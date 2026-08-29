@@ -158,7 +158,7 @@ struct quantize_state_impl {
     bool has_tied_embeddings = true; // assume tied until we see output.weight
     bool has_activations = false;
 
-    // tensor type override patterns (compiled once, used twice)
+    // tensor type override patterns (compiled once, queried via tensor_type_override_for())
     std::vector<std::pair<std::regex, ggml_type>> tensor_type_patterns;
 
     quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params) : model(model), params(params) {
@@ -170,6 +170,18 @@ struct quantize_state_impl {
         }
     }
 };
+
+// the --tensor-type override for the tensor or GGML_TYPE_COUNT if none
+static ggml_type tensor_type_override_for(const quantize_state_impl & qs, const char * tensor_name) {
+    if (qs.tensor_type_patterns.empty()) { return GGML_TYPE_COUNT; }
+
+    const std::string name(tensor_name);
+    for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
+        if (std::regex_search(name, pattern)) { return qtype; }
+    }
+
+    return GGML_TYPE_COUNT;
+}
 
 // per-tensor metadata, computed in the preliminary loop and used in the main loop
 struct tensor_metadata {
@@ -585,21 +597,12 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs,
     const ggml_type default_type,
     const tensor_metadata & tm
 ) {
-    if (params->target_bpw != -1.0f || params->target_size != -1) { return tensor->type; }  // defer tensor type selection to target_bpw_type()
+    if (params->target_bpw != -1.0f || params->target_size != -1) { return tensor->type; }
     if (!tensor_allows_quantization(params, qs.model.arch, tensor)) { return tensor->type; }
     if (params->token_embedding_type < GGML_TYPE_COUNT && tm.category == TENSOR_CATEGORY_TOKEN_EMBD) {
         // per_layer_token_embd follows --token-embedding-type by default, but it is a large
         // separate table, so let an explicit --tensor-type name it
-        bool named = false;
-        if (std::strcmp(tensor->name, "per_layer_token_embd.weight") == 0) {
-            const std::string tensor_name(tensor->name);
-            for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
-                if (std::regex_search(tensor_name, pattern)) {
-                    named = true;
-                    break;
-                }
-            }
-        }
+        const bool named = std::strcmp(tensor->name, "per_layer_token_embd.weight") == 0 && tensor_type_override_for(qs, tensor->name) != GGML_TYPE_COUNT;
         if (!named) { return params->token_embedding_type; }
     }
     if (params->output_tensor_type < GGML_TYPE_COUNT && tm.category == TENSOR_CATEGORY_OUTPUT) { return params->output_tensor_type; }
@@ -609,20 +612,12 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs,
     // get more optimal quantization type based on the tensor shape, layer, etc.
     if (ggml_is_quantized(default_type)) {
         // if the user provided tensor types, use those
-        bool manual = false;
-        if (!qs.tensor_type_patterns.empty()) {
-            const std::string tensor_name(tensor->name);
-            for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
-                if (std::regex_search(tensor_name, pattern)) {
-                    if (qtype != new_type) {
-                        LLAMA_LOG_WARN("%s: %-36s - applying manual override: %s -> %s\n",
-                            __func__, tensor_name.c_str(), ggml_type_name(new_type), ggml_type_name(qtype));
-                        new_type = qtype;
-                    }
-                    manual = true;
-                    break;
-                }
-            }
+        const ggml_type manual_type = tensor_type_override_for(qs, tensor->name);
+        const bool manual = manual_type != GGML_TYPE_COUNT;
+        if (manual && manual_type != new_type) {
+            LLAMA_LOG_WARN("%s: %-36s - applying manual override: %s -> %s\n",
+                __func__, tensor->name, ggml_type_name(new_type), ggml_type_name(manual_type));
+            new_type = manual_type;
         }
 
         // otherwise, use the standard logic
@@ -3077,16 +3072,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             // Build locked tensor type map from --tensor-type patterns
             std::unordered_map<std::string, ggml_type> locked_tensors;
-            if (!qs.tensor_type_patterns.empty()) {
-                for (size_t i = 0; i < tensors.size(); ++i) {
-                    if (!metadata[i].allows_quantization) { continue; }
-                    const std::string name = ggml_get_name(tensors[i]->tensor);
-                    for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
-                        if (std::regex_search(name, pattern)) {
-                            locked_tensors[name] = qtype;
-                            break;
-                        }
-                    }
+            for (size_t i = 0; i < tensors.size(); ++i) {
+                if (!metadata[i].allows_quantization) { continue; }
+                const char * name = ggml_get_name(tensors[i]->tensor);
+                if (const ggml_type locked = tensor_type_override_for(qs, name); locked != GGML_TYPE_COUNT) {
+                    locked_tensors[name] = locked;
                 }
             }
 
