@@ -1715,7 +1715,7 @@ SC_API int spec_hip_rebase_state(int32_t seq_id, int32_t pos_min,
 }
 
 SC_API int spec_hip_attach_target_stream(void * stream, int32_t device) {
-    if (!S.ok || device != S.device) return -1;
+    if (!S.ok || device != S.device || hipSetDevice(S.device) != hipSuccess) return -1;
     const hipStream_t next = stream == nullptr ? S.owned_stream : reinterpret_cast<hipStream_t>(stream);
     if (next != S.stream) {
         SC_CHECK(hipStreamSynchronize(S.stream));

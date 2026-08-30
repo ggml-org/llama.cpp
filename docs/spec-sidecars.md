@@ -181,7 +181,12 @@ export SPEC_SIDECAR=1
   With a single HIP target ubatch on the matching device, the host passes
   borrowed target device pointers and attaches the sidecar to the target HIP
   stream; the target context defers those host output copies until a host
-  getter is requested. Otherwise it uses the synchronized host-copy path.
+  getter is requested. Mirrored tensor-parallel outputs are resolved to the
+  concrete allocation and stream on the final Meta rank, so this direct path
+  also applies to tensor split. Set
+  `LLAMA_SPEC_HIP_DISABLE_META_DEVICE_VIEW=1` to force the synchronized host
+  fallback for diagnosis. Interleaved or multi-ubatch inputs still use the
+  host path.
 - The ABI exposes sequence-scoped `state_size`, `get_state`, `set_state`,
   `reset_state`, `truncate_state`, `commit_state`, and `rebase_state` for both
   sidecars. Snapshots contain only a position cursor plus an epoch; the large

@@ -69,6 +69,16 @@ extern "C" {
     GGML_API bool                           ggml_backend_buffer_is_meta       (ggml_backend_buffer_t buffer);
     GGML_API struct ggml_tensor *           ggml_backend_meta_get_simple_tensor(const struct ggml_tensor * tensor, size_t index);
 
+    // Resolve a mirrored Meta compute tensor to one concrete backend allocation.
+    // The returned tensor is borrowed and remains valid only until the Meta
+    // backend rebuilds or switches its active graph plan.
+    GGML_API bool ggml_backend_meta_get_mirrored_tensor(
+            ggml_backend_t meta_backend,
+            const struct ggml_tensor * tensor,
+            size_t index,
+            const struct ggml_tensor ** simple_tensor,
+            ggml_backend_t * simple_backend);
+
     // tensor copy between different backends
     GGML_API void ggml_backend_tensor_copy(const struct ggml_tensor * src, struct ggml_tensor * dst);
 

@@ -2007,6 +2007,26 @@ int llama_context::decode(const llama_batch & batch_inp) {
 #if defined(GGML_USE_HIP)
                 if (ggml_backend_is_cuda(backend_h)) {
                     embd_nextn_device = { t_h_nextn, backend_h, ubatch.n_tokens, true };
+                } else if (std::getenv("LLAMA_SPEC_HIP_DISABLE_META_DEVICE_VIEW") == nullptr) {
+                    // Tensor-parallel activations are represented by a Meta
+                    // tensor. A mirrored output has one complete allocation per
+                    // rank, so borrow one instead of materializing it on the
+                    // host. The Meta helper refuses partial/sharded tensors.
+                    // Prefer the last rank, matching the Meta executor's
+                    // steady-state current device and the sidecar's previous
+                    // tensor-split placement while avoiding a device switch.
+                    for (size_t rank = 0; rank < GGML_BACKEND_META_MAX_DEVICES; ++rank) {
+                        const ggml_tensor * simple_tensor = nullptr;
+                        ggml_backend_t simple_backend = nullptr;
+                        if (!ggml_backend_meta_get_mirrored_tensor(
+                                    backend_h, t_h_nextn, rank, &simple_tensor, &simple_backend)) {
+                            break;
+                        }
+                        if (ggml_backend_is_cuda(simple_backend)) {
+                            embd_nextn_device = {
+                                simple_tensor, simple_backend, ubatch.n_tokens, true };
+                        }
+                    }
                 }
 #endif
             }
@@ -2109,9 +2129,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
 #if defined(GGML_USE_HIP)
-                if (embd_nextn_device_preferred && ggml_backend_is_cuda(backend_h)) {
+                if (embd_nextn_device_preferred && embd_nextn_device.valid) {
                     pending_embd_nextn_copies.push_back({
-                        t_h_nextn, backend_h, embd_nextn_out,
+                        embd_nextn_device.tensor, embd_nextn_device.backend, embd_nextn_out,
                         (size_t) n_rows * n_embd * sizeof(float) });
                 } else
 #endif

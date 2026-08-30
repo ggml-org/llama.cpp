@@ -229,6 +229,35 @@ int main() {
         }
     }
 
+    for (size_t j = 0; j < ud.ndev; ++j) {
+        const ggml_tensor * simple_tensor = nullptr;
+        ggml_backend_t simple_backend = nullptr;
+        if (!ggml_backend_meta_get_mirrored_tensor(
+                    backend.get(), mirror, j, &simple_tensor, &simple_backend) ||
+                simple_tensor == nullptr || simple_backend == nullptr ||
+                !ggml_are_same_shape(simple_tensor, mirror)) {
+            std::fprintf(stderr, "failed to resolve mirrored tensor on backend %zu\n", j);
+            return 1;
+        }
+        std::fill(actual.begin(), actual.end(), 0.0f);
+        ggml_backend_tensor_get(simple_tensor, actual.data(), 0, nbytes);
+        if (actual != mirrored) {
+            std::fprintf(stderr, "resolved mirrored tensor mismatch on backend %zu\n", j);
+            return 1;
+        }
+    }
+    {
+        const ggml_tensor * simple_tensor = nullptr;
+        ggml_backend_t simple_backend = nullptr;
+        if (ggml_backend_meta_get_mirrored_tensor(
+                    backend.get(), root, 0, &simple_tensor, &simple_backend) ||
+                ggml_backend_meta_get_mirrored_tensor(
+                    backend.get(), partial, 0, &simple_tensor, &simple_backend)) {
+            std::fprintf(stderr, "non-mirrored tensor exposed as a direct device view\n");
+            return 1;
+        }
+    }
+
     const size_t axis3_nbytes = ggml_nbytes(axis3);
     std::vector<float> axis3_expected(axis3_nbytes / sizeof(float));
     for (size_t i = 0; i < axis3_expected.size(); ++i) {

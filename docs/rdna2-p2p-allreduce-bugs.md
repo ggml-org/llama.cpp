@@ -89,8 +89,13 @@ reductions at startup. A size that does not match the installed RCCL byte for
 byte remains on RCCL. On four V620s, a 20-sample `[2560,4]` graph microbenchmark
 improved steady execution by 4.30%; an exact fixed-output server ABBA improved
 19.798 to 19.960 tok/s (0.82%) with identical output, proposal, and acceptance
-counts. This is incremental: tensor-split sidecar input still reports
-`bound device=-1` and pays a separate host synchronization/copy cost.
+counts. The target integration also resolves the mirrored Meta `h_nextn`
+output to a concrete final-rank allocation, binds the sidecar to that HIP
+stream, and avoids the synchronized host round trip (`bound device=3` on the
+four-V620 setup). This direct view is fail-closed to mirrored, contiguous F32
+outputs and can be disabled with `LLAMA_SPEC_HIP_DISABLE_META_DEVICE_VIEW=1`.
+Its isolated natural-output ABBA improved 13.372 to 13.669 tok/s (2.22%); a
+high-acceptance forced-token ABBA was effectively neutral (-0.16%).
 
 **Fix:** classify the route explicitly and log unsupported widths once. A
 supported width whose startup exactness self-test failed receives a different
