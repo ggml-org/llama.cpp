@@ -6059,9 +6059,13 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     }
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-    // determine whether to use Adreno xmem GEMM
-    backend_ctx->adreno_xmem_gemm_enabled = getenv("GGML_OPENCL_ADRENO_XMEM_GEMM") != nullptr &&
-                                             backend_ctx->gpu_family == GPU_FAMILY::ADRENO;
+    // Adreno xmem F16xF32 GEMM, default on adreno, opt out with GGML_OPENCL_ADRENO_XMEM_GEMM=0.
+    // This helps models with f16 attention weights, e.g., gpt-oss-20b-f16
+    {
+        const char * xmem_env = getenv("GGML_OPENCL_ADRENO_XMEM_GEMM");
+        backend_ctx->adreno_xmem_gemm_enabled = backend_ctx->gpu_family == GPU_FAMILY::ADRENO &&
+                                                (xmem_env ? atoi(xmem_env) != 0 : true);
+    }
 #endif
 
     // determine whether to use large buffer for Adreno
@@ -19534,9 +19538,18 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
     // GEMM using local memory
     // Current BK = 16, so ne00 % 16 == 0
+    //
+    // Certain A7X compiler (E031.41) executes kernel_mul_mm_f32_f32_l4_lm poorly;
+    // matrices with ne11 <= 8 appears OK.
+    // Fallback to the MV style kernels for A7x and ne11 > 8.
+    // Override with GGML_OPENCL_A7X_F32_LM_BYPASS=0.
+    static const char * a7x_f32lm_env    = getenv("GGML_OPENCL_A7X_F32_LM_BYPASS");
+    static const bool   a7x_f32lm_bypass = (a7x_f32lm_env == nullptr || a7x_f32lm_env[0] != '0');
     if (src1t == GGML_TYPE_F32 &&
         ne00 % 16 == 0 &&
-        ne11 > 1) {
+        ne11 > 1 &&
+        !(a7x_f32lm_bypass && src0t == GGML_TYPE_F32 && ne11 > 8 &&
+          backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X)) {
         switch(src0t) {
             case GGML_TYPE_F32: {
                 kernel = backend_ctx->kernel_mul_mm_f32_f32_l4_lm;
