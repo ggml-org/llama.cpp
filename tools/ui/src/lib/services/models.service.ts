@@ -33,6 +33,7 @@ export class ModelsService {
 	 * @param sidecar - Sidecar type, uppercased into the tag (e.g. `MTP`)
 	 * @returns Repo id possibly suffixed with `:tag`
 	 */
+	// LLAMA-APP-REUSE: repo:tag id builder
 	static buildDownloadTag(
 		repoId: string,
 		quant: string | null,
@@ -154,6 +155,7 @@ export class ModelsService {
 	 * @param modelId - Raw model identifier string
 	 * @returns Structured {@link ParsedModelId} with all detected fields
 	 */
+	// LLAMA-APP-REUSE: model id parser
 	static parseModelId(modelId: string): ParsedModelId {
 		const result: ParsedModelId = {
 			activatedParams: null,

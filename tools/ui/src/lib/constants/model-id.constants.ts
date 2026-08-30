@@ -1,6 +1,7 @@
 /**
  * Parsing of `org/ModelName[-tag][:quant]` style model IDs.
  */
+// LLAMA-APP-REUSE: model id grammar: sidecars, quants, segments
 
 import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
 

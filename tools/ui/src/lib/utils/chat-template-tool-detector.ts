@@ -5,6 +5,7 @@
  * template. A template that accepts a `tools` array or emits tool-call tokens
  * is treated as tool-capable.
  */
+// LLAMA-APP-REUSE: tool-use support detection from a chat template
 
 /** Tool-call tokens emitted by the template for assistant tool calls. */
 const TOOL_CALL_TOKENS = [
