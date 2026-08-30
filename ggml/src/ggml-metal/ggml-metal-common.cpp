@@ -1,9 +1,26 @@
 #include "ggml-metal-common.h"
 
+#include "ggml.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
 #include <vector>
+
+bool ggml_metal_op_mul_mat_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm) {
+    const int64_t ne00 = op->src[0]->ne[0];
+    const int64_t ne11 = op->src[1]->ne[1];
+
+    return !ggml_is_transposed(op->src[0]) &&
+           !ggml_is_transposed(op->src[1]) &&
+           has_simdgroup_mm && ne00 >= 64 && ne11 > 8;
+}
+
+bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm) {
+    const int64_t ne00 = op->src[0]->ne[0];
+    const int64_t ne21 = op->src[2]->ne[1];
+
+    return has_simdgroup_mm && ne00 >= 64 && ne21 >= 32;
+}
 
 // represents a memory range (i.e. an interval from a starting address p0 to an ending address p1 in a given buffer pb)
 // the type indicates whether it is a source range (i.e. ops read data from it) or a destination range (i.e. ops write data to it)
