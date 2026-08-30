@@ -1,0 +1,116 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+
+#include "types.glsl"
+
+layout(constant_id = 0) const int BLOCK_SIZE = 1024;
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
+layout (binding = 1) writeonly buffer D {int data_d[];};
+
+layout (push_constant) uniform parameter {
+    uint orig_ncols;
+    uint ncols_input;
+    uint ncols_output;
+    uint k;
+    uint nrows;
+    uint first_pass;
+    uint last_pass;
+} p;
+
+#define RADIX_BITS 8
+#define RADIX_SIZE (1 << RADIX_BITS)
+
+shared uint histo[RADIX_SIZE];
+shared uint sh_bucket;
+shared uint sh_above;
+shared uint out_count;
+
+// order-preserving float -> uint mapping
+uint f2ui(float x) {
+    uint y = floatBitsToUint(x);
+    if ((y & 0x80000000u) != 0u) {
+        y ^= 0xFFFFFFFFu;
+    } else {
+        y |= 0x80000000u;
+    }
+    return y;
+}
+
+// One workgroup per row: radix-select the K-th largest value, then compact the
+// elements above it plus enough ties to reach K.
+void topk(const uint row) {
+    const uint tid    = gl_LocalInvocationID.x;
+    const uint ncols  = p.ncols_input;
+    const uint row_in = row * ncols;
+    const uint row_out = row * p.k;
+
+    uint prefix  = 0;     // fixed high bits of the threshold key
+    uint desired = p.k;   // count still needed from the candidate range
+
+    [[unroll]] for (int shift = 32 - RADIX_BITS; shift >= 0; shift -= RADIX_BITS) {
+        for (uint i = tid; i < RADIX_SIZE; i += BLOCK_SIZE) {
+            histo[i] = 0;
+        }
+        barrier();
+
+        const uint hi_mask   = (shift + RADIX_BITS >= 32) ? 0u : (0xFFFFFFFFu << uint(shift + RADIX_BITS));
+        const uint prefix_hi = prefix & hi_mask;
+        for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
+            const uint key = f2ui(data_a[row_in + i]);
+            if ((key & hi_mask) == prefix_hi) {
+                atomicAdd(histo[(key >> uint(shift)) & (RADIX_SIZE - 1)], 1u);
+            }
+        }
+        barrier();
+
+        // top-down scan for the bucket holding the K-th value
+        if (tid == 0) {
+            uint acc = 0;
+            uint b   = 0;
+            for (int bb = RADIX_SIZE - 1; bb >= 0; --bb) {
+                const uint c = histo[bb];
+                if (acc + c >= desired) { b = uint(bb); break; }
+                acc += c;
+            }
+            sh_bucket = b;
+            sh_above  = acc;
+        }
+        barrier();
+
+        prefix  |= sh_bucket << uint(shift);
+        desired -= sh_above;
+        barrier();
+    }
+
+    if (tid == 0) {
+        out_count = 0;
+    }
+    barrier();
+
+    // emit everything above the threshold, then fill the rest from ties
+    const uint threshold = prefix;
+    for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
+        if (f2ui(data_a[row_in + i]) > threshold) {
+            data_d[row_out + atomicAdd(out_count, 1u)] = int(i);
+        }
+    }
+    barrier();
+    for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
+        if (f2ui(data_a[row_in + i]) == threshold) {
+            const uint pos = atomicAdd(out_count, 1u);
+            if (pos < p.k) {
+                data_d[row_out + pos] = int(i);
+            }
+        }
+    }
+}
+
+void main() {
+    for (uint row = gl_WorkGroupID.y; row < p.nrows; row += gl_NumWorkGroups.y) {
+        topk(row);
+    }
+}
