@@ -1366,7 +1366,7 @@ UseGgmlGemm1:;
 
     // IQ panel gemm (see iqp.h) - must come after the barrier above, it consumes the q8_K rows
     // of src1 from the work buffer
-    if (ggml_cpu_iqp_supported_mul_mat(dst) && !params->use_ref) {
+    if (ggml_cpu_iqp_supports_mul_mat(dst) && !params->use_ref) {
         ggml_compute_forward_mul_mat_iqp(params, dst);
         return;
     }
@@ -1590,7 +1590,7 @@ static void ggml_compute_forward_mul_mat_id(
 
     // IQ panel gemm (see iqp.h); per expert eligibility is decided below, but the work buffer is
     // reserved for the whole node (ggml_graph_plan sizes it without params, use_ref only skips the dispatch)
-    const bool iqp = ggml_cpu_iqp_supported_mul_mat_id(dst) && !params->use_ref;
+    const bool iqp = ggml_cpu_iqp_supports_mul_mat_id(dst) && !params->use_ref;
 
     char * iqp_panels = NULL;
 
@@ -1669,7 +1669,7 @@ static void ggml_compute_forward_mul_mat_id(
             continue;
         }
 
-        if (iqp && ggml_cpu_iqp_expert_eligible(cne1)) {
+        if (iqp && ggml_cpu_iqp_mul_mat_id_min_batch(cne1)) {
             ggml_compute_forward_mul_mat_id_iqp(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0),
                                                 iqp_panels);
 
@@ -2885,7 +2885,7 @@ struct ggml_cplan ggml_graph_plan(
                         }
 
                         // the IQ panel path needs one scratch panel per thread past the q8_K rows
-                        if (ggml_cpu_iqp_supported_mul_mat(node)) {
+                        if (ggml_cpu_iqp_supports_mul_mat(node)) {
                             cur = GGML_PAD(cur, 64) + n_tasks * ggml_cpu_iqp_scratch_size(node);
                         }
                     } break;
@@ -2908,7 +2908,7 @@ struct ggml_cplan ggml_graph_plan(
                         // atomic_current_chunk
                         cur += CACHE_LINE_SIZE*n_as + CACHE_LINE_SIZE;
                         // the IQ panel path needs one scratch panel per thread on top of that
-                        if (ggml_cpu_iqp_supported_mul_mat_id(node)) {
+                        if (ggml_cpu_iqp_supports_mul_mat_id(node)) {
                             cur += n_tasks * ggml_cpu_iqp_scratch_size(node) + 64;
                         }
                     } break;

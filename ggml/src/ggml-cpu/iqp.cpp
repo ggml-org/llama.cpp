@@ -22,12 +22,6 @@
 #define IQP_SB_SIZE 16                    // weights per sub-block
 #define IQP_NSB     (QK_K / IQP_SB_SIZE)  // sub-blocks per super-block
 
-// smallest src1 batch for which the decode pays for itself
-#define GGML_IQP_MIN_BATCH 8
-
-// same, per expert, for MUL_MAT_ID
-#define GGML_IQP_MIN_BATCH_ID 8
-
 // one super-block of a grid based IQ type decoded to int8, 8 rows interleaved:
 // dfac[row] * iscales[sb*8 + row] * qs is bit identical to dequantize_row_iq*
 struct block_iqp_x8 {
@@ -46,6 +40,10 @@ static_assert(sizeof(block_iqp_x8) == 8 * sizeof(float) + 8 * sizeof(int32_t) + 
 #else
 #    define GGML_IQP_USE_BIAS 0
 #endif
+
+static inline size_t ggml_cpu_iqp_row_size(const struct ggml_tensor * dst) {
+    return ggml_row_size(GGML_TYPE_Q8_K, dst->src[1]->ne[0]);
+}
 
 // the low 7 bits of v are the first 7 signs and the 8th is their parity (cf. unpack_ksigns in the CUDA backend)
 static inline uint8_t iqp_unpack_ksigns(uint32_t v) {
@@ -1082,7 +1080,7 @@ static bool iqp_supported_common(const struct ggml_tensor * dst) {
     return true;
 }
 
-bool ggml_cpu_iqp_supported_mul_mat(const struct ggml_tensor * dst) {
+bool ggml_cpu_iqp_supports_mul_mat(const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
@@ -1102,7 +1100,7 @@ bool ggml_cpu_iqp_supported_mul_mat(const struct ggml_tensor * dst) {
     return true;
 }
 
-bool ggml_cpu_iqp_supported_mul_mat_id(const struct ggml_tensor * dst) {
+bool ggml_cpu_iqp_supports_mul_mat_id(const struct ggml_tensor * dst) {
     const struct ggml_tensor * ids = dst->src[2];
 
     if (!iqp_supported_common(dst)) {
@@ -1110,7 +1108,7 @@ bool ggml_cpu_iqp_supported_mul_mat_id(const struct ggml_tensor * dst) {
     }
 
     // skip the node entirely (work buffer included) if no expert can reach the per expert threshold
-    if (!ggml_cpu_iqp_expert_eligible(ids->ne[0] * ids->ne[1])) {
+    if (!ggml_cpu_iqp_mul_mat_id_min_batch(ids->ne[0] * ids->ne[1])) {
         return false;
     }
 

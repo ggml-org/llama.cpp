@@ -12,6 +12,12 @@
 extern "C" {
 #endif
 
+// smallest src1 batch for which the decode pays for itself
+#define GGML_IQP_MIN_BATCH 8
+
+// same, per expert, for MUL_MAT_ID
+#define GGML_IQP_MIN_BATCH_ID 8
+
 static inline bool ggml_cpu_iqp_mul_mat_id_min_batch(int64_t cne1) {
     return cne1 >= GGML_IQP_MIN_BATCH_ID;
 }
