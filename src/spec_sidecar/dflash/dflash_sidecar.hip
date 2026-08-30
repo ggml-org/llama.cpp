@@ -33,24 +33,24 @@ static void deq_q4k_host(const uint8_t * src, float * dst, size_t n) {
 
 #define DISPATCH_Q4K(N, W, X, Y, NIN, NOUT, ST) do { \
     switch (N) { \
-    case 1: gemv8t_q4_K<1><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 2: gemv8t_q4_K<2><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 3: gemv8t_q4_K<3><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 4: gemv8t_q4_K<4><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 5: gemv8t_q4_K<5><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 6: gemv8t_q4_K<6><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 7: gemv8t_q4_K<7><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    default: gemv8t_q4_K<8><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; } } while (0)
+    case 1: gemv8t_q4_K<1><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 2: gemv8t_q4_K<2><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 3: gemv8t_q4_K<3><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 4: gemv8t_q4_K<4><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 5: gemv8t_q4_K<5><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 6: gemv8t_q4_K<6><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 7: gemv8t_q4_K<7><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    default: gemv8t_q4_K<8><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; } } while (0)
 #define DISPATCH_Q6K(N, W, X, Y, NIN, NOUT, ST) do { \
     switch (N) { \
-    case 1: gemv8t_q6_K<1><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 2: gemv8t_q6_K<2><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 3: gemv8t_q6_K<3><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 4: gemv8t_q6_K<4><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 5: gemv8t_q6_K<5><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 6: gemv8t_q6_K<6><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 7: gemv8t_q6_K<7><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    default: gemv8t_q6_K<8><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; } } while (0)
+    case 1: gemv8t_q6_K<1><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 2: gemv8t_q6_K<2><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 3: gemv8t_q6_K<3><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 4: gemv8t_q6_K<4><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 5: gemv8t_q6_K<5><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 6: gemv8t_q6_K<6><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 7: gemv8t_q6_K<7><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    default: gemv8t_q6_K<8><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; } } while (0)
 
 namespace {
 struct DLayer {
@@ -764,7 +764,7 @@ DF_API int spec_dflash_draft(int32_t seq_id, int32_t id_last, int32_t n_past, in
         df_add<<<(DF_BLOCK * DF_EMBD + 255) / 256, 256, 0, S.st>>>(S.x, S.cg, DF_BLOCK * DF_EMBD);
     }
     df_rmsnorm<<<DF_BLOCK, 256, 0, S.st>>>(S.x, S.w_out_norm, S.tE, DF_EMBD);
-    gemv8t_q6_K<DF_BLOCK><<<(S.n_head + 7) / 8, 256, 0, S.st>>>(S.W_head, S.tE, S.logits, DF_EMBD, S.n_head);
+    gemv8t_q6_K<DF_BLOCK><<<(S.n_head + 7) / 8, 512, 0, S.st>>>(S.W_head, S.tE, S.logits, DF_EMBD, S.n_head);
     DISPATCH_Q4K(DF_BLOCK, S.W_selhid, S.tE, S.selhid, DF_EMBD, DF_RANK, S.st);
     for (int s2 = 0; s2 < DF_TOPK; ++s2) {
         dfa_argmax_partial<<<dim3(S.tkparts, DF_BLOCK), 256, 0, S.st>>>(S.logits, S.n_head, S.tk_pmax, S.tk_pidx, S.tkparts);

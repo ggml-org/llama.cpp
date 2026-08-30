@@ -433,73 +433,74 @@ __global__ void dfa_argmax_final_mask(float * __restrict__ x, int n,
 #define GT_TILE 512
 
 template<int NCOLS>
-__global__ void gemv8t_q4_K(const block_q4_K * __restrict__ W, const float * __restrict__ x,
+__global__ __launch_bounds__(512) void gemv8t_q4_K(const block_q4_K * __restrict__ W, const float * __restrict__ x,
                             float * __restrict__ y, int n_in, int n_out) {
-    __shared__ float xt[NCOLS][GT_TILE];
+    // no-LDS split-K form (512 threads): waves w and w+8 own the same row and
+    // cover even/odd Q4_K blocks; partials are combined with one add per row.
+    // NOTE: changes FP summation order vs the historical tiled kernel.
+    __shared__ float xacc[NCOLS][8];
     const int wave = threadIdx.x >> 5, lane = threadIdx.x & 31;
-    const int row = blockIdx.x * 8 + wave;
+    const int wrow = wave & 7, half = wave >> 3;
+    const int row = blockIdx.x * 8 + wrow;
     float acc[NCOLS] = {};
-    for (int t0 = 0; t0 < n_in; t0 += GT_TILE) {
-        const int tn = min(GT_TILE, n_in - t0);
-        // cooperative x-tile load (256 threads)
-        for (int c = 0; c < NCOLS; ++c) {
-            for (int i = threadIdx.x; i < tn; i += 256) xt[c][i] = x[(size_t) c * n_in + t0 + i];
-        }
-        __syncthreads();
-        if (row < n_out) {
-            const int b0 = t0 / 256, bn = tn / 256;
-            const block_q4_K * wr = W + (size_t) row * (n_in / 256);
-            for (int b = 0; b < bn; ++b) {
-                const block_q4_K * bk = &wr[b0 + b];
-                const float d = df_f16(bk->d), dmin = df_f16(bk->dmin);
-                // lane l covers elems l*8 .. l*8+7: one 32-run => one scale pair
-                const int e0 = lane * 8;
-                const int g64 = e0 >> 6, rem0 = e0 & 63;
-                float sc, mn;
-                q4k_scale_min(g64 * 2 + (rem0 >= 32 ? 1 : 0), bk->scales, &sc, &mn);
-                const float ds = d * sc, dm = dmin * mn;
-                const uint8_t * qs = bk->qs + g64 * 32 + (rem0 & 31);
-                const bool hi = rem0 >= 32;
-                const float * xtb = &xt[0][b * 256 + e0];
+    if (row < n_out) {
+        const int bn_all = n_in / 256;
+        const block_q4_K * wr = W + (size_t) row * bn_all;
+        for (int b = half; b < bn_all; b += 2) {
+            const block_q4_K * bk = &wr[b];
+            const float d = df_f16(bk->d), dmin = df_f16(bk->dmin);
+            const int e0 = lane * 8;
+            const int g64 = e0 >> 6, rem0 = e0 & 63;
+            float sc, mn;
+            q4k_scale_min(g64 * 2 + (rem0 >= 32 ? 1 : 0), bk->scales, &sc, &mn);
+            const float ds = d * sc, dm = dmin * mn;
+            const uint8_t * qs = bk->qs + g64 * 32 + (rem0 & 31);
+            const bool hi = rem0 >= 32;
+            const float * xb = x + b * 256 + e0;
+            uint32_t qw[2];
+            __builtin_memcpy(qw, qs, 8); // 8B-aligned: lane*8 within a 32B run
+            #pragma unroll
+            for (int e = 0; e < 8; ++e) {
+                const uint8_t byte = (uint8_t) (qw[e >> 2] >> ((e & 3) * 8));
+                const float w = ds * (hi ? (byte >> 4) : (byte & 0xF)) - dm;
                 #pragma unroll
-                for (int e = 0; e < 8; ++e) {
-                    const uint8_t byte = qs[e];
-                    const float w = ds * (hi ? (byte >> 4) : (byte & 0xF)) - dm;
-                    #pragma unroll
-                    for (int c = 0; c < NCOLS; ++c) acc[c] += w * xtb[(size_t) c * GT_TILE + e];
-                }
+                for (int c = 0; c < NCOLS; ++c) acc[c] += w * xb[(size_t) c * n_in + e];
             }
         }
-        __syncthreads();
     }
-    if (row < n_out) {
+    float red[NCOLS];
+    #pragma unroll
+    for (int c = 0; c < NCOLS; ++c) {
+        float a = acc[c];
         #pragma unroll
-        for (int c = 0; c < NCOLS; ++c) {
-            float a = acc[c];
-            #pragma unroll
-            for (int off = 16; off > 0; off >>= 1) a += __shfl_down(a, off, 32);
-            if (lane == 0) y[(size_t) c * n_out + row] = a;
-        }
+        for (int off = 16; off > 0; off >>= 1) a += __shfl_down(a, off, 32);
+        red[c] = a;
+    }
+    if (half == 1 && lane == 0) {
+        #pragma unroll
+        for (int c = 0; c < NCOLS; ++c) xacc[c][wrow] = red[c];
+    }
+    __syncthreads();
+    if (row < n_out && half == 0 && lane == 0) {
+        #pragma unroll
+        for (int c = 0; c < NCOLS; ++c) y[(size_t) c * n_out + row] = red[c] + xacc[c][wrow];
     }
 }
 
 template<int NCOLS>
-__global__ void gemv8t_q6_K(const block_q6_K * __restrict__ W, const float * __restrict__ x,
+__global__ __launch_bounds__(512) void gemv8t_q6_K(const block_q6_K * __restrict__ W, const float * __restrict__ x,
                             float * __restrict__ y, int n_in, int n_out) {
-    __shared__ float xt[NCOLS][GT_TILE];
+    // no-LDS split-K form (512 threads); see gemv8t_q4_K
+    __shared__ float xacc[NCOLS][8];
     const int wave = threadIdx.x >> 5, lane = threadIdx.x & 31;
-    const int row = blockIdx.x * 8 + wave;
+    const int wrow = wave & 7, half = wave >> 3;
+    const int row = blockIdx.x * 8 + wrow;
     float acc[NCOLS] = {};
-    for (int t0 = 0; t0 < n_in; t0 += GT_TILE) {
-        const int tn = min(GT_TILE, n_in - t0);
-        for (int c = 0; c < NCOLS; ++c) {
-            for (int i = threadIdx.x; i < tn; i += 256) xt[c][i] = x[(size_t) c * n_in + t0 + i];
-        }
-        __syncthreads();
-        if (row < n_out) {
-            const int b0 = t0 / 256, bn = tn / 256;
+    if (row < n_out) {
+        {
+            const int b0 = 0, bn = n_in / 256;
             const block_q6_K * wr = W + (size_t) row * (n_in / 256);
-            for (int b = 0; b < bn; ++b) {
+            for (int b = half; b < bn; b += 2) {
                 const block_q6_K * bk = &wr[b0 + b];
                 const float d = df_f16(bk->d);
                 // lane's 8 elems: one half, one grp, one scale group
@@ -511,25 +512,32 @@ __global__ void gemv8t_q6_K(const block_q6_K * __restrict__ W, const float * __r
                 const uint8_t * qhp = bk->qh + half * 32 + l0;
                 const int sh_h = grp * 2;
                 const bool hi = grp >= 2;
-                const float * xtb = &xt[0][b * 256 + e0];
+                const float * xb = x + b * 256 + e0;
                 #pragma unroll
                 for (int e = 0; e < 8; ++e) {
                     const int qv = (hi ? (qlp[e] >> 4) : (qlp[e] & 0xF)) | (((qhp[e] >> sh_h) & 3) << 4);
                     const float w = dsc * (qv - 32);
                     #pragma unroll
-                    for (int c = 0; c < NCOLS; ++c) acc[c] += w * xtb[(size_t) c * GT_TILE + e];
+                    for (int c = 0; c < NCOLS; ++c) acc[c] += w * xb[(size_t) c * n_in + e];
                 }
             }
         }
-        __syncthreads();
     }
-    if (row < n_out) {
+    float red[NCOLS];
+    #pragma unroll
+    for (int c = 0; c < NCOLS; ++c) {
+        float a = acc[c];
         #pragma unroll
-        for (int c = 0; c < NCOLS; ++c) {
-            float a = acc[c];
-            #pragma unroll
-            for (int off = 16; off > 0; off >>= 1) a += __shfl_down(a, off, 32);
-            if (lane == 0) y[(size_t) c * n_out + row] = a;
-        }
+        for (int off = 16; off > 0; off >>= 1) a += __shfl_down(a, off, 32);
+        red[c] = a;
+    }
+    if (half == 1 && lane == 0) {
+        #pragma unroll
+        for (int c = 0; c < NCOLS; ++c) xacc[c][wrow] = red[c];
+    }
+    __syncthreads();
+    if (row < n_out && half == 0 && lane == 0) {
+        #pragma unroll
+        for (int c = 0; c < NCOLS; ++c) y[(size_t) c * n_out + row] = red[c] + xacc[c][wrow];
     }
 }
