@@ -961,7 +961,12 @@ void ggml_numa_mirror_register(struct ggml_backend_buffer * buffer, void * base,
 
     int64_t t1 = ggml_time_us();
     const double local_before = ggml_numa_mirror_local_fraction(base, size, home);
-    if (local_before >= 0.95) {
+    if (local_before < 0.0) {
+        // move_pages query failed - placement is unknown, do not attempt migration or report a bogus percentage
+        GGML_NUMA_MIRROR_LOG_WARN(
+            "cannot probe the primary buffer's page placement (move_pages failed) - "
+            "if the model is not already on node %d, launch with `numactl --membind=%d`\n", home, home);
+    } else if (local_before >= 0.95) {
         ggml_numa_mirror_bind_pages(base, size, home, false); // policy only, nothing to move
     } else {
         // probe on a small prefix before committing to walking the whole buffer
@@ -980,8 +985,10 @@ void ggml_numa_mirror_register(struct ggml_backend_buffer * buffer, void * base,
     }
     const double local_after = ggml_numa_mirror_local_fraction(base, size, home);
     int64_t t2 = ggml_time_us();
-    GGML_NUMA_MIRROR_LOG_INFO("primary %p %.1f GiB: %.0f%% -> %.0f%% on node %d (%.1f s)\n",
-            base, gib, local_before * 100.0, local_after * 100.0, home, (t2 - t1) / 1e6);
+    if (local_before >= 0.0 && local_after >= 0.0) {
+        GGML_NUMA_MIRROR_LOG_INFO("primary %p %.1f GiB: %.0f%% -> %.0f%% on node %d (%.1f s)\n",
+                base, gib, local_before * 100.0, local_after * 100.0, home, (t2 - t1) / 1e6);
+    }
 
     int n_replicas = 0;
     for (int node = 0; node < g_numa_mirror.n_nodes && node < GGML_NUMA_MAX_NODES; ++node) {
