@@ -588,6 +588,36 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
     return 0;
 }
 
+// pooled embeddings with an n_ubatch that is not a multiple of n_seq_max
+// ref: https://github.com/ggml-org/llama.cpp/issues/27175
+static void test_ctx_pooling_mean(const size_t seed) {
+    const uint32_t n_seq_max = 5;
+    const uint32_t n_ubatch  = 64; // must not be a multiple of n_seq_max
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_LLAMA, /*moe =*/ false);
+
+    llama_model_params model_params = llama_model_default_params();
+
+    size_t tmp = seed;
+    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tmp, model_params));
+    if (!model) {
+        throw std::runtime_error("failed to create llama model");
+    }
+
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx        = 0;
+    ctx_params.n_batch      = n_ubatch;
+    ctx_params.n_ubatch     = n_ubatch;
+    ctx_params.n_seq_max    = n_seq_max;
+    ctx_params.embeddings   = true;
+    ctx_params.pooling_type = LLAMA_POOLING_TYPE_MEAN;
+
+    llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
+    if (!lctx) {
+        throw std::runtime_error("failed to create llama context");
+    }
+}
+
 static int test_backends(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level) {
     struct user_data_t {
         struct {
@@ -605,6 +635,8 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
         const ggml_log_level level_eff = level >= ud->min_level ? level : GGML_LOG_LEVEL_DEBUG;
         ud->original_logger.callback(level_eff, text, ud->original_logger.user_data);
     }, &ud);
+
+    test_ctx_pooling_mean(seed);
 
     const std::vector<llama_token> tokens = get_tokens(128, 128, seed);
 
