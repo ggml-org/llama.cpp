@@ -637,6 +637,7 @@ static rpc_tensor serialize_tensor(const ggml_tensor * tensor, const std::shared
     if (tensor->buffer && ggml_backend_buffer_is_rpc(tensor->buffer)) {
         ggml_backend_buffer_t buffer = tensor->buffer;
         ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
+        // ref: https://github.com/ggml-org/llama.cpp/pull/26500
         if (ctx != nullptr && (dispatcher == nullptr || ctx->dispatcher == dispatcher)) {
             result.buffer = ctx->remote_ptr;
             result.data = reinterpret_cast<uint64_t>(tensor->data);
