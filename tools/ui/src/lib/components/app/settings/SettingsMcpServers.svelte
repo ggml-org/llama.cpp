@@ -7,7 +7,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Empty from '$lib/components/ui/empty';
 	import { HealthCheckStatus } from '$lib/enums';
-	import { conversationsStore, mcpStore, toolsStore } from '$lib/stores';
+	import { mcpStore, toolsStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 
@@ -86,15 +86,13 @@
 					<McpServerCardSkeleton />
 				{:else}
 					<McpServerCard
-						enabled={conversationsStore.preferences.isMcpServerEnabledForChat(server.id)}
+						enabled={server.enabled}
 						onBrowseResources={() => (isResourcesDialogOpen = true)}
 						onDelete={() => mcpStore.removeServer(server.id)}
 						onToggle={async () => {
-							const wasEnabled = conversationsStore.preferences.isMcpServerEnabledForChat(
-								server.id
-							);
+							const wasEnabled = server.enabled;
 
-							await conversationsStore.preferences.toggleMcpServerForChat(server.id);
+							mcpStore.updateServer(server.id, { enabled: !wasEnabled });
 
 							if (!wasEnabled) {
 								// Promote the connection so tools/prompts/resources become

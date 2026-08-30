@@ -183,6 +183,53 @@ static void swiglu_oai_f32(const float * restrict src0,
 static const float GELU_COEF_A     = 0.044715f;
 static const float SQRT_2_OVER_PI  = 0.79788456080286535587989211986876f;
 
+static inline HVX_Vector hvx_vec_fast_sigmoid_f32_2it(HVX_Vector v) {
+    v = Q6_Vqf32_vmpy_VsfVsf(v, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
+    v = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v), Q6_V_vsplat_R(FAST_SIGMOID_C3));
+
+    HVX_Vector in_int = hvx_vec_truncate_f32(Q6_Vsf_equals_Vqf32(v));
+    HVX_Vector x      = Q6_Vqf32_vsub_Vqf32Vsf(v, Q6_Vsf_equals_Vw(in_int));
+    HVX_Vector xx     = Q6_Vqf32_vmpy_Vqf32Vqf32(x, x);
+
+    HVX_Vector v1 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(xx), Q6_V_vsplat_R(FAST_SIGMOID_C2));
+    v1            = Q6_Vqf32_vadd_Vqf32Vsf(v1, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
+
+    HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(x), Q6_V_vsplat_R(FAST_SIGMOID_C1));
+    v2            = Q6_Vqf32_vmpy_Vqf32Vqf32(v2, xx);
+    v2            = Q6_Vqf32_vadd_Vqf32Vqf32(v2, x);
+
+    HVX_Vector v3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(v2, v1));
+    v3            = Q6_Vw_vaslacc_VwVwR(v3, in_int, 24);
+
+    HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
+    HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
+
+    // Newton-Raphson with 2 iterations
+    HVX_Vector two_sf = hvx_vec_splat_f32(2.0f);
+    HVX_Vector i_sf   = Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(0x7EEEEBB3), v5);
+    HVX_Vector r_qf   = Q6_Vqf32_vmpy_VsfVsf(
+        i_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(two_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(i_sf, v5)))));
+    r_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(
+        r_qf, Q6_Vqf32_vsub_VsfVsf(two_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(r_qf), v5))));
+    HVX_Vector res = Q6_Vsf_equals_Vqf32(r_qf);
+
+    res = Q6_Vqf32_vmpy_VsfVsf(v3, res);
+
+    return Q6_Vsf_equals_Vqf32(res);
+}
+
+static inline HVX_Vector hvx_vec_fast_sigmoid_f32_guard_2it(HVX_Vector v,
+                                                            HVX_Vector one,
+                                                            HVX_Vector max_exp,
+                                                            HVX_Vector min_exp) {
+    const HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(max_exp, v);
+    const HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(v, min_exp);
+
+    HVX_Vector out = hvx_vec_fast_sigmoid_f32_2it(v);
+    out            = Q6_V_vmux_QVV(pred_max, out, one);
+    return Q6_V_vmux_QVV(pred_min, out, Q6_V_vzero());
+}
+
 static inline void hvx_geglu_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
     assert((unsigned long) dst  % 128 == 0);
     assert((unsigned long) src0 % 128 == 0);
@@ -200,20 +247,13 @@ static inline void hvx_geglu_f32_aa(uint8_t * restrict dst, const uint8_t * rest
 
     const HVX_Vector v_coef_a_times_sqrt = hvx_vec_splat_f32(GELU_COEF_A_TIMES_SQRT);
     const HVX_Vector v_sqrt_2_pi         = hvx_vec_splat_f32(SQRT_2_OVER_PI);
-    const HVX_Vector v_half              = hvx_vec_splat_f32(0.5f);
     const HVX_Vector v_one               = hvx_vec_splat_f32(1.0f);
-    const HVX_Vector v_two               = hvx_vec_splat_f32(2.0f);
-
-    // Hoisted fast sigmoid / inverse constants to avoid loop-internal overhead
-    const HVX_Vector v_log2f             = Q6_V_vsplat_R(FAST_SIGMOID_LOG2F);
-    const HVX_Vector v_c1                = Q6_V_vsplat_R(FAST_SIGMOID_C1);
-    const HVX_Vector v_c2                = Q6_V_vsplat_R(FAST_SIGMOID_C2);
-    const HVX_Vector v_inv_aprox         = Q6_V_vsplat_R(0x7EEEEBB3);
     const HVX_Vector v_max_exp           = hvx_vec_splat_f32(87.0f);
     const HVX_Vector v_min_exp           = hvx_vec_splat_f32(-87.0f);
 
     uint32_t i = 0;
 
+    _Pragma("unroll(4)")
     for (; i < nvec; i++) {
         HVX_Vector x = vsrc0[i];
         HVX_Vector g = vsrc1[i];
@@ -223,56 +263,13 @@ static inline void hvx_geglu_f32_aa(uint8_t * restrict dst, const uint8_t * rest
         coef = hvx_vec_add_f32_f32(coef, v_sqrt_2_pi);
         HVX_Vector inner = hvx_vec_mul_f32_f32(x, coef);
 
-        // y2 = 2 * inner
-        HVX_Vector y2 = hvx_vec_mul_f32_f32(inner, v_two);
+        // y2 = 2 * inner = inner + inner
+        HVX_Vector y2 = hvx_vec_add_f32_f32(inner, inner);
 
-        // Sigmoid guard check predicates
-        HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(v_max_exp, y2);
-        HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(y2, v_min_exp);
+        // Fast sigmoid approximation (2 iterations)
+        HVX_Vector sig2y = hvx_vec_fast_sigmoid_f32_guard_2it(y2, v_one, v_max_exp, v_min_exp);
 
-        // Fast sigmoid approximation
-        HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(y2, v_log2f);
-        v = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v), v_half);
-
-        HVX_Vector in_int = hvx_vec_truncate_f32(Q6_Vsf_equals_Vqf32(v));
-        HVX_Vector x_sig  = Q6_Vqf32_vsub_Vqf32Vsf(v, Q6_Vsf_equals_Vw(in_int));
-        HVX_Vector xx_sig = Q6_Vqf32_vmpy_Vqf32Vqf32(x_sig, x_sig);
-
-        HVX_Vector v1 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(xx_sig), v_c2);
-        v1 = Q6_Vqf32_vadd_Vqf32Vsf(v1, v_log2f);
-
-        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(x_sig), v_c1);
-        v2 = Q6_Vqf32_vmpy_Vqf32Vqf32(v2, xx_sig);
-        v2 = Q6_Vqf32_vadd_Vqf32Vqf32(v2, x_sig);
-
-        HVX_Vector v3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(v2, v1));
-        v3 = Q6_Vw_vaslacc_VwVwR(v3, in_int, 24);
-
-        HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
-        HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
-
-        // Fast division (Newton-Raphson with 2 iterations)
-        HVX_Vector i_sf = Q6_Vw_vsub_VwVw(v_inv_aprox, v5);
-        HVX_Vector r_qf = Q6_Vqf32_vmpy_VsfVsf(
-            i_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v_two, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(i_sf, v5)))));
-        r_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(
-            r_qf, Q6_Vqf32_vsub_VsfVsf(v_two, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(r_qf), v5))));
-        HVX_Vector res_inv = Q6_Vsf_equals_Vqf32(r_qf);
-
-        HVX_Vector sig2y = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v3, res_inv));
-
-        // Sigmoid guards
-        sig2y = Q6_V_vmux_QVV(pred_max, sig2y, v_one);
-        sig2y = Q6_V_vmux_QVV(pred_min, sig2y, Q6_V_vzero());
-
-        // tanh(inner) = 2 * sigmoid(2 * inner) - 1
-        HVX_Vector tanh_val = hvx_vec_mul_f32_f32(sig2y, v_two);
-        tanh_val = hvx_vec_sub_f32_f32(tanh_val, v_one);
-
-        HVX_Vector tanh_plus_one = hvx_vec_add_f32_f32(tanh_val, v_one);
-        HVX_Vector half_x = hvx_vec_mul_f32_f32(x, v_half);
-        HVX_Vector gelu_x = hvx_vec_mul_f32_f32(half_x, tanh_plus_one);
-
+        HVX_Vector gelu_x = hvx_vec_mul_f32_f32(x, sig2y);
         vdst[i] = hvx_vec_mul_f32_f32(gelu_x, g);
     }
 
@@ -285,50 +282,11 @@ static inline void hvx_geglu_f32_aa(uint8_t * restrict dst, const uint8_t * rest
         coef = hvx_vec_add_f32_f32(coef, v_sqrt_2_pi);
         HVX_Vector inner = hvx_vec_mul_f32_f32(x, coef);
 
-        HVX_Vector y2 = hvx_vec_mul_f32_f32(inner, v_two);
+        HVX_Vector y2 = hvx_vec_add_f32_f32(inner, inner);
 
-        HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(v_max_exp, y2);
-        HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(y2, v_min_exp);
+        HVX_Vector sig2y = hvx_vec_fast_sigmoid_f32_guard_2it(y2, v_one, v_max_exp, v_min_exp);
 
-        HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(y2, v_log2f);
-        v = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v), v_half);
-
-        HVX_Vector in_int = hvx_vec_truncate_f32(Q6_Vsf_equals_Vqf32(v));
-        HVX_Vector x_sig  = Q6_Vqf32_vsub_Vqf32Vsf(v, Q6_Vsf_equals_Vw(in_int));
-        HVX_Vector xx_sig = Q6_Vqf32_vmpy_Vqf32Vqf32(x_sig, x_sig);
-
-        HVX_Vector v1 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(xx_sig), v_c2);
-        v1 = Q6_Vqf32_vadd_Vqf32Vsf(v1, v_log2f);
-
-        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(x_sig), v_c1);
-        v2 = Q6_Vqf32_vmpy_Vqf32Vqf32(v2, xx_sig);
-        v2 = Q6_Vqf32_vadd_Vqf32Vqf32(v2, x_sig);
-
-        HVX_Vector v3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(v2, v1));
-        v3 = Q6_Vw_vaslacc_VwVwR(v3, in_int, 24);
-
-        HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
-        HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
-
-        HVX_Vector i_sf = Q6_Vw_vsub_VwVw(v_inv_aprox, v5);
-        HVX_Vector r_qf = Q6_Vqf32_vmpy_VsfVsf(
-            i_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v_two, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(i_sf, v5)))));
-        r_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(
-            r_qf, Q6_Vqf32_vsub_VsfVsf(v_two, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(r_qf), v5))));
-        HVX_Vector res_inv = Q6_Vsf_equals_Vqf32(r_qf);
-
-        HVX_Vector sig2y = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v3, res_inv));
-
-        sig2y = Q6_V_vmux_QVV(pred_max, sig2y, v_one);
-        sig2y = Q6_V_vmux_QVV(pred_min, sig2y, Q6_V_vzero());
-
-        HVX_Vector tanh_val = hvx_vec_mul_f32_f32(sig2y, v_two);
-        tanh_val = hvx_vec_sub_f32_f32(tanh_val, v_one);
-
-        HVX_Vector tanh_plus_one = hvx_vec_add_f32_f32(tanh_val, v_one);
-        HVX_Vector half_x = hvx_vec_mul_f32_f32(x, v_half);
-        HVX_Vector gelu_x = hvx_vec_mul_f32_f32(half_x, tanh_plus_one);
-
+        HVX_Vector gelu_x = hvx_vec_mul_f32_f32(x, sig2y);
         HVX_Vector res = hvx_vec_mul_f32_f32(gelu_x, g);
         hvx_vec_store_a((void *) &vdst[i], nloe * sizeof(float), res);
     }
