@@ -1,3 +1,5 @@
+import type { SearchResult } from '$lib/types/search';
+
 /**
  * Parsers for MCP web-search tool responses shaped like:
  *
@@ -15,14 +17,6 @@
  * separated by `---` qualifies), so it adapts to other web-search MCP
  * servers without hardcoding tool names.
  */
-
-export type SearchResult = {
-	title: string;
-	url: string;
-	published?: string;
-	author?: string;
-	highlights?: string;
-};
 
 const SEPARATOR_LINE_RE = /^\s*---\s*$/;
 const URL_SCHEME_RE = /^https?:\/\//i;
@@ -56,10 +50,10 @@ const FAVICON_PATH = '/favicon.ico';
 // (and that callers read off `SearchResult`), so `FieldKey.TITLE` is a
 // drop-in for the literal `'title'`.
 enum FieldKey {
-	TITLE = 'title',
-	URL = 'url',
+	AUTHOR = 'author',
 	PUBLISHED = 'published',
-	AUTHOR = 'author'
+	TITLE = 'title',
+	URL = 'url'
 }
 const FIELD_PREFIXES: ReadonlyArray<{ key: FieldKey; prefix: string }> = [
 	{ key: FieldKey.TITLE, prefix: 'Title:' },

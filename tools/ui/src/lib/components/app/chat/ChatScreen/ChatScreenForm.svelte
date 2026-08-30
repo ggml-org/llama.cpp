@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { deviceStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -120,13 +120,13 @@
 	}
 
 	onMount(() => {
-		if (!isMobile.current) {
+		if (!deviceStore.isMobile) {
 			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});
 
 	afterNavigate((navigation) => {
-		if (navigation?.from != null && !isMobile.current) {
+		if (navigation?.from != null && !deviceStore.isMobile) {
 			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});
@@ -147,15 +147,14 @@
 	});
 </script>
 
-<div class="chat-screen-form-wrapper" bind:this={formWrapperEl}>
+<div bind:this={formWrapperEl} class="chat-screen-form-wrapper">
 	<ChatForm
-		class="mx-auto max-w-3xl {className}"
 		bind:this={chatFormRef}
-		bind:value={message}
 		bind:uploadedFiles
+		bind:value={message}
+		class="mx-auto max-w-3xl {className}"
 		{disabled}
 		{isLoading}
-		showMcpPromptButton
 		onFilesAdd={handleFilesAdd}
 		{onStop}
 		onSubmit={handleSubmit}

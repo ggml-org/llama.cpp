@@ -1,7 +1,6 @@
 import { getAuthHeaders, getJsonHeaders } from './api-headers';
 import { base } from '$app/paths';
-import { ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants/error';
-import { UrlProtocol } from '$lib/enums';
+import { API_ABSOLUTE_URL_PROTOCOLS, ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants';
 
 /**
  * API Fetch Utilities
@@ -63,10 +62,8 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 	const { authOnly = false, headers: customHeaders, ...fetchOptions } = options;
 	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
 	const headers = { ...baseHeaders, ...customHeaders };
-	const url =
-		path.startsWith(UrlProtocol.HTTP) || path.startsWith(UrlProtocol.HTTPS)
-			? path
-			: `${base}${path}`;
+	// absolute URLs with an allowed protocol pass through untouched; relative paths get the base prefix
+	const url = API_ABSOLUTE_URL_PROTOCOLS.some((p) => path.startsWith(p)) ? path : `${base}${path}`;
 
 	let response;
 
@@ -117,28 +114,7 @@ export async function apiFetchWithParams<T>(
 		}
 	}
 
-	const { authOnly = false, headers: customHeaders, ...fetchOptions } = options;
-	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
-	const headers = { ...baseHeaders, ...customHeaders };
-
-	let response;
-
-	try {
-		response = await fetch(url.toString(), {
-			...fetchOptions,
-			headers
-		});
-	} catch (e) {
-		throw new Error(beautifyNetworkError(e));
-	}
-
-	if (!response.ok) {
-		const errorMessage = await parseErrorMessage(response);
-
-		throw new ApiError(errorMessage, response.status);
-	}
-
-	return response.json() as Promise<T>;
+	return apiFetch<T>(url.toString(), options);
 }
 
 /**

@@ -86,6 +86,7 @@ class ServerProcess:
     server_reranking: bool | None = False
     server_metrics: bool | None = False
     kv_unified: bool | None = False
+    swa_full: bool | None = False
     server_slots: bool | None = False
     pooling: str | None = None
     api_key: str | None = None
@@ -98,6 +99,8 @@ class ServerProcess:
     spec_type: str | None = None
     spec_draft_n_min: int | None = None
     spec_draft_n_max: int | None = None
+    spec_synth_len: float | None = None
+    spec_synth_rates: List[float] | None = None
     no_ui: bool | None = None
     jinja: bool | None = None
     reasoning_format: Literal['deepseek', 'none', 'nothink'] | None = None
@@ -106,6 +109,7 @@ class ServerProcess:
     chat_template_file: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
+    no_mmproj: bool | None = None
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
@@ -198,6 +202,8 @@ class ServerProcess:
             server_args.append("--metrics")
         if self.kv_unified:
             server_args.append("--kv-unified")
+        if self.swa_full:
+            server_args.append("--swa-full")
         if self.server_slots:
             server_args.append("--slots")
         else:
@@ -241,6 +247,11 @@ class ServerProcess:
             server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
         if self.spec_draft_n_min:
             server_args.extend(["--spec-draft-n-min", self.spec_draft_n_min])
+        if self.spec_synth_len is not None:
+            server_args.extend(["--spec-synth-len", self.spec_synth_len])
+        if self.spec_synth_rates is not None:
+            rates = ",".join(str(rate) for rate in self.spec_synth_rates)
+            server_args.extend(["--spec-synth-rates", rates])
         if self.no_ui:
             server_args.append("--no-ui")
         if self.no_models_autoload:
@@ -259,6 +270,8 @@ class ServerProcess:
             server_args.extend(["--chat-template-file", self.chat_template_file])
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
+        if self.no_mmproj:
+            server_args.append("--no-mmproj")
         if self.media_path:
             server_args.extend(["--media-path", self.media_path])
         if self.sleep_idle_seconds is not None:
@@ -617,7 +630,7 @@ class ServerPreset:
         server.model_hf_repo = "ggml-org/tinygemma3-GGUF:Q8_0"
         server.model_alias = "tinygemma3"
         server.n_ctx = 1024
-        server.n_batch = 32
+        server.n_batch = 512
         server.n_slots = 2
         server.n_predict = 4
         server.seed = 42

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import '$styles/katex-custom.scss';
+	import '$lib/styles/katex-custom.scss';
 	import {
 		getCodeInfoFromTarget,
 		getHastNodeId,
@@ -25,34 +25,25 @@
 		DialogMermaidPreview
 	} from '$lib/components/app';
 	import {
-		BOOL_TRUE_STRING,
-		CODE_BLOCK_HEADER_CLASS,
-		DATA_ERROR_BOUND_ATTR,
-		DATA_ERROR_HANDLED_ATTR,
+		CODE_BLOCK_CLASS,
 		DIAGRAM_VIEW_MODE_ATTR,
 		DIAGRAM_VIEW_RENDERED,
 		DIAGRAM_VIEW_SOURCE,
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
+		MARKDOWN_DATA_ATTRS,
 		MERMAID_BLOCK_CLASS,
 		MERMAID_LANGUAGE,
 		MERMAID_RENDERED_ATTR,
 		MERMAID_SYNTAX_ATTR,
 		MERMAID_WRAPPER_CLASS,
 		SETTINGS_KEYS,
-		SVG_BLOCK_CLASS,
-		SVG_INLINE_SHADOW_STYLE,
-		SVG_LANGUAGE,
-		SVG_RENDERED_ATTR,
-		SVG_SOURCE_ATTR,
-		SVG_TAG_PREFIX,
-		SVG_WRAPPER_CLASS,
-		TOGGLE_SOURCE_BTN_CLASS,
-		XML_LANGUAGE
+		SVG,
+		TOGGLE_SOURCE_BTN_CLASS
 	} from '$lib/constants';
-	import { ColorMode, UrlProtocol } from '$lib/enums';
+	import { BooleanString, ColorMode, UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files.enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import {
 		copyCodeToClipboard,
@@ -105,9 +96,9 @@
 
 		if (!block) return null;
 
-		if (block.language === SVG_LANGUAGE) return block.code;
+		if (block.language === SVG.LANGUAGE) return block.code;
 
-		if (block.language === XML_LANGUAGE && block.code.trimStart().startsWith(SVG_TAG_PREFIX))
+		if (block.language === SVG.XML_LANGUAGE && block.code.trimStart().startsWith(SVG.TAG_PREFIX))
 			return block.code;
 
 		return null;
@@ -137,7 +128,7 @@
 
 	// Mount the streaming svg into its shadow host on every chunk so it renders live
 	$effect(() => {
-		if (streamingSvgHost) mountSvgShadow(streamingSvgHost, liveSvgHtml, SVG_INLINE_SHADOW_STYLE);
+		if (streamingSvgHost) mountSvgShadow(streamingSvgHost, liveSvgHtml, SVG.INLINE_SHADOW_STYLE);
 	});
 
 	let streamingCodeScrollContainer = $state<HTMLDivElement>();
@@ -493,13 +484,19 @@
 			const copyButton = wrapper.querySelector<HTMLButtonElement>('.copy-code-btn');
 			const previewButton = wrapper.querySelector<HTMLButtonElement>('.preview-code-btn');
 
-			if (copyButton && copyButton.dataset.listenerBound !== 'true') {
-				copyButton.dataset.listenerBound = 'true';
+			if (
+				copyButton &&
+				copyButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
+			) {
+				copyButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
 				copyButton.addEventListener('click', handleCopyClick);
 			}
 
-			if (previewButton && previewButton.dataset.listenerBound !== 'true') {
-				previewButton.dataset.listenerBound = 'true';
+			if (
+				previewButton &&
+				previewButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
+			) {
+				previewButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
 				previewButton.addEventListener('click', handlePreviewClick);
 			}
 		}
@@ -515,7 +512,7 @@
 		const images = containerRef.querySelectorAll<HTMLImageElement>(IMAGE_NOT_ERROR_BOUND_SELECTOR);
 
 		for (const img of images) {
-			img.dataset[DATA_ERROR_BOUND_ATTR] = BOOL_TRUE_STRING;
+			img.setAttribute(MARKDOWN_DATA_ATTRS.ERROR_BOUND, BooleanString.TRUE);
 			img.addEventListener('error', handleImageError);
 		}
 	}
@@ -535,7 +532,7 @@
 			event.preventDefault();
 			event.stopPropagation();
 
-			const wrapper = toggleBtn.closest(`.${MERMAID_WRAPPER_CLASS}, .${SVG_WRAPPER_CLASS}`);
+			const wrapper = toggleBtn.closest(`.${MERMAID_WRAPPER_CLASS}, .${SVG.WRAPPER_CLASS}`);
 
 			if (!wrapper) return;
 
@@ -593,16 +590,16 @@
 		}
 
 		// Check if clicking on copy or preview button in svg block
-		const svgCopyBtn = target.closest(`.${SVG_WRAPPER_CLASS} .copy-code-btn`);
-		const svgPreviewBtn = target.closest(`.${SVG_WRAPPER_CLASS} .preview-code-btn`);
+		const svgCopyBtn = target.closest(`.${SVG.WRAPPER_CLASS} .copy-code-btn`);
+		const svgPreviewBtn = target.closest(`.${SVG.WRAPPER_CLASS} .preview-code-btn`);
 
 		if (svgCopyBtn || svgPreviewBtn) {
-			const wrapper = target.closest(`.${SVG_WRAPPER_CLASS}`);
+			const wrapper = target.closest(`.${SVG.WRAPPER_CLASS}`);
 
 			if (!wrapper) return;
 
 			const preElement = wrapper.querySelector<HTMLElement>(
-				`pre.${SVG_BLOCK_CLASS}[${SVG_SOURCE_ATTR}]`
+				`pre.${SVG.BLOCK_CLASS}[${SVG.SOURCE_ATTR}]`
 			);
 
 			if (!preElement) return;
@@ -611,7 +608,7 @@
 				event.preventDefault();
 				event.stopPropagation();
 				try {
-					await copyToClipboard(preElement.getAttribute(SVG_SOURCE_ATTR) ?? '');
+					await copyToClipboard(preElement.getAttribute(SVG.SOURCE_ATTR) ?? '');
 				} catch (error) {
 					console.error('Failed to copy svg source:', error);
 				}
@@ -622,7 +619,7 @@
 			if (svgPreviewBtn) {
 				event.preventDefault();
 				event.stopPropagation();
-				mermaidPreviewSvgHtml = sanitizeSvg(preElement.getAttribute(SVG_SOURCE_ATTR) ?? '');
+				mermaidPreviewSvgHtml = sanitizeSvg(preElement.getAttribute(SVG.SOURCE_ATTR) ?? '');
 				svgPreviewLive = false;
 				mermaidPreviewOpen = true;
 
@@ -633,14 +630,14 @@
 		// A click on the header chrome targets the action buttons, never the
 		// diagram. Guard so a header click can not fall through to the click to
 		// zoom branches below, whatever the scroll position or stacking.
-		if (target.closest(`.${CODE_BLOCK_HEADER_CLASS}`)) return;
+		if (target.closest(`.${CODE_BLOCK_CLASS.HEADER}`)) return;
 
 		// Open preview when clicking the svg block itself. A final block carries its
 		// source, a streaming block does not and is mirrored live into the dialog.
-		const svgEl = target.closest(`.${SVG_BLOCK_CLASS}`);
+		const svgEl = target.closest(`.${SVG.BLOCK_CLASS}`);
 
 		if (svgEl) {
-			const source = svgEl.getAttribute(SVG_SOURCE_ATTR);
+			const source = svgEl.getAttribute(SVG.SOURCE_ATTR);
 
 			if (source !== null) {
 				mermaidPreviewSvgHtml = sanitizeSvg(source);
@@ -698,7 +695,7 @@
 
 		// Mark nodes immediately to prevent duplicate renders if called again during streaming.
 		// This avoids needing a guard that would block node discovery.
-		nodes.forEach((node) => node.setAttribute(MERMAID_RENDERED_ATTR, 'true'));
+		nodes.forEach((node) => node.setAttribute(MERMAID_RENDERED_ATTR, BooleanString.TRUE));
 
 		// Read mode before await so Svelte tracks it reactively.
 		const isDark = mode.current === ColorMode.DARK;
@@ -739,15 +736,15 @@
 		if (!containerRef) return;
 
 		const nodes = containerRef.querySelectorAll<HTMLElement>(
-			`pre.${SVG_BLOCK_CLASS}:not([${SVG_RENDERED_ATTR}])`
+			`pre.${SVG.BLOCK_CLASS}:not([${SVG.RENDERED_ATTR}])`
 		);
 
 		if (nodes.length === 0) return;
 
 		nodes.forEach((node) => {
-			node.setAttribute(SVG_RENDERED_ATTR, 'true');
+			node.setAttribute(SVG.RENDERED_ATTR, BooleanString.TRUE);
 
-			const source = node.getAttribute(SVG_SOURCE_ATTR) ?? node.textContent ?? '';
+			const source = node.getAttribute(SVG.SOURCE_ATTR) ?? node.textContent ?? '';
 			const clean = sanitizeSvg(source);
 
 			if (clean) {
@@ -755,7 +752,7 @@
 				const host = document.createElement('div');
 
 				node.appendChild(host);
-				mountSvgShadow(host, clean, SVG_INLINE_SHADOW_STYLE);
+				mountSvgShadow(host, clean, SVG.INLINE_SHADOW_STYLE);
 			}
 		});
 	}
@@ -772,11 +769,11 @@
 		// Don't handle data URLs or already-handled images
 		if (
 			img.src.startsWith(UrlProtocol.DATA) ||
-			img.dataset[DATA_ERROR_HANDLED_ATTR] === BOOL_TRUE_STRING
+			img.getAttribute(MARKDOWN_DATA_ATTRS.ERROR_HANDLED) === BooleanString.TRUE
 		)
 			return;
 
-		img.dataset[DATA_ERROR_HANDLED_ATTR] = BOOL_TRUE_STRING;
+		img.setAttribute(MARKDOWN_DATA_ATTRS.ERROR_HANDLED, BooleanString.TRUE);
 
 		const src = img.src;
 		// Create fallback element
@@ -870,19 +867,22 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	bind:this={containerRef}
-	onclick={handleMermaidClick}
-	class="markdown-content {className}{config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
+	class="markdown-content {className}{settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
 		? ' full-height-code-blocks'
 		: ''}"
+	onclick={handleMermaidClick}
 >
 	{#each renderedBlocks as block (block.id)}
-		<div class="markdown-block" data-block-id={block.id}>
+		<div class="markdown-block" {...{ [MARKDOWN_DATA_ATTRS.BLOCK_ID]: block.id }}>
 			{@html block.html}
 		</div>
 	{/each}
 
 	{#if unstableBlockHtml}
-		<div class="markdown-block markdown-block--unstable" data-block-id="unstable">
+		<div
+			class="markdown-block markdown-block--unstable"
+			{...{ [MARKDOWN_DATA_ATTRS.BLOCK_ID]: 'unstable' }}
+		>
 			<!-- eslint-disable-next-line no-at-html-tags -->
 			{@html unstableBlockHtml}
 		</div>
@@ -893,14 +893,16 @@
 			<div class="mermaid-block-wrapper streaming-mermaid-block">
 				<div class="code-block-header">
 					<span class="code-language">mermaid</span>
+
 					<div class="code-block-actions">
 						<ActionIconCopyToClipboard
-							text={incompleteCodeBlock.code}
-							canCopy={false}
 							ariaLabel="Diagram incomplete"
+							canCopy={false}
+							text={incompleteCodeBlock.code}
 						/>
 					</div>
 				</div>
+
 				<div class="mermaid-loading-placeholder">
 					<span class="mermaid-loading-text">Generating diagram...</span>
 				</div>
@@ -909,17 +911,19 @@
 			<div class="svg-block-wrapper streaming-svg-block">
 				<div class="code-block-header">
 					<span class="code-language">svg</span>
+
 					<div class="code-block-actions">
 						<ActionIconCopyToClipboard
-							text={incompleteCodeBlock.code}
-							canCopy={false}
 							ariaLabel="Diagram incomplete"
+							canCopy={false}
+							text={incompleteCodeBlock.code}
 						/>
 					</div>
 				</div>
+
 				{#if liveSvgHtml}
 					<div class="svg-scroll-container">
-						<div class={SVG_BLOCK_CLASS}>
+						<div class={SVG.BLOCK_CLASS}>
 							<div bind:this={streamingSvgHost}></div>
 						</div>
 					</div>
@@ -933,10 +937,11 @@
 			<div class="code-block-wrapper streaming-code-block relative">
 				<div class="code-block-header">
 					<span class="code-language">{incompleteCodeBlock.language || 'text'}</span>
+
 					<CodeBlockActions
 						code={incompleteCodeBlock.code}
-						language={incompleteCodeBlock.language || 'text'}
 						disabled
+						language={incompleteCodeBlock.language || 'text'}
 						onPreview={(code, lang) => {
 							previewCode = code;
 							previewLanguage = lang;
@@ -961,16 +966,16 @@
 </div>
 
 <DialogCodePreview
-	open={previewDialogOpen}
 	code={previewCode}
 	language={previewLanguage}
 	onOpenChange={handlePreviewDialogOpenChange}
+	open={previewDialogOpen}
 />
 
 <DialogMermaidPreview
+	onOpenChange={handleMermaidPreviewOpenChange}
 	open={mermaidPreviewOpen}
 	svgHtml={mermaidPreviewSvgHtml}
-	onOpenChange={handleMermaidPreviewOpenChange}
 />
 
 <style>

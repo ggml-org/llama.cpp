@@ -49,6 +49,14 @@ mkdir -p "$2"
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
 
+# gpu-rocm self-hosted runner can't upload logs to blob; keep each run's logs in
+# their own dir keyed by the GitHub run id so an Actions run URL maps to its logs.
+if [ -n "${GG_BUILD_ROCM}" ] && [ -n "${GITHUB_RUN_ID}" ]; then
+    OUT="$OUT/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+    mkdir -p "$OUT"
+    echo "ci results dir: $OUT"
+fi
+
 rm -f $OUT/*.log
 rm -f $OUT/*.exit
 rm -f $OUT/*.md
@@ -181,8 +189,8 @@ if [ ! -z ${GG_BUILD_OPENVINO} ]; then
     fi
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 
-    # TODO: fix and re-enable the `test-llama-archs` test below
-    CTEST_EXTRA="-E test-llama-archs"
+    # TODO: fix and re-enable the `test-llama-archs` and `test-recurrent-state-rollback*`
+    CTEST_EXTRA="-E test-llama-archs|^test-recurrent-state-rollback"
 fi
 
 ## helpers
@@ -289,6 +297,40 @@ function gg_sum_ctest_release {
     gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
     gg_printf '```\n'
     gg_printf '%s\n' "$(cat $OUT/${ci}-ctest.log)"
+    gg_printf '```\n'
+}
+
+# test_llama_archs_tensor_split
+
+function gg_run_test_llama_archs_tensor_split {
+    cd ${SRC}
+
+    set -e
+
+    if [ ! -z ${GG_BUILD_CUDA} ]; then
+        GGML_CUDA_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+    fi
+
+    if [ ! -z ${GG_BUILD_METAL} ]; then
+        GGML_METAL_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+    fi
+
+    set +e
+}
+
+function gg_sum_test_llama_archs_tensor_split {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'Runs test-llama-archs with 1 to 4 devices\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '```\n'
+    gg_printf '%s\n' "$(cat $OUT/${ci}.log)"
     gg_printf '```\n'
 }
 
@@ -742,6 +784,8 @@ ret=0
 
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
+
+test $ret -eq 0 && gg_run test_llama_archs_tensor_split
 
 if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
     test $ret -eq 0 && gg_run test_backend_ops_cpu

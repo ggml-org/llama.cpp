@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ModelBadge, ModelsSelectorDropdown } from '$lib/components/app';
 	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore } from '$lib/stores/models.svelte';
+	import { modelsStore } from '$lib/stores';
 	import { copyToClipboard } from '$lib/utils';
 
 	interface Props {
@@ -31,7 +31,7 @@
 				pendingModel = modelId;
 
 				try {
-					await modelsStore.loadModel(modelId);
+					await modelsStore.status.load(modelId);
 				} finally {
 					pendingModel = null;
 				}

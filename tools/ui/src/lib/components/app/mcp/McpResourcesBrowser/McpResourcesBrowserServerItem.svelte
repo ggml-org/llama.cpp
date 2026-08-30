@@ -9,8 +9,8 @@
 	import { McpServerIdentity } from '$lib/components/app/mcp';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { mcpStore } from '$lib/stores';
 	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
 	import { getDisplayName, getResourceIcon } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -86,7 +86,7 @@
 
 	{#if isFolder}
 		{@const folderCount = countTreeResources(node)}
-		<Collapsible.Root open={isFolderExpanded} onOpenChange={() => onToggleFolder(folderId)}>
+		<Collapsible.Root onOpenChange={() => onToggleFolder(folderId)} open={isFolderExpanded}>
 			<Collapsible.Trigger
 				class="flex w-full items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted/50"
 			>
@@ -121,9 +121,9 @@
 			{#if onToggle}
 				<Checkbox
 					checked={isSelected}
+					class={ICON_CLASS_DEFAULT}
 					onCheckedChange={(checked: boolean | 'indeterminate') =>
 						handleCheckboxChange(resource, checked === true)}
-					class={ICON_CLASS_DEFAULT}
 				/>
 			{/if}
 
@@ -146,7 +146,7 @@
 	{/if}
 {/snippet}
 
-<Collapsible.Root open={isExpanded} onOpenChange={onToggleServer}>
+<Collapsible.Root onOpenChange={onToggleServer} open={isExpanded}>
 	<Collapsible.Trigger
 		class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
 	>

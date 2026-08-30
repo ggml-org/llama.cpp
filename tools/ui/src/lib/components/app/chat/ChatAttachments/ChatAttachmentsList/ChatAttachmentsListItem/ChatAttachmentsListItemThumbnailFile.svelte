@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Music, Video, X } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { AttachmentType } from '$lib/enums';
 	import {
 		formatFileSize,
@@ -101,7 +101,7 @@
 	<div
 		class="absolute top-2 right-2 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
 	>
-		<ActionIcon icon={X} tooltip="Remove" stopPropagationOnClick onclick={() => onRemove?.(id)} />
+		<ActionIcon icon={X} onclick={() => onRemove?.(id)} stopPropagationOnClick tooltip="Remove" />
 	</div>
 {/snippet}
 

@@ -1,14 +1,4 @@
-import {
-	APP1_MARKER,
-	EXIF_ORIENTATION_TAG,
-	EXIF_SCAN_BYTE_LIMIT,
-	EXIF_SIGNATURE,
-	IFD_ENTRY_SIZE,
-	JPEG_SOI_MARKER,
-	SOS_MARKER,
-	TIFF_LITTLE_ENDIAN,
-	TIFF_MAGIC
-} from '$lib/constants/jpeg-exif';
+import { EXIF } from '$lib/constants';
 import { MimeTypeImage } from '$lib/enums';
 
 /**
@@ -28,7 +18,7 @@ export function getJpegOrientationFromDataURL(base64UrlJpeg: string): number {
 		}
 
 		// Keep the slice a multiple of 4 characters so atob accepts it
-		const charLimit = Math.ceil(EXIF_SCAN_BYTE_LIMIT / 3) * 4;
+		const charLimit = Math.ceil(EXIF.SCAN_BYTE_LIMIT / 3) * 4;
 		const slice = base64UrlJpeg.slice(payloadStart, payloadStart + charLimit);
 		const binary = atob(slice.slice(0, slice.length - (slice.length % 4)));
 		const bytes = new Uint8Array(binary.length);
@@ -49,7 +39,7 @@ export function getJpegOrientationFromDataURL(base64UrlJpeg: string): number {
  * @returns The orientation value (1 to 8), or 1 when absent or malformed
  */
 function findExifOrientation(view: DataView): number {
-	if (view.byteLength < 4 || view.getUint16(0) !== JPEG_SOI_MARKER) {
+	if (view.byteLength < 4 || view.getUint16(0) !== EXIF.JPEG_SOI_MARKER) {
 		return 1;
 	}
 
@@ -63,13 +53,13 @@ function findExifOrientation(view: DataView): number {
 		const marker = view.getUint8(offset + 1);
 
 		// Compressed image data starts here: no EXIF past this point
-		if (marker === SOS_MARKER) {
+		if (marker === EXIF.SOS_MARKER) {
 			return 1;
 		}
 
 		const segmentLength = view.getUint16(offset + 2);
 
-		if (marker === APP1_MARKER) {
+		if (marker === EXIF.APP1_MARKER) {
 			return parseExifOrientation(view, offset + 4, segmentLength);
 		}
 
@@ -92,7 +82,7 @@ function parseExifOrientation(view: DataView, start: number, segmentLength: numb
 	// The payload opens with the "Exif\0\0" signature
 	if (
 		start + 6 > end ||
-		view.getUint32(start) !== EXIF_SIGNATURE ||
+		view.getUint32(start) !== EXIF.EXIF_SIGNATURE ||
 		view.getUint16(start + 4) !== 0
 	) {
 		return 1;
@@ -104,9 +94,9 @@ function parseExifOrientation(view: DataView, start: number, segmentLength: numb
 		return 1;
 	}
 
-	const littleEndian = view.getUint16(tiff) === TIFF_LITTLE_ENDIAN;
+	const littleEndian = view.getUint16(tiff) === EXIF.TIFF_LITTLE_ENDIAN;
 
-	if (view.getUint16(tiff + 2, littleEndian) !== TIFF_MAGIC) {
+	if (view.getUint16(tiff + 2, littleEndian) !== EXIF.TIFF_MAGIC) {
 		return 1;
 	}
 
@@ -120,13 +110,13 @@ function parseExifOrientation(view: DataView, start: number, segmentLength: numb
 
 	// Scan IFD0 entries for the orientation tag
 	for (let i = 0; i < entryCount; i++) {
-		const entry = tiff + ifdOffset + 2 + i * IFD_ENTRY_SIZE;
+		const entry = tiff + ifdOffset + 2 + i * EXIF.IFD_ENTRY_SIZE;
 
-		if (entry + IFD_ENTRY_SIZE > end) {
+		if (entry + EXIF.IFD_ENTRY_SIZE > end) {
 			return 1;
 		}
 
-		if (view.getUint16(entry, littleEndian) === EXIF_ORIENTATION_TAG) {
+		if (view.getUint16(entry, littleEndian) === EXIF.ORIENTATION_TAG) {
 			const orientation = view.getUint16(entry + 8, littleEndian);
 
 			return orientation >= 1 && orientation <= 8 ? orientation : 1;

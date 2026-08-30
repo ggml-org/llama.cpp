@@ -3,7 +3,7 @@
 	import { Card } from '$lib/components/ui/card';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { McpPromptVariant } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
 
@@ -99,12 +99,12 @@
 				<Tooltip.Trigger>
 					{#if serverFavicon}
 						<img
-							src={serverFavicon}
 							alt=""
 							class="h-3.5 w-3.5 shrink-0 rounded-sm"
 							onerror={(e) => {
 								(e.currentTarget as HTMLImageElement).style.display = 'none';
 							}}
+							src={serverFavicon}
 						/>
 					{/if}
 				</Tooltip.Trigger>

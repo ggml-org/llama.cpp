@@ -1,0 +1,128 @@
+name: Make Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Commit SHA to release (empty = branch HEAD)'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Dry run - validate without creating the tag'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+permissions:
+  contents: write
+
+jobs:
+  make-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
+          ref: ${{ inputs.commit != '' && inputs.commit || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Run release checks
+        id: checks
+        run: bash scripts/make-release-checks.sh ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
+
+      - name: Create release tag
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        run: |
+          VERSION="${{ steps.checks.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${VERSION}" -m "Release ${VERSION}"
+          git push origin "${VERSION}"
+          echo "Created and pushed tag ${VERSION}"
+
+      - name: Generate release description
+        id: desc
+        run: bash scripts/make-release-desc.sh "${{ steps.checks.outputs.version }}"
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Create nightly-tag.txt
+        id: nightly_tag_file
+        run: |
+          NIGHTLY_TAG="${{ steps.desc.outputs.nightly_tag }}"
+          if [[ -z "${NIGHTLY_TAG}" ]]; then
+            echo "Warning: no nightly tag found for the release commit - nightly-tag.txt will not be created"
+            echo "create=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "${NIGHTLY_TAG}" > nightly-tag.txt
+          echo "create=true" >> "$GITHUB_OUTPUT"
+          echo "nightly-tag.txt:"
+          cat nightly-tag.txt
+
+      - name: Create release
+        id: create_release
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: ggml-org/action-create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tag_name: ${{ steps.checks.outputs.version }}
+          prerelease: false
+          # TODO: enrich the body of the release with more information
+          body: |
+            ## Overview
+
+            New version has been released.
+
+            ## Assets
+
+            ${{ steps.desc.outputs.nightly }}
+
+            ## More info
+
+            - [Releases and versioning of `ggml-org` projects](https://github.com/ggml-org/ggml/discussions/1579)
+
+            ## ${{ steps.desc.outputs.changelog_title }}
+
+            ${{ steps.desc.outputs.changelog }}
+
+      - name: Upload nightly-tag.txt
+        if: ${{ github.event.inputs.dry_run == 'false' && steps.nightly_tag_file.outputs.create == 'true' }}
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const fs = require('fs');
+            const release_id = '${{ steps.create_release.outputs.id }}';
+            console.log('uploadReleaseAsset', 'nightly-tag.txt');
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release_id,
+              name: 'nightly-tag.txt',
+              data: await fs.readFileSync('./nightly-tag.txt')
+            });
+
+      - name: Dry run summary
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: |
+          if [[ "${{ steps.checks.outputs.checks_passed }}" == "true" ]]; then
+            echo "Dry run complete - all checks passed."
+            echo "Would have created tag: ${{ steps.checks.outputs.version }}"
+            if [[ -n "${{ steps.desc.outputs.nightly_tag }}" ]]; then
+              echo "Would have uploaded nightly-tag.txt: ${{ steps.desc.outputs.nightly_tag }}"
+            fi
+          else
+            echo "::error::Dry run found release check failures. A release tag would not be created."
+            exit 1
+          fi

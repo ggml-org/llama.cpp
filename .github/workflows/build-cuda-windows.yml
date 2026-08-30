@@ -22,6 +22,7 @@ env:
 
 jobs:
   cuda:
+    name: windows-cuda (${{ matrix.cuda }}, ${{ matrix.arch }})
     runs-on: windows-2022
 
     permissions:
@@ -29,7 +30,16 @@ jobs:
 
     strategy:
       matrix:
-        cuda: ['12.4', '13.3']
+        include:
+          - cuda: '12.4'
+            arch: x64
+            defines: '-DGGML_CUDA_CUB_3DOT2=ON'
+          - cuda: '13.3'
+            arch: x64
+            defines: ''
+          - cuda: '13.4'
+            arch: arm64
+            defines: '-DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
 
     steps:
       - name: Clone
@@ -39,12 +49,13 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
+          key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
 
       - name: Install Cuda Toolkit
         uses: ./.github/actions/windows-setup-cuda
         with:
           cuda_version: ${{ matrix.cuda }}
+          cuda_arch: ${{ matrix.arch }}
 
       - name: Install Ninja
         id: install_ninja
@@ -54,26 +65,21 @@ jobs:
       - name: Build
         id: cmake_build
         shell: cmd
-        # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
           cmake -S . -B build -G "Ninja Multi-Config" ^
-            -DLLAMA_BUILD_SERVER=ON ^
-            -DLLAMA_BUILD_BORINGSSL=ON ^
-            -DGGML_NATIVE=OFF ^
             -DGGML_BACKEND_DL=ON ^
-            -DGGML_CPU_ALL_VARIANTS=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CPU=OFF ^
             -DGGML_CUDA=ON ^
-            -DGGML_RPC=ON ^
-            -DGGML_CUDA_CUB_3DOT2=ON
+            -DLLAMA_BUILD_BORINGSSL=ON ${{ matrix.defines }}
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
-          cmake --build build --config Release -j %NINJA_JOBS% -t ggml
-          cmake --build build --config Release
+          cmake --build build --config Release -j %NINJA_JOBS% --target ggml-cuda
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
         with:
-          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
+          key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
 
   hip:
     runs-on: windows-2022
@@ -83,7 +89,7 @@ jobs:
 
     env:
       # Make sure this is in sync with build-cache.yml
-      HIPSDK_INSTALLER_VERSION: "26.Q1"
+      ROCM_VERSION: "7.14.0"
 
     strategy:
       matrix:
@@ -97,36 +103,53 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Grab rocWMMA package
-        id: grab_rocwmma
-        run: |
-          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2.1/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70201-81~24.04_amd64.deb"
-          7z x rocwmma.deb
-          7z x data.tar
-
-      - name: Use ROCm Installation Cache
-        uses: actions/cache@v5
-        id: cache-rocm
-        with:
-          path: C:\Program Files\AMD\ROCm
-          key: cache-gha-rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
+      # - name: Cache ROCm Installation
+      #   uses: actions/cache@v5
+      #   id: cache-rocm
+      #   with:
+      #     path: C:\TheRock\build
+      #     key: rocm-wheels-${{ env.ROCM_VERSION }}-multi-arch-${{ runner.os }}
 
       - name: Setup ROCm
-        if: steps.cache-rocm.outputs.cache-hit != 'true'
+        # if: steps.cache-rocm.outputs.cache-hit != 'true'
         uses: ./.github/actions/windows-setup-rocm
         with:
-          version: ${{ env.HIPSDK_INSTALLER_VERSION }}
+          version: ${{ env.ROCM_VERSION }}
+
+      - name: Setup ROCm Environment
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Activate venv from cache or fresh install
+          & C:\TheRock\build\.venv\Scripts\Activate.ps1
+
+          # Expand the devel tree (idempotent; no-op if already done during install)
+          rocm-sdk init
+          if ($LASTEXITCODE -ne 0) { throw "rocm-sdk init failed with exit code $LASTEXITCODE" }
+
+          # Get ROCm installation paths using the rocm-sdk CLI tool
+          $rocmPath = (rocm-sdk path --root)
+          if (-not $rocmPath) { throw "rocm-sdk path --root returned empty - devel package may not be installed" }
+          $rocmPath = $rocmPath.Trim()
+          $cmakePath = (rocm-sdk path --cmake).Trim()
+          $binPath = (rocm-sdk path --bin).Trim()
+          write-host "ROCm root: $rocmPath"
+
+          echo "HIP_PATH=$rocmPath" >> $env:GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$cmakePath" >> $env:GITHUB_ENV
+          echo "HIP_DEVICE_LIB_PATH=$rocmPath\lib\llvm\amdgcn\bitcode" >> $env:GITHUB_ENV
+          echo "HIP_PLATFORM=amd" >> $env:GITHUB_ENV
+          echo "LLVM_PATH=$rocmPath\lib\llvm" >> $env:GITHUB_ENV
+          echo "$binPath" >> $env:GITHUB_PATH
+
+          # Keep venv in PATH for subsequent steps
+          echo "C:\TheRock\build\.venv\Scripts" >> $env:GITHUB_PATH
 
       - name: Verify ROCm
         id: verify
         run: |
-          # Find and test ROCm installation
-          $clangPath = Get-ChildItem 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | Select-Object -First 1
-          if (-not $clangPath) {
-            Write-Error "ROCm installation not found"
-            exit 1
-          }
-          & $clangPath.FullName --version
+          # Test the ROCm clang shipped in the installed wheel
+          & "${env:HIP_PATH}\lib\llvm\bin\clang.exe" --version
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -134,28 +157,27 @@ jobs:
           # TODO: this build does not match the build in release.yml, so we use a different cache key
           #       ideally, the builds should match, similar to the CUDA build above so that we would be able
           #       to populate the ccache for the release with manual runs of this workflow
-          #key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
-          key: cuda-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
+          #key: release-windows-2022-x64-hip-${{ env.ROCM_VERSION }}-${{ matrix.name }}
+          key: cuda-windows-2022-x64-hip-${{ env.ROCM_VERSION }}-${{ matrix.name }}
 
       - name: Build
         id: cmake_build
         run: |
-          $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
-          $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
           cmake -G "Unix Makefiles" -B build -S . `
-            -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
-            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.2.1/include/" `
+            -DCMAKE_PREFIX_PATH="${env:HIP_PATH}" `
+            -DCMAKE_C_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
+            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang++.exe" `
+            -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DCMAKE_BUILD_TYPE=Release `
             -DLLAMA_BUILD_BORINGSSL=ON `
-            -DROCM_DIR="${env:HIP_PATH}" `
+            -DHIP_PATH="${env:HIP_PATH}" `
             -DGGML_HIP=ON `
-            -DGPU_TARGETS="gfx1100"  `
+            -DGPU_TARGETS="gfx1100" `
             -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
         with:
-          #key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
-          key: cuda-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
+          #key: release-windows-2022-x64-hip-${{ env.ROCM_VERSION }}-${{ matrix.name }}
+          key: cuda-windows-2022-x64-hip-${{ env.ROCM_VERSION }}-${{ matrix.name }}

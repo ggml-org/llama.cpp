@@ -16,6 +16,7 @@ from .granite import GraniteHybridModel
     "NemotronH_Nano_VL_V2",
     "RADIOModel",
 )
+@ModelBase.example("nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16")
 class NemotronNanoV2VLModel(MmprojModel):
     # ViT-Huge architecture parameters for RADIO v2.5-h
     _vit_hidden_size = 1280
@@ -151,6 +152,7 @@ class NemotronNanoV2VLModel(MmprojModel):
 
 
 @ModelBase.register("NemotronForCausalLM")
+@ModelBase.example("nvidia/Minitron-4B-Base")
 class NemotronModel(TextModel):
     model_arch = gguf.MODEL_ARCH.NEMOTRON
 
@@ -193,18 +195,25 @@ class NemotronModel(TextModel):
 
 
 @ModelBase.register("NemotronHForCausalLM")
+@ModelBase.example("nvidia/Nemotron-H-8B-Base-8K")
 class NemotronHModel(GraniteHybridModel):
     """Hybrid mamba2/attention model from NVIDIA"""
     model_arch = gguf.MODEL_ARCH.NEMOTRON_H
     is_moe: bool = False
     supports_mtp_export = True
 
+    _SSM_LAYER_TYPES = {"mamba", "linear_attention"}
+    _ATTN_LAYER_TYPES = {"attention", "full_attention"}
+    _MLP_LAYER_TYPES = {"moe"}
+
     def __init__(self, *args, **kwargs):
         # We have to determine the correct model architecture (MoE vs non-MoE) before
         # calling the parent __init__. This is because the parent constructor
         # uses self.model_arch to build the tensor name map, and all MoE-specific
         # mappings would be missed if it were called with the default non-MoE arch.
-        hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
         has_moe_params = (
             "num_experts_per_tok" in hparams
             or (isinstance(hparams.get("llm_config"), dict) and "num_experts_per_tok" in hparams["llm_config"])
@@ -212,8 +221,11 @@ class NemotronHModel(GraniteHybridModel):
         if has_moe_params:
             self.model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
             self.is_moe = True
+        layers_block_type = hparams.get("layers_block_type")
+        if layers_block_type is not None:
+            hparams["num_hidden_layers"] = len(layers_block_type)
 
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, hparams=hparams, **kwargs)
 
         # Save the top-level head_dim for later
         self.head_dim = self.hparams.get("head_dim", self.hparams.get("attention_head_dim"))
@@ -234,8 +246,8 @@ class NemotronHModel(GraniteHybridModel):
             self._ssm_layers = [i for i, val in enumerate(pattern) if val == "M"]
             self._mlp_layers = [i for i, val in enumerate(pattern) if val == ("E" if self.is_moe else "-")]
         else:
-            self._ssm_layers = [i for i, val in enumerate(pattern) if val == "mamba"]
-            self._mlp_layers = [i for i, val in enumerate(pattern) if val == "moe"]
+            self._ssm_layers = [i for i, val in enumerate(pattern) if val in self._SSM_LAYER_TYPES]
+            self._mlp_layers = [i for i, val in enumerate(pattern) if val in self._MLP_LAYER_TYPES]
 
         # `--no-mtp` drops it entirely; `--mtp` exports only the MTP head
         self._mtp_bid: int | None = None
@@ -264,7 +276,7 @@ class NemotronHModel(GraniteHybridModel):
         if isinstance(pattern, str):
             return [i for i, val in enumerate(pattern) if val == "*"]
 
-        return [i for i, val in enumerate(pattern) if val == "attention"]
+        return [i for i, val in enumerate(pattern) if val in self._ATTN_LAYER_TYPES]
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -275,13 +287,25 @@ class NemotronHModel(GraniteHybridModel):
                 return None
         elif cls.mtp_only:
             # --mtp: export the MTP head plus the tensors it shares with the target model
+            # Include lm_head scale sidecars so NVFP4 packing sees them.
             keep = name in (
                 "backbone.embeddings.weight",
                 "backbone.norm_f.weight",
                 "lm_head.weight",
+                "lm_head.weight_scale",
+                "lm_head.weight_scale_2",
+                "lm_head.weight_scale_inv",
+                "lm_head.input_scale",
+                "lm_head.input_global_scale",
+                "lm_head.weight_global_scale",
+                "lm_head.weight_packed",
             )
             if not keep:
                 return None
+        # PEFT names adapter tensors using model.layers.*, while Nemotron-H checkpoints
+        # and the GGUF tensor map use backbone.layers.*
+        if name.startswith("model.layers.") and ".mixer." in name:
+            name = name.replace("model.layers.", "backbone.layers.", 1)
         return super().filter_tensors((name, gen))
 
     def prepare_metadata(self, vocab_only: bool):

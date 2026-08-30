@@ -1,6 +1,6 @@
 <script lang="ts">
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
-	import { buildConversationTree } from '$lib/stores/conversations.svelte';
+	import { buildConversationTree } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -68,16 +68,16 @@
 						}}
 						{depth}
 						isActive={currentChatId === conversation.id}
-						{isSelectionMode}
 						isSelected={selectedIds.has(conversation.id)}
-						{onSelect}
-						{onEdit}
+						{isSelectionMode}
 						{onDelete}
+						{onEdit}
+						{onEnterSelectionMode}
+						{onRowMouseDown}
+						{onSelect}
+						{onSelectionClick}
 						{onStop}
 						{onToggleSelect}
-						{onEnterSelectionMode}
-						{onSelectionClick}
-						{onRowMouseDown}
 					/>
 				</li>
 			{/each}

@@ -7,7 +7,7 @@
 
 import { parseToolArgs } from './_shared';
 import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
 
 export type RunJavascriptMeta = {
 	code: string;
@@ -16,7 +16,7 @@ export type RunJavascriptMeta = {
 };
 
 export function parseRunJavascriptMeta(section: AgenticSection): RunJavascriptMeta | null {
-	const args = parseToolArgs(BuiltInTool.RUN_JAVASCRIPT, section);
+	const args = parseToolArgs(BuiltInTool.BROWSER_RUN_JAVASCRIPT, section);
 
 	if (!args) return null;
 

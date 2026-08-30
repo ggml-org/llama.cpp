@@ -1,9 +1,9 @@
 export {
+	AttachmentLabel,
 	AttachmentType,
 	AttachmentMenuItemId,
 	AttachmentItemEnabledWhen,
-	AttachmentAction,
-	AttachmentItemVisibleWhen
+	AttachmentAction
 } from './attachment.enums';
 
 export {
@@ -26,10 +26,13 @@ export {
 	PdfViewMode,
 	ReasoningFormat,
 	ChatFormCommandAction,
-	FileMentionEntryType
+	FileMentionEntryType,
+	ChatFormInputRichTokenKind
 } from './chat.enums';
 
 export { SessionRecordType } from './conversation-import.enums';
+
+export { BooleanString } from './boolean-string.enums';
 
 export { ReasoningEffort } from './reasoning-effort.enums';
 
@@ -43,13 +46,13 @@ export {
 	FileExtensionAudio,
 	FileExtensionPdf,
 	FileExtensionText,
-	MimeTypePrefix,
-	MimeTypeIncludes,
-	UriPattern,
 	MimeTypeApplication,
 	MimeTypeAudio,
 	MimeTypeVideo,
 	MimeTypeImage,
+	MimeTypePrefix,
+	MimeTypeIncludes,
+	UriPattern,
 	MimeTypeText,
 	SpecialFileType
 } from './files.enums';
@@ -64,13 +67,22 @@ export {
 	JsonSchemaType
 } from './mcp.enums';
 
-export { ModelModality } from './model.enums';
+export { ModelCapability, ModelModality } from './model.enums';
 
 export { ServerRole, ServerModelStatus, ServerModelsSseEventType } from './server.enums';
 
 export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings.enums';
 
-export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } from './ui.enums';
+export {
+	ColorLevel,
+	ColorMode,
+	HtmlInputType,
+	McpPromptVariant,
+	ScrollCarouselVariant,
+	SidebarAction,
+	TooltipSide,
+	UrlProtocol
+} from './ui.enums';
 
 export { KeyboardKey } from './keyboard.enums';
 
