@@ -1592,12 +1592,10 @@ static void ggml_compute_forward_mul_mat_id(
     // reserved for the whole node (ggml_graph_plan sizes it without params, use_ref only skips the dispatch)
     const bool iqp = ggml_cpu_iqp_supports_mul_mat_id(dst) && !params->use_ref;
 
-    char *    iqp_panels = NULL;
-    int32_t * iqp_rows   = NULL;  // [n_as][ids->ne[0]*ids->ne[1]][2]
+    char * iqp_panels = NULL;
 
     if (iqp) {
         iqp_panels = incr_ptr_aligned(&wdata_cur, nth * ggml_cpu_iqp_scratch_size(dst), 64);
-        iqp_rows = incr_ptr_aligned(&wdata_cur, n_as * ids->ne[0] * ids->ne[1] * 2 * sizeof(int32_t), sizeof(int64_t));
     }
 
     GGML_ASSERT(params->wsize >= (size_t)((char *) wdata_cur - (char *) params->wdata));
@@ -1651,13 +1649,6 @@ static void ggml_compute_forward_mul_mat_id(
                 assert(i02 >= 0 && i02 < n_as);
 
                 MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
-
-                if (iqp) {
-                    int32_t * row = iqp_rows + (i02 * ids->ne[0] * ids->ne[1] + matrix_row_counts[i02]) * 2;
-                    row[0]        = id;
-                    row[1]        = iid1;
-                }
-
                 matrix_row_counts[i02] += 1;
             }
         }
@@ -1679,8 +1670,8 @@ static void ggml_compute_forward_mul_mat_id(
         }
 
         if (iqp && ggml_cpu_iqp_mul_mat_id_min_batch(cne1)) {
-            ggml_compute_forward_mul_mat_id_iqp(params, dst, cur_a, cne1,
-                                                iqp_rows + cur_a * ids->ne[0] * ids->ne[1] * 2, iqp_panels);
+            ggml_compute_forward_mul_mat_id_iqp(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0),
+                                                iqp_panels);
 
             continue;
         }
@@ -2916,11 +2907,9 @@ struct ggml_cplan ggml_graph_plan(
                         cur += n_as*ids->ne[0]*ids->ne[1]*sizeof(struct mmid_row_mapping) + sizeof(int64_t);
                         // atomic_current_chunk
                         cur += CACHE_LINE_SIZE*n_as + CACHE_LINE_SIZE;
-                        // the IQ panel path needs one scratch panel per thread and its own copy of
-                        // the row mappings as linear int32 pairs on top of that
+                        // the IQ panel path needs one scratch panel per thread on top of that
                         if (ggml_cpu_iqp_supports_mul_mat_id(node)) {
                             cur += n_tasks * ggml_cpu_iqp_scratch_size(node) + 64;
-                            cur += n_as * ids->ne[0] * ids->ne[1] * 2 * sizeof(int32_t) + sizeof(int64_t);
                         }
                     } break;
                 case GGML_OP_OUT_PROD:
