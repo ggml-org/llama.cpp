@@ -108,7 +108,7 @@ exhaustion.
 | gfx1100 flash-attention launch shapes | **Automatic** | Selected by architecture and shape under the safe profile. |
 | Q8_0 MMVQ VDR=4 | **Automatic** for native gfx1100 | Passed backend correctness and shape A/B tests on both RX 7900 XT cards; this is not end-to-end Q8 GGUF validation. |
 | MTP sidecar + ngram drafting | **Automatic** in the launcher | Requires the prepared sidecar bundle; exact 262K native/in-process MTP does not fit, so the HIP sidecar is the validated path. |
-| Sidecar adaptive n-gram verification | **Automatic** for MTP-sidecar stacks | Uses the configured MTP width as the floor/start (the launcher uses 3) and each n-gram stack's own maximum as its ceiling (K4V uses `m=48`); promotion is gradual to avoid oversized verification bursts. |
+| Sidecar n-gram verification cap | **Automatic** for MTP-sidecar stacks | Caps n-gram proposals at the configured MTP width (the launcher uses 3) to avoid oversized target verification bursts; explicit `speculative.n_max` remains authoritative. |
 | Chunked GDN prefill | `--profile experimental` | Default-off in `safe`; keep experimental until workload-specific validation is complete. |
 | Add+RMSNorm+MUL fusion | `--gfx1100-add-rms-fusion` | Exact output parity; prompt-heavy throughput improved historically, while decode was effectively neutral. Default-off. |
 
@@ -128,15 +128,12 @@ parity testing. Do not set `HSA_OVERRIDE_GFX_VERSION` on gfx1100.
   or partial-peer topologies stay on the safe generic behavior.
 - Do not force `NCCL_P2P_LEVEL=PXB`, `NCCL_ALGO`, or `NCCL_PROTO` on this topology;
   RCCL Auto selected the tested direct transport.
-- With the launcher’s stacked MTP+K4V configuration, the sidecar-only adaptive
-  policy starts K4V verification at the configured `--spec-draft-n-max` width
-  and gradually probes toward the configured K4V `size_m` ceiling. It applies
-  the same rule to the other configured n-gram stacks without changing their
-  command-line settings. Set `GGML_HIP_SIDECAR_ADAPTIVE_SPEC=0` only for a
-  short, supervised A/B control using the full configured n-gram width; it
-  intentionally removes the anti-stutter safety policy and is not the
-  unattended/production setting. Explicit request `speculative.n_max` remains
-  authoritative.
+- With the launcher’s stacked MTP+K4V configuration, sidecar n-gram proposals
+  are capped at the configured `--spec-draft-n-max` width (the launcher uses 3)
+  to avoid oversized target verification bursts. The same fixed cap applies to
+  the other sidecar n-gram stacks without changing their command-line settings.
+  Explicit request `speculative.n_max` remains authoritative and intentionally
+  bypasses this internal sidecar cap.
 
 ## RDNA2: gfx1030 / V620
 

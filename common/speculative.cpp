@@ -10,7 +10,7 @@
 #include "ngram-mod.h"
 #include "sampling.h"
 #include "spec_sidecar.h"
-#include "speculative-adaptive.h"
+#include "speculative-sidecar-cap.h"
 #include "../include/spec_sidecar/sidecar_abi.h"
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
@@ -125,93 +125,18 @@ struct common_speculative_config {
             const common_params_speculative & p = common_params_speculative{}) : type(t), params(p) {}
 };
 
-struct common_speculative_adaptive_config {
-    bool enabled = false;
-    int floor = 0;
-    int ceiling = 0;
-};
-
-// Adaptive sidecar n-gram verification is deliberately an internal policy.
-// The normal launcher needs no additional setting; this opt-out exists only
-// for controlled A/B comparisons against the full configured n-gram width.
-static bool common_speculative_sidecar_adaptive_enabled() {
-    return common_speculative_adaptive_env_enabled(
-        std::getenv("GGML_HIP_SIDECAR_ADAPTIVE_SPEC"));
-}
-
-static common_speculative_adaptive_config common_speculative_adaptive_config_for(
+// Sidecar MTP+n-gram stacks use a fixed n-gram proposal cap.  The cap is
+// derived from the configured MTP width, preserving the anti-stutter policy
+// without acceptance-driven width changes.
+static common_speculative_sidecar_cap_config common_speculative_sidecar_cap_config_for(
         const common_params_speculative & params, int ceiling) {
-    if (!common_speculative_sidecar_adaptive_enabled() ||
-            !params.draft.sidecar_only ||
+    if (!params.draft.sidecar_only ||
             params.draft.sidecar_type != COMMON_SPECULATIVE_TYPE_DRAFT_MTP ||
             params.draft.n_max <= 0 || ceiling <= params.draft.n_max) {
         return {};
     }
 
-    return {
-        /* .enabled = */ true,
-        /* .floor   = */ std::max(1, params.draft.n_max),
-        /* .ceiling = */ ceiling,
-    };
-}
-
-static bool common_speculative_adaptive_request_enabled(
-        const common_speculative_adaptive_config & config,
-        const common_speculative_draft_params & dp) {
-    return config.enabled && !dp.n_max_user_override;
-}
-
-static int common_speculative_adaptive_limit(
-        const common_speculative_adaptive & adaptive,
-        const common_speculative_draft_params & dp) {
-    int limit = adaptive.n_cur;
-    if (dp.n_max > 0) {
-        limit = std::min(limit, dp.n_max);
-    }
-    return std::max(0, limit);
-}
-
-static void common_speculative_adaptive_trim(
-        const common_speculative_adaptive_config & config,
-        common_speculative_adaptive & adaptive,
-        const common_speculative_draft_params & dp,
-        llama_tokens & result,
-        int & n_last) {
-    n_last = 0;
-    if (result.empty()) {
-        return;
-    }
-
-    if (!common_speculative_adaptive_request_enabled(config, dp)) {
-        return;
-    }
-
-    const int limit = common_speculative_adaptive_limit(adaptive, dp);
-    if (limit < 1) {
-        result.clear();
-        return;
-    }
-    if ((int) result.size() > limit) {
-        result.resize((size_t) limit);
-    }
-    n_last = (int) result.size();
-}
-
-static void common_speculative_adaptive_update(
-        const common_speculative_adaptive_config & config,
-        common_speculative_adaptive & adaptive,
-        int n_last, uint16_t n_accepted, bool is_other) {
-    if (!config.enabled || is_other || n_last <= 0) {
-        return;
-    }
-
-    const int before = adaptive.n_cur;
-    adaptive.update(n_last, (int) n_accepted);
-    if (adaptive.n_cur != before) {
-        SPC_DBG("adaptive sidecar ngram width: %d -> %d (offered=%d, accepted=%d, range=%d..%d)\n",
-                before, adaptive.n_cur, n_last, (int) n_accepted,
-                adaptive.n_floor, adaptive.n_ceiling);
-    }
+    return { std::max(1, params.draft.n_max) };
 }
 
 static bool common_speculative_are_compatible(
@@ -3015,38 +2940,24 @@ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
 
     // shared across all sequences
     common_ngram_simple_config config;
-    common_speculative_adaptive_config adaptive_config;
-    std::vector<common_speculative_adaptive> adaptive_ctrl;
-    std::vector<int> adaptive_last_draft;
+    common_speculative_sidecar_cap_config sidecar_cap;
 
     common_speculative_impl_ngram_simple(
             const common_params_speculative & params, uint32_t n_seq,
             common_ngram_simple_config config,
-            common_speculative_adaptive_config adaptive_cfg = {})
+            common_speculative_sidecar_cap_config cap_cfg = {})
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, n_seq)
         , params(params.ngram_simple)
         , config(config)
-        , adaptive_config(adaptive_cfg)
-        , adaptive_ctrl(n_seq)
-        , adaptive_last_draft(n_seq, 0)
+        , sidecar_cap(cap_cfg)
     {
-        if (adaptive_config.enabled) {
-            for (auto & ctrl : adaptive_ctrl) {
-                ctrl.reset(adaptive_config.floor, adaptive_config.ceiling);
-            }
-            SPC_INF("sidecar adaptive ngram-simple width enabled: %d..%d\n",
-                    adaptive_config.floor, adaptive_config.ceiling);
-        }
+
         SPC_TRC("%s", "adding speculative implementation 'ngram-simple'\n");
         SPC_TRC("- size_n=%d, size_m=%d, min_hits=%d\n",
                 this->params.size_n, this->params.size_m, this->params.min_hits);
     }
 
-    void begin(llama_seq_id seq_id, const llama_tokens & /*prompt*/) override {
-        if (adaptive_config.enabled && seq_id >= 0 && seq_id < (llama_seq_id) adaptive_ctrl.size()) {
-            adaptive_ctrl[seq_id].reset(adaptive_config.floor, adaptive_config.ceiling);
-            adaptive_last_draft[seq_id] = 0;
-        }
+    void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
     }
 
     bool process(const llama_batch & /*batch*/) override {
@@ -3064,49 +2975,32 @@ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
             }
 
             *dp.result = common_ngram_simple_draft(config, *dp.prompt, dp.id_last);
-            common_speculative_adaptive_trim(adaptive_config, adaptive_ctrl[seq_id], dp,
-                    *dp.result, adaptive_last_draft[seq_id]);
+            common_speculative_sidecar_cap_trim(sidecar_cap, dp, *dp.result);
         }
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
-        if (seq_id < 0 || seq_id >= (llama_seq_id) adaptive_ctrl.size()) {
-            return;
-        }
-        common_speculative_adaptive_update(adaptive_config, adaptive_ctrl[seq_id],
-                adaptive_last_draft[seq_id], n_accepted, is_other);
+    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
     }
 };
 
 struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
     // n_seq configs
     std::vector<common_ngram_map> config;
-    common_speculative_adaptive_config adaptive_config;
-    std::vector<common_speculative_adaptive> adaptive_ctrl;
-    std::vector<int> adaptive_last_draft;
+    common_speculative_sidecar_cap_config sidecar_cap;
 
     common_speculative_impl_ngram_map_k(
             const common_ngram_map & config,
             uint32_t n_seq,
-            common_speculative_adaptive_config adaptive_cfg = {})
+            common_speculative_sidecar_cap_config cap_cfg = {})
         : common_speculative_impl(config.key_only ? COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K
             : COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, n_seq)
-        , adaptive_config(adaptive_cfg)
-        , adaptive_ctrl(n_seq)
-        , adaptive_last_draft(n_seq, 0)
+        , sidecar_cap(cap_cfg)
     {
         for (uint32_t i = 0; i < n_seq; i++) {
             this->config.push_back(config);
         }
 
-        if (adaptive_config.enabled) {
-            for (auto & ctrl : adaptive_ctrl) {
-                ctrl.reset(adaptive_config.floor, adaptive_config.ceiling);
-            }
-            SPC_INF("sidecar adaptive %s width enabled: %d..%d\n",
-                    this->type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V ? "ngram-map-k4v" : "ngram-map-k",
-                    adaptive_config.floor, adaptive_config.ceiling);
-        }
+
 
         SPC_TRC("adding speculative implementation '%s'\n", common_speculative_type_to_str(this->type).c_str());
         SPC_TRC("- size_key=%d, size_value=%d, key_only=%d, min_hits=%d\n",
@@ -3115,10 +3009,7 @@ struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
 
     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
         GGML_ASSERT(seq_id < (llama_seq_id) n_seq);
-        if (adaptive_config.enabled) {
-            adaptive_ctrl[seq_id].reset(adaptive_config.floor, adaptive_config.ceiling);
-            adaptive_last_draft[seq_id] = 0;
-        }
+
 
         common_ngram_map_begin(config[seq_id], prompt);
     }
@@ -3137,24 +3028,21 @@ struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
                 continue;
             }
 
-            const bool adaptive_request = common_speculative_adaptive_request_enabled(
-                    adaptive_config, dp);
-            config[seq_id].adaptive_draft_limit = adaptive_request
-                    ? (uint16_t) std::min(common_speculative_adaptive_limit(
-                            adaptive_ctrl[seq_id], dp), (int) UINT16_MAX)
+            const bool cap_request = common_speculative_sidecar_cap_request_enabled(
+                    sidecar_cap, dp);
+            config[seq_id].draft_limit = cap_request
+                    ? (uint16_t) std::min(common_speculative_sidecar_cap_limit(
+                            sidecar_cap, dp), (int) UINT16_MAX)
                     : 0;
             common_ngram_map_draft(config[seq_id], *dp.prompt, dp.id_last, *dp.result);
-            common_speculative_adaptive_trim(adaptive_config, adaptive_ctrl[seq_id], dp,
-                    *dp.result, adaptive_last_draft[seq_id]);
+            common_speculative_sidecar_cap_trim(sidecar_cap, dp, *dp.result);
         }
     }
 
     void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
-        if (seq_id < 0 || seq_id >= (llama_seq_id) adaptive_ctrl.size()) {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) config.size()) {
             return;
         }
-        common_speculative_adaptive_update(adaptive_config, adaptive_ctrl[seq_id],
-                adaptive_last_draft[seq_id], n_accepted, is_other);
         if (!is_other) {
             common_ngram_map_accept(config[seq_id], n_accepted);
         }
@@ -3182,21 +3070,18 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
     };
 
     std::vector<seq_info> sinfos;
-    common_speculative_adaptive_config adaptive_config;
-    std::vector<common_speculative_adaptive> adaptive_ctrl;
-    std::vector<int> adaptive_last_draft;
+    common_speculative_sidecar_cap_config sidecar_cap;
 
     common_speculative_impl_ngram_mod(
             const common_params_speculative & params,
             uint32_t n_seq,
-            common_speculative_adaptive_config adaptive_cfg = {})
+            common_speculative_sidecar_cap_config cap_cfg = {})
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_MOD, n_seq)
         , params(params.ngram_mod)
         , mod(params.ngram_mod.n_match, 4*1024*1024)
         , verbose(std::getenv("LLAMA_TRACE") != nullptr)
-        , adaptive_config(adaptive_cfg)
-        , adaptive_ctrl(n_seq)
-        , adaptive_last_draft(n_seq, 0) {
+        , sidecar_cap(cap_cfg)
+        {
         static_assert(sizeof(llama_token) == sizeof(common_ngram_mod::entry_t));
 
         SPC_TRC("%s", "adding speculative implementation 'ngram-mod'\n");
@@ -3211,13 +3096,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         }
 
         sinfos.resize(n_seq);
-        if (adaptive_config.enabled) {
-            for (auto & ctrl : adaptive_ctrl) {
-                ctrl.reset(adaptive_config.floor, adaptive_config.ceiling);
-            }
-            SPC_INF("sidecar adaptive ngram-mod width enabled: %d..%d\n",
-                    adaptive_config.floor, adaptive_config.ceiling);
-        }
+
     }
 
     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
@@ -3225,10 +3104,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         sinfo.i_last = 0;
         sinfo.n_draft_last = 0;
-        if (adaptive_config.enabled) {
-            adaptive_ctrl[seq_id].reset(adaptive_config.floor, adaptive_config.ceiling);
-            adaptive_last_draft[seq_id] = 0;
-        }
+
 
         const size_t n = mod.get_n();
         if (prompt.size() < n) {
@@ -3323,17 +3199,12 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
             }
 
             draft_one(seq_id, dp);
-            common_speculative_adaptive_trim(adaptive_config, adaptive_ctrl[seq_id], dp,
-                    *dp.result, adaptive_last_draft[seq_id]);
-            if (adaptive_config.enabled && !dp.n_max_user_override) {
-                sinfos[seq_id].n_draft_last = adaptive_last_draft[seq_id];
-            }
+            common_speculative_sidecar_cap_trim(sidecar_cap, dp, *dp.result);
+            sinfos[seq_id].n_draft_last = dp.result->size();
         }
     }
 
     void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
-        common_speculative_adaptive_update(adaptive_config, adaptive_ctrl[seq_id],
-                adaptive_last_draft[seq_id], n_accepted, is_other);
         if (is_other) {
             return;
         }
@@ -3378,9 +3249,7 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
     };
 
     std::vector<seq_info> sinfos;
-    common_speculative_adaptive_config adaptive_config;
-    std::vector<common_speculative_adaptive> adaptive_ctrl;
-    std::vector<int> adaptive_last_draft;
+    common_speculative_sidecar_cap_config sidecar_cap;
 
     common_speculative_impl_ngram_cache(
             const common_params_speculative & params,
@@ -3390,15 +3259,13 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
             const std::string & path_dynamic,
             bool save_dynamic,
             bool save_static,
-            common_speculative_adaptive_config adaptive_cfg = {})
+            common_speculative_sidecar_cap_config cap_cfg = {})
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, n_seq)
         , params(params.ngram_cache)
         , n_draft(n_draft)
         , save_dynamic(save_dynamic)
         , save_static(save_static)
-        , adaptive_config(adaptive_cfg)
-        , adaptive_ctrl(n_seq)
-        , adaptive_last_draft(n_seq, 0)
+        , sidecar_cap(cap_cfg)
     {
         SPC_TRC("%s", "adding speculative implementation 'ngram-cache'\n");
         SPC_TRC("- n_draft=%d, cache_static=%s, cache_dynamic=%s\n",
@@ -3407,13 +3274,7 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
                 path_dynamic.empty() ? "none" : path_dynamic.c_str());
 
         sinfos.resize(n_seq);
-        if (adaptive_config.enabled) {
-            for (auto & ctrl : adaptive_ctrl) {
-                ctrl.reset(adaptive_config.floor, adaptive_config.ceiling);
-            }
-            SPC_INF("sidecar adaptive ngram-cache width enabled: %d..%d\n",
-                    adaptive_config.floor, adaptive_config.ceiling);
-        }
+
 
         if (!path_static.empty()) {
             try {
@@ -3442,11 +3303,7 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
         }
     }
 
-    void begin(llama_seq_id seq_id, const llama_tokens & /*prompt*/) override {
-        if (adaptive_config.enabled && seq_id >= 0 && seq_id < (llama_seq_id) adaptive_ctrl.size()) {
-            adaptive_ctrl[seq_id].reset(adaptive_config.floor, adaptive_config.ceiling);
-            adaptive_last_draft[seq_id] = 0;
-        }
+    void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
     }
 
     void draft_one(
@@ -3509,17 +3366,11 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
             }
 
             draft_one(seq_id, dp);
-            common_speculative_adaptive_trim(adaptive_config, adaptive_ctrl[seq_id], dp,
-                    *dp.result, adaptive_last_draft[seq_id]);
+            common_speculative_sidecar_cap_trim(sidecar_cap, dp, *dp.result);
         }
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
-        if (seq_id < 0 || seq_id >= (llama_seq_id) adaptive_ctrl.size()) {
-            return;
-        }
-        common_speculative_adaptive_update(adaptive_config, adaptive_ctrl[seq_id],
-                adaptive_last_draft[seq_id], n_accepted, is_other);
+    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
     }
 };
 
@@ -3549,7 +3400,7 @@ static common_speculative_impl_ngram_cache create_state_ngram_cache(
         uint32_t n_seq,
         const std::string & path_static,
         const std::string & path_dynamic,
-        common_speculative_adaptive_config adaptive_cfg = {}) {
+        common_speculative_sidecar_cap_config cap_cfg = {}) {
     uint16_t n_draft = 8; // TODO get from config?
 
     // TODO bool param in common/common.h to set save_static/save_dynamic?
@@ -3557,7 +3408,7 @@ static common_speculative_impl_ngram_cache create_state_ngram_cache(
     bool save_dynamic = false;
 
     common_speculative_impl_ngram_cache state(config.params, n_seq, n_draft, path_static,
-            path_dynamic, save_static, save_dynamic, adaptive_cfg);
+            path_dynamic, save_static, save_dynamic, cap_cfg);
 
     return state;
 }
@@ -4042,8 +3893,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD ||
                type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE;
     });
-    if (mtp_sidecar && has_ngram && !common_speculative_sidecar_adaptive_enabled()) {
-        SPC_INF("%s", "sidecar adaptive ngram width disabled by GGML_HIP_SIDECAR_ADAPTIVE_SPEC=0\n");
+    if (mtp_sidecar && has_ngram && params.draft.n_max > 0) {
+        SPC_INF("sidecar ngram verification fixed at MTP width %d; explicit speculative.n_max remains authoritative\n",
+                params.draft.n_max);
     }
 
     for (const common_speculative_config & config : configs) {
@@ -4085,7 +3937,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                     /* .params = */ config.params,
                     /* .n_seq  = */ n_seq,
                     /* .state  = */ config_simple,
-                    /* .adaptive_cfg = */ common_speculative_adaptive_config_for(
+                    /* .cap_cfg = */ common_speculative_sidecar_cap_config_for(
                         params, config_simple.size_mgram)
                 );
                 impls.push_back(std::move(state));
@@ -4095,7 +3947,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 impls.push_back(
                         std::make_unique<common_speculative_impl_ngram_map_k>(
                             get_common_ngram_map(config.type, config.params.ngram_map_k), n_seq,
-                            common_speculative_adaptive_config_for(
+                            common_speculative_sidecar_cap_config_for(
                                 params, config.params.ngram_map_k.size_m)));
                 break;
             }
@@ -4103,7 +3955,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 impls.push_back(
                         std::make_unique<common_speculative_impl_ngram_map_k>(
                             get_common_ngram_map(config.type, config.params.ngram_map_k4v), n_seq,
-                            common_speculative_adaptive_config_for(
+                            common_speculative_sidecar_cap_config_for(
                                 params, config.params.ngram_map_k4v.size_m)));
                 break;
             }
@@ -4111,7 +3963,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 impls.push_back(
                         std::make_unique<common_speculative_impl_ngram_mod>(
                             config.params, n_seq,
-                            common_speculative_adaptive_config_for(
+                            common_speculative_sidecar_cap_config_for(
                                 params, config.params.ngram_mod.n_max)));
                 break;
             }
@@ -4120,7 +3972,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                         config, n_seq,
                         params.ngram_cache.lookup_cache_static,
                         params.ngram_cache.lookup_cache_dynamic,
-                        common_speculative_adaptive_config_for(params, 8));
+                        common_speculative_sidecar_cap_config_for(params, 8));
                 impls.push_back(std::make_unique<common_speculative_impl_ngram_cache>(state));
                 break;
             }
