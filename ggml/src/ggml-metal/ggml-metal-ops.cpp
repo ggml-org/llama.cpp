@@ -2875,11 +2875,6 @@ static int ggml_metal_op_flash_attn_ext_n_kv_max_sparse(const ggml_tensor * op) 
         return 0;
     }
 
-    // the sparse path is implemented for the vec kernels only
-    if (!ggml_metal_op_flash_attn_ext_use_vec(op)) {
-        return 0;
-    }
-
     // bound the size of the index lists
     if (n_kv_max > 4096) {
         return 0;
@@ -3297,7 +3292,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         }
     }
 
-    if (!ggml_metal_op_flash_attn_ext_use_vec(op)) {
+    if (!use_sparse && !ggml_metal_op_flash_attn_ext_use_vec(op)) {
         // half8x8 kernel
         const int nqptg = OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_NCPSG; // cache values per simdgroup
@@ -3579,16 +3574,16 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // workgroups
         // each workgroup handles nsg*nkpsg cache values
         int32_t nwg = 1;
-        if (false) {
-            // for small KV caches, we could launch a single workgroup and write the results directly to dst/
-            // however, this does not lead to significant improvement, so disabled
-            nwg = 1;
-            nsg = 4;
-        } else if (use_sparse) {
-            // the reduce kernel sums over one workgroup per lane (32), so nwg must be 32;
-            // workgroups beyond the number of chunks emit empty partials which the reduce ignores
-            nsg = 1;
-            nwg = 32;
+        if (use_sparse) {
+            if (ne01 > 32) {
+                // large sparse batch
+                nwg = 1;
+                nsg = 4;
+            } else {
+                // small sparse batch
+                nsg = 1;
+                nwg = 32;
+            }
         } else {
             nwg = 32;
             nsg = 1;
