@@ -1089,7 +1089,7 @@ kernel void kernel_flash_attn_ext_vec_idx(
     const int i2 = tgpig[1];
     const int i3 = tgpig[2];
 
-    device const half * pm  = (device const half *) (mask + i1*args.nb31 + i2*args.nb32 + i3*args.nb33);
+    device const half * pm  = (device const half *) ((device const char *) mask + i1*args.nb31 + i2*args.nb32 + i3*args.nb33);
     device int * pidx       = idx + ((i3*args.ne32 + i2)*args.ne31 + i1)*args.n_kv_max_padded;
 
     const int n  = args.ne30;
@@ -1294,14 +1294,14 @@ kernel void kernel_flash_attn_ext_vec(
         const short ty = tiisg/NL;
 
         // pointer to the mask
-        device const half * pm_base = (device const half *) (mask + (FC_flash_attn_ext_vec_has_sparse ? (iq1%args.ne31) : (iq1*Q))*args.nb31 + (iq2%args.ne32)*args.nb32 + (iq3%args.ne33)*args.nb33);
+        device const half * pm_base = (device const half *) (mask + iq1*Q*args.nb31 + (iq2%args.ne32)*args.nb32 + (iq3%args.ne33)*args.nb33);
 
         // sparse indices: the list of finite mask entries per query row
         // the sparse path requires Q == 1 (enforced by the host)
         device const int * pidx = nullptr;
         if (FC_flash_attn_ext_vec_has_sparse) {
-            pidx = (device const int *) (idx + ((iq3%args.ne33)*args.ne32 + (iq2%args.ne32))*args.ne31*args.n_kv_max_padded
-                                        + (iq1%args.ne31)*args.n_kv_max_padded);
+            pidx = (device const int *) (idx + sizeof(int)*(((iq3%args.ne33)*args.ne32 + (iq2%args.ne32))*args.ne31*args.n_kv_max_padded
+                                        + (iq1%args.ne31)*args.n_kv_max_padded));
         }
 
         float slope = 1.0f;
