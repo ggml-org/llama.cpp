@@ -5545,8 +5545,6 @@ void server_routes::override_system_prompt(json & messages) {
         if (messages[0]["content"] == this->params.system_prompt) { return; }
         messages[0]["content"] = this->params.system_prompt;
     } else {
-        messages.push_back({ {"role", "system"}, {"content", this->params.system_prompt} });
-        // messages.insert_before({ {"role", "system"}, {"content", this->params.system_prompt} });
+        messages.insert_before({ {"role", "system"}, {"content", this->params.system_prompt} });
     }
-
 }
