@@ -245,6 +245,10 @@ extern "C" {
     typedef const void * (*ggml_sched_remap_node_t)(const void *, int);
     GGML_API void ggml_sched_set_remap_node_fn(ggml_sched_remap_node_t fn);
 
+    // notifies the CPU backend that a buffer is being freed so the NUMA mirror can drop its replicas; NULL until the CPU backend registers it
+    typedef void (*ggml_sched_buffer_free_notify_t)(struct ggml_backend_buffer *);
+    GGML_API void ggml_sched_set_buffer_free_notify(ggml_sched_buffer_free_notify_t fn);
+
     // Add backend dynamic loading support to the backend
 
     // Initialize the backend

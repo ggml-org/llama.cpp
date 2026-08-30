@@ -86,9 +86,6 @@ static ggml_backend_buffer_type_t * ggml_backend_cpu_device_get_extra_buffers_ty
     GGML_UNUSED(device);
 }
 
-// true for any buffer type whose memory the CPU GEMM paths read directly, so the NUMA mirror can replicate it (see ggml-cpu-impl.h)
-extern "C" bool ggml_backend_cpu_buft_is_mirrorable(ggml_backend_buffer_type_t buft);
-
 static bool ggml_backend_cpu_is_extra_buffer_type(ggml_backend_buffer_type_t buft) {
     for (auto * extra : ggml_backend_cpu_get_extra_buffer_types()) {
         if (extra == buft) {
@@ -229,8 +226,9 @@ ggml_backend_t ggml_backend_cpu_init(void) {
     // initialize CPU backend now to avoid slowing the first graph computation
     ggml_cpu_init();
 
-    // hand the scheduler our NUMA-mirror remap function (see ggml-backend-impl.h); both init paths (direct and device registry) funnel through here
+    // hand the scheduler our NUMA-mirror remap and free-notify functions (see ggml-backend-impl.h); both init paths (direct and device registry) funnel through here
     ggml_sched_set_remap_node_fn(ggml_numa_mirror_remap_node);
+    ggml_sched_set_buffer_free_notify(ggml_numa_mirror_buffer_freed);
 
     struct ggml_backend_cpu_context * ctx = new ggml_backend_cpu_context;
     if (ctx == NULL) {

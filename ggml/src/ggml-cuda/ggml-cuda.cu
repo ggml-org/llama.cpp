@@ -5474,7 +5474,7 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
-// the NUMA node this GPU hangs off, from sysfs - lets the scheduler read op-offload weight uploads from the NUMA replica local to the destination card instead of always from the home node (on a dual-socket box the wrong choice spends the card's PCIe link dragging bytes over the socket interconnect)
+// the NUMA node this GPU hangs off, from sysfs - lets the scheduler read expert-weight uploads from the NUMA replica local to the destination card instead of always from the home node (on a dual-socket box the wrong choice spends the card's PCIe link dragging bytes over the socket interconnect)
 static int ggml_backend_cuda_get_numa_node(ggml_backend_t backend) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
     char bus[64] = {0};

@@ -540,6 +540,7 @@ bool         ggml_numa_mirror_enabled(void);
 // implemented in ggml-cpu.cpp: host buffers plus the extra buffer types (repack, AMX) whose memory is host memory but report is_host = nullptr
 bool         ggml_backend_cpu_buft_is_mirrorable(struct ggml_backend_buffer_type * buft);
 void         ggml_numa_mirror_register(struct ggml_backend_buffer * buffer, void * base, size_t size);
+void         ggml_numa_mirror_buffer_freed(struct ggml_backend_buffer * buffer);
 const void * ggml_numa_mirror_remap(const void * p);
 const void * ggml_numa_mirror_remap_node(const void * p, int node);
 void         ggml_numa_mirror_scan_graph(const struct ggml_cgraph * cgraph);

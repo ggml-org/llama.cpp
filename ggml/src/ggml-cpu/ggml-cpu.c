@@ -831,8 +831,9 @@ bool ggml_is_numa(void) {
 // NUMA weight mirroring (--numa mirror)
 //
 // Keeps a full per-NUMA-node replica of large host weight buffers so that the CPU GEMM paths (mul_mat / mul_mat_id) read weights from node-local memory instead of interleaved/remote pages.
-// The primary copy is bound to node 0 and stays as tensor->data, so GPU offload uploads are unaffected; other nodes get an mmap'd replica. Threads pick their copy via getcpu() at op entry.
-// Buffers are discovered lazily at graph_compute time (ggml_numa_mirror_scan_graph): no allocator hooks, so any loader path that populates weights before the first compute is covered.
+// The primary copy stays as tensor->data on the home node (picked from GPU PCIe affinity, see ggml_numa_mirror_pick_home_node); other nodes get an mmap'd replica. Threads pick their copy via getcpu() at op entry.
+// The scheduler sources expert-weight uploads from the replica local to the destination GPU (ggml_numa_mirror_remap_node).
+// Buffers are discovered lazily at graph_compute time (ggml_numa_mirror_scan_graph): no allocator hooks, so any loader path that populates weights before the first compute is covered. Replicas are dropped when the owning buffer is freed (ggml_sched_set_buffer_free_notify).
 //
 
 #define GGML_NUMA_MIRROR_MAX_BUFS 16
@@ -858,6 +859,9 @@ static struct {
     size_t  bytes_skipped;
     int     reported;
 } g_numa_mirror = { 0, {{0}}, 0, 0, 0, -1, 0, 0, 0 };
+
+// serializes register/unregister (two llama contexts in one process may compute concurrently); the remap hot path stays lock-free
+static pthread_mutex_t g_numa_mirror_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define GGML_NUMA_MIRROR_LOG_INFO(...) GGML_LOG_INFO("NUMA mirror: " __VA_ARGS__)
 #define GGML_NUMA_MIRROR_LOG_WARN(...) GGML_LOG_WARN("NUMA mirror: " __VA_ARGS__)
@@ -1017,16 +1021,51 @@ static void ggml_numa_mirror_copy(void * dst, const void * src, size_t size) {
     }
 }
 
+// drop the replicas of a dying buffer; called for every buffer free via the scheduler notify, so it must be cheap when the table is empty
+void ggml_numa_mirror_buffer_freed(struct ggml_backend_buffer * buffer) {
+    const int n = atomic_load_explicit(&g_numa_mirror.n_bufs, memory_order_acquire);
+    if (n == 0) {
+        return;
+    }
+    pthread_mutex_lock(&g_numa_mirror_mutex);
+    for (int i = 0; i < n; ++i) {
+        struct ggml_numa_mirror_buf * mb = &g_numa_mirror.bufs[i];
+        if (mb->owner != buffer || mb->base == NULL) {
+            continue;
+        }
+        // tombstone before unmapping: size 0 makes the entry unmatchable for lock-free readers, and no reader of a buffer being freed can still be in a GEMM on it
+        void * replicas[GGML_NUMA_MAX_NODES];
+        memcpy(replicas, mb->replica, sizeof(replicas));
+        const size_t sz = mb->size;
+        mb->size  = 0;
+        mb->base  = NULL;
+        mb->owner = NULL;
+        for (int nd = 0; nd < GGML_NUMA_MAX_NODES; ++nd) {
+            if (nd != g_numa_mirror.home_node && replicas[nd] != NULL) {
+                munmap(replicas[nd], sz);
+            }
+            mb->replica[nd] = NULL;
+        }
+    }
+    pthread_mutex_unlock(&g_numa_mirror_mutex);
+}
+
 void ggml_numa_mirror_register(struct ggml_backend_buffer * buffer, void * base, size_t size) {
     if (!ggml_numa_mirror_enabled() || size < g_numa_mirror.min_bytes) {
         return;
     }
 
+    pthread_mutex_lock(&g_numa_mirror_mutex);
     int n = atomic_load_explicit(&g_numa_mirror.n_bufs, memory_order_acquire);
     int slot = -1;
     for (int i = 0; i < n; ++i) {
+        if (g_numa_mirror.bufs[i].base == NULL && slot < 0) {
+            slot = i; // tombstone of a freed buffer, reusable
+            continue;
+        }
         if (g_numa_mirror.bufs[i].base == base) {
             if (g_numa_mirror.bufs[i].owner == buffer) {
+                pthread_mutex_unlock(&g_numa_mirror_mutex);
                 return; // already mirrored
             }
             // address range reused by a different buffer: drop stale replicas, rebuild
@@ -1044,6 +1083,7 @@ void ggml_numa_mirror_register(struct ggml_backend_buffer * buffer, void * base,
     if (slot < 0) {
         if (n >= GGML_NUMA_MIRROR_MAX_BUFS) {
             GGML_NUMA_MIRROR_LOG_WARN("buffer table full, %p (%zu bytes) not mirrored\n", base, size);
+            pthread_mutex_unlock(&g_numa_mirror_mutex);
             return;
         }
         slot = n;
@@ -1115,6 +1155,7 @@ void ggml_numa_mirror_register(struct ggml_backend_buffer * buffer, void * base,
     if (slot == n) {
         atomic_store_explicit(&g_numa_mirror.n_bufs, n + 1, memory_order_release);
     }
+    pthread_mutex_unlock(&g_numa_mirror_mutex);
 }
 
 const void * ggml_numa_mirror_remap(const void * p) {
@@ -1122,10 +1163,14 @@ const void * ggml_numa_mirror_remap(const void * p) {
     if (n == 0) {
         return p;
     }
+    const int node = ggml_numa_mirror_current_node();
+    if (node < 0 || node >= GGML_NUMA_MAX_NODES) {
+        return p; // unpinned thread on a node beyond the replica table (>8-node box)
+    }
     for (int i = 0; i < n; ++i) {
         const uintptr_t off = (uintptr_t) p - (uintptr_t) g_numa_mirror.bufs[i].base;
         if (off < g_numa_mirror.bufs[i].size) {
-            const void * rep = g_numa_mirror.bufs[i].replica[ggml_numa_mirror_current_node()];
+            const void * rep = g_numa_mirror.bufs[i].replica[node];
             return rep != NULL ? (const char *) rep + off : p;
         }
     }
@@ -1198,6 +1243,10 @@ void ggml_numa_mirror_register(struct ggml_backend_buffer * buffer, void * base,
     GGML_UNUSED(buffer);
     GGML_UNUSED(base);
     GGML_UNUSED(size);
+}
+
+void ggml_numa_mirror_buffer_freed(struct ggml_backend_buffer * buffer) {
+    GGML_UNUSED(buffer);
 }
 
 const void * ggml_numa_mirror_remap(const void * p) {
@@ -2649,8 +2698,14 @@ static void set_numa_thread_affinity(int thread_n) {
     size_t setsize = CPU_ALLOC_SIZE(g_state.numa.total_cpus);
 
     switch(g_state.numa.numa_strategy) {
+        case GGML_NUMA_STRATEGY_MIRROR:
+            // mirror uses distribute thread placement; workers pinned off the home node must not inherit the loader's home-node memory policy, or their KV/scratch first touches land remote
+            node_num = thread_n % g_state.numa.n_nodes;
+            if (node_num != ggml_numa_mirror_pick_home_node()) {
+                syscall(__NR_set_mempolicy, 0l, NULL, 0); // MPOL_DEFAULT: first-touch local again
+            }
+            break;
         case GGML_NUMA_STRATEGY_DISTRIBUTE:
-        case GGML_NUMA_STRATEGY_MIRROR: // mirror uses distribute thread placement
             // run thread on node_num thread_n / (threads per node)
             node_num = thread_n % g_state.numa.n_nodes;
             break;

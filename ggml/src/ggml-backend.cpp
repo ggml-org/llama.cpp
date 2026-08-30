@@ -112,11 +112,21 @@ const char * ggml_backend_buffer_name(ggml_backend_buffer_t buffer) {
     return ggml_backend_buft_name(ggml_backend_buffer_get_type(buffer));
 }
 
+// see ggml-backend-impl.h: lets the NUMA mirror drop its replicas when the mirrored buffer dies
+static ggml_sched_buffer_free_notify_t g_sched_buffer_free_notify = NULL;
+
+void ggml_sched_set_buffer_free_notify(ggml_sched_buffer_free_notify_t fn) {
+    g_sched_buffer_free_notify = fn;
+}
+
 void ggml_backend_buffer_free(ggml_backend_buffer_t buffer) {
     if (buffer == NULL) {
         return;
     }
 
+    if (g_sched_buffer_free_notify != NULL) {
+        g_sched_buffer_free_notify(buffer);
+    }
     if (buffer->iface.free_buffer != NULL) {
         buffer->iface.free_buffer(buffer);
     }
@@ -1650,8 +1660,9 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     return true;
 }
 
-// ---- NUMA mirror: source weight uploads from the replica local to the destination GPU ----
+// ---- NUMA mirror: source expert-weight uploads (MUL_MAT_ID path) from the replica local to the destination GPU ----
 // ggml_numa_mirror_remap() picks the replica for the CALLING THREAD's node, which has nothing to do with where the destination card sits, so the upload path asks for a node explicitly
+// only the expert-copy site below is remapped; the generic cross-backend copy fallback still reads the primary
 
 // the CPU backend registers its remap function here at init (dependency inversion; a registry lookup from inside ggml-base would be an upward dependency)
 static ggml_sched_remap_node_t g_sched_remap_node_fn = nullptr;
