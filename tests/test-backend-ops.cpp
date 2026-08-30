@@ -6230,7 +6230,7 @@ struct test_top_k : public test_case {
     }
 };
 
-// qwen4 QSA indexer top-k fusion: expand per-block scores to cells, add the f16 mask, top-k.
+// qwen4exp QSA indexer top-k fusion: expand per-block scores to cells, add the f16 mask, top-k.
 struct test_topk_qsa : public test_case {
     const int64_t n_blocks;
     const int64_t n_kv;
@@ -6238,6 +6238,11 @@ struct test_topk_qsa : public test_case {
     const int64_t n_stream;
     const int     width;
     ggml_tensor * out {};
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "TOPK_QSA";
+    }
 
     std::string vars() override {
         return VARS_TO_STR5(n_blocks, n_kv, n_tps, n_stream, width);
@@ -9810,22 +9815,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    // Large-k, including multi-row and ties (Qwen 3.8 Flash Next)
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 1024,  1, 1, 1 }, 1024));
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 2048,  2, 1, 1 }, 1024));
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 4096,  1, 1, 1 }, 2048));
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 8192,  2, 1, 1 }, 2051));
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 33024, 1, 1, 1 }, 2051));
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 33024, 4, 1, 1 }, 2051));
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 8192,  2, 1, 1 }, 2051, true));
-    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 33024, 4, 1, 1 }, 2051, true));
-
-    // qwen4 QSA indexer top-k fusion (get_rows + f16 mask + top_k)
-    test_cases.emplace_back(new test_topk_qsa(512,  2048,  1, 1, 1500));
-    test_cases.emplace_back(new test_topk_qsa(512,  2048,  2, 1, 1500));
-    test_cases.emplace_back(new test_topk_qsa(256,  2048,  4, 2, 2000));
-    test_cases.emplace_back(new test_topk_qsa(64,   256,   2, 1, 200));  // small k: unfused fallback
-
     for (int k : {1, 2, 3, 7, 15}) {
         test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {16, 10, 10, 10}, k));
         test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {60, 10, 10, 10}, k));
@@ -9837,6 +9826,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {2048, 2, 1, 3}, k));
         test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {2049, 2, 1, 3}, k));
     }
+
+    // Large-k, including multi-row and ties (qwen4exp)
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 1024,  1, 1, 1 }, 1024));
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 2048,  2, 1, 1 }, 1024));
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 4096,  1, 1, 1 }, 2048));
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 8192,  2, 1, 1 }, 2051));
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 33024, 1, 1, 1 }, 2051));
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 33024, 4, 1, 1 }, 2051));
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 8192,  2, 1, 1 }, 2051, true));
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 33024, 4, 1, 1 }, 2051, true));
+
+    // qwen4exp QSA indexer top-k fusion (get_rows + f16 mask + top_k)
+    test_cases.emplace_back(new test_topk_qsa(512,  2048,  1, 1, 1500));
+    test_cases.emplace_back(new test_topk_qsa(512,  2048,  2, 1, 1500));
+    test_cases.emplace_back(new test_topk_qsa(256,  2048,  4, 2, 2000));
+    test_cases.emplace_back(new test_topk_qsa(64,   256,   2, 1, 200));  // small k: unfused fallback
 
     // exhaustive top_k tests
     //for (int i = 1; i < 9999; ++i) {

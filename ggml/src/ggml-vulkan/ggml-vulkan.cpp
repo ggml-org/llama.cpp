@@ -1765,13 +1765,13 @@ struct vk_op_topk_push_constants {
     uint32_t last_pass;
 };
 
-struct vk_op_topk_qsa_push_constants {
-    uint32_t ncols;    // n_kv
-    uint32_t k;        // width
-    uint32_t nrows;    // n_tps * n_stream
-    uint32_t n_tps;
-    uint32_t n_blocks;
-    uint32_t n_stream;
+struct vk_op_topk_radix_push_constants {
+    uint32_t ncols;
+    uint32_t k;
+    uint32_t nrows;
+    uint32_t n_tps;    // QSA only
+    uint32_t n_blocks; // QSA only
+    uint32_t n_stream; // QSA only
 };
 
 struct vk_op_im2col_push_constants {
@@ -5840,13 +5840,12 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         }
     }
 
-    // large-k fallback: one workgroup per row, radix-select instead of a full sort
+    // large-k fallback: one workgroup per row, radix-select instead of a full sort. The QSA
+    // variant (spec constant 1) additionally gathers the qwen4 indexer input on the fly.
     {
         const uint32_t BLOCK_SIZE = 1u << std::min(10u, device->max_workgroup_size_log2);
-        ggml_vk_create_pipeline2(device, device->pipeline_topk_radix_f32, "topk_radix_f32", topk_radix_select_f32_len, topk_radix_select_f32_data, "main", 2, sizeof(vk_op_topk_push_constants), {BLOCK_SIZE, 1, 1}, {BLOCK_SIZE}, 1, true);
-        if (device->fp16) {
-            ggml_vk_create_pipeline2(device, device->pipeline_topk_radix_qsa, "topk_radix_qsa", topk_radix_select_qsa_len, topk_radix_select_qsa_data, "main", 5, sizeof(vk_op_topk_qsa_push_constants), {BLOCK_SIZE, 1, 1}, {BLOCK_SIZE}, 1, true);
-        }
+        ggml_vk_create_pipeline2(device, device->pipeline_topk_radix_f32, "topk_radix_f32", topk_radix_select_f32_len, topk_radix_select_f32_data, "main", 5, sizeof(vk_op_topk_radix_push_constants), {BLOCK_SIZE, 1, 1}, {BLOCK_SIZE, 0}, 1, true);
+        ggml_vk_create_pipeline2(device, device->pipeline_topk_radix_qsa, "topk_radix_qsa", topk_radix_select_f32_len, topk_radix_select_f32_data, "main", 5, sizeof(vk_op_topk_radix_push_constants), {BLOCK_SIZE, 1, 1}, {BLOCK_SIZE, 1}, 1, true);
     }
 
     ggml_vk_create_pipeline(device, device->pipeline_argmax_f32, "argmax_f32", argmax_f32_len, argmax_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
@@ -13983,15 +13982,18 @@ static void ggml_vk_topk(ggml_backend_vk_context * ctx, vk_context& subctx, cons
             ggml_vk_sync_buffers(ctx, subctx);
         }
 
-        vk_op_topk_push_constants pc { ncols, ncols, ncols, k, nrows, 0, 0 };
+        vk_op_topk_radix_push_constants pc { ncols, k, nrows, 0, 0, 0 };
         std::array<uint32_t, 3> elements {
             pipeline->wg_denoms[0],
             std::min(nrows, ctx->device->properties.limits.maxComputeWorkGroupCount[1]),
             1,
         };
+        // the non-QSA path only uses bindings 0/1; bind valid buffers for the unused QSA slots
+        vk_subbuffer src0_buf = ggml_vk_tensor_subbuffer(ctx, src0);
+        vk_subbuffer dst_buf  = ggml_vk_tensor_subbuffer(ctx, dst);
         ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
         ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
-            { ggml_vk_tensor_subbuffer(ctx, src0), ggml_vk_tensor_subbuffer(ctx, dst) }, pc, elements);
+            { src0_buf, dst_buf, src0_buf, src0_buf, src0_buf }, pc, elements);
         return;
     }
 
@@ -14132,7 +14134,7 @@ static void ggml_vk_topk_qsa(ggml_backend_vk_context * ctx, vk_context& subctx, 
         ggml_vk_sync_buffers(ctx, subctx);
     }
 
-    vk_op_topk_qsa_push_constants pc { n_kv, width, nrows, n_tps, n_blocks, n_stream };
+    vk_op_topk_radix_push_constants pc { n_kv, width, nrows, n_tps, n_blocks, n_stream };
     std::array<uint32_t, 3> elements {
         pipeline->wg_denoms[0],
         std::min(nrows, ctx->device->properties.limits.maxComputeWorkGroupCount[1]),
@@ -14141,8 +14143,8 @@ static void ggml_vk_topk_qsa(ggml_backend_vk_context * ctx, vk_context& subctx, 
     vk_subbuffer scratch_buf { ctx->prealloc_x, 0, ctx->prealloc_x->size };
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
-        { ggml_vk_tensor_subbuffer(ctx, scores), ggml_vk_tensor_subbuffer(ctx, cell_blk),
-          ggml_vk_tensor_subbuffer(ctx, mask),   ggml_vk_tensor_subbuffer(ctx, top_k),
+        { ggml_vk_tensor_subbuffer(ctx, scores), ggml_vk_tensor_subbuffer(ctx, top_k),
+          ggml_vk_tensor_subbuffer(ctx, cell_blk), ggml_vk_tensor_subbuffer(ctx, mask),
           scratch_buf }, pc, elements);
     ctx->prealloc_x_need_sync = true;
 }
