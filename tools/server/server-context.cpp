@@ -376,6 +376,10 @@ struct server_slot {
     common_prompt_checkpoint spec_ckpt;
     bool spec_is_replay = false;
     bool spec_grammar_fallback_logged = false;
+    // True only while the sidecar cursor still describes this slot's resident
+    // target prompt. Host prompt-cache and slot-file restores replace target KV
+    // without restoring the sidecar's private device KV.
+    bool spec_prompt_state_valid = true;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -461,7 +465,11 @@ struct server_slot {
     }
 
     bool prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
+        const bool replaces_resident_state = prompt_cache.has_better_match(prompt, tokens);
         bool res = prompt_cache.load(prompt, tokens, ctx_tgt, ctx_dft, id);
+        if (replaces_resident_state) {
+            spec_prompt_state_valid = false;
+        }
         if (!res) {
             SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
         }
@@ -475,6 +483,10 @@ struct server_slot {
         mem.seq_rm(id, -1, -1);
 
         prompt.clear();
+        if (can_speculate()) {
+            common_speculative_reset_state(spec, id);
+        }
+        spec_prompt_state_valid = true;
     }
 
     std::vector<common_adapter_lora_info> lora;
@@ -521,11 +533,10 @@ struct server_slot {
         n_sent_text    = 0;
 
         if (can_speculate()) {
-            // A prompt-cache/slot reset restores the target and native draft
-            // contexts separately from the optional sidecar. Invalidate the
-            // sidecar epoch before the slot can accept another request; the
-            // next full prompt prefill will seed it again without copying KV.
-            common_speculative_reset_state(spec, id);
+            // Keep implementation state only when it can remain tied to this
+            // slot's resident target prompt. MTP validates that relationship at
+            // the next request; other implementations retain reset-on-release.
+            common_speculative_release_state(spec, id);
             spec_draft.clear();
             spec_dists.clear();
             spec_i_batch.clear();
@@ -913,6 +924,8 @@ struct server_slot {
         other.stats = stats;
 
         other.prompt = prompt.clone();
+        // Target KV was copied, but a sidecar's private per-sequence KV was not.
+        other.spec_prompt_state_valid = false;
         other.init_sampler();
     }
 };
@@ -2078,6 +2091,7 @@ private:
                 if (lora_should_clear_cache(slot.lora, task_loras)) {
                     SLT_TRC(slot, "clearing cache for lora change. %zu loras -> %zu loras\n", slot.lora.size(), task.params.lora.size());
                     slot.prompt.clear();
+                    slot.spec_prompt_state_valid = false;
                 } else {
                     SLT_TRC(slot, "keeping cache for alora. %zu target loras\n", task_loras.size());
                 }
@@ -3039,6 +3053,7 @@ private:
 
                         slot->prompt.clear();
                         slot->prompt.tokens = std::move(restored);
+                        slot->spec_prompt_state_valid = false;
                     } catch (const std::exception & err) {
                         slot->prompt_clear();
                         send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);
@@ -3719,6 +3734,28 @@ private:
                                     slot.prompt.checkpoints.clear();
                                 }
                             }
+
+                            // The MTP sidecar can reuse device KV only when the new
+                            // prompt is a strict linear extension of the exact
+                            // resident target prefix. A host-cache restore, branch,
+                            // same-prompt logits replay, or chunk shift requires one
+                            // full target replay to reconstruct sidecar KV safely.
+                            const bool can_reuse_resident_spec_state =
+                                    slot.spec_prompt_state_valid &&
+                                    slot.task->params.cache_prompt &&
+                                    n_past == n_past_common &&
+                                    n_past == slot.prompt.n_tokens() &&
+                                    n_past < slot.task->n_tokens();
+                            const llama_pos resident_pos_next = slot.prompt.tokens.pos_next(n_past);
+                            if (slot.can_speculate() && !common_speculative_prepare_prompt_state(
+                                        spec.get(), slot.id, resident_pos_next, can_reuse_resident_spec_state)) {
+                                SLT_DBG(slot, "replaying full prompt to synchronize speculative sidecar (cached=%d, resident=%d, incoming=%d)\n",
+                                        n_past, slot.prompt.n_tokens(), slot.task->n_tokens());
+                                n_past = 0;
+                                n_past_common = 0;
+                                slot.prompt.checkpoints.clear();
+                            }
+                            slot.spec_prompt_state_valid = true;
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
 

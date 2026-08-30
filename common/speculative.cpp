@@ -257,6 +257,12 @@ struct common_speculative_impl {
     virtual bool set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) { return true; }
     virtual bool state_required(llama_seq_id /*seq_id*/) const { return false; }
     virtual bool reset_state(llama_seq_id /*seq_id*/) { return true; }
+    // Request release normally invalidates implementation-local state. Stateful
+    // sidecars may keep a committed cursor here and validate it against the next
+    // resident prompt before any target prefix is reused.
+    virtual void release_state(llama_seq_id seq_id) { reset_state(seq_id); }
+    virtual bool prepare_prompt_state(
+            llama_seq_id /*seq_id*/, llama_pos /*pos_next*/, bool /*can_reuse_resident*/) { return true; }
     virtual bool truncate_state(llama_seq_id /*seq_id*/, llama_pos /*pos_max*/) { return true; }
     virtual bool commit_state(llama_seq_id /*seq_id*/, llama_pos /*pos_max*/) { return true; }
     virtual bool rebase_state(llama_seq_id /*seq_id*/, llama_pos /*pos_min*/, llama_pos /*pos_max*/, llama_pos /*delta*/) { return true; }
@@ -2801,6 +2807,54 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         return true;
     }
 
+    void release_state(llama_seq_id /*seq_id*/) override {
+        // The server can retain this slot's target KV and prompt after request
+        // completion. Keep the committed sidecar KV with it; prepare_prompt_state()
+        // validates the exact target/sidecar boundary before the next reuse.
+    }
+
+    bool prepare_prompt_state(
+            llama_seq_id seq_id, llama_pos pos_next, bool can_reuse_resident) override {
+        if (sidecar_load_pending) {
+            // A lazily loaded sidecar has no prior KV. Position zero is the only
+            // boundary that can be seeded without replaying the target prompt.
+            return can_reuse_resident && pos_next == 0;
+        }
+        if (!sidecar.active()) {
+            return true;
+        }
+
+        bool cursor_matches = false;
+        if (can_reuse_resident) {
+            std::vector<uint8_t> data;
+            spec_sidecar_state state = {};
+            if (sidecar.get_state(seq_id, data) && data.size() == sizeof(state)) {
+                std::memcpy(&state, data.data(), sizeof(state));
+                cursor_matches =
+                        state.magic   == SPEC_SIDECAR_STATE_MAGIC &&
+                        state.version == SPEC_SIDECAR_STATE_VERSION &&
+                        state.kind    == SPEC_SIDECAR_STATE_KIND_MTP &&
+                        state.pos_min >= 0 && state.pos_min <= state.pos_max &&
+                        state.pos_max == pos_next;
+            }
+        }
+
+        if (cursor_matches && sidecar.truncate_state(seq_id, pos_next)) {
+            // Truncating to the current tip is a no-op for committed KV/hidden
+            // state, but discards any uncommitted catch-up rows from a cancelled
+            // request before the slot is reused.
+            SPC_DBG("reusing MTP sidecar state: seq=%d, pos=%d\n", (int) seq_id, (int) pos_next);
+            return true;
+        }
+
+        if (!reset_state(seq_id)) {
+            return false;
+        }
+        SPC_DBG("reset MTP sidecar state for prompt replay: seq=%d, target_pos=%d, resident=%d\n",
+                (int) seq_id, (int) pos_next, (int) can_reuse_resident);
+        return false;
+    }
+
     bool truncate_state(llama_seq_id seq_id, llama_pos pos_max) override {
         if (!sidecar.active()) return true;
         if (!sidecar.truncate_state(seq_id, pos_max)) {
@@ -4328,6 +4382,27 @@ void common_speculative_reset_state(common_speculative * spec, llama_seq_id seq_
     for (auto & impl : spec->impls) {
         impl->reset_state(seq_id);
     }
+}
+
+void common_speculative_release_state(common_speculative * spec, llama_seq_id seq_id) {
+    if (spec == nullptr) {
+        return;
+    }
+    for (auto & impl : spec->impls) {
+        impl->release_state(seq_id);
+    }
+}
+
+bool common_speculative_prepare_prompt_state(
+        common_speculative * spec, llama_seq_id seq_id, llama_pos pos_next, bool can_reuse_resident) {
+    if (spec == nullptr) {
+        return true;
+    }
+    bool result = true;
+    for (auto & impl : spec->impls) {
+        result = impl->prepare_prompt_state(seq_id, pos_next, can_reuse_resident) && result;
+    }
+    return result;
 }
 
 bool common_speculative_truncate_state(common_speculative * spec, llama_seq_id seq_id, llama_pos pos_max) {
