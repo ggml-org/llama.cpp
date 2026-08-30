@@ -503,19 +503,24 @@ __global__ __launch_bounds__(512) void gemv8t_q6_K(const block_q6_K * __restrict
             for (int b = half; b < bn; b += 2) {
                 const block_q6_K * bk = &wr[b0 + b];
                 const float d = df_f16(bk->d);
-                // lane's 8 elems: one half, one grp, one scale group
+                // lane's 8 elems: one 128-half (ehalf), one grp, one scale group
                 const int e0 = lane * 8;
-                const int half = e0 >> 7, r0 = e0 & 127;
+                const int ehalf = e0 >> 7, r0 = e0 & 127;
                 const int grp = r0 >> 5, l0 = r0 & 31;
-                const float dsc = d * bk->scales[half * 8 + (r0 >> 4)];
-                const uint8_t * qlp = bk->ql + half * 64 + (grp & 1) * 32 + l0;
-                const uint8_t * qhp = bk->qh + half * 32 + l0;
+                const float dsc = d * bk->scales[ehalf * 8 + (r0 >> 4)];
+                const uint8_t * qlp = bk->ql + ehalf * 64 + (grp & 1) * 32 + l0;
+                const uint8_t * qhp = bk->qh + ehalf * 32 + l0;
                 const int sh_h = grp * 2;
                 const bool hi = grp >= 2;
                 const float * xb = x + b * 256 + e0;
+                uint32_t qlw[2], qhw[2];
+                __builtin_memcpy(qlw, qlp, 8); // 8B-aligned (l0 = lane*8 mod 32)
+                __builtin_memcpy(qhw, qhp, 8);
                 #pragma unroll
                 for (int e = 0; e < 8; ++e) {
-                    const int qv = (hi ? (qlp[e] >> 4) : (qlp[e] & 0xF)) | (((qhp[e] >> sh_h) & 3) << 4);
+                    const uint8_t qlb = (uint8_t) (qlw[e >> 2] >> ((e & 3) * 8));
+                    const uint8_t qhb = (uint8_t) (qhw[e >> 2] >> ((e & 3) * 8));
+                    const int qv = (hi ? (qlb >> 4) : (qlb & 0xF)) | (((qhb >> sh_h) & 3) << 4);
                     const float w = dsc * (qv - 32);
                     #pragma unroll
                     for (int c = 0; c < NCOLS; ++c) acc[c] += w * xb[(size_t) c * n_in + e];
