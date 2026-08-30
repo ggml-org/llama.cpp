@@ -320,13 +320,14 @@ public:
             }
 
             const auto m = seq[i] & seqs;
-            if (m.none()) {
-                continue;
-            }
 
-            for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
+            // a cell carries a handful of sequences at most, out of LLAMA_MAX_SEQ
+            size_t left = m.count();
+
+            for (llama_seq_id s = 0; left > 0 && s < (llama_seq_id) LLAMA_MAX_SEQ; ++s) {
                 if (m.test(s)) {
                     f(s, pos[i], ext[i].tok);
+                    --left;
                 }
             }
         }
