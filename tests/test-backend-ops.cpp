@@ -3573,6 +3573,43 @@ struct test_rms_norm : public test_case {
     }
 };
 
+// GGML_OP_RMS_NORM + GGML_OP_MUL
+struct test_rms_norm_mul : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    const float eps;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RMS_NORM_MUL";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(type, ne, eps);
+    }
+
+    test_rms_norm_mul(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {64, 5, 4, 3},
+            float eps = 1e-6f)
+        : type(type), ne(ne), eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * w = ggml_new_tensor_1d(ctx, type, ne[0]);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+        ggml_set_param(w);
+        ggml_set_name(w, "w");
+
+        ggml_tensor * out = ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), w);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_RMS_NORM_BACK
 struct test_rms_norm_back : public test_case {
     const ggml_type type;
@@ -9109,6 +9146,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // in-place tests
     test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {64, 5, 4, 3}, false, 1e-6f, true));
+
+    // CUDA grid.y and grid.z are limited to 65535.
+    test_cases.emplace_back(new test_norm             (GGML_TYPE_F32, {1, 1, 65536, 1}, false, 1e-6f));
+    test_cases.emplace_back(new test_rms_norm         (GGML_TYPE_F32, {1, 1, 65536, 1}, false, 1e-6f));
+    test_cases.emplace_back(new test_l2_norm          (GGML_TYPE_F32, {1, 1, 65536, 1}, 1e-6f, false));
+    test_cases.emplace_back(new test_rms_norm_mul     (GGML_TYPE_F32, {1, 1, 65536, 1}, 1e-6f));
+    test_cases.emplace_back(new test_rms_norm_mul_add (GGML_TYPE_F32, {1, 1, 65536, 1}, 1e-6f, false));
 
     for (float eps : { 0.0f, 1e-6f, 1e-4f, 1e-1f, 1.0f }) {
         for (uint32_t n : { 64, 1025 }) {
