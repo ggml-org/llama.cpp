@@ -191,7 +191,7 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
 
 static void init_tensor_kq_mask_sparse(ggml_tensor * tensor, int64_t n_kv_max) {
     GGML_ASSERT(tensor->type == GGML_TYPE_F16);
-    GGML_ASSERT(n_kv_max > 1 && n_kv_max <= tensor->ne[0]);
+    GGML_ASSERT(n_kv_max > 0 && n_kv_max <= tensor->ne[0]);
 
     const int64_t ne0 = tensor->ne[0];
     const int64_t nrows = ggml_nrows(tensor);
