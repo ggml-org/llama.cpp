@@ -526,3 +526,13 @@ export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.
  * ```
  */
 export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
+
+/**
+ * **DialogModelsDiscover** - full-screen model discovery dialog.
+ *
+ * Two-pane layout: searchable model list (Hugging Face + llama.app catalog)
+ * on the left, model details with download options on the right.
+ *
+ * @see ModelsDiscover in $lib/components/app/models/discover
+ */
+export { default as DialogModelsDiscover } from './DialogModelsDiscover.svelte';
