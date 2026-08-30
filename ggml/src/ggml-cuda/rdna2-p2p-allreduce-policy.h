@@ -58,6 +58,9 @@ inline ggml_cuda_rdna2_p2p_host_mode_result ggml_cuda_rdna2_p2p_host_parse_mode(
 enum class ggml_cuda_rdna2_p2p_host_route {
     fallback,
     qwen4exp_width1,
+    qwen4exp_width2,
+    qwen4exp_width3,
+    qwen4exp_width4,
     ordinary_width1,
     speculative_width5,
     speculative_width6,
@@ -78,22 +81,38 @@ struct ggml_cuda_rdna2_p2p_host_route_result {
 
 inline ggml_cuda_rdna2_p2p_host_route_result ggml_cuda_rdna2_p2p_host_select_route(
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3,
-        bool speculative_widths_enabled, bool exact_qwen4exp_width1,
-        bool exact_width1, bool exact_width5, bool exact_width6) {
-    if (ne0 == 2560 && ne1 == 1 && ne2 == 1 && ne3 == 1) {
-        if (!exact_qwen4exp_width1) {
+        bool speculative_widths_enabled,
+        bool exact_2560, bool exact_5120, bool exact_7680,
+        bool exact_10240, bool exact_25600, bool exact_30720) {
+    if (ne0 == 2560 && ne2 == 1 && ne3 == 1) {
+        if (ne1 < 1 || ne1 > 4) {
+            return { ggml_cuda_rdna2_p2p_host_route::fallback,
+                     ggml_cuda_rdna2_p2p_host_fallback_reason::unsupported_width };
+        }
+        if (ne1 > 1 && !speculative_widths_enabled) {
+            return { ggml_cuda_rdna2_p2p_host_route::fallback,
+                     ggml_cuda_rdna2_p2p_host_fallback_reason::policy_disabled };
+        }
+        const bool exact = ne1 == 1 ? exact_2560 : ne1 == 2 ? exact_5120 :
+                           ne1 == 3 ? exact_7680 : exact_10240;
+        if (!exact) {
             return { ggml_cuda_rdna2_p2p_host_route::fallback,
                      ggml_cuda_rdna2_p2p_host_fallback_reason::self_test_failed };
         }
-        return { ggml_cuda_rdna2_p2p_host_route::qwen4exp_width1,
-                 ggml_cuda_rdna2_p2p_host_fallback_reason::none };
+        return {
+            ne1 == 1 ? ggml_cuda_rdna2_p2p_host_route::qwen4exp_width1 :
+            ne1 == 2 ? ggml_cuda_rdna2_p2p_host_route::qwen4exp_width2 :
+            ne1 == 3 ? ggml_cuda_rdna2_p2p_host_route::qwen4exp_width3 :
+                       ggml_cuda_rdna2_p2p_host_route::qwen4exp_width4,
+            ggml_cuda_rdna2_p2p_host_fallback_reason::none,
+        };
     }
     if (ne0 != 5120 || ne2 != 1 || ne3 != 1) {
         return { ggml_cuda_rdna2_p2p_host_route::fallback,
                  ggml_cuda_rdna2_p2p_host_fallback_reason::unrelated_shape };
     }
     if (ne1 == 1) {
-        if (!exact_width1) {
+        if (!exact_5120) {
             return { ggml_cuda_rdna2_p2p_host_route::fallback,
                      ggml_cuda_rdna2_p2p_host_fallback_reason::self_test_failed };
         }
@@ -105,7 +124,7 @@ inline ggml_cuda_rdna2_p2p_host_route_result ggml_cuda_rdna2_p2p_host_select_rou
             return { ggml_cuda_rdna2_p2p_host_route::fallback,
                      ggml_cuda_rdna2_p2p_host_fallback_reason::policy_disabled };
         }
-        if (!exact_width5) {
+        if (!exact_25600) {
             return { ggml_cuda_rdna2_p2p_host_route::fallback,
                      ggml_cuda_rdna2_p2p_host_fallback_reason::self_test_failed };
         }
@@ -117,7 +136,7 @@ inline ggml_cuda_rdna2_p2p_host_route_result ggml_cuda_rdna2_p2p_host_select_rou
             return { ggml_cuda_rdna2_p2p_host_route::fallback,
                      ggml_cuda_rdna2_p2p_host_fallback_reason::policy_disabled };
         }
-        if (!exact_width6) {
+        if (!exact_30720) {
             return { ggml_cuda_rdna2_p2p_host_route::fallback,
                      ggml_cuda_rdna2_p2p_host_fallback_reason::self_test_failed };
         }
