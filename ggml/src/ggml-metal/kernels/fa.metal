@@ -1071,6 +1071,93 @@ constant int32_t FC_flash_attn_ext_vec_ns10 [[function_constant(FC_FLASH_ATTN_EX
 constant int32_t FC_flash_attn_ext_vec_ns20 [[function_constant(FC_FLASH_ATTN_EXT_VEC + 21)]];
 constant int32_t FC_flash_attn_ext_vec_nsg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 22)]];
 constant int32_t FC_flash_attn_ext_vec_nwg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 23)]];
+constant bool    FC_flash_attn_ext_vec_has_sparse [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]];
+
+// compress the finite entries of each KQ mask row into a list of KV indices (ascending order),
+// padded with -1 up to n_kv_max_padded (a multiple of OP_FLASH_ATTN_EXT_VEC_NCPSG)
+// one threadgroup per mask row; the mask remains the single source of truth for the values
+kernel void kernel_flash_attn_ext_vec_idx(
+        constant ggml_metal_kargs_flash_attn_ext_vec_idx & args,
+        device const half * mask,
+        device       int  * idx,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]],
+        ushort3 ntg[[threads_per_threadgroup]]) {
+    constexpr short NW = N_SIMDWIDTH;
+
+    const int i1 = tgpig[0];
+    const int i2 = tgpig[1];
+    const int i3 = tgpig[2];
+
+    device const half * pm  = (device const half *) (mask + i1*args.nb31 + i2*args.nb32 + i3*args.nb33);
+    device int * pidx       = idx + ((i3*args.ne32 + i2)*args.ne31 + i1)*args.n_kv_max_padded;
+
+    const int n  = args.ne30;
+    const int q  = n/ntg.x;
+    const int r  = n%ntg.x;
+
+    // each thread handles a contiguous slice of the mask row
+    const int r0 = q*tiitg + min((int) tiitg, r);
+    const int r1 = r0 + q + (tiitg < r ? 1 : 0);
+
+    // count the finite entries in the slice
+    int cnt = 0;
+    for (int i = r0; i < r1; ++i) {
+        cnt += isfinite((float) pm[i]) ? 1 : 0;
+    }
+
+    const short sgitg = tiitg/NW;
+    const short tiisg = tiitg%NW;
+
+    threadgroup int tcount[8];
+
+    // simd_sum is a collective: all lanes must evaluate it
+    const int sg_sum = simd_sum(cnt);
+    if (tiisg == 0) {
+        tcount[sgitg] = sg_sum;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    int total = 0;
+    for (short s = 0; s < ntg.x/NW; ++s) {
+        total += tcount[s];
+    }
+
+    // base offset of this thread's slice in the output list (exclusive scan within the simdgroup)
+    int sg_base = 0;
+    for (short s = 0; s < sgitg; ++s) {
+        sg_base += tcount[s];
+    }
+
+    // exclusive prefix scan of the per-thread counts within the simdgroup
+    int incl = cnt;
+    for (int d = 1; d < NW; d <<= 1) {
+        const int v = simd_shuffle_up(incl, d);
+        if (tiisg >= d) {
+            incl += v;
+        }
+    }
+    const int base = sg_base + (incl - cnt);
+
+    // write the finite positions in order; if the hint is violated, keep only the first n_kv_max entries
+    int j = 0;
+    for (int i = r0; i < r1; ++i) {
+        if (base + j >= args.n_kv_max) {
+            break;
+        }
+        if (isfinite((float) pm[i])) {
+            pidx[base + j] = i;
+            j++;
+        }
+    }
+
+    // pad the tail of the list with -1
+    const int count = min(total, args.n_kv_max);
+    for (int i = count + tiitg; i < args.n_kv_max_padded; i += ntg.x) {
+        pidx[i] = -1;
+    }
+}
 
 template<
     typename q4_t,  // query types in shared memory
@@ -1091,6 +1178,7 @@ template<
     short NE = 4,   // head elements per thread
     short Q  = OP_FLASH_ATTN_EXT_VEC_NQPSG,  // queries per threadgroup
     short C  = OP_FLASH_ATTN_EXT_VEC_NCPSG>  // cache items per threadgroup
+
 kernel void kernel_flash_attn_ext_vec(
         constant ggml_metal_kargs_flash_attn_ext_vec & args,
         device const char * q,
@@ -1100,6 +1188,7 @@ kernel void kernel_flash_attn_ext_vec(
         device const char * sinks,
         device const char * pad,
         device       char * dst,
+        device const char * idx,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
@@ -1205,7 +1294,15 @@ kernel void kernel_flash_attn_ext_vec(
         const short ty = tiisg/NL;
 
         // pointer to the mask
-        device const half * pm_base = (device const half *) (mask + iq1*Q*args.nb31 + (iq2%args.ne32)*args.nb32 + (iq3%args.ne33)*args.nb33);
+        device const half * pm_base = (device const half *) (mask + (FC_flash_attn_ext_vec_has_sparse ? (iq1%args.ne31) : (iq1*Q))*args.nb31 + (iq2%args.ne32)*args.nb32 + (iq3%args.ne33)*args.nb33);
+
+        // sparse indices: the list of finite mask entries per query row
+        // the sparse path requires Q == 1 (enforced by the host)
+        device const int * pidx = nullptr;
+        if (FC_flash_attn_ext_vec_has_sparse) {
+            pidx = (device const int *) (idx + ((iq3%args.ne33)*args.ne32 + (iq2%args.ne32))*args.ne31*args.n_kv_max_padded
+                                        + (iq1%args.ne31)*args.n_kv_max_padded);
+        }
 
         float slope = 1.0f;
 
@@ -1265,11 +1362,22 @@ kernel void kernel_flash_attn_ext_vec(
             }
 
             if (FC_flash_attn_ext_vec_has_mask) {
-                FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
-                    if ((iq1*Q + qq) < args.ne01) {
-                        sm[qq*C + tiisg] = pm[qq][ic + tiisg];
-                    } else {
-                        sm[qq*C + tiisg] = -MAXHALF;
+                if (FC_flash_attn_ext_vec_has_sparse) {
+                    FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
+                        const int i11 = pidx[ic + tiisg];
+                        if ((iq1*Q + qq) < args.ne01 && i11 >= 0) {
+                            sm[qq*C + tiisg] = pm[qq][i11];
+                        } else {
+                            sm[qq*C + tiisg] = -MAXHALF;
+                        }
+                    }
+                } else {
+                    FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
+                        if ((iq1*Q + qq) < args.ne01) {
+                            sm[qq*C + tiisg] = pm[qq][ic + tiisg];
+                        } else {
+                            sm[qq*C + tiisg] = -MAXHALF;
+                        }
                     }
                 }
             } else {
@@ -1294,9 +1402,13 @@ kernel void kernel_flash_attn_ext_vec(
 
             // Q*K^T
             {
-                device      const k4_t * pk4 = (device const k4_t *) (k + ic*args.nb11);
+                device      const k4_t * pk4 = nullptr;
 
-                pk4 += ty*NS10/4 + tx;
+                if (!FC_flash_attn_ext_vec_has_sparse) {
+                    pk4 = (device const k4_t *) (k + ic*args.nb11);
+
+                    pk4 += ty*NS10/4 + tx;
+                }
 
                 qk_t mqk[Q][C/NE];
                 FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
@@ -1307,7 +1419,35 @@ kernel void kernel_flash_attn_ext_vec(
 
                 // each simdgroup processes Q queries and NE (NW/NL) cache elements
                 FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
-                    if (is_same<kd4_t, k4_t>::value) {
+                    if (FC_flash_attn_ext_vec_has_sparse) {
+                        // the KV rows are gathered from the index list; -1 entries are padding
+                        const int i11 = pidx[ic + NE*cc + ty];
+                        if (i11 >= 0) {
+                            if (is_same<kd4_t, k4_t>::value) {
+                                device const k4_t * pk4s = (device const k4_t *) (k + i11*args.nb11) + tx;
+                                FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
+                                    const k4_t k_elem = pk4s[ii*NL];
+                                    FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
+                                        mqk[qq][cc] += dot((float4) k_elem, (float4) sq4[qq*PK4 + ii*NL + tx]);
+                                    }
+                                }
+                            } else {
+                                device const kd4_t * pk = (device const kd4_t *) (k + i11*args.nb11);
+
+                                k4_t mk;
+
+                                FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
+                                    const short i = ii*NL + tx;
+
+                                    deq_k_t4(pk + i/nl_k, i%nl_k, mk);
+
+                                    FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
+                                        mqk[qq][cc] += dot((float4) mk, (float4) sq4[qq*PK4 + i]);
+                                    }
+                                }
+                            }
+                        }
+                    } else if (is_same<kd4_t, k4_t>::value) {
                         FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
                             const k4_t k_elem = pk4[cc*NE*NS10/4 + ii*NL];
                             FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
@@ -1422,7 +1562,40 @@ kernel void kernel_flash_attn_ext_vec(
                     }
                 }
 
-                if (is_same<vd4_t, v4_t>::value) {
+                if (FC_flash_attn_ext_vec_has_sparse) {
+                    FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
+                        // the KV rows are gathered from the index list; -1 entries are padding
+                        const int i11 = pidx[ic + NE*cc + ty];
+                        if (i11 >= 0) {
+                            if (is_same<vd4_t, v4_t>::value) {
+                                device const v4_t * pv4 = (device const v4_t *) (v + i11*args.nb21);
+
+                                pv4 += tx;
+
+                                FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
+                                    const v4_t v_elem = pv4[ii*NL];
+                                    FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
+                                        lo[qq][ii] += o4_t(float4(v_elem)*float4(ss[qq*C + cc*NE + ty]));
+                                    }
+                                }
+                            } else {
+                                device const vd4_t * pv4 = (device const vd4_t *) (v + i11*args.nb21);
+
+                                FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
+                                    const short i = ii*NL + tx;
+
+                                    v4_t mv;
+
+                                    deq_v_t4(pv4 + i/nl_v, i%nl_v, mv);
+
+                                    FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
+                                        lo[qq][ii] += o4_t(float4(mv)*float4(ss[qq*C + cc*NE + ty]));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (is_same<vd4_t, v4_t>::value) {
                     device const v4_t * pv4 = (device const v4_t *) (v + ic*args.nb21);
 
                     pv4 += ty*NS20/4 + tx;
