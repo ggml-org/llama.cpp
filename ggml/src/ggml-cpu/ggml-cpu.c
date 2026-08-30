@@ -636,6 +636,25 @@ static uint32_t ggml_get_numa_affinity(void) {
 }
 #endif
 
+#if defined(__gnu_linux__)
+// mirror mode wants the primary weights on one node with replicas elsewhere - prefer the home node for every allocation made from here on, which is what `numactl --membind=<home>` achieves but degrading instead of failing when the node is full
+// called before any weight buffer is allocated; the compute threads spawn later and inherit the policy
+static void ggml_numa_mirror_set_home_policy(int home) {
+    int mode = 0;
+    if (syscall(__NR_get_mempolicy, &mode, NULL, 0, NULL, 0) == 0 && mode != 0) {
+        GGML_LOG_INFO("NUMA mirror: an explicit memory policy is already set, leaving it in place\n");
+        return;
+    }
+    unsigned long nodemask = 1ul << home;
+    // MPOL_PREFERRED = 1 (numaif.h not required at build time)
+    if (syscall(__NR_set_mempolicy, 1l, &nodemask, sizeof(nodemask)*8) == 0) {
+        GGML_LOG_INFO("NUMA mirror: memory policy set to prefer node %d\n", home);
+    } else {
+        GGML_LOG_WARN("NUMA mirror: set_mempolicy failed - if the model does not load on node %d, launch with `numactl --membind=%d`\n", home, home);
+    }
+}
+#endif
+
 void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     if (g_state.numa.n_nodes > 0) {
         fprintf(stderr, "ggml_numa_init: NUMA already initialized\n");
@@ -717,6 +736,10 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
             }
             fclose(fptr);
         }
+    }
+
+    if (numa_flag == GGML_NUMA_STRATEGY_MIRROR && g_state.numa.n_nodes > 1) {
+        ggml_numa_mirror_set_home_policy(0); // home node, matches g_numa_mirror.home_node
     }
 #else
     UNUSED(numa_flag);
