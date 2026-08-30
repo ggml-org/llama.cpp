@@ -31,11 +31,6 @@ bool ggml_cpu_iqp_supported_mul_mat(const struct ggml_tensor * dst);
 // node level test only - per expert eligibility is decided with ggml_cpu_iqp_expert_eligible
 bool ggml_cpu_iqp_supported_mul_mat_id(const struct ggml_tensor * dst);
 
-size_t ggml_cpu_iqp_src1_conv_size(const struct ggml_tensor * dst);
-
-// offset of the panel scratch area inside the work buffer (past the q8_K conversion of src1)
-size_t ggml_cpu_iqp_scratch_offset(const struct ggml_tensor * dst);
-
 // per thread panel scratch bytes, padded
 size_t ggml_cpu_iqp_scratch_size(const struct ggml_tensor * dst);
 

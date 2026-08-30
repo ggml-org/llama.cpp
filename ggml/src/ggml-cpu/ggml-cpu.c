@@ -2886,8 +2886,7 @@ struct ggml_cplan ggml_graph_plan(
 
                         // the IQ panel path needs one scratch panel per thread past the q8_K rows
                         if (ggml_cpu_iqp_supported_mul_mat(node)) {
-                            cur =
-                                MAX(cur, ggml_cpu_iqp_scratch_offset(node) + n_tasks * ggml_cpu_iqp_scratch_size(node));
+                            cur = GGML_PAD(cur, 64) + n_tasks * ggml_cpu_iqp_scratch_size(node);
                         }
                     } break;
                 case GGML_OP_MUL_MAT_ID:

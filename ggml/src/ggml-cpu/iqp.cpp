@@ -1111,12 +1111,6 @@ bool ggml_cpu_iqp_supported_mul_mat_id(const struct ggml_tensor * dst) {
     return true;
 }
 
-size_t ggml_cpu_iqp_src1_conv_size(const struct ggml_tensor * dst) {
-    const enum ggml_type vec_dot_type = ggml_get_type_traits_cpu(dst->src[0]->type)->vec_dot_type;
-
-    return ggml_row_size(vec_dot_type, ggml_nelements(dst->src[1]));
-}
-
 void ggml_compute_forward_mul_mat_id_iqp(const struct ggml_compute_params * params,
                                          struct ggml_tensor *               dst,
                                          int64_t                            cur_a,
@@ -1176,11 +1170,6 @@ void ggml_compute_forward_mul_mat_id_iqp(const struct ggml_compute_params * para
     }
 }
 
-// ggml_graph_plan sizes the work buffer with these two helpers and the compute pass addresses it with them, so the two cannot drift
-size_t ggml_cpu_iqp_scratch_offset(const struct ggml_tensor * dst) {
-    return GGML_PAD(ggml_cpu_iqp_src1_conv_size(dst), 64);
-}
-
 size_t ggml_cpu_iqp_scratch_size(const struct ggml_tensor * dst) {
     return GGML_PAD((dst->src[0]->ne[0] / QK_K) * sizeof(block_iqp_x8), 64);
 }
@@ -1201,10 +1190,11 @@ void ggml_compute_forward_mul_mat_iqp(const struct ggml_compute_params * params,
 
     const size_t scratch_size = ggml_cpu_iqp_scratch_size(dst);
 
-    GGML_ASSERT(ggml_cpu_iqp_scratch_offset(dst) + (size_t) nth * scratch_size <= params->wsize);
+    const size_t scratch_offset = GGML_PAD(nbw2 * ne12, 64);
 
-    block_iqp_x8 * panel =
-        (block_iqp_x8 *) ((char *) params->wdata + ggml_cpu_iqp_scratch_offset(dst) + (size_t) ith * scratch_size);
+    GGML_ASSERT(scratch_offset + (size_t) nth * scratch_size <= params->wsize);
+
+    block_iqp_x8 * panel = (block_iqp_x8 *) ((char *) params->wdata + scratch_offset + (size_t) ith * scratch_size);
 
     const int64_t nrows = ne11;
 
