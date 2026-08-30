@@ -1182,7 +1182,19 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override {
         mctx = static_cast<const llama_memory_hybrid_idx_context *>(params.mctx)->get_attn();
-        return rows->ne[0] == (int64_t) pmodel.hparams.ple_n_heads * params.ubatch.n_tokens;
+
+        const int64_t n_want = (int64_t) pmodel.hparams.ple_n_heads * params.ubatch.n_tokens;
+
+        // exactly one of the two is built: `rows` when the table is a tensor and the
+        // graph does the get_rows, `embd` when --ngram-on-disk gathered it in set_input.
+        // Dereferencing `rows` unconditionally segfaults on every on-disk decode.
+        if (rows) {
+            return rows->ne[0] == n_want;      // I32 [n_heads*n_tokens]
+        }
+        if (embd) {
+            return embd->ne[1] == n_want;      // F32 [ple_head_dim, n_heads*n_tokens]
+        }
+        return false;
     }
 
     ggml_tensor * rows = nullptr;   // I32 [ple_n_heads * n_tokens]
@@ -1261,17 +1273,14 @@ void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
     }
 
     if (pmodel.ple_disk) {
-        // idx is head-major and head-local; the reader wants one global row per (token, head)
-        // in token-major order, which is the layout the per-head gather + concat produces.
+        // idx is already exactly what the reader wants: one global row per (token, head),
+        // token-major, with ple_head_offsets folded in by the loop above. The previous
+        // version read it head-major and added the offset a second time, which is only
+        // correct for a table split per head -- on a joined per_layer_token_embd it walks
+        // past the end (rows beyond ple_rows) and gather() aborts.
         GGML_ASSERT(embd != nullptr && rows == nullptr);
-        rows_global.resize(idx.size());
-        for (int64_t i = 0; i < n_tokens; ++i) {
-            for (int64_t h = 0; h < n_heads; ++h) {
-                rows_global[i*n_heads + h] = (int32_t) (idx[h*n_tokens + i] + (int64_t) hp.ple_head_offsets[h]);
-            }
-        }
-        embd_buf.resize(rows_global.size() * (size_t) hp.ple_head_dim);
-        pmodel.ple_disk->gather(rows_global.data(), rows_global.size(), embd_buf.data());
+        embd_buf.resize(idx.size() * (size_t) hp.ple_head_dim);
+        pmodel.ple_disk->gather(idx.data(), idx.size(), embd_buf.data());
         ggml_backend_tensor_set(embd, embd_buf.data(), 0, embd_buf.size() * sizeof(float));
         return;
     }
