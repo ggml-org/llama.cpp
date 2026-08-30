@@ -826,10 +826,10 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
     // See comments in init_tensor.
     rpc_get |= ggml_is_quantized(tensor->type) && (tensor->ne[0] % 512 != 0) && (tensor->view_src == nullptr);
 
-    // ops that require additional memory for fleeting data on certain backends
+    // [TAG_ALLOC_SIZE_EXPAND]
+    // ops that may require additional memory for fleeting data on certain backends
     // ref: https://github.com/ggml-org/llama.cpp/pull/15966
-    rpc_get |= tensor->op == GGML_OP_FLASH_ATTN_EXT;
-    rpc_get |= tensor->op == GGML_OP_MUL_MAT_ID;
+    rpc_get |= ggml_backend_op_alloc_size_may_expand(tensor->op);
 
     if (rpc_get) {
         ggml_backend_rpc_buffer_type_context * buft_ctx = (ggml_backend_rpc_buffer_type_context *)buft->context;

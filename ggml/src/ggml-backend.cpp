@@ -65,6 +65,13 @@ size_t ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, const s
     if (buft->iface.get_alloc_size) {
         size_t size = buft->iface.get_alloc_size(buft, tensor);
         assert(size >= ggml_nbytes(tensor));
+
+        // [TAG_ALLOC_SIZE_EXPAND]
+        // if you hit this assert, update ggml_backend_op_alloc_size_may_expand() accordingly
+        GGML_ASSERT(size <= ggml_nbytes(tensor) ||
+                    ggml_op_is_empty(tensor->op) ||
+                    ggml_backend_op_alloc_size_may_expand(tensor->op));
+
         return size;
     }
     return ggml_nbytes(tensor);
@@ -2100,6 +2107,22 @@ ggml_backend_t ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched,
 }
 
 // utils
+
+// [TAG_ALLOC_SIZE_EXPAND]
+// returns true for ops that may require additional memory for fleeting data on some backends,
+// i.e. the backend's get_alloc_size may return more than ggml_nbytes for the output tensor
+bool ggml_backend_op_alloc_size_may_expand(enum ggml_op op) {
+    switch (op) {
+        case GGML_OP_FLASH_ATTN_EXT:
+        case GGML_OP_MUL_MAT_ID:
+        case GGML_OP_CUMSUM:
+        case GGML_OP_ARGSORT:
+        case GGML_OP_TOP_K:
+            return true;
+        default:
+            return false;
+    }
+}
 
 enum ggml_status ggml_backend_view_init(struct ggml_tensor * tensor) {
     GGML_ASSERT(tensor);
