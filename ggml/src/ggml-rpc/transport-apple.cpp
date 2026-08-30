@@ -115,16 +115,9 @@ struct apple_rdma::impl {
 
     ~impl() {
         broken = true;
-        // the QP must be destroyed before the memory it can still write to is
-        // deregistered and freed: ERR only starts flushing the posted WQEs
-        if (qp) {
-            struct ibv_qp_attr a = {};
-            a.qp_state = IBV_QPS_ERR;
-            ibv_modify_qp(qp, &a, IBV_QP_STATE);
-            struct ibv_wc wc[RDMA_NBUF * 2];
-            while (ibv_poll_cq(cq, RDMA_NBUF * 2, wc) > 0) {}
-            ibv_destroy_qp(qp);
-        }
+        // destroy the QP first: it can still write to the rings until it is gone.
+        // no IBV_QPS_ERR before it - Apple's provider then fails every region unmap.
+        if (qp) ibv_destroy_qp(qp);
         if (send_mr) ibv_dereg_mr(send_mr);
         if (recv_mr) ibv_dereg_mr(recv_mr);
         free(send_mem);
