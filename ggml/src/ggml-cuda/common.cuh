@@ -1424,6 +1424,15 @@ struct ggml_backend_cuda_context {
 
     int curr_stream_no = 0;
 
+    // MMVQ activation quantization cache
+    void *       mmvq_workspace        = nullptr;
+    size_t       mmvq_workspace_size   = 0;
+    const void * mmvq_cached_src1_data = nullptr;
+    int64_t      mmvq_cached_ne10      = 0;
+    int64_t      mmvq_cached_ne11      = 0;
+    int64_t      mmvq_cached_ne12      = 0;
+    int64_t      mmvq_cached_ne13      = 0;
+
 #ifdef USE_CUDA_GRAPH
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
