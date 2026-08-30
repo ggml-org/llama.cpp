@@ -2007,11 +2007,14 @@ int llama_context::decode(const llama_batch & batch_inp) {
 #if defined(GGML_USE_HIP)
                 if (ggml_backend_is_cuda(backend_h)) {
                     embd_nextn_device = { t_h_nextn, backend_h, ubatch.n_tokens, true };
-                } else if (std::getenv("LLAMA_SPEC_HIP_DISABLE_META_DEVICE_VIEW") == nullptr) {
-                    // Tensor-parallel activations are represented by a Meta
-                    // tensor. A mirrored output has one complete allocation per
-                    // rank, so borrow one instead of materializing it on the
-                    // host. The Meta helper refuses partial/sharded tensors.
+                } else if (llm_arch_supports_speculative_meta_device_view(model.arch) &&
+                           std::getenv("LLAMA_SPEC_HIP_DISABLE_META_DEVICE_VIEW") == nullptr) {
+                    // Qwen4Exp tensor-parallel activations are represented by a
+                    // Meta tensor. A mirrored output has one complete allocation
+                    // per rank, so borrow one instead of materializing it on the
+                    // host. The Meta helper refuses partial/sharded tensors. Do
+                    // not generalize this from shape alone: each architecture
+                    // needs hidden-content, stream, and placement validation.
                     // Prefer the last rank, matching the Meta executor's
                     // steady-state current device and the sidecar's previous
                     // tensor-split placement while avoiding a device switch.
