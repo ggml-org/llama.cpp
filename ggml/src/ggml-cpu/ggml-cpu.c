@@ -199,6 +199,7 @@ typedef void * thread_ret_t;
 #include <unistd.h>
 #if defined(__gnu_linux__)
 #include <sys/mman.h> // NUMA weight mirroring: replica mmap + mbind
+#include <dirent.h>   // NUMA weight mirroring: sysfs PCI scan for home-node detection
 #endif
 
 #endif
@@ -637,6 +638,81 @@ static uint32_t ggml_get_numa_affinity(void) {
 #endif
 
 #if defined(__gnu_linux__)
+static int ggml_numa_mirror_read_sysfs_hex(const char * dev, const char * attr, unsigned * out) {
+    char path[512];
+    int rv = snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/%s", dev, attr);
+    GGML_ASSERT(rv > 0 && (unsigned)rv < sizeof(path));
+    FILE * f = fopen(path, "r");
+    if (f == NULL) {
+        return -1;
+    }
+    rv = fscanf(f, "%x", out) == 1 ? 0 : -1;
+    fclose(f);
+    return rv;
+}
+
+// The home node holds the primary weights: GPU op-offload uploads read from it, so it should be the node the GPUs hang off.
+// Runs before any backend is initialized, so the GPUs are found via a sysfs PCI scan rather than the backend API: display-class devices (0x03xx) from discrete-GPU vendors, majority vote on their numa_node.
+// The vendor filter skips the BMC VGA every server board has on node 0. GGML_NUMA_MIRROR_HOME=<n> overrides.
+static int ggml_numa_mirror_pick_home_node(void) {
+    static int cached = -1;
+    if (cached >= 0) {
+        return cached;
+    }
+    const char * e = getenv("GGML_NUMA_MIRROR_HOME");
+    if (e != NULL && e[0]) {
+        int h = atoi(e);
+        cached = h >= 0 && h < GGML_NUMA_MAX_NODES ? h : 0;
+        GGML_LOG_INFO("NUMA mirror: home node %d (GGML_NUMA_MIRROR_HOME)\n", cached);
+        return cached;
+    }
+    int votes[GGML_NUMA_MAX_NODES] = { 0 };
+    DIR * d = opendir("/sys/bus/pci/devices");
+    if (d != NULL) {
+        struct dirent * de;
+        while ((de = readdir(d)) != NULL) {
+            unsigned cls = 0, vendor = 0;
+            if (de->d_name[0] == '.') {
+                continue;
+            }
+            if (ggml_numa_mirror_read_sysfs_hex(de->d_name, "class", &cls) != 0 || (cls >> 16) != 0x03) {
+                continue;
+            }
+            if (ggml_numa_mirror_read_sysfs_hex(de->d_name, "vendor", &vendor) != 0 || (vendor != 0x10de && vendor != 0x1002)) {
+                continue;
+            }
+            char path[512];
+            int rv = snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/numa_node", de->d_name);
+            GGML_ASSERT(rv > 0 && (unsigned)rv < sizeof(path));
+            FILE * f = fopen(path, "r");
+            if (f == NULL) {
+                continue;
+            }
+            int node = -1;
+            if (fscanf(f, "%d", &node) == 1 && node >= 0 && node < GGML_NUMA_MAX_NODES) {
+                votes[node]++;
+            }
+            fclose(f);
+        }
+        closedir(d);
+    }
+    int home = 0, best = 0, n_gpus = 0;
+    for (int n = 0; n < GGML_NUMA_MAX_NODES; ++n) {
+        n_gpus += votes[n];
+        if (votes[n] > best) {
+            best = votes[n];
+            home = n;
+        }
+    }
+    cached = home;
+    if (n_gpus > 0) {
+        GGML_LOG_INFO("NUMA mirror: home node %d (%d of %d GPUs)\n", home, best, n_gpus);
+    } else {
+        GGML_LOG_INFO("NUMA mirror: home node 0 (no GPUs found)\n");
+    }
+    return cached;
+}
+
 // mirror mode wants the primary weights on one node with replicas elsewhere - prefer the home node for every allocation made from here on, which is what `numactl --membind=<home>` achieves but degrading instead of failing when the node is full
 // called before any weight buffer is allocated; the compute threads spawn later and inherit the policy
 static void ggml_numa_mirror_set_home_policy(int home) {
@@ -739,7 +815,7 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     }
 
     if (numa_flag == GGML_NUMA_STRATEGY_MIRROR && g_state.numa.n_nodes > 1) {
-        ggml_numa_mirror_set_home_policy(0); // home node, matches g_numa_mirror.home_node
+        ggml_numa_mirror_set_home_policy(ggml_numa_mirror_pick_home_node());
     }
 #else
     UNUSED(numa_flag);
@@ -899,7 +975,7 @@ bool ggml_numa_mirror_enabled(void) {
         }
         const char * mb = getenv("GGML_NUMA_MIRROR_MIN_MB");
         g_numa_mirror.min_bytes = mb != NULL ? strtoull(mb, NULL, 10) << 20 : 1ull << 30;
-        g_numa_mirror.home_node = 0;
+        g_numa_mirror.home_node = ggml_numa_mirror_pick_home_node();
         g_numa_mirror.enabled = on ? 1 : 0;
         if (on) {
             GGML_NUMA_MIRROR_LOG_INFO("%d nodes, home node %d, min buffer %zu MiB\n",
