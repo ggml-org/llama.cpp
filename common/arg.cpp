@@ -1402,6 +1402,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         params.parse_special = true; // parse special tokens by default, like the old tokenize tool
     } else if (ex == LLAMA_EXAMPLE_TTS) {
         params.out_file = "output.wav";
+        params.n_ctx = 4096;
         params.sampling.penalty_repeat = 1.05f;
         params.sampling.penalty_last_n = -1;
     }

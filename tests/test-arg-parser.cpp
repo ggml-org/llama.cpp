@@ -172,6 +172,39 @@ static void test(void) {
 
     std::vector<std::string> argv;
 
+    {
+        common_params tts_params;
+
+        argv = {
+            "binary_name",
+            "-m", "dummy-model.gguf",
+            "-mm", "dummy-mmproj.gguf",
+        };
+        assert(true == common_params_parse(
+                argv.size(),
+                list_str_to_char(argv).data(),
+                tts_params,
+                LLAMA_EXAMPLE_TTS));
+        assert(tts_params.n_ctx == 4096);
+    }
+
+    {
+        common_params tts_params;
+
+        argv = {
+            "binary_name",
+            "-m", "dummy-model.gguf",
+            "-mm", "dummy-mmproj.gguf",
+            "-c", "8192",
+        };
+        assert(true == common_params_parse(
+                argv.size(),
+                list_str_to_char(argv).data(),
+                tts_params,
+                LLAMA_EXAMPLE_TTS));
+        assert(tts_params.n_ctx == 8192);
+    }
+
     printf("test-arg-parser: test invalid usage\n\n");
 
     // missing value
