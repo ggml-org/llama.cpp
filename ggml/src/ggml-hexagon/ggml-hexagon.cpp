@@ -69,29 +69,14 @@ using u32vec  = std::vector<uint32_t>;
 #define GGML_HEXAGON_FENCE_SLOT_SIZE       128
 
 struct ggml_hexagon_device_config {
-    int physical_idx = 0;
-    int virtual_idx  = 0;
+    int         physical_idx = 0;
+    int         virtual_idx  = 0;
+    int         domain_id    = 0;
+    std::string domain_name;
     std::string name;
 };
 
 static ggml_hexagon_device_config opt_device_configs[GGML_HEXAGON_MAX_SESSIONS];
-
-static int get_domain_id(int physical_idx) {
-    switch (physical_idx) {
-        case 0:  return 3;  // CDSP0 (all devices)
-        case 1:  return 4;  // CDSP1 (IQ9, IQ10)
-        case 2:  return 18; // CDSP2 (IQ10)
-        case 3:  return 19; // CDSP3 (IQ10)
-        default: return CDSP_DOMAIN_ID + physical_idx;
-    }
-}
-
-static std::string get_domain_name(int physical_idx) {
-    if (physical_idx == 0) {
-        return CDSP_DOMAIN_NAME;
-    }
-    return std::string("cdsp") + std::to_string(physical_idx);
-}
 
 static int    opt_arch    = 0; // autodetect
 static size_t opt_ndev    = 1;
@@ -361,7 +346,6 @@ struct ggml_hexagon_session {
     uint32_t         session_id;
     uint32_t         domain_id;
     uint64_t         queue_id;
-    int              dev_id;
     int              phys_idx;
     int              virt_idx;
     bool             valid_session;
@@ -376,9 +360,6 @@ struct ggml_hexagon_session {
     std::unordered_map<int, std::unique_ptr<ggml_hexagon_shared_buffer>> cloned_buffers;
     std::unordered_set<ggml_hexagon_session *>                           sync_peers;
 
-    ggml_backend_buffer_type buffer_type        = {};
-    ggml_backend_buffer_type host_buffer_type   = {};
-
     uint32_t n_threads   = 0;
     uint32_t n_hvx       = 0;
     uint32_t n_hmx       = 0;
@@ -392,12 +373,12 @@ struct ggml_hexagon_session {
 
     mutable std::unordered_set<const ggml_tensor *> needs_repack;
 
-    ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) noexcept(false);
+    ggml_hexagon_session(const ggml_hexagon_device_config & config, ggml_backend_dev_t dev = nullptr) noexcept(false);
     ~ggml_hexagon_session() noexcept(true);
 
     const char* c_name() const { return name.c_str(); }
 
-    void allocate(int dev_id) noexcept(false);
+    void allocate(const ggml_hexagon_device_config & config) noexcept(false);
     void release() noexcept(true);
 
     void enqueue_op(const htp_opnode & node);
@@ -430,14 +411,38 @@ struct ggml_hexagon_session {
 
 // ** backend buffers
 
+struct ggml_backend_hexagon_device_context {
+    int                        dev_id;
+    ggml_hexagon_device_config config;
+    ggml_backend_dev_t         dev = nullptr;
+    size_t                     max_bufsize = 0;
+
+    ggml_backend_buffer_type buffer_type      = {};
+    ggml_backend_buffer_type host_buffer_type = {};
+
+    std::unique_ptr<ggml_hexagon_session> sess;
+
+    ggml_backend_hexagon_device_context(int dev_id, const ggml_hexagon_device_config & config, ggml_backend_dev_t dev);
+    ~ggml_backend_hexagon_device_context();
+
+    const char * c_name() const { return config.name.c_str(); }
+
+    ggml_hexagon_session * session() {
+        if (!sess) {
+            sess = std::make_unique<ggml_hexagon_session>(config, dev);
+        }
+        return sess.get();
+    }
+};
+
 struct ggml_backend_hexagon_buffer_type_context {
-    ggml_backend_hexagon_buffer_type_context(const std::string & name, ggml_hexagon_session * sess) {
-        this->sess = sess;
-        this->name = name;
+    ggml_backend_hexagon_buffer_type_context(const std::string & name, ggml_backend_hexagon_device_context * dev_ctx) {
+        this->dev_ctx = dev_ctx;
+        this->name    = name;
     }
 
-    ggml_hexagon_session * sess;
-    std::string            name;
+    ggml_backend_hexagon_device_context * dev_ctx;
+    std::string                           name;
 };
 
 struct ggml_hexagon_rpcmem_block {
@@ -576,7 +581,8 @@ struct ggml_hexagon_shared_buffer {
 };
 
 static ggml_hexagon_session * ggml_backend_hexagon_buffer_get_sess(ggml_backend_buffer_t buffer) {
-    return static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer->buft->context)->sess;
+    auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(buffer->context);
+    return sbuf->sess;
 }
 
 static void ggml_backend_hexagon_buffer_free_buffer(ggml_backend_buffer_t buffer) {
@@ -1494,24 +1500,26 @@ static const char * ggml_backend_hexagon_buffer_type_name(ggml_backend_buffer_ty
 
 static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
-    auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
+    auto dev_ctx = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->dev_ctx;
+    auto sess    = dev_ctx->session();
     try {
         ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size, false, GGML_HEXAGON_FENCE_BUFFER_SIZE);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
-        GGML_LOG_ERROR("ggml-hex: %s failed to allocate device buffer context: %s\n", sess->c_name(), exc.what());
+        GGML_LOG_ERROR("ggml-hex: %s failed to allocate device buffer context: %s\n", dev_ctx->c_name(), exc.what());
         return nullptr;
     }
 }
 
 static ggml_backend_buffer_t ggml_backend_hexagon_host_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
-    auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
+    auto dev_ctx = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->dev_ctx;
+    auto sess    = dev_ctx->session();
     try {
         ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size, false, GGML_HEXAGON_FENCE_BUFFER_SIZE);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_host_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
-        GGML_LOG_ERROR("ggml-hex: %s failed to allocate host buffer context: %s\n", sess->c_name(), exc.what());
+        GGML_LOG_ERROR("ggml-hex: %s failed to allocate host buffer context: %s\n", dev_ctx->c_name(), exc.what());
         return nullptr;
     }
 }
@@ -1536,7 +1544,7 @@ static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffe
 
 static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     auto * context = static_cast<ggml_backend_hexagon_buffer_type_context *>(buft->context);
-    return context->sess->max_bufsize;
+    return context->dev_ctx->max_bufsize;
 }
 
 static bool ggml_backend_hexagon_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
@@ -1566,6 +1574,22 @@ static ggml_backend_buffer_type_i ggml_backend_hexagon_host_buffer_type_interfac
     /* .get_alloc_size   = */ ggml_backend_hexagon_buffer_type_get_alloc_size,
     /* .is_host          = */ ggml_backend_hexagon_host_buffer_type_is_host,
 };
+
+ggml_backend_hexagon_device_context::ggml_backend_hexagon_device_context(int dev_id, const ggml_hexagon_device_config & config, ggml_backend_dev_t dev)
+    : dev_id(dev_id), config(config), dev(dev), max_bufsize(opt_mbuf) {
+    buffer_type.device  = dev;
+    buffer_type.iface   = ggml_backend_hexagon_buffer_type_interface;
+    buffer_type.context = new ggml_backend_hexagon_buffer_type_context(config.name, this);
+
+    host_buffer_type.device  = dev;
+    host_buffer_type.iface   = ggml_backend_hexagon_host_buffer_type_interface;
+    host_buffer_type.context = new ggml_backend_hexagon_buffer_type_context(config.name + "-HOST", this);
+}
+
+ggml_backend_hexagon_device_context::~ggml_backend_hexagon_device_context() {
+    delete static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type.context);
+    delete static_cast<ggml_backend_hexagon_buffer_type_context *>(host_buffer_type.context);
+}
 
 static bool ggml_backend_buffer_is_hexagon(const struct ggml_backend_buffer * b) {
     return b->buft->iface.get_alignment == ggml_backend_hexagon_buffer_type_get_alignment;
@@ -2811,8 +2835,7 @@ static size_t ggml_hexagon_measure_max_vmem(ggml_hexagon_session *sess) {
     return vmem - step; // backoff to account for overhead from internal mappings
 }
 
-void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
-    const auto & config = opt_device_configs[dev_id];
+void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) noexcept(false) {
     int phys_idx = config.physical_idx;
     int virt_idx = config.virtual_idx;
 
@@ -2823,21 +2846,31 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
     this->phys_idx   = phys_idx;
     this->virt_idx   = virt_idx;
-    this->domain_id  = get_domain_id(phys_idx);
+    this->domain_id  = config.domain_id;
     this->session_id = 0;
-    this->dev_id     = dev_id;
     this->name       = config.name;
     this->op_pending = 0;
 
     GGML_LOG_DEBUG("ggml-hex: %s allocating new session\n", this->name.c_str());
 
-    domain * my_domain = htpdrv_get_domain(this->domain_id);
-    if (my_domain == NULL) {
-        GGML_LOG_ERROR("ggml-hex: unable to get domain struct for CDSP (domain_id %d)\n", this->domain_id);
-        throw std::runtime_error("ggml-hex: failed to get CDSP domain (see log for details)");
+    if (config.domain_id < 0 || config.domain_name.empty()) {
+        GGML_LOG_ERROR("ggml-hex: %s: invalid physical CDSP core %d\n", config.name.c_str(), config.physical_idx);
+        throw std::runtime_error("ggml-hex: invalid physical CDSP core");
     }
 
-    std::string dom_name = get_domain_name(phys_idx);
+    const std::string & dom_name = config.domain_name;
+
+    // Enable Unsigned PD for all domains
+    {
+        struct remote_rpc_control_unsigned_module u;
+        u.domain = -1;
+        u.enable = 1;
+        int err  = remote_session_control(DSPRPC_CONTROL_UNSIGNED_MODULE, (void *) &u, sizeof(u));
+        if (err != AEE_SUCCESS) {
+            GGML_LOG_ERROR("ggml-hex: %s failed to enable unsigned PD : error 0x%x\n", this->c_name(), err);
+            throw std::runtime_error("ggml-hex: remote_session_control(unsign) failed (see log for details)");
+        }
+    }
 
     // Create new session if virtual_idx > 0
     if (virt_idx > 0) {
@@ -2849,7 +2882,8 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
         int err = remote_session_control(FASTRPC_RESERVE_NEW_SESSION, (void *) &n, sizeof(n));
         if (err != AEE_SUCCESS) {
-            GGML_LOG_ERROR("ggml-hex: failed to reserve new session %d (physical %d, virtual %d) : error 0x%x\n", dev_id, phys_idx, virt_idx, err);
+            GGML_LOG_ERROR("ggml-hex: %s failed to reserve new session (physical %d, virtual %d) : error 0x%x\n",
+                           this->c_name(), phys_idx, virt_idx, err);
             throw std::runtime_error("ggml-hex: remote_session_control(new-sess) failed (see log for details)");
         }
 
@@ -2857,9 +2891,20 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         this->session_id    = n.session_id;
         this->domain_id     = n.effective_domain_id;
         this->valid_session = true;
-    }
+    } else {
+        struct remote_rpc_effective_domain_id eff = {};
+        eff.domain_name     = const_cast<char *>(dom_name.c_str());
+        eff.domain_name_len = dom_name.size();
+        eff.session_id      = 0;
 
-    // Get session URI
+        int err = remote_session_control(FASTRPC_GET_EFFECTIVE_DOMAIN_ID, (void *) &eff, sizeof(eff));
+        if (err == AEE_SUCCESS) {
+            this->domain_id = eff.effective_domain_id;
+        } else {
+            GGML_LOG_DEBUG("ggml-hex: %s FASTRPC_GET_EFFECTIVE_DOMAIN_ID returned 0x%x, using domain_id %d\n",
+                           this->name.c_str(), err, this->domain_id);
+        }
+    }
 
     char session_uri[256];
     {
@@ -2877,31 +2922,18 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
         int err = remote_session_control(FASTRPC_GET_URI, (void *) &u, sizeof(u));
         if (err != AEE_SUCCESS) {
-            // fallback to single session uris
-            int htp_URI_domain_len = strlen(htp_uri) + MAX_DOMAIN_NAMELEN;
+            snprintf(session_uri, sizeof(session_uri), "%s&_dom=%s&_session=%u",
+                     htp_uri, dom_name.c_str(), this->session_id);
 
-            snprintf(session_uri, htp_URI_domain_len, "%s%s", htp_uri, my_domain->uri);
-
-            GGML_LOG_WARN("ggml-hex: failed to get URI for session %d (physical %d, virtual %d) : error 0x%x. Falling back to single session URI: %s\n", dev_id, phys_idx, virt_idx, err, session_uri);
-        }
-    }
-
-    // Enable Unsigned PD
-    {
-        struct remote_rpc_control_unsigned_module u;
-        u.domain = this->domain_id;
-        u.enable = 1;
-        int err  = remote_session_control(DSPRPC_CONTROL_UNSIGNED_MODULE, (void *) &u, sizeof(u));
-        if (err != AEE_SUCCESS) {
-            GGML_LOG_ERROR("ggml-hex: failed to enable unsigned PD for session %d : error 0x%x\n", dev_id, err);
-            throw std::runtime_error("ggml-hex: remote_session_control(unsign) failed (see log for details)");
+            GGML_LOG_WARN("ggml-hex: %s failed to get URI (physical %d, virtual %d) : error 0x%x. Falling back to single session URI: %s\n",
+                          this->c_name(), phys_idx, virt_idx, err, session_uri);
         }
     }
 
     // Open session
     int err = htp_iface_open(session_uri, &this->handle);
     if (err != AEE_SUCCESS) {
-        GGML_LOG_ERROR("ggml-hex: failed to open session %d : error 0x%x\n", dev_id, err);
+        GGML_LOG_ERROR("ggml-hex: %s failed to open session : error 0x%x\n", this->c_name(), err);
         throw std::runtime_error("ggml-hex: failed to open session (see log for details)");
     }
 
@@ -2991,7 +3023,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     this->op_batch = new ggml_hexagon_opbatch(this, opt_opbatch, this->max_vmem);
 
     // Start dspqueue/opbatch processing
-    err = htp_iface_start(this->handle, dev_id, this->queue_id, opt_nhvx, opt_nhmx, this->max_vmem);
+    err = htp_iface_start(this->handle, this->session_id, this->queue_id, opt_nhvx, opt_nhmx, this->max_vmem);
     if (err != 0) {
         GGML_LOG_ERROR("ggml-hex: %s failed to start session: 0x%08x\n", this->c_name(), (unsigned) err);
         throw std::runtime_error("ggml-hex: iface start failed (see log for details)");
@@ -3054,33 +3086,23 @@ void ggml_hexagon_session::release() noexcept(true) {
     this->cloned_buffers.clear();
 }
 
-ggml_hexagon_session::ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) noexcept(false) {
-    buffer_type.device      = dev;
-    host_buffer_type.device = dev;
-
+ggml_hexagon_session::ggml_hexagon_session(const ggml_hexagon_device_config & config, ggml_backend_dev_t dev) noexcept(false) {
     op_batch = nullptr;
     op_queue = nullptr;
     fence_seq = ((uintptr_t)this) & 0xFFFF;
 
     try {
-        allocate(dev_id);
-
-        buffer_type.iface   = ggml_backend_hexagon_buffer_type_interface;
-        buffer_type.context = new ggml_backend_hexagon_buffer_type_context(this->name, this);
-
-        host_buffer_type.iface   = ggml_backend_hexagon_host_buffer_type_interface;
-        host_buffer_type.context = new ggml_backend_hexagon_buffer_type_context(this->name + "-HOST", this);
+        allocate(config);
     } catch (const std::exception & exc) {
         release();
         throw;
     }
+
+    GGML_UNUSED(dev);
 }
 
 ggml_hexagon_session::~ggml_hexagon_session() noexcept(true) {
     release();
-
-    delete static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type.context);
-    delete static_cast<ggml_backend_hexagon_buffer_type_context *>(host_buffer_type.context);
 }
 
 // ** backend interface
@@ -3957,11 +3979,13 @@ static void ggml_hexagon_precompute_fused_mmnx_params(
 }
 
 static bool ggml_hexagon_tensor_is_host(const struct ggml_hexagon_session * sess, const struct ggml_tensor * t) {
-    return t && t->buffer && t->buffer->buft == &sess->host_buffer_type;
+    return t && t->buffer && ggml_backend_buft_is_host(t->buffer->buft);
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_tensor_is_non_host(const struct ggml_hexagon_session * sess, const struct ggml_tensor * t) {
-    return t && t->buffer && t->buffer->buft != &sess->host_buffer_type;
+    return t && t->buffer && !ggml_backend_buft_is_host(t->buffer->buft);
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * dst) {
@@ -4677,6 +4701,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
             switch (ggml_get_glu_op(t)) {
                 case GGML_GLU_OP_SWIGLU:     return HTP_OP_GLU_SWIGLU;
                 case GGML_GLU_OP_SWIGLU_OAI: return HTP_OP_GLU_SWIGLU_OAI;
+                case GGML_GLU_OP_SWIGLU_CLAMP: return HTP_OP_GLU_SWIGLU_CLAMP;
                 case GGML_GLU_OP_GEGLU:      return HTP_OP_GLU_GEGLU;
                 default: break;
             }
@@ -4984,7 +5009,9 @@ static std::vector<int> ggml_hexagon_graph_optimize_reorder(const std::vector<ht
     return res;
 }
 
-static void ggml_backend_hexagon_graph_optimize(ggml_backend_t backend, ggml_cgraph * gf) {
+static void ggml_backend_hexagon_graph_optimize(ggml_backend_t backend, ggml_cgraph * gf, ggml_backend_graph_optimize_params * params) {
+    GGML_UNUSED(params);
+
     const int n = gf->n_nodes;
 
     constexpr int MAX_FUSE = 16;
@@ -5267,7 +5294,8 @@ bool ggml_backend_is_hexagon(ggml_backend_t backend) {
 // device interface
 
 static ggml_backend_t ggml_backend_hexagon_device_init(ggml_backend_dev_t dev, const char * params) {
-    auto sess = static_cast<ggml_hexagon_session *>(dev->context);
+    auto dev_ctx = static_cast<ggml_backend_hexagon_device_context *>(dev->context);
+    auto sess    = dev_ctx->session();
 
     return new ggml_backend{
         /* .guid      = */ ggml_backend_hexagon_guid(),
@@ -5280,8 +5308,8 @@ static ggml_backend_t ggml_backend_hexagon_device_init(ggml_backend_dev_t dev, c
 }
 
 static const char * ggml_backend_hexagon_device_get_name(ggml_backend_dev_t dev) {
-    auto sess = static_cast<ggml_hexagon_session *>(dev->context);
-    return sess->c_name();
+    auto dev_ctx = static_cast<ggml_backend_hexagon_device_context *>(dev->context);
+    return dev_ctx->c_name();
 
     GGML_UNUSED(dev);
 }
@@ -5319,16 +5347,16 @@ static void ggml_backend_hexagon_device_get_props(ggml_backend_dev_t dev, struct
 }
 
 static ggml_backend_buffer_type_t ggml_backend_hexagon_device_get_buffer_type(ggml_backend_dev_t dev) {
-    auto sess = static_cast<ggml_hexagon_session *>(dev->context);
-    return &sess->buffer_type;
+    auto dev_ctx = static_cast<ggml_backend_hexagon_device_context *>(dev->context);
+    return &dev_ctx->buffer_type;
 }
 
 static ggml_backend_buffer_type_t ggml_backend_hexagon_device_get_host_buffer_type(ggml_backend_dev_t dev) {
     if (!opt_hostbuf) {
         return NULL;
     }
-    auto sess = static_cast<ggml_hexagon_session *>(dev->context);
-    return &sess->host_buffer_type;
+    auto dev_ctx = static_cast<ggml_backend_hexagon_device_context *>(dev->context);
+    return &dev_ctx->host_buffer_type;
 }
 
 static bool ggml_hexagon_supported_cpy(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -5419,7 +5447,8 @@ static bool ggml_hexagon_supported_fill(const struct ggml_hexagon_session * sess
 }
 
 static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
-    auto sess = static_cast<ggml_hexagon_session *>(dev->context);
+    auto dev_ctx = static_cast<ggml_backend_hexagon_device_context *>(dev->context);
+    auto sess    = dev_ctx->session();
 
     // reject ops that match the filter
     if (opt_opfilter && std::regex_match(ggml_op_desc(op), *opt_opfilter)) {
@@ -5491,6 +5520,7 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
                     supp = ggml_hexagon_supported_unary(sess, op);
                     break;
                 default:
+                    supp = false;
                     break;
             }
             break;
@@ -5499,10 +5529,12 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             switch (ggml_get_glu_op(op)) {
                 case GGML_GLU_OP_SWIGLU:
                 case GGML_GLU_OP_SWIGLU_OAI:
+                case GGML_GLU_OP_SWIGLU_CLAMP:
                 case GGML_GLU_OP_GEGLU:
                     supp = ggml_hexagon_supported_activations(sess, op);
                     break;
                 default:
+                    supp = false;
                     break;
             }
             break;
@@ -5588,17 +5620,17 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 }
 
 static bool ggml_backend_hexagon_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    auto sess = static_cast<ggml_hexagon_session *>(dev->context);
+    auto dev_ctx = static_cast<ggml_backend_hexagon_device_context *>(dev->context);
 
     // Technically we can clone hexagon buffers from any session but for some reason the output is garbled with layer-split,
     // tensor-split works correctly, so it needs mode debugging and investigation. For now accept only our own buffers.
 #if 0
     bool supp = (buft->iface.get_alignment == ggml_backend_hexagon_buffer_type_get_alignment);
 #else
-    bool supp = (buft == &sess->host_buffer_type) || (buft == &sess->buffer_type);
+    bool supp = (buft == &dev_ctx->host_buffer_type) || (buft == &dev_ctx->buffer_type);
 #endif
 
-    HEX_VERBOSE("ggml-hex: %s device-supports-buft %s %s\n", sess->name.c_str(), ggml_backend_buft_name(buft), supp ? "yes" : "no");
+    HEX_VERBOSE("ggml-hex: %s device-supports-buft %s %s\n", dev_ctx->c_name(), ggml_backend_buft_name(buft), supp ? "yes" : "no");
     return supp;
 }
 
@@ -5627,16 +5659,11 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
 
     GGML_LOG_INFO("ggml-hex: Hexagon Arch version v%d\n", opt_arch);
 
-    // Create devices / sessions
+    // Create devices
     for (size_t i = 0; i < opt_ndev; i++) {
-        devices[i].iface = ggml_backend_hexagon_device_i;
-        devices[i].reg   = reg;
-        try {
-            devices[i].context = new ggml_hexagon_session(i, &devices[i]);
-        } catch (const std::exception & exc) {
-            GGML_LOG_ERROR("ggml-hex: failed to create device/session %zu\n", i);
-            devices[i].context = nullptr;
-        }
+        devices[i].iface   = ggml_backend_hexagon_device_i;
+        devices[i].reg     = reg;
+        devices[i].context = new ggml_backend_hexagon_device_context(i, opt_device_configs[i], &devices[i]);
     }
 
 }
@@ -5644,10 +5671,10 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
 ggml_hexagon_registry::~ggml_hexagon_registry() {
     GGML_LOG_INFO("ggml-hex: releasing registry\n");
 
-    // Release devices / sessions
+    // Release devices
     for (size_t i = 0; i < opt_ndev; i++) {
-        auto sess = static_cast<ggml_hexagon_session *>(devices[i].context);
-        delete sess;
+        auto dev_ctx = static_cast<ggml_backend_hexagon_device_context *>(devices[i].context);
+        delete dev_ctx;
     }
 }
 
@@ -5816,6 +5843,85 @@ template<typename T, int BASE=10> std::string vec_to_str(std::vector<T> v) {
     return str;
 }
 
+// Enumerate NPU (aka CDSP) domains via FASTRPC_GET_DOMAINS if supported,
+// and populate domain_id and domain_name for all configured devices.
+static void ggml_hexagon_discover_devices() {
+    std::unordered_map<int, fastrpc_domain> cdsp_map;
+    bool discovery_supported = false;
+
+    system_req_payload domain_info = {};
+    domain_info.id              = FASTRPC_GET_DOMAINS;
+    domain_info.sys.domains     = nullptr;
+    domain_info.sys.max_domains = 0;
+    domain_info.sys.flags       = DOMAINS_LIST_FLAGS_SET_TYPE(0, FASTRPC_NSP);
+
+    int err = remote_system_request(&domain_info);
+    if (err == AEE_SUCCESS && domain_info.sys.num_domains > 0) {
+        std::vector<fastrpc_domain> domains(domain_info.sys.num_domains);
+        domain_info.sys.domains     = domains.data();
+        domain_info.sys.max_domains = (int) domains.size();
+
+        err = remote_system_request(&domain_info);
+        if (err == AEE_SUCCESS) {
+            discovery_supported = true;
+            const int n_domains = std::min(domain_info.sys.num_domains, (int) domains.size());
+            for (int i = 0; i < n_domains; i++) {
+                GGML_LOG_INFO("ggml-hex: FASTRPC_GET_DOMAINS[%d]: type %d id %d name '%s' status %d instance-id %d\n",
+                              i, (int) domains[i].type, domains[i].id, domains[i].name, domains[i].status, domains[i].instance_id);
+                if (domains[i].type != FASTRPC_NSP) {
+                    GGML_LOG_DEBUG("ggml-hex:   skipping non-CDSP domain (type=%d)\n", (int) domains[i].type);
+                    continue;
+                }
+                if (!domains[i].status) {
+                    GGML_LOG_WARN("ggml-hex:   skipping CDSP domain id=%d (status=down)\n", domains[i].id);
+                    continue;
+                }
+                cdsp_map[domains[i].instance_id] = domains[i];
+                GGML_LOG_INFO("ggml-hex: using CDSP domain: instance-id %d id %d name '%s'\n",
+                              domains[i].instance_id, domains[i].id, domains[i].name);
+            }
+        } else {
+            GGML_LOG_WARN("ggml-hex: FASTRPC_GET_DOMAINS fetch failed (0x%x), using static CDSP domains\n", (unsigned) err);
+        }
+    } else if (err != AEE_SUCCESS) {
+        GGML_LOG_DEBUG("ggml-hex: FASTRPC_GET_DOMAINS query failed (0x%x), using static CDSP domains\n", (unsigned) err);
+    }
+
+    // Populate domain IDs and names for all configured devices
+    for (size_t i = 0; i < opt_ndev; i++) {
+        auto & cfg = opt_device_configs[i];
+        if (discovery_supported) {
+            auto it = cdsp_map.find(cfg.physical_idx);
+            if (it != cdsp_map.end()) {
+                cfg.domain_id   = it->second.id;
+                cfg.domain_name = it->second.name;
+            } else {
+                GGML_LOG_ERROR("ggml-hex: physical CDSP core %d not found on device (%zu CDSP core(s) available)\n",
+                               cfg.physical_idx, cdsp_map.size());
+                cfg.domain_id   = -1;
+                cfg.domain_name = "";
+            }
+        } else {
+            switch (cfg.physical_idx) {
+                case 0:
+                    cfg.domain_id   = 3;
+                    cfg.domain_name = CDSP_DOMAIN_NAME;
+                    break;
+                case 1:
+                    cfg.domain_id   = 4;
+                    cfg.domain_name = "cdsp1";
+                    break;
+                default:
+                    GGML_LOG_ERROR("ggml-hex: physical CDSP core %d not supported without dynamic discovery\n",
+                                   cfg.physical_idx);
+                    cfg.domain_id   = -1;
+                    cfg.domain_name = "";
+                    break;
+            }
+        }
+    }
+}
+
 static void ggml_hexagon_init(ggml_backend_reg * reg) {
     // Basic sanity checks to make sure definitions match
     static_assert((unsigned int) HTP_TYPE_Q4_0 == (unsigned int) GGML_TYPE_Q4_0,
@@ -5980,6 +6086,9 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
         GGML_LOG_WARN("ggml-hex: forcing ndev to 1 for SoCs archs lower than v75.\n");
     }
 #endif
+
+    // Resolve domain info for all configured devices
+    ggml_hexagon_discover_devices();
 
     if (str_profile) {
         opt_pmu_evt = [&]() -> std::vector<uint32_t> {
