@@ -10415,6 +10415,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
 
+    // Sparse flash attention prefill: long-KV with a sparse mask (n_kv_max hint).
+    // the vec FA kernel iterates only n_kv_max valid entries per row instead of the full KV.
+    for (int64_t kv : { 2048, 4096, 8192, 16384 }) {
+        for (int64_t n_kv_max : { 256, 512, 640, 1024 }) {
+            for (int64_t nb : { 1, 4, 16, 32 }) {
+                test_cases.emplace_back(new test_flash_attn_ext(128, 128, 32, {8, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, n_kv_max));
+            }
+        }
+    }
+
     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
     // note: same bytes either way, so a backend that indexes them differently shows it here
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
