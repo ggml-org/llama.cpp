@@ -296,4 +296,41 @@ __global__ void proposal_normalize_top32(const float * __restrict__ logits,
     for (int i = 0; i < PROPOSAL_TOP_K; ++i) probabilities[i] /= sum;
 }
 
+// Sample an already-normalized top-32 row with the same sticky p_min stop
+// contract as the generic MTP sidecar. A rejected step still receives a safe
+// top-1 token so later fixed-count device work cannot index an invalid row;
+// output_count keeps that suffix invisible to the caller.
+__global__ void proposal_sample_top32(const int32_t * __restrict__ ids,
+        const float * __restrict__ probabilities, float p_min, double uniform,
+        int step, int32_t * __restrict__ output_tokens,
+        int32_t * __restrict__ output_ids, float * __restrict__ output_probs,
+        int32_t * __restrict__ output_count, int32_t * __restrict__ active) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    const int32_t fallback = ids[0];
+    output_tokens[step] = fallback;
+    if (*active == 0) return;
+
+    double cumulative = 0.0;
+    const double bounded = uniform < 1.0 ? (uniform > 0.0 ? uniform : 0.0) :
+            0.9999999999999999;
+    int selected = PROPOSAL_TOP_K - 1;
+    for (int i = 0; i < PROPOSAL_TOP_K; ++i) {
+        cumulative += probabilities[i];
+        if (bounded < cumulative) {
+            selected = i;
+            break;
+        }
+    }
+    if (ids[selected] < 0 || probabilities[selected] < p_min) {
+        *active = 0;
+        return;
+    }
+    output_tokens[step] = ids[selected];
+    for (int i = 0; i < PROPOSAL_TOP_K; ++i) {
+        output_ids[static_cast<size_t>(step) * PROPOSAL_TOP_K + i] = ids[i];
+        output_probs[static_cast<size_t>(step) * PROPOSAL_TOP_K + i] = probabilities[i];
+    }
+    *output_count = step + 1;
+}
+
 } // namespace qwen4exp_sidecar

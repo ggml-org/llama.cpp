@@ -5,11 +5,9 @@
 // Test builds retain the historical phase-boundary helpers used by the exact
 // native-parity fixtures.
 #include "kernels.hip"
-#ifdef QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST
+#if defined(QWEN4EXP_SIDECAR_PRODUCTION) || defined(QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST)
+#define QWEN4EXP_SIDECAR_HAS_NATIVE_ATTN 1
 #include "native_attention.h"
-#endif
-#if defined(QWEN4EXP_SIDECAR_PRODUCTION) && !defined(QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST)
-#error "Qwen4Exp production sidecar requires the native-attention translation unit"
 #endif
 #ifdef QWEN4EXP_SIDECAR_NATIVE_MMQ_TEST
 #include "native_mmq.h"
@@ -20,6 +18,7 @@
 #include "spec_sidecar/sidecar_abi.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -150,6 +149,10 @@ struct CatchupScratch {
     float * chain_hidden = nullptr;
     float * chain_logits = nullptr;
     int32_t * chain_tokens = nullptr;
+    int32_t * chain_dist_ids = nullptr;
+    float * chain_dist_probs = nullptr;
+    int32_t * chain_count = nullptr;
+    int32_t * chain_active = nullptr;
     bool allocated = false;
 };
 
@@ -188,7 +191,7 @@ struct QsaScratch {
     uint64_t * candidate_keys_b = nullptr;
     int32_t * candidate_blocks_a = nullptr;
     int32_t * candidate_blocks_b = nullptr;
-#ifdef QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST
+#ifdef QWEN4EXP_SIDECAR_HAS_NATIVE_ATTN
     float * attention_query = nullptr;
     __half * attention_mask = nullptr;
     float * attention_parts = nullptr;
@@ -457,7 +460,11 @@ static int ensure_catchup_scratch() {
             allocate_tracked(c.chain_attention_hc, 8 * HC_WIDTH) != 0 ||
             allocate_tracked(c.chain_hidden, 8 * HC_WIDTH) != 0 ||
             allocate_tracked(c.chain_logits, 8 * N_VOCAB) != 0 ||
-            allocate_tracked(c.chain_tokens, 8) != 0) return -1;
+            allocate_tracked(c.chain_tokens, 8) != 0 ||
+            allocate_tracked(c.chain_dist_ids, 8 * PROPOSAL_TOP_K) != 0 ||
+            allocate_tracked(c.chain_dist_probs, 8 * PROPOSAL_TOP_K) != 0 ||
+            allocate_tracked(c.chain_count, 1) != 0 ||
+            allocate_tracked(c.chain_active, 1) != 0) return -1;
     c.allocated = true;
     return 0;
 }
@@ -508,7 +515,7 @@ static int ensure_qsa_scratch() {
     return 0;
 }
 
-#ifdef QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST
+#ifdef QWEN4EXP_SIDECAR_HAS_NATIVE_ATTN
 static int ensure_native_attention_scratch() {
     QsaScratch & q = S.qsa;
     if (ensure_qsa_scratch() != 0) return -1;
@@ -927,7 +934,7 @@ static void invalidate_qsa_for_seq(int32_t seq_id) {
     q.last_complete_blocks = 0;
     q.last_position = -1;
     q.last_ranked_blocks = 0;
-#ifdef QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST
+#ifdef QWEN4EXP_SIDECAR_HAS_NATIVE_ATTN
     q.last_attention_seq = -1;
     q.last_attention_physical = 0;
     q.last_attention_parallel = 0;
@@ -1305,7 +1312,9 @@ static int draft_step_runtime(SeqState & seq, int32_t seq_id,
 }
 
 static int draft_runtime_impl(int32_t seq_id, int32_t token, int32_t position,
-        const float * hidden, bool hidden_device, int count, int32_t * output_tokens) {
+        const float * hidden, bool hidden_device, float temperature, float p_min,
+        uint64_t rng_key, bool stochastic, int count, int32_t * output_tokens,
+        int32_t * output_dist_ids, float * output_dist_probs) {
     SeqState * seq = get_seq(seq_id);
     CatchupScratch & c = S.catchup;
     if (!S.ok || seq == nullptr || token < 0 || token >= N_VOCAB ||
@@ -1313,8 +1322,20 @@ static int draft_runtime_impl(int32_t seq_id, int32_t token, int32_t position,
             (!hidden_device && hidden == nullptr) || position != seq->state_pos_max ||
             position < 0 || position + count > S.max_pos || !seq->allocated ||
             (hidden_device && !seq->hidden_valid) ||
+            (stochastic && (output_dist_ids == nullptr || output_dist_probs == nullptr ||
+                !std::isfinite(temperature) || temperature <= 0.0f || temperature > 100.0f ||
+                !std::isfinite(p_min) || p_min < 0.0f)) ||
             seq->pending_pos_max != seq->state_pos_max ||
             ensure_pending_storage(*seq, count) != 0 || ensure_catchup_scratch() != 0) return -1;
+
+    if (stochastic) {
+        const int32_t zero = 0;
+        const int32_t one = 1;
+        if (hipMemcpyAsync(c.chain_count, &zero, sizeof(zero),
+                    hipMemcpyHostToDevice, S.stream) != hipSuccess ||
+                hipMemcpyAsync(c.chain_active, &one, sizeof(one),
+                    hipMemcpyHostToDevice, S.stream) != hipSuccess) return -1;
+    }
 
     const float * initial_hidden = hidden_device ? seq->hidden_committed : hidden;
     seq->pending_pos_min = position;
@@ -1333,8 +1354,18 @@ static int draft_runtime_impl(int32_t seq_id, int32_t token, int32_t position,
                 seq->value_committed, seq->value_pending, current_position, step, 1, KV_WIDTH);
         copy_cache_rows_f16<<<(IDX_WIDTH + 255) / 256, 256, 0, S.stream>>>(
                 seq->index_committed, seq->index_pending, current_position, step, 1, IDX_WIDTH);
-        if (draft_step_runtime(*seq, seq_id, current_position, 1.0f) != 0 ||
-                hipMemcpyAsync(c.chain_tokens + step, c.topk_indices,
+        if (draft_step_runtime(*seq, seq_id, current_position,
+                    stochastic ? temperature : 1.0f) != 0) {
+            discard_pending(*seq);
+            return -1;
+        }
+        if (stochastic) {
+            proposal_sample_top32<<<1, 1, 0, S.stream>>>(
+                    c.topk_indices, c.topk_probabilities, p_min,
+                    spec_sidecar_stochastic_uniform(rng_key, static_cast<uint32_t>(step)),
+                    step, c.chain_tokens, c.chain_dist_ids, c.chain_dist_probs,
+                    c.chain_count, c.chain_active);
+        } else if (hipMemcpyAsync(c.chain_tokens + step, c.topk_indices,
                     sizeof(int32_t), hipMemcpyDeviceToDevice, S.stream) != hipSuccess) {
             discard_pending(*seq);
             return -1;
@@ -1349,21 +1380,34 @@ static int draft_runtime_impl(int32_t seq_id, int32_t token, int32_t position,
             }
         }
     }
-    if (hipMemcpyAsync(output_tokens, c.chain_tokens,
-                static_cast<size_t>(count) * sizeof(int32_t),
-                hipMemcpyDeviceToHost, S.stream) != hipSuccess ||
-            hipStreamSynchronize(S.stream) != hipSuccess) {
+
+    int32_t emitted = count;
+    if (stochastic && (hipMemcpyAsync(&emitted, c.chain_count, sizeof(emitted),
+                    hipMemcpyDeviceToHost, S.stream) != hipSuccess ||
+            hipMemcpyAsync(output_dist_ids, c.chain_dist_ids,
+                    static_cast<size_t>(count) * PROPOSAL_TOP_K * sizeof(int32_t),
+                    hipMemcpyDeviceToHost, S.stream) != hipSuccess ||
+            hipMemcpyAsync(output_dist_probs, c.chain_dist_probs,
+                    static_cast<size_t>(count) * PROPOSAL_TOP_K * sizeof(float),
+                    hipMemcpyDeviceToHost, S.stream) != hipSuccess)) {
         discard_pending(*seq);
         return -1;
     }
-    for (int step = 0; step < count; ++step) {
+    if (hipMemcpyAsync(output_tokens, c.chain_tokens,
+                static_cast<size_t>(count) * sizeof(int32_t),
+                hipMemcpyDeviceToHost, S.stream) != hipSuccess ||
+            hipStreamSynchronize(S.stream) != hipSuccess || emitted < 0 || emitted > count) {
+        discard_pending(*seq);
+        return -1;
+    }
+    for (int step = 0; step < emitted; ++step) {
         if (output_tokens[step] < 0 || output_tokens[step] >= N_VOCAB) {
             discard_pending(*seq);
             return -1;
         }
     }
     discard_pending(*seq);
-    return count;
+    return emitted;
 }
 #endif
 
@@ -1657,7 +1701,8 @@ SC_API int spec_hip_catchup_device(int32_t seq_id, const int32_t * tokens,
 SC_API int spec_hip_draft(int32_t seq_id, int32_t token, int32_t position,
         const float * hidden, int count, int32_t * output_tokens) {
 #ifdef QWEN4EXP_SIDECAR_PRODUCTION
-    return draft_runtime_impl(seq_id, token, position, hidden, false, count, output_tokens);
+    return draft_runtime_impl(seq_id, token, position, hidden, false,
+            1.0f, 0.0f, 0, false, count, output_tokens, nullptr, nullptr);
 #else
     (void) seq_id; (void) token; (void) position; (void) hidden; (void) count; (void) output_tokens;
     return -1;
@@ -1666,7 +1711,8 @@ SC_API int spec_hip_draft(int32_t seq_id, int32_t token, int32_t position,
 SC_API int spec_hip_draft_device(int32_t seq_id, int32_t token, int32_t position,
         int count, int32_t * output_tokens) {
 #ifdef QWEN4EXP_SIDECAR_PRODUCTION
-    return draft_runtime_impl(seq_id, token, position, nullptr, true, count, output_tokens);
+    return draft_runtime_impl(seq_id, token, position, nullptr, true,
+            1.0f, 0.0f, 0, false, count, output_tokens, nullptr, nullptr);
 #else
     (void) seq_id; (void) token; (void) position; (void) count; (void) output_tokens;
     return -1;
@@ -1675,13 +1721,35 @@ SC_API int spec_hip_draft_device(int32_t seq_id, int32_t token, int32_t position
 SC_API int spec_hip_stochastic_top_k() {
     return SPEC_SIDECAR_MTP_DRAFT_TOP_K;
 }
-SC_API int spec_hip_draft_stochastic(int32_t, int32_t, int32_t, const float *,
-        float, float, uint64_t, int, int32_t *, int32_t *, float *) {
+SC_API int spec_hip_draft_stochastic(int32_t seq_id, int32_t token, int32_t position,
+        const float * hidden, float temperature, float p_min, uint64_t rng_key,
+        int count, int32_t * output_tokens, int32_t * output_dist_ids,
+        float * output_dist_probs) {
+#ifdef QWEN4EXP_SIDECAR_PRODUCTION
+    return draft_runtime_impl(seq_id, token, position, hidden, false,
+            temperature, p_min, rng_key, true, count, output_tokens,
+            output_dist_ids, output_dist_probs);
+#else
+    (void) seq_id; (void) token; (void) position; (void) hidden;
+    (void) temperature; (void) p_min; (void) rng_key; (void) count;
+    (void) output_tokens; (void) output_dist_ids; (void) output_dist_probs;
     return -1;
+#endif
 }
-SC_API int spec_hip_draft_stochastic_device(int32_t, int32_t, int32_t,
-        float, float, uint64_t, int, int32_t *, int32_t *, float *) {
+SC_API int spec_hip_draft_stochastic_device(int32_t seq_id, int32_t token,
+        int32_t position, float temperature, float p_min, uint64_t rng_key,
+        int count, int32_t * output_tokens, int32_t * output_dist_ids,
+        float * output_dist_probs) {
+#ifdef QWEN4EXP_SIDECAR_PRODUCTION
+    return draft_runtime_impl(seq_id, token, position, nullptr, true,
+            temperature, p_min, rng_key, true, count, output_tokens,
+            output_dist_ids, output_dist_probs);
+#else
+    (void) seq_id; (void) token; (void) position;
+    (void) temperature; (void) p_min; (void) rng_key; (void) count;
+    (void) output_tokens; (void) output_dist_ids; (void) output_dist_probs;
     return -1;
+#endif
 }
 
 #if defined(QWEN4EXP_SIDECAR_LIFECYCLE_TEST) || defined(QWEN4EXP_SIDECAR_ARTIFACT_TEST)

@@ -1,9 +1,9 @@
-# speculative sidecar Qwen3.8-27B sidecars
+# speculative sidecars for Qwen3.8
 
-This tree carries an optional, host-mediated speculative sidecar integration for the
-Qwen3.8-27B MTP and DFlash2 drafters. The target model remains authoritative:
-the sidecar proposes token IDs and the normal target verifier accepts or
-rejects them.
+This tree carries optional, host-mediated speculative sidecar integrations for
+Qwen3.8-27B MTP and DFlash2, plus Qwen3.8 Flash Next (`qwen4exp`) MTP. The
+target model remains authoritative: a sidecar proposes token IDs and the normal
+target verifier accepts or rejects them.
 
 The sidecars are intentionally **not** enabled by default. Runtime activation
 requires the exact opt-in `SPEC_SIDECAR=1`; an unset value, `0`, or any other
@@ -50,6 +50,28 @@ for hidden-state extraction and does not create a native MTP draft context. It
 uses the original full-vocabulary target because sliced native MTP-head loading is
 not enabled in this integration yet.
 
+## Prepare the Flash Next artifacts
+
+Flash Next uses a separate provider and cannot reuse the Qwen3.8-27B bundle.
+Prepare it from the first shard of the matching base target and its matching
+Qwen4Exp MTP GGUF:
+
+```sh
+python3 tools/spec-sidecar/prepare_assets.py qwen4exp-mtp \
+  --target /absolute/models/Qwen3.8-Flash-Next-00001-of-00004.gguf \
+  --draft /absolute/models/Qwen3.8-Flash-Next-MTP-Q4_0.gguf \
+  --output /absolute/artifacts/spec-sidecar-qwen4exp-mtp
+
+python3 tools/spec-sidecar/validate_assets.py qwen4exp-mtp \
+  /absolute/artifacts/spec-sidecar-qwen4exp-mtp
+```
+
+The provider requires the exact `qwen4exp` 512x56B contract: target embedding
+width 2,560, target handoff width 10,240, 48 target blocks, 512 experts, and a
+248,320-token vocabulary. The generated bundle contains 34 tensors and an
+identity full-vocabulary ID table. Mixing it with a `qwen35` target is rejected
+before initialization.
+
 ## Build
 
 Normal builds do not compile the sidecars. Enable them explicitly in a HIP
@@ -63,16 +85,17 @@ cmake -S . -B build-spec-sidecar \
   -DLLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES=gfx1030 \
   -DCMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc
 cmake --build build-spec-sidecar \
-  --target spec-sidecar-hip-mtp spec-sidecar-hip-dflash llama-server
+  --target spec-sidecar-hip-mtp spec-sidecar-hip-dflash \
+           spec-sidecar-hip-qwen4exp-mtp llama-server
 ```
 
-The resulting libraries are `spec_hip_sidecar.so` and
-`spec_dflash_sidecar.so` in the build `bin` directory. For automatic runtime
-discovery, put the prepared bundles at `bin/spec-sidecar-mtp` and
-`bin/spec-sidecar-dflash` beside those libraries (or under the documented
-installed `share/llama.cpp/spec-sidecar` layout). The sidecar target is
-optional because it contains fixed Qwen3.8-27B dimensions and is not a
-replacement for the normal HIP backend.
+The resulting libraries are `spec_hip_sidecar.so`, `spec_dflash_sidecar.so`,
+and `spec_qwen4exp_mtp_sidecar.so` in the build `bin` directory. For automatic
+runtime discovery, put the prepared bundles at `bin/spec-sidecar-mtp`,
+`bin/spec-sidecar-dflash`, and `bin/spec-sidecar-qwen4exp-mtp` beside those
+libraries (or under the documented installed `share/llama.cpp/spec-sidecar`
+layout). These targets are optional because each provider contains fixed model
+dimensions and is not a replacement for the normal HIP backend.
 
 ## Run MTP
 
@@ -90,6 +113,32 @@ export SPEC_SIDECAR=1
   -np 1 --no-context-shift \
   --ctx-checkpoints 0 --cache-ram 0 --no-cache-idle-slots
 ```
+
+## Run Flash Next MTP
+
+The Flash Next provider has separate override variables so an incompatible
+Qwen3.8-27B sidecar cannot be selected accidentally. With the default layout,
+only the master gate is needed; otherwise set all three absolute paths:
+
+```sh
+export SPEC_SIDECAR=1
+# Optional explicit overrides:
+# export LLAMA_SPEC_QWEN4EXP_HIP_SIDECAR=/absolute/build/bin/spec_qwen4exp_mtp_sidecar.so
+# export LLAMA_SPEC_QWEN4EXP_HIP_WEIGHTS=/absolute/artifacts/spec-sidecar-qwen4exp-mtp
+# export LLAMA_QWEN4EXP_DRAFT_HEAD_IDS=/absolute/artifacts/spec-sidecar-qwen4exp-mtp/draft_head_ids.bin
+
+./build-spec-sidecar/bin/llama-server \
+  -m /absolute/models/Qwen3.8-Flash-Next-00001-of-00004.gguf \
+  --spec-type draft-mtp \
+  --spec-draft-n-max 3 \
+  --spec-draft-p-min 0 \
+  -np 1 --no-context-shift \
+  --ctx-checkpoints 0 --cache-ram 0 --no-cache-idle-slots
+```
+
+Do not also pass a Qwen3.8-27B `-md` model when testing this provider. If the
+profile, artifact schema, explicit device binding, or runtime state checks fail,
+the server disables the sidecar and continues target-only.
 
 ## Run DFlash2
 
@@ -135,6 +184,8 @@ export SPEC_SIDECAR=1
   implementations cannot consume one another's state.
 - Prompt and ordinary target rows are implicitly committed; target
   verification stages rows and acceptance commits only the accepted prefix.
+  Flash Next shifts runtime target handoffs explicitly so token `x_p` consumes
+  hidden row `h_(p-1)`; the accepted target-hidden tip remains device-resident.
   Checkpoint rollback discards pending rows and restores the cursor, slot reset
   starts a new epoch, and context shifting rebases committed device KV rows.
   Any failed update or restore enters target-only mode instead of guessing at
