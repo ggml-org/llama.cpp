@@ -600,12 +600,12 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         ggml_set_input(inp->embd);
 
         ggml_tensor * inp_target = inp->embd;
-        cb(inp_feat, "inp_target_features", -1);
+        cb(inp_target, "inp_target_features", -1);
 
         res->add_input(std::move(inp));
 
         // fuse the target features through the encoder
-        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_feat, model.fc_s);
+        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
         inp_g = build_norm(inp_g, model.output_norm_enc, NULL, LLM_NORM_RMS, -1);
         cb(inp_g, "inp_g_embeddings", -1);
 
@@ -837,12 +837,12 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         ggml_set_input(inp->embd);
 
         ggml_tensor * inp_target = inp->embd;
-        cb(inp_feat, "inp_target_features", -1);
+        cb(inp_target, "inp_target_features", -1);
 
         res->add_input(std::move(inp));
 
         // fuse the target features through the encoder
-        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_feat, model.fc_s);
+        ggml_tensor * inp_g = build_lora_mm(model.fc, inp_target, model.fc_s);
         inp_g = build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
         cb(inp_g, "inp_g_embeddings", -1);
 
