@@ -4,7 +4,7 @@ Tool usage: [examples/compare-single-and-block/README.md](examples/compare-singl
 
 ## Motivation
 
-This work started from an observation made while reproducing [DFlash](https://github.com/z-lab/dflash) on llama.cpp (and MNN): with `temp = 0` (greedy sampling) and by default the exact-match-then-accept algorithm — assuming no KV-cache corruption, no weight differences, and a correct argmax — the answer of a DFlash-produced output with Qwen3-4B as target model and any draft model should be **exactly the same** as the output of Autoregressive-produced output with Qwen3-4B.
+This work started from an observation made while reproducing [DFlash](https://github.com/z-lab/dflash) on [llama.cpp](https://github.com/ggml-org/llama.cpp/pull/22105) (and MNN): with `temp = 0` (greedy sampling) and by default the exact-match-then-accept algorithm — assuming no KV-cache corruption, no weight differences, and a correct argmax — the answer of a DFlash-produced output with Qwen3-4B as target model and any draft model should be **exactly the same** as the output of Autoregressive-produced output with Qwen3-4B.
 
 This held for 6 out of 7 test prompts. However, with the prompt *"Explain the Pythagorean theorem"*, the two outputs diverged at some position: the AR trajectory continues with *"relates"*, while the DFlash run produced *"describes"*. A guess is: this phenomenon stems primarily from the **Gap between the logits calculated with single run or a block run on one model**. So here comes this tool.
 
