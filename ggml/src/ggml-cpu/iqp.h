@@ -17,7 +17,7 @@ bool ggml_cpu_iqp_mul_mat_id_min_batch(int64_t cne1);
 
 bool ggml_cpu_iqp_supports_mul_mat(const struct ggml_tensor * dst);
 
-// node level test only - per expert eligibility is decided with ggml_cpu_iqp_expert_eligible
+// node level test only - per expert eligibility is decided with ggml_cpu_iqp_mul_mat_id_min_batch
 bool ggml_cpu_iqp_supports_mul_mat_id(const struct ggml_tensor * dst);
 
 // per thread panel scratch bytes, padded
