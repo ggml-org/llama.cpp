@@ -5367,9 +5367,12 @@ bool parse_www_authenticate(const Response &res,
     auth[std::move(key_part)] = std::move(unquoted);
   }
 
-  // A challenge with no auth-param can't produce a usable Authorization
-  // header, so treat it the same as no Digest challenge at all.
-  return found_digest && !auth.empty();
+  // RFC 7616 Section 3.3 requires realm and nonce on every Digest challenge;
+  // make_digest_authentication_header() dereferences both unconditionally, so
+  // a challenge missing either can't produce a usable Authorization header.
+  // Treat it the same as no Digest challenge at all.
+  return found_digest && auth.find("realm") != auth.end() &&
+         auth.find("nonce") != auth.end();
 }
 
 class ContentProviderAdapter {
