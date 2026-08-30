@@ -784,10 +784,6 @@ void process_shaders() {
         if (tname == "q8_0") {
             string_to_spv("dequant_" + tname + "_transpose", "dequant_" + tname + ".comp", merge_maps(base_dict, {{data_a_key, "1"}, {"D_TYPE", "float16_t"}, {"DEQUANT_TRANSPOSE", "1"}}));
         }
-        // Strided-copy counterpart for f16 KV (same scratch layout, no dequant).
-        if (tname == "f16") {
-            string_to_spv("dequant_f16_transpose", "dequant_f16_transpose.comp", {});
-        }
 
         shader = (tname == "f32" || tname == "f16" || tname == "bf16") ? "get_rows.comp" : "get_rows_quant.comp";
 
