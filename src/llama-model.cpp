@@ -421,7 +421,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         const ggml_tensor * tensor_axis_0;
 
         uint32_t il;
-        size_t   rotation; // when assigning tensor slices, rotate how the rounding is done for more even allocation
+        size_t   il_eff;   // index of this layer among the layers of its type
     };
 
     auto get_tensor_config_impl = [&](
@@ -440,22 +440,22 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
 
         uint32_t il;
         std::string prefix;
-        size_t rotation;
+        size_t il_eff;
         if (tensor_name.substr(0, 4) == "blk.") {
             const size_t length_prefix = tensor_name.find('.', 4);
             GGML_ASSERT(length_prefix != std::string::npos);
             prefix = tensor_name.substr(0, length_prefix + 1);
             il = std::stoull(tensor_name.substr(4, length_prefix));
-            rotation = get_il_eff(il) % ud->n_devices;
+            il_eff = get_il_eff(il);
         } else if (tensor_name.substr(0, 6) == "cache_") {
             const size_t layer_index_start = tensor_name.find("_l", 6);
             GGML_ASSERT(layer_index_start != std::string::npos);
             il = std::stoull(tensor_name.substr(layer_index_start + 2));
             prefix = "blk." + std::to_string(il) + ".";
-            rotation = get_il_eff(il) % ud->n_devices;
+            il_eff = get_il_eff(il);
         } else {
             il = 0;
-            rotation = hparams.n_layer() % ud->n_devices;
+            il_eff = 0;
         }
         const ggml_tensor * tensor_axis_0 = suffix.empty() ? tensor : ud->model->get_tensor((prefix + suffix).c_str());
         if (tensor_axis_0 == nullptr) {
@@ -463,7 +463,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             tensor_axis_0 = ud->model->get_tensor((prefix + suffix_fallback).c_str());
         }
         GGML_ASSERT(tensor_axis_0 != nullptr);
-        return {axis, tensor_axis_0, il, rotation};
+        return {axis, tensor_axis_0, il, il_eff};
     };
 
     auto get_tensor_config = [&]() -> tensor_config {
@@ -786,32 +786,72 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     if (split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS) {
         const int64_t blck_size = ggml_blck_size(tc.tensor_axis_0->type);
         const float * tensor_split = ud->model->tensor_split();
-        std::vector<float> tensor_split_scan;
-        tensor_split_scan.reserve(ud->n_devices);
-        for (size_t j = 0; j < ud->n_devices; j++) {
-            tensor_split_scan.push_back(tensor_split == nullptr ? 0.0f : tensor_split[(j + tc.rotation) % ud->n_devices]);
-            if (j > 0) {
-                tensor_split_scan[j] += tensor_split_scan[j - 1];
-            }
+        std::vector<float> tensor_split_share(ud->n_devices, 1.0/ud->n_devices);
+        float share_sum = 0.0;
+        for (size_t j = 0; tensor_split != nullptr && j < ud->n_devices; j++) {
+            share_sum += tensor_split[j];
+        }
+        for (size_t j = 0; share_sum > 0.0 && j < ud->n_devices; j++) {
+            tensor_split_share[j] = tensor_split[j]/share_sum;
         }
         const std::vector<std::pair<int64_t, uint32_t>> segments = get_split_segments(split_state.axis, tc.il);
         const std::vector<int64_t> granularity = get_split_granularity(blck_size, tc.il, segments);
+
+        // Just recompute how many slices each device was given in past layers, its relatively cheap
+        std::vector<int64_t> base_slices(ud->n_devices);
+        std::vector<int64_t> device_slices(ud->n_devices);
+        std::vector<int64_t> segment_slices(ud->n_devices);
         for (size_t is = 0; is < segments.size(); is++) {
             const int64_t  ne_s = segments[is].first;
             const uint32_t nr_s = segments[is].second;
             const int64_t  g_s  = granularity[is];
-            int64_t low = 0;
-            size_t j = 0;
-            for (; j < ud->n_devices - 1; j++) {
-                int64_t high = tensor_split_scan.back() == 0.0f ?
-                    ne_s * (j+1)/ud->n_devices : ne_s * tensor_split_scan[j]/tensor_split_scan.back();
-                if (high % g_s != 0) {
-                    high -= high % g_s;
-                }
-                split_state.ne[is*ud->n_devices + (j + tc.rotation) % ud->n_devices] = high - low;
-                low = high;
+            const int64_t  n_q  = ne_s / g_s;
+
+            int64_t base_total = 0;
+            for (size_t j = 0; j < ud->n_devices; j++) {
+                base_slices[j] = (tensor_split_share[j] - 1e-9) * n_q;
+                base_total    += base_slices[j];
             }
-            split_state.ne[is*ud->n_devices + (j + tc.rotation) % ud->n_devices] = ne_s - low;
+
+            std::fill(device_slices.begin(), device_slices.end(), 0);
+            int64_t shares_allocated = 0;
+            for (size_t m = 0; m <= tc.il_eff; m++) {
+                for (size_t k = 0; k < ud->n_devices; k++) {
+                    segment_slices[k]  = base_slices[k];
+                    device_slices[k]  += base_slices[k];
+                }
+                shares_allocated += base_total;
+                for (int64_t q = base_total; q < n_q; q++) {
+                    shares_allocated++;
+                    size_t best         = ud->n_devices;
+                    float best_priority = -1.0;
+                    for (int pass = 0; pass < 2 && best == ud->n_devices; pass++) {
+                        for (size_t j = 0; j < ud->n_devices; j++) {
+                            if (segment_slices[j] > base_slices[j]) {
+                                continue;
+                            }
+                            const int64_t max_slices = std::ceil(shares_allocated * tensor_split_share[j] - 1e-9);
+                            if (pass == 0 && (float)device_slices[j] + 1 > max_slices) {
+                                continue;
+                            }
+                            const float priority = tensor_split_share[j]/float(device_slices[j] + 1);
+                            if (priority > best_priority) {
+                                best_priority = priority;
+                                best          = j;
+                            }
+                        }
+                    }
+                    device_slices[best]++;
+                    segment_slices[best]++;
+                }
+            }
+
+            int64_t low = 0;
+            for (size_t j = 0; j + 1 < ud->n_devices; j++) {
+                split_state.ne[is*ud->n_devices + j] = segment_slices[j]*g_s;
+                low += split_state.ne[is*ud->n_devices + j];
+            }
+            split_state.ne[is*ud->n_devices + ud->n_devices - 1] = ne_s - low;
             split_state.nr[is] = nr_s;
         }
         split_state.n_segments = segments.size();
