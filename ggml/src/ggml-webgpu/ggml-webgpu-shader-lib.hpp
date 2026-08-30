@@ -3101,6 +3101,10 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("OP_GEGLU_QUICK");
                 variant += "_geglu_quick";
                 break;
+            case GGML_GLU_OP_SWIGLU_CLAMP:
+                defines.push_back("OP_SWIGLU_CLAMP");
+                variant += "_swiglu_clamp";
+                break;
             default:
                 GGML_ABORT("Unsupported GLU op");
         }

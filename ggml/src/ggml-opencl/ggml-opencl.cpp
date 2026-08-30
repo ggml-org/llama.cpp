@@ -744,8 +744,9 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_tri;
     cl_kernel kernel_fill;
     cl_kernel kernel_clamp;
-    cl_kernel kernel_geglu, kernel_reglu, kernel_swiglu, kernel_swiglu_oai, kernel_geglu_erf, kernel_geglu_quick,
-              kernel_geglu_f16, kernel_reglu_f16, kernel_swiglu_f16, kernel_geglu_erf_f16, kernel_geglu_quick_f16;
+    cl_kernel kernel_geglu, kernel_reglu, kernel_swiglu, kernel_swiglu_oai, kernel_swiglu_clamp, kernel_geglu_erf,
+              kernel_geglu_quick, kernel_geglu_f16, kernel_reglu_f16, kernel_swiglu_f16, kernel_swiglu_clamp_f16,
+              kernel_geglu_erf_f16, kernel_geglu_quick_f16;
     cl_kernel kernel_norm, kernel_norm_mul_add;
     cl_kernel kernel_rms_norm, kernel_rms_norm_mul;
     cl_kernel kernel_l2_norm_f32;
@@ -1601,11 +1602,13 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         CL_CHECK((backend_ctx->kernel_reglu           = clCreateKernel(backend_ctx->program_glu, "kernel_reglu", &err), err));
         CL_CHECK((backend_ctx->kernel_swiglu          = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu", &err), err));
         CL_CHECK((backend_ctx->kernel_swiglu_oai      = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_oai", &err), err));
+        CL_CHECK((backend_ctx->kernel_swiglu_clamp    = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_clamp", &err), err));
         CL_CHECK((backend_ctx->kernel_geglu_erf       = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_erf", &err), err));
         CL_CHECK((backend_ctx->kernel_geglu_quick     = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_quick", &err), err));
         CL_CHECK((backend_ctx->kernel_geglu_f16       = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_reglu_f16       = clCreateKernel(backend_ctx->program_glu, "kernel_reglu_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_swiglu_f16      = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_swiglu_clamp_f16 = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_clamp_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_geglu_erf_f16   = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_erf_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_geglu_quick_f16 = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_quick_f16", &err), err));
         GGML_LOG_CONT(".");
@@ -7700,6 +7703,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 case GGML_GLU_OP_SWIGLU_OAI:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
+                case GGML_GLU_OP_SWIGLU_CLAMP:
                     return ggml_is_contiguous_1(op->src[0]) && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
                 default:
                     return false;
@@ -24886,6 +24890,13 @@ static void ggml_cl_glu(ggml_backend_t backend, const ggml_tensor * src0, const 
         case GGML_GLU_OP_SWIGLU_OAI:
             kernel = backend_ctx->kernel_swiglu_oai;
             break;
+        case GGML_GLU_OP_SWIGLU_CLAMP:
+            if (dst->type == GGML_TYPE_F32) {
+                kernel = backend_ctx->kernel_swiglu_clamp;
+            } else {
+                kernel = backend_ctx->kernel_swiglu_clamp_f16;
+            }
+            break;
         case GGML_GLU_OP_GEGLU_ERF:
             if (dst->type == GGML_TYPE_F32) {
                 kernel = backend_ctx->kernel_geglu_erf;
@@ -24941,8 +24952,10 @@ static void ggml_cl_glu(ggml_backend_t backend, const ggml_tensor * src0, const 
     CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne00_off));
     CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10_off));
 
-    if (ggml_get_glu_op(dst) == GGML_GLU_OP_SWIGLU_OAI) {
+    if (ggml_get_glu_op(dst) == GGML_GLU_OP_SWIGLU_OAI || ggml_get_glu_op(dst) == GGML_GLU_OP_SWIGLU_CLAMP) {
         CL_CHECK(clSetKernelArg(kernel, 12, sizeof(float), &limit));
+    }
+    if (ggml_get_glu_op(dst) == GGML_GLU_OP_SWIGLU_OAI) {
         CL_CHECK(clSetKernelArg(kernel, 13, sizeof(float), &alpha));
     }
 
