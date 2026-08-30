@@ -7988,7 +7988,6 @@ size_t ggml_quantize_chunk(
     const size_t row_size  = ggml_row_size(type, n_per_row);
 
     size_t result = 0;
-
     switch (type) {
         case GGML_TYPE_Q1_0:    result = quantize_q1_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q2_0:    result = quantize_q2_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

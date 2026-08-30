@@ -15,6 +15,7 @@
 #include "ops.h"
 #include "ggml.h"
 #include "common.h"
+#include "tiled/tiled.h"
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -1262,6 +1263,10 @@ void ggml_compute_forward_mul_mat(
     const int32_t hint = ggml_get_op_params_i32(dst, 1);
     if (hint == GGML_HINT_SRC0_IS_HADAMARD && !params->use_ref) {
         ggml_compute_forward_fwht(params, dst);
+        return;
+    }
+
+    if (ggml_compute_forward_mul_mat_tiled(params, dst)) {
         return;
     }
 
@@ -2883,11 +2888,13 @@ struct ggml_cplan ggml_graph_plan(
                         if (node->src[1]->type != vec_dot_type) {
                             cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
                         }
-
                         // the IQ panel path needs one scratch panel per thread past the q8_K rows
                         if (ggml_cpu_iqp_supports_mul_mat(node)) {
                             cur = GGML_PAD(cur, 64) + n_tasks * ggml_cpu_iqp_scratch_size(node);
                         }
+                        // Extra reservation for tiled mat_mul, if any (VNNI case).  0 if VNNI not enabled.
+                        const int64_t r1 = node->src[1]->ne[1] * node->src[1]->ne[2] * node->src[1]->ne[3];
+                        cur += ggml_tiled_extra_wdata_len(node->src[1]->ne[0], r1);
                     } break;
                 case GGML_OP_MUL_MAT_ID:
                     {
