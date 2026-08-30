@@ -5,6 +5,7 @@
  * (https://huggingface.co/docs/huggingface_hub/package_reference/hf_api)
  * so they can be sent and compared directly.
  */
+// LLAMA-APP-REUSE: HF sort and sidecar-form enums
 
 /** Sort field for /api/models search queries. */
 export enum HfModelSort {

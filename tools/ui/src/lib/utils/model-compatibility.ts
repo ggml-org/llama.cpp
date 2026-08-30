@@ -6,6 +6,7 @@
  * device-specific budgets are deliberately ignored - callers present the
  * requirement and let the user judge.
  */
+// LLAMA-APP-REUSE: hardware compatibility estimation
 
 /** Overhead multiplier applied to the file size when estimating weight memory. */
 const WEIGHT_OVERHEAD_MULTIPLIER = 1.05;

@@ -126,6 +126,7 @@ export class HuggingFaceService {
 	 * quant. Non-sharded files pass through unchanged. Downloads are tag-based
 	 * (`repo:quant`), so the first shard is enough to represent the set.
 	 */
+	// LLAMA-APP-REUSE: shard-set collapsing
 	static collapseGgufShards(siblings: HfModelSibling[]): HfModelSibling[] {
 		const sizeByPath = new Map(siblings.map((f) => [f.path, f.size ?? 0]));
 		const result: HfModelSibling[] = [];
@@ -175,6 +176,7 @@ export class HuggingFaceService {
 	 * (e.g. `*-BF16.gguf`); `sidecar` is `null` if no sidecar flag is present.
 	 * Returns `null` only when the filename doesn't end in `.gguf`.
 	 */
+	// LLAMA-APP-REUSE: quant + sidecar filename parser
 	static extractQuantMeta(filename: string): {
 		quant: string | null;
 		sidecar: ModelSidecar | null;
@@ -231,6 +233,7 @@ export class HuggingFaceService {
 	/**
 	 * Filter raw siblings by file extension and sort by size descending.
 	 */
+	// LLAMA-APP-REUSE: sibling filtering
 	static filterByExtension(siblings: HfModelSibling[], ext: string): HfModelSibling[] {
 		return siblings
 			.filter((f) => f.path.toLowerCase().endsWith(ext.toLowerCase()) && (f.size ?? 0) > 0)
@@ -240,6 +243,7 @@ export class HuggingFaceService {
 	/**
 	 * Format model downloads count with K/M/B suffix
 	 */
+	// LLAMA-APP-REUSE: compact download counts
 	static formatDownloads(downloads: number): string {
 		if (downloads >= MEGABYTE) {
 			return `${(downloads / MEGABYTE).toFixed(1)}${MEGA_LABEL}`;
@@ -255,6 +259,7 @@ export class HuggingFaceService {
 	/**
 	 * Format file size in bytes to human-readable string
 	 */
+	// LLAMA-APP-REUSE: human-readable file sizes
 	static formatFileSize(bytes: number): string {
 		if (bytes >= GIGABYTE) {
 			return `${(bytes / GIGABYTE).toFixed(1)} ${GIGABYTE_LABEL}`;
@@ -274,6 +279,7 @@ export class HuggingFaceService {
 	/**
 	 * Format likes count with K suffix if applicable
 	 */
+	// LLAMA-APP-REUSE: compact like counts
 	static formatLikes(likes: number): string {
 		if (likes >= KILOBYTE) {
 			return `${(likes / KILOBYTE).toFixed(1)}${KILO_LABEL}`;
@@ -285,6 +291,7 @@ export class HuggingFaceService {
 	/**
 	 * Format timestamp to relative time
 	 */
+	// LLAMA-APP-REUSE: relative timestamps
 	static formatRelativeTime(timestamp: string): string {
 		const date = new Date(timestamp);
 		const now = new Date();
@@ -312,6 +319,7 @@ export class HuggingFaceService {
 	 * Format a min-max size range with a single shared unit and no spaces
 	 * around the dash, e.g. `19.0-28.6 GB`.
 	 */
+	// LLAMA-APP-REUSE: min-max size ranges
 	static formatSizeRange(min: number, max: number): string {
 		const unit =
 			max >= GIGABYTE
@@ -398,6 +406,7 @@ export class HuggingFaceService {
 	 * Look up the average bit-depth for a known GGUF quantization.
 	 * Returns `null` for unrecognized tokens.
 	 */
+	// LLAMA-APP-REUSE: quant bit depths
 	static getBitDepth(quant: string): number | null {
 		// Strip a leading `UD-` (Unsloth Dynamic) prefix before lookup.
 		const base = quant.replace(HF_UD_QUANT_PREFIX_REGEX, '');
@@ -581,6 +590,7 @@ export class HuggingFaceService {
 	 * `Qwen3.8-27B-GGUF` or `300M` from `embeddinggemma-300M-GGUF`. Returns null
 	 * when no size token is present.
 	 */
+	// LLAMA-APP-REUSE: parameter-count parsing
 	static parseParamCount(name: string): string | null {
 		const match = HF_PARAM_COUNT_REGEX.exec(name);
 
@@ -592,6 +602,7 @@ export class HuggingFaceService {
 	/**
 	 * Parse model tags to extract useful information
 	 */
+	// LLAMA-APP-REUSE: tag parsing
 	static parseTags(tags: string[]): {
 		license: string | null;
 		isGated: boolean;

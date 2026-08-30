@@ -1,3 +1,4 @@
+// LLAMA-APP-REUSE: model name / HF repo path normalization
 import { FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
 
 /**

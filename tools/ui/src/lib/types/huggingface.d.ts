@@ -4,6 +4,7 @@
  * Types for the HuggingFace REST API (/api/models)
  * Reference: https://huggingface.co/docs/huggingface_hub/package_reference/hf_api
  */
+// LLAMA-APP-REUSE: HF API response shapes
 
 // Search Options
 

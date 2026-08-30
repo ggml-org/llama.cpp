@@ -4,6 +4,7 @@
  * URLs, parsing regexes and formatting units for the HuggingFaceService.
  * Reference: https://huggingface.co/docs/huggingface_hub/package_reference/hf_api
  */
+// LLAMA-APP-REUSE: HF Hub endpoints and filename conventions
 
 // API endpoints
 
