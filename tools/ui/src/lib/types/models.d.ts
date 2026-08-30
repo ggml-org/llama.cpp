@@ -46,6 +46,15 @@ export interface ModelDownloadProgress {
 }
 
 
+/**
+ * Per-byte download progress for one in-flight model download, driven by the
+ * /models/sse feed. Lives only while a download runs.
+ */
+export interface ModelDownloadProgress {
+	downloadedBytes: number;
+	totalBytes: number;
+}
+
 // LLAMA-APP-REUSE: parsed model id shape
 export interface ParsedModelId {
 	raw: string;
