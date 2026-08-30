@@ -5,6 +5,7 @@
 	import {
 		ActionIcon,
 		DialogConversationRename,
+		DialogSettingsChat,
 		Logo,
 		SidebarNavigationActions,
 		SidebarNavigationConversationList
@@ -91,6 +92,7 @@
 	let selectedIds = new SvelteSet<string>();
 
 	let renameDialogOpen = $state(false);
+	let settingsDialogOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
@@ -308,7 +310,7 @@
 
 <svelte:window bind:innerWidth onkeydown={handleKeydown} />
 
-{#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.SEARCH))}
+{#if innerWidth > 768 || !page.url.hash.includes(ROUTES.SEARCH)}
 	<aside
 		class={[
 			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 w-[calc(100dvw-1rem)]',
@@ -400,6 +402,7 @@
 					isSearchModeActive = false;
 					searchQuery = '';
 				}}
+				onSettingsClick={() => (settingsDialogOpen = true)}
 			/>
 
 			{#if uiStore.isSidebarExpanded || isOnMobile}
@@ -446,6 +449,8 @@
 	onCancel={handleRenameCancel}
 	onConfirm={handleRenameConfirm}
 />
+
+<DialogSettingsChat bind:open={settingsDialogOpen} />
 
 <style>
 	aside {

@@ -72,6 +72,7 @@ OutputVector rename_outputs_with_suffix(const OutputVector & outputs, const std:
         name += "_";
         name += suffix;
         node->set_friendly_name(name);
+        // Uncomment to dump every node's inferred shape (used to hunt down dynamic dims on NPU).
         // std::cout << name << "  " << output.get_partial_shape() << std::endl;
     }
     return outputs;

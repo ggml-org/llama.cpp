@@ -8,7 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { conversationsStore, mcpStore } from '$lib/stores';
+	import { mcpStore } from '$lib/stores';
 	import type { MCPResourceContent, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
 	import { getResourceDisplayName } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -48,8 +48,7 @@
 	});
 
 	async function loadResources() {
-		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
-		const initialized = await mcpStore.ensureInitialized(perChatOverrides);
+		const initialized = await mcpStore.ensureInitialized();
 
 		if (initialized) {
 			await mcpStore.fetchAllResources();
@@ -253,7 +252,7 @@
 </script>
 
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
-	<Dialog.Content class="max-h-[80vh] !max-w-4xl overflow-hidden p-0">
+	<Dialog.Content class="max-h-[80vh] md:max-w-4xl! w-full! overflow-hidden p-0">
 		<Dialog.Header class="border-b border-border/30 px-6 py-4">
 			<Dialog.Title class="flex items-center gap-2">
 				<FolderOpen class="h-5 w-5" />
