@@ -12,15 +12,8 @@
 extern "C" {
 #endif
 
-// smallest src1 batch for which the decode pays for itself
-#define GGML_IQP_MIN_BATCH 8
-
-// same, per expert, for MUL_MAT_ID
-#define GGML_IQP_MIN_BATCH_ID 8
-
-static inline bool ggml_cpu_iqp_mul_mat_id_min_batch(int64_t cne1) {
-    return cne1 >= GGML_IQP_MIN_BATCH_ID;
-}
+// whether cne1 rows of src1 are enough for the decode to pay for itself, per expert, for MUL_MAT_ID
+bool ggml_cpu_iqp_mul_mat_id_min_batch(int64_t cne1);
 
 bool ggml_cpu_iqp_supports_mul_mat(const struct ggml_tensor * dst);
 
