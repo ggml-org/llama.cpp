@@ -273,6 +273,12 @@ def get_base_tensor_name(lora_tensor_name: str) -> str:
     # models produced by mergekit-extract-lora have token embeddings in the adapter
     base_name = base_name.replace(".lora_embedding_A", ".weight")
     base_name = base_name.replace(".lora_embedding_B", ".weight")
+    # Multimodal conditional-generation bases (e.g. Qwen3_5ForConditionalGeneration)
+    # nest the language stack under `model.language_model.layers.N...`; the base
+    # converter strips `language_model.` (convert_hf_to_gguf.py). Without this
+    # strip the LoRA tensor names cannot be mapped and conversion fails with
+    # "Can not map tensor".
+    base_name = base_name.replace("model.language_model.", "model.")
     return base_name
 
 
