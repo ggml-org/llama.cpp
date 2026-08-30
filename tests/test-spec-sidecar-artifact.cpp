@@ -151,6 +151,33 @@ int main(int argc, char ** argv) {
         failures += require(fixture == nullptr,
                             "Flash Next auxiliary-only GGUF is rejected as a base target");
     }
+    if (argc >= 5) {
+        const auto * fixture = qwen4exp_mtp;
+        failures += require(fixture != nullptr,
+                            "Flash Next profile exists for external probe");
+        if (fixture != nullptr) {
+            set_environment("SPEC_SIDECAR", "1");
+            set_environment(fixture->library_env, argv[3]);
+            set_environment(fixture->artifact_env, argv[4]);
+            if (argc >= 6) {
+                set_environment(fixture->ids_env, argv[5]);
+            }
+
+            common_params_speculative probe_params;
+            probe_params.types = { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
+            failures += require(common_speculative_sidecar_candidate(
+                                probe_params, argv[1], 8),
+                                "real Flash Next target, artifact, and release ABI pass the eight-sequence probe");
+            failures += require(!common_speculative_sidecar_candidate(
+                                probe_params, argv[1], 9),
+                                "real Flash Next sidecar rejects more than eight sequences");
+
+            unset_environment("SPEC_SIDECAR");
+            unset_environment(fixture->library_env);
+            unset_environment(fixture->artifact_env);
+            unset_environment(fixture->ids_env);
+        }
+    }
 
     failures += require(sizeof(spec_sidecar_state) == 24,
                         "sidecar state ABI is a fixed 24-byte record");
