@@ -1084,6 +1084,7 @@ kernel void kernel_flash_attn_ext_vec_idx(
         ushort  tiitg[[thread_index_in_threadgroup]],
         ushort3 ntg[[threads_per_threadgroup]]) {
     constexpr short NW = N_SIMDWIDTH;
+    constexpr short NLOCAL = 32; // max finite positions kept in registers per thread
 
     const int i1 = tgpig[0];
     const int i2 = tgpig[1];
@@ -1100,10 +1101,18 @@ kernel void kernel_flash_attn_ext_vec_idx(
     const int r0 = q*tiitg + min((int) tiitg, r);
     const int r1 = r0 + q + (tiitg < r ? 1 : 0);
 
-    // count the finite entries in the slice
-    int cnt = 0;
+    // count the finite entries in the slice and keep their positions in registers (single mask read)
+    int cnt = 0;  // total finite entries in the slice
+    int nloc = 0; // finite entries kept in registers
+    int local[NLOCAL];
     for (int i = r0; i < r1; ++i) {
-        cnt += isfinite((float) pm[i]) ? 1 : 0;
+        if (isfinite((float) pm[i])) {
+            if (nloc < NLOCAL) {
+                local[nloc] = i;
+                nloc++;
+            }
+            cnt++;
+        }
     }
 
     const short sgitg = tiitg/NW;
@@ -1142,13 +1151,23 @@ kernel void kernel_flash_attn_ext_vec_idx(
 
     // write the finite positions in order; if the hint is violated, keep only the first n_kv_max entries
     int j = 0;
-    for (int i = r0; i < r1; ++i) {
-        if (base + j >= args.n_kv_max) {
-            break;
-        }
-        if (isfinite((float) pm[i])) {
-            pidx[base + j] = i;
-            j++;
+    for (; j < nloc && base + j < args.n_kv_max; ++j) {
+        pidx[base + j] = local[j];
+    }
+
+    // a dense mask may have more than NLOCAL finite entries in a slice; re-read the mask to write the rest
+    if (cnt > nloc && base + nloc < args.n_kv_max) {
+        int j2 = 0;
+        for (int i = r0; i < r1; ++i) {
+            if (isfinite((float) pm[i])) {
+                if (j2 >= nloc) {
+                    pidx[base + j2] = i;
+                }
+                j2++;
+                if (base + j2 >= args.n_kv_max) {
+                    break;
+                }
+            }
         }
     }
 
