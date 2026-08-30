@@ -1059,7 +1059,9 @@ static bool iqp_supported_common(const struct ggml_tensor * dst) {
     }
 
     // the path assumes the src1 conversion type is q8_K
-    GGML_ASSERT(ggml_get_type_traits_cpu(src0->type)->vec_dot_type == GGML_TYPE_Q8_K);
+    if (ggml_get_type_traits_cpu(src0->type)->vec_dot_type != GGML_TYPE_Q8_K) {
+        return false;
+    }
 
     // escape hatch to A/B the panel against the plain vec_dot path without rebuilding (--no-repack does not cover this path)
     static const bool disabled = getenv("GGML_NO_IQ_PANEL") != nullptr;
