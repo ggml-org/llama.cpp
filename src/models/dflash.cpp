@@ -599,7 +599,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, n_tokens);
         ggml_set_input(inp->embd);
 
-        ggml_tensor * inp_feat = inp->embd;
+        ggml_tensor * inp_target = inp->embd;
         cb(inp_feat, "inp_target_features", -1);
 
         res->add_input(std::move(inp));
@@ -836,7 +836,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, n_tokens);
         ggml_set_input(inp->embd);
 
-        ggml_tensor * inp_feat = inp->embd;
+        ggml_tensor * inp_target = inp->embd;
         cb(inp_feat, "inp_target_features", -1);
 
         res->add_input(std::move(inp));
