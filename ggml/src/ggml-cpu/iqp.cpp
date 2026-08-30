@@ -1215,8 +1215,10 @@ void ggml_compute_forward_mul_mat_iqp(const struct ggml_compute_params * params,
     const int64_t ngroups = ne01 / IQP_NB_ROWS;
 
     // aim for 4 chunks per thread; the caller has already reset the chunk counter
-    const int64_t groups_per_chunk = MAX(1, (ngroups + nth * 4 - 1) / (nth * 4));
-    const int64_t nchunk           = (ngroups + groups_per_chunk - 1) / groups_per_chunk;
+    // on NUMA systems fall back to one chunk per thread
+    const int64_t chunks_per_thread = ggml_is_numa() ? 1 : 4;
+    const int64_t groups_per_chunk  = MAX(1, (ngroups + nth * chunks_per_thread - 1) / (nth * chunks_per_thread));
+    const int64_t nchunk            = (ngroups + groups_per_chunk - 1) / groups_per_chunk;
 
     int current_chunk = ith;
 
