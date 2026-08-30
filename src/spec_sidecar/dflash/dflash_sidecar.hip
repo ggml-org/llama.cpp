@@ -79,11 +79,7 @@ struct DState {
     int device = -1;
     hipStream_t st = nullptr;
     hipStream_t owned_st = nullptr;
-    hipStream_t target_st = nullptr; // borrowed target stream for stream-memop fencing
     bool owns_st = true;
-    bool stream_memops = false;
-    uint32_t * stream_fence = nullptr;
-    uint32_t stream_fence_value = 0;
     DLayer L[DF_LAYERS];
     const block_q4_K *W_fc, *W_selhid;
     const block_q4_0d *W_embd;
@@ -308,11 +304,6 @@ DF_API int spec_dflash_rebase_state(int32_t seq_id, int32_t pos_min, int32_t pos
 DF_API int spec_dflash_attach_target_stream(void * stream, int32_t device) {
     if (!S.ok || device != S.device) return -1;
     if (stream == nullptr) {
-        if (S.stream_memops) {
-            DFC(hipStreamSynchronize(S.st));
-            S.target_st = nullptr;
-            return 0;
-        }
         if (S.st != S.owned_st) {
             DFC(hipStreamSynchronize(S.st));
             S.st = S.owned_st;
@@ -321,13 +312,6 @@ DF_API int spec_dflash_attach_target_stream(void * stream, int32_t device) {
         return 0;
     }
     const hipStream_t target = reinterpret_cast<hipStream_t>(stream);
-    if (S.stream_memops) {
-        if (S.target_st != target) {
-            DFC(hipStreamSynchronize(S.st));
-            S.target_st = target;
-        }
-        return 0;
-    }
     if (target != S.st) {
         DFC(hipStreamSynchronize(S.st));
         S.st = target;
@@ -607,33 +591,6 @@ DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
     DFC(hipStreamCreate(&S.owned_st));
     S.st = S.owned_st;
     S.owns_st = true;
-#if defined(HIP_VERSION_MAJOR) && HIP_VERSION_MAJOR >= 7
-    // The runtime capability is per device. This remains opt-in while the
-    // direct target-feature path is qualified, and uses a normal device word:
-    // the current gfx1100 runtime rejects hipMallocSignalMemory even though the
-    // stream wait/write APIs accept normal GPU memory.
-    if (const char * memops = getenv("LLAMA_SPEC_HIP_STREAM_MEMOPS")) {
-        int can_wait = 0;
-        if (std::strcmp(memops, "1") == 0 &&
-                hipDeviceGetAttribute(&can_wait, hipDeviceAttributeCanUseStreamWaitValue, S.device) == hipSuccess &&
-                can_wait &&
-                hipExtMallocWithFlags(reinterpret_cast<void **>(&S.stream_fence),
-                        sizeof(*S.stream_fence), hipDeviceMallocDefault) == hipSuccess) {
-            const uint32_t zero = 0;
-            if (hipMemcpy(S.stream_fence, &zero, sizeof(zero), hipMemcpyHostToDevice) == hipSuccess) {
-                S.stream_memops = true;
-            } else {
-                const hipError_t free_rc = hipFree(S.stream_fence);
-                (void) free_rc;
-                S.stream_fence = nullptr;
-            }
-        }
-    }
-#endif
-    if (getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr) {
-        fprintf(stderr, "[dflash-sidecar] stream memops: %s\n",
-                S.stream_memops ? "enabled" : "disabled");
-    }
     DFC(hipMalloc(&S.feat_d, (size_t) 8 * 25600 * 4));
     DFC(hipMalloc(&S.henc,   (size_t) 8 * DF_EMBD * 4));
     DFC(hipMalloc(&S.x,      (size_t) DF_BLOCK * DF_EMBD * 4));
@@ -696,18 +653,6 @@ static int spec_dflash_chunk_impl(int32_t seq_id, const int32_t * poss,
     const bool dbg = getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr;
     auto t0 = std::chrono::high_resolution_clock::now();
     const int NROT = 128;
-#if defined(HIP_VERSION_MAJOR) && HIP_VERSION_MAJOR >= 7
-    if (device_features && S.stream_memops && S.target_st != nullptr && S.target_st != S.st) {
-        uint32_t ticket = ++S.stream_fence_value;
-        if (ticket == 0) {
-            ticket = ++S.stream_fence_value;
-        }
-        DFC(hipStreamWriteValue32(S.target_st, S.stream_fence, ticket,
-                hipStreamWriteValueDefault));
-        DFC(hipStreamWaitValue32(S.st, S.stream_fence, ticket,
-                hipStreamWaitValueGte));
-    }
-#endif
     q->pending_pos_min = q->state_pos_max;
     q->pending_pos_max = q->state_pos_max + n;
     for (int off = 0; off < n; off += 8) {
