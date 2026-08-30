@@ -78,6 +78,12 @@ struct Scratch {
     float * logits = nullptr;
     float * partial_max = nullptr;
     int * partial_idx = nullptr;
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    block_q8_1 * q8_embd = nullptr;
+    block_q8_1_sum_hi * q8_embd_hi = nullptr;
+    block_q8_1 * q8_ffn = nullptr;
+    block_q8_1_sum_hi * q8_ffn_hi = nullptr;
+#endif
     int * id_dev = nullptr;
     int * tok_out = nullptr;
     int * draft_count = nullptr;
@@ -240,36 +246,74 @@ static void run_full_block(Scratch & c, const int * token, const float * hidden,
     gemv_q4_0<<<N_EMBD, 32, 0, S.stream>>>(
             S.weights.attn_output, c.attention, c.residual, N_HEAD * HEAD_DIM, N_EMBD);
     add_inplace<<<(N_EMBD + 255) / 256, 256, 0, S.stream>>>(c.residual, c.projected, N_EMBD);
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    rmsnorm_q8_1<<<1, 256, 0, S.stream>>>(
+            c.residual, S.weights.post_attention_norm, c.post_norm,
+            c.q8_embd, c.q8_embd_hi, N_EMBD);
+#else
     rmsnorm<<<1, 256, 0, S.stream>>>(
             c.residual, S.weights.post_attention_norm, c.post_norm, N_EMBD);
+#endif
 
     gemv_f32<<<N_EXPERT, 32, 0, S.stream>>>(
             S.weights.ffn_gate_inp, c.post_norm, c.router, N_EMBD, N_EXPERT);
     router_top8<<<1, 1, 0, S.stream>>>(
             c.router, c.expert_ids, c.expert_weights);
     dim3 expert_grid(N_FF, N_EXPERT_USED);
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    gemv_q4_q8_experts_dot8<<<expert_grid, 32, 0, S.stream>>>(
+            S.weights.ffn_gate_exps, c.q8_embd, c.q8_embd_hi, c.expert_ids,
+            c.expert_gate, N_EMBD, N_FF, N_EXPERT_USED, 0);
+    gemv_q4_q8_experts_dot8<<<expert_grid, 32, 0, S.stream>>>(
+            S.weights.ffn_up_exps, c.q8_embd, c.q8_embd_hi, c.expert_ids,
+            c.expert_up, N_EMBD, N_FF, N_EXPERT_USED, 0);
+#else
     gemv_q4_experts<<<expert_grid, 32, 0, S.stream>>>(
             S.weights.ffn_gate_exps, c.post_norm, c.expert_ids,
             c.expert_gate, N_EMBD, N_FF, N_EXPERT_USED);
     gemv_q4_experts<<<expert_grid, 32, 0, S.stream>>>(
             S.weights.ffn_up_exps, c.post_norm, c.expert_ids,
             c.expert_up, N_EMBD, N_FF, N_EXPERT_USED);
+#endif
     silu_mul<<<(N_EXPERT_USED * N_FF + 255) / 256, 256, 0, S.stream>>>(
             c.expert_gate, c.expert_up, N_EXPERT_USED * N_FF);
     dim3 down_grid(N_EMBD, N_EXPERT_USED);
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    quantize_q8_1_batched<<<N_EXPERT_USED, 256, 0, S.stream>>>(
+            c.expert_gate, c.q8_ffn, c.q8_ffn_hi, N_FF, N_FF);
+    gemv_q4_q8_experts_dot8<<<down_grid, 32, 0, S.stream>>>(
+            S.weights.ffn_down_exps, c.q8_ffn, c.q8_ffn_hi, c.expert_ids,
+            c.expert_outputs, N_FF, N_EMBD, N_EXPERT_USED, N_FF / 32);
+#else
     gemv_q4_experts<<<down_grid, 32, 0, S.stream>>>(
             S.weights.ffn_down_exps, c.expert_gate, c.expert_ids,
             c.expert_outputs, N_FF, N_EMBD, N_EXPERT_USED);
+#endif
     weighted_sum<<<(N_EMBD + 255) / 256, 256, 0, S.stream>>>(
             c.expert_outputs, c.expert_weights, c.moe, N_EMBD, N_EXPERT_USED);
 
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    gemv_q4_q8_1_dot8<<<N_FF, 32, 0, S.stream>>>(
+            S.weights.ffn_gate_shexp, c.q8_embd, c.q8_embd_hi, c.shared_gate, N_EMBD, N_FF);
+    gemv_q4_q8_1_dot8<<<N_FF, 32, 0, S.stream>>>(
+            S.weights.ffn_up_shexp, c.q8_embd, c.q8_embd_hi, c.shared_up, N_EMBD, N_FF);
+#else
     gemv_q4_0<<<N_FF, 32, 0, S.stream>>>(
             S.weights.ffn_gate_shexp, c.post_norm, c.shared_gate, N_EMBD, N_FF);
     gemv_q4_0<<<N_FF, 32, 0, S.stream>>>(
             S.weights.ffn_up_shexp, c.post_norm, c.shared_up, N_EMBD, N_FF);
+#endif
     silu_mul<<<(N_FF + 255) / 256, 256, 0, S.stream>>>(c.shared_gate, c.shared_up, N_FF);
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    quantize_q8_1_batched<<<1, 256, 0, S.stream>>>(
+            c.shared_gate, c.q8_ffn, c.q8_ffn_hi, N_FF, N_FF);
+    gemv_q4_q8_1_dot8<<<N_EMBD, 32, 0, S.stream>>>(
+            S.weights.ffn_down_shexp, c.q8_ffn, c.q8_ffn_hi,
+            c.shared_output, N_FF, N_EMBD);
+#else
     gemv_q4_0<<<N_EMBD, 32, 0, S.stream>>>(
             S.weights.ffn_down_shexp, c.shared_gate, c.shared_output, N_FF, N_EMBD);
+#endif
     gemv_f32<<<1, 32, 0, S.stream>>>(
             S.weights.ffn_gate_inp_shexp, c.post_norm, c.shared_scalar, N_EMBD, 1);
     scale_sigmoid<<<(N_EMBD + 255) / 256, 256, 0, S.stream>>>(
@@ -280,8 +324,16 @@ static void run_full_block(Scratch & c, const int * token, const float * hidden,
     rmsnorm<<<1, 256, 0, S.stream>>>(
             c.residual, S.weights.shared_head_norm, c.h_next, N_EMBD);
     if (emit_logits) {
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+        quantize_q8_1_batched<<<1, 256, 0, S.stream>>>(
+                c.h_next, c.q8_embd, c.q8_embd_hi, N_EMBD, N_EMBD);
+        gemv_q4_q8_1_dot8<<<N_HEAD_ROWS, 32, 0, S.stream>>>(
+                S.weights.output, c.q8_embd, c.q8_embd_hi,
+                c.logits, N_EMBD, N_HEAD_ROWS);
+#else
         gemv_q4_0<<<N_HEAD_ROWS, 32, 0, S.stream>>>(
                 S.weights.output, c.h_next, c.logits, N_EMBD, N_HEAD_ROWS);
+#endif
     }
 }
 
@@ -445,6 +497,12 @@ static int initialize_impl(const char * weights_dir, const char * ids_path,
     // per partition in the same buffers.
     MALLOC_F32(partial_max, N_PARTS * MTP_DRAFT_TOP_K);
     SC_CHECK(hipMalloc(&c.partial_idx, N_PARTS * MTP_DRAFT_TOP_K * sizeof(int)));
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    SC_CHECK(hipMalloc(&c.q8_embd, (N_EMBD / 32) * sizeof(block_q8_1)));
+    SC_CHECK(hipMalloc(&c.q8_embd_hi, (N_EMBD / 32) * sizeof(block_q8_1_sum_hi)));
+    SC_CHECK(hipMalloc(&c.q8_ffn, N_EXPERT_USED * (N_FF / 32) * sizeof(block_q8_1)));
+    SC_CHECK(hipMalloc(&c.q8_ffn_hi, N_EXPERT_USED * (N_FF / 32) * sizeof(block_q8_1_sum_hi)));
+#endif
     SC_CHECK(hipMalloc(&c.id_dev, sizeof(int)));
     SC_CHECK(hipMalloc(&c.tok_out, 8 * sizeof(int)));
     SC_CHECK(hipMalloc(&c.expert_ids, N_EXPERT_USED * sizeof(int32_t)));

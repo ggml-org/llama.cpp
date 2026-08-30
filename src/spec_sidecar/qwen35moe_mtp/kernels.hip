@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 namespace qwen35moe_sidecar {
 
@@ -44,6 +45,183 @@ __device__ __forceinline__ float q4_0_get(const block_q4_0 * block, int index) {
     const int quant = index < 16 ? packed & 0x0f : packed >> 4;
     return (quant - 8) * f16_to_f32(block->d);
 }
+
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+struct block_q8_1 {
+    __half2 ds;
+    int8_t qs[32];
+};
+static_assert(sizeof(block_q8_1) == 36, "q8_1 block size");
+
+struct block_q8_1_sum_hi {
+    int8_t sum_hi[2];
+};
+static_assert(sizeof(block_q8_1_sum_hi) == 2, "q8_1 high-nibble sum size");
+
+__device__ __forceinline__ uint32_t get_int4(const int8_t * values, int index) {
+    return reinterpret_cast<const uint32_t *>(values)[index];
+}
+
+__device__ __forceinline__ uint32_t get_int2(const uint8_t * values, int index) {
+    const uint16_t * values16 = reinterpret_cast<const uint16_t *>(values);
+    return static_cast<uint32_t>(values16[2 * index]) |
+            (static_cast<uint32_t>(values16[2 * index + 1]) << 16);
+}
+
+__device__ __forceinline__ int udot8_u4(uint32_t a, uint32_t b, int accumulator) {
+    return static_cast<int>(__builtin_amdgcn_udot8(a, b, static_cast<uint32_t>(accumulator), false));
+}
+
+__device__ __forceinline__ int sdot8_i4(int a, int b, int accumulator) {
+    return __builtin_amdgcn_sdot8(a, b, accumulator, false);
+}
+
+template <int vdr>
+__device__ __forceinline__ float q4_q8_dot8(const block_q4_0 * q4,
+        const block_q8_1 * q8, const block_q8_1_sum_hi * sum_hi, int offset) {
+    int low = 0;
+    int high = 0;
+#pragma unroll
+    for (int i = 0; i < vdr; ++i) {
+        const uint32_t q4_unsigned = get_int2(q4->qs, offset + i);
+        const uint32_t q4_signed = q4_unsigned ^ 0x88888888u;
+        const uint32_t q8_0 = get_int4(q8->qs, offset + i);
+        const uint32_t q8_1 = get_int4(q8->qs, offset + i + 4);
+        const uint32_t q8_low = (q8_0 & 0x0f0f0f0fu) | ((q8_1 & 0x0f0f0f0fu) << 4);
+        const uint32_t q8_high = ((q8_0 >> 4) & 0x0f0f0f0fu) | (q8_1 & 0xf0f0f0f0u);
+        low = udot8_u4(q4_unsigned, q8_low, low);
+        high = sdot8_i4(static_cast<int>(q4_signed), static_cast<int>(q8_high), high);
+    }
+    const int integer_dot = low + 16 * high + 128 * static_cast<int>(sum_hi->sum_hi[offset / vdr]);
+    const float2 scales = __half22float2(q8->ds);
+    return f16_to_f32(q4->d) * (integer_dot * scales.x - (8 * vdr / 4) * scales.y);
+}
+
+__global__ void rmsnorm_q8_1(const float * __restrict__ input, const float * __restrict__ weights,
+        float * __restrict__ output, block_q8_1 * __restrict__ quantized,
+        block_q8_1_sum_hi * __restrict__ sum_hi, int n) {
+    __shared__ float sums[256];
+    float sum = 0.0f;
+    for (int i = static_cast<int>(threadIdx.x); i < n; i += static_cast<int>(blockDim.x)) {
+        sum += input[i] * input[i];
+    }
+    sums[threadIdx.x] = sum;
+    __syncthreads();
+    for (int offset = blockDim.x / 2; offset > 0; offset >>= 1) {
+        if (threadIdx.x < offset) sums[threadIdx.x] += sums[threadIdx.x + offset];
+        __syncthreads();
+    }
+    const float scale = rsqrtf(sums[0] / n + RMS_EPS);
+    const int lane = static_cast<int>(threadIdx.x) & 31;
+    const int warp = static_cast<int>(threadIdx.x) >> 5;
+    const int blocks = n / 32;
+    for (int block = warp; block < blocks; block += blockDim.x / 32) {
+        const int index = block * 32 + lane;
+        const float value = input[index] * scale * weights[index];
+        if (output != nullptr) output[index] = value;
+        float amax = fabsf(value);
+        float total = value;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            amax = fmaxf(amax, __shfl_down(amax, offset, 32));
+            total += __shfl_down(total, offset, 32);
+        }
+        amax = __shfl(amax, 0, 32);
+        total = __shfl(total, 0, 32);
+        const float d = amax / 127.0f;
+        const int8_t q = amax == 0.0f ? 0 : static_cast<int8_t>(roundf(value / d));
+        quantized[block].qs[lane] = q;
+        int high0 = 0;
+        int high1 = 0;
+#pragma unroll
+        for (int i = 0; i < 16; ++i) {
+            high0 += __shfl(static_cast<int>(q), i, 32) >> 4;
+            high1 += __shfl(static_cast<int>(q), 16 + i, 32) >> 4;
+        }
+        if (lane == 0) {
+            quantized[block].ds = make_half2(d, total);
+            sum_hi[block].sum_hi[0] = static_cast<int8_t>(high0);
+            sum_hi[block].sum_hi[1] = static_cast<int8_t>(high1);
+        }
+    }
+}
+
+__global__ void quantize_q8_1_batched(const float * __restrict__ input,
+        block_q8_1 * __restrict__ quantized, block_q8_1_sum_hi * __restrict__ sum_hi,
+        int n, int stride) {
+    const int batch = static_cast<int>(blockIdx.x);
+    const int lane = static_cast<int>(threadIdx.x) & 31;
+    const int warp = static_cast<int>(threadIdx.x) >> 5;
+    const int blocks = n / 32;
+    const float * source = input + static_cast<size_t>(batch) * stride;
+    for (int block = warp; block < blocks; block += blockDim.x / 32) {
+        const int index = block * 32 + lane;
+        const float value = source[index];
+        float amax = fabsf(value);
+        float total = value;
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            amax = fmaxf(amax, __shfl_down(amax, offset, 32));
+            total += __shfl_down(total, offset, 32);
+        }
+        amax = __shfl(amax, 0, 32);
+        total = __shfl(total, 0, 32);
+        const float d = amax / 127.0f;
+        const int8_t q = amax == 0.0f ? 0 : static_cast<int8_t>(roundf(value / d));
+        quantized[static_cast<size_t>(batch) * blocks + block].qs[lane] = q;
+        int high0 = 0;
+        int high1 = 0;
+#pragma unroll
+        for (int i = 0; i < 16; ++i) {
+            high0 += __shfl(static_cast<int>(q), i, 32) >> 4;
+            high1 += __shfl(static_cast<int>(q), 16 + i, 32) >> 4;
+        }
+        if (lane == 0) {
+            quantized[static_cast<size_t>(batch) * blocks + block].ds = make_half2(d, total);
+            sum_hi[static_cast<size_t>(batch) * blocks + block].sum_hi[0] = static_cast<int8_t>(high0);
+            sum_hi[static_cast<size_t>(batch) * blocks + block].sum_hi[1] = static_cast<int8_t>(high1);
+        }
+    }
+}
+
+__global__ void gemv_q4_q8_1_dot8(const block_q4_0 * __restrict__ weights,
+        const block_q8_1 * __restrict__ input, const block_q8_1_sum_hi * __restrict__ sum_hi,
+        float * __restrict__ output, int n_in, int n_out) {
+    const int row = static_cast<int>(blockIdx.x);
+    const int lane = static_cast<int>(threadIdx.x);
+    if (row >= n_out) return;
+    const int blocks = n_in / 32;
+    const block_q4_0 * row_weights = weights + static_cast<size_t>(row) * blocks;
+    float sum = 0.0f;
+    for (int block = lane / 2; block < blocks; block += 16) {
+        sum += q4_q8_dot8<2>(row_weights + block, input + block, sum_hi + block,
+                2 * (lane & 1));
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) sum += __shfl_down(sum, offset, 32);
+    if (lane == 0) output[row] = sum;
+}
+
+__global__ void gemv_q4_q8_experts_dot8(const block_q4_0 * __restrict__ weights,
+        const block_q8_1 * __restrict__ input, const block_q8_1_sum_hi * __restrict__ sum_hi,
+        const int32_t * __restrict__ experts, float * __restrict__ output,
+        int n_in, int n_out, int experts_used, int input_stride_blocks) {
+    const int row = static_cast<int>(blockIdx.x);
+    const int slot = static_cast<int>(blockIdx.y);
+    const int lane = static_cast<int>(threadIdx.x);
+    if (row >= n_out || slot >= experts_used) return;
+    const int blocks = n_in / 32;
+    const size_t expert_stride = static_cast<size_t>(n_out) * blocks;
+    const block_q4_0 * row_weights = weights + static_cast<size_t>(experts[slot]) * expert_stride +
+            static_cast<size_t>(row) * blocks;
+    const block_q8_1 * input_row = input + static_cast<size_t>(slot) * input_stride_blocks;
+    const block_q8_1_sum_hi * sum_row = sum_hi + static_cast<size_t>(slot) * input_stride_blocks;
+    float sum = 0.0f;
+    for (int block = lane / 2; block < blocks; block += 16) {
+        sum += q4_q8_dot8<2>(row_weights + block, input_row + block, sum_row + block,
+                2 * (lane & 1));
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) sum += __shfl_down(sum, offset, 32);
+    if (lane == 0) output[static_cast<size_t>(slot) * n_out + row] = sum;
+}
+#endif
 
 __global__ void gemv_q4_0(const block_q4_0 * __restrict__ weights,
         const float * __restrict__ input, float * __restrict__ output,
