@@ -79,6 +79,16 @@ size_t gemm_kernel_i8i4(size_t          blk_len,
                         size_t          k_blks,
                         size_t          ldc);
 
+size_t gemm_kernel_i8i8(size_t          blk_len,
+                        const uint8_t * quant_a_ptr,
+                        const uint8_t * quant_b_data,
+                        const uint8_t * quant_b_zp,
+                        float *         c_ptr,
+                        size_t          count_m,
+                        size_t          count_n,
+                        size_t          k_blks,
+                        size_t          ldc);
+
 void quantize_a_row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);
 
 void quantize_a_4row_i8(size_t blk_len, const float * a_ptr, size_t count_k, uint8_t * quant_a_ptr);

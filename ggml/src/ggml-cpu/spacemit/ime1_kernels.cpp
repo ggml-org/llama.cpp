@@ -991,6 +991,129 @@ void SQ4BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t          BlkLen,
         }
     }
 }
+
+// ---- Q8_0 IME1 int8xint8 M1 kernel ----------------------------------------
+// B comes from block_q8_0x16 (make_block_q8_0x16): 16 fp16 scales (32B) then 512B of interleaved
+// int8 weights laid out as [INNER0: reg0..reg7][INNER1: reg0..reg7], each reg 32B = 4 columns x
+// (even=K-first-half / odd=K-second-half). A comes from quantize_a_row_i8 (same as Q4_0 path).
+// Reuses the vmadot COMP macro and the ACC_F16 dequant tail from the Q4_0 kernel.
+static void SQ8BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(size_t          BlkLen,
+                                                       const uint8_t * QuantA,
+                                                       const uint8_t * QuantBData,
+                                                       float *         C,
+                                                       size_t          CountN,
+                                                       size_t          BlockCountK,
+                                                       const size_t    ldc) {
+    GGML_UNUSED(ldc);
+    const size_t INNER = BlkLen / 16;  // = 2 for QK8_0=32
+
+    for (size_t n = 0; n < CountN; n += 16) {
+        size_t    nblks = (CountN - n) > 16 ? 16 : CountN - n;
+        // Each x16 K-block is {16 fp16 scales (32B), 512B interleaved int8}; stride = 544B.
+        uint8_t * QuantBDataPtr = (uint8_t *) QuantBData + (n / 16) * BlockCountK * (16 * sizeof(_Float16) + 512);
+        float *   CPtr = C + n;
+        size_t    cnt  = BlockCountK;
+
+        __asm__ volatile(
+            "vsetvli      t0, zero, e32, m4       \n\t"
+            "vxor.vv      v28, v28, v28           \n\t"
+            // s7 = per-K-block base (scale@+0, data@+32, block stride 544)
+            "addi         s7, %[B], 0             \n\t"
+            "addi         s5, %[A], 0             \n\t"   // A scale (fp32)
+            "addi         s6, %[A], 12            \n\t"   // A data (int8), offset like Q4_0 M1
+            "LOOP_K%=:                            \n\t"
+            "addi         s1, s7, 32              \n\t"   // data base for this K-block
+            // B scales: d[0..15] fp16 at block start. Load in 4 groups of 4 (d[0-3]/[4-7]/[8-11]/[12-15])
+            // matching the 4 accumulators (each covers columns [g*4 .. g*4+3]).
+            "addi         s2, s7, 8               \n\t"
+            "addi         s3, s7, 16              \n\t"
+            "addi         s4, s7, 24              \n\t"
+            "vsetvli      t0, zero, e16, mf4      \n\t"
+            "vle16.v      v4, (s7)                \n\t"
+            "vle16.v      v5, (s2)                \n\t"
+            "vle16.v      v6, (s3)                \n\t"
+            "vle16.v      v7, (s4)                \n\t"
+            "addi         s7, s7, 544             \n\t"   // advance to next K-block (32 scale + 512 data)
+            "flw          f1, (s5)                \n\t"
+            "addi         s5, s5, 4               \n\t"
+            "vfwcvt.f.f.v v8, v4                  \n\t"
+            "vfwcvt.f.f.v v9, v5                  \n\t"
+            "vfwcvt.f.f.v v10, v6                 \n\t"
+            "vfwcvt.f.f.v v11, v7                 \n\t"
+            "vsetvli      t0, zero, e32, mf2      \n\t"
+            "addi         t5, %[INNER], 0         \n\t"
+            "vxor.vv      v16, v16, v16           \n\t"
+            "vxor.vv      v18, v18, v18           \n\t"
+            "vxor.vv      v20, v20, v20           \n\t"
+            "vxor.vv      v22, v22, v22           \n\t"
+            // combined scale (A_scale * B_scale) -> v24..v27 (one per accumulator)
+            "vfmul.vf     v24, v8, f1             \n\t"
+            "vfmul.vf     v25, v9, f1             \n\t"
+            "vfmul.vf     v26, v10, f1            \n\t"
+            "vfmul.vf     v27, v11, f1            \n\t"
+            "addi         %[CNT], %[CNT], -1      \n\t"
+            "vsetvli      t0, zero, e8, m1        \n\t"
+            "LOOP_INNER%=:                        \n\t"
+            // load 8 B data regs (v0..v7) directly (int8, no nibble unpack)
+            "vle8.v       v0, (s1)                \n\t"
+            "addi         s1, s1, 32              \n\t"
+            "vle8.v       v1, (s1)                \n\t"
+            "addi         s1, s1, 32              \n\t"
+            "vle8.v       v2, (s1)                \n\t"
+            "addi         s1, s1, 32              \n\t"
+            "vle8.v       v3, (s1)                \n\t"
+            "addi         s1, s1, 32              \n\t"
+            "vle8.v       v4, (s1)                \n\t"
+            "addi         s1, s1, 32              \n\t"
+            "vle8.v       v5, (s1)                \n\t"
+            "addi         s1, s1, 32              \n\t"
+            "vle8.v       v6, (s1)                \n\t"
+            "addi         s1, s1, 32              \n\t"
+            "vle8.v       v7, (s1)                \n\t"
+            "addi         s1, s1, 32              \n\t"
+            // load A (2 halves): v14 from s5, v15 from s6 (matches Q4_0 M1 A packing)
+            "vsetvli      t0, zero, e8, mf4       \n\t"
+            "vle8.v       v14, (s5)               \n\t"
+            "addi         s5, s5, 16              \n\t"
+            "vle8.v       v15, (s6)               \n\t"
+            "addi         s6, s6, 16              \n\t"
+            "addi         t5, t5, -1              \n\t"
+            "vsetvli      t0, zero, e8, m1        \n\t"
+            SQ4BIT_KERNEL_COMP_1x8x2_4X8X4
+            "bnez         t5, LOOP_INNER%=        \n\t"
+            "vsetvli      t0, zero, e32, mf2      \n\t"
+            SQ4BIT_KERNEL_ACC_F16_1X4X4
+            "bnez         %[CNT], LOOP_K%=        \n\t"
+            "addi         t3, zero, 16            \n\t"
+            "addi         s1, %[C], 16            \n\t"
+            "addi         s2, %[C], 32            \n\t"
+            "addi         s3, %[C], 48            \n\t"
+            "blt          %[NBLKS], t3, ST_TAIL%= \n\t"
+            "vse32.v      v28, (%[C])             \n\t"
+            "vse32.v      v29, (s1)               \n\t"
+            "vse32.v      v30, (s2)               \n\t"
+            "vse32.v      v31, (s3)               \n\t"
+            "jal          x0, END%=               \n\t"
+            "ST_TAIL%=:                           \n\t"
+            "vsetvli      t0, %[NBLKS], e32, mf2  \n\t"
+            "sub          %[NBLKS], %[NBLKS], t0  \n\t"
+            "vse32.v      v28, (%[C])             \n\t"
+            "vsetvli      t0, %[NBLKS], e32, mf2  \n\t"
+            "sub          %[NBLKS], %[NBLKS], t0  \n\t"
+            "vse32.v      v29, (s1)               \n\t"
+            "vsetvli      t0, %[NBLKS], e32, mf2  \n\t"
+            "sub          %[NBLKS], %[NBLKS], t0  \n\t"
+            "vse32.v      v30, (s2)               \n\t"
+            "vsetvli      t0, %[NBLKS], e32, mf2  \n\t"
+            "sub          %[NBLKS], %[NBLKS], t0  \n\t"
+            "vse32.v      v31, (s3)               \n\t"
+            "END%=:                               \n\t"
+            : [CNT] "+r"(cnt), [NBLKS] "+r"(nblks)
+            : [INNER] "r"(INNER), [A] "r"(QuantA), [B] "r"(QuantBDataPtr), [C] "r"(CPtr)
+            : "cc", "t0", "t3", "t5", "f1", "s1", "s2", "s3", "s4", "s5", "s6", "s7");
+    }
+}
+
 }  // namespace
 
 namespace ime1 {
@@ -1022,6 +1145,21 @@ size_t gemm_kernel_i8i4(size_t          blk_len,
         }
         return 1;
     }
+}
+
+size_t gemm_kernel_i8i8(size_t          blk_len,
+                        const uint8_t * quant_a_ptr,
+                        const uint8_t * quant_b_data,
+                        const uint8_t * quant_b_zp,
+                        float *         c_ptr,
+                        size_t          count_m,
+                        size_t          count_n,
+                        size_t          k_blks,
+                        size_t          ldc) {
+    GGML_UNUSED(quant_b_zp);
+    GGML_UNUSED(count_m);
+    SQ8BitGemmM1Kernel_CompInt8_ScaleFp16_Impl(blk_len, quant_a_ptr, quant_b_data, c_ptr, count_n, k_blks, ldc);
+    return 1;
 }
 }  // namespace ime1
 }  // namespace spacemit_kernels
