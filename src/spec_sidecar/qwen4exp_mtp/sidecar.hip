@@ -8,6 +8,9 @@
 #ifdef QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST
 #include "native_attention.h"
 #endif
+#if defined(QWEN4EXP_SIDECAR_PRODUCTION) && !defined(QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST)
+#error "Qwen4Exp production sidecar requires the native-attention translation unit"
+#endif
 #ifdef QWEN4EXP_SIDECAR_NATIVE_MMQ_TEST
 #include "native_mmq.h"
 #endif
@@ -939,6 +942,13 @@ static int ensure_seq_storage(SeqState & seq) {
     SC_CHECK(hipMalloc(&seq.value_committed, kv_bytes));
     SC_CHECK(hipMalloc(&seq.index_committed, index_bytes));
     SC_CHECK(hipMalloc(&seq.hidden_committed, static_cast<size_t>(HC_WIDTH) * sizeof(float)));
+    // Long attention rounds its physical cache width to 256 cells. Clear the
+    // untouched tail so masked reads can never ingest allocator residue/NaNs.
+    SC_CHECK(hipMemsetAsync(seq.key_committed, 0, kv_bytes, S.stream));
+    SC_CHECK(hipMemsetAsync(seq.value_committed, 0, kv_bytes, S.stream));
+    SC_CHECK(hipMemsetAsync(seq.index_committed, 0, index_bytes, S.stream));
+    SC_CHECK(hipMemsetAsync(seq.hidden_committed, 0,
+            static_cast<size_t>(HC_WIDTH) * sizeof(float), S.stream));
     seq.allocated = true;
     return 0;
 }
@@ -1195,6 +1205,165 @@ static int catchup_runtime_impl(int32_t seq_id, const int32_t * tokens,
         return -1;
     }
     return 0;
+}
+
+static int build_qsa_mask_runtime(SeqState & seq, int32_t seq_id, int32_t position) {
+    QsaScratch & q = S.qsa;
+    CatchupScratch & c = S.catchup;
+    if (position < 32 || position >= S.max_pos || seq.state_pos_min != 0 ||
+            ensure_native_attention_scratch() != 0) return -1;
+    const int valid_tokens = position + 1;
+    const int complete_blocks = valid_tokens / QSA_RATIO;
+    if (complete_blocks < 1 || complete_blocks > QSA_MAX_BLOCKS) return -1;
+
+    gemv_f16_f32_batched<256><<<INDEX_HEADS * INDEX_DIM, 256, 0, S.stream>>>(
+            S.weights.index_query, c.mixed, q.query, N_EMBD, INDEX_HEADS * INDEX_DIM);
+    rms_norm_shared_rows<<<INDEX_HEADS, 256, 0, S.stream>>>(
+            q.query, S.weights.index_query_norm, q.query, INDEX_DIM);
+    index_rope_neox<<<INDEX_HEADS, N_ROT / 2, 0, S.stream>>>(
+            q.query, INDEX_HEADS, position, 0);
+    if (hipMemsetAsync(q.selected, 0, SC_MAX_POS, S.stream) != hipSuccess) return -1;
+    qsa_pool_index_f16<<<complete_blocks, INDEX_DIM, 0, S.stream>>>(
+            seq.index_committed, q.pooled, complete_blocks);
+    rms_norm_shared_rows<<<complete_blocks, 256, 0, S.stream>>>(
+            q.pooled, S.weights.index_key_norm, q.normalized, INDEX_DIM);
+    index_rope_neox<<<complete_blocks, N_ROT / 2, 0, S.stream>>>(
+            q.normalized, complete_blocks, 0, QSA_RATIO);
+    index_head_dots_native<<<complete_blocks, 64, 0, S.stream>>>(
+            q.normalized, q.query, q.head_dots, complete_blocks);
+    index_head_relu_transpose_native<<<
+            (complete_blocks * INDEX_HEADS + 255) / 256, 256, 0, S.stream>>>(
+            q.head_dots, q.block_heads, complete_blocks);
+    index_sum_heads_native<<<complete_blocks, 32, 0, S.stream>>>(
+            q.block_heads, q.scores, complete_blocks);
+
+    int partitions = (complete_blocks + QSA_SORT_CAPACITY - 1) / QSA_SORT_CAPACITY;
+    int candidate_count = partitions * QSA_MAX_RANKED_BLOCKS;
+    qsa_select_candidates_scores<<<partitions, QSA_SORT_THREADS, 0, S.stream>>>(
+            q.scores, complete_blocks, q.candidate_keys_a, q.candidate_blocks_a);
+    const uint64_t * final_keys = q.candidate_keys_a;
+    const int32_t * final_blocks = q.candidate_blocks_a;
+    if (candidate_count > QSA_SORT_CAPACITY) {
+        partitions = (candidate_count + QSA_SORT_CAPACITY - 1) / QSA_SORT_CAPACITY;
+        qsa_select_candidates_pairs<<<partitions, QSA_SORT_THREADS, 0, S.stream>>>(
+                q.candidate_keys_a, q.candidate_blocks_a, candidate_count,
+                q.candidate_keys_b, q.candidate_blocks_b);
+        candidate_count = partitions * QSA_MAX_RANKED_BLOCKS;
+        final_keys = q.candidate_keys_b;
+        final_blocks = q.candidate_blocks_b;
+    }
+    if (candidate_count > QSA_SORT_CAPACITY) {
+        partitions = (candidate_count + QSA_SORT_CAPACITY - 1) / QSA_SORT_CAPACITY;
+        qsa_select_candidates_pairs<<<partitions, QSA_SORT_THREADS, 0, S.stream>>>(
+                q.candidate_keys_b, q.candidate_blocks_b, candidate_count,
+                q.candidate_keys_a, q.candidate_blocks_a);
+        candidate_count = partitions * QSA_MAX_RANKED_BLOCKS;
+        final_keys = q.candidate_keys_a;
+        final_blocks = q.candidate_blocks_a;
+    }
+    if (candidate_count > QSA_SORT_CAPACITY) return -1;
+    qsa_select_mask_final<<<1, QSA_SORT_THREADS, 0, S.stream>>>(
+            final_keys, final_blocks, candidate_count, complete_blocks,
+            position, q.selected, q.selected_blocks);
+    if (hipGetLastError() != hipSuccess) return -1;
+
+    const int target_tokens = std::min(valid_tokens, INDEX_TOP_K + QSA_RATIO - 1);
+    const int ranked_tokens = target_tokens - valid_tokens % QSA_RATIO;
+    q.last_complete_blocks = complete_blocks;
+    q.last_position = position;
+    q.last_ranked_blocks = ranked_tokens / QSA_RATIO + (ranked_tokens % QSA_RATIO != 0);
+    q.last_qsa_seq = seq_id;
+    q.last_attention_seq = -1;
+    return 0;
+}
+
+static int draft_step_runtime(SeqState & seq, int32_t seq_id,
+        int32_t position, float temperature) {
+    CatchupScratch & c = S.catchup;
+    if (prepare_draft_query(position) != 0) return -1;
+    if (position < 32) {
+        attention_dense_f16_32<<<N_HEAD, 32, 0, S.stream>>>(
+                c.query, seq.key_committed, seq.value_committed,
+                c.attention, position + 1);
+    } else {
+        QsaScratch & q = S.qsa;
+        const int physical = ((position + 1 + 255) / 256) * 256;
+        if (physical > S.max_pos || build_qsa_mask_runtime(seq, seq_id, position) != 0) return -1;
+        qsa_mask_to_f16<<<(physical + 255) / 256, 256, 0, S.stream>>>(
+                q.selected, q.attention_mask, physical);
+        int parallel = 0;
+        if (hipGetLastError() != hipSuccess ||
+                launch_native_sparse_attention(S.stream, c.query,
+                    seq.key_committed, seq.value_committed, q.attention_mask,
+                    physical, QSA_MAX_ATTENTION_PARTS, q.attention_parts,
+                    q.attention_meta, c.attention, &parallel) != 0) return -1;
+        q.last_attention_seq = seq_id;
+        q.last_attention_physical = physical;
+        q.last_attention_parallel = parallel;
+    }
+    return finish_draft_from_attention(temperature);
+}
+
+static int draft_runtime_impl(int32_t seq_id, int32_t token, int32_t position,
+        const float * hidden, bool hidden_device, int count, int32_t * output_tokens) {
+    SeqState * seq = get_seq(seq_id);
+    CatchupScratch & c = S.catchup;
+    if (!S.ok || seq == nullptr || token < 0 || token >= N_VOCAB ||
+            count < 1 || count > 8 || output_tokens == nullptr ||
+            (!hidden_device && hidden == nullptr) || position != seq->state_pos_max ||
+            position < 0 || position + count > S.max_pos || !seq->allocated ||
+            (hidden_device && !seq->hidden_valid) ||
+            seq->pending_pos_max != seq->state_pos_max ||
+            ensure_pending_storage(*seq, count) != 0 || ensure_catchup_scratch() != 0) return -1;
+
+    const float * initial_hidden = hidden_device ? seq->hidden_committed : hidden;
+    seq->pending_pos_min = position;
+    seq->pending_pos_max = position + count;
+    if (load_normalized_hidden_row(initial_hidden, hidden_device, false) != 0 ||
+            phase1_from_normalized_hidden(*seq, token, position, 0) != 0) {
+        discard_pending(*seq);
+        return -1;
+    }
+
+    for (int step = 0; step < count; ++step) {
+        const int32_t current_position = position + step;
+        copy_cache_rows_f16<<<(KV_WIDTH + 255) / 256, 256, 0, S.stream>>>(
+                seq->key_committed, seq->key_pending, current_position, step, 1, KV_WIDTH);
+        copy_cache_rows_f16<<<(KV_WIDTH + 255) / 256, 256, 0, S.stream>>>(
+                seq->value_committed, seq->value_pending, current_position, step, 1, KV_WIDTH);
+        copy_cache_rows_f16<<<(IDX_WIDTH + 255) / 256, 256, 0, S.stream>>>(
+                seq->index_committed, seq->index_pending, current_position, step, 1, IDX_WIDTH);
+        if (draft_step_runtime(*seq, seq_id, current_position, 1.0f) != 0 ||
+                hipMemcpyAsync(c.chain_tokens + step, c.topk_indices,
+                    sizeof(int32_t), hipMemcpyDeviceToDevice, S.stream) != hipSuccess) {
+            discard_pending(*seq);
+            return -1;
+        }
+        if (step + 1 < count) {
+            rms_norm_rows<<<1, 1024, 0, S.stream>>>(
+                    c.eh, S.weights.hidden_norm, c.hidden_norm, HC_WIDTH);
+            if (phase1_from_normalized_hidden_device_token(*seq, c.chain_tokens + step,
+                        current_position + 1, step + 1) != 0) {
+                discard_pending(*seq);
+                return -1;
+            }
+        }
+    }
+    if (hipMemcpyAsync(output_tokens, c.chain_tokens,
+                static_cast<size_t>(count) * sizeof(int32_t),
+                hipMemcpyDeviceToHost, S.stream) != hipSuccess ||
+            hipStreamSynchronize(S.stream) != hipSuccess) {
+        discard_pending(*seq);
+        return -1;
+    }
+    for (int step = 0; step < count; ++step) {
+        if (output_tokens[step] < 0 || output_tokens[step] >= N_VOCAB) {
+            discard_pending(*seq);
+            return -1;
+        }
+    }
+    discard_pending(*seq);
+    return count;
 }
 #endif
 
@@ -1485,11 +1654,23 @@ SC_API int spec_hip_catchup_device(int32_t seq_id, const int32_t * tokens,
 #endif
 }
 
-SC_API int spec_hip_draft(int32_t, int32_t, int32_t, const float *, int, int32_t *) {
+SC_API int spec_hip_draft(int32_t seq_id, int32_t token, int32_t position,
+        const float * hidden, int count, int32_t * output_tokens) {
+#ifdef QWEN4EXP_SIDECAR_PRODUCTION
+    return draft_runtime_impl(seq_id, token, position, hidden, false, count, output_tokens);
+#else
+    (void) seq_id; (void) token; (void) position; (void) hidden; (void) count; (void) output_tokens;
     return -1;
+#endif
 }
-SC_API int spec_hip_draft_device(int32_t, int32_t, int32_t, int, int32_t *) {
+SC_API int spec_hip_draft_device(int32_t seq_id, int32_t token, int32_t position,
+        int count, int32_t * output_tokens) {
+#ifdef QWEN4EXP_SIDECAR_PRODUCTION
+    return draft_runtime_impl(seq_id, token, position, nullptr, true, count, output_tokens);
+#else
+    (void) seq_id; (void) token; (void) position; (void) count; (void) output_tokens;
     return -1;
+#endif
 }
 SC_API int spec_hip_stochastic_top_k() {
     return SPEC_SIDECAR_MTP_DRAFT_TOP_K;
