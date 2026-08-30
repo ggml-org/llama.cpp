@@ -2615,6 +2615,23 @@ common_speculative_init_result::common_speculative_init_result(
     cparams.n_rs_seq  = 0;
     cparams.ctx_other = ctx_tgt;
 
+    // DFlash2/DSpark rank the full target vocabulary inside the draft graph (top_k / argmax
+    // on the lm_head output), so the worst-case compute buffer grows with n_ubatch * n_vocab.
+    // Their largest decode batch is one noise block per sequence (n_max + 1 tokens), so cap the
+    // ubatch to that; anything larger only inflates the reserved compute buffer.
+    const bool has_block_draft = std::any_of(
+        params.speculative.types.begin(), params.speculative.types.end(),
+        [](common_speculative_type t) {
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
+        });
+    if (has_block_draft) {
+        const uint32_t n_ubatch_dft = params.n_parallel * (uint32_t) std::max(1, params.speculative.draft.n_max + 1);
+        if (cparams.n_ubatch > n_ubatch_dft) {
+            LOG_INF("%s: capping draft context ubatch from %u to %u (block draft)\n", __func__, cparams.n_ubatch, n_ubatch_dft);
+            cparams.n_ubatch = n_ubatch_dft;
+        }
+    }
+
     std::string model_path;
     if (has_draft) {
         model_path = params.speculative.draft.mparams.path;

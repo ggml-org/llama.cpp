@@ -1319,6 +1319,17 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         }
         cparams_dft.n_rs_seq = 0;
 
+        // keep the fit estimate in sync with common_speculative_init_result (see there)
+        const bool has_block_draft = std::any_of(
+            params.speculative.types.begin(), params.speculative.types.end(),
+            [](common_speculative_type t) {
+                return t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
+            });
+        if (has_block_draft) {
+            cparams_dft.n_ubatch = std::min(cparams_dft.n_ubatch,
+                    params_dft.n_parallel * (uint32_t) std::max(1, params_dft.speculative.draft.n_max + 1));
+        }
+
         const common_fit_extra_model extra = {
             /*.path_model   =*/ params_dft.model.path.c_str(),
             /*.mparams      =*/ &mparams_dft,
