@@ -437,10 +437,9 @@ int main(int argc, char ** argv) {
 
     fprintf(stderr, "%s : recurrent rollback checkpoint and resize restored successfully\n", __func__);
     llama_free(ctx_src);
-    llama_free(ctx_dst);
+    llama_free(ctx_dst); // ctx_dirty aliases ctx_dst
     llama_free(ctx_resize);
     llama_free(ctx_ref);
-    llama_free(ctx_dirty);
 
     if (!test_multi_seq_split_replay(params, model, n_vocab)) {
         return 1;
