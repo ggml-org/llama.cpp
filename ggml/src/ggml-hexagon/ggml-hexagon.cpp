@@ -4984,7 +4984,9 @@ static std::vector<int> ggml_hexagon_graph_optimize_reorder(const std::vector<ht
     return res;
 }
 
-static void ggml_backend_hexagon_graph_optimize(ggml_backend_t backend, ggml_cgraph * gf) {
+static void ggml_backend_hexagon_graph_optimize(ggml_backend_t backend, ggml_cgraph * gf, ggml_backend_graph_optimize_params * params) {
+    GGML_UNUSED(params);
+
     const int n = gf->n_nodes;
 
     constexpr int MAX_FUSE = 16;
