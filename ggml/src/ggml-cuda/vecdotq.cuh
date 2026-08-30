@@ -1310,6 +1310,57 @@ static __device__ __forceinline__ float vec_dot_iq1_m_q8_1(
     return d * ((sumi[0] + sumf[0]) * sc0 + (sumi[1] + sumf[1]) * sc1);
 }
 
+#define VDR_IQ2_NL_Q8_1_MMVQ 1
+
+static __device__ __forceinline__ float vec_dot_iq2_nl_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq2_nl * bq2 = (const block_iq2_nl *) vbq + kbx;
+
+    const uint8_t * qs = bq2->qs;
+    const int     * q8 = (const int *) bq8_1->qs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int g = 0; g < 4; ++g) {
+        int v = 0;
+#pragma unroll
+        for (int b = 0; b < 4; ++b) {
+            v |= (iq2_nl_value(qs, 4*iqs + b, g) & 0xff) << (8*b);
+        }
+        sumi = ggml_cuda_dp4a(v, q8[2*g + iqs], sumi);
+    }
+
+    const float d = __half2float(bq2->d) * __low2float(bq8_1->ds);
+    return d * sumi;
+}
+
+#define VDR_IQ3_NL_Q8_1_MMVQ 1
+
+static __device__ __forceinline__ float vec_dot_iq3_nl_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq3_nl * bq3 = (const block_iq3_nl *) vbq + kbx;
+
+    const uint8_t * qs = bq3->qs;
+    const uint8_t * qh = bq3->qh;
+    const int     * q8 = (const int *) bq8_1->qs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int g = 0; g < 4; ++g) {
+        int v = 0;
+#pragma unroll
+        for (int b = 0; b < 4; ++b) {
+            v |= (iq3_nl_value(qs, qh, 4*iqs + b, g) & 0xff) << (8*b);
+        }
+        sumi = ggml_cuda_dp4a(v, q8[2*g + iqs], sumi);
+    }
+
+    const float d = __half2float(bq3->d) * __low2float(bq8_1->ds);
+    return d * sumi;
+}
+
 #define VDR_IQ4_NL_Q8_1_MMVQ 2
 #define VDR_IQ4_NL_Q8_1_MMQ  4
 

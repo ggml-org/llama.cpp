@@ -668,6 +668,62 @@ void dequantize_iq1_m(device const block_iq1_m * xb, short il, thread type4x4 & 
 }
 
 template <typename type4x4>
+void dequantize_iq2_nl(device const block_iq2_nl * xb, short il, thread type4x4 & reg) {
+    // il selects the 16-weight half of the 32-weight block (0 or 1)
+    const float d = xb->d;
+    device const uint8_t * qs = xb->qs;
+    for (short m = 0; m < 16; ++m) {
+        const short p = il*16 + m;       // logical position 0..31
+        const short j = p & 7;           // byte index    0..7
+        const short g = p >> 3;          // 2-bit group   0..3
+        reg[m/4][m%4] = d * kvalues_iq2nl_f[(qs[j] >> (2*g)) & 3];
+    }
+}
+
+template <typename type4>
+void dequantize_iq2_nl_t4(device const block_iq2_nl * xb, short il, thread type4 & reg) {
+    // il selects the 4-weight of the 32-weight block (0..7)
+    device const uint16_t * q2 = (device const uint16_t *)xb->qs;
+    const float d = xb->d;
+    uint32_t aux32;
+    thread const uint8_t * q8 = (thread const uint8_t *)&aux32;
+    aux32 = ((q2[2*(il&1)] | (q2[2*(il&1)+1] << 16)) >> (2*(il >> 1))) & 0x03030303;
+    reg[0] = d * kvalues_iq2nl_f[q8[0]];
+    reg[1] = d * kvalues_iq2nl_f[q8[1]];
+    reg[2] = d * kvalues_iq2nl_f[q8[2]];
+    reg[3] = d * kvalues_iq2nl_f[q8[3]];
+}
+
+template <typename type4x4>
+void dequantize_iq3_nl(device const block_iq3_nl * xb, short il, thread type4x4 & reg) {
+    const float d = xb->d;
+    device const uint8_t * qs = xb->qs;
+    device const uint8_t * qh = xb->qh;
+    for (short m = 0; m < 16; ++m) {
+        const short p   = il*16 + m;     // logical position 0..31
+        const short j   = p & 7;
+        const short g   = p >> 3;
+        const short idx = ((qs[j] >> (2*g)) & 3) | (((qh[g] >> j) & 1) << 2);
+        reg[m/4][m%4] = d * kvalues_iq3nl_f[idx];
+    }
+}
+
+template <typename type4>
+void dequantize_iq3_nl_t4(device const block_iq3_nl * xb, short il, thread type4 & reg) {
+    // il selects a 4-weight of the 32-weight block (0..7)
+    device const uint16_t * q2 = (device const uint16_t *)xb->qs;
+    const float d = xb->d;
+    uint32_t aux32;
+    thread const uint8_t * q8 = (thread const uint8_t *)&aux32;
+    aux32 = ((q2[2*(il&1)] | (q2[2*(il&1)+1] << 16)) >> (2*(il >> 1))) & 0x03030303;
+    const uint8_t hb = xb->qh[il >> 1] >> (4*(il & 1));
+    reg[0] = d * kvalues_iq3nl_f[q8[0] | ((hb << 2) & 4)];
+    reg[1] = d * kvalues_iq3nl_f[q8[1] | ((hb << 1) & 4)];
+    reg[2] = d * kvalues_iq3nl_f[q8[2] | ( hb       & 4)];
+    reg[3] = d * kvalues_iq3nl_f[q8[3] | ((hb >> 1) & 4)];
+}
+
+template <typename type4x4>
 void dequantize_iq4_nl(device const block_iq4_nl * xb, short il, thread type4x4 & reg) {
     device const uint16_t * q4 = (device const uint16_t *)xb->qs;
     const float d = xb->d;
