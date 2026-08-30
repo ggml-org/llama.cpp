@@ -186,7 +186,7 @@ else()
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-common.h
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal-impl.h
         COMMAND rm -rf ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels
-        DEPENDS ${AIR_FILES}
+        DEPENDS ${AIR_FILES} ${AIR_MM_TENSOR}
         COMMENT "Linking Metal kernels into default.metallib"
     )
 
