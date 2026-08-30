@@ -1703,7 +1703,15 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
             COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end() ||
         std::find(params.speculative.types.begin(), params.speculative.types.end(),
             COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK) != params.speculative.types.end();
-    mparams.no_tp_output_head_sharding = has_external_shared_head_draft;
+    // A sidecar-only DFlash/DSpark run never loads the host draft model, so the
+    // shared output head does not need to stay mirrored. The candidate probe is
+    // path/artifact-based and deterministic; if it passes here but the model
+    // preflight later fails, the speculative loader fails closed instead of
+    // loading a head-sharing host draft against a sharded head.
+    const bool sidecar_only_candidate = has_external_shared_head_draft &&
+        common_speculative_sidecar_candidate(params.speculative, params.model.path,
+            (uint32_t) params.n_parallel);
+    mparams.no_tp_output_head_sharding = has_external_shared_head_draft && !sidecar_only_candidate;
 
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;

@@ -218,8 +218,17 @@ static bool profile_matches_target_file(const common_spec_sidecar_profile & prof
     }
     if (ok) {
         const std::string prefix = std::string(profile.target_architecture) + ".";
-        const uint32_t auxiliary_layers = profile.target_n_layer_nextn > 0
+        uint32_t auxiliary_layers = profile.target_n_layer_nextn > 0
                 ? (uint32_t) profile.target_n_layer_nextn : 0;
+        if (profile.target_n_layer_nextn < 0) {
+            // The provider does not constrain auxiliary layers; a target GGUF
+            // may still carry them (for example an MTP-bearing export used
+            // with the DFlash provider), and block_count includes them.
+            const int64_t nextn_id = gguf_find_key(ctx, (prefix + "nextn_predict_layers").c_str());
+            if (nextn_id >= 0 && gguf_get_kv_type(ctx, nextn_id) == GGUF_TYPE_UINT32) {
+                auxiliary_layers = gguf_get_val_u32(ctx, nextn_id);
+            }
+        }
         ok = has_u32((prefix + "block_count").c_str(),
                 (uint32_t) profile.target_n_layer + auxiliary_layers,
                 "target GGUF block count differs");
