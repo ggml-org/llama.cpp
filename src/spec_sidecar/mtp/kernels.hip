@@ -9,6 +9,13 @@
 //   attn_q output is q/gate interleaved per head: [q 256 | gate 256] x 24.
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
+#if defined(SPEC_SIDECAR_GFX1030) && defined(__has_include)
+#    if __has_include(<rocprim/device/device_topk.hpp>)
+#        include <rocprim/device/device_topk.hpp>
+#        include <rocprim/iterator/counting_iterator.hpp>
+#        define SPEC_SIDECAR_ROCPRIM_TOPK
+#    endif
+#endif
 #include <cstdio>
 #include <cstdint>
 #include <cstring>

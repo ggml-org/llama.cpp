@@ -175,7 +175,10 @@ export SPEC_SIDECAR=1
   the target residual verifier. The proposal RNG is a deterministic keyed
   stream derived from the request seed, sequence, position, sidecar kind, and
   draft step; target acceptance/rejection RNG remains owned by the main
-  sampler. `p_min` is applied to the sampled q probability.
+  sampler. `p_min` is applied to the sampled q probability. The gfx1030
+  Qwen35/MTP provider uses rocPRIM device top-k when its headers are available;
+  otherwise it retains the portable two-stage device reduction. This provider-
+  local optimization is independent of the Qwen4Exp sidecar.
 - Text-only, contiguous positions are the supported sidecar input. Vision
   batches, unsupported interleaving, and migration disable the sidecar safely.
   With a single HIP target ubatch on the matching device, the host passes
