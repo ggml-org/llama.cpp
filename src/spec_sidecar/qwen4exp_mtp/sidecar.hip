@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-// Qwen3.8 Flash Next MTP sidecar state/ABI foundation.
+// Qwen3.8 Flash Next MTP sidecar.
 //
-// This source is intentionally not added to CMake until the model graph and
-// long-context gates are complete. The lifecycle-test build exercises the
-// real sequence ownership/cursor/cache operations with synthetic pending rows.
+// The production ABI is enabled only for the dedicated opt-in CMake target.
+// Test builds retain the historical phase-boundary helpers used by the exact
+// native-parity fixtures.
 #include "kernels.hip"
 #ifdef QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST
 #include "native_attention.h"
@@ -69,6 +69,7 @@ struct SeqState {
     __half * value_pending = nullptr;
     __half * index_pending = nullptr;
     float * hidden_committed = nullptr;
+    float * hidden_pending = nullptr;
     int pending_capacity = 0;
     int32_t pending_pos_min = 0;
     int32_t pending_pos_max = 0;
@@ -520,9 +521,15 @@ static int ensure_native_attention_scratch() {
 }
 #endif
 
-static int initialize_artifacts(const char * weights_dir, const char * ids_path, int32_t n_seq) {
-    if (S.ok) return n_seq == S.n_seq ? 0 : -1;
+static int initialize_artifacts(const char * weights_dir, const char * ids_path,
+        int32_t n_seq, int32_t requested_device = -1) {
+    if (requested_device < -1) return -1;
+    if (S.ok) {
+        return n_seq == S.n_seq &&
+                (requested_device < 0 || requested_device == S.device) ? 0 : -1;
+    }
     if (n_seq < 1 || n_seq > SC_MAX_SEQ) return -1;
+    if (requested_device >= 0 && hipSetDevice(requested_device) != hipSuccess) return -1;
     char path[1024];
     std::string error;
     std::vector<Tensor> tensors;
@@ -576,6 +583,9 @@ static int initialize_artifacts(const char * weights_dir, const char * ids_path,
     S.tensors = std::move(tensors);
     S.artifact_bytes = weights_size;
     hipError_t status = hipGetDevice(&S.device);
+    if (status == hipSuccess && requested_device >= 0 && S.device != requested_device) {
+        status = hipErrorInvalidDevice;
+    }
     if (status == hipSuccess) status = hipStreamCreate(&S.owned_stream);
     if (status != hipSuccess) {
         std::fprintf(stderr, "[qwen4exp-sidecar] HIP initialization failed: %s\n",
@@ -943,12 +953,15 @@ static int ensure_pending_storage(SeqState & seq, int count) {
     if (seq.key_pending != nullptr) SC_CHECK(hipFree(seq.key_pending));
     if (seq.value_pending != nullptr) SC_CHECK(hipFree(seq.value_pending));
     if (seq.index_pending != nullptr) SC_CHECK(hipFree(seq.index_pending));
+    if (seq.hidden_pending != nullptr) SC_CHECK(hipFree(seq.hidden_pending));
     const int capacity = std::max(count, std::max(8, seq.pending_capacity * 2));
     const size_t kv_bytes = static_cast<size_t>(capacity) * KV_WIDTH * sizeof(__half);
     const size_t index_bytes = static_cast<size_t>(capacity) * IDX_WIDTH * sizeof(__half);
+    const size_t hidden_bytes = static_cast<size_t>(capacity) * HC_WIDTH * sizeof(float);
     SC_CHECK(hipMalloc(&seq.key_pending, kv_bytes));
     SC_CHECK(hipMalloc(&seq.value_pending, kv_bytes));
     SC_CHECK(hipMalloc(&seq.index_pending, index_bytes));
+    SC_CHECK(hipMalloc(&seq.hidden_pending, hidden_bytes));
     seq.pending_capacity = capacity;
     return 0;
 }
@@ -1128,6 +1141,63 @@ static int catchup_phase1_impl(int32_t seq_id, const int32_t * tokens,
     return 0;
 }
 
+#ifdef QWEN4EXP_SIDECAR_PRODUCTION
+// Runtime target batches expose h_p beside token x_p. Qwen4Exp MTP consumes
+// x_p with h_(p-1), so preserve the raw target rows for commit and shift the
+// hidden source by one while constructing the draft K/V/index cache.
+static int catchup_runtime_impl(int32_t seq_id, const int32_t * tokens,
+        const int32_t * positions, const float * hidden_rows, int count,
+        bool hidden_device) {
+    SeqState * seq = get_seq(seq_id);
+    if (!S.ok || seq == nullptr || count < 0 ||
+            (count > 0 && (tokens == nullptr || positions == nullptr || hidden_rows == nullptr))) return -1;
+    if (count == 0) return 0;
+    if ((seq->state_pos_max > 0 && !seq->hidden_valid) ||
+            count > S.max_pos - seq->state_pos_max ||
+            seq->pending_pos_max != seq->state_pos_max ||
+            ensure_seq_storage(*seq) != 0 || ensure_pending_storage(*seq, count) != 0 ||
+            ensure_catchup_scratch() != 0) return -1;
+    for (int row = 0; row < count; ++row) {
+        if (tokens[row] < 0 || tokens[row] >= N_VOCAB ||
+                positions[row] != seq->state_pos_max + row) return -1;
+    }
+
+    const size_t hidden_bytes = static_cast<size_t>(count) * HC_WIDTH * sizeof(float);
+    const hipMemcpyKind hidden_kind = hidden_device ? hipMemcpyDeviceToDevice : hipMemcpyHostToDevice;
+    if (hipMemcpyAsync(seq->hidden_pending, hidden_rows, hidden_bytes,
+                hidden_kind, S.stream) != hipSuccess) return -1;
+
+    seq->pending_pos_min = seq->state_pos_max;
+    seq->pending_pos_max = seq->state_pos_max + count;
+    for (int row = 0; row < count; ++row) {
+        if (row == 0 && seq->state_pos_max == 0) {
+            if (hipMemsetAsync(S.catchup.hidden_norm, 0,
+                        static_cast<size_t>(HC_WIDTH) * sizeof(float), S.stream) != hipSuccess) {
+                discard_pending(*seq);
+                return -1;
+            }
+        } else {
+            const float * previous_hidden = row == 0 ? seq->hidden_committed :
+                    seq->hidden_pending + static_cast<size_t>(row - 1) * HC_WIDTH;
+            if (load_normalized_hidden_row(previous_hidden, true, false) != 0) {
+                discard_pending(*seq);
+                return -1;
+            }
+        }
+        if (phase1_from_normalized_hidden(*seq, tokens[row], positions[row], row) != 0) {
+            discard_pending(*seq);
+            return -1;
+        }
+    }
+    if (hipGetLastError() != hipSuccess ||
+            (!hidden_device && hipStreamSynchronize(S.stream) != hipSuccess)) {
+        discard_pending(*seq);
+        return -1;
+    }
+    return 0;
+}
+#endif
+
 static bool state_matches(int32_t seq_id, const void * data, int size,
         spec_sidecar_state & snapshot) {
     SeqState * seq = get_seq(seq_id);
@@ -1184,6 +1254,7 @@ static int free_seq(SeqState & seq) {
     if (seq.value_pending != nullptr) SC_CHECK(hipFree(seq.value_pending));
     if (seq.index_pending != nullptr) SC_CHECK(hipFree(seq.index_pending));
     if (seq.hidden_committed != nullptr) SC_CHECK(hipFree(seq.hidden_committed));
+    if (seq.hidden_pending != nullptr) SC_CHECK(hipFree(seq.hidden_pending));
     seq = SeqState{};
     return 0;
 }
@@ -1283,9 +1354,15 @@ SC_API int spec_hip_commit_state(int32_t seq_id, int32_t pos_max,
         SC_CHECK(hipMemcpyAsync(seq->index_committed + static_cast<size_t>(seq->state_pos_max) * IDX_WIDTH,
                 seq->index_pending + source_row * IDX_WIDTH,
                 rows * IDX_WIDTH * sizeof(__half), hipMemcpyDeviceToDevice, S.stream));
-        seq->hidden_valid = hidden_device != nullptr;
-        if (hidden_device != nullptr) {
-            SC_CHECK(hipMemcpyAsync(seq->hidden_committed, hidden_device,
+        const float * hidden_source = hidden_device;
+#ifdef QWEN4EXP_SIDECAR_PRODUCTION
+        if (hidden_source == nullptr && seq->hidden_pending != nullptr) {
+            hidden_source = seq->hidden_pending + (source_row + rows - 1) * HC_WIDTH;
+        }
+#endif
+        seq->hidden_valid = hidden_source != nullptr;
+        if (hidden_source != nullptr) {
+            SC_CHECK(hipMemcpyAsync(seq->hidden_committed, hidden_source,
                     static_cast<size_t>(HC_WIDTH) * sizeof(float),
                     hipMemcpyDeviceToDevice, S.stream));
         }
@@ -1341,6 +1418,13 @@ SC_API int spec_hip_attach_target_stream(void * stream, int32_t device) {
     return 0;
 }
 
+#ifdef QWEN4EXP_SIDECAR_PRODUCTION
+SC_API int spec_hip_init_device(const char * weights_dir, const char * ids_path,
+        int32_t n_seq, int32_t device) {
+    return initialize_artifacts(weights_dir, ids_path, n_seq, device);
+}
+#endif
+
 SC_API int spec_hip_init(const char * weights_dir, const char * ids_path, int32_t n_seq) {
 #ifdef QWEN4EXP_SIDECAR_LIFECYCLE_TEST
     (void) weights_dir;
@@ -1354,7 +1438,7 @@ SC_API int spec_hip_init(const char * weights_dir, const char * ids_path, int32_
     S.stream = S.owned_stream;
     S.ok = true;
     return 0;
-#elif defined(QWEN4EXP_SIDECAR_ARTIFACT_TEST)
+#elif defined(QWEN4EXP_SIDECAR_ARTIFACT_TEST) || defined(QWEN4EXP_SIDECAR_PRODUCTION)
     return initialize_artifacts(weights_dir, ids_path, n_seq);
 #else
     (void) weights_dir;
@@ -1377,6 +1461,8 @@ SC_API int spec_hip_catchup(int32_t seq_id, const int32_t * tokens,
                 positions[row] != seq->state_pos_max + row) return -1;
     }
     return stage_test_rows(*seq, positions[0], count);
+#elif defined(QWEN4EXP_SIDECAR_PRODUCTION)
+    return catchup_runtime_impl(seq_id, tokens, positions, hidden_rows, count, false);
 #elif defined(QWEN4EXP_SIDECAR_ARTIFACT_TEST)
     return catchup_phase1_impl(seq_id, tokens, positions, hidden_rows, count, false, false);
 #else
@@ -1389,6 +1475,8 @@ SC_API int spec_hip_catchup_device(int32_t seq_id, const int32_t * tokens,
         const int32_t * positions, const float * hidden_rows_device, int count) {
 #ifdef QWEN4EXP_SIDECAR_LIFECYCLE_TEST
     return spec_hip_catchup(seq_id, tokens, positions, hidden_rows_device, count);
+#elif defined(QWEN4EXP_SIDECAR_PRODUCTION)
+    return catchup_runtime_impl(seq_id, tokens, positions, hidden_rows_device, count, true);
 #elif defined(QWEN4EXP_SIDECAR_ARTIFACT_TEST)
     return catchup_phase1_impl(seq_id, tokens, positions, hidden_rows_device, count, true, false);
 #else
