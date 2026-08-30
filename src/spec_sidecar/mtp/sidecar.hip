@@ -57,7 +57,11 @@ struct State {
     int device = -1;
     hipStream_t st = nullptr;       // active target/draft stream
     hipStream_t owned_st = nullptr; // fallback stream owned by the sidecar
+    hipStream_t target_st = nullptr; // borrowed target stream for stream-memop fencing
     bool owns_st = true;
+    bool stream_memops = false;
+    uint32_t * stream_fence = nullptr;
+    uint32_t stream_fence_value = 0;
     Scratch scr[N_SCR];             // shared serialized scratch; scr[0] is draft scratch
     BatchScratch bs;
     float *part_m = nullptr, *part_l = nullptr, *part_acc = nullptr; // split-K attention partials
@@ -446,6 +450,14 @@ SC_API int spec_hip_attach_target_stream(void * stream, int32_t device) {
         return -1;
     }
     if (stream == nullptr) {
+        if (S.stream_memops) {
+            // The sidecar owns its stream in the memop path. The target stream
+            // is only a producer fence source and may be forgotten after all
+            // sidecar work already queued on our stream is complete.
+            SC_CHECK(hipStreamSynchronize(S.st));
+            S.target_st = nullptr;
+            return 0;
+        }
         if (S.st != S.owned_st) {
             SC_CHECK(hipStreamSynchronize(S.st));
             S.st = S.owned_st;
@@ -454,6 +466,15 @@ SC_API int spec_hip_attach_target_stream(void * stream, int32_t device) {
         return 0;
     }
     const hipStream_t target = reinterpret_cast<hipStream_t>(stream);
+    if (S.stream_memops) {
+        // Keep the sidecar on its owned stream. catchup_device() inserts a
+        // device-side producer/consumer fence between target and sidecar.
+        if (S.target_st != target) {
+            SC_CHECK(hipStreamSynchronize(S.st));
+            S.target_st = target;
+        }
+        return 0;
+    }
     if (target != S.st) {
         SC_CHECK(hipStreamSynchronize(S.st));
         S.st = target;
@@ -654,6 +675,35 @@ static int spec_hip_init_impl(const char * weights_dir, const char * ids_path,
     SC_CHECK(hipStreamCreate(&s.owned_st));
     s.st = s.owned_st;
     s.owns_st = true;
+#if defined(HIP_VERSION_MAJOR) && HIP_VERSION_MAJOR >= 7
+    // HIP exposes the capability per device, but the signal-memory allocation
+    // documented for this API is rejected by the current gfx1100 runtime.
+    // A normal device allocation is GPU-visible and is accepted by the tested
+    // stream wait/write implementation, so use it only after a capability
+    // check. The feature remains opt-in while direct device-view ordering is
+    // being qualified end-to-end.
+    if (const char * memops = getenv("LLAMA_SPEC_HIP_STREAM_MEMOPS")) {
+        int can_wait = 0;
+        if (std::strcmp(memops, "1") == 0 &&
+                hipDeviceGetAttribute(&can_wait, hipDeviceAttributeCanUseStreamWaitValue, s.device) == hipSuccess &&
+                can_wait &&
+                hipExtMallocWithFlags(reinterpret_cast<void **>(&s.stream_fence),
+                        sizeof(*s.stream_fence), hipDeviceMallocDefault) == hipSuccess) {
+            const uint32_t zero = 0;
+            if (hipMemcpy(s.stream_fence, &zero, sizeof(zero), hipMemcpyHostToDevice) == hipSuccess) {
+                s.stream_memops = true;
+            } else {
+                const hipError_t free_rc = hipFree(s.stream_fence);
+                (void) free_rc;
+                s.stream_fence = nullptr;
+            }
+        }
+    }
+#endif
+    if (getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr) {
+        fprintf(stderr, "[hip-sidecar] stream memops: %s\n",
+                s.stream_memops ? "enabled" : "disabled");
+    }
     SC_CHECK(hipEventCreate(&s.ev_a));
     SC_CHECK(hipEventCreate(&s.ev_b));
 
@@ -742,6 +792,18 @@ static int spec_hip_catchup_impl(int32_t seq_id, const int32_t * toks, const int
     q->pending_pos_max = q->state_pos_max + n;
     auto & b = S.bs;
     hipStream_t st = S.st;
+#if defined(HIP_VERSION_MAJOR) && HIP_VERSION_MAJOR >= 7
+    if (h_rows_device && S.stream_memops && S.target_st != nullptr && S.target_st != st) {
+        uint32_t ticket = ++S.stream_fence_value;
+        if (ticket == 0) {
+            ticket = ++S.stream_fence_value;
+        }
+        SC_CHECK(hipStreamWriteValue32(S.target_st, S.stream_fence, ticket,
+                hipStreamWriteValueDefault));
+        SC_CHECK(hipStreamWaitValue32(st, S.stream_fence, ticket,
+                hipStreamWaitValueGte));
+    }
+#endif
     const float * pending_h_rows = h_rows;
     if (!h_rows_device) {
         if (ensure_pending_h_storage(*q, n) != 0) return -1;
