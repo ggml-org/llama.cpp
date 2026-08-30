@@ -24,10 +24,16 @@ layout(constant_id = 0) const uint GROUP_SIZE = 32;
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer A {vec4 data_a[];};
-#ifndef QBLOCK_X4
-layout (binding = 1) writeonly buffer D {block_q8_1_packed32 data_b[];};
+#if defined(FUSED_SWIGLU) || defined(FUSED_SIGMOID_MUL)
+layout (binding = 1) readonly buffer B {vec4 data_b[];};
+#define D_BINDING 2
 #else
-layout (binding = 1) writeonly buffer D {block_q8_1_x4 data_b[];};
+#define D_BINDING 1
+#endif
+#ifndef QBLOCK_X4
+layout (binding = D_BINDING) writeonly buffer D {block_q8_1_packed32 data_d[];};
+#else
+layout (binding = D_BINDING) writeonly buffer D {block_q8_1_x4 data_d[];};
 #endif
 
 #ifndef USE_SUBGROUPS
@@ -57,7 +63,20 @@ void quantize(const uint wgid) {
 
     const uint a_idx = ib * 8 + iqs;
 
-    vec4 vals = a_idx < p.ne / 4 ? data_a[a_idx] : vec4(0.0f);
+    vec4 vals = vec4(0.0f);
+    if (a_idx < p.ne / 4) {
+#ifdef FUSED_SWIGLU
+        precise vec4 gate = data_a[a_idx];
+        precise vec4 activated = gate / (vec4(1.0f) + exp(-gate));
+        vals = activated * data_b[a_idx];
+#elif defined(FUSED_SIGMOID_MUL)
+        precise vec4 gate = data_b[a_idx];
+        precise vec4 activated = vec4(1.0f) / (vec4(1.0f) + exp(-gate));
+        vals = data_a[a_idx] * activated;
+#else
+        vals = data_a[a_idx];
+#endif
+    }
     const vec4 abs_vals = abs(vals);
 
     // Find absolute max for each block
@@ -82,9 +101,9 @@ void quantize(const uint wgid) {
     vals = round(vals * d_inv);
 
 #ifndef QBLOCK_X4
-    data_b[ib].qs[iqs] = pack32(i8vec4(round(vals)));
+    data_d[ib].qs[iqs] = pack32(i8vec4(round(vals)));
 #else
-    data_b[ibx4_outer].qs[ibx4_inner * 8 + iqs] = pack32(i8vec4(round(vals)));
+    data_d[ibx4_outer].qs[ibx4_inner * 8 + iqs] = pack32(i8vec4(round(vals)));
 #endif
 
 #ifndef USE_SUBGROUPS
@@ -111,9 +130,9 @@ void quantize(const uint wgid) {
 #endif
 
 #ifndef QBLOCK_X4
-        data_b[ib].ds = f16vec2(vec2(d, sum * d));
+        data_d[ib].ds = f16vec2(vec2(d, sum * d));
 #else
-        data_b[ibx4_outer].ds[ibx4_inner] = f16vec2(vec2(d, sum * d));
+        data_d[ibx4_outer].ds[ibx4_inner] = f16vec2(vec2(d, sum * d));
 #endif
     }
 }

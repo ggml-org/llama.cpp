@@ -1,0 +1,50 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+
+layout(constant_id = 0) const uint BLOCK_SIZE = 512;
+
+layout(push_constant) uniform parameter {
+    uint width;
+    uint height;
+    uint depth;
+    uint channels;
+    float eps;
+} p;
+
+layout(binding = 0) readonly buffer A    { float data_a[];    };
+layout(binding = 1) readonly buffer NORM { float data_norm[]; };
+layout(binding = 2) writeonly buffer D   { float data_d[];    };
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+shared float sumsh[BLOCK_SIZE];
+
+void main() {
+    const uint tid = gl_LocalInvocationID.x;
+    const uint plane = p.width * p.height * p.depth;
+    const uint spatial = (gl_WorkGroupID.z * p.height + gl_WorkGroupID.y) * p.width + gl_WorkGroupID.x;
+
+    precise float sum = 0.0f;
+    [[unroll]] for (uint channel = tid; channel < p.channels; channel += BLOCK_SIZE) {
+        const float value = data_a[spatial + channel * plane];
+        precise float square = value * value;
+        sum += square;
+    }
+
+    sumsh[tid] = sum;
+    barrier();
+    [[unroll]] for (uint s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sum += sumsh[tid + s];
+            sumsh[tid] = sum;
+        }
+        barrier();
+    }
+
+    const float scale = inversesqrt(sumsh[0] / float(p.channels) + p.eps);
+    [[unroll]] for (uint channel = tid; channel < p.channels; channel += BLOCK_SIZE) {
+        const uint offset = spatial + channel * plane;
+        data_d[offset] = scale * data_a[offset] * data_norm[channel];
+    }
+}
