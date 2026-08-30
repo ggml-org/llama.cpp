@@ -283,7 +283,7 @@ endif()
 llama_build_and_test(test-backend-ops.cpp)
 llama_build_and_test(test-spec-sidecar-artifact.cpp)
 llama_build_and_test(test-speculative-adaptive.cpp)
-target_include_directories(test-speculative-adaptive PRIVATE ${PROJECT_SOURCE_DIR}/../common)
+target_include_directories(test-speculative-adaptive PRIVATE ${PROJECT_SOURCE_DIR}/common)
 target_include_directories(test-spec-sidecar-artifact PRIVATE ${PROJECT_SOURCE_DIR}/src/spec_sidecar)
 
 # Pure host-side selector contract for the guarded RDNA2 BF16 hidden AllReduce.
