@@ -12,24 +12,14 @@
 extern "C" {
 #endif
 
-// smallest src1 batch for which the decode pays for itself
-#define GGML_IQP_MIN_BATCH 8
-
-// same, per expert, for MUL_MAT_ID
-#define GGML_IQP_MIN_BATCH_ID 8
-
-static inline bool ggml_cpu_iqp_expert_eligible(int64_t cne1) {
+static inline bool ggml_cpu_iqp_mul_mat_id_min_batch(int64_t cne1) {
     return cne1 >= GGML_IQP_MIN_BATCH_ID;
 }
 
-static inline size_t ggml_cpu_iqp_row_size(const struct ggml_tensor * dst) {
-    return ggml_row_size(GGML_TYPE_Q8_K, dst->src[1]->ne[0]);
-}
-
-bool ggml_cpu_iqp_supported_mul_mat(const struct ggml_tensor * dst);
+bool ggml_cpu_iqp_supports_mul_mat(const struct ggml_tensor * dst);
 
 // node level test only - per expert eligibility is decided with ggml_cpu_iqp_expert_eligible
-bool ggml_cpu_iqp_supported_mul_mat_id(const struct ggml_tensor * dst);
+bool ggml_cpu_iqp_supports_mul_mat_id(const struct ggml_tensor * dst);
 
 // per thread panel scratch bytes, padded
 size_t ggml_cpu_iqp_scratch_size(const struct ggml_tensor * dst);

@@ -22,6 +22,12 @@
 #define IQP_SB_SIZE 16                    // weights per sub-block
 #define IQP_NSB     (QK_K / IQP_SB_SIZE)  // sub-blocks per super-block
 
+// smallest src1 batch for which the decode pays for itself
+#define GGML_IQP_MIN_BATCH 8
+
+// same, per expert, for MUL_MAT_ID
+#define GGML_IQP_MIN_BATCH_ID 8
+
 // one super-block of a grid based IQ type decoded to int8, 8 rows interleaved:
 // dfac[row] * iscales[sb*8 + row] * qs is bit identical to dequantize_row_iq*
 struct block_iqp_x8 {
