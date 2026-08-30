@@ -50,6 +50,44 @@ for hidden-state extraction and does not create a native MTP draft context. It
 uses the original full-vocabulary target because sliced native MTP-head loading is
 not enabled in this integration yet.
 
+## Prepare the Qwen3.6 35B-A3B MoE artifacts
+
+`qwen35moe-mtp` is a separate compatibility provider for the Qwen3.6/Qwen3.5
+MoE model identified by GGUF as `qwen35moe` (`35B-A3B`). It cannot reuse the
+dense Qwen3.8-27B provider: the MoE target has a 2,048-wide hidden state, 40
+trunk blocks plus one MTP block, 16/2 attention heads, and an 8-of-256 expert
+MTP FFN. The preparation step converts the trained MTP block and output head to
+the provider's Q4_0/F32 artifact layout and uses the validated 40,960-row draft
+vocabulary ID table:
+
+```sh
+python3 tools/spec-sidecar/prepare_assets.py qwen35moe-mtp \
+  --target /absolute/models/Qwen_Qwen3.6-35B-A3B-Q4_0.gguf \
+  --ids /absolute/artifacts/draft_vocab_ids.bin \
+  --output /absolute/artifacts/spec-sidecar-qwen35moe-mtp
+
+python3 tools/spec-sidecar/validate_assets.py qwen35moe-mtp \
+  /absolute/artifacts/spec-sidecar-qwen35moe-mtp
+```
+
+The MoE sidecar is currently an **explicit-path experimental compatibility
+provider**. It is not selected merely because its DLL is beside
+`llama-server`; this prevents an unqualified provider from replacing native
+MTP. Set both variables below when deliberately testing it. Without them,
+Qwen3.6 35B-A3B retains native MTP loading:
+
+```sh
+export SPEC_SIDECAR=1
+export LLAMA_SPEC_QWEN35MOE_HIP_SIDECAR=/absolute/build/bin/spec_qwen35moe_mtp_sidecar.so
+export LLAMA_SPEC_QWEN35MOE_HIP_WEIGHTS=/absolute/artifacts/spec-sidecar-qwen35moe-mtp
+# The ID path defaults to $LLAMA_SPEC_QWEN35MOE_HIP_WEIGHTS/draft_head_ids.bin.
+```
+
+The current implementation is correctness/lifecycle validated but not yet a
+production speed recommendation. Its full-vocabulary target output is reduced
+to the 40,960 IDs in the artifact, so acceptance and throughput must be
+qualified against native MTP on the user's exact model and prompt family.
+
 ## Prepare the Flash Next artifacts
 
 Flash Next uses a separate provider and cannot reuse the Qwen3.8-27B bundle.
@@ -90,12 +128,15 @@ cmake --build build-spec-sidecar \
 ```
 
 The resulting libraries are `spec_hip_sidecar.so`, `spec_dflash_sidecar.so`,
-and `spec_qwen4exp_mtp_sidecar.so` in the build `bin` directory. For automatic
-runtime discovery, put the prepared bundles at `bin/spec-sidecar-mtp`,
+`spec_qwen35moe_mtp_sidecar.so`, and `spec_qwen4exp_mtp_sidecar.so` in the
+build `bin` directory. For automatic runtime discovery of the qualified
+providers, put the prepared bundles at `bin/spec-sidecar-mtp`,
 `bin/spec-sidecar-dflash`, and `bin/spec-sidecar-qwen4exp-mtp` beside those
 libraries (or under the documented installed `share/llama.cpp/spec-sidecar`
-layout). These targets are optional because each provider contains fixed model
-dimensions and is not a replacement for the normal HIP backend.
+layout). The Qwen35MoE bundle is intentionally explicit-path only until its
+end-to-end speed and acceptance matrix is complete. These targets are optional
+because each provider contains fixed model dimensions and is not a replacement
+for the normal HIP backend.
 
 ## Run MTP
 

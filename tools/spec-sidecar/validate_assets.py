@@ -34,6 +34,32 @@ QWEN35_MTP_SCHEMA = {
 }
 
 
+QWEN35MOE_MTP_SCHEMA = {
+    "token_embd.weight": ("2", [2048, 248320], 286064640),
+    "blk.40.attn_k.weight": ("2", [2048, 512], 589824),
+    "blk.40.attn_k_norm.weight": ("0", [256], 1024),
+    "blk.40.attn_norm.weight": ("0", [2048], 8192),
+    "blk.40.attn_output.weight": ("2", [4096, 2048], 4718592),
+    "blk.40.attn_q.weight": ("2", [2048, 8192], 9437184),
+    "blk.40.attn_q_norm.weight": ("0", [256], 1024),
+    "blk.40.attn_v.weight": ("2", [2048, 512], 589824),
+    "blk.40.ffn_down_exps.weight": ("2", [512, 2048, 256], 150994944),
+    "blk.40.ffn_down_shexp.weight": ("2", [512, 2048], 589824),
+    "blk.40.ffn_gate_exps.weight": ("2", [2048, 512, 256], 150994944),
+    "blk.40.ffn_gate_inp.weight": ("0", [2048, 256], 2097152),
+    "blk.40.ffn_gate_inp_shexp.weight": ("0", [2048], 8192),
+    "blk.40.ffn_gate_shexp.weight": ("2", [2048, 512], 589824),
+    "blk.40.ffn_up_exps.weight": ("2", [2048, 512, 256], 150994944),
+    "blk.40.ffn_up_shexp.weight": ("2", [2048, 512], 589824),
+    "blk.40.nextn.eh_proj.weight": ("2", [4096, 2048], 4718592),
+    "blk.40.nextn.enorm.weight": ("0", [2048], 8192),
+    "blk.40.nextn.hnorm.weight": ("0", [2048], 8192),
+    "blk.40.nextn.shared_head_norm.weight": ("0", [2048], 8192),
+    "blk.40.post_attention_norm.weight": ("0", [2048], 8192),
+    "output.weight": ("2", [2048, 40960], 47185920),
+}
+
+
 QWEN4EXP_MTP_SCHEMA = {
     "output.weight": ("14", [2560, 248320], 521472000),
     "output_hc_down.weight": ("2", [10240, 320], 1843200),
@@ -194,6 +220,19 @@ def validate_mtp(directory: Path) -> list[Path]:
     ]
 
 
+def validate_qwen35moe_mtp(directory: Path) -> list[Path]:
+    tensors = validate_blob(directory, "drafter_manifest.json", "drafter_weights.bin", 22)
+    validate_schema(tensors, QWEN35MOE_MTP_SCHEMA, "Qwen3.6 35B-A3B MTP")
+    ids = validate_ids(directory / "draft_head_ids.bin", 40_960)
+    if len(ids) != 40_960:
+        raise ValueError("Qwen3.6 35B-A3B MTP requires a 40,960-row draft-head ID table")
+    return [
+        directory / "drafter_manifest.json",
+        directory / "drafter_weights.bin",
+        directory / "draft_head_ids.bin",
+    ]
+
+
 def validate_qwen4exp_mtp(directory: Path) -> list[Path]:
     tensors = validate_blob(directory, "drafter_manifest.json", "drafter_weights.bin", 34)
     validate_schema(tensors, QWEN4EXP_MTP_SCHEMA, "Qwen3.8 Flash Next MTP")
@@ -244,13 +283,15 @@ def validate_dflash(directory: Path) -> list[Path]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kind", choices=("mtp", "qwen4exp-mtp", "dflash"))
+    parser.add_argument("kind", choices=("mtp", "qwen35moe-mtp", "qwen4exp-mtp", "dflash"))
     parser.add_argument("directory", type=Path)
     parser.add_argument("--hash", action="store_true", help="also calculate SHA-256 (slow for large blobs)")
     args = parser.parse_args()
     try:
         if args.kind == "mtp":
             paths = validate_mtp(args.directory)
+        elif args.kind == "qwen35moe-mtp":
+            paths = validate_qwen35moe_mtp(args.directory)
         elif args.kind == "qwen4exp-mtp":
             paths = validate_qwen4exp_mtp(args.directory)
         else:

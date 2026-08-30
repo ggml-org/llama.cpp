@@ -69,6 +69,11 @@ spec_sidecar_add_sidecar(
     ${PROJECT_SOURCE_DIR}/src/spec_sidecar/dflash/dflash_sidecar.hip)
 
 spec_sidecar_add_sidecar(
+    spec-sidecar-hip-qwen35moe-mtp
+    spec_qwen35moe_mtp_sidecar
+    ${PROJECT_SOURCE_DIR}/src/spec_sidecar/qwen35moe_mtp/sidecar.hip)
+
+spec_sidecar_add_sidecar(
     spec-sidecar-hip-qwen4exp-mtp
     spec_qwen4exp_mtp_sidecar
     ${PROJECT_SOURCE_DIR}/src/spec_sidecar/qwen4exp_mtp/sidecar.hip

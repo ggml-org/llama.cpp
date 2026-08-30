@@ -96,8 +96,9 @@ int main(int argc, char ** argv) {
     unset_environment("SPEC_SIDECAR");
 
     const auto profile_count = common_spec_sidecar_profile_count();
-    failures += require(profile_count >= 3, "provider registry exposes all independent profiles");
+    failures += require(profile_count >= 4, "provider registry exposes all independent profiles");
     const common_spec_sidecar_profile * qwen35_mtp = nullptr;
+    const common_spec_sidecar_profile * qwen35moe_mtp = nullptr;
     const common_spec_sidecar_profile * qwen35_dflash = nullptr;
     const common_spec_sidecar_profile * qwen4exp_mtp = nullptr;
     for (size_t i = 0; i < profile_count; ++i) {
@@ -106,16 +107,32 @@ int main(int argc, char ** argv) {
             continue;
         }
         if (std::strcmp(profile->name, "qwen35-mtp") == 0) qwen35_mtp = profile;
+        if (std::strcmp(profile->name, "qwen35moe-mtp") == 0) qwen35moe_mtp = profile;
         if (std::strcmp(profile->name, "qwen35-dflash") == 0) qwen35_dflash = profile;
         if (std::strcmp(profile->name, "qwen4exp-mtp") == 0) qwen4exp_mtp = profile;
     }
-    failures += require(qwen35_mtp != nullptr && qwen35_dflash != nullptr && qwen4exp_mtp != nullptr &&
+    failures += require(qwen35_mtp != nullptr && qwen35moe_mtp != nullptr &&
+                        qwen35_dflash != nullptr && qwen4exp_mtp != nullptr &&
                         qwen35_mtp->kind == COMMON_SPEC_SIDECAR_KIND_MTP &&
+                        qwen35moe_mtp->kind == COMMON_SPEC_SIDECAR_KIND_MTP &&
                         qwen35_dflash->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH &&
                         qwen4exp_mtp->kind == COMMON_SPEC_SIDECAR_KIND_MTP,
                         "Qwen3.8-27B and Flash Next use distinct named provider profiles");
-    failures += require(qwen35_mtp != nullptr && qwen35_dflash != nullptr &&
+    failures += require(qwen35_mtp != nullptr && qwen35moe_mtp != nullptr && qwen35_dflash != nullptr &&
                         qwen35_mtp->mtp_embedding_width == 5120 && qwen35_mtp->mtp_head_rows == 40960 &&
+                        std::strcmp(qwen35moe_mtp->target_architecture, "qwen35moe") == 0 &&
+                        std::strcmp(qwen35moe_mtp->target_name, "Qwen3.6") == 0 &&
+                        std::strcmp(qwen35moe_mtp->target_size_label, "35B-A3B") == 0 &&
+                        qwen35moe_mtp->target_n_embd == 2048 &&
+                        qwen35moe_mtp->target_n_embd_out == 2048 &&
+                        qwen35moe_mtp->target_n_layer == 40 &&
+                        qwen35moe_mtp->target_n_layer_nextn == 1 &&
+                        qwen35moe_mtp->target_n_vocab == 248320 &&
+                        qwen35moe_mtp->mtp_embedding_width == 2048 &&
+                        qwen35moe_mtp->mtp_head_rows == 40960 &&
+                        qwen35moe_mtp->explicit_paths_only &&
+                        std::strcmp(qwen35moe_mtp->default_library_name,
+                                    "spec_qwen35moe_mtp_sidecar.so") == 0 &&
                         qwen35_dflash->dflash_encoded_width == 25600 && qwen35_dflash->dflash_block_size == 8 &&
                         qwen35_dflash->dflash_head_rows == 40960,
                         "Qwen3.8-27B providers retain their independent contracts");
@@ -188,6 +205,19 @@ int main(int argc, char ** argv) {
                         offsetof(spec_sidecar_state, pos_max) == 12 &&
                         offsetof(spec_sidecar_state, epoch) == 16,
                         "sidecar state ABI field offsets are stable");
+    if (argc >= 7 && qwen35moe_mtp != nullptr) {
+        set_environment(qwen35moe_mtp->library_env, "/explicit/qwen35moe-sidecar.so");
+        set_environment(qwen35moe_mtp->artifact_env, "/explicit/qwen35moe-artifacts");
+        std::string fixture_error;
+        const auto * fixture = common_spec_sidecar_profile_for_target_file(
+                COMMON_SPEC_SIDECAR_KIND_MTP, argv[6], fixture_error);
+        failures += require(fixture != nullptr && fixture->name != nullptr &&
+                            std::strcmp(fixture->name, "qwen35moe-mtp") == 0,
+                            "real Qwen3.6 35B-A3B target selects qwen35moe-mtp with explicit paths");
+        unset_environment(qwen35moe_mtp->library_env);
+        unset_environment(qwen35moe_mtp->artifact_env);
+    }
+
     failures += require(SPEC_SIDECAR_MTP_DRAFT_TOP_K == 32 &&
                         SPEC_SIDECAR_DFLASH_DRAFT_TOP_K == 16,
                         "sidecar stochastic top-k constants are stable");
