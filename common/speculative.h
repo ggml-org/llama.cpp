@@ -17,10 +17,9 @@ std::vector<enum common_speculative_type> common_speculative_types_from_names(co
 // infer the spec types from the GGUF metadata of a draft model; empty if unknown
 std::vector<enum common_speculative_type> common_speculative_types_from_gguf(const std::string & path);
 
-// returns true when the draft model ranks its full vocabulary inside the graph (DFlash2
-// candidate selector, DSpark markov head) and has no lm_head of its own, so the target's
-// lm_head must be replicated on every device under tensor parallelism
-bool common_speculative_draft_ranks_full_output(const std::string & path);
+// returns true when the draft's in-graph logits consumer (DSpark markov head) requires the
+// lm_head replicated on every device under tensor parallelism
+bool common_speculative_draft_replicated_lm_head(const std::string & path);
 
 // convert string to type
 enum common_speculative_type common_speculative_type_from_name(const std::string & name);

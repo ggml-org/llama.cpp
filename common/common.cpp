@@ -1292,12 +1292,12 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
-    // DFlash2/DSpark drafters rank their full draft vocabulary inside the graph (top_k / argmax
-    // on the lm_head output), which needs the lm_head (the target's when the draft has none)
-    // replicated on every device. The flag must be set before the model is loaded, since the
-    // tensor split state is fixed during load.
+    // DSpark's markov head reads the lm_head output in-graph (argmax over the full vocabulary),
+    // so it keeps the lm_head replicated on every device; DFlash2 ranks the vocabulary on the
+    // CPU instead and can use a split lm_head. The flag must be set before the model is loaded,
+    // since the tensor split state is fixed during load.
     if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR && !params.speculative.draft.mparams.path.empty() &&
-            common_speculative_draft_ranks_full_output(params.speculative.draft.mparams.path)) {
+            common_speculative_draft_replicated_lm_head(params.speculative.draft.mparams.path)) {
         mparams.output_replicated = true;
     }
 
