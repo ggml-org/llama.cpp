@@ -219,14 +219,6 @@ static bool ggml_cuda_rdna3_auto_apply(const ggml_cuda_device_info & info) {
 }
 #endif
 
-bool ggml_backend_cuda_rdna3_auto_active(void) {
-#if defined(GGML_USE_HIP) && defined(__linux__)
-    return ggml_cuda_rdna3_auto_active;
-#else
-    return false;
-#endif
-}
-
 #define GGML_LOG_WARN_ONCE(str) \
     { static std::once_flag warn_flag; std::call_once(warn_flag, []() { GGML_LOG_WARN(str); }); }
 
