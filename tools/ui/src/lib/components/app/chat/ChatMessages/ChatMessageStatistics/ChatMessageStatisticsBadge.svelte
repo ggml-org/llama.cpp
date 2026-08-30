@@ -11,7 +11,7 @@
 		tooltipLabel?: string;
 	}
 
-	let { class: className = '', icon: IconComponent, value, tooltipLabel }: Props = $props();
+	let { class: className = '', icon: IconComponent, tooltipLabel, value }: Props = $props();
 
 	function handleClick() {
 		void copyToClipboard(String(value));
@@ -32,6 +32,7 @@
 				</BadgeInfo>
 			{/snippet}
 		</Tooltip.Trigger>
+
 		<Tooltip.Content>
 			<p>{tooltipLabel}</p>
 		</Tooltip.Content>

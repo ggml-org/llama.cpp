@@ -23,6 +23,23 @@ extern "C" {
 struct mtmd_helper_video;
 typedef struct mtmd_helper_video mtmd_helper_video;
 
+struct mtmd_helper_video_init_params {
+    float fps_target;            // desired output fps; <= 0 means use the video's native fps, defaulted to 4.0f
+    const char * ffmpeg_bin_dir; // directory containing ffmpeg/ffprobe binaries; NULL means search PATH
+    int64_t timestamp_interval_ms; // interval for adding timestamp as text chunk (example: "[10m50.5s]"); <= 0 means no timestamp, defaulted to 5000ms
+    // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
+};
+
+MTMD_API struct mtmd_helper_video_init_params mtmd_helper_video_init_params_default(void);
+
+// opt for mtmd_helper_bitmap_init_from_*()
+struct mtmd_helper_init_opt {
+    struct mtmd_helper_video_init_params video_params;
+};
+typedef struct mtmd_helper_init_opt mtmd_helper_init_opt;
+
+MTMD_API struct mtmd_helper_init_opt mtmd_helper_init_opt_default(void);
+
 // Set callback for all future logging events.
 // If this is not called, or NULL is supplied, everything is output on stderr.
 // Note: this also call mtmd_log_set() internally
@@ -40,19 +57,28 @@ struct mtmd_helper_bitmap_wrapper {
 // it calls mtmd_helper_bitmap_init_from_buf() internally
 // returns nullptr on failure
 // this function is thread-safe
-MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder);
+MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(
+                    mtmd_context * ctx,
+                    const char * fname,
+                    bool placeholder,
+                    struct mtmd_helper_init_opt opt);
 
 // helper function to construct a mtmd_bitmap from a buffer containing a file
 // supported formats:
 //     image: formats supported by stb_image: jpg, png, bmp, gif, etc.
+//            webp is decoded via ffmpeg, requires MTMD_VIDEO build with ffmpeg in PATH
 //     audio: formats supported by miniaudio: wav, mp3, flac
 // note:
 //   - for now, video input is only supported via C++ helper functions
 //   - audio files will be auto-detected based on magic bytes
-//   - output bitmap will have FNV hash as the ID
+//   - output bitmap will have SHA-256 hash (hex string) as the ID
 // returns nullptr on failure
 // this function is thread-safe
-MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder);
+MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(
+                    mtmd_context * ctx,
+                    const unsigned char * buf, size_t len,
+                    bool placeholder,
+                    struct mtmd_helper_init_opt opt);
 
 // helper to count the total number of tokens from a list of chunks, useful to keep track of KV cache
 MTMD_API size_t mtmd_helper_get_n_tokens(const mtmd_input_chunks * chunks);
@@ -123,14 +149,7 @@ struct mtmd_helper_video_info {
     int32_t  n_frames; // estimated total frames at effective fps (-1 if unknown)
 };
 
-struct mtmd_helper_video_init_params {
-    float fps_target;            // desired output fps; <= 0 means use the video's native fps, defaulted to 4.0f
-    const char * ffmpeg_bin_dir; // directory containing ffmpeg/ffprobe binaries; NULL means search PATH
-    int64_t timestamp_interval_ms; // interval for adding timestamp as text chunk (example: "[10m50.5s]"); <= 0 means no timestamp, defaulted to 5000ms
-    // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
-};
-
-MTMD_API struct mtmd_helper_video_init_params mtmd_helper_video_init_params_default(void);
+// note: mtmd_helper_video_init_params is defined at the top, as it is part of mtmd_helper_init_opt
 
 // returns NULL on failure (ffprobe not found, file unreadable, etc.)
 MTMD_API mtmd_helper_video * mtmd_helper_video_init(
@@ -183,8 +202,9 @@ struct mtmd_helper_gen_audio_inp {
     mtmd_bitmap * speaker_ref; // optional, can be NULL
     const char * lang; // optional, can be NULL
 
-    int32_t top_k;
-    float   top_p;
+    int32_t  top_k;
+    float    top_p;
+    uint32_t seed; // UINT32_MAX for random (default: random)
 
     enum mtmd_helper_gen_audio_outtype out_type;
 };
@@ -208,12 +228,15 @@ MTMD_API int32_t mtmd_helper_gen_audio_step_prompt(
                         int32_t n_batch);
 
 // generates one frame; must only be called after step_prompt() has returned 0
-// h_state_out is valid until next step_gen() or reset() call
+// sampled can be LLAMA_TOKEN_NULL for pipelines with no discrete backbone token
+// out_stop (optional) is set on end-of-speech, the caller must then stop the loop
+// h_state_out is valid until next step_gen() or reset() call, null if no frame is generated
 MTMD_API int32_t mtmd_helper_gen_audio_step_gen(
                         mtmd_helper_gen_audio * ctx,
                         llama_token sampled,
                         const float *  h_state_in,
-                        const float ** h_state_out);
+                        const float ** h_state_out,
+                        bool * out_stop);
 
 // out_data valid until next get_output() or reset() call
 // out_n_samples (optional, can be NULL) receives the number of generated PCM samples
@@ -261,8 +284,8 @@ struct gen_audio {
     int32_t step_prompt(int32_t n_batch) {
         return mtmd_helper_gen_audio_step_prompt(ctx.get(), n_batch);
     }
-    int32_t step_gen(llama_token sampled, const float * h_state, const float ** h_state_out) {
-        return mtmd_helper_gen_audio_step_gen(ctx.get(), sampled, h_state, h_state_out);
+    int32_t step_gen(llama_token sampled, const float * h_state, const float ** h_state_out, bool * out_stop = nullptr) {
+        return mtmd_helper_gen_audio_step_gen(ctx.get(), sampled, h_state, h_state_out, out_stop);
     }
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples = nullptr) {
         return mtmd_helper_gen_audio_get_output(ctx.get(), out_sample_rate, out_data, out_data_len, out_n_samples);

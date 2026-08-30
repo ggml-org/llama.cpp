@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 #
+# usage: ./build-xcframework.sh [BUILD ...] (default: all builds)
+# builds: ios-sim ios-device macos visionos visionos-sim tvos-sim tvos-device
+#
 # Options
 IOS_MIN_OS_VERSION=16.4
 MACOS_MIN_OS_VERSION=13.3
@@ -18,6 +21,43 @@ GGML_METAL=ON
 GGML_METAL_EMBED_LIBRARY=ON
 GGML_BLAS_DEFAULT=ON
 GGML_OPENMP=OFF
+
+# Max number of concurrent platform builds
+MAX_PARALLEL_BUILDS=1
+
+# Split the available cores between the concurrent builds (min 1)
+JOBS_PER_BUILD=$(( $(sysctl -n hw.logicalcpu) / MAX_PARALLEL_BUILDS ))
+if [[ "$JOBS_PER_BUILD" -lt 1 ]]; then
+    JOBS_PER_BUILD=1
+fi
+
+# echo "build_fn build_dir release_dir platform is_simulator min_os" for a build name
+build_spec() {
+    case "$1" in
+        ios-sim)      echo "build_ios_sim build-ios-sim Release-iphonesimulator ios true ${IOS_MIN_OS_VERSION}" ;;
+        ios-device)   echo "build_ios_device build-ios-device Release-iphoneos ios false ${IOS_MIN_OS_VERSION}" ;;
+        macos)        echo "build_macos build-macos Release macos false ${MACOS_MIN_OS_VERSION}" ;;
+        visionos)     echo "build_visionos build-visionos Release-xros visionos false ${VISIONOS_MIN_OS_VERSION}" ;;
+        visionos-sim) echo "build_visionos_sim build-visionos-sim Release-xrsimulator visionos true ${VISIONOS_MIN_OS_VERSION}" ;;
+        tvos-sim)     echo "build_tvos_sim build-tvos-sim Release-appletvsimulator tvos true ${TVOS_MIN_OS_VERSION}" ;;
+        tvos-device)  echo "build_tvos_device build-tvos-device Release-appletvos tvos false ${TVOS_MIN_OS_VERSION}" ;;
+        *)            return 1 ;;
+    esac
+}
+
+# Default: build everything
+if [[ $# -eq 0 ]]; then
+    BUILDS=(ios-sim ios-device macos visionos visionos-sim tvos-sim tvos-device)
+else
+    BUILDS=("$@")
+fi
+for b in "${BUILDS[@]}"; do
+    if ! build_spec "$b" >/dev/null; then
+        echo "Error: unknown build '$b'" >&2
+        echo "Valid builds: ios-sim ios-device macos visionos visionos-sim tvos-sim tvos-device" >&2
+        exit 1
+    fi
+done
 
 COMMON_C_FLAGS="-Wno-macro-redefined -Wno-shorten-64-to-32 -Wno-unused-command-line-argument -g"
 COMMON_CXX_FLAGS="-Wno-macro-redefined -Wno-shorten-64-to-32 -Wno-unused-command-line-argument -g"
@@ -250,6 +290,7 @@ combine_static_libraries() {
         "${base_dir}/${build_dir}/ggml/src/ggml-metal/${release_dir}/libggml-metal.a"
         "${base_dir}/${build_dir}/ggml/src/ggml-blas/${release_dir}/libggml-blas.a"
         "${base_dir}/${build_dir}/tools/mtmd/${release_dir}/libmtmd.a"
+        "${base_dir}/${build_dir}/vendor/hash/${release_dir}/libvendor-hash.a"
     )
 
     # Create temporary directory for processing
@@ -401,148 +442,189 @@ combine_static_libraries() {
     rm -rf "${temp_dir}"
 }
 
-echo "Building for iOS simulator..."
-cmake -B build-ios-sim -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${IOS_MIN_OS_VERSION} \
-    -DIOS=ON \
-    -DCMAKE_SYSTEM_NAME=iOS \
-    -DCMAKE_OSX_SYSROOT=iphonesimulator \
-    -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=iphonesimulator \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-ios-sim --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_ios_sim() {
+    echo "Building for iOS simulator..."
+    cmake -B build-ios-sim -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${IOS_MIN_OS_VERSION} \
+        -DIOS=ON \
+        -DCMAKE_SYSTEM_NAME=iOS \
+        -DCMAKE_OSX_SYSROOT=iphonesimulator \
+        -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=iphonesimulator \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-ios-sim --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
-echo "Building for iOS devices..."
-cmake -B build-ios-device -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${IOS_MIN_OS_VERSION} \
-    -DCMAKE_SYSTEM_NAME=iOS \
-    -DCMAKE_OSX_SYSROOT=iphoneos \
-    -DCMAKE_OSX_ARCHITECTURES="arm64" \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=iphoneos \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-ios-device --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_ios_device() {
+    echo "Building for iOS devices..."
+    cmake -B build-ios-device -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${IOS_MIN_OS_VERSION} \
+        -DCMAKE_SYSTEM_NAME=iOS \
+        -DCMAKE_OSX_SYSROOT=iphoneos \
+        -DCMAKE_OSX_ARCHITECTURES="arm64" \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=iphoneos \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-ios-device --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
-echo "Building for macOS..."
-cmake -B build-macos -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_MIN_OS_VERSION} \
-    -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -S .
-cmake --build build-macos --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_macos() {
+    echo "Building for macOS..."
+    cmake -B build-macos -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_MIN_OS_VERSION} \
+        -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -S .
+    cmake --build build-macos --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
-echo "Building for visionOS..."
-cmake -B build-visionos -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${VISIONOS_MIN_OS_VERSION} \
-    -DCMAKE_OSX_ARCHITECTURES="arm64" \
-    -DCMAKE_SYSTEM_NAME=visionOS \
-    -DCMAKE_OSX_SYSROOT=xros \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xros \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DLLAMA_BUILD_SERVER=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-visionos --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_visionos() {
+    echo "Building for visionOS..."
+    cmake -B build-visionos -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${VISIONOS_MIN_OS_VERSION} \
+        -DCMAKE_OSX_ARCHITECTURES="arm64" \
+        -DCMAKE_SYSTEM_NAME=visionOS \
+        -DCMAKE_OSX_SYSROOT=xros \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xros \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DLLAMA_BUILD_SERVER=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-visionos --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
-echo "Building for visionOS simulator..."
-cmake -B build-visionos-sim -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${VISIONOS_MIN_OS_VERSION} \
-    -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-    -DCMAKE_SYSTEM_NAME=visionOS \
-    -DCMAKE_OSX_SYSROOT=xrsimulator \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xrsimulator \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DLLAMA_BUILD_SERVER=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-visionos-sim --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_visionos_sim() {
+    echo "Building for visionOS simulator..."
+    cmake -B build-visionos-sim -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${VISIONOS_MIN_OS_VERSION} \
+        -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+        -DCMAKE_SYSTEM_NAME=visionOS \
+        -DCMAKE_OSX_SYSROOT=xrsimulator \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xrsimulator \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DLLAMA_BUILD_SERVER=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-visionos-sim --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
 # Add tvOS builds (might need the same u_int definitions as watchOS and visionOS)
-echo "Building for tvOS simulator..."
-cmake -B build-tvos-sim -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${TVOS_MIN_OS_VERSION} \
-    -DCMAKE_SYSTEM_NAME=tvOS \
-    -DCMAKE_OSX_SYSROOT=appletvsimulator \
-    -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-    -DGGML_METAL=ON \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=appletvsimulator \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-tvos-sim --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_tvos_sim() {
+    echo "Building for tvOS simulator..."
+    cmake -B build-tvos-sim -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${TVOS_MIN_OS_VERSION} \
+        -DCMAKE_SYSTEM_NAME=tvOS \
+        -DCMAKE_OSX_SYSROOT=appletvsimulator \
+        -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+        -DGGML_METAL=ON \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=appletvsimulator \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-tvos-sim --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
-echo "Building for tvOS devices..."
-cmake -B build-tvos-device -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${TVOS_MIN_OS_VERSION} \
-    -DCMAKE_SYSTEM_NAME=tvOS \
-    -DCMAKE_OSX_SYSROOT=appletvos \
-    -DCMAKE_OSX_ARCHITECTURES="arm64" \
-    -DGGML_METAL=ON \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=appletvos \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-tvos-device --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_tvos_device() {
+    echo "Building for tvOS devices..."
+    cmake -B build-tvos-device -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${TVOS_MIN_OS_VERSION} \
+        -DCMAKE_SYSTEM_NAME=tvOS \
+        -DCMAKE_OSX_SYSROOT=appletvos \
+        -DCMAKE_OSX_ARCHITECTURES="arm64" \
+        -DGGML_METAL=ON \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=appletvos \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-tvos-device --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
+
+run_builds_parallel() {
+    local -a pids=()
+    local -a names=()
+    local name i
+    for name in "$@"; do
+        # Wait for the oldest running build to free a slot
+        if [[ "${#pids[@]}" -ge "$MAX_PARALLEL_BUILDS" ]]; then
+            if ! wait "${pids[0]}"; then
+                echo "ERROR: build '${names[0]}' failed, log follows (${names[0]}.log):" >&2
+                kill "${pids[@]}" 2>/dev/null || true
+                cat "${names[0]}.log" >&2
+                exit 1
+            fi
+            pids=("${pids[@]:1}")
+            names=("${names[@]:1}")
+        fi
+        echo "Starting build: $name (log: ${name}.log, -j ${JOBS_PER_BUILD})"
+        "$name" > "${name}.log" 2>&1 &
+        pids+=("$!")
+        names+=("$name")
+    done
+    # Wait for the remaining builds
+    for i in "${!pids[@]}"; do
+        if ! wait "${pids[$i]}"; then
+            echo "ERROR: build '${names[$i]}' failed, log follows (${names[$i]}.log):" >&2
+            kill "${pids[@]}" 2>/dev/null || true
+            cat "${names[$i]}.log" >&2
+            exit 1
+        fi
+    done
+}
+
+BUILD_FNS=()
+for b in "${BUILDS[@]}"; do
+    read -r fn _ < <(build_spec "$b")
+    BUILD_FNS+=("$fn")
+done
+echo "Building: ${BUILDS[*]} (max ${MAX_PARALLEL_BUILDS} at a time, -j ${JOBS_PER_BUILD} each)..."
+run_builds_parallel "${BUILD_FNS[@]}"
 
 # Setup frameworks and copy binaries and headers
 echo "Setting up framework structures..."
-setup_framework_structure "build-ios-sim" ${IOS_MIN_OS_VERSION} "ios"
-setup_framework_structure "build-ios-device" ${IOS_MIN_OS_VERSION} "ios"
-setup_framework_structure "build-macos" ${MACOS_MIN_OS_VERSION} "macos"
-setup_framework_structure "build-visionos" ${VISIONOS_MIN_OS_VERSION} "visionos"
-setup_framework_structure "build-visionos-sim" ${VISIONOS_MIN_OS_VERSION} "visionos"
-setup_framework_structure "build-tvos-sim" ${TVOS_MIN_OS_VERSION} "tvos"
-setup_framework_structure "build-tvos-device" ${TVOS_MIN_OS_VERSION} "tvos"
+for b in "${BUILDS[@]}"; do
+    read -r _ bdir _ platform _ min_os < <(build_spec "$b")
+    setup_framework_structure "$bdir" "$min_os" "$platform"
+done
 
 # Create dynamic libraries from static libraries
 echo "Creating dynamic libraries from static libraries..."
-combine_static_libraries "build-ios-sim" "Release-iphonesimulator" "ios" "true"
-combine_static_libraries "build-ios-device" "Release-iphoneos" "ios" "false"
-combine_static_libraries "build-macos" "Release" "macos" "false"
-combine_static_libraries "build-visionos" "Release-xros" "visionos" "false"
-combine_static_libraries "build-visionos-sim" "Release-xrsimulator" "visionos" "true"
-combine_static_libraries "build-tvos-sim" "Release-appletvsimulator" "tvos" "true"
-combine_static_libraries "build-tvos-device" "Release-appletvos" "tvos" "false"
+for b in "${BUILDS[@]}"; do
+    read -r _ bdir rdir platform is_sim _ < <(build_spec "$b")
+    combine_static_libraries "$bdir" "$rdir" "$platform" "$is_sim"
+done
 
 # Create XCFramework with correct debug symbols paths
 echo "Creating XCFramework..."
+XCFW_ARGS=()
+for b in "${BUILDS[@]}"; do
+    read -r _ bdir _ _ _ _ < <(build_spec "$b")
+    XCFW_ARGS+=(-framework "$(pwd)/${bdir}/framework/llama.framework")
+    XCFW_ARGS+=(-debug-symbols "$(pwd)/${bdir}/dSYMs/llama.dSYM")
+done
 xcrun xcodebuild -create-xcframework \
-    -framework $(pwd)/build-ios-sim/framework/llama.framework \
-    -debug-symbols $(pwd)/build-ios-sim/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-ios-device/framework/llama.framework \
-    -debug-symbols $(pwd)/build-ios-device/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-macos/framework/llama.framework \
-    -debug-symbols $(pwd)/build-macos/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-visionos/framework/llama.framework \
-    -debug-symbols $(pwd)/build-visionos/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-visionos-sim/framework/llama.framework \
-    -debug-symbols $(pwd)/build-visionos-sim/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-tvos-device/framework/llama.framework \
-    -debug-symbols $(pwd)/build-tvos-device/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-tvos-sim/framework/llama.framework \
-    -debug-symbols $(pwd)/build-tvos-sim/dSYMs/llama.dSYM \
-    -output $(pwd)/build-apple/llama.xcframework
+    "${XCFW_ARGS[@]}" \
+    -output "$(pwd)/build-apple/llama.xcframework"

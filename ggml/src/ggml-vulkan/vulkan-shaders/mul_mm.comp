@@ -88,6 +88,8 @@ layout (push_constant) uniform parameter
     uint nei1;
     uint nbi1;
     uint ne11;
+    uint n_experts;
+    uint hoist_row_ids;
 #else
     uint base_work_group_z;
     uint num_batches;
@@ -119,10 +121,13 @@ layout (constant_id = 3) const uint BK = 16;  // Assumed to be 32 if working wit
 #endif
 
 #ifdef COOPMAT
-#define SHMEM_STRIDE (BK / 2 + 4)
+layout(constant_id = 12) const uint SHMEM_STRIDE_PAD = 4;
+layout(constant_id = 13) const bool APPLY_SLM_A_RESHAPE = false;
 #else
-#define SHMEM_STRIDE (BK / 2 + 1)
+const uint SHMEM_STRIDE_PAD = 1;
+const bool APPLY_SLM_A_RESHAPE = false;
 #endif
+#define SHMEM_STRIDE (BK / 2 + SHMEM_STRIDE_PAD)
 
 shared FLOAT_TYPEV2 buf_a[BM * SHMEM_STRIDE];
 shared FLOAT_TYPEV2 buf_b[BN * SHMEM_STRIDE];
@@ -211,27 +216,31 @@ void main() {
     const uint loadstride_b = gl_WorkGroupSize.x * LOAD_VEC_B_EFF * LOAD_VEC_BATCH_B / BK;
 
 #ifdef MUL_MAT_ID
-#ifdef MUL_MAT_ID_USE_SUBGROUPS
-    if (bitCount(p.nei0) == 1) {
-        load_row_ids(expert_idx, true, ic);
+    if (p.hoist_row_ids != 0) {
+        load_row_ids_hoisted(expert_idx, ic);
     } else {
-        load_row_ids(expert_idx, false, ic);
-    }
+#ifdef MUL_MAT_ID_USE_SUBGROUPS
+        if (bitCount(p.nei0) == 1) {
+            load_row_ids(expert_idx, true, ic);
+        } else {
+            load_row_ids(expert_idx, false, ic);
+        }
 #else
-    _ne1 = 0;
-    for (uint ii1 = 0; ii1 < p.nei1 && _ne1 < (ic + 1) * BN; ii1++) {
-        for (uint ii0 = 0; ii0 < p.nei0 && _ne1 < (ic + 1) * BN; ii0++) {
-            if (data_ids[ii1*p.nbi1 + ii0] == expert_idx) {
-                if (_ne1 >= ic * BN) {
-                    row_ids[_ne1 - ic * BN] = u16vec2(ii0, ii1);
+        _ne1 = 0;
+        for (uint ii1 = 0; ii1 < p.nei1 && _ne1 < (ic + 1) * BN; ii1++) {
+            for (uint ii0 = 0; ii0 < p.nei0 && _ne1 < (ic + 1) * BN; ii0++) {
+                if (data_ids[ii1*p.nbi1 + ii0] == expert_idx) {
+                    if (_ne1 >= ic * BN) {
+                        row_ids[_ne1 - ic * BN] = u16vec2(ii0, ii1);
+                    }
+                    _ne1++;
                 }
-                _ne1++;
             }
         }
-    }
 
-    barrier();
+        barrier();
 #endif
+    }
 
     // Workgroup has no work
     if (ic * BN >= _ne1) return;
@@ -302,7 +311,7 @@ void main() {
         [[unroll]] for (uint i = 0; i < BK; i += TK) {
             [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
                 // Load from shared into cache
-                coopMatLoad(cache_a, buf_a, (warp_r * WM + cm_row * TM) * SHMEM_STRIDE + i / 2, SHMEM_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+                coopMatLoad(cache_a, buf_a, a_shmem_index(warp_r * WM + cm_row * TM, i / 2), a_shmem_stride(), gl_CooperativeMatrixLayoutRowMajor);
 
                 [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
                     coopMatLoad(cache_b, buf_b, (warp_c * WN + cm_col * TN) * SHMEM_STRIDE + i / 2, SHMEM_STRIDE, gl_CooperativeMatrixLayoutColumnMajor);

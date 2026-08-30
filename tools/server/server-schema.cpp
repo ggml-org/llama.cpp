@@ -503,7 +503,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             const auto & samplers = data.at("samplers");
             if (samplers.is_array()) {
-                ctx.params.sampling.samplers = common_sampler_types_from_names(samplers);
+                ctx.params.sampling.samplers = common_sampler_types_from_names(samplers.get<std::vector<std::string>>());
             } else if (samplers.is_string()) {
                 ctx.params.sampling.samplers = common_sampler_types_from_chars(samplers.get<std::string>());
             }
@@ -519,7 +519,7 @@ task_params eval_llama_cmpl_schema(
                 const json & data) {
     task_params params;
 
-    // Sampling parameter defaults are loaded from the global server context (but individual requests can still them)
+    // Sampling parameter defaults are loaded from the global server context (but individual requests can still override them)
     params.sampling      = params_base.sampling;
     params.speculative   = params_base.speculative;
     params.n_keep        = params_base.n_keep;
@@ -580,8 +580,7 @@ static void handle_with_catch(const char * name, std::function<void()> func) {
 
 // treat a null value as absent so clients can send null to request the server default
 static bool has_value(const json & data, const char * n) {
-    auto it = data.find(n);
-    return it != data.end() && !it->is_null();
+    return data.contains(n) && !data.at(n).is_null();
 }
 
 template <typename T>

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import type { Component, Snippet } from 'svelte';
 	import { KeyboardKey } from '$lib/enums';
+	import type { Component, Snippet } from 'svelte';
 
 	interface Props {
 		open: boolean;
@@ -18,17 +18,17 @@
 	}
 
 	let {
+		cancelText = 'Cancel',
+		children,
+		confirmText = 'Confirm',
+		description,
+		icon,
+		onCancel,
+		onConfirm,
+		onKeydown,
 		open = $bindable(),
 		title,
-		description,
-		confirmText = 'Confirm',
-		cancelText = 'Cancel',
-		variant = 'default',
-		icon,
-		onConfirm,
-		onCancel,
-		onKeydown,
-		children
+		variant = 'default'
 	}: Props = $props();
 
 	function handleKeydown(event: KeyboardEvent) {
@@ -37,6 +37,7 @@
 
 			onConfirm();
 		}
+
 		onKeydown?.(event);
 	}
 
@@ -47,7 +48,7 @@
 	}
 </script>
 
-<AlertDialog.Root {open} onOpenChange={handleOpenChange}>
+<AlertDialog.Root onOpenChange={handleOpenChange} {open}>
 	<AlertDialog.Content onkeydown={handleKeydown}>
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
@@ -70,9 +71,10 @@
 
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={onCancel}>{cancelText}</AlertDialog.Cancel>
+
 			<AlertDialog.Action
-				onclick={onConfirm}
 				class={variant === 'destructive' ? 'bg-destructive text-white hover:bg-destructive/80' : ''}
+				onclick={onConfirm}
 			>
 				{confirmText}
 			</AlertDialog.Action>

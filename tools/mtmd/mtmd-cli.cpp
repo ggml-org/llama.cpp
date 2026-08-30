@@ -87,6 +87,9 @@ struct mtmd_cli_context {
     mtmd::bitmaps bitmaps;
     std::vector<mtmd_helper::video_ptr> videos;
 
+    mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
+    std::string video_ffmpeg_bin_dir;
+
     mtmd::batch_ptr mbatch;
 
     // chat template
@@ -154,6 +157,7 @@ struct mtmd_cli_context {
         const char * clip_path = params.mmproj.path.c_str();
         mtmd_context_params mparams = mtmd_context_params_default();
         mparams.use_gpu          = params.mmproj_use_gpu;
+        mparams.device           = params.mmproj_device;
         mparams.print_timings    = true;
         mparams.n_threads        = params.cpuparams.n_threads;
         mparams.flash_attn_type  = params.flash_attn_type;
@@ -169,6 +173,12 @@ struct mtmd_cli_context {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
             exit(1);
         }
+
+        video_ffmpeg_bin_dir = params.video_ffmpeg_bin_dir;
+        init_opt.video_params.fps_target = params.video_fps;
+        init_opt.video_params.timestamp_interval_ms = params.video_timestamp_interval_ms;
+        init_opt.video_params.ffmpeg_bin_dir = video_ffmpeg_bin_dir.empty()
+                            ? nullptr : video_ffmpeg_bin_dir.c_str();
     }
 
     bool check_antiprompt(const llama_tokens & generated_tokens) {
@@ -183,7 +193,7 @@ struct mtmd_cli_context {
     }
 
     bool load_media(const std::string & fname) {
-        auto res = mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str(), false);
+        auto res = mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str(), false, init_opt);
         if (!res.bitmap) {
             return false;
         }

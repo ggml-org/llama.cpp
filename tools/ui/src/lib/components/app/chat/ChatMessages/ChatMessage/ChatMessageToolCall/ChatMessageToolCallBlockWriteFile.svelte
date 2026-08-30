@@ -1,11 +1,12 @@
 <script lang="ts">
+	import { parseWriteFileMeta } from './parsers/write-file';
+	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { XCircle } from '@lucide/svelte';
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '$lib/constants';
-	import { abbreviateHome, type AgenticSection } from '$lib/utils';
-	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { parseWriteFileMeta } from './parsers/write-file';
-	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { toolsStore } from '$lib/stores';
+	import type { AgenticSection } from '$lib/types';
+	import { abbreviateHome } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -14,18 +15,20 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, onToggle }: Props = $props();
+	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const writeFileMeta = $derived(parseWriteFileMeta(section));
 	const home = $derived(toolsStore.serverHome);
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={writeFileMeta} {onToggle}>
+<ToolCallBlock {isStreaming} meta={writeFileMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
 		<span class="text-muted-foreground">Write file </span>
+
 		<span class="font-mono" title={writeFileMeta?.filePath}
 			>{abbreviateHome(writeFileMeta?.filePath ?? '', home)}</span
 		>
+
 		{#if writeFileMeta?.errorMessage}
 			<span class="ml-1 text-xs italic text-muted-foreground/70">(failed)</span>
 		{/if}
@@ -37,6 +40,7 @@
 				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
 			>
 				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+
 				<span>{meta.errorMessage}</span>
 			</div>
 		{:else if meta}
@@ -46,9 +50,11 @@
 				maxHeight={MAX_HEIGHT_CODE_BLOCK}
 				streaming={ctx.isCodeStreaming}
 			/>
+
 			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
 				{#if meta.resultMessage}
 					{meta.resultMessage}{meta.bytesWritten != null ? RESULT_STAT_SEPARATOR : ''}{/if}
+
 				{#if meta.bytesWritten != null}
 					<span class="font-mono">{meta.bytesWritten}</span>
 					bytes
