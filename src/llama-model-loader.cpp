@@ -7,12 +7,20 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
+#include <chrono>
 #include <cinttypes>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <future>
+#include <mutex>
 #include <regex>
+#include <thread>
+#include <unordered_set>
+#include <vector>
 
 static const size_t kiB = 1024;
 static const size_t MiB = 1024*kiB;
@@ -1056,6 +1064,38 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
     return op_supported;
 }
 
+// RPC cache hits still require the client to hash the complete tensor before
+// asking the server for the cached copy. The RPC backend uses a byte-at-a-time
+// FNV-1a hash, so doing this in the normal tensor loop pins one CPU core.
+//
+// With mmap, the source bytes remain stable for the entire load. This lets us
+// submit independent RPC tensors from multiple workers. Hashing happens in
+// parallel; the RPC backend must serialize complete socket transactions.
+static bool ggml_buffer_is_rpc(ggml_backend_buffer_t buffer) {
+    if (buffer == nullptr) {
+        return false;
+    }
+
+    ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buffer);
+    const char * name = buft ? ggml_backend_buft_name(buft) : nullptr;
+    return name != nullptr && std::strncmp(name, "RPC", 3) == 0;
+}
+
+static size_t ggml_rpc_load_threads() {
+    const char * value = std::getenv("GGML_RPC_LOAD_THREADS");
+    if (value == nullptr || value[0] == '\0') {
+        return 0;
+    }
+
+    char * end = nullptr;
+    const unsigned long parsed = std::strtoul(value, &end, 10);
+    if (end == value || *end != '\0' || parsed < 2) {
+        return 0;
+    }
+
+    return std::min<size_t>(parsed, 64);
+}
+
 // find the first buffer type in the list that can use the tensor
 static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op, const buft_list_t * buft_list) {
     GGML_ASSERT(!buft_list->empty());
@@ -1560,6 +1600,108 @@ bool llama_model_loader::load_all_data(
             ggml_backend_name(upload_backend));
     }
 
+    std::unordered_set<ggml_tensor *> rpc_preloaded;
+
+    // Opt-in and mmap-only: source pointers remain valid and each worker
+    // touches a distinct tensor. HASH_THRESHOLD is 10 MiB in ggml-rpc; smaller
+    // tensors are sent directly and do not benefit from parallel cache hashing.
+    //
+    // IMPORTANT: the RPC backend must protect each complete request/response
+    // transaction on its shared endpoint socket. Without that companion RPC
+    // lock, concurrent ggml_backend_tensor_set() calls are not safe.
+    const size_t rpc_threads = ggml_rpc_load_threads();
+    if (use_mmap && !check_tensors && rpc_threads > 1) {
+        constexpr size_t rpc_hash_threshold = 10 * MiB;
+
+        struct rpc_load_job {
+            ggml_tensor * tensor;
+            const void  * data;
+            size_t        size;
+        };
+
+        std::vector<rpc_load_job> jobs;
+        std::unordered_set<size_t> job_files;
+        size_t jobs_bytes = 0;
+
+        for (ggml_tensor * tensor = ggml_get_first_tensor(ctx);
+             tensor != nullptr;
+             tensor = ggml_get_next_tensor(ctx, tensor)) {
+            const auto * weight = get_weight(ggml_get_name(tensor));
+            if (weight == nullptr || tensor->data == nullptr || !ggml_buffer_is_rpc(tensor->buffer)) {
+                continue;
+            }
+
+            const size_t tensor_size = ggml_nbytes(tensor);
+            if (tensor_size <= rpc_hash_threshold) {
+                continue;
+            }
+
+            const auto & mapping = mappings.at(weight->idx);
+            const void * data = (const uint8_t *) mapping->addr() + weight->offs;
+            jobs.push_back({tensor, data, tensor_size});
+            job_files.insert(weight->idx);
+            jobs_bytes += tensor_size;
+        }
+
+        if (!jobs.empty()) {
+            const size_t n_workers = std::min(rpc_threads, jobs.size());
+            LLAMA_LOG_INFO("%s: preloading %zu RPC tensors (%.2f GiB across %zu GGUF shards) with %zu mmap workers\n",
+                    __func__, jobs.size(), jobs_bytes / (double) GiB, job_files.size(), n_workers);
+
+            const auto preload_start = std::chrono::steady_clock::now();
+            std::atomic<size_t> next_job {0};
+            std::atomic<bool> stop_workers {false};
+            std::exception_ptr worker_error;
+            std::mutex worker_error_mutex;
+            std::vector<std::thread> workers;
+            workers.reserve(n_workers);
+
+            for (size_t i = 0; i < n_workers; ++i) {
+                workers.emplace_back([&]() {
+                    try {
+                        while (!stop_workers.load(std::memory_order_relaxed)) {
+                            const size_t job_index = next_job.fetch_add(1, std::memory_order_relaxed);
+                            if (job_index >= jobs.size()) {
+                                break;
+                            }
+
+                            const rpc_load_job & job = jobs[job_index];
+                            ggml_backend_tensor_set(job.tensor, job.data, 0, job.size);
+                        }
+                    } catch (...) {
+                        stop_workers.store(true, std::memory_order_relaxed);
+                        std::lock_guard<std::mutex> lock(worker_error_mutex);
+                        if (!worker_error) {
+                            worker_error = std::current_exception();
+                        }
+                    }
+                });
+            }
+
+            for (std::thread & worker : workers) {
+                worker.join();
+            }
+            if (worker_error) {
+                std::rethrow_exception(worker_error);
+            }
+
+            rpc_preloaded.reserve(jobs.size());
+            for (const rpc_load_job & job : jobs) {
+                rpc_preloaded.insert(job.tensor);
+            }
+
+            const double preload_seconds = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - preload_start).count();
+            const double gib_per_second = preload_seconds > 0.0
+                    ? jobs_bytes / (double) GiB / preload_seconds
+                    : 0.0;
+            LLAMA_LOG_INFO("%s: parallel RPC preload complete in %.2f s (%.2f GiB/s)\n",
+                    __func__, preload_seconds, gib_per_second);
+        }
+    } else if (rpc_threads > 1 && !use_mmap) {
+        LLAMA_LOG_WARN("%s: GGML_RPC_LOAD_THREADS requires mmap; disable --direct-io and enable mmap\n", __func__);
+    }
+
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
         const auto * weight = get_weight(ggml_get_name(cur));
         if (weight == nullptr) {
@@ -1574,6 +1716,11 @@ bool llama_model_loader::load_all_data(
         }
 
         size_t n_size = ggml_nbytes(cur);
+
+        if (rpc_preloaded.find(cur) != rpc_preloaded.end()) {
+            size_done += n_size;
+            continue;
+        }
 
         if (use_mmap) {
             const auto & mapping = mappings.at(weight->idx);
