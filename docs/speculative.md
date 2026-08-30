@@ -230,6 +230,15 @@ Unsupported samplers and device layouts fall back to CPU sampling. Generic tenso
 
 The automatic chain is stateless and remains attached to its slot across compatible requests so the backend can reuse its scheduler reservation. A request that becomes ineligible or explicitly selects a sampler detaches the chain and follows the normal fallback. For the automatic path, `cache_prompt: false` still preserves checkpoint-driven prompt chunk boundaries, but clears older prompt checkpoints and skips serializing an unused replacement. `cache_prompt: true` and all fallback paths retain normal checkpoint behavior; switching from uncached to cached operation requires one full prompt reprocessing pass before checkpoint reuse resumes.
 
+### Synthetic Acceptance
+
+`llama-server` and `llama-cli` can replace normal speculative verification with synthetic decisions for benchmarking. The generated output is not valid model output because accepted draft tokens do not have to match the target model.
+
+Use exactly one of these options:
+
+- `--spec-synth-rates P0,P1,...` sets unconditional per-position acceptance probabilities. Entry `i` is the probability that the first `i+1` draft tokens are all accepted. The number of entries must match the effective maximum draft length. Values must be finite, within `[0, 1]`, and monotonically non-increasing.
+- `--spec-synth-len L` sets the target mean acceptance length, including the target token. For `K` maximum draft tokens, `L` must be within `[1, K+1]`. The server finds a constant conditional probability `p` such that `p + p^2 + ... + p^K = L - 1`, then uses unconditional rates `[p, p^2, ..., p^K]`.
+
 ### General Speculative Parameters
 
 ```

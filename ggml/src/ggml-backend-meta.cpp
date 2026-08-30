@@ -742,7 +742,13 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state_im
             GGML_ASSERT(split_states_equal(src_ss[0], src_ss[1]));
             return src_ss[0];
         }
-        GGML_ABORT("fatal error");
+        // batched matmul with the batches split across devices and a replicated activation
+        if (src_ss[0].axis >= GGML_BACKEND_SPLIT_AXIS_2 && src_ss[0].axis < GGML_MAX_DIMS &&
+                src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+            return src_ss[0];
+        }
+        GGML_ABORT("unsupported mul_mat split states: node=%s src0=%s axis=%d src1=%s axis=%d",
+            tensor->name, tensor->src[0]->name, (int) src_ss[0].axis, tensor->src[1]->name, (int) src_ss[1].axis);
         //return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}, {1}, 1};
     };
 
@@ -752,27 +758,40 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state_im
             case GGML_BACKEND_SPLIT_AXIS_1:
             case GGML_BACKEND_SPLIT_AXIS_2:
             case GGML_BACKEND_SPLIT_AXIS_3: {
-                GGML_ASSERT(src_ss[0].n_segments == 1);
-                if (src_ss[0].axis == ggml_n_dims(tensor->src[0]) - 1 && src_ss[0].nr[0] == 1) {
-                    return {ggml_backend_meta_split_axis(ggml_n_dims(tensor) - 1), {0}, {1}, 1};
-                }
-                int64_t base_ne_in = tensor->src[0]->ne[0];
-                for (int dim = 1; dim <= src_ss[0].axis; dim++) {
+                int64_t base_ne_in = 1;
+                for (int dim = 0; dim <= src_ss[0].axis; dim++) {
                     base_ne_in *= tensor->src[0]->ne[dim];
                 }
-                base_ne_in /= src_ss[0].nr[0];
+                if (src_ss[0].n_segments == 1) {
+                    base_ne_in /= src_ss[0].nr[0];
+                    if (src_ss[0].axis == ggml_n_dims(tensor->src[0]) - 1 && src_ss[0].nr[0] == 1) {
+                        return {ggml_backend_meta_split_axis(ggml_n_dims(tensor) - 1), {0}, {1}, 1};
+                    }
+                    if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_0 && tensor->ne[0] == tensor->src[0]->ne[0] &&
+                            tensor->ne[1] == 1 && src_ss[0].nr[0] == 1) {
+                        bool complete_rows = true;
+                        for (size_t j = 0; j < n_bufs; j++) {
+                            const int64_t ne = src_ss[0].ne[j];
+                            complete_rows = complete_rows && (ne == 0 || ne == tensor->src[0]->ne[0]);
+                        }
+                        if (complete_rows) {
+                            // Move a complete dim-0 split to the following singleton dimension.
+                            return {GGML_BACKEND_SPLIT_AXIS_1, {0}, {1}, 1};
+                        }
+                    }
+                }
+                // Reshape outputs use one segment; split-state propagation merges source segments.
                 int64_t base_ne_out = 1;
                 for (int dim = 0; dim < GGML_MAX_DIMS; dim++) {
-                    const int64_t base_ne_out_next = base_ne_out *= tensor->ne[dim];
-                    if (base_ne_out_next % base_ne_in == 0) {
-                        return {ggml_backend_meta_split_axis(dim), {0}, {uint32_t(base_ne_out_next/base_ne_in)}, 1};
+                    base_ne_out *= tensor->ne[dim];
+                    if (base_ne_out % base_ne_in == 0) {
+                        return {ggml_backend_meta_split_axis(dim), {0}, {uint32_t(base_ne_out/base_ne_in)}, 1};
                     }
-                    if (base_ne_out_next > base_ne_in) {
+                    if (base_ne_out > base_ne_in) {
                         GGML_ASSERT(src_ss[0].n_segments == 1);
                         GGML_ASSERT(src_ss[0].nr[0]      == 1);
                         return {ggml_backend_meta_split_axis(dim), {0}, {1}, 1};
                     }
-                    base_ne_out = base_ne_out_next;
                 }
                 GGML_ABORT("shape mismatch for %s", ggml_op_name(tensor->op));
             }
@@ -961,7 +980,7 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state_im
             ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(tensor->buffer));
             const ggml_backend_meta_device_context * dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
             ggml_backend_meta_split_state ret = dev_ctx->get_split_state(tensor, dev_ctx->get_split_state_ud);
-            if (ret.axis >= 0 && ret.axis <= GGML_MAX_DIMS) {
+            if (ret.axis >= 0 && ret.axis < GGML_MAX_DIMS) {
                 const int64_t granularity = ret.axis == GGML_BACKEND_SPLIT_AXIS_0 ? ggml_blck_size(tensor->type) : 1;
                 int64_t ne_sum = 0;
                 for (size_t s = 0; s < ret.n_segments; s++) {
@@ -971,6 +990,9 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state_im
                     }
                 }
                 GGML_ASSERT(ne_sum == tensor->ne[ret.axis]);
+            } else if (ret.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL) {
+                GGML_ASSERT(ret.n_segments == 1);
+                GGML_ASSERT(ret.nr[0] == 1);
             }
             return ret;
         }
@@ -1489,7 +1511,14 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_one(ggml_backend_me
             t_ij->data = (char *) ggml_backend_buffer_get_base(simple_buf)
                 + size_t(tensor->data) - size_t(ggml_backend_buffer_get_base(tensor->buffer));
         }
-        t_ij->extra = tensor->extra;
+
+        if (simple_buf) {
+            // the backend that owns the buffer will set .extra
+            ggml_backend_buffer_init_tensor(simple_buf, t_ij);
+        } else {
+            t_ij->extra = tensor->extra;
+        }
+
         for (int i = 0; i < GGML_MAX_SRC; i++) {
             t_ij->src[i] = tensor->src[i];
             if (tensor->src[i] == tensor) {
@@ -2178,6 +2207,16 @@ ggml_tensor * ggml_backend_meta_get_simple_tensor(const ggml_tensor * tensor, si
     return ggml_backend_meta_buffer_simple_tensor(tensor, index);
 }
 
+void ggml_backend_meta_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage) {
+    GGML_ASSERT(ggml_backend_buffer_is_meta(buffer));
+    ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) buffer->context;
+    for (size_t i = 0; i < buf_ctx->bufs.size(); i++) {
+        if (buf_ctx->bufs[i]) {
+            ggml_backend_buffer_set_usage(buf_ctx->bufs[i].get(), usage);
+        }
+    }
+}
+
 static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 
@@ -2718,7 +2757,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
 
         {
             // For MoE models it may make sense to delay the AllReduce in order to reduce I/O:
-            auto get_i_delayed = [&](const int i) -> int {
+            auto get_i_delayed_branch = [&](const int i) -> int {
                 int id = i; // i_delayed
                 int idr = i; // i_delayed return, last safe return value
 
@@ -2819,6 +2858,62 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 }
                 idr = id;
                 return idr;
+            };
+
+            // AllReduce(a) + AllReduce(b) == AllReduce(a + b) for independent partial branches.
+            auto get_i_delayed = [&](const int i) -> int {
+                const int i_delayed = get_i_delayed_branch(i);
+                ggml_tensor * node = cgraph->nodes[i_delayed];
+
+                if (ggml_node_get_use_count(cgraph, i_delayed) != 1) {
+                    return i_delayed;
+                }
+
+                for (int id = i_delayed + 1; id < cgraph->n_nodes; id++) {
+                    ggml_tensor * next = cgraph->nodes[id];
+                    if (next->view_src == node) {
+                        return i_delayed;
+                    }
+                    for (int s = 0; s < GGML_MAX_SRC; s++) {
+                        if (next->src[s] == node) {
+                            return i_delayed;
+                        }
+                    }
+
+                    if (next->view_src != nullptr && next->view_src->op == GGML_OP_NONE && ggml_backend_buffer_is_host(next->view_src->buffer)) {
+                        continue;
+                    }
+                    if (ggml_backend_meta_get_split_state(next, false).axis != GGML_BACKEND_SPLIT_AXIS_PARTIAL) {
+                        continue;
+                    }
+
+                    const int i_other = id;
+                    const int i_other_delayed = get_i_delayed_branch(i_other);
+                    ggml_tensor * other = cgraph->nodes[i_other_delayed];
+                    if (ggml_node_get_use_count(cgraph, i_other_delayed) != 1 || i_other_delayed + 1 >= cgraph->n_nodes) {
+                        return i_delayed;
+                    }
+
+                    ggml_tensor * sum = cgraph->nodes[i_other_delayed + 1];
+                    if (sum->op != GGML_OP_ADD ||
+                            !ggml_are_same_shape(node, other) || node->type != other->type || sum->type != node->type ||
+                            !((sum->src[0] == node && sum->src[1] == other) ||
+                              (sum->src[0] == other && sum->src[1] == node)) ||
+                            ggml_backend_meta_get_split_state(sum, false).axis != GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+                        return i_delayed;
+                    }
+
+                    for (size_t j = 0; j < n_backends; j++) {
+                        auto & bcj = backend_ctx->backend_configs[j];
+                        const bool compute       = bcj.nodes[i]->flags       & GGML_TENSOR_FLAG_COMPUTE;
+                        const bool compute_other = bcj.nodes[i_other]->flags & GGML_TENSOR_FLAG_COMPUTE;
+                        if (compute != compute_other) {
+                            return i_delayed;
+                        }
+                    }
+                    return i_other_delayed + 1;
+                }
+                return i_delayed;
             };
 
             int i_start = 0;

@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <array>
+#include <bitset>
 #include <cassert>
 #include <cmath>
 

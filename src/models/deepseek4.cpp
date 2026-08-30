@@ -1,3 +1,4 @@
+#include "llama-hparams.h"
 #include "models.h"
 
 #include "deepseek4-mmq-config.h"
@@ -59,6 +60,7 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     if (n_compress_ratios < hparams.n_layer_all) {
         throw std::runtime_error("DeepSeek-V4 compress_ratios is shorter than block_count");
     }
+    GGML_ASSERT(n_compress_ratios <= LLAMA_MAX_LAYERS);
     ml.get_arr(LLM_KV_ATTENTION_COMPRESS_RATIOS, hparams.dsv4_compress_ratios);
 
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func);
