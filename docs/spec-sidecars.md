@@ -132,9 +132,16 @@ export SPEC_SIDECAR=1
   --spec-type draft-mtp \
   --spec-draft-n-max 3 \
   --spec-draft-p-min 0 \
+  --batch-size 128 --ubatch-size 128 \
   -np 1 --no-context-shift \
   --ctx-checkpoints 0 --cache-ram 0 --no-cache-idle-slots
 ```
+
+For the current gfx1030 Flash Next path, `--batch-size 128 --ubatch-size 128`
+is the validated Flash Attention setting. A 6,336-token real-server prompt with
+both values at 512 reproducibly faults the target `flash_attn_tile` kernel even
+with speculative decoding disabled. Use the 128-token setting or disable Flash
+Attention until that separate target-backend issue is fixed.
 
 Do not also pass a Qwen3.8-27B `-md` model when testing this provider. If the
 profile, artifact schema, explicit device binding, or runtime state checks fail,
