@@ -11,6 +11,14 @@
 #include "../artifact_manifest.h"
 #include "spec_sidecar/sidecar_abi.h"
 
+#if defined(__has_include)
+#    if __has_include(<rocprim/device/device_topk.hpp>)
+#        include <rocprim/device/device_topk.hpp>
+#        include <rocprim/iterator/counting_iterator.hpp>
+#        define SPEC_SIDECAR_ROCPRIM_TOPK
+#    endif
+#endif
+
 // ---------------- host: weights ----------------
 using Tensor = spec_sidecar_artifact::TensorDesc;
 static constexpr int SC_N_VOCAB = 248320;
@@ -65,6 +73,11 @@ struct State {
     float *draft_logits = nullptr, *draft_probs = nullptr;
     int *pidx = nullptr, *tok_out = nullptr;
     int *draft_ids = nullptr, *draft_count = nullptr, *draft_active = nullptr;
+#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
+    void *topk_temp = nullptr;
+    size_t topk_temp_bytes = 0;
+    bool topk_rocprim = false;
+#endif
     int nparts = 0;
     size_t max_pos = 131072;
     SeqState seq[SC_MAX_SEQ];
@@ -657,6 +670,32 @@ static int spec_hip_init_impl(const char * weights_dir, const char * ids_path,
     SC_CHECK(hipEventCreate(&s.ev_a));
     SC_CHECK(hipEventCreate(&s.ev_b));
 
+#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
+    {
+        const rocprim::counting_iterator<int> indices(0);
+        size_t bytes = 0;
+        const hipError_t status = rocprim::topk_pairs<rocprim::default_config, true>(
+                nullptr, bytes, s.logits, s.pmax, indices, s.pidx,
+                (uint32_t) N_HEAD_ROWS, (uint32_t) MTP_DRAFT_TOP_K,
+                rocprim::identity_decomposer{}, s.st);
+        if (status == hipSuccess) {
+            s.topk_temp_bytes = bytes;
+            if (bytes == 0 || hipMalloc(&s.topk_temp, bytes) == hipSuccess) {
+                s.topk_rocprim = true;
+            } else {
+                fprintf(stderr, "[hip-sidecar] rocPRIM top-k scratch allocation failed; using fallback\n");
+            }
+        } else {
+            fprintf(stderr, "[hip-sidecar] rocPRIM top-k query failed (%s); using fallback\n",
+                    hipGetErrorString(status));
+        }
+        if (getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr) {
+            fprintf(stderr, "[hip-sidecar] stochastic top-k: %s\n",
+                    s.topk_rocprim ? "rocPRIM" : "fallback");
+        }
+    }
+#endif
+
     auto W  = [&](const char * n) { return (const block_q4_0 *) find_tensor(n)->dev; };
     auto Wf = [&](const char * n) { return (const float *) find_tensor(n)->dev; };
     s.W_embd = W("token_embd.weight");
@@ -966,10 +1005,26 @@ static int spec_hip_draft_stochastic_impl(int32_t seq_id, int32_t id_last, int32
         deq_row_q4_0<<<(N_EMBD + 255) / 256, 256, 0, S.st>>>(S.W_embd, tok_src, c.x_tok, N_EMBD, SC_N_VOCAB);
         block_phase1(c, S.st, xh_in, n_past + j, q->Kc, q->Vc);
         block_phase2(c, S.st, n_past + j, nullptr, q->Kc, q->Vc, true);
-        topk_partial<<<S.nparts, 256, 0, S.st>>>(S.logits, N_HEAD_ROWS, S.pmax, S.pidx);
-        topk_final<<<1, 256, 0, S.st>>>(S.pmax, S.pidx, S.nparts, S.remap_d, SC_N_VOCAB,
-                S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
-                S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
+#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
+        if (S.topk_rocprim) {
+            const rocprim::counting_iterator<int> indices(0);
+            size_t topk_bytes = S.topk_temp_bytes;
+            const hipError_t status = rocprim::topk_pairs<rocprim::default_config, true>(
+                    S.topk_temp, topk_bytes, S.logits, S.pmax, indices, S.pidx,
+                    (uint32_t) N_HEAD_ROWS, (uint32_t) MTP_DRAFT_TOP_K,
+                    rocprim::identity_decomposer{}, S.st);
+            SC_CHECK(status);
+            topk_final<<<1, 256, 0, S.st>>>(S.pmax, S.pidx, 1, S.remap_d, SC_N_VOCAB,
+                    S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
+                    S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
+        } else
+#endif
+        {
+            topk_partial<<<S.nparts, 256, 0, S.st>>>(S.logits, N_HEAD_ROWS, S.pmax, S.pidx);
+            topk_final<<<1, 256, 0, S.st>>>(S.pmax, S.pidx, S.nparts, S.remap_d, SC_N_VOCAB,
+                    S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
+                    S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
+        }
         sample_topk<<<1, 1, 0, S.st>>>(
                 S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
                 S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K,
