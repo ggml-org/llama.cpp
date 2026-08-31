@@ -622,7 +622,7 @@ class ModelBase:
                 target_name = new_name.replace(".weight", ".scale")
                 entries = scale_tensors.setdefault(target_name, [])
                 assert isinstance(entries, list)
-                entries.append((expert_id, float(scale[0])))
+                cast(list[tuple[int, float]], entries).append((expert_id, float(scale[0])))
             else:
                 new_name = self.map_tensor_name(weight_name)
                 scale_tensors[new_name.replace(".weight", ".scale")] = scale.numpy()
