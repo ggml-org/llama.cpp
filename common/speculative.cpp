@@ -1094,8 +1094,14 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             selector_top_k = sidecar_profile->dflash_selector_top_k;
             is_dflash2 = selector_top_k > 0;
         }
+        // In sidecar-only mode there is no host draft model; the target shares
+        // the drafter vocabulary, so its mask token is authoritative.
         mask_token_id = model_dft != nullptr
-                ? llama_vocab_mask(llama_model_get_vocab(model_dft)) : 0;
+                ? llama_vocab_mask(llama_model_get_vocab(model_dft))
+                : llama_vocab_mask(llama_model_get_vocab(model_tgt));
+        if (mask_token_id == LLAMA_TOKEN_NULL) {
+            mask_token_id = 0;
+        }
         n_layer_tgt = llama_model_n_layer(model_tgt);
 
         LOG_INF("%s: adding speculative implementation '%s'\n", __func__, common_speculative_type_to_str(type).c_str());
@@ -3829,6 +3835,18 @@ common_speculative_init_result::common_speculative_init_result(
     } else if (!sidecar_error.empty()) {
         LOG_WRN("%s: sidecar probe unavailable; retaining native draft loading: %s\n",
                 __func__, sidecar_error.c_str());
+    }
+
+    // If the path-based candidate probe promised a sidecar at model-load time
+    // (allowing the shared output head to be sharded), a preflight failure must
+    // fail closed: loading a host draft against a sharded head is incorrect.
+    if (!pimpl->sidecar_only && (spec_dflash || spec_dspark) &&
+            common_speculative_sidecar_candidate(params.speculative,
+                params.model.path, params.n_parallel)) {
+        LOG_ERR("%s: sidecar candidate accepted at model load but preflight failed (%s); "
+                "refusing host draft fallback against a possibly sharded output head\n",
+                __func__, sidecar_error.c_str());
+        return;
     }
 
     std::string model_path;
