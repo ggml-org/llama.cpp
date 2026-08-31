@@ -2741,15 +2741,17 @@ common_speculative_init_result::common_speculative_init_result(
 
     // DFlash2/DSpark rank the full target vocabulary (in-graph or on the CPU after the decode),
     // so the lm_head output for every block position grows with n_ubatch * n_vocab.
-    // Their largest decode batch is one noise block per sequence (n_max + 1 tokens), so cap the
-    // ubatch to that; anything larger only inflates the reserved compute buffer.
+    // Their largest decode batch is one noise block per sequence (n_max + 1 tokens), but the
+    // target-feature prefill (encoder + KV injection) is chunked by the same ubatch, so keep a
+    // floor: anything below ~64 tokens per chunk is launch-bound and degrades prompt processing.
     const bool has_block_draft = std::any_of(
         params.speculative.types.begin(), params.speculative.types.end(),
         [](common_speculative_type t) {
             return t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
         });
     if (has_block_draft) {
-        const uint32_t n_ubatch_dft = params.n_parallel * (uint32_t) std::max(1, params.speculative.draft.n_max + 1);
+        const uint32_t n_ubatch_dft = std::max<uint32_t>(
+            params.n_parallel * (uint32_t) std::max(1, params.speculative.draft.n_max + 1), 64);
         if (cparams.n_ubatch > n_ubatch_dft) {
             LOG_INF("%s: capping draft context ubatch from %u to %u (block draft)\n", __func__, cparams.n_ubatch, n_ubatch_dft);
             cparams.n_ubatch = n_ubatch_dft;

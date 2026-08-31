@@ -1327,7 +1327,7 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             });
         if (has_block_draft) {
             cparams_dft.n_ubatch = std::min(cparams_dft.n_ubatch,
-                    params_dft.n_parallel * (uint32_t) std::max(1, params_dft.speculative.draft.n_max + 1));
+                    std::max<uint32_t>(params_dft.n_parallel * (uint32_t) std::max(1, params_dft.speculative.draft.n_max + 1), 64));
         }
 
         const common_fit_extra_model extra = {
