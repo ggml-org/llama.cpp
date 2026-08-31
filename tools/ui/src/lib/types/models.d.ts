@@ -36,6 +36,15 @@ export interface ModelLoadProgress {
 	current: ApiModelLoadStage;
 	value: number;
 }
+/**
+ * Per-byte download progress for one in-flight model download, driven by the
+ * /models/sse feed. Lives only while a download runs.
+ */
+export interface ModelDownloadProgress {
+	downloadedBytes: number;
+	totalBytes: number;
+}
+
 
 export interface ParsedModelId {
 	raw: string;
