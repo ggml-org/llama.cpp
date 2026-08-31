@@ -180,7 +180,11 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                     # initialize the vectors with the type's `dup` intrinsic before use.
                     check_arm_feature(dotprod DOTPROD     "#include <arm_neon.h>\nint main() { int8x16_t _a = vdupq_n_s8(0), _b = vdupq_n_s8(0); int32x4_t _s = vdupq_n_s32(0); _s = vdotq_s32(_s, _a, _b); return 0; }")
                     check_arm_feature(i8mm    MATMUL_INT8 "#include <arm_neon.h>\nint main() { int8x16_t _a = vdupq_n_s8(0), _b = vdupq_n_s8(0); int32x4_t _s = vdupq_n_s32(0); _s = vmmlaq_s32(_s, _a, _b); return 0; }")
-                    check_arm_feature(sve     SVE         "#include <arm_sve.h>\nint main()  { svfloat32_t _a = svdup_n_f32(0.0f), _b = svdup_n_f32(0.0f); svfloat32_t _c = svadd_f32_z(svptrue_b8(), _a, _b); return 0; }")
+                    # SVE probe mirrors the `const svbool_t pg = ...;` and const-svint8_t-arg
+                    # patterns used at quants.c:402-511. MSVC declares SVE sizeless types in a
+                    # way that rejects const-qualified locals, so this fails on MSVC (SVE off).
+                    # If MSVC later fixes it, the probe passes and SVE auto-enables.
+                    check_arm_feature(sve     SVE         "#include <arm_sve.h>\nint main() { const svbool_t pg = svptrue_b8(); const svint8_t a = svdup_n_s8(0), b = svdup_n_s8(0); svint32_t s = svdup_n_s32(0); s = svdot_s32(s, a, b); (void) pg; (void) s; return 0; }")
                 else()
                     check_arm_feature(dotprod DOTPROD     "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vdotq_s32(_s, _a, _b); return 0; }")
                     check_arm_feature(i8mm    MATMUL_INT8 "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vmmlaq_s32(_s, _a, _b); return 0; }")
