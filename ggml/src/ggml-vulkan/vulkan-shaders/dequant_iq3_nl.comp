@@ -24,13 +24,15 @@ void main() {
     const uint b_idx = 1024*i + 32*ir + q_idx;
 
     const float d = float(data_a[ib].d);
+    const uvec4 qh = uvec4(data_a[ib].qh[0], data_a[ib].qh[1], data_a[ib].qh[2], data_a[ib].qh[3]);
+    const uint qsw = pack32(u8vec4(data_a[ib].qs[q_idx    ], data_a[ib].qs[q_idx + 1],
+                                   data_a[ib].qs[q_idx + 2], data_a[ib].qs[q_idx + 3]));
 
-    [[unroll]] for (uint l = 0; l < 4; ++l) {
-        const uint j  = q_idx + l;
-        const uint qs = data_a[ib].qs[j];
-        [[unroll]] for (uint g = 0; g < 4; ++g) {
-            const uint idx = iq3nl_index(qs, uint(data_a[ib].qh[g]), j, g);
-            data_b[b_idx + l + 8*g] = D_TYPE(d * kvalues_iq3nl[idx]);
-        }
+    [[unroll]] for (uint g = 0; g < 4; ++g) {
+        const uvec4 idx = iq3nl_index4(qsw, qh[g], q_idx, g);
+        data_b[b_idx + 0 + 8*g] = D_TYPE(d * kvalues_iq3nl[idx.x]);
+        data_b[b_idx + 1 + 8*g] = D_TYPE(d * kvalues_iq3nl[idx.y]);
+        data_b[b_idx + 2 + 8*g] = D_TYPE(d * kvalues_iq3nl[idx.z]);
+        data_b[b_idx + 3 + 8*g] = D_TYPE(d * kvalues_iq3nl[idx.w]);
     }
 }

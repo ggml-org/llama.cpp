@@ -1782,20 +1782,16 @@ struct block_iq3_nl_packed16
 #define A_TYPE block_iq3_nl
 #define A_TYPE_PACKED16 block_iq3_nl_packed16
 
-// Transposed bit planes: element j + g*8 takes its low bit pair from bits 2*g of qs[j],
-// but its high bit from bit j of qh[g]. All decode paths go through these two functions,
-// so the layout stays in one place. Same as dequantize_row_iq3_nl in ggml-quants.c.
 uint iq3nl_index(uint qs_j, uint qh_g, uint j, uint g) {
     return ((qs_j >> (2 * g)) & 3) | (((qh_g >> j) & 1) << 2);
 }
 
-// Same, for elements j0..j0+3 of plane g. qs_packed holds qs[j0] in its low byte.
+uint iq3nl_hbits4(uint h) {
+    return (((h & 0xF) * 0x00204081u) & 0x01010101u) << 2;
+}
+
 uvec4 iq3nl_index4(uint qs_packed, uint qh_g, uint j0, uint g) {
-    const uvec4 qs_j = uvec4(unpack8(qs_packed));
-    return uvec4(iq3nl_index(qs_j.x, qh_g, j0,     g),
-                 iq3nl_index(qs_j.y, qh_g, j0 + 1, g),
-                 iq3nl_index(qs_j.z, qh_g, j0 + 2, g),
-                 iq3nl_index(qs_j.w, qh_g, j0 + 3, g));
+    return uvec4(unpack8(((qs_packed >> (2 * g)) & 0x03030303) | iq3nl_hbits4(qh_g >> j0)));
 }
 #endif
 
@@ -1915,7 +1911,6 @@ shared FLOAT_TYPE kvalues_iq4nl[16];
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
-    // copy the table into shared memory and sync
     for (uint i = gl_LocalInvocationIndex.x; i < kvalues_iq4nl.length(); i += wgsize.x) {
         kvalues_iq4nl[i] = FLOAT_TYPE(kvalues_iq4nl_const[i]);
     }
