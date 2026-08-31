@@ -96,7 +96,8 @@ cmake_flags=(
     -DCMAKE_HIP_ARCHITECTURES="$TARGET_ARCH"
     -DCMAKE_HIP_COMPILER="$ROCM_PATH/llvm/bin/clang++"
     -DCMAKE_PREFIX_PATH="$ROCM_PATH"
-    -DCMAKE_HIP_FLAGS=-mllvm\ --amdgpu-unroll-threshold-local=600
+    # Keep the established HIP tuning flag and enable unsafe math for now.
+    -DCMAKE_HIP_FLAGS=-mllvm\ --amdgpu-unroll-threshold-local=600\ -funsafe-math-optimizations
     -DLLAMA_BUILD_SERVER=ON
     -DLLAMA_BUILD_TOOLS=ON
     -DLLAMA_BUILD_EXAMPLES=ON
