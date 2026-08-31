@@ -123,3 +123,15 @@ endif()
 target_include_directories(${TARGET} PUBLIC
     ${CMAKE_CURRENT_BINARY_DIR}
 )
+
+if (BUILD_TESTING AND LLAMA_BUILD_TESTS)
+    add_test(
+        NAME test-ui-assets
+        COMMAND ${CMAKE_COMMAND}
+            "-DUI_ASSETS_SCRIPT=${PROJECT_SOURCE_DIR}/scripts/ui-assets.cmake"
+            "-DLLAMA_UI_EMBED=${LLAMA_UI_EMBED_EXE}"
+            "-DTEST_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-ui-assets"
+            -P "${PROJECT_SOURCE_DIR}/tests/test-ui-assets.cmake"
+    )
+    set_tests_properties(test-ui-assets PROPERTIES LABELS main)
+endif()
