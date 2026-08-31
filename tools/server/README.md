@@ -1769,6 +1769,15 @@ We also offer additional options that are exclusive to presets (these aren't tre
 - `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts. Only applies at startup: if the model list is reloaded later (for example after editing the preset file), a newly added model is listed but not loaded
 - `stop-timeout` (int, seconds): After requested unload, wait for this many seconds before forcing termination (default: 10)
 - `dedup-cache-models` (boolean): When the preset uses `hf-repo` pointing to a model that is already downloaded, hide the corresponding cached model entry from `GET /models` (the preset entry remains visible). Set it in the `[*]` section to apply to all presets.
+- `hidden` (boolean): Omit this model from `GET /models` and `GET /v1/models`. The model can still be loaded and used by requesting it by name, so this only affects listings such as the model picker in the web UI. Useful for entries that are not meant to be picked directly, e.g. a draft/MTP GGUF that is discovered from the HF cache:
+
+  ```ini
+  ; hides the auto-discovered cache entry, which is only useful as a draft model
+  [ggml-org/MY-MODEL-MTP-GGUF:Q4_K_M]
+  hidden = 1
+  ```
+
+  A section whose name matches an existing model merges into that model's entry rather than creating a new one, so a stub section with just `hidden = 1` is enough to hide a model that came from the HF cache or from `--models-dir`.
 
 ### Routing requests
 

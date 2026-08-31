@@ -4797,6 +4797,12 @@ void common_params_add_preset_options(std::vector<common_arg> & args) {
         [](common_params &, const std::string &) { /* unused */ }
     ).set_env(COMMON_ARG_PRESET_DEDUP_CACHE_MODELS).set_preset_only());
 
+    args.push_back(common_arg(
+        {"hidden"}, "0|1",
+        "in server router mode, omit this model from GET /models (it can still be loaded by name)",
+        [](common_params &, const std::string &) { /* unused */ }
+    ).set_env(COMMON_ARG_PRESET_HIDDEN).set_preset_only());
+
     // args.push_back(common_arg(
     //     {"pin"},
     //     "in server router mode, do not unload this model if models_max is exceeded",

@@ -626,7 +626,10 @@ void server_models::load_models() {
     };
     auto apply_hidden = [&]() {
         for (auto & [name, inst] : mapping) {
-            inst.meta.hidden = hidden_models.count(name) > 0;
+            std::string val;
+            bool by_preset = inst.meta.preset.get_option(COMMON_ARG_PRESET_HIDDEN, val)
+                             && common_arg_utils::is_truthy(val);
+            inst.meta.hidden = by_preset || hidden_models.count(name) > 0;
         }
     };
     // update_args() injects HOST/PORT/ALIAS, so strip them before comparing presets
@@ -1971,7 +1974,7 @@ void server_models_routes::init_routes() {
         std::time_t t = std::time(0);
         for (const auto & meta : all_models) {
             if (meta.hidden) {
-                continue; // cache model deduplicated by a preset
+                continue; // preset asked to hide it, or a cache model deduplicated by a preset
             }
             json status {
                 {"value",  server_model_status_to_string(meta.status)},
