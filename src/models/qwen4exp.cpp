@@ -430,7 +430,7 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override {
         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
-        mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio, blk_bias);
+        mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, mask_row, bias, ubatch, ratio, blk_bias);
     }
 
     bool can_reuse(const llm_graph_params & params) override {
@@ -457,6 +457,10 @@ public:
         res &= bias->ne[0]      == (blk_bias ? n_blocks : n_kv);
         res &= bias->ne[1]      == params.ubatch.n_tokens/n_stream;
 
+        res &= mask_row->ne[0]  == n_kv;
+        res &= mask_row->ne[1]  == params.ubatch.n_tokens/n_stream;
+        res &= mask_row->ne[2]  == n_stream;
+
         return res;
     }
 
@@ -466,6 +470,10 @@ public:
     ggml_tensor * blk_cells = nullptr;   // I32 [ratio*n_blocks, n_stream]
     ggml_tensor * blk_pos   = nullptr;   // I32 [4*n_blocks*n_stream]
     ggml_tensor * bias      = nullptr;   // F32 [n_blocks or n_kv, n_tokens/n_stream, n_stream]
+
+    // per-cell visibility for the gather path (0 or -INF); left unallocated by the
+    // masked path, which reads the attention kq_mask instead. F32 [n_kv, n_tps, n_stream]
+    ggml_tensor * mask_row  = nullptr;
 
     const llama_memory_hybrid_idx_context * mctx;
     const uint32_t ratio;
@@ -520,7 +528,9 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
         qsa->blk_cells = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, r*n_blocks, n_stream);
         qsa->blk_pos   = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4*n_blocks*n_stream);
         qsa->bias      = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, blk_bias ? n_blocks : n_kv, n_tps, n_stream);
+        qsa->mask_row  = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_kv, n_tps, n_stream);
 
+        ggml_set_input(qsa->mask_row);
         ggml_set_input(qsa->cell_blk);
         ggml_set_input(qsa->blk_cells);
         ggml_set_input(qsa->blk_pos);
@@ -654,6 +664,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
         ggml_tensor *             k_cur,
         ggml_tensor *             v_cur,
         ggml_tensor *             top_k,
+        ggml_tensor *             mask_row,
         float                     kq_scale,
         int                       il,
         bool                      gather) {
@@ -729,10 +740,15 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
         cb(k_g, "qsa_k_gathered", il);
         cb(v_g, "qsa_v_gathered", il);
 
-        // gather the same cells' mask values: keeps -INF for any invalid cell the padded
-        // top-k width pulled in (e.g. when fewer than n_topk cells are visible)
-        ggml_tensor * m1 = ggml_view_4d(ctx0, kq_mask, 1, n_kv, 1, ns,
-                kq_mask->nb[0], kq_mask->nb[1], kq_mask->nb[3], 0);
+        // gather the same cells' visibility: keeps -INF for any invalid cell the padded
+        // top-k width pulled in (e.g. when fewer than n_topk cells are visible).
+        // reading the compact per-cell mask_row instead of the attention kq_mask leaves
+        // the latter unreferenced, so it is neither filled (O(n_kv * pad) host work) nor
+        // uploaded (n_kv * GGML_KQ_MASK_PAD * 2 bytes, ~18 MB/token at 141K ctx)
+        GGML_ASSERT(mask_row != nullptr);
+        GGML_ASSERT(mask_row->ne[0] == n_kv);
+        ggml_tensor * m1 = ggml_view_4d(ctx0, mask_row, 1, n_kv, 1, ns,
+                mask_row->nb[0], mask_row->nb[1], mask_row->nb[3], 0);
         ggml_tensor * m_g = ggml_get_rows(ctx0, m1, idx);            // F32 [1, n_topk, 1, ns]
         m_g = ggml_reshape_4d(ctx0, m_g, n_topk, 1, 1, ns);
         m_g = ggml_cast(ctx0, m_g, GGML_TYPE_F16);                   // FA wants contiguous F16
@@ -876,7 +892,13 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
     if (top_k) {
-        cur = build_attn_qsa(inp, Qcur, Kcur, Vcur, top_k, kq_scale, il, gather);
+        ggml_tensor * qsa_mask_row = nullptr;
+        if (gather) {
+            const auto it = qsa_inps.find((uint32_t) hparams.dsv4_compress_ratios[il]);
+            GGML_ASSERT(it != qsa_inps.end());
+            qsa_mask_row = it->second->mask_row;
+        }
+        cur = build_attn_qsa(inp, Qcur, Kcur, Vcur, top_k, qsa_mask_row, kq_scale, il, gather);
     } else {
         cur = build_attn(inp,
                     nullptr, nullptr, nullptr,

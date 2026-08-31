@@ -343,6 +343,7 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
         ggml_tensor * cell_blk,
         ggml_tensor * blk_cells,
         ggml_tensor * blk_pos,
+        ggml_tensor * mask_row,
         ggml_tensor * bias,
         const llama_ubatch * ubatch,
         uint32_t ratio,
@@ -434,6 +435,33 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
             const int64_t      i      = s*n_tps + ii;
             const llama_seq_id seq_id = ubatch->seq_id[i][0];
             const llama_pos    q      = ubatch->pos[i];
+
+            // per-cell visibility for the gather path: what row i of the attention
+            // kq_mask would say, minus SWA/alibi (the gather gate excludes those).
+            // unallocated (and skipped) when the graph takes the masked path.
+            if (mask_row != nullptr && mask_row->buffer != nullptr) {
+                float * dst_row = (float *) mask_row->data + i*n_kv;
+
+                const bool is_2d = ubatch->is_pos_2d();
+
+                const llama_pos qx = is_2d ? ubatch->pos[i + ubatch->n_tokens*2] : 0;
+                const llama_pos qy = is_2d ? ubatch->pos[i + ubatch->n_tokens]   : 0;
+
+                for (int64_t j = 0; j < n_kv; ++j) {
+                    float v = -INFINITY;
+
+                    if (!cells.is_empty(j) && cells.seq_has(j, seq_id) && cells.pos_get(j) <= q) {
+                        v = 0.0f;
+
+                        // M-RoPE: image tokens can share the temporal position of the query
+                        if (is_2d && cells.pos_get(j) == q && cells.ext_get(j).is_2d_gt(qx, qy)) {
+                            v = -INFINITY;
+                        }
+                    }
+
+                    dst_row[j] = v;
+                }
+            }
 
             // the tail is an incomplete block and is always visible, as in the reference
             const llama_pos tail_start = (q + 1)/r*r;
