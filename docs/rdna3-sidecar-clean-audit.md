@@ -68,3 +68,28 @@ and gfx1030. The focused host suite passed 4/4:
 The final launcher dry run selected native gfx1100 `ROCm0,ROCm1`, tensor split
 `1,1`, RCCL-linked HIP, and the fixed-width MTP sidecar. No DFlash runtime
 long-context claim is made without a matching prepared artifact bundle.
+
+## RocPRIM A/B result
+
+For a fair native-RDNA3 comparison, the old `502224204` source was compiled
+with its rocPRIM path explicitly enabled on gfx1100; its original
+`SPEC_SIDECAR_GFX1030` guard would otherwise use the fallback on gfx1100. Both
+variants also compiled successfully for gfx1030.
+
+- A 12-run HIP top-k microbenchmark (`N=40960`, `K=32`, alternating order,
+  5000/10000 iterations) measured `444.470 us/call` for `0a723d2e5` and
+  `444.685 us/call` for `502224204`: a `0.048%` advantage for current, well
+  inside run-to-run noise. Selection outputs matched.
+- The actual MTP sidecar ABI was exercised directly on gfx1100: two no-debug
+  500-call runs per variant, three stochastic proposals per call. The means
+  were `3.529171 ms/call` current and `3.528476 ms/call` old, a `0.020%`
+  advantage for old. Proposal IDs and checksums were identical.
+
+Thus neither rocPRIM implementation has a meaningful performance advantage in
+this test. Keep `0a723d2e5`: it is effectively tied, activates rocPRIM on both
+architectures when available, and safely falls back when the API or scratch
+allocation is unavailable. A full target-model server A/B was not completed
+because startup encountered the known SVM resident-memory failure before the
+sidecar was initialized; no end-to-end speed claim is based on that attempt.
+Evidence is under `rocprim-variant-topk-microbench-20260831T141203Z` and
+`rocprim-variant-mtp-direct-20260831T141621Z`.
