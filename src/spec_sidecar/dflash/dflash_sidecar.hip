@@ -70,7 +70,7 @@ struct DSeqState {
     int32_t state_pos_min = 0;
     int32_t state_pos_max = 0; // exclusive; only committed target rows
     uint64_t state_epoch = 1;
-    bool allocated = false;
+    int kv_capacity = 0; // allocated Kc/Vc rows; grows geometrically on demand
 };
 struct DState {
     bool ok = false;
@@ -91,7 +91,7 @@ struct DState {
     float *feat_d = nullptr, *henc = nullptr, *x = nullptr, *xn = nullptr, *dyn_a = nullptr, *dyn_f = nullptr, *cg = nullptr, *q = nullptr, *k = nullptr, *v = nullptr, *att = nullptr, *wo_out = nullptr,
           *fu = nullptr, *fg = nullptr, *ftmp = nullptr, *resid = nullptr, *tE = nullptr, *logits = nullptr, *selhid = nullptr, *tk_pmax = nullptr, *tk_vals = nullptr;
     int *pos_d[8] = {}, *tok_d[8] = {}, *tk_pidx = nullptr, *tk_ids = nullptr;
-    int max_pos = 16384;
+    int max_pos = 131072; // hard position ceiling; KV storage grows on demand
     DSeqState seq[8];
     int tkparts = 0;
     // Host scratch copied with the existing compact top-k readback. It lets
@@ -143,14 +143,47 @@ static constexpr int32_t DF_RELEASE_ABI = 5;
 static_assert(DF_TOPK == SPEC_SIDECAR_DFLASH_DRAFT_TOP_K,
               "DFlash stochastic top-k ABI mismatch");
 
-static int ensure_seq_storage(DSeqState & q) {
-    if (q.allocated) return 0;
-    const size_t kv_bytes = (size_t) S.max_pos * DF_KV * DF_HDIM * sizeof(__half);
+static hipGraphExec_t g_draft_gexec[8] = {};
+
+// Grow committed KV storage only as far as the current request needs. The
+// graph captures Kc/Vc pointers, so replacing storage invalidates that
+// sequence's cached graph; the next draft recaptures it once.
+static int ensure_seq_storage(DSeqState & q, int needed) {
+    if (needed <= q.kv_capacity) return 0;
+    if (needed > S.max_pos) return -1;
+    int capacity = q.kv_capacity > 0 ? q.kv_capacity : 16384;
+    while (capacity < needed) capacity *= 2;
+    if (capacity > S.max_pos) capacity = S.max_pos;
+    const size_t kv_bytes = (size_t) capacity * DF_KV * DF_HDIM * sizeof(__half);
+    const size_t row_bytes = (size_t) DF_KV * DF_HDIM * sizeof(__half);
+    DFC(hipStreamSynchronize(S.st));
     for (int il = 0; il < DF_LAYERS; ++il) {
-        DFC(hipMalloc(&q.Kc[il], kv_bytes));
-        DFC(hipMalloc(&q.Vc[il], kv_bytes));
+        __half * nk = nullptr;
+        __half * nv = nullptr;
+        DFC(hipMalloc(&nk, kv_bytes));
+        DFC(hipMalloc(&nv, kv_bytes));
+        if (q.state_pos_max > 0) {
+            DFC(hipMemcpyAsync(nk, q.Kc[il], (size_t) q.state_pos_max * row_bytes,
+                               hipMemcpyDeviceToDevice, S.st));
+            DFC(hipMemcpyAsync(nv, q.Vc[il], (size_t) q.state_pos_max * row_bytes,
+                               hipMemcpyDeviceToDevice, S.st));
+        }
+        DFC(hipStreamSynchronize(S.st));
+        if (q.Kc[il] != nullptr) DFC(hipFree(q.Kc[il]));
+        if (q.Vc[il] != nullptr) DFC(hipFree(q.Vc[il]));
+        q.Kc[il] = nk;
+        q.Vc[il] = nv;
     }
-    q.allocated = true;
+    const int seq_idx = (int) (&q - S.seq);
+    if (seq_idx >= 0 && seq_idx < 8 && g_draft_gexec[seq_idx] != nullptr) {
+        DFC(hipGraphExecDestroy(g_draft_gexec[seq_idx]));
+        g_draft_gexec[seq_idx] = nullptr;
+    }
+    if (q.kv_capacity > 0) {
+        fprintf(stderr, "[dflash-sidecar] seq %d KV cache grown %d -> %d rows\n",
+                seq_idx, q.kv_capacity, capacity);
+    }
+    q.kv_capacity = capacity;
     return 0;
 }
 
@@ -238,6 +271,29 @@ DF_API int spec_dflash_reset_state(int32_t seq_id) {
     q->state_pos_min = 0;
     q->state_pos_max = 0;
     discard_pending(*q);
+    // Return memory borrowed for a long request. The next request above 16K
+    // pays one growth allocation and one graph recapture.
+    if (q->kv_capacity > 16384) {
+        DFC(hipStreamSynchronize(S.st));
+        for (int il = 0; il < DF_LAYERS; ++il) {
+            if (q->Kc[il] != nullptr) {
+                DFC(hipFree(q->Kc[il]));
+                q->Kc[il] = nullptr;
+            }
+            if (q->Vc[il] != nullptr) {
+                DFC(hipFree(q->Vc[il]));
+                q->Vc[il] = nullptr;
+            }
+        }
+        const int seq_idx = (int) (q - S.seq);
+        if (seq_idx >= 0 && seq_idx < 8 && g_draft_gexec[seq_idx] != nullptr) {
+            DFC(hipGraphExecDestroy(g_draft_gexec[seq_idx]));
+            g_draft_gexec[seq_idx] = nullptr;
+        }
+        fprintf(stderr, "[dflash-sidecar] seq %d KV cache shrunk %d -> 0 rows on reset\n",
+                seq_idx, q->kv_capacity);
+        q->kv_capacity = 0;
+    }
     return 0;
 }
 
@@ -254,7 +310,7 @@ DF_API int spec_dflash_commit_state(int32_t seq_id, int32_t pos_max) {
     if (!S.ok || q == nullptr || pos_max < q->state_pos_max ||
             pos_max > q->pending_pos_max || pos_max > S.max_pos) return -1;
     if (pos_max > q->state_pos_max) {
-        if (!q->allocated || q->pending_pos_min != q->state_pos_max) return -1;
+        if (ensure_seq_storage(*q, pos_max) != 0 || q->pending_pos_min != q->state_pos_max) return -1;
         const size_t src_row = (size_t) (q->state_pos_max - q->pending_pos_min);
         const size_t n_rows = (size_t) (pos_max - q->state_pos_max);
         const size_t row_bytes = (size_t) DF_KV * DF_HDIM * sizeof(__half);
@@ -280,11 +336,12 @@ DF_API int spec_dflash_rebase_state(int32_t seq_id, int32_t pos_min, int32_t pos
         if (delta != 0 && ++q->state_epoch == 0) q->state_epoch = 1;
         return 0;
     }
-    if (pos_max < q->state_pos_max || !q->allocated) return -1;
+    if (pos_max < q->state_pos_max || q->kv_capacity <= 0) return -1;
 
     const int64_t new_min = (int64_t) pos_min + delta;
     const int64_t new_max = (int64_t) q->state_pos_max + delta;
-    if (new_min < 0 || new_max < new_min || new_max > S.max_pos) return -1;
+    if (new_min < 0 || new_max < new_min || new_max > S.max_pos ||
+            ensure_seq_storage(*q, (int) new_max) != 0) return -1;
 
     DFC(hipStreamSynchronize(S.st));
     for (int il = 0; il < DF_LAYERS; ++il) {
@@ -582,6 +639,8 @@ DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
     if (!(t = DT("output_norm.weight"))) return -1; S.w_out_norm = (const float *) t->dev;
     if (!(t = DT("selector_hidden.weight"))) return -1; S.W_selhid = (const block_q4_K *) t->dev;
 
+    // Optional override of the hard position ceiling; storage still grows on
+    // demand from 16K rows and this only bounds that growth.
     if (const char * mp = getenv("LLAMA_SPEC_HIP_MAX_POS")) {
         long long v = atoll(mp);
         if (v < 4096) v = 4096;
@@ -634,7 +693,7 @@ static int spec_dflash_chunk_impl(int32_t seq_id, const int32_t * poss,
             (n > 0 && (!poss || (device_features ? layer_features_device == nullptr : feats == nullptr)))) return -1;
     if (n == 0) return 0;
     if (n > S.max_pos - q->state_pos_max || q->pending_pos_max != q->state_pos_max ||
-            ensure_seq_storage(*q) != 0 || ensure_pending_storage(*q, n) != 0) return -1;
+            ensure_seq_storage(*q, q->state_pos_max + n) != 0 || ensure_pending_storage(*q, n) != 0) return -1;
     if (device_features && (n_layers != DF_LAYERS || layer_width != DF_EMBD / DF_LAYERS)) return -1;
     if (device_features) {
         for (int il = 0; il < DF_LAYERS; ++il) {
@@ -711,8 +770,10 @@ DF_API int spec_dflash_chunk_device(int32_t seq_id, const int32_t * poss,
 DF_API int spec_dflash_draft(int32_t seq_id, int32_t id_last, int32_t n_past, int32_t * out_ids) {
     DSeqState * q = get_seq(seq_id);
     if (!S.ok || q == nullptr || !out_ids || id_last < 0 || id_last >= DF_VOCAB) return -1;
-    if (n_past < 1 || n_past != q->state_pos_max || !q->allocated ||
-            static_cast<uint64_t>(n_past) + DF_BLOCK > static_cast<uint64_t>(S.max_pos)) return -1;
+    if (n_past < 1 || n_past != q->state_pos_max || q->kv_capacity < n_past) return -1;
+    // At the hard ceiling, report no DFlash proposal so stacked n-gram
+    // drafters can continue instead of disabling the sidecar process-wide.
+    if (static_cast<uint64_t>(n_past) + DF_BLOCK > static_cast<uint64_t>(S.max_pos)) return 0;
     const int NROT = 128;
     static int n_calls = 0;
     static double tot_ms = 0.0;
@@ -728,9 +789,8 @@ DF_API int spec_dflash_draft(int32_t seq_id, int32_t id_last, int32_t n_past, in
 
     // one hipGraph for the whole ~205-kernel draft: all kernel args are static
     // device pointers (contents vary per call), n_past is read from pos_d[0]
-    static hipGraphExec_t gexec[8] = {};
-    if (gexec[seq_id] != nullptr) {
-        DFC(hipGraphLaunch(gexec[seq_id], S.st));
+    if (g_draft_gexec[seq_id] != nullptr) {
+        DFC(hipGraphLaunch(g_draft_gexec[seq_id], S.st));
         goto readback;
     }
     DFC(hipStreamBeginCapture(S.st, hipStreamCaptureModeThreadLocal));
@@ -773,10 +833,10 @@ DF_API int spec_dflash_draft(int32_t seq_id, int32_t id_last, int32_t n_past, in
     {
         hipGraph_t graph = nullptr;
         DFC(hipStreamEndCapture(S.st, &graph));
-        DFC(hipGraphInstantiate(&gexec[seq_id], graph, nullptr, nullptr, 0));
+        DFC(hipGraphInstantiate(&g_draft_gexec[seq_id], graph, nullptr, nullptr, 0));
         DFC(hipGraphDestroy(graph));
         fprintf(stderr, "[dflash-sidecar] draft graph captured for seq %d\n", seq_id);
-        DFC(hipGraphLaunch(gexec[seq_id], S.st));
+        DFC(hipGraphLaunch(g_draft_gexec[seq_id], S.st));
     }
 readback:
     int   h_ids[8 * DF_TOPK];
@@ -847,8 +907,13 @@ DF_API int spec_dflash_draft_stochastic(int32_t seq_id, int32_t id_last, int32_t
     }
 
     int32_t greedy_ids[7] = {};
-    if (spec_dflash_draft(seq_id, id_last, n_past, greedy_ids) < 0) {
+    const int greedy_rc = spec_dflash_draft(seq_id, id_last, n_past, greedy_ids);
+    if (greedy_rc < 0) {
         return -1;
+    }
+    if (greedy_rc == 0) {
+        // Hard position ceiling: no draft this cycle; S.last_* is stale.
+        return 0;
     }
 
     int pred_idx = 0;
