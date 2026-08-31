@@ -11,7 +11,8 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 
     bool rope_finetuned = true;
     ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
-    hparams.rope_finetuned = rope_finetuned;
+    hparams.rope_finetuned = rope_finetuned; // needed for round trip save
+    std::fill(hparams.rope_pattern.begin(), hparams.rope_pattern.end(), rope_finetuned);
 
     switch (hparams.n_layer()) {
         case 40: type = hparams.n_embd == 4096 ? LLM_TYPE_8B : LLM_TYPE_3B; break;
@@ -254,7 +255,7 @@ llama_model_granite_switch::graph::graph(
     cb(inpL, "inp_embd", -1);
 
     ggml_tensor * inp_pos = nullptr;
-    if (hparams.rope_finetuned) {
+    if (hparams.has_rope(0)) {
         inp_pos = build_inp_pos();
     }
     auto * inp_attn = build_attn_inp_kv();
@@ -361,7 +362,7 @@ ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(
     Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-    if (hparams.rope_finetuned) {
+    if (hparams.has_rope(il)) {
         ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
         Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
                 n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,

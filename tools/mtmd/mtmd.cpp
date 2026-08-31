@@ -1,6 +1,7 @@
 #include "clip.h"
 #include "clip-impl.h"
 #include "mtmd.h"
+#include "mtmd-internal.h"
 #include "mtmd-audio.h"
 #include "mtmd-image.h"
 #include "debug/mtmd-debug.h"
@@ -149,6 +150,7 @@ struct mtmd_bitmap {
     uint32_t ny = 0;
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
+    bool mergeable = false; // [QWEN_VIDEO] set only on frames of the same video
 
     // lazy-loaded bitmap
     mtmd_bitmap_lazy_callback lazy_callback = nullptr;
@@ -186,7 +188,9 @@ struct mtmd_bitmap {
 
     bool can_merge_with(const mtmd_bitmap & other) const {
         // [QWEN_VIDEO] can (temporal) merge if both are images with same size
-        return !is_audio && !other.is_audio && nx == other.nx && ny == other.ny;
+        return mergeable && other.mergeable
+            && !is_audio && !other.is_audio
+            && nx == other.nx && ny == other.ny;
     }
 
   private:
@@ -452,6 +456,7 @@ static clip_flash_attn_type mtmd_get_clip_flash_attn_type(enum llama_flash_attn_
 mtmd_context_params mtmd_context_params_default() {
     mtmd_context_params params {
         /* use_gpu           */ true,
+        /* device            */ nullptr,
         /* print_timings     */ true,
         /* n_threads         */ 4,
         /* image_marker      */ nullptr,
@@ -560,6 +565,7 @@ struct mtmd_context {
 
         clip_context_params ctx_clip_params {
             /* use_gpu           */ ctx_params.use_gpu,
+            /* device            */ ctx_params.device,
             /* flash_attn_type   */ mtmd_get_clip_flash_attn_type(ctx_params.flash_attn_type),
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
@@ -819,6 +825,7 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_longest_edge>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_DOTS_OCR:
+            case PROJECTOR_TYPE_DOTS3NOTE_V:
                 {
                     // <|img|> ... (image embeddings) ... <|endofimg|>
                     img_beg = "<|img|>";
@@ -970,6 +977,13 @@ struct mtmd_context {
                     aud_end = "<audio|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4ua>(ctx_a);
                 } break;
+            case PROJECTOR_TYPE_DOTS3NOTE_A:
+                {
+                    // <|audio_comp_start|> ... (embeddings) ... <|audio_comp_end|>
+                    aud_beg = "<|audio_comp_start|>";
+                    aud_end = "<|audio_comp_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_dots3note>(ctx_a);
+                } break;
             case PROJECTOR_TYPE_MIMO_AUDIO:
                 {
                     aud_beg = "<|mimo_audio_start|>";
@@ -1076,6 +1090,25 @@ void mtmd_free(mtmd_context * ctx) {
     delete ctx;
 }
 
+std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::vector<mtmd_input_part> & parts, int n_merge) {
+    std::vector<std::vector<const mtmd_bitmap *>> output;
+    for (size_t i = 0; i < parts.size(); i++) {
+        if (parts[i].bitmap == nullptr) {
+            continue; // text part
+        }
+        const bool has_next = n_merge > 1 && i + 1 < parts.size() && parts[i + 1].bitmap != nullptr;
+        if (has_next && parts[i].bitmap->can_merge_with(*parts[i + 1].bitmap)) {
+            LOG_DBG("%s: merging 2 frames at part index %zu and %zu\n", __func__, i, i + 1);
+            output.push_back({parts[i].bitmap, parts[i + 1].bitmap});
+            parts.erase(parts.begin() + i + 1);
+            continue;
+        }
+        LOG_DBG("%s: no merging for part index %zu\n", __func__, i);
+        output.push_back({parts[i].bitmap});
+    }
+    return output;
+}
+
 struct mtmd_tokenizer {
     mtmd_context * ctx;
 
@@ -1084,10 +1117,7 @@ struct mtmd_tokenizer {
     bool parse_special;
     const llama_vocab * vocab;
 
-    struct part {
-        std::string text;
-        const mtmd_bitmap * bitmap;
-    };
+    using part = mtmd_input_part;
     std::vector<part> parts;
     // these will be freed when mtmd_tokenizer finishes
     std::vector<mtmd::bitmap> bm_from_lazy; // TODO @ngxson : refactor, free bm_from_lazy progressively
@@ -1192,34 +1222,7 @@ struct mtmd_tokenizer {
             GGML_ASSERT(n_merge_frames <= 2 && "we only support merging maximum 2 images for now; open an issue if this model supports merging more");
         }
 
-        // Build merged_bitmaps: each entry is a group of 1 or 2 bitmaps.
-        // For consecutive mergeable bitmap parts, merge them and collapse the second part out of this->parts.
-        std::vector<std::vector<const mtmd_bitmap *>> merged_bitmaps;
-        if (n_merge_frames > 1) {
-            for (size_t i = 0; i < parts.size(); ++i) {
-                if (parts[i].bitmap == nullptr) {
-                    continue;
-                }
-                if (i + 1 < parts.size() && parts[i + 1].bitmap != nullptr) {
-                    const mtmd_bitmap * bm_a = parts[i].bitmap;
-                    const mtmd_bitmap * bm_b = parts[i + 1].bitmap;
-                    if (bm_a->can_merge_with(*bm_b)) {
-                        LOG_DBG("%s: merging 2 frames at part index %zu and %zu\n", __func__, i, i + 1);
-                        merged_bitmaps.push_back({bm_a, bm_b});
-                        parts.erase(parts.begin() + i + 1); // collapse the second bitmap part
-                        continue;
-                    }
-                }
-                LOG_DBG("%s: no merging for part index %zu\n", __func__, i);
-                merged_bitmaps.push_back({parts[i].bitmap});
-            }
-        } else {
-            for (const auto & p : parts) {
-                if (p.bitmap != nullptr) {
-                    merged_bitmaps.push_back({p.bitmap});
-                }
-            }
-        }
+        auto merged_bitmaps = mtmd_group_mergeable_bitmaps(parts, n_merge_frames);
 
         size_t i_bm = 0;
         for (const auto & p : parts) {
@@ -2200,6 +2203,10 @@ void mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id) {
     }
 }
 
+void mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable) {
+    bitmap->mergeable = mergeable;
+}
+
 mtmd_bitmap * mtmd_bitmap_init_lazy(mtmd_context * ctx,
                                     const char * id,
                                     void * user_data,
@@ -2322,28 +2329,46 @@ void mtmd_input_chunk_free(mtmd_input_chunk * chunk) {
     }
 }
 
-int32_t mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, size_t out_len, size_t * expected_out_len) {
+// returns 0 on success
+static int32_t mtmd_input_chunk_save_impl(const mtmd_input_chunk * chunk, std::vector<char> & out_buf) {
     try {
         mtmd_serialization ser(MTMD_SERIALIZATION_VERSION);
         chunk->serialize(ser);
-
-        if (expected_out_len) {
-            *expected_out_len = ser.data.size();
-        }
-        if (!out_buf) {
-            // caller is only querying the required size
-            return 0;
-        }
-        if (out_len < ser.data.size()) {
-            LOG_ERR("%s: out_buf is too small, need %zu bytes, got %zu\n", __func__, ser.data.size(), out_len);
-            return -1;
-        }
-        std::memcpy(out_buf, ser.data.data(), ser.data.size());
+        out_buf = std::move(ser.data);
         return 0;
     } catch (const std::exception & e) {
         LOG_ERR("%s: %s\n", __func__, e.what());
         return -1;
     }
+}
+
+mtmd_input_chunk * mtmd_input_chunk_get_placeholder(const mtmd_input_chunk * chunk) {
+    // this is hacky, but still faster than copy the whole batch data
+    std::vector<char> buf;
+    if (mtmd_input_chunk_save_impl(chunk, buf) != 0) {
+        return nullptr;
+    }
+    return mtmd_input_chunk_load(buf.data(), buf.size());
+}
+
+int32_t mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, size_t out_len, size_t * expected_out_len) {
+    std::vector<char> buf;
+    if (mtmd_input_chunk_save_impl(chunk, buf) != 0) {
+        return -1;
+    }
+    if (expected_out_len) {
+        *expected_out_len = buf.size();
+    }
+    if (!out_buf) {
+        // caller is only querying the required size
+        return 0;
+    }
+    if (out_len < buf.size()) {
+        LOG_ERR("%s: out_buf is too small, need %zu bytes, got %zu\n", __func__, buf.size(), out_len);
+        return -1;
+    }
+    std::memcpy(out_buf, buf.data(), buf.size());
+    return 0;
 }
 
 mtmd_input_chunk * mtmd_input_chunk_load(const char * buf, size_t len) {

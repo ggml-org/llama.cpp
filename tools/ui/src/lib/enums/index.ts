@@ -3,8 +3,7 @@ export {
 	AttachmentType,
 	AttachmentMenuItemId,
 	AttachmentItemEnabledWhen,
-	AttachmentAction,
-	AttachmentItemVisibleWhen
+	AttachmentAction
 } from './attachment.enums';
 
 export {
@@ -68,7 +67,7 @@ export {
 	JsonSchemaType
 } from './mcp.enums';
 
-export { ModelModality } from './model.enums';
+export { ModelCapability, ModelModality } from './model.enums';
 
 export { ServerRole, ServerModelStatus, ServerModelsSseEventType } from './server.enums';
 
@@ -79,6 +78,8 @@ export {
 	ColorMode,
 	HtmlInputType,
 	McpPromptVariant,
+	ScrollCarouselVariant,
+	SidebarAction,
 	TooltipSide,
 	UrlProtocol
 } from './ui.enums';

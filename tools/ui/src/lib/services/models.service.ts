@@ -1,16 +1,54 @@
+/**
+ * ModelsService - Stateless model management API layer
+ *
+ * Wraps the /models endpoints (list, load, unload) and the /models/sse
+ * status feed in MODEL and ROUTER modes. No reactive state; consumed by
+ * modelsStore and its status manager.
+ */
+
+import { base } from '$app/paths';
 import { API_MODELS, MODEL_ID } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
-import { apiFetch, apiPost, normalizeModelName } from '$lib/utils';
+import {
+	apiFetch,
+	apiPost,
+	extractSseDataPayload,
+	normalizeModelName,
+	splitSseRecords
+} from '$lib/utils';
+import { getAuthHeaders } from '$lib/utils/api-headers';
 
 export class ModelsService {
+	private static readonly SSE_RECONNECT_MS = 1000;
+
+	/**
+	 * Check if a model is loaded based on its metadata.
+	 *
+	 * @param model - Model data entry from the API response
+	 * @returns True if the model status is LOADED
+	 */
+	static isModelLoaded(model: ApiModelDataEntry): boolean {
+		return model.status.value === ServerModelStatus.LOADED;
+	}
+
 	/**
 	 *
 	 *
-	 * Listing
+	 * Load/Unload
 	 *
 	 *
 	 */
+
+	/**
+	 * Check if a model is currently loading.
+	 *
+	 * @param model - Model data entry from the API response
+	 * @returns True if the model status is LOADING
+	 */
+	static isModelLoading(model: ApiModelDataEntry): boolean {
+		return model.status.value === ServerModelStatus.LOADING;
+	}
 
 	/**
 	 * Fetch list of models from OpenAI-compatible endpoint.
@@ -34,14 +72,6 @@ export class ModelsService {
 	}
 
 	/**
-	 *
-	 *
-	 * Load/Unload
-	 *
-	 *
-	 */
-
-	/**
 	 * Load a model (ROUTER mode only).
 	 * Sends POST request to `/models/load`. Note: the endpoint returns success
 	 * before loading completes — use polling to await actual load status.
@@ -59,54 +89,6 @@ export class ModelsService {
 
 		return apiPost<ApiRouterModelsLoadResponse>(API_MODELS.LOAD, payload);
 	}
-
-	/**
-	 * Unload a model (ROUTER mode only).
-	 * Sends POST request to `/models/unload`. Note: the endpoint returns success
-	 * before unloading completes — use polling to await actual unload status.
-	 *
-	 * @param modelId - Model identifier to unload
-	 * @returns Unload response from the server
-	 */
-	static async unload(modelId: string): Promise<ApiRouterModelsUnloadResponse> {
-		return apiPost<ApiRouterModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
-	}
-
-	/**
-	 *
-	 *
-	 * Status
-	 *
-	 *
-	 */
-
-	/**
-	 * Check if a model is loaded based on its metadata.
-	 *
-	 * @param model - Model data entry from the API response
-	 * @returns True if the model status is LOADED
-	 */
-	static isModelLoaded(model: ApiModelDataEntry): boolean {
-		return model.status.value === ServerModelStatus.LOADED;
-	}
-
-	/**
-	 * Check if a model is currently loading.
-	 *
-	 * @param model - Model data entry from the API response
-	 * @returns True if the model status is LOADING
-	 */
-	static isModelLoading(model: ApiModelDataEntry): boolean {
-		return model.status.value === ServerModelStatus.LOADING;
-	}
-
-	/**
-	 *
-	 *
-	 * Parsing
-	 *
-	 *
-	 */
 
 	/**
 	 * Parse a model ID string into its structured components.
@@ -205,8 +187,17 @@ export class ModelsService {
 
 		// 6. Model name = segments before params; tags = remaining segments after params
 		const pivotIdx = paramsIdx !== MODEL_ID.NOT_FOUND ? paramsIdx : segments.length;
+		const modelSegments = segments.slice(0, pivotIdx);
 
-		result.modelName = segments.slice(0, pivotIdx).join(MODEL_ID.SEGMENT_SEPARATOR) || null;
+		// strip trailing container-format segments (e.g. GGUF) from the model name
+		while (
+			modelSegments.length > 0 &&
+			MODEL_ID.IGNORED_SEGMENTS.has(modelSegments[modelSegments.length - 1].toUpperCase())
+		) {
+			modelSegments.pop();
+		}
+
+		result.modelName = modelSegments.join(MODEL_ID.SEGMENT_SEPARATOR) || null;
 
 		if (paramsIdx !== MODEL_ID.NOT_FOUND) {
 			result.tags = segments.slice(paramsIdx + 1).filter((_, relIdx) => {
@@ -219,5 +210,85 @@ export class ModelsService {
 		}
 
 		return result;
+	}
+
+	/**
+	 * Unload a model (ROUTER mode only).
+	 * Sends POST request to `/models/unload`. Note: the endpoint returns success
+	 * before unloading completes — use polling to await actual unload status.
+	 *
+	 * @param modelId - Model identifier to unload
+	 * @returns Unload response from the server
+	 */
+	static async unload(modelId: string): Promise<ApiRouterModelsUnloadResponse> {
+		return apiPost<ApiRouterModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
+	}
+
+	/**
+	 * Read the /models/sse feed and invoke onEvent for each parsed envelope.
+	 * Reconnects on network drops until the signal aborts. Splits the byte
+	 * stream into SSE records on the blank line boundary; the payload rides in
+	 * the data lines as a JSON envelope with its own model, event and data fields.
+	 */
+	static async watchModelEvents(
+		signal: AbortSignal,
+		onEvent: (event: ApiModelsSseEvent) => void
+	): Promise<void> {
+		const decoder = new TextDecoder();
+
+		while (!signal.aborted) {
+			try {
+				const response = await fetch(`${base}${API_MODELS.SSE}`, {
+					headers: getAuthHeaders(),
+					signal
+				});
+
+				if (response.ok && response.body) {
+					const reader = response.body.getReader();
+
+					let buffer = '';
+
+					while (!signal.aborted) {
+						const { done, value } = await reader.read();
+
+						if (done) break;
+
+						buffer += decoder.decode(value, { stream: true });
+
+						const { records, rest } = splitSseRecords(buffer);
+
+						buffer = rest;
+
+						for (const record of records) {
+							const event = ModelsService.parseStatusRecord(record);
+
+							if (event) onEvent(event);
+						}
+					}
+				}
+			} catch {
+				// network drop or abort falls through to the reconnect delay
+			}
+
+			if (signal.aborted) return;
+
+			await new Promise((resolve) => setTimeout(resolve, ModelsService.SSE_RECONNECT_MS));
+		}
+	}
+
+	/**
+	 * Parse one SSE record into its JSON envelope, or null when the record
+	 * carries no data payload or malformed JSON.
+	 */
+	private static parseStatusRecord(record: string): ApiModelsSseEvent | null {
+		const payload = extractSseDataPayload(record);
+
+		if (payload.length === 0) return null;
+
+		try {
+			return JSON.parse(payload) as ApiModelsSseEvent;
+		} catch {
+			return null;
+		}
 	}
 }

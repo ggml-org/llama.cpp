@@ -34,34 +34,34 @@
 </script>
 
 {#if isSearchCall}
-	<ChatMessageToolCallBlockSearchResults {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.GET_DATETIME}
-	<ChatMessageToolCallBlockGetDatetime {section} {isStreaming} />
-{:else if section.toolName === BuiltInTool.GET_INFO}
-	<ChatMessageToolCallBlockGetInfo {section} {isStreaming} />
-{:else if section.toolName === BuiltInTool.READ_FILE}
-	<ChatMessageToolCallBlockReadFile {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.READ_MEDIA}
-	<ChatMessageToolCallBlockReadMedia {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.EDIT_FILE}
-	<ChatMessageToolCallBlockEditFile {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.WRITE_FILE}
-	<ChatMessageToolCallBlockWriteFile {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.EXEC_SHELL_COMMAND}
+	<ChatMessageToolCallBlockSearchResults {isStreaming} {onToggle} {open} {section} />
+{:else if section.toolName === BuiltInTool.BROWSER_GET_DATETIME}
+	<ChatMessageToolCallBlockGetDatetime {isStreaming} {section} />
+{:else if section.toolName === BuiltInTool.SERVER_GET_INFO}
+	<ChatMessageToolCallBlockGetInfo {isStreaming} {section} />
+{:else if section.toolName === BuiltInTool.SERVER_READ_FILE}
+	<ChatMessageToolCallBlockReadFile {isStreaming} {onToggle} {open} {section} />
+{:else if section.toolName === BuiltInTool.BROWSER_READ_MEDIA}
+	<ChatMessageToolCallBlockReadMedia {isStreaming} {onToggle} {open} {section} />
+{:else if section.toolName === BuiltInTool.SERVER_EDIT_FILE}
+	<ChatMessageToolCallBlockEditFile {isStreaming} {onToggle} {open} {section} />
+{:else if section.toolName === BuiltInTool.SERVER_WRITE_FILE}
+	<ChatMessageToolCallBlockWriteFile {isStreaming} {onToggle} {open} {section} />
+{:else if section.toolName === BuiltInTool.SERVER_EXEC_SHELL_COMMAND}
 	<ChatMessageToolCallBlockExecShellCommand
-		{section}
-		{open}
-		{isStreaming}
-		{isExecuting}
 		{attachments}
+		{isExecuting}
+		{isStreaming}
 		{onToggle}
+		{open}
+		{section}
 	/>
-{:else if section.toolName === BuiltInTool.FILE_GLOB_SEARCH}
-	<ChatMessageToolCallBlockFileGlobSearch {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.GREP_SEARCH}
-	<ChatMessageToolCallBlockGrepSearch {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.RUN_JAVASCRIPT}
-	<ChatMessageToolCallBlockRunJavascript {section} {open} {isStreaming} {onToggle} />
+{:else if section.toolName === BuiltInTool.SERVER_FILE_GLOB_SEARCH}
+	<ChatMessageToolCallBlockFileGlobSearch {isStreaming} {onToggle} {open} {section} />
+{:else if section.toolName === BuiltInTool.SERVER_GREP_SEARCH}
+	<ChatMessageToolCallBlockGrepSearch {isStreaming} {onToggle} {open} {section} />
+{:else if section.toolName === BuiltInTool.BROWSER_RUN_JAVASCRIPT}
+	<ChatMessageToolCallBlockRunJavascript {isStreaming} {onToggle} {open} {section} />
 {:else}
-	<ChatMessageToolCallBlockDefault {section} {open} {isStreaming} {attachments} {onToggle} />
+	<ChatMessageToolCallBlockDefault {attachments} {isStreaming} {onToggle} {open} {section} />
 {/if}

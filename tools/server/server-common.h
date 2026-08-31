@@ -5,9 +5,9 @@
 #include "llama.h"
 #include "chat.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
 
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <atomic>
 #include <chrono>
@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 #define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 #define SLT_TRC(slot, fmt, ...) LOG_TRC("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
@@ -42,9 +42,9 @@ static T json_value(const json & body, const std::string & key, const T & defaul
     // Fallback null to default value
     if (body.contains(key) && !body.at(key).is_null()) {
         try {
-            return body.at(key);
-        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const & err) {
-            LOG_WRN("Wrong type supplied for parameter '%s'. Expected '%s', using default value: %s\n", key.c_str(), json(default_value).type_name(), err.what());
+            return body.at(key).get<T>();
+        } catch (const common_json_error & err) {
+            LOG_WRN("Wrong type supplied for parameter '%s', using default value: %s\n", key.c_str(), err.what());
             return default_value;
         }
     } else {
@@ -195,6 +195,10 @@ public:
     // will create a copy of the chunk if it contains non-text data
     void push_back(const mtmd_input_chunk * chunk);
 
+    // same as push_back, but media chunks are stored as placeholders (no image/audio data)
+    // only use this if the chunk will never be encoded again (e.g. it is already in the KV cache)
+    void push_back_placeholder(const mtmd_input_chunk * chunk);
+
     // appends server tokens, updates the media map. copies media chunks.
     void push_back(server_tokens & tokens);
 
@@ -266,7 +270,12 @@ size_t validate_utf8(const std::string& text);
 
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
 // if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
-server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder = false);
+server_tokens process_mtmd_prompt(
+                                        mtmd_context * mctx,
+                                        const std::string & prompt,
+                                        const std::vector<raw_buffer> & files,
+                                        const mtmd_helper_init_opt & init_opt,
+                                        bool is_placeholder = false);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -286,7 +295,8 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         mtmd_context * mctx,
                                         const json & json_prompt,
                                         bool add_special,
-                                        bool parse_special);
+                                        bool parse_special,
+                                        const mtmd_helper_init_opt & init_opt);
 
 //
 // OAI utils
@@ -535,7 +545,8 @@ server_tokens format_prompt_rerank(
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
-        const std::string & doc);
+        const std::string & doc,
+        const mtmd_helper_init_opt & init_opt);
 
 // simple implementation of a pipe
 // used for streaming data between threads

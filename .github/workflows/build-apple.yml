@@ -22,7 +22,8 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-apple.yml',
-      'ggml/src/ggml-metal/**'
+      'ggml/src/ggml-metal/**',
+      'ggml/src/ggml-rpc/**'
     ]
 
 concurrency:
@@ -73,6 +74,16 @@ jobs:
           cd build
           ctest -L main -E "test-llama-archs" --verbose --timeout 900
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: apple-arm64
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+
   macos-latest-x64:
     runs-on: macos-15-intel
 
@@ -108,6 +119,16 @@ jobs:
         run: |
           cd build
           ctest -L main --verbose --timeout 900
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: apple-x64
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
 
   macos-latest-ios-xcode:
     runs-on: macos-latest
@@ -163,14 +184,6 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      # TODO: this likely does not do anything - if yes, remove it
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: apple-tvos
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
       - name: Build
         id: cmake_build
         run: |
@@ -195,14 +208,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      # TODO: this likely does not do anything - if yes, remove it
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: apple-visionos
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -233,14 +238,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      # TODO: this likely does not do anything - if yes, remove it
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: apple-swift
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Download xcframework artifact
         uses: actions/download-artifact@v7
