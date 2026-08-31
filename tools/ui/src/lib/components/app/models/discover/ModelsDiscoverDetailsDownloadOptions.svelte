@@ -1,14 +1,14 @@
 <script lang="ts">
 	import DialogModelDownload from './DialogModelDownload.svelte';
 	import DownloadProgressBar from './DownloadProgressBar.svelte';
-	import { Check, Cpu, Download, TriangleAlert, X } from '@lucide/svelte';
-	import { browser } from '$app/environment';
+	import { Download } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isAuxSidecar, type ModelSidecar } from '$lib/constants';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
-	import type { ModelDownloadProgress } from '$lib/types';
+	import { modelsStore } from '$lib/stores';
+import type { ModelDownloadProgress } from '$lib/types';
 	import type { HfModelSibling } from '$lib/types/huggingface';
-	import { computeFileCompatibilityTiers, detectOs } from '$lib/utils';
+	import { estimateModelMemoryBytes } from '$lib/utils';
 
 	/** Download state of a single repo entry, injected by the integration layer. */
 	export interface DownloadEntryState {
@@ -32,51 +32,35 @@
 		modelId: string;
 		/** GGUF files grouped by bit depth. */
 		bitDepthRows: BitDepthRow[];
-		/** Repo GGUF files, input to the compatibility tiers. */
-		files: HfModelSibling[];
-		/** Native context window of the model, drives the fit tiers. */
-		nativeCtxTokens: number;
-		/** Device memory in GB for the fit tiers; 0 = unknown (no tiers). */
-		deviceMemoryGb?: number;
-		/** Download state lookup; defaults to all-neutral. Keyed by `<repo>:<tag>`. */
-		getDownloadState?: (repoWithTag: string, filePath: string) => DownloadEntryState;
+		/** Download state lookup; defaults to the models store status feed. */
+		getDownloadState?: (repoWithTag: string, filePath: string, isSidecar: boolean) => DownloadEntryState;
 	}
 
-	let {
-		bitDepthRows,
-		deviceMemoryGb = 0,
-		files,
-		getDownloadState = () => ({ isDownloaded: false, isDownloading: false, isFailed: false, progress: null }),
-		modelId,
-		nativeCtxTokens
-	}: Props = $props();
+	let { bitDepthRows, getDownloadState, modelId }: Props = $props();
 
 	let pendingDownload: PendingDownload | null = $state(null);
 
-	let osLabel = $derived(browser ? detectOs(navigator.userAgent) : 'unknown');
-	let tiers = $derived(computeFileCompatibilityTiers(files, nativeCtxTokens, deviceMemoryGb));
+	function stateFor(repoWithTag: string, filePath: string, isSidecar: boolean): DownloadEntryState {
+		if (getDownloadState) return getDownloadState(repoWithTag, filePath, isSidecar);
 
-	function buttonClass(parts: {
-		isDownloaded: boolean;
-		isFailed: boolean;
-		isUnavailable: boolean;
-	}): string {
-		const { isDownloaded, isFailed, isUnavailable } = parts;
+		return {
+			isDownloading: modelsStore.status.isDownloadInProgress(repoWithTag),
+			isDownloaded: isSidecar
+				? modelsStore.status.isDraftDownloaded(modelId, filePath)
+				: modelsStore.status.isModelDownloaded(repoWithTag),
+			isFailed: modelsStore.status.hasFailedDownload(repoWithTag),
+			progress: modelsStore.status.getDownloadProgress(repoWithTag)
+		};
+	}
+
+	function buttonClass(parts: { isDownloaded: boolean; isFailed: boolean }): string {
 		const classes = [
 			'relative inline-flex items-center gap-1 overflow-hidden rounded-md border bg-muted px-2 py-1 text-left font-mono text-xs transition-colors'
 		];
 
-		// Buttons stay neutral; only the leading compatibility badge carries
-		// color (green/yellow/red). Unavailable quants are greyed + disabled.
-		if (isUnavailable) {
-			classes.push('cursor-not-allowed opacity-50');
-		} else {
-			classes.push('cursor-pointer hover:border-primary/60 hover:bg-primary/5');
-		}
-
-		if (isDownloaded && !isFailed) {
+		if (parts.isDownloaded && !parts.isFailed) {
 			classes.push('border-foreground bg-muted');
-		} else if (isFailed) {
+		} else if (parts.isFailed) {
 			classes.push('border-destructive');
 		}
 
@@ -91,16 +75,6 @@
 				<Download class="h-4 w-4" />
 				Downloadable options
 			</h2>
-
-			<span
-				class="inline-flex items-center gap-1.5 rounded-full border bg-background px-2.5 py-1 text-xs font-medium"
-			>
-				<Cpu class="h-3 w-3 text-muted-foreground" />
-				{osLabel}
-				{#if deviceMemoryGb > 0}
-					<span class="text-muted-foreground">({deviceMemoryGb} GB)</span>
-				{/if}
-			</span>
 		</div>
 
 		<div class="divide-y px-4 pb-1">
@@ -117,40 +91,26 @@
 					<div class="flex flex-wrap justify-end gap-1.5">
 						{#each row.files as file (file.path)}
 							{@const meta = HuggingFaceService.extractQuantMeta(file.path)}
-					{@const basename = file.path.split('/').pop() ?? file.path}
-					{@const label = meta?.quant ?? basename.replace(/\.gguf$/i, '')}
-					{@const hfRepoWithTag = ModelsService.buildDownloadTag(modelId, meta?.quant ?? null, meta?.sidecar ?? null)}
-					{@const state = getDownloadState(hfRepoWithTag, file.path)}
-					{@const isDownloading = state.isDownloading}
-					{@const progress = state.progress}
-					{@const isDownloaded = state.isDownloaded}
-					{@const isFailed = state.isFailed}
-							{@const tier = tiers.get(file.path)}
-							{@const isUnavailable =
-								tier === 'none' && !isDownloaded && !isDownloading && !isFailed}
-							{@const isAvailable = tier === 'full' && !isDownloaded && !isDownloading && !isFailed}
-							{@const isLimited =
-								tier === 'limited' && !isDownloaded && !isDownloading && !isFailed}
+							{@const basename = file.path.split('/').pop() ?? file.path}
+							{@const label = meta?.quant ?? basename.replace(/\.gguf$/i, '')}
+							{@const hfRepoWithTag = ModelsService.buildDownloadTag(modelId, meta?.quant ?? null, meta?.sidecar ?? null)}
+							{@const state = stateFor(hfRepoWithTag, file.path, Boolean(meta?.sidecar))}
+							{@const isDownloading = state.isDownloading}
+							{@const progress = state.progress}
+							{@const isDownloaded = state.isDownloaded}
+							{@const isFailed = state.isFailed}
+							{@const memoryGb = Math.ceil(estimateModelMemoryBytes(file.size ?? 0) / (1024 ** 3))}
 							{@const tooltipText = isDownloading
 								? `Downloading ${file.path}`
 								: isDownloaded
 									? `Already downloaded: ${file.path}`
 									: isFailed
 										? `Last attempt failed: ${file.path}. Click to retry.`
-										: isUnavailable
-											? `Does not fit this device: ${file.path}`
-											: `Download ${file.path}`}
+										: `Download ${file.path} (requires ~${memoryGb} GB of memory)`}
 							<Tooltip.Root>
 								<Tooltip.Trigger
-									aria-disabled={isUnavailable}
-									class={buttonClass({
-										isDownloaded,
-										isFailed,
-										isUnavailable
-									})}
+									class={buttonClass({ isDownloaded, isFailed })}
 									onclick={() => {
-										if (isUnavailable) return;
-
 										pendingDownload = {
 											filePath: file.path,
 											quant: meta?.quant ?? null,
@@ -160,26 +120,6 @@
 									}}
 									type="button"
 								>
-									{#if isAvailable}
-										<span
-											class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-green-600"
-										>
-											<Check class="h-2.5 w-2.5 text-white" />
-										</span>
-									{:else if isLimited}
-										<span
-											class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-yellow-500"
-										>
-											<TriangleAlert class="h-2.5 w-2.5 text-white" />
-										</span>
-									{:else if isUnavailable}
-										<span
-											class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-red-600"
-										>
-											<X class="h-2.5 w-2.5 text-white" />
-										</span>
-									{/if}
-
 									{#if isFailed && !isDownloading && !isDownloaded}
 										<span
 											class="rounded bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase"
@@ -244,7 +184,6 @@
 			? HuggingFaceService.formatFileSize(pendingDownload.sizeBytes)
 			: undefined}
 		onClose={() => (pendingDownload = null)}
-		onDownload={() => {}}
 		quant={pendingDownload.quant}
 		repoId={modelId}
 		sidecar={pendingDownload.sidecar}
