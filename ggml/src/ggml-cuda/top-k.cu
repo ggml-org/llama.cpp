@@ -36,7 +36,9 @@ static void top_k_cub(ggml_cuda_pool & pool,
                          ncols, k, env));
 }
 
-#elif defined(GGML_CUDA_USE_CUB)  // CUB_TOP_K_AVAILABLE
+#endif  // CUB_TOP_K_AVAILABLE
+
+#ifdef GGML_CUDA_USE_CUB
 
 static int next_power_of_2(int x) {
     int n = 1;
@@ -46,7 +48,7 @@ static int next_power_of_2(int x) {
     return n;
 }
 
-#endif                            // CUB_TOP_K_AVAILABLE
+#endif  // GGML_CUDA_USE_CUB
 
 #if !defined(GGML_CUDA_USE_CUB) && defined(GGML_USE_HIP)
 
@@ -225,15 +227,23 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t    nrows = ggml_nrows(src0);
     const int64_t    k     = dst->ne[0];
     ggml_cuda_pool & pool  = ctx.pool();
+#ifdef GGML_CUDA_USE_CUB
 #ifdef CUB_TOP_K_AVAILABLE
+    // DeviceTopK processes a single row per call, so a batched op means a serial
+    // per-row loop of 3-4 kernel launches each; prompt processing can hand this op
+    // hundreds of rows at once. Keep DeviceTopK for decode-shaped calls and dispatch
+    // larger batches to the row-parallel argsort path below.
     // TODO: Switch to `DeviceSegmentedTopK` for multi-row TopK once implemented
     // https://github.com/NVIDIA/cccl/issues/6391
     // TODO: investigate if there exists a point where parallelized argsort is faster than sequential top-k
-    for (int i = 0; i < nrows; i++) {
-        top_k_cub(pool, src0_d + i * ncols, dst_d + i * k, ncols, k, stream);
+    if (nrows <= 4) {
+        for (int i = 0; i < nrows; i++) {
+            top_k_cub(pool, src0_d + i * ncols, dst_d + i * k, ncols, k, stream);
+        }
+        return;
     }
-#elif defined(GGML_CUDA_USE_CUB)  // CUB_TOP_K_AVAILABLE
-    // Fall back to argsort + copy
+#endif  // CUB_TOP_K_AVAILABLE
+    // argsort + copy
     const int    ncols_pad      = next_power_of_2(ncols);
     const size_t shared_mem     = ncols_pad * sizeof(int);
     const size_t max_shared_mem = ggml_cuda_info().devices[ggml_cuda_get_device()].smpb;
@@ -257,7 +267,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         src0_d += ncols * iter_nrows;
         dst_d  += k     * iter_nrows;
     }
-#else                             // GGML_CUDA_USE_CUB
+#else   // GGML_CUDA_USE_CUB
 #if defined(GGML_USE_HIP)
     if (ncols > 1024) {
         top_k_radix_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
