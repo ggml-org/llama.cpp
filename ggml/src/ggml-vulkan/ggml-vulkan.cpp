@@ -3442,15 +3442,55 @@ static void ggml_vk_load_shaders(vk_device& device) {
             } \
         }
 
+// Like CREATE_FA but restricted to FA_SCALAR: when f32acc is requested (prec ==
+// GGML_PREC_F32), bind the true FLOAT_TYPE=float shader body (the "_fp32"
+// suffixed variant) instead of the FLOAT_TYPE=float16_t one -- see the comment
+// at its call site for why this matters.
+#define CREATE_FA_SCALAR_F32ACC_FIX(TYPE, NAMELC) \
+        for (auto &fa : device->pipeline_flash_attn_f32_f16[TYPE]) { \
+            FaCodePath path = fa.first.path; \
+            uint32_t Br = fa.first.Br; \
+            uint32_t Bc = fa.first.Bc; \
+            bool aligned = fa.first.aligned; \
+            bool f32acc = fa.first.f32acc; \
+            uint32_t fa_sgs = fa.first.subgroup_size; \
+            bool fa_ds = fa.first.subgroup_size == 0; \
+            if (path == FA_SCALAR) { \
+                if (aligned) { \
+                    if (f32acc) { \
+                        ggml_vk_create_pipeline(device, fa.second, "flash_attn_f32_f16_aligned_f32acc" #NAMELC, flash_attn_f32_f16_ ## NAMELC ## _fp32_len,  flash_attn_f32_f16_ ## NAMELC ## _fp32_data,  "main", 7, sizeof(vk_flash_attn_push_constants), {Br, 1, 1}, get_fa_spec_constants(fa.first), Bc, true, !fa_ds, (!fa_ds ? fa_sgs : 0));     \
+                    } else { \
+                        ggml_vk_create_pipeline(device, fa.second, "flash_attn_f32_f16_aligned_f16acc" #NAMELC, flash_attn_f32_f16_ ## NAMELC ## _f16acc_len,  flash_attn_f32_f16_ ## NAMELC ## _f16acc_data,  "main", 7, sizeof(vk_flash_attn_push_constants), {Br, 1, 1}, get_fa_spec_constants(fa.first), Bc, true, !fa_ds, (!fa_ds ? fa_sgs : 0));     \
+                    } \
+                } else { \
+                    if (f32acc) { \
+                        ggml_vk_create_pipeline(device, fa.second, "flash_attn_f32_f16_f32acc"         #NAMELC, flash_attn_f32_f16_ ## NAMELC ## _fp32_len,  flash_attn_f32_f16_ ## NAMELC ## _fp32_data,  "main", 7, sizeof(vk_flash_attn_push_constants), {Br, 1, 1}, get_fa_spec_constants(fa.first), 1,  true, !fa_ds, (!fa_ds ? fa_sgs : 0));     \
+                    } else { \
+                        ggml_vk_create_pipeline(device, fa.second, "flash_attn_f32_f16_f16acc"         #NAMELC, flash_attn_f32_f16_ ## NAMELC ## _f16acc_len,  flash_attn_f32_f16_ ## NAMELC ## _f16acc_data,  "main", 7, sizeof(vk_flash_attn_push_constants), {Br, 1, 1}, get_fa_spec_constants(fa.first), 1,  true, !fa_ds, (!fa_ds ? fa_sgs : 0));     \
+                    } \
+                } \
+            } \
+        }
+
     if (device->fp16) {
-        CREATE_FA(GGML_TYPE_F32, f32, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_F16, f16, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_Q8_0, q8_0, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_Q4_1, q4_1, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_Q5_0, q5_0, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_Q5_1, q5_1, FA_SCALAR, )
-        CREATE_FA(GGML_TYPE_IQ4_NL, iq4_nl, FA_SCALAR, )
+        // f32acc (prec==GGML_PREC_F32) only ever selected the FLOAT_TYPE=float16_t
+        // shader body compiled with an fp32 ACC_TYPE (the raw QK^T score
+        // accumulator) -- the online-softmax running accumulators Of/Lf/Mf stayed
+        // float16_t regardless, silently truncating on every KV block. That's a
+        // correctness gap versus what GGML_PREC_F32 means everywhere else in ggml
+        // (full fp32), and it compounds catastrophically for architectures like
+        // MLA with very information-dense per-token values at long context. Route
+        // f32acc==true to the true FLOAT_TYPE=float shader body (already compiled
+        // as the "_fp32" suffixed variant, previously only reachable on devices
+        // lacking fp16 hardware support at all) instead of the fp16-body one.
+        CREATE_FA_SCALAR_F32ACC_FIX(GGML_TYPE_F32, f32)
+        CREATE_FA_SCALAR_F32ACC_FIX(GGML_TYPE_F16, f16)
+        CREATE_FA_SCALAR_F32ACC_FIX(GGML_TYPE_Q4_0, q4_0)
+        CREATE_FA_SCALAR_F32ACC_FIX(GGML_TYPE_Q8_0, q8_0)
+        CREATE_FA_SCALAR_F32ACC_FIX(GGML_TYPE_Q4_1, q4_1)
+        CREATE_FA_SCALAR_F32ACC_FIX(GGML_TYPE_Q5_0, q5_0)
+        CREATE_FA_SCALAR_F32ACC_FIX(GGML_TYPE_Q5_1, q5_1)
+        CREATE_FA_SCALAR_F32ACC_FIX(GGML_TYPE_IQ4_NL, iq4_nl)
     } else {
         CREATE_FA(GGML_TYPE_F32, f32, FA_SCALAR, _fp32)
         CREATE_FA(GGML_TYPE_F16, f16, FA_SCALAR, _fp32)

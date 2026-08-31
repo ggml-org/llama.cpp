@@ -90,19 +90,33 @@ void main() {
     barrier();
 
     FLOAT_TYPEV4 Of[rows_per_thread][HSV_per_thread / 4];
+    // Kahan (compensated) summation running error term for Of, so the running
+    // sum over up to KV/Bc blocks doesn't accumulate O(KV) rounding error. This
+    // is a secondary refinement on top of the ggml_vk_load_shaders fix (see
+    // ggml-vulkan.cpp, CREATE_FA_SCALAR_F32ACC_FIX) that makes prec=GGML_PREC_F32
+    // actually reach this FLOAT_TYPE=float shader body -- with that fix alone,
+    // FLASH_ATTN_EXT's NMSE against the CPU reference still grows mildly with KV
+    // (ordinary float32 non-associativity vs. the CPU reference's summation
+    // order); Kahan summation here trims that residual further. Composes with
+    // the eM rescaling below by rescaling the compensation term the same way
+    // the sum itself is rescaled.
+    FLOAT_TYPEV4 Oc[rows_per_thread][HSV_per_thread / 4];
     [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
             Of[r][d] = FLOAT_TYPEV4(0.0);
+            Oc[r][d] = FLOAT_TYPEV4(0.0);
         }
     }
 
     float Lf[rows_per_thread], Mf[rows_per_thread];
+    float Lc[rows_per_thread]; // Kahan compensation term for Lf, see Oc above
 
     // Use -FLT_MAX/2 rather than -inf to reduce the possibility of NaNs, e.g. when computing Mold-M.
     const float NEG_FLT_MAX_OVER_2 = uintBitsToFloat(0xFEFFFFFF);
 
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
         Lf[r] = 0;
+        Lc[r] = 0;
         Mf[r] = NEG_FLT_MAX_OVER_2;
     }
 
@@ -320,11 +334,13 @@ void main() {
             Mf[r] = max(rowmaxf, Moldf);
             eMf[r] = exp(Moldf - Mf[r]);
             Lf[r] = eMf[r]*Lf[r];
+            Lc[r] = eMf[r]*Lc[r]; // keep the Kahan compensation term in the same scale as Lf
         }
 
         [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                 Of[r][d] = FLOAT_TYPE(eMf[r]) * Of[r][d];
+                Oc[r][d] = FLOAT_TYPE(eMf[r]) * Oc[r][d]; // ditto for Of's compensation term
             }
         }
 
@@ -360,7 +376,14 @@ void main() {
             FLOAT_TYPE Pf[rows_per_thread];
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                 Pf[r] = FLOAT_TYPE(exp(float(Sf[r][c]) - Mf[r]));
-                Lf[r] += Pf[r];
+                // Kahan summation: Lf[r] += Pf[r], but tracking (and correcting
+                // for) the rounding error lost on each addition -- see Oc's
+                // comment above for why this is a secondary refinement, not
+                // the main fix.
+                float Ly = float(Pf[r]) - Lc[r];
+                float Lt = Lf[r] + Ly;
+                Lc[r] = (Lt - Lf[r]) - Ly;
+                Lf[r] = Lt;
             }
 
             [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
@@ -378,7 +401,11 @@ void main() {
 #endif
                 }
                 [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-                    Of[r][d] += FLOAT_TYPEV4(Pf[r] * Vf);
+                    // Kahan summation, same reasoning as Lf above.
+                    FLOAT_TYPEV4 Oy = FLOAT_TYPEV4(Pf[r] * Vf) - Oc[r][d];
+                    FLOAT_TYPEV4 Ot = Of[r][d] + Oy;
+                    Oc[r][d] = (Ot - Of[r][d]) - Oy;
+                    Of[r][d] = Ot;
                 }
             }
         }

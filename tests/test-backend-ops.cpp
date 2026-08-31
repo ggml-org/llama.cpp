@@ -1415,11 +1415,37 @@ struct test_case {
             double err = ud->tc->err(f1.data(), f2.data(), f1.size());
             if (err > ud->tc->max_err(ud->backend1)) {
                 printf("[%s] ERR = %.9f > %.9f ", ggml_op_desc(t1), err, ud->tc->max_err(ud->backend1));
-                //for (int i = 0; i < (int) f1.size(); i++) {
-                //    printf("%5d %9.6f %9.6f, diff = %9.6f\n", i, f1[i], f2[i], f1[i] - f2[i]);
-                //}
-                //printf("\n");
-                //exit(1);
+                if (getenv("MLA_DIFF_DUMP")) {
+                    // out tensor layout here is {hsv_padded, nh*nr23[0], nb, nr23[1]} --
+                    // decode flat index into (d, head, token) so we can see *where*
+                    // (which head, which token position) the divergence actually is.
+                    int64_t ne0 = t1->ne[0], ne1 = t1->ne[1], ne2 = t1->ne[2];
+                    int n_printed = 0;
+                    double max_diff = 0;
+                    int64_t max_diff_idx = -1;
+                    for (int64_t i = 0; i < (int64_t) f1.size(); i++) {
+                        double diff = std::fabs((double) f1[i] - (double) f2[i]);
+                        if (diff > max_diff) { max_diff = diff; max_diff_idx = i; }
+                        if (diff > 1.0 && n_printed < 200) {
+                            int64_t d = i % ne0;
+                            int64_t head = (i / ne0) % ne1;
+                            int64_t tok = (i / (ne0 * ne1)) % ne2;
+                            printf("\n  [diff>1] flat=%lld (d=%lld,head=%lld,tok=%lld) ref=%9.6f got=%9.6f diff=%9.6f",
+                                   (long long) i, (long long) d, (long long) head, (long long) tok, f1[i], f2[i], (float) diff);
+                            n_printed++;
+                        }
+                    }
+                    if (max_diff_idx >= 0) {
+                        int64_t d = max_diff_idx % ne0;
+                        int64_t head = (max_diff_idx / ne0) % ne1;
+                        int64_t tok = (max_diff_idx / (ne0 * ne1)) % ne2;
+                        printf("\n  [MAX DIFF] flat=%lld (d=%lld,head=%lld,tok=%lld) ref=%9.6f got=%9.6f diff=%9.6f (ne0=%lld ne1=%lld ne2=%lld)",
+                               (long long) max_diff_idx, (long long) d, (long long) head, (long long) tok,
+                               f1[max_diff_idx], f2[max_diff_idx], (float) max_diff,
+                               (long long) ne0, (long long) ne1, (long long) ne2);
+                    }
+                    printf("\n");
+                }
                 ud->ok = false;
             }
             return true;
@@ -8602,6 +8628,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // qwen35-mla / TransMLA-style MQA-absorbed shape (hsk=kv_lora_rank+qk_mqa_dim=320,
+    // hsv=kv_lora_rank=256 -- the "Mistral4 MLA" shape above, but at gqa_ratio=16,
+    // which the sweep above never tests (it only covers nr2 in {1,4,12,20,32}).
+    // Reproduces a long-context LongPPL blowup seen on Vulkan at non-power-of-2 kv,
+    // absent on CPU and with -fa off. Testing both small (matching the sweep's own
+    // granularity) and large (our real workload's) kv, power-of-2 and not.
+    for (int kv : { 113, 512, 1024, 1536, 2048, 4096, 8192, 16384, 24576, 32768, 40960, 49152, 65536 }) {
+        test_cases.emplace_back(new test_flash_attn_ext(320, 256, 1, {16, 1}, kv, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16));
+    }
+
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   10, 5, 4, 3}));
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {30000, 1, 1, 1}));
     test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {   10, 5, 4, 3}));
@@ -8858,6 +8894,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             }
         }
     }
+
 
     for (int col : {8192, 16384, 32768, 65536, 131072, 262144, 524288}) {
         for (int rows : {1, 4, 16}){
