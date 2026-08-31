@@ -180,8 +180,75 @@ static void swiglu_oai_f32(const float * restrict src0,
     }
 }
 
+static void swiglu_clamp_f32(const float * restrict src0,
+                             const float * restrict src1,
+                             float * restrict dst,
+                             const uint32_t                 num_rows,
+                             const struct htp_act_context * actx) {
+    htp_glu_op_preamble;
+    const float limit = ((const float *) (actx->octx->op_params))[3];
+
+    for (uint32_t ib = 0; ib < num_rows; ib++) {
+        const uint8_t * restrict src0_ptr = (const uint8_t *) src0 + (ib * src0_row_size_aligned);
+        const uint8_t * restrict src1_ptr = (const uint8_t *) src1 + (ib * src1_row_size_aligned);
+        uint8_t * restrict dst_ptr        = (uint8_t *) dst + (ib * dst_row_size_aligned);
+
+        hvx_min_scalar_f32((uint8_t *) src0_ptr, src0_ptr, limit, nc);
+        hvx_clamp_scalar_f32((uint8_t *) src1_ptr, src1_ptr, -limit, limit, nc);
+        hvx_sigmoid_f32_aa(dst_ptr, src0_ptr, nc);
+        hvx_mul_mul_f32_aa(dst_ptr, src0_ptr, dst_ptr, src1_ptr, nc);
+    }
+}
+
 static const float GELU_COEF_A     = 0.044715f;
 static const float SQRT_2_OVER_PI  = 0.79788456080286535587989211986876f;
+
+static inline HVX_Vector hvx_vec_fast_sigmoid_f32_2it(HVX_Vector v) {
+    v = Q6_Vqf32_vmpy_VsfVsf(v, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
+    v = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v), Q6_V_vsplat_R(FAST_SIGMOID_C3));
+
+    HVX_Vector in_int = hvx_vec_truncate_f32(Q6_Vsf_equals_Vqf32(v));
+    HVX_Vector x      = Q6_Vqf32_vsub_Vqf32Vsf(v, Q6_Vsf_equals_Vw(in_int));
+    HVX_Vector xx     = Q6_Vqf32_vmpy_Vqf32Vqf32(x, x);
+
+    HVX_Vector v1 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(xx), Q6_V_vsplat_R(FAST_SIGMOID_C2));
+    v1            = Q6_Vqf32_vadd_Vqf32Vsf(v1, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
+
+    HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(x), Q6_V_vsplat_R(FAST_SIGMOID_C1));
+    v2            = Q6_Vqf32_vmpy_Vqf32Vqf32(v2, xx);
+    v2            = Q6_Vqf32_vadd_Vqf32Vqf32(v2, x);
+
+    HVX_Vector v3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(v2, v1));
+    v3            = Q6_Vw_vaslacc_VwVwR(v3, in_int, 24);
+
+    HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
+    HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
+
+    // Newton-Raphson with 2 iterations
+    HVX_Vector two_sf = hvx_vec_splat_f32(2.0f);
+    HVX_Vector i_sf   = Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(0x7EEEEBB3), v5);
+    HVX_Vector r_qf   = Q6_Vqf32_vmpy_VsfVsf(
+        i_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(two_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(i_sf, v5)))));
+    r_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(
+        r_qf, Q6_Vqf32_vsub_VsfVsf(two_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(r_qf), v5))));
+    HVX_Vector res = Q6_Vsf_equals_Vqf32(r_qf);
+
+    res = Q6_Vqf32_vmpy_VsfVsf(v3, res);
+
+    return Q6_Vsf_equals_Vqf32(res);
+}
+
+static inline HVX_Vector hvx_vec_fast_sigmoid_f32_guard_2it(HVX_Vector v,
+                                                            HVX_Vector one,
+                                                            HVX_Vector max_exp,
+                                                            HVX_Vector min_exp) {
+    const HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(max_exp, v);
+    const HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(v, min_exp);
+
+    HVX_Vector out = hvx_vec_fast_sigmoid_f32_2it(v);
+    out            = Q6_V_vmux_QVV(pred_max, out, one);
+    return Q6_V_vmux_QVV(pred_min, out, Q6_V_vzero());
+}
 
 static inline void hvx_geglu_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
     assert((unsigned long) dst  % 128 == 0);
@@ -200,20 +267,13 @@ static inline void hvx_geglu_f32_aa(uint8_t * restrict dst, const uint8_t * rest
 
     const HVX_Vector v_coef_a_times_sqrt = hvx_vec_splat_f32(GELU_COEF_A_TIMES_SQRT);
     const HVX_Vector v_sqrt_2_pi         = hvx_vec_splat_f32(SQRT_2_OVER_PI);
-    const HVX_Vector v_half              = hvx_vec_splat_f32(0.5f);
     const HVX_Vector v_one               = hvx_vec_splat_f32(1.0f);
-    const HVX_Vector v_two               = hvx_vec_splat_f32(2.0f);
-
-    // Hoisted fast sigmoid / inverse constants to avoid loop-internal overhead
-    const HVX_Vector v_log2f             = Q6_V_vsplat_R(FAST_SIGMOID_LOG2F);
-    const HVX_Vector v_c1                = Q6_V_vsplat_R(FAST_SIGMOID_C1);
-    const HVX_Vector v_c2                = Q6_V_vsplat_R(FAST_SIGMOID_C2);
-    const HVX_Vector v_inv_aprox         = Q6_V_vsplat_R(0x7EEEEBB3);
     const HVX_Vector v_max_exp           = hvx_vec_splat_f32(87.0f);
     const HVX_Vector v_min_exp           = hvx_vec_splat_f32(-87.0f);
 
     uint32_t i = 0;
 
+    _Pragma("unroll(4)")
     for (; i < nvec; i++) {
         HVX_Vector x = vsrc0[i];
         HVX_Vector g = vsrc1[i];
@@ -223,56 +283,13 @@ static inline void hvx_geglu_f32_aa(uint8_t * restrict dst, const uint8_t * rest
         coef = hvx_vec_add_f32_f32(coef, v_sqrt_2_pi);
         HVX_Vector inner = hvx_vec_mul_f32_f32(x, coef);
 
-        // y2 = 2 * inner
-        HVX_Vector y2 = hvx_vec_mul_f32_f32(inner, v_two);
+        // y2 = 2 * inner = inner + inner
+        HVX_Vector y2 = hvx_vec_add_f32_f32(inner, inner);
 
-        // Sigmoid guard check predicates
-        HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(v_max_exp, y2);
-        HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(y2, v_min_exp);
+        // Fast sigmoid approximation (2 iterations)
+        HVX_Vector sig2y = hvx_vec_fast_sigmoid_f32_guard_2it(y2, v_one, v_max_exp, v_min_exp);
 
-        // Fast sigmoid approximation
-        HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(y2, v_log2f);
-        v = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v), v_half);
-
-        HVX_Vector in_int = hvx_vec_truncate_f32(Q6_Vsf_equals_Vqf32(v));
-        HVX_Vector x_sig  = Q6_Vqf32_vsub_Vqf32Vsf(v, Q6_Vsf_equals_Vw(in_int));
-        HVX_Vector xx_sig = Q6_Vqf32_vmpy_Vqf32Vqf32(x_sig, x_sig);
-
-        HVX_Vector v1 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(xx_sig), v_c2);
-        v1 = Q6_Vqf32_vadd_Vqf32Vsf(v1, v_log2f);
-
-        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(x_sig), v_c1);
-        v2 = Q6_Vqf32_vmpy_Vqf32Vqf32(v2, xx_sig);
-        v2 = Q6_Vqf32_vadd_Vqf32Vqf32(v2, x_sig);
-
-        HVX_Vector v3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(v2, v1));
-        v3 = Q6_Vw_vaslacc_VwVwR(v3, in_int, 24);
-
-        HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
-        HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
-
-        // Fast division (Newton-Raphson with 2 iterations)
-        HVX_Vector i_sf = Q6_Vw_vsub_VwVw(v_inv_aprox, v5);
-        HVX_Vector r_qf = Q6_Vqf32_vmpy_VsfVsf(
-            i_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v_two, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(i_sf, v5)))));
-        r_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(
-            r_qf, Q6_Vqf32_vsub_VsfVsf(v_two, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(r_qf), v5))));
-        HVX_Vector res_inv = Q6_Vsf_equals_Vqf32(r_qf);
-
-        HVX_Vector sig2y = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v3, res_inv));
-
-        // Sigmoid guards
-        sig2y = Q6_V_vmux_QVV(pred_max, sig2y, v_one);
-        sig2y = Q6_V_vmux_QVV(pred_min, sig2y, Q6_V_vzero());
-
-        // tanh(inner) = 2 * sigmoid(2 * inner) - 1
-        HVX_Vector tanh_val = hvx_vec_mul_f32_f32(sig2y, v_two);
-        tanh_val = hvx_vec_sub_f32_f32(tanh_val, v_one);
-
-        HVX_Vector tanh_plus_one = hvx_vec_add_f32_f32(tanh_val, v_one);
-        HVX_Vector half_x = hvx_vec_mul_f32_f32(x, v_half);
-        HVX_Vector gelu_x = hvx_vec_mul_f32_f32(half_x, tanh_plus_one);
-
+        HVX_Vector gelu_x = hvx_vec_mul_f32_f32(x, sig2y);
         vdst[i] = hvx_vec_mul_f32_f32(gelu_x, g);
     }
 
@@ -285,50 +302,11 @@ static inline void hvx_geglu_f32_aa(uint8_t * restrict dst, const uint8_t * rest
         coef = hvx_vec_add_f32_f32(coef, v_sqrt_2_pi);
         HVX_Vector inner = hvx_vec_mul_f32_f32(x, coef);
 
-        HVX_Vector y2 = hvx_vec_mul_f32_f32(inner, v_two);
+        HVX_Vector y2 = hvx_vec_add_f32_f32(inner, inner);
 
-        HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(v_max_exp, y2);
-        HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(y2, v_min_exp);
+        HVX_Vector sig2y = hvx_vec_fast_sigmoid_f32_guard_2it(y2, v_one, v_max_exp, v_min_exp);
 
-        HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(y2, v_log2f);
-        v = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v), v_half);
-
-        HVX_Vector in_int = hvx_vec_truncate_f32(Q6_Vsf_equals_Vqf32(v));
-        HVX_Vector x_sig  = Q6_Vqf32_vsub_Vqf32Vsf(v, Q6_Vsf_equals_Vw(in_int));
-        HVX_Vector xx_sig = Q6_Vqf32_vmpy_Vqf32Vqf32(x_sig, x_sig);
-
-        HVX_Vector v1 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(xx_sig), v_c2);
-        v1 = Q6_Vqf32_vadd_Vqf32Vsf(v1, v_log2f);
-
-        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(x_sig), v_c1);
-        v2 = Q6_Vqf32_vmpy_Vqf32Vqf32(v2, xx_sig);
-        v2 = Q6_Vqf32_vadd_Vqf32Vqf32(v2, x_sig);
-
-        HVX_Vector v3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(v2, v1));
-        v3 = Q6_Vw_vaslacc_VwVwR(v3, in_int, 24);
-
-        HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
-        HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
-
-        HVX_Vector i_sf = Q6_Vw_vsub_VwVw(v_inv_aprox, v5);
-        HVX_Vector r_qf = Q6_Vqf32_vmpy_VsfVsf(
-            i_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v_two, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(i_sf, v5)))));
-        r_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(
-            r_qf, Q6_Vqf32_vsub_VsfVsf(v_two, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(r_qf), v5))));
-        HVX_Vector res_inv = Q6_Vsf_equals_Vqf32(r_qf);
-
-        HVX_Vector sig2y = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v3, res_inv));
-
-        sig2y = Q6_V_vmux_QVV(pred_max, sig2y, v_one);
-        sig2y = Q6_V_vmux_QVV(pred_min, sig2y, Q6_V_vzero());
-
-        HVX_Vector tanh_val = hvx_vec_mul_f32_f32(sig2y, v_two);
-        tanh_val = hvx_vec_sub_f32_f32(tanh_val, v_one);
-
-        HVX_Vector tanh_plus_one = hvx_vec_add_f32_f32(tanh_val, v_one);
-        HVX_Vector half_x = hvx_vec_mul_f32_f32(x, v_half);
-        HVX_Vector gelu_x = hvx_vec_mul_f32_f32(half_x, tanh_plus_one);
-
+        HVX_Vector gelu_x = hvx_vec_mul_f32_f32(x, sig2y);
         HVX_Vector res = hvx_vec_mul_f32_f32(gelu_x, g);
         hvx_vec_store_a((void *) &vdst[i], nloe * sizeof(float), res);
     }
@@ -453,6 +431,7 @@ static void geglu_f32(const float * restrict src0,
 
 DEFINE_GLU_PER_THREAD(swiglu, "swiglu-f32", swiglu_f32(src0_spad, src1_spad, dst_spad, block_size, actx))
 DEFINE_GLU_PER_THREAD(swiglu_oai, "swiglu-oai-f32", swiglu_oai_f32(src0_spad, src1_spad, dst_spad, block_size, actx))
+DEFINE_GLU_PER_THREAD(swiglu_clamp, "swiglu-clamp-f32", swiglu_clamp_f32(src0_spad, src1_spad, dst_spad, block_size, actx))
 DEFINE_GLU_PER_THREAD(geglu, "geglu-f32", geglu_f32(src0_spad, src1_spad, dst_spad, block_size, actx))
 
 static int execute_op_activations_f32(struct htp_ops_context * octx) {
@@ -477,6 +456,11 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
         case HTP_OP_GLU_SWIGLU_OAI:
             act_op_func = (worker_callback_t)glu_swiglu_oai_f32_per_thread;
             op_type     = "swiglu-oai-f32";
+            break;
+
+        case HTP_OP_GLU_SWIGLU_CLAMP:
+            act_op_func = (worker_callback_t) glu_swiglu_clamp_f32_per_thread;
+            op_type     = "swiglu-clamp-f32";
             break;
 
         case HTP_OP_GLU_GEGLU:
@@ -569,7 +553,7 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     const uint8_t * data_src0 = (const uint8_t *) src0->data;
     const uint8_t * data_src1 = src1 ? (const uint8_t *) src1->data : NULL;
 
-    if (!src1 && (octx->op == HTP_OP_GLU_SWIGLU || octx->op == HTP_OP_GLU_SWIGLU_OAI || octx->op == HTP_OP_GLU_GEGLU)) {
+    if (!src1 && (octx->op == HTP_OP_GLU_SWIGLU || octx->op == HTP_OP_GLU_SWIGLU_OAI || octx->op == HTP_OP_GLU_SWIGLU_CLAMP || octx->op == HTP_OP_GLU_GEGLU)) {
          const int32_t swapped = octx->op_params[1];
          data_src1 = data_src0;
          actx.src1_row_size = actx.src0_row_size;

@@ -9,6 +9,7 @@ General:
 
 Coding:
 - When in doubt, always refer to the CONTRIBUTING.md file of the project
+- In `test-backend-ops.cpp`, do not mention specific backends (e.g. Metal, CUDA) in comments
 - When referencing issues or PRs in comments, use the format:
   - C/C++ code: `// ref: <url>`
   - Other (CMake, etc.): `# ref: <url>`
@@ -16,6 +17,7 @@ Coding:
 Pull requests (PRs):
 - New branch names are prefixed with "gg/"
 - Before opening a pull request, ask the user to confirm the description
+- Don't explicitly wrap lines in the PR description (each paragraph and bullet is a single line)
 - When creating a pull request, look for the repository's PR template and follow it
 - For the AI usage disclosure section, write "YES. pi:llama.cpp/[MODEL]"
 - Ask the user to tell you what model was used and write it in place of [MODEL]

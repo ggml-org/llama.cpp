@@ -59,7 +59,7 @@
 		message.model ?? chatStore.getResumeModel(message.convId) ?? modelsStore.selectedModelName
 	);
 	let modelLoadProgress = $derived(
-		isRouter && loadTargetModel ? modelsStore.getLoadProgress(loadTargetModel) : null
+		isRouter && loadTargetModel ? modelsStore.status.getLoadProgress(loadTargetModel) : null
 	);
 	let modelLoadingText = $derived(modelLoadProgressText(modelLoadProgress));
 
@@ -126,16 +126,16 @@
 
 <div
 	bind:this={assistantEl}
-	class="chat-message-assistant text-md group w-full leading-7.5 {className}"
+	style:--assistant-margin-top={assistantMarginTop > 0 ? `${assistantMarginTop}px` : undefined}
 	style:--last-user-message-height={lastUserMessageHeight > 0
 		? `${lastUserMessageHeight}px`
 		: undefined}
-	style:--assistant-margin-top={assistantMarginTop > 0 ? `${assistantMarginTop}px` : undefined}
-	role="group"
 	aria-label="Assistant message with actions"
+	class="chat-message-assistant text-md group w-full leading-7.5 {className}"
+	role="group"
 >
 	{#if showProcessingInfoTop}
-		<ChatMessageAssistantProcessingInfo {modelLoadingText} {processingState} position="top" />
+		<ChatMessageAssistantProcessingInfo {modelLoadingText} position="top" {processingState} />
 	{/if}
 
 	{#if editCtx.isEditing}
@@ -145,16 +145,16 @@
 			<ChatMessageAssistantRawOutput {message} {toolMessages} />
 		{:else}
 			<ChatMessageAgenticContent
+				{isLastAssistantMessage}
+				isStreaming={chatStore.isStreaming()}
 				{message}
 				{toolMessages}
-				isStreaming={chatStore.isStreaming()}
-				{isLastAssistantMessage}
 			/>
 		{/if}
 	{/if}
 
 	{#if showProcessingInfoBottom}
-		<ChatMessageAssistantProcessingInfo {modelLoadingText} {processingState} position="bottom" />
+		<ChatMessageAssistantProcessingInfo {modelLoadingText} position="bottom" {processingState} />
 	{/if}
 
 	{#if displayedModel}
@@ -168,8 +168,8 @@
 				/>
 
 				<ChatMessageAssistantStatistics
-					{message}
 					isLoading={chatStore.isLoading}
+					{message}
 					{processingState}
 					showMessageStats={currentConfig.showMessageStats}
 				/>
@@ -179,14 +179,14 @@
 
 	{#if message.timestamp && !editCtx.isEditing}
 		<ChatMessageActionIcons
-			role={MessageRole.ASSISTANT}
-			justify="start"
 			actionsPosition="left"
-			{onRegenerate}
+			justify="start"
 			onContinue={currentConfig.enableContinueGeneration ? onContinue : undefined}
-			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
-			rawOutputEnabled={showRawOutput}
 			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
+			{onRegenerate}
+			rawOutputEnabled={showRawOutput}
+			role={MessageRole.ASSISTANT}
+			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
 		/>
 	{/if}
 </div>
@@ -196,7 +196,7 @@
 		--assistant-min-height-offset: calc(
 			var(--last-user-message-height, 19rem) + var(--chat-form-height, 6rem) +
 				var(--chat-form-bottom-position, 0.5rem) + var(--chat-form-padding-top, 6rem) +
-				var(--assistant-margin-top, 3rem)
+				var(--assistant-margin-top, 3rem) + var(--chat-tabs-offset, 0px)
 		);
 		min-height: calc(100dvh - var(--assistant-min-height-offset));
 
@@ -204,7 +204,7 @@
 			--assistant-min-height-offset: calc(
 				var(--last-user-message-height, 18rem) + var(--chat-form-height, 6rem) +
 					var(--chat-form-bottom-position, 1rem) + var(--chat-form-padding-top, 6rem) +
-					var(--assistant-margin-top, 3rem)
+					var(--assistant-margin-top, 3rem) + var(--chat-tabs-offset, 0px)
 			);
 		}
 	}

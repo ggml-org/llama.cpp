@@ -88,3 +88,13 @@ jobs:
             -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
 
           time cmake --build build-wasm --config Release --target test-backend-ops -j $(nproc)
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: webgpu-ubuntu-24.04-arm-wasm
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

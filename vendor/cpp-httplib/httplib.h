@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.53.1"
-#define CPPHTTPLIB_VERSION_NUM "0x003501"
+#define CPPHTTPLIB_VERSION "0.54.1"
+#define CPPHTTPLIB_VERSION_NUM "0x003601"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -132,6 +132,16 @@
 
 #ifndef CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 8192
+#endif
+
+#ifndef CPPHTTPLIB_STATIC_FILE_COMPRESSION_MIN_LENGTH
+// 1400 rather than a round number: a body that already fits in one 1500-byte
+// MTU gains nothing from being made smaller.
+#define CPPHTTPLIB_STATIC_FILE_COMPRESSION_MIN_LENGTH 1400
+#endif
+
+#ifndef CPPHTTPLIB_STATIC_FILE_COMPRESSION_MAX_LENGTH
+#define CPPHTTPLIB_STATIC_FILE_COMPRESSION_MAX_LENGTH (4 * 1024 * 1024) // 4MB
 #endif
 
 #ifndef CPPHTTPLIB_RANGE_MAX_COUNT
@@ -1429,9 +1439,16 @@ public:
   DataSink &operator=(DataSink &&) = delete;
 
   std::function<bool(const char *data, size_t data_len)> write;
-  std::function<bool()> is_writable;
-  std::function<void()> done;
-  std::function<void(const Headers &trailer)> done_with_trailer;
+
+  // Only `write` is mandatory. The rest are defaulted so that a provider
+  // calling one on a writer that does not set it gets sensible behaviour
+  // rather than std::bad_function_call thrown from a worker thread. Capturing
+  // `this` is safe: DataSink is neither copyable nor movable.
+  std::function<bool()> is_writable = []() { return true; };
+  std::function<void()> done = []() {};
+  std::function<void(const Headers &trailer)> done_with_trailer =
+      [this](const Headers & /*trailer*/) { done(); };
+
   std::ostream os;
 
 private:
@@ -1516,7 +1533,10 @@ make_file_body(const std::string &filepath) {
       auto to_read = (std::min)(sizeof(buf), length);
       f.read(buf, static_cast<std::streamsize>(to_read));
       auto n = static_cast<size_t>(f.gcount());
-      if (n == 0) { break; }
+      // The file is shorter than the size make_file_body() measured, which the
+      // caller has already committed to as Content-Length. The body cannot be
+      // completed, so fail as every other error here does.
+      if (n == 0) { return false; }
       if (!sink.write(buf, n)) { return false; }
       length -= n;
     }
@@ -1723,6 +1743,14 @@ struct Request {
 #endif
 };
 
+namespace detail {
+
+// Declared up here, away from the rest of the compression helpers, because
+// `Response` stores one.
+enum class EncodingType { None = 0, Gzip, Brotli, Zstd };
+
+} // namespace detail
+
 struct Response {
   std::string version;
   int status = -1;
@@ -1788,6 +1816,11 @@ struct Response {
   bool content_provider_success_ = false;
   std::string file_content_path_;
   std::string file_content_content_type_;
+
+  // Content coding chosen for a file-backed content provider, decided once
+  // where the file is opened so that the ETag and the body cannot disagree.
+  // `EncodingType::None` for every other kind of response.
+  detail::EncodingType file_content_encoding_ = detail::EncodingType::None;
 };
 
 enum class Error {
@@ -1827,6 +1860,7 @@ enum class Error {
   InvalidRangeHeader,
   UnsupportedContentEncoding,
   WebSocketHandshake,
+  UserCallbackException,
 
   // For internal use only
   SSLPeerCouldBeClosed_,
@@ -2020,6 +2054,10 @@ private:
 
 int close_socket(socket_t sock) noexcept;
 
+bool is_accept_resource_error();
+
+bool is_accept_transient_error();
+
 ssize_t write_headers(Stream &strm, const Headers &headers);
 
 bool set_socket_opt_time(socket_t sock, int level, int optname, time_t sec,
@@ -2107,6 +2145,17 @@ public:
   Server &Delete(const std::string &pattern, HandlerWithContentReader handler);
   Server &Options(const std::string &pattern, Handler handler);
 
+  // Register a handler for an HTTP method outside the built-in set (e.g. the
+  // WebDAV methods from RFC 4918). Registering a method here is what makes the
+  // server accept it; an unregistered method is still rejected with 400.
+  // `method` must be a valid HTTP method token and must not be one of the
+  // built-in methods, which have their own registration functions above. A
+  // rejected registration makes is_valid() return false, so listen() fails.
+  Server &CustomRoute(const std::string &method, const std::string &pattern,
+                      Handler handler);
+  Server &CustomRoute(const std::string &method, const std::string &pattern,
+                      HandlerWithContentReader handler);
+
   Server &WebSocket(const std::string &pattern, WebSocketHandler handler);
   Server &WebSocket(const std::string &pattern, WebSocketHandler handler,
                     SubProtocolSelector sub_protocol_selector);
@@ -2174,6 +2223,10 @@ public:
 
   Server &set_payload_max_length(size_t length);
 
+  Server &set_static_file_compression(bool on);
+  Server &set_static_file_compression_min_length(size_t length);
+  Server &set_static_file_compression_max_length(size_t length);
+
   Server &set_websocket_ping_interval(time_t sec);
   template <class Rep, class Period>
   Server &set_websocket_ping_interval(
@@ -2202,6 +2255,35 @@ protected:
                        const std::function<void(Request &)> &setup_request,
                        bool *websocket_upgraded = nullptr);
 
+  // Runs the per-connection serving loop and stops an exception thrown by a
+  // user callback from escaping the worker thread.
+  //
+  // process_request() wraps only routing() in a try/catch. Content providers,
+  // the post-routing, error, logging and expect-100 handlers and WebSocket
+  // handlers all run outside it, and the task queue calls the job without a
+  // catch, so an exception from any of those would terminate the process.
+  //
+  // No 500 is possible here: by the time a content provider runs, the status
+  // line and headers are already on the wire. Report it through the error
+  // logger and drop the connection, which is what the peer observes either
+  // way. Other connections are unaffected.
+  template <typename Serve> bool serve_guarded(Serve &&serve) const {
+#ifdef CPPHTTPLIB_NO_EXCEPTIONS
+    return serve();
+#else
+    try {
+      return serve();
+    } catch (...) {
+      // The error logger is a user callback too, so it must not be able to
+      // throw the guard back open.
+      try {
+        output_error_log(Error::UserCallbackException, nullptr);
+      } catch (...) {}
+      return false;
+    }
+#endif
+  }
+
   std::atomic<socket_t> svr_sock_{INVALID_SOCKET};
 
   std::vector<std::string> trusted_proxies_;
@@ -2215,6 +2297,11 @@ protected:
   time_t idle_interval_sec_ = CPPHTTPLIB_IDLE_INTERVAL_SECOND;
   time_t idle_interval_usec_ = CPPHTTPLIB_IDLE_INTERVAL_USECOND;
   size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
+  bool static_file_compression_ = false;
+  size_t static_file_compression_min_length_ =
+      CPPHTTPLIB_STATIC_FILE_COMPRESSION_MIN_LENGTH;
+  size_t static_file_compression_max_length_ =
+      CPPHTTPLIB_STATIC_FILE_COMPRESSION_MAX_LENGTH;
   time_t websocket_ping_interval_sec_ =
       CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND;
   int websocket_max_missed_pongs_ = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS;
@@ -2226,8 +2313,20 @@ private:
       std::vector<std::pair<std::unique_ptr<detail::MatcherBase>,
                             HandlerWithContentReader>>;
 
+  // Both handler tables for one custom method live in a single entry, so that
+  // routing() needs only one map lookup per request to reach either of them.
+  struct CustomHandlerEntry {
+    Handlers handlers;
+    HandlersForContentReader handlers_for_content_reader;
+  };
+  using CustomHandlers = std::map<std::string, CustomHandlerEntry>;
+
   static std::unique_ptr<detail::MatcherBase>
   make_matcher(const std::string &pattern);
+
+  static const std::set<std::string> &builtin_methods();
+  CustomHandlerEntry *custom_entry_for_registration(const std::string &method);
+  const CustomHandlerEntry *find_custom_entry(const std::string &method) const;
 
   template <typename H>
   Server &add_handler(
@@ -2259,6 +2358,10 @@ private:
       const HandlersForContentReader &handlers) const;
 
   bool parse_request_line(const char *s, Request &req) const;
+  detail::EncodingType static_file_encoding(const Request &req,
+                                            const std::string &content_type,
+                                            size_t length) const;
+  bool apply_static_file_compression(const Request &req, Response &res) const;
   void apply_ranges(const Request &req, Response &res,
                     std::string &content_type, std::string &boundary) const;
   bool write_response(Stream &strm, bool close_connection, Request &req,
@@ -2292,6 +2395,10 @@ private:
   std::atomic<bool> is_running_{false};
   std::atomic<bool> is_decommissioned{false};
 
+  // Set when CustomRoute() refuses a registration. Written before listen(),
+  // read by is_valid() on the same thread, so it needs no synchronization.
+  bool has_invalid_registration_ = false;
+
   struct MountPointEntry {
     std::string mount_point;
     std::string base_dir;
@@ -2313,6 +2420,7 @@ private:
   Handlers delete_handlers_;
   HandlersForContentReader delete_handlers_for_content_reader_;
   Handlers options_handlers_;
+  CustomHandlers custom_handlers_;
 
   struct WebSocketHandlerEntry {
     std::unique_ptr<detail::MatcherBase> matcher;
@@ -3500,6 +3608,16 @@ void split(const char *b, const char *e, char d,
 void split(const char *b, const char *e, char d, size_t m,
            std::function<void(const char *, const char *)> fn);
 
+bool split_find(const char *b, const char *e, char d,
+                std::function<bool(const char *, const char *)> fn);
+
+bool has_header_token(const Headers &headers, const std::string &key,
+                      const std::string &token);
+
+std::string websocket_accept_key(const std::string &client_key);
+
+bool is_websocket_upgrade(const Request &req);
+
 bool process_client_socket(
     socket_t sock, time_t read_timeout_sec, time_t read_timeout_usec,
     time_t write_timeout_sec, time_t write_timeout_usec,
@@ -3520,6 +3638,9 @@ socket_t create_client_socket(const std::string &host, const std::string &ip,
 const char *get_header_value(const Headers &headers, const std::string &key,
                              const char *def, size_t id);
 
+std::string get_combined_header_value(const Headers &headers,
+                                      const std::string &key);
+
 std::string params_to_query_str(const Params &params);
 
 void parse_query_text(const char *data, std::size_t size, Params &params);
@@ -3534,11 +3655,13 @@ bool parse_range_header(const std::string &s, Ranges &ranges);
 bool parse_accept_header(const std::string &s,
                          std::vector<std::string> &content_types);
 
+void parse_disposition_params(const std::string &s, Params &params);
+
 ssize_t send_socket(socket_t sock, const void *ptr, size_t size, int flags);
 
 ssize_t read_socket(socket_t sock, void *ptr, size_t size, int flags);
 
-enum class EncodingType { None = 0, Gzip, Brotli, Zstd };
+EncodingType encoding_type(const Request &req, const std::string &content_type);
 
 EncodingType encoding_type(const Request &req, const Response &res);
 
@@ -4318,6 +4441,11 @@ private:
   int unacked_pings_ = 0;
   std::atomic<bool> closed_{false};
   std::mutex write_mutex_;
+  // Owned by whichever thread is parsing frames off strm_. Only one thread
+  // may do so: read_websocket_frame() reads a payload until it has the whole
+  // declared length, so a second parser stealing bytes silently corrupts the
+  // message the first one is assembling.
+  std::mutex read_mutex_;
   std::thread ping_thread_;
   std::mutex ping_mutex_;
   std::condition_variable ping_cv_;

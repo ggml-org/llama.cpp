@@ -291,6 +291,36 @@ The flow for downloading a new model:
 - If a stop request comes in, the router asks the child process to stop (same mechanism as running a model in child process)
 - Otherwise, upon completion, we call `load_models()` to refresh the list of models
 
+### Sleep mode
+
+Sleep mode was initially introduced in PR [#18228](https://github.com/ggml-org/llama.cpp/pull/18228). The main idea is to have:
+- `server_queue` keeping track of the idle timeout
+- When the timeout is detected, `server_queue` signals to `server_context_impl` that it should go into sleep
+- `server_context_impl` frees all `llama_context` and `mtmd_context`
+
+Compared to simply exiting the whole process, this approach allows accessing some read-only endpoints during sleep, while also handling wakeup-on-request. Any inference request will wake the server up.
+
+Call stack on entering sleeping:
+- `server_queue::start_loop` (main thread) sees no task for `idle_sleep_ms` --> `sleeping = true`
+- `cb0(true)` --> `server_routes::update_cached_responses`
+    - snapshots `/props`, `/models` and metrics; the model is still alive here
+- `cb1(true)` --> `server_context_impl::handle_sleeping_state`
+    - `callback_state(SERVER_STATE_SLEEPING)` --> reported to router in child mode
+    - `destroy()` --> frees `llama_context` and `mtmd_context`
+- `condition_tasks.wait` until `req_stop_sleeping`
+
+Call stack on waking up:
+- `server_res_generator` constructor (HTTP thread) --> `server_queue::wait_until_no_sleep`
+    - sets `req_stop_sleeping = true`, then waits until `sleeping == false`
+- `server_queue::start_loop` (main thread) wakes up
+- `cb1(false)` --> `server_context_impl::handle_sleeping_state`
+    - `load_model()`, which then emits `callback_state(SERVER_STATE_READY)`
+- `cb0(false)` --> `server_routes::update_cached_responses`
+    - nothing to do, the cache is only read during sleep
+- `sleeping = false` --> `notify_all` unblocks the HTTP thread, the request is handled as usual
+
+Endpoints created with `create_response(true)` (`/health`, `/props`, `/models`, `/metrics`) skip `wait_until_no_sleep`, so they answer from the cached responses instead of waking the server.
+
 ### Notable Related PRs
 
 - Initial server implementation: https://github.com/ggml-org/llama.cpp/pull/1443
