@@ -110,7 +110,9 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
         __m512i acc16[NUM_ROWS];
         for (int t = 0; t < NUM_ROWS; t++) { acc16[t] = _mm512_setzero_si512(); }
 
+#ifdef __GNUC__
         #pragma GCC unroll 8 // pragma unrolled justified by measuing with/without
+#endif
         for (int g = 0; g < NG; g++) {
             const int kg = s * NG + g;
             const __m512i codes = _mm512_loadu_si512((const __m512i *) &src1.q[kg * TILED_TILE_ROWS * 4 + j0 * 4]);
