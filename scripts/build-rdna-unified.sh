@@ -7,7 +7,7 @@ ROCM_PATH="${ROCM_PATH:-${HIP_PATH:-}}"
 TARGET_ARCH="${TARGET_ARCH:-}"
 BUILD_DIR="${BUILD_DIR:-}"
 JOBS="${JOBS:-}"
-GGML_HIP_RCCL="${GGML_HIP_RCCL:-OFF}"
+GGML_HIP_RCCL="${GGML_HIP_RCCL:-ON}"
 BUILD_TESTS="${BUILD_TESTS:-ON}"
 BUILD_SIDECARS="${BUILD_SIDECARS:-ON}"
 
@@ -18,7 +18,7 @@ Usage: scripts/build-rdna-unified.sh [--arch gfx1030|gfx1100] [--rocm PATH]
                                      [--build-dir PATH] [--jobs N]
 
 Environment overrides: TARGET_ARCH, ROCM_PATH, BUILD_DIR, JOBS,
-GGML_HIP_RCCL (default OFF), BUILD_TESTS, BUILD_SIDECARS.
+GGML_HIP_RCCL (default ON), BUILD_TESTS, BUILD_SIDECARS.
 
 Build gfx1030 and gfx1100 in separate directories. Mixed-architecture HIP
 objects are intentionally rejected because their tuned compile definitions differ.
