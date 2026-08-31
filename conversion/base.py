@@ -1762,6 +1762,9 @@ class TextModel(ModelBase):
         if chkhsh == "972da7b59cec44d1f0a490a86c96df53859e486e481563e5dddac155013d87ac":
             # ref: https://huggingface.co/poolside/Laguna-XS.2
             res = "laguna"
+        if chkhsh == "e6ddf9c6686791c12d698d34c31ab9be1fea9af5a3d9a6909783ab382198ae1c":
+            # ref: https://huggingface.co/AngelSlim/Hy4-preview-GGUF
+            res = "hy_v4"
 
         if res is None:
             logger.warning("\n")
