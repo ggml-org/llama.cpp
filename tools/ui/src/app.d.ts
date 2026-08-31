@@ -83,6 +83,7 @@ declare global {
 		ApiLlamaCppServerProps,
 		ApiModelDataEntry,
 		ApiModelLoadStage,
+		ModelDownloadProgress,
 		ApiModelsSseProgress,
 		ApiModelsSseData,
 		ApiModelsSseDownloadProgressData,

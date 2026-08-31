@@ -6,7 +6,8 @@
 	import DownloadProgressBar from '$lib/components/app/models/discover/DownloadProgressBar.svelte';
 	import ModelsDiscover from '$lib/components/app/models/discover/ModelsDiscover.svelte';
 	import { ModelDraftSidecar } from '$lib/enums';
-	import { modelsHubStore } from '$lib/stores';
+	import { modelsHubStore, modelsStore } from '$lib/stores';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	const { Story } = defineMeta({
 		tags: ['autodocs'],
@@ -18,7 +19,15 @@
 	modelsHubStore.loading = false;
 	modelsHubStore.error = null;
 
-	const PROGRESS = { downloadedBytes: 3_600_000_000, totalBytes: 7_300_000_000 };
+	// Mark the Q4_K_M tag as failed for the previous-failure story. The status
+	// manager keeps this in a private SvelteSet keyed by `<repo>:<tag>`.
+	const FAILED_TAG = 'ggml-org/gemma-4-12b-it-GGUF:Q4_K_M';
+
+	(
+		modelsStore.status as unknown as { failedDownloads: Set<string> }
+	).failedDownloads = new SvelteSet([FAILED_TAG]);
+
+
 </script>
 
 <Story name="Progress bar">
@@ -54,9 +63,7 @@
 		<DialogModelDownload
 			filePath="Q4_K_M/gemma-4-12b-it-Q4_K_M.gguf"
 			formattedSize="7.3 GB"
-			onCancelDownload={() => {}}
 			onClose={() => {}}
-			onDownload={() => {}}
 			open
 			quant="Q4_K_M"
 			repoId="ggml-org/gemma-4-12b-it-GGUF"
@@ -70,31 +77,11 @@
 		<DialogModelDownload
 			filePath="Q4_K_M/gemma-4-12b-it-Q4_K_M.gguf"
 			formattedSize="7.3 GB"
-			onCancelDownload={() => {}}
-			onClose={() => {}}
-			onDownload={() => {}}
 			open
-			previousFailure
 			quant="Q4_K_M"
 			repoId="ggml-org/gemma-4-12b-it-GGUF"
 			sidecar={null}
-		/>
-	</div>
-</Story>
-
-<Story name="Download dialog (downloading)">
-	<div class="p-4">
-		<DialogModelDownload
-			filePath="Q4_K_M/gemma-4-12b-it-Q4_K_M.gguf"
-			inFlight
-			onCancelDownload={() => {}}
 			onClose={() => {}}
-			onDownload={() => {}}
-			open
-			progress={PROGRESS}
-			quant="Q4_K_M"
-			repoId="ggml-org/gemma-4-12b-it-GGUF"
-			sidecar={null}
 		/>
 	</div>
 </Story>

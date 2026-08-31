@@ -1,11 +1,20 @@
 <script lang="ts">
 	import { SearchInput } from '$lib/components/app';
 	import { ModelsDiscoverDetails, ModelsDiscoverList } from '$lib/components/app/models/discover';
+	import { HuggingFaceService } from '$lib/services';
 	import { modelsHubStore } from '$lib/stores';
+	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types';
 
 	let selectedId = $state<string | null>(null);
 	let searchQuery = $state('');
 	let searchTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	// Detail pane state, reloaded when the selection changes.
+	let details = $state<HfModelDetailInfo | null>(null);
+	let files = $state<HfModelSibling[]>([]);
+	let readme = $state<string | null>(null);
+	let detailLoading = $state(false);
+	let detailError = $state<string | null>(null);
 
 	// Load the sidebar list on mount (the component is mounted when the dialog opens).
 	$effect(() => {
@@ -31,6 +40,54 @@
 			void modelsHubStore.search(value);
 		}, 300);
 	}
+
+	// Load the detail pane for the selected model (component is reused across
+	// selections, so this re-fetches on every change).
+	$effect(() => {
+		const id = selectedId;
+
+		if (!id) return;
+
+		let cancelled = false;
+
+		detailLoading = true;
+		detailError = null;
+
+		void (async () => {
+			try {
+				const [info, tree, readmeText] = await Promise.all([
+					HuggingFaceService.getDetails(id),
+					HuggingFaceService.getTree(id),
+					HuggingFaceService.getReadme(id)
+				]);
+
+				if (cancelled) return;
+
+				if (!info) {
+					detailError = 'Model not found';
+
+					return;
+				}
+
+				details = info;
+				files = HuggingFaceService.filterByExtension(
+					HuggingFaceService.collapseGgufShards(tree),
+					'.gguf'
+				);
+				readme = readmeText;
+			} catch (err) {
+				if (cancelled) return;
+
+				detailError = err instanceof Error ? err.message : 'Failed to load model';
+			} finally {
+				if (!cancelled) detailLoading = false;
+			}
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	});
 </script>
 
 <aside
@@ -65,13 +122,13 @@
 
 <main class="overflow-y-auto">
 	{#if selectedId}
-		<!-- TODO: load details/tree/readme via HuggingFaceService in the integration branch -->
 		<ModelsDiscoverDetails
-						details={null}
-			files={[]}
-			loading={true}
+			details={details}
+			error={detailError}
+			files={files}
+			loading={detailLoading}
 			modelId={selectedId}
-					readme={null}
+			readme={readme}
 		/>
 	{/if}
 </main>
