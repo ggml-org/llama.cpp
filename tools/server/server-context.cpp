@@ -474,7 +474,7 @@ struct server_slot {
         return !!spec;
     }
 
-    // a greedy target makes q a point mass, and rejection then degenerates to sample-and-match
+    // at temp 0 both p and q are point masses, so rejection is the same as sample-and-match
     bool use_spec_rejection() const {
         return task && task->params.sampling.temp > 0.0f;
     }
@@ -2998,6 +2998,9 @@ private:
                 if (n_draft_max > 0) {
                     GGML_ASSERT(slot.can_speculate());
 
+                    // any candidates still here are for a draft we are about to replace
+                    slot.spec_draft_q.clear();
+
                     if (!slot.spec_draft.empty()) {
                         // we have a previous (partial) draft to reuse
                         if (use_ckpt_tgt) {
@@ -3016,8 +3019,6 @@ private:
                         }
 
                         slot.spec_prompt = slot.prompt.tokens.get_text_tokens();
-
-                        slot.spec_draft_q.clear();
 
                         const bool spec_reject = slot.use_spec_rejection();
 
