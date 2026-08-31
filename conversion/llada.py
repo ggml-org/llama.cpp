@@ -16,21 +16,22 @@ class LLaDAModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLADA
     undo_permute = True
 
-    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+    def get_vocab_base(self, tokenizer=None, tokpre: str | None = None) -> tuple[list[str], list[int], str]:
         tokens: list[str] = []
         toktypes: list[int] = []
 
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        if tokenizer is None:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
 
-        vocab_dict = tokenizer.get_vocab()  # ty: ignore[unresolved-attribute]
+        vocab_dict = tokenizer.get_vocab()
         vocab_size = self.hparams.get("vocab_size", len(vocab_dict))
         assert max(vocab_dict.values()) < vocab_size
 
-        tokpre = self.get_vocab_base_pre(tokenizer)
+        tokpre = tokpre or self.get_vocab_base_pre(tokenizer)
 
         reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab_dict.items()}
-        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.get_added_vocab()
 
         for i in range(vocab_size):
             if i not in reverse_vocab:

@@ -593,8 +593,8 @@ class Glm5NextModel(TextModel):
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         # keep the small mHC / gating parameters exact
-        if (new_name.startswith(("blk.", "output_hc")) and any(k in new_name for k in
-                ("hc_attn_", "hc_ffn_", "indexer_compressor_", "ssm_a", "ssm_dt", "exp_probs_b"))):
+        exact_keys = ("hc_attn_", "hc_ffn_", "indexer_compressor_", "ssm_a", "ssm_dt", "exp_probs_b")
+        if new_name.startswith(("blk.", "output_hc")) and any(k in new_name for k in exact_keys):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
