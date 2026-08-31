@@ -113,11 +113,21 @@ const char * ggml_backend_buffer_name(ggml_backend_buffer_t buffer) {
     return ggml_backend_buft_name(ggml_backend_buffer_get_type(buffer));
 }
 
+// see ggml-backend-impl.h: lets the NUMA mirror drop its replicas when the mirrored buffer dies
+static ggml_sched_buffer_free_notify_t g_sched_buffer_free_notify = NULL;
+
+void ggml_sched_set_buffer_free_notify(ggml_sched_buffer_free_notify_t fn) {
+    g_sched_buffer_free_notify = fn;
+}
+
 void ggml_backend_buffer_free(ggml_backend_buffer_t buffer) {
     if (buffer == NULL) {
         return;
     }
 
+    if (g_sched_buffer_free_notify != NULL) {
+        g_sched_buffer_free_notify(buffer);
+    }
     if (buffer->iface.free_buffer != NULL) {
         buffer->iface.free_buffer(buffer);
     }
@@ -1651,6 +1661,64 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     return true;
 }
 
+// ---- NUMA mirror: source expert-weight uploads (MUL_MAT_ID path) from the replica local to the destination GPU ----
+// ggml_numa_mirror_remap() picks the replica for the CALLING THREAD's node, which has nothing to do with where the destination card sits, so the upload path asks for a node explicitly
+// only the expert-copy site below is remapped; the generic cross-backend copy fallback still reads the primary
+
+// the CPU backend registers its remap function here at init (dependency inversion; a registry lookup from inside ggml-base would be an upward dependency)
+static ggml_sched_remap_node_t g_sched_remap_node_fn = nullptr;
+
+void ggml_sched_set_remap_node_fn(ggml_sched_remap_node_t fn) {
+    g_sched_remap_node_fn = fn;
+}
+
+typedef int (*ggml_sched_numa_node_t)(ggml_backend_t);
+
+// the node a backend's device hangs off; a process-wide property, cached per backend
+static int ggml_sched_backend_numa_node(ggml_backend_t backend) {
+    static ggml_backend_t owners[GGML_SCHED_MAX_BACKENDS] = { nullptr };
+    static int            nodes [GGML_SCHED_MAX_BACKENDS];
+    static int            n = 0;
+    for (int i = 0; i < n; i++) {
+        if (owners[i] == backend) {
+            return nodes[i];
+        }
+    }
+    int node = -1;
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+    if (reg != NULL) {
+        ggml_sched_numa_node_t fn = (ggml_sched_numa_node_t)
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_get_numa_node");
+        if (fn != NULL) {
+            node = fn(backend);
+        }
+    }
+    // test hook: on a box with every card on the home node the correct choice is also the status quo and a bug here is invisible - forcing the node makes it observable (must stay bit-exact, replicas are identical bytes, only the transfer speed moves)
+    const char * e = getenv("GGML_NUMA_MIRROR_SRC_NODE");
+    if (e != NULL && e[0]) {
+        node = atoi(e);
+    }
+    if (n < GGML_SCHED_MAX_BACKENDS) {
+        owners[n] = backend;
+        nodes [n] = node;
+        n++;
+    }
+    GGML_LOG_DEBUG("%s: %s uploads from NUMA node %d%s\n", __func__, ggml_backend_name(backend), node, (e && e[0]) ? " (forced)" : "");
+    return node;
+}
+
+static const void * ggml_sched_upload_src(const void * p, ggml_backend_t dst) {
+    ggml_sched_remap_node_t fn = g_sched_remap_node_fn;
+    if (fn == nullptr) {
+        return p;
+    }
+    const int node = ggml_sched_backend_numa_node(dst);
+    if (node < 0) {
+        return p;
+    }
+    return fn(p, node);
+}
+
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
@@ -1754,7 +1822,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                         ggml_backend_tensor_set_async(split_backend,
                             input_cpy,
-                            (const uint8_t *)input->data + expert_offset, expert_offset,
+                            ggml_sched_upload_src((const uint8_t *)input->data + expert_offset, split_backend), expert_offset,
                             // copy a bit extra at the to ensure there are no NaNs in the padding of the last expert
                             // this is necessary for MMQ in the CUDA backend
                             expert_size_copy + padding_end);
