@@ -2907,17 +2907,28 @@ public:
             }
 
             if (mbuf_cur.n_tensors == mbuf.n_tensors) {
-                // same chunking: copy 1:1 by index
+                // an equal tensor count does not imply the same chunking, e.g. save ranges [2,1] vs restore runs [1,2]
+                bool same_chunking = true;
                 for (size_t i = 0; i < mbuf_cur.org.size(); ++i) {
-                    GGML_ASSERT(ggml_nbytes(mbuf_cur.cpy[i]) == ggml_nbytes(mbuf.org[i]));
-                    ggml_backend_tensor_copy(mbuf_cur.cpy[i], mbuf.org[i]);
+                    if (ggml_nbytes(mbuf_cur.cpy[i]) != ggml_nbytes(mbuf.org[i])) {
+                        same_chunking = false;
+                        break;
+                    }
                 }
-                continue;
+
+                if (same_chunking) {
+                    // same chunking: copy 1:1 by index
+                    for (size_t i = 0; i < mbuf_cur.org.size(); ++i) {
+                        ggml_backend_tensor_copy(mbuf_cur.cpy[i], mbuf.org[i]);
+                    }
+                    continue;
+                }
             }
 
             // different chunking: copy the write-side data (mbuf_cur.cpy) into the read-side targets (mbuf.org)
             // with a byte cursor. Write and read enumerate the same logical data in the same order but may chunk
-            // it differently, so copy across tensor boundaries rather than 1:1 by index.
+            // it differently (even with an equal number of tensors), so copy across tensor boundaries rather than
+            // 1:1 by index.
             const size_t total = mbuf_cur.total_size;
 
             ggml_init_params params_scratch = {

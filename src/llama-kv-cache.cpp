@@ -2533,6 +2533,24 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
 bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo) {
     auto & cells = v_cells[strm];
 
+    // batch the scatter reads per contiguous run of destination indices
+    // from inclusive, to exclusive - same convention as cell_ranges_t
+    // contiguous cells yield a single run covering the whole block
+    struct cell_run { uint32_t from; uint32_t to; };
+    std::vector<cell_run> runs;
+    if (cell_count > 0) {
+        const auto & idxs = sinfo.idxs[0];
+        uint32_t i0 = 0;
+        while (i0 < cell_count) {
+            uint32_t i1 = i0 + 1;
+            while (i1 < cell_count && idxs[i1] == idxs[i1 - 1] + 1) {
+                ++i1;
+            }
+            runs.push_back({idxs[i0], idxs[i1 - 1] + 1});
+            i0 = i1;
+        }
+    }
+
     uint32_t v_trans;
     uint32_t n_layer;
 
@@ -2580,17 +2598,8 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
             return false;
         }
 
-        if (cell_count) {
-            if (sinfo.is_contiguous()) {
-                // Fast path: contiguous cells, single memcpy
-                io.read_tensor(k, sinfo.head() * k_size_row, cell_count * k_size_row);
-            } else {
-                // Slow path: scatter to non-contiguous positions
-                for (uint32_t i = 0; i < cell_count; ++i) {
-                    const size_t dst_offset = sinfo.idxs[0][i] * k_size_row;
-                    io.read_tensor(k, dst_offset, k_size_row);
-                }
-            }
+        for (const auto & r : runs) {
+            io.read_tensor(k, (size_t) r.from * k_size_row, (size_t) (r.to - r.from) * k_size_row);
         }
     }
 
@@ -2623,17 +2632,8 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
                 return false;
             }
 
-            if (cell_count) {
-                if (sinfo.is_contiguous()) {
-                    // Fast path: contiguous cells, single memcpy
-                    io.read_tensor(v, sinfo.head() * v_size_row, cell_count * v_size_row);
-                } else {
-                    // Slow path: scatter to non-contiguous positions
-                    for (uint32_t i = 0; i < cell_count; ++i) {
-                        const size_t dst_offset = sinfo.idxs[0][i] * v_size_row;
-                        io.read_tensor(v, dst_offset, v_size_row);
-                    }
-                }
+            for (const auto & r : runs) {
+                io.read_tensor(v, (size_t) r.from * v_size_row, (size_t) (r.to - r.from) * v_size_row);
             }
         }
     } else {
@@ -2674,22 +2674,10 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
                 return false;
             }
 
-            if (cell_count) {
-                if (sinfo.is_contiguous()) {
-                    // Fast path: contiguous cells
-                    const uint32_t h = sinfo.head();
-                    for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
-                        const size_t dst_offset = (h + j * cells.size()) * v_size_el;
-                        io.read_tensor(v, dst_offset, cell_count * v_size_el);
-                    }
-                } else {
-                    // Slow path: scatter to non-contiguous positions
-                    for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
-                        for (uint32_t i = 0; i < cell_count; ++i) {
-                            const size_t dst_offset = (sinfo.idxs[0][i] + j * cells.size()) * v_size_el;
-                            io.read_tensor(v, dst_offset, v_size_el);
-                        }
-                    }
+            for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+                for (const auto & r : runs) {
+                    const size_t dst_offset = ((size_t) r.from + j * cells.size()) * v_size_el;
+                    io.read_tensor(v, dst_offset, (size_t) (r.to - r.from) * v_size_el);
                 }
             }
         }
