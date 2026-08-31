@@ -1,6 +1,5 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 #include "ggml.h"
 
 #include <time.h>
@@ -53,6 +52,31 @@ static void fill_tensor(struct ggml_tensor * t, const float * src, int64_t rows,
     free(q);
 }
 
+// The CPU-specific control API is resolved through the backend registry: with
+// GGML_BACKEND_DL the CPU backend is a runtime-loaded module and its symbols
+// are not available at link time (same pattern as get_cpu_repack_buft below)
+static void cpu_set_use_ref(ggml_backend_t backend, bool use_ref) {
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+    void (* set_use_ref)(ggml_backend_t, bool) =
+        (void (*)(ggml_backend_t, bool)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_set_use_ref");
+    if (!set_use_ref) {
+        fprintf(stderr, "ggml_backend_cpu_set_use_ref not available\n");
+        exit(1);
+    }
+    set_use_ref(backend, use_ref);
+}
+
+static void cpu_set_n_threads(ggml_backend_t backend, int n_threads) {
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+    void (* set_n_threads)(ggml_backend_t, int) =
+        (void (*)(ggml_backend_t, int)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+    if (!set_n_threads) {
+        fprintf(stderr, "ggml_backend_set_n_threads not available\n");
+        exit(1);
+    }
+    set_n_threads(backend, n_threads);
+}
+
 static void test_matmul(ggml_backend_t backend, int64_t M, int64_t N, int64_t K, ggml_type quant_type) {
     srand(0xBEEF);
 
@@ -78,10 +102,10 @@ static void test_matmul(ggml_backend_t backend, int64_t M, int64_t N, int64_t K,
     fill_tensor(src1, src1_ref, M, N, GGML_TYPE_F32);
     fill_tensor(src0, src0_ref, K, N, quant_type);
 
-    ggml_backend_cpu_set_use_ref(backend, true);
+    cpu_set_use_ref(backend, true);
     ggml_backend_graph_compute(backend, gf);
     ggml_backend_tensor_get(dst, dst_out, 0, ggml_nbytes(dst));
-    ggml_backend_cpu_set_use_ref(backend, false);
+    cpu_set_use_ref(backend, false);
     ggml_backend_graph_compute(backend, gf);
     ggml_backend_tensor_get(dst, dst_tiled, 0, ggml_nbytes(dst));
 
@@ -153,10 +177,10 @@ static void test_matmul_highdim(ggml_backend_t backend, int64_t M, int64_t N, in
 
     // reference = stock path (use_ref keeps the op off the tiled hook), tiled
     // = the gated path; same weights, same op, run twice into separate buffers
-    ggml_backend_cpu_set_use_ref(backend, true);
+    cpu_set_use_ref(backend, true);
     ggml_backend_graph_compute(backend, gf);
     ggml_backend_tensor_get(dst, dst_std, 0, ggml_nbytes(dst));
-    ggml_backend_cpu_set_use_ref(backend, false);
+    cpu_set_use_ref(backend, false);
     ggml_backend_graph_compute(backend, gf);
     ggml_backend_tensor_get(dst, dst_tiled, 0, ggml_nbytes(dst));
 
@@ -313,9 +337,9 @@ static bench_row bench_three_way(ggml_backend_t backend, int64_t M, int64_t N, i
     const size_t flush_size = 256 * 1024 * 1024;
     void * flush_buf = malloc(flush_size);
     const int n_reps = 5;
-    ggml_backend_cpu_set_use_ref(backend, true);
+    cpu_set_use_ref(backend, true);
     row.time_std    = time_graph_compute_best(backend, gf, n_reps, flush_buf, flush_size);
-    ggml_backend_cpu_set_use_ref(backend, false);
+    cpu_set_use_ref(backend, false);
     if (row.have_repack) {
         row.time_repack = time_graph_compute_best(backend, gf_repack, n_reps, flush_buf, flush_size);
     }
@@ -326,10 +350,10 @@ static bench_row bench_three_way(ggml_backend_t backend, int64_t M, int64_t N, i
     float * out_std    = (float *) malloc(M * K * sizeof(float));
     float * out_tiled  = (float *) malloc(M * K * sizeof(float));
     float * out_repack = (float *) malloc(M * K * sizeof(float));
-    ggml_backend_cpu_set_use_ref(backend, true);
+    cpu_set_use_ref(backend, true);
     ggml_backend_graph_compute(backend, gf);
     ggml_backend_tensor_get(dst, out_std, 0, ggml_nbytes(dst));
-    ggml_backend_cpu_set_use_ref(backend, false);
+    cpu_set_use_ref(backend, false);
     ggml_backend_graph_compute(backend, gf);
     ggml_backend_tensor_get(dst, out_tiled, 0, ggml_nbytes(dst));
     if (row.have_repack) {
@@ -382,8 +406,12 @@ int main() {
     setenv("GGML_CPU_TILED_MM_FORCE", "1", 1);
 #endif
 
-    ggml_backend_t backend = ggml_backend_cpu_init();
-    ggml_backend_cpu_set_n_threads(backend, 8);
+    ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
+    if (!backend) {
+        fprintf(stderr, "failed to initialize the CPU backend\n");
+        return 1;
+    }
+    cpu_set_n_threads(backend, 8);
     // base case, smoke each quant type
     test_matmul(backend, 512, 1024, 512, GGML_TYPE_Q6_K);
     test_matmul(backend, 512, 1024, 512, GGML_TYPE_Q5_K);
