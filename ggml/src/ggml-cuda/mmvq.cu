@@ -18,7 +18,7 @@ template <> struct mmvq_pf<GGML_TYPE_IQ4_XS> { static constexpr int bytes = size
 // Q2_K is left out: prefetching does not raise its L2 hit rate, so the requests only add pressure
 
 static __device__ __forceinline__ void mmvq_prefetch_l2(const void * p) {
-#if !defined(GGML_USE_HIP)
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     asm volatile("prefetch.global.L2 [%0];" :: "l"(p));
 #else
     GGML_UNUSED(p);
