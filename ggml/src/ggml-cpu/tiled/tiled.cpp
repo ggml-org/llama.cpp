@@ -290,6 +290,8 @@ static bool ggml_tiled_matmul_supported(const struct ggml_tensor * src0,
                                         const struct ggml_tensor * src1) {
 
 #if !defined(__AVX512VNNI__) && !defined(__AVX2__) && !defined(__AVX__)
+    UNUSED(src0);
+    UNUSED(src1);
     return false;
 #else
     if (!ggml_tiled_matmul_enabled()) {
