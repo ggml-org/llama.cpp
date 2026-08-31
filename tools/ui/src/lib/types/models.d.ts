@@ -45,7 +45,6 @@ export interface ModelDownloadProgress {
 	totalBytes: number;
 }
 
-
 export interface ParsedModelId {
 	raw: string;
 	orgName: string | null;
