@@ -9,9 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__unix__)
-#include <sys/wait.h>
-#include <unistd.h>
+#if defined(_WIN32)
+#include <windows.h>
 #endif
 
 // failed checks; main exits non-zero on any failures
@@ -201,11 +200,21 @@ static void test_matmul_highdim(ggml_backend_t backend, int64_t M, int64_t N, in
 }
 
 static double time_graph_compute(ggml_backend_t backend, struct ggml_cgraph * gf) {
+#if defined(_WIN32)
+    // high-res timer; clock_gettime is not portable across Windows toolchains
+    LARGE_INTEGER freq, t0, t1;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t0);
+    ggml_backend_graph_compute(backend, gf);
+    QueryPerformanceCounter(&t1);
+    return (double) (t1.QuadPart - t0.QuadPart) / (double) freq.QuadPart;
+#else
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     ggml_backend_graph_compute(backend, gf);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     return (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+#endif
 }
 
 // Warm up, then time n runs and return the best
@@ -365,8 +374,13 @@ static void print_bench_table(int64_t M, int64_t N, int64_t K, const bench_row *
 
 int main() {
     // Enable tiled MM, also force tiled MM even when unprofitable for benchmarks
+#if defined(_MSC_VER)
+    _putenv("GGML_CPU_TILED_MM=1");
+    _putenv("GGML_CPU_TILED_MM_FORCE=1");
+#else
     setenv("GGML_CPU_TILED_MM", "1", 1);
     setenv("GGML_CPU_TILED_MM_FORCE", "1", 1);
+#endif
 
     ggml_backend_t backend = ggml_backend_cpu_init();
     ggml_backend_cpu_set_n_threads(backend, 8);
