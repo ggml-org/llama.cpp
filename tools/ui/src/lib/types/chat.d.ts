@@ -249,7 +249,7 @@ export interface ChatMessageDeletionInfo {
  * refresh + user-action notification), passed to each ChatMessage as a prop.
  */
 export interface ChatMessageActions {
-	copy: (message: DatabaseMessage) => void;
+	copy: (message: DatabaseMessage, contentOverride?: string) => void;
 	delete: (message: DatabaseMessage) => void;
 	navigateToSibling: (siblingId: string) => void;
 	editWithBranching: (

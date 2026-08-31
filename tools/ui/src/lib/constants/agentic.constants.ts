@@ -20,6 +20,10 @@ export const SEARCH_SUMMARY = {
 // wraps mid-paragraph.
 export const RESULT_STAT_SEPARATOR = ' - ';
 
+// Separator between the assistant text sections of a grouped agentic
+// session when they are joined for the clipboard.
+export const AGENTIC_TEXT_COPY_SEPARATOR = '\n\n';
+
 export const DEFAULT_AGENTIC_CONFIG: AgenticConfig = {
 	enabled: true,
 	maxTurns: 100
