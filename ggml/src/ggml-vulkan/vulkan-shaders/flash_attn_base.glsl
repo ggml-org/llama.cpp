@@ -24,8 +24,7 @@ const bool USE_MASK_OPT    = (Flags & 1) != 0;
 const bool MASK_ENABLE     = (Flags & 2) != 0;
 const bool LOGIT_SOFTCAP   = (Flags & 4) != 0;
 const bool OLD_AMD_WINDOWS = (Flags & 8) != 0;
-// Sparse mask: p.split_kv holds n_kv_max (the compacted KV-list length); the KV
-// loop runs over the compacted indices in the binding-7 buffer instead of [0,KV).
+// Sparse: gather binding-7 indices instead of scanning [0,KV); p.split_kv = n_kv_max.
 const bool USE_SPARSE      = (Flags & 16) != 0;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
@@ -214,9 +213,8 @@ void init_indices()
     // and breaking the alignment detection.
     m_stride = (p.gqa_ratio > 1) ? (p.gqa_ratio >> 16) : KV;
 
-    // For sparse attention, the whole tile shares a single mask row (gqa: the
-    // heads of one query; non-gqa scalar: Br==1). p.split_kv carries n_kv_max
-    // (the total compacted list length); split_k partitions those blocks.
+    // Sparse: the tile shares one mask row (gqa heads, or Br==1). split_k
+    // partitions the n_kv_max blocks.
     if (USE_SPARSE) {
         uint32_t qrow = (p.gqa_ratio > 1) ? gqa_iq1 : (i * Br);
         sparse_base = (((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 + qrow) * p.split_kv;
@@ -228,9 +226,7 @@ void init_indices()
     }
 }
 
-// Resolve a linear KV slot to an actual K/V/mask column. Returns false for
-// inactive slots (padding past the end of the sparse list, or -1 entries; for
-// dense, positions past KV under a bounds check).
+// Resolve a linear KV slot to a real column; false for inactive (sparse padding/-1, or dense OOB).
 bool fa_kv_index(uint lin, out uint kv_col) {
     if (USE_SPARSE) {
         if (lin >= p.split_kv) {
