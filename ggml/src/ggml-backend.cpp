@@ -1266,9 +1266,26 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     for (int i = 0; i < graph->n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
         int * cur_backend_id = &tensor_backend_id(node);
-        if (node->view_src != NULL && *cur_backend_id == -1) {
-            *cur_backend_id = tensor_backend_id(node->view_src);
-            SET_CAUSE(node, "4.vsrc");
+        if (node->view_src != NULL) {
+            const int vsrc_backend_id = tensor_backend_id(node->view_src);
+            if (*cur_backend_id == -1) {
+                *cur_backend_id = vsrc_backend_id;
+                GGML_ASSERT(vsrc_backend_id == -1 || ggml_backend_supports_op(sched->backends[*cur_backend_id], node));
+                SET_CAUSE(node, "4.vsrc");
+            } else if (!ggml_is_view_op(node->op) && !ggml_backend_sched_buffer_supported(sched, node->view_src, *cur_backend_id) && vsrc_backend_id != -1) {
+                bool found = false;
+                for (int b = 0;b < sched->n_backends;b++) {
+                    if (ggml_backend_sched_buffer_supported(sched, node->view_src, b) && ggml_backend_supports_op(sched->backends[b], node)) {
+                        found = true;
+                        *cur_backend_id = b;
+                        break;
+                    }
+                }
+                if (!found) {
+                    GGML_ABORT("op (%s) writes into a view of (%s) but no backend can access the buffer and run the op", ggml_op_name(node->op), node->view_src->name);
+                }
+                SET_CAUSE(node, "4.vsrc");
+            }
         }
         for (int j = 0; j < GGML_MAX_SRC; j++) {
             struct ggml_tensor * src = node->src[j];
