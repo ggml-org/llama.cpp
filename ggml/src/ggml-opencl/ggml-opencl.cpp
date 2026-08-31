@@ -14744,6 +14744,11 @@ static bool ggml_cl_adreno_xmem_attn_can_use(
         const ggml_tensor * q,
         const ggml_tensor * k,
         const ggml_tensor * dst) {
+    static const char * xmem_sdpa_env = getenv("GGML_OPENCL_XMEM_SDPA");
+    if (xmem_sdpa_env == nullptr || xmem_sdpa_env[0] == '0') {
+        return false;
+    }
+
     const ggml_tensor * v = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
     const ggml_tensor * sinks = dst->src[4];
