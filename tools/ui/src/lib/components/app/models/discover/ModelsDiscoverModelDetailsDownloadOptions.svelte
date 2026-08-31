@@ -43,6 +43,19 @@
 
 	let selectedPaths = $state<string[]>([]);
 
+	function stateFor(repoWithTag: string, filePath: string, isSidecar: boolean): DownloadEntryState {
+		if (getDownloadState) return getDownloadState(repoWithTag, filePath, isSidecar);
+
+		return {
+			isDownloaded: isSidecar
+				? modelsStore.status.isDraftDownloaded(modelId, filePath)
+				: modelsStore.status.isModelDownloaded(repoWithTag),
+			isDownloading: modelsStore.status.isDownloadInProgress(repoWithTag),
+			isFailed: modelsStore.status.hasFailedDownload(repoWithTag),
+			progress: modelsStore.status.getDownloadProgress(repoWithTag)
+		};
+	}
+
 	/** Kind of a file path: the main weights, a draft sidecar, or an aux sidecar (mmproj). */
 	function classify(path: string): 'main' | 'draft' | 'aux' {
 		const sidecar = HuggingFaceService.extractQuantMeta(path)?.sidecar;
@@ -59,6 +72,8 @@
 	function handleSelection(next: string[]) {
 		const added = next.find((p) => !selectedPaths.includes(p));
 
+		if (added && downloadedPaths.has(added)) return;
+
 		if (!added) {
 			selectedPaths = next;
 
@@ -70,23 +85,28 @@
 
 		selectedPaths = [...base, added];
 	}
+	/** Paths already downloaded on the server; those render as static chips. */
+	let downloadedPaths = $derived(
+		new Set(
+			bitDepthRows
+				.flatMap((r) => r.files)
+				.filter((f) => {
+					const meta = HuggingFaceService.extractQuantMeta(f.path);
+					const tag = ModelsService.buildDownloadTag(
+						modelId,
+						meta?.quant ?? null,
+						meta?.sidecar ?? null
+					);
+
+					return stateFor(tag, f.path, Boolean(meta?.sidecar)).isDownloaded;
+				})
+				.map((f) => f.path)
+		)
+	);
 	let copied = $state(false);
 
 	/** All repo files in one lookup by path. */
 	let fileByPath = $derived(new Map(bitDepthRows.flatMap((r) => r.files).map((f) => [f.path, f])));
-
-	function stateFor(repoWithTag: string, filePath: string, isSidecar: boolean): DownloadEntryState {
-		if (getDownloadState) return getDownloadState(repoWithTag, filePath, isSidecar);
-
-		return {
-			isDownloaded: isSidecar
-				? modelsStore.status.isDraftDownloaded(modelId, filePath)
-				: modelsStore.status.isModelDownloaded(repoWithTag),
-			isDownloading: modelsStore.status.isDownloadInProgress(repoWithTag),
-			isFailed: modelsStore.status.hasFailedDownload(repoWithTag),
-			progress: modelsStore.status.getDownloadProgress(repoWithTag)
-		};
-	}
 
 	/** Selection ordered main-quant-first, so the command reads naturally. */
 	let selected: SelectedDownload[] = $derived.by(() => {
@@ -128,20 +148,6 @@
 		[ModelDraftSidecar.EAGLE3]: 'eagle3',
 		[ModelDraftSidecar.MTP]: 'draft-mtp'
 	};
-
-	function buttonClass(parts: { isDownloaded: boolean; isFailed: boolean }): string {
-		const classes = [
-			'relative inline-flex items-center gap-1 overflow-hidden rounded-md border bg-muted px-2 py-1 text-left font-mono text-xs transition-colors'
-		];
-
-		if (parts.isDownloaded && !parts.isFailed) {
-			classes.push('border-foreground bg-muted');
-		} else if (parts.isFailed) {
-			classes.push('border-destructive');
-		}
-
-		return classes.join(' ');
-	}
 
 	async function copyCommand() {
 		await copyToClipboard(serveCommand);
@@ -231,51 +237,73 @@
 										: `Download ${file.path} (requires ~${memoryGb} GB of memory)`}
 							<Tooltip.Root>
 								<Tooltip.Trigger>
-									<ToggleGroupItem
-										aria-label={tooltipText}
-										class="relative inline-flex h-auto items-center gap-1 overflow-hidden rounded-md border bg-muted px-2 py-1 text-left font-mono text-xs transition-colors data-[state=on]:border-primary data-[state=on]:bg-primary/10 {buttonClass(
-											{ isDownloaded, isFailed }
-										)}"
-										value={file.path}
-									>
-										{#if isFailed && !isDownloading && !isDownloaded}
-											<span
-												class="rounded bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase"
-											>
-												Failed
-											</span>
-										{/if}
-
-										{#if meta?.sidecar && !isAuxSidecar(meta.sidecar)}
-											<span
-												class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
-											>
-												{meta.sidecar}
-											</span>
-										{/if}
-
-										<span class="font-medium {isDownloaded ? '' : 'text-muted-foreground/80'}"
-											>{label}</span
+									{#if isDownloaded}
+										<!-- downloaded files are not selectable, just marked as done -->
+										<div
+											aria-label={tooltipText}
+											class="inline-flex items-center gap-1 rounded-md border border-foreground bg-muted px-2 py-1 font-mono text-xs"
 										>
-
-										<span class="-my-1 w-px self-stretch bg-border"></span>
-
-										<span class={isDownloaded ? '' : 'text-muted-foreground/80'}>
-											{#if isDownloading && progress && progress.totalBytes > 0}
-												{Math.round((progress.downloadedBytes / progress.totalBytes) * 100)}%
-											{:else}
-												{HuggingFaceService.formatFileSize(file.size ?? 0)}
+											{#if meta?.sidecar && !isAuxSidecar(meta.sidecar)}
+												<span
+													class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
+												>
+													{meta.sidecar}
+												</span>
 											{/if}
-										</span>
 
-										{#if isDownloading && progress}
-											<DownloadProgressBar
-												downloadedBytes={progress.downloadedBytes}
-												overlay
-												totalBytes={progress.totalBytes}
-											/>
-										{/if}
-									</ToggleGroupItem>
+											<span class="font-medium">{label}</span>
+
+											<span class="-my-1 w-px self-stretch bg-border"></span>
+
+											<span>{HuggingFaceService.formatFileSize(file.size ?? 0)}</span>
+
+											<Check class="h-3.5 w-3.5 shrink-0 text-green-500" />
+										</div>
+									{:else}
+										<ToggleGroupItem
+											aria-label={tooltipText}
+											class="relative inline-flex h-auto items-center gap-1 overflow-hidden rounded-md border bg-muted px-2 py-1 text-left font-mono text-xs transition-colors data-[state=on]:border-primary data-[state=on]:bg-primary/10 {isFailed
+												? 'border-destructive'
+												: ''}"
+											value={file.path}
+										>
+											{#if isFailed && !isDownloading}
+												<span
+													class="rounded bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase"
+												>
+													Failed
+												</span>
+											{/if}
+
+											{#if meta?.sidecar && !isAuxSidecar(meta.sidecar)}
+												<span
+													class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
+												>
+													{meta.sidecar}
+												</span>
+											{/if}
+
+											<span class="font-medium text-muted-foreground/80">{label}</span>
+
+											<span class="-my-1 w-px self-stretch bg-border"></span>
+
+											<span class="text-muted-foreground/80">
+												{#if isDownloading && progress && progress.totalBytes > 0}
+													{Math.round((progress.downloadedBytes / progress.totalBytes) * 100)}%
+												{:else}
+													{HuggingFaceService.formatFileSize(file.size ?? 0)}
+												{/if}
+											</span>
+
+											{#if isDownloading && progress}
+												<DownloadProgressBar
+													downloadedBytes={progress.downloadedBytes}
+													overlay
+													totalBytes={progress.totalBytes}
+												/>
+											{/if}
+										</ToggleGroupItem>
+									{/if}
 								</Tooltip.Trigger>
 
 								<Tooltip.Content>
