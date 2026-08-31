@@ -948,11 +948,11 @@ void init_iq_shmem(uvec3 wgsize)
 
 #if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S)
 #if defined(DATA_A_IQ2_S)
-shared uvec2 iq2_grid[1024];
+shared uvec2 iq2s_grid[1024];
 #elif defined(DATA_A_IQ2_XS)
-shared uvec2 iq2_grid[512];
+shared uvec2 iq2xs_grid[512];
 #else
-shared uvec2 iq2_grid[256];
+shared uvec2 iq2xxs_grid[256];
 #endif
 #endif
 
@@ -1045,9 +1045,9 @@ const uvec2[256] iq2xxs_grid_const = {
 void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
-    [[unroll]] for (uint i = 0; i < iq2_grid.length(); i += wgsize.x) {
+    [[unroll]] for (uint i = 0; i < iq2xxs_grid.length(); i += wgsize.x) {
         if (iq2xxs_grid_const.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq2xxs_grid_const.length()) {
-            iq2_grid[i + gl_LocalInvocationIndex.x] = iq2xxs_grid_const[i + gl_LocalInvocationIndex.x];
+            iq2xxs_grid[i + gl_LocalInvocationIndex.x] = iq2xxs_grid_const[i + gl_LocalInvocationIndex.x];
         }
     }
     barrier();
@@ -1217,9 +1217,9 @@ const uvec2 iq2xs_grid_const[512] = {
 void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
-    [[unroll]] for (uint i = 0; i < iq2_grid.length(); i += wgsize.x) {
-        if (iq2_grid.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq2xs_grid_const.length()) {
-            iq2_grid[i + gl_LocalInvocationIndex.x] = iq2xs_grid_const[i + gl_LocalInvocationIndex.x];
+    [[unroll]] for (uint i = 0; i < iq2xs_grid.length(); i += wgsize.x) {
+        if (iq2xs_grid.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq2xs_grid_const.length()) {
+            iq2xs_grid[i + gl_LocalInvocationIndex.x] = iq2xs_grid_const[i + gl_LocalInvocationIndex.x];
         }
     }
     barrier();
@@ -1519,9 +1519,9 @@ const uvec2 iq2s_grid_const[1024] = {
 void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
-    [[unroll]] for (uint i = 0; i < iq2_grid.length(); i += wgsize.x) {
-        if (iq2_grid.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq2s_grid_const.length()) {
-            iq2_grid[i + gl_LocalInvocationIndex.x] = iq2s_grid_const[i + gl_LocalInvocationIndex.x];
+    [[unroll]] for (uint i = 0; i < iq2s_grid.length(); i += wgsize.x) {
+        if (iq2s_grid.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq2s_grid_const.length()) {
+            iq2s_grid[i + gl_LocalInvocationIndex.x] = iq2s_grid_const[i + gl_LocalInvocationIndex.x];
         }
     }
     barrier();
@@ -1538,9 +1538,9 @@ void init_iq_shmem(uvec3 wgsize)
 
 #if defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S)
 #if defined(DATA_A_IQ3_S)
-shared uint32_t iq3_grid[512];
+shared uint32_t iq3s_grid[512];
 #else
-shared uint32_t iq3_grid[256];
+shared uint32_t iq3xxs_grid[256];
 #endif
 #endif
 
@@ -1601,9 +1601,9 @@ const uint32_t iq3xxs_grid_const[256] = {
 void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
-    [[unroll]] for (uint i = 0; i < iq3_grid.length(); i += wgsize.x) {
-        if (iq3_grid.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq3_grid.length()) {
-            iq3_grid[i + gl_LocalInvocationIndex.x] = iq3xxs_grid_const[i + gl_LocalInvocationIndex.x];
+    [[unroll]] for (uint i = 0; i < iq3xxs_grid.length(); i += wgsize.x) {
+        if (iq3xxs_grid.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq3xxs_grid.length()) {
+            iq3xxs_grid[i + gl_LocalInvocationIndex.x] = iq3xxs_grid_const[i + gl_LocalInvocationIndex.x];
         }
     }
     barrier();
@@ -1713,9 +1713,9 @@ const uint32_t iq3s_grid_const[512] = {
 void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
-    [[unroll]] for (uint i = 0; i < iq3_grid.length(); i += wgsize.x) {
-        if (iq3_grid.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq3_grid.length()) {
-            iq3_grid[i + gl_LocalInvocationIndex.x] = iq3s_grid_const[i + gl_LocalInvocationIndex.x];
+    [[unroll]] for (uint i = 0; i < iq3s_grid.length(); i += wgsize.x) {
+        if (iq3s_grid.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq3s_grid.length()) {
+            iq3s_grid[i + gl_LocalInvocationIndex.x] = iq3s_grid_const[i + gl_LocalInvocationIndex.x];
         }
     }
     barrier();
