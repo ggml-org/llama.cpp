@@ -17,13 +17,11 @@ template <> struct mmvq_pf<GGML_TYPE_Q6_K>   { static constexpr int bytes = size
 template <> struct mmvq_pf<GGML_TYPE_IQ4_XS> { static constexpr int bytes = sizeof(block_iq4_xs); };
 // Q2_K is left out: prefetching does not raise its L2 hit rate, so the requests only add pressure
 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
 static __device__ __forceinline__ void mmvq_prefetch_l2(const void * p) {
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     asm volatile("prefetch.global.L2 [%0];" :: "l"(p));
-#else
-    GGML_UNUSED(p);
-#endif
 }
+#endif
 
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
 
