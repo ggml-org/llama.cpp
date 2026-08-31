@@ -418,7 +418,7 @@ void quantize_row_q8_K_vnni(const float * RESTRICT x, void * RESTRICT vy, int64_
 
         // Quantize these floats
         const float iscale = 127.f / amax;
-        y[i].d = GGML_CPU_FP32_TO_FP16(1 / iscale);
+        y[i].d = 1 / iscale;
         const float id = ( amax != 0.0f ) ? iscale : 0.f;
         const __m512 vscale = _mm512_set1_ps(id);
 
@@ -470,12 +470,7 @@ inline void from_float<block_q8_1>(const float * x, char * vy, int64_t k) {
 
 template <>
 inline void from_float<block_q8_K>(const float * x, char * vy, int64_t k) {
-#if 1
-    // TODO: this is reference impl!
-    quantize_row_q8_K_ref(x, (block_q8_K *)vy, k);
-#else
     quantize_row_q8_K_vnni(x, vy, k);
-#endif
 }
 
 // load A from memory to array when nrows can not fill in whole tile
