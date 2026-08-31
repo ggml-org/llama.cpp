@@ -1123,7 +1123,10 @@ void launch_fattn(
         const int tiles_nwaves = (ntiles_dst + max_blocks - 1) / max_blocks;
         const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
 
-        const bool use_stream_k = cc >= GGML_CUDA_CC_ADA_LOVELACE || amd_wmma_available(cc) || tiles_efficiency_percent < 75;
+        bool use_stream_k = cc >= GGML_CUDA_CC_ADA_LOVELACE || amd_wmma_available(cc) || tiles_efficiency_percent < 75;
+        if (amd_wmma_available(cc) && ntiles_dst >= 2*max_blocks && tiles_efficiency_percent >= 75) {
+            use_stream_k = false;
+        }
 
         blocks_num.x = ntiles_dst;
         blocks_num.y = 1;
