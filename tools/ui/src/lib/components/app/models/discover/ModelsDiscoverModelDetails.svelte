@@ -1,13 +1,12 @@
 <script lang="ts">
-	import ModelsDiscoverModelDetailsCommands from './ModelsDiscoverModelDetailsCommands.svelte';
 	import ModelsDiscoverModelDetailsDownloadOptions from './ModelsDiscoverModelDetailsDownloadOptions.svelte';
-	import ModelsDiscoverDetailsHeader from './ModelsDiscoverModelDetailsHeader.svelte';
-	import ModelsDiscoverDetailsReadme from './ModelsDiscoverModelDetailsReadme.svelte';
-	import { isAuxSidecar, type ModelSidecar } from '$lib/constants';
+	import ModelsDiscoverModelDetailsHeader from './ModelsDiscoverModelDetailsHeader.svelte';
+	import ModelsDiscoverModelDetailsReadme from './ModelsDiscoverModelDetailsReadme.svelte';
+	import { isAuxSidecar } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types/huggingface';
 	import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
-	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap } from 'svelte/reactivity';
 
 	interface Props {
 		/** Full HuggingFace model id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */
@@ -49,29 +48,8 @@
 
 	// Draft sidecars (mtp, dflash, dspark, eagle3) present in the repo, e.g.
 	// speculative-decoding drafts. mmproj is excluded: it is vision.
-	let draftSidecars = $derived.by<ModelSidecar[]>(() => {
-		const set = new SvelteSet<ModelSidecar>();
-
-		for (const file of files) {
-			const sidecar = HuggingFaceService.extractQuantMeta(file.path)?.sidecar;
-
-			if (sidecar && !isAuxSidecar(sidecar)) set.add(sidecar);
-		}
-
-		return [...set];
-	});
 
 	type BitDepthRow = { bitDepth: number; files: HfModelSibling[] };
-	let quants = $derived(
-		Array.from(
-			new Set(
-				files
-					.map((f) => HuggingFaceService.extractQuantMeta(f.path)?.quant)
-					.filter((q): q is string => Boolean(q))
-					.map((q) => q.toUpperCase())
-			)
-		)
-	);
 	let bitDepthRows = $derived.by<BitDepthRow[]>(() => {
 		const rows = new SvelteMap<number, HfModelSibling[]>();
 
@@ -105,7 +83,7 @@
 	</div>
 {:else if details}
 	<div class="space-y-6 p-6">
-		<ModelsDiscoverDetailsHeader
+		<ModelsDiscoverModelDetailsHeader
 			{baseModels}
 			{details}
 			{gguf}
@@ -118,8 +96,6 @@
 
 		<ModelsDiscoverModelDetailsDownloadOptions {bitDepthRows} {modelId} />
 
-		<ModelsDiscoverModelDetailsCommands {modelId} {quants} sidecars={draftSidecars} />
-
-		<ModelsDiscoverDetailsReadme {readme} />
+		<ModelsDiscoverModelDetailsReadme {readme} />
 	</div>
 {/if}

@@ -3,11 +3,9 @@
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ModelsDiscoverChatTemplateDialog from '$lib/components/app/models/discover/ModelsDiscoverChatTemplateDialog.svelte';
 	import ModelsDiscoverModelDetails from '$lib/components/app/models/discover/ModelsDiscoverModelDetails.svelte';
-	import ModelsDiscoverModelDetailsCommands from '$lib/components/app/models/discover/ModelsDiscoverModelDetailsCommands.svelte';
 	import ModelsDiscoverModelDetailsDownloadOptions from '$lib/components/app/models/discover/ModelsDiscoverModelDetailsDownloadOptions.svelte';
 	import ModelsDiscoverModelDetailsHeader from '$lib/components/app/models/discover/ModelsDiscoverModelDetailsHeader.svelte';
 	import ModelsDiscoverModelDetailsReadme from '$lib/components/app/models/discover/ModelsDiscoverModelDetailsReadme.svelte';
-	import { ModelDraftSidecar } from '$lib/enums';
 	import type { HfModelSibling } from '$lib/types';
 
 	const { Story } = defineMeta({
@@ -68,25 +66,6 @@
 				{ bitDepth: 8, files: files.filter((f) => f.path.includes('Q8_0')) }
 			]}
 			modelId="ggml-org/gemma-4-12b-it-GGUF"
-		/>
-	</div>
-</Story>
-
-<Story name="Terminal commands (no sidecars)">
-	<div class="w-200 p-4">
-		<ModelsDiscoverModelDetailsCommands
-			modelId="ggml-org/Qwen3.8-27B-GGUF"
-			quants={['Q4_K_M', 'Q8_0']}
-		/>
-	</div>
-</Story>
-
-<Story name="Terminal commands (MTP sidecar)">
-	<div class="w-200 p-4">
-		<ModelsDiscoverModelDetailsCommands
-			modelId="ggml-org/gemma-4-12b-it-GGUF"
-			quants={['Q4_K_M', 'Q8_0']}
-			sidecars={[ModelDraftSidecar.MTP]}
 		/>
 	</div>
 </Story>
