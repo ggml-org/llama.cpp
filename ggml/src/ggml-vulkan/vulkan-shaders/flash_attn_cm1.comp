@@ -181,8 +181,7 @@ void main() {
                         if (kv_active) {
                             f16vec4 m;
                             if (USE_SPARSE) {
-                                // sparse is gated to gqa (m_stride == 0), so all four
-                                // rows of the tile share the same mask value.
+                                // sparse is gqa-gated (m_stride == 0): all four rows share the value
                                 FLOAT_TYPE mv = FLOAT_TYPE(data_m[m_offset + kcol]);
                                 m = f16vec4(mv);
                                 max_mask = max(max_mask, float(mv));
