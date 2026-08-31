@@ -2031,6 +2031,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<std::vector<float>> verify_h;
     std::vector<int32_t> verify_h_rows;
     std::vector<llama_pos> verify_pos_first;
+    // Sequences whose sidecar cursor no longer mirrors the target prefix
+    // (e.g. an image prompt delivered embedding batches with no token ids).
+    // Stale sequences skip sidecar catch-up/drafting until the next reset
+    // instead of disabling the sidecar for the whole process.
+    std::vector<bool> mtp_sidecar_stale;
 
     std::vector<int>                i_last;
     std::vector<std::vector<float>> chain_h;
@@ -2171,6 +2176,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         verify_h.assign(n_seq, {});
         verify_h_rows.assign(n_seq, 0);
         verify_pos_first.assign(n_seq, -1);
+        mtp_sidecar_stale.assign(n_seq, false);
         verify_h_device.assign(n_seq, nullptr);
         verify_h_device_stride.assign(n_seq, 0);
         sidecar_deferred_tokens.assign(n_seq, {});
@@ -2322,6 +2328,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
             const int32_t n_rows = contiguous[seq_id] ? end - beg + 1 : (int32_t) indices.size();
             if (n_rows <= 0) continue;
+            if (mtp_sidecar_stale[seq_id]) {
+                verify_h_rows[seq_id] = 0;
+                verify_pos_first[seq_id] = -1;
+                sidecar_deferred_tokens[seq_id].clear();
+                sidecar_deferred_pos[seq_id].clear();
+                continue;
+            }
             verify_h_rows[seq_id] = n_rows;
             verify_pos_first[seq_id] = batch_in.pos[contiguous[seq_id] ? beg : indices.front()];
             verify_h_device[seq_id] = nullptr;
@@ -2361,10 +2374,14 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                         verify_h[seq_id].data(), n_rows);
             }
             if (rc != 0) {
-                sidecar.disable();
-                sidecar_target_only = true;
-                SPC_ERR("%s", "MTP sidecar catch-up failed; entering target-only mode\n");
-                return true;
+                // Position/token mismatch (e.g. image prompt) or transient
+                // failure: pause this sequence until reset, keep the sidecar.
+                mtp_sidecar_stale[seq_id] = true;
+                verify_h_rows[seq_id] = 0;
+                verify_pos_first[seq_id] = -1;
+                sidecar_deferred_tokens[seq_id].clear();
+                sidecar_deferred_pos[seq_id].clear();
+                SPC_WRN("MTP sidecar: seq %d catch-up rejected; drafting paused until reset\n", (int) seq_id);
             }
         }
         if (defer_catchup) {
@@ -2397,12 +2414,18 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             return true;
         }
 
-        // TODO: how to make it work with vision tokens?
+        // Image/multimodal embedding batches carry no token ids, so the MTP
+        // catch-up cannot represent them. Pause the affected sequences until
+        // the next reset instead of disabling the sidecar for the process.
         if (batch_in.token == nullptr || batch_in.embd != nullptr) {
             if (sidecar.active()) {
-                sidecar.disable();
-                sidecar_target_only = true;
-                SPC_WRN("%s", "MTP sidecar requires text token batches; entering target-only mode\n");
+                for (int32_t k = 0; k < batch_in.n_tokens; ++k) {
+                    const llama_seq_id sid = batch_in.seq_id != nullptr ? batch_in.seq_id[k][0] : 0;
+                    if (sid >= 0 && sid < (llama_seq_id) n_seq && !mtp_sidecar_stale[sid]) {
+                        mtp_sidecar_stale[sid] = true;
+                        SPC_WRN("MTP sidecar: seq %d stale after non-token batch; drafting paused until reset\n", (int) sid);
+                    }
+                }
             }
             return true;
         }
@@ -2584,7 +2607,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         if (sidecar.active()) {
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 auto & dp = dparams[seq_id];
-                if (!dp.drafting) {
+                if (!dp.drafting || mtp_sidecar_stale[seq_id]) {
                     continue;
                 }
                 const bool stochastic = dp.temperature > 0.0f;
@@ -2834,6 +2857,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) override {
         if (!sidecar.active()) return false;
+        if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq && mtp_sidecar_stale[seq_id]) return false;
         if (!sidecar.get_state(seq_id, data)) {
             sidecar.disable();
             sidecar_target_only = true;
@@ -2856,6 +2880,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     bool reset_state(llama_seq_id seq_id) override {
         if (!sidecar.active()) return true;
+        if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq && mtp_sidecar_stale[seq_id]) {
+            mtp_sidecar_stale[seq_id] = false;
+            SPC_INF("MTP sidecar: seq %d re-armed after reset\n", (int) seq_id);
+        }
         if (!sidecar.reset_state(seq_id)) {
             sidecar.disable();
             sidecar_target_only = true;
@@ -2915,6 +2943,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     bool truncate_state(llama_seq_id seq_id, llama_pos pos_max) override {
         if (!sidecar.active()) return true;
+        if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq && mtp_sidecar_stale[seq_id]) return true;
         if (!sidecar.truncate_state(seq_id, pos_max)) {
             sidecar.disable();
             sidecar_target_only = true;
@@ -2926,6 +2955,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     bool commit_state(llama_seq_id seq_id, llama_pos pos_max) override {
         if (!sidecar.active()) return true;
+        if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq && mtp_sidecar_stale[seq_id]) return true;
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             sidecar.disable();
             sidecar_target_only = true;
@@ -2962,6 +2992,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     bool rebase_state(llama_seq_id seq_id, llama_pos pos_min, llama_pos pos_max, llama_pos delta) override {
         if (!sidecar.active()) return true;
+        if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq && mtp_sidecar_stale[seq_id]) return true;
         if (!sidecar.rebase_state(seq_id, pos_min, pos_max, delta)) {
             sidecar.disable();
             sidecar_target_only = true;
