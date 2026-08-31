@@ -305,10 +305,7 @@ struct block_q2_K_packed32
 
 #define QUANT_K_TQ1_0 256
 
-// ternary (BitNet) 1.69 bpw: base-3 packed values, 5 per byte in `qs`
-// (48 bytes = 240 values) and 4 per byte in `qh` (4 bytes = 16 values).
-// Decoded via powers of 3: xi = (qbyte * pow3[t] * 3) >> 8, then
-// w = d * (xi - 1) maps {0,1,2} onto {-1,0,+1}.
+// TQ1_0: base-3 packed trits, 5 per byte in `qs` (48B) and 4 in `qh` (4B).
 struct block_tq1_0
 {
     uint8_t qs[(QUANT_K_TQ1_0 - 4 * QUANT_K_TQ1_0 / 64) / 5];
@@ -316,9 +313,7 @@ struct block_tq1_0
     float16_t d;
 };
 
-// TQ1_0 decode helpers, shared by every shader that reads this type.
-// For element e in [0, 255]: which packed byte holds it (0..47 -> qs,
-// 48..51 -> qh at index-48) and which base-3 digit position it occupies.
+// Element e in [0,255] -> its packed byte (0..47 qs, 48..51 qh) and digit.
 uint tq1_0_byte_of(uint e) {
     return e < 160u ? (e % 32u)
          : e < 240u ? 32u + ((e - 160u) % 16u)
@@ -329,9 +324,8 @@ uint tq1_0_digit_of(uint e) {
          : e < 240u ? ((e - 160u) / 16u)
          : ((e - 240u) / 4u);
 }
-// Decode one trit (0,1,2). The powers of 3 are packed into one 32-bit
-// constant (7 bits each, max 81 < 128) so they extract with a shift/mask
-// instead of a constant array that may not end up in registers.
+// Powers of 3 packed in one uint (7 bits each) to avoid a constant array
+// that may not land in registers.
 // The 8-bit truncation of the product IS part of the format (C reference:
 // `uint8_t q = qs[..] * pow3[n]`); without it the high digits overflow
 // their scale and the weights decode to noise.

@@ -7,11 +7,8 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
 
-// ternary TQ1_0: w = (xi - 1) * d, with xi in {0,1,2} decoded from base-3
-// packed bytes. See types.glsl for the block layout and tq1_0_trit().
-// This shader walks the packed bytes directly (byte m, digit t) instead of
-// going through tq1_0_byte_of()/tq1_0_digit_of(), so that each thread reads
-// one byte and expands it into all of its digits.
+// Walks the packed bytes directly (byte m, digit t) rather than via
+// tq1_0_byte_of()/tq1_0_digit_of(): one byte per thread, expanded in place.
 void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     uint a_offset, b_offset, d_offset;
     get_offsets(a_offset, b_offset, d_offset);
