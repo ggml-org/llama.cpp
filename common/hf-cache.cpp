@@ -4,9 +4,7 @@
 #include "common.h"
 #include "log.h"
 #include "http.h"
-
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <filesystem>
 #include <fstream>
@@ -14,8 +12,6 @@
 #include <string>
 #include <string_view>
 #include <stdexcept>
-
-namespace nl = nlohmann;
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -195,8 +191,8 @@ static void safe_write_file(const fs::path & path, const std::string & data) {
     }
 }
 
-static nl::json api_get(const std::string & url,
-                        const std::string & token) {
+static common_json api_get(const std::string & url,
+                           const std::string & token) {
     auto [cli, parts] = common_http_client(url);
 
     httplib::Headers headers = {
@@ -214,10 +210,10 @@ static nl::json api_get(const std::string & url,
         auto body = res->body;
 
         if (res->status == 200) {
-            return nl::json::parse(res->body);
+            return common_json::parse(res->body);
         }
         try {
-            body = nl::json::parse(res->body)["error"].get<std::string>();
+            body = common_json::parse(res->body)["error"].get<std::string>();
         } catch (...) { }
 
         throw std::runtime_error("GET failed (" + std::to_string(res->status) + "): " + body);
@@ -280,7 +276,7 @@ static std::string get_repo_commit(const std::string & repo_id,
         safe_write_file(refs_path / name, commit);
         return commit;
 
-    } catch (const nl::json::exception & e) {
+    } catch (const common_json_error & e) {
         LOG_ERR("%s: JSON error: %s\n", __func__, e.what());
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
@@ -358,7 +354,7 @@ hf_files get_repo_files(const std::string & repo_id,
 
             files.push_back(file);
         }
-    } catch (const nl::json::exception & e) {
+    } catch (const common_json_error & e) {
         LOG_ERR("%s: JSON error: %s\n", __func__, e.what());
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());

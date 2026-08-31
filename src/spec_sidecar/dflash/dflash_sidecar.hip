@@ -8,6 +8,9 @@
 #include "../artifact_manifest.h"
 #include "spec_sidecar/sidecar_abi.h"
 
+#include <chrono>
+#include <cinttypes>
+
 #define DFC(x) do { hipError_t e_ = (x); if (e_ != hipSuccess) { fprintf(stderr, "[dflash-sidecar] %s @%d\n", hipGetErrorString(e_), __LINE__); return -1; } } while (0)
 
 using Tens = spec_sidecar_artifact::TensorDesc;
@@ -33,24 +36,84 @@ static void deq_q4k_host(const uint8_t * src, float * dst, size_t n) {
 
 #define DISPATCH_Q4K(N, W, X, Y, NIN, NOUT, ST) do { \
     switch (N) { \
-    case 1: gemv8t_q4_K<1><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 2: gemv8t_q4_K<2><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 3: gemv8t_q4_K<3><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 4: gemv8t_q4_K<4><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 5: gemv8t_q4_K<5><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 6: gemv8t_q4_K<6><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 7: gemv8t_q4_K<7><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    default: gemv8t_q4_K<8><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; } } while (0)
+    case 1: gemv8t_q4_K<1><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 2: gemv8t_q4_K<2><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 3: gemv8t_q4_K<3><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 4: gemv8t_q4_K<4><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 5: gemv8t_q4_K<5><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 6: gemv8t_q4_K<6><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 7: gemv8t_q4_K<7><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    default: gemv8t_q4_K<8><<<((NOUT)+7)/8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; } } while (0)
 #define DISPATCH_Q6K(N, W, X, Y, NIN, NOUT, ST) do { \
     switch (N) { \
-    case 1: gemv8t_q6_K<1><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 2: gemv8t_q6_K<2><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 3: gemv8t_q6_K<3><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 4: gemv8t_q6_K<4><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 5: gemv8t_q6_K<5><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 6: gemv8t_q6_K<6><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    case 7: gemv8t_q6_K<7><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
-    default: gemv8t_q6_K<8><<<((NOUT)+7)/8, 256, 0, ST>>>(W, X, Y, NIN, NOUT); break; } } while (0)
+    case 1: gemv8t_q6_K<1><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 2: gemv8t_q6_K<2><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 3: gemv8t_q6_K<3><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 4: gemv8t_q6_K<4><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 5: gemv8t_q6_K<5><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 6: gemv8t_q6_K<6><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    case 7: gemv8t_q6_K<7><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; \
+    default: gemv8t_q6_K<8><<<((NOUT)+7)/ 8, 512, 0, ST>>>(W, X, Y, NIN, NOUT); break; } } while (0)
+#define DISPATCH_Q4K_Q8(N, W, X, Q, Y, NIN, NOUT, ST) do { \
+    switch (N) { \
+    case 1: gemv_q4_K_q8_1<1><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 2: gemv_q4_K_q8_1<2><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 3: gemv_q4_K_q8_1<3><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 4: gemv_q4_K_q8_1<4><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 5: gemv_q4_K_q8_1<5><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 6: gemv_q4_K_q8_1<6><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 7: gemv_q4_K_q8_1<7><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    default: gemv_q4_K_q8_1<8><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; } } while (0)
+#define DISPATCH_Q6K_Q8(N, W, X, Q, Y, NIN, NOUT, ST) do { \
+    switch (N) { \
+    case 1: gemv_q6_K_q8_1<1><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 2: gemv_q6_K_q8_1<2><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 3: gemv_q6_K_q8_1<3><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 4: gemv_q6_K_q8_1<4><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 5: gemv_q6_K_q8_1<5><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 6: gemv_q6_K_q8_1<6><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 7: gemv_q6_K_q8_1<7><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    default: gemv_q6_K_q8_1<8><<<((NOUT)+7)/8, 256, 0, ST>>>(W, Q, Y, NIN, NOUT); break; } } while (0)
+#define DISPATCH_Q4K_Q8_NATIVE(N, W, X, Q, Y, NIN, NOUT, ST) do { \
+    switch (N) { \
+    case 1: gemv_mmvq2_q4_K_q8_1<1><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 2: gemv_mmvq2_q4_K_q8_1<2><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 3: gemv_mmvq2_q4_K_q8_1<3><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 4: gemv_mmvq2_q4_K_q8_1<4><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 5: gemv_mmvq2_q4_K_q8_1<5><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 6: gemv_mmvq2_q4_K_q8_1<6><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 7: gemv_mmvq2_q4_K_q8_1<7><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    default: gemv_mmvq2_q4_K_q8_1<8><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; } } while (0)
+#define DISPATCH_Q6K_Q8_NATIVE(N, W, X, Q, Y, NIN, NOUT, ST) do { \
+    switch (N) { \
+    case 1: gemv_mmvq2_q6_K_q8_1<1><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 2: gemv_mmvq2_q6_K_q8_1<2><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 3: gemv_mmvq2_q6_K_q8_1<3><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 4: gemv_mmvq2_q6_K_q8_1<4><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 5: gemv_mmvq2_q6_K_q8_1<5><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 6: gemv_mmvq2_q6_K_q8_1<6><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    case 7: gemv_mmvq2_q6_K_q8_1<7><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; \
+    default: gemv_mmvq2_q6_K_q8_1<8><<<((NOUT)+1)/2, 32, 0, ST>>>(W, Q, Y, NIN, NOUT); break; } } while (0)
+#define DISPATCH_Q4K_ANY(N, W, X, Q, Y, NIN, NOUT, USE_Q8, ST) do { \
+    if (USE_Q8) DISPATCH_Q4K_Q8(N, W, X, Q, Y, NIN, NOUT, ST); \
+    else        DISPATCH_Q4K(N, W, X, Y, NIN, NOUT, ST); } while (0)
+#define DISPATCH_Q6K_ANY(N, W, X, Q, Y, NIN, NOUT, USE_Q8, ST) do { \
+    if (USE_Q8) DISPATCH_Q6K_Q8(N, W, X, Q, Y, NIN, NOUT, ST); \
+    else        DISPATCH_Q6K(N, W, X, Y, NIN, NOUT, ST); } while (0)
+#define DISPATCH_Q4K_ANY_NATIVE(N, W, X, Q, Y, NIN, NOUT, USE_Q8, USE_NATIVE, ST) do { \
+    if (USE_Q8) { \
+        if (USE_NATIVE) DISPATCH_Q4K_Q8_NATIVE(N, W, X, Q, Y, NIN, NOUT, ST); \
+        else             DISPATCH_Q4K_Q8(N, W, X, Q, Y, NIN, NOUT, ST); \
+    } else { \
+        DISPATCH_Q4K(N, W, X, Y, NIN, NOUT, ST); \
+    } } while (0)
+#define DISPATCH_Q6K_ANY_NATIVE(N, W, X, Q, Y, NIN, NOUT, USE_Q8, USE_NATIVE, ST) do { \
+    if (USE_Q8) { \
+        if (USE_NATIVE && !S.q8_native_q4_only) DISPATCH_Q6K_Q8_NATIVE(N, W, X, Q, Y, NIN, NOUT, ST); \
+        else                                  DISPATCH_Q6K_Q8(N, W, X, Q, Y, NIN, NOUT, ST); \
+    } else { \
+        DISPATCH_Q6K(N, W, X, Y, NIN, NOUT, ST); \
+    } } while (0)
 
 namespace {
 struct DLayer {
@@ -90,6 +153,16 @@ struct DState {
     int n_head = 40960; // rows in the loaded target head (sliced or full)
     float *feat_d = nullptr, *henc = nullptr, *x = nullptr, *xn = nullptr, *dyn_a = nullptr, *dyn_f = nullptr, *cg = nullptr, *q = nullptr, *k = nullptr, *v = nullptr, *att = nullptr, *wo_out = nullptr,
           *fu = nullptr, *fg = nullptr, *ftmp = nullptr, *resid = nullptr, *tE = nullptr, *logits = nullptr, *selhid = nullptr, *tk_pmax = nullptr, *tk_vals = nullptr;
+    df_block_q8_1 * q8_feat = nullptr, *q8_xn = nullptr, *q8_cg = nullptr,
+                   *q8_att = nullptr, *q8_fg = nullptr, *tE_q8 = nullptr;
+    bool q8_head = false;
+    bool q8_all = false;
+    bool q8_process = false;
+    bool q8_native_mmvq = false;
+    bool q8_native_q4_only = false;
+    int q8_layers = 5;
+    float * q8_probe = nullptr;
+    int q8_probe_slots = 0;
     int *pos_d[8] = {}, *tok_d[8] = {}, *tk_pidx = nullptr, *tk_ids = nullptr;
     int max_pos = 131072; // hard position ceiling; KV storage grows on demand
     DSeqState seq[8];
@@ -102,6 +175,43 @@ struct DState {
     float last_selhid[8 * DF_RANK] = {};
 };
 DState S;
+
+// Sidecar calls run on an explicit stream, but HIP's current device is still
+// thread-local state shared with llama.cpp. Keep device-placement experiments
+// from leaking that state into the target backend.
+struct DFlashDeviceGuard {
+    int previous = -1;
+    bool valid = false;
+    bool changed = false;
+
+    explicit DFlashDeviceGuard(int target = -1) {
+        if (hipGetDevice(&previous) != hipSuccess) {
+            return;
+        }
+        valid = true;
+        if (target >= 0 && !set_target(target)) {
+            return;
+        }
+    }
+
+    bool set_target(int target) {
+        if (!valid || target < 0 || previous == target) {
+            return valid;
+        }
+        if (hipSetDevice(target) != hipSuccess) {
+            valid = false;
+            return false;
+        }
+        changed = true;
+        return true;
+    }
+
+    ~DFlashDeviceGuard() {
+        if (changed && previous >= 0) {
+            (void) hipSetDevice(previous);
+        }
+    }
+};
 
 static bool valid_seq(int32_t seq_id) {
     return seq_id >= 0 && seq_id < S.n_seq && seq_id < 8;
@@ -145,9 +255,11 @@ static_assert(DF_TOPK == SPEC_SIDECAR_DFLASH_DRAFT_TOP_K,
 
 static hipGraphExec_t g_draft_gexec[8] = {};
 
-// Grow committed KV storage only as far as the current request needs. The
-// graph captures Kc/Vc pointers, so replacing storage invalidates that
-// sequence's cached graph; the next draft recaptures it once.
+// Grow the committed KV cache to hold at least `needed` rows. Storage starts
+// at 16K positions (~335 MB/seq) and doubles on demand up to S.max_pos, so
+// long generations scale automatically instead of hitting a fixed cap. The
+// draft hipGraph bakes in the Kc/Vc pointers, so growth invalidates the
+// cached graph for this sequence; the next draft recaptures it (one-time).
 static int ensure_seq_storage(DSeqState & q, int needed) {
     if (needed <= q.kv_capacity) return 0;
     if (needed > S.max_pos) return -1;
@@ -158,15 +270,12 @@ static int ensure_seq_storage(DSeqState & q, int needed) {
     const size_t row_bytes = (size_t) DF_KV * DF_HDIM * sizeof(__half);
     DFC(hipStreamSynchronize(S.st));
     for (int il = 0; il < DF_LAYERS; ++il) {
-        __half * nk = nullptr;
-        __half * nv = nullptr;
+        __half * nk = nullptr, * nv = nullptr;
         DFC(hipMalloc(&nk, kv_bytes));
         DFC(hipMalloc(&nv, kv_bytes));
         if (q.state_pos_max > 0) {
-            DFC(hipMemcpyAsync(nk, q.Kc[il], (size_t) q.state_pos_max * row_bytes,
-                               hipMemcpyDeviceToDevice, S.st));
-            DFC(hipMemcpyAsync(nv, q.Vc[il], (size_t) q.state_pos_max * row_bytes,
-                               hipMemcpyDeviceToDevice, S.st));
+            DFC(hipMemcpyAsync(nk, q.Kc[il], (size_t) q.state_pos_max * row_bytes, hipMemcpyDeviceToDevice, S.st));
+            DFC(hipMemcpyAsync(nv, q.Vc[il], (size_t) q.state_pos_max * row_bytes, hipMemcpyDeviceToDevice, S.st));
         }
         DFC(hipStreamSynchronize(S.st));
         if (q.Kc[il] != nullptr) DFC(hipFree(q.Kc[il]));
@@ -180,8 +289,7 @@ static int ensure_seq_storage(DSeqState & q, int needed) {
         g_draft_gexec[seq_idx] = nullptr;
     }
     if (q.kv_capacity > 0) {
-        fprintf(stderr, "[dflash-sidecar] seq %d KV cache grown %d -> %d rows\n",
-                seq_idx, q.kv_capacity, capacity);
+        fprintf(stderr, "[dflash-sidecar] seq %d KV cache grown %d -> %d rows\n", seq_idx, q.kv_capacity, capacity);
     }
     q.kv_capacity = capacity;
     return 0;
@@ -271,28 +379,25 @@ DF_API int spec_dflash_reset_state(int32_t seq_id) {
     q->state_pos_min = 0;
     q->state_pos_max = 0;
     discard_pending(*q);
-    // Return memory borrowed for a long request. The next request above 16K
-    // pays one growth allocation and one graph recapture.
+    // Give grown KV storage back on reset: a long generation borrows memory
+    // and returns it when the request ends. The next >16K request pays one
+    // re-alloc plus a graph recapture (~15 ms, once).
     if (q->kv_capacity > 16384) {
-        DFC(hipStreamSynchronize(S.st));
-        for (int il = 0; il < DF_LAYERS; ++il) {
-            if (q->Kc[il] != nullptr) {
-                DFC(hipFree(q->Kc[il]));
-                q->Kc[il] = nullptr;
+        DFlashDeviceGuard device_guard(S.device);
+        if (device_guard.valid) {
+            (void) hipStreamSynchronize(S.st);
+            for (int il = 0; il < DF_LAYERS; ++il) {
+                if (q->Kc[il] != nullptr) { (void) hipFree(q->Kc[il]); q->Kc[il] = nullptr; }
+                if (q->Vc[il] != nullptr) { (void) hipFree(q->Vc[il]); q->Vc[il] = nullptr; }
             }
-            if (q->Vc[il] != nullptr) {
-                DFC(hipFree(q->Vc[il]));
-                q->Vc[il] = nullptr;
+            const int seq_idx = (int) (q - S.seq);
+            if (seq_idx >= 0 && seq_idx < 8 && g_draft_gexec[seq_idx] != nullptr) {
+                (void) hipGraphExecDestroy(g_draft_gexec[seq_idx]);
+                g_draft_gexec[seq_idx] = nullptr;
             }
+            fprintf(stderr, "[dflash-sidecar] seq %d KV cache shrunk %d -> 0 rows on reset\n", seq_idx, q->kv_capacity);
+            q->kv_capacity = 0;
         }
-        const int seq_idx = (int) (q - S.seq);
-        if (seq_idx >= 0 && seq_idx < 8 && g_draft_gexec[seq_idx] != nullptr) {
-            DFC(hipGraphExecDestroy(g_draft_gexec[seq_idx]));
-            g_draft_gexec[seq_idx] = nullptr;
-        }
-        fprintf(stderr, "[dflash-sidecar] seq %d KV cache shrunk %d -> 0 rows on reset\n",
-                seq_idx, q->kv_capacity);
-        q->kv_capacity = 0;
     }
     return 0;
 }
@@ -309,10 +414,17 @@ DF_API int spec_dflash_commit_state(int32_t seq_id, int32_t pos_max) {
     DSeqState * q = get_seq(seq_id);
     if (!S.ok || q == nullptr || pos_max < q->state_pos_max ||
             pos_max > q->pending_pos_max || pos_max > S.max_pos) return -1;
+    DFlashDeviceGuard device_guard(S.device);
+    if (!device_guard.valid) return -1;
+    const bool sync_timing = getenv("LLAMA_SPEC_HIP_SYNC_TIMING") != nullptr;
+    const auto t0 = sync_timing ? std::chrono::high_resolution_clock::now()
+                                : std::chrono::high_resolution_clock::time_point{};
+    int n_rows_committed = 0;
     if (pos_max > q->state_pos_max) {
         if (ensure_seq_storage(*q, pos_max) != 0 || q->pending_pos_min != q->state_pos_max) return -1;
         const size_t src_row = (size_t) (q->state_pos_max - q->pending_pos_min);
         const size_t n_rows = (size_t) (pos_max - q->state_pos_max);
+        n_rows_committed = (int) n_rows;
         const size_t row_bytes = (size_t) DF_KV * DF_HDIM * sizeof(__half);
         for (int il = 0; il < DF_LAYERS; ++il) {
             DFC(hipMemcpyAsync(q->Kc[il] + (size_t) q->state_pos_max * DF_KV * DF_HDIM,
@@ -325,6 +437,19 @@ DF_API int spec_dflash_commit_state(int32_t seq_id, int32_t pos_max) {
         q->state_pos_max = pos_max;
     }
     discard_pending(*q);
+    if (sync_timing) {
+        DFC(hipStreamSynchronize(S.st));
+        static uint64_t n_calls = 0;
+        static uint64_t n_rows = 0;
+        static double total_ms = 0.0;
+        total_ms += std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - t0).count();
+        n_rows += (uint64_t) n_rows_committed;
+        if (++n_calls % 25 == 0) {
+            fprintf(stderr, "[dflash-sidecar] commit complete avg %.3f ms (%.1f rows) over %" PRIu64 " calls\n",
+                    total_ms / (double) n_calls, (double) n_rows / (double) n_calls, n_calls);
+        }
+    }
     return 0;
 }
 
@@ -332,6 +457,8 @@ DF_API int spec_dflash_rebase_state(int32_t seq_id, int32_t pos_min, int32_t pos
     DSeqState * q = get_seq(seq_id);
     if (!S.ok || q == nullptr || pos_min < 0 || pos_min > pos_max || pos_max > S.max_pos ||
             q->pending_pos_max != q->state_pos_max) return -1;
+    DFlashDeviceGuard device_guard(S.device);
+    if (!device_guard.valid) return -1;
     if (delta == 0 || q->state_pos_max <= pos_min) {
         if (delta != 0 && ++q->state_epoch == 0) q->state_epoch = 1;
         return 0;
@@ -360,6 +487,8 @@ DF_API int spec_dflash_rebase_state(int32_t seq_id, int32_t pos_min, int32_t pos
 
 DF_API int spec_dflash_attach_target_stream(void * stream, int32_t device) {
     if (!S.ok || device != S.device) return -1;
+    DFlashDeviceGuard device_guard(S.device);
+    if (!device_guard.valid) return -1;
     if (stream == nullptr) {
         if (S.st != S.owned_st) {
             DFC(hipStreamSynchronize(S.st));
@@ -473,8 +602,46 @@ static bool validate_target_schema(const std::vector<Tens> & tensors, std::strin
 
 DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
     if (S.ok) return n_seq == S.n_seq ? 0 : -1;
+    DFlashDeviceGuard caller_device;
+    if (!caller_device.valid) return -1;
     if (n_seq < 1 || n_seq > 8) return -1;
     S.n_seq = n_seq;
+    // Q8_1-activation GEMV is the default on the qualified gfx1030 sidecar;
+    // LLAMA_SPEC_HIP_DFLASH_Q8_DISABLE restores the pure-f32 kernels for A/B.
+    S.q8_all = getenv("LLAMA_SPEC_HIP_DFLASH_Q8_DISABLE") == nullptr ||
+               getenv("LLAMA_SPEC_HIP_DFLASH_Q8_ALL") != nullptr;
+    S.q8_process = S.q8_all && getenv("LLAMA_SPEC_HIP_DFLASH_Q8_PROCESS") != nullptr;
+    // Q4_K is automatically selected only for the exact gfx1030 sidecar
+    // build, and only reaches a kernel when an existing Q8 dispatch gate is
+    // active. The full selector remains an audit-only override because the
+    // native-shaped Q6 path regresses. The disable switch is an opt-out for
+    // A/B and rollback; there is no Q4 performance opt-in in normal use.
+#if defined(SPEC_SIDECAR_GFX1030)
+    constexpr bool gfx1030_sidecar = true;
+#else
+    constexpr bool gfx1030_sidecar = false;
+#endif
+    const bool native_all = gfx1030_sidecar && getenv("LLAMA_SPEC_HIP_DFLASH_Q8_NATIVE_MMVQ") != nullptr;
+    const bool native_q4 = gfx1030_sidecar &&
+        (native_all || getenv("LLAMA_SPEC_HIP_DFLASH_DISABLE_NATIVE_Q4_MMVQ") == nullptr);
+    S.q8_native_q4_only = native_q4 && !native_all;
+    S.q8_native_mmvq = native_q4 || native_all;
+    S.q8_layers = 5;
+    if (const char * layers = getenv("LLAMA_SPEC_HIP_DFLASH_Q8_LAYERS")) {
+        S.q8_layers = std::max(0, std::min(DF_LAYERS, std::atoi(layers)));
+    }
+    const bool q8_no_head = getenv("LLAMA_SPEC_HIP_DFLASH_Q8_NO_HEAD") != nullptr;
+    S.q8_head = !q8_no_head && (S.q8_all || getenv("LLAMA_SPEC_HIP_DFLASH_Q8_HEAD") != nullptr);
+    if (const char * requested = getenv("LLAMA_SPEC_HIP_DFLASH_DEVICE")) {
+        const int device = atoi(requested);
+        int device_count = 0;
+        DFC(hipGetDeviceCount(&device_count));
+        if (device < 0 || device >= device_count || !caller_device.set_target(device)) {
+            fprintf(stderr, "[dflash-sidecar] invalid requested device %d (count=%d)\n",
+                    device, device_count);
+            return -1;
+        }
+    }
     DFC(hipGetDevice(&S.device));
     char pb[1024];
     std::string validation_error;
@@ -639,8 +806,8 @@ DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
     if (!(t = DT("output_norm.weight"))) return -1; S.w_out_norm = (const float *) t->dev;
     if (!(t = DT("selector_hidden.weight"))) return -1; S.W_selhid = (const block_q4_K *) t->dev;
 
-    // Optional override of the hard position ceiling; storage still grows on
-    // demand from 16K rows and this only bounds that growth.
+    // Optional override of the hard position ceiling (storage still grows on
+    // demand from 16K rows; this only bounds the growth).
     if (const char * mp = getenv("LLAMA_SPEC_HIP_MAX_POS")) {
         long long v = atoll(mp);
         if (v < 4096) v = 4096;
@@ -667,6 +834,19 @@ DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
     DFC(hipMalloc(&S.ftmp,   (size_t) DF_BLOCK * DF_EMBD * 4));
     DFC(hipMalloc(&S.resid,  (size_t) DF_BLOCK * DF_EMBD * 4));
     DFC(hipMalloc(&S.tE,     (size_t) DF_BLOCK * DF_EMBD * 4));
+    if (S.q8_all) {
+        DFC(hipMalloc(&S.q8_feat, (size_t) DF_BLOCK * (25600 / 32) * sizeof(df_block_q8_1)));
+        DFC(hipMalloc(&S.q8_xn,   (size_t) DF_BLOCK * (DF_EMBD / 32) * sizeof(df_block_q8_1)));
+        DFC(hipMalloc(&S.q8_cg,   (size_t) DF_BLOCK * (DF_EMBD / 32) * sizeof(df_block_q8_1)));
+        DFC(hipMalloc(&S.q8_att,  (size_t) DF_BLOCK * ((DF_HEADS * DF_HDIM) / 32) * sizeof(df_block_q8_1)));
+        DFC(hipMalloc(&S.q8_fg,   (size_t) DF_BLOCK * (DF_FF / 32) * sizeof(df_block_q8_1)));
+    }
+    if (S.q8_head) {
+        DFC(hipMalloc(&S.tE_q8, (size_t) DF_BLOCK * (DF_EMBD / 32) * sizeof(df_block_q8_1)));
+    }
+    if (S.q8_all) {
+        DFC(hipMalloc(&S.q8_probe, (size_t) 60 * 4 * sizeof(float)));
+    }
     DFC(hipMalloc(&S.logits, (size_t) DF_BLOCK * S.n_head * 4));
     DFC(hipMalloc(&S.selhid, (size_t) DF_BLOCK * DF_RANK * 4));
     for (int seq_id = 0; seq_id < 8; ++seq_id) {
@@ -679,7 +859,9 @@ DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
     DFC(hipMalloc(&S.tk_ids,  8 * DF_TOPK * 4));
     DFC(hipMalloc(&S.tk_vals, 8 * DF_TOPK * 4));
     S.ok = true;
-    fprintf(stderr, "[dflash-sidecar] initialized (max_pos=%d)\n", S.max_pos);
+    fprintf(stderr, "[dflash-sidecar] initialized (max_pos=%d, device=%d, q8_head=%d, q8_all=%d, q8_process=%d, q8_layers=%d, q8_native_mmvq=%d, q8_native_q4_only=%d)\n",
+            S.max_pos, S.device, S.q8_head ? 1 : 0, S.q8_all ? 1 : 0, S.q8_process ? 1 : 0, S.q8_layers,
+            S.q8_native_mmvq ? 1 : 0, S.q8_native_q4_only ? 1 : 0);
     return 0;
 }
 
@@ -692,6 +874,8 @@ static int spec_dflash_chunk_impl(int32_t seq_id, const int32_t * poss,
     if (!S.ok || q == nullptr || n < 0 ||
             (n > 0 && (!poss || (device_features ? layer_features_device == nullptr : feats == nullptr)))) return -1;
     if (n == 0) return 0;
+    DFlashDeviceGuard device_guard(S.device);
+    if (!device_guard.valid) return -1;
     if (n > S.max_pos - q->state_pos_max || q->pending_pos_max != q->state_pos_max ||
             ensure_seq_storage(*q, q->state_pos_max + n) != 0 || ensure_pending_storage(*q, n) != 0) return -1;
     if (device_features && (n_layers != DF_LAYERS || layer_width != DF_EMBD / DF_LAYERS)) return -1;
@@ -730,12 +914,51 @@ static int spec_dflash_chunk_impl(int32_t seq_id, const int32_t * poss,
                                (size_t) nb * 25600 * sizeof(float), hipMemcpyHostToDevice, S.st));
         }
         const int pos_base = poss[off];
-        DISPATCH_Q4K(nb, S.W_fc, S.feat_d, S.henc, 25600, DF_EMBD, S.st);
+        if (S.q8_process) {
+            df_quantize_q8_1<<<dim3(25600 / 256, nb), 256, 0, S.st>>>(
+                    S.feat_d, S.q8_feat, 25600);
+        }
+        DISPATCH_Q4K_ANY_NATIVE(nb, S.W_fc, S.feat_d, S.q8_feat, S.henc, 25600, DF_EMBD, S.q8_process, S.q8_native_mmvq, S.st);
+        if (dbg && getenv("LLAMA_SPEC_HIP_DFLASH_TRACE_PROCESS") != nullptr) {
+            static bool compared_process = false;
+            if (!compared_process) {
+                compared_process = true;
+                DISPATCH_Q4K(nb, S.W_fc, S.feat_d, S.resid, 25600, DF_EMBD, S.st);
+                float h_q8[8] = {}, h_f32[8] = {};
+                DFC(hipStreamSynchronize(S.st));
+                DFC(hipMemcpy(h_q8, S.henc, sizeof(h_q8), hipMemcpyDeviceToHost));
+                DFC(hipMemcpy(h_f32, S.resid, sizeof(h_f32), hipMemcpyDeviceToHost));
+                std::vector<float> h_input((size_t) nb * 25600);
+                DFC(hipMemcpy(h_input.data(), S.feat_d, h_input.size() * sizeof(float), hipMemcpyDeviceToHost));
+                FILE * input_file = std::fopen("/tmp/dflash-sidecar-fc-input.bin", "wb");
+                if (input_file != nullptr) {
+                    std::fwrite(h_input.data(), sizeof(float), h_input.size(), input_file);
+                    std::fclose(input_file);
+                }
+                if (S.q8_process) {
+                    std::vector<df_block_q8_1> h_q8_input((size_t) nb * (25600 / 32));
+                    DFC(hipMemcpy(h_q8_input.data(), S.q8_feat,
+                                  h_q8_input.size() * sizeof(df_block_q8_1), hipMemcpyDeviceToHost));
+                    FILE * q8_file = std::fopen("/tmp/dflash-sidecar-fc-q8.bin", "wb");
+                    if (q8_file != nullptr) {
+                        std::fwrite(h_q8_input.data(), sizeof(df_block_q8_1), h_q8_input.size(), q8_file);
+                        std::fclose(q8_file);
+                    }
+                }
+                fprintf(stderr, "[dflash-sidecar] process fc compare q8=%d q8=%.9g,%.9g,%.9g,%.9g f32=%.9g,%.9g,%.9g,%.9g\n",
+                        S.q8_process ? 1 : 0, h_q8[0], h_q8[1], h_q8[2], h_q8[3],
+                        h_f32[0], h_f32[1], h_f32[2], h_f32[3]);
+            }
+        }
         df_rmsnorm<<<nb, 256, 0, S.st>>>(S.henc, S.w_enc_norm, S.xn, DF_EMBD);
+        if (S.q8_process) {
+            df_quantize_q8_1<<<dim3(DF_EMBD / 256, nb), 256, 0, S.st>>>(
+                    S.xn, S.q8_xn, DF_EMBD);
+        }
         for (int il = 0; il < DF_LAYERS; ++il) {
-            DISPATCH_Q4K(nb, S.L[il].wk, S.xn, S.k, DF_EMBD, DF_KV * DF_HDIM, S.st);
-            if (S.L[il].wv_q6) DISPATCH_Q6K(nb, (const block_q6_K *) S.L[il].wv, S.xn, S.v, DF_EMBD, DF_KV * DF_HDIM, S.st);
-            else               DISPATCH_Q4K(nb, (const block_q4_K *) S.L[il].wv, S.xn, S.v, DF_EMBD, DF_KV * DF_HDIM, S.st);
+            DISPATCH_Q4K_ANY_NATIVE(nb, S.L[il].wk, S.xn, S.q8_xn, S.k, DF_EMBD, DF_KV * DF_HDIM, S.q8_process, S.q8_native_mmvq, S.st);
+            if (S.L[il].wv_q6) DISPATCH_Q6K_ANY_NATIVE(nb, (const block_q6_K *) S.L[il].wv, S.xn, S.q8_xn, S.v, DF_EMBD, DF_KV * DF_HDIM, S.q8_process, S.q8_native_mmvq, S.st);
+            else               DISPATCH_Q4K_ANY_NATIVE(nb, (const block_q4_K *) S.L[il].wv, S.xn, S.q8_xn, S.v, DF_EMBD, DF_KV * DF_HDIM, S.q8_process, S.q8_native_mmvq, S.st);
             df_rmsnorm_head<<<dim3(DF_KV, nb), 128, 0, S.st>>>(S.k, S.L[il].kn, DF_KV);
             df_rope_base<<<dim3(DF_KV, nb), NROT / 2, 0, S.st>>>(S.k, DF_KV, pos_base, NROT);
             df_kv_store_base<<<dim3((DF_KV * DF_HDIM + 255) / 256, nb), 256, 0, S.st>>>(
@@ -771,9 +994,12 @@ DF_API int spec_dflash_draft(int32_t seq_id, int32_t id_last, int32_t n_past, in
     DSeqState * q = get_seq(seq_id);
     if (!S.ok || q == nullptr || !out_ids || id_last < 0 || id_last >= DF_VOCAB) return -1;
     if (n_past < 1 || n_past != q->state_pos_max || q->kv_capacity < n_past) return -1;
-    // At the hard ceiling, report no DFlash proposal so stacked n-gram
-    // drafters can continue instead of disabling the sidecar process-wide.
+    // The hard ceiling is not an error: report an empty draft so the host
+    // falls through to the stacked n-gram drafters instead of disabling the
+    // sidecar for the rest of the process.
     if (static_cast<uint64_t>(n_past) + DF_BLOCK > static_cast<uint64_t>(S.max_pos)) return 0;
+    DFlashDeviceGuard device_guard(S.device);
+    if (!device_guard.valid) return -1;
     const int NROT = 128;
     static int n_calls = 0;
     static double tot_ms = 0.0;
@@ -789,6 +1015,7 @@ DF_API int spec_dflash_draft(int32_t seq_id, int32_t id_last, int32_t n_past, in
 
     // one hipGraph for the whole ~205-kernel draft: all kernel args are static
     // device pointers (contents vary per call), n_past is read from pos_d[0]
+    int q8_probe_slot = 0;
     if (g_draft_gexec[seq_id] != nullptr) {
         DFC(hipGraphLaunch(g_draft_gexec[seq_id], S.st));
         goto readback;
@@ -797,35 +1024,84 @@ DF_API int spec_dflash_draft(int32_t seq_id, int32_t id_last, int32_t n_past, in
     df_embed_rows<<<dim3((DF_EMBD + 255) / 256, DF_BLOCK), 256, 0, S.st>>>(S.W_embd, S.tok_d[seq_id], S.x, DF_EMBD);
     for (int il = 0; il < DF_LAYERS; ++il) {
         auto & L = S.L[il];
+        const bool q8_layer = S.q8_all && il < S.q8_layers;
         df_rmsnorm<<<DF_BLOCK, 256, 0, S.st>>>(S.x, L.attn_norm, S.xn, DF_EMBD);
-        DISPATCH_Q4K(DF_BLOCK, L.conv_a_proj, S.xn, S.dyn_a, DF_EMBD, DF_CONVDYN, S.st);
+        if (q8_layer) {
+            df_quantize_q8_1<<<dim3(DF_EMBD / 256, DF_BLOCK), 256, 0, S.st>>>(
+                    S.xn, S.q8_xn, DF_EMBD);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.xn, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_EMBD);
+        }
+        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.conv_a_proj, S.xn, S.q8_xn, S.dyn_a, DF_EMBD, DF_CONVDYN, q8_layer, S.q8_native_mmvq, S.st);
         df_conv_gate<<<dim3((DF_EMBD + 255) / 256, DF_BLOCK), 256, 0, S.st>>>(S.xn, S.dyn_a, L.conv_a_base, S.cg, 0, DF_BLOCK);
-        DISPATCH_Q4K(DF_BLOCK, L.wq, S.cg, S.q, DF_EMBD, DF_HEADS * DF_HDIM, S.st);
-        DISPATCH_Q4K(DF_BLOCK, L.wk, S.cg, S.k, DF_EMBD, DF_KV * DF_HDIM, S.st);
-        if (L.wv_q6) DISPATCH_Q6K(DF_BLOCK, (const block_q6_K *) L.wv, S.cg, S.v, DF_EMBD, DF_KV * DF_HDIM, S.st);
-        else         DISPATCH_Q4K(DF_BLOCK, (const block_q4_K *) L.wv, S.cg, S.v, DF_EMBD, DF_KV * DF_HDIM, S.st);
+        if (q8_layer) {
+            df_quantize_q8_1<<<dim3(DF_EMBD / 256, DF_BLOCK), 256, 0, S.st>>>(
+                    S.cg, S.q8_cg, DF_EMBD);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.cg, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_EMBD);
+        }
+        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.wq, S.cg, S.q8_cg, S.q, DF_EMBD, DF_HEADS * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
+        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.wk, S.cg, S.q8_cg, S.k, DF_EMBD, DF_KV * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
+        if (L.wv_q6) DISPATCH_Q6K_ANY_NATIVE(DF_BLOCK, (const block_q6_K *) L.wv, S.cg, S.q8_cg, S.v, DF_EMBD, DF_KV * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
+        else         DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, (const block_q4_K *) L.wv, S.cg, S.q8_cg, S.v, DF_EMBD, DF_KV * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
         df_rmsnorm_head<<<dim3(DF_HEADS, DF_BLOCK), 128, 0, S.st>>>(S.q, L.qn, DF_HEADS);
         df_rmsnorm_head<<<dim3(DF_KV, DF_BLOCK), 128, 0, S.st>>>(S.k, L.kn, DF_KV);
         df_rope<<<dim3(DF_HEADS, DF_BLOCK), NROT / 2, 0, S.st>>>(S.q, DF_HEADS, S.pos_d[seq_id], NROT);
         df_rope<<<dim3(DF_KV, DF_BLOCK), NROT / 2, 0, S.st>>>(S.k, DF_KV, S.pos_d[seq_id], NROT);
         df_attn<<<dim3(DF_HEADS, DF_BLOCK), 256, 0, S.st>>>(S.q, q->Kc[il], q->Vc[il], S.k, S.v, S.att, n_past, S.pos_d[seq_id]);
-        DISPATCH_Q4K(DF_BLOCK, L.wo, S.att, S.wo_out, DF_HEADS * DF_HDIM, DF_EMBD, S.st);
+        if (q8_layer) {
+            df_quantize_q8_1<<<dim3((DF_HEADS * DF_HDIM) / 256, DF_BLOCK), 256, 0, S.st>>>(
+                    S.att, S.q8_att, DF_HEADS * DF_HDIM);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.att, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_HEADS * DF_HDIM);
+        }
+        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.wo, S.att, S.q8_att, S.wo_out, DF_HEADS * DF_HDIM, DF_EMBD, q8_layer, S.q8_native_mmvq, S.st);
         df_conv_gate<<<dim3((DF_EMBD + 255) / 256, DF_BLOCK), 256, 0, S.st>>>(S.wo_out, S.dyn_a, L.conv_a_base, S.cg, 1, DF_BLOCK);
         df_add<<<(DF_BLOCK * DF_EMBD + 255) / 256, 256, 0, S.st>>>(S.x, S.cg, DF_BLOCK * DF_EMBD);
         df_rmsnorm<<<DF_BLOCK, 256, 0, S.st>>>(S.x, L.ffn_norm, S.xn, DF_EMBD);
-        DISPATCH_Q4K(DF_BLOCK, L.conv_f_proj, S.xn, S.dyn_f, DF_EMBD, DF_CONVDYN, S.st);
+        if (q8_layer) {
+            df_quantize_q8_1<<<dim3(DF_EMBD / 256, DF_BLOCK), 256, 0, S.st>>>(
+                    S.xn, S.q8_xn, DF_EMBD);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.xn, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_EMBD);
+        }
+        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.conv_f_proj, S.xn, S.q8_xn, S.dyn_f, DF_EMBD, DF_CONVDYN, q8_layer, S.q8_native_mmvq, S.st);
         df_conv_gate<<<dim3((DF_EMBD + 255) / 256, DF_BLOCK), 256, 0, S.st>>>(S.xn, S.dyn_f, L.conv_f_base, S.cg, 0, DF_BLOCK);
-        DISPATCH_Q4K(DF_BLOCK, L.up, S.cg, S.fu, DF_EMBD, DF_FF, S.st);
-        DISPATCH_Q4K(DF_BLOCK, L.gate, S.cg, S.fg, DF_EMBD, DF_FF, S.st);
+        if (q8_layer) {
+            df_quantize_q8_1<<<dim3(DF_EMBD / 256, DF_BLOCK), 256, 0, S.st>>>(
+                    S.cg, S.q8_cg, DF_EMBD);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.cg, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_EMBD);
+        }
+        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.up, S.cg, S.q8_cg, S.fu, DF_EMBD, DF_FF, q8_layer, S.q8_native_mmvq, S.st);
+        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.gate, S.cg, S.q8_cg, S.fg, DF_EMBD, DF_FF, q8_layer, S.q8_native_mmvq, S.st);
+        if (q8_layer) {
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.fu, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_FF);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.fg, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_FF);
+        }
         df_silu_mul<<<(DF_BLOCK * DF_FF + 255) / 256, 256, 0, S.st>>>(S.fg, S.fu, DF_BLOCK * DF_FF);
-        if (L.down_q6) DISPATCH_Q6K(DF_BLOCK, (const block_q6_K *) L.down, S.fg, S.ftmp, DF_FF, DF_EMBD, S.st);
-        else           DISPATCH_Q4K(DF_BLOCK, (const block_q4_K *) L.down, S.fg, S.ftmp, DF_FF, DF_EMBD, S.st);
+        if (q8_layer) {
+            df_quantize_q8_1<<<dim3(DF_FF / 256, DF_BLOCK), 256, 0, S.st>>>(
+                    S.fg, S.q8_fg, DF_FF);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.fg, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_FF);
+        }
+        if (L.down_q6) DISPATCH_Q6K_ANY_NATIVE(DF_BLOCK, (const block_q6_K *) L.down, S.fg, S.q8_fg, S.ftmp, DF_FF, DF_EMBD, q8_layer, S.q8_native_mmvq, S.st);
+        else           DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, (const block_q4_K *) L.down, S.fg, S.q8_fg, S.ftmp, DF_FF, DF_EMBD, q8_layer, S.q8_native_mmvq, S.st);
         df_conv_gate<<<dim3((DF_EMBD + 255) / 256, DF_BLOCK), 256, 0, S.st>>>(S.ftmp, S.dyn_f, L.conv_f_base, S.cg, 1, DF_BLOCK);
         df_add<<<(DF_BLOCK * DF_EMBD + 255) / 256, 256, 0, S.st>>>(S.x, S.cg, DF_BLOCK * DF_EMBD);
     }
     df_rmsnorm<<<DF_BLOCK, 256, 0, S.st>>>(S.x, S.w_out_norm, S.tE, DF_EMBD);
-    gemv8t_q6_K<DF_BLOCK><<<(S.n_head + 7) / 8, 256, 0, S.st>>>(S.W_head, S.tE, S.logits, DF_EMBD, S.n_head);
-    DISPATCH_Q4K(DF_BLOCK, S.W_selhid, S.tE, S.selhid, DF_EMBD, DF_RANK, S.st);
+    if (S.q8_head) {
+        df_quantize_q8_1<<<dim3(DF_EMBD / 256, DF_BLOCK), 256, 0, S.st>>>(
+                S.tE, S.tE_q8, DF_EMBD);
+        if (S.q8_process) {
+            df_probe_f32<<<1, 1, 0, S.st>>>(S.tE, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_EMBD);
+        }
+        DISPATCH_Q6K_ANY_NATIVE(DF_BLOCK, S.W_head, S.tE, S.tE_q8, S.logits, DF_EMBD, S.n_head, true, S.q8_native_mmvq, S.st);
+    } else {
+        gemv8t_q6_K<DF_BLOCK><<<(S.n_head + 7) / 8, 512, 0, S.st>>>(
+                S.W_head, S.tE, S.logits, DF_EMBD, S.n_head);
+    }
+    if (S.q8_head) {
+        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, S.W_selhid, S.tE, S.tE_q8, S.selhid, DF_EMBD, DF_RANK, true, S.q8_native_mmvq, S.st);
+    } else {
+        DISPATCH_Q4K(DF_BLOCK, S.W_selhid, S.tE, S.selhid, DF_EMBD, DF_RANK, S.st);
+    }
     for (int s2 = 0; s2 < DF_TOPK; ++s2) {
         dfa_argmax_partial<<<dim3(S.tkparts, DF_BLOCK), 256, 0, S.st>>>(S.logits, S.n_head, S.tk_pmax, S.tk_pidx, S.tkparts);
         dfa_argmax_final_mask<<<DF_BLOCK, 1, 0, S.st>>>(S.logits, S.n_head, S.tk_pmax, S.tk_pidx, S.tkparts, S.tk_ids, S.tk_vals, s2, DF_TOPK);
@@ -834,6 +1110,7 @@ DF_API int spec_dflash_draft(int32_t seq_id, int32_t id_last, int32_t n_past, in
         hipGraph_t graph = nullptr;
         DFC(hipStreamEndCapture(S.st, &graph));
         DFC(hipGraphInstantiate(&g_draft_gexec[seq_id], graph, nullptr, nullptr, 0));
+        S.q8_probe_slots = q8_probe_slot;
         DFC(hipGraphDestroy(graph));
         fprintf(stderr, "[dflash-sidecar] draft graph captured for seq %d\n", seq_id);
         DFC(hipGraphLaunch(g_draft_gexec[seq_id], S.st));
@@ -846,9 +1123,47 @@ readback:
     DFC(hipMemcpyAsync(h_vals, S.tk_vals, sizeof(h_vals), hipMemcpyDeviceToHost, S.st));
     DFC(hipMemcpyAsync(sh, S.selhid, sizeof(sh), hipMemcpyDeviceToHost, S.st));
     DFC(hipStreamSynchronize(S.st));
+    if (dbg && S.q8_all && S.q8_head) {
+        static bool trace_q8_values = false;
+        if (!trace_q8_values) {
+            trace_q8_values = true;
+            df_block_q8_1 h_xn[8] = {}, h_cg[8] = {}, h_fg[8] = {}, h_te[8] = {};
+            float h_te_f[8] = {}, h_logits[8] = {}, h_probe[60 * 4] = {};
+            DFC(hipMemcpy(h_xn, S.q8_xn, sizeof(h_xn), hipMemcpyDeviceToHost));
+            DFC(hipMemcpy(h_cg, S.q8_cg, sizeof(h_cg), hipMemcpyDeviceToHost));
+            DFC(hipMemcpy(h_fg, S.q8_fg, sizeof(h_fg), hipMemcpyDeviceToHost));
+            DFC(hipMemcpy(h_te, S.tE_q8, sizeof(h_te), hipMemcpyDeviceToHost));
+            DFC(hipMemcpy(h_te_f, S.tE, sizeof(h_te_f), hipMemcpyDeviceToHost));
+            DFC(hipMemcpy(h_logits, S.logits, sizeof(h_logits), hipMemcpyDeviceToHost));
+            DFC(hipMemcpy(h_probe, S.q8_probe, sizeof(h_probe), hipMemcpyDeviceToHost));
+            fprintf(stderr, "[dflash-sidecar] q8 trace xn d/s=%.6g/%.6g cg=%.6g/%.6g fg=%.6g/%.6g tE=%.6g/%.6g tE_f=%.6g logits=%.6g,%.6g,%.6g,%.6g\n",
+                    df_f16(h_xn[0].d), df_f16(h_xn[0].s),
+                    df_f16(h_cg[0].d), df_f16(h_cg[0].s),
+                    df_f16(h_fg[0].d), df_f16(h_fg[0].s),
+                    df_f16(h_te[0].d), df_f16(h_te[0].s),
+                    h_te_f[0], h_logits[0], h_logits[1], h_logits[2], h_logits[3]);
+            for (int slot = 0; slot < S.q8_probe_slots; ++slot) {
+                fprintf(stderr, "[dflash-sidecar] q8 probe slot=%d lo=%.6g hi=%.6g bad=%.0f ratio=%.6g\n",
+                        slot, h_probe[slot * 4 + 0], h_probe[slot * 4 + 1],
+                        h_probe[slot * 4 + 2], h_probe[slot * 4 + 3]);
+            }
+        }
+    }
     std::memcpy(S.last_tk_ids, h_ids, sizeof(h_ids));
     std::memcpy(S.last_tk_vals, h_vals, sizeof(h_vals));
     std::memcpy(S.last_selhid, sh, sizeof(sh));
+    if (dbg) {
+        static int trace_blocks = 0;
+        if (trace_blocks++ < 1) {
+            for (int t = 1; t < 4; ++t) {
+                fprintf(stderr, "[dflash-sidecar] raw topk t=%d", t);
+                for (int kx = 0; kx < 8; ++kx) {
+                    fprintf(stderr, " %d:%.6g", h_ids[t * DF_TOPK + kx], h_vals[t * DF_TOPK + kx]);
+                }
+                fprintf(stderr, "\n");
+            }
+        }
+    }
 
     int pred_idx = 0;
     int n_out = 0;

@@ -6,8 +6,7 @@
 #include "log.h"
 #include "console.h"
 
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <algorithm>
 #include <cctype>
@@ -16,7 +15,7 @@
 #include <map>
 #include <set>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 struct cli_context_impl {
     json messages      = json::array();
@@ -73,7 +72,7 @@ static std::string format_error_message(const json & err) {
 
 // err is the raw response body of a failed request; it may or may not be JSON
 static std::string format_error_message(const std::string & err) {
-    json parsed = json::parse(err, nullptr, false);
+    json parsed = json::parse_no_throw(err);
     if (!parsed.is_discarded()) {
         return format_error_message(parsed);
     }
@@ -157,7 +156,7 @@ bool cli_context::init() {
             if (!list_and_ask_models()) {
                 return false;
             }
-        } catch (const json::parse_error & e) {
+        } catch (const common_json_error & e) {
             ui::show_error(e.what());
             ui::show_message("This might be caused by an incorrect server-base endpoint URL");
             return false;
@@ -364,7 +363,7 @@ bool cli_context::generate_completion(generated_content & content_out, cli_timin
     ui::assistant_turn a;
 
     std::string err = client.post_sse("/v1/chat/completions", body.dump(), should_stop, [&](const std::string & payload) {
-        json chunk = json::parse(payload, nullptr, false);
+        json chunk = json::parse_no_throw(payload);
         if (chunk.is_discarded()) {
             return;
         }

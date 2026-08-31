@@ -2462,7 +2462,7 @@ server_http_proxy::server_http_proxy(
     bool has_files = !files.empty();
 
     if (has_files) {
-        json form_fields = json::parse(body, nullptr, false);
+        json form_fields = json::parse_no_throw(body);
         if (!form_fields.is_discarded()) {
             auto boundary = generate_multipart_boundary();
             effective_body = build_multipart_body(form_fields, files, boundary);

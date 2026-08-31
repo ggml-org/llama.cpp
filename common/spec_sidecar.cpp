@@ -123,13 +123,13 @@ static std::string join_path(const std::string & dir, const char * name) {
 static const int32_t QWEN35_DFLASH_TARGET_LAYER_IDS[] = { 6, 20, 34, 48, 62 };
 
 static bool profile_mismatch(const common_spec_sidecar_profile & profile,
-        const char * detail, std::string & error) {
+        const std::string & detail, std::string & error) {
     error = std::string(profile.name != nullptr ? profile.name : "sidecar") +
             " target mismatch: " + detail;
     return false;
 }
 
-static bool qwen35_profile_matches_model(const common_spec_sidecar_profile & profile,
+static bool profile_matches_model(const common_spec_sidecar_profile & profile,
         const llama_model * model, std::string & error) {
     if (model == nullptr) {
         return profile_mismatch(profile, "target model is null", error);
@@ -139,7 +139,8 @@ static bool qwen35_profile_matches_model(const common_spec_sidecar_profile & pro
     if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) < 0 ||
             profile.target_architecture == nullptr ||
             std::strcmp(arch, profile.target_architecture) != 0) {
-        return profile_mismatch(profile, "architecture is not qwen35", error);
+        return profile_mismatch(profile, std::string("architecture is not ") +
+                (profile.target_architecture != nullptr ? profile.target_architecture : "the provider target"), error);
     }
 
     if (profile.target_name != nullptr) {
@@ -171,7 +172,7 @@ static bool qwen35_profile_matches_model(const common_spec_sidecar_profile & pro
     return true;
 }
 
-static bool qwen35_profile_matches_target_file(const common_spec_sidecar_profile & profile,
+static bool profile_matches_target_file(const common_spec_sidecar_profile & profile,
         const std::string & path, std::string & error) {
     if (path.empty()) {
         return profile_mismatch(profile, "target model path is empty", error);
@@ -221,7 +222,8 @@ static bool qwen35_profile_matches_target_file(const common_spec_sidecar_profile
                 ? (uint32_t) profile.target_n_layer_nextn : 0;
         if (profile.target_n_layer_nextn < 0) {
             // The provider does not constrain auxiliary layers; a target GGUF
-            // may still carry them, and block_count includes those layers.
+            // may still carry them (for example an MTP-bearing export used
+            // with the DFlash provider), and block_count includes them.
             const int64_t nextn_id = gguf_find_key(ctx, (prefix + "nextn_predict_layers").c_str());
             if (nextn_id >= 0 && gguf_get_kv_type(ctx, nextn_id) == GGUF_TYPE_UINT32) {
                 auxiliary_layers = gguf_get_val_u32(ctx, nextn_id);
@@ -232,9 +234,16 @@ static bool qwen35_profile_matches_target_file(const common_spec_sidecar_profile
                 "target GGUF block count differs");
     }
     if (ok && profile.target_n_layer_nextn >= 0) {
-        const std::string prefix = std::string(profile.target_architecture) + ".";
-        ok = has_u32((prefix + "nextn_predict_layers").c_str(),
-                (uint32_t) profile.target_n_layer_nextn, "target GGUF auxiliary-layer count differs");
+        const std::string key = std::string(profile.target_architecture) + ".nextn_predict_layers";
+        const int64_t id = gguf_find_key(ctx, key.c_str());
+        // Base targets commonly omit a zero-valued auxiliary-layer key. A
+        // positive contract remains mandatory and exact.
+        if (profile.target_n_layer_nextn == 0 && id < 0) {
+            // Accepted: absent means no auxiliary layers.
+        } else if (id < 0 || gguf_get_kv_type(ctx, id) != GGUF_TYPE_UINT32 ||
+                gguf_get_val_u32(ctx, id) != (uint32_t) profile.target_n_layer_nextn) {
+            ok = profile_mismatch(profile, "target GGUF auxiliary-layer count differs", error);
+        }
     }
     if (ok) {
         const std::string prefix = std::string(profile.target_architecture) + ".";
@@ -276,8 +285,40 @@ static const common_spec_sidecar_profile QWEN35_MTP_PROFILE = {
     /* .full_head_env         = */ nullptr,
     /* .default_library_name  = */ "spec_hip_sidecar.so",
     /* .default_artifact_dir_name = */ "spec-sidecar-mtp",
-    /* .matches_model         = */ qwen35_profile_matches_model,
-    /* .matches_target_file   = */ qwen35_profile_matches_target_file,
+    /* .explicit_paths_only   = */ false,
+    /* .matches_model         = */ profile_matches_model,
+    /* .matches_target_file   = */ profile_matches_target_file,
+};
+
+static const common_spec_sidecar_profile QWEN35MOE_MTP_PROFILE = {
+    /* .name                  = */ "qwen35moe-mtp",
+    /* .kind                  = */ COMMON_SPEC_SIDECAR_KIND_MTP,
+    /* .target_architecture   = */ "qwen35moe",
+    /* .target_name           = */ "Qwen3.6",
+    /* .target_size_label     = */ "35B-A3B",
+    /* .target_n_embd         = */ 2048,
+    /* .target_n_embd_out     = */ 2048,
+    /* .target_n_layer        = */ 40,
+    /* .target_n_layer_nextn  = */ 1,
+    /* .target_n_vocab        = */ 248320,
+    /* .mtp_embedding_width  = */ 2048,
+    /* .mtp_head_rows         = */ 40960,
+    /* .dflash_encoded_width  = */ 0,
+    /* .dflash_decoder_width  = */ 0,
+    /* .dflash_block_size     = */ 0,
+    /* .dflash_selector_top_k = */ 0,
+    /* .dflash_head_rows      = */ 0,
+    /* .dflash_target_layer_ids = */ nullptr,
+    /* .dflash_target_layer_ids_n = */ 0,
+    /* .library_env           = */ "LLAMA_SPEC_QWEN35MOE_HIP_SIDECAR",
+    /* .artifact_env          = */ "LLAMA_SPEC_QWEN35MOE_HIP_WEIGHTS",
+    /* .ids_env               = */ "LLAMA_QWEN35MOE_DRAFT_HEAD_IDS",
+    /* .full_head_env         = */ nullptr,
+    /* .default_library_name  = */ "spec_qwen35moe_mtp_sidecar.so",
+    /* .default_artifact_dir_name = */ "spec-sidecar-qwen35moe-mtp",
+    /* .explicit_paths_only   = */ true,
+    /* .matches_model         = */ profile_matches_model,
+    /* .matches_target_file   = */ profile_matches_target_file,
 };
 
 static const common_spec_sidecar_profile QWEN35_DFLASH_PROFILE = {
@@ -306,17 +347,29 @@ static const common_spec_sidecar_profile QWEN35_DFLASH_PROFILE = {
     /* .full_head_env         = */ "LLAMA_SPEC_HIP_FULL_HEAD",
     /* .default_library_name  = */ "spec_dflash_sidecar.so",
     /* .default_artifact_dir_name = */ "spec-sidecar-dflash",
-    /* .matches_model         = */ qwen35_profile_matches_model,
-    /* .matches_target_file   = */ qwen35_profile_matches_target_file,
+    /* .explicit_paths_only   = */ false,
+    /* .matches_model         = */ profile_matches_model,
+    /* .matches_target_file   = */ profile_matches_target_file,
 };
 
 static const common_spec_sidecar_profile * const ALL_PROFILES[] = {
     &QWEN35_MTP_PROFILE,
+    &QWEN35MOE_MTP_PROFILE,
     &QWEN35_DFLASH_PROFILE,
 };
 
 static const char * env_value(const char * name) {
     return name != nullptr ? std::getenv(name) : nullptr;
+}
+
+static bool profile_paths_are_available(const common_spec_sidecar_profile & profile) {
+    if (!profile.explicit_paths_only) {
+        return true;
+    }
+    // The MoE provider is an explicit experimental compatibility path until
+    // its sidecar arithmetic and throughput are independently qualified. Do
+    // not let merely placing the DLL beside llama-server replace native MTP.
+    return env_value(profile.library_env) != nullptr && env_value(profile.artifact_env) != nullptr;
 }
 
 static std::string normalize_path(const std::filesystem::path & path) {
@@ -520,6 +573,11 @@ const common_spec_sidecar_profile * common_spec_sidecar_profile_for_model(
         }
         std::string mismatch;
         if (profile->matches_model(*profile, model, mismatch)) {
+            if (!profile_paths_are_available(*profile)) {
+                error = std::string(profile->name != nullptr ? profile->name : "sidecar") +
+                        " requires explicit library and artifact paths";
+                continue;
+            }
             return profile;
         }
         if (error.empty()) {
@@ -541,6 +599,11 @@ const common_spec_sidecar_profile * common_spec_sidecar_profile_for_target_file(
         }
         std::string mismatch;
         if (profile->matches_target_file(*profile, path, mismatch)) {
+            if (!profile_paths_are_available(*profile)) {
+                error = std::string(profile->name != nullptr ? profile->name : "sidecar") +
+                        " requires explicit library and artifact paths";
+                continue;
+            }
             return profile;
         }
         if (error.empty()) {

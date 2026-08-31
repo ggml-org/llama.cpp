@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 
-MTP_SCHEMA = {
+QWEN35_MTP_SCHEMA = {
     "token_embd.weight": ("2", [5120, 248320], 715161600),
     "blk.64.attn_k.weight": ("2", [5120, 1024], 2949120),
     "blk.64.attn_k_norm.weight": ("0", [256], 1024),
@@ -32,6 +32,36 @@ MTP_SCHEMA = {
     "blk.64.post_attention_norm.weight": ("0", [5120], 20480),
     "blk.64.nextn.shared_head_head.weight": ("2", [5120, 40960], 117964800),
 }
+
+
+QWEN35MOE_MTP_SCHEMA = {
+    "token_embd.weight": ("2", [2048, 248320], 286064640),
+    "blk.40.attn_k.weight": ("2", [2048, 512], 589824),
+    "blk.40.attn_k_norm.weight": ("0", [256], 1024),
+    "blk.40.attn_norm.weight": ("0", [2048], 8192),
+    "blk.40.attn_output.weight": ("2", [4096, 2048], 4718592),
+    "blk.40.attn_q.weight": ("2", [2048, 8192], 9437184),
+    "blk.40.attn_q_norm.weight": ("0", [256], 1024),
+    "blk.40.attn_v.weight": ("2", [2048, 512], 589824),
+    "blk.40.ffn_down_exps.weight": ("2", [512, 2048, 256], 150994944),
+    "blk.40.ffn_down_shexp.weight": ("2", [512, 2048], 589824),
+    "blk.40.ffn_gate_exps.weight": ("2", [2048, 512, 256], 150994944),
+    "blk.40.ffn_gate_inp.weight": ("0", [2048, 256], 2097152),
+    "blk.40.ffn_gate_inp_shexp.weight": ("0", [2048], 8192),
+    "blk.40.ffn_gate_shexp.weight": ("2", [2048, 512], 589824),
+    "blk.40.ffn_up_exps.weight": ("2", [2048, 512, 256], 150994944),
+    "blk.40.ffn_up_shexp.weight": ("2", [2048, 512], 589824),
+    "blk.40.nextn.eh_proj.weight": ("2", [4096, 2048], 4718592),
+    "blk.40.nextn.enorm.weight": ("0", [2048], 8192),
+    "blk.40.nextn.hnorm.weight": ("0", [2048], 8192),
+    "blk.40.nextn.shared_head_norm.weight": ("0", [2048], 8192),
+    "blk.40.post_attention_norm.weight": ("0", [2048], 8192),
+    "output.weight": ("2", [2048, 40960], 47185920),
+}
+
+
+# Backward-compatible name for out-of-tree callers of the asset helper.
+MTP_SCHEMA = QWEN35_MTP_SCHEMA
 
 
 def dflash_schema() -> dict[str, tuple[str, list[int], int]]:
@@ -121,11 +151,12 @@ def validate_schema(tensors: list[dict], expected: dict[str, tuple[str, list[int
             raise ValueError(f"{label} schema mismatch for {name}: expected {wanted}, found {observed}")
 
 
-def validate_ids(path: Path) -> list[int]:
+def validate_ids(path: Path, rows: int = 40_960) -> list[int]:
     raw = path.read_bytes()
-    if len(raw) != 40_960 * 4:
-        raise ValueError(f"{path}: expected 163,840 bytes, found {len(raw):,}")
-    ids = list(struct.unpack("<40960i", raw))
+    expected_bytes = rows * 4
+    if len(raw) != expected_bytes:
+        raise ValueError(f"{path}: expected {expected_bytes:,} bytes, found {len(raw):,}")
+    ids = list(struct.unpack(f"<{rows}i", raw))
     if len(set(ids)) != len(ids):
         raise ValueError(f"{path}: IDs are not unique")
     if min(ids) < 0 or max(ids) >= 248_320:
@@ -143,8 +174,21 @@ def sha256(path: Path) -> str:
 
 def validate_mtp(directory: Path) -> list[Path]:
     tensors = validate_blob(directory, "drafter_manifest.json", "drafter_weights.bin", 17)
-    validate_schema(tensors, MTP_SCHEMA, "MTP")
+    validate_schema(tensors, QWEN35_MTP_SCHEMA, "Qwen3.8-27B MTP")
     validate_ids(directory / "draft_head_ids.bin")
+    return [
+        directory / "drafter_manifest.json",
+        directory / "drafter_weights.bin",
+        directory / "draft_head_ids.bin",
+    ]
+
+
+def validate_qwen35moe_mtp(directory: Path) -> list[Path]:
+    tensors = validate_blob(directory, "drafter_manifest.json", "drafter_weights.bin", 22)
+    validate_schema(tensors, QWEN35MOE_MTP_SCHEMA, "Qwen3.6 35B-A3B MTP")
+    ids = validate_ids(directory / "draft_head_ids.bin", 40_960)
+    if len(ids) != 40_960:
+        raise ValueError("Qwen3.6 35B-A3B MTP requires a 40,960-row draft-head ID table")
     return [
         directory / "drafter_manifest.json",
         directory / "drafter_weights.bin",
@@ -165,7 +209,7 @@ def validate_dflash(directory: Path) -> list[Path]:
         embedding_count,
     )
     if embedding_count == 17:
-        validate_schema(embedding, MTP_SCHEMA, "DFlash target/MTP blob")
+        validate_schema(embedding, QWEN35_MTP_SCHEMA, "DFlash target/MTP blob")
     else:
         validate_schema(
             embedding,
@@ -189,12 +233,17 @@ def validate_dflash(directory: Path) -> list[Path]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kind", choices=("mtp", "dflash"))
+    parser.add_argument("kind", choices=("mtp", "qwen35moe-mtp", "dflash"))
     parser.add_argument("directory", type=Path)
     parser.add_argument("--hash", action="store_true", help="also calculate SHA-256 (slow for large blobs)")
     args = parser.parse_args()
     try:
-        paths = validate_mtp(args.directory) if args.kind == "mtp" else validate_dflash(args.directory)
+        if args.kind == "mtp":
+            paths = validate_mtp(args.directory)
+        elif args.kind == "qwen35moe-mtp":
+            paths = validate_qwen35moe_mtp(args.directory)
+        else:
+            paths = validate_dflash(args.directory)
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         print(f"INVALID: {exc}", file=sys.stderr)
         return 2

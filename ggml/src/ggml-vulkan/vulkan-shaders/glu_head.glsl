@@ -1,5 +1,7 @@
 #extension GL_EXT_shader_16bit_storage : require
 
+#include "utils.glsl"
+
 
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 
@@ -38,10 +40,3 @@ layout (push_constant) uniform parameter
 uint get_aoffset() { return p.misalign_offsets >> 16; }
 uint get_boffset() { return (p.misalign_offsets >> 8) & 0xFF; }
 uint get_doffset() { return p.misalign_offsets & 0xFF; }
-
-// see init_fastdiv_values in ggml-vulkan.cpp
-uint fastdiv(uint n, uint mp, uint L) {
-    uint msbs, lsbs;
-    umulExtended(n, mp, msbs, lsbs);
-    return (msbs + n) >> L;
-}

@@ -6,6 +6,7 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/build}"
 ROCM_PATH="${ROCM_PATH:-/opt/rocm/core-7.14}"
 TARGET_ARCH="${TARGET_ARCH:-gfx1030}"
+BUILD_SPEC_SIDECARS="${BUILD_SPEC_SIDECARS:-ON}"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -37,6 +38,8 @@ CMAKE_FLAGS=(
     -DCMAKE_PREFIX_PATH="$ROCM_PATH"
     -DLLAMA_BUILD_SERVER=ON
     -DLLAMA_BUILD_TESTS=OFF
+    -DLLAMA_BUILD_SPEC_SIDECARS="$BUILD_SPEC_SIDECARS"
+    -DLLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES="$TARGET_ARCH"
     -DCMAKE_BUILD_TYPE=Release
 )
 
@@ -53,6 +56,13 @@ HIP_LIB="$BUILD_DIR/bin/libggml-hip.so.0"
 
 [ -x "$SERVER" ] || fail "server binary was not produced"
 [ -f "$HIP_LIB" ] || fail "HIP backend library was not produced"
+case "$BUILD_SPEC_SIDECARS" in
+    ON|1|TRUE|on|true)
+        for so in spec_hip_sidecar.so spec_dflash_sidecar.so spec_qwen35moe_mtp_sidecar.so; do
+            [ -f "$BUILD_DIR/bin/$so" ] || fail "speculative sidecar was not produced: $so"
+        done
+        ;;
+esac
 grep -q '^GGML_HIP_RCCL:BOOL=ON$' "$BUILD_DIR/CMakeCache.txt" || fail "RCCL is not enabled in CMake cache"
 ldd "$HIP_LIB" | grep -q 'librccl\.so' || fail "HIP backend is not linked to librccl"
 if ldd "$SERVER" "$HIP_LIB" | grep -q 'not found'; then
@@ -63,3 +73,11 @@ fi
 echo
 echo "Build complete: $SERVER"
 echo "Run tensor split with GGML_CUDA_ALLREDUCE=nccl"
+case "$BUILD_SPEC_SIDECARS" in
+    ON|1|TRUE|on|true)
+        echo "Speculative sidecars built (dormant unless SPEC_SIDECAR=1 at runtime)."
+        echo "For automatic discovery, place prepared bundles at:"
+        echo "  $BUILD_DIR/bin/spec-sidecar-mtp and $BUILD_DIR/bin/spec-sidecar-dflash"
+        echo "See docs/spec-sidecars.md. Disable at build time with BUILD_SPEC_SIDECARS=OFF."
+        ;;
+esac

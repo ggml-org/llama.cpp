@@ -55,6 +55,9 @@ struct common_spec_sidecar_profile {
     const char * full_head_env = nullptr;
     const char * default_library_name = nullptr;
     const char * default_artifact_dir_name = nullptr;
+    // Experimental providers can require explicit paths so a colocated DLL
+    // cannot silently replace a faster native path before qualification.
+    bool explicit_paths_only = false;
 
     common_spec_sidecar_model_match_fn matches_model = nullptr;
     common_spec_sidecar_file_match_fn matches_target_file = nullptr;
@@ -89,7 +92,7 @@ bool common_spec_sidecar_dflash_probe(const std::string & library_path,
         const std::string & artifact_dir, int32_t encoded_width,
         int32_t block_size, int32_t n_seq, std::string & error);
 
-// Host-side loader for the optional speculative sidecar Qwen3.8-27B sidecars.
+// Host-side loader for optional model-specific speculative sidecars.
 // The sidecars are deliberately opt-in and model-specific. A loader object
 // keeps the library resident for the lifetime of the process because the
 // current release ABI has no shutdown operation. State/KV calls are serialized
