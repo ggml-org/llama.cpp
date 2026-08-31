@@ -709,13 +709,19 @@ class DFlashModel(Qwen3Model):
             extract_layer_ids = [i + 1 for i in target_layer_ids]
             self.gguf_writer.add_target_layers(extract_layer_ids)
 
-        use_sliding_window = self.hparams.get("use_sliding_window", False)
-        sliding_window = self.hparams.get("sliding_window")
+        use_sliding_window = self.hparams.get("use_sliding_window", False) or dflash_config.get("use_swa", False)
+        sliding_window = dflash_config.get("swa_window_size") or self.hparams.get("sliding_window")
         layer_types = self.hparams.get("layer_types")
         if use_sliding_window and sliding_window and layer_types:
             is_swa = [lt == "sliding_attention" for lt in layer_types]
             self.gguf_writer.add_sliding_window(sliding_window)
             self.gguf_writer.add_sliding_window_pattern(is_swa)
+
+        causal = self.hparams.get("is_causal")
+        if causal is None:
+            causal = dflash_config.get("causal")
+        if causal is not None:
+            self.gguf_writer.add_causal_attention(bool(causal))
 
         # M-RoPE target: the draft ropes on the temporal dim only, so write
         # degenerate sections [n_rot/2, 0, 0, 0]
@@ -737,6 +743,8 @@ class DFlashModel(Qwen3Model):
         name, gen = item
         if not name.startswith("model."):
             name = "model." + name
+        if "sink" in name and not name.endswith(".weight"):
+            name += ".weight"
         return super().filter_tensors((name, gen))
 
     _ROPE_PERMUTE_SUFFIXES = (
@@ -815,6 +823,10 @@ class DSparkModel(DFlashModel):
         super().set_gguf_parameters()
         self.gguf_writer.add_sample_from_anchor(self._sample_from_anchor)
 
+        # confidence head is optional: vanilla-markov exports ship without it
+        has_conf = any("confidence_head.proj" in name for name in self.model_tensors)
+        self.gguf_writer.add_has_confidence_head(has_conf)
+
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         if item[0] == "t2d":  # not used at runtime
@@ -833,7 +845,7 @@ class DSparkModel(DFlashModel):
             self._d2t = data_torch
             return
 
-        if self._n_vocab_draft == self.hparams["vocab_size"] and name.endswith(("embed_tokens.weight", "lm_head.weight")):
+        if self._n_vocab_draft == self.hparams["vocab_size"] and name.endswith("lm_head.weight"):
             return
 
         # interleaved-rope checkpoints (rope_is_neox_style = false) -> NeoX layout: per head, even dims first then odd

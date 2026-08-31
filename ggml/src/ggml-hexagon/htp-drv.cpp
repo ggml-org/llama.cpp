@@ -73,6 +73,7 @@ typedef int (*remote_handle64_close_pfn_t)(remote_handle h);
 typedef int (*remote_handle_control_pfn_t)(uint32_t req, void* data, uint32_t datalen);
 typedef int (*remote_handle64_control_pfn_t)(remote_handle64 h, uint32_t req, void* data, uint32_t datalen);
 typedef int (*remote_session_control_pfn_t)(uint32_t req, void *data, uint32_t datalen);
+typedef int (*remote_system_request_pfn_t)(system_req_payload * req);
 
 //
 // Driver API pfns
@@ -99,6 +100,7 @@ remote_handle64_close_pfn_t   remote_handle64_close_pfn   = nullptr;
 remote_handle_control_pfn_t   remote_handle_control_pfn   = nullptr;
 remote_handle64_control_pfn_t remote_handle64_control_pfn = nullptr;
 remote_session_control_pfn_t  remote_session_control_pfn  = nullptr;
+remote_system_request_pfn_t   remote_system_request_pfn   = nullptr;
 
 //
 // Driver API
@@ -204,6 +206,13 @@ HTPDRV_API int remote_handle64_control(remote_handle64 h, uint32_t req, void * d
 
 HTPDRV_API int remote_session_control(uint32_t req, void * data, uint32_t datalen) {
     return remote_session_control_pfn(req, data, datalen);
+}
+
+HTPDRV_API int remote_system_request(system_req_payload * req) {
+    if (!remote_system_request_pfn) {
+        return AEE_EUNSUPPORTEDAPI;
+    }
+    return remote_system_request_pfn(req);
 }
 
 #ifdef _WIN32
@@ -367,6 +376,7 @@ int htpdrv_init() {
     dlsym(handle.get(), remote_handle64_control_pfn_t, remote_handle64_control_pfn, remote_handle64_control, false);
     dlsym(handle.get(), remote_session_control_pfn_t, remote_session_control_pfn, remote_session_control, false);
     dlsym(handle.get(), remote_handle64_close_pfn_t, remote_handle64_close_pfn, remote_handle64_close, false);
+    dlsym(handle.get(), remote_system_request_pfn_t, remote_system_request_pfn, remote_system_request, true);
 
     lib_cdsp_rpc_handle = std::move(handle);
     initialized         = true;
