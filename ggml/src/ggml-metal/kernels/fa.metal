@@ -1245,8 +1245,8 @@ kernel void kernel_flash_attn_ext_vec(
 
   //const short T = PK + NSG*SH; // shared memory size per query in (half)
 
-  //threadgroup q_t   * sq  = (threadgroup q_t   *) (shmem_f16 +                            0*PK); // holds the query data
-    threadgroup q4_t  * sq4 = (threadgroup q4_t  *) (shmem_f16 +                            0*PK); // same as above but in q4_t
+  //threadgroup q_t   * sq  = (threadgroup q_t   *) (shmem_f16 +                          0*PK); // holds the query data
+    threadgroup q4_t  * sq4 = (threadgroup q4_t  *) (shmem_f16 +                          0*PK); // same as above but in q4_t
     threadgroup s_t   * ss  = (threadgroup s_t   *) (shmem_f16 +   sgitg*SH         + Q*NSG*PK); // scratch buffer for attention
     threadgroup s4_t  * ss4 = (threadgroup s4_t  *) (shmem_f16 +   sgitg*SH         + Q*NSG*PK); // same as above but in s4_t
     threadgroup half  * sm  = (threadgroup half  *) (shmem_f16 +   sgitg*SH + 2*Q*C + Q*NSG*PK); // scratch buffer for mask
@@ -1407,6 +1407,7 @@ kernel void kernel_flash_attn_ext_vec(
                 }
             }
 
+            // skip -INF mask
             {
                 bool any_finite = false;
                 FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
