@@ -308,6 +308,13 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // do not quantize the i32 token-id -> expert-id routing table (DeepSeek-V4)
     quantize &= name.find("ffn_gate_tid2eid.weight") == std::string::npos;
 
+    // do not quantize MHC hyper-connection gate matrices (xingchen4/deepseek4):
+    // precision-sensitive, must stay F32 to match the vllm reference
+    // (the 1D hc_*_base / hc_*_scale tensors are already excluded by the n_dims < 2 rule)
+    quantize &= name.find("hc_attn_fn.weight") == std::string::npos;
+    quantize &= name.find("hc_ffn_fn.weight")  == std::string::npos;
+    quantize &= name.find("hc_head_fn.weight") == std::string::npos;
+
     // these are very small (e.g. 4x4)
     quantize &= name.find("altup")  == std::string::npos;
     quantize &= name.find("laurel") == std::string::npos;
