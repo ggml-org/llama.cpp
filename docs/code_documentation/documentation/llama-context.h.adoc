@@ -1,0 +1,53 @@
+[[docs:funcstructs:llama-context.h]]
+== llama-context.h
+
+
+[[docs:funcstructs:llama-context.h:struct-llama_context]]
+=== struct llama_context
+
+This structure contains most, if not all of the information crucial for a run. Here are some of its members:
+
+* [.codebit]#`const struct llama_model & model`#: a reference to the model to be used
+* [.codebit]#`struct llama_cparams cparams`#: this contains the eval_callback and eval_callback_user_data (see the [.codebit]#`ggml_backend_sched_compute_splits(...)`# section for more details)
+* [.codebit]#`std::vector<ggml_backend_ptr> backends`#: these contain interfaces with functions specialized for each available backend, see [.codebit]#`struct ggml_backend`# for more details
+* [.codebit]#`ggml_backend_t backend_cpu`#: same as above, but for the cpu backend
+* [.codebit]#`std::vector<uint8_t> buf_compute_meta`#: serves as the buffer for the [.codebit]#`ggml_context`# used to build the [.codebit]#`ggml_cgraph`# in [.codebit]#`struct llm_build_context`#
+* [.codebit]#`ggml_backend_sched_ptr sched`#: helps with splitting the computation graph between multiple backends when needed, see [.codebit]#`struct ggml_backend_sched`#
+* input tensors of type [.codebit]#`struct ggml_tensor*`#, see below
+* [.codebit]#`struct llama_sbatch sbatch`#: helps with input handling
+* [.codebit]#`size_t  logits_size`#: size of [.codebit]#`logits`# buffer
+* [.codebit]#`float * logits`#: 2-dimensional array of size [.codebit]#`[n_outputs][n_vocab]`# holding decode output
+* [.codebit]#`size_t  embd_size`#: size of [.codebit]#`embd`# buffer
+* [.codebit]#`float * embd`#: 2-dimensional array of size [.codebit]#`[n_outputs][n_embd]`# holding embeddings output
+* [.codebit]#`int32_t n_outputs`#: from comments, "number of actually-used outputs in the current ubatch or last logical batch"
+
+Input tensors:
+
+[source,C++]
+----
+struct ggml_tensor * inp_tokens;        // I32 [n_batch]
+struct ggml_tensor * inp_embd;          // F32 [n_embd, n_batch]
+struct ggml_tensor * inp_pos;           // I32 [n_batch]
+struct ggml_tensor * inp_out_ids;       // I32 [n_outputs]
+struct ggml_tensor * inp_KQ_mask;       // F32 [kv_size, n_batch]
+struct ggml_tensor * inp_KQ_mask_swa;   // F32 [kv_size, n_batch]
+struct ggml_tensor * inp_K_shift;       // I32 [kv_size]
+struct ggml_tensor * inp_mean;          // F32 [n_batch, n_batch]
+struct ggml_tensor * inp_cls;           // I32 [n_batch]
+struct ggml_tensor * inp_s_copy;        // I32 [kv_size]
+struct ggml_tensor * inp_s_mask;        // F32 [1, n_kv]
+struct ggml_tensor * inp_s_seq;         // I32 [n_kv, n_batch]
+struct ggml_tensor * inp_pos_bucket;    // I32 [n_batch|n_kv, n_batch]
+struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
+struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
+----
+
+It has a single constructor that does minimal setup:
+
+[source,C++]
+----
+llama_context(const llama_model & model)
+    : model(model)
+    , t_start_us(model.t_start_us)
+    , t_load_us(model.t_load_us) {}
+----
