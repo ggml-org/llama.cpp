@@ -1,21 +1,11 @@
 <script lang="ts">
 	import ModelsDiscoverAvatar from './ModelsDiscoverAvatar.svelte';
-	import ModelsDiscoverChatTemplateDialog from './ModelsDiscoverChatTemplateDialog.svelte';
-	import {
-		Download,
-		ExternalLink,
-		Heart,
-		Image,
-		Lightbulb,
-		MessageSquareCode,
-		Wrench
-	} from '@lucide/svelte';
+	import ModelsDiscoverModelDetailsMetadata from './ModelsDiscoverModelDetailsMetadata.svelte';
+	import { Download, ExternalLink, Heart, Image, Lightbulb, Wrench } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ICON_CLASS_SM } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
-	import { modelsHubStore } from '$lib/stores';
 	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
-	import { formatParameters } from '$lib/utils';
 
 	interface Props {
 		modelId: string;
@@ -37,13 +27,6 @@
 	let baseOrg = $derived(baseModels[0]?.split('/')[0]);
 	let avatarOrg = $derived(baseOrg || repoOrg);
 	let quantOrg = $derived(baseOrg && baseOrg !== repoOrg ? repoOrg : undefined);
-
-	// Catalog family description when curated, else the HF card description.
-	let description = $derived(
-		modelsHubStore.descriptionFor(modelId) ?? details.cardData?.description
-	);
-
-	let chatTemplateOpen = $state(false);
 </script>
 
 <header class="space-y-3">
@@ -148,70 +131,5 @@
 		{/if}
 	</div>
 
-	{#if description}
-		<p class="text-sm text-muted-foreground">{description}</p>
-	{/if}
-
-	<!-- Metadata chips: label | value pairs, matching the HF model page style -->
-	<div class="flex flex-wrap items-center gap-1.5">
-		{#if gguf?.total}
-			<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
-				<span class="px-2.5 py-1 text-muted-foreground">Model size</span>
-
-				<span class="px-2.5 py-1 font-medium">{formatParameters(gguf.total)} params</span>
-			</span>
-		{/if}
-
-		{#if gguf?.context_length}
-			<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
-				<span class="px-2.5 py-1 text-muted-foreground">Context</span>
-
-				<span class="px-2.5 py-1 font-medium">{gguf.context_length.toLocaleString()}</span>
-			</span>
-		{/if}
-
-		{#if gguf?.architecture}
-			<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
-				<span class="px-2.5 py-1 text-muted-foreground">Architecture</span>
-
-				<span class="px-2.5 py-1 font-medium">{gguf.architecture}</span>
-			</span>
-		{/if}
-
-		{#if gguf?.chat_template}
-			<button
-				class="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-muted"
-				onclick={() => (chatTemplateOpen = true)}
-				type="button"
-			>
-				<MessageSquareCode class="h-3 w-3" />
-				Chat template
-			</button>
-		{/if}
-
-		{#if licenseTag}
-			<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
-				<span class="px-2.5 py-1 text-muted-foreground">License</span>
-
-				<span class="px-2.5 py-1 font-medium">{licenseTag}</span>
-			</span>
-
-			<span class="rounded bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"> </span>
-		{/if}
-
-		{#if details.gated === true}
-			<span
-				class="rounded bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-600 dark:text-yellow-400"
-			>
-				gated
-			</span>
-		{/if}
-	</div>
+	<ModelsDiscoverModelDetailsMetadata {details} {gguf} {licenseTag} {modelId} />
 </header>
-
-{#if gguf?.chat_template}
-	<ModelsDiscoverChatTemplateDialog
-		bind:open={chatTemplateOpen}
-		chatTemplate={gguf.chat_template}
-	/>
-{/if}

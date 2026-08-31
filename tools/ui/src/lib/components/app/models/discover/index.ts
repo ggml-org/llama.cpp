@@ -25,6 +25,13 @@ export { default as ModelsDiscover } from './ModelsDiscover.svelte';
 export { default as ModelsDiscoverList } from './ModelsDiscoverList.svelte';
 
 /**
+ * **ModelsDiscoverListSearch** - Sidebar search input
+ *
+ * Debounced search field for the model list.
+ */
+export { default as ModelsDiscoverListSearch } from './ModelsDiscoverListSearch.svelte';
+
+/**
  * **ModelsDiscoverItem** - Single sidebar row
  *
  * One model entry in the sidebar list. Links to `/models-hub/[org]/[model]`.

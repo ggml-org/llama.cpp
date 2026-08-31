@@ -5,14 +5,19 @@
 	import { copyToClipboard } from '$lib/utils';
 
 	interface Props {
-		/** Full HuggingFace model id, The draft sidecar sits in the same repo. */
+		/** Full HuggingFace repo id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */
 		modelId: string;
-		/** Draft sidecar variants present in the repo (mtp, dflash, dspark, eagle3). */
+		/** Available quantization tags, e.g. `Q4_K_M`, `Q8_0`. */
+		quants: string[];
 		/** Draft sidecars present in the repo (mtp, dflash, dspark, eagle3). */
 		sidecars?: ModelSidecar[];
 	}
 
-	let { modelId, sidecars = [] }: Props = $props();
+	let { modelId, quants, sidecars = [] }: Props = $props();
+
+	let pickedQuant = $state<string | null>(null);
+	let selectedQuant = $derived(pickedQuant ?? quants[0] ?? null);
+	let selectedSidecar = $state<ModelSidecar | null>(null);
 
 	// llama.cpp --spec-type value for each draft sidecar.
 	const SPEC_TYPE: Record<ModelSidecar, string> = {
@@ -31,27 +36,60 @@
 		setTimeout(() => (copiedIndex = null), 1500);
 	}
 
-	// One box per binary (serve / cli). Each box lists one command per available
-	// draft sidecar, or just the base command when none is present.
+	// One box per binary (serve / cli). The command embeds inline selectors for
+	// the quant and the draft sidecar type.
 	let boxes = $derived.by(() => {
-		const variants = sidecars.filter((v) => !isAuxSidecar(v));
+		const quant = selectedQuant ?? quants[0];
+
+		if (!quant) return [];
+
+		const draft = selectedSidecar && !isAuxSidecar(selectedSidecar) ? selectedSidecar : null;
+		const specType = draft ? `--spec-type ${SPEC_TYPE[draft]}` : '';
 		const build = (bin: string) => {
-			const base = `llama ${bin} -hf ${modelId}`;
+			const parts = ['llama', bin, '-hfd', modelId];
 
-			if (variants.length === 0) return [base];
+			if (specType) parts.push(specType);
 
-			return variants.map((v) => `${base} -hfd ${modelId} --spec-type ${SPEC_TYPE[v]}`);
+			return parts.join(' ');
 		};
 
 		return [
-			{ commands: build('serve'), icon: Server, title: 'Serve' },
-			{ commands: build('cli'), icon: SquareTerminal, title: 'CLI' }
+			{ command: build('serve'), icon: Server, title: 'Serve' },
+			{ command: build('cli'), icon: SquareTerminal, title: 'CLI' }
 		];
 	});
 </script>
 
 <div class="space-y-3">
-	{#each boxes as box (box.title)}
+	<div class="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+		<span>Quant</span>
+
+		<select
+			bind:value={selectedQuant}
+			class="rounded border bg-background px-1.5 py-0.5 font-mono text-xs"
+		>
+			{#each quants as quant (quant)}
+				<option value={quant}>{quant}</option>
+			{/each}
+		</select>
+
+		{#if sidecars.length}
+			<span>Draft</span>
+
+			<select
+				bind:value={selectedSidecar}
+				class="rounded border bg-background px-1.5 py-0.5 font-mono text-xs"
+			>
+				<option value={null}>none</option>
+
+				{#each sidecars as sidecar (sidecar)}
+					<option value={sidecar}>{sidecar}</option>
+				{/each}
+			</select>
+		{/if}
+	</div>
+
+	{#each boxes as box, i (box.title)}
 		<div
 			class="overflow-hidden rounded-md"
 			style="background: var(--code-background); border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);"
@@ -65,27 +103,21 @@
 				<span class="text-xs font-medium text-foreground/80">{box.title}</span>
 			</div>
 
-			<div class="space-y-1 p-2">
-				{#each box.commands as cmd, i (cmd)}
-					<div
-						class="group flex items-center justify-between gap-2 rounded px-2 py-1 font-mono text-xs"
-					>
-						<span class="truncate text-foreground/90">{cmd}</span>
+			<div class="flex items-center justify-between gap-2 p-2">
+				<span class="truncate font-mono text-xs text-foreground/90">{box.command}</span>
 
-						<button
-							aria-label="Copy command"
-							class="shrink-0 text-muted-foreground/60 transition-colors hover:text-foreground"
-							onclick={() => handleCopy(i, cmd)}
-							type="button"
-						>
-							{#if copiedIndex === i}
-								<Check class="h-3.5 w-3.5 text-green-500" />
-							{:else}
-								<Copy class="h-3.5 w-3.5" />
-							{/if}
-						</button>
-					</div>
-				{/each}
+				<button
+					aria-label="Copy command"
+					class="shrink-0 text-muted-foreground/60 transition-colors hover:text-foreground"
+					onclick={() => handleCopy(i, box.command)}
+					type="button"
+				>
+					{#if copiedIndex === i}
+						<Check class="h-3.5 w-3.5 text-green-500" />
+					{:else}
+						<Copy class="h-3.5 w-3.5" />
+					{/if}
+				</button>
 			</div>
 		</div>
 	{/each}

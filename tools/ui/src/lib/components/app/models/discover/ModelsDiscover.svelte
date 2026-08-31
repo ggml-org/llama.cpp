@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { SearchInput } from '$lib/components/app';
 	import {
 		ModelsDiscoverList,
+		ModelsDiscoverListSearch,
 		ModelsDiscoverModelDetails
 	} from '$lib/components/app/models/discover';
 	import { HuggingFaceService } from '$lib/services';
@@ -96,14 +96,7 @@
 <aside
 	class="w-108 shrink-0 self-start border-r border-border/40 bg-background overflow-y-auto md:p-4 h-full space-y-1"
 >
-	<div class="p-2 sticky top-0 z-99">
-		<SearchInput
-			bind:value={searchQuery}
-			class=""
-			onInput={handleSearchInput}
-			placeholder="Search models..."
-		/>
-	</div>
+	<ModelsDiscoverListSearch bind:value={searchQuery} onSearch={handleSearchInput} />
 
 	<div>
 		{#if modelsHubStore.loading}
