@@ -75,7 +75,7 @@
 #define N_R0_IQ2_S 4
 #define N_SG_IQ2_S 2
 
-#define N_R0_IQ3_XXS 4
+#define N_R0_IQ3_XXS 8
 #define N_SG_IQ3_XXS 2
 
 #define N_R0_IQ3_S 4
