@@ -7911,7 +7911,7 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_pipeline(ggml_backend_vk_conte
     }
 
     if (src1_type != GGML_TYPE_F32 &&
-        !(src1_type == GGML_TYPE_F16 && ctx->device->vendor_id == VK_VENDOR_ID_INTEL) &&
+        !(src1_type == GGML_TYPE_F16 && ctx->device->coopmat_support) &&
         !ctx->device->coopmat2) {
         return nullptr;
     }
@@ -9414,9 +9414,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     const bool x_non_contig = (ctx->device->coopmat2 && src0->type == GGML_TYPE_F32) ||
                               !ggml_vk_dim01_contiguous(src0);
     const bool y_non_contig = (ctx->device->coopmat2 && src1->type == GGML_TYPE_F32) ||
-                              // Intel coopmat1: force f32->f16 conversion so the f16-B-type pipeline is used.
                               (ctx->device->coopmat_support && !ctx->device->coopmat2 &&
-                               ctx->device->vendor_id == VK_VENDOR_ID_INTEL &&
                                ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32) ||
                               (src0->type == GGML_TYPE_BF16 && src1->type != GGML_TYPE_BF16) ||
                               !ggml_vk_dim01_contiguous(src1);
