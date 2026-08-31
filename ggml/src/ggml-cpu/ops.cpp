@@ -2,6 +2,7 @@
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
+#include "ggml-threading.h"
 #include "binary-ops.h"
 #include "simd-gemm.h"
 #include "ggml.h"
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <type_traits>
 
 // ggml_compute_forward_dup
 
@@ -290,6 +292,14 @@ static void ggml_compute_forward_dup_to_q(
     const int ir1 = MIN(ir0 + dr, nr);
 
     if (ggml_is_contiguous(dst) &&
+            ggml_is_contiguous(src0) &&
+            std::is_same<src_t, float>::value &&
+            dst->type == GGML_TYPE_IQ4_NL) {
+        if (ith == 0) {
+            ggml_quantize_chunk_mt(dst->type, (const float *) src0->data, dst->data, 0, ggml_nrows(src0), ne00, nullptr, nth);
+        }
+        ggml_barrier(params->threadpool);
+    } else if (ggml_is_contiguous(dst) &&
             nb00 == sizeof(src_t) &&
             ggml_get_type_traits_cpu(dst->type)->from_float) {
         // casting non-quantized types --> intermediate f32 --> quantized
