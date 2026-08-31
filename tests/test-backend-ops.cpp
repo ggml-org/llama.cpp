@@ -9790,6 +9790,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+    // qwen4exp QSA indexer: k is indexer_top_k + compress_ratio - 1 over the whole KV
+    // window, so it runs past any one workgroup while nrows tracks the ubatch. 33 rows
+    // is over the bound the large-k path carries, so it covers the fallback too.
+    for (int nrows : {1, 3, 32, 33}) {
+        test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {54822, nrows, 1, 1}, 2051));
+        test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {54822, nrows, 1, 1}, 2051, true));
+    }
+
     for (int k : {4, 8, 16, 32}) {
         for (int nrows : {1, 8, 16}) {
             test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {202048, nrows, 1, 1}, k));

@@ -626,6 +626,8 @@ enum shader_reduction_mode {
 static constexpr uint32_t num_argsort_pipelines = 11;
 static constexpr uint32_t num_topk_moe_pipelines = 10;
 static constexpr uint32_t num_topk_pipelines = 11;
+// Row bound for the sort-the-whole-row TOP_K path; see ggml_backend_vk_device_supports_op.
+static constexpr int64_t  TOPK_LARGE_K_MAX_ROWS = 32;
 
 static constexpr std::initializer_list<ggml_op> topk_moe_early_softmax_norm{ GGML_OP_SOFT_MAX, GGML_OP_RESHAPE,  GGML_OP_ARGSORT,
                                                                              GGML_OP_VIEW,     GGML_OP_GET_ROWS, GGML_OP_RESHAPE,
@@ -13849,6 +13851,72 @@ static void ggml_vk_rope(ggml_backend_vk_context * ctx, vk_context& subctx, cons
         ggml_vk_make_rope_constants(cgraph->nodes[node_idx], src0, src2 != nullptr, backprop, set_rows_stride));
 }
 
+// Writes the full index permutation of each row of `src0_buf` into `out_buf`. `scratch` is
+// only read when the sort needs more than one workgroup, and must then hold 2*ncolsp2*nrows
+// ints. Split out of ggml_vk_argsort so ggml_vk_topk can reach it for k values that no
+// single workgroup can hold.
+static void ggml_vk_argsort_rows(ggml_backend_vk_context * ctx, vk_context& subctx,
+                                 vk_subbuffer src0_buf, vk_subbuffer out_buf, vk_subbuffer scratch,
+                                 uint32_t ncols, uint32_t nrows, uint32_t order) {
+    uint32_t ncols_pad_log2 = (uint32_t)ceilf(log2f(float(ncols)));
+    uint32_t ncolsp2 = 1 << ncols_pad_log2;
+
+    vk_op_argsort_push_constants pc { ncols, ncolsp2, ncols_pad_log2, nrows, order, 0, 0, 0, 0, };
+
+    uint32_t pipeline_idx = std::min(ncols_pad_log2, num_argsort_pipelines - 1);
+
+    bool use_small = ncols_pad_log2 <= ctx->device->max_workgroup_size_log2 &&
+                     ctx->device->pipeline_argsort_f32[pipeline_idx] != nullptr;
+
+    vk_pipeline pipeline = use_small ? ctx->device->pipeline_argsort_f32[pipeline_idx]
+                                     : ctx->device->pipeline_argsort_large_f32[pipeline_idx];
+
+    vk_subbuffer subbuf1 = use_small ? out_buf : scratch;
+
+    std::array<uint32_t, 3> elements;
+    elements[0] = ncolsp2;
+    elements[1] = std::min(nrows, ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
+    elements[2] = 1;
+
+    // First dispatch initializes tmp_idx and does the first N passes where there is only
+    // communication between threads in the same workgroup.
+    {
+        vk_op_argsort_push_constants pc2 = pc;
+        pc2.outer_start = 0;
+        pc2.outer_end = std::min(ncols_pad_log2, ctx->device->max_workgroup_size_log2);
+        pc2.inner_start = 0;
+        pc2.inner_end = 100;
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src0_buf, subbuf1, out_buf }, pc2, elements);
+    }
+    if (!use_small) {
+        ggml_vk_sync_buffers(ctx, subctx);
+        // Loop over outer/inner passes, synchronizing between each pass.
+        for (uint32_t outer = ctx->device->max_workgroup_size_log2; outer < ncols_pad_log2; ++outer) {
+            for (uint32_t inner = 0; inner < outer + 1; ++inner) {
+                vk_op_argsort_push_constants pc2 = pc;
+                pc2.outer_start = outer;
+                pc2.outer_end = outer + 1;
+                pc2.inner_start = inner;
+                pc2.inner_end = inner + 1;
+                // When the inner idx is large enough, there's only communication within a
+                // workgroup, so the remaining inner iterations run in the same dispatch.
+                if (outer - inner < pipeline_idx) {
+                    pc2.inner_end = 100;
+                    inner = outer;
+                    pipeline = ctx->device->pipeline_argsort_large_f32[pipeline_idx];
+                } else {
+                    // Smaller workgroup empirically seems to perform better
+                    pipeline = ctx->device->pipeline_argsort_large_f32[pipeline_idx - 2];
+                }
+                ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+                ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src0_buf, subbuf1, out_buf }, pc2, elements);
+                ggml_vk_sync_buffers(ctx, subctx);
+            }
+        }
+    }
+}
+
 static void ggml_vk_argsort(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
     const uint32_t * op_params = (const uint32_t *)dst->op_params;
 
@@ -13858,21 +13926,12 @@ static void ggml_vk_argsort(ggml_backend_vk_context * ctx, vk_context& subctx, c
     uint32_t ncols_pad_log2 = (uint32_t)ceilf(log2f(float(ncols)));
     uint32_t ncolsp2 = 1 << ncols_pad_log2;
 
-    vk_op_argsort_push_constants pc { ncols, ncolsp2, ncols_pad_log2, nrows, op_params[0], 0, 0, 0, 0, };
-
-    // Pick the largest workgroup size <= ncolsp2
-    uint32_t pipeline_idx = std::min(ncols_pad_log2, num_argsort_pipelines - 1);
-
-    // Use the "small" argsort shader if the whole sort can be done by a single workgroup.
     bool use_small = ncols_pad_log2 <= ctx->device->max_workgroup_size_log2 &&
-                     ctx->device->pipeline_argsort_f32[pipeline_idx] != nullptr;
-
-    vk_pipeline pipeline = use_small ? ctx->device->pipeline_argsort_f32[pipeline_idx]
-                                     : ctx->device->pipeline_argsort_large_f32[pipeline_idx];
+                     ctx->device->pipeline_argsort_f32[std::min(ncols_pad_log2, num_argsort_pipelines - 1)] != nullptr;
 
     vk_subbuffer src0_buf = ggml_vk_tensor_subbuffer(ctx, src0);
-    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst);
-    vk_subbuffer subbuf1 = dst_buf;
+    vk_subbuffer dst_buf  = ggml_vk_tensor_subbuffer(ctx, dst);
+    vk_subbuffer scratch  = dst_buf;
 
     // Reserve space for ivec2 per element, with rows padded to a power of two
     if (!use_small) {
@@ -13885,60 +13944,70 @@ static void ggml_vk_argsort(ggml_backend_vk_context * ctx, vk_context& subctx, c
         if (ctx->prealloc_x_need_sync) {
             ggml_vk_sync_buffers(ctx, subctx);
         }
-        subbuf1 = { ctx->prealloc_x, 0, ctx->prealloc_x->size };
+        scratch = { ctx->prealloc_x, 0, ctx->prealloc_x->size };
     }
 
-    std::array<uint32_t, 3> elements;
+    ggml_vk_argsort_rows(ctx, subctx, src0_buf, dst_buf, scratch, ncols, nrows, op_params[0]);
 
-    elements[0] = ncolsp2;
-    elements[1] = std::min((uint32_t)ggml_nrows(src0), ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
-    elements[2] = 1;
-
-    // First dispatch initializes tmp_idx and does the first N passes where
-    // there is only communication between threads in the same workgroup.
-    {
-        vk_op_argsort_push_constants pc2 = pc;
-        pc2.outer_start = 0;
-        pc2.outer_end = std::min(ncols_pad_log2, ctx->device->max_workgroup_size_log2);
-        pc2.inner_start = 0;
-        pc2.inner_end = 100;
-        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
-        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src0_buf, subbuf1, dst_buf }, pc2, elements);
-    }
     if (!use_small) {
-        ggml_vk_sync_buffers(ctx, subctx);
-        // Loop over outer/inner passes, synchronizing between each pass.
-        for (uint32_t outer = ctx->device->max_workgroup_size_log2; outer < ncols_pad_log2; ++outer) {
-            for (uint32_t inner = 0; inner < outer + 1; ++inner) {
-                vk_op_argsort_push_constants pc2 = pc;
-                pc2.outer_start = outer;
-                pc2.outer_end = outer + 1;
-                pc2.inner_start = inner;
-                pc2.inner_end = inner + 1;
-                // When the inner idx is large enough, there's only communication
-                // within a workgroup. So the remaining inner iterations can all
-                // run in the same dispatch.
-                if (outer - inner < pipeline_idx) {
-                    pc2.inner_end = 100;
-                    inner = outer;
-                    pipeline = ctx->device->pipeline_argsort_large_f32[pipeline_idx];
-                } else {
-                    // Smaller workgroup empirically seems to perform better
-                    pipeline = ctx->device->pipeline_argsort_large_f32[pipeline_idx - 2];
-                }
-                ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
-                ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src0_buf, subbuf1, dst_buf }, pc2, elements);
-                ggml_vk_sync_buffers(ctx, subctx);
-            }
-        }
         ctx->prealloc_x_need_sync = true;
     }
+}
+
+// The reduction shader needs one workgroup to hold every candidate on its last pass, so k
+// above that limit cannot go through it. Sort the whole row instead and keep the leading k:
+// ggml_top_k does not order its output (the CPU reference swaps the first two entries to say
+// so), so the leading k of a descending sort is a valid answer.
+static void ggml_vk_topk_large_k(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    const uint32_t ncols = src0->ne[0];
+    const uint32_t nrows = ggml_nrows(src0);
+    const uint32_t k     = dst->ne[0];
+
+    const uint32_t ncolsp2 = 1u << (uint32_t)ceilf(log2f(float(ncols)));
+
+    // prealloc_x carries the sort scratch followed by the permutation this pass produces.
+    const size_t align      = ctx->device->properties.limits.minStorageBufferOffsetAlignment;
+    const size_t scratch_sz = ROUNDUP_POW2(size_t{ncolsp2} * nrows * 2 * sizeof(int), align);
+    const size_t perm_sz    = ROUNDUP_POW2(size_t{ncols}   * nrows *     sizeof(int), align);
+
+    if (ctx->prealloc_size_x < scratch_sz + perm_sz) {
+        ctx->prealloc_size_x = scratch_sz + perm_sz;
+        ggml_vk_preallocate_buffers(ctx, subctx);
+    }
+    if (ctx->prealloc_x_need_sync) {
+        ggml_vk_sync_buffers(ctx, subctx);
+    }
+
+    vk_subbuffer scratch = { ctx->prealloc_x, 0,          scratch_sz };
+    vk_subbuffer perm    = { ctx->prealloc_x, scratch_sz, perm_sz    };
+
+    ggml_vk_argsort_rows(ctx, subctx, ggml_vk_tensor_subbuffer(ctx, src0), perm, scratch,
+                         ncols, nrows, GGML_SORT_ORDER_DESC);
+    ggml_vk_sync_buffers(ctx, subctx);
+
+    // Gather the leading k of every sorted row into the k-wide destination.
+    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst);
+    std::vector<vk::BufferCopy> slices;
+    slices.reserve(nrows);
+    for (uint32_t row = 0; row < nrows; ++row) {
+        slices.push_back({ perm.offset    + size_t{row} * ncols * sizeof(int),
+                           dst_buf.offset + size_t{row} * k     * sizeof(int),
+                           size_t{k} * sizeof(int) });
+    }
+    subctx->s->buffer->buf.copyBuffer(perm.buffer->buffer, dst_buf.buffer->buffer, slices);
+
+    ctx->prealloc_x_need_sync = true;
 }
 
 static void ggml_vk_topk(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
     uint32_t ncols = src0->ne[0];
     uint32_t nrows = ggml_nrows(src0);
     uint32_t k = dst->ne[0];
+
+    if (k > (1u << ctx->device->max_workgroup_size_log2)) {
+        ggml_vk_topk_large_k(ctx, subctx, src0, dst);
+        return;
+    }
 
     vk_op_topk_push_constants pc { ncols, ncols, ncols, k, nrows, 0, 0 };
 
@@ -18723,12 +18792,18 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 if (!ggml_is_contiguous(op) || !ggml_is_contiguous(op->src[0])) {
                     return false;
                 }
-                // We could potentially support larger, using argsort to sort the
-                // whole thing. Not clear if this is needed.
+                // Past the workgroup limit, ggml_vk_topk_large_k sorts the whole row
+                // instead, which needs the same memory model as argsort_large. A full sort
+                // costs more than the selection it replaces, so it only pays for itself
+                // while the row count is low enough that the CPU round trip dominates:
+                // measured on gfx1151 with ncols 54822 / k 2051, 3 rows is 11% faster on
+                // the GPU and 1024 rows is 10% slower.
                 uint32_t min_pipeline = (uint32_t)log2f(float(op->ne[0])) + 1;
                 if (min_pipeline >= num_topk_pipelines ||
                     !device->pipeline_topk_f32[min_pipeline]) {
-                    return false;
+                    return device->vulkan_memory_model &&
+                           (uint32_t)op->ne[0] > (1u << device->max_workgroup_size_log2) &&
+                           ggml_nrows(op->src[0]) <= TOPK_LARGE_K_MAX_ROWS;
                 }
             }
             return true;
