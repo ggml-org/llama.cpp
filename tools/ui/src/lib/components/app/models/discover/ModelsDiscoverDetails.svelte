@@ -106,12 +106,7 @@
 			{modelId}
 		/>
 
-		<ModelsDiscoverDetailsDownloadOptions
-			{bitDepthRows}
-			{files}
-			{modelId}
-			nativeCtxTokens={gguf?.context_length ?? 0}
-		/>
+		<ModelsDiscoverDetailsDownloadOptions {bitDepthRows} {modelId} />
 
 		<TerminalCommands {modelId} sidecars={draftSidecars} />
 

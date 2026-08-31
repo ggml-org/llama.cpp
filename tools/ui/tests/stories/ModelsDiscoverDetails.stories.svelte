@@ -76,10 +76,7 @@
 				{ bitDepth: 8, files: files.filter((f) => f.path.includes('Q8_0')) },
 				{ bitDepth: 16, files: files.filter((f) => f.path.includes('BF16')) }
 			]}
-			deviceMemoryGb={128}
-			{files}
 			modelId="ggml-org/gemma-4-12b-it-GGUF"
-			nativeCtxTokens={131072}
 		/>
 	</div>
 </Story>
@@ -91,10 +88,7 @@
 				{ bitDepth: 4, files: files.filter((f) => f.path.includes('Q4_K_M')) },
 				{ bitDepth: 8, files: files.filter((f) => f.path.includes('Q8_0')) }
 			]}
-			deviceMemoryGb={0}
-			{files}
 			modelId="ggml-org/gemma-4-12b-it-GGUF"
-			nativeCtxTokens={131072}
 		/>
 	</div>
 </Story>

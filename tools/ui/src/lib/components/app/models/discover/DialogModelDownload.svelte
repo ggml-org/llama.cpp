@@ -31,13 +31,13 @@
 		/** Error message from a failed start attempt, shown above the footer. */
 		error?: string | null;
 		/** Fire the download (POST /models). */
-		onDownload: () => void;
+		onDownload?: () => void;
 		/** Cancel the in-flight download (DELETE /models). */
 		onCancelDownload?: () => void;
 		/** Delete the model from the server cache; offered once finished. */
 		onDelete?: () => void;
 		/** Dialog was dismissed or the download completed. */
-		onClose: () => void;
+		onClose?: () => void;
 	}
 
 	let {
@@ -102,7 +102,7 @@
 			return;
 		}
 
-		if (!inFlight) onClose();
+		if (!inFlight) onClose?.();
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
@@ -118,7 +118,7 @@
 		started = true;
 		sawProgress = false;
 
-		onDownload();
+		onDownload?.();
 	}
 
 	async function cancel() {
@@ -137,7 +137,7 @@
 		showDeleteConfirm = false;
 
 		onDelete?.();
-		onClose();
+		onClose?.();
 	}
 
 	// Latch progress: 'in-flight ending' only means finished once the feed has
@@ -150,7 +150,7 @@
 	$effect(() => {
 		if (phase !== 'finished') return;
 
-		const timer = setTimeout(() => onClose(), 600);
+		const timer = setTimeout(() => onClose?.(), 600);
 
 		return () => clearTimeout(timer);
 	});
@@ -280,7 +280,7 @@
 					{/if}
 				</AlertDialog.Action>
 			{:else}
-				<AlertDialog.Cancel disabled={inFlight} onclick={() => onClose()}>
+				<AlertDialog.Cancel disabled={inFlight} onclick={() => onClose?.()}>
 					{#if phase === 'finished'}Close{:else}Cancel{/if}
 				</AlertDialog.Cancel>
 			{/if}
