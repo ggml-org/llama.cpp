@@ -344,13 +344,8 @@ export { executeBrowserInfoTool } from './browser-info';
 // Tool-use support detection from a chat template
 export { detectToolUseSupport } from './chat-template-tool-detector';
 
-// Model hardware-compatibility estimation
-export {
-	computeFileCompatibilityTiers,
-	deviceMemoryBudgetMb,
-	resolveDeviceMemoryGb,
-	type CompatibilityTier
-} from './model-compatibility';
+// Model memory estimation
+export { estimateModelMemoryBytes } from './model-compatibility';
 
 // Cryptography utilities
 
