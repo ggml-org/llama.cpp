@@ -4241,6 +4241,30 @@ int ggml_metal_op_im2col(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
+static void ggml_metal_op_conv_mm(ggml_metal_op_t ctx, const ggml_tensor * op, ggml_metal_kargs_conv_mm & args) {
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    auto pipeline = ggml_metal_library_get_pipeline_conv_mm(lib, op);
+
+    const int nr0 = pipeline.nr0;
+    const int nr1 = pipeline.nr1;
+    const int nsg = pipeline.nsg;
+
+    const int64_t NP = (int64_t) args.N*args.OD*args.OH*args.OW;
+    const int64_t OC = args.OC;
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+
+    ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, (NP + nr1 - 1)/nr1, (OC + nr0 - 1)/nr0, 1, 32, nsg, 1);
+}
+
 int ggml_metal_op_conv_2d(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -4299,24 +4323,42 @@ int ggml_metal_op_conv_2d(ggml_metal_op_t ctx, int idx) {
     const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->dev);
 
     if (props_dev->has_simdgroup_mm) {
-        auto pipeline = ggml_metal_library_get_pipeline_conv_2d_mm(lib, op);
+        ggml_metal_kargs_conv_mm args_mm = {
+            /*.nbw  =*/ nb03,
+            /*.nb10 =*/ nb10,
+            /*.nb11 =*/ nb11,
+            /*.nb12 =*/ 0,
+            /*.nb13 =*/ nb12,
+            /*.nb14 =*/ nb13,
+            /*.nb0  =*/ nb0,
+            /*.nb1  =*/ nb1,
+            /*.nb2  =*/ 0,
+            /*.nb3  =*/ nb2,
+            /*.nb4  =*/ nb3,
+            /*.IW   =*/ ne10,
+            /*.IH   =*/ ne11,
+            /*.ID   =*/ 1,
+            /*.KW   =*/ ne00,
+            /*.KH   =*/ ne01,
+            /*.KD   =*/ 1,
+            /*.IC   =*/ ne02,
+            /*.OC   =*/ ne03,
+            /*.OW   =*/ ne0,
+            /*.OH   =*/ ne1,
+            /*.OD   =*/ 1,
+            /*.N    =*/ ne3,
+            /*.s0   =*/ s0,
+            /*.s1   =*/ s1,
+            /*.s2   =*/ 1,
+            /*.p0   =*/ p0,
+            /*.p1   =*/ p1,
+            /*.p2   =*/ 0,
+            /*.d0   =*/ d0,
+            /*.d1   =*/ d1,
+            /*.d2   =*/ 1,
+        };
 
-        const int nr0 = pipeline.nr0;
-        const int nr1 = pipeline.nr1;
-        const int nsg = pipeline.nsg;
-
-        const int64_t NP = ne3*ne1*ne0;
-        const int64_t OC = ne03;
-
-        ggml_metal_encoder_set_pipeline(enc, pipeline);
-        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
-
-        ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
-
-        ggml_metal_encoder_dispatch_threadgroups(enc, (NP + nr1 - 1)/nr1, (OC + nr0 - 1)/nr0, 1, 32, nsg, 1);
+        ggml_metal_op_conv_mm(ctx, op, args_mm);
 
         return 1;
     }
@@ -4468,6 +4510,49 @@ int ggml_metal_op_conv_3d(ggml_metal_op_t ctx, int idx) {
         nb10, nb11, nb12, nb13, // Input strides
         nb0,  nb1,  nb2,  nb3   // Output strides
     };
+
+    const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->dev);
+
+    if (props_dev->has_simdgroup_mm) {
+        ggml_metal_kargs_conv_mm args_mm = {
+            /*.nbw  =*/ IC*nb03,
+            /*.nb10 =*/ nb10,
+            /*.nb11 =*/ nb11,
+            /*.nb12 =*/ nb12,
+            /*.nb13 =*/ nb13,
+            /*.nb14 =*/ IC*nb13,
+            /*.nb0  =*/ nb0,
+            /*.nb1  =*/ nb1,
+            /*.nb2  =*/ nb2,
+            /*.nb3  =*/ nb3,
+            /*.nb4  =*/ OC*nb3,
+            /*.IW   =*/ args.IW,
+            /*.IH   =*/ args.IH,
+            /*.ID   =*/ args.ID,
+            /*.KW   =*/ args.KW,
+            /*.KH   =*/ args.KH,
+            /*.KD   =*/ args.KD,
+            /*.IC   =*/ IC,
+            /*.OC   =*/ OC,
+            /*.OW   =*/ args.OW,
+            /*.OH   =*/ args.OH,
+            /*.OD   =*/ args.OD,
+            /*.N    =*/ N,
+            /*.s0   =*/ s0,
+            /*.s1   =*/ s1,
+            /*.s2   =*/ s2,
+            /*.p0   =*/ p0,
+            /*.p1   =*/ p1,
+            /*.p2   =*/ p2,
+            /*.d0   =*/ d0,
+            /*.d1   =*/ d1,
+            /*.d2   =*/ d2,
+        };
+
+        ggml_metal_op_conv_mm(ctx, op, args_mm);
+
+        return 1;
+    }
 
     // 4. Fetch the JIT pipeline
     auto pipeline = ggml_metal_library_get_pipeline_conv_3d(lib, op);

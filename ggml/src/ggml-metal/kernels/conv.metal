@@ -274,9 +274,9 @@ kernel void kernel_conv_2d<half>(
         uint3   tpitg[[thread_position_in_threadgroup]],
         uint3     ntg[[threads_per_threadgroup]]);
 
-template <typename TK, short NR0, short NR1>
-kernel void kernel_conv_2d_mm(
-        constant ggml_metal_kargs_conv_2d & args,
+template <typename TK, short NR0, short NR1, short DIMS>
+kernel void kernel_conv_mm(
+        constant ggml_metal_kargs_conv_mm & args,
         device const char * weights,
         device const char * src,
         device       char * dst,
@@ -297,8 +297,14 @@ kernel void kernel_conv_2d_mm(
     threadgroup half * sa = (threadgroup half *) shmem;
     threadgroup half * sb = (threadgroup half *) shmem + (NR0/8)*NKB*NB;
 
-    const int K  = args.IC*args.KH*args.KW;
-    const int NP = args.N*args.OH*args.OW;
+    const int KD = DIMS == 3 ? args.KD : 1;
+    const int OD = DIMS == 3 ? args.OD : 1;
+
+    const int KWH = args.KW*args.KH;
+    const int OWH = args.OW*args.OH;
+
+    const int K  = args.IC*KD*KWH;
+    const int NP = args.N*OD*OWH;
 
     const int r0 = tgpig.y*NR0;
     const int r1 = tgpig.x*NR1;
@@ -310,6 +316,7 @@ kernel void kernel_conv_2d_mm(
 
     int  ix0[NPL];
     int  iy0[NPL];
+    int  iz0[NPL];
     bool ip_ok[NPL];
 
     device const char * srcb[NPL];
@@ -319,14 +326,16 @@ kernel void kernel_conv_2d_mm(
 
         const int iow = ip % args.OW;
         const int ioh = (ip / args.OW) % args.OH;
-        const int in  = ip / (args.OW*args.OH);
+        const int iod = (ip / OWH) % OD;
+        const int in  = ip / (OWH*OD);
 
         ix0[t] = iow*args.s0 - args.p0;
         iy0[t] = ioh*args.s1 - args.p1;
+        iz0[t] = iod*args.s2 - args.p2;
 
         ip_ok[t] = ip < NP;
 
-        srcb[t] = src + in*args.nb13;
+        srcb[t] = src + in*args.nb14;
     }
 
     simdgroup_half8x8  ma[4];
@@ -350,7 +359,7 @@ kernel void kernel_conv_2d_mm(
 
                 half v = 0;
                 if (kk < K && oc < args.OC) {
-                    v = *((device const TK *)(weights + oc*args.nb03) + kk);
+                    v = *((device const TK *)(weights + oc*args.nbw) + kk);
                 }
 
                 const short ib = NKB*(row/8) + k/8;
@@ -364,7 +373,8 @@ kernel void kernel_conv_2d_mm(
 
             int kw = kk % args.KW;
             int kh = (kk / args.KW) % args.KH;
-            int ic = kk / (args.KW*args.KH);
+            int kd = (kk / KWH) % KD;
+            int ic = kk / (KWH*KD);
 
             FOR_UNROLL (short i = 0; i < 8; i++) {
                 const short k = lb_k + i;
@@ -375,9 +385,21 @@ kernel void kernel_conv_2d_mm(
                     const int ix = ix0[t] + kw*args.d0;
                     const int iy = iy0[t] + kh*args.d1;
 
+                    bool ok = ip_ok[t] && kk < K && ix >= 0 && ix < args.IW && iy >= 0 && iy < args.IH;
+
+                    uint64_t offs = ic*args.nb13 + iy*args.nb11 + ix*args.nb10;
+
+                    if (DIMS == 3) {
+                        const int iz = iz0[t] + kd*args.d2;
+
+                        ok = ok && iz >= 0 && iz < args.ID;
+
+                        offs += iz*args.nb12;
+                    }
+
                     half v = 0;
-                    if (ip_ok[t] && kk < K && ix >= 0 && ix < args.IW && iy >= 0 && iy < args.IH) {
-                        v = *(device const float *)(srcb[t] + ic*args.nb12 + iy*args.nb11 + ix*args.nb10);
+                    if (ok) {
+                        v = *(device const float *)(srcb[t] + offs);
                     }
 
                     const short ib = NKB*(n/8) + k/8;
@@ -390,7 +412,10 @@ kernel void kernel_conv_2d_mm(
                     kw = 0;
                     if (++kh == args.KH) {
                         kh = 0;
-                        ic++;
+                        if (++kd == KD) {
+                            kd = 0;
+                            ic++;
+                        }
                     }
                 }
             }
@@ -434,26 +459,31 @@ kernel void kernel_conv_2d_mm(
 
     const int ow = p % args.OW;
     const int oh = (p / args.OW) % args.OH;
-    const int n  = p / (args.OW*args.OH);
+    const int od = (p / OWH) % OD;
+    const int n  = p / (OWH*OD);
 
-    device char * dstp = dst + n*args.nb3 + oh*args.nb1 + ow*args.nb0;
+    device char * dstp = dst + n*args.nb4 + od*args.nb2 + oh*args.nb1 + ow*args.nb0;
 
     for (short j = 0; j < NR0*NR1/NTH; j++) {
         const short row = tiitg/NR1 + (NTH/NR1)*j;
         const int   oc  = r0 + row;
 
         if (oc < args.OC) {
-            *(device float *)(dstp + oc*args.nb2) = sc[NR1*row + cn];
+            *(device float *)(dstp + oc*args.nb3) = sc[NR1*row + cn];
         }
     }
 }
 
-typedef decltype(kernel_conv_2d_mm<float, 64, 32>) kernel_conv_2d_mm_t;
+typedef decltype(kernel_conv_mm<float, 64, 32, 2>) kernel_conv_mm_t;
 
-template [[host_name("kernel_conv_2d_mm_f32_f32_64x32")]] kernel kernel_conv_2d_mm_t kernel_conv_2d_mm<float, 64, 32>;
-template [[host_name("kernel_conv_2d_mm_f16_f32_64x32")]] kernel kernel_conv_2d_mm_t kernel_conv_2d_mm<half,  64, 32>;
-template [[host_name("kernel_conv_2d_mm_f32_f32_32x64")]] kernel kernel_conv_2d_mm_t kernel_conv_2d_mm<float, 32, 64>;
-template [[host_name("kernel_conv_2d_mm_f16_f32_32x64")]] kernel kernel_conv_2d_mm_t kernel_conv_2d_mm<half,  32, 64>;
+template [[host_name("kernel_conv_2d_mm_f32_f32_64x32")]] kernel kernel_conv_mm_t kernel_conv_mm<float, 64, 32, 2>;
+template [[host_name("kernel_conv_2d_mm_f16_f32_64x32")]] kernel kernel_conv_mm_t kernel_conv_mm<half,  64, 32, 2>;
+template [[host_name("kernel_conv_2d_mm_f32_f32_32x64")]] kernel kernel_conv_mm_t kernel_conv_mm<float, 32, 64, 2>;
+template [[host_name("kernel_conv_2d_mm_f16_f32_32x64")]] kernel kernel_conv_mm_t kernel_conv_mm<half,  32, 64, 2>;
+template [[host_name("kernel_conv_3d_mm_f32_f32_64x32")]] kernel kernel_conv_mm_t kernel_conv_mm<float, 64, 32, 3>;
+template [[host_name("kernel_conv_3d_mm_f16_f32_64x32")]] kernel kernel_conv_mm_t kernel_conv_mm<half,  64, 32, 3>;
+template [[host_name("kernel_conv_3d_mm_f32_f32_32x64")]] kernel kernel_conv_mm_t kernel_conv_mm<float, 32, 64, 3>;
+template [[host_name("kernel_conv_3d_mm_f16_f32_32x64")]] kernel kernel_conv_mm_t kernel_conv_mm<half,  32, 64, 3>;
 
 typedef void (conv_transpose_1d_t)(
         constant ggml_metal_kargs_conv_transpose_1d & args,
