@@ -44,10 +44,10 @@ import type { ModelDownloadProgress } from '$lib/types';
 		if (getDownloadState) return getDownloadState(repoWithTag, filePath, isSidecar);
 
 		return {
-			isDownloading: modelsStore.status.isDownloadInProgress(repoWithTag),
 			isDownloaded: isSidecar
 				? modelsStore.status.isDraftDownloaded(modelId, filePath)
 				: modelsStore.status.isModelDownloaded(repoWithTag),
+			isDownloading: modelsStore.status.isDownloadInProgress(repoWithTag),
 			isFailed: modelsStore.status.hasFailedDownload(repoWithTag),
 			progress: modelsStore.status.getDownloadProgress(repoWithTag)
 		};
