@@ -125,6 +125,16 @@ export class ModelStatusManager {
 	constructor(private host: ModelStatusHost) {}
 
 	/**
+	 * All tracked downloads (in flight), as a list for the download manager.
+	 */
+	downloadEntries(): { progress: ModelDownloadProgress; repoWithTag: string }[] {
+		return Array.from(this.downloadProgress, ([repoWithTag, progress]) => ({
+			progress,
+			repoWithTag
+		}));
+	}
+
+	/**
 	 * Trigger a model download from HuggingFace via POST /models
 	 * (ggml-org/llama.cpp#23976). The download runs in the background on the
 	 * server; the model appears in the list once the feed reports models_reload.
@@ -332,7 +342,11 @@ export class ModelStatusManager {
 			total += file?.total ?? 0;
 		}
 
-		this.downloadProgress.set(event.model, { downloadedBytes: downloaded, totalBytes: total });
+		this.downloadProgress.set(event.model, {
+			downloadedBytes: downloaded,
+			files: progress,
+			totalBytes: total
+		});
 	}
 
 	/**

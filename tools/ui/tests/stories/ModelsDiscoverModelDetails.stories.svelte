@@ -74,7 +74,10 @@
 
 <Story name="Terminal commands (no sidecars)">
 	<div class="w-200 p-4">
-		<ModelsDiscoverModelDetailsCommands modelId="ggml-org/Qwen3.8-27B-GGUF" />
+		<ModelsDiscoverModelDetailsCommands
+			modelId="ggml-org/Qwen3.8-27B-GGUF"
+			quants={['Q4_K_M', 'Q8_0']}
+		/>
 	</div>
 </Story>
 
@@ -82,6 +85,7 @@
 	<div class="w-200 p-4">
 		<ModelsDiscoverModelDetailsCommands
 			modelId="ggml-org/gemma-4-12b-it-GGUF"
+			quants={['Q4_K_M', 'Q8_0']}
 			sidecars={[ModelDraftSidecar.MTP]}
 		/>
 	</div>

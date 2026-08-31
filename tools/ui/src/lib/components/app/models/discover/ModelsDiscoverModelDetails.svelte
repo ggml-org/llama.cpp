@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelsDiscoverModelDetailsCommands from './ModelsDiscoverModelDetailsCommands.svelte';
-	import ModelsDiscoverDetailsDownloadOptions from './ModelsDiscoverModelDetailsDownloadOptions.svelte';
+	import ModelsDiscoverModelDetailsDownloadOptions from './ModelsDiscoverModelDetailsDownloadOptions.svelte';
 	import ModelsDiscoverDetailsHeader from './ModelsDiscoverModelDetailsHeader.svelte';
 	import ModelsDiscoverDetailsReadme from './ModelsDiscoverModelDetailsReadme.svelte';
 	import { isAuxSidecar, type ModelSidecar } from '$lib/constants';
@@ -62,6 +62,16 @@
 	});
 
 	type BitDepthRow = { bitDepth: number; files: HfModelSibling[] };
+	let quants = $derived(
+		Array.from(
+			new Set(
+				files
+					.map((f) => HuggingFaceService.extractQuantMeta(f.path)?.quant)
+					.filter((q): q is string => Boolean(q))
+					.map((q) => q.toUpperCase())
+			)
+		)
+	);
 	let bitDepthRows = $derived.by<BitDepthRow[]>(() => {
 		const rows = new SvelteMap<number, HfModelSibling[]>();
 
@@ -106,9 +116,9 @@
 			{modelId}
 		/>
 
-		<ModelsDiscoverDetailsDownloadOptions {bitDepthRows} {modelId} />
+		<ModelsDiscoverModelDetailsDownloadOptions {bitDepthRows} {modelId} />
 
-		<ModelsDiscoverModelDetailsCommands {modelId} sidecars={draftSidecars} />
+		<ModelsDiscoverModelDetailsCommands {modelId} {quants} sidecars={draftSidecars} />
 
 		<ModelsDiscoverDetailsReadme {readme} />
 	</div>

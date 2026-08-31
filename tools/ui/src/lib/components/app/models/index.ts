@@ -109,3 +109,18 @@ export { default as ModelBadge } from './ModelBadge.svelte';
  * Respects the user's `showRawModelNames` setting.
  */
 export { default as ModelId } from './ModelId.svelte';
+
+/**
+ * **ModelsDownloadManager** - tracked downloads list
+ *
+ * Lists every in-flight download with per-file progress and a delete action.
+ */
+export { default as ModelsDownloadManager } from './download-manager/ModelsDownloadManager.svelte';
+
+/**
+ * **ModelsDownloadManagerDownloadStatusToast** - per-entry download toast
+ *
+ * One toast per download with a progress bar per file (main + sidecars) and
+ * a CTA to open the download manager.
+ */
+export { default as ModelsDownloadManagerDownloadStatusToast } from './download-manager/ModelsDownloadManagerDownloadStatusToast.svelte';
