@@ -4763,6 +4763,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             spec.push_back(device->subgroup_size);     // subgroup_size
             if (type != UINT32_MAX) {
                 spec.push_back(type);                  // MmTypeA
+                spec.push_back((uint32_t)ggml_type_size((ggml_type)type)); // MmABlockBytes
             }
             return spec;
         };
