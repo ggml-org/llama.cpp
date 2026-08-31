@@ -200,17 +200,6 @@ std::unique_ptr<llm_graph_context> llama_model_glm5_next::build_arch_graph(const
     return std::make_unique<graph>(*this, params);
 }
 
-// Mean over the hyper-connection streams
-static ggml_tensor * glm5_hc_mean(ggml_context * ctx, ggml_tensor * x) {
-    const int64_t hc = x->ne[1];
-
-    ggml_tensor * acc = ggml_view_2d(ctx, x, x->ne[0], x->ne[2], x->nb[2], 0);
-    for (int64_t s = 1; s < hc; ++s) {
-        acc = ggml_add(ctx, acc, ggml_view_2d(ctx, x, x->ne[0], x->ne[2], x->nb[2], s*x->nb[1]));
-    }
-    return ggml_scale(ctx, acc, 1.0f/hc);
-}
-
 // Causal conv1d over one of Q/K/V
 static ggml_tensor * glm5_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
                                  ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
@@ -364,7 +353,7 @@ llama_model_glm5_next::llm_graph_input_kpool * llama_model_glm5_next::graph::bui
 }
 
 llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(model) {
+    llama_model_deepseek4::graph_base<llm_build_delta_net_base>(params), model(model) {
 
     ggml_tensor * cur;
 
@@ -476,7 +465,7 @@ llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_p
         inpL = ggml_reshape_3d(ctx0, flat, n_embd, hc, n_outputs);
     }
 
-    cur = glm5_hc_mean(ctx0, inpL);
+    cur = build_hc_mean(inpL);
     cb(cur, "hc_head", -1);
 
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);

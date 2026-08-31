@@ -1339,36 +1339,6 @@ struct llm_graph_context {
     // hybrid
     //
 
-    // hyper-connections (mHC)
-
-
-    // collapse the hc streams with per-stream weights
-    ggml_tensor * build_hc_pre(
-            ggml_tensor * x,
-            ggml_tensor * weights,
-            int il) const;
-
-    // returns the collapsed input and fills the post / comb weights
-    ggml_tensor * build_hc_pre(
-            ggml_tensor * x,
-            ggml_tensor * hc_fn,
-            ggml_tensor * hc_scale,
-            ggml_tensor * hc_base,
-            ggml_tensor ** post,
-            ggml_tensor ** comb,
-            int il) const;
-
-    ggml_tensor * build_hc_post(
-            ggml_tensor * x,
-            ggml_tensor * residual,
-            ggml_tensor * post,
-            ggml_tensor * comb,
-            int il) const;
-
-    ggml_tensor * build_hc_sinkhorn(
-            ggml_tensor * comb,
-            int il) const;
-
     llm_graph_input_mem_hybrid * build_inp_mem_hybrid() const;
     llm_graph_input_mem_hybrid_k * build_inp_mem_hybrid_k() const;
 
