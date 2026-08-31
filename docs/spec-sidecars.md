@@ -90,8 +90,14 @@ qualified against native MTP on the user's exact model and prompt family.
 
 ## Build
 
-Normal builds do not compile the sidecars. Enable them explicitly in a HIP
-build and select the actual GPU architecture:
+The RDNA2 build scripts in this repository (`scripts/build-rdna2-rocm.sh` and
+`scripts/build-rdna2-portable.sh`) compile the sidecar libraries by default so
+that the runtime opt-in works out of the box; pass `BUILD_SPEC_SIDECARS=OFF`
+(or `--no-spec-sidecars` for the portable script) to skip them. The libraries
+are dormant unless `SPEC_SIDECAR=1` is set at runtime.
+
+A plain CMake build does not compile the sidecars. Enable them explicitly in a
+HIP build and select the actual GPU architecture:
 
 ```sh
 cmake -S . -B build-spec-sidecar \
@@ -101,7 +107,8 @@ cmake -S . -B build-spec-sidecar \
   -DLLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES=gfx1030 \
   -DCMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc
 cmake --build build-spec-sidecar \
-  --target spec-sidecar-hip-mtp spec-sidecar-hip-dflash llama-server
+  --target spec-sidecar-hip-mtp spec-sidecar-hip-dflash \
+           spec-sidecar-hip-qwen35moe-mtp llama-server
 ```
 
 The resulting libraries are `spec_hip_sidecar.so`, `spec_dflash_sidecar.so`,

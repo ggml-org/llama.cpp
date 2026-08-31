@@ -12,6 +12,14 @@ endif()
 
 find_package(hip REQUIRED)
 
+# ggml builds HIP sources either through a hipcc CXX driver or through native
+# CMake HIP language support. When the top-level project was not configured
+# with hipcc as the CXX compiler, the sidecar sources are compiled as LANGUAGE
+# HIP below, which requires the HIP language to be enabled first.
+if (NOT CMAKE_CXX_COMPILER MATCHES "hipcc(\\.bat)?$")
+    enable_language(HIP)
+endif()
+
 set(LLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES "" CACHE STRING
     "HIP architectures for speculative sidecars (empty inherits CMAKE_HIP_ARCHITECTURES)")
 
