@@ -7,13 +7,11 @@
 
 // ---- helpers -------------------------------------------------------------
 
-// the pattern outputs, defaulting to the last node
+// the pattern outputs (absolute graph node indices); the default is the last node
 static const int * ggml_metal_fuse_outputs(const struct ggml_metal_fuse * fuse, int * buf) {
     if (fuse->outputs) {
         return fuse->outputs;
     }
-
-    buf[0] = fuse->n_ops - 1;
 
     return buf;
 }
@@ -224,7 +222,9 @@ const struct ggml_metal_fuse * ggml_metal_fuse_next(
             continue;
         }
 
+        // ggml_can_fuse_subgraph_ext expects outputs as absolute graph node indices
         int outputs_buf[GGML_MAX_SRC];
+        outputs_buf[0] = node_idxs[idx + fuse->n_ops - 1];
         const int * outputs = ggml_metal_fuse_outputs(fuse, outputs_buf);
         const int n_outputs = fuse->n_outputs ? fuse->n_outputs : 1;
 
