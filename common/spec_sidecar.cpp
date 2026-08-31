@@ -352,42 +352,10 @@ static const common_spec_sidecar_profile QWEN35_DFLASH_PROFILE = {
     /* .matches_target_file   = */ profile_matches_target_file,
 };
 
-static const common_spec_sidecar_profile QWEN4EXP_MTP_PROFILE = {
-    /* .name                  = */ "qwen4exp-mtp",
-    /* .kind                  = */ COMMON_SPEC_SIDECAR_KIND_MTP,
-    /* .target_architecture   = */ "qwen4exp",
-    /* .target_name           = */ "Qwen3.8 Flash Next",
-    /* .target_size_label     = */ "512x56B",
-    /* .target_n_embd         = */ 2560,
-    /* .target_n_embd_out     = */ 10240,
-    /* .target_n_layer        = */ 48,
-    /* .target_n_layer_nextn  = */ 0,
-    /* .target_n_vocab        = */ 248320,
-    /* .mtp_embedding_width   = */ 10240,
-    /* .mtp_head_rows         = */ 248320,
-    /* .dflash_encoded_width  = */ 0,
-    /* .dflash_decoder_width  = */ 0,
-    /* .dflash_block_size     = */ 0,
-    /* .dflash_selector_top_k = */ 0,
-    /* .dflash_head_rows      = */ 0,
-    /* .dflash_target_layer_ids = */ nullptr,
-    /* .dflash_target_layer_ids_n = */ 0,
-    /* .library_env           = */ "LLAMA_SPEC_QWEN4EXP_HIP_SIDECAR",
-    /* .artifact_env          = */ "LLAMA_SPEC_QWEN4EXP_HIP_WEIGHTS",
-    /* .ids_env               = */ "LLAMA_QWEN4EXP_DRAFT_HEAD_IDS",
-    /* .full_head_env         = */ nullptr,
-    /* .default_library_name  = */ "spec_qwen4exp_mtp_sidecar.so",
-    /* .default_artifact_dir_name = */ "spec-sidecar-qwen4exp-mtp",
-    /* .explicit_paths_only   = */ false,
-    /* .matches_model         = */ profile_matches_model,
-    /* .matches_target_file   = */ profile_matches_target_file,
-};
-
 static const common_spec_sidecar_profile * const ALL_PROFILES[] = {
     &QWEN35_MTP_PROFILE,
     &QWEN35MOE_MTP_PROFILE,
     &QWEN35_DFLASH_PROFILE,
-    &QWEN4EXP_MTP_PROFILE,
 };
 
 static const char * env_value(const char * name) {
