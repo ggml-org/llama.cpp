@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# Mistral Chat Preset for llama-server
+if [[ "$preset" == "mistral-chat-7b" ]]; then
+  MODEL_REPO="TheBloke/Mistral-7B-Instruct-v0.2-GGUF"
+  MODEL_FILE="mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+  CONTEXT_SIZE=4096
+  BATCH_SIZE=512
+  OTHER_FLAGS="--chat"
+  
+  echo "Starting llama-server with Mistral 7B Chat Preset..."
+  ./llama-server -m $MODEL_REPO/$MODEL_FILE --context-size $CONTEXT_SIZE -b $BATCH_SIZE $OTHER_FLAGS
+fi
+
+chmod +x preset-mistral-chat.sh
+
+./preset-mistral-chat.sh --preset mistral-chat-7b
+
+git add preset-mistral-chat.sh
+
+git commit -m "Add mistral-chat-7b preset for llama-server"
+
+git push origin add-mistral-chat-preset
+
+git branch -r
+
+
+
+git branch
+
