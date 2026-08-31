@@ -156,9 +156,9 @@ class XingChen4Model(DeepseekV2Model):
             self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
 
         # Manifold-Constrained Hyper-Connections (MHC)
-        self.gguf_writer.add_hyper_connection_count(hparams["num_residual_streams"])
-        self.gguf_writer.add_hyper_connection_sinkhorn_iterations(hparams["mhc_sinkhorn_iterations"])
-        self.gguf_writer.add_hyper_connection_epsilon(1e-6)
+        self.gguf_writer.add_hyper_connection_count(hparams["hc_mult"])
+        self.gguf_writer.add_hyper_connection_sinkhorn_iterations(hparams["hc_sinkhorn_iters"])
+        self.gguf_writer.add_hyper_connection_epsilon(hparams["hc_eps"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         hc_match = re.match(r"model\.layers\.(\d+)\.(attn_hc|ffn_hc)\.(\w+)$", name)
