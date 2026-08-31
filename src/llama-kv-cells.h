@@ -314,20 +314,33 @@ public:
     // note: used by n-gram input embeddings to recover the tokens preceding a ubatch
     template<typename F>
     void for_each_token_in(const std::bitset<LLAMA_MAX_SEQ> & seqs, llama_pos p0, llama_pos p1, F && f) const {
-        for (const auto & i : used) {
-            if (pos[i] < p0 || pos[i] >= p1) {
+        // scan the raw arrays instead of iterating `used`: walking that RB-tree visits
+        // every used cell through pointer chasing and dominates the cost of this call
+        // at long context (it runs once per ubatch). the array scan covers the same
+        // cells in the same (index) order with contiguous reads. empty cells have
+        // pos == -1 and are skipped by the range check below.
+        const uint32_t n_cells = (uint32_t) pos.size();
+
+        // hoist the queried seq ids out of the per-cell loop: queries carry a handful
+        // of ids (usually one), so testing those directly beats masking and counting
+        // the full LLAMA_MAX_SEQ bitset for every cell
+        llama_seq_id seq_ids[LLAMA_MAX_SEQ];
+        uint32_t n_seq_ids = 0;
+        for (llama_seq_id s = 0; s < (llama_seq_id) LLAMA_MAX_SEQ; ++s) {
+            if (seqs.test(s)) {
+                seq_ids[n_seq_ids++] = s;
+            }
+        }
+
+        for (uint32_t i = 0; i < n_cells; ++i) {
+            if (pos[i] < 0 || pos[i] < p0 || pos[i] >= p1) {
                 continue;
             }
 
-            const auto m = seq[i] & seqs;
-
-            // a cell carries a handful of sequences at most, out of LLAMA_MAX_SEQ
-            size_t left = m.count();
-
-            for (llama_seq_id s = 0; left > 0 && s < (llama_seq_id) LLAMA_MAX_SEQ; ++s) {
-                if (m.test(s)) {
+            for (uint32_t k = 0; k < n_seq_ids; ++k) {
+                const llama_seq_id s = seq_ids[k];
+                if (seq[i].test(s)) {
                     f(s, pos[i], ext[i].tok);
-                    --left;
                 }
             }
         }
