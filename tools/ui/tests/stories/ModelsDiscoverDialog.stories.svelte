@@ -23,11 +23,8 @@
 	// manager keeps this in a private SvelteSet keyed by `<repo>:<tag>`.
 	const FAILED_TAG = 'ggml-org/gemma-4-12b-it-GGUF:Q4_K_M';
 
-	(
-		modelsStore.status as unknown as { failedDownloads: Set<string> }
-	).failedDownloads = new SvelteSet([FAILED_TAG]);
-
-
+	(modelsStore.status as unknown as { failedDownloads: Set<string> }).failedDownloads =
+		new SvelteSet([FAILED_TAG]);
 </script>
 
 <Story name="Progress bar">

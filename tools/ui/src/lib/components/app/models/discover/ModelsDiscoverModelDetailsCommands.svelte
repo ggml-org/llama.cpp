@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Check, Copy, Server, SquareTerminal } from '@lucide/svelte';
 	import { isAuxSidecar, type ModelSidecar } from '$lib/constants';
-import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
+	import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
 	import { copyToClipboard } from '$lib/utils';
 
 	interface Props {

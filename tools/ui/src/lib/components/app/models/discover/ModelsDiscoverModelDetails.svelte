@@ -1,8 +1,8 @@
 <script lang="ts">
-	import ModelsDiscoverDetailsDownloadOptions from './ModelsDiscoverDetailsDownloadOptions.svelte';
-	import ModelsDiscoverDetailsHeader from './ModelsDiscoverDetailsHeader.svelte';
-	import ModelsDiscoverDetailsReadme from './ModelsDiscoverDetailsReadme.svelte';
-	import TerminalCommands from './TerminalCommands.svelte';
+	import ModelsDiscoverModelDetailsCommands from './ModelsDiscoverModelDetailsCommands.svelte';
+	import ModelsDiscoverDetailsDownloadOptions from './ModelsDiscoverModelDetailsDownloadOptions.svelte';
+	import ModelsDiscoverDetailsHeader from './ModelsDiscoverModelDetailsHeader.svelte';
+	import ModelsDiscoverDetailsReadme from './ModelsDiscoverModelDetailsReadme.svelte';
 	import { isAuxSidecar, type ModelSidecar } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types/huggingface';
@@ -108,7 +108,7 @@
 
 		<ModelsDiscoverDetailsDownloadOptions {bitDepthRows} {modelId} />
 
-		<TerminalCommands {modelId} sidecars={draftSidecars} />
+		<ModelsDiscoverModelDetailsCommands {modelId} sidecars={draftSidecars} />
 
 		<ModelsDiscoverDetailsReadme {readme} />
 	</div>

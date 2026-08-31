@@ -29,7 +29,7 @@ export { default as ModelsDiscoverList } from './ModelsDiscoverList.svelte';
  *
  * One model entry in the sidebar list. Links to `/models-hub/[org]/[model]`.
  */
-export { default as ModelsDiscoverItem } from './ModelsDiscoverItem.svelte';
+export { default as ModelsDiscoverListItem } from './ModelsDiscoverListItem.svelte';
 
 /**
  * **ModelsDiscoverAvatar** - Org avatar for a model row
@@ -40,20 +40,12 @@ export { default as ModelsDiscoverItem } from './ModelsDiscoverItem.svelte';
 export { default as ModelsDiscoverAvatar } from './ModelsDiscoverAvatar.svelte';
 
 /**
- * **ModelsDiscoverInfo** - Model name + metadata for a row
- *
- * Renders the model name via ModelId and the remaining metadata (org, last
- * modified, params, downloads, likes, vision) below it.
- */
-export { default as ModelsDiscoverInfo } from './ModelsDiscoverInfo.svelte';
-
-/**
  * **ModelsDiscoverDetails** - Model detail view
  *
  * Detail pane for the selected model. Loads its own data (details + GGUF file
  * list) from HuggingFaceService based on the `modelId` route param.
  */
-export { default as ModelsDiscoverDetails } from './ModelsDiscoverDetails.svelte';
+export { default as ModelsDiscoverModelDetails } from './ModelsDiscoverModelDetails.svelte';
 
 /**
  * **ModelsDiscoverDetailsHeader** - Detail view header
@@ -61,16 +53,7 @@ export { default as ModelsDiscoverDetails } from './ModelsDiscoverDetails.svelte
  * Shows the model avatar (base org + quant org corner badge), name, base model
  * info, stats, metadata chips and capability badges.
  */
-export { default as ModelsDiscoverDetailsHeader } from './ModelsDiscoverDetailsHeader.svelte';
-
-/**
- * **ModelsDiscoverDetailsName** - Model name block
- *
- * Shows the quant model name with capability icons (vision, tool use,
- * reasoning) beside it, and the base model name with a smaller external-link
- * icon on the line below.
- */
-export { default as ModelsDiscoverDetailsName } from './ModelsDiscoverDetailsName.svelte';
+export { default as ModelsDiscoverModelDetailsHeader } from './ModelsDiscoverModelDetailsHeader.svelte';
 
 /**
  * **ModelsDiscoverDetailsDownloadOptions** - GGUF download options
@@ -78,7 +61,7 @@ export { default as ModelsDiscoverDetailsName } from './ModelsDiscoverDetailsNam
  * Groups GGUF files by bit depth and renders per-file download buttons with
  * progress, owned by the download confirmation dialog.
  */
-export { default as ModelsDiscoverDetailsDownloadOptions } from './ModelsDiscoverDetailsDownloadOptions.svelte';
+export { default as ModelsDiscoverModelDetailsDownloadOptions } from './ModelsDiscoverModelDetailsDownloadOptions.svelte';
 
 /**
  * **ModelsDiscoverChatTemplateDialog** - Chat template viewer
@@ -92,14 +75,14 @@ export { default as ModelsDiscoverChatTemplateDialog } from './ModelsDiscoverCha
  *
  * Renders the model card README as markdown.
  */
-export { default as ModelsDiscoverDetailsReadme } from './ModelsDiscoverDetailsReadme.svelte';
+export { default as ModelsDiscoverModelDetailsReadme } from './ModelsDiscoverModelDetailsReadme.svelte';
 
 /**
  * **TerminalCommands** - Terminal command block
  *
  * Shows the `llama serve` / `llama cli` commands for a model with copy buttons.
  */
-export { default as TerminalCommands } from './TerminalCommands.svelte';
+export { default as ModelsDiscoverModelDetailsCommands } from './ModelsDiscoverModelDetailsCommands.svelte';
 
 /**
  * **DialogModelDownload** - Download confirmation / progress dialog

@@ -6,7 +6,7 @@
 	import { isAuxSidecar, type ModelSidecar } from '$lib/constants';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
-import type { ModelDownloadProgress } from '$lib/types';
+	import type { ModelDownloadProgress } from '$lib/types';
 	import type { HfModelSibling } from '$lib/types/huggingface';
 	import { estimateModelMemoryBytes } from '$lib/utils';
 
@@ -33,7 +33,11 @@ import type { ModelDownloadProgress } from '$lib/types';
 		/** GGUF files grouped by bit depth. */
 		bitDepthRows: BitDepthRow[];
 		/** Download state lookup; defaults to the models store status feed. */
-		getDownloadState?: (repoWithTag: string, filePath: string, isSidecar: boolean) => DownloadEntryState;
+		getDownloadState?: (
+			repoWithTag: string,
+			filePath: string,
+			isSidecar: boolean
+		) => DownloadEntryState;
 	}
 
 	let { bitDepthRows, getDownloadState, modelId }: Props = $props();
@@ -93,13 +97,17 @@ import type { ModelDownloadProgress } from '$lib/types';
 							{@const meta = HuggingFaceService.extractQuantMeta(file.path)}
 							{@const basename = file.path.split('/').pop() ?? file.path}
 							{@const label = meta?.quant ?? basename.replace(/\.gguf$/i, '')}
-							{@const hfRepoWithTag = ModelsService.buildDownloadTag(modelId, meta?.quant ?? null, meta?.sidecar ?? null)}
+							{@const hfRepoWithTag = ModelsService.buildDownloadTag(
+								modelId,
+								meta?.quant ?? null,
+								meta?.sidecar ?? null
+							)}
 							{@const state = stateFor(hfRepoWithTag, file.path, Boolean(meta?.sidecar))}
 							{@const isDownloading = state.isDownloading}
 							{@const progress = state.progress}
 							{@const isDownloaded = state.isDownloaded}
 							{@const isFailed = state.isFailed}
-							{@const memoryGb = Math.ceil(estimateModelMemoryBytes(file.size ?? 0) / (1024 ** 3))}
+							{@const memoryGb = Math.ceil(estimateModelMemoryBytes(file.size ?? 0) / 1024 ** 3)}
 							{@const tooltipText = isDownloading
 								? `Downloading ${file.path}`
 								: isDownloaded

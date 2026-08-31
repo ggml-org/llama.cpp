@@ -1,8 +1,16 @@
 <script lang="ts">
 	import ModelsDiscoverAvatar from './ModelsDiscoverAvatar.svelte';
 	import ModelsDiscoverChatTemplateDialog from './ModelsDiscoverChatTemplateDialog.svelte';
-	import ModelsDiscoverDetailsName from './ModelsDiscoverDetailsName.svelte';
-	import { Download, ExternalLink, Heart, MessageSquareCode } from '@lucide/svelte';
+	import {
+		Download,
+		ExternalLink,
+		Heart,
+		Image,
+		Lightbulb,
+		MessageSquareCode,
+		Wrench
+	} from '@lucide/svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ICON_CLASS_SM } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsHubStore } from '$lib/stores';
@@ -43,13 +51,67 @@
 		<div class="flex min-w-0 items-center gap-2">
 			<ModelsDiscoverAvatar org={avatarOrg} {quantOrg} />
 
-			<ModelsDiscoverDetailsName
-				{baseModels}
-				{hasReasoning}
-				{hasTools}
-				{hasVision}
-				modelId={details.id ?? modelId}
-			/>
+			<div class="min-w-0">
+				<div class="flex items-center gap-2">
+					<h1 class="truncate text-lg font-semibold">{details.id ?? modelId}</h1>
+
+					{#if hasVision || hasTools || hasReasoning}
+						<div class="flex shrink-0 items-center gap-2.5 text-muted-foreground">
+							{#if hasVision}
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										<Image class="h-4 w-4" />
+									</Tooltip.Trigger>
+
+									<Tooltip.Content>
+										<p>Vision</p>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							{/if}
+
+							{#if hasTools}
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										<Wrench class="h-4 w-4" />
+									</Tooltip.Trigger>
+
+									<Tooltip.Content>
+										<p>Tool use</p>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							{/if}
+
+							{#if hasReasoning}
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										<Lightbulb class="h-4 w-4" />
+									</Tooltip.Trigger>
+
+									<Tooltip.Content>
+										<p>Reasoning</p>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							{/if}
+						</div>
+					{/if}
+				</div>
+
+				{#if baseModels.length}
+					<div class="flex items-center gap-1">
+						<span class="truncate text-xs text-muted-foreground">{baseModels.join(', ')}</span>
+
+						<a
+							aria-label="View base model on HuggingFace"
+							class="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+							href={HuggingFaceService.getModelUrl(baseModels[0])}
+							rel="noopener noreferrer"
+							target="_blank"
+						>
+							<ExternalLink class="h-3 w-3" />
+						</a>
+					</div>
+				{/if}
+			</div>
 		</div>
 
 		<a
