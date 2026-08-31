@@ -85,13 +85,6 @@ export { default as ModelsDiscoverChatTemplateDialog } from './ModelsDiscoverCha
 export { default as ModelsDiscoverModelDetailsReadme } from './ModelsDiscoverModelDetailsReadme.svelte';
 
 /**
- * **TerminalCommands** - Terminal command block
- *
- * Shows the `llama serve` / `llama cli` commands for a model with copy buttons.
- */
-export { default as ModelsDiscoverModelDetailsCommands } from './ModelsDiscoverModelDetailsCommands.svelte';
-
-/**
  * **DialogModelDownload** - Download confirmation / progress dialog
  *
  * Confirms a single GGUF download, tracks live progress over the SSE feed and
