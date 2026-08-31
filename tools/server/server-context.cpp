@@ -2651,6 +2651,23 @@ private:
                     slot->prompt.clear();
                     slot->prompt.tokens.insert(tokens);
 
+                    // DSV4/hybrid-recurrent models cannot roll back their recurrent state by
+                    // truncation, so the slot operator will only reuse the restored cache if a
+                    // context checkpoint covering it exists. Register one over the restored
+                    // sequence (pos_min == 0 always matches the search predicate).
+                    if (token_count > 0) {
+                        common_prompt_checkpoint ckpt;
+                        ckpt.update_pos(token_count, 0, (llama_pos) (token_count - 1));
+                        ckpt.update_tgt(ctx_tgt, slot->id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                        ckpt.update_dft(ctx_dft, slot->id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                        common_speculative_get_state(spec.get(), slot->id, ckpt.data_spec);
+
+                        slot->prompt.checkpoints.push_back(std::move(ckpt));
+
+                        SLT_INF(*slot, "registered checkpoint over restored state (%" PRId64 " tokens, pos [0, %d])\n",
+                                ckpt.n_tokens, (int) token_count - 1);
+                    }
+
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
 
