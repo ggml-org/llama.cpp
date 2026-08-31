@@ -670,13 +670,25 @@ void dequantize_iq1_m(device const block_iq1_m * xb, short il, thread type4x4 & 
 template <typename type4x4>
 void dequantize_iq2_nl(device const block_iq2_nl * xb, short il, thread type4x4 & reg) {
     // il selects the 16-weight half of the 32-weight block (0 or 1)
+    device const uint16_t * q2 = (device const uint16_t *)xb->qs;
     const float d = xb->d;
-    device const uint8_t * qs = xb->qs;
-    for (short m = 0; m < 16; ++m) {
-        const short p = il*16 + m;       // logical position 0..31
-        const short j = p & 7;           // byte index    0..7
-        const short g = p >> 3;          // 2-bit group   0..3
-        reg[m/4][m%4] = d * kvalues_iq2nl_f[(qs[j] >> (2*g)) & 3];
+
+    // lo holds qs[0..3], hi holds qs[4..7]
+    const uint32_t lo = q2[0] | (q2[1] << 16);
+    const uint32_t hi = q2[2] | (q2[3] << 16);
+
+    const short g = 2*il;
+
+    uint32_t aux32;
+    thread const uint8_t * q8 = (thread const uint8_t *)&aux32;
+
+    FOR_UNROLL (short r = 0; r < 4; ++r) {
+        aux32 = (((r & 1) ? hi : lo) >> (2*(g + (r >> 1)))) & 0x03030303;
+
+        reg[r][0] = d * kvalues_iq2nl_f[q8[0]];
+        reg[r][1] = d * kvalues_iq2nl_f[q8[1]];
+        reg[r][2] = d * kvalues_iq2nl_f[q8[2]];
+        reg[r][3] = d * kvalues_iq2nl_f[q8[3]];
     }
 }
 
@@ -696,15 +708,28 @@ void dequantize_iq2_nl_t4(device const block_iq2_nl * xb, short il, thread type4
 
 template <typename type4x4>
 void dequantize_iq3_nl(device const block_iq3_nl * xb, short il, thread type4x4 & reg) {
+    device const uint16_t * q2 = (device const uint16_t *)xb->qs;
     const float d = xb->d;
-    device const uint8_t * qs = xb->qs;
-    device const uint8_t * qh = xb->qh;
-    for (short m = 0; m < 16; ++m) {
-        const short p   = il*16 + m;     // logical position 0..31
-        const short j   = p & 7;
-        const short g   = p >> 3;
-        const short idx = ((qs[j] >> (2*g)) & 3) | (((qh[g] >> j) & 1) << 2);
-        reg[m/4][m%4] = d * kvalues_iq3nl_f[idx];
+
+    // lo holds qs[0..3], hi holds qs[4..7]
+    const uint32_t lo = q2[0] | (q2[1] << 16);
+    const uint32_t hi = q2[2] | (q2[3] << 16);
+
+    const short g = 2*il;
+
+    uint32_t aux32;
+    thread const uint8_t * q8 = (thread const uint8_t *)&aux32;
+
+    FOR_UNROLL (short r = 0; r < 4; ++r) {
+        aux32 = (((r & 1) ? hi : lo) >> (2*(g + (r >> 1)))) & 0x03030303;
+
+        // hb bit i is the high bit of element i
+        const uint8_t hb = xb->qh[g + (r >> 1)] >> (4*(r & 1));
+
+        reg[r][0] = d * kvalues_iq3nl_f[q8[0] | ((hb << 2) & 4)];
+        reg[r][1] = d * kvalues_iq3nl_f[q8[1] | ((hb << 1) & 4)];
+        reg[r][2] = d * kvalues_iq3nl_f[q8[2] | ( hb       & 4)];
+        reg[r][3] = d * kvalues_iq3nl_f[q8[3] | ((hb >> 1) & 4)];
     }
 }
 
