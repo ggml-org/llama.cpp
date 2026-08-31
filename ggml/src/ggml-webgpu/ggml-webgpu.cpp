@@ -3717,14 +3717,14 @@ static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
     if (local_offset != 0) {
         // If offset is not a multiple of 4, we need to round it down to the previous
         // multiple of 4
-        total_offset = total_offset - local_offset;
+        total_offset -= local_offset;
     }
 
     size_t final_size = size + local_offset;
     if (final_size % 4 != 0) {
         // If size is not a multiple of 4, we need to round it up to the next
         // multiple of 4
-        final_size = final_size + (4 - (final_size % 4));
+        final_size += 4 - (final_size % 4);
     }
 
     std::lock_guard<std::recursive_mutex> lock(buf_ctx->global_ctx->mutex);
