@@ -1,4 +1,4 @@
-#!/usr/bin/env uv run
+#!/usr/bin/env -S uv run --script --python 3.14
 '''
     Simplistic tool call benchmarks for llama-server and ollama.
 
