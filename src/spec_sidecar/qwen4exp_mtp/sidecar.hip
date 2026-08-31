@@ -5,9 +5,11 @@
 // Test builds retain the historical phase-boundary helpers used by the exact
 // native-parity fixtures.
 #include "kernels.hip"
-#if defined(QWEN4EXP_SIDECAR_PRODUCTION) || defined(QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST)
-#define QWEN4EXP_SIDECAR_HAS_NATIVE_ATTN 1
+#ifdef QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST
 #include "native_attention.h"
+#endif
+#if defined(QWEN4EXP_SIDECAR_PRODUCTION) && !defined(QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST)
+#error "Qwen4Exp production sidecar requires the native-attention translation unit"
 #endif
 #ifdef QWEN4EXP_SIDECAR_NATIVE_MMQ_TEST
 #include "native_mmq.h"
@@ -15,11 +17,9 @@
 #include "moe_kernels.hip"
 #include "output_kernels.hip"
 #include "../artifact_manifest.h"
-#include "../mtp/catchup_alignment.h"
 #include "spec_sidecar/sidecar_abi.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -150,10 +150,6 @@ struct CatchupScratch {
     float * chain_hidden = nullptr;
     float * chain_logits = nullptr;
     int32_t * chain_tokens = nullptr;
-    int32_t * chain_dist_ids = nullptr;
-    float * chain_dist_probs = nullptr;
-    int32_t * chain_count = nullptr;
-    int32_t * chain_active = nullptr;
     bool allocated = false;
 };
 
@@ -192,7 +188,7 @@ struct QsaScratch {
     uint64_t * candidate_keys_b = nullptr;
     int32_t * candidate_blocks_a = nullptr;
     int32_t * candidate_blocks_b = nullptr;
-#ifdef QWEN4EXP_SIDECAR_HAS_NATIVE_ATTN
+#ifdef QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST
     float * attention_query = nullptr;
     __half * attention_mask = nullptr;
     float * attention_parts = nullptr;
@@ -461,11 +457,7 @@ static int ensure_catchup_scratch() {
             allocate_tracked(c.chain_attention_hc, 8 * HC_WIDTH) != 0 ||
             allocate_tracked(c.chain_hidden, 8 * HC_WIDTH) != 0 ||
             allocate_tracked(c.chain_logits, 8 * N_VOCAB) != 0 ||
-            allocate_tracked(c.chain_tokens, 8) != 0 ||
-            allocate_tracked(c.chain_dist_ids, 8 * PROPOSAL_TOP_K) != 0 ||
-            allocate_tracked(c.chain_dist_probs, 8 * PROPOSAL_TOP_K) != 0 ||
-            allocate_tracked(c.chain_count, 1) != 0 ||
-            allocate_tracked(c.chain_active, 1) != 0) return -1;
+            allocate_tracked(c.chain_tokens, 8) != 0) return -1;
     c.allocated = true;
     return 0;
 }
@@ -516,7 +508,7 @@ static int ensure_qsa_scratch() {
     return 0;
 }
 
-#ifdef QWEN4EXP_SIDECAR_HAS_NATIVE_ATTN
+#ifdef QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST
 static int ensure_native_attention_scratch() {
     QsaScratch & q = S.qsa;
     if (ensure_qsa_scratch() != 0) return -1;
@@ -935,7 +927,7 @@ static void invalidate_qsa_for_seq(int32_t seq_id) {
     q.last_complete_blocks = 0;
     q.last_position = -1;
     q.last_ranked_blocks = 0;
-#ifdef QWEN4EXP_SIDECAR_HAS_NATIVE_ATTN
+#ifdef QWEN4EXP_SIDECAR_NATIVE_ATTN_TEST
     q.last_attention_seq = -1;
     q.last_attention_physical = 0;
     q.last_attention_parallel = 0;
@@ -1166,96 +1158,31 @@ static int catchup_phase1_impl(int32_t seq_id, const int32_t * tokens,
 static int catchup_runtime_impl(int32_t seq_id, const int32_t * tokens,
         const int32_t * positions, const float * hidden_rows, int count,
         bool hidden_device) {
-    const bool debug = std::getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr;
     SeqState * seq = get_seq(seq_id);
-    int current_device = -2;
-    if (debug) {
-        (void) hipGetDevice(&current_device);
-        std::fprintf(stderr,
-                "[qwen4exp-sidecar] catch-up enter seq=%d count=%d path=%s provider_device=%d current_device=%d state=[%d,%d) pending=[%d,%d) hidden_valid=%d input_pos=[%d,%d]\n",
-                seq_id, count, hidden_device ? "D2D" : "HOST", S.device, current_device,
-                seq != nullptr ? seq->state_pos_min : -1,
-                seq != nullptr ? seq->state_pos_max : -1,
-                seq != nullptr ? seq->pending_pos_min : -1,
-                seq != nullptr ? seq->pending_pos_max : -1,
-                seq != nullptr ? static_cast<int>(seq->hidden_valid) : -1,
-                count > 0 && positions != nullptr ? positions[0] : -1,
-                count > 0 && positions != nullptr ? positions[count - 1] : -1);
-    }
     if (!S.ok || seq == nullptr || count < 0 ||
-            (count > 0 && (tokens == nullptr || positions == nullptr || hidden_rows == nullptr))) {
-        std::fprintf(stderr, "[qwen4exp-sidecar] catch-up rejected: invalid provider/sequence/input\n");
-        return -1;
-    }
+            (count > 0 && (tokens == nullptr || positions == nullptr || hidden_rows == nullptr))) return -1;
     if (count == 0) return 0;
-    if (seq->state_pos_max > 0 && !seq->hidden_valid) {
-        std::fprintf(stderr,
-                "[qwen4exp-sidecar] catch-up rejected: committed hidden tip missing at state_pos_max=%d\n",
-                seq->state_pos_max);
-        return -1;
-    }
-    if (count > S.max_pos - seq->state_pos_max) {
-        std::fprintf(stderr,
-                "[qwen4exp-sidecar] catch-up rejected: capacity count=%d state_pos_max=%d max_pos=%d\n",
-                count, seq->state_pos_max, S.max_pos);
-        return -1;
-    }
-    if (seq->pending_pos_max != seq->state_pos_max) {
-        std::fprintf(stderr,
-                "[qwen4exp-sidecar] catch-up rejected: uncommitted pending state=[%d,%d) pending=[%d,%d)\n",
-                seq->state_pos_min, seq->state_pos_max,
-                seq->pending_pos_min, seq->pending_pos_max);
-        return -1;
-    }
-    if (ensure_seq_storage(*seq) != 0) {
-        std::fprintf(stderr, "[qwen4exp-sidecar] catch-up rejected: sequence allocation failed\n");
-        return -1;
-    }
-    if (ensure_pending_storage(*seq, count) != 0) {
-        std::fprintf(stderr, "[qwen4exp-sidecar] catch-up rejected: pending allocation failed for count=%d\n", count);
-        return -1;
-    }
-    if (ensure_catchup_scratch() != 0) {
-        std::fprintf(stderr, "[qwen4exp-sidecar] catch-up rejected: scratch allocation failed\n");
-        return -1;
-    }
+    if ((seq->state_pos_max > 0 && !seq->hidden_valid) ||
+            count > S.max_pos - seq->state_pos_max ||
+            seq->pending_pos_max != seq->state_pos_max ||
+            ensure_seq_storage(*seq) != 0 || ensure_pending_storage(*seq, count) != 0 ||
+            ensure_catchup_scratch() != 0) return -1;
     for (int row = 0; row < count; ++row) {
-        if (tokens[row] < 0 || tokens[row] >= N_VOCAB) {
-            std::fprintf(stderr,
-                    "[qwen4exp-sidecar] catch-up rejected: invalid token row=%d token=%d\n",
-                    row, tokens[row]);
-            return -1;
-        }
-        const int32_t expected = seq->state_pos_max + row;
-        if (positions[row] != expected) {
-            std::fprintf(stderr,
-                    "[qwen4exp-sidecar] catch-up rejected: position mismatch row=%d actual=%d expected=%d state_pos_max=%d count=%d\n",
-                    row, positions[row], expected, seq->state_pos_max, count);
-            return -1;
-        }
+        if (tokens[row] < 0 || tokens[row] >= N_VOCAB ||
+                positions[row] != seq->state_pos_max + row) return -1;
     }
 
     const size_t hidden_bytes = static_cast<size_t>(count) * HC_WIDTH * sizeof(float);
     const hipMemcpyKind hidden_kind = hidden_device ? hipMemcpyDeviceToDevice : hipMemcpyHostToDevice;
-    hipError_t status = hipMemcpyAsync(seq->hidden_pending, hidden_rows, hidden_bytes,
-            hidden_kind, S.stream);
-    if (status != hipSuccess) {
-        std::fprintf(stderr,
-                "[qwen4exp-sidecar] catch-up hidden copy failed: %s (bytes=%zu path=%s)\n",
-                hipGetErrorString(status), hidden_bytes, hidden_device ? "D2D" : "HOST");
-        return -1;
-    }
+    if (hipMemcpyAsync(seq->hidden_pending, hidden_rows, hidden_bytes,
+                hidden_kind, S.stream) != hipSuccess) return -1;
 
     seq->pending_pos_min = seq->state_pos_max;
     seq->pending_pos_max = seq->state_pos_max + count;
     for (int row = 0; row < count; ++row) {
         if (row == 0 && seq->state_pos_max == 0) {
-            status = hipMemsetAsync(S.catchup.hidden_norm, 0,
-                    static_cast<size_t>(HC_WIDTH) * sizeof(float), S.stream);
-            if (status != hipSuccess) {
-                std::fprintf(stderr,
-                        "[qwen4exp-sidecar] catch-up BOS hidden clear failed: %s\n",
-                        hipGetErrorString(status));
+            if (hipMemsetAsync(S.catchup.hidden_norm, 0,
+                        static_cast<size_t>(HC_WIDTH) * sizeof(float), S.stream) != hipSuccess) {
                 discard_pending(*seq);
                 return -1;
             }
@@ -1263,44 +1190,19 @@ static int catchup_runtime_impl(int32_t seq_id, const int32_t * tokens,
             const float * previous_hidden = row == 0 ? seq->hidden_committed :
                     seq->hidden_pending + static_cast<size_t>(row - 1) * HC_WIDTH;
             if (load_normalized_hidden_row(previous_hidden, true, false) != 0) {
-                std::fprintf(stderr,
-                        "[qwen4exp-sidecar] catch-up hidden normalization failed at row=%d position=%d\n",
-                        row, positions[row]);
                 discard_pending(*seq);
                 return -1;
             }
         }
         if (phase1_from_normalized_hidden(*seq, tokens[row], positions[row], row) != 0) {
-            std::fprintf(stderr,
-                    "[qwen4exp-sidecar] catch-up phase 1 rejected at row=%d position=%d token=%d\n",
-                    row, positions[row], tokens[row]);
             discard_pending(*seq);
             return -1;
         }
     }
-    status = hipGetLastError();
-    if (status != hipSuccess) {
-        std::fprintf(stderr,
-                "[qwen4exp-sidecar] catch-up final launch check failed: %s\n",
-                hipGetErrorString(status));
+    if (hipGetLastError() != hipSuccess ||
+            (!hidden_device && hipStreamSynchronize(S.stream) != hipSuccess)) {
         discard_pending(*seq);
         return -1;
-    }
-    if (!hidden_device || debug) {
-        status = hipStreamSynchronize(S.stream);
-        if (status != hipSuccess) {
-            std::fprintf(stderr,
-                    "[qwen4exp-sidecar] catch-up final stream sync failed: %s (path=%s count=%d positions=[%d,%d])\n",
-                    hipGetErrorString(status), hidden_device ? "D2D" : "HOST", count,
-                    positions[0], positions[count - 1]);
-            discard_pending(*seq);
-            return -1;
-        }
-    }
-    if (debug) {
-        std::fprintf(stderr,
-                "[qwen4exp-sidecar] catch-up staged seq=%d count=%d positions=[%d,%d]\n",
-                seq_id, count, positions[0], positions[count - 1]);
     }
     return 0;
 }
@@ -1403,9 +1305,7 @@ static int draft_step_runtime(SeqState & seq, int32_t seq_id,
 }
 
 static int draft_runtime_impl(int32_t seq_id, int32_t token, int32_t position,
-        const float * hidden, bool hidden_device, float temperature, float p_min,
-        uint64_t rng_key, bool stochastic, int count, int32_t * output_tokens,
-        int32_t * output_dist_ids, float * output_dist_probs) {
+        const float * hidden, bool hidden_device, int count, int32_t * output_tokens) {
     SeqState * seq = get_seq(seq_id);
     CatchupScratch & c = S.catchup;
     if (!S.ok || seq == nullptr || token < 0 || token >= N_VOCAB ||
@@ -1413,20 +1313,8 @@ static int draft_runtime_impl(int32_t seq_id, int32_t token, int32_t position,
             (!hidden_device && hidden == nullptr) || position != seq->state_pos_max ||
             position < 0 || position + count > S.max_pos || !seq->allocated ||
             (hidden_device && !seq->hidden_valid) ||
-            (stochastic && (output_dist_ids == nullptr || output_dist_probs == nullptr ||
-                !std::isfinite(temperature) || temperature <= 0.0f || temperature > 100.0f ||
-                !std::isfinite(p_min) || p_min < 0.0f)) ||
             seq->pending_pos_max != seq->state_pos_max ||
             ensure_pending_storage(*seq, count) != 0 || ensure_catchup_scratch() != 0) return -1;
-
-    if (stochastic) {
-        const int32_t zero = 0;
-        const int32_t one = 1;
-        if (hipMemcpyAsync(c.chain_count, &zero, sizeof(zero),
-                    hipMemcpyHostToDevice, S.stream) != hipSuccess ||
-                hipMemcpyAsync(c.chain_active, &one, sizeof(one),
-                    hipMemcpyHostToDevice, S.stream) != hipSuccess) return -1;
-    }
 
     const float * initial_hidden = hidden_device ? seq->hidden_committed : hidden;
     seq->pending_pos_min = position;
@@ -1445,18 +1333,8 @@ static int draft_runtime_impl(int32_t seq_id, int32_t token, int32_t position,
                 seq->value_committed, seq->value_pending, current_position, step, 1, KV_WIDTH);
         copy_cache_rows_f16<<<(IDX_WIDTH + 255) / 256, 256, 0, S.stream>>>(
                 seq->index_committed, seq->index_pending, current_position, step, 1, IDX_WIDTH);
-        if (draft_step_runtime(*seq, seq_id, current_position,
-                    stochastic ? temperature : 1.0f) != 0) {
-            discard_pending(*seq);
-            return -1;
-        }
-        if (stochastic) {
-            proposal_sample_top32<<<1, 1, 0, S.stream>>>(
-                    c.topk_indices, c.topk_probabilities, p_min,
-                    spec_sidecar_stochastic_uniform(rng_key, static_cast<uint32_t>(step)),
-                    step, c.chain_tokens, c.chain_dist_ids, c.chain_dist_probs,
-                    c.chain_count, c.chain_active);
-        } else if (hipMemcpyAsync(c.chain_tokens + step, c.topk_indices,
+        if (draft_step_runtime(*seq, seq_id, current_position, 1.0f) != 0 ||
+                hipMemcpyAsync(c.chain_tokens + step, c.topk_indices,
                     sizeof(int32_t), hipMemcpyDeviceToDevice, S.stream) != hipSuccess) {
             discard_pending(*seq);
             return -1;
@@ -1471,34 +1349,21 @@ static int draft_runtime_impl(int32_t seq_id, int32_t token, int32_t position,
             }
         }
     }
-
-    int32_t emitted = count;
-    if (stochastic && (hipMemcpyAsync(&emitted, c.chain_count, sizeof(emitted),
-                    hipMemcpyDeviceToHost, S.stream) != hipSuccess ||
-            hipMemcpyAsync(output_dist_ids, c.chain_dist_ids,
-                    static_cast<size_t>(count) * PROPOSAL_TOP_K * sizeof(int32_t),
-                    hipMemcpyDeviceToHost, S.stream) != hipSuccess ||
-            hipMemcpyAsync(output_dist_probs, c.chain_dist_probs,
-                    static_cast<size_t>(count) * PROPOSAL_TOP_K * sizeof(float),
-                    hipMemcpyDeviceToHost, S.stream) != hipSuccess)) {
-        discard_pending(*seq);
-        return -1;
-    }
     if (hipMemcpyAsync(output_tokens, c.chain_tokens,
                 static_cast<size_t>(count) * sizeof(int32_t),
                 hipMemcpyDeviceToHost, S.stream) != hipSuccess ||
-            hipStreamSynchronize(S.stream) != hipSuccess || emitted < 0 || emitted > count) {
+            hipStreamSynchronize(S.stream) != hipSuccess) {
         discard_pending(*seq);
         return -1;
     }
-    for (int step = 0; step < emitted; ++step) {
+    for (int step = 0; step < count; ++step) {
         if (output_tokens[step] < 0 || output_tokens[step] >= N_VOCAB) {
             discard_pending(*seq);
             return -1;
         }
     }
     discard_pending(*seq);
-    return emitted;
+    return count;
 }
 #endif
 
@@ -1604,9 +1469,8 @@ SC_API int spec_hip_set_state(int32_t seq_id, const void * data, int size) {
     SeqState * seq = get_seq(seq_id);
     spec_sidecar_state snapshot = {};
     if (seq == nullptr || !state_matches(seq_id, data, size, snapshot)) return -1;
-    seq->hidden_valid = seq->hidden_valid && spec_sidecar_mtp::committed_hidden_matches_tip(
-            seq->state_pos_max, snapshot.pos_max);
     seq->state_pos_max = snapshot.pos_max;
+    seq->hidden_valid = false;
     discard_pending(*seq);
     invalidate_qsa_for_seq(seq_id);
     return 0;
@@ -1629,9 +1493,8 @@ SC_API int spec_hip_truncate_state(int32_t seq_id, int32_t pos_max) {
     if (!S.ok || seq == nullptr || pos_max < seq->state_pos_min || pos_max > seq->state_pos_max) {
         return -1;
     }
-    seq->hidden_valid = seq->hidden_valid && spec_sidecar_mtp::committed_hidden_matches_tip(
-            seq->state_pos_max, pos_max);
     seq->state_pos_max = pos_max;
+    seq->hidden_valid = false;
     discard_pending(*seq);
     invalidate_qsa_for_seq(seq_id);
     return 0;
@@ -1715,7 +1578,7 @@ SC_API int spec_hip_rebase_state(int32_t seq_id, int32_t pos_min,
 }
 
 SC_API int spec_hip_attach_target_stream(void * stream, int32_t device) {
-    if (!S.ok || device != S.device || hipSetDevice(S.device) != hipSuccess) return -1;
+    if (!S.ok || device != S.device) return -1;
     const hipStream_t next = stream == nullptr ? S.owned_stream : reinterpret_cast<hipStream_t>(stream);
     if (next != S.stream) {
         SC_CHECK(hipStreamSynchronize(S.stream));
@@ -1794,8 +1657,7 @@ SC_API int spec_hip_catchup_device(int32_t seq_id, const int32_t * tokens,
 SC_API int spec_hip_draft(int32_t seq_id, int32_t token, int32_t position,
         const float * hidden, int count, int32_t * output_tokens) {
 #ifdef QWEN4EXP_SIDECAR_PRODUCTION
-    return draft_runtime_impl(seq_id, token, position, hidden, false,
-            1.0f, 0.0f, 0, false, count, output_tokens, nullptr, nullptr);
+    return draft_runtime_impl(seq_id, token, position, hidden, false, count, output_tokens);
 #else
     (void) seq_id; (void) token; (void) position; (void) hidden; (void) count; (void) output_tokens;
     return -1;
@@ -1804,8 +1666,7 @@ SC_API int spec_hip_draft(int32_t seq_id, int32_t token, int32_t position,
 SC_API int spec_hip_draft_device(int32_t seq_id, int32_t token, int32_t position,
         int count, int32_t * output_tokens) {
 #ifdef QWEN4EXP_SIDECAR_PRODUCTION
-    return draft_runtime_impl(seq_id, token, position, nullptr, true,
-            1.0f, 0.0f, 0, false, count, output_tokens, nullptr, nullptr);
+    return draft_runtime_impl(seq_id, token, position, nullptr, true, count, output_tokens);
 #else
     (void) seq_id; (void) token; (void) position; (void) count; (void) output_tokens;
     return -1;
@@ -1814,35 +1675,13 @@ SC_API int spec_hip_draft_device(int32_t seq_id, int32_t token, int32_t position
 SC_API int spec_hip_stochastic_top_k() {
     return SPEC_SIDECAR_MTP_DRAFT_TOP_K;
 }
-SC_API int spec_hip_draft_stochastic(int32_t seq_id, int32_t token, int32_t position,
-        const float * hidden, float temperature, float p_min, uint64_t rng_key,
-        int count, int32_t * output_tokens, int32_t * output_dist_ids,
-        float * output_dist_probs) {
-#ifdef QWEN4EXP_SIDECAR_PRODUCTION
-    return draft_runtime_impl(seq_id, token, position, hidden, false,
-            temperature, p_min, rng_key, true, count, output_tokens,
-            output_dist_ids, output_dist_probs);
-#else
-    (void) seq_id; (void) token; (void) position; (void) hidden;
-    (void) temperature; (void) p_min; (void) rng_key; (void) count;
-    (void) output_tokens; (void) output_dist_ids; (void) output_dist_probs;
+SC_API int spec_hip_draft_stochastic(int32_t, int32_t, int32_t, const float *,
+        float, float, uint64_t, int, int32_t *, int32_t *, float *) {
     return -1;
-#endif
 }
-SC_API int spec_hip_draft_stochastic_device(int32_t seq_id, int32_t token,
-        int32_t position, float temperature, float p_min, uint64_t rng_key,
-        int count, int32_t * output_tokens, int32_t * output_dist_ids,
-        float * output_dist_probs) {
-#ifdef QWEN4EXP_SIDECAR_PRODUCTION
-    return draft_runtime_impl(seq_id, token, position, nullptr, true,
-            temperature, p_min, rng_key, true, count, output_tokens,
-            output_dist_ids, output_dist_probs);
-#else
-    (void) seq_id; (void) token; (void) position;
-    (void) temperature; (void) p_min; (void) rng_key; (void) count;
-    (void) output_tokens; (void) output_dist_ids; (void) output_dist_probs;
+SC_API int spec_hip_draft_stochastic_device(int32_t, int32_t, int32_t,
+        float, float, uint64_t, int, int32_t *, int32_t *, float *) {
     return -1;
-#endif
 }
 
 #if defined(QWEN4EXP_SIDECAR_LIFECYCLE_TEST) || defined(QWEN4EXP_SIDECAR_ARTIFACT_TEST)

@@ -73,32 +73,6 @@ width one, takes the validated width-one route, and retains its measured
 separate incremental optimization and does not claim to close the remaining 2x
 gap.
 
-Qwen4Exp uses a 2,560-wide hidden state. Its sidecar with
-`--spec-draft-n-max 3` makes target verification graphs of widths two through
-four, so the old Qwen4Exp width-one route could not serve them. The current
-implementation adds exact `[2560,2]`, `[2560,3]`, and `[2560,4]` routes. Their
-flat element counts and installed-RCCL schedules are:
-
-- width two: 5,120 elements, reusing the exact eight-by-640 schedule;
-- width three: 7,680 elements, four 1,920-element chunks;
-- width four: 10,240 elements, four 1,536-element chunks followed by four
-  1,024-element chunks.
-
-Every size is checked over four adversarial patterns and sixteen chained
-reductions at startup. A size that does not match the installed RCCL byte for
-byte remains on RCCL. On four V620s, a 20-sample `[2560,4]` graph microbenchmark
-improved steady execution by 4.30%; an exact fixed-output server ABBA improved
-19.798 to 19.960 tok/s (0.82%) with identical output, proposal, and acceptance
-counts. For Qwen4Exp only, the target integration also resolves the mirrored
-Meta `h_nextn` output to a concrete final-rank allocation, binds the sidecar to
-that HIP stream, and avoids the synchronized host round trip (`bound device=3`
-on the four-V620 setup). This direct view is fail-closed to mirrored,
-contiguous F32 outputs and can be disabled with
-`LLAMA_SPEC_HIP_DISABLE_META_DEVICE_VIEW=1`. Other architectures remain on the
-host path until separately validated; tensor shape alone must not opt them in.
-Its isolated natural-output ABBA improved 13.372 to 13.669 tok/s (2.22%); a
-high-acceptance forced-token ABBA was effectively neutral (-0.16%).
-
 **Fix:** classify the route explicitly and log unsupported widths once. A
 supported width whose startup exactness self-test failed receives a different
 warning. The implementation deliberately does not generalize the reduction

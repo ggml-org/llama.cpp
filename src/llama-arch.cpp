@@ -1120,14 +1120,6 @@ bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
     }
 }
 
-bool llm_arch_supports_speculative_meta_device_view(const llm_arch & arch) {
-    // Keep this opt-in model-specific. A structurally mirrored Meta tensor is
-    // not sufficient evidence that another architecture's h_nextn contents,
-    // stream ownership, and sidecar placement are compatible with a borrowed
-    // device pointer.
-    return arch == LLM_ARCH_QWEN4EXP;
-}
-
 bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_GROK:

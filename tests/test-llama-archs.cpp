@@ -1369,17 +1369,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
     return all_ok ? 0 : 1;
 }
 
-static void check_speculative_meta_device_view_scope() {
-    for (const llm_arch arch : llm_arch_all()) {
-        const bool expected = arch == LLM_ARCH_QWEN4EXP;
-        GGML_ASSERT(llm_arch_supports_speculative_meta_device_view(arch) == expected);
-    }
-}
-
 int main(int argc, char ** argv) {
     // FIXME these tests are disabled in the CI for macOS-latest-cmake-arm64 because they are segfaulting
     common_init();
-    check_speculative_meta_device_view_scope();
     std::random_device rd;
 
     llm_arch arch = LLM_ARCH_UNKNOWN;

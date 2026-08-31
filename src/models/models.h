@@ -2365,12 +2365,9 @@ struct llama_model_qwen4exp : public llama_model_base {
                         int64_t   row_offset,
                             int   il);
 
-        ggml_tensor * build_inp_ple(
-  const llama_memory_hybrid_idx_context * mctx_hyb);
-
         ggml_tensor * build_ple(
              llm_graph_input_rs * inp,
-                    ggml_tensor * emb,
+  const llama_memory_hybrid_idx_context * mctx_hyb,
                     ggml_tensor * hidden,
                             int   il);
 

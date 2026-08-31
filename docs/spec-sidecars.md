@@ -1,9 +1,9 @@
-# speculative sidecars for Qwen3.8
+# speculative sidecar Qwen3.8-27B sidecars
 
-This tree carries optional, host-mediated speculative sidecar integrations for
-Qwen3.8-27B MTP and DFlash2, plus Qwen3.8 Flash Next (`qwen4exp`) MTP. The
-target model remains authoritative: a sidecar proposes token IDs and the normal
-target verifier accepts or rejects them.
+This tree carries an optional, host-mediated speculative sidecar integration for the
+Qwen3.8-27B MTP and DFlash2 drafters. The target model remains authoritative:
+the sidecar proposes token IDs and the normal target verifier accepts or
+rejects them.
 
 The sidecars are intentionally **not** enabled by default. Runtime activation
 requires the exact opt-in `SPEC_SIDECAR=1`; an unset value, `0`, or any other
@@ -88,28 +88,6 @@ production speed recommendation. Its full-vocabulary target output is reduced
 to the 40,960 IDs in the artifact, so acceptance and throughput must be
 qualified against native MTP on the user's exact model and prompt family.
 
-## Prepare the Flash Next artifacts
-
-Flash Next uses a separate provider and cannot reuse the Qwen3.8-27B bundle.
-Prepare it from the first shard of the matching base target and its matching
-Qwen4Exp MTP GGUF:
-
-```sh
-python3 tools/spec-sidecar/prepare_assets.py qwen4exp-mtp \
-  --target /absolute/models/Qwen3.8-Flash-Next-00001-of-00004.gguf \
-  --draft /absolute/models/Qwen3.8-Flash-Next-MTP-Q4_0.gguf \
-  --output /absolute/artifacts/spec-sidecar-qwen4exp-mtp
-
-python3 tools/spec-sidecar/validate_assets.py qwen4exp-mtp \
-  /absolute/artifacts/spec-sidecar-qwen4exp-mtp
-```
-
-The provider requires the exact `qwen4exp` 512x56B contract: target embedding
-width 2,560, target handoff width 10,240, 48 target blocks, 512 experts, and a
-248,320-token vocabulary. The generated bundle contains 34 tensors and an
-identity full-vocabulary ID table. Mixing it with a `qwen35` target is rejected
-before initialization.
-
 ## Build
 
 Normal builds do not compile the sidecars. Enable them explicitly in a HIP
@@ -123,20 +101,18 @@ cmake -S . -B build-spec-sidecar \
   -DLLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES=gfx1030 \
   -DCMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc
 cmake --build build-spec-sidecar \
-  --target spec-sidecar-hip-mtp spec-sidecar-hip-dflash \
-           spec-sidecar-hip-qwen4exp-mtp llama-server
+  --target spec-sidecar-hip-mtp spec-sidecar-hip-dflash llama-server
 ```
 
 The resulting libraries are `spec_hip_sidecar.so`, `spec_dflash_sidecar.so`,
-`spec_qwen35moe_mtp_sidecar.so`, and `spec_qwen4exp_mtp_sidecar.so` in the
-build `bin` directory. For automatic runtime discovery of the qualified
-providers, put the prepared bundles at `bin/spec-sidecar-mtp`,
-`bin/spec-sidecar-dflash`, and `bin/spec-sidecar-qwen4exp-mtp` beside those
-libraries (or under the documented installed `share/llama.cpp/spec-sidecar`
-layout). The Qwen35MoE bundle is intentionally explicit-path only until its
-end-to-end speed and acceptance matrix is complete. These targets are optional
-because each provider contains fixed model dimensions and is not a replacement
-for the normal HIP backend.
+and `spec_qwen35moe_mtp_sidecar.so` in the build `bin` directory. For automatic
+runtime discovery of the qualified providers, put the prepared bundles at
+`bin/spec-sidecar-mtp` and `bin/spec-sidecar-dflash` beside those libraries (or
+under the documented installed `share/llama.cpp/spec-sidecar` layout). The
+Qwen35MoE bundle is intentionally explicit-path only until its end-to-end speed
+and acceptance matrix is complete. These targets are optional because each
+provider contains fixed model dimensions and is not a replacement for the
+normal HIP backend.
 
 ## Run MTP
 
@@ -154,39 +130,6 @@ export SPEC_SIDECAR=1
   -np 1 --no-context-shift \
   --ctx-checkpoints 0 --cache-ram 0 --no-cache-idle-slots
 ```
-
-## Run Flash Next MTP
-
-The Flash Next provider has separate override variables so an incompatible
-Qwen3.8-27B sidecar cannot be selected accidentally. With the default layout,
-only the master gate is needed; otherwise set all three absolute paths:
-
-```sh
-export SPEC_SIDECAR=1
-# Optional explicit overrides:
-# export LLAMA_SPEC_QWEN4EXP_HIP_SIDECAR=/absolute/build/bin/spec_qwen4exp_mtp_sidecar.so
-# export LLAMA_SPEC_QWEN4EXP_HIP_WEIGHTS=/absolute/artifacts/spec-sidecar-qwen4exp-mtp
-# export LLAMA_QWEN4EXP_DRAFT_HEAD_IDS=/absolute/artifacts/spec-sidecar-qwen4exp-mtp/draft_head_ids.bin
-
-./build-spec-sidecar/bin/llama-server \
-  -m /absolute/models/Qwen3.8-Flash-Next-00001-of-00004.gguf \
-  --spec-type draft-mtp \
-  --spec-draft-n-max 3 \
-  --spec-draft-p-min 0 \
-  --batch-size 128 --ubatch-size 128 \
-  -np 1 --no-context-shift \
-  --ctx-checkpoints 0 --cache-ram 0 --no-cache-idle-slots
-```
-
-For the current gfx1030 Flash Next path, `--batch-size 128 --ubatch-size 128`
-is the validated Flash Attention setting. A 6,336-token real-server prompt with
-both values at 512 reproducibly faults the target `flash_attn_tile` kernel even
-with speculative decoding disabled. Use the 128-token setting or disable Flash
-Attention until that separate target-backend issue is fixed.
-
-Do not also pass a Qwen3.8-27B `-md` model when testing this provider. If the
-profile, artifact schema, explicit device binding, or runtime state checks fail,
-the server disables the sidecar and continues target-only.
 
 ## Run DFlash2
 
@@ -225,13 +168,7 @@ export SPEC_SIDECAR=1
   With a single HIP target ubatch on the matching device, the host passes
   borrowed target device pointers and attaches the sidecar to the target HIP
   stream; the target context defers those host output copies until a host
-  getter is requested. For Qwen4Exp only, mirrored tensor-parallel outputs are
-  resolved to the concrete allocation and stream on the final Meta rank, so
-  this direct path also applies to tensor split. Other architectures retain
-  the synchronized host fallback until their hidden contents, stream ordering,
-  placement, and performance are independently validated. Set
-  `LLAMA_SPEC_HIP_DISABLE_META_DEVICE_VIEW=1` to force the Qwen4Exp host fallback
-  for diagnosis. Interleaved or multi-ubatch inputs still use the host path.
+  getter is requested. Otherwise it uses the synchronized host-copy path.
 - The ABI exposes sequence-scoped `state_size`, `get_state`, `set_state`,
   `reset_state`, `truncate_state`, `commit_state`, and `rebase_state` for both
   sidecars. Snapshots contain only a position cursor plus an epoch; the large
@@ -241,8 +178,6 @@ export SPEC_SIDECAR=1
   implementations cannot consume one another's state.
 - Prompt and ordinary target rows are implicitly committed; target
   verification stages rows and acceptance commits only the accepted prefix.
-  Flash Next shifts runtime target handoffs explicitly so token `x_p` consumes
-  hidden row `h_(p-1)`; the accepted target-hidden tip remains device-resident.
   Checkpoint rollback discards pending rows and restores the cursor, slot reset
   starts a new epoch, and context shifting rebases committed device KV rows.
   Any failed update or restore enters target-only mode instead of guessing at
