@@ -77,11 +77,11 @@
 		<DialogModelDownload
 			filePath="Q4_K_M/gemma-4-12b-it-Q4_K_M.gguf"
 			formattedSize="7.3 GB"
+			onClose={() => {}}
 			open
 			quant="Q4_K_M"
 			repoId="ggml-org/gemma-4-12b-it-GGUF"
 			sidecar={null}
-			onClose={() => {}}
 		/>
 	</div>
 </Story>
