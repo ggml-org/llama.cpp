@@ -85,6 +85,14 @@ static inline __m256i bytes_from_bits_32(const uint8_t * x) {
     return _mm256_cmpeq_epi8(bytes, _mm256_set1_epi64x(-1));
 }
 
+// Unpack 32 2-bit fields into 32 bytes, grouped 8 apart as the iq2_nl/iq3_nl qs packing stores them
+static inline __m256i bytes_from_2bits_32(const uint8_t * x) {
+    uint64_t x64;
+    memcpy(&x64, x, sizeof(uint64_t));
+    const __m256i shifted = _mm256_srlv_epi64(_mm256_set1_epi64x(x64), _mm256_set_epi64x(6, 4, 2, 0));
+    return _mm256_and_si256(shifted, _mm256_set1_epi8(0x03));
+}
+
 // Unpack 32 4-bit fields into 32 bytes
 // The output vector contains 32 bytes, each one in [ 0 .. 15 ] interval
 static inline __m256i bytes_from_nibbles_32(const uint8_t * rsi)
@@ -3915,6 +3923,108 @@ void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(scale);
     ggml_vec_dot_iq1_m_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
+}
+
+void ggml_vec_dot_iq2_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK2_NL == 0);
+    static_assert(QK2_NL == QK8_0, "QK2_NL and QK8_0 must be the same");
+
+    const block_iq2_nl * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK2_NL;
+
+    int ib = 0;
+    float sumf = 0;
+
+#if defined __AVX2__
+    int32_t aux32;
+    memcpy(&aux32, kvalues_iq2nl, sizeof(aux32));
+
+    // splat the 4 entry LUT over both 128 bit lanes, only indices 0..3 are used
+    const __m256i values = _mm256_set1_epi32(aux32);
+    const __m256i mone   = _mm256_set1_epi16(1);
+
+    __m256 accum = _mm256_setzero_ps();
+    for (; ib < nb; ++ib) {
+        const __m256i q2b = _mm256_shuffle_epi8(values, bytes_from_2bits_32(x[ib].qs));
+        const __m256i q8b = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+        const __m256i p   = _mm256_madd_epi16(mul_add_epi8(q2b, q8b), mone);
+        accum = _mm256_fmadd_ps(_mm256_set1_ps(GGML_CPU_FP16_TO_FP32(y[ib].d)*GGML_CPU_FP16_TO_FP32(x[ib].d)),
+                _mm256_cvtepi32_ps(p), accum);
+    }
+
+    sumf = hsum_float_8(accum);
+
+#endif
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d)*GGML_CPU_FP16_TO_FP32(x[ib].d);
+        int sumi = 0;
+        for (int j = 0; j < QK2_NL/4; ++j) {
+            for (int g = 0; g < 4; ++g) {
+                sumi += y[ib].qs[j + g*(QK2_NL/4)] * kvalues_iq2nl[(x[ib].qs[j] >> 2*g) & 3];
+            }
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_iq3_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK3_NL == 0);
+    static_assert(QK3_NL == QK8_0, "QK3_NL and QK8_0 must be the same");
+
+    const block_iq3_nl * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK3_NL;
+
+    int ib = 0;
+    float sumf = 0;
+
+#if defined __AVX2__
+    const __m128i values128 = _mm_loadl_epi64((const __m128i *)kvalues_iq3nl);
+    const __m256i values    = MM256_SET_M128I(values128, values128);
+    const __m256i m4        = _mm256_set1_epi8(0x04);
+    const __m256i mone      = _mm256_set1_epi16(1);
+
+    __m256 accum = _mm256_setzero_ps();
+    for (; ib < nb; ++ib) {
+        // qh keeps one high bit per weight in weight order, which is what bytes_from_bits_32 expands to
+        const __m256i qh  = _mm256_and_si256(bytes_from_bits_32(x[ib].qh), m4);
+        const __m256i idx = _mm256_or_si256(bytes_from_2bits_32(x[ib].qs), qh);
+        const __m256i q3b = _mm256_shuffle_epi8(values, idx);
+        const __m256i q8b = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+        const __m256i p   = _mm256_madd_epi16(mul_add_epi8(q3b, q8b), mone);
+        accum = _mm256_fmadd_ps(_mm256_set1_ps(GGML_CPU_FP16_TO_FP32(y[ib].d)*GGML_CPU_FP16_TO_FP32(x[ib].d)),
+                _mm256_cvtepi32_ps(p), accum);
+    }
+
+    sumf = hsum_float_8(accum);
+
+#endif
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d)*GGML_CPU_FP16_TO_FP32(x[ib].d);
+        int sumi = 0;
+        for (int j = 0; j < QK3_NL/4; ++j) {
+            for (int g = 0; g < 4; ++g) {
+                const int idx = ((x[ib].qs[j] >> 2*g) & 3) | (((x[ib].qh[g] >> j) & 1) << 2);
+                sumi += y[ib].qs[j + g*(QK3_NL/4)] * kvalues_iq3nl[idx];
+            }
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
 }
 
 void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
