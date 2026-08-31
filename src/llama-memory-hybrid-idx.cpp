@@ -350,7 +350,10 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
     GGML_ASSERT(ratio > 0);
     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
 
-    GGML_ASSERT(ggml_backend_buffer_is_host(cell_blk->buffer));
+    // the block-gather decode path never references cell_blk in the graph, so the
+    // scheduler leaves it unallocated; skip its (O(n_kv) per ubatch) fill in that case
+    const bool has_cell_blk = cell_blk->buffer != nullptr;
+    GGML_ASSERT(!has_cell_blk || ggml_backend_buffer_is_host(cell_blk->buffer));
 
     const int64_t n_kv     = cell_blk->ne[0];
     const int64_t n_ns     = cell_blk->ne[1];        // streams in this ubatch
@@ -361,7 +364,7 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
     GGML_ASSERT(n_tokens % n_ns == 0);
     const int64_t n_tps = n_tokens/n_ns;             // tokens per stream
 
-    int32_t * dst_cell_blk  = (int32_t *) cell_blk->data;
+    int32_t * dst_cell_blk  = has_cell_blk ? (int32_t *) cell_blk->data : nullptr;
     int32_t * dst_blk_cells = (int32_t *) blk_cells->data;
     int32_t * dst_blk_pos   = (int32_t *) blk_pos->data;
     float   * dst_bias      = (float   *) bias->data;
@@ -385,7 +388,7 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
         const llama_seq_id seq_of_stream = ubatch->seq_id[s*n_tps][0];
         const auto & cells = mem->get_mem_idx()->get_cells(seq_of_stream);
 
-        int32_t * cur_cell_blk  = dst_cell_blk  + s*n_kv;
+        int32_t * cur_cell_blk  = has_cell_blk ? dst_cell_blk + s*n_kv : nullptr;
         int32_t * cur_blk_cells = dst_blk_cells + s*(r*n_blocks);
 
         // an incomplete block cannot be pooled; the bias below forces those tail cells in
@@ -420,7 +423,7 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
 
         // per-block mode keeps an unpooled cell's real block, so the block's own -inf reaches it
         // per-cell mode carries that -inf itself and only needs the gather in range
-        for (int64_t j = 0; j < n_kv; ++j) {
+        for (int64_t j = 0; has_cell_blk && j < n_kv; ++j) {
             if (blk_of[j] >= 0 && filled[blk_of[j]] < r && !blk_bias) {
                 blk_of[j] = -1;
             }
