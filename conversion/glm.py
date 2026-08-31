@@ -453,14 +453,13 @@ class Glm5NextModel(TextModel):
             return None
 
         assert cls._n_main_layers is not None
-        m = re.match(r"model\.(?:language_model\.)?layers\.(\d+)\.", name)
+        m = re.match(r"model\.layers\.(\d+)\.", name)
         is_mtp = m is not None and int(m.group(1)) >= cls._n_main_layers
 
         if is_mtp and cls.no_mtp:
             return None
         if cls.mtp_only and not is_mtp and name not in (
             "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
-            "model.language_model.embed_tokens.weight", "model.language_model.norm.weight",
         ):
             return None
 
@@ -532,9 +531,6 @@ class Glm5NextModel(TextModel):
             self.gguf_writer.add_swiglu_clamp_shexp([limit] * self.block_count)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("model.language_model."):
-            name = "model." + name[len("model.language_model."):]
-
         if name == "lm_head.weight" and self.hparams.get("tie_word_embeddings", False):
             return
 
