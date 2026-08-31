@@ -545,6 +545,7 @@ void ggml_cuda_flash_attn_ext_vec_case_impl(ggml_backend_cuda_context & ctx, ggm
 
 template <int D, ggml_type type_K, ggml_type type_V>
 void ggml_cuda_flash_attn_ext_vec_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const ggml_tensor * KQV = dst;
     const ggml_tensor * Q   = dst->src[0];
 
@@ -553,6 +554,22 @@ void ggml_cuda_flash_attn_ext_vec_case(ggml_backend_cuda_context & ctx, ggml_ten
 
     if (Q->ne[1] == 1) {
         constexpr int cols_per_block = 1;
+        if (logit_softcap == 0.0f) {
+            constexpr bool use_logit_softcap = false;
+            ggml_cuda_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, use_logit_softcap>(ctx, dst);
+        } else {
+            constexpr bool use_logit_softcap = true;
+            ggml_cuda_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, use_logit_softcap>(ctx, dst);
+        }
+        return;
+    }
+
+    // ne[1] == 2 is served by the 2 wide tile below, which does half the work of
+    // the 4 wide one. ntiles_x stays 1 for widths 1 to 4, so the launch geometry
+    // and thus the result is the same for both tiles.
+    if (cc >= GGML_CUDA_CC_BLACKWELL && Q->ne[1] >= 3 && Q->ne[1] <= 4 && Q->ne[3] == 1 &&
+            ggml_cuda_fa_sm120_invariant()) {
+        constexpr int cols_per_block = 4;
         if (logit_softcap == 0.0f) {
             constexpr bool use_logit_softcap = false;
             ggml_cuda_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, use_logit_softcap>(ctx, dst);
