@@ -109,6 +109,7 @@ export type {
 	ModelCapabilities,
 	ModelModalities,
 	ModelOption,
+	ModelDownloadProgress,
 	ModelLoadProgress,
 	ModalityCapabilities
 } from './models';
