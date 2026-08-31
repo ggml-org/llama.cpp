@@ -56,7 +56,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
     target_compile_features(${GGML_CPU_NAME} PRIVATE c_std_11 cxx_std_17)
     target_include_directories(${GGML_CPU_NAME} PRIVATE . ggml-cpu)
-    target_precompile_headers (${GGML_CPU_NAME} PRIVATE ggml-impl.h)
 
     if (APPLE AND GGML_ACCELERATE)
         find_library(ACCELERATE_FRAMEWORK Accelerate)
@@ -667,6 +666,12 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     target_sources(${GGML_CPU_NAME} PRIVATE ${GGML_CPU_SOURCES})
     target_compile_options(${GGML_CPU_NAME} PRIVATE ${ARCH_FLAGS})
     target_compile_definitions(${GGML_CPU_NAME} PRIVATE ${ARCH_DEFINITIONS})
+
+    if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND GGML_SYSTEM_ARCH STREQUAL "ARM" AND HAVE_SVE)
+        message(STATUS "Skipping PCH for ${GGML_CPU_NAME}: GCC + SVE is known to trigger an internal compiler error with PCH")
+    else()
+        target_precompile_headers(${GGML_CPU_NAME} PRIVATE ggml-impl.h)
+    endif()
 
     if (EMSCRIPTEN)
         set_target_properties(${GGML_CPU_NAME} PROPERTIES COMPILE_FLAGS "-msimd128")
