@@ -35,8 +35,10 @@
 struct block_q4_0d { uint16_t d; uint8_t qs[16]; };
 struct block_q4_K { uint16_t d, dmin; uint8_t scales[12]; uint8_t qs[128]; }; // 256 elems
 struct block_q6_K { uint8_t ql[128]; uint8_t qh[64]; int8_t scales[16]; uint16_t d; }; // 256 elems
+struct df_block_q8_1 { uint16_t d, s; int8_t qs[32]; };
 static_assert(sizeof(block_q4_K) == 144, "q4_K");
 static_assert(sizeof(block_q6_K) == 210, "q6_K");
+static_assert(sizeof(df_block_q8_1) == 36, "q8_1");
 
 __device__ __host__ __forceinline__ float df_f16(uint16_t h) {
 #ifdef __HIP_DEVICE_COMPILE__
@@ -139,6 +141,370 @@ __global__ void gemv8_q6_K(const block_q6_K * __restrict__ W, const float * __re
         #pragma unroll
         for (int off = 16; off > 0; off >>= 1) a += __shfl_down(a, off, 32);
         if (lane == 0) y[(size_t) c * n_out + row] = a;
+    }
+}
+
+static __device__ __forceinline__ int df_sdot4(int a, int b, int c) {
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    return __builtin_amdgcn_sdot4(a, b, c, false);
+#else
+    const int8_t * av = reinterpret_cast<const int8_t *>(&a);
+    const int8_t * bv = reinterpret_cast<const int8_t *>(&b);
+    return c + av[0] * bv[0] + av[1] * bv[1] + av[2] * bv[2] + av[3] * bv[3];
+#endif
+}
+
+// The stock gfx1030 MMVQ reduction uses the native wave FADD when available.
+// Keep the shuffle fallback for non-gfx1030 diagnostic builds and for compilers
+// that do not expose the builtin.
+static __device__ __forceinline__ float df_wave_reduce_sum(float x) {
+#if (defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)) && __has_builtin(__builtin_amdgcn_wave_reduce_fadd_f32)
+    return __builtin_amdgcn_wave_reduce_fadd_f32(x, 0.0f);
+#else
+    for (int off = 16; off > 0; off >>= 1) x += __shfl_xor(x, off, 32);
+    return x;
+#endif
+}
+
+// Match ggml's standard Q8_1 activation quantization. One warp writes one
+// 32-element block; eight warps share a 256-thread launch block, matching
+// native quantize_q8_1. The head GEMV below consumes only d and qs, while s
+// keeps the native q8_1 meaning: it stores the raw sum(qs), not d*sum(qs).
+__global__ void df_quantize_q8_1(const float * __restrict__ x,
+                                 df_block_q8_1 * __restrict__ y, int n_in) {
+    const int lane = threadIdx.x & 31;
+    const int warp = threadIdx.x >> 5;
+    const int warps_per_block = blockDim.x / 32;
+    const int block = blockIdx.x * warps_per_block + warp;
+    const int col = blockIdx.y;
+    if (warps_per_block < 1 || block * 32 + lane >= n_in) return;
+
+    const float xi = x[(size_t) col * n_in + block * 32 + lane];
+    float amax = fabsf(xi);
+    float sum = xi;
+    // Native warp_reduce_{max,sum}<32>() uses XOR exchange. A down-shuffle
+    // here would leave lane 0 with only a partial reduction, so every lane
+    // would quantize with a different effective scale while lane 0 publishes
+    // the wrong block scale.
+    for (int off = 16; off > 0; off >>= 1) {
+        amax = fmaxf(amax, __shfl_xor(amax, off, 32));
+        sum += __shfl_xor(sum, off, 32);
+    }
+    const float d = amax / 127.0f;
+    const int q = amax == 0.0f ? 0 : (int) roundf(xi / d);
+    df_block_q8_1 * out = y + (size_t) col * (n_in / 32) + block;
+    out->qs[lane] = (int8_t) q;
+    if (lane == 0) {
+        __half dh = __float2half(d);
+        __half sh = __float2half(sum);
+        memcpy(&out->d, &dh, sizeof(out->d));
+        memcpy(&out->s, &sh, sizeof(out->s));
+    }
+}
+
+// Diagnostic-only range probe used by the gated Q8_1 experiment. It runs as
+// one tiny serial kernel so graph-captured activations can be inspected without
+// synchronizing between every GEMV.
+__global__ void df_probe_f32(const float * __restrict__ x, float * __restrict__ out, int n) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    float lo = INFINITY, hi = -INFINITY;
+    int bad = 0;
+    for (int i = 0; i < n; ++i) {
+        const float value = x[i];
+        if (!isfinite(value)) {
+            ++bad;
+        } else {
+            lo = fminf(lo, value);
+            hi = fmaxf(hi, value);
+        }
+    }
+    out[0] = lo;
+    out[1] = hi;
+    out[2] = (float) bad;
+    out[3] = n > 0 ? (float) bad / (float) n : 0.0f;
+}
+
+// Q6_K x Q8_1 GEMV matching the standard native MMVQ arithmetic. Eight lanes
+// cover one 32-value Q6 sub-block (four int8 products per lane), and each wave
+// handles one output row. Eight waves per block preserve the sidecar's current
+// row launch shape while replacing scalar dequant/FMA with signed dot4.
+template<int NCOLS>
+__global__ void gemv_q6_K_q8_1(const block_q6_K * __restrict__ W,
+                               const df_block_q8_1 * __restrict__ x,
+                               float * __restrict__ y, int n_in, int n_out) {
+    const int wave = threadIdx.x >> 5;
+    const int iqs = threadIdx.x & 31;
+    const int row = blockIdx.x * 8 + wave;
+    if (row >= n_out) return;
+
+    // Match vec_dot_q6_K_q8_1() in ggml-cuda/vecdotq.cuh. Q6_K's
+    // physical ql/qh layout is interleaved: the standard Q8_1 blocks are
+    // consumed as {0,2}, {1,3}, {4,6}, {5,7}, not in contiguous order.
+    const int bq8_offset = 2 * 2 * (iqs / 16) + (iqs % 16) / 8;
+    const int scale_offset = 8 * (iqs / 16) + (iqs % 16) / 4;
+    const int vh_shift = 2 * ((iqs % 16) / 8);
+    const int ql_offset = 4 * iqs;
+    const int qh_index = 8 * (iqs / 16) + (iqs % 8);
+    const int qh_offset = 4 * qh_index;
+
+    const int nblk = n_in / 256;
+    const block_q6_K * wr = W + (size_t) row * nblk;
+    float acc[NCOLS] = {};
+    for (int b = 0; b < nblk; ++b) {
+        const block_q6_K * bk = &wr[b];
+        const float d6 = df_f16(bk->d);
+        const int vl = *reinterpret_cast<const int *>(bk->ql + ql_offset);
+        const int vh0 = *reinterpret_cast<const int *>(bk->qh + qh_offset);
+        const int vh = vh0 >> vh_shift;
+        #pragma unroll
+        for (int i = 0; i < 2; ++i) {
+            const int ql4 = (vl >> (4 * i)) & 0x0F0F0F0F;
+            const int qh4 = ((vh >> (4 * i)) << 4) & 0x30303030;
+            const uint32_t q6_raw = (uint32_t) (ql4 | qh4);
+            int q6_pack = 0;
+            #pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                const int q6 = (int) ((q6_raw >> (8 * j)) & 0xffu) - 32;
+                q6_pack |= (q6 & 0xff) << (8 * j);
+            }
+            const int scale = (int) bk->scales[scale_offset + 4 * i];
+            #pragma unroll
+            for (int c = 0; c < NCOLS; ++c) {
+                const df_block_q8_1 * bq = x + (size_t) c * (n_in / 32) + b * 8 + bq8_offset + 2 * i;
+                const int q8_pack = *reinterpret_cast<const int *>(bq->qs + 4 * (iqs % 8));
+                const int dot = df_sdot4(q6_pack, q8_pack, 0);
+                acc[c] += d6 * df_f16(bq->d) * (float) scale * (float) dot;
+            }
+        }
+    }
+
+    #pragma unroll
+    for (int c = 0; c < NCOLS; ++c) {
+        float a = acc[c];
+        for (int off = 16; off > 0; off >>= 1) a += __shfl_down(a, off, 32);
+        if (iqs == 0) y[(size_t) c * n_out + row] = a;
+    }
+}
+
+// Q4_K x Q8_1 GEMV using the same packed 32-value sub-block layout as the
+// native standard MMVQ path. The min correction recomputes d8*sum(qs),
+// matching native vec_dot_q4_K_q8_1 (q8_1.s itself is the raw sum).
+template<int NCOLS>
+__global__ void gemv_q4_K_q8_1(const block_q4_K * __restrict__ W,
+                               const df_block_q8_1 * __restrict__ x,
+                               float * __restrict__ y, int n_in, int n_out) {
+    const int wave = threadIdx.x >> 5;
+    const int lane = threadIdx.x & 31;
+    const int row = blockIdx.x * 8 + wave;
+    if (row >= n_out) return;
+
+    const int nblk = n_in / 256;
+    const block_q4_K * wr = W + (size_t) row * nblk;
+    float acc[NCOLS] = {};
+    for (int b = 0; b < nblk; ++b) {
+        const block_q4_K * bk = &wr[b];
+        const float d = df_f16(bk->d);
+        const float dmin = df_f16(bk->dmin);
+        for (int g = lane >> 3; g < 8; g += 4) {
+            const int in_group = lane & 7;
+            const int lbase = (in_group & 3) * 4 + (in_group >= 4 ? 16 : 0);
+            const int group = g >> 1;
+            const bool high = (g & 1) != 0;
+            float scale, minv;
+            q4k_scale_min(group * 2 + (high ? 1 : 0), bk->scales, &scale, &minv);
+            const uint8_t * qs = bk->qs + group * 32;
+            int q4_pack = 0;
+            #pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                const int l = lbase + j;
+                const int q4 = (qs[l] >> (high ? 4 : 0)) & 0xF;
+                q4_pack |= (uint32_t) q4 << (8 * j);
+            }
+            #pragma unroll
+            for (int c = 0; c < NCOLS; ++c) {
+                const df_block_q8_1 * bq = x + (size_t) c * (n_in / 32) + b * 8 + g;
+                const int q8_offset = (in_group & 3) * 4 + (in_group >= 4 ? 16 : 0);
+                const int q8_pack = *reinterpret_cast<const int *>(bq->qs + q8_offset);
+                const int dot = df_sdot4(q4_pack, q8_pack, 0);
+                acc[c] += d * df_f16(bq->d) * scale * (float) dot;
+                if (in_group == 0) {
+                    // Native Q4_K MMVQ does not consume block_q8_1.s here:
+                    // it keeps d8 in half but forms d8*sum(qs) in F32. The
+                    // stored s is half and can overflow for large activations.
+                    int sum_q8 = 0;
+                    #pragma unroll
+                    for (int j = 0; j < 32; ++j) sum_q8 += (int) bq->qs[j];
+                    acc[c] -= dmin * minv * df_f16(bq->d) * (float) sum_q8;
+                }
+            }
+        }
+    }
+
+    #pragma unroll
+    for (int c = 0; c < NCOLS; ++c) {
+        float a = acc[c];
+        for (int off = 16; off > 0; off >>= 1) a += __shfl_down(a, off, 32);
+        if (lane == 0) y[(size_t) c * n_out + row] = a;
+    }
+}
+
+// Native gfx1030 MMVQ-shaped Q4_K/Q6_K x Q8_1 kernels. These are kept
+// behind a diagnostic selector in the sidecar. For standard Q8_1 layout the
+// native RDNA2 path uses one wave per block, partitions Q4_K blocks between
+// the two half-waves (vdr=2), and computes two output rows per block. Q6_K
+// uses one lane per iqs and partitions blocks across all 32 lanes (vdr=1).
+// Keeping the same work partition makes this a useful execution-path test,
+// rather than another arbitrary row tiling.
+static __device__ __forceinline__ float df_q4k_q8_1_native_dot(
+        const block_q4_K * bk, const df_block_q8_1 * bq8_1, int iqs) {
+    int v[2];
+    int u[4];
+    float d8[2];
+
+    // This is the standard vec_dot_q4_K_q8_1() mapping in vecdotq.cuh.
+    const int bq8_offset = 2 * ((iqs / 2) / 4);
+    const int * q4 = reinterpret_cast<const int *>(
+            bk->qs + 16 * bq8_offset + 4 * ((iqs / 2) % 4));
+    v[0] = q4[0];
+    v[1] = q4[4];
+
+    const uint16_t * scales = reinterpret_cast<const uint16_t *>(bk->scales);
+    uint16_t aux[2];
+    const int j = bq8_offset / 2;
+    if (j < 2) {
+        aux[0] = scales[j + 0] & 0x3f3f;
+        aux[1] = scales[j + 2] & 0x3f3f;
+    } else {
+        aux[0] = ((scales[j + 2] >> 0) & 0x0f0f) | ((scales[j - 2] & 0xc0c0) >> 2);
+        aux[1] = ((scales[j + 2] >> 4) & 0x0f0f) | ((scales[j - 0] & 0xc0c0) >> 2);
+    }
+    const uint8_t * sc = reinterpret_cast<const uint8_t *>(aux);
+    const uint8_t * mn = sc + 2;
+
+    float sum_d = 0.0f;
+    float sum_m = 0.0f;
+    #pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        const df_block_q8_1 * bq8 = bq8_1 + bq8_offset + i;
+        d8[i] = df_f16(bq8->d);
+        const int * q8 = reinterpret_cast<const int *>(bq8->qs) + ((iqs / 2) % 4);
+        u[2 * i + 0] = q8[0];
+        u[2 * i + 1] = q8[4];
+
+        // vec_dot_q4_K_q8_1 extracts the same nibble from both packed
+        // halves: v[0] and v[1] cover the first/second 16 values of one
+        // 32-value sub-block, while i selects the low or high nibble
+        // (therefore the q8 block).  Do not extract low/high nibbles from
+        // one v word; that pairs q4 sub-blocks with the wrong q8 values.
+        const int q4_lo = (v[0] >> (4 * i)) & 0x0F0F0F0F;
+        const int q4_hi = (v[1] >> (4 * i)) & 0x0F0F0F0F;
+        const int dot = df_sdot4(q4_hi, u[2 * i + 1],
+                                 df_sdot4(q4_lo, u[2 * i + 0], 0));
+        const int sum_q8 = df_sdot4(0x01010101, u[2 * i + 1],
+                                    df_sdot4(0x01010101, u[2 * i + 0], 0));
+        sum_d += d8[i] * (float) (dot * sc[i]);
+        sum_m += d8[i] * (float) (sum_q8 * mn[i]);
+    }
+    return df_f16(bk->d) * sum_d - df_f16(bk->dmin) * sum_m;
+}
+
+static __device__ __forceinline__ float df_q6k_q8_1_native_dot(
+        const block_q6_K * bk, const df_block_q8_1 * bq8_1, int iqs) {
+    const int bq8_offset = 4 * (iqs / 16) + (iqs % 16) / 8;
+    const int scale_offset = 8 * (iqs / 16) + (iqs % 16) / 4;
+    const int vh_shift = 2 * ((iqs % 16) / 8);
+    const int vl = *reinterpret_cast<const int *>(bk->ql + 4 * iqs);
+    const int qh_index = 8 * (iqs / 16) + (iqs % 8);
+    const int vh = *reinterpret_cast<const int *>(bk->qh + 4 * qh_index) >> vh_shift;
+
+    float sum = 0.0f;
+    #pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        const int ql = (vl >> (4 * i)) & 0x0F0F0F0F;
+        const int qh = ((vh >> (4 * i)) << 4) & 0x30303030;
+        const uint32_t raw = (uint32_t) (ql | qh);
+        int q6_pack = 0;
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const int q6 = (int) ((raw >> (8 * j)) & 0xffu) - 32;
+            q6_pack |= (q6 & 0xff) << (8 * j);
+        }
+        const df_block_q8_1 * bq8 = bq8_1 + bq8_offset + 2 * i;
+        const int q8_pack = reinterpret_cast<const int *>(bq8->qs)[iqs % 8];
+        const int dot = df_sdot4(q6_pack, q8_pack, 0);
+        sum += df_f16(bq8->d) * (float) bk->scales[scale_offset + 4 * i] * (float) dot;
+    }
+    return df_f16(bk->d) * sum;
+}
+
+template<int NCOLS>
+__global__ void gemv_mmvq2_q4_K_q8_1(const block_q4_K * __restrict__ W,
+                                      const df_block_q8_1 * __restrict__ x,
+                                      float * __restrict__ y, int n_in, int n_out) {
+    const int lane = threadIdx.x;
+    if (lane >= 32) return;
+    const int row0 = blockIdx.x * 2;
+    const int nblk = n_in / 256;
+    const int iqs = 2 * (lane & 15);
+    float acc[2][NCOLS] = {};
+
+    // Native Q4_K MMVQ: vdr=2, qi=32, so the two half-waves own alternating
+    // Q4_K blocks while the 16 iqs values cover one complete super-block.
+    for (int b = lane >> 4; b < nblk; b += 2) {
+        for (int r = 0; r < 2; ++r) {
+            const int row = row0 + r;
+            if (row >= n_out) continue;
+            const block_q4_K * bk = W + (size_t) row * nblk + b;
+            for (int c = 0; c < NCOLS; ++c) {
+                const df_block_q8_1 * bq8 = x + (size_t) c * (n_in / 32) + b * 8;
+                acc[r][c] += df_q4k_q8_1_native_dot(bk, bq8, iqs);
+            }
+        }
+    }
+
+    for (int r = 0; r < 2; ++r) {
+        const int row = row0 + r;
+        if (row >= n_out) continue;
+        for (int c = 0; c < NCOLS; ++c) {
+            const float a = df_wave_reduce_sum(acc[r][c]);
+            if (lane == 0) y[(size_t) c * n_out + row] = a;
+        }
+    }
+}
+
+template<int NCOLS>
+__global__ void gemv_mmvq2_q6_K_q8_1(const block_q6_K * __restrict__ W,
+                                      const df_block_q8_1 * __restrict__ x,
+                                      float * __restrict__ y, int n_in, int n_out) {
+    const int lane = threadIdx.x;
+    if (lane >= 32) return;
+    const int row0 = blockIdx.x * 2;
+    const int nblk = n_in / 256;
+    const int iqs = lane;
+    float acc[2][NCOLS] = {};
+
+    // Q6_K has qi=32 and vdr=1, so a 32-lane native wave covers
+    // every iqs value for the same Q6_K block.  The block loop is therefore
+    // replicated by all lanes, unlike the Q4_K two-half-wave partition.
+    for (int b = 0; b < nblk; ++b) {
+        for (int r = 0; r < 2; ++r) {
+            const int row = row0 + r;
+            if (row >= n_out) continue;
+            const block_q6_K * bk = W + (size_t) row * nblk + b;
+            for (int c = 0; c < NCOLS; ++c) {
+                const df_block_q8_1 * bq8 = x + (size_t) c * (n_in / 32) + b * 8;
+                acc[r][c] += df_q6k_q8_1_native_dot(bk, bq8, iqs);
+            }
+        }
+    }
+
+    for (int r = 0; r < 2; ++r) {
+        const int row = row0 + r;
+        if (row >= n_out) continue;
+        for (int c = 0; c < NCOLS; ++c) {
+            const float a = df_wave_reduce_sum(acc[r][c]);
+            if (lane == 0) y[(size_t) c * n_out + row] = a;
+        }
     }
 }
 
