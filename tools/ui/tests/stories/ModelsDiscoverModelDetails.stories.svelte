@@ -2,12 +2,11 @@
 	import { mockDetails, mockSiblings } from './fixtures/models-discover';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ModelsDiscoverChatTemplateDialog from '$lib/components/app/models/discover/ModelsDiscoverChatTemplateDialog.svelte';
-	import ModelsDiscoverDetails from '$lib/components/app/models/discover/ModelsDiscoverDetails.svelte';
-	import ModelsDiscoverDetailsDownloadOptions from '$lib/components/app/models/discover/ModelsDiscoverDetailsDownloadOptions.svelte';
-	import ModelsDiscoverDetailsHeader from '$lib/components/app/models/discover/ModelsDiscoverDetailsHeader.svelte';
-	import ModelsDiscoverDetailsName from '$lib/components/app/models/discover/ModelsDiscoverDetailsName.svelte';
-	import ModelsDiscoverDetailsReadme from '$lib/components/app/models/discover/ModelsDiscoverDetailsReadme.svelte';
-	import TerminalCommands from '$lib/components/app/models/discover/TerminalCommands.svelte';
+	import ModelsDiscoverModelDetails from '$lib/components/app/models/discover/ModelsDiscoverModelDetails.svelte';
+	import ModelsDiscoverModelDetailsCommands from '$lib/components/app/models/discover/ModelsDiscoverModelDetailsCommands.svelte';
+	import ModelsDiscoverModelDetailsDownloadOptions from '$lib/components/app/models/discover/ModelsDiscoverModelDetailsDownloadOptions.svelte';
+	import ModelsDiscoverModelDetailsHeader from '$lib/components/app/models/discover/ModelsDiscoverModelDetailsHeader.svelte';
+	import ModelsDiscoverModelDetailsReadme from '$lib/components/app/models/discover/ModelsDiscoverModelDetailsReadme.svelte';
 	import { ModelDraftSidecar } from '$lib/enums';
 	import type { HfModelSibling } from '$lib/types';
 
@@ -34,7 +33,7 @@
 
 <Story name="Header">
 	<div class="w-160 p-4">
-		<ModelsDiscoverDetailsHeader
+		<ModelsDiscoverModelDetailsHeader
 			baseModels={mockDetails.cardData?.base_model ? [String(mockDetails.cardData.base_model)] : []}
 			details={mockDetails}
 			hasReasoning
@@ -48,29 +47,9 @@
 	</div>
 </Story>
 
-<Story name="Name">
-	<div class="space-y-4 p-4">
-		<ModelsDiscoverDetailsName
-			baseModels={['google/gemma-4-12b-it']}
-			hasReasoning
-			hasTools
-			hasVision
-			modelId="ggml-org/gemma-4-12b-it"
-		/>
-
-		<ModelsDiscoverDetailsName
-			baseModels={[]}
-			hasReasoning={false}
-			hasTools={false}
-			hasVision={false}
-			modelId="ggml-org/Qwen3.8-27B"
-		/>
-	</div>
-</Story>
-
 <Story name="Download options">
 	<div class="w-200 p-4">
-		<ModelsDiscoverDetailsDownloadOptions
+		<ModelsDiscoverModelDetailsDownloadOptions
 			bitDepthRows={[
 				{ bitDepth: 4, files: files.filter((f) => f.path.includes('Q4_K_M')) },
 				{ bitDepth: 8, files: files.filter((f) => f.path.includes('Q8_0')) },
@@ -83,7 +62,7 @@
 
 <Story name="Download options (unknown device)">
 	<div class="w-200 p-4">
-		<ModelsDiscoverDetailsDownloadOptions
+		<ModelsDiscoverModelDetailsDownloadOptions
 			bitDepthRows={[
 				{ bitDepth: 4, files: files.filter((f) => f.path.includes('Q4_K_M')) },
 				{ bitDepth: 8, files: files.filter((f) => f.path.includes('Q8_0')) }
@@ -95,19 +74,22 @@
 
 <Story name="Terminal commands (no sidecars)">
 	<div class="w-200 p-4">
-		<TerminalCommands modelId="ggml-org/Qwen3.8-27B-GGUF" />
+		<ModelsDiscoverModelDetailsCommands modelId="ggml-org/Qwen3.8-27B-GGUF" />
 	</div>
 </Story>
 
 <Story name="Terminal commands (MTP sidecar)">
 	<div class="w-200 p-4">
-		<TerminalCommands modelId="ggml-org/gemma-4-12b-it-GGUF" sidecars={[ModelDraftSidecar.MTP]} />
+		<ModelsDiscoverModelDetailsCommands
+			modelId="ggml-org/gemma-4-12b-it-GGUF"
+			sidecars={[ModelDraftSidecar.MTP]}
+		/>
 	</div>
 </Story>
 
 <Story name="Readme">
 	<div class="w-160 p-4">
-		<ModelsDiscoverDetailsReadme {readme} />
+		<ModelsDiscoverModelDetailsReadme {readme} />
 	</div>
 </Story>
 
@@ -119,7 +101,7 @@
 
 <Story name="Details (loading)">
 	<div class="h-96 w-200 border">
-		<ModelsDiscoverDetails
+		<ModelsDiscoverModelDetails
 			details={null}
 			files={[]}
 			loading
@@ -131,7 +113,7 @@
 
 <Story name="Details (error)">
 	<div class="h-96 w-200 border">
-		<ModelsDiscoverDetails
+		<ModelsDiscoverModelDetails
 			details={null}
 			error="Model not found"
 			files={[]}
@@ -143,7 +125,7 @@
 
 <Story name="Details (loaded)">
 	<div class="h-96 w-200 overflow-y-auto border">
-		<ModelsDiscoverDetails
+		<ModelsDiscoverModelDetails
 			details={mockDetails}
 			{files}
 			modelId={mockDetails.id ?? 'ggml-org/gemma-4-12b-it-GGUF'}

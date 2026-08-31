@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { SearchInput } from '$lib/components/app';
-	import { ModelsDiscoverDetails, ModelsDiscoverList } from '$lib/components/app/models/discover';
+	import {
+		ModelsDiscoverList,
+		ModelsDiscoverModelDetails
+	} from '$lib/components/app/models/discover';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsHubStore } from '$lib/stores';
 	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types';
@@ -122,13 +125,13 @@
 
 <main class="overflow-y-auto">
 	{#if selectedId}
-		<ModelsDiscoverDetails
-			details={details}
+		<ModelsDiscoverModelDetails
+			{details}
 			error={detailError}
-			files={files}
+			{files}
 			loading={detailLoading}
 			modelId={selectedId}
-			readme={readme}
+			{readme}
 		/>
 	{/if}
 </main>

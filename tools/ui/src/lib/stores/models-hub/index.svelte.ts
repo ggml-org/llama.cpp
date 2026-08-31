@@ -6,7 +6,7 @@
  * a model, so `firstModel` drives the initial selection. By default the list
  * shows a curated set of official ggml-org GGUF models in a fixed display order;
  * search replaces the list with matching models across all of HuggingFace.
- * Detail data is loaded by ModelsDiscoverDetails, not here.
+ * Detail data is loaded by ModelsDiscoverModelDetails, not here.
  */
 
 import { HuggingFaceService } from '$lib/services';
