@@ -802,6 +802,7 @@ static __global__ void mul_mat_vec_q_moe(
     const float * x_scale    = nullptr;
     const float * gate_scale = nullptr;
     ggml_glu_op   active_glu = GGML_GLU_OP_SWIGLU;
+    float         glu_limit  = 0.0f;
 
     if constexpr (has_fusion) {
         use_gate   = fusion.gate != nullptr;
@@ -809,6 +810,7 @@ static __global__ void mul_mat_vec_q_moe(
         x_bias     = (const float *) fusion.x_bias;
         gate_bias  = (const float *) fusion.gate_bias;
         active_glu = fusion.glu_op;
+        glu_limit  = fusion.glu_limit;
         if constexpr (type == GGML_TYPE_NVFP4) {
             x_scale    = (const float *) fusion.x_scale;
             gate_scale = (const float *) fusion.gate_scale;
@@ -899,6 +901,9 @@ static __global__ void mul_mat_vec_q_moe(
                     case GGML_GLU_OP_SWIGLU_OAI:
                         result = ggml_cuda_op_swiglu_oai_single(gate_value, result);
                         break;
+                    case GGML_GLU_OP_SWIGLU_CLAMP:
+                        result = ggml_cuda_op_swiglu_clamp_single(gate_value, result, glu_limit);
+                        break;
                     default:
                         result = result * gate_value;
                         break;
@@ -909,7 +914,7 @@ static __global__ void mul_mat_vec_q_moe(
     }
 
     if constexpr (!has_fusion) {
-        GGML_UNUSED_VARS(use_gate, tmp_gate, vgate, x_bias, gate_bias, active_glu, x_scale, gate_scale);
+        GGML_UNUSED_VARS(use_gate, tmp_gate, vgate, x_bias, gate_bias, active_glu, glu_limit, x_scale, gate_scale);
     } else if constexpr (type != GGML_TYPE_NVFP4) {
         GGML_UNUSED_VARS(x_scale, gate_scale);
     }
