@@ -26,14 +26,15 @@
 #define UNUSED GGML_UNUSED
 
 static inline int best_index_int8(int n, const int8_t * val, float x) {
-    if (x <= val[0]) return 0;
-    if (x >= val[n-1]) return n-1;
-    int ml = 0, mu = n-1;
-    while (mu-ml > 1) {
-        int mav = (ml+mu)/2;
-        if (x < val[mav]) mu = mav; else ml = mav;
+    // val is sorted, so x picks level i once it reaches the midpoint of val[i-1] and val[i].
+    // Scale by 2 to keep both sides exact, then binary search with no branches. n must be a power of 2.
+    const float x2 = x + x;
+    int idx = 0;
+    for (int step = n >> 1; step > 0; step >>= 1) {
+        const int j = idx + step;
+        idx = (x2 >= (float)(val[j-1] + val[j])) ? j : idx;
     }
-    return x - val[mu-1] < val[mu] - x ? mu-1 : mu;
+    return idx;
 }
 
 // reference implementation for deterministic creation of model files
@@ -5035,6 +5036,7 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
         }
         if (amax < GROUP_MAX_EPS) {
             scales[ib] = 0;
+            memset(Lb, 0, block_size);
             continue;
         }
         float d = ntry > 0 ? -max/values[0] : max/values[0];
@@ -5113,6 +5115,7 @@ static void quantize_row_iq4_nl_impl(const int super_block_size, const int block
             }
         }
     } else {
+        GGML_ASSERT(nvalues <= 4 || qh);
         const int n = super_block_size/4;
         for (int j = 0; j < n; ++j) {
             q4[j] = (L[j] & 3) | ((L[j+n] & 3) << 2) | ((L[j+2*n] & 3) << 4) | ((L[j+3*n] & 3) << 6);

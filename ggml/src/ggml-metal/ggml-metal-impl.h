@@ -81,10 +81,10 @@
 #define N_R0_IQ3_S 4
 #define N_SG_IQ3_S 2
 
-#define N_R0_IQ2_NL 2
+#define N_R0_IQ2_NL 4
 #define N_SG_IQ2_NL 2
 
-#define N_R0_IQ3_NL 2
+#define N_R0_IQ3_NL 4
 #define N_SG_IQ3_NL 2
 
 #define N_R0_IQ4_NL 2

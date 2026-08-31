@@ -7,22 +7,13 @@
 typedef void (*cpy_kernel_t)(const char * cx, char * cdst);
 
 __dpct_inline__ int best_index_int8(int n, const int8_t * val, float x) {
-    if (x <= val[0]) {
-        return 0;
+    const float x2  = x + x;
+    int         idx = 0;
+    for (int step = n >> 1; step > 0; step >>= 1) {
+        const int j = idx + step;
+        idx         = (x2 >= (float) (val[j - 1] + val[j])) ? j : idx;
     }
-    if (x >= val[n - 1]) {
-        return n - 1;
-    }
-    int ml = 0, mu = n - 1;
-    while (mu - ml > 1) {
-        int mav = (ml + mu) / 2;
-        if (x < val[mav]) {
-            mu = mav;
-        } else {
-            ml = mav;
-        }
-    }
-    return x - val[mu - 1] < val[mu] - x ? mu - 1 : mu;
+    return idx;
 }
 
 inline void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
