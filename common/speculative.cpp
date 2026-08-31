@@ -1357,6 +1357,33 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<int>                i_last;
     std::vector<std::vector<float>> chain_h;
 
+    // Tree-drafting falsifier, enabled by LLAMA_MTP_TOPK_STATS=1.
+    // Drafting deeper fails on a single-head model because the head is reused off its training
+    // distribution past step 1. The open question is whether drafting WIDER pays instead: when
+    // the target rejects a draft token, how often is the token it picked the head's rank-2
+    // candidate? That probability is the per-step gain of widening the tree at that position.
+    //
+    // It is measurable without building a tree. n_past advances by (n_accepted + 1) per
+    // verification, so the rejection index is derived from consecutive draft() calls, and the
+    // token the target chose at that index arrives as id_last on the next call. Deriving it
+    // from n_past rather than the accept() hook keeps this correct on every server code path.
+    enum { TOPK_MAX = 8, TOPK_POS = 16 };
+
+    bool     topk_stats  = false;
+    uint64_t topk_every  = 128;
+
+    std::vector<std::vector<std::vector<llama_token>>> dbg_cand;   // [seq][step][rank]
+    std::vector<std::vector<float>>                    dbg_p2;     // [seq][step] rank-2 prob
+    std::vector<int>                                   dbg_npast;  // [seq] n_past of last draft
+    std::vector<int>                                   dbg_ndraft; // [seq] size of last draft
+
+    uint64_t stat_rank[TOPK_POS][TOPK_MAX + 1] = {}; // [pos][rank]; last column = outside top-k
+    uint64_t stat_acc [TOPK_POS] = {};               // draft token at pos matched the target
+    uint64_t stat_run [TOPK_POS] = {};               // draft reached pos at all
+    double   stat_p2  [TOPK_POS] = {};               // sum of rank-2 prob, for a mean
+    uint64_t stat_events = 0;
+    uint64_t stat_next   = 0;
+
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
         , params(params.draft)
@@ -1435,9 +1462,34 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         verify_h.assign(n_seq, {});
         verify_h_rows.assign(n_seq, 0);
+
+        {
+            const char * env = getenv("LLAMA_MTP_TOPK_STATS");
+            topk_stats = env != nullptr && atoi(env) != 0;
+
+            const char * env_every = getenv("LLAMA_MTP_TOPK_STATS_EVERY");
+            if (env_every != nullptr && atoi(env_every) > 0) {
+                topk_every = (uint64_t) atoi(env_every);
+            }
+            stat_next = topk_every;
+
+            dbg_cand  .assign(n_seq, {});
+            dbg_p2    .assign(n_seq, {});
+            dbg_npast .assign(n_seq, -1);
+            dbg_ndraft.assign(n_seq, 0);
+
+            if (topk_stats) {
+                SPC_INF("top-k draft statistics enabled, reporting every %llu verifications\n",
+                        (unsigned long long) topk_every);
+            }
+        }
     }
 
     ~common_speculative_impl_draft_mtp() override {
+        if (topk_stats && stat_events > 0) {
+            topk_stats_report();
+        }
+
         auto * ctx_dft = this->params.ctx_dft;
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) backend_chains.size(); ++seq_id) {
             if (backend_chains[seq_id] == nullptr) {
@@ -1615,6 +1667,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             drafting[seq_id] = true;
             common_sampler_reset(smpls[seq_id].get());
 
+            if (topk_stats) {
+                topk_stats_update(seq_id, dp.id_last, dp.n_past);
+                dbg_cand[seq_id].clear();
+                dbg_p2  [seq_id].clear();
+            }
+
             common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
             std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, pending_h[seq_id].data(), row_bytes);
 
@@ -1691,6 +1749,20 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 result.push_back(id);
 
+                // recorded after the p_min stop so the step index matches the draft index
+                if (topk_stats) {
+                    const int nk = std::min<int>(TOPK_MAX, (int) cur_p->size);
+
+                    dbg_cand[seq_id].emplace_back();
+                    auto & cand = dbg_cand[seq_id].back();
+                    cand.reserve(nk);
+                    for (int k = 0; k < nk; ++k) {
+                        cand.push_back(cur_p->data[k].id);
+                    }
+
+                    dbg_p2[seq_id].push_back(nk > 1 ? cur_p->data[1].p : 0.0f);
+                }
+
                 if (params.n_max <= (int) result.size()) {
                     drafting[seq_id] = false;
                     n_drafting--;
@@ -1741,6 +1813,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             if (dp.result->size() < (size_t) params.n_min) {
                 dp.result->clear();
             }
+
+            if (topk_stats) {
+                dbg_ndraft[seq_id] = (int) dp.result->size();
+            }
         }
     }
 
@@ -1757,6 +1833,100 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         const int32_t i_h = std::min<int32_t>(n_accepted, n_rows - 1);
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
         std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
+    }
+
+    // Score the previous draft for this sequence against what the target actually chose.
+    // Called at the top of draft(), before the per-sequence state is overwritten.
+    void topk_stats_update(llama_seq_id seq_id, llama_token id_last, int n_past) {
+        const int prev_npast  = dbg_npast [seq_id];
+        const int prev_ndraft = dbg_ndraft[seq_id];
+
+        dbg_npast[seq_id] = n_past;
+
+        if (prev_npast < 0 || prev_ndraft <= 0) {
+            return;
+        }
+
+        // n_past advances by the accepted count plus the target's own token at the stop point.
+        const int n_acc = n_past - prev_npast - 1;
+        if (n_acc < 0 || n_acc > prev_ndraft) {
+            // a rollback, checkpoint restore or context shift moved n_past on its own
+            return;
+        }
+
+        stat_events++;
+
+        const int reached = n_acc < prev_ndraft ? n_acc + 1 : prev_ndraft;
+        for (int j = 0; j < reached && j < TOPK_POS; ++j) {
+            stat_run[j]++;
+        }
+        for (int j = 0; j < n_acc && j < TOPK_POS; ++j) {
+            stat_acc[j]++;
+        }
+
+        if (n_acc < prev_ndraft && n_acc < TOPK_POS) {
+            const auto & cand = dbg_cand[seq_id][n_acc];
+
+            int rank = TOPK_MAX; // outside the recorded top-k
+            for (int r = 0; r < (int) cand.size() && r < TOPK_MAX; ++r) {
+                if (cand[r] == id_last) {
+                    rank = r;
+                    break;
+                }
+            }
+
+            stat_rank[n_acc][rank]++;
+            stat_p2  [n_acc] += dbg_p2[seq_id][n_acc];
+        }
+
+        if (stat_events >= stat_next) {
+            stat_next += topk_every;
+            topk_stats_report();
+        }
+    }
+
+    void topk_stats_report() {
+        SPC_INF("top-k draft stats after %llu verifications\n", (unsigned long long) stat_events);
+        SPC_INF("%s", "  pos  reached   accept   rank2   rank3  rank4+   miss   mean_p2\n");
+
+        for (int j = 0; j < TOPK_POS; ++j) {
+            if (stat_run[j] == 0) {
+                continue;
+            }
+
+            const double run = (double) stat_run[j];
+
+            uint64_t rank4p = 0;
+            for (int r = 3; r < TOPK_MAX; ++r) {
+                rank4p += stat_rank[j][r];
+            }
+
+            const uint64_t n_rej = stat_run[j] - stat_acc[j];
+
+            SPC_INF("  %3d  %7llu  %6.2f%%  %6.2f%%  %6.2f%%  %6.2f%%  %6.2f%%  %8.4f\n",
+                    j,
+                    (unsigned long long) stat_run[j],
+                    100.0 * (double) stat_acc [j]           / run,
+                    100.0 * (double) stat_rank[j][1]        / run,
+                    100.0 * (double) stat_rank[j][2]        / run,
+                    100.0 * (double) rank4p                 / run,
+                    100.0 * (double) stat_rank[j][TOPK_MAX] / run,
+                    n_rej > 0 ? stat_p2[j] / (double) n_rej : 0.0);
+        }
+
+        // Expected tokens per verification now, and if position 0 were widened to rank 2.
+        // Widening converts a rejection at position 0 into one extra token: the target's own
+        // token is emitted either way, but the rank-2 branch also carries a verified successor.
+        double e_now = 0.0;
+        for (int j = 0; j < TOPK_POS; ++j) {
+            e_now += (double) stat_acc[j];
+        }
+        e_now = stat_events > 0 ? 1.0 + e_now / (double) stat_events : 0.0;
+
+        const double gain0 = stat_events > 0 ? (double) stat_rank[0][1] / (double) stat_events : 0.0;
+
+        SPC_INF("  E[tokens/verify] = %.4f, top-2 at pos 0 adds %.4f (%.2f%%)\n",
+                e_now, gain0, e_now > 0.0 ? 100.0 * gain0 / e_now : 0.0);
     }
 };
 
