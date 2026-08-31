@@ -3578,11 +3578,21 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             if (ne01 > 32) {
                 // large sparse batch
                 nwg = 1;
-                nsg = 4;
+                nsg = 1;
+                if (n_kv_max_padded == 640) {
+                    nsg = 4; // 640 % (4*32) == 0
+                } else {
+                    while (2*nwg*nsg*ncpsg < n_kv_max_padded && nsg < 4) {
+                        nsg *= 2;
+                    }
+                }
             } else {
                 // small sparse batch
-                nsg = 1;
                 nwg = 32;
+                nsg = 1;
+                while (2*nwg*nsg*ncpsg < n_kv_max_padded && nsg < 4) {
+                    nsg *= 2;
+                }
             }
         } else {
             nwg = 32;
