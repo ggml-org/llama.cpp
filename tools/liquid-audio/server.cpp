@@ -209,7 +209,7 @@ int main(int argc, char ** argv) {
                      json::array(
                           { { { "index", 0 }, { "delta", { { "content", to_send } } }, { "finish_reason", nullptr } } }) }
                 };
-                output->push("data: " + chunk.dump() + "\n\n");
+                output->push("data: " + chunk.dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n");
             };
 
             auto audio_cb = [&output, &item](const std::vector<int16_t> & audio) {
@@ -230,7 +230,7 @@ int main(int argc, char ** argv) {
                                                          { "sample_rate", item.output_sample_rate } } } } },
                                                  { "finish_reason", nullptr } } }) }
                 };
-                output->push("data: " + chunk.dump() + "\n\n");
+                output->push("data: " + chunk.dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n");
             };
 
             std::optional<std::string> err;
@@ -243,7 +243,7 @@ int main(int argc, char ** argv) {
                     json error_chunk = {
                         { "error", { { "message", *err }, { "type", "server_error" } } }
                     };
-                    output->push("data: " + error_chunk.dump() + "\n\n");
+                    output->push("data: " + error_chunk.dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n");
                 } else {
                     json final_chunk = {
                         { "object",  "chat.completion.chunk"                                                    },
@@ -252,7 +252,7 @@ int main(int argc, char ** argv) {
                          json::array(
                               { { { "index", 0 }, { "delta", json::object() }, { "finish_reason", "stop" } } }) }
                     };
-                    output->push("data: " + final_chunk.dump() + "\n\n");
+                    output->push("data: " + final_chunk.dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n");
                     output->push("data: [DONE]\n\n");
                 }
             }
@@ -273,7 +273,7 @@ int main(int argc, char ** argv) {
         json error_response = {
             { "error", { { "message", message }, { "type", "server_error" }, { "code", code } } }
         };
-        res.set_content(error_response.dump(), MIMETYPE_JSON);
+        res.set_content(error_response.dump(-1, ' ', false, json::error_handler_t::replace), MIMETYPE_JSON);
         res.status = code;
     };
 
