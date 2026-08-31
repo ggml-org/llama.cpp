@@ -4,17 +4,17 @@
 #include "mma.cuh"
 
 // XOR swizzle for K/V SMEM tiles to avoid bank conflicts without row padding (Turing+ only).
-// Stride must be a power-of-two >= 32 half2 columns,otherwise we keep +4 row padding.
+// Stride must be a multiple of 32 half2 columns, otherwise we keep +4 row padding.
 
 namespace ggml_cuda_fattn_smem_swizzle {
 
-static __host__ __device__ constexpr bool pow2_stride(const int nbatch_2) {
-    return nbatch_2 >= 32 && (nbatch_2 & (nbatch_2 - 1)) == 0;
+static __host__ __device__ constexpr bool bank_aligned(const int nbatch_2) {
+    return nbatch_2 >= 32 && nbatch_2 % 32 == 0;
 }
 
 static __device__ constexpr bool enabled(const int nbatch_2) {
 #if defined(TURING_MMA_AVAILABLE)
-    return pow2_stride(nbatch_2);
+    return bank_aligned(nbatch_2);
 #else
     GGML_UNUSED(nbatch_2);
     return false;
@@ -27,7 +27,7 @@ static __host__ bool enabled(const int nbatch_2, const int cc) {
     GGML_UNUSED(cc);
     return false;
 #else
-    return turing_mma_available(cc) && pow2_stride(nbatch_2);
+    return turing_mma_available(cc) && bank_aligned(nbatch_2);
 #endif // GGML_USE_HIP
 }
 
@@ -42,7 +42,7 @@ static __host__ int tile_stride(const int nbatch_2, const int cc) {
 // Swizzled byte offset for tile element (row, col_h2), same map used for writes and reads.
 template<int stride_h2>
 static __device__ __forceinline__ int bytes_rc(const int row, const int col_h2) {
-    static_assert(pow2_stride(stride_h2), "swizzled tile needs a pow2 stride");
+    static_assert(bank_aligned(stride_h2), "swizzled tile needs a stride that is a multiple of 32");
     return ((row * stride_h2 + col_h2) * (int) sizeof(half2)) ^ ((row & 7) << 4);
 }
 
@@ -73,7 +73,7 @@ static __device__ __forceinline__ void ldmatrix_x4_trans(int * xi, const half2 *
 template<int stride_h2>
 static __device__ __forceinline__ const half2 * lane_addr(
         const half2 * tile_base, const int base_row, const int base_col_h2, const int I, const int J) {
-    static_assert(pow2_stride(stride_h2), "swizzled tile needs a pow2 stride");
+    static_assert(bank_aligned(stride_h2), "swizzled tile needs a stride that is a multiple of 32");
     const int lane_row = threadIdx.x % I;
     const int lane_col = (threadIdx.x / I) * (J / 2);
     uint32_t byte_off = (uint32_t) ((base_row + lane_row)*stride_h2 + base_col_h2 + lane_col) * (uint32_t) sizeof(half2);
