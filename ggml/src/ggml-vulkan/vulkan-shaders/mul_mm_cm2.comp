@@ -25,6 +25,7 @@
 
 #ifdef MULMAT_QUANT
 layout (constant_id = 7) const uint MmTypeA = 0;
+layout (constant_id = 8) const uint MmABlockBytes = 2;
 #endif
 
 #include "types.glsl"
@@ -99,19 +100,7 @@ layout (push_constant) uniform parameter
 #ifndef MULMAT_QUANT
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
 #else
-layout (binding = 0) readonly buffer BUF_Q1_0    { block_q1_0 data[];    } a_q1_0;
-layout (binding = 0) readonly buffer BUF_Q2_0    { block_q2_0 data[];    } a_q2_0;
-layout (binding = 0) readonly buffer BUF_Q4_0    { block_q4_0 data[];    } a_q4_0;
-layout (binding = 0) readonly buffer BUF_Q4_1    { block_q4_1 data[];    } a_q4_1;
-layout (binding = 0) readonly buffer BUF_Q5_0    { block_q5_0 data[];    } a_q5_0;
-layout (binding = 0) readonly buffer BUF_Q5_1    { block_q5_1 data[];    } a_q5_1;
-layout (binding = 0) readonly buffer BUF_Q8_0    { block_q8_0 data[];    } a_q8_0;
-layout (binding = 0) readonly buffer BUF_Q2_K    { block_q2_K data[];    } a_q2_k;
-layout (binding = 0) readonly buffer BUF_TQ2_0   { block_tq2_0 data[];   } a_tq2_0;
-layout (binding = 0) readonly buffer BUF_Q3_K    { block_q3_K data[];    } a_q3_k;
-layout (binding = 0) readonly buffer BUF_Q4_K    { block_q4_K data[];    } a_q4_k;
-layout (binding = 0) readonly buffer BUF_Q5_K    { block_q5_K data[];    } a_q5_k;
-layout (binding = 0) readonly buffer BUF_Q6_K    { block_q6_K data[];    } a_q6_k;
+layout (binding = 0) readonly buffer A {uint8_t data_a[];};
 #endif
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
 layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
@@ -129,39 +118,47 @@ layout (binding = 1) readonly buffer B4 {B_TYPEV4 data_b_v4[];};
 #define DECODEFUNCA , dequantFuncA
 #endif
 #else
-// Dispatch coopMatLoadTensorNV to the right decode function
-// based on the MmTypeA spec constant. The compiler will dead-code-eliminate
-// all but the selected branch.
+layout(buffer_reference, std430, buffer_reference_align = 1) buffer decodeBufA {
+    uint8_t raw[MmABlockBytes];
+};
+
+float16_t mmDecodeA(const in decodeBufA bl_in, const in uint blockCoords[2], const in uint coordInBlock[2]) {
+    switch (MmTypeA) {
+    case GGML_TYPE_Q1_0:  return dequantFuncQ1_0 (decodeBufQ1_0 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q2_0:  return dequantFuncQ2_0 (decodeBufQ2_0 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q4_0:  return dequantFuncQ4_0 (decodeBufQ4_0 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q4_1:  return dequantFuncQ4_1 (decodeBufQ4_1 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q5_0:  return dequantFuncQ5_0 (decodeBufQ5_0 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q5_1:  return dequantFuncQ5_1 (decodeBufQ5_1 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q8_0:  return dequantFuncQ8_0 (decodeBufQ8_0 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q2_K:  return dequantFuncQ2_K (decodeBufQ2_K (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_TQ2_0: return dequantFuncTQ2_0(decodeBufTQ2_0(bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q3_K:  return dequantFuncQ3_K (decodeBufQ3_K (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q6_K:  return dequantFuncQ6_K (decodeBufQ6_K (bl_in), blockCoords, coordInBlock);
+    default:              return float16_t(0);
+    }
+}
+
 #ifdef GGML_VULKAN_COOPMAT2_DECODE_VECTOR
-#define COOPMAT_LOAD_A(mat, tensor_layout) \
-    if (MmTypeA == GGML_TYPE_Q1_0) { coopMatLoadTensorNV(mat, a_q1_0.data, pos_a, tensor_layout, dequantFuncQ1_0, dequantFuncQ1_0_v); } \
-    else if (MmTypeA == GGML_TYPE_Q2_0) { coopMatLoadTensorNV(mat, a_q2_0.data, pos_a, tensor_layout, dequantFuncQ2_0, dequantFuncQ2_0_v); } \
-    else if (MmTypeA == GGML_TYPE_Q4_0) { coopMatLoadTensorNV(mat, a_q4_0.data, pos_a, tensor_layout, dequantFuncQ4_0, dequantFuncQ4_0_v); } \
-    else if (MmTypeA == GGML_TYPE_Q4_1) { coopMatLoadTensorNV(mat, a_q4_1.data, pos_a, tensor_layout, dequantFuncQ4_1, dequantFuncQ4_1_v); } \
-    else if (MmTypeA == GGML_TYPE_Q5_0) { coopMatLoadTensorNV(mat, a_q5_0.data, pos_a, tensor_layout, dequantFuncQ5_0, dequantFuncQ5_0_v); } \
-    else if (MmTypeA == GGML_TYPE_Q5_1) { coopMatLoadTensorNV(mat, a_q5_1.data, pos_a, tensor_layout, dequantFuncQ5_1, dequantFuncQ5_1_v); } \
-    else if (MmTypeA == GGML_TYPE_Q8_0) { coopMatLoadTensorNV(mat, a_q8_0.data, pos_a, tensor_layout, dequantFuncQ8_0, dequantFuncQ8_0_v); } \
-    else if (MmTypeA == GGML_TYPE_Q2_K) { coopMatLoadTensorNV(mat, a_q2_k.data, pos_a, tensor_layout, dequantFuncQ2_K, dequantFuncQ2_K_v); } \
-    else if (MmTypeA == GGML_TYPE_TQ2_0) { coopMatLoadTensorNV(mat, a_tq2_0.data, pos_a, tensor_layout, dequantFuncTQ2_0, dequantFuncTQ2_0_v); } \
-    else if (MmTypeA == GGML_TYPE_Q3_K) { coopMatLoadTensorNV(mat, a_q3_k.data, pos_a, tensor_layout, dequantFuncQ3_K, dequantFuncQ3_K_v); } \
-    else if (MmTypeA == GGML_TYPE_Q4_K) { coopMatLoadTensorNV(mat, a_q4_k.data, pos_a, tensor_layout, dequantFuncQ4_K, dequantFuncQ4_K_v); } \
-    else if (MmTypeA == GGML_TYPE_Q5_K) { coopMatLoadTensorNV(mat, a_q5_k.data, pos_a, tensor_layout, dequantFuncQ5_K, dequantFuncQ5_K_v); } \
-    else if (MmTypeA == GGML_TYPE_Q6_K) { coopMatLoadTensorNV(mat, a_q6_k.data, pos_a, tensor_layout, dequantFuncQ6_K, dequantFuncQ6_K_v); }
+f16vec4 mmDecodeA_v(const in decodeBufA bl_in, const in uint blockCoords[2], const in uint coordInBlock[2]) {
+    switch (MmTypeA) {
+    case GGML_TYPE_Q1_0:  return dequantFuncQ1_0_v (decodeBufQ1_0 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q2_0:  return dequantFuncQ2_0_v (decodeBufQ2_0 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q4_0:  return dequantFuncQ4_0_v (decodeBufQ4_0 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q4_1:  return dequantFuncQ4_1_v (decodeBufQ4_1 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q5_0:  return dequantFuncQ5_0_v (decodeBufQ5_0 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q5_1:  return dequantFuncQ5_1_v (decodeBufQ5_1 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q8_0:  return dequantFuncQ8_0_v (decodeBufQ8_0 (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q2_K:  return dequantFuncQ2_K_v (decodeBufQ2_K (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_TQ2_0: return dequantFuncTQ2_0_v(decodeBufTQ2_0(bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q3_K:  return dequantFuncQ3_K_v (decodeBufQ3_K (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_Q6_K:  return dequantFuncQ6_K_v (decodeBufQ6_K (bl_in), blockCoords, coordInBlock);
+    default:              return f16vec4(0);
+    }
+}
+#define DECODEFUNCA , mmDecodeA, mmDecodeA_v
 #else
-#define COOPMAT_LOAD_A(mat, tensor_layout) \
-    if (MmTypeA == GGML_TYPE_Q1_0) { coopMatLoadTensorNV(mat, a_q1_0.data, pos_a, tensor_layout, dequantFuncQ1_0); } \
-    else if (MmTypeA == GGML_TYPE_Q2_0) { coopMatLoadTensorNV(mat, a_q2_0.data, pos_a, tensor_layout, dequantFuncQ2_0); } \
-    else if (MmTypeA == GGML_TYPE_Q4_0) { coopMatLoadTensorNV(mat, a_q4_0.data, pos_a, tensor_layout, dequantFuncQ4_0); } \
-    else if (MmTypeA == GGML_TYPE_Q4_1) { coopMatLoadTensorNV(mat, a_q4_1.data, pos_a, tensor_layout, dequantFuncQ4_1); } \
-    else if (MmTypeA == GGML_TYPE_Q5_0) { coopMatLoadTensorNV(mat, a_q5_0.data, pos_a, tensor_layout, dequantFuncQ5_0); } \
-    else if (MmTypeA == GGML_TYPE_Q5_1) { coopMatLoadTensorNV(mat, a_q5_1.data, pos_a, tensor_layout, dequantFuncQ5_1); } \
-    else if (MmTypeA == GGML_TYPE_Q8_0) { coopMatLoadTensorNV(mat, a_q8_0.data, pos_a, tensor_layout, dequantFuncQ8_0); } \
-    else if (MmTypeA == GGML_TYPE_Q2_K) { coopMatLoadTensorNV(mat, a_q2_k.data, pos_a, tensor_layout, dequantFuncQ2_K); } \
-    else if (MmTypeA == GGML_TYPE_TQ2_0) { coopMatLoadTensorNV(mat, a_tq2_0.data, pos_a, tensor_layout, dequantFuncTQ2_0); } \
-    else if (MmTypeA == GGML_TYPE_Q3_K) { coopMatLoadTensorNV(mat, a_q3_k.data, pos_a, tensor_layout, dequantFuncQ3_K); } \
-    else if (MmTypeA == GGML_TYPE_Q4_K) { coopMatLoadTensorNV(mat, a_q4_k.data, pos_a, tensor_layout, dequantFuncQ4_K); } \
-    else if (MmTypeA == GGML_TYPE_Q5_K) { coopMatLoadTensorNV(mat, a_q5_k.data, pos_a, tensor_layout, dequantFuncQ5_K); } \
-    else if (MmTypeA == GGML_TYPE_Q6_K) { coopMatLoadTensorNV(mat, a_q6_k.data, pos_a, tensor_layout, dequantFuncQ6_K); }
+#define DECODEFUNCA , mmDecodeA
 #endif
 #endif
 #else
@@ -401,6 +398,11 @@ void main() {
     uint pos_d = batch_idx * p.batch_stride_d + ik * p.batch_stride_d * p.num_batches;
 #endif
 
+#ifdef MULMAT_QUANT
+    // pos_a is a byte offset into the raw buffer; strides stay in block units
+    pos_a *= MmABlockBytes;
+#endif
+
     uint stride_a = p.stride_a / qk;
     uint stride_b = p.stride_b;
 
@@ -500,11 +502,7 @@ void main() {
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover4, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                     coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                    COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK));
-#endif
                     coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, ic * BN, BNover4, block_k, BK), tensorViewTranspose);
 
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
@@ -519,11 +517,7 @@ void main() {
                 coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                 coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover4, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                 coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK));
-#endif
                 coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, ic * BN, BNover4, block_k, BK), tensorViewTranspose);
 
                 sum = coopMatMulAdd(mat_a, mat_b, sum);
@@ -551,11 +545,7 @@ void main() {
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover2, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                     coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                    COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK));
-#endif
                     coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, ic * BN, BNover2, block_k, BK), tensorViewTranspose);
 
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
@@ -570,11 +560,7 @@ void main() {
                 coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                 coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover2, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                 coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK));
-#endif
                 coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, ic * BN, BNover2, block_k, BK), tensorViewTranspose);
 
                 sum = coopMatMulAdd(mat_a, mat_b, sum);
@@ -603,11 +589,7 @@ void main() {
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BN, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                     coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                    COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK));
-#endif
                     coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, ic * BN, BN, block_k, BK), tensorViewTranspose);
 
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
@@ -622,11 +604,7 @@ void main() {
                 coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                 coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BN, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                 coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK));
-#endif
                 coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, ic * BN, BN, block_k, BK), tensorViewTranspose);
 
                 sum = coopMatMulAdd(mat_a, mat_b, sum);
@@ -678,11 +656,7 @@ void main() {
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover4, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                     coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                    COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK));
-#endif
                     coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover4, block_k, BK), tensorViewTranspose DECODEFUNCB);
 
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
@@ -690,11 +664,7 @@ void main() {
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover4, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                     coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutAClamp, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                    COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutAClamp, ir * BM, BM, block_k, BK));
-#endif
                     coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover4, block_k, BK), tensorViewTranspose DECODEFUNCB);
 
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
@@ -730,11 +700,7 @@ void main() {
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover2, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                     coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                    COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK));
-#endif
                     coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover2, block_k, BK), tensorViewTranspose DECODEFUNCB);
 
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
@@ -742,11 +708,7 @@ void main() {
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover2, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                     coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutAClamp, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                    COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutAClamp, ir * BM, BM, block_k, BK));
-#endif
                     coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover2, block_k, BK), tensorViewTranspose DECODEFUNCB);
 
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
@@ -782,11 +744,7 @@ void main() {
                 coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                 coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BN, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                 coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK));
-#endif
 #ifdef MUL_MAT_ID
                 coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BN, block_k, BK), tensorViewTranspose DECODEFUNCB);
 #else
@@ -798,11 +756,7 @@ void main() {
                 coopmat<MAT_TYPE, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> mat_a;
                 coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BN, gl_MatrixUseB> mat_b;
 
-#ifndef MULMAT_QUANT
                 coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutAClamp, ir * BM, BM, block_k, BK) DECODEFUNCA);
-#else
-                COOPMAT_LOAD_A(mat_a, sliceTensorLayoutNV(tensorLayoutAClamp, ir * BM, BM, block_k, BK));
-#endif
 #ifdef MUL_MAT_ID
                 coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BN, block_k, BK), tensorViewTranspose DECODEFUNCB);
 #else
