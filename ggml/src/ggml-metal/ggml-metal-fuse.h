@@ -40,7 +40,7 @@ struct ggml_metal_fuse {
     enum ggml_metal_fuse_id id;
     const enum ggml_op *    ops;      // op sequence (fixed length)
     int                     n_ops;    // number of ops
-    const int *             outputs;  // output node indices relative to the subgraph start (nullptr => { n_ops-1 })
+    const int *             outputs;  // output node indices (absolute graph indices; nullptr => the last node)
     int                     n_outputs;// number of outputs (0 => default last node)
     // extra backend constraints on top of ggml_can_fuse_subgraph
     // nodes[j] is the j-th node of the pattern
