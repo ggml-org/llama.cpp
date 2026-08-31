@@ -1,8 +1,10 @@
 <script lang="ts">
-	import { AlertTriangle, X } from '@lucide/svelte';
+	import { AlertTriangle, Check, X } from '@lucide/svelte';
 	import { ChatForm, DialogConfirmation } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
+	import { Label } from '$lib/components/ui/label';
 	import { Switch } from '$lib/components/ui/switch';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { getChatMessageEditContext } from '$lib/contexts';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores';
@@ -15,10 +17,15 @@
 	let branchAfterEdit = $state(false);
 
 	let isUserMessage = $derived(editCtx.messageRole === MessageRole.USER);
+	// An assistant turn is plain text in two fields. Attachments, file mentions, MCP
+	// prompts and the model picker all belong to composing a request, so its editor is
+	// a pair of textareas rather than the conversation chat form.
 	let isAssistantMessage = $derived(editCtx.messageRole === MessageRole.ASSISTANT);
 
 	let hasUnsavedChanges = $derived.by(() => {
 		if (editCtx.editedContent !== editCtx.originalContent) return true;
+
+		if (editCtx.editedReasoning !== editCtx.originalReasoning) return true;
 
 		if (editCtx.editedUploadedFiles.length > 0) return true;
 
@@ -36,13 +43,28 @@
 			(editCtx.editedUploadedFiles && editCtx.editedUploadedFiles.length > 0)
 	);
 
-	let canSubmit = $derived(editCtx.editedContent.trim().length > 0 || hasAttachments);
+	let canSubmit = $derived(
+		editCtx.editedContent.trim().length > 0 ||
+			editCtx.editedReasoning.trim().length > 0 ||
+			hasAttachments
+	);
 
 	function handleGlobalKeydown(event: KeyboardEvent) {
 		if (event.key === KeyboardKey.ESCAPE) {
 			event.preventDefault();
 			attemptCancel();
 		}
+	}
+
+	// Plain Enter inserts a newline in the assistant fields, which hold long text,
+	// so the accelerator carries a modifier.
+	function handleFieldKeydown(event: KeyboardEvent) {
+		if (event.key !== KeyboardKey.ENTER) return;
+
+		if (!event.ctrlKey && !event.metaKey) return;
+
+		event.preventDefault();
+		handleSubmit();
 	}
 
 	function attemptCancel() {
@@ -59,8 +81,8 @@
 		if (isUserMessage && saveWithoutRegenerate && editCtx.showSaveOnlyOption) {
 			editCtx.saveOnly();
 		} else {
-			if (isAssistantMessage && editCtx.setShouldBranchAfterEdit) {
-				editCtx.setShouldBranchAfterEdit(branchAfterEdit);
+			if (editCtx.showBranchAfterEditOption) {
+				editCtx.setShouldBranchAfterEdit?.(branchAfterEdit);
 			}
 
 			editCtx.save();
@@ -68,6 +90,16 @@
 
 		saveWithoutRegenerate = false;
 		branchAfterEdit = false;
+	}
+
+	function handleContentInput(event: Event & { currentTarget: EventTarget & HTMLTextAreaElement }) {
+		editCtx.setContent(event.currentTarget.value);
+	}
+
+	function handleReasoningInput(
+		event: Event & { currentTarget: EventTarget & HTMLTextAreaElement }
+	) {
+		editCtx.setReasoning?.(event.currentTarget.value);
 	}
 
 	function handleAttachmentRemove(index: number) {
@@ -89,6 +121,15 @@
 		editCtx.setUploadedFiles([...editCtx.editedUploadedFiles, ...processed]);
 	}
 
+	let contentEl = $state<HTMLTextAreaElement | null>(null);
+
+	$effect(() => {
+		if (!contentEl) return;
+
+		contentEl.focus();
+		contentEl.setSelectionRange(contentEl.value.length, contentEl.value.length);
+	});
+
 	$effect(() => {
 		chatStore.setEditModeActive(handleFilesAdd);
 
@@ -100,21 +141,52 @@
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
-<div class="relative w-full max-w-[80%]">
-	<ChatForm
-		bind:uploadedFiles={editCtx.editedUploadedFiles}
-		attachments={editCtx.editedExtras}
-		onAttachmentRemove={handleAttachmentRemove}
-		onFilesAdd={handleFilesAdd}
-		onSubmit={handleSubmit}
-		onUploadedFileRemove={handleUploadedFileRemove}
-		onValueChange={editCtx.setContent}
-		placeholder="Edit your message..."
-		showAddButton={editCtx.messageRole === MessageRole.USER}
-		showModelSelector={editCtx.messageRole === MessageRole.USER}
-		value={editCtx.editedContent}
-	/>
-</div>
+{#if isAssistantMessage}
+	<div class="grid w-full max-w-[80%] gap-3">
+		{#if editCtx.showReasoningField}
+			<div class="grid gap-1">
+				<Label class="text-xs text-muted-foreground" for="edit-reasoning">Reasoning</Label>
+
+				<Textarea
+					class="max-h-64 overflow-y-auto font-mono text-xs"
+					id="edit-reasoning"
+					oninput={handleReasoningInput}
+					onkeydown={handleFieldKeydown}
+					value={editCtx.editedReasoning}
+				/>
+			</div>
+		{/if}
+
+		<div class="grid gap-1">
+			<Label class="text-xs text-muted-foreground" for="edit-response">Response</Label>
+
+			<Textarea
+				bind:ref={contentEl}
+				class="max-h-96 overflow-y-auto"
+				id="edit-response"
+				oninput={handleContentInput}
+				onkeydown={handleFieldKeydown}
+				value={editCtx.editedContent}
+			/>
+		</div>
+	</div>
+{:else}
+	<div class="relative w-full max-w-[80%]">
+		<ChatForm
+			bind:uploadedFiles={editCtx.editedUploadedFiles}
+			attachments={editCtx.editedExtras}
+			onAttachmentRemove={handleAttachmentRemove}
+			onFilesAdd={handleFilesAdd}
+			onSubmit={handleSubmit}
+			onUploadedFileRemove={handleUploadedFileRemove}
+			onValueChange={editCtx.setContent}
+			placeholder="Edit your message..."
+			showContextGauge={false}
+			showWorkingDirectory={false}
+			value={editCtx.editedContent}
+		/>
+	</div>
+{/if}
 
 <div class="mt-2 flex w-full max-w-[80%] items-center justify-between">
 	{#if isUserMessage && editCtx.showSaveOnlyOption}
@@ -125,7 +197,7 @@
 				Update without re-sending
 			</label>
 		</div>
-	{:else if isAssistantMessage}
+	{:else if editCtx.showBranchAfterEditOption}
 		<div class="flex items-center gap-2">
 			<Switch bind:checked={branchAfterEdit} class="scale-75" id="branch-after-edit" />
 
@@ -137,11 +209,27 @@
 		<div></div>
 	{/if}
 
-	<Button class="h-7 px-3 text-xs" onclick={attemptCancel} size="sm" variant="ghost">
-		<X class="mr-1 h-3 w-3" />
+	<div class="flex items-center gap-1">
+		<Button class="h-7 px-3 text-xs" onclick={attemptCancel} size="sm" variant="ghost">
+			<X class="mr-1 h-3 w-3" />
 
-		Cancel
-	</Button>
+			Cancel
+		</Button>
+
+		{#if isAssistantMessage}
+			<Button
+				class="h-7 px-3 text-xs"
+				disabled={!canSubmit}
+				onclick={handleSubmit}
+				size="sm"
+				variant="ghost"
+			>
+				<Check class="mr-1 h-3 w-3" />
+
+				Save
+			</Button>
+		{/if}
+	</div>
 </div>
 
 <DialogConfirmation

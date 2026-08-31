@@ -75,7 +75,9 @@
 		isLoading?: boolean;
 		placeholder?: string;
 		showAddButton?: boolean;
+		showContextGauge?: boolean;
 		showModelSelector?: boolean;
+		showWorkingDirectory?: boolean;
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
@@ -103,7 +105,9 @@
 		onValueChange,
 		placeholder = 'Type a message...',
 		showAddButton = true,
+		showContextGauge = true,
 		showModelSelector = true,
+		showWorkingDirectory = true,
 		uploadedFiles = $bindable([]),
 		value = $bindable('')
 	}: Props = $props();
@@ -633,15 +637,18 @@
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ files: uploadedFiles, message: value })}
 				{showAddButton}
+				{showContextGauge}
 				{showModelSelector}
 				{uploadedFiles}
 			/>
 		</div>
 	</div>
 
-	<ContextGaugePopup />
+	{#if showContextGauge}
+		<ContextGaugePopup />
+	{/if}
 
-	{#if conversationsStore.preferences.hasEnabledCwdTools()}
+	{#if showWorkingDirectory && conversationsStore.preferences.hasEnabledCwdTools()}
 		<ChatFormCurrentWorkingDirectory
 			bind:query={pickers.workingDirectoryQuery}
 			customAnchor={mentionAnchor}

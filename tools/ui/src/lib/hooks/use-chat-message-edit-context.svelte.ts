@@ -47,11 +47,18 @@ export function useChatMessageEditContext(options: UseChatMessageEditContextOpti
 
 	setChatMessageEditContext({
 		cancel: handleCancelEdit,
+		get canEdit() {
+			return true;
+		},
 		get editedContent() {
 			return editedContent;
 		},
 		get editedExtras() {
 			return editedExtras;
+		},
+		// A pending user message carries no reasoning, so the edit form stays single field
+		get editedReasoning() {
+			return '';
 		},
 		get editedUploadedFiles() {
 			return editedUploadedFiles;
@@ -68,6 +75,9 @@ export function useChatMessageEditContext(options: UseChatMessageEditContextOpti
 		get originalExtras() {
 			return options.getExtras();
 		},
+		get originalReasoning() {
+			return '';
+		},
 		save: handleSaveEdit,
 		saveOnly: handleSaveEdit,
 		setContent: (c: string) => {
@@ -83,6 +93,9 @@ export function useChatMessageEditContext(options: UseChatMessageEditContextOpti
 			return false;
 		},
 		get showBranchAfterEditOption() {
+			return false;
+		},
+		get showReasoningField() {
 			return false;
 		},
 		get showSaveOnlyOption() {
