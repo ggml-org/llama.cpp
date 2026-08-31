@@ -32,6 +32,10 @@ pip install gguf[gui]
 
 [gguf/scripts/gguf_editor_gui.py](https://github.com/ggml-org/llama.cpp/blob/master/gguf-py/gguf/scripts/gguf_editor_gui.py) — Allows for viewing, editing, adding, or removing metadata values within a GGUF file as well as viewing its tensors with a Qt interface.
 
+gguf/scripts/shrink_embd.py — To delete some dimensions in gguf model.
+
+gguf/scripts/shrink_layers.py — To delete some layers in gguf model.
+
 ## Development
 Maintainers who participate in development of this package are advised to install it in editable mode:
 
