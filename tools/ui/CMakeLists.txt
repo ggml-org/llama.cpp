@@ -49,10 +49,26 @@ if(CMAKE_CROSSCOMPILING)
         set(LLAMA_UI_EMBED_EXE "${CMAKE_CURRENT_BINARY_DIR}/llama-ui-embed-host")
     endif()
 
+    # The host compiler is not necessarily the one the toolchain file picked. A
+    # Windows toolchain file sets CMAKE_SYSTEM_NAME, which makes CMake treat the
+    # build as cross-compiling even on a Windows host, and HOST_CXX_COMPILER then
+    # resolves to MSVC. MSVC does not take GNU-style flags: it ignores -std=c++17
+    # with only a D9002 warning, drops to C++14, and embed.cpp then fails because
+    # <filesystem> is C++17-only. Pick the spelling the host compiler understands.
+    get_filename_component(HOST_CXX_NAME "${HOST_CXX_COMPILER}" NAME_WE)
+    if(HOST_CXX_NAME STREQUAL "cl")
+        set(LLAMA_UI_EMBED_FLAGS
+            /nologo /O2 /EHsc /std:c++17
+            "/Fo:${CMAKE_CURRENT_BINARY_DIR}/llama-ui-embed-host.obj"
+            "/Fe:${LLAMA_UI_EMBED_EXE}")
+    else()
+        set(LLAMA_UI_EMBED_FLAGS -O2 -std=c++17 -o "${LLAMA_UI_EMBED_EXE}")
+    endif()
+
     add_custom_command(
         OUTPUT  "${LLAMA_UI_EMBED_EXE}"
-        COMMAND "${HOST_CXX_COMPILER}" -O2 -std=c++17
-                -o "${LLAMA_UI_EMBED_EXE}" "${CMAKE_CURRENT_SOURCE_DIR}/embed.cpp"
+        COMMAND "${HOST_CXX_COMPILER}" ${LLAMA_UI_EMBED_FLAGS}
+                "${CMAKE_CURRENT_SOURCE_DIR}/embed.cpp"
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/embed.cpp"
         COMMENT "Building llama-ui-embed (host)"
         VERBATIM
