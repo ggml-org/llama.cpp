@@ -63,7 +63,15 @@ struct State {
     float *part_m = nullptr, *part_l = nullptr, *part_acc = nullptr; // split-K attention partials
     float *logits = nullptr, *pmax = nullptr;
     float *draft_logits = nullptr, *draft_probs = nullptr;
+#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
+    float *topk_vals = nullptr;
+    void  *topk_tmp = nullptr;
+    size_t topk_tmp_bytes = 0;
+#endif
     int *pidx = nullptr, *tok_out = nullptr;
+#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
+    int *topk_idx = nullptr;
+#endif
     int *draft_ids = nullptr, *draft_count = nullptr, *draft_active = nullptr;
     int nparts = 0;
     size_t max_pos = 131072;
@@ -635,6 +643,22 @@ static int spec_hip_init_impl(const char * weights_dir, const char * ids_path,
     SC_CHECK(hipMalloc(&s.draft_ids, (size_t) 8 * MTP_DRAFT_TOP_K * 4));
     SC_CHECK(hipMalloc(&s.draft_logits, (size_t) 8 * MTP_DRAFT_TOP_K * 4));
     SC_CHECK(hipMalloc(&s.draft_probs, (size_t) 8 * MTP_DRAFT_TOP_K * 4));
+#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
+    SC_CHECK(hipMalloc(&s.topk_vals, (size_t) MTP_DRAFT_TOP_K * sizeof(float)));
+    SC_CHECK(hipMalloc(&s.topk_idx, (size_t) MTP_DRAFT_TOP_K * sizeof(int)));
+    {
+        rocprim::counting_iterator<int> indices(0);
+        const hipError_t status = rocprim::topk_pairs<rocprim::default_config, true>(
+                nullptr, s.topk_tmp_bytes, s.logits, s.topk_vals, indices, s.topk_idx,
+                (uint32_t) N_HEAD_ROWS, (uint32_t) MTP_DRAFT_TOP_K,
+                rocprim::identity_decomposer{}, nullptr);
+        if (status != hipSuccess) {
+            fprintf(stderr, "[hip-sidecar] rocPRIM top-k query failed: %s\n", hipGetErrorString(status));
+            return -1;
+        }
+        SC_CHECK(hipMalloc(&s.topk_tmp, s.topk_tmp_bytes));
+    }
+#endif
     SC_CHECK(hipMalloc(&s.draft_count, 4));
     SC_CHECK(hipMalloc(&s.draft_active, 4));
     if (const char * mp = getenv("LLAMA_SPEC_HIP_MAX_POS")) {
@@ -966,10 +990,28 @@ static int spec_hip_draft_stochastic_impl(int32_t seq_id, int32_t id_last, int32
         deq_row_q4_0<<<(N_EMBD + 255) / 256, 256, 0, S.st>>>(S.W_embd, tok_src, c.x_tok, N_EMBD, SC_N_VOCAB);
         block_phase1(c, S.st, xh_in, n_past + j, q->Kc, q->Vc);
         block_phase2(c, S.st, n_past + j, nullptr, q->Kc, q->Vc, true);
+#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
+        {
+            rocprim::counting_iterator<int> indices(0);
+            size_t topk_bytes = S.topk_tmp_bytes;
+            const hipError_t status = rocprim::topk_pairs<rocprim::default_config, true>(
+                    S.topk_tmp, topk_bytes, S.logits, S.topk_vals, indices, S.topk_idx,
+                    (uint32_t) N_HEAD_ROWS, (uint32_t) MTP_DRAFT_TOP_K,
+                    rocprim::identity_decomposer{}, S.st);
+            if (status != hipSuccess) {
+                fprintf(stderr, "[hip-sidecar] rocPRIM top-k failed: %s\n", hipGetErrorString(status));
+                return -1;
+            }
+            topk_final<<<1, 1, 0, S.st>>>(S.topk_vals, S.topk_idx, 1, S.remap_d, SC_N_VOCAB,
+                    S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
+                    S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
+        }
+#else
         topk_partial<<<S.nparts, 256, 0, S.st>>>(S.logits, N_HEAD_ROWS, S.pmax, S.pidx);
         topk_final<<<1, 256, 0, S.st>>>(S.pmax, S.pidx, S.nparts, S.remap_d, SC_N_VOCAB,
                 S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
                 S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
+#endif
         sample_topk<<<1, 1, 0, S.st>>>(
                 S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
                 S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K,

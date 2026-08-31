@@ -33,7 +33,11 @@ except ImportError as exc:
 else:
     _GGUF_IMPORT_ERROR = None
 
-from validate_assets import dflash_schema, validate_schema
+from validate_assets import (
+    QWEN35MOE_MTP_SCHEMA,
+    dflash_schema,
+    validate_schema,
+)
 
 
 ID_FIELDS = ("qwen35.nextn.draft_vocab_ids", "qwen3.nextn.draft_vocab_ids")
@@ -94,6 +98,32 @@ def get_tensor(reader: GGUFReader, name: str):
         if value.name == name:
             return value
     raise ValueError(f"missing required tensor: {name}")
+
+
+def metadata_value(reader: GGUFReader, key: str):
+    field = reader.get_field(key)
+    if field is None:
+        raise ValueError(f"missing required metadata: {key}")
+    return field.contents()
+
+
+def require_metadata(reader: GGUFReader, expected: dict[str, object], label: str) -> None:
+    for key, wanted in expected.items():
+        observed = metadata_value(reader, key)
+        if observed != wanted:
+            raise ValueError(f"{label}: expected {key}={wanted!r}, found {observed!r}")
+
+
+def tensor_entries(reader: GGUFReader) -> list[dict]:
+    return [
+        {
+            "name": value.name,
+            "dtype": str(int(value.tensor_type)),
+            "shape": [int(item) for item in value.shape],
+            "nbytes": int(value.data.nbytes),
+        }
+        for value in reader.tensors
+    ]
 
 
 def read_ids(path: Path | None, reader: GGUFReader) -> list[int]:
@@ -335,6 +365,135 @@ def prepare_mtp(args: argparse.Namespace) -> None:
     print(f"prepared MTP target: {prepared}")
 
 
+def _qwen35moe_q4_tensor(value):
+    shape = [int(item) for item in value.shape]
+    dequantized = quants.dequantize(value.data, value.tensor_type).reshape(*reversed(shape))
+    return quants.quantize(dequantized, GGMLQuantizationType.Q4_0)
+
+
+def _qwen35moe_f32_tensor(value):
+    shape = [int(item) for item in value.shape]
+    dequantized = quants.dequantize(value.data, value.tensor_type).reshape(*reversed(shape))
+    return np.asarray(dequantized, dtype=np.float32)
+
+
+def prepare_qwen35moe_mtp(args: argparse.Namespace) -> None:
+    """Prepare the Qwen3.6 35B-A3B MoE MTP bundle."""
+    args.output.mkdir(parents=True, exist_ok=True)
+    outputs = [
+        args.output / "drafter_weights.bin",
+        args.output / "drafter_manifest.json",
+        args.output / "draft_head_ids.bin",
+    ]
+    refuse_existing(outputs, args.force)
+    if args.ids is None:
+        raise ValueError("Qwen3.6 35B-A3B MTP requires --ids with 40,960 output-head IDs")
+
+    source = open_gguf(args.target)
+    require_metadata(
+        source,
+        {
+            "general.architecture": "qwen35moe",
+            "general.size_label": "35B-A3B",
+            "qwen35moe.block_count": 41,
+            "qwen35moe.embedding_length": 2048,
+            "qwen35moe.attention.head_count": 16,
+            "qwen35moe.attention.head_count_kv": 2,
+            "qwen35moe.attention.key_length": 256,
+            "qwen35moe.attention.value_length": 256,
+            "qwen35moe.expert_count": 256,
+            "qwen35moe.expert_used_count": 8,
+            "qwen35moe.expert_feed_forward_length": 512,
+            "qwen35moe.nextn_predict_layers": 1,
+            "qwen35moe.rope.dimension_count": 64,
+        },
+        "Qwen3.6 35B-A3B target",
+    )
+    if "Qwen3.6" not in str(metadata_value(source, "general.name")):
+        raise ValueError("target model identity is not Qwen3.6")
+    tokens = metadata_value(source, "tokenizer.ggml.tokens")
+    if len(tokens) != 248_320:
+        raise ValueError(f"Qwen3.6 35B-A3B target must have 248,320 tokens, found {len(tokens):,}")
+    if nextn_block(source) != 40:
+        raise ValueError("Qwen3.6 35B-A3B MTP block must be block 40")
+
+    selected_names = set(QWEN35MOE_MTP_SCHEMA)
+    source_names = {value.name for value in source.tensors}
+    if not selected_names.issubset(source_names):
+        missing = sorted(selected_names - source_names)
+        raise ValueError(f"Qwen3.6 35B-A3B source is missing required tensors: {missing}")
+
+    prepared = args.output / "qwen35moe-mtp-q4.gguf"
+    prepared_outputs = [prepared]
+    refuse_existing(prepared_outputs, args.force)
+    source_hash = sha256(args.target)
+    identity_ids = read_ids(args.ids, source)
+    id_hash = hashlib.sha256(struct.pack(f"<{len(identity_ids)}i", *identity_ids)).hexdigest()
+
+    with temporary_output(prepared) as temporary:
+        writer = GGUFWriter(str(temporary), "qwen35moe")
+        try:
+            copy_metadata(source, writer, set(ID_FIELDS) | {"qwen35moe.nextn.draft_vocab_ids"})
+            writer.add_key_value(
+                "qwen35moe.nextn.draft_vocab_ids",
+                identity_ids,
+                GGUFValueType.ARRAY,
+                sub_type=GGUFValueType.INT32,
+            )
+            for value in source.tensors:
+                if value.name not in selected_names:
+                    continue
+                if value.name == "output.weight":
+                    raw_head, vocabulary, _ = row_view(value)
+                    if identity_ids[-1] >= vocabulary:
+                        raise ValueError("draft-head ID exceeds Qwen3.6 output vocabulary")
+                    gathered = np.ascontiguousarray(raw_head[np.asarray(identity_ids, dtype=np.int64)])
+                    dequantized = quants.dequantize(gathered, value.tensor_type).reshape(
+                        len(identity_ids), int(value.shape[0]))
+                    converted = quants.quantize(dequantized, GGMLQuantizationType.Q4_0)
+                    raw_shape = converted.shape
+                    raw_dtype = GGMLQuantizationType.Q4_0
+                elif value.tensor_type == GGMLQuantizationType.F32:
+                    converted = value.data
+                    raw_shape = value.data.shape
+                    raw_dtype = GGMLQuantizationType.F32
+                elif value.tensor_type == GGMLQuantizationType.BF16:
+                    converted = _qwen35moe_f32_tensor(value)
+                    raw_shape = converted.shape
+                    raw_dtype = GGMLQuantizationType.F32
+                else:
+                    converted = _qwen35moe_q4_tensor(value)
+                    raw_shape = converted.shape
+                    raw_dtype = GGMLQuantizationType.Q4_0
+                writer.add_tensor(value.name, converted, raw_shape=raw_shape, raw_dtype=raw_dtype)
+            writer.write_header_to_file()
+            writer.write_kv_data_to_file()
+            writer.write_tensors_to_file(progress=True)
+        finally:
+            writer.close()
+        os.replace(temporary, prepared)
+
+    prepared_reader = open_gguf(prepared)
+    values = [value for value in prepared_reader.tensors if value.name in selected_names]
+    entries = tensor_entries(prepared_reader)
+    entries = [entry for entry in entries if entry["name"] in selected_names]
+    validate_schema(entries, QWEN35MOE_MTP_SCHEMA, "Qwen3.6 35B-A3B MTP")
+    write_blob(
+        values,
+        args.output / "drafter_weights.bin",
+        args.output / "drafter_manifest.json",
+        args.target,
+        source_hash,
+        {
+            "provider": "qwen35moe-mtp",
+            "source_file": args.target.name,
+            "draft_ids_sha256": id_hash,
+        },
+    )
+    write_ids(args.output / "draft_head_ids.bin", identity_ids)
+    print(f"prepared Qwen3.6 35B-A3B MTP bundle: {args.output}")
+
+
 def prepare_dflash(args: argparse.Namespace) -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     outputs = [
@@ -441,6 +600,14 @@ def build_parser() -> argparse.ArgumentParser:
     mtp.add_argument("--model-name", help="output GGUF filename (directories are rejected)")
     mtp.add_argument("--force", action="store_true", help="replace existing outputs")
     mtp.set_defaults(run=prepare_mtp)
+
+    qwen35moe_mtp = commands.add_parser("qwen35moe-mtp")
+    qwen35moe_mtp.add_argument("--target", type=Path, required=True)
+    qwen35moe_mtp.add_argument("--ids", type=Path, required=True)
+    qwen35moe_mtp.add_argument("--output", type=Path, required=True)
+    qwen35moe_mtp.add_argument("--force", action="store_true", help="replace existing outputs")
+    qwen35moe_mtp.set_defaults(run=prepare_qwen35moe_mtp)
+
 
     dflash = commands.add_parser("dflash")
     dflash.add_argument("--target", type=Path, required=True)

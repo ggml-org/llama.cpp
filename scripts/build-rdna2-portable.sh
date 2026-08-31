@@ -14,6 +14,7 @@ GGML_NATIVE="${GGML_NATIVE:-ON}"
 GGML_BACKEND_DL="${GGML_BACKEND_DL:-ON}"
 GGML_CPU_ALL_VARIANTS="${GGML_CPU_ALL_VARIANTS:-ON}"
 GGML_HIP_RCCL="${GGML_HIP_RCCL:-ON}"
+BUILD_SPEC_SIDECARS="${BUILD_SPEC_SIDECARS:-ON}"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -32,6 +33,8 @@ Options:
   --target-arch ARCH     AMD GPU target, normally gfx1030 (or TARGET_ARCH=ARCH)
   --build-dir PATH       CMake build directory (or BUILD_DIR=PATH)
   --jobs N               Parallel build jobs (or JOBS=N)
+  --no-spec-sidecars     Skip the optional speculative sidecar libraries
+                         (or BUILD_SPEC_SIDECARS=OFF)
   -h, --help             Show this help
 
 Examples:
@@ -61,6 +64,10 @@ while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 ]] || fail "--jobs requires a value"
             JOBS=$2
             shift 2
+            ;;
+        --no-spec-sidecars)
+            BUILD_SPEC_SIDECARS=OFF
+            shift
             ;;
         -h|--help)
             usage
@@ -230,6 +237,8 @@ CMAKE_FLAGS=(
     -DLLAMA_BUILD_EXAMPLES=ON
     -DLLAMA_BUILD_TOOLS=ON
     -DLLAMA_BUILD_TESTS=OFF
+    -DLLAMA_BUILD_SPEC_SIDECARS="$BUILD_SPEC_SIDECARS"
+    -DLLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES="$TARGET_ARCH"
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
 )
 
@@ -251,7 +260,22 @@ SERVER="$BUILD_DIR/bin/llama-server"
 if ! compgen -G "$BUILD_DIR/bin/*ggml-hip*.so*" >/dev/null 2>&1; then
     fail "HIP backend library was not produced under $BUILD_DIR/bin"
 fi
+case "$BUILD_SPEC_SIDECARS" in
+    ON|1|TRUE|on|true)
+        for so in spec_hip_sidecar.so spec_dflash_sidecar.so spec_qwen35moe_mtp_sidecar.so; do
+            [[ -f "$BUILD_DIR/bin/$so" ]] || fail "speculative sidecar was not produced: $so"
+        done
+        ;;
+esac
 
 echo
 echo "Build complete: $SERVER"
 echo "For V620 runtime optimizations set HSA_OVERRIDE_GFX_VERSION=10.3.0 before launching."
+case "$BUILD_SPEC_SIDECARS" in
+    ON|1|TRUE|on|true)
+        echo "Speculative sidecars built (dormant unless SPEC_SIDECAR=1 at runtime)."
+        echo "For automatic discovery, place prepared bundles at:"
+        echo "  $BUILD_DIR/bin/spec-sidecar-mtp and $BUILD_DIR/bin/spec-sidecar-dflash"
+        echo "See docs/spec-sidecars.md. Disable at build time with BUILD_SPEC_SIDECARS=OFF."
+        ;;
+esac

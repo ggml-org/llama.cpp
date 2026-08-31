@@ -64,7 +64,7 @@ jobs:
     needs: create_tag
     uses: ./.github/workflows/ui-build.yml
     with:
-      hf_ui_version: ${{ needs.create_tag.outputs.source_tag }}
+      ui_version: ${{ needs.create_tag.outputs.source_tag }}
 
   prepare_matrices:
     name: Prepare Docker matrices
@@ -162,7 +162,7 @@ jobs:
         if: ${{ matrix.config.prebuilt_ui == true }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: Set up QEMU
