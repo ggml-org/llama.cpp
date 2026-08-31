@@ -1027,6 +1027,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     std::vector<float> features_buf;
     std::vector<llama_pos> verify_pos_first;
     std::vector<int32_t> verify_rows;
+    // Sequences whose sidecar KV no longer mirrors the target prefix (e.g. an
+    // M-RoPE image prompt made target positions diverge from the dense draft
+    // rows). Stale sequences skip sidecar drafting until the next state reset
+    // instead of disabling the sidecar for the whole process.
+    std::vector<bool> sidecar_stale;
 
     common_spec_sidecar_dflash sidecar;
     bool sidecar_target_only = false; // runtime failure or unsupported sampling mode
@@ -1188,6 +1193,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         selector_reset.assign(n_seq, true);
         verify_pos_first.assign(n_seq, -1);
         verify_rows.assign(n_seq, 0);
+        sidecar_stale.assign(n_seq, false);
 
         // offload draft sampling to the backend
         backend_chains.assign(n_seq, nullptr);
@@ -1364,6 +1370,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             }
             const int32_t n_rows = contiguous[seq_id] ? end - beg + 1 : (int32_t) indices.size();
             if (n_rows <= 0) continue;
+            if (sidecar_stale[seq_id]) {
+                verify_rows[seq_id] = 0;
+                verify_pos_first[seq_id] = -1;
+                continue;
+            }
             verify_rows[seq_id] = n_rows;
             verify_pos_first[seq_id] = batch_in.pos[contiguous[seq_id] ? beg : indices.front()];
 
@@ -1406,10 +1417,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 rc = sidecar.chunk(seq_id, positions.data(), features_buf.data(), n_rows);
             }
             if (rc != 0) {
-                sidecar.disable();
-                sidecar_target_only = true;
-                SPC_ERR("%s", "DFlash sidecar target feature update failed; entering target-only mode\n");
-                return true;
+                // Position mismatch (e.g. M-RoPE image prompt) or transient
+                // failure: pause this sequence until reset, keep the sidecar.
+                sidecar_stale[seq_id] = true;
+                verify_rows[seq_id] = 0;
+                verify_pos_first[seq_id] = -1;
+                SPC_WRN("DFlash sidecar: seq %d target feature update rejected; drafting paused until reset\n", (int) seq_id);
             }
         }
         return true;
@@ -1429,9 +1442,17 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         const bool has_embeddings = batch_in.embd  != nullptr;
         if (has_tokens == has_embeddings) {
             if (sidecar.active()) {
-                sidecar.disable();
-                sidecar_target_only = true;
-                SPC_WRN("%s", "DFlash sidecar requires text token batches; entering target-only mode\n");
+                // Image/multimodal embedding batches are not representable in the
+                // sidecar's dense KV. Mark the affected sequences stale so they
+                // skip sidecar drafting until the next reset; other sequences and
+                // future requests keep the sidecar.
+                for (int32_t k = 0; k < batch_in.n_tokens; ++k) {
+                    const llama_seq_id sid = batch_in.seq_id != nullptr ? batch_in.seq_id[k][0] : 0;
+                    if (sid >= 0 && sid < (llama_seq_id) n_seq && !sidecar_stale[sid]) {
+                        sidecar_stale[sid] = true;
+                        SPC_WRN("DFlash sidecar: seq %d stale after non-token batch; drafting paused until reset\n", (int) sid);
+                    }
+                }
             }
             return true;
         }
@@ -1602,7 +1623,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         if (sidecar.active()) {
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 auto & dp = dparams[seq_id];
-                if (!dp.drafting) {
+                if (!dp.drafting || sidecar_stale[seq_id]) {
                     continue;
                 }
                 const bool stochastic = dp.temperature > 0.0f;
@@ -1883,6 +1904,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) override {
         if (!sidecar.active()) return false;
+        if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq && sidecar_stale[seq_id]) return false;
         if (!sidecar.get_state(seq_id, data)) {
             sidecar.disable();
             sidecar_target_only = true;
@@ -1905,6 +1927,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     bool reset_state(llama_seq_id seq_id) override {
         if (!sidecar.active()) return true;
+        if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq && sidecar_stale[seq_id]) {
+            sidecar_stale[seq_id] = false;
+            SPC_INF("DFlash sidecar: seq %d re-armed after reset\n", (int) seq_id);
+        }
         if (!sidecar.reset_state(seq_id)) {
             sidecar.disable();
             sidecar_target_only = true;
@@ -1916,6 +1942,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     bool truncate_state(llama_seq_id seq_id, llama_pos pos_max) override {
         if (!sidecar.active()) return true;
+        if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq && sidecar_stale[seq_id]) return true;
         if (!sidecar.truncate_state(seq_id, pos_max)) {
             sidecar.disable();
             sidecar_target_only = true;
@@ -1927,6 +1954,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     bool commit_state(llama_seq_id seq_id, llama_pos pos_max) override {
         if (!sidecar.active()) return true;
+        if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq && sidecar_stale[seq_id]) return true;
         if (!sidecar.commit_state(seq_id, pos_max)) {
             sidecar.disable();
             sidecar_target_only = true;
@@ -1938,6 +1966,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     bool rebase_state(llama_seq_id seq_id, llama_pos pos_min, llama_pos pos_max, llama_pos delta) override {
         if (!sidecar.active()) return true;
+        if (seq_id >= 0 && seq_id < (llama_seq_id) n_seq && sidecar_stale[seq_id]) return true;
         if (!sidecar.rebase_state(seq_id, pos_min, pos_max, delta)) {
             sidecar.disable();
             sidecar_target_only = true;
