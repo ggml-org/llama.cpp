@@ -7,12 +7,13 @@
 #include "llama.h"
 #include "llama-cpp.h"
 
-// TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
 #include "../src/llama-model-saver.h"
+#include "../src/llama-ext.h"
 
 #include <cinttypes>
 #include <cstddef>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -753,6 +754,498 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
     return all_ok ? 0 : 1;
 }
 
+
+// output_reorder() permutes the extracted buffers by output row, but embd_layer_inp holds one
+// row per token and those rows arrive in ubatch order.
+// two sequences split over two ubatches therefore need the token permutation, not the output one.
+// embd_nextn has two layouts and output_reorder() permutes them differently: masked rows are
+// output-indexed, unmasked rows are token-indexed. Both are checked here, and so is the case the
+// layout snapshot exists for -- changing the mode between the decode and the read.
+//
+// The values are the whole model output, so unlike a layer-0 input they depend on the sequence
+// history and are not bit-comparable across batch shapes. Each row is instead matched to the
+// nearest reference row: a correct permutation puts row i closest to reference i, and a wrong one
+// puts it closest to some other. That tests the ordering without assuming numerical identity.
+static int test_output_reorder_nextn_rows(const size_t seed) {
+    ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (dev_cpu == nullptr) {
+        printf("%s: SKIPPED, no CPU backend device\n", __func__);
+        return 0;
+    }
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_QWEN35, false);
+
+    llama_model_params model_params = llama_model_default_params();
+    model_params.progress_callback = silent_model_load_progress;
+
+    std::vector<ggml_backend_dev_t> devs = { dev_cpu, nullptr };
+    model_params.devices = devs.data();
+
+    size_t tmp = seed;
+    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tmp, model_params));
+    if (!model) {
+        throw std::runtime_error("failed to create llama model");
+    }
+
+    // nextn rows are n_embd_out wide, not n_embd
+    const uint32_t n_embd = llama_model_n_embd_out(model.get());
+
+    const llama_token tokens[4] = { 3, 5, 7, 11 };
+
+    // two sequences of two tokens: with n_ubatch 2 the splitter regroups them to 0, 2, 1, 3,
+    // with n_ubatch 4 it does not, so the second is a reference in batch order.
+    const llama_pos    pos[4]     = { 0, 1, 0, 1 };
+    const llama_seq_id seq[4]     = { 0, 0, 1, 1 };
+    const bool         out_all[4] = { true, true, true, true };
+    const bool         out_mid[4] = { false, true, true, false };
+
+    // returns the nextn rows as the getter presents them, one entry per batch position, with
+    // absent rows left empty. `flip_to` toggles the mode after the decode and before the read.
+    auto decode_rows = [&](uint32_t n_ubatch, bool masked, const bool * output, int flip_to) {
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.n_ctx           = 128;
+        ctx_params.n_batch         = 4;
+        ctx_params.n_ubatch        = n_ubatch;
+        ctx_params.n_seq_max       = 2;
+        ctx_params.n_threads       = 2;
+        ctx_params.n_threads_batch = 2;
+
+        llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
+        if (!lctx) {
+            throw std::runtime_error("failed to create llama context");
+        }
+
+        llama_set_embeddings_nextn(lctx.get(), true, masked);
+
+        // a token-row buffer must also be live, so that token_swaps is built even when nextn is
+        // masked. that combination is what lets a later mode flip address the wrong buffer.
+        llama_set_embeddings_layer_inp(lctx.get(), 0, true);
+
+        llama_batch batch = llama_batch_init(4, 0, 1);
+        for (int i = 0; i < 4; i++) {
+            common_batch_add(batch, tokens[i], pos[i], { seq[i] }, output[i]);
+        }
+
+        const int rc = llama_decode(lctx.get(), batch);
+        llama_batch_free(batch);
+        if (rc != 0) {
+            throw std::runtime_error("failed to decode batch");
+        }
+
+        if (flip_to >= 0) {
+            llama_set_embeddings_nextn(lctx.get(), true, flip_to != 0);
+        }
+
+        std::vector<std::vector<float>> rows(4);
+        for (int i = 0; i < 4; i++) {
+            if (masked && !output[i]) {
+                continue;
+            }
+            const float * r = llama_get_embeddings_nextn_ith(lctx.get(), i);
+            if (r == nullptr) {
+                throw std::runtime_error("nextn row unavailable");
+            }
+            rows[i].assign(r, r + n_embd);
+        }
+        return rows;
+    };
+
+    const std::vector<std::vector<float>> ref = decode_rows(4, false, out_all, -1);
+
+    // NaN never compares less, so a plain running minimum would accept a corrupt row as a match
+    auto nearest = [&](const std::vector<float> & row) {
+        for (uint32_t k = 0; k < n_embd; k++) {
+            if (!std::isfinite(row[k])) {
+                return -1;
+            }
+        }
+        int best = -1;
+        double best_d = 0.0, second_d = 0.0;
+        for (int j = 0; j < 4; j++) {
+            double d = 0.0;
+            for (uint32_t k = 0; k < n_embd; k++) {
+                if (!std::isfinite(ref[j][k])) {
+                    return -1;
+                }
+                const double e = row[k] - ref[j][k];
+                d += e*e;
+            }
+            if (best < 0 || d < best_d) {
+                second_d = best < 0 ? d : best_d;
+                best     = j;
+                best_d   = d;
+            } else if (d < second_d || second_d == best_d) {
+                second_d = d;
+            }
+        }
+        // these rows are whole model outputs, so a tie identifies nothing
+        if (best < 0 || !(second_d > best_d*4.0 + 1e-12)) {
+            return -1;
+        }
+        return best;
+    };
+
+    struct { const char * name; bool masked; const bool * output; int flip_to; } cases[] = {
+        { "unmasked, all outputs",              false, out_all, -1 },
+        { "unmasked, partial outputs",          false, out_mid, -1 },
+        { "masked, partial outputs",            true,  out_mid, -1 },
+        { "masked decode then set unmasked",    true,  out_mid,  0 },
+        { "unmasked decode then set masked",    false, out_mid,  1 },
+    };
+
+    int n_fail = 0;
+
+    for (const auto & c : cases) {
+        const std::vector<std::vector<float>> got = decode_rows(2, c.masked, c.output, c.flip_to);
+
+        // without this, a case whose rows all came back empty would compare nothing and still pass
+        int expect = 0;
+        for (int i = 0; i < 4; i++) {
+            if (!c.masked || c.output[i]) {
+                expect++;
+            }
+        }
+        int checked = 0;
+
+        for (int i = 0; i < 4; i++) {
+            if (got[i].empty()) {
+                continue;
+            }
+            checked++;
+            const int j = nearest(got[i]);
+            if (j < 0) {
+                printf("%s: %s: the row read back for batch position %d is not finite or matches no reference row\n",
+                        __func__, c.name, i);
+                n_fail++;
+            } else if (j != i) {
+                printf("%s: %s: the row read back for batch position %d is the one for %d\n",
+                        __func__, c.name, i, j);
+                n_fail++;
+            }
+        }
+
+        if (checked != expect) {
+            printf("%s: %s: compared %d rows, %d were due\n", __func__, c.name, checked, expect);
+            n_fail++;
+        }
+    }
+
+    if (n_fail == 0) {
+        printf("%s: OK\n", __func__);
+    }
+
+    return n_fail == 0 ? 0 : 1;
+}
+
+static int test_output_reorder_token_rows(const size_t seed) {
+    ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (dev_cpu == nullptr) {
+        printf("%s: SKIPPED, no CPU backend device\n", __func__);
+        return 0;
+    }
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_LLAMA, false);
+
+    llama_model_params model_params = llama_model_default_params();
+    model_params.progress_callback = silent_model_load_progress;
+
+    std::vector<ggml_backend_dev_t> devs = { dev_cpu, nullptr };
+    model_params.devices = devs.data();
+
+    size_t tmp = seed;
+    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tmp, model_params));
+    if (!model) {
+        throw std::runtime_error("failed to create llama model");
+    }
+
+    const uint32_t n_embd = llama_model_n_embd(model.get());
+
+    const llama_token tokens[4] = { 3, 5, 7, 11 };
+
+    auto decode_rows = [&](uint32_t n_ubatch, uint32_t n_seq_max,
+                           const llama_pos * pos, const llama_seq_id * seq, const bool * output) {
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.n_ctx           = 128;
+        ctx_params.n_batch         = 4;
+        ctx_params.n_ubatch        = n_ubatch;
+        ctx_params.n_seq_max       = n_seq_max;
+        ctx_params.n_threads       = 2;
+        ctx_params.n_threads_batch = 2;
+
+        llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
+        if (!lctx) {
+            throw std::runtime_error("failed to create llama context");
+        }
+
+        llama_set_embeddings_layer_inp(lctx.get(), 0, true);
+
+        llama_batch batch = llama_batch_init(4, 0, 1);
+        for (int i = 0; i < 4; i++) {
+            common_batch_add(batch, tokens[i], pos[i], { seq[i] }, output[i]);
+        }
+
+        const int rc = llama_decode(lctx.get(), batch);
+        llama_batch_free(batch);
+        if (rc != 0) {
+            throw std::runtime_error("failed to decode batch");
+        }
+
+        const float * layer = llama_get_embeddings_layer_inp(lctx.get(), 0);
+        return std::vector<float>(layer, layer + (size_t) 4*n_embd);
+    };
+
+    // A sweep over batch shapes and two output patterns. The fixed cases below pin the minimal
+    // repro; this covers what a single transposition does not reach. Instrumenting decode() over
+    // these 160 shapes counted, for the cycle structure: 10 single transpositions, 5 four-cycles,
+    // 3 with disjoint cycles including one of length three, 2 disjoint with a four-cycle, 1 of two
+    // disjoint transpositions, 1 of four disjoint cycles, and 68 identities.
+    //
+    // The same instrumentation counted 9 shapes where output_swaps is EMPTY while token_swaps is
+    // not. Those are the ones that show the two permutations are independent: with no output swap
+    // to apply, upstream does nothing at all and leaves the rows in ubatch order, so the defect is
+    // reachable without the selected outputs ever being out of order. The first output pattern
+    // never produces that case -- all 90 of its probes have a non-empty output_swaps -- which is
+    // why there are two.
+    //
+    // Neither breakdown is asserted: the permutations stop being observable from the output once
+    // they are correct.
+    //
+    // layer 0 is a pure embedding lookup, so a reference table built by decoding each id once in
+    // one sequence identifies any row by its token, with no tolerance.
+    auto probe_shapes = [&]() {
+        const uint32_t n_ref = 24;
+
+        std::vector<float> ref;
+        {
+            llama_context_params cp = llama_context_default_params();
+            cp.n_ctx = 128; cp.n_batch = n_ref; cp.n_ubatch = n_ref; cp.n_seq_max = 1;
+            cp.n_threads = 2; cp.n_threads_batch = 2;
+            llama_context_ptr c(llama_init_from_model(model.get(), cp));
+            llama_set_embeddings_layer_inp(c.get(), 0, true);
+            llama_batch b = llama_batch_init(n_ref, 0, 1);
+            for (uint32_t i = 0; i < n_ref; i++) {
+                common_batch_add(b, (llama_token) i, (llama_pos) i, { 0 }, true);
+            }
+            const int rc = llama_decode(c.get(), b);
+            llama_batch_free(b);
+            if (rc != 0) {
+                throw std::runtime_error("failed to decode reference batch");
+            }
+            const float * li = llama_get_embeddings_layer_inp(c.get(), 0);
+            ref.assign(li, li + (size_t) n_ref*n_embd);
+        }
+
+        int n_bad = 0, n_shapes = 0, n_attempted = 0;
+
+        for (uint32_t n_seq = 1; n_seq <= 4; n_seq++) {
+            for (uint32_t per_seq = 1; per_seq <= 4; per_seq++) {
+                const uint32_t n_tok = n_seq*per_seq;
+                if (n_tok > n_ref) {
+                    continue;
+                }
+                for (uint32_t ub : { 1u, 2u, 3u, 4u, 8u })
+                for (int opat = 0; opat < 2; opat++) {
+                    llama_context_params cp = llama_context_default_params();
+                    cp.n_ctx = 128*n_seq; cp.n_batch = std::max(n_tok, ub); cp.n_ubatch = ub;
+                    cp.n_seq_max = n_seq; cp.n_threads = 2; cp.n_threads_batch = 2;
+                    n_attempted++;
+                    llama_context_ptr c(llama_init_from_model(model.get(), cp));
+                    if (!c) {
+                        printf("%s: n_seq=%u per_seq=%u n_ubatch=%u opat=%d: context init failed\n",
+                                __func__, n_seq, per_seq, ub, opat);
+                        n_bad++;
+                        continue;
+                    }
+                    llama_set_embeddings_layer_inp(c.get(), 0, true);
+
+                    // sequences round-robined, so a batch spans ubatches and gets regrouped
+                    llama_batch b = llama_batch_init(n_tok, 0, 1);
+                    std::vector<llama_token> tok(n_tok);
+                    for (uint32_t i = 0; i < n_tok; i++) {
+                        tok[i] = (llama_token) i;
+                        // Two output patterns. The first leaves the selected outputs unsorted in
+                        // ubatch order, so output_swaps is non-empty. The second selects every
+                        // other token, which for a round-robin batch picks the head of each
+                        // sequence and leaves them ALREADY sorted -- output_swaps comes out empty
+                        // while token_swaps does not, which is the case that shows the two
+                        // permutations are independent rather than one gating the other.
+                        const bool out = opat == 0 ? ((i % 3) != 0) : ((i % 2) == 0);
+                        common_batch_add(b, tok[i], (llama_pos)(i / n_seq), { (llama_seq_id)(i % n_seq) },
+                                         out);
+                    }
+                    const int rc = llama_decode(c.get(), b);
+                    llama_batch_free(b);
+                    if (rc != 0) {
+                        printf("%s: n_seq=%u per_seq=%u n_ubatch=%u opat=%d: decode returned %d\n",
+                                __func__, n_seq, per_seq, ub, opat, rc);
+                        n_bad++;
+                        continue;
+                    }
+                    n_shapes++;
+
+                    const float * li = llama_get_embeddings_layer_inp(c.get(), 0);
+
+                    // which token each row holds, so the permutation can be decomposed
+                    std::vector<int> where(n_tok, -1);
+                    for (uint32_t i = 0; i < n_tok; i++) {
+                        for (uint32_t j = 0; j < n_tok; j++) {
+                            bool eq = true;
+                            for (uint32_t k = 0; k < n_embd; k++) {
+                                if (li[(size_t) i*n_embd + k] != ref[(size_t) j*n_embd + k]) { eq = false; break; }
+                            }
+                            if (eq) { where[i] = (int) j; break; }
+                        }
+                        if (where[i] != (int) i) {
+                            printf("%s: n_seq=%u per_seq=%u n_ubatch=%u: row %u holds token %d\n",
+                                    __func__, n_seq, per_seq, ub, i, where[i]);
+                            n_bad++;
+                        }
+                    }
+
+                }
+            }
+        }
+
+        // 4 n_seq x 4 per_seq x 5 n_ubatch x 2 output patterns
+        const int n_want = 4*4*5*2;
+        printf("test_output_reorder_token_rows: %d of %d shapes completed, %d rows out of batch order\n",
+               n_shapes, n_want, n_bad);
+        if (n_attempted != n_want || n_shapes != n_want) {
+            printf("%s: attempted %d and completed %d of %d shapes\n",
+                    __func__, n_attempted, n_shapes, n_want);
+            n_bad++;
+        }
+        return n_bad;
+    };
+
+    // one sequence in order: nothing is permuted, so row i is the layer input of tokens[i]
+    const llama_pos    pos_one[4] = { 0, 1, 2, 3 };
+    const llama_seq_id seq_one[4] = { 0, 0, 0, 0 };
+    const bool         out_all[4] = { true, true, true, true };
+
+    const std::vector<float> ref = decode_rows(4, 1, pos_one, seq_one, out_all);
+
+    // two sequences over two ubatches: the rows come back as batch 0, 2, 1, 3
+    // out_all keeps n_outputs equal to n_tokens, out_mid makes the outputs a subset of them
+    const llama_pos    pos_two[4] = { 0, 1, 0, 1 };
+    const llama_seq_id seq_two[4] = { 0, 0, 1, 1 };
+    const bool         out_mid[4] = { false, true, true, false };
+
+    // Two named cases the four-token pair above cannot express. The sweep reaches both, but only
+    // incidentally: if the splitter's grouping changes it would stop producing them and say
+    // nothing, whereas these fail loudly. Instrumenting decode() confirms what each one produces:
+    //
+    //   all outputs     order [0 2 4 1 3 5], one cycle of length 4. upstream is CORRECT here, as
+    //                    it is for the four-token all-output case: with n_outputs == n_tokens the
+    //                    output permutation coincides with the token one. A no-regression control.
+    //   sorted outputs  order [0 2 4 1 3 5], and output_swaps comes out EMPTY. Upstream then does
+    //                    nothing at all and returns 0 2 4 1 3 5, measured. This is the defect
+    //                    reached without the selected outputs ever being out of order, so no
+    //                    re-gating of the existing swap can address it.
+    auto six_token_case = [&](const char * name, const bool * output) {
+        const uint32_t N = 6;
+        const uint32_t n_ref = 8;
+
+        // layer 0 is a pure embedding lookup, so decoding each id once in one sequence, where
+        // nothing is regrouped, gives a table that identifies any row by its token
+        std::vector<float> ref6;
+        {
+            llama_context_params cp = llama_context_default_params();
+            cp.n_ctx = 128; cp.n_batch = n_ref; cp.n_ubatch = n_ref; cp.n_seq_max = 1;
+            cp.n_threads = 2; cp.n_threads_batch = 2;
+            llama_context_ptr c(llama_init_from_model(model.get(), cp));
+            llama_set_embeddings_layer_inp(c.get(), 0, true);
+            llama_batch b = llama_batch_init(n_ref, 0, 1);
+            for (uint32_t i = 0; i < n_ref; i++) {
+                common_batch_add(b, (llama_token) i, (llama_pos) i, { 0 }, true);
+            }
+            const int rc = llama_decode(c.get(), b);
+            llama_batch_free(b);
+            if (rc != 0) {
+                throw std::runtime_error("failed to decode reference batch");
+            }
+            const float * li = llama_get_embeddings_layer_inp(c.get(), 0);
+            ref6.assign(li, li + (size_t) n_ref*n_embd);
+        }
+
+        // three sequences of two, over two ubatches of three: the splitter takes one token from
+        // each sequence per ubatch, so the encounter order is 0 2 4 1 3 5 -- a four-cycle, which
+        // exercises the repeated inner loop that a single transposition never enters
+        llama_context_params cp = llama_context_default_params();
+        cp.n_ctx = 128*3; cp.n_batch = N; cp.n_ubatch = 3; cp.n_seq_max = 3;
+        cp.n_threads = 2; cp.n_threads_batch = 2;
+        llama_context_ptr c(llama_init_from_model(model.get(), cp));
+        if (!c) {
+            // 0 is the success value here
+            printf("%s: %s: context init failed\n", __func__, name);
+            return 1;
+        }
+        llama_set_embeddings_layer_inp(c.get(), 0, true);
+
+        llama_batch b = llama_batch_init(N, 0, 1);
+        for (uint32_t i = 0; i < N; i++) {
+            // seq 0,0,1,1,2,2 with pos 0,1,0,1,0,1. NOT i % 3: that lays the batch out as all
+            // position 0 then all position 1, which the splitter takes in order and never
+            // regroups, and the case is then vacuous -- it passes against upstream too.
+            common_batch_add(b, (llama_token) i, (llama_pos)(i % 2), { (llama_seq_id)(i / 2) },
+                             output[i]);
+        }
+        const int rc = llama_decode(c.get(), b);
+        llama_batch_free(b);
+        if (rc != 0) {
+            throw std::runtime_error("failed to decode six-token batch");
+        }
+
+        const float * li = llama_get_embeddings_layer_inp(c.get(), 0);
+        int bad = 0;
+        for (uint32_t i = 0; i < N; i++) {
+            bool eq = true;
+            for (uint32_t k = 0; k < n_embd; k++) {
+                if (li[(size_t) i*n_embd + k] != ref6[(size_t) i*n_embd + k]) { eq = false; break; }
+            }
+            if (!eq) {
+                printf("%s: %s: row %u is not the layer input of batch position %u\n",
+                        __func__, name, i, i);
+                bad++;
+            }
+        }
+        return bad;
+    };
+
+    const bool out_six_all[6]    = { true, true, true, true, true, true };
+    // every other token: in a round-robin batch those are the heads of each sequence, which the
+    // splitter meets first, so out_ids comes out already sorted and output_swaps is EMPTY while
+    // token_swaps is not. Upstream then does nothing at all and leaves the rows in ubatch order,
+    // which is the defect reachable without the selected outputs ever being out of order.
+    const bool out_six_sorted[6] = { true, false, true, false, true, false };
+
+    int n_fail = probe_shapes();
+    n_fail += six_token_case("six tokens, four-cycle, all outputs", out_six_all);
+    n_fail += six_token_case("six tokens, four-cycle, output_swaps empty", out_six_sorted);
+
+
+    for (int c = 0; c < 2; c++) {
+        const bool * output = c == 0 ? out_all : out_mid;
+
+        const std::vector<float> got = decode_rows(2, 2, pos_two, seq_two, output);
+
+        for (int i = 0; i < 4; i++) {
+            for (uint32_t k = 0; k < n_embd; k++) {
+                if (got[(size_t) i*n_embd + k] != ref[(size_t) i*n_embd + k]) {
+                    printf("%s: with %s outputs, row %d is not the layer input of batch position %d\n",
+                            __func__, c == 0 ? "all" : "partial", i, i);
+                    n_fail++;
+                    break;
+                }
+            }
+        }
+    }
+
+    printf("%s: %s\n", __func__, n_fail == 0 ? "OK" : "FAILED");
+
+    return n_fail == 0 ? 0 : 1;
+}
+
 int main(int argc, char ** argv) {
     // FIXME these tests are disabled in the CI for macOS-latest-cmake-arm64 because they are segfaulting
     common_init();
@@ -804,10 +1297,19 @@ int main(int argc, char ** argv) {
     }
     printf("%s: using seed %zu\n", __func__, seed);
 
+
     try {
         if (!out.empty()) {
             return save_models(arch, seed, log_level, out);
         }
+        if (test_output_reorder_token_rows(seed) != 0) {
+            return 1;
+        }
+
+        if (test_output_reorder_nextn_rows(seed) != 0) {
+            return 1;
+        }
+
         return test_backends(arch, seed, log_level);
     } catch (const std::exception & err) {
         fprintf(stderr, "encountered runtime error: %s\n", err.what());
