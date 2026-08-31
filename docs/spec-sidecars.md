@@ -52,8 +52,10 @@ not enabled in this integration yet.
 
 ## Build
 
-Normal builds do not compile the sidecars. Enable them explicitly in a HIP
-build and select the actual GPU architecture:
+The unified RDNA build script compiles the MTP and DFlash sidecars by default
+(`BUILD_SIDECARS=ON`) and passes the selected architecture. Plain CMake builds
+do not compile them; enable them explicitly in a HIP build and select the
+actual GPU architecture:
 
 ```sh
 cmake -S . -B build-spec-sidecar \
@@ -119,7 +121,10 @@ export SPEC_SIDECAR=1
   the target residual verifier. The proposal RNG is a deterministic keyed
   stream derived from the request seed, sequence, position, sidecar kind, and
   draft step; target acceptance/rejection RNG remains owned by the main
-  sampler. `p_min` is applied to the sampled q probability.
+  sampler. `p_min` is applied to the sampled q probability. The HIP MTP
+  provider uses capability-gated rocPRIM top-k when available and retains the
+  portable reduction fallback; this is compiled independently for gfx1030 and
+  gfx1100.
 - Text-only, contiguous positions are the supported sidecar input. Vision
   batches, unsupported interleaving, and migration disable the sidecar safely.
   With a single HIP target ubatch on the matching device, the host passes
@@ -132,7 +137,10 @@ export SPEC_SIDECAR=1
   device KV cache is not serialized or copied. Target-derived rows are staged
   in pending KV and only the accepted prefix is copied into persistent KV.
   The speculative manager wraps state by implementation type, so stacked
-  implementations cannot consume one another's state.
+  implementations cannot consume one another's state. DFlash committed KV
+  storage starts at 16K rows and grows geometrically up to the hard
+  `LLAMA_SPEC_HIP_MAX_POS` ceiling (131072 by default); growth recaptures the
+  per-sequence graph once, and reset releases grown storage.
 - Prompt and ordinary target rows are implicitly committed; target
   verification stages rows and acceptance commits only the accepted prefix.
   Checkpoint rollback discards pending rows and restores the cursor, slot reset
@@ -147,10 +155,13 @@ export SPEC_SIDECAR=1
   contiguous sidecar prefill, the sidecar rejects the gap and the host uses
   target-only mode for correctness.
 - The target verifier remains the correctness authority. A sidecar ABI/artifact
-  probe runs before draft construction. A successful probe selects sidecar-only
-  mode and avoids loading the host draft model/context; a later HIP
-  initialization/runtime failure disables drafting and enters target-only mode
-  rather than loading a late or potentially desynchronized native cache.
+  probe runs before draft construction. A successful DFlash probe permits the
+  target tensor-parallel output head to remain sharded; if the promised probe
+  later fails, host-draft fallback is refused rather than risking a sharded-head
+  mismatch. A successful probe selects sidecar-only mode and avoids loading the
+  host draft model/context; a later HIP initialization/runtime failure disables
+  drafting and enters target-only mode rather than loading a late or potentially
+  desynchronized native cache.
 - Validate the activation log and artifact set before making performance
   comparisons. speculative sidecar's published numbers are Windows/RX7900 XTX
   research evidence, not RDNA2/Linux qualification.
