@@ -3,6 +3,7 @@
 #import "ggml-impl.h"
 #import "ggml-backend-impl.h"
 #import "ggml-metal-impl.h"
+#import "ggml-metal-common.h"
 
 #include <Foundation/Foundation.h>
 
@@ -788,6 +789,10 @@ void ggml_metal_encoder_debug_group_pop (ggml_metal_encoder_t encoder) {
 }
 
 void ggml_metal_encoder_set_pipeline(ggml_metal_encoder_t encoder, struct ggml_metal_pipeline_with_params pipeline) {
+    if (!pipeline.pipeline) {
+        GGML_ABORT("%s: nil Metal pipeline (missing kernel; see compile_pipeline log above)\n", __func__);
+    }
+
     [encoder->obj setComputePipelineState:pipeline.pipeline->obj];
 }
 
@@ -800,6 +805,9 @@ void ggml_metal_encoder_set_buffer(ggml_metal_encoder_t encoder, struct ggml_met
 }
 
 void ggml_metal_encoder_set_threadgroup_memory_size(ggml_metal_encoder_t encoder, size_t size, int idx) {
+    // ref: https://developer.apple.com/documentation/metal/mtlcomputecommandencoder/setthreadgroupmemorylength(_:index:)
+    GGML_ASSERT(size % 16 == 0);
+
     [encoder->obj setThreadgroupMemoryLength:size atIndex:idx];
 }
 
@@ -1407,6 +1415,30 @@ void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t
     }
 }
 
+static bool ggml_metal_supports_mul_mat_op(
+        bool has_simdgroup_reduction,
+        const struct ggml_tensor * op,
+        bool src0_f16_has_mv,
+        bool mm_path) {
+    if (!has_simdgroup_reduction || op->src[0]->type == GGML_TYPE_NVFP4) {
+        return false;
+    }
+
+    if (op->src[1]->type != GGML_TYPE_F16) {
+        return true;
+    }
+
+    if (op->src[0]->type == GGML_TYPE_BF16) {
+        return false;
+    }
+
+    if (src0_f16_has_mv && op->src[0]->type == GGML_TYPE_F16) {
+        return true;
+    }
+
+    return mm_path;
+}
+
 bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_tensor * op) {
     const bool has_simdgroup_mm        = dev->props.has_simdgroup_mm;
     const bool has_simdgroup_reduction = dev->props.has_simdgroup_reduction;
@@ -1478,6 +1510,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 case GGML_GLU_OP_SWIGLU_OAI:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
+                case GGML_GLU_OP_SWIGLU_CLAMP:
                     return ggml_is_contiguous_1(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
                default:
                     return false;
@@ -1710,9 +1743,15 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_GATED_DELTA_NET:
             return has_simdgroup_reduction && op->src[2]->ne[0] % 32 == 0;
         case GGML_OP_SOLVE_TRI:
+            return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:
+            return ggml_metal_supports_mul_mat_op(
+                    has_simdgroup_reduction, op, true,
+                    ggml_metal_op_mul_mat_use_mm(op, has_simdgroup_mm));
         case GGML_OP_MUL_MAT_ID:
-            return has_simdgroup_reduction && op->src[0]->type != GGML_TYPE_NVFP4;
+            return ggml_metal_supports_mul_mat_op(
+                    has_simdgroup_reduction, op, false,
+                    ggml_metal_op_mul_mat_id_use_mm(op, has_simdgroup_mm));
         case GGML_OP_SET:
         case GGML_OP_CPY:
         case GGML_OP_DUP:
