@@ -303,6 +303,11 @@ struct llama_hparams {
     // PLE conv history rows: (kernel - 1) * ngram_size; 0 without a PLE module
     uint32_t ple_conv_state() const;
 
+    // XingChen4 (DeepSeek-V3 style MLA/MoE + MHC multi-residual-stream blocks)
+    uint32_t xc4_hc_mult              = 0;
+    uint32_t xc4_hc_sinkhorn_iters    = 0;
+    float    xc4_hc_eps               = 0.0f;
+
     // qwen3vl deepstack
     // When parsed from GGUF, this implies the first N layers consume the first
     // N deepstack embeddings. Use deepstack_mapping_arr if you need a more

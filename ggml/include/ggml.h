@@ -574,6 +574,9 @@ extern "C" {
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
+        GGML_OP_XC4_HC_COMB,
+        GGML_OP_XC4_HC_PRE,
+        GGML_OP_XC4_HC_POST,
 
         GGML_OP_UNARY,
 
@@ -2655,6 +2658,33 @@ extern "C" {
     //                       + sum_src residual[i, src, t]*comb[dst, src, t]
     //
     GGML_API struct ggml_tensor * ggml_dsv4_hc_post(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * residual,
+            struct ggml_tensor  * post,
+            struct ggml_tensor  * comb);
+
+    // XingChen4 hyper-connections (DeepSeek-V2 MLA + 4-stream MHC). Same shape
+    // contract as the dsv4 variants, but the comb is [src_hc, dst_hc] (ne0 =
+    // src) and the reference "with_clamp" semantics differ:
+    //   * logits are clamped to [-30, 30] before the Softmax;
+    //   * the Softmax runs over src (not dst);
+    //   * eps is only added to the normalization denominators, never to values;
+    //   * the Sinkhorn first normalizes over src, then alternates (src, dst).
+    GGML_API struct ggml_tensor * ggml_xc4_hc_comb(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mixes,
+            struct ggml_tensor  * scale,
+            struct ggml_tensor  * base,
+            float                 eps,
+            int32_t               n_iter);
+
+    GGML_API struct ggml_tensor * ggml_xc4_hc_pre(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * weights);
+
+    GGML_API struct ggml_tensor * ggml_xc4_hc_post(
             struct ggml_context * ctx,
             struct ggml_tensor  * x,
             struct ggml_tensor  * residual,

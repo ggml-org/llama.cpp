@@ -527,6 +527,14 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 };
                 byte_encode = false;
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_XINGCHEN4:
+                // XingChen uses SPM-style BPE (same shape as Gemma4): spaces replaced with U+2581
+                // by the normalizer, BPE merges over the whole text on raw UTF-8.
+                regex_exprs = {
+                    "[^\\n]+|[\\n]+",
+                };
+                byte_encode = false;
+                break;
             case LLAMA_VOCAB_PRE_TYPE_MINICPM5:
                 regex_exprs = {
                     // original regex from tokenizer.json (openbmb/MiniCPM5-1B)
@@ -2209,6 +2217,11 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 escape_whitespaces = true;
                 clean_spaces = false;
             } else if (
+                    tokenizer_pre == "xingchen4") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_XINGCHEN4;
+                escape_whitespaces = true;
+                add_space_prefix = true;
+            } else if (
                     tokenizer_pre == "jina-v1-en" ||
                     tokenizer_pre == "jina-v2-code" ||
                     tokenizer_pre == "roberta-bpe") {
@@ -3452,9 +3465,16 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 if (add_special) {
                     session->append_bos(output);
                 }
+                bool first_text = true;
                 for (const auto & fragment : fragment_buffer) {
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
                         std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+
+                        if (first_text && add_space_prefix && escape_whitespaces) {
+                            // sentencepiece add_dummy_prefix: prepend U+2581 to the first text
+                            text = "\xe2\x96\x81" + text;
+                        }
+                        first_text = false;
 
                         if (escape_whitespaces) {
                             llama_escape_whitespace(text);
