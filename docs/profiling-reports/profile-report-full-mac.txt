@@ -1,0 +1,228 @@
+Analyzing build trace from '/Users/danbev/work/ai/llama.cpp/build-profile-full/clang_analysis.bin'...
+**** Time summary:
+Compilation (407 times):
+  Parsing (frontend):          265.7 s
+  Codegen & opts (backend):    209.7 s
+
+**** Files that took longest to parse (compiler frontend):
+  2896 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tools/ui/CMakeFiles/llama-ui.dir/ui.cpp.o
+  2826 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tools/server/CMakeFiles/llama-server-impl.dir/server-models.cpp.o
+  2360 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tools/server/CMakeFiles/server-context.dir/server-context.cpp.o
+  2210 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/vendor/cpp-httplib/CMakeFiles/cpp-httplib.dir/httplib.cpp.o
+  2094 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tools/server/CMakeFiles/llama-server-impl.dir/server.cpp.o
+  2049 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/common/CMakeFiles/llama-common.dir/chat.cpp.o
+  1950 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tools/server/CMakeFiles/llama-server-impl.dir/server-http.cpp.o
+  1930 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tools/server/CMakeFiles/server-context.dir/server-tools.cpp.o
+  1925 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/common/CMakeFiles/llama-common.dir/arg.cpp.o
+  1879 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tests/CMakeFiles/test-peg-parser.dir/peg-parser/test-gbnf-generation.cpp.o
+
+**** Files that took longest to codegen (compiler backend):
+  8830 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tests/CMakeFiles/test-backend-ops.dir/test-backend-ops.cpp.o
+  7873 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tests/CMakeFiles/test-chat.dir/test-chat.cpp.o
+  6536 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/vendor/cpp-httplib/CMakeFiles/cpp-httplib.dir/httplib.cpp.o
+  5706 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/common/CMakeFiles/llama-common.dir/chat.cpp.o
+  5336 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/common/CMakeFiles/llama-common.dir/arg.cpp.o
+  4720 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tests/CMakeFiles/test-jinja.dir/test-jinja.cpp.o
+  4636 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tools/mtmd/CMakeFiles/mtmd.dir/mtmd-helper.cpp.o
+  4145 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tools/server/CMakeFiles/server-context.dir/server-context.cpp.o
+  4103 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tests/CMakeFiles/test-chat-auto-parser.dir/test-chat-auto-parser.cpp.o
+  4012 ms: /Users/danbev/work/ai/llama.cpp/build-profile-full/tests/CMakeFiles/test-chat-peg-parser.dir/test-chat-peg-parser.cpp.o
+
+**** Templates that took longest to instantiate:
+  3123 ms: std::basic_regex<char>::basic_regex<std::char_traits<char>, std::all... (29 times, avg 107 ms)
+  3117 ms: std::basic_regex<char>::__init<std::__wrap_iter<const char *>> (29 times, avg 107 ms)
+  3100 ms: std::basic_regex<char>::__parse<std::__wrap_iter<const char *>> (29 times, avg 106 ms)
+  2589 ms: std::__variant_detail::__copy_constructor<std::__variant_detail::__t... (34 times, avg 76 ms)
+  2582 ms: std::__variant_detail::__ctor<std::__variant_detail::__traits<common... (34 times, avg 75 ms)
+  2469 ms: std::basic_regex<char>::__parse_ecma_exp<std::__wrap_iter<const char... (29 times, avg 85 ms)
+  2416 ms: std::basic_regex<char>::__parse_alternative<std::__wrap_iter<const c... (29 times, avg 83 ms)
+  2405 ms: std::basic_regex<char>::__parse_term<std::__wrap_iter<const char *>> (29 times, avg 82 ms)
+  1476 ms: std::basic_regex<char>::__parse_atom<std::__wrap_iter<const char *>> (29 times, avg 50 ms)
+  1171 ms: std::unordered_map<std::bitset<256>, std::vector<int>> (172 times, avg 6 ms)
+  1096 ms: std::basic_regex<char>::basic_regex (17 times, avg 64 ms)
+  1092 ms: std::basic_regex<char>::__init<const char *> (17 times, avg 64 ms)
+  1089 ms: std::basic_regex<char>::__parse<const char *> (17 times, avg 64 ms)
+  1042 ms: std::basic_regex<char>::__push_lookahead (41 times, avg 25 ms)
+  1039 ms: std::__lookahead<char, std::regex_traits<char>>::__lookahead (41 times, avg 25 ms)
+  1035 ms: std::__lookahead<char, std::regex_traits<char>>::__exec (41 times, avg 25 ms)
+  1012 ms: std::vector<bool>::vector (176 times, avg 5 ms)
+   996 ms: std::unordered_map<std::string, std::string> (185 times, avg 5 ms)
+   971 ms: std::__hash_table<std::__hash_value_type<std::bitset<256>, std::vect... (172 times, avg 5 ms)
+   969 ms: std::unordered_map<int, int> (166 times, avg 5 ms)
+   956 ms: std::basic_regex<char>::__parse_ecma_exp<const char *> (17 times, avg 56 ms)
+   950 ms: std::__variant_detail::__visitation::__base::__visit_alt_at<(lambda ... (34 times, avg 27 ms)
+   947 ms: std::basic_regex<char>::__parse_alternative<const char *> (17 times, avg 55 ms)
+   947 ms: std::basic_regex<char>::__parse_term<const char *> (17 times, avg 55 ms)
+   940 ms: std::__variant_detail::__visitation::__base::__make_fdiagonal<(lambd... (34 times, avg 27 ms)
+   933 ms: std::__variant_detail::__visitation::__base::__make_fdiagonal_impl<(... (34 times, avg 27 ms)
+   926 ms: std::basic_regex<char>::__match_at_start_ecma<std::allocator<std::cs... (42 times, avg 22 ms)
+   892 ms: std::basic_string<wchar_t> (386 times, avg 2 ms)
+   855 ms: std::basic_string<char16_t> (386 times, avg 2 ms)
+   845 ms: std::unordered_map<std::string, llama_adapter_lora_weight> (172 times, avg 4 ms)
+
+**** Template sets that took longest to instantiate:
+ 11404 ms: std::vector<$> (7951 times, avg 1 ms)
+  7273 ms: std::allocator_traits<$> (8688 times, avg 0 ms)
+  5682 ms: std::unordered_map<$> (1002 times, avg 5 ms)
+  5545 ms: std::vector<$>::vector (1462 times, avg 3 ms)
+  5461 ms: std::__hash_table<$> (1252 times, avg 4 ms)
+  5198 ms: std::map<$> (1480 times, avg 3 ms)
+  4950 ms: std::function<$>::function<$> (889 times, avg 5 ms)
+  4846 ms: std::__function::__value_func<$>::__value_func<$> (889 times, avg 5 ms)
+  4555 ms: std::vector<$>::__construct_at_end<$> (1413 times, avg 3 ms)
+  4529 ms: std::vector<$>::emplace_back<$> (1243 times, avg 3 ms)
+  4335 ms: std::basic_regex<$>::__init<$> (47 times, avg 92 ms)
+  4314 ms: std::basic_regex<$>::__parse<$> (47 times, avg 91 ms)
+  4132 ms: std::__tree<$> (1895 times, avg 2 ms)
+  4028 ms: std::vector<$>::__init_with_size<$> (995 times, avg 4 ms)
+  3934 ms: std::unique_ptr<$> (4148 times, avg 0 ms)
+  3634 ms: std::__uninitialized_allocator_copy<$> (1226 times, avg 2 ms)
+  3597 ms: std::basic_string<$> (1638 times, avg 2 ms)
+  3537 ms: std::basic_regex<$>::__parse_ecma_exp<$> (47 times, avg 75 ms)
+  3483 ms: std::vector<$>::__swap_out_circular_buffer (1565 times, avg 2 ms)
+  3474 ms: std::basic_regex<$>::__parse_alternative<$> (47 times, avg 73 ms)
+  3463 ms: std::basic_regex<$>::__parse_term<$> (47 times, avg 73 ms)
+  3454 ms: std::vector<$>::__emplace_back_slow_path<$> (1009 times, avg 3 ms)
+  3447 ms: std::vector<$>::push_back (903 times, avg 3 ms)
+  3249 ms: std::basic_regex<$>::basic_regex<$> (30 times, avg 108 ms)
+  2989 ms: std::basic_string<$>::basic_string (1615 times, avg 1 ms)
+  2681 ms: std::basic_string<$>::__init (1545 times, avg 1 ms)
+  2600 ms: std::__variant_detail::__ctor<$>::__generic_construct<$> (35 times, avg 74 ms)
+  2589 ms: std::__variant_detail::__copy_constructor<$>::__copy_constructor (34 times, avg 76 ms)
+  2291 ms: std::__exception_guard_exceptions<$>::~__exception_guard_exceptions (2134 times, avg 1 ms)
+  2275 ms: std::__copy<$> (952 times, avg 2 ms)
+
+**** Functions that took longest to compile:
+  2744 ms: test_template_output_peg_parsers(bool) (/Users/danbev/work/ai/llama.cpp/tests/test-chat.cpp)
+  1008 ms: make_test_cases_eval() (/Users/danbev/work/ai/llama.cpp/tests/test-backend-ops.cpp)
+   957 ms: common_params_parser_init(common_params&, llama_example, void (*)(in... (/Users/danbev/work/ai/llama.cpp/common/arg.cpp)
+   567 ms: clip_model_loader::load_tensors(clip_ctx&) (/Users/danbev/work/ai/llama.cpp/tools/mtmd/clip.cpp)
+   404 ms: test_gbnf_generation(testing&) (/Users/danbev/work/ai/llama.cpp/tests/peg-parser/test-gbnf-generation.cpp)
+   354 ms: clip_encode(clip_ctx*, clip_encode_params*) (/Users/danbev/work/ai/llama.cpp/tools/mtmd/clip.cpp)
+   336 ms: test_basic(testing&)::$_2::operator()(testing&) const (/Users/danbev/work/ai/llama.cpp/tests/peg-parser/test-basic.cpp)
+   305 ms: test_fuzzing(testing&) (/Users/danbev/work/ai/llama.cpp/tests/test-jinja.cpp)
+   289 ms: make_test_cases_perf() (/Users/danbev/work/ai/llama.cpp/tests/test-backend-ops.cpp)
+   171 ms: test_python_dict_parser(testing&) (/Users/danbev/work/ai/llama.cpp/tests/peg-parser/test-python-dict-parser.cpp)
+   169 ms: test_array_methods(testing&) (/Users/danbev/work/ai/llama.cpp/tests/test-jinja.cpp)
+   157 ms: test_json_parser(testing&) (/Users/danbev/work/ai/llama.cpp/tests/peg-parser/test-json-parser.cpp)
+   146 ms: parse_cmd_params(int, char**) (/Users/danbev/work/ai/llama.cpp/tools/llama-bench/llama-bench.cpp)
+   144 ms: llama_server(common_params&, int, char**) (/Users/danbev/work/ai/llama.cpp/tools/server/server.cpp)
+   141 ms: ma_flac_ds_read(void*, void*, unsigned long long, unsigned long long*) (/Users/danbev/work/ai/llama.cpp/tools/mtmd/mtmd-helper.cpp)
+   139 ms: server_chat_convert_responses_to_chatcmpl(common_json const&) (/Users/danbev/work/ai/llama.cpp/tools/server/server-chat.cpp)
+   137 ms: common_chat_try_specialized_template(common_chat_template const&, st... (/Users/danbev/work/ai/llama.cpp/common/chat.cpp)
+   133 ms: test_handcrafted_file(unsigned int) (/Users/danbev/work/ai/llama.cpp/tests/test-gguf.cpp)
+   132 ms: server_chat_convert_anthropic_to_oai(common_json const&) (/Users/danbev/work/ai/llama.cpp/tools/server/server-chat.cpp)
+   130 ms: test_init(testing&) (/Users/danbev/work/ai/llama.cpp/tests/test-batch-alloc.cpp)
+   130 ms: llama_vocab::impl::load(llama_model_loader&, LLM_KV const&) (/Users/danbev/work/ai/llama.cpp/src/llama-vocab.cpp)
+   125 ms: void set_input_kq_mask_impl<float>(args_set_input_kq_mask const&, fl... (/Users/danbev/work/ai/llama.cpp/src/llama-kv-cache.cpp)
+   122 ms: llama_model_base::load_tensors(llama_model_loader&) (/Users/danbev/work/ai/llama.cpp/src/llama-model.cpp)
+   121 ms: llm_chat_apply_template(llm_chat_template, std::__1::vector<llama_ch... (/Users/danbev/work/ai/llama.cpp/src/llama-chat.cpp)
+   120 ms: llama_perplexity(int, char**) (/Users/danbev/work/ai/llama.cpp/tools/perplexity/perplexity.cpp)
+   117 ms: server_task_result_cmpl_partial::to_json_oaicompat_resp() (/Users/danbev/work/ai/llama.cpp/tools/server/server-task.cpp)
+   115 ms: llama_completion(int, char**) (/Users/danbev/work/ai/llama.cpp/tools/completion/completion.cpp)
+   115 ms: test_filters(testing&) (/Users/danbev/work/ai/llama.cpp/tests/test-jinja.cpp)
+   113 ms: ma_dr_mp3dec_decode_frame(ma_dr_mp3dec*, unsigned char const*, int, ... (/Users/danbev/work/ai/llama.cpp/tools/mtmd/mtmd-helper.cpp)
+   107 ms: ggml_compute_forward_add_non_quantized (/Users/danbev/work/ai/llama.cpp/ggml/src/ggml-cpu/binary-ops.cpp)
+
+**** Function sets that took longest to compile / optimize:
+   509 ms: bool std::__1::basic_regex<$>::__match_at_start_posix_nosubs<$>(char... (33 times, avg 15 ms)
+   343 ms: std::__1::__wrap_iter<$> std::__1::vector<$>::__insert_with_size[abi... (45 times, avg 7 ms)
+   285 ms: bool std::__1::basic_regex<$>::__match_at_start_posix_subs<$>(char c... (33 times, avg 8 ms)
+   278 ms: std::__1::__bracket_expression<$>::__exec(std::__1::__state<$>&) const (29 times, avg 9 ms)
+   246 ms: void (anonymous namespace)::tinyBLAS<$>::gemm<$>(long long, long lon... (36 times, avg 6 ms)
+   189 ms: bool std::__1::basic_regex<$>::__match_at_start_ecma<$>(char const*,... (33 times, avg 5 ms)
+   163 ms: std::__1::vector<$>::__append(unsigned long) (139 times, avg 1 ms)
+   161 ms: ggml::cpu::repack::tensor_traits<$>::forward_mul_mat(ggml_compute_pa... (16 times, avg 10 ms)
+   159 ms: void std::__1::__tree_balance_after_insert[abi:ne200100]<$>(std::__1... (119 times, avg 1 ms)
+   144 ms: std::__1::deque<$>::__add_back_capacity() (39 times, avg 3 ms)
+   138 ms: void std::__1::vector<$>::__assign_with_size[abi:ne200100]<$>(std::_... (38 times, avg 3 ms)
+   137 ms: common_chat_try_specialized_template(common_chat_template const&, st... (1 times, avg 137 ms)
+   129 ms: std::__1::vector<$>::~vector[abi:ne200100]() (145 times, avg 0 ms)
+   128 ms: std::__1::deque<$>::__add_front_capacity() (35 times, avg 3 ms)
+   127 ms: std::__1::__bracket_expression<$>::__add_range[abi:ne200100](std::__... (29 times, avg 4 ms)
+   125 ms: void set_input_kq_mask_impl<$>(args_set_input_kq_mask const&, float*... (1 times, avg 125 ms)
+   121 ms: llm_chat_apply_template(llm_chat_template, std::__1::vector<$> const... (1 times, avg 121 ms)
+   111 ms: void std::__1::__hash_table<$>::__do_rehash<$>(unsigned long) (85 times, avg 1 ms)
+   110 ms: ggml::cpu::repack::tensor_traits<$>::forward_mul_mat_id(ggml_compute... (16 times, avg 6 ms)
+   106 ms: std::__1::__loop<$>::__exec(std::__1::__state<$>&) const (29 times, avg 3 ms)
+   104 ms: test_all(std::__1::basic_string<$> const&, std::__1::function<$>) (1 times, avg 104 ms)
+   103 ms: void set_input_kq_mask_impl<$>(args_set_input_kq_mask const&, unsign... (1 times, avg 103 ms)
+    96 ms: std::__1::__exception_guard_exceptions<$>::~__exception_guard_except... (111 times, avg 0 ms)
+    95 ms: unicode_regex_split(std::__1::basic_string<$> const&, std::__1::vect... (1 times, avg 95 ms)
+    94 ms: char const* std::__1::basic_regex<$>::__parse_expression_term<$>(cha... (17 times, avg 5 ms)
+    93 ms: std::__1::__function::__func<$>::target(std::type_info const&) const (125 times, avg 0 ms)
+    92 ms: unicode_regex_split_custom(std::__1::basic_string<$> const&, std::__... (1 times, avg 92 ms)
+    90 ms: dsv4_build_comp_plans(std::__1::vector<$> const&, unsigned int, bool... (1 times, avg 90 ms)
+    88 ms: std::__1::vector<$>::assign(unsigned long, std::__1::sub_match<$> co... (34 times, avg 2 ms)
+    85 ms: std::__1::__murmur2_or_cityhash<unsigned long, 64ul>::operator()[abi... (29 times, avg 2 ms)
+
+**** Expensive headers:
+71656 ms: /Users/danbev/work/ai/llama.cpp/src/models/models.h (included 152 times, avg 471 ms), included via:
+  152x: <direct include>
+
+64040 ms: /Users/danbev/work/ai/llama.cpp/src/llama-model.h (included 169 times, avg 378 ms), included via:
+  151x: models.h 
+  18x: <direct include>
+
+47893 ms: /Users/danbev/work/ai/llama.cpp/src/llama-arch.h (included 176 times, avg 272 ms), included via:
+  151x: models.h llama-model.h 
+  4x: llama-model.h 
+  3x: llama-memory.h llama-graph.h 
+  2x: <direct include>
+  2x: llama-model-loader.h 
+  2x: llama-context.h llama-graph.h 
+  ...
+
+42695 ms: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1/string (included 386 times, avg 110 ms), included via:
+  150x: models.h llama-model.h llama-arch.h 
+  43x: models.h clip-graph.h clip.h mtmd.h map functional vector locale __locale 
+  19x: arg.h common.h list functional vector locale __locale 
+  16x: common.h list functional vector locale __locale 
+  15x: ggml-impl.h vector locale __locale 
+  10x: <direct include>
+  ...
+
+36571 ms: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1/functional (included 349 times, avg 104 ms), included via:
+  151x: models.h llama-model.h llama-arch.h set 
+  43x: models.h clip-graph.h clip.h mtmd.h map 
+  20x: common.h list 
+  19x: arg.h common.h list 
+  6x: llama-grammar.h map 
+  5x: tests.h json.h map 
+  ...
+
+30365 ms: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1/vector (included 377 times, avg 80 ms), included via:
+  151x: models.h llama-model.h llama-arch.h set functional 
+  43x: models.h clip-graph.h clip.h mtmd.h map functional 
+  19x: arg.h common.h list functional 
+  16x: common.h list functional 
+  15x: ggml-impl.h 
+  6x: <direct include>
+  ...
+
+29586 ms: /Users/danbev/work/ai/llama.cpp/common/common.h (included 84 times, avg 352 ms), included via:
+  25x: <direct include>
+  23x: arg.h 
+  7x: tests.h testing.h 
+  3x: chat-auto-parser-helpers.h chat-auto-parser.h chat.h 
+  3x: testing.h 
+  2x: server-task.h 
+  ...
+
+25740 ms: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1/algorithm (included 386 times, avg 66 ms), included via:
+  150x: models.h llama-model.h llama-arch.h string string_view 
+  43x: models.h clip-graph.h clip.h mtmd.h map functional boyer_moore_searcher.h array 
+  19x: arg.h common.h list 
+  16x: common.h list 
+  15x: ggml-impl.h array 
+  9x: string string_view 
+  ...
+
+20790 ms: /Users/danbev/work/ai/llama.cpp/tools/mtmd/models/models.h (included 44 times, avg 472 ms), included via:
+  44x: <direct include>
+
+20453 ms: /Users/danbev/work/ai/llama.cpp/tools/mtmd/clip-graph.h (included 44 times, avg 464 ms), included via:
+  43x: models.h 
+  1x: <direct include>
+
+  done in 0.1s.

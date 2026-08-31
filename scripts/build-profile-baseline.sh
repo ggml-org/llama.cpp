@@ -3,7 +3,7 @@
 #
 # Requires ClangBuildAnalyzer:
 # Install mac: brew install clang-build-analyzer
-# Install linux: TODO
+# Install linux: https://github.com/aras-p/ClangBuildAnalyzer.git
 
 set -euo pipefail
 
@@ -89,8 +89,7 @@ find "${BUILD_DIR}" -name "*.json" ! -name "compile_commands.json" \
     | xargs ls -l 2>/dev/null \
     | awk 'NF>5 {print $5, $NF}' \
     | sort -rn \
-    | head -20 \
-    | awk '{printf "%8.1f KB  %s\n", $1/1024, $2}'
+    | awk 'NR<=20 {printf "%8.1f KB  %s\n", $1/1024, $2}'
 
 echo
 echo "ClangBuildAnalyzer report was generated: ${BUILD_DIR}/profile-report.txt"

@@ -3,7 +3,7 @@
 #
 # Requires ClangBuildAnalyzer:
 # Install mac: brew install clang-build-analyzer
-# Install linux: TODO
+# Install linux: https://github.com/aras-p/ClangBuildAnalyzer.git
 
 set -euo pipefail
 
