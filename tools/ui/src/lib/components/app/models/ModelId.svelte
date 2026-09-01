@@ -93,6 +93,72 @@
 {#if resolvedShowRaw}
 	<TruncatedText class="font-medium {className}" showTooltip={false} text={modelId} {...rest} />
 {:else}
+	{#snippet capabilityIcons()}
+		{#if supportsToolUse}
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<Wrench class="h-3 w-3 text-muted-foreground" />
+				</Tooltip.Trigger>
+
+				<Tooltip.Content>
+					<p>Tool use</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+		{/if}
+
+		{#if supportsThinking && !hideReasoning}
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<Lightbulb class="h-3 w-3 text-muted-foreground" />
+				</Tooltip.Trigger>
+
+				<Tooltip.Content>
+					<p>Reasoning</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+		{/if}
+
+		{#if hasModalityIcons && !hideModalities}
+			<span class="inline-flex items-center gap-1.25 text-muted-foreground">
+				{#if modalities?.vision}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Image class="h-3 w-3 text-muted-foreground" />
+						</Tooltip.Trigger>
+
+						<Tooltip.Content>
+							<p>Vision</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+
+				{#if modalities?.video}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Video class="h-3 w-3 text-muted-foreground" />
+						</Tooltip.Trigger>
+
+						<Tooltip.Content>
+							<p>Video</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+
+				{#if modalities?.audio}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Mic class="h-3 w-3 text-muted-foreground" />
+						</Tooltip.Trigger>
+
+						<Tooltip.Content>
+							<p>Audio</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+			</span>
+		{/if}
+	{/snippet}
+
 	{#snippet nameAndBadges()}
 		{#if !hideName}
 			<span class="min-w-0 truncate font-medium">
@@ -164,72 +230,12 @@
 				{@render nameAndBadges()}
 			{/if}
 
-			{#if supportsToolUse}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<Wrench class="h-3 w-3 text-muted-foreground" />
-					</Tooltip.Trigger>
-
-					<Tooltip.Content>
-						<p>Tool use</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
-
-			{#if supportsThinking && !hideReasoning}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<Lightbulb class="h-3 w-3 text-muted-foreground" />
-					</Tooltip.Trigger>
-
-					<Tooltip.Content>
-						<p>Reasoning</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
-
-			{#if hasModalityIcons && !hideModalities}
-				<span class="inline-flex items-center gap-1.25 text-muted-foreground">
-					{#if modalities?.vision}
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								<Image class="h-3 w-3 text-muted-foreground" />
-							</Tooltip.Trigger>
-
-							<Tooltip.Content>
-								<p>Vision</p>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					{/if}
-
-					{#if modalities?.video}
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								<Video class="h-3 w-3 text-muted-foreground" />
-							</Tooltip.Trigger>
-
-							<Tooltip.Content>
-								<p>Video</p>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					{/if}
-
-					{#if modalities?.audio}
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								<Mic class="h-3 w-3 text-muted-foreground" />
-							</Tooltip.Trigger>
-
-							<Tooltip.Content>
-								<p>Audio</p>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					{/if}
-				</span>
-			{/if}
+			{#if !iconsOnNewLine}{@render capabilityIcons()}{/if}
 		</span>
 
 		<span class="inline-flex items-center gap-1.5">
+			{#if iconsOnNewLine}{@render capabilityIcons()}{/if}
+
 			{#if contextLength}
 				<span class="inline-flex items-center gap-1 text-muted-foreground">
 					<ScrollText class="h-3 w-3" />
