@@ -1346,19 +1346,21 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
 void ggml_metal_device_free(ggml_metal_device_t dev) {
     assert(dev != NULL);
 
-    ggml_metal_rsets_free(dev->rsets);
+    @autoreleasepool {
+        ggml_metal_rsets_free(dev->rsets);
 
-    ggml_metal_library_free(dev->library);
-    dev->library = NULL;
+        ggml_metal_library_free(dev->library);
+        dev->library = NULL;
 
-    if (dev->mtl_queue) {
-        [dev->mtl_queue release];
-        dev->mtl_queue = nil;
-    }
+        if (dev->mtl_queue) {
+            [dev->mtl_queue release];
+            dev->mtl_queue = nil;
+        }
 
-    if (dev->mtl_device) {
-        [dev->mtl_device release];
-        dev->mtl_device = nil;
+        if (dev->mtl_device) {
+            [dev->mtl_device release];
+            dev->mtl_device = nil;
+        }
     }
 
     free(dev);
@@ -1446,12 +1448,14 @@ ggml_metal_event_t ggml_metal_device_event_init(ggml_metal_device_t dev) {
 }
 
 void ggml_metal_device_event_free(ggml_metal_device_t dev, ggml_metal_event_t ev) {
-    id<MTLSharedEvent> event = ev->obj;
-    [event release];
+    @autoreleasepool {
+        id<MTLSharedEvent> event = ev->obj;
+        [event release];
 
-    free(ev);
+        free(ev);
 
-    GGML_UNUSED(dev);
+        GGML_UNUSED(dev);
+    }
 }
 
 void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_event_t ev) {
@@ -2226,13 +2230,15 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
 }
 
 void ggml_metal_buffer_free(ggml_metal_buffer_t buf) {
-    ggml_metal_device_rsets_rm(buf->dev, buf->rset);
+    @autoreleasepool {
+        ggml_metal_device_rsets_rm(buf->dev, buf->rset);
 
-    for (int i = 0; i < buf->n_buffers; i++) {
-        [buf->buffers[i].metal release];
+        for (int i = 0; i < buf->n_buffers; i++) {
+            [buf->buffers[i].metal release];
+        }
+
+        ggml_metal_buffer_rset_free(buf);
     }
-
-    ggml_metal_buffer_rset_free(buf);
 
     if (buf->is_shared && buf->owned) {
 #if TARGET_OS_OSX
