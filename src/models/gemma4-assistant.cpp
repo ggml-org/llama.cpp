@@ -4,7 +4,7 @@ void llama_model_gemma4_assistant::load_arch_hparams(llama_model_loader & ml) {
     hparams.n_embd_inp_impl = hparams.n_embd_out();
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
+    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer_all);
 
     uint32_t n_kv_shared_layers = 0;
     ml.get_key(LLM_KV_ATTENTION_SHARED_KV_LAYERS, n_kv_shared_layers, false);

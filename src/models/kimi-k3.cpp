@@ -94,7 +94,7 @@ void llama_model_kimi_k3::load_arch_tensors(llama_model_loader &) {
             layer.ssm_beta = create_tensor(tn(LLM_TENSOR_SSM_BETA, "weight", i), {n_embd, n_head}, 0);
 
             // K3's A_log is a plain 1-D [n_head] tensor (kimi-linear's is padded)
-            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {n_head}, 0);
+            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN, i), {n_head}, 0);
             layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {d_inner}, 0);
 
             // K3 uses a single full-rank gate instead of kimi-linear's g_a/g_b pair
