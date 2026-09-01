@@ -67,10 +67,10 @@ kernel void kernel_gated_delta_net_impl(
     const uint state_out_base = (i23*args.ne21 + i21)*S_v*S_v + i20*S_v;
 
     // when fused with the cache cpy, write the snapshots straight into the cache buffer using
-    // the slot stride; otherwise append them after the attn scores (state_out_stride == 0)
-    const bool fused = args.state_out_stride > 0;
+    // the slot stride; otherwise append them after the attn scores (nb_out == 0)
+    const bool fused = args.nb_out > 0;
     const device float * state_out_ = fused ? (device float *)state_out : (device float *)dst + attn_size;
-    const uint slot_stride = fused ? (uint)args.state_out_stride : state_size_per_snap;
+    const uint slot_stride = fused ? (uint)args.nb_out : state_size_per_snap;
 
     for (short t = 0; t < args.ne22; t++) {
         float s_k = 0.0f;
@@ -239,10 +239,10 @@ kernel void kernel_gated_delta_net_impl(
     }
 
     // when fused with the cache cpy, write the snapshots straight into the cache buffer using
-    // the slot stride; otherwise append them after the attn scores (state_out_stride == 0)
-    const bool fused = args.state_out_stride > 0;
+    // the slot stride; otherwise append them after the attn scores (nb_out == 0)
+    const bool fused = args.nb_out > 0;
     const device float * state_out_ = fused ? (device float *)state_out : (device float *)dst + args.ne23*args.ne22*args.ne21*S_v;
-    const uint slot_stride = fused ? (uint)args.state_out_stride : S_v*S_v;
+    const uint slot_stride = fused ? (uint)args.nb_out : S_v*S_v;
 
     device float * dst_state  = (device float *)state_out_ + (i23*args.ne21 + i21)*slot_stride + i20;
     device T     * dstt_state = (device T     *) (dst_state);

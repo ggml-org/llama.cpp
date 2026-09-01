@@ -1883,8 +1883,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
 
     // when fused with the trailing cache cpy, the snapshots are written straight into the
     // recurrent cache and the cpy is skipped (see GGML_METAL_FUSE_GDN_CACHE)
-    ggml_metal_buffer_id bid_state_out = ggml_metal_get_buffer_id(op);
-    int32_t state_out_stride = 0;
+    ggml_metal_buffer_id bid_out = ggml_metal_get_buffer_id(op);
+    uint64_t nb_out = 0;
     int n_fuse = 1;
 
     if (use_fusion) {
@@ -1894,8 +1894,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         if (fuse && fuse->id == GGML_METAL_FUSE_GDN_CACHE) {
             const ggml_tensor * dst_cache = ctx->node(idx + 1)->src[1]; // cache view
 
-            bid_state_out    = ggml_metal_get_buffer_id(dst_cache);
-            state_out_stride = (int32_t) (dst_cache->nb[2]/sizeof(float));
+            bid_out = ggml_metal_get_buffer_id(dst_cache);
+            nb_out  = dst_cache->nb[2]/sizeof(float);
             n_fuse = 2;
 
             if (debug_fusion > 1) {
@@ -1942,7 +1942,7 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         /*.nb1  =*/ nb1,
         /*.nb2  =*/ nb2,
         /*.nb3  =*/ nb3,
-        /*.state_out_stride =*/ state_out_stride,
+        /*.nb_out =*/ nb_out,
     };
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
@@ -1954,7 +1954,7 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[4]), ida++); // beta
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[5]), ida++); // state
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // dst (attn)
-    ggml_metal_encoder_set_buffer  (enc, bid_state_out,                       ida++); // state_out
+    ggml_metal_encoder_set_buffer  (enc, bid_out,                              ida++); // state_out
 
     const int nsg = pipeline.nsg;
 
