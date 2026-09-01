@@ -374,6 +374,10 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
     return true;
 }
 
+// depth-sweep overrides (0 = leave defaults). Set only by test_depth_sweep().
+static uint32_t g_depth_sweep_n_ctx = 0;
+static uint32_t g_depth_sweep_n_ub  = 0;
+
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
@@ -386,11 +390,12 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     model_params.split_mode = split_mode;
 
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = 0;
+    ctx_params.n_ctx = g_depth_sweep_n_ctx;   // 0 = model default (original behavior)
     ctx_params.n_threads = 4;
     ctx_params.n_threads_batch = 4;
     if (!encode) {
-        ctx_params.n_ubatch = 64;
+        ctx_params.n_ubatch = g_depth_sweep_n_ub ? g_depth_sweep_n_ub : 64;
+        ctx_params.n_batch  = std::max<uint32_t>(2048, ctx_params.n_ubatch);
     }
 
     size_t tmp = seed;
@@ -783,6 +788,88 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
     return all_ok ? 0 : 1;
 }
 
+// Long-context CPU-vs-device divergence sweep for the glm5next "@@@@" collapse
+// (ggml-org/llama.cpp#27754 / #27752). Runs ONE tiny random-weight glm5next
+// model on the CPU backend and on the first non-CPU device with an identical
+// token stream, decoding in chunks; after each chunk the last-position logits
+// are compared (NMSE + greedy argmax). On the real model the collapse depth
+// depends on (depth, n_ctx, n_ubatch); this asks whether that reproduces at
+// toy scale, in minutes instead of hours.
+static int test_depth_sweep(const size_t seed, const uint32_t max_depth,
+                            const uint32_t n_ctx_arg, const uint32_t n_ub) {
+    g_depth_sweep_n_ctx = n_ctx_arg;
+    g_depth_sweep_n_ub  = n_ub;
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_GLM5NEXT, /*moe=*/true);
+    // the fixture bakes context_length=128; the KV/pool structures must be
+    // sized for the sweep target instead
+    gguf_set_val_u32(gguf_ctx.get(), "glm5next.context_length", n_ctx_arg);
+
+    ggml_backend_dev_t dev_gpu = nullptr;
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_buffer_type(dev) != ggml_backend_cpu_buffer_type()) {
+            dev_gpu = dev;
+            break;
+        }
+    }
+    if (dev_gpu == nullptr) {
+        printf("depth-sweep: no non-CPU device found\n");
+        return 1;
+    }
+    printf("depth-sweep: glm5next-moe, n_ctx=%u, n_ubatch=%u, max_depth=%u, device=%s\n",
+           n_ctx_arg, n_ub ? n_ub : 64, max_depth, ggml_backend_dev_description(dev_gpu));
+
+    auto mc_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
+    auto mc_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {dev_gpu});
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mc_cpu.first.get()));
+
+    const std::vector<llama_token> tokens = get_tokens(max_depth, n_vocab, seed);
+    const uint32_t chunk = 2048;
+
+    llama_batch batch = llama_batch_init(chunk, 0, 1);
+    bool diverged = false;
+    for (uint32_t pos0 = 0; pos0 < max_depth; pos0 += chunk) {
+        const uint32_t n = std::min(chunk, max_depth - pos0);
+        common_batch_clear(batch);
+        for (uint32_t i = 0; i < n; i++) {
+            common_batch_add(batch, tokens[pos0 + i], pos0 + i, {0}, i == n - 1);
+        }
+        if (llama_decode(mc_cpu.second.get(), batch)) {
+            printf("depth-sweep: CPU decode failed at depth %u\n", pos0 + n);
+            llama_batch_free(batch);
+            return 1;
+        }
+        if (llama_decode(mc_dev.second.get(), batch)) {
+            printf("depth-sweep: device decode failed at depth %u\n", pos0 + n);
+            llama_batch_free(batch);
+            return 1;
+        }
+        const float * lc = llama_get_logits_ith(mc_cpu.second.get(), n - 1);
+        const float * ld = llama_get_logits_ith(mc_dev.second.get(), n - 1);
+        double se = 0.0, ref = 0.0;
+        uint32_t amax_c = 0, amax_d = 0;
+        for (uint32_t j = 0; j < n_vocab; j++) {
+            const double d = (double) lc[j] - (double) ld[j];
+            se  += d * d;
+            ref += (double) lc[j] * (double) lc[j];
+            if (lc[j] > lc[amax_c]) amax_c = j;
+            if (ld[j] > ld[amax_d]) amax_d = j;
+        }
+        const double nmse_val = ref > 0.0 ? se / ref : se;
+        const bool bad = nmse_val > 1e-3 || amax_c != amax_d;
+        printf("depth=%7u nmse=%.3e argmax_cpu=%u argmax_dev=%u%s\n",
+               pos0 + n, nmse_val, amax_c, amax_d, bad ? "  <-- DIVERGED" : "");
+        fflush(stdout);
+        if (bad) {
+            diverged = true;
+        }
+    }
+    llama_batch_free(batch);
+    printf("depth-sweep: %s\n", diverged ? "DIVERGENCE FOUND" : "no divergence up to max depth");
+    return diverged ? 2 : 0;
+}
+
 int main(int argc, char ** argv) {
     // FIXME these tests are disabled in the CI for macOS-latest-cmake-arm64 because they are segfaulting
     common_init();
@@ -790,6 +877,9 @@ int main(int argc, char ** argv) {
 
     llm_arch arch = LLM_ARCH_UNKNOWN;
     size_t seed = rd();
+    uint32_t depth_sweep = 0;
+    uint32_t sweep_ctx = 131072;
+    uint32_t sweep_ub = 0;
     ggml_log_level log_level = GGML_LOG_LEVEL_ERROR;
     std::string out;
 
@@ -806,6 +896,15 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        }
+        if (strcmp(argv[i], "--depth-sweep") == 0 && i + 1 < argc) {
+            depth_sweep = std::stoul(argv[++i]);
+        }
+        if (strcmp(argv[i], "--ctx") == 0 && i + 1 < argc) {
+            sweep_ctx = std::stoul(argv[++i]);
+        }
+        if (strcmp(argv[i], "--ub") == 0 && i + 1 < argc) {
+            sweep_ub = std::stoul(argv[++i]);
         }
         if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
             if (i + 1 < argc) {
@@ -831,6 +930,9 @@ int main(int argc, char ** argv) {
     printf("%s: using seed %zu\n", __func__, seed);
 
     try {
+        if (depth_sweep > 0) {
+            return test_depth_sweep(seed, depth_sweep, sweep_ctx, sweep_ub);
+        }
         if (!out.empty()) {
             return save_models(arch, seed, log_level, out);
         }
