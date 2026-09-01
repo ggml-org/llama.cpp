@@ -552,7 +552,7 @@ static int save_models(const llm_arch target_arch, const size_t seed, const int 
 
     llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
         const user_data_t * ud = (const user_data_t *) user_data;
-        int verbosity = common_get_verbosity(level);
+        int verbosity = common_log_get_verbosity(level);
         if (verbosity <= ud->verbosity) {
             ud->log_old.callback(level, text, ud->log_old.user_data);
         }
@@ -610,7 +610,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
 
     llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
         const user_data_t * ud = (const user_data_t *) user_data;
-        int verbosity = common_get_verbosity(level);
+        int verbosity = common_log_get_verbosity(level);
         if (verbosity <= ud->verbosity) {
             ud->log_old.callback(level, text, ud->log_old.user_data);
         }

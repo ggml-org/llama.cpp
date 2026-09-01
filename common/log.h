@@ -43,7 +43,7 @@ int  common_log_get_verbosity_thold(void);
 
 void common_log_set_verbosity_thold(int verbosity); // not thread-safe
 
-int common_get_verbosity(enum ggml_log_level level);
+int common_log_get_verbosity(enum ggml_log_level level);
 
 void common_log_default_callback(enum ggml_log_level level, const char * text, void * user_data);
 
