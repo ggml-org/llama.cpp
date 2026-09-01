@@ -84,9 +84,9 @@ void llama_model_kimi_linear::load_arch_tensors(llama_model_loader &) {
              layer.ssm_beta = create_tensor(tn(LLM_TENSOR_SSM_BETA, "weight", i), {n_embd, n_head}, 0);
 
              // A_log - Shape in GGUF: [1, num_heads, 1, 1] (4D) or [1, num_heads] (2D after quantization) Note: -exp(A_log) is applied in convert_hf_to_gguf.py
-             layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {1, n_head, 1, 1}, TENSOR_NOT_REQUIRED);
+             layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN, i), {1, n_head, 1, 1}, TENSOR_NOT_REQUIRED);
              if (!layer.ssm_a) {
-                 layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {1, n_head}, 0);
+                 layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN, i), {1, n_head}, 0);
              }
 
              // dt_bias - shape [n_embd_head_k_kda * n_head] = [4096]
