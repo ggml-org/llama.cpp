@@ -104,8 +104,6 @@ exhaustion.
 | Optimization | Status and activation | Scope / notes |
 |---|---|---|
 | RCCL AllReduce and direct P2P | **Automatic** with `GGML_HIP_RDNA3_AUTO=1` and an RCCL build | Defaults only unset `GGML_CUDA_ALLREDUCE=nccl`, `GGML_CUDA_P2P=1`, and `NCCL_P2P_DISABLE=0`; RCCL level, algorithm, protocol, and channel tuning stay on Auto. |
-| Two-rank host-snapshot AllReduce | **Experimental, default-off** | `GGML_HIP_RDNA3_P2P_ALLREDUCE=1` enables the exact, startup-self-tested gfx1100 two-rank path for `[5120,1,1,1]` F32 boundaries. Nonmatching shapes, identities, rank counts, or stream pairs fall back to RCCL. The launcher does not enable it. |
-| Two-rank consumer-fused AllReduce | **Experimental, default-off** | `GGML_HIP_RDNA3_P2P_FUSED_ALLREDUCE=1` enables the same guarded host-snapshot reduction fused with the `[5120,1,1,1]` residual add/RMSNorm/mul prefix. It is separate from ordinary-width and MTP verification policy. |
 | gfx11 MMQ / WMMA | **Automatic** in a gfx11 build | Qualified Q4 prompt kernels and compatible F16 flash attention use the compiled gfx11 paths; no runtime switch is needed. |
 | gfx1100 flash-attention launch shapes | **Automatic** | Selected by architecture and shape under the safe profile. |
 | Q8_0 MMVQ VDR=4 | **Automatic** for native gfx1100 | Passed backend correctness and shape A/B tests on both RX 7900 XT cards; this is not end-to-end Q8 GGUF validation. |
@@ -130,12 +128,6 @@ parity testing. Do not set `HSA_OVERRIDE_GFX_VERSION` on gfx1100.
   or partial-peer topologies stay on the safe generic behavior.
 - Do not force `NCCL_P2P_LEVEL=PXB`, `NCCL_ALGO`, or `NCCL_PROTO` on this topology;
   RCCL Auto selected the tested direct transport.
-- The experimental `GGML_HIP_RDNA3_P2P_ALLREDUCE` and
-  `GGML_HIP_RDNA3_P2P_FUSED_ALLREDUCE` switches are supervised A/B controls,
-  not production defaults. They require the native two-card identity/topology
-  guard and an RCCL build, use portable mapped-host snapshots with phase
-  barriers, and leave all unsupported shapes on RCCL. Do not use them as a
-  replacement for `GGML_HIP_RDNA3_AUTO=1` or force NCCL topology settings.
 - With the launcher’s stacked MTP+K4V configuration, sidecar n-gram proposals
   are capped at the configured `--spec-draft-n-max` width (the launcher uses 3)
   to avoid oversized target verification bursts. The same fixed cap applies to
