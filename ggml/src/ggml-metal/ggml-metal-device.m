@@ -2141,6 +2141,16 @@ void * ggml_metal_buffer_get_base(ggml_metal_buffer_t buf) {
     return buf->all_data;
 }
 
+uint64_t ggml_metal_buffer_get_gpu_address(ggml_metal_buffer_t buf, const struct ggml_tensor * tensor) {
+    struct ggml_metal_buffer_id bid = ggml_metal_buffer_get_id(buf, tensor);
+    if (bid.metal == nil) {
+        return 0;
+    }
+
+    id<MTLBuffer> metal = bid.metal;
+    return metal.gpuAddress + bid.offs;
+}
+
 bool ggml_metal_buffer_is_shared(ggml_metal_buffer_t buf) {
     return buf->is_shared;
 }

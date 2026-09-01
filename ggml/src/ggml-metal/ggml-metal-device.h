@@ -329,6 +329,7 @@ ggml_metal_buffer_t ggml_metal_buffer_map (ggml_metal_device_t dev, void * ptr, 
 
 void   ggml_metal_buffer_free     (ggml_metal_buffer_t buf);
 void * ggml_metal_buffer_get_base (ggml_metal_buffer_t buf);
+uint64_t ggml_metal_buffer_get_gpu_address(ggml_metal_buffer_t buf, const struct ggml_tensor * tensor);
 bool   ggml_metal_buffer_is_shared(ggml_metal_buffer_t buf);
 
 void   ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size);

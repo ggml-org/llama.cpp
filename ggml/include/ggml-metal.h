@@ -54,6 +54,11 @@ GGML_BACKEND_API bool ggml_backend_metal_supports_family(ggml_backend_t backend,
 // capture all command buffers committed the next time `ggml_backend_graph_compute` is called
 GGML_BACKEND_API void ggml_backend_metal_capture_next_compute(ggml_backend_t backend);
 
+// Returns tensor's Metal GPU virtual address, or 0 for a non-Metal buffer.
+// This is a diagnostic interface; ordinary callers should not depend on the
+// relative placement of separately allocated MTLBuffers.
+GGML_BACKEND_API uint64_t ggml_backend_metal_buffer_get_gpu_address(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor);
+
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_metal_reg(void);
 
 #ifdef __cplusplus

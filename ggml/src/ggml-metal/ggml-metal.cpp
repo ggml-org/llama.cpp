@@ -182,6 +182,17 @@ static bool ggml_backend_buffer_is_metal(ggml_backend_buffer_t buffer) {
            buffer->iface.free_buffer == ggml_backend_metal_buffer_private_free_buffer;
 }
 
+uint64_t ggml_backend_metal_buffer_get_gpu_address(
+        ggml_backend_buffer_t buffer,
+        const struct ggml_tensor * tensor) {
+    if (buffer == nullptr || tensor == nullptr || !ggml_backend_buffer_is_metal(buffer)) {
+        return 0;
+    }
+
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t) buffer->context;
+    return ggml_metal_buffer_get_gpu_address(ctx, tensor);
+}
+
 //
 // buffer types
 //

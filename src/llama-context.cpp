@@ -1,6 +1,7 @@
 #include "llama-context.h"
 
 #include "ggml.h"
+#include "ggml-metal.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
 #include "llama-impl.h"
@@ -1410,14 +1411,19 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
                             }
                             fbl_seen.insert(t);
                             ggml_backend_buffer_t buf = t->buffer;
-                            fprintf(f, "%s|%d|%s|%s|%p|%zu|%lld,%lld,%lld,%lld|%p|%zu|%s|%p\n",
+                            const uint64_t gpu_data = buf ? ggml_backend_metal_buffer_get_gpu_address(buf, t) : 0;
+                            const uint64_t gpu_base = gpu_data
+                                ? gpu_data - ((uintptr_t) t->data - (uintptr_t) ggml_backend_buffer_get_base(buf))
+                                : 0;
+                            fprintf(f, "%s|%d|%s|%s|%p|%zu|%lld,%lld,%lld,%lld|%p|%zu|%s|%p|0x%llx|0x%llx\n",
                                 tag, idx, t->name, ggml_op_name(t->op), t->data, ggml_nbytes(t),
                                 (long long) t->ne[0], (long long) t->ne[1],
                                 (long long) t->ne[2], (long long) t->ne[3],
                                 buf ? ggml_backend_buffer_get_base(buf) : nullptr,
                                 buf ? ggml_backend_buffer_get_size(buf) : (size_t) 0,
                                 buf ? ggml_backend_buffer_name(buf) : "-",
-                                (const void *) t->view_src);
+                                (const void *) t->view_src,
+                                (unsigned long long) gpu_data, (unsigned long long) gpu_base);
                         };
                         for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
                             ggml_tensor * n = ggml_graph_node(gf, i);
