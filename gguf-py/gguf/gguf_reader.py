@@ -256,8 +256,29 @@ class GGUFReader:
             if int(alen[0]) > GGUF_MAX_ARRAY_ELEMENTS:
                 raise ValueError(f'Array length {int(alen[0])} exceeds maximum {GGUF_MAX_ARRAY_ELEMENTS}')
             offs += int(alen.nbytes)
-            if int(alen[0]) > self.data.nbytes - offs:
-                raise ValueError(f'Array length {int(alen[0])} exceeds remaining file size {self.data.nbytes - offs}')
+            if int(alen[0]) > 0:
+                # Bound the declared element count by the smallest number of bytes
+                # those elements could occupy, mirroring the gguf_reader::read
+                # check in ggml/src/gguf.cpp. STRING elements carry a uint64 length
+                # prefix, and nested ARRAY elements a uint32 type plus a uint64
+                # count, so both have a fixed minimum even though their total size
+                # is not known here.
+                itype = GGUFValueType(int(raw_itype[0]))
+                nptype = self.gguf_scalar_to_np.get(itype)
+                if nptype is not None:
+                    min_elem_size = int(np.dtype(nptype).itemsize)
+                elif itype == GGUFValueType.STRING:
+                    min_elem_size = 8
+                elif itype == GGUFValueType.ARRAY:
+                    min_elem_size = 12
+                else:
+                    min_elem_size = 1
+                required = int(alen[0]) * min_elem_size
+                if required > max(self.data.nbytes - offs, 0):
+                    raise ValueError(
+                        f'Array of {int(alen[0])} {itype.name} elements requires at least '
+                        f'{required} bytes but only {self.data.nbytes - offs} remain'
+                    )
             aparts: list[npt.NDArray[Any]] = [raw_itype, alen]
             data_idxs: list[int] = []
             # FIXME: Handle multi-dimensional arrays properly instead of flattening
