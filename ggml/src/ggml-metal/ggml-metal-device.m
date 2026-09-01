@@ -1381,12 +1381,14 @@ ggml_metal_event_t ggml_metal_device_event_init(ggml_metal_device_t dev) {
 }
 
 void ggml_metal_device_event_free(ggml_metal_device_t dev, ggml_metal_event_t ev) {
-    id<MTLSharedEvent> event = ev->obj;
-    [event release];
+    @autoreleasepool {
+        id<MTLSharedEvent> event = ev->obj;
+        [event release];
 
-    free(ev);
+        free(ev);
 
-    GGML_UNUSED(dev);
+        GGML_UNUSED(dev);
+    }
 }
 
 void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_event_t ev) {
