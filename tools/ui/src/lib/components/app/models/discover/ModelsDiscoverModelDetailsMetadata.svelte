@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelsDiscoverChatTemplateDialog from './ModelsDiscoverChatTemplateDialog.svelte';
+	import ModelsDiscoverModelDetailsMetadataItem from './ModelsDiscoverModelDetailsMetadataItem.svelte';
 	import { MessageSquareCode } from '@lucide/svelte';
 	import { modelsHubStore } from '$lib/stores';
 	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
@@ -30,27 +31,21 @@
 <!-- Metadata chips: label | value pairs, matching the HF model page style -->
 <div class="flex flex-wrap items-center gap-1.5">
 	{#if gguf?.total}
-		<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
-			<span class="px-2.5 py-1 text-muted-foreground">Model size</span>
-
-			<span class="px-2.5 py-1 font-medium">{formatParameters(gguf.total)} params</span>
-		</span>
+		<ModelsDiscoverModelDetailsMetadataItem
+			label="Model size"
+			value="{formatParameters(gguf.total)} params"
+		/>
 	{/if}
 
 	{#if gguf?.context_length}
-		<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
-			<span class="px-2.5 py-1 text-muted-foreground">Context</span>
-
-			<span class="px-2.5 py-1 font-medium">{gguf.context_length.toLocaleString()}</span>
-		</span>
+		<ModelsDiscoverModelDetailsMetadataItem
+			label="Context"
+			value={gguf.context_length.toLocaleString()}
+		/>
 	{/if}
 
 	{#if gguf?.architecture}
-		<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
-			<span class="px-2.5 py-1 text-muted-foreground">Architecture</span>
-
-			<span class="px-2.5 py-1 font-medium">{gguf.architecture}</span>
-		</span>
+		<ModelsDiscoverModelDetailsMetadataItem label="Architecture" value={gguf.architecture} />
 	{/if}
 
 	{#if gguf?.chat_template}
@@ -65,11 +60,7 @@
 	{/if}
 
 	{#if licenseTag}
-		<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
-			<span class="px-2.5 py-1 text-muted-foreground">License</span>
-
-			<span class="px-2.5 py-1 font-medium">{licenseTag}</span>
-		</span>
+		<ModelsDiscoverModelDetailsMetadataItem label="License" value={licenseTag} />
 	{/if}
 
 	{#if details.gated === true}
