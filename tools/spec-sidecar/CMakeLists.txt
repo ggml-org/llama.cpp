@@ -60,6 +60,8 @@ function(spec_sidecar_add_sidecar target output source)
     # never for a multi-arch/fallback target.
     if (_spec_arches STREQUAL "gfx1030")
         target_compile_definitions(${target} PRIVATE SPEC_SIDECAR_GFX1030=1)
+    elseif (_spec_arches STREQUAL "gfx1100")
+        target_compile_definitions(${target} PRIVATE SPEC_SIDECAR_GFX1100=1)
     endif()
     if (LLAMA_TOOLS_INSTALL)
         install(TARGETS ${target} LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
