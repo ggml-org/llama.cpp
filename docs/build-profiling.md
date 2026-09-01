@@ -39,7 +39,7 @@ Environment:
 | Minimal, master    | 249 |   468.2 s  |   270.3 s  |   738.5 s  |
 | Minimal, with PCH  | 253 |   177.1 s  |   265.8 s  |   442.9 s  |
 | Full,    master    | 396 |   811.0 s  |   692.2 s  | 1,503.2 s  |
-| Full,    with PCH  | 404 |   418.3 s  |   663.9 s  | 1,082.2 s  |
+| Full,    with PCH  | 404 |   380.0 s  |   664.7 s  | 1,044.7 s  |
 +--------------------+-----+------------+------------+------------+
 
 PCH = precompiled header.
