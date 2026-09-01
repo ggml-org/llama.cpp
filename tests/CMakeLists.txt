@@ -348,6 +348,9 @@ llama_build_and_test(test-tensor-split.cpp)
 llama_build_and_test(test-meta-split.cpp)
 target_include_directories(test-tensor-split PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 
+llama_build_and_test(test-tp-output-policy.cpp)
+target_include_directories(test-tp-output-policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")

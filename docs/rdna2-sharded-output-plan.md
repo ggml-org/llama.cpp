@@ -1,15 +1,22 @@
-# RDNA2 tensor-parallel sharded output plan
+# RDNA2 hidden-axis tensor-parallel sharded output plan
+
+> **Status:** This document describes the hidden-axis/full-logit policy selected
+> by unset/`auto` output-sharding mode. Explicit
+> `GGML_TP_SHARDED_OUTPUT=1` now selects the vocabulary-axis primary output mode
+> for supported Qwen35/Qwen35MoE models; see
+> `docs/gfx1030-native-optimizations.md` for its CPU/sidecar sampling contract.
 
 ## Goal
 
 Reduce LM-head latency in tensor mode without changing sampler semantics.
-The feature is opt-in through `GGML_TP_SHARDED_OUTPUT=1` and initially supports
-validated Qwen3.5/Qwen3.6 35B/122B heads only.
+The hidden-axis policy is selected automatically where validated; explicit
+`GGML_TP_SHARDED_OUTPUT=1` is reserved for vocabulary-sharded CPU/sidecar
+workloads.
 
 ## Important non-goal
 
-This design does **not** split logits by vocabulary and does not implement a
-distributed sampler. Every rank produces a full-vocabulary partial contribution;
+This hidden-axis design does **not** split logits by vocabulary and does not
+implement a distributed sampler. Every rank produces a full-vocabulary partial contribution;
 RCCL or the existing generic all-reduce sums those contributions into the same
 full mirrored logits tensor that the current sampler already consumes.
 
@@ -44,7 +51,9 @@ placement later. Enabling the feature therefore has two classes of checks:
 
 A head is sharded only when all are true:
 
-- `GGML_TP_SHARDED_OUTPUT=1` exactly;
+- the hidden-axis automatic policy is active (`GGML_TP_SHARDED_OUTPUT` is
+  unset/`auto` and the validated automatic model gate passes); explicit `=1`
+  is handled by the vocabulary-sharded policy described above;
 - architecture is initially `LLM_ARCH_QWEN35` or `LLM_ARCH_QWEN35MOE`;
 - tensor pointer is `model.output` or a validated
   `layer.nextn.shared_head_head` pointer;
@@ -100,6 +109,8 @@ sharded and which collective provider is selected.
   GPU.
 
 ## MTP behavior
+
+For this hidden-axis/full-logit policy:
 
 - Main and Qwen shared MTP heads are recognized by tensor identity.
 - Draft backend sampling receives full mirrored logits after reduction.

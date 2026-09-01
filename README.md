@@ -108,6 +108,7 @@ exhaustion.
 | gfx1100 flash-attention launch shapes | **Automatic** | Selected by architecture and shape under the safe profile. |
 | Q8_0 MMVQ VDR=4 | **Automatic** for native gfx1100 | Passed backend correctness and shape A/B tests on both RX 7900 XT cards; this is not end-to-end Q8 GGUF validation. |
 | MTP sidecar + ngram drafting | **Automatic** in the launcher | Requires the prepared sidecar bundle; exact 262K native/in-process MTP does not fit, so the HIP sidecar is the validated path. |
+| TP output-head sharding | Explicit `GGML_TP_SHARDED_OUTPUT=1` | Supported Qwen35/Qwen35MoE models can shard the primary output head along vocabulary rows and avoid the full-logit output AllReduce; target/backend sampling falls back to CPU while sidecar-local sampling remains available. Unset/`auto` retain hidden-axis/full-logit output. |
 | Sidecar n-gram verification cap | **Automatic** for MTP-sidecar stacks | Caps n-gram proposals at the configured MTP width (the launcher uses 3) to avoid oversized target verification bursts; explicit `speculative.n_max` remains authoritative. |
 | Chunked GDN prefill | `--profile experimental` | Default-off in `safe`; keep experimental until workload-specific validation is complete. |
 | Add+RMSNorm+MUL fusion | `--gfx1100-add-rms-fusion` | Exact output parity; prompt-heavy throughput improved historically, while decode was effectively neutral. Default-off. |
@@ -128,6 +129,10 @@ parity testing. Do not set `HSA_OVERRIDE_GFX_VERSION` on gfx1100.
   or partial-peer topologies stay on the safe generic behavior.
 - Do not force `NCCL_P2P_LEVEL=PXB`, `NCCL_ALGO`, or `NCCL_PROTO` on this topology;
   RCCL Auto selected the tested direct transport.
+- `GGML_TP_SHARDED_OUTPUT=1` is an explicit Qwen35/Qwen35MoE output policy: it
+  selects vocabulary-axis primary output and forces target/backend sampling to
+  CPU; sidecar-local sampling is unaffected. Unset/`auto` preserve the normal
+  hidden-axis/full-logit policy.
 - With the launcher’s stacked MTP+K4V configuration, sidecar n-gram proposals
   are capped at the configured `--spec-draft-n-max` width (the launcher uses 3)
   to avoid oversized target verification bursts. The same fixed cap applies to
