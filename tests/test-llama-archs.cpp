@@ -377,6 +377,8 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
 // depth-sweep overrides (0 = leave defaults). Set only by test_depth_sweep().
 static uint32_t g_depth_sweep_n_ctx = 0;
 static uint32_t g_depth_sweep_n_ub  = 0;
+static uint32_t g_sweep_iheads      = 0;
+static uint32_t g_sweep_iklen       = 0;
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
@@ -809,6 +811,12 @@ static int test_depth_sweep(const size_t seed, const uint32_t max_depth,
         // real GLM-5.3-Flash: indexer.top_k = 2048, kpool = 4 (fixture: 8/4)
         gguf_set_val_u32(gguf_ctx.get(), "glm5next.attention.indexer.top_k", topk_override);
     }
+    if (g_sweep_iheads > 0) {  // real: 32 (fixture: 1)
+        gguf_set_val_u32(gguf_ctx.get(), "glm5next.attention.indexer.head_count", g_sweep_iheads);
+    }
+    if (g_sweep_iklen > 0) {   // real: 128 (fixture: 64)
+        gguf_set_val_u32(gguf_ctx.get(), "glm5next.attention.indexer.key_length", g_sweep_iklen);
+    }
 
     ggml_backend_dev_t dev_gpu = nullptr;
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
@@ -929,6 +937,12 @@ int main(int argc, char ** argv) {
         }
         if (strcmp(argv[i], "--topk") == 0 && i + 1 < argc) {
             sweep_topk = std::stoul(argv[++i]);
+        }
+        if (strcmp(argv[i], "--iheads") == 0 && i + 1 < argc) {
+            g_sweep_iheads = std::stoul(argv[++i]);
+        }
+        if (strcmp(argv[i], "--iklen") == 0 && i + 1 < argc) {
+            g_sweep_iklen = std::stoul(argv[++i]);
         }
         if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
             if (i + 1 < argc) {
