@@ -355,7 +355,101 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
 }
 
 
-// Run the full save/load test suite (tests 1-5) for a single model.
+// Test 6/7: seq copy (scatter)
+// - decode the same prefix on two sequences, interleaving seq 0 cells between the seq 1 cells
+// - save the seq 1 state, free the interleaved seq 0 cells, and restore via the given io path
+// - the restore destination is non-contiguous: scatter reads are batched per contiguous run
+// - save again on the host and compare the two blobs byte for byte
+static bool test_seq_cp_scatter(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, int test_num, bool on_device) {
+    auto params_ctx = common_context_params_to_llama(params);
+    params_ctx.n_ctx      = 256;
+    params_ctx.n_seq_max  = 2;
+    params_ctx.kv_unified = true;
+    auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
+
+    LOG("\n=== Test %d: seq copy (%s, scatter) ===\n", test_num, on_device ? "device" : "host");
+
+    const uint32_t flags = on_device ? LLAMA_STATE_SEQ_FLAGS_ON_DEVICE : LLAMA_STATE_SEQ_FLAGS_NONE;
+
+    auto decode_one = [&](llama_token tok, int pos, llama_seq_id seq) {
+        llama_batch_ptr batch(1, 0, 1);
+        common_batch_add(batch.get(), tok, pos, { seq }, false);
+        return llama_decode(ctx.get(), batch.get()) == 0;
+    };
+
+    // seq 0 cells 0,1,4 interleave the seq 1 cells 2,3,5
+    if (!decode_one(tokens[0], 0, 0) ||
+        !decode_one(tokens[1], 1, 0) ||
+        !decode_one(tokens[0], 0, 1) ||
+        !decode_one(tokens[1], 1, 1) ||
+        !decode_one(tokens[2], 2, 0) ||
+        !decode_one(tokens[2], 2, 1)) {
+        LOG_ERR("%s: failed to build interleaved state\n", __func__);
+        return false;
+    }
+
+    const auto get_seq_state = [&](llama_seq_id seq_id, uint32_t fl, std::vector<uint8_t> & state) {
+        const size_t state_size = llama_state_seq_get_size_ext(ctx.get(), seq_id, fl);
+        if (state_size == 0) {
+            LOG_ERR("%s: sequence state is empty\n", __func__);
+            return false;
+        }
+
+        state.resize(state_size);
+        const size_t ncopy = llama_state_seq_get_data_ext(ctx.get(), state.data(), state.size(), seq_id, fl);
+        if (ncopy != state.size()) {
+            LOG_ERR("%s: sequence state length %zu does not match expected length %zu\n",
+                    __func__, ncopy, state.size());
+            return false;
+        }
+
+        return true;
+    };
+
+    // host blob: contains the KV data, used for the byte-for-byte comparison
+    std::vector<uint8_t> state_before;
+    if (!get_seq_state(1, LLAMA_STATE_SEQ_FLAGS_NONE, state_before)) {
+        return false;
+    }
+
+    // save via the io path under test
+    std::vector<uint8_t> state_save;
+    if (!get_seq_state(1, flags, state_save)) {
+        return false;
+    }
+    LOG_TRC("%s: seq 1 saved via %s, %zu bytes\n", __func__, on_device ? "device" : "host", state_save.size());
+
+    // free seq 0's cells so the ring is fragmented: the restore destination (seq 1's interleaved cells) stays non-contiguous
+    if (!llama_memory_seq_rm(llama_get_memory(ctx.get()), 0, -1, -1)) {
+        LOG_ERR("%s: failed to remove sequence 0\n", __func__);
+        return false;
+    }
+
+    // restore via the io path under test
+    const size_t nset = llama_state_seq_set_data_ext(ctx.get(), state_save.data(), state_save.size(), 1, flags);
+    if (nset != state_save.size()) {
+        LOG_ERR("%s: seq set data length %zu does not match expected length %zu\n", __func__, nset, state_save.size());
+        return false;
+    }
+    LOG_TRC("%s: seq 1 restored via %s, %zu bytes\n", __func__, on_device ? "device" : "host", nset);
+
+    std::vector<uint8_t> state_after;
+    if (!get_seq_state(1, LLAMA_STATE_SEQ_FLAGS_NONE, state_after)) {
+        return false;
+    }
+
+    // the blob is serialized in sequence cell order, so identical bytes iff the restore wrote the same KV
+    if (state_before.size() != state_after.size() || memcmp(state_before.data(), state_after.data(), state_before.size()) != 0) {
+        LOG_ERR("\n%s: error: restored KV state is not byte-identical to the saved state\n", __func__);
+        return false;
+    }
+
+    LOG("\nPASS\n");
+    return true;
+}
+
+
+// Run the full save/load test suite (tests 1-7) for a single model.
 // Returns true if all tests pass, false otherwise.
 static bool run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params) {
     struct common_params params = base_params;
@@ -419,6 +513,16 @@ static bool run_save_load_tests_for_model(const std::string & model_path, const 
 
     // Test 5: seq copy (device)
     if (!test_seq_cp_device(model, params, tokens, result_baseline)) {
+        return false;
+    }
+
+    // Test 6: seq copy (host, scatter)
+    if (!test_seq_cp_scatter(model, params, tokens, 6, false)) {
+        return false;
+    }
+
+    // Test 7: seq copy (device, scatter)
+    if (!test_seq_cp_scatter(model, params, tokens, 7, true)) {
         return false;
     }
 

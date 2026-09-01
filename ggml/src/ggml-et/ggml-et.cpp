@@ -1210,7 +1210,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 // Check GLU variant - support SWIGLU, SWIGLU_OAI, GEGLU, GEGLU_ERF, GEGLU_QUICK, REGLU
                 ggml_glu_op glu_type          = ggml_get_glu_op(op);
                 const bool  supported_variant = glu_type == GGML_GLU_OP_SWIGLU || glu_type == GGML_GLU_OP_SWIGLU_OAI ||
-                                                glu_type == GGML_GLU_OP_GEGLU || glu_type == GGML_GLU_OP_GEGLU_ERF ||
+                                                glu_type == GGML_GLU_OP_SWIGLU_CLAMP || glu_type == GGML_GLU_OP_GEGLU ||
+                                                glu_type == GGML_GLU_OP_GEGLU_ERF ||
                                                 glu_type == GGML_GLU_OP_GEGLU_QUICK || glu_type == GGML_GLU_OP_REGLU;
 
                 if (op->src[1]) {
