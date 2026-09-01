@@ -1567,13 +1567,6 @@ struct test_case {
         ggml_cgraph * gf = ggml_new_graph_custom(ctx.get(), graph_nodes, false);
         ggml_build_forward_expand(gf, out);
 
-        // warmup run
-        ggml_status status = ggml_backend_graph_compute(backend, gf);
-        if (status != GGML_STATUS_SUCCESS) {
-            fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
-            return false;
-        }
-
         // determine number of runs
         int n_runs;
         bool is_cpu = ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
@@ -1596,6 +1589,13 @@ struct test_case {
         // duplicate the op
         for (int i = 1; i < n_runs; i++) {
             ggml_graph_add_node(gf, out);
+        }
+
+        // warmup run
+        ggml_status status = ggml_backend_graph_compute(backend, gf);
+        if (status != GGML_STATUS_SUCCESS) {
+            fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+            return false;
         }
 
         // calculate memory

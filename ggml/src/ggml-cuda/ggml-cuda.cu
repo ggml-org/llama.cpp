@@ -2557,6 +2557,11 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
 
+        // Reject pathological capture - duplicated nodes in test-backend-ops create huge fake graphs
+        if (i > 0 && node == cgraph->nodes[i - 1]) {
+            use_cuda_graph = false;
+        }
+
         if (ggml_cuda_is_view_or_noop(node)) {
             continue;
         }
