@@ -27,6 +27,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <random>
@@ -81,6 +82,16 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
         ret.push_back(dis(gen));
     }
     return ret;
+}
+
+// trim leading/trailing whitespace (used when parsing padded TSV columns)
+static std::string trim(const std::string & s) {
+    const size_t b = s.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) {
+        return "";
+    }
+    const size_t e = s.find_last_not_of(" \t\r\n");
+    return s.substr(b, e - b + 1);
 }
 
 static std::string get_arch(const std::string & path) {
@@ -333,10 +344,10 @@ int main(int argc, char ** argv) {
             std::vector<std::string> cols;
             size_t pos = 0;
             while ((pos = line.find('\t')) != std::string::npos) {
-                cols.push_back(line.substr(0, pos));
+                cols.push_back(trim(line.substr(0, pos)));
                 line.erase(0, pos + 1);
             }
-            cols.push_back(line);
+            cols.push_back(trim(line));
             if (cols.size() != 5) {
                 continue;
             }
@@ -459,7 +470,12 @@ int main(int argc, char ** argv) {
         std::ostream & os = record_path.empty() ? std::cout : out;
         if (!record_path.empty()) {
             os << "# test-fusion baseline for device " << base_name << "\n";
-            os << "# arch\tmoe\tmode\tlabel\tcount\n";
+            os << "# " << std::left
+               << std::setw(18) << "arch"  << '\t'
+               << std::setw(2)  << "moe"   << '\t'
+               << std::setw(6)  << "mode"  << '\t'
+               << std::setw(20) << "label" << '\t'
+               << std::right << std::setw(7) << "count" << '\n';
         }
 
         LOG_INF("%-20s %-4s %-8s %-22s %7s %7s %7s %10s %10s %s\n",
@@ -477,8 +493,12 @@ int main(int argc, char ** argv) {
                     (unsigned long long) r.count_fused, (unsigned long long) r.count_unfused,
                     (unsigned long long) r.expected, r.nmse_fus, r.nmse_dev, status);
             if (!record_path.empty()) {
-                os << r.arch << '\t' << (r.moe ? "1" : "0") << '\t' << r.mode << '\t' << r.label << '\t'
-                   << r.count_fused << '\n';
+                os << std::left
+                   << std::setw(20) << r.arch << '\t'
+                   << std::setw(4)  << (r.moe ? "1" : "0") << '\t'
+                   << std::setw(8)  << r.mode << '\t'
+                   << std::setw(22) << r.label << '\t'
+                   << std::right << std::setw(7) << r.count_fused << '\n';
             }
         }
         LOG_INF("summary: %d ok, %d failed, %d skipped (of %d rows)\n", n_ok, n_bad, n_skip, n_ok + n_bad);
