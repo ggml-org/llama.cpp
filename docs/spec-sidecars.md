@@ -124,13 +124,6 @@ and acceptance matrix is complete. These targets are optional because each
 provider contains fixed model dimensions and is not a replacement for the
 normal HIP backend.
 
-For an exact single-architecture gfx1100 sidecar build, the Qwen3.8 MTP
-provider contains a native RDNA3 signed/unsigned DOT4 path for its Q4_0 x Q8_1
-projections. It is opt-in with `LLAMA_SPEC_HIP_GFX1100_GEMV=1`; the established
-f32 GEMV remains the production default because the initial direct sidecar A/B
-was slightly slower at this workload. Set the variable to `0` (or leave it
-unset) for the fallback. The gfx1030 DOT8 path retains its existing default.
-
 ## Run MTP
 
 The default bundle layout needs only the master gate; provider paths are

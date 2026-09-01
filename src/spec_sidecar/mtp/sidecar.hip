@@ -30,7 +30,7 @@ namespace {
 struct Scratch {
     float *x_tok, *x_h, *e_n, *h_n, *cat, *proj, *attin, *qfull, *q, *gate, *k, *v, *attout,
           *ffn_in, *ffn_g, *ffn_u, *ffn_tmp, *resid, *hnorm2;
-#if defined(SPEC_SIDECAR_Q8_1)
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
     block_q8_1 *q8;
     block_q8_1_sum_hi *q8_sum_hi;
 #endif
@@ -118,32 +118,13 @@ __global__ void shift_kv_rows(__half * kv, int src_min, int src_max, int delta, 
     }
 }
 
-#if defined(SPEC_SIDECAR_Q8_1)
-static bool sidecar_q8_gemv_enabled() {
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+static bool sidecar_gfx1030_gemv_enabled() {
     static const bool enabled = [] {
-#if defined(__gfx1100__) || defined(SPEC_SIDECAR_GFX1100)
-        const char * value = getenv("LLAMA_SPEC_HIP_GFX1100_GEMV");
-        // The DOT4 path is retained as an explicit gfx1100 experiment until
-        // a longer model-level A/B proves a win. Keep the production default
-        // on the established scalar GEMV path.
-        return value != nullptr && (std::atoi(value) != 0);
-#else
         const char * value = getenv("LLAMA_SPEC_HIP_GFX1030_GEMV");
         return value == nullptr || (std::atoi(value) != 0);
-#endif
     }();
     return enabled;
-}
-
-static void sidecar_q8_gemv(const block_q4_0 * W, const block_q8_1 * q,
-        const block_q8_1_sum_hi * sum_hi, float * y, int n_in, int n_out,
-        hipStream_t st) {
-#if defined(__gfx1100__) || defined(SPEC_SIDECAR_GFX1100)
-    (void) sum_hi;
-    gemv_q4_0_q8_1_dot4<<<n_out, 32, 0, st>>>(W, q, y, n_in, n_out);
-#else
-    gemv_q4_0_q8_1_dot8<<<n_out, 32, 0, st>>>(W, q, sum_hi, y, n_in, n_out);
-#endif
 }
 #endif
 
@@ -179,14 +160,16 @@ void block_phase2(Scratch & c, hipStream_t st, int pos, int * tok_dst,
     sigmoid_gate<<<(N_HEAD * HEAD_DIM + 255) / 256, 256, 0, st>>>(c.attout, c.gate, N_HEAD * HEAD_DIM);
     gemv_q4_0<<<N_EMBD, 32, 0, st>>>(s.W_o, c.attout, c.resid, N_HEAD * HEAD_DIM, N_EMBD);
     add_inplace<<<(N_EMBD + 255) / 256, 256, 0, st>>>(c.resid, c.proj, N_EMBD);
-#if defined(SPEC_SIDECAR_Q8_1)
-    if (sidecar_q8_gemv_enabled()) {
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    if (sidecar_gfx1030_gemv_enabled()) {
         rmsnorm_q8_1<<<1, 256, 0, st>>>(c.resid, s.w_post, c.ffn_in,
                                         c.q8, c.q8_sum_hi, N_EMBD);
         // W_fg and W_fu consume the same normalized activation. Quantize once
         // and keep the Q8_1 payload resident for both sibling projections.
-        sidecar_q8_gemv(s.W_fg, c.q8, c.q8_sum_hi, c.ffn_g, N_EMBD, N_FF, st);
-        sidecar_q8_gemv(s.W_fu, c.q8, c.q8_sum_hi, c.ffn_u, N_EMBD, N_FF, st);
+        gemv_q4_0_q8_1_dot8<<<N_FF, 32, 0, st>>>(s.W_fg, c.q8, c.q8_sum_hi,
+                                                 c.ffn_g, N_EMBD, N_FF);
+        gemv_q4_0_q8_1_dot8<<<N_FF, 32, 0, st>>>(s.W_fu, c.q8, c.q8_sum_hi,
+                                                 c.ffn_u, N_EMBD, N_FF);
     } else
 #endif
     {
@@ -195,10 +178,11 @@ void block_phase2(Scratch & c, hipStream_t st, int pos, int * tok_dst,
         gemv_q4_0<<<N_FF, 32, 0, st>>>(s.W_fu, c.ffn_in, c.ffn_u, N_EMBD, N_FF);
     }
     silu_mul<<<(N_FF + 255) / 256, 256, 0, st>>>(c.ffn_g, c.ffn_u, N_FF);
-#if defined(SPEC_SIDECAR_Q8_1)
-    if (sidecar_q8_gemv_enabled()) {
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    if (sidecar_gfx1030_gemv_enabled()) {
         quantize_q8_1<<<1, 256, 0, st>>>(c.ffn_g, c.q8, c.q8_sum_hi, N_FF);
-        sidecar_q8_gemv(s.W_fd, c.q8, c.q8_sum_hi, c.ffn_tmp, N_FF, N_EMBD, st);
+        gemv_q4_0_q8_1_dot8<<<N_EMBD, 32, 0, st>>>(s.W_fd, c.q8, c.q8_sum_hi,
+                                                    c.ffn_tmp, N_FF, N_EMBD);
     } else
 #endif
     {
@@ -206,14 +190,15 @@ void block_phase2(Scratch & c, hipStream_t st, int pos, int * tok_dst,
     }
     add_inplace<<<(N_EMBD + 255) / 256, 256, 0, st>>>(c.resid, c.ffn_tmp, N_EMBD);
     if (tok_dst != nullptr || emit_logits) {
-#if defined(SPEC_SIDECAR_Q8_1)
-        if (sidecar_q8_gemv_enabled()) {
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+        if (sidecar_gfx1030_gemv_enabled()) {
             // Keep hnorm2 in float for the next autoregressive step while
             // producing the Q8_1 activation needed by the shared head.
             rmsnorm_q8_1<<<1, 256, 0, st>>>(c.resid, s.w_shn, c.hnorm2,
                                             c.q8, c.q8_sum_hi, N_EMBD);
-            sidecar_q8_gemv(s.W_head, c.q8, c.q8_sum_hi, s.logits,
-                            N_EMBD, N_HEAD_ROWS, st);
+            gemv_q4_0_q8_1_dot8<<<N_HEAD_ROWS, 32, 0, st>>>(s.W_head, c.q8,
+                                                            c.q8_sum_hi, s.logits,
+                                                            N_EMBD, N_HEAD_ROWS);
         } else
 #endif
         {
@@ -626,7 +611,7 @@ static int spec_hip_init_impl(const char * weights_dir, const char * ids_path,
         SC_CHECK(hipMalloc(&c.ffn_in, N_EMBD * 4)); SC_CHECK(hipMalloc(&c.ffn_g, N_FF * 4)); SC_CHECK(hipMalloc(&c.ffn_u, N_FF * 4));
         SC_CHECK(hipMalloc(&c.ffn_tmp, N_EMBD * 4));
         SC_CHECK(hipMalloc(&c.resid, N_EMBD * 4));  SC_CHECK(hipMalloc(&c.hnorm2, N_EMBD * 4));
-#if defined(SPEC_SIDECAR_Q8_1)
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
         SC_CHECK(hipMalloc(&c.q8, (size_t) (N_FF / 32) * sizeof(block_q8_1)));
         SC_CHECK(hipMalloc(&c.q8_sum_hi, (size_t) (N_FF / 32) * sizeof(block_q8_1_sum_hi)));
 #endif
@@ -734,15 +719,10 @@ static int spec_hip_init_impl(const char * weights_dir, const char * ids_path,
     S.ok = true;
     fprintf(stderr, "[hip-sidecar] initialized: %zu tensors, KV %zu positions f16, device=%d\n",
             S.tensors.size(), S.max_pos, S.device);
-#if defined(SPEC_SIDECAR_Q8_1)
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
     if (getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr) {
-#if defined(__gfx1100__) || defined(SPEC_SIDECAR_GFX1100)
-        fprintf(stderr, "[hip-sidecar] gfx1100 DOT4 GEMV path: %s\n",
-                sidecar_q8_gemv_enabled() ? "enabled" : "disabled");
-#else
-        fprintf(stderr, "[hip-sidecar] gfx1030 DOT8 GEMV path: %s\n",
-                sidecar_q8_gemv_enabled() ? "enabled" : "disabled");
-#endif
+        fprintf(stderr, "[hip-sidecar] gfx1030 GEMV path: %s\n",
+                sidecar_gfx1030_gemv_enabled() ? "enabled" : "disabled");
     }
 #endif
     return 0;

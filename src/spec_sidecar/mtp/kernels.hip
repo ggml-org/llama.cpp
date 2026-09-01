@@ -16,14 +16,6 @@
 #        define SPEC_SIDECAR_ROCPRIM_TOPK
 #    endif
 #endif
-// The Q8_1 activation format is shared by the validated gfx1030 DOT8 path
-// and the native gfx1100 DOT4 path. The host pass receives the matching
-// SPEC_SIDECAR_GFX* definition from CMake; device passes expose __gfx*__.
-#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030) || \
-    defined(__gfx1100__) || defined(SPEC_SIDECAR_GFX1100)
-#    define SPEC_SIDECAR_Q8_1 1
-#endif
-
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -66,10 +58,10 @@ __device__ __forceinline__ float q4_0_get(const block_q4_0 * b, int j) {
     return (q - 8) * f16_to_f32(b->d);
 }
 
-// Keep these paths compile-time gated. The sidecar is also useful as a
-// portable fallback, but the packed integer paths are selected only for the
-// exact architectures that provide a qualified implementation.
-#if defined(SPEC_SIDECAR_Q8_1)
+// Keep this path compile-time gated. The sidecar is also useful as a
+// portable fallback, but the packed DOT8 builtins and its correction term are
+// only validated for the exact gfx1030 build used by the RDNA2 deployment.
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
 struct block_q8_1 {
     __half2 ds; // d and raw sum(qs), matching native block_q8_1
     int8_t qs[32];
@@ -90,7 +82,6 @@ static __device__ __forceinline__ uint32_t sidecar_get_int_b2(const uint8_t * x,
     return (uint32_t) x16[2*i] | ((uint32_t) x16[2*i + 1] << 16);
 }
 
-#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
 static __device__ __forceinline__ int sidecar_udot8_u4(uint32_t a, uint32_t b, int c) {
     return (int) __builtin_amdgcn_udot8(a, b, (uint32_t) c, false);
 }
@@ -125,7 +116,6 @@ static __device__ __forceinline__ float sidecar_vec_dot_q4_0_q8_1_dot8(
     return f16_to_f32(bq4->d) *
             (sumi * ds.x - (8 * vdr / 4) * ds.y);
 }
-#endif // defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
 
 // Fused RMSNorm -> Q8_1. The optional float output is retained because the
 // normalized hidden row is also the autoregressive input to the next draft
@@ -212,7 +202,6 @@ __global__ void quantize_q8_1(const float * __restrict__ x,
     }
 }
 
-#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
 // Real gfx1030 GEMV: one wave32 per output row, with paired lanes reusing
 // each q4_0/q8_1 block load and the RDNA2 packed DOT8 operations.
 __global__ void gemv_q4_0_q8_1_dot8(
@@ -239,62 +228,6 @@ __global__ void gemv_q4_0_q8_1_dot8(
     if (lane == 0) y[row] = acc;
 }
 #endif // defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
-
-#if defined(__gfx1100__) || defined(SPEC_SIDECAR_GFX1100)
-// RDNA3 has a signed/unsigned byte DOT4 rather than the RDNA2 packed DOT8
-// pair. The q4_0 low and high nibbles are already laid out as two groups of
-// four unsigned bytes, so two DOT4 operations cover the same eight values as
-// one DOT8 operation without requiring the sum_hi correction in the dot kernel.
-static __device__ __forceinline__ int sidecar_sudot4(uint32_t a, uint32_t b, int c) {
-    return (int) __builtin_amdgcn_sudot4(true, (int) a, true, (int) b, c, false);
-}
-
-template <int vdr>
-static __device__ __forceinline__ float sidecar_vec_dot_q4_0_q8_1_dot4(
-        const block_q4_0 * bq4, const block_q8_1 * bq8, int iqs) {
-    int sumi = 0;
-#pragma unroll
-    for (int i = 0; i < vdr; ++i) {
-        const uint32_t qw = sidecar_get_int_b2(bq4->qs, iqs + i);
-        const uint32_t q4_lo = qw & 0x0F0F0F0Fu;
-        const uint32_t q4_hi = (qw >> 4) & 0x0F0F0F0Fu;
-        const uint32_t qa_lo = sidecar_get_int_b4(bq8->qs, iqs + i);
-        const uint32_t qa_hi = sidecar_get_int_b4(bq8->qs, iqs + i + 4);
-        sumi = sidecar_sudot4(q4_lo, qa_lo, sumi);
-        sumi = sidecar_sudot4(q4_hi, qa_hi, sumi);
-    }
-
-    const float2 ds = __half22float2(bq8->ds);
-    return f16_to_f32(bq4->d) *
-            (sumi * ds.x - (8 * vdr / 4) * ds.y);
-}
-
-// One wave32 per output row, with the same two-lane block partition as the
-// validated gfx1030 sidecar kernel. Each lane handles half of a q4_0 block;
-// the RDNA3 DOT4 path changes only the packed arithmetic.
-__global__ void gemv_q4_0_q8_1_dot4(
-        const block_q4_0 * __restrict__ W, const block_q8_1 * __restrict__ q,
-        float * __restrict__ y, int n_in, int n_out) {
-    const int row = blockIdx.x;
-    const int lane = threadIdx.x;
-    if (row >= n_out) return;
-    constexpr int vdr = 2;
-    constexpr int lanes_per_block = 2;
-    constexpr int blocks_per_iter = 32 / lanes_per_block;
-    const int nblocks = n_in / 32;
-    const block_q4_0 * wr = W + (size_t) row * nblocks;
-    float acc = 0.0f;
-    for (int kbx = lane / lanes_per_block; kbx < nblocks; kbx += blocks_per_iter) {
-        const int iqs = vdr * (lane % lanes_per_block);
-        acc += sidecar_vec_dot_q4_0_q8_1_dot4<vdr>(wr + kbx, q + kbx, iqs);
-    }
-    for (int off = 16; off > 0; off >>= 1) {
-        acc += __shfl_down(acc, off, 32);
-    }
-    if (lane == 0) y[row] = acc;
-}
-#endif // defined(__gfx1100__) || defined(SPEC_SIDECAR_GFX1100)
-#endif // defined(SPEC_SIDECAR_Q8_1)
 
 // ---------------- kernels ----------------
 
