@@ -523,8 +523,10 @@ bool llm_graph_input_attn_k::can_reuse_impl(const llm_graph_params & params) {
 
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
 
-    // Patch B: expanded mirror idxs scale with n_tokens
-    res &= !self_v_idxs || (params.ubatch.n_tokens > 0 && self_v_idxs->ne[0] % params.ubatch.n_tokens == 0);
+    // Patch B (grokk 036): exact width check, mirroring the hybrid-k wrapper
+    res &= !self_v_idxs ||
+        (int64_t) self_v_idxs->ne[0] ==
+            (int64_t) params.ubatch.n_tokens * mctx->mirror_width_max();
 
     res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
 
@@ -3003,7 +3005,9 @@ ggml_tensor * llm_graph_context::build_attn(
 
         // Patch B (grokk 033 2.1): dense consumer maintains the mirror too
         if (mctx_cur->get_has_v_mirror()) {
-            ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, k_cur, inp->get_v_idxs(), il));
+            ggml_tensor * vupd = mctx_cur->cpy_v(ctx0, k_cur, inp->get_v_idxs(), il);
+            cb(vupd, "v_mirror_upd", il);
+            ggml_build_forward_expand(gf, vupd);
         }
     }
 
@@ -3767,7 +3771,9 @@ ggml_tensor * llm_graph_context::build_attn_sparse(
 
         // Patch B: keep the transposed mirror in sync (same latent rows, O(1)/token)
         if (mctx_cur->get_has_v_mirror()) {
-            ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, k_cur, inp->get_v_idxs(), il));
+            ggml_tensor * vupd = mctx_cur->cpy_v(ctx0, k_cur, inp->get_v_idxs(), il);
+            cb(vupd, "v_mirror_upd", il);
+            ggml_build_forward_expand(gf, vupd);
         }
     }
 
