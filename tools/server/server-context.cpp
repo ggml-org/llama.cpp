@@ -1296,18 +1296,27 @@ private:
 
             if (reuse_dft) {
                 SRV_INF("reusing draft model for speculative prefill '%s'\n", params_spf.model.get_name().c_str());
-                llama_context_params cparams = common_context_params_to_llama(params_spf);
-                ctx_spf_own.reset(llama_init_from_model(model_dft, cparams));
                 model_spf = model_dft;
-                ctx_spf   = ctx_spf_own.get();
             } else {
                 SRV_INF("loading speculative prefill draft model '%s'\n", params_spf.model.get_name().c_str());
-                llama_init_spf = common_init_from_params(params_spf);
+                llama_init_spf = common_init_from_params(params_spf, /*model_only=*/true);
                 model_spf = llama_init_spf ? llama_init_spf->model() : nullptr;
-                ctx_spf   = llama_init_spf ? llama_init_spf->context() : nullptr;
             }
-            if (model_spf == nullptr || ctx_spf == nullptr) {
+            if (model_spf == nullptr) {
                 SRV_ERR("failed to load speculative prefill draft model, '%s'\n", params_spf.model.path.c_str());
+                return false;
+            }
+
+            if (params_base.speculative.prefill.n_ctx <= 0 && params_spf.n_ctx > (int32_t) llama_model_n_ctx_train(model_spf)) {
+                params_spf.n_ctx = llama_model_n_ctx_train(model_spf);
+                SRV_INF("capping speculative prefill draft context to training limit (%d tokens)\n", params_spf.n_ctx);
+            }
+
+            llama_context_params cparams = common_context_params_to_llama(params_spf);
+            ctx_spf_own.reset(llama_init_from_model(model_spf, cparams));
+            ctx_spf   = ctx_spf_own.get();
+            if (ctx_spf == nullptr) {
+                SRV_ERR("failed to create speculative prefill context for '%s'\n", params_spf.model.path.c_str());
                 return false;
             }
 

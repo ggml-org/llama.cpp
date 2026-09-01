@@ -4318,7 +4318,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_DEVICE"));
     add_opt(common_arg(
         {"--spec-prefill-draft-ctx", "--spec-prefill-ctx", "--spec-prefill-ctx-size", "--spec-prefill-max-ctx", "-cpd", "--speculative-prefill-ctx", "--speculative-prefill-max-ctx"}, "N",
-        string_format("context size for speculative prefill draft model (default: %d, 0 = main context size)", params.speculative.prefill.n_ctx),
+        string_format("context size for speculative prefill draft model (default: %d, 0 = draft training limit or main context)", params.speculative.prefill.n_ctx),
         [](common_params & params, int value) {
             if (value < 0) {
                 throw std::invalid_argument("spec-prefill context size must be >= 0");

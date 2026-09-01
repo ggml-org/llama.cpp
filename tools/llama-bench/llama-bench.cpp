@@ -2830,7 +2830,8 @@ int llama_bench(int argc, char ** argv) {
 
         if (has_spec_prefill) {
             llama_context_params dft_cparams = llama_context_default_params();
-            dft_cparams.n_ctx           = inst.spec_prefill_n_ctx > 0 ? inst.spec_prefill_n_ctx : (inst.n_prompt + inst.spec_prefill_lookahead + 16);
+            const uint32_t needed_dft_ctx = (uint32_t) (inst.n_prompt + inst.spec_prefill_lookahead + 16);
+            dft_cparams.n_ctx           = inst.spec_prefill_n_ctx > 0 ? inst.spec_prefill_n_ctx : std::min(needed_dft_ctx, (uint32_t) llama_model_n_ctx_train(lmodel_dft));
             dft_cparams.n_batch         = inst.n_batch;
             dft_cparams.n_ubatch        = inst.n_ubatch;
             dft_cparams.type_k          = inst.type_k;

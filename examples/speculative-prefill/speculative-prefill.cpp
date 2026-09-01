@@ -77,14 +77,17 @@ int main(int argc, char ** argv) {
     }
     params_dft.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED; // standard attention needed to capture kq_soft_max weights
 
-    auto init_dft = common_init_from_params(params_dft);
+    auto init_dft = common_init_from_params(params_dft, /*model_only=*/true);
     if (!init_dft) {
         LOG_ERR("%s: failed to load draft model\n", __func__);
         return 1;
     }
 
     llama_model * model_dft = init_dft->model();
-    llama_context * ctx_dft = init_dft->context();
+    if (!model_dft) {
+        LOG_ERR("%s: failed to load draft model\n", __func__);
+        return 1;
+    }
 
     if (llama_model_is_recurrent(model_dft)) {
         LOG_ERR("%s: draft model is recurrent and not supported for speculative prefill\n", __func__);
@@ -93,6 +96,19 @@ int main(int argc, char ** argv) {
 
     if (llama_model_target_layer_ids_n(model_dft) > 0) {
         LOG_ERR("%s: draft model '%s' is target-dependent and cannot be used for speculative prefill\n", __func__, dft_model.path.c_str());
+        return 1;
+    }
+
+    if (params.speculative.prefill.n_ctx <= 0 && params_dft.n_ctx > (int32_t) llama_model_n_ctx_train(model_dft)) {
+        params_dft.n_ctx = llama_model_n_ctx_train(model_dft);
+        LOG_INF("%s: capping speculative prefill draft context to training limit (%d tokens)\n", __func__, params_dft.n_ctx);
+    }
+
+    llama_context_params cparams_dft = common_context_params_to_llama(params_dft);
+    llama_context_ptr ctx_dft_own(llama_init_from_model(model_dft, cparams_dft));
+    llama_context * ctx_dft = ctx_dft_own.get();
+    if (!ctx_dft) {
+        LOG_ERR("%s: failed to create draft context\n", __func__);
         return 1;
     }
 
