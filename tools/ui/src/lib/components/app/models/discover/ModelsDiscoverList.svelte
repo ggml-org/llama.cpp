@@ -28,7 +28,7 @@
 <ul class="space-y-0.5 p-2">
 	{#if loading}
 		{#each Array(loadingCount) as _, index (index)}
-			<ModelsDiscoverListItemSkeleton />
+			<ModelsDiscoverListItemSkeleton {index} />
 		{/each}
 	{:else}
 		{#each models as model (model.id)}

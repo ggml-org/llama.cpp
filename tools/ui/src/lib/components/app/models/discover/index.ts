@@ -110,6 +110,14 @@ export { default as ModelsDiscoverModelDetailsDownloadOptionsDownloadButton } fr
 export { default as ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand } from './ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand.svelte';
 
 /**
+ * **ModelsDiscoverDetailsSkeleton** - Detail view loading skeleton
+ *
+ * Static placeholder matching the detail layout: header with avatar and name,
+ * metadata chips, the download options box and readme text lines.
+ */
+export { default as ModelsDiscoverModelDetailsSkeleton } from './ModelsDiscoverModelDetailsSkeleton.svelte';
+
+/**
  * **ModelsDiscoverChatTemplateDialog** - Chat template viewer
  *
  * Shows the model's chat template in a scrollable dialog with a copy button.
