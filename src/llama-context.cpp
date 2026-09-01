@@ -1391,7 +1391,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             if (fbl_path) {
                 static long long fbl_gate   = getenv("LLAMA_ALLOCDUMP_MIN_NE0") ? atoll(getenv("LLAMA_ALLOCDUMP_MIN_NE0")) : 0;
                 static long long fbl_stride = getenv("LLAMA_ALLOCDUMP_STRIDE")  ? atoll(getenv("LLAMA_ALLOCDUMP_STRIDE"))  : 2048;
+                static long long fbl_reqtok = getenv("LLAMA_ALLOCDUMP_REQ_TOKENS") ? atoll(getenv("LLAMA_ALLOCDUMP_REQ_TOKENS")) : 0;
                 static long long fbl_last   = -1;
+                // grokk-reply: reserve (n_tokens=1) and tail batches are the wrong geometry
+                const bool fbl_tok_ok = fbl_reqtok == 0 || (long long) ubatch.n_tokens == fbl_reqtok;
                 long long kq_ne0 = -1;
                 for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
                     const ggml_tensor * n = ggml_graph_node(gf, i);
@@ -1399,7 +1402,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
                         kq_ne0 = n->ne[0];
                     }
                 }
-                if (kq_ne0 >= fbl_gate && (fbl_last < 0 || kq_ne0 - fbl_last >= fbl_stride)) {
+                if (fbl_tok_ok && kq_ne0 >= fbl_gate && (fbl_last < 0 || llabs(kq_ne0 - fbl_last) >= fbl_stride)) {
                     fbl_last = kq_ne0;
                     if (FILE * f = fopen(fbl_path, "a")) {
                         fprintf(f, "GRAPH kq_ne0=%lld n_nodes=%d n_tokens=%d\n",
