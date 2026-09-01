@@ -13,10 +13,6 @@ void llama_model_hy_v3::load_arch_hparams(llama_model_loader & ml) {
         hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
     }
 
-    // NextN/MTP (HY V3): extra decoder block(s) appended beyond the main stack
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_all");
-
     switch (hparams.n_layer()) {
         case 48: type = LLM_TYPE_30B_A3B; break;
         default: type = LLM_TYPE_UNKNOWN;
