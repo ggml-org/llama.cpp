@@ -259,6 +259,7 @@ enum ggml_metal_device_id {
     GGML_METAL_DEVICE_M5_PRO,
     GGML_METAL_DEVICE_M5_MAX,
     GGML_METAL_DEVICE_M5_ULTRA,
+    GGML_METAL_DEVICE_A18_PRO,
 };
 
 const char * ggml_metal_device_id_token(enum ggml_metal_device_id id);

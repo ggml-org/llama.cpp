@@ -1056,6 +1056,7 @@ static const struct {
     DEV("M5 Pro",   GGML_METAL_DEVICE_M5_PRO),
     DEV("M5 Max",   GGML_METAL_DEVICE_M5_MAX),
     DEV("M5 Ultra", GGML_METAL_DEVICE_M5_ULTRA),
+    DEV("A18 Pro",  GGML_METAL_DEVICE_A18_PRO),
 #undef DEV
 };
 
