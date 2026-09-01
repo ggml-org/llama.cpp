@@ -136,6 +136,12 @@ int main(int argc, char ** argv) {
                         qwen35_dflash->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH,
                         "Qwen3.8-27B providers use distinct named profiles");
     failures += require(qwen35_mtp != nullptr && qwen35moe_mtp != nullptr && qwen35_dflash != nullptr &&
+                        common_spec_sidecar_profile_name_matches(*qwen35_mtp, "Qwen/Qwen3.8-27B") &&
+                        common_spec_sidecar_profile_name_matches(*qwen35_mtp, "..") &&
+                        common_spec_sidecar_profile_name_matches(*qwen35_dflash, "..") &&
+                        !common_spec_sidecar_profile_name_matches(*qwen35_mtp, ".") &&
+                        !common_spec_sidecar_profile_name_matches(*qwen35_mtp, "unrelated") &&
+                        !common_spec_sidecar_profile_name_matches(*qwen35moe_mtp, "..") &&
                         qwen35_mtp->mtp_embedding_width == 5120 && qwen35_mtp->mtp_head_rows == 40960 &&
                         std::strcmp(qwen35moe_mtp->target_architecture, "qwen35moe") == 0 &&
                         std::strcmp(qwen35moe_mtp->target_name, "Qwen3.6") == 0 &&
@@ -152,7 +158,7 @@ int main(int argc, char ** argv) {
                                     "spec_qwen35moe_mtp_sidecar.so") == 0 &&
                         qwen35_dflash->dflash_encoded_width == 25600 && qwen35_dflash->dflash_block_size == 8 &&
                         qwen35_dflash->dflash_head_rows == 40960,
-                        "Qwen3.8-27B providers retain their independent contracts");
+                        "Qwen3.8-27B providers retain narrow identity and independent capability contracts");
 
     if (qwen35_mtp != nullptr) {
         set_environment(qwen35_mtp->library_env, "/definitely/missing/spec_hip_sidecar.so");

@@ -129,6 +129,26 @@ static bool profile_mismatch(const common_spec_sidecar_profile & profile,
     return false;
 }
 
+static bool profile_name_matches(
+        const common_spec_sidecar_profile & profile, const char * name) {
+    if (profile.target_name == nullptr) {
+        return true;
+    }
+    if (name != nullptr && std::strstr(name, profile.target_name) != nullptr) {
+        return true;
+    }
+
+    // Some Quark MXFP4 exports retain only the source path's parent marker as
+    // general.name. Keep this exception exact; all architecture, size, shape,
+    // auxiliary-layer, and vocabulary checks below remain mandatory.
+    return name != nullptr && std::strcmp(name, "..") == 0 &&
+            profile.target_architecture != nullptr &&
+            std::strcmp(profile.target_architecture, "qwen35") == 0 &&
+            std::strcmp(profile.target_name, "Qwen3.8-27B") == 0 &&
+            profile.target_size_label != nullptr &&
+            std::strcmp(profile.target_size_label, "27B") == 0;
+}
+
 static bool profile_matches_model(const common_spec_sidecar_profile & profile,
         const llama_model * model, std::string & error) {
     if (model == nullptr) {
@@ -148,7 +168,7 @@ static bool profile_matches_model(const common_spec_sidecar_profile & profile,
         // Quantizers may retain a path or add a backend suffix to general.name;
         // require the stable model identity token rather than an exact spelling.
         if (llama_model_meta_val_str(model, "general.name", name, sizeof(name)) < 0 ||
-                std::strstr(name, profile.target_name) == nullptr) {
+                !profile_name_matches(profile, name)) {
             return profile_mismatch(profile, "model name is not the provider target", error);
         }
     }
@@ -205,7 +225,7 @@ static bool profile_matches_target_file(const common_spec_sidecar_profile & prof
     if (ok && profile.target_name != nullptr) {
         const int64_t name_id = gguf_find_key(ctx, "general.name");
         if (name_id < 0 || gguf_get_kv_type(ctx, name_id) != GGUF_TYPE_STRING ||
-                std::strstr(gguf_get_val_str(ctx, name_id), profile.target_name) == nullptr) {
+                !profile_name_matches(profile, gguf_get_val_str(ctx, name_id))) {
             ok = profile_mismatch(profile, "target GGUF model identity differs", error);
         }
     }
@@ -555,6 +575,11 @@ static bool validate_profile_artifacts_impl(const common_spec_sidecar_profile & 
 }
 
 } // namespace
+
+bool common_spec_sidecar_profile_name_matches(
+        const common_spec_sidecar_profile & profile, const char * name) {
+    return profile_name_matches(profile, name);
+}
 
 size_t common_spec_sidecar_profile_count() {
     return sizeof(ALL_PROFILES) / sizeof(ALL_PROFILES[0]);

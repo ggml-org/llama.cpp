@@ -72,6 +72,8 @@ struct common_spec_sidecar_paths {
 
 size_t common_spec_sidecar_profile_count();
 const common_spec_sidecar_profile * common_spec_sidecar_profile_at(size_t index);
+bool common_spec_sidecar_profile_name_matches(
+        const common_spec_sidecar_profile & profile, const char * name);
 
 const common_spec_sidecar_profile * common_spec_sidecar_profile_for_model(
         common_spec_sidecar_kind kind, const llama_model * model, std::string & error);
