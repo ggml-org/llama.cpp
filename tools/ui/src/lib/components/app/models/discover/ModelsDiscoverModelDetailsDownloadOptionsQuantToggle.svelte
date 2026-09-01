@@ -44,7 +44,7 @@
 					<span
 						class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
 					>
-						{meta.sidecar}
+						{meta.sidecar}{meta.shared ? '-shared' : ''}
 					</span>
 				{/if}
 
@@ -76,7 +76,7 @@
 					<span
 						class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
 					>
-						{meta.sidecar}
+						{meta.sidecar}{meta.shared ? '-shared' : ''}
 					</span>
 				{/if}
 
