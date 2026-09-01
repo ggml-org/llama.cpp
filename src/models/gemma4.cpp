@@ -136,7 +136,7 @@ std::unique_ptr<llm_graph_context> llama_model_gemma4::build_arch_graph(const ll
 }
 
 // get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
-static ggml_tensor * ggml_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
+static ggml_tensor * gemma4_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
     GGML_ASSERT(idx < (int) x->ne[2]);
     return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
                         idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
@@ -345,7 +345,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             cur = build_lora_mm(model.layers[il].per_layer_inp_gate, cur); // [n_embd_per_layer, n_tokens]
             cur = ggml_gelu(ctx0, cur);
 
-            ggml_tensor * inp_this_layer = ggml_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
+            ggml_tensor * inp_this_layer = gemma4_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
             // TODO @ngxson : improve this
             if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
