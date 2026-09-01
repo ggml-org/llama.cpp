@@ -2623,10 +2623,12 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         // mode: off (default) | kq | kqv | both (legacy "1" == both)
         static const int fbl_mode = [] {
             const char * e = getenv("LLAMA_PACKED_MQA_DECODE");
-            if (!e) return 0;
+            if (!e || strcmp(e, "0") == 0 || strcmp(e, "off") == 0) return 0;
             if (strcmp(e, "kq") == 0) return 1;
             if (strcmp(e, "kqv") == 0) return 2;
-            if (strcmp(e, "both") == 0 || atoi(e) != 0) return 3;
+            if (strcmp(e, "both") == 0 || strcmp(e, "1") == 0) return 3;  // "1" = legacy alias
+            // grokk 028 §3: bare atoi made "2" mean both — fail loud instead
+            fprintf(stderr, "LLAMA_PACKED_MQA_DECODE=%s unrecognized (want off|kq|kqv|both) -> off\n", e);
             return 0;
         }();
         const bool fbl_gate = fbl_mode != 0 &&
