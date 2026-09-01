@@ -347,6 +347,17 @@ struct common_params_speculative_draft {
     common_speculative_type sidecar_type = COMMON_SPECULATIVE_TYPE_NONE;
     const common_spec_sidecar_profile * sidecar_profile = nullptr;
 
+    // Resolved before target-model loading so the output-head placement probe,
+    // post-load preflight, and runtime loader consume one atomic artifact set.
+    bool sidecar_prepare_attempted = false;
+    bool sidecar_candidate_ready = false;
+    bool sidecar_dflash_full_head = false;
+    std::string sidecar_profile_name;
+    std::string sidecar_library;
+    std::string sidecar_artifact_dir;
+    std::string sidecar_ids;
+    std::string sidecar_prepare_error;
+
     int32_t n_gpu_layers = -1; // number of layers to store in VRAM for the draft model (-1 - use default)
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
@@ -380,6 +391,10 @@ struct common_params_speculative_ngram_cache {
 
 struct common_params_speculative {
     std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
+
+    // Empty uses ${LLAMA_CACHE}/spec-sidecar (or the platform cache default).
+    // Generated bundles are profile/source keyed below this root.
+    std::string sidecar_cache;
 
     double synth_len = -1.0;
     std::vector<double> synth_rates;

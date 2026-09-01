@@ -103,18 +103,25 @@ GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded
 It is shape- and topology-gated and falls back safely; leave it unset on other
 machines.
 
-### DFlash / MTP
+### MTP / DFlash sidecars
 
-Add the draft model only when it is compatible with the main model:
+The RDNA2 build helpers compile the sidecar libraries. With `SPEC_SIDECAR=1`,
+the server detects a compatible MTP target or DFlash draft, prepares the needed
+assets natively on first start, and reuses them from the llama.cpp cache:
 
 ```bash
-  --spec-type draft-dflash \
-  --spec-draft-model /path/to/dflash.gguf \
-  --spec-draft-n-max 6
+# MTP is detected from the main model
+SPEC_SIDECAR=1 ./build/bin/llama-server -m /path/to/main.gguf --spec-draft-n-max 3
+
+# DFlash is detected from the speculative model
+SPEC_SIDECAR=1 ./build/bin/llama-server -m /path/to/main.gguf \
+  -md /path/to/dflash.gguf --spec-draft-n-max 7
 ```
 
-`--spec-draft-n-max` is a workload setting, not a build requirement. Start with
-the draft model's supported block size and tune acceptance and throughput.
+No Python preparation step is required. Generated files default to
+`${LLAMA_CACHE:-~/.cache/llama.cpp}/spec-sidecar`; use
+`--spec-sidecar-cache /path` to choose another location. Existing explicit
+sidecar paths remain supported.
 
 ## What is automatic
 
@@ -141,8 +148,7 @@ commit when comparing performance.
 | GDN sibling projection fusion | Automatic when eligible | Qwen3.5/Qwen3.6 MoE sibling weights are packed only for validated MoE loader/model conditions; it is not used by the dense Qwen3.8-27B path. |
 | RCCL/topology policy | Automatic after `GGML_HIP_RCCL=ON` build | RCCL tuner and guarded host-snapshot/P2P schedules self-test before activation; unknown topologies use RCCL defaults. |
 | TP4 host-snapshot consumer fusion | Optional `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded` | Exact ordinary TP4 F32 boundaries can fuse reduction with residual/RMSNorm/mul; this is not selected by the supplied command unless explicitly added. |
-| Embedding-sharded LM head | Model-dependent | `GGML_TP_SHARDED_OUTPUT=1` requests validated sharding, but an external DFlash shared-head guard keeps the supplied Qwen3.8 command mirrored. |
-| Vocabulary-sharded output | Explicit `GGML_TP_VOCAB_SHARDED_OUTPUT=1` | Experimental DeepSeek4/raw-decode path requiring RCCL; not part of the supplied Qwen3.8/DFlash command. |
+| TP output-head sharding | Explicit `GGML_TP_SHARDED_OUTPUT=1` for CPU/sidecar-oriented output | On Qwen35/Qwen35MoE, explicit `1` selects vocabulary-axis sharding for the primary LM head and removes the full-logit output AllReduce; target/native-MTP backend sampling falls back to CPU while sidecar-local sampling remains active. Unset/`auto` retains hidden-axis/full-logit output for backend sampling. |
 | Recurrent state safety | Add `GGML_HIP_SAFE_STATE_IO=1` for state-heavy workloads | Protects multi-GPU pageable state save/restore; it is a reliability workaround, not an inference-kernel switch. |
 | DFlash/MTP correctness paths | Automatic | Native Qwen3.8 MTP rows, exact NVFP4 handling, grammar fallback, recurrent cache/state handling, and safe graph boundaries are selected by model/shape. |
 
@@ -170,8 +176,9 @@ variables similarly disable only that feature.
 
 - Results are validated primarily on four V620 `gfx1030` GPUs, ROCm 7.14, and
 the tested PCIe topology; other systems retain conservative fallbacks.
-- `GGML_TP_SHARDED_OUTPUT` and `GGML_TP_VOCAB_SHARDED_OUTPUT` are different,
-incompatible output-head modes.
+- `GGML_TP_SHARDED_OUTPUT=1` selects vocabulary-axis primary output on supported
+  Qwen35/Qwen35MoE models; unset/`auto` retains hidden-axis/full-logit output,
+  and `0` disables output-head sharding.
 - External draft models can force a shared output head to remain mirrored.
 - After a ROCm illegal-memory fault, reset the affected GPUs or reboot before
 trusting later measurements.

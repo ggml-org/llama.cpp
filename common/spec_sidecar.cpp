@@ -129,6 +129,26 @@ static bool profile_mismatch(const common_spec_sidecar_profile & profile,
     return false;
 }
 
+static bool profile_name_matches(
+        const common_spec_sidecar_profile & profile, const char * name) {
+    if (profile.target_name == nullptr) {
+        return true;
+    }
+    if (name != nullptr && std::strstr(name, profile.target_name) != nullptr) {
+        return true;
+    }
+
+    // Some Quark MXFP4 exports retain only the source path's parent marker as
+    // general.name. Keep this exception exact; all architecture, size, shape,
+    // auxiliary-layer, and vocabulary checks below remain mandatory.
+    return name != nullptr && std::strcmp(name, "..") == 0 &&
+            profile.target_architecture != nullptr &&
+            std::strcmp(profile.target_architecture, "qwen35") == 0 &&
+            std::strcmp(profile.target_name, "Qwen3.8-27B") == 0 &&
+            profile.target_size_label != nullptr &&
+            std::strcmp(profile.target_size_label, "27B") == 0;
+}
+
 static bool profile_matches_model(const common_spec_sidecar_profile & profile,
         const llama_model * model, std::string & error) {
     if (model == nullptr) {
@@ -148,7 +168,7 @@ static bool profile_matches_model(const common_spec_sidecar_profile & profile,
         // Quantizers may retain a path or add a backend suffix to general.name;
         // require the stable model identity token rather than an exact spelling.
         if (llama_model_meta_val_str(model, "general.name", name, sizeof(name)) < 0 ||
-                std::strstr(name, profile.target_name) == nullptr) {
+                !profile_name_matches(profile, name)) {
             return profile_mismatch(profile, "model name is not the provider target", error);
         }
     }
@@ -205,7 +225,7 @@ static bool profile_matches_target_file(const common_spec_sidecar_profile & prof
     if (ok && profile.target_name != nullptr) {
         const int64_t name_id = gguf_find_key(ctx, "general.name");
         if (name_id < 0 || gguf_get_kv_type(ctx, name_id) != GGUF_TYPE_STRING ||
-                std::strstr(gguf_get_val_str(ctx, name_id), profile.target_name) == nullptr) {
+                !profile_name_matches(profile, gguf_get_val_str(ctx, name_id))) {
             ok = profile_mismatch(profile, "target GGUF model identity differs", error);
         }
     }
@@ -525,7 +545,7 @@ static bool validate_id_table(const std::string & path, int32_t rows,
     return true;
 }
 
-static bool validate_profile_artifacts(const common_spec_sidecar_profile & profile,
+static bool validate_profile_artifacts_impl(const common_spec_sidecar_profile & profile,
         const common_spec_sidecar_paths & paths, std::string & error) {
     if (profile.kind == COMMON_SPEC_SIDECAR_KIND_MTP) {
         if (!validate_manifest_blob(join_path(paths.artifact_dir, "drafter_manifest.json"),
@@ -555,6 +575,11 @@ static bool validate_profile_artifacts(const common_spec_sidecar_profile & profi
 }
 
 } // namespace
+
+bool common_spec_sidecar_profile_name_matches(
+        const common_spec_sidecar_profile & profile, const char * name) {
+    return profile_name_matches(profile, name);
+}
 
 size_t common_spec_sidecar_profile_count() {
     return sizeof(ALL_PROFILES) / sizeof(ALL_PROFILES[0]);
@@ -616,18 +641,45 @@ const common_spec_sidecar_profile * common_spec_sidecar_profile_for_target_file(
     return nullptr;
 }
 
+bool common_spec_sidecar_get_library(const common_spec_sidecar_profile & profile,
+        std::string & library, std::string & error) {
+    error.clear();
+    const char * library_env = env_value(profile.library_env);
+    library = library_env != nullptr ? library_env : find_default_library(profile);
+    if (library.empty()) {
+        error = std::string(profile.name != nullptr ? profile.name : "sidecar") +
+                " could not discover its provider library; rebuild with speculative sidecars enabled or set " +
+                (profile.library_env != nullptr ? profile.library_env : "the provider library path");
+        return false;
+    }
+    if (!is_absolute_path(library)) {
+        error = std::string(profile.name != nullptr ? profile.name : "sidecar") +
+                " provider library path must be absolute: " + library;
+        return false;
+    }
+    library = normalize_path(library);
+    if (!is_regular_file(library)) {
+        error = std::string(profile.name != nullptr ? profile.name : "sidecar") +
+                " provider library is not readable: " + library;
+        return false;
+    }
+    return true;
+}
+
 bool common_spec_sidecar_get_paths(const common_spec_sidecar_profile & profile,
         common_spec_sidecar_paths & paths, std::string & error) {
     paths = {};
-    const char * library_env = env_value(profile.library_env);
     const char * artifact_env = env_value(profile.artifact_env);
-    paths.library = library_env != nullptr ? library_env : find_default_library(profile);
-    paths.artifact_dir = artifact_env != nullptr ? artifact_env : find_default_artifact_directory(profile);
-    if (paths.library.empty() || paths.artifact_dir.empty()) {
-        error = std::string(profile.name != nullptr ? profile.name : "sidecar") +
-                " could not discover its default library/artifact bundle; set the provider paths explicitly";
+    if (!common_spec_sidecar_get_library(profile, paths.library, error)) {
         return false;
     }
+    paths.artifact_dir = artifact_env != nullptr ? artifact_env : find_default_artifact_directory(profile);
+    if (paths.artifact_dir.empty()) {
+        error = std::string(profile.name != nullptr ? profile.name : "sidecar") +
+                " could not discover its default artifact bundle; set the provider path explicitly";
+        return false;
+    }
+    paths.artifact_dir = normalize_path(paths.artifact_dir);
     if (profile.kind == COMMON_SPEC_SIDECAR_KIND_MTP) {
         const char * ids = env_value(profile.ids_env);
         paths.ids = ids != nullptr ? ids : join_path(paths.artifact_dir, "draft_head_ids.bin");
@@ -642,13 +694,14 @@ bool common_spec_sidecar_get_paths(const common_spec_sidecar_profile & profile,
     return true;
 }
 
+bool common_spec_sidecar_validate_artifacts(const common_spec_sidecar_profile & profile,
+        const common_spec_sidecar_paths & paths, std::string & error) {
+    return validate_profile_artifacts_impl(profile, paths, error);
+}
+
 bool common_spec_sidecar_probe(const common_spec_sidecar_profile & profile,
-        uint32_t n_seq, std::string & error) {
-    common_spec_sidecar_paths paths;
-    if (!common_spec_sidecar_get_paths(profile, paths, error)) {
-        return false;
-    }
-    if (!validate_profile_artifacts(profile, paths, error)) {
+        const common_spec_sidecar_paths & paths, uint32_t n_seq, std::string & error) {
+    if (!common_spec_sidecar_validate_artifacts(profile, paths, error)) {
         return false;
     }
     if (profile.kind == COMMON_SPEC_SIDECAR_KIND_MTP) {
@@ -657,6 +710,15 @@ bool common_spec_sidecar_probe(const common_spec_sidecar_profile & profile,
     }
     return common_spec_sidecar_dflash_probe(paths.library, paths.artifact_dir,
             profile.dflash_encoded_width, profile.dflash_block_size, (int32_t) n_seq, error);
+}
+
+bool common_spec_sidecar_probe(const common_spec_sidecar_profile & profile,
+        uint32_t n_seq, std::string & error) {
+    common_spec_sidecar_paths paths;
+    if (!common_spec_sidecar_get_paths(profile, paths, error)) {
+        return false;
+    }
+    return common_spec_sidecar_probe(profile, paths, n_seq, error);
 }
 
 using state_size_fn_t     = int (*)();

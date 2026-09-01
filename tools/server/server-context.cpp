@@ -62,9 +62,15 @@ static bool server_env_enabled(const char * name) {
     return std::getenv(name) != nullptr && !server_env_disabled(name);
 }
 
+static bool server_vocab_sharded_output_enabled() {
+    const char * value = std::getenv("GGML_TP_SHARDED_OUTPUT");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
 static bool server_gfx1030_spec_target_backend_sampling_profile(const common_params & params) {
     if (!server_gfx1030_native_auto_enabled() ||
-            server_env_disabled("GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING")) {
+            server_env_disabled("GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING") ||
+            server_vocab_sharded_output_enabled()) {
         return false;
     }
 
@@ -1257,6 +1263,12 @@ private:
         const bool is_resume = sleeping;
 
         params_base = params;
+        // Sidecar probing can infer MTP/DFlash from the supplied GGUF. Do this
+        // before computing output limits so an auto-detected type reserves the
+        // same target buffers as an explicit --spec-type.
+        const bool sidecar_candidate = common_speculative_sidecar_candidate(
+                params_base.speculative, params_base.model.path,
+                (uint32_t) params_base.n_parallel);
         const auto output_limits = server_output_limits(params_base);
         params_base.n_outputs_max = output_limits.total;
         params_base.n_outputs_max_per_seq = output_limits.per_seq;
@@ -1268,9 +1280,6 @@ private:
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
         // A sidecar-only DFlash invocation may intentionally omit -md: the
         // ABI/artifact probe is enough to establish the speculative stage.
-        const bool sidecar_candidate = common_speculative_sidecar_candidate(
-                params_base.speculative, params_base.model.path,
-                (uint32_t) params_base.n_parallel);
         const bool has_spec = has_draft || spec_mtp || sidecar_candidate;
 
         if (callback_state) {
@@ -2216,6 +2225,11 @@ private:
 
             // TODO: getting pre sampling logits is not yet supported with backend sampling
             use_backend_sampling &= !need_pre_sample_logits;
+            if (use_backend_sampling && server_vocab_sharded_output_enabled()) {
+                SLT_WRN(slot, "%s", "vocabulary-sharded target output is incompatible with backend sampling; using CPU fallback\n");
+                use_backend_sampling = false;
+                task.params.sampling.backend_sampling = false;
+            }
 
             if (use_backend_sampling) {
                 llama_sampler * backend_sampler = common_sampler_get(slot.smpl.get());

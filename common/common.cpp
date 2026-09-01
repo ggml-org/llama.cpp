@@ -1434,6 +1434,27 @@ std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
 }
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
+    // Resolve or build an explicitly enabled sidecar bundle before model-load
+    // policy decides whether a shared output head must remain mirrored.
+    (void) common_speculative_sidecar_candidate(
+            params.speculative, params.model.path, (uint32_t) params.n_parallel);
+
+    const char * output_sharding = std::getenv("GGML_TP_SHARDED_OUTPUT");
+    const bool use_vocab_sharded_output = params.split_mode == LLAMA_SPLIT_MODE_TENSOR &&
+        output_sharding != nullptr && std::strcmp(output_sharding, "1") == 0;
+    if (use_vocab_sharded_output) {
+        if (params.sampling.backend_sampling) {
+            COM_WRN("%s", "vocabulary-sharded target output is incompatible with backend sampling; using CPU target sampling\n");
+            params.sampling.backend_sampling = false;
+        }
+        const bool has_mtp = std::find(params.speculative.types.begin(), params.speculative.types.end(),
+            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+        if (has_mtp && params.speculative.draft.backend_sampling) {
+            COM_WRN("%s", "vocabulary-sharded output disables native MTP backend draft sampling; sidecar-local sampling is unaffected\n");
+            params.speculative.draft.backend_sampling = false;
+        }
+    }
+
     common_init_result_ptr res(new common_init_result(params, model_only));
 
     llama_model * model = res->model();
