@@ -49,9 +49,10 @@ common_speculative_type common_speculative_sidecar_preflight(
         common_params_speculative & params, const llama_model * model_tgt,
         uint32_t n_seq, std::string & error);
 
-// Cheap pre-target check used by --fit to avoid creating a host draft model
-// solely for memory measurement when the explicit sidecar contract is present.
-bool common_speculative_sidecar_candidate(const common_params_speculative & params,
+// Pre-target check used by model placement and --fit. With SPEC_SIDECAR=1 it
+// also auto-detects a supplied draft GGUF and prepares a missing native cache
+// once, recording the resolved paths in params for post-load preflight.
+bool common_speculative_sidecar_candidate(common_params_speculative & params,
         const std::string & target_model_path, uint32_t n_seq);
 
 struct common_speculative_output_limits {

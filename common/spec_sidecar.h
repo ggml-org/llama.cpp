@@ -72,13 +72,21 @@ struct common_spec_sidecar_paths {
 
 size_t common_spec_sidecar_profile_count();
 const common_spec_sidecar_profile * common_spec_sidecar_profile_at(size_t index);
+bool common_spec_sidecar_profile_name_matches(
+        const common_spec_sidecar_profile & profile, const char * name);
 
 const common_spec_sidecar_profile * common_spec_sidecar_profile_for_model(
         common_spec_sidecar_kind kind, const llama_model * model, std::string & error);
 const common_spec_sidecar_profile * common_spec_sidecar_profile_for_target_file(
         common_spec_sidecar_kind kind, const std::string & path, std::string & error);
+bool common_spec_sidecar_get_library(const common_spec_sidecar_profile & profile,
+        std::string & library, std::string & error);
 bool common_spec_sidecar_get_paths(const common_spec_sidecar_profile & profile,
         common_spec_sidecar_paths & paths, std::string & error);
+bool common_spec_sidecar_validate_artifacts(const common_spec_sidecar_profile & profile,
+        const common_spec_sidecar_paths & paths, std::string & error);
+bool common_spec_sidecar_probe(const common_spec_sidecar_profile & profile,
+        const common_spec_sidecar_paths & paths, uint32_t n_seq, std::string & error);
 bool common_spec_sidecar_probe(const common_spec_sidecar_profile & profile,
         uint32_t n_seq, std::string & error);
 

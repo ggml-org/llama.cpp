@@ -1263,6 +1263,12 @@ private:
         const bool is_resume = sleeping;
 
         params_base = params;
+        // Sidecar probing can infer MTP/DFlash from the supplied GGUF. Do this
+        // before computing output limits so an auto-detected type reserves the
+        // same target buffers as an explicit --spec-type.
+        const bool sidecar_candidate = common_speculative_sidecar_candidate(
+                params_base.speculative, params_base.model.path,
+                (uint32_t) params_base.n_parallel);
         const auto output_limits = server_output_limits(params_base);
         params_base.n_outputs_max = output_limits.total;
         params_base.n_outputs_max_per_seq = output_limits.per_seq;
@@ -1274,9 +1280,6 @@ private:
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
         // A sidecar-only DFlash invocation may intentionally omit -md: the
         // ABI/artifact probe is enough to establish the speculative stage.
-        const bool sidecar_candidate = common_speculative_sidecar_candidate(
-                params_base.speculative, params_base.model.path,
-                (uint32_t) params_base.n_parallel);
         const bool has_spec = has_draft || spec_mtp || sidecar_candidate;
 
         if (callback_state) {

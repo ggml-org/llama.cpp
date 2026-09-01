@@ -56,18 +56,12 @@ Qwen3.8-27B-Q4_0-AutoRound-Code.gguf  6f02e53c762a4a29a795a2346704c07f35c8a8ae7b
 mmproj-model.gguf                     9da757136cb044abdf552334c56f2dcb63839799ea54c705ba4bcee807abdad2
 ```
 
-Prepare the MTP sidecar bundle once after building. Use the pinned 40,960-ID
-source recorded by the project, then validate the generated bundle:
-
-```bash
-export MODEL_DIR="${MODEL_DIR:-$HOME/models/Qwen3.8-27B-Q4-AutoRound-Code-GGUF}"
-python tools/spec-sidecar/prepare_assets.py mtp \
-  --target "$MODEL_DIR/Qwen3.8-27B-Q4_0-AutoRound-Code.gguf" \
-  --ids "$HOME/models/.manifests/qwen38-sidecar/draft_vocab_ids-c954724104a7856a07abb7031cc4af780ae7f5bf.json" \
-  --output build-gfx1100-portable/bin/spec-sidecar-mtp
-python tools/spec-sidecar/validate_assets.py mtp \
-  build-gfx1100-portable/bin/spec-sidecar-mtp
-```
+With `SPEC_SIDECAR=1`, the server detects the embedded MTP block and prepares
+the required 40,960-row sidecar assets natively on first start. Later starts
+reuse the validated cache under `${LLAMA_CACHE:-~/.cache/llama.cpp}/spec-sidecar`.
+No Python preparation step is required; use `--spec-sidecar-cache /path` to
+choose a different cache root. The launcher uses this automatic path unless an
+existing explicit bundle is supplied with `--bundle`.
 
 ### Launch: all available RDNA3 options
 
@@ -107,7 +101,7 @@ exhaustion.
 | gfx11 MMQ / WMMA | **Automatic** in a gfx11 build | Qualified Q4 prompt kernels and compatible F16 flash attention use the compiled gfx11 paths; no runtime switch is needed. |
 | gfx1100 flash-attention launch shapes | **Automatic** | Selected by architecture and shape under the safe profile. |
 | Q8_0 MMVQ VDR=4 | **Automatic** for native gfx1100 | Passed backend correctness and shape A/B tests on both RX 7900 XT cards; this is not end-to-end Q8 GGUF validation. |
-| MTP sidecar + ngram drafting | **Automatic** in the launcher | Requires the prepared sidecar bundle; exact 262K native/in-process MTP does not fit, so the HIP sidecar is the validated path. |
+| MTP sidecar + ngram drafting | **Automatic** in the launcher | First start prepares and caches the embedded MTP assets natively; exact 262K native/in-process MTP does not fit, so the HIP sidecar is the validated path. |
 | TP output-head sharding | Explicit `GGML_TP_SHARDED_OUTPUT=1` | Supported Qwen35/Qwen35MoE models can shard the primary output head along vocabulary rows and avoid the full-logit output AllReduce for CPU/sidecar sampling. If `--backend-sampling` is enabled at model load, the primary head safely retains hidden-axis/full-logit output so target backend sampling works; vocabulary-axis sharding and target backend sampling are not combined yet. Sidecar-local sampling remains available. Unset/`auto` retain hidden-axis/full-logit output. |
 | Sidecar n-gram verification cap | **Automatic** for MTP-sidecar stacks | Caps n-gram proposals at the configured MTP width (the launcher uses 3) to avoid oversized target verification bursts; explicit `speculative.n_max` remains authoritative. |
 | Chunked GDN prefill | `--profile experimental` | Default-off in `safe`; keep experimental until workload-specific validation is complete. |
@@ -187,6 +181,8 @@ Explicit `GGML_HIP_GFX1030_*` variables remain per-feature overrides.
 | Q8_1 activation reuse and fusion | **Automatic** on RDNA2 | Includes the graph-owned cache and eligible routed projection staging. It is structurally disabled on RDNA3. |
 | GDN sibling projection fusion | **Automatic** when eligible | Applies to validated Qwen MoE loader/model conditions, not dense Qwen3.8-27B. |
 | V620 topology/P2P/RCCL policy | **Automatic** on the qualified topology | `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded` is an optional TP4 host-snapshot experiment, not a general default. |
+| TP output-head sharding | Explicit `GGML_TP_SHARDED_OUTPUT=1` | Uses vocabulary-axis output for CPU/sidecar sampling; an explicit backend-sampling request retains hidden-axis/full logits instead. |
+| Automatic MTP/DFlash assets | `SPEC_SIDECAR=1` | Detects supported runtime GGUFs, creates a validated first-start cache, and reuses it on warm starts. |
 
 ## Shared rules
 
