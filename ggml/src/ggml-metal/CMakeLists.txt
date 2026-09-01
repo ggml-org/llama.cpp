@@ -163,19 +163,37 @@ else()
         )
     endforeach()
 
+    # the tensor API kernels go in a separate metallib, loaded only where supported
+    set(AIR_MM_TENSOR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mul_mm_tensor.air")
+    add_custom_command(
+        OUTPUT ${AIR_MM_TENSOR}
+        COMMAND xcrun -sdk macosx metal ${XC_FLAGS} -DGGML_METAL_HAS_TENSOR -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/mul_mm.metal -o ${AIR_MM_TENSOR}
+        DEPENDS kernels/mul_mm.metal kernels/common.h kernels/dequantize.h ${METALLIB_COMMON} ggml-metal-impl.h
+        COMMENT "Compiling kernels/mul_mm.metal (tensor API)"
+        VERBATIM
+    )
+
+    add_custom_command(
+        OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib
+        COMMAND xcrun -sdk macosx metallib ${AIR_MM_TENSOR} -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib
+        DEPENDS ${AIR_MM_TENSOR}
+        COMMENT "Linking tensor API Metal kernels into ggml-tensor.metallib"
+    )
+
     add_custom_command(
         OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
         COMMAND xcrun -sdk macosx metallib ${AIR_FILES} -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-common.h
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal-impl.h
         COMMAND rm -rf ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels
-        DEPENDS ${AIR_FILES}
+        DEPENDS ${AIR_FILES} ${AIR_MM_TENSOR}
         COMMENT "Linking Metal kernels into default.metallib"
     )
 
     add_custom_target(
         ggml-metal-lib ALL
         DEPENDS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
+                ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib
     )
 endif() # GGML_METAL_EMBED_LIBRARY
 
@@ -188,6 +206,7 @@ if (NOT GGML_METAL_EMBED_LIBRARY)
 
     install(
         FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
+              ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib
         DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 endif()
