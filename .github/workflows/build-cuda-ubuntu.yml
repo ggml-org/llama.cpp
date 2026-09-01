@@ -68,7 +68,6 @@ jobs:
           hf_bucket: ggml-org/cache
 
       - name: Build with CMake
-        # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
         run: |
           cmake -S . -B build -G Ninja \
             -DLLAMA_FATAL_WARNINGS=ON \
@@ -128,6 +127,7 @@ jobs:
           cmake -B build -S . \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGPU_TARGETS="gfx1030" \
+            -DGGML_NATIVE=OFF \
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
 
@@ -177,6 +177,7 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build -S . \
+            -DGGML_NATIVE=OFF \
             -DGGML_MUSA=ON
           time cmake --build build --config Release -j $(nproc)
 
