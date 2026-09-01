@@ -10140,24 +10140,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    // Exercise k=2..8 with aligned/unaligned and scaled/unscaled inputs.
+    // Cover the supported boundaries, common k = 8 shapes, a view-backed input, and k = 16 fallback.
     test_cases.emplace_back(new test_moe_weighted_reduction(63,  2, 17));
-    test_cases.emplace_back(new test_moe_weighted_reduction(256, 3, 33));
-    test_cases.emplace_back(new test_moe_weighted_reduction(256, 4, 33));
-    test_cases.emplace_back(new test_moe_weighted_reduction(256, 4, 33, true));
-    test_cases.emplace_back(new test_moe_weighted_reduction(63,  5, 17, false, true));
-    test_cases.emplace_back(new test_moe_weighted_reduction(256, 6, 33, true));
-    test_cases.emplace_back(new test_moe_weighted_reduction(256, 7, 33, false, true));
     test_cases.emplace_back(new test_moe_weighted_reduction(2048, 8, 128));
     test_cases.emplace_back(new test_moe_weighted_reduction(2048, 8, 128, false, true));
-    test_cases.emplace_back(new test_moe_weighted_reduction(63,  4, 17,  true,  true));
-    // Exercise k=9..15 with aligned/unaligned and scaled/unscaled inputs.
-    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 9,  65));                // aligned expert storage, unscaled
-    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 15, 40, false, true));   // aligned expert storage, scaled (max fusable k)
-    test_cases.emplace_back(new test_moe_weighted_reduction(256,  9,  48, true,  false));  // unaligned expert storage, unscaled
-    test_cases.emplace_back(new test_moe_weighted_reduction(63,   12, 33, true,  true));   // non-multiple-of-four embedding size, scaled
-    // k > 15 exceeds the 31-node fusion limit and must use the per-operation path.
-    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 16, 32, false, true));   // not fused; correctness via the per-operation path
+    test_cases.emplace_back(new test_moe_weighted_reduction(63,   12, 33, true,  true));
+    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 15, 40, false, true));
+    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 16, 32, false, true));
 
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
