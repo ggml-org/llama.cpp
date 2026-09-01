@@ -2,7 +2,7 @@
 	import McpLogo from './McpLogo.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ICON_CLASS_DEFAULT, MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
-	import { HealthCheckStatus } from '$lib/enums';
+	import { HealthCheckStatus, ToolSource } from '$lib/enums';
 	import { conversationsStore, mcpStore } from '$lib/stores';
 
 	interface Props {
@@ -13,9 +13,13 @@
 	let { class: className = '', onclick }: Props = $props();
 
 	let mcpServers = $derived(mcpStore.getServers().filter((s) => s.enabled));
+	// respect the active conversation's tool policy, not just global enablement
 	let enabledMcpServersForChat = $derived(
 		mcpServers.filter(
-			(s) => conversationsStore.preferences.isMcpServerEnabledForChat(s.id) && s.url.trim()
+			(s) =>
+				s.url.trim() &&
+				conversationsStore.preferences.isCategoryEnabled(ToolSource.MCP) &&
+				conversationsStore.preferences.isServerToolsEnabled(s.id)
 		)
 	);
 	let healthyEnabledMcpServers = $derived(
@@ -68,15 +72,16 @@
 					<Tooltip.Trigger>
 						<div class="box-shadow-lg overflow-hidden rounded-full bg-muted ring-1 ring-muted">
 							<img
-								src={favicon.url}
 								alt=""
 								class={ICON_CLASS_DEFAULT}
 								onerror={(e) => {
 									(e.currentTarget as HTMLImageElement).style.display = 'none';
 								}}
+								src={favicon.url}
 							/>
 						</div>
 					</Tooltip.Trigger>
+
 					<Tooltip.Content>
 						<p>{favicon.name}</p>
 					</Tooltip.Content>

@@ -221,16 +221,14 @@ class common_json {
     // implicit get<T>() for plain values, so they can be assigned to their C++ type directly
     // note: kept to this short list on purpose, a wider one makes j["key"] ambiguous
     // note: a numeric one would make "str = json;" ambiguous, a number converts to char too
-    operator std::string() const { return get<std::string>(); }
+    operator std::string() const;
 
     template <typename T>
     T value(const std::string & key, T def) const {
         return contains(key) ? at(key).get<T>() : def;
     }
 
-    std::string value(const std::string & key, const char * def) const {
-        return contains(key) ? at(key).get<std::string>() : std::string(def);
-    }
+    std::string value(const std::string & key, const char * def) const;
 
     // a JSON default needs no get<T>(), it is already the right type
     common_json value(const std::string & key, const common_json & def) const {

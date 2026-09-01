@@ -7,7 +7,12 @@
 		ChatMessageSystem,
 		ChatMessageUser
 	} from '$lib/components/app/chat';
-	import { REASONING_TAGS, ROUTES, SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
+	import {
+		AGENTIC_TEXT_COPY_SEPARATOR,
+		REASONING_TAGS,
+		ROUTES,
+		SYSTEM_MESSAGE_PLACEHOLDER
+	} from '$lib/constants';
 	import { setChatMessageActionsContext, setChatMessageEditContext } from '$lib/contexts';
 	import { AgenticSectionType, AttachmentType, MessageRole } from '$lib/enums';
 	import { DatabaseService } from '$lib/services/database.service';
@@ -237,6 +242,24 @@
 	}
 
 	function handleCopy() {
+		// Agentic sessions render as a single entry anchored on the first assistant
+		// turn, whose own content is typically just the first tool call. Copy the
+		// text sections of the whole session so the clipboard matches the visible
+		// response instead of the anchor turn.
+		if (message.role === MessageRole.ASSISTANT) {
+			const sections = deriveAgenticSections(message, toolMessages, [], false);
+			const text = sections
+				.filter((section) => section.type === AgenticSectionType.TEXT)
+				.map((section) => section.content)
+				.join(AGENTIC_TEXT_COPY_SEPARATOR);
+
+			if (text) {
+				chatActions.copy(message, text);
+
+				return;
+			}
+		}
+
 		chatActions.copy(message);
 	}
 
@@ -381,13 +404,13 @@
 	}
 </script>
 
-<div class="chat-message" class:chat-message--synthetic={isSynthetic}>
+<div class:chat-message--synthetic={isSynthetic} class="chat-message">
 	{#if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem bind:textareaElement class={className} {message} />
 	{:else if mcpPromptExtra}
-		<ChatMessageMcpPrompt class={className} {message} mcpPrompt={mcpPromptExtra} />
+		<ChatMessageMcpPrompt class={className} mcpPrompt={mcpPromptExtra} {message} />
 	{:else if isSynthetic}
-		<ChatMessageSynthetic {message} class={className} />
+		<ChatMessageSynthetic class={className} {message} />
 	{:else if message.role === MessageRole.USER}
 		<ChatMessageUser class={className} {isLastUserMessage} {message} {nextAssistantMessage} />
 	{:else}
@@ -396,9 +419,9 @@
 			class={className}
 			{isLastAssistantMessage}
 			{message}
-			{toolMessages}
 			onContinue={handleContinue}
 			onRegenerate={handleRegenerate}
+			{toolMessages}
 		/>
 	{/if}
 </div>
