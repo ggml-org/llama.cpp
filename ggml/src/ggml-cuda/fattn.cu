@@ -77,12 +77,15 @@ static __global__ void flash_attn_mask_to_sparse_indices(
         __syncthreads();
     }
 
-    ggml_cuda_pdl_lc();
-
     const int count = row_count;
     for (int i = count + tid; i < n_kv_max; i += blockDim.x) {
         indices[i] = -1;
     }
+    __syncthreads();
+
+    // the dependent grid reads indices, signal once the row is complete
+    ggml_cuda_pdl_lc();
+
     if (count > n_kv_max) {
         if (tid == 0) {
             printf("flash attention sparse mask row exceeds n_kv_max (%d > %d)\n", count, n_kv_max);
