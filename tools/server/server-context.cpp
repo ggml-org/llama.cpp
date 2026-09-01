@@ -63,7 +63,7 @@ static bool server_env_enabled(const char * name) {
 }
 
 static bool server_vocab_sharded_output_enabled() {
-    const char * value = std::getenv("GGML_TP_VOCAB_SHARDED_OUTPUT");
+    const char * value = std::getenv("GGML_TP_SHARDED_OUTPUT");
     return value != nullptr && std::strcmp(value, "1") == 0;
 }
 

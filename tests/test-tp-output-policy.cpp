@@ -22,7 +22,7 @@ int main() {
     require(select(true, false, true, true, false, true) == mode::hidden,
             "default primary head must retain hidden/full-logit sharding");
     require(select(true, false, true, true, true, true) == mode::vocabulary,
-            "explicit primary vocabulary sharding was not selected");
+            "explicit combined TP output request did not select vocabulary sharding");
     require(select(true, false, true, true, true, false) == mode::hidden,
             "auxiliary MTP head must retain hidden/full-logit sharding");
     require(select(false, false, true, true, true, true) == mode::mirrored,

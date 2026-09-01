@@ -1434,9 +1434,9 @@ std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
 }
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
-    const char * vocab_sharded_output = std::getenv("GGML_TP_VOCAB_SHARDED_OUTPUT");
+    const char * output_sharding = std::getenv("GGML_TP_SHARDED_OUTPUT");
     const bool use_vocab_sharded_output = params.split_mode == LLAMA_SPLIT_MODE_TENSOR &&
-        vocab_sharded_output != nullptr && std::strcmp(vocab_sharded_output, "1") == 0;
+        output_sharding != nullptr && std::strcmp(output_sharding, "1") == 0;
     if (use_vocab_sharded_output) {
         if (params.sampling.backend_sampling) {
             COM_WRN("%s", "vocabulary-sharded target output is incompatible with backend sampling; using CPU target sampling\n");

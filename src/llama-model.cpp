@@ -2058,10 +2058,14 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
             ((arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) &&
                 (type == LLM_TYPE_35B_A3B || type == LLM_TYPE_122B_A10B));
         const bool supported_arch = supported_qwen || arch == LLM_ARCH_DEEPSEEK4;
-        const char * vocab_sharded = getenv("GGML_TP_VOCAB_SHARDED_OUTPUT");
-        const bool vocab_sharded_output = vocab_sharded != nullptr && strcmp(vocab_sharded, "1") == 0;
         const bool requested = enabled != nullptr && strcmp(enabled, "1") == 0;
         const bool automatic = enabled == nullptr || strcmp(enabled, "auto") == 0;
+        // An explicit Qwen35 output-sharding request selects the
+        // CPU/sidecar-friendly vocabulary-axis primary head. Automatic mode
+        // retains full logits for backend sampling; other supported output
+        // architectures retain their existing hidden-axis policy.
+        const bool vocab_sharded_output = requested &&
+            (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE);
         const bool use_sharded_output = llama_model_rdna2_auto_enabled() &&
             (requested || (automatic && auto_qwen27));
         auto output_mode = [&](bool primary_head) {
@@ -2112,9 +2116,9 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
 }
 
 bool llama_model::is_tensor_parallel_output_head_vocab_sharded(const ggml_tensor * tensor) const {
-    const char * enabled = getenv("GGML_TP_VOCAB_SHARDED_OUTPUT");
+    const char * enabled = getenv("GGML_TP_SHARDED_OUTPUT");
     const bool supported_qwen = arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE;
-    return (arch == LLM_ARCH_DEEPSEEK4 || (supported_qwen && tensor == output)) &&
+    return supported_qwen && tensor == output &&
         enabled != nullptr && strcmp(enabled, "1") == 0 && is_tensor_parallel_output_head(tensor);
 }
 
