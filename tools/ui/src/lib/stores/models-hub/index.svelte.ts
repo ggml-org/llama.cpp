@@ -19,6 +19,12 @@ class ModelsHubStore {
 	firstModel = $derived(this.models[0] ?? null);
 
 	loading = $state(false);
+	/**
+	 * True while a non-empty search query is in flight; drives the skeleton list
+	 * rows. Only the newest request owns this flag, so a stale response clearing
+	 * it cannot blank the list out from under a newer query.
+	 */
+	searching = $state(false);
 
 	private catalog: HfCatalogEntry[] = [];
 	private defaultModels: HfModelInfo[] = [];
@@ -69,34 +75,41 @@ class ModelsHubStore {
 
 	/**
 	 * Replace the list with GGUF search results. An empty query restores the
-	 * default list. The current list stays visible while a search is in
-	 * flight; stale responses are dropped when a newer search starts.
+	 * default list. While a query is in flight the previous results stay in
+	 * `models` (so detail lookups keep working) but `searching` has the list
+	 * render skeletons instead; stale responses are dropped when a newer
+	 * search starts.
 	 */
 	async search(query: string): Promise<void> {
 		const trimmed = query.trim();
+		const requestId = ++this.searchRequestId;
 
-		this.searchRequestId++;
-
+		// An empty query restores the cached default list: no request, no spinner.
 		if (!trimmed) {
+			this.searching = false;
 			this.models = this.defaultModels;
 			this.error = null;
 
 			return;
 		}
 
-		const requestId = this.searchRequestId;
+		// The previous results stay mounted underneath; the list shows skeletons
+		// while the query is in flight.
+		this.searching = true;
 
 		try {
 			const results = await HuggingFaceService.searchByQuery(trimmed, { full: true, limit: 50 });
 
-			if (requestId === this.searchRequestId) {
-				this.models = results;
-				this.error = null;
-			}
+			if (requestId !== this.searchRequestId) return;
+
+			this.models = results;
+			this.error = null;
 		} catch (err) {
-			if (requestId === this.searchRequestId) {
-				this.error = err instanceof Error ? err.message : 'Search failed';
-			}
+			if (requestId !== this.searchRequestId) return;
+
+			this.error = err instanceof Error ? err.message : 'Search failed';
+		} finally {
+			if (requestId === this.searchRequestId) this.searching = false;
 		}
 	}
 

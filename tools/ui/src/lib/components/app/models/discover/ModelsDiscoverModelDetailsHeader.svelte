@@ -32,7 +32,13 @@
 <header class="space-y-3">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
-			<ModelsDiscoverAvatar org={avatarOrg} {quantOrg} />
+			<ModelsDiscoverAvatar
+				org={avatarOrg}
+				{quantOrg}
+				quantPositionClass="-bottom-1.5 -right-1.5"
+				quantSize="h-6 w-6"
+				size="h-12 w-12"
+			/>
 
 			<div class="min-w-0">
 				<div class="flex items-center gap-2">

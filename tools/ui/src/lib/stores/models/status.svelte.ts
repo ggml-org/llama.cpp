@@ -147,8 +147,10 @@ export class ModelStatusManager {
 	 * Trigger a model download from HuggingFace via POST /models
 	 * (ggml-org/llama.cpp#23976). The download runs in the background on the
 	 * server; the model appears in the list once the feed reports models_reload.
+	 * Progress is reported by the /models/sse feed; the caller owns the
+	 * start/progress UI.
 	 */
-	async downloadModel(repoWithTag: string, displayName?: string): Promise<void> {
+	async downloadModel(repoWithTag: string): Promise<void> {
 		if (!serverStore.isRouterMode) {
 			toast.error('Model downloads are only available in router mode');
 
@@ -158,18 +160,14 @@ export class ModelStatusManager {
 		// the feed must be live so the resulting models_reload event refreshes the list
 		this.subscribe();
 
-		const label = displayName ?? repoWithTag;
-
 		try {
 			const res = await ModelsService.downloadModel(repoWithTag);
 
-			if (res.success) {
-				toast.success(`Download started: ${label}`);
-			} else {
+			if (!res.success) {
 				throw new Error(res.error?.message ?? 'Server rejected the download request');
 			}
 		} catch (error) {
-			toast.error(`Download failed: ${label}`);
+			toast.error(`Download failed: ${repoWithTag}`);
 
 			throw error;
 		}

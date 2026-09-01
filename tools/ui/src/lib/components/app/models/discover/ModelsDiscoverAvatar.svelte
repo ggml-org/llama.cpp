@@ -16,6 +16,8 @@
 		quantImageClass?: string;
 		/** Positioning classes for the quant corner badge (default `-bottom-0.75 -right-0.75`). */
 		quantPositionClass?: string;
+		/** Size classes for the quant corner badge container (default `h-4.25 w-4.25`). */
+		quantSize?: string;
 	}
 
 	let {
@@ -24,6 +26,7 @@
 		quantImageClass = 'h-full w-full',
 		quantOrg,
 		quantPositionClass = '-bottom-0.75 -right-0.75',
+		quantSize = 'h-4.25 w-4.25',
 		size = 'h-9 w-9'
 	}: Props = $props();
 
@@ -78,7 +81,7 @@
 	{#if quantOrg && quantOrg !== org}
 		<Tooltip.Root>
 			<Tooltip.Trigger
-				class="absolute {quantPositionClass} h-4.25 w-4.25 overflow-hidden rounded-full border border-background bg-muted "
+				class="absolute {quantPositionClass} {quantSize} overflow-hidden rounded-full border border-background bg-muted "
 			>
 				{#if quantError}
 					<span

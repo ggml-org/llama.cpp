@@ -1,6 +1,7 @@
 <script lang="ts">
 	import DownloadProgressBar from './DownloadProgressBar.svelte';
 	import { Check, Copy, Download } from '@lucide/svelte';
+	import ModelsDownloadManagerDownloadStatusToast from '$lib/components/app/models/download-manager/ModelsDownloadManagerDownloadStatusToast.svelte';
 	import { ToggleGroup, ToggleGroupItem } from '$lib/components/ui/toggle-group';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isAuxSidecar, type ModelSidecar } from '$lib/constants';
@@ -9,6 +10,7 @@
 	import { modelsStore } from '$lib/stores';
 	import type { HfModelSibling } from '$lib/types/huggingface';
 	import { copyToClipboard, minMemoryTierGb } from '$lib/utils';
+	import { toast } from 'svelte-sonner';
 
 	/** Download state of a single repo entry, injected by the integration layer. */
 	export interface DownloadEntryState {
@@ -20,10 +22,16 @@
 
 	type BitDepthRow = { bitDepth: number; files: HfModelSibling[] };
 
-	interface SelectedDownload {
-		filePath: string;
-		quant: string | null;
-		sidecar: ModelSidecar | null;
+	/** A selectable GGUF, tagged with its kind: main weights, draft, or aux (mmproj). */
+	type SelectableFile = HfModelSibling & { kind: 'main' | 'draft' | 'aux' };
+
+	/** Option of a quant `<select>`; already-downloaded files stay non-selectable. */
+	interface QuantOption {
+		disabled: boolean;
+		/** Quant token, or the file name when the file carries no quant (e.g. BF16). */
+		label: string;
+		path: string;
+		size: number;
 	}
 
 	interface Props {
@@ -42,6 +50,20 @@
 	let { bitDepthRows, getDownloadState, modelId }: Props = $props();
 
 	let selectedPaths = $state<string[]>([]);
+
+	// Quant picks shown inline in the command. `basePick` is preselected so the
+	// command is readable before the user touches anything.
+	let basePick = $state('');
+	let draftPick = $state('');
+
+	/** Bit depth to preselect for the base model; falls back to the closest one. */
+	const DEFAULT_BASE_BIT_DEPTH = 4;
+
+	// min-w keeps the value clear of the native chevron: Safari sizes a select
+	// to its widest option, so an exactly-as-wide value would otherwise let the
+	// chevron overlap the text (draft selects are all same-width quants).
+	const selectClass =
+		'h-6 min-w-18 max-w-40 shrink-0 cursor-pointer rounded-md border border-input bg-transparent py-0 pr-3 pl-2 font-mono text-xs outline-none transition-colors hover:bg-accent/40 focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]';
 
 	function stateFor(repoWithTag: string, filePath: string, isSidecar: boolean): DownloadEntryState {
 		if (getDownloadState) return getDownloadState(repoWithTag, filePath, isSidecar);
@@ -65,6 +87,139 @@
 		return isAuxSidecar(sidecar) ? 'aux' : 'draft';
 	}
 
+	/** Display label of a file: its quant, else the file name without the extension. */
+	function labelFor(path: string): string {
+		const quant = HuggingFaceService.extractQuantMeta(path)?.quant;
+
+		if (quant) return quant;
+
+		const basename = path.split('/').pop() ?? path;
+
+		return basename.replace(/\.gguf$/i, '');
+	}
+
+	/**
+	 * Every selectable file with its kind and download state, in row order.
+	 * Single source of truth for the toggle group rows, the selects and the
+	 * command.
+	 */
+	let selectableFiles = $derived.by(() => {
+		const files: (SelectableFile & { state: DownloadEntryState })[] = [];
+
+		for (const row of bitDepthRows) {
+			for (const file of row.files) {
+				const meta = HuggingFaceService.extractQuantMeta(file.path);
+				const tag = ModelsService.buildDownloadTag(
+					modelId,
+					meta?.quant ?? null,
+					meta?.sidecar ?? null
+				);
+
+				files.push({
+					...file,
+					kind: classify(file.path),
+					state: stateFor(tag, file.path, Boolean(meta?.sidecar))
+				});
+			}
+		}
+
+		return files;
+	});
+
+	let mainFiles = $derived(selectableFiles.filter((f) => f.kind === 'main'));
+	let draftFiles = $derived(selectableFiles.filter((f) => f.kind === 'draft'));
+
+	/** Paths already downloaded on the server; static chips, disabled options. */
+	let downloadedPaths = $derived(
+		new Set(selectableFiles.filter((f) => f.state.isDownloaded).map((f) => f.path))
+	);
+
+	/** Bit depth of a file; `99` (Other) when it carries no quant token. */
+	function bitDepthOf(path: string): number {
+		const quant = HuggingFaceService.extractQuantMeta(path)?.quant ?? '';
+		const match = quant.match(/^UD-(?=.)/i) ? quant.slice(3) : quant;
+		const bit = match.match(/(?:I?Q|F)(\d+)/i)?.[1];
+
+		return bit ? Number(bit) : 99;
+	}
+
+	function optionFor(file: SelectableFile & { state: DownloadEntryState }): QuantOption {
+		return {
+			disabled: file.state.isDownloaded,
+			label: labelFor(file.path),
+			path: file.path,
+			size: file.size ?? 0
+		};
+	}
+
+	/**
+	 * Options per kind, in row (bit depth) order, so like quants line up
+	 * between the two selects. Draft options carry their sidecar type (MTP,
+	 * DFLASH...) since a repo can ship more than one draft flavour.
+	 */
+	let baseOptions = $derived(mainFiles.map(optionFor));
+	let draftOptions = $derived(
+		draftFiles.map((f) => ({
+			...optionFor(f),
+			badge: HuggingFaceService.extractQuantMeta(f.path)?.sidecar
+		}))
+	);
+
+	/**
+	 * Default base quant: the untouched selection falls back to the 4-bit file,
+	 * or the lowest bit depth available when there is none. Downloaded files
+	 * are skipped, so the command points at something there is still to fetch.
+	 */
+	function defaultBasePath(): string {
+		const candidates = mainFiles.filter((f) => !downloadedPaths.has(f.path));
+		const pool = candidates.length ? candidates : mainFiles;
+		const preferred = pool.find((f) => bitDepthOf(f.path) === DEFAULT_BASE_BIT_DEPTH);
+
+		if (preferred) return preferred.path;
+
+		const ranked = [...pool].sort((a, b) => bitDepthOf(a.path) - bitDepthOf(b.path));
+
+		return ranked[0]?.path ?? '';
+	}
+
+	/**
+	 * Selection source of truth: the toggle group, the selects and the command
+	 * all read it; the selects also mirror it. A pick replaces the previous one
+	 * of its kind, an empty value drops it, aux sidecars are left alone.
+	 */
+	function setPick(kind: 'main' | 'draft', path: string) {
+		const rest = selectedPaths.filter((p) => classify(p) !== kind);
+
+		selectedPaths = path ? [...rest, path] : rest;
+	}
+
+	/**
+	 * Mirror the selection into the selects. With no main chip on, the default
+	 * quant (4-bit, or the nearest one still to fetch) is preselected in both
+	 * the command and the chips, so the command is always complete; the dashed
+	 * border tells a default-only pick from a deliberate one.
+	 */
+	$effect(() => {
+		const paths = selectedPaths;
+		const mainPath = mainFiles.find((f) => paths.includes(f.path))?.path ?? '';
+
+		if (mainPath) {
+			basePick = mainPath;
+		} else {
+			const fallback = defaultBasePath();
+
+			basePick = fallback;
+
+			// Still fetchable: also toggle the chip on. When everything is
+			// downloaded the chips stay off and only the command previews it.
+			if (fallback && !downloadedPaths.has(fallback)) {
+				selectedPaths = [...paths.filter((p) => classify(p) === 'aux'), fallback];
+			}
+		}
+
+		draftPick = draftFiles.find((f) => paths.includes(f.path))?.path ?? '';
+	});
+
 	/**
 	 * Constrained selection: at most one base model and one draft sidecar.
 	 * Aux sidecars (mmproj) are unconstrained.
@@ -85,61 +240,33 @@
 
 		selectedPaths = [...base, added];
 	}
-	/** Paths already downloaded on the server; those render as static chips. */
-	let downloadedPaths = $derived(
-		new Set(
-			bitDepthRows
-				.flatMap((r) => r.files)
-				.filter((f) => {
-					const meta = HuggingFaceService.extractQuantMeta(f.path);
-					const tag = ModelsService.buildDownloadTag(
-						modelId,
-						meta?.quant ?? null,
-						meta?.sidecar ?? null
-					);
 
-					return stateFor(tag, f.path, Boolean(meta?.sidecar)).isDownloaded;
-				})
-				.map((f) => f.path)
-		)
-	);
 	let copied = $state(false);
 
-	/** All repo files in one lookup by path. */
-	let fileByPath = $derived(new Map(bitDepthRows.flatMap((r) => r.files).map((f) => [f.path, f])));
-
 	/** Selection ordered main-quant-first, so the command reads naturally. */
-	let selected: SelectedDownload[] = $derived.by(() => {
-		const mains: SelectedDownload[] = [];
-		const sidecars: SelectedDownload[] = [];
+	let selected = $derived.by(() => {
+		const mains: SelectableFile[] = [];
+		const drafts: SelectableFile[] = [];
 
-		for (const path of selectedPaths) {
-			const file = fileByPath.get(path);
+		for (const file of selectableFiles) {
+			if (!selectedPaths.includes(file.path)) continue;
 
-			if (!file) continue;
-
-			const meta = HuggingFaceService.extractQuantMeta(file.path);
-			const entry = {
-				filePath: file.path,
-				quant: meta?.quant ?? null,
-				sidecar: meta?.sidecar ?? null
-			};
-
-			if (entry.sidecar && !isAuxSidecar(entry.sidecar)) sidecars.push(entry);
-			else mains.push(entry);
+			if (file.kind === 'draft') drafts.push(file);
+			else mains.push(file);
 		}
 
-		return [...mains, ...sidecars];
+		return [...mains, ...drafts];
 	});
 
-	/** First selected main quant, drives the `-hf <repo>:<quant>` tag. */
-	let primaryQuant = $derived(selected.find((s) => !s.sidecar)?.quant ?? null);
+	/** Selected main weights, drive the `-hf <repo>:<quant>` tag. */
+	let mainEntry = $derived(selected.find((f) => f.kind === 'main') ?? null);
 
-	/** First selected draft sidecar entry. */
-	let draftEntry = $derived(selected.find((s) => s.sidecar && !isAuxSidecar(s.sidecar)) ?? null);
+	/** Selected draft sidecar; its type drives the `--spec-type` flag. */
+	let draftEntry = $derived(selected.find((f) => f.kind === 'draft') ?? null);
 
-	/** First selected draft sidecar type, drives the `--spec-type` flag. */
-	let draft = $derived(draftEntry?.sidecar ?? null);
+	let draftSidecar = $derived(
+		draftEntry ? (HuggingFaceService.extractQuantMeta(draftEntry.path)?.sidecar ?? null) : null
+	);
 
 	// LLAMA-APP-REUSE: --spec-type value for each draft sidecar
 	const SPEC_TYPE: Record<ModelSidecar, string> = {
@@ -150,47 +277,127 @@
 		[ModelDraftSidecar.MTP]: 'draft-mtp'
 	};
 
+	/** Base file the command shows: the picked one, else whatever the base select holds. */
+	let commandMain = $derived(mainEntry ?? mainFiles.find((f) => f.path === basePick) ?? null);
+
+	/** Quant of the file the `-hf` tag points at; null when the file carries no quant. */
+	let commandMainQuant = $derived(
+		commandMain ? (HuggingFaceService.extractQuantMeta(commandMain.path)?.quant ?? null) : null
+	);
+
+	/** Quant of the file the `-hfd` tag points at. */
+	let commandDraftQuant = $derived(
+		draftEntry ? (HuggingFaceService.extractQuantMeta(draftEntry.path)?.quant ?? null) : null
+	);
+
 	async function copyCommand() {
 		await copyToClipboard(serveCommand);
 		copied = true;
 		setTimeout(() => (copied = false), 1500);
 	}
 
-	/** Fire downloads for every selected entry. */
+	/**
+	 * Queue one download and surface a live progress toast keyed by the tag,
+	 * so a retry updates the same toast instead of stacking a new one.
+	 */
+	async function queueDownload(tag: string) {
+		try {
+			await modelsStore.status.downloadModel(tag);
+		} catch {
+			// the store already toasted the failure
+			return;
+		}
+
+		toast.custom(ModelsDownloadManagerDownloadStatusToast, {
+			componentProps: { repoWithTag: tag },
+			duration: Infinity,
+			id: tag
+		});
+	}
+
+	/**
+	 * Files the CTA would download: the selection, else the command's base
+	 * pick. The same set feeds the total size on the button label.
+	 */
+	let downloadQueue = $derived.by(() =>
+		mainEntry
+			? selected
+			: [
+					...selected.filter((f) => f.kind === 'main' || f.kind === 'aux'),
+					...(commandMain ? [commandMain] : [])
+				]
+	);
+
+	/** Total bytes the CTA would fetch; drives the size in the button label. */
+	let downloadTotalBytes = $derived(downloadQueue.reduce((sum, file) => sum + (file.size ?? 0), 0));
+
+	/**
+	 * Fire downloads for the selection. With no main chip on, the command shows
+	 * the default base quant, so the CTA queues exactly that file too.
+	 */
 	function downloadSelected() {
-		for (const sel of selected) {
-			const tag = ModelsService.buildDownloadTag(modelId, sel.quant, sel.sidecar);
+		for (const file of downloadQueue) {
+			const meta = HuggingFaceService.extractQuantMeta(file.path);
+			const tag = ModelsService.buildDownloadTag(
+				modelId,
+				meta?.quant ?? null,
+				meta?.sidecar ?? null
+			);
 
 			if (modelsStore.status.hasFailedDownload(tag)) {
-				void modelsStore.status
-					.cancelDownload(tag)
-					.then(() => modelsStore.status.downloadModel(tag, sel.filePath));
+				void modelsStore.status.cancelDownload(tag).then(() => queueDownload(tag));
 			} else {
-				void modelsStore.status.downloadModel(tag, sel.filePath);
+				void queueDownload(tag);
 			}
 		}
 
 		selectedPaths = [];
 	}
 
-	/** The llama serve command for the current selection. */
+	/** The llama serve command; always readable, driven by the inline selects. */
 	// LLAMA-APP-REUSE: serve command shape (-hf / -hfd / --spec-type)
 	let serveCommand = $derived.by(() => {
-		const quantTag = primaryQuant ? `${modelId}:${primaryQuant}` : modelId;
-		const parts = ['llama', 'serve', '-hf', quantTag];
+		const mainQuant = commandMain
+			? HuggingFaceService.extractQuantMeta(commandMain.path)?.quant
+			: null;
+		const mainTag = mainQuant ? `${modelId}:${mainQuant}` : modelId;
+		const parts = ['llama', 'serve', '-hf', mainTag];
 
-		if (draft) {
-			const draftTag = draftEntry?.quant ? `${modelId}:${draftEntry.quant}` : modelId;
+		if (draftEntry && draftSidecar) {
+			const draftQuant = HuggingFaceService.extractQuantMeta(draftEntry.path)?.quant;
+			const draftTag = draftQuant ? `${modelId}:${draftQuant}` : modelId;
 
-			parts.push('-hfd', draftTag, '--spec-type', SPEC_TYPE[draft]);
+			parts.push('-hfd', draftTag, '--spec-type', SPEC_TYPE[draftSidecar]);
 		}
 
 		return parts.join(' ');
+	});
+
+	/**
+	 * CTA label for the command shown: the selection, else the preview base
+	 * quant, plus the total download size.
+	 */
+	let downloadLabel = $derived.by(() => {
+		const main = mainEntry ?? commandMain;
+		const draftLabel = draftSidecar?.toUpperCase();
+
+		let label = 'Download';
+
+		if (main && draftLabel) label = `Download ${labelFor(main.path)} + ${draftLabel}`;
+		else if (draftLabel) label = `Download ${draftLabel} draft`;
+		else if (main) label = `Download ${labelFor(main.path)}`;
+
+		if (downloadTotalBytes > 0) {
+			label += ` · ${HuggingFaceService.formatFileSize(downloadTotalBytes)}`;
+		}
+
+		return label;
 	});
 </script>
 
 {#if bitDepthRows.length}
 	<section class="rounded-xl border">
+		<!-- header row is intentionally hidden for now
 		<div class="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-1">
 			<h2 class="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
 				<Download class="h-4 w-4" />
@@ -201,6 +408,7 @@
 				<span class="text-xs text-muted-foreground">{selected.length} selected</span>
 			{/if}
 		</div>
+		-->
 
 		<ToggleGroup
 			class="flex w-full flex-col items-stretch divide-y px-4 pb-1"
@@ -237,8 +445,7 @@
 					<div class="flex flex-wrap justify-end gap-1.5">
 						{#each row.files as file (file.path)}
 							{@const meta = HuggingFaceService.extractQuantMeta(file.path)}
-							{@const basename = file.path.split('/').pop() ?? file.path}
-							{@const label = meta?.quant ?? basename.replace(/\.gguf$/i, '')}
+							{@const label = labelFor(file.path)}
 							{@const hfRepoWithTag = ModelsService.buildDownloadTag(
 								modelId,
 								meta?.quant ?? null,
@@ -261,12 +468,13 @@
 									{#if isDownloaded}
 										<!-- downloaded files are not selectable, just marked as done -->
 										<div
+											aria-disabled="true"
 											aria-label={tooltipText}
-											class="inline-flex items-center gap-1 rounded-md border border-foreground bg-muted px-2 py-1 font-mono text-xs"
+											class="inline-flex cursor-default items-center gap-1 rounded-md border bg-muted px-2 py-1 font-mono text-xs opacity-70"
 										>
 											{#if meta?.sidecar && !isAuxSidecar(meta.sidecar)}
 												<span
-													class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
+													class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
 												>
 													{meta.sidecar}
 												</span>
@@ -283,14 +491,14 @@
 									{:else}
 										<ToggleGroupItem
 											aria-label={tooltipText}
-											class="relative inline-flex h-auto items-center gap-1 overflow-hidden rounded-md border bg-muted px-2 py-1 text-left font-mono text-xs transition-colors data-[state=on]:border-primary data-[state=on]:bg-primary/10 {isFailed
+											class="relative inline-flex h-auto items-center gap-1 overflow-hidden rounded-md! border bg-muted px-2 py-1 text-left font-mono text-xs transition-colors data-[state=on]:border-primary data-[state=on]:bg-primary/10 {isFailed
 												? 'border-destructive'
 												: ''}"
 											value={file.path}
 										>
 											{#if isFailed && !isDownloading}
 												<span
-													class="rounded bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase"
+													class="rounded-md bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase"
 												>
 													Failed
 												</span>
@@ -298,17 +506,17 @@
 
 											{#if meta?.sidecar && !isAuxSidecar(meta.sidecar)}
 												<span
-													class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
+													class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
 												>
 													{meta.sidecar}
 												</span>
 											{/if}
 
-											<span class="font-medium text-muted-foreground/80">{label}</span>
+											<span class="font-medium">{label}</span>
 
 											<span class="-my-1 w-px self-stretch bg-border"></span>
 
-											<span class="text-muted-foreground/80">
+											<span>
 												{#if isDownloading && progress && progress.totalBytes > 0}
 													{Math.round((progress.downloadedBytes / progress.totalBytes) * 100)}%
 												{:else}
@@ -337,17 +545,71 @@
 			{/each}
 		</ToggleGroup>
 
-		<!-- Terminal command + download CTA for the current selection -->
+		<!-- Terminal command with inline quant selects + download CTA -->
 		<div class="space-y-2 border-t px-4 pt-3 pb-4">
 			<div
-				class="flex items-center justify-between gap-2 rounded-md px-3 py-2"
+				class="flex flex-wrap items-center gap-2 rounded-md px-3 py-2"
 				style="background: var(--code-background); border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);"
 			>
-				<span class="truncate font-mono text-xs text-foreground/90">{serveCommand}</span>
+				<div
+					class="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-xs text-foreground/90"
+				>
+					<span>llama</span>
+
+					<span>serve</span>
+
+					<span>-hf</span>
+
+					<span class="truncate">{modelId}{commandMainQuant ? ':' : ''}</span>
+
+					<!-- Base quant: always part of the command, the 8-bit file by default. -->
+					{#if baseOptions.length}
+						<select
+							aria-label="Base model quantization"
+							class="{selectClass} {mainEntry ? '' : 'border-dashed'} -ml-2"
+							onchange={(e) => setPick('main', e.currentTarget.value)}
+							title={mainEntry
+								? undefined
+								: 'Default quant - pick a file above or another quant here'}
+							value={basePick}
+						>
+							{#each baseOptions as option (option.path)}
+								<option disabled={option.disabled} value={option.path}>
+									{option.label}
+								</option>
+							{/each}
+						</select>
+					{/if}
+
+					<!-- Draft segment: appears once a draft is picked, quant inline too. -->
+					{#if draftEntry && draftSidecar}
+						<span>-hfd</span>
+
+						<span class="truncate">{modelId}{commandDraftQuant ? ':' : ''}</span>
+
+						<select
+							aria-label="Draft model quantization"
+							class={selectClass}
+							onchange={(e) => setPick('draft', e.currentTarget.value)}
+							value={draftPick}
+						>
+							{#each draftOptions as option (option.path)}
+								<option disabled={option.disabled} value={option.path}>
+									<!-- {option.badge ? `${option.badge.toUpperCase()} ` : ''} -->
+									{option.label}
+								</option>
+							{/each}
+						</select>
+
+						<span>--spec-type</span>
+
+						<span>{SPEC_TYPE[draftSidecar]}</span>
+					{/if}
+				</div>
 
 				<button
 					aria-label="Copy command"
-					class="shrink-0 text-muted-foreground/60 transition-colors hover:text-foreground"
+					class="ml-auto shrink-0 text-muted-foreground/60 transition-colors hover:text-foreground"
 					onclick={copyCommand}
 					type="button"
 				>
@@ -361,17 +623,13 @@
 
 			<button
 				class="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-				disabled={selected.length === 0}
+				disabled={selected.length === 0 && !commandMain}
 				onclick={downloadSelected}
 				type="button"
 			>
 				<Download class="h-4 w-4" />
 
-				{#if primaryQuant && draft}
-					Download {primaryQuant} + {draft}
-				{:else}
-					Download
-				{/if}
+				{downloadLabel}
 			</button>
 		</div>
 	</section>

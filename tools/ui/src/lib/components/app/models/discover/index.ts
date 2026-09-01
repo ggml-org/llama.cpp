@@ -39,6 +39,14 @@ export { default as ModelsDiscoverListSearch } from './ModelsDiscoverListSearch.
 export { default as ModelsDiscoverListItem } from './ModelsDiscoverListItem.svelte';
 
 /**
+ * **ModelsDiscoverListItemSkeleton** - Skeleton sidebar row
+ *
+ * Pulsing placeholder matching a ModelsDiscoverListItem row, shown while the
+ * list is loading.
+ */
+export { default as ModelsDiscoverListItemSkeleton } from './ModelsDiscoverListItemSkeleton.svelte';
+
+/**
  * **ModelsDiscoverAvatar** - Org avatar for a model row
  *
  * Shows the org's avatar image, falling back to a monogram on a stable hue
