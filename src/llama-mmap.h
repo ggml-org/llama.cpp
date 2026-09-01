@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 #include <cstdio>
+#include <string>
 
 struct llama_file;
 struct llama_mmap;

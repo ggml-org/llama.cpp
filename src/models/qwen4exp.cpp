@@ -7,7 +7,9 @@
 #include <cerrno>
 #include <cinttypes>
 #include <cstring>
+#include <cstdint>
 #include <exception>
+#include <string>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -17,35 +19,96 @@
 #ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
+#else
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
 llama_model_qwen4exp::llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
 llama_model_qwen4exp::~llama_model_qwen4exp() = default;
 
-#ifndef _WIN32
+#ifdef _WIN32
+static std::string ple_win_error(DWORD error) {
+    LPSTR buffer = nullptr;
+    const DWORD size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                                      FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, error, 0,
+                                      reinterpret_cast<LPSTR>(&buffer), 0, nullptr);
+    if (!size) {
+        return format("Win32 error code: %lu", (unsigned long) error);
+    }
+    std::string result(buffer, size);
+    LocalFree(buffer);
+    return result;
+}
+
+static HANDLE ple_open_file(const std::string & path) {
+    const int size = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+    if (size <= 0) {
+        return INVALID_HANDLE_VALUE;
+    }
+
+    std::vector<wchar_t> wide_path(size);
+    if (MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wide_path.data(), size) <= 0) {
+        return INVALID_HANDLE_VALUE;
+    }
+
+    return CreateFileW(wide_path.data(), GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS | FILE_FLAG_OVERLAPPED, nullptr);
+}
+
+struct ple_win_handle {
+    HANDLE handle;
+
+    ~ple_win_handle() {
+        if (handle != INVALID_HANDLE_VALUE && handle != nullptr) {
+            CloseHandle(handle);
+        }
+    }
+};
+#endif
+
 // Direct-read path for the lazy PLE table (--lazy-mode on-direct).
 // The n-gram row indices of a whole ubatch are known host-side before the graph
-// runs, so the rows can be read with explicit pread()s of exactly what the gather
-// needs instead of demand-faulting file pages in through the mmap. Rows are sorted
-// (dedup + ascending file offsets) and read by a small set of worker threads, so
-// the block layer sees a sorted, parallel batch instead of one serialized page
-// fault per ~90-byte row. The table stays on disk; the kernel page cache provides
-// reuse across ubatches.
+// runs, so the rows can be read with explicit offset reads instead of demand-
+// faulting file pages in through the mmap. Rows are sorted (dedup + ascending
+// file offsets) and read by a small set of worker threads. The table stays on
+// disk; the kernel page cache provides reuse across ubatches.
 struct llama_model_qwen4exp::ple_direct_reader {
+#ifdef _WIN32
+    ple_direct_reader(HANDLE handle, size_t base, size_t row_size, int64_t n_rows, int n_threads,
+                      enum ggml_type type, int64_t head_dim)
+        : handle(handle), base(base), row_size(row_size), n_rows(n_rows), n_threads(n_threads),
+          head_dim(head_dim), to_float(type == GGML_TYPE_F32 ? nullptr : ggml_get_type_traits(type)->to_float) {
+#else
     ple_direct_reader(int fd, size_t base, size_t row_size, int64_t n_rows, int n_threads,
                       enum ggml_type type, int64_t head_dim)
         : fd(fd), base(base), row_size(row_size), n_rows(n_rows), n_threads(n_threads),
           head_dim(head_dim), to_float(type == GGML_TYPE_F32 ? nullptr : ggml_get_type_traits(type)->to_float) {
+#endif
         // F32 rows have no dequantizer; they are staged as-is, like ggml_get_rows
         GGML_ASSERT((type == GGML_TYPE_F32 || to_float != nullptr) && head_dim > 0);
     }
     ~ple_direct_reader() {
+#ifdef _WIN32
+        if (handle != INVALID_HANDLE_VALUE && handle != nullptr) {
+            CloseHandle(handle);
+        }
+#else
         if (fd >= 0) {
             ::close(fd);
         }
+#endif
     }
 
+#ifdef _WIN32
+    const HANDLE   handle;
+#else
     const int      fd;
+#endif
     const size_t   base;       // file offset of row 0
     const size_t   row_size;   // bytes per quantized row
     const int64_t  n_rows;
@@ -111,6 +174,12 @@ private:
     void run_range(const std::vector<std::pair<int32_t, int32_t>> & pairs,
                    int64_t begin, int64_t end, float * dst) const {
         std::vector<uint8_t> bounce(row_size);
+#ifdef _WIN32
+        ple_win_handle event{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+        if (event.handle == nullptr) {
+            throw std::runtime_error(format("PLE direct read event creation failed: %s", ple_win_error(GetLastError()).c_str()));
+        }
+#endif
         for (int64_t i = begin; i < end; ) {
             int64_t j = i;
             while (j + 1 < end && pairs[j + 1].first == pairs[i].first) {
@@ -118,6 +187,34 @@ private:
             }
             const size_t off = base + (size_t) pairs[i].first * row_size;
             for (size_t done = 0; done < row_size; ) {
+#ifdef _WIN32
+                const DWORD request = (DWORD) std::min<size_t>(row_size - done, MAXDWORD);
+                const uint64_t read_offset = (uint64_t) off + done;
+                OVERLAPPED overlapped = {};
+                overlapped.hEvent = event.handle;
+                overlapped.Offset = (DWORD) read_offset;
+                overlapped.OffsetHigh = (DWORD) (read_offset >> 32);
+                ResetEvent(event.handle);
+
+                DWORD n_read = 0;
+                if (!ReadFile(handle, bounce.data() + done, request, &n_read, &overlapped)) {
+                    const DWORD error = GetLastError();
+                    if (error != ERROR_IO_PENDING) {
+                        throw std::runtime_error(format("PLE direct read of %zu bytes at file offset %zu failed: %s",
+                                row_size, off, ple_win_error(error).c_str()));
+                    }
+                }
+                if (!GetOverlappedResult(handle, &overlapped, &n_read, TRUE)) {
+                    const DWORD error = GetLastError();
+                    throw std::runtime_error(format("PLE direct read of %zu bytes at file offset %zu failed: %s",
+                            row_size, off, ple_win_error(error).c_str()));
+                }
+                if (n_read == 0) {
+                    throw std::runtime_error(format("PLE direct read of %zu bytes at file offset %zu failed: unexpected EOF",
+                            row_size, off));
+                }
+                done += n_read;
+#else
                 const ssize_t n_read = ::pread(fd, bounce.data() + done, row_size - done, off + done);
                 if (n_read < 0 && errno == EINTR) {
                     continue; // interrupted by a signal without SA_RESTART
@@ -127,6 +224,7 @@ private:
                             row_size, off, n_read == 0 ? "unexpected EOF" : strerror(errno)));
                 }
                 done += n_read;
+#endif
             }
             float * first = dst + (size_t) pairs[i].second * head_dim;
             if (to_float) {
@@ -141,18 +239,6 @@ private:
         }
     }
 };
-
-// matching interface so the call sites compile; never constructed on this
-// platform, see load_arch_tensors
-#else
-struct llama_model_qwen4exp::ple_direct_reader {
-    const int64_t head_dim = 0;
-
-    void gather(const int32_t *, int64_t, float *) const {
-        GGML_ABORT("PLE direct reads are not supported on this platform");
-    }
-};
-#endif
 
 void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
@@ -286,41 +372,52 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         }
         per_layer_tok_embd = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),
                                            { hparams.ple_head_dim, ple_rows }, TENSOR_READ_LAZY);
-        // --lazy-mode on-direct: read the gathered rows with explicit pread()s
+        // --lazy-mode on-direct: read the gathered rows with explicit offset reads
         // instead of faulting them in through the mmap
         if (ml.lazy.mode == LLAMA_LAZY_MODE_DIRECT) {
-#ifndef _WIN32
+            const auto & file = ml.files[ple_w.idx];
+#ifdef _WIN32
+            ple_win_handle direct_handle{ple_open_file(file->name())};
+            if (direct_handle.handle == INVALID_HANDLE_VALUE) {
+                LLAMA_LOG_WARN("%s: could not open %s for direct reads (%s), using lazy mmap reads\n",
+                        __func__, file->name().c_str(), ple_win_error(GetLastError()).c_str());
+            } else {
+#else
             // an independent buffered descriptor: dup() would share the loader's
             // open file description, whose readahead advice and O_DIRECT flag
             // (init_mappings applies POSIX_FADV_SEQUENTIAL, --load-mode dio)
             // would fight the small scattered row reads
-            const int fd = ::open(ml.files[ple_w.idx]->name().c_str(), O_RDONLY | O_CLOEXEC);
+            const int fd = ::open(file->name().c_str(), O_RDONLY | O_CLOEXEC);
             if (fd < 0) {
                 // e.g. a FILE*-backed model has no reopenable path; the tensor is
                 // still lazy, so keep serving it through the mmap reads
                 LLAMA_LOG_WARN("%s: could not open %s for direct reads (%s), using lazy mmap reads\n",
-                        __func__, ml.files[ple_w.idx]->name().c_str(), strerror(errno));
+                        __func__, file->name().c_str(), strerror(errno));
             } else {
 #ifdef __linux__
                 // rows are tiny and scattered, so sequential readahead would be
                 // pure waste; Darwin has no posix_fadvise
                 ::posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
 #endif
-
+#endif
                 // in-flight reads are IO queue depth, not compute; 2x cores worked
                 // well on NVMe and stays sane on smaller machines
                 const int n_threads = 2 * (int) std::max(1u, std::thread::hardware_concurrency());
 
+#ifdef _WIN32
+                ple_reader = std::make_unique<ple_direct_reader>(direct_handle.handle, ple_w.offs,
+#else
                 ple_reader = std::make_unique<ple_direct_reader>(fd, ple_w.offs,
+#endif
                         ggml_row_size(per_layer_tok_embd->type, per_layer_tok_embd->ne[0]), ple_rows, n_threads,
                         per_layer_tok_embd->type, hparams.ple_head_dim);
 
                 LLAMA_LOG_INFO("%s: PLE direct read enabled: %" PRId64 " rows of %zu bytes at file offset %zu, %d threads\n",
                         __func__, ple_rows, ple_reader->row_size, ple_w.offs, n_threads);
-            }
-#else
-            LLAMA_LOG_WARN("%s: --lazy-mode on-direct is not supported on this platform, using lazy mmap reads\n", __func__);
+#ifdef _WIN32
+                direct_handle.handle = INVALID_HANDLE_VALUE;
 #endif
+            }
         }
     }
 
