@@ -89,6 +89,63 @@ static bool ggml_metal_fuse_check_add_chain(const struct ggml_tensor * const * n
     return true;
 }
 
+// GATED_DELTA_NET + CPY: the trailing cpy scatters the gdn state snapshots into the recurrent
+// cache, so the gdn kernel writes them straight to the cache and the cpy is elided.
+// mirrors ggml_metal_op_can_fuse_gdn_cache (PR #25788). the gdn output has other consumers (the
+// attn scores view), so unlike the other patterns this is not an elision chain: the structural
+// checks live entirely in this callback (raw = true).
+static bool ggml_metal_fuse_check_gdn_cache(const struct ggml_tensor * const * nodes,
+                                            const struct ggml_metal_fuse *    fuse,
+                                            enum ggml_metal_fuse_mode         mode) {
+    const struct ggml_tensor * gdn = nodes[0];
+    const struct ggml_tensor * cpy = nodes[1];
+
+    // the kernel skips the snapshot tail, so the gdn output must not be a graph output
+    if (gdn->type != GGML_TYPE_F32 || (gdn->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+        return false;
+    }
+
+    if (cpy->op != GGML_OP_CPY || (cpy->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+        return false;
+    }
+
+    const int64_t S_v      = gdn->src[2]->ne[0];
+    const int64_t H        = gdn->src[2]->ne[1];
+    const int64_t n_tokens = gdn->src[2]->ne[2];
+    const int64_t n_seqs   = gdn->src[2]->ne[3];
+    const int64_t K        = ggml_get_op_params_i32(gdn, 0);
+    const size_t  tail_off = ggml_row_size(GGML_TYPE_F32, S_v * H * n_tokens * n_seqs);
+
+    const int64_t D         = S_v * S_v * H;
+    const int64_t n_written = std::min<int64_t>(n_tokens, K);
+
+    const struct ggml_tensor * src = cpy->src[0]; // gdn snapshot tail view
+    const struct ggml_tensor * dst = cpy->src[1]; // cache view
+
+    // src must be this gdn's snapshot tail (contiguous, at the tail offset)
+    if (src->op != GGML_OP_VIEW || src->view_src != gdn ||
+        src->view_offs != tail_off || !ggml_is_contiguous(src)) {
+        return false;
+    }
+
+    const int64_t expected_ne[GGML_MAX_DIMS] = { D, n_seqs, n_written, 1 };
+    if (dst->type != GGML_TYPE_F32 ||
+        !std::equal(expected_ne, expected_ne + GGML_MAX_DIMS, dst->ne) ||
+        dst->nb[0] != ggml_type_size(GGML_TYPE_F32) ||
+        dst->nb[1] != (size_t) ggml_row_size(GGML_TYPE_F32, D)) {
+        return false;
+    }
+
+    if (mode == GGML_METAL_FUSE_FULL) {
+        // the cache must be allocated so the kernel can write straight to its buffer
+        if (dst->data == nullptr) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // MUL + SIN + SQR + MUL + ADD (snake activation)
 static bool ggml_metal_fuse_check_snake(const struct ggml_tensor * const * nodes,
                                         const struct ggml_metal_fuse *    fuse,
@@ -144,20 +201,22 @@ static const enum ggml_op ops_add_4[] = { GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD,
 static const enum ggml_op ops_add_5[] = { GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
 static const enum ggml_op ops_add_6[] = { GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
 static const enum ggml_op ops_add_7[] = { GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
-static const enum ggml_op ops_snake[] = { GGML_OP_MUL, GGML_OP_SIN, GGML_OP_SQR, GGML_OP_MUL, GGML_OP_ADD };
+static const enum ggml_op ops_snake[]     = { GGML_OP_MUL, GGML_OP_SIN, GGML_OP_SQR, GGML_OP_MUL, GGML_OP_ADD };
+static const enum ggml_op ops_gdn_cache[] = { GGML_OP_GATED_DELTA_NET, GGML_OP_CPY };
 
 static const struct ggml_metal_fuse ggml_metal_fuses[] = {
-    { GGML_METAL_FUSE_NORM_MUL,     ops_norm_mul,         2, nullptr, 0, ggml_metal_fuse_check_norm },
-    { GGML_METAL_FUSE_NORM_MUL_ADD, ops_norm_mul_add,     3, nullptr, 0, ggml_metal_fuse_check_norm },
-    { GGML_METAL_FUSE_NORM_MUL,     ops_rms_norm_mul,     2, nullptr, 0, ggml_metal_fuse_check_norm },
-    { GGML_METAL_FUSE_NORM_MUL_ADD, ops_rms_norm_mul_add, 3, nullptr, 0, ggml_metal_fuse_check_norm },
-    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_2, 2, nullptr, 0, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_3, 3, nullptr, 0, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_4, 4, nullptr, 0, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_5, 5, nullptr, 0, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_6, 6, nullptr, 0, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_7, 7, nullptr, 0, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_SNAKE,     ops_snake, 5, nullptr, 0, ggml_metal_fuse_check_snake },
+    { GGML_METAL_FUSE_NORM_MUL,     ops_norm_mul,         2, nullptr, 0, false, ggml_metal_fuse_check_norm },
+    { GGML_METAL_FUSE_NORM_MUL_ADD, ops_norm_mul_add,     3, nullptr, 0, false, ggml_metal_fuse_check_norm },
+    { GGML_METAL_FUSE_NORM_MUL,     ops_rms_norm_mul,     2, nullptr, 0, false, ggml_metal_fuse_check_norm },
+    { GGML_METAL_FUSE_NORM_MUL_ADD, ops_rms_norm_mul_add, 3, nullptr, 0, false, ggml_metal_fuse_check_norm },
+    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_2, 2, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
+    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_3, 3, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
+    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_4, 4, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
+    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_5, 5, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
+    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_6, 6, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
+    { GGML_METAL_FUSE_ADD_CHAIN, ops_add_7, 7, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
+    { GGML_METAL_FUSE_SNAKE,     ops_snake, 5, nullptr, 0, false, ggml_metal_fuse_check_snake },
+    { GGML_METAL_FUSE_GDN_CACHE, ops_gdn_cache, 2, nullptr, 0, true,  ggml_metal_fuse_check_gdn_cache },
 };
 
 const struct ggml_metal_fuse * ggml_metal_fuse_all(int * n) {
@@ -194,20 +253,25 @@ const struct ggml_metal_fuse * ggml_metal_fuse_next(
             continue;
         }
 
-        // the first node must match the pattern start
-        if (gf->nodes[node_idxs[idx]]->op != fuse->ops[0]) {
-            continue;
-        }
-
         const struct ggml_tensor * nodes[GGML_METAL_FUSE_MAX];
 
-        // common element-wise chain constraints: each node reads the previous one,
-        // and all nodes have the same shape
+        // the op sequence must match exactly
         bool ok = true;
         for (int j = 0; j < fuse->n_ops; j++) {
             nodes[j] = gf->nodes[node_idxs[idx + j]];
+            if (nodes[j]->op != fuse->ops[j]) {
+                ok = false;
+                break;
+            }
+        }
+        if (!ok) {
+            continue;
+        }
 
-            if (j > 0) {
+        if (!fuse->raw) {
+            // common element-wise chain constraints: each node reads the previous one,
+            // and all nodes have the same shape
+            for (int j = 1; j < fuse->n_ops && ok; j++) {
                 if (nodes[j]->src[0] != nodes[j - 1] && nodes[j]->src[1] != nodes[j - 1]) {
                     ok = false;
                     break;
@@ -217,23 +281,23 @@ const struct ggml_metal_fuse * ggml_metal_fuse_next(
                     break;
                 }
             }
-        }
-        if (!ok) {
-            continue;
+            if (!ok) {
+                continue;
+            }
+
+            // ggml_can_fuse_subgraph_ext expects outputs as absolute graph node indices
+            int outputs_buf[GGML_MAX_SRC];
+            outputs_buf[0] = node_idxs[idx + fuse->n_ops - 1];
+            const int * outputs = ggml_metal_fuse_outputs(fuse, outputs_buf);
+            const int n_outputs = fuse->n_outputs ? fuse->n_outputs : 1;
+
+            // structural subgraph checks (op sequence, elidable uses, view containment)
+            if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, fuse->n_ops, fuse->ops, outputs, n_outputs)) {
+                continue;
+            }
         }
 
-        // ggml_can_fuse_subgraph_ext expects outputs as absolute graph node indices
-        int outputs_buf[GGML_MAX_SRC];
-        outputs_buf[0] = node_idxs[idx + fuse->n_ops - 1];
-        const int * outputs = ggml_metal_fuse_outputs(fuse, outputs_buf);
-        const int n_outputs = fuse->n_outputs ? fuse->n_outputs : 1;
-
-        // structural subgraph checks (op sequence, elidable uses, view containment)
-        if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, fuse->n_ops, fuse->ops, outputs, n_outputs)) {
-            continue;
-        }
-
-        // pattern-specific checks
+        // pattern-specific checks (the sole validator for raw patterns)
         if (fuse->check && !fuse->check(nodes, fuse, mode)) {
             continue;
         }
@@ -248,28 +312,45 @@ const struct ggml_metal_fuse * ggml_metal_fuse_next(
 }
 
 // optimize phase: maximum number of nodes starting at idx (a raw sequential graph index) that
-// could be fused, chaining patterns back-to-back
+// could be fused, chaining patterns back-to-back. matching runs on the same filtered (view
+// transparent) node sequence that the compute phase uses, so the returned count is the raw index
+// span from idx to the last matched node (intermediate views are packed along).
 int ggml_metal_fuse_max(const struct ggml_cgraph * gf, int idx) {
+    // an empty/view node cannot start a pattern - pack it alone
+    if (ggml_op_is_empty(gf->nodes[idx]->op) || ggml_is_empty(gf->nodes[idx])) {
+        return 1;
+    }
+
+    // collect the non-empty node indices starting at idx
     int idxs[GGML_METAL_FUSE_MAX];
+    int n_idxs = 0;
+    for (int i = idx; i < gf->n_nodes && n_idxs < GGML_METAL_FUSE_MAX; i++) {
+        if (!ggml_op_is_empty(gf->nodes[i]->op) && !ggml_is_empty(gf->nodes[i])) {
+            idxs[n_idxs++] = i;
+        }
+    }
+    if (n_idxs == 0) {
+        return 1;
+    }
 
     int total = 0;
-    int i = idx;
+    int i_f = 0;
 
-    while (i < gf->n_nodes && total < GGML_METAL_FUSE_MAX) {
-        const int n_idxs = std::min(GGML_METAL_FUSE_MAX, (int) gf->n_nodes - i);
-        for (int j = 0; j < n_idxs; j++) {
-            idxs[j] = i + j;
-        }
-
+    while (i_f < n_idxs && total < GGML_METAL_FUSE_MAX) {
         int len = 1;
-        const struct ggml_metal_fuse * fuse = ggml_metal_fuse_next(gf, idxs, n_idxs, 0, GGML_METAL_FUSE_STRUCTURAL, &len);
+        const struct ggml_metal_fuse * fuse = ggml_metal_fuse_next(gf, idxs, n_idxs, i_f, GGML_METAL_FUSE_STRUCTURAL, &len);
         if (!fuse || total + len > GGML_METAL_FUSE_MAX) {
             break;
         }
 
         total += len;
-        i += len;
+        i_f += len;
     }
 
-    return std::max(total, 1);
+    if (i_f == 0) {
+        return 1;
+    }
+
+    // map the matched non-empty nodes back to the raw index span (views are included)
+    return std::min(GGML_METAL_FUSE_MAX, idxs[i_f - 1] - idx + 1);
 }
