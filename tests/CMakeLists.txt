@@ -299,6 +299,38 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
 endif()
 llama_build_and_test(test-backend-ops.cpp)
 
+if (WIN32)
+    # Put the plugin and its satellite DLL outside the test exe directory.
+    set(TEST_BACKEND_DL_PACK "${CMAKE_BINARY_DIR}/test-backend-dl-pack")
+
+    add_library(test-backend-dl-dep SHARED test-backend-dl.cpp)
+    target_compile_definitions(test-backend-dl-dep PRIVATE GGML_TEST_BACKEND_DL_DEP)
+
+    add_library(test-backend-dl-plugin MODULE test-backend-dl.cpp)
+    target_compile_definitions(test-backend-dl-plugin PRIVATE
+        GGML_TEST_BACKEND_DL_PLUGIN
+        GGML_BACKEND_DL
+        GGML_BACKEND_BUILD
+        GGML_BACKEND_SHARED)
+    target_include_directories(test-backend-dl-plugin PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/include)
+    target_link_libraries(test-backend-dl-plugin PRIVATE test-backend-dl-dep)
+
+    foreach (tgt test-backend-dl-dep test-backend-dl-plugin)
+        set_target_properties(${tgt} PROPERTIES PREFIX "")
+        foreach (prop RUNTIME_OUTPUT_DIRECTORY LIBRARY_OUTPUT_DIRECTORY ARCHIVE_OUTPUT_DIRECTORY)
+            set_target_properties(${tgt} PROPERTIES ${prop} "${TEST_BACKEND_DL_PACK}")
+            foreach (cfg DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+                set_target_properties(${tgt} PROPERTIES ${prop}_${cfg} "${TEST_BACKEND_DL_PACK}")
+            endforeach()
+        endforeach()
+    endforeach()
+
+    llama_build_and_test(test-backend-dl.cpp ARGS "$<TARGET_FILE:test-backend-dl-plugin>")
+    add_dependencies(test-backend-dl test-backend-dl-plugin)
+endif()
+
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
