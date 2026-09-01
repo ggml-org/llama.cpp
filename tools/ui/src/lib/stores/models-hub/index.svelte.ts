@@ -86,7 +86,7 @@ class ModelsHubStore {
 
 			this.catalog = catalog;
 
-			const builds = this.catalogBuilds(catalog);
+			const builds = this.catalogBuilds();
 			const fetched = await Promise.all(
 				builds.map(async (build) => {
 					const [info, tree] = await Promise.all([
@@ -210,8 +210,8 @@ class ModelsHubStore {
 	 * families published only by other orgs (mistralai, unsloth) still show up.
 	 * Returns an empty array when the catalog is empty.
 	 */
-	private catalogBuilds(catalog: HfCatalogEntry[]): HfCatalogBuild[] {
-		return [...catalog]
+	private catalogBuilds(): HfCatalogBuild[] {
+		return [...this.catalog]
 			.sort((a, b) => b.released.localeCompare(a.released))
 			.flatMap((entry) =>
 				entry.sizes.flatMap((size) => {
