@@ -38,38 +38,40 @@ enum ggml_metal_fuse_id {
 };
 
 struct ggml_metal_fuse {
-    enum ggml_metal_fuse_id id;
-    const enum ggml_op *    ops;      // op sequence (fixed length)
-    int                     n_ops;    // number of ops
-    const int *             outputs;  // output node indices (absolute graph indices; nullptr => the last node)
-    int                     n_outputs;// number of outputs (0 => default last node)
+    ggml_metal_fuse_id id;
+    const ggml_op *    ops;       // op sequence (fixed length)
+    int                n_ops;     // number of ops
+    const int *        outputs;   // output node indices (absolute graph indices; nullptr => the last node)
+    int                n_outputs; // number of outputs (0 => default last node)
+
     // if unsafe: the generic chain/shape + ggml_can_fuse_subgraph checks are skipped and the
     // check callback below is the sole validator (used for patterns that are not elision chains,
     // e.g. the gdn + cache-cpy write-through fusion)
     bool unsafe;
+
     // extra backend constraints on top of ggml_can_fuse_subgraph
     // nodes[j] is the j-th node of the pattern
-    bool (*check)(const struct ggml_tensor * const * nodes,
-                  const struct ggml_metal_fuse *    fuse,
-                  enum ggml_metal_fuse_mode         mode);
+    bool (*check)(const ggml_tensor * const   * nodes,
+                  const ggml_metal_fuse       * fuse,
+                        ggml_metal_fuse_mode    mode);
 };
 
 // the single table of all fusions supported by the Metal backend
-const struct ggml_metal_fuse * ggml_metal_fuse_all(int * n);
+const ggml_metal_fuse * ggml_metal_fuse_all(int * n);
 
 // compute phase: longest fusion starting at idx (a position in node_idxs) that matches in `mode`.
 // returns the matching pattern (nullptr if no fusion) and sets *n_out to the number of nodes consumed.
-const struct ggml_metal_fuse * ggml_metal_fuse_next(
-        const struct ggml_cgraph * gf,
+const ggml_metal_fuse * ggml_metal_fuse_next(
+        const ggml_cgraph * gf,
         const int * node_idxs,
         int n_idxs,
         int idx,
-        enum ggml_metal_fuse_mode mode,
+        ggml_metal_fuse_mode mode,
         int * n_out);
 
 // optimize phase: maximum number of nodes starting at idx (a raw sequential graph index) that
 // could be fused, chaining patterns back-to-back. returns at least 1.
-int ggml_metal_fuse_max(const struct ggml_cgraph * gf, int idx);
+int ggml_metal_fuse_max(const ggml_cgraph * gf, int idx);
 
 #ifdef __cplusplus
 }
