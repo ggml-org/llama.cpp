@@ -24,6 +24,9 @@ const char * mem_api_int2str(int mem_api) {
 }
 
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+/*
+* Depend on to call zesInit(0) before any other Level Zero API calls, otherwise the Level Zero API calls may fail.
+*/
 bool query_free_memory_by_ze(sycl::device dev, size_t & free_bytes, size_t & total_bytes) {
     free_bytes  = 0;
     total_bytes = 0;
@@ -37,41 +40,28 @@ bool query_free_memory_by_ze(sycl::device dev, size_t & free_bytes, size_t & tot
 #endif
 
     try {
-        ze_result_t zes_init = zesInit(0);
-        if (zes_init != ZE_RESULT_SUCCESS) {
-            std::cerr << "Warning: zesInit failed with code " << static_cast<int>(zes_init)
-                      << ". Sysman free-memory query may be unavailable.\n";
-        }
 
         if (dev.get_platform().get_backend() != kL0Backend) {
-            GGML_SYCL_DEBUG("Device backend is not Level Zero; falling back to SYCL memory query.\n");
-            total_bytes = dev.get_info<sycl::info::device::global_mem_size>();
-            free_bytes  = total_bytes;
+            GGML_SYCL_DEBUG("Device backend is not Level Zero.\n");
             return false;
         }
 
         ze_device_handle_t ze_dev = sycl::get_native<kL0Backend>(dev);
         if (ze_dev == nullptr) {
-            GGML_SYCL_DEBUG("Level Zero device handle is null; falling back to SYCL memory query.\n");
-            total_bytes = dev.get_info<sycl::info::device::global_mem_size>();
-            free_bytes  = total_bytes;
+            GGML_SYCL_DEBUG("Level Zero device handle is null.\n");
             return false;
         }
 
         ze_result_t r = zesDeviceEnumMemoryModules(ze_dev, &module_count, nullptr);
         if (r != ZE_RESULT_SUCCESS || module_count == 0) {
-            GGML_SYCL_DEBUG("Failed to enumerate Level Zero memory modules. Falling back to SYCL memory query.\n");
-            total_bytes = dev.get_info<sycl::info::device::global_mem_size>();
-            free_bytes  = total_bytes;
+            GGML_SYCL_DEBUG("Failed to enumerate Level Zero memory modules.\n");
             return false;
         }
 
         std::vector<zes_mem_handle_t> modules(module_count);
         r = zesDeviceEnumMemoryModules(ze_dev, &module_count, modules.data());
         if (r != ZE_RESULT_SUCCESS || module_count == 0) {
-            GGML_SYCL_DEBUG("Failed to enumerate Level Zero memory modules. Falling back to SYCL memory query.\n");
-            total_bytes = dev.get_info<sycl::info::device::global_mem_size>();
-            free_bytes  = total_bytes;
+            GGML_SYCL_DEBUG("Failed to enumerate Level Zero memory modules.\n");
             return false;
         }
 
@@ -90,16 +80,12 @@ bool query_free_memory_by_ze(sycl::device dev, size_t & free_bytes, size_t & tot
         }
 
         if (total_bytes == 0) {
-            GGML_SYCL_DEBUG("Level Zero memory query returned zero total bytes. Falling back to SYCL memory query.\n");
-            total_bytes = dev.get_info<sycl::info::device::global_mem_size>();
-            free_bytes  = total_bytes;
+            GGML_SYCL_DEBUG("Level Zero memory query returned zero total bytes.\n");
             return false;
         }
         return true;
     } catch (const sycl::exception & e) {
         GGML_SYCL_DEBUG("Level Zero memory query failed: %s\n", e.what());
-        total_bytes = dev.get_info<sycl::info::device::global_mem_size>();
-        free_bytes  = total_bytes;
         return false;
     }
 }
@@ -112,23 +98,20 @@ bool get_memory_size_by_sycl_api(sycl::device dev, size_t & free_bytes, size_t &
 #if (defined(__SYCL_COMPILER_VERSION) && __SYCL_COMPILER_VERSION >= 20221105)
     if (dev.has(sycl::aspect::ext_intel_free_memory)) {
         try {
-            GGML_SYCL_DEBUG("Querying free memory using SYCL aspect::ext_intel_free_memory.");
+            GGML_SYCL_DEBUG("Querying free memory using SYCL aspect::ext_intel_free_memory.\n");
             free_bytes = dev.get_info<sycl::ext::intel::info::device::free_memory>();
-            return true;
         } catch (const sycl::exception &) {
             GGML_SYCL_DEBUG(
-                "Failed to query free memory using SYCL aspect::ext_intel_free_memory. Using total memory as free "
-                "memory.");
-            free_bytes = total_bytes;
+                "Failed to query free memory using SYCL aspect::ext_intel_free_memory.\n");
             return false;
         }
     } else {
         GGML_SYCL_DEBUG(
-            "Device does not support SYCL aspect::ext_intel_free_memory. Using total memory as free memory.");
+            "Device does not support SYCL aspect::ext_intel_free_memory. Using total memory as free memory.\n");
         free_bytes = total_bytes;
     }
 #else
-    GGML_SYCL_DEBUG("SYCL Compiler version is older than 20221105. Using total memory as free memory.");
+    GGML_SYCL_DEBUG("SYCL Compiler version is older than 20221105. Using total memory as free memory.\n");
     free_bytes = total_bytes;
 #endif
     return true;

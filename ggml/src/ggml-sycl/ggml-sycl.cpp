@@ -110,7 +110,6 @@ int g_ggml_sycl_enable_host_pinned_mem = 1;
 int g_ggml_sycl_host_pinned_mem_2g = 0;
 int g_ggml_sycl_get_mem_api = MEMORY_API_TYPE_LEVEL_ZERO;
 
-
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
 
@@ -311,13 +310,26 @@ static const char* dev2dev_int2str(int dev2dev) {
 * It's the first internal function to be called by them in SYCL backend.
 * This function is used to do initialize work for the SYCL backend and set the global variables.
 */
+
+static ze_result_t init_zes() {
+    ze_result_t res = zesInit(0);
+        if (res != ZE_RESULT_SUCCESS) {
+            std::cerr << "Warning: [" << __func__ << "] zesInit failed with code " << static_cast<int>(res)
+                << ". Sysman free-memory query may be unavailable.\n";
+        }
+    return res;
+}
+
+
+const ze_result_t get_zes_init_res() {
+    static ze_result_t zes_init_res = init_zes();
+    return zes_init_res;
+}
+
 void initialize_sycl_begining() {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
-    ze_result_t zes_init = zesInit(0);
-    if (zes_init != ZE_RESULT_SUCCESS) {
-        std::cerr << "Warning: zesInit failed [ggml_check_sycl] with code " << static_cast<int>(zes_init)
-                            << ". Sysman free-memory query may be unavailable.\n";
-    }
+    //must be called in initialization stage, before any other Level Zero API calls
+    get_zes_init_res();
 #endif
 }
 
@@ -5634,8 +5646,9 @@ catch (sycl::exception const &exc) {
 
 void ggml_backend_sycl_get_device_memory(int device, size_t * free, size_t * total) try {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_get_device_memory\n");
+    printf("zjy 2 g_zes_init=%d, g_ggml_sycl_get_mem_api=%d\n", get_zes_init_res(), g_ggml_sycl_get_mem_api);
     bool res = get_memory_size(dpct::dev_mgr::instance().get_device(device), *free, *total,
-                               (MemoryAPIType) g_ggml_sycl_get_mem_api);
+            get_zes_init_res() == ZE_RESULT_SUCCESS ? (MemoryAPIType) g_ggml_sycl_get_mem_api : MemoryAPIType::MEMORY_API_TYPE_SYCL);
     if (!res) {
         GGML_ABORT("[%s] failed to get device memory size", __func__);
     }
@@ -6061,8 +6074,9 @@ static const char * ggml_backend_sycl_device_get_description(ggml_backend_dev_t 
 
 static void ggml_backend_sycl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *) dev->context;
+    printf("zjy 1 g_zes_init=%d, g_ggml_sycl_get_mem_api=%d\n", get_zes_init_res(), g_ggml_sycl_get_mem_api);
     bool res = get_memory_size(dpct::dev_mgr::instance().get_device(ctx->device), *free, *total,
-                               (MemoryAPIType) g_ggml_sycl_get_mem_api);
+        get_zes_init_res() == ZE_RESULT_SUCCESS ? (MemoryAPIType) g_ggml_sycl_get_mem_api : MemoryAPIType::MEMORY_API_TYPE_SYCL);
     if (!res) {
         GGML_ABORT("[%s] failed to get device memory size", __func__);
     }
