@@ -6342,15 +6342,17 @@ struct test_moe_weighted_reduction : public test_case {
     const int64_t n_tokens;
     const bool unaligned_experts;
     const bool with_expert_scale;
+    const bool interleaved_views_adds;
 
     test_moe_weighted_reduction(
             int64_t n_embd, int64_t n_expert_used, int64_t n_tokens,
-            bool unaligned_experts = false, bool with_expert_scale = false) :
+            bool unaligned_experts = false, bool with_expert_scale = false, bool interleaved_views_adds = false) :
         n_embd(n_embd), n_expert_used(n_expert_used), n_tokens(n_tokens),
-        unaligned_experts(unaligned_experts), with_expert_scale(with_expert_scale) {}
+        unaligned_experts(unaligned_experts), with_expert_scale(with_expert_scale),
+        interleaved_views_adds(interleaved_views_adds) {}
 
     std::string vars() override {
-        return VARS_TO_STR5(n_embd, n_expert_used, n_tokens, unaligned_experts, with_expert_scale);
+        return VARS_TO_STR6(n_embd, n_expert_used, n_tokens, unaligned_experts, with_expert_scale, interleaved_views_adds);
     }
 
     std::string op_desc(ggml_tensor * t) override {
@@ -6390,11 +6392,17 @@ struct test_moe_weighted_reduction : public test_case {
         for (int64_t expert = 0; expert < n_expert_used; ++expert) {
             views[expert] = ggml_view_2d(
                 ctx, weighted, n_embd, n_tokens, weighted->nb[2], expert * weighted->nb[1]);
+            if (!interleaved_views_adds && mode == MODE_TEST) {
+                ggml_build_forward_expand(gf, views[expert]);
+            }
         }
 
         ggml_tensor * out = views[0];
         for (int64_t expert = 1; expert < n_expert_used; ++expert) {
             out = ggml_add(ctx, out, views[expert]);
+            if (!interleaved_views_adds && mode == MODE_TEST) {
+                ggml_build_forward_expand(gf, out);
+            }
         }
         ggml_set_name(out, "moe_weighted_reduction");
         return out;
@@ -10140,11 +10148,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    // Cover the supported boundaries, common k = 8 shapes, a view-backed input, and k = 16 fallback.
+    // Cover the supported boundaries, common k = 8 shapes, interleaved views and adds, and k = 16 fallback.
     test_cases.emplace_back(new test_moe_weighted_reduction(63,  2, 17));
     test_cases.emplace_back(new test_moe_weighted_reduction(2048, 8, 128));
     test_cases.emplace_back(new test_moe_weighted_reduction(2048, 8, 128, false, true));
-    test_cases.emplace_back(new test_moe_weighted_reduction(63,   12, 33, true,  true));
+    test_cases.emplace_back(new test_moe_weighted_reduction(63,   12, 33, true,  true, true));
     test_cases.emplace_back(new test_moe_weighted_reduction(2048, 15, 40, false, true));
     test_cases.emplace_back(new test_moe_weighted_reduction(2048, 16, 32, false, true));
 

@@ -2958,7 +2958,7 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
     return true;
 }
 
-// Returns whether the write (out) nodes overwrite the read nodes in operation.
+// returns whether the write (out) nodes overwrite the read nodes in operation
 static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                                                  const int           node_idx,
                                                  const int           node_count,
@@ -3037,32 +3037,28 @@ struct ggml_cuda_moe_weighted_reduction_match {
 static bool ggml_cuda_match_moe_weighted_reduction(
         const ggml_cgraph * cgraph,
         int node_idx,
-        ggml_cuda_moe_weighted_reduction_match & match,
-        bool check_memory_ranges = true) {
+        ggml_cuda_moe_weighted_reduction_match & match) {
     const ggml_tensor * first = cgraph->nodes[node_idx];
     if (first->op != GGML_OP_MUL || first->type != GGML_TYPE_F32 || !ggml_is_contiguous(first)) {
         return false;
     }
 
-    auto is_weights = [](const ggml_tensor * tensor, const ggml_tensor * full) {
-        return tensor && tensor->type == GGML_TYPE_F32 && ggml_is_contiguous(tensor) &&
-            tensor->ne[0] == 1 && tensor->ne[1] == full->ne[1] &&
-            tensor->ne[2] == full->ne[2] && tensor->ne[3] == full->ne[3];
-    };
-    auto is_experts = [](const ggml_tensor * tensor, const ggml_tensor * full) {
-        return tensor && tensor->type == GGML_TYPE_F32 && ggml_is_contiguous(tensor) &&
-            ggml_are_same_shape(tensor, full);
-    };
+    auto split_mul = [](const ggml_tensor * mul, const ggml_tensor *& full, const ggml_tensor *& broadcast) {
+        auto is_weights = [mul](const ggml_tensor * tensor) {
+            return tensor && tensor->type == GGML_TYPE_F32 && ggml_is_contiguous(tensor) && tensor->ne[0] == 1 &&
+                tensor->ne[1] == mul->ne[1] && tensor->ne[2] == mul->ne[2] && tensor->ne[3] == mul->ne[3];
+        };
+        auto is_experts = [mul](const ggml_tensor * tensor) {
+            return tensor && tensor->type == GGML_TYPE_F32 && ggml_is_contiguous(tensor) &&
+                ggml_are_same_shape(tensor, mul);
+        };
 
-    auto split_mul = [&is_experts, &is_weights](const ggml_tensor * mul,
-                                                const ggml_tensor *& full,
-                                                const ggml_tensor *& broadcast) {
-        if (is_experts(mul->src[0], mul) && is_weights(mul->src[1], mul)) {
+        if (is_experts(mul->src[0]) && is_weights(mul->src[1])) {
             full      = mul->src[0];
             broadcast = mul->src[1];
             return true;
         }
-        if (is_experts(mul->src[1], mul) && is_weights(mul->src[0], mul)) {
+        if (is_experts(mul->src[1]) && is_weights(mul->src[0])) {
             full      = mul->src[1];
             broadcast = mul->src[0];
             return true;
@@ -3100,8 +3096,8 @@ static bool ggml_cuda_match_moe_weighted_reduction(
         return false;
     }
 
-    const int n_expert_used = (int) weighted->ne[1];
-    const int64_t n_tokens = weighted->ne[2] * weighted->ne[3];
+    const int     n_expert_used = (int) weighted->ne[1];
+    const int64_t n_tokens      = weighted->ne[2] * weighted->ne[3];
     if (n_expert_used < 2 || n_expert_used > MOE_WEIGHTED_REDUCTION_MAX_EXPERTS || n_tokens <= 0) {
         return false;
     }
@@ -3162,35 +3158,12 @@ static bool ggml_cuda_match_moe_weighted_reduction(
         return false;
     }
 
-    if (check_memory_ranges &&
-            !ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, node_count, &output_idx, 1)) {
-        return false;
-    }
-
     match.experts      = experts;
     match.expert_scale = expert_scale;
     match.weights      = weights;
     match.dst          = cgraph->nodes[output_idx];
     match.node_count   = node_count;
     return true;
-}
-
-static bool ggml_cuda_use_moe_weighted_reduction() {
-    static const bool enabled = [] {
-        // Enabled by default. Unrecognized graphs use the per-operation path.
-        // Set GGML_CUDA_MOE_WEIGHTED_REDUCTION=0 to disable the fusion.
-        const char * env = getenv("GGML_CUDA_MOE_WEIGHTED_REDUCTION");
-        return env == nullptr || atoi(env) != 0;
-    }();
-    return enabled;
-}
-
-static bool ggml_cuda_fusion_disabled() {
-    static const bool disabled = [] {
-        const char * env = getenv("GGML_CUDA_DISABLE_FUSION");
-        return env != nullptr && atoi(env) != 0;
-    }();
-    return disabled;
 }
 
 
@@ -3448,18 +3421,22 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 // try and fuse nodes and return the number of nodes to skip
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
-    if (ggml_cuda_fusion_disabled()) {
+    static bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
+    if (disable_fusion) {
         return 0;
     }
 
     ggml_tensor * node = cgraph->nodes[i];
 
-    if (ggml_cuda_use_moe_weighted_reduction() && node->op == GGML_OP_MUL) {
+    if (node->op == GGML_OP_MUL) {
         ggml_cuda_moe_weighted_reduction_match match;
         if (ggml_cuda_match_moe_weighted_reduction(cgraph, i, match)) {
-            ggml_cuda_op_moe_weighted_reduction(
-                *cuda_ctx, match.experts, match.expert_scale, match.weights, match.dst);
-            return match.node_count - 1;
+            const int output_idx = i + match.node_count - 1;
+            if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, match.node_count, &output_idx, 1)) {
+                ggml_cuda_op_moe_weighted_reduction(
+                    *cuda_ctx, match.experts, match.expert_scale, match.weights, match.dst);
+                return match.node_count - 1;
+            }
         }
     }
 
@@ -4511,14 +4488,15 @@ static void ggml_backend_cuda_event_wait(ggml_backend_t backend, ggml_backend_ev
 static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph, ggml_backend_graph_optimize_params * params) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
 
-    if (!ggml_cuda_fusion_disabled() && ggml_cuda_use_moe_weighted_reduction()) {
+    static const bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
+    if (!disable_fusion) {
         for (int i = 0; i < cgraph->n_nodes; ++i) {
             if (cgraph->nodes[i]->op != GGML_OP_MUL) {
                 continue;
             }
 
             ggml_cuda_moe_weighted_reduction_match match;
-            if (!ggml_cuda_match_moe_weighted_reduction(cgraph, i, match, false)) {
+            if (!ggml_cuda_match_moe_weighted_reduction(cgraph, i, match)) {
                 continue;
             }
 
