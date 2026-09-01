@@ -417,14 +417,12 @@ class Glm5NextModel(TextModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.n_main_layers = self.hparams["num_hidden_layers"]
         self.n_nextn_layers = self.hparams.get("num_nextn_predict_layers", 0)
         self.skip_mtp = self.no_mtp or self.n_nextn_layers == 0
 
-        self.block_count = self.n_main_layers
         if not self.skip_mtp:
             self.block_count += self.n_nextn_layers
-        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
         self.hparams.pop("head_dim", None)
 
@@ -459,17 +457,15 @@ class Glm5NextModel(TextModel):
 
         return name, gen
 
-    def is_kda_layer(self, il: int) -> bool:
-        if il >= self.n_main_layers:
-            return False
-        return self.hparams["layer_types"][il] == "linear_attention"
-
     def set_gguf_parameters(self):
         hp = self.hparams
-        n_layer = self.n_main_layers
 
-        # the loader reads this array before it knows about NextN, so cover all
-        hp["num_key_value_heads"] = [0 if self.is_kda_layer(il) else 1 for il in range(self.block_count)]
+        layer_types = hp["layer_types"]
+        n_kv_heads = [0 if t == "linear_attention" else 1 for t in layer_types]
+        assert len(n_kv_heads) == hp["num_hidden_layers"]
+        # pad to block_count, since the generic loader validates this array's length against the full count before NextN is known
+        # the NextN entry's value itself is never read
+        hp["num_key_value_heads"] = n_kv_heads + [1] * (self.block_count - len(n_kv_heads))
 
         super().set_gguf_parameters()
         self.gguf_writer.add_vocab_size(hp["vocab_size"])
@@ -506,7 +502,7 @@ class Glm5NextModel(TextModel):
         self.gguf_writer.add_indexer_kpool_select_tail(hp.get("index_kpool_always_select_tail", True))
         self.gguf_writer.add_indexer_index_share_mtp(hp.get("index_share_for_mtp_iteration", False))
         if (indexer_types := hp.get("indexer_types")) is not None:
-            self.gguf_writer.add_indexer_types([t == "full" for t in indexer_types[:n_layer]])
+            self.gguf_writer.add_indexer_types([t == "full" for t in indexer_types])
 
         # mHC
         assert hp.get("mhc", True)
