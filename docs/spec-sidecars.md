@@ -127,7 +127,7 @@ normal HIP backend.
 ## Run MTP
 
 The default bundle layout needs only the master gate; provider paths are
-optional overrides. For tensor-parallel Qwen3.8 inference where target sampling remains on the CPU, `GGML_TP_SHARDED_OUTPUT=1` enables vocabulary-axis primary output and removes the primary full-logit output AllReduce. The sidecar's compact draft head and provider-local device top-k remain active; server-wide or request-level target backend sampling falls back to CPU in this mode. Leave the variable unset or use `auto` when full logits are required for backend sampling.
+optional overrides. For tensor-parallel Qwen3.8 inference where target sampling remains on the CPU, `GGML_TP_SHARDED_OUTPUT=1` enables vocabulary-axis primary output and removes the primary full-logit output AllReduce. The sidecar's compact draft head and provider-local device top-k remain active. If `--backend-sampling` is enabled at model load, the loader safely retains hidden-axis/full-logit output instead so target backend sampling works; vocabulary-axis sharding and target backend sampling are not combined yet. A request-level backend-sampling override cannot change a model already loaded in vocabulary-sharded mode and falls back to CPU there. Leave the variable unset or use `auto` when full logits are required for backend sampling.
 
 ```sh
 export SPEC_SIDECAR=1

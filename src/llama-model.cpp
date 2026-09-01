@@ -2064,7 +2064,7 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
         // CPU/sidecar-friendly vocabulary-axis primary head. Automatic mode
         // retains full logits for backend sampling; other supported output
         // architectures retain their existing hidden-axis policy.
-        const bool vocab_sharded_output = requested &&
+        const bool vocab_sharded_output = requested && !params.no_tp_output_vocab_sharding &&
             (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE);
         const bool use_sharded_output = llama_model_rdna2_auto_enabled() &&
             (requested || (automatic && auto_qwen27));
@@ -2118,7 +2118,7 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
 bool llama_model::is_tensor_parallel_output_head_vocab_sharded(const ggml_tensor * tensor) const {
     const char * enabled = getenv("GGML_TP_SHARDED_OUTPUT");
     const bool supported_qwen = arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE;
-    return supported_qwen && tensor == output &&
+    return supported_qwen && !params.no_tp_output_vocab_sharding && tensor == output &&
         enabled != nullptr && strcmp(enabled, "1") == 0 && is_tensor_parallel_output_head(tensor);
 }
 
@@ -2963,6 +2963,7 @@ llama_model_params llama_model_default_params() {
         /*.no_alloc                    =*/ false,
         /*.load_mtp                    =*/ false,
         /*.no_tp_output_head_sharding =*/ false,
+        /*.no_tp_output_vocab_sharding =*/ false,
     };
 
     return result;

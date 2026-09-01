@@ -43,7 +43,7 @@ All misses use RCCL.
 Only graph transformations remain model-specific:
 
 - Deferred catch-up defaults on for `general.architecture=qwen35`, width 5120, one sequence/layer, non-shared/non-chained MTP, `n_max=4`, width five, and logits on every row.
-- TP output sharding defaults on for validated Qwen35 27B heads after the existing split/head checks. Explicit `GGML_TP_SHARDED_OUTPUT=1` selects vocabulary-axis primary output and removes the primary-head output AllReduce for CPU-sampled workloads; unset/`auto` retains hidden-axis/full-logit sharding for backend sampling.
+- TP output sharding defaults on for validated Qwen35 27B heads after the existing split/head checks. Explicit `GGML_TP_SHARDED_OUTPUT=1` selects vocabulary-axis primary output and removes the primary-head output AllReduce for CPU-sampled workloads. If server-wide `--backend-sampling` is enabled at model load, the primary head instead retains hidden-axis/full-logit sharding so backend sampling remains usable; unset/`auto` retains the normal hidden-axis/full-logit policy.
 
 ## Overrides
 
@@ -73,6 +73,6 @@ GGML_MTP_DEFER_CATCHUP=0|auto|1
 GGML_TP_SHARDED_OUTPUT=0|auto|1
 ```
 
-`GGML_TP_SHARDED_OUTPUT=1` is an explicit CPU-target-sampling mode for the primary Qwen35/Qwen35MoE output head: it selects vocabulary-axis output, suppresses automatic target backend sampling, forces server-wide/request-level target backend requests to CPU fallback, and disables native-MTP backend draft sampling when the draft reuses that output. Sidecar-local draft sampling remains active. Leave the variable unset or use `auto` when full logits must be present on every device.
+`GGML_TP_SHARDED_OUTPUT=1` is an explicit CPU-target-sampling mode for the primary Qwen35/Qwen35MoE output head: without server-wide backend sampling it selects vocabulary-axis output, suppresses automatic target backend sampling, and keeps request-level target backend requests on the CPU. If `--backend-sampling` is enabled at model load, the loader selects hidden-axis/full-logit output instead, allowing target and native-MTP backend sampling; this compatibility path does not combine backend sampling with vocabulary-axis shards. Sidecar-local draft sampling remains active. Leave the variable unset or use `auto` when full logits must be present on every device.
 
 A user-provided `NCCL_TUNER_PLUGIN`, `NCCL_P2P_LEVEL`, `NCCL_ALGO`, `NCCL_PROTO`, channel count, or `NCCL_NTHREADS` is never overwritten. `GGML_CUDA_ALLREDUCE` also retains its existing explicit override; Linux already defaults to NCCL/RCCL. NCCL P2P defaults enabled, and NCCL builds already establish VMM peer mappings, so `GGML_CUDA_P2P=1` and `NCCL_P2P_DISABLE=0` are not required.

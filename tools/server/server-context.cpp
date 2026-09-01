@@ -2222,7 +2222,8 @@ private:
 
             // TODO: getting pre sampling logits is not yet supported with backend sampling
             use_backend_sampling &= !need_pre_sample_logits;
-            if (use_backend_sampling && server_vocab_sharded_output_enabled()) {
+            if (use_backend_sampling && server_vocab_sharded_output_enabled() &&
+                    !params_base.sampling.backend_sampling) {
                 SLT_WRN(slot, "%s", "vocabulary-sharded target output is incompatible with backend sampling; using CPU fallback\n");
                 use_backend_sampling = false;
                 task.params.sampling.backend_sampling = false;
