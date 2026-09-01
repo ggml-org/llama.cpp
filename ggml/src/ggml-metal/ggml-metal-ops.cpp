@@ -34,22 +34,20 @@ struct ggml_metal_op {
         ggml_cgraph * gf,
         int  idx_start,
         int  idx_end,
-        bool use_fusion,
         bool use_concurrency,
         bool use_capture,
         int  debug_graph,
-        int  debug_fusion) {
+        ggml_metal_fusion * fusion) {
         this->dev             = dev;
         this->lib             = ggml_metal_device_get_library(dev);
         this->enc             = ggml_metal_encoder_init(cmd_buf, use_concurrency);
         this->mem_ranges      = ggml_mem_ranges_init(debug_graph);
         this->idx_start       = idx_start;
         this->idx_end         = idx_end;
-        this->use_fusion      = use_fusion;
         this->use_concurrency = use_concurrency;
         this->use_capture     = use_capture;
         this->debug_graph     = debug_graph;
-        this->debug_fusion    = debug_fusion;
+        this->fusion          = fusion;
         this->gf              = gf;
 
         idxs.reserve(gf->n_nodes);
@@ -82,10 +80,30 @@ struct ggml_metal_op {
     // consult the fusion table for the longest pattern starting at i0
     // returns the matching pattern (nullptr if no fusion) and sets *n_out to the number of nodes
     const ggml_metal_fuse * can_fuse(int i0, enum ggml_metal_fuse_mode mode, int * n_out) const {
-        assert(use_fusion);
+        assert(use_fusion());
         assert(i0 >= 0 && i0 < n_nodes());
 
         return ggml_metal_fuse_next(gf, idxs.data(), (int) idxs.size(), i0, mode, n_out);
+    }
+
+    // whether to attempt fusion; the toggle lives in the shared fusion debugging context owned
+    // by the device (initialized from GGML_METAL_FUSION_DISABLE, overridable by the test)
+    bool use_fusion() const {
+        return fusion->enabled;
+    }
+
+    // record that a fusion fired, indexed by the matching table entry
+    void count_fuse(const ggml_metal_fuse * fuse) const {
+        if (!fusion->stats || fuse == nullptr) {
+            return;
+        }
+
+        int n = 0;
+        const ggml_metal_fuse * all = ggml_metal_fuse_all(&n);
+        const int idx = (int)(fuse - all);
+        if (idx >= 0 && idx < n) {
+            fusion->counts[idx]++;
+        }
     }
 
     ggml_metal_device_t  dev;
@@ -93,12 +111,13 @@ struct ggml_metal_op {
     ggml_metal_encoder_t enc;
     ggml_mem_ranges_t    mem_ranges;
 
-    bool use_fusion;
     bool use_concurrency;
     bool use_capture;
 
     int debug_graph;
-    int debug_fusion;
+
+    // shared fusion debugging context (NULL unless fusion debugging is enabled)
+    struct ggml_metal_fusion * fusion;
 
 private:
     ggml_cgraph * gf;
@@ -116,22 +135,20 @@ ggml_metal_op_t ggml_metal_op_init(
         ggml_cgraph * gf,
         int idx_start,
         int idx_end,
-        bool use_fusion,
         bool use_concurrency,
         bool use_capture,
         int debug_graph,
-        int debug_fusion) {
+        struct ggml_metal_fusion * fusion) {
     ggml_metal_op_t res = new ggml_metal_op(
         dev,
         cmd_buf,
         gf,
         idx_start,
         idx_end,
-        use_fusion,
         use_concurrency,
         use_capture,
         debug_graph,
-        debug_fusion);
+        fusion);
 
     return res;
 }
@@ -1867,8 +1884,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
-    const bool use_fusion = ctx->use_fusion;
-    const int  debug_fusion = ctx->debug_fusion;
+    const bool use_fusion = ctx->use_fusion();
+    const int  debug_fusion = ctx->fusion->debug;
 
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
@@ -1897,6 +1914,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
             bid_out = ggml_metal_get_buffer_id(dst_cache);
             nb_out  = dst_cache->nb[2]/sizeof(float);
             n_fuse = 2;
+
+            ctx->count_fuse(fuse);
 
             if (debug_fusion > 1) {
                 GGML_LOG_DEBUG("%s: fuse: GATED_DELTA_NET + CPY\n", __func__);
@@ -3748,13 +3767,14 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
     int n_fuse = 1;
     const ggml_metal_fuse * fuse = nullptr;
 
-    if (ctx->use_fusion) {
+    if (ctx->use_fusion()) {
         int n = 1;
         fuse = ctx->can_fuse(idx, GGML_METAL_FUSE_FULL, &n);
         n_fuse = n;
 
         // snake activation autofuse: mul -> sin -> sqr -> mul -> add
         if (fuse && fuse->id == GGML_METAL_FUSE_SNAKE) {
+            ctx->count_fuse(fuse);
             return ggml_metal_op_snake_fused(ctx, idx);
         }
     }
@@ -3764,9 +3784,9 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
-    const bool use_fusion = ctx->use_fusion;
+    const bool use_fusion = ctx->use_fusion();
 
-    const int debug_fusion = ctx->debug_fusion;
+    const int debug_fusion = ctx->fusion->debug;
 
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
@@ -3820,6 +3840,8 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
         for (int i = 1; i < n_fuse; i++) {
             args.o1[i] = ggml_metal_get_buffer_id(ctx->node(idx + i)->src[1]).offs;
         }
+
+        ctx->count_fuse(fuse);
 
         if (debug_fusion > 1) {
             GGML_LOG_DEBUG("%s: fuse: ADD x %d\n", __func__, n_fuse);
@@ -4029,9 +4051,9 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
-    const bool use_fusion = ctx->use_fusion;
+    const bool use_fusion = ctx->use_fusion();
 
-    const int debug_fusion = ctx->debug_fusion;
+    const int debug_fusion = ctx->fusion->debug;
 
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
@@ -4072,6 +4094,8 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
 
         if (fuse && (fuse->id == GGML_METAL_FUSE_NORM_MUL || fuse->id == GGML_METAL_FUSE_NORM_MUL_ADD)) {
             n_fuse = n;
+
+            ctx->count_fuse(fuse);
 
             for (int i = 1; i < n_fuse; i++) {
                 const ggml_tensor * fn = ctx->node(idx + i);

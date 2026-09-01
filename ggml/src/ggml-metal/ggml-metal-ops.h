@@ -8,17 +8,18 @@ extern "C" {
 
 typedef struct ggml_metal_op * ggml_metal_op_t;
 
+struct ggml_metal_fusion; // forward decl (ggml-metal-device.h)
+
 ggml_metal_op_t ggml_metal_op_init(
         ggml_metal_device_t dev,
         ggml_metal_cmd_buf_t cmd_buf,
         struct ggml_cgraph * gf,
         int  idx_start,
         int  idx_end,
-        bool use_fusion,
         bool use_concurrency,
         bool use_capture,
         int  debug_graph,
-        int  debug_fusion);
+        struct ggml_metal_fusion * fusion);
 
 void ggml_metal_op_free(ggml_metal_op_t ctx);
 

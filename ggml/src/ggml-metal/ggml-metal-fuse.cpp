@@ -4,6 +4,7 @@
 #include "ggml-metal-device.h"
 
 #include <algorithm>
+#include <cstring>
 
 // ---- helpers -------------------------------------------------------------
 
@@ -234,6 +235,38 @@ const ggml_metal_fuse * ggml_metal_fuse_all(int * n) {
     *n = (int) sizeof(ggml_metal_fuses) / sizeof(ggml_metal_fuses[0]);
 
     return ggml_metal_fuses;
+}
+
+const char * ggml_metal_fuse_label(const ggml_metal_fuse * fuse) {
+    const int n_fusions = (int) sizeof(ggml_metal_fuses) / sizeof(ggml_metal_fuses[0]);
+
+    const int idx = (int)(fuse - ggml_metal_fuses);
+    GGML_ASSERT(idx >= 0 && idx < n_fusions);
+
+    // labels are built once and cached (the table is static, so the pointers stay valid)
+    static char labels[sizeof(ggml_metal_fuses) / sizeof(ggml_metal_fuses[0])][GGML_METAL_FUSE_LABEL_MAX];
+    static bool built = false;
+
+    if (!built) {
+        for (int i = 0; i < n_fusions; i++) {
+            char * buf = labels[i];
+            int len = 0;
+            for (int j = 0; j < ggml_metal_fuses[i].n_ops; j++) {
+                if (j > 0) {
+                    buf[len++] = '+';
+                }
+                const char * name = ggml_op_name(ggml_metal_fuses[i].ops[j]);
+                const int name_len = (int) strlen(name);
+                GGML_ASSERT(len + name_len < GGML_METAL_FUSE_LABEL_MAX);
+                memcpy(buf + len, name, name_len);
+                len += name_len;
+            }
+            buf[len] = '\0';
+        }
+        built = true;
+    }
+
+    return labels[idx];
 }
 
 // ---- queries -------------------------------------------------------------
