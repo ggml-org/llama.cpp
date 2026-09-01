@@ -384,6 +384,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_hard_limits(-1, INT32_MAX)
         ->set_desc("Number of tokens in the reasoning budget (-1 = disabled)"));
 
+    add((new field_num("reasoning_budget_warn_offset", params.sampling.reasoning_budget_warn_offset))
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("Number of tokens before the cutoff to inject the reasoning budget message"));
+
     add((new field_str("reasoning_budget_start_tag"))
         ->set_desc("Token string marking the start of the reasoning budget section")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
