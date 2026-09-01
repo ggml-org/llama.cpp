@@ -48,4 +48,4 @@ export function labelFor(path: string): string {
 // to its widest option, so an exactly-as-wide value would otherwise let the
 // chevron overlap the text (draft selects are all same-width quants).
 export const SELECT_CLASS =
-	'h-6 min-w-18 max-w-40 shrink-0 cursor-pointer rounded border border-primary/15 bg-primary/[0.07] py-0 pr-3 pl-2 font-mono text-xs text-foreground outline-none transition-colors hover:bg-primary/15 focus-visible:border-primary/40 focus-visible:ring-0';
+	'h-6 min-w-22 max-w-36 shrink-0 cursor-pointer rounded border border-primary/15 bg-primary/[0.07] py-0 pr-3 pl-2 font-mono text-xs text-foreground outline-none transition-colors hover:bg-primary/15 focus-visible:border-primary/40 focus-visible:ring-0';

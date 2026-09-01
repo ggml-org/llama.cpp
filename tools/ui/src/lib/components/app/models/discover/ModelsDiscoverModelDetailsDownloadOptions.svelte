@@ -131,8 +131,7 @@
 	let draftOptions = $derived(
 		draftFiles.map((f) => ({
 			...optionFor(f),
-			badge: HuggingFaceService.extractQuantMeta(f.path)?.sidecar ?? null,
-			shared: HuggingFaceService.extractQuantMeta(f.path)?.shared ?? false
+			badge: HuggingFaceService.extractQuantMeta(f.path)?.sidecar ?? null
 		}))
 	);
 
