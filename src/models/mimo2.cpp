@@ -16,9 +16,6 @@ void llama_model_mimo2::load_arch_hparams(llama_model_loader & ml) {
         hparams.f_attn_value_scale = value_scale;
     }
 
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_impl");
-
     switch (hparams.n_layer()) {
         case 48: type = LLM_TYPE_310B_A15B; break;
         default: type = LLM_TYPE_UNKNOWN;
