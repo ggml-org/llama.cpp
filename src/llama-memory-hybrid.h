@@ -42,7 +42,8 @@ public:
     const layer_filter_cb & filter_recr = nullptr,
                             /* optional indexer key cache; absent unless filter_idx */
     const layer_filter_cb & filter_idx  = nullptr,
-                ggml_type   type_idx    = GGML_TYPE_F16);
+                ggml_type   type_idx    = GGML_TYPE_F16,
+                     bool   attn_v_mirror = false);
 
     ~llama_memory_hybrid() = default;
 

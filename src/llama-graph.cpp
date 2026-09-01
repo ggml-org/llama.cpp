@@ -505,6 +505,10 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
 void llm_graph_input_attn_k::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_k_idxs(self_k_idxs, ubatch);
 
+    if (self_v_idxs) {
+        mctx->set_input_v_idxs(self_v_idxs, ubatch);   // Patch B mirror
+    }
+
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
 }
 
@@ -518,6 +522,9 @@ bool llm_graph_input_attn_k::can_reuse_impl(const llm_graph_params & params) {
     bool res = true;
 
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
+
+    // Patch B: expanded mirror idxs scale with n_tokens
+    res &= !self_v_idxs || (params.ubatch.n_tokens > 0 && self_v_idxs->ne[0] % params.ubatch.n_tokens == 0);
 
     res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
 
@@ -1139,6 +1146,10 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
 // Refactoring is required in the future.
 void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
     mctx->get_attn()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
+
+    if (inp_attn->self_v_idxs) {
+        mctx->get_attn()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);   // Patch B mirror
+    }
 
     mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
 
@@ -2937,6 +2948,10 @@ static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
 
         inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
 
+        if (mctx_cur->get_has_v_mirror()) {
+            inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);   // Patch B
+        }
+
         inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
         inp->self_kq_mask_cnv = inp->self_kq_mask;
     }
@@ -3736,6 +3751,11 @@ ggml_tensor * llm_graph_context::build_attn_sparse(
         const auto & k_idxs = inp->get_k_idxs();
 
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+
+        // Patch B: keep the transposed mirror in sync (same latent rows, O(1)/token)
+        if (mctx_cur->get_has_v_mirror()) {
+            ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, k_cur, inp->get_v_idxs(), il));
+        }
     }
 
     const auto & kq_mask = inp->get_kq_mask();
@@ -3782,7 +3802,11 @@ ggml_tensor * llm_graph_context::build_attn_sparse(
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
-    ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
+    // Patch B: with the mirror, V is the persistent transposed copy — build_attn_mha
+    // sees v_trans and never builds the per-token cont(transpose(v)) (the 4.83 ms v_cont)
+    ggml_tensor * v = mctx_cur->get_has_v_mirror()
+        ? mctx_cur->get_v(ctx0, il)
+        : ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, mask_top_k, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);

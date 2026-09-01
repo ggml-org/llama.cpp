@@ -114,7 +114,8 @@ public:
         const  layer_reuse_cb & reuse,
         const  layer_share_cb & share,
         // a model can hold more than one cache, so the tensor names have to stay unique
-                 const char *   name_tag = "");
+                 const char *   name_tag = "",
+                         bool   v_mirror_opt = false);
 
     ~llama_kv_cache() = default;
 
@@ -199,6 +200,11 @@ public:
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
 
+    // speed-conf Patch B: derived transposed MLA-V mirror (022/024 contracts)
+    bool get_has_v_mirror() const { return v_mirror; }
+    bool get_mirror_dirty() const { return mirror_dirty; }
+    uint32_t mirror_width_max() const { return mirror_w_max; }
+
     // store k_cur and v_cur in the cache based on the provided head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
@@ -277,6 +283,9 @@ private:
     };
 
     bool v_trans = true;  // the value tensor is transposed
+    bool v_mirror     = false; // derived transposed MLA-V mirror (never serialized; contract 4.5)
+    bool mirror_dirty = false; // set on state restore; rebuilt from K in update() (contract 4.6)
+    uint32_t mirror_w_max = 0; // max n_embd_k_gqa over mirrored layers (contract 7 idx sizing)
 
     // see set_kpool_dirty. mutable because the only consumer runs from set_input, which
     // holds the cache by const pointer; nothing else observes it.
@@ -349,6 +358,8 @@ private:
                           float   freq_base,
                           float   freq_scale,
                        uint32_t   il) const;
+
+    ggml_cgraph * build_graph_mirror(llm_graph_result * res, llama_context * lctx) const;
 
     ggml_cgraph * build_graph_shift(
                llm_graph_result * res,
@@ -428,6 +439,7 @@ public:
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+    bool get_has_v_mirror() const;
 
     // store k_cur and v_cur in the cache based on the provided head location
     // note: the heads in k_cur and v_cur should be laid out contiguously in memory

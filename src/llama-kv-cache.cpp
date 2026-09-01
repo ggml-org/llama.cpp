@@ -80,7 +80,8 @@ llama_kv_cache::llama_kv_cache(
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share,
-             const char *   name_tag) :
+             const char *   name_tag,
+                     bool   v_mirror_opt) :
     model(model), hparams(hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
     other(static_cast<llama_kv_cache *>(mem_other)),
@@ -163,6 +164,8 @@ llama_kv_cache::llama_kv_cache(
 
     const bool is_mla = hparams.is_mla();
 
+    v_mirror = v_mirror_opt && is_mla && v_trans;   // Patch B opt-in, MLA transposed caches only
+
     for (uint32_t il = 0; il < n_layer; il++) {
         if (!hparams.has_kv(il)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: does not have KV cache\n", __func__, il);
@@ -229,10 +232,15 @@ llama_kv_cache::llama_kv_cache(
         }
 
         const bool has_k = true;
-        const bool has_v = !is_mla;
+        const bool has_v = !is_mla || v_mirror;   // Patch B: mirror allocates V despite MLA
+        // grokk 024/020: the mirror is a layout of K -> width n_embd_k_gqa (512), type_k
+        const uint32_t n_embd_v_alloc = v_mirror ? n_embd_k_gqa : n_embd_v_gqa;
+        if (v_mirror && n_embd_k_gqa > mirror_w_max) {
+            mirror_w_max = n_embd_k_gqa;
+        }
 
         ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
-        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
+        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, v_mirror ? type_k : type_v, n_embd_v_alloc, kv_size, n_stream) : nullptr;
 
         has_k && ggml_format_name(k, "cache_%sk_l%d", name_tag, il);
         has_v && ggml_format_name(v, "cache_%sv_l%d", name_tag, il);
@@ -242,7 +250,7 @@ llama_kv_cache::llama_kv_cache(
 
         for (uint32_t s = 0; s < n_stream; ++s) {
             k_stream.push_back(has_k ? ggml_view_2d(ctx, k, n_embd_k_gqa, kv_size, k->nb[1], s*k->nb[2]) : nullptr);
-            v_stream.push_back(has_v ? ggml_view_2d(ctx, v, n_embd_v_gqa, kv_size, v->nb[1], s*v->nb[2]) : nullptr);
+            v_stream.push_back(has_v ? ggml_view_2d(ctx, v, n_embd_v_alloc, kv_size, v->nb[1], s*v->nb[2]) : nullptr);
         }
 
         map_layer_ids[il] = layers.size();
@@ -851,6 +859,10 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
                 if (layer.v_stream[ssrc]) {
                     ggml_backend_tensor_copy(layer.v_stream[ssrc], layer.v_stream[sdst]);
                 }
+
+                if (v_mirror) {
+                    mirror_dirty = true;
+                }
             }
         }
     }
@@ -893,7 +905,64 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
         }
     }
 
+    if (v_mirror && mirror_dirty) {
+        LLAMA_LOG_DEBUG("%s: rebuilding derived V mirror from K\n", __func__);
+
+        ggml_backend_sched_reset(sched);
+
+        auto * res = lctx->get_gf_res_reserve();
+
+        res->reset();
+
+        auto * gf = build_graph_mirror(res, lctx);
+        if (!ggml_backend_sched_alloc_graph(sched, gf)) {
+            LLAMA_LOG_ERROR("%s: failed to allocate compute graph for V-mirror rebuild\n", __func__);
+            return updated;
+        }
+
+        res->set_inputs(nullptr);
+
+        if (lctx->graph_compute(gf, false) != GGML_STATUS_SUCCESS) {
+            LLAMA_LOG_ERROR("%s: failed to compute V-mirror rebuild\n", __func__);
+            return updated;
+        }
+
+        mirror_dirty = false;
+        fprintf(stderr, "MIRROR_REBUILD SUCCESS\n");
+        updated = true;
+    }
+
     return updated;
+}
+
+ggml_cgraph * llama_kv_cache::build_graph_mirror(llm_graph_result * res, llama_context * lctx) const {
+    GGML_ASSERT(!other);
+    GGML_UNUSED(lctx);
+
+    auto * ctx = res->get_ctx();
+    auto * gf  = res->get_gf();
+
+    const uint64_t kv_size = get_size();
+
+    for (const auto & layer : layers) {
+        if (!layer.v) {
+            continue;
+        }
+
+        const uint64_t w = hparams.n_embd_k_gqa(layer.il);
+
+        for (uint32_t st = 0; st < n_stream; ++st) {
+            ggml_tensor * ksrc = ggml_view_2d(ctx, layer.k, w, kv_size, layer.k->nb[1], st*layer.k->nb[2]);
+            // mirror layout: row e holds element e of every cell (transposed K)
+            ggml_tensor * vdst = ggml_view_2d(ctx, layer.v, kv_size, w,
+                    ggml_row_size(layer.v->type, kv_size),
+                    st*ggml_row_size(layer.v->type, kv_size*w));
+
+            ggml_build_forward_expand(gf, ggml_cpy(ctx, ggml_transpose(ctx, ksrc), vdst));
+        }
+    }
+
+    return gf;
 }
 
 llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch, bool cont) const {
@@ -1319,6 +1388,17 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
                 ggml_row_size(v->type, n_embd_v_gqa*kv_size)*sinfo.s0);
     }
 
+    if (v_mirror) {
+        // contracts 4.4/7: mirror view is 512-wide (K slab), one KV head
+        const uint64_t w = hparams.n_embd_k_gqa(il);
+        return ggml_view_4d(ctx, v,
+                n_kv, 1, w, ns,
+                ggml_row_size(v->type, kv_size*w),   // head stride > element stride => v_trans in mha
+                ggml_row_size(v->type, kv_size),
+                ggml_row_size(v->type, kv_size*w),
+                ggml_row_size(v->type, kv_size*w)*sinfo.s0);
+    }
+
     // note: v->nb[1] > v->nb[2]
     return ggml_view_4d(ctx, v,
             n_kv, hparams.n_head_kv(il), hparams.n_embd_head_v(il), ns,
@@ -1461,7 +1541,7 @@ ggml_tensor * llama_kv_cache::build_input_v_idxs(ggml_context * ctx, const llama
     if (!v_trans) {
         v_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens);
     } else {
-        v_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens*hparams.n_embd_v_gqa_max());
+        v_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens*(v_mirror ? mirror_w_max : hparams.n_embd_v_gqa_max()));
     }
 
     ggml_set_input(v_idxs);
@@ -1545,7 +1625,7 @@ void llama_kv_cache::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ub
         // note: the V cache is transposed when not using flash attention
         const int64_t kv_size = get_size();
 
-        const int64_t n_embd_v_gqa = hparams.n_embd_v_gqa_max();
+        const int64_t n_embd_v_gqa = v_mirror ? mirror_w_max : hparams.n_embd_v_gqa_max();
 
         for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
             const int64_t offs = sinfo.strm[s]*kv_size*n_embd_v_gqa;
@@ -2351,7 +2431,7 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
             auto * v = layer.v_stream[cr.strm];
-            if (!v) {
+            if (!v || v_mirror) {   // contract 4.5: derived mirror never serialized
                 continue;
             }
 
@@ -2380,7 +2460,7 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
             auto * v = layer.v_stream[cr.strm];
-            if (!v) {
+            if (!v || v_mirror) {   // contract 4.5: derived mirror never serialized
                 continue;
             }
 
@@ -2590,6 +2670,10 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
         return false;
     }
 
+    if (v_mirror) {
+        mirror_dirty = true;   // contract 4.6: restored K needs a mirror rebuild before decode
+    }
+
     // For each layer, read the keys for each cell, one row is one cell, read as one contiguous block
     for (const auto & layer : layers) {
         const uint32_t il = layer.il;
@@ -2637,7 +2721,7 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
             auto * v = layer.v_stream[strm];
-            if (!v) {
+            if (!v || v_mirror) {   // contract 4.5: mirror not on the wire
                 continue;
             }
 
@@ -2680,7 +2764,7 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
             auto * v = layer.v_stream[strm];
-            if (!v) {
+            if (!v || v_mirror) {   // contract 4.5: mirror not on the wire
                 continue;
             }
 
@@ -2762,8 +2846,8 @@ llama_kv_cache_context::llama_kv_cache_context(
         llama_context * lctx,
         bool do_shift,
         stream_copy_info sc_info) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), lctx(lctx), do_shift(do_shift), sc_info(std::move(sc_info)) {
-    if (!do_shift && this->sc_info.empty()) {
-        status = LLAMA_MEMORY_STATUS_NO_UPDATE;
+    if (!do_shift && this->sc_info.empty() && !kv->get_mirror_dirty()) {
+        status = LLAMA_MEMORY_STATUS_NO_UPDATE;   // contract 4.6: a dirty mirror must vote for update
     }
 }
 
@@ -2841,6 +2925,10 @@ const llama_kv_cache * llama_kv_cache_context::get_kv() const {
 
 ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {
     return kv->get_k(ctx, il, n_kv, sinfos[i_cur]);
+}
+
+bool llama_kv_cache_context::get_has_v_mirror() const {
+    return kv->get_has_v_mirror();
 }
 
 ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) const {
