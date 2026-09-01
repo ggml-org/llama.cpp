@@ -141,7 +141,7 @@
 	/** First selected draft sidecar type, drives the `--spec-type` flag. */
 	let draft = $derived(draftEntry?.sidecar ?? null);
 
-	// llama.cpp --spec-type value for each draft sidecar.
+	// LLAMA-APP-REUSE: --spec-type value for each draft sidecar
 	const SPEC_TYPE: Record<ModelSidecar, string> = {
 		[ModelAuxSidecar.MMPROJ]: '',
 		[ModelDraftSidecar.DFLASH]: 'draft-dflash',
@@ -174,6 +174,7 @@
 	}
 
 	/** The llama serve command for the current selection. */
+	// LLAMA-APP-REUSE: serve command shape (-hf / -hfd / --spec-type)
 	let serveCommand = $derived.by(() => {
 		const quantTag = primaryQuant ? `${modelId}:${primaryQuant}` : modelId;
 		const parts = ['llama', 'serve', '-hf', quantTag];
