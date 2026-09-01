@@ -2,9 +2,11 @@
 #include "artifact_manifest.h"
 #include "mtp/catchup_alignment.h"
 #include "spec_sidecar.h"
+#include "spec_sidecar_assets.h"
 #include "../common/speculative.h"
 #include "../include/spec_sidecar/sidecar_abi.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -95,6 +97,24 @@ int main(int argc, char ** argv) {
     }
     unset_environment("SPEC_SIDECAR");
 
+    common_params_speculative candidate_gate_params;
+    candidate_gate_params.types = { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
+    failures += require(!common_speculative_sidecar_candidate(
+                            candidate_gate_params, "/definitely/missing/model.gguf", 1) &&
+                        !candidate_gate_params.draft.sidecar_prepare_attempted,
+                        "disabled sidecar candidate performs no model or cache work");
+    unset_environment("LLAMA_SPEC_HIP_SIDECAR");
+    unset_environment("LLAMA_SPEC_HIP_WEIGHTS");
+
+    std::vector<int32_t> builtin_ids;
+    std::string builtin_error;
+    failures += require(common_spec_sidecar_builtin_draft_vocab_ids(builtin_ids, builtin_error) &&
+                        builtin_ids.size() == 40960 && builtin_ids.front() == 0 &&
+                        builtin_ids.back() == 248076 &&
+                        std::is_sorted(builtin_ids.begin(), builtin_ids.end()) &&
+                        std::adjacent_find(builtin_ids.begin(), builtin_ids.end()) == builtin_ids.end(),
+                        "built-in Apache-2.0 draft vocabulary passes its integrity check");
+
     const auto profile_count = common_spec_sidecar_profile_count();
     failures += require(profile_count >= 3, "provider registry exposes all independent profiles");
     const common_spec_sidecar_profile * qwen35_mtp = nullptr;
@@ -116,6 +136,12 @@ int main(int argc, char ** argv) {
                         qwen35_dflash->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH,
                         "Qwen3.8-27B providers use distinct named profiles");
     failures += require(qwen35_mtp != nullptr && qwen35moe_mtp != nullptr && qwen35_dflash != nullptr &&
+                        common_spec_sidecar_profile_name_matches(*qwen35_mtp, "Qwen/Qwen3.8-27B") &&
+                        common_spec_sidecar_profile_name_matches(*qwen35_mtp, "..") &&
+                        common_spec_sidecar_profile_name_matches(*qwen35_dflash, "..") &&
+                        !common_spec_sidecar_profile_name_matches(*qwen35_mtp, ".") &&
+                        !common_spec_sidecar_profile_name_matches(*qwen35_mtp, "unrelated") &&
+                        !common_spec_sidecar_profile_name_matches(*qwen35moe_mtp, "..") &&
                         qwen35_mtp->mtp_embedding_width == 5120 && qwen35_mtp->mtp_head_rows == 40960 &&
                         std::strcmp(qwen35moe_mtp->target_architecture, "qwen35moe") == 0 &&
                         std::strcmp(qwen35moe_mtp->target_name, "Qwen3.6") == 0 &&
@@ -132,7 +158,17 @@ int main(int argc, char ** argv) {
                                     "spec_qwen35moe_mtp_sidecar.so") == 0 &&
                         qwen35_dflash->dflash_encoded_width == 25600 && qwen35_dflash->dflash_block_size == 8 &&
                         qwen35_dflash->dflash_head_rows == 40960,
-                        "Qwen3.8-27B providers retain their independent contracts");
+                        "Qwen3.8-27B providers retain narrow identity and independent capability contracts");
+
+    if (qwen35_mtp != nullptr) {
+        set_environment(qwen35_mtp->library_env, "/definitely/missing/spec_hip_sidecar.so");
+        std::string library;
+        std::string library_error;
+        failures += require(!common_spec_sidecar_get_library(*qwen35_mtp, library, library_error) &&
+                            library_error.find("not readable") != std::string::npos,
+                            "automatic preparation rejects a missing provider before writing assets");
+        unset_environment(qwen35_mtp->library_env);
+    }
 
     // Optional external fixture paths keep the default host test hermetic while
     // allowing release validation against a real sharded base target and a

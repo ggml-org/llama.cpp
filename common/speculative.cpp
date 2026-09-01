@@ -10,6 +10,7 @@
 #include "ngram-mod.h"
 #include "sampling.h"
 #include "spec_sidecar.h"
+#include "spec_sidecar_assets.h"
 #include "speculative-sidecar-cap.h"
 #include "../include/spec_sidecar/sidecar_abi.h"
 
@@ -21,6 +22,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <iomanip>
 #include <map>
 #include <random>
@@ -46,6 +48,35 @@ static bool common_speculative_rdna2_auto_enabled() {
 static bool common_speculative_sidecar_enabled() {
     const char * value = std::getenv("SPEC_SIDECAR");
     return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
+static bool common_spec_sidecar_paths_from_params(
+        const common_params_speculative_draft & params,
+        const common_spec_sidecar_profile & profile,
+        common_spec_sidecar_paths & paths) {
+    if (!params.sidecar_candidate_ready || params.sidecar_profile_name.empty() ||
+            profile.name == nullptr || params.sidecar_profile_name != profile.name ||
+            params.sidecar_library.empty() || params.sidecar_artifact_dir.empty()) {
+        return false;
+    }
+    paths.library = params.sidecar_library;
+    paths.artifact_dir = params.sidecar_artifact_dir;
+    paths.ids = params.sidecar_ids;
+    paths.dflash_full_head = params.sidecar_dflash_full_head;
+    return true;
+}
+
+static void common_spec_sidecar_store_paths(
+        common_params_speculative_draft & params,
+        const common_spec_sidecar_profile & profile,
+        const common_spec_sidecar_paths & paths) {
+    params.sidecar_candidate_ready = true;
+    params.sidecar_profile_name = profile.name != nullptr ? profile.name : "";
+    params.sidecar_library = paths.library;
+    params.sidecar_artifact_dir = paths.artifact_dir;
+    params.sidecar_ids = paths.ids;
+    params.sidecar_dflash_full_head = paths.dflash_full_head;
+    params.sidecar_prepare_error.clear();
 }
 
 static uint64_t common_spec_sidecar_stochastic_key(uint32_t seed, llama_seq_id seq_id,
@@ -1152,8 +1183,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 sidecar_profile->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH) {
             common_spec_sidecar_paths paths;
             std::string error;
-            if (common_spec_sidecar_get_paths(*sidecar_profile, paths, error) &&
-                    n_embd_enc == sidecar_profile->dflash_encoded_width &&
+            const bool have_paths = common_spec_sidecar_paths_from_params(
+                    this->params, *sidecar_profile, paths) ||
+                    common_spec_sidecar_get_paths(*sidecar_profile, paths, error);
+            if (have_paths && n_embd_enc == sidecar_profile->dflash_encoded_width &&
                     block_size == sidecar_profile->dflash_block_size) {
                 if (sidecar.load(paths.library, paths.artifact_dir,
                         sidecar_profile->dflash_encoded_width,
@@ -1515,11 +1548,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             verify_rows[seq_id] = n_rows;
             verify_pos_first[seq_id] = batch_in.pos != nullptr
                     ? batch_in.pos[i_batch_beg[seq_id]] : -1;
-
-            // M-RoPE target positions are tuples whose temporal component can repeat across image
-            // tokens. The 1-D draft cache instead keeps exactly one dense row per target token.
-            // Server-side draft trimming guarantees that its current tail is the next token index.
-            llama_pos pos_next = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id) + 1;
 
             for (int32_t offset = 0; offset < n_rows; offset += n_ubatch) {
                 const int32_t n_chunk = std::min(n_ubatch, n_rows - offset);
@@ -2168,7 +2196,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         if (sidecar_only && n_mtp_layers == 1 && !chain_heads && !is_mem_shared &&
                 sidecar_profile != nullptr && sidecar_profile->kind == COMMON_SPEC_SIDECAR_KIND_MTP) {
             std::string error;
-            if (common_spec_sidecar_get_paths(*sidecar_profile, sidecar_paths, error)) {
+            const bool have_paths = common_spec_sidecar_paths_from_params(
+                    this->params, *sidecar_profile, sidecar_paths) ||
+                    common_spec_sidecar_get_paths(*sidecar_profile, sidecar_paths, error);
+            if (have_paths) {
                 sidecar_embedding_width = sidecar_profile->mtp_embedding_width;
                 sidecar_head_rows = sidecar_profile->mtp_head_rows;
                 // Retain h_nextn on the backend from the first evaluation;
@@ -3659,9 +3690,14 @@ std::vector<common_speculative_type> common_speculative_types_from_gguf(const st
 
     const std::string arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
     if (arch != "dflash") {
-        const uint32_t block_count = gguf_get_val_u32(gguf_ctx.get(), gguf_find_key(gguf_ctx.get(), (arch + ".block_count").c_str()));
-
-        if (gguf_find_tensor(gguf_ctx.get(), ("blk." + std::to_string(block_count - 1) + ".nextn.eh_proj.weight").c_str()) >= 0) {
+        const int64_t block_count_id = gguf_find_key(gguf_ctx.get(), (arch + ".block_count").c_str());
+        if (block_count_id < 0 || gguf_get_kv_type(gguf_ctx.get(), block_count_id) != GGUF_TYPE_UINT32) {
+            return {};
+        }
+        const uint32_t block_count = gguf_get_val_u32(gguf_ctx.get(), block_count_id);
+        if (block_count > 0 && gguf_find_tensor(gguf_ctx.get(),
+                ("blk." + std::to_string(block_count - 1) + ".nextn.eh_proj.weight").c_str()) >= 0) {
+            SPC_INF("%s", "auto-detected speculative type 'draft-mtp' from the model metadata\n");
             return { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
         }
 
@@ -3689,32 +3725,90 @@ static bool common_speculative_has_host_draft_type(const common_params_speculati
            common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK);
 }
 
-bool common_speculative_sidecar_candidate(const common_params_speculative & params,
+static bool common_spec_sidecar_probe_resolved(
+        common_params_speculative & params,
+        const common_spec_sidecar_profile & profile,
+        uint32_t n_seq,
+        std::string & error) {
+    common_spec_sidecar_paths paths;
+    if (!common_spec_sidecar_paths_from_params(params.draft, profile, paths) &&
+            !common_spec_sidecar_get_paths(profile, paths, error)) {
+        return false;
+    }
+    if (!common_spec_sidecar_probe(profile, paths, n_seq, error)) {
+        return false;
+    }
+    common_spec_sidecar_store_paths(params.draft, profile, paths);
+    return true;
+}
+
+bool common_speculative_sidecar_candidate(common_params_speculative & params,
         const std::string & target_model_path, uint32_t n_seq) {
     if (!common_speculative_sidecar_enabled()) {
         return false;
     }
 
-    const bool has_mtp = common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
-    const bool has_dflash = common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH);
-    if (common_speculative_has_host_draft_type(params) || (has_mtp && has_dflash)) {
+    // A supplied draft GGUF is authoritative for type detection. Without one,
+    // an MTP-bearing target can select the MTP provider directly.
+    if (params.types == std::vector<common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE}) {
+        const std::string & detection_path = params.draft.mparams.path.empty()
+                ? target_model_path : params.draft.mparams.path;
+        const auto detected = common_speculative_types_from_gguf(detection_path);
+        if (detected == std::vector<common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_MTP} ||
+                detected == std::vector<common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH}) {
+            params.types = detected;
+        }
+    }
+
+    if (params.draft.sidecar_candidate_ready) {
+        return true;
+    }
+    if (params.draft.sidecar_prepare_attempted) {
         return false;
     }
 
-    std::string error;
-    if (has_mtp) {
-        const auto * profile = common_spec_sidecar_profile_for_target_file(
-                COMMON_SPEC_SIDECAR_KIND_MTP, target_model_path, error);
-        if (profile != nullptr && common_spec_sidecar_probe(*profile, n_seq, error)) {
-            return true;
-        }
+    const bool has_mtp = common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
+    const bool has_dflash = common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH);
+    if ((!has_mtp && !has_dflash) || n_seq < 1 || n_seq > 8 ||
+            common_speculative_has_host_draft_type(params) || (has_mtp && has_dflash)) {
+        return false;
     }
-    if (has_dflash) {
-        const auto * profile = common_spec_sidecar_profile_for_target_file(
-                COMMON_SPEC_SIDECAR_KIND_DFLASH, target_model_path, error);
-        if (profile != nullptr && common_spec_sidecar_probe(*profile, n_seq, error)) {
-            return true;
-        }
+    params.draft.sidecar_prepare_attempted = true;
+
+    const common_spec_sidecar_kind kind = has_mtp
+            ? COMMON_SPEC_SIDECAR_KIND_MTP : COMMON_SPEC_SIDECAR_KIND_DFLASH;
+    std::string error;
+    const auto * profile = common_spec_sidecar_profile_for_target_file(
+            kind, target_model_path, error);
+    if (profile == nullptr) {
+        params.draft.sidecar_prepare_error = error;
+        return false;
+    }
+
+    // Preserve manual/prepared layouts exactly. Automatic generation is only
+    // attempted when the existing path does not pass the complete ABI probe.
+    if (common_spec_sidecar_probe_resolved(params, *profile, n_seq, error)) {
+        return true;
+    }
+
+    common_spec_sidecar_paths paths;
+    bool cache_hit = false;
+    bool prepared = false;
+    try {
+        prepared = common_spec_sidecar_prepare_artifacts(*profile, target_model_path,
+                params.draft.mparams.path, params.sidecar_cache,
+                paths, cache_hit, error);
+    } catch (const std::exception & exception) {
+        error = std::string("automatic sidecar preparation failed: ") + exception.what();
+    }
+    if (prepared && common_spec_sidecar_probe(*profile, paths, n_seq, error)) {
+        common_spec_sidecar_store_paths(params.draft, *profile, paths);
+        return true;
+    }
+
+    params.draft.sidecar_prepare_error = error;
+    if (!error.empty()) {
+        SPC_WRN("automatic sidecar preparation unavailable: %s\n", error.c_str());
     }
     return false;
 }
@@ -3745,7 +3839,8 @@ common_speculative_type common_speculative_sidecar_preflight(
     if (has_mtp) {
         const auto * profile = common_spec_sidecar_profile_for_model(
                 COMMON_SPEC_SIDECAR_KIND_MTP, model_tgt, probe_error);
-        if (profile != nullptr && common_spec_sidecar_probe(*profile, n_seq, probe_error)) {
+        if (profile != nullptr && common_spec_sidecar_probe_resolved(
+                params, *profile, n_seq, probe_error)) {
             params.draft.sidecar_only = true;
             params.draft.sidecar_type = COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
             params.draft.sidecar_profile = profile;
@@ -3756,7 +3851,8 @@ common_speculative_type common_speculative_sidecar_preflight(
     if (has_dflash) {
         const auto * profile = common_spec_sidecar_profile_for_model(
                 COMMON_SPEC_SIDECAR_KIND_DFLASH, model_tgt, probe_error);
-        if (profile != nullptr && common_spec_sidecar_probe(*profile, n_seq, probe_error)) {
+        if (profile != nullptr && common_spec_sidecar_probe_resolved(
+                params, *profile, n_seq, probe_error)) {
             params.draft.sidecar_only = true;
             params.draft.sidecar_type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
             params.draft.sidecar_profile = profile;
@@ -3764,7 +3860,9 @@ common_speculative_type common_speculative_sidecar_preflight(
         }
     }
 
-    if (!probe_error.empty()) {
+    if (!params.draft.sidecar_prepare_error.empty()) {
+        error = params.draft.sidecar_prepare_error;
+    } else if (!probe_error.empty()) {
         error = probe_error;
     }
     return COMMON_SPECULATIVE_TYPE_NONE;

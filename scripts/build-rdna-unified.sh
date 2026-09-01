@@ -114,7 +114,13 @@ printf 'Configuring unified RDNA build\n  source: %s\n  build:  %s\n  ROCm:   %s
 cmake -S "$ROOT_DIR" -B "$BUILD_DIR" "${cmake_flags[@]}"
 
 targets=(llama-server)
-if [[ $BUILD_SIDECARS == ON ]]; then targets+=(spec-sidecar-hip-mtp spec-sidecar-hip-dflash); fi
+if [[ $BUILD_SIDECARS == ON ]]; then
+    targets+=(
+        spec-sidecar-hip-mtp
+        spec-sidecar-hip-dflash
+        spec-sidecar-hip-qwen35moe-mtp
+    )
+fi
 if [[ $BUILD_TESTS == ON ]]; then targets+=(test-backend-ops); fi
 cmake --build "$BUILD_DIR" --target "${targets[@]}" --parallel "$JOBS"
 

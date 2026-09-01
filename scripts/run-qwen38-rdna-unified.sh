@@ -7,7 +7,7 @@ BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/build-gfx1100-unified}"
 MODEL_DIR="${MODEL_DIR:-$HOME/models/Qwen3.8-27B-Q4-AutoRound-Code-GGUF}"
 MODEL="${MODEL:-$MODEL_DIR/Qwen3.8-27B-Q4_0-AutoRound-Code.gguf}"
 MMPROJ="${MMPROJ:-$MODEL_DIR/mmproj-model.gguf}"
-BUNDLE="${BUNDLE:-$BUILD_DIR/bin/spec-sidecar-mtp}"
+BUNDLE="${BUNDLE:-}"
 ROCM_PATH="${ROCM_PATH:-/opt/rocm/core-10.0}"
 PROFILE="${PROFILE:-safe}"
 CTX_SIZE="${CTX_SIZE:-262144}"
@@ -29,7 +29,7 @@ Usage: scripts/run-qwen38-rdna-unified.sh [options] [-- extra llama-server args]
   --build-dir PATH     native architecture build (default build-gfx1100-unified)
   --model PATH         verified target GGUF
   --mmproj PATH        verified multimodal projector
-  --bundle PATH        prepared spec-sidecar-mtp bundle
+  --bundle PATH        optional existing bundle (default: native automatic cache)
   --profile NAME       safe | experimental (default safe)
   --split-mode MODE    tensor | layer (default tensor)
   --kv-type TYPE       cache type (default f16 for tensor, q8_0 for layer)
@@ -191,12 +191,17 @@ fi
 
 if ((USE_SIDECAR)); then
     [[ -f $BUILD_DIR/bin/spec_hip_sidecar.so ]] || fail "MTP sidecar library missing"
-    [[ -d $BUNDLE && -f $BUNDLE/drafter_manifest.json && -f $BUNDLE/drafter_weights.bin && -f $BUNDLE/draft_head_ids.bin ]] ||
-        fail "prepared MTP bundle is missing or incomplete: $BUNDLE"
     export SPEC_SIDECAR=1
     export LLAMA_SPEC_HIP_SIDECAR="$BUILD_DIR/bin/spec_hip_sidecar.so"
-    export LLAMA_SPEC_HIP_WEIGHTS="$BUNDLE"
-    export LLAMA_DRAFT_HEAD_IDS="$BUNDLE/draft_head_ids.bin"
+    if [[ -n $BUNDLE ]]; then
+        [[ -d $BUNDLE && -f $BUNDLE/drafter_manifest.json &&
+           -f $BUNDLE/drafter_weights.bin && -f $BUNDLE/draft_head_ids.bin ]] ||
+            fail "prepared MTP bundle is missing or incomplete: $BUNDLE"
+        export LLAMA_SPEC_HIP_WEIGHTS="$BUNDLE"
+        export LLAMA_DRAFT_HEAD_IDS="$BUNDLE/draft_head_ids.bin"
+    else
+        unset LLAMA_SPEC_HIP_WEIGHTS LLAMA_DRAFT_HEAD_IDS
+    fi
     sidecar_max_pos=$CTX_SIZE
     ((sidecar_max_pos > 131072)) && sidecar_max_pos=131072
     export LLAMA_SPEC_HIP_MAX_POS="$sidecar_max_pos"

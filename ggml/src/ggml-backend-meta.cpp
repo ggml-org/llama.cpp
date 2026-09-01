@@ -603,7 +603,7 @@ struct ggml_backend_meta_scratch_shards {
     }
 
     ggml_tensor * get(const ggml_tensor * tensor, size_t index) {
-        return ggml_backend_meta_simple_tensor_ensure(stc, (ggml_tensor *) tensor, index);
+        return ggml_backend_meta_simple_tensor_ensure(stc, const_cast<ggml_tensor *>(tensor), index);
     }
 };
 
