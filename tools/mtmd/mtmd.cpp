@@ -2132,6 +2132,7 @@ bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA4V:
         case PROJECTOR_TYPE_GEMMA4UV:
+        case PROJECTOR_TYPE_DEEPSEEK4V:
             return true;
         default:
             return false;

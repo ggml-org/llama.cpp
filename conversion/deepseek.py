@@ -578,8 +578,7 @@ class DeepseekV4Model(TextModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
-        if (name.startswith(("aligner.", "image_"))
-                or name.endswith(".ffn.gate.bias_vl")):
+        if name.startswith(("aligner.", "image_")):
             return None
         if name.startswith("mtp."):
             if not cls.mtp_only:
@@ -856,6 +855,7 @@ class DeepseekV4Model(TextModel):
             "ffn_norm.weight": (gguf.MODEL_TENSOR.FFN_NORM, ".weight"),
             "ffn.gate.weight": (gguf.MODEL_TENSOR.FFN_GATE_INP, ".weight"),
             "ffn.gate.bias": (gguf.MODEL_TENSOR.FFN_EXP_PROBS_B, ".bias"),
+            "ffn.gate.bias_vl": (gguf.MODEL_TENSOR.FFN_EXP_PROBS_B_VL, ".bias"),
             "ffn.gate.tid2eid": (gguf.MODEL_TENSOR.FFN_GATE_TID2EID, ".weight"),
             "ffn.shared_experts.w1.weight": (gguf.MODEL_TENSOR.FFN_GATE_SHEXP, ".weight"),
             "ffn.shared_experts.w2.weight": (gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, ".weight"),
@@ -879,6 +879,10 @@ class DeepseekV4Model(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if re.match(r"layers\.\d+\.ffn\.experts\.\d+\.w[123]\.(weight|scale)$", name):
+            return []
+
+        # hash layers route text tokens via tid2eid and image tokens via bias_vl; gate.bias is unused
+        if name.endswith(".ffn.gate.bias") and bid is not None and bid < self.hparams["num_hash_layers"]:
             return []
 
         tensor_key, suffix = self._map_dsv4_tensor_name(name, bid)

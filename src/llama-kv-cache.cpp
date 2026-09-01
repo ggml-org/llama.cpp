@@ -1681,7 +1681,9 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
 
                 // apply SWA if any
                 if (swa) {
-                    if (llama_hparams::is_masked_swa(n_swa, swa_type, p0, p1)) {
+                    // see llama_hparams::swa_full_non_causal
+                    const bool in_span = !causal && args.hparams.swa_full_non_causal && p0 >= seq_pos_min[seq_id];
+                    if (!in_span && llama_hparams::is_masked_swa(n_swa, swa_type, p0, p1)) {
                         goto skip;
                     }
                 }

@@ -161,6 +161,9 @@ struct llama_hparams {
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
 
+    // deepseek4 vision: when set to non-causal attention, SWA should not be applied (case: input is multimodal)
+    bool swa_full_non_causal = false;
+
     // if is_swa_impl[il] == 1, then layer il is SWA
     // if is_swa_impl[il] == 0, then layer il is dense (i.e. non-SWA)
     // by default, all layers are dense
