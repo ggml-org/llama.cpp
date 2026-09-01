@@ -1263,6 +1263,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     }
 
     // pass 4: assign backends to remaining src from dst and view_src
+    //         and ensure ops that write into a view run on a backend that can access the view_src buffer
     for (int i = 0; i < graph->n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
         int * cur_backend_id = &tensor_backend_id(node);
