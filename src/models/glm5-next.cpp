@@ -18,9 +18,6 @@ void llama_model_glm5_next::load_arch_hparams(llama_model_loader & ml) {
     // the MLA cache holds the compressed latent
     hparams.n_embd_head_v_full = hparams.n_lora_kv;
 
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all);
-
     for (uint32_t i = 0; i < hparams.n_layer_all; ++i) {
         if (i >= hparams.n_layer()) {
             hparams.n_head_kv_arr[i] = 1;

@@ -458,16 +458,13 @@ class Glm5NextModel(TextModel):
         return name, gen
 
     def set_gguf_parameters(self):
+        super().set_gguf_parameters()
         hp = self.hparams
 
         layer_types = hp["layer_types"]
         n_kv_heads = [0 if t == "linear_attention" else 1 for t in layer_types]
         assert len(n_kv_heads) == hp["num_hidden_layers"]
-        # pad to block_count, since the generic loader validates this array's length against the full count before NextN is known
-        # the NextN entry's value itself is never read
-        hp["num_key_value_heads"] = n_kv_heads + [1] * (self.block_count - len(n_kv_heads))
-
-        super().set_gguf_parameters()
+        self.gguf_writer.add_head_count_kv(n_kv_heads)
         self.gguf_writer.add_vocab_size(hp["vocab_size"])
         self.gguf_writer.add_layer_norm_eps(1e-6)
 
