@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Download, HardDriveDownload, Trash2 } from '@lucide/svelte';
 	import DownloadProgressBar from '$lib/components/app/models/discover/DownloadProgressBar.svelte';
-	import { modelsStore } from '$lib/stores';
 	import { ServerModelStatus } from '$lib/enums';
+	import { modelsStore } from '$lib/stores';
 
 	function isLoaded(status: ServerModelStatus | null): boolean {
 		return status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING;

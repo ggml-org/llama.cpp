@@ -1,6 +1,5 @@
 <script lang="ts">
 	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
-	import type { ModelItem } from '$lib/components/app/navigation/utils';
 	import { ChevronDown, Lightbulb, Loader2, PackageSearch } from '@lucide/svelte';
 	import {
 		ChatFormActionAddReasoningSubmenu,
@@ -11,6 +10,7 @@
 		ModelsSelectorList,
 		ModelsSelectorOption
 	} from '$lib/components/app';
+	import type { ModelItem } from '$lib/components/app/navigation/utils';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { MODEL_SELECTOR_ICON, SETTINGS_KEYS } from '$lib/constants';

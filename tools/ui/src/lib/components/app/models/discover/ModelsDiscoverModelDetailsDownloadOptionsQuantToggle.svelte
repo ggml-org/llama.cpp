@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { type DownloadEntryState, labelFor } from './download-options.utils';
 	import DownloadProgressBar from './DownloadProgressBar.svelte';
 	import { Check } from '@lucide/svelte';
 	import { ToggleGroupItem } from '$lib/components/ui/toggle-group';
@@ -6,7 +7,6 @@
 	import { isAuxSidecar } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import type { HfModelSibling } from '$lib/types/huggingface';
-	import { labelFor, type DownloadEntryState } from './download-options.utils';
 
 	interface Props {
 		/** GGUF file the chip stands for. */

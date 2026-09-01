@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/navigation/utils';
 	import { ModelsSelectorOption } from '$lib/components/app';
+	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/navigation/utils';
 	import { modelsStore } from '$lib/stores';
 
 	interface Props {

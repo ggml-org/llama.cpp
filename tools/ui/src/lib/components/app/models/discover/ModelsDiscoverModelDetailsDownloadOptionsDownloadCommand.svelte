@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { type QuantOption, SELECT_CLASS } from './download-options.utils';
 	import { Check, Copy } from '@lucide/svelte';
 	import { type ModelSidecar } from '$lib/constants';
 	import { copyToClipboard } from '$lib/utils';
-	import { SELECT_CLASS, type QuantOption } from './download-options.utils';
 
 	interface Props {
 		modelId: string;

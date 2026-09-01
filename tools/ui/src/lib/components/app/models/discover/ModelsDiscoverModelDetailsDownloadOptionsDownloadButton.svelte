@@ -8,7 +8,7 @@
 		onclick: () => void;
 	}
 
-	let { label, disabled, onclick }: Props = $props();
+	let { disabled, label, onclick }: Props = $props();
 </script>
 
 <Button
