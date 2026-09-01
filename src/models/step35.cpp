@@ -440,9 +440,24 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
     cb(cur, "mtp_attn_norm", il);
 
-    ggml_tensor * Qcur = build_lora_mm(layer.wq, cur, layer.wq_s);
-    ggml_tensor * Kcur = build_lora_mm(layer.wk, cur, layer.wk_s);
-    ggml_tensor * Vcur = build_lora_mm(layer.wv, cur, layer.wv_s);
+    ggml_tensor * Qcur;
+    ggml_tensor * Kcur;
+    ggml_tensor * Vcur;
+    if (layer.wqkv) {
+        ggml_tensor * qkv = build_lora_mm(layer.wqkv, cur, layer.wqkv_s);
+        cb(qkv, "mtp_wqkv", il);
+        const int64_t q_dim = n_embd_head_k * n_head_l;
+        const int64_t k_dim = n_embd_head_k * n_head_kv_l;
+        const int64_t v_dim = n_embd_head_v * n_head_kv_l;
+        const size_t  esize = ggml_element_size(qkv);
+        Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, q_dim, n_tokens, qkv->nb[1], 0));
+        Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, k_dim, n_tokens, qkv->nb[1], q_dim * esize));
+        Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, v_dim, n_tokens, qkv->nb[1], (q_dim + k_dim) * esize));
+    } else {
+        Qcur = build_lora_mm(layer.wq, cur, layer.wq_s);
+        Kcur = build_lora_mm(layer.wk, cur, layer.wk_s);
+        Vcur = build_lora_mm(layer.wv, cur, layer.wv_s);
+    }
     cb(Qcur, "mtp_Qcur", il);
     cb(Kcur, "mtp_Kcur", il);
     cb(Vcur, "mtp_Vcur", il);

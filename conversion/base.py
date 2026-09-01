@@ -693,36 +693,37 @@ class ModelBase:
                 return []
 
         # Handle Q/K/V tensor fusion if enabled
-        if self.fuse_qkv and bid is not None:
+        qkv_bid = next((int(part) for part in new_name.split(".") if part.isdecimal()), None) if self.fuse_qkv else None
+        if qkv_bid is not None:
             is_bias = new_name.endswith('.bias')
             suffix = '.bias' if is_bias else '.weight'
             fusable_layers = self._fusable_qkv_bias_layers if is_bias else self._fusable_qkv_weight_layers
-            if bid not in fusable_layers:
+            if qkv_bid not in fusable_layers:
                 return [(new_name, data_torch)]
 
             buf_q = self._q_bias_buffer if is_bias else self._q_buffer
             buf_k = self._k_bias_buffer if is_bias else self._k_buffer
             buf_v = self._v_bias_buffer if is_bias else self._v_buffer
 
-            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, bid, suffix):
-                buf_q[bid] = data_torch
-            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, bid, suffix):
-                buf_k[bid] = data_torch
-            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, bid, suffix):
-                buf_v[bid] = data_torch
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, qkv_bid, suffix):
+                buf_q[qkv_bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, qkv_bid, suffix):
+                buf_k[qkv_bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, qkv_bid, suffix):
+                buf_v[qkv_bid] = data_torch
 
-            if bid in buf_q and bid in buf_k and bid in buf_v:
-                q_data = buf_q.pop(bid)
-                k_data = buf_k.pop(bid)
-                v_data = buf_v.pop(bid)
+            if qkv_bid in buf_q and qkv_bid in buf_k and qkv_bid in buf_v:
+                q_data = buf_q.pop(qkv_bid)
+                k_data = buf_k.pop(qkv_bid)
+                v_data = buf_v.pop(qkv_bid)
                 fused_data = torch.cat([q_data, k_data, v_data], dim=0)
-                fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid, suffix=suffix)
-                logger.info(f"Fused Q, K, V {suffix[1:]} into QKV for layer {bid}")
+                fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, qkv_bid, suffix=suffix)
+                logger.info(f"Fused Q, K, V {suffix[1:]} into QKV for layer {qkv_bid}")
                 return [(fused_name, fused_data)]
 
-            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, bid, suffix) or \
-               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, bid, suffix) or \
-               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, bid, suffix):
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, qkv_bid, suffix) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, qkv_bid, suffix) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, qkv_bid, suffix):
                 return []
 
         return [(new_name, data_torch)]
