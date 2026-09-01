@@ -438,7 +438,7 @@ void common_log_flush(struct common_log * log) {
     log->resume();
 }
 
-static int common_get_verbosity(enum ggml_log_level level) {
+int common_log_get_verbosity(enum ggml_log_level level) {
     switch (level) {
         case GGML_LOG_LEVEL_DEBUG: return LOG_LEVEL_DEBUG;
         case GGML_LOG_LEVEL_INFO:  return LOG_LEVEL_TRACE;
@@ -452,7 +452,7 @@ static int common_get_verbosity(enum ggml_log_level level) {
 }
 
 void common_log_default_callback(enum ggml_log_level level, const char * text, void * /*user_data*/) {
-    auto verbosity = common_get_verbosity(level);
+    auto verbosity = common_log_get_verbosity(level);
     if (verbosity <= common_log_verbosity_thold) {
         common_log_add(common_log_main(), level, "%s", text);
     }
