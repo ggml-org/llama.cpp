@@ -43,10 +43,10 @@ struct ggml_metal_fuse {
     int                     n_ops;    // number of ops
     const int *             outputs;  // output node indices (absolute graph indices; nullptr => the last node)
     int                     n_outputs;// number of outputs (0 => default last node)
-    // if raw: the generic chain/shape + ggml_can_fuse_subgraph checks are skipped and the
+    // if unsafe: the generic chain/shape + ggml_can_fuse_subgraph checks are skipped and the
     // check callback below is the sole validator (used for patterns that are not elision chains,
     // e.g. the gdn + cache-cpy write-through fusion)
-    bool raw;
+    bool unsafe;
     // extra backend constraints on top of ggml_can_fuse_subgraph
     // nodes[j] is the j-th node of the pattern
     bool (*check)(const struct ggml_tensor * const * nodes,

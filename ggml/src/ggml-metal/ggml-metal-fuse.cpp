@@ -93,7 +93,7 @@ static bool ggml_metal_fuse_check_add_chain(const struct ggml_tensor * const * n
 // cache, so the gdn kernel writes them straight to the cache and the cpy is elided.
 // mirrors ggml_metal_op_can_fuse_gdn_cache (PR #25788). the gdn output has other consumers (the
 // attn scores view), so unlike the other patterns this is not an elision chain: the structural
-// checks live entirely in this callback (raw = true).
+// checks live entirely in this callback (unsafe = true).
 static bool ggml_metal_fuse_check_gdn_cache(const struct ggml_tensor * const * nodes,
                                             const struct ggml_metal_fuse *    fuse,
                                             enum ggml_metal_fuse_mode         mode) {
@@ -268,7 +268,7 @@ const struct ggml_metal_fuse * ggml_metal_fuse_next(
             continue;
         }
 
-        if (!fuse->raw) {
+        if (!fuse->unsafe) {
             // common element-wise chain constraints: each node reads the previous one,
             // and all nodes have the same shape
             for (int j = 1; j < fuse->n_ops && ok; j++) {
@@ -297,7 +297,7 @@ const struct ggml_metal_fuse * ggml_metal_fuse_next(
             }
         }
 
-        // pattern-specific checks (the sole validator for raw patterns)
+        // pattern-specific checks (the sole validator for unsafe patterns)
         if (fuse->check && !fuse->check(nodes, fuse, mode)) {
             continue;
         }
