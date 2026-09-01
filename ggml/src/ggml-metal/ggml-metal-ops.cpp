@@ -88,19 +88,6 @@ struct ggml_metal_op {
         return ggml_metal_fuse_next(gf, idxs.data(), (int) idxs.size(), i0, mode, n_out);
     }
 
-    // true if node i is a cpy fused into the previous node through a view: the fusing op already
-    // wrote its dst directly, so its mem-range must not be tracked (e.g. the gdn + cache cpy)
-    bool is_view_consumer(int i) const {
-        if (i <= 0) {
-            return false;
-        }
-
-        const ggml_tensor * node = this->node(i);
-        const ggml_tensor * prev = this->node(i - 1);
-
-        return node->op == GGML_OP_CPY && node->src[0] && node->src[0]->view_src == prev;
-    }
-
     ggml_metal_device_t  dev;
     ggml_metal_library_t lib;
     ggml_metal_encoder_t enc;
@@ -523,11 +510,6 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
 
     // update the mem ranges in the encoding context
     for (int i = 0; i < n_fuse; ++i) {
-        // view consumers are handled by the fusing op (they wrote the dst directly)
-        if (ctx->is_view_consumer(idx + i)) {
-            continue;
-        }
-
         if (!ggml_metal_op_concurrency_add(ctx, ctx->node(idx + i))) {
             ggml_metal_op_concurrency_reset(ctx);
         }
