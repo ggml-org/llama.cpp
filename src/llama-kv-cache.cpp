@@ -164,9 +164,16 @@ llama_kv_cache::llama_kv_cache(
 
     const bool is_mla = hparams.is_mla();
 
-    v_mirror = v_mirror_opt && is_mla && v_trans;   // Patch B opt-in, MLA transposed caches only
+    // Patch B opt-in. Scope guard (codex 051 s3): mirroring the FULL K slab as V
+    // is only proven for nope-only GLM5Next, where K carries no rope-key half.
+    // is_mla alone does not establish that contract; fail closed elsewhere so a
+    // globally inherited env cannot enable the mirror on an unproven MLA arch.
+    const bool mirror_supported = model.arch == LLM_ARCH_GLM5NEXT && hparams.n_rot(0) == 0;
+
+    v_mirror = v_mirror_opt && mirror_supported && is_mla && v_trans;
     if (v_mirror_opt && !v_mirror) {
-        fprintf(stderr, "MLA_V_MIRROR requested but DISABLED (is_mla=%d v_trans=%d)\n", (int) is_mla, (int) v_trans);
+        fprintf(stderr, "MLA_V_MIRROR requested but DISABLED (arch=%d n_rot=%u is_mla=%d v_trans=%d)\n",
+                (int) model.arch, hparams.n_rot(0), (int) is_mla, (int) v_trans);
     }
     if (v_mirror) {
         GGML_ASSERT((type_k == GGML_TYPE_F16 || type_k == GGML_TYPE_F32) && "V mirror v0 requires F16/F32 type_k");
