@@ -13,6 +13,7 @@
 // usage:
 //   test-fusion --models DIR --device MTL0 --record baseline.tsv   # generate a baseline
 //   test-fusion --models DIR --device MTL0 --check  baseline.tsv   # validate against it
+//   test-fusion --model FILE --device MTL0 --check  baseline.tsv   # validate a single model
 
 #include "common.h"
 #include "log.h"
@@ -196,8 +197,21 @@ struct fusion_row {
     bool         skip_nmse; // nmse unreliable (NaN logits or arch already broken on the device)
 };
 
+static void usage(const char * argv0) {
+    printf("%s: verify fusion counts on a device against a per-device baseline\n\n", argv0);
+    printf("usage: %s [options]\n\n", argv0);
+    printf("options:\n");
+    printf("  --models DIR   run over all .gguf models in a directory\n");
+    printf("  --model FILE   run over a single model file (mutually exclusive with --models)\n");
+    printf("  --device NAME  device to run on (e.g. MTL0, CPU)\n");
+    printf("  --record TSV   write the golden baseline\n");
+    printf("  --check  TSV   validate the counters against a baseline (default)\n");
+    printf("  -h, --help     show this message and exit\n");
+}
+
 int main(int argc, char ** argv) {
     std::string models_dir;
+    std::string model_file;
     std::string device_name;
     std::string record_path;
     std::string check_path;
@@ -211,7 +225,12 @@ int main(int argc, char ** argv) {
             }
             return argv[++i];
         };
+        if (arg == "-h" || arg == "--help") {
+            usage(argv[0]);
+            exit(0);
+        }
         if (arg == "--models")     { models_dir  = next("--models"); }
+        else if (arg == "--model") { model_file  = next("--model"); }
         else if (arg == "--device"){ device_name = next("--device"); }
         else if (arg == "--record"){ record_path = next("--record"); }
         else if (arg == "--check") { check_path  = next("--check"); }
@@ -221,8 +240,16 @@ int main(int argc, char ** argv) {
         }
     }
 
-    if (models_dir.empty() || device_name.empty()) {
-        LOG_ERR("%s: --models DIR and --device NAME are required\n", __func__);
+    if (device_name.empty()) {
+        LOG_ERR("%s: --device NAME is required\n", __func__);
+        return 1;
+    }
+    if (models_dir.empty() && model_file.empty()) {
+        LOG_ERR("%s: --models DIR or --model FILE is required\n", __func__);
+        return 1;
+    }
+    if (!models_dir.empty() && !model_file.empty()) {
+        LOG_ERR("%s: --models DIR and --model FILE are mutually exclusive\n", __func__);
         return 1;
     }
     if (!record_path.empty() && !check_path.empty()) {
@@ -230,22 +257,29 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (!std::filesystem::exists(models_dir) || !std::filesystem::is_directory(models_dir)) {
-        LOG_ERR("%s: models directory '%s' does not exist\n", __func__, models_dir.c_str());
-        return 1;
-    }
-
     std::vector<std::string> models;
-    for (const auto & entry : std::filesystem::directory_iterator(models_dir)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".gguf") {
-            models.push_back(entry.path().string());
+    if (!model_file.empty()) {
+        if (!std::filesystem::is_regular_file(model_file)) {
+            LOG_ERR("%s: model file '%s' does not exist\n", __func__, model_file.c_str());
+            return 1;
         }
-    }
-    std::sort(models.begin(), models.end());
+        models.push_back(model_file);
+    } else {
+        if (!std::filesystem::exists(models_dir) || !std::filesystem::is_directory(models_dir)) {
+            LOG_ERR("%s: models directory '%s' does not exist\n", __func__, models_dir.c_str());
+            return 1;
+        }
+        for (const auto & entry : std::filesystem::directory_iterator(models_dir)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".gguf") {
+                models.push_back(entry.path().string());
+            }
+        }
+        std::sort(models.begin(), models.end());
 
-    if (models.empty()) {
-        LOG_ERR("%s: no .gguf models found in '%s'\n", __func__, models_dir.c_str());
-        return 1;
+        if (models.empty()) {
+            LOG_ERR("%s: no .gguf models found in '%s'\n", __func__, models_dir.c_str());
+            return 1;
+        }
     }
 
     common_init();
