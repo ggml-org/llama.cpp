@@ -2605,6 +2605,14 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     } else {
+        { // codex 026: complementary branch marker — OFF cells must prove they
+          // reached the non-FA branch, not merely lack the packed marker
+            static bool fbl_branch_logged = false;
+            if (!fbl_branch_logged) {
+                fbl_branch_logged = true;
+                fprintf(stderr, "GLM_ATTN_PATH=NON_FA\n");
+            }
+        }
         // fabley speed-conf 019 Patch A: packed-MQA decode transform.
         // At decode (n_tokens==1) with an MQA cache (one KV head) and many
         // query heads, mul_mat broadcasts over ne2 and Metal re-reads the

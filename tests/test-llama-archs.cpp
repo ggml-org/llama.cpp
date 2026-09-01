@@ -395,7 +395,8 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
-        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
+        llama_flash_attn_type fa_type = LLAMA_FLASH_ATTN_TYPE_AUTO) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -405,9 +406,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     model_params.split_mode = split_mode;
 
     llama_context_params ctx_params = llama_context_default_params();
-    // match production glm5next: FA off (AUTO would enable it on the toy and
-    // silently bypass the non-FA attention branch under test)
-    ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    ctx_params.flash_attn_type = fa_type;   // depth-sweep passes DISABLED (production parity); others keep AUTO
     ctx_params.n_ctx = g_depth_sweep_n_ctx;   // 0 = model default (original behavior)
     ctx_params.n_threads = 4;
     ctx_params.n_threads_batch = 4;
@@ -857,10 +856,10 @@ static int test_depth_sweep(const size_t seed, const uint32_t max_depth,
            max_depth, ub_a, b_on_cpu ? "cpu" : ggml_backend_dev_description(dev_gpu), ub_b);
 
     g_depth_sweep_n_ub = ub_a;
-    auto mc_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
+    auto mc_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, false, LLAMA_FLASH_ATTN_TYPE_DISABLED);
     g_depth_sweep_n_ub = ub_b;
-    auto mc_dev = b_on_cpu ? get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {})
-                           : get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {dev_gpu});
+    auto mc_dev = b_on_cpu ? get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, false, LLAMA_FLASH_ATTN_TYPE_DISABLED)
+                           : get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {dev_gpu}, LLAMA_SPLIT_MODE_LAYER, false, LLAMA_FLASH_ATTN_TYPE_DISABLED);
     const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mc_cpu.first.get()));
 
     const std::vector<llama_token> tokens = get_tokens(max_depth, n_vocab, seed);
