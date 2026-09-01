@@ -2612,32 +2612,45 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         // Packing heads into ne1 selects mul_mm (r2=1, K tiled once), then
         // permutes back so softmax/mask see the original layout.
         // Env-gated: LLAMA_PACKED_MQA_DECODE=1. Prefill is never affected.
-        static const bool fbl_packed_mqa = [] {
+        // mode: off (default) | kq | kqv | both (legacy "1" == both)
+        static const int fbl_mode = [] {
             const char * e = getenv("LLAMA_PACKED_MQA_DECODE");
-            return e && atoi(e) != 0;
+            if (!e) return 0;
+            if (strcmp(e, "kq") == 0) return 1;
+            if (strcmp(e, "kqv") == 0) return 2;
+            if (strcmp(e, "both") == 0 || atoi(e) != 0) return 3;
+            return 0;
         }();
-        const bool fbl_pack = fbl_packed_mqa &&
+        const bool fbl_gate = fbl_mode != 0 &&
             q->ne[1] == 1 && k->ne[2] == 1 && q->ne[2] > 8 && n_stream == 1;
+        const bool fbl_pack    = fbl_gate && (fbl_mode & 1) != 0;  // KQ side
+        const bool fbl_pack_o  = fbl_gate && (fbl_mode & 2) != 0;  // KQV side
 
         ggml_tensor * kq = nullptr;
-        if (fbl_pack) {
+        if (fbl_gate) {
             static bool fbl_logged = false;
-            if (!fbl_logged) { fbl_logged = true; fprintf(stderr, "packed-MQA decode path ACTIVE\n"); }
+            if (!fbl_logged) {
+                fbl_logged = true;
+                fprintf(stderr, "packed-MQA decode path ACTIVE (mode=%d)\n", fbl_mode);
+            }
+        }
+        if (fbl_pack) {
             ggml_tensor * qp = ggml_cont(ctx0, ggml_permute(ctx0, q, 0, 2, 1, 3)); // [d, n_head, 1]
             cb(qp, "q_packed", il);
             kq = ggml_mul_mat(ctx0, k, qp);                                        // [n_kv, n_head, 1]
             ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+            cb(kq, "kq", il);                       // grokk 020: historical name on the mul_mm
             kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 0, 2, 1, 3));              // [n_kv, 1, n_head]
-            cb(kq, "kq_packed", il);
+            cb(kq, "kq_unpacked", il);
         } else {
             kq = ggml_mul_mat(ctx0, k, q);
+            cb(kq, "kq", il);
         }
-        cb(kq, "kq", il);
 
         // note: this op tends to require high floating point range
         //       while for some models F16 is enough, for others it is not, so we default to F32 here
         if (!fbl_pack) {
-            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);   // packed branch set it on the mul_mm above
         }
 
         if (arch == LLM_ARCH_GROK) {
@@ -2678,16 +2691,20 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
 
         ggml_tensor * kqv = nullptr;
-        if (fbl_pack) {
+        if (fbl_pack_o) {
             ggml_tensor * kqp = ggml_cont(ctx0, ggml_permute(ctx0, kq, 0, 2, 1, 3)); // [n_kv, n_head, 1]
             cb(kqp, "kq_soft_max_packed", il);
             kqv = ggml_mul_mat(ctx0, v, kqp);                                        // [d_v, n_head, 1]
+            // packing moves this product from mul_mv (f32 accumulation) to mul_mm
+            // (f16 tile accumulation by default) - request f32 like the KQ side
+            ggml_mul_mat_set_prec(kqv, GGML_PREC_F32);
+            cb(kqv, "kqv", il);                     // historical name on the mul_mm
             kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));              // [d_v, 1, n_head]
-            cb(kqv, "kqv_packed", il);
+            cb(kqv, "kqv_unpacked", il);
         } else {
             kqv = ggml_mul_mat(ctx0, v, kq);
+            cb(kqv, "kqv", il);
         }
-        cb(kqv, "kqv", il);
 
         // for MLA with the absorption optimization, we need to "decompress" from MQA back to MHA
         if (v_mla) {

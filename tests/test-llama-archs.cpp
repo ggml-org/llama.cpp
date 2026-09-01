@@ -193,11 +193,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     } else if (arch == LLM_ARCH_GLM5NEXT) {
         // head_count doubles as the KDA head count, so it stays uniform; the kv array is what
         // marks the recurrent layers, and the loader asserts it holds both a zero and a nonzero
+        // Under --heads (query-head override), DSA stays MQA: n_head_kv is held at 1
+        // (real model: 64 query heads over one latent KV head). KDA layers stay 0.
         GGML_ASSERT(n_layer >= 2);
+        const uint32_t glm_dsa_kv = (g_sweep_heads > 0) ? 1u : n_head_kv;
         std::vector<uint32_t> n_head_kv_per_layer;
         n_head_kv_per_layer.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
-            n_head_kv_per_layer.push_back(il == 1 ? 0 : n_head_kv);
+            n_head_kv_per_layer.push_back(il == 1 ? 0 : glm_dsa_kv);
         }
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT,    n_head);
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_kv_per_layer);
@@ -402,6 +405,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     model_params.split_mode = split_mode;
 
     llama_context_params ctx_params = llama_context_default_params();
+    // match production glm5next: FA off (AUTO would enable it on the toy and
+    // silently bypass the non-FA attention branch under test)
+    ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
     ctx_params.n_ctx = g_depth_sweep_n_ctx;   // 0 = model default (original behavior)
     ctx_params.n_threads = 4;
     ctx_params.n_threads_batch = 4;
