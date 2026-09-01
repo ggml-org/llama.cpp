@@ -98,16 +98,17 @@
 >
 	<ModelsDiscoverListSearch bind:value={searchQuery} onSearch={handleSearchInput} />
 
+	<!-- One list instance, so the rows keep their state across search round trips;
+		 skeleton rows replace them while the initial catalog or a query loads. -->
 	<div>
-		{#if modelsHubStore.loading}
-			<p class="p-4 text-sm text-muted-foreground">Loading models...</p>
-		{:else if modelsHubStore.error}
+		{#if modelsHubStore.error}
 			<p class="p-4 text-sm text-destructive">{modelsHubStore.error}</p>
-		{:else if modelsHubStore.models.length === 0}
+		{:else if !modelsHubStore.loading && !modelsHubStore.searching && modelsHubStore.models.length === 0}
 			<p class="p-4 text-sm text-muted-foreground">No models found</p>
 		{:else}
 			<ModelsDiscoverList
 				activeId={selectedId}
+				loading={modelsHubStore.loading || modelsHubStore.searching}
 				models={modelsHubStore.models}
 				onSelect={(id) => (selectedId = id)}
 				showBaseModelAvatar
