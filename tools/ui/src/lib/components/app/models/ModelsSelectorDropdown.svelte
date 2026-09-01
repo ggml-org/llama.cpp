@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
-	import type { ModelItem } from './utils';
+	import type { ModelItem } from '$lib/components/app/navigation/utils';
 	import { ChevronDown, Lightbulb, Loader2, PackageSearch } from '@lucide/svelte';
 	import {
 		ChatFormActionAddReasoningSubmenu,

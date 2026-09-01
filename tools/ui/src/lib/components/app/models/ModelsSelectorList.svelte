@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { GroupedModelOptions, ModelItem } from './utils';
+	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/navigation/utils';
 	import { ModelsSelectorOption } from '$lib/components/app';
 	import { modelsStore } from '$lib/stores';
 

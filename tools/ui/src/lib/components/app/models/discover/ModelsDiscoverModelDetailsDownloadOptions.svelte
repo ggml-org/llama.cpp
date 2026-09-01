@@ -1,38 +1,22 @@
 <script lang="ts">
-	import DownloadProgressBar from './DownloadProgressBar.svelte';
-	import { Check, Copy, Download } from '@lucide/svelte';
-	import ModelsDownloadManagerDownloadStatusToast from '$lib/components/app/models/download-manager/ModelsDownloadManagerDownloadStatusToast.svelte';
-	import { ToggleGroup, ToggleGroupItem } from '$lib/components/ui/toggle-group';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { isAuxSidecar, type ModelSidecar } from '$lib/constants';
+	import { ToggleGroup } from '$lib/components/ui/toggle-group';
+	import { type ModelSidecar } from '$lib/constants';
 	import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
+	import ModelsDiscoverModelDetailsDownloadOptionsDownloadButton from './ModelsDiscoverModelDetailsDownloadOptionsDownloadButton.svelte';
+	import ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand from './ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand.svelte';
+	import ModelsDiscoverModelDetailsDownloadOptionsRow from './ModelsDiscoverModelDetailsDownloadOptionsRow.svelte';
+	import ModelsDownloadManagerDownloadStatusToast from '$lib/components/app/models/download-manager/ModelsDownloadManagerDownloadStatusToast.svelte';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
-	import type { HfModelSibling } from '$lib/types/huggingface';
-	import { copyToClipboard, minMemoryTierGb } from '$lib/utils';
+	import {
+		classify,
+		labelFor,
+		type BitDepthRow,
+		type DownloadEntryState,
+		type QuantOption,
+		type SelectableFile
+	} from './download-options.utils';
 	import { toast } from 'svelte-sonner';
-
-	/** Download state of a single repo entry, injected by the integration layer. */
-	export interface DownloadEntryState {
-		isDownloading: boolean;
-		progress: ModelDownloadProgress | null;
-		isDownloaded: boolean;
-		isFailed: boolean;
-	}
-
-	type BitDepthRow = { bitDepth: number; files: HfModelSibling[] };
-
-	/** A selectable GGUF, tagged with its kind: main weights, draft, or aux (mmproj). */
-	type SelectableFile = HfModelSibling & { kind: 'main' | 'draft' | 'aux' };
-
-	/** Option of a quant `<select>`; already-downloaded files stay non-selectable. */
-	interface QuantOption {
-		disabled: boolean;
-		/** Quant token, or the file name when the file carries no quant (e.g. BF16). */
-		label: string;
-		path: string;
-		size: number;
-	}
 
 	interface Props {
 		/** Full HuggingFace repo id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */
@@ -59,12 +43,6 @@
 	/** Bit depth to preselect for the base model; falls back to the closest one. */
 	const DEFAULT_BASE_BIT_DEPTH = 4;
 
-	// min-w keeps the value clear of the native chevron: Safari sizes a select
-	// to its widest option, so an exactly-as-wide value would otherwise let the
-	// chevron overlap the text (draft selects are all same-width quants).
-	const selectClass =
-		'h-6 min-w-18 max-w-40 shrink-0 cursor-pointer rounded-md border border-input bg-transparent py-0 pr-3 pl-2 font-mono text-xs outline-none transition-colors hover:bg-accent/40 focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]';
-
 	function stateFor(repoWithTag: string, filePath: string, isSidecar: boolean): DownloadEntryState {
 		if (getDownloadState) return getDownloadState(repoWithTag, filePath, isSidecar);
 
@@ -76,26 +54,6 @@
 			isFailed: modelsStore.status.hasFailedDownload(repoWithTag),
 			progress: modelsStore.status.getDownloadProgress(repoWithTag)
 		};
-	}
-
-	/** Kind of a file path: the main weights, a draft sidecar, or an aux sidecar (mmproj). */
-	function classify(path: string): 'main' | 'draft' | 'aux' {
-		const sidecar = HuggingFaceService.extractQuantMeta(path)?.sidecar;
-
-		if (!sidecar) return 'main';
-
-		return isAuxSidecar(sidecar) ? 'aux' : 'draft';
-	}
-
-	/** Display label of a file: its quant, else the file name without the extension. */
-	function labelFor(path: string): string {
-		const quant = HuggingFaceService.extractQuantMeta(path)?.quant;
-
-		if (quant) return quant;
-
-		const basename = path.split('/').pop() ?? path;
-
-		return basename.replace(/\.gguf$/i, '');
 	}
 
 	/**
@@ -134,6 +92,18 @@
 		new Set(selectableFiles.filter((f) => f.state.isDownloaded).map((f) => f.path))
 	);
 
+	/** Rows for the row component: per-bit-depth files with state attached. */
+	let rows = $derived.by(() =>
+		bitDepthRows.map((row) => {
+			const paths = new Set(row.files.map((f) => f.path));
+
+			return {
+				bitDepth: row.bitDepth,
+				files: selectableFiles.filter((f) => paths.has(f.path))
+			};
+		})
+	);
+
 	/** Bit depth of a file; `99` (Other) when it carries no quant token. */
 	function bitDepthOf(path: string): number {
 		const quant = HuggingFaceService.extractQuantMeta(path)?.quant ?? '';
@@ -161,7 +131,7 @@
 	let draftOptions = $derived(
 		draftFiles.map((f) => ({
 			...optionFor(f),
-			badge: HuggingFaceService.extractQuantMeta(f.path)?.sidecar
+			badge: HuggingFaceService.extractQuantMeta(f.path)?.sidecar ?? null
 		}))
 	);
 
@@ -241,8 +211,6 @@
 		selectedPaths = [...base, added];
 	}
 
-	let copied = $state(false);
-
 	/** Selection ordered main-quant-first, so the command reads naturally. */
 	let selected = $derived.by(() => {
 		const mains: SelectableFile[] = [];
@@ -289,12 +257,6 @@
 	let commandDraftQuant = $derived(
 		draftEntry ? (HuggingFaceService.extractQuantMeta(draftEntry.path)?.quant ?? null) : null
 	);
-
-	async function copyCommand() {
-		await copyToClipboard(serveCommand);
-		copied = true;
-		setTimeout(() => (copied = false), 1500);
-	}
 
 	/**
 	 * Queue one download and surface a live progress toast keyed by the tag,
@@ -396,11 +358,12 @@
 </script>
 
 {#if bitDepthRows.length}
-	<section class="rounded-xl border">
+	<section
+		class="rounded-3xl border border-border/30 bg-muted/40 shadow-xs transition-[box-shadow,border-color] focus-within:border-border focus-within:shadow-sm dark:border-border/20 dark:bg-muted/50"
+	>
 		<!-- header row is intentionally hidden for now
 		<div class="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-1">
 			<h2 class="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
-				<Download class="h-4 w-4" />
 				Downloadable options
 			</h2>
 
@@ -411,226 +374,48 @@
 		-->
 
 		<ToggleGroup
-			class="flex w-full flex-col items-stretch divide-y px-4 pb-1"
+			class="flex w-full flex-col items-stretch divide-y divide-border/50 px-4 pb-1 dark:divide-border/35"
 			onValueChange={handleSelection}
 			type="multiple"
 			value={selectedPaths}
 		>
-			{#each bitDepthRows as row (row.bitDepth)}
-				{@const mainFile = row.files.find(
-					(f) => !HuggingFaceService.extractQuantMeta(f.path)?.sidecar
-				)}
-				{@const draftFile = row.files.find((f) => {
-					const sidecar = HuggingFaceService.extractQuantMeta(f.path)?.sidecar;
-
-					return sidecar && !isAuxSidecar(sidecar);
-				})}
-				{@const mainMemGb = mainFile ? minMemoryTierGb(mainFile.size ?? 0) : null}
-				{@const draftMemGb = draftFile ? minMemoryTierGb(draftFile.size ?? 0) : null}
-				<div class="grid grid-cols-[5rem_1fr] items-start gap-3 py-3">
-					<div class="pt-1 text-sm tabular-nums text-muted-foreground">
-						{#if row.bitDepth === 99}
-							Other
-						{:else}
-							{row.bitDepth}-bit
-						{/if}
-
-						{#if mainMemGb}
-							<span class="block text-[10px] whitespace-nowrap text-muted-foreground/60">
-								needs at least {mainMemGb}GB{draftMemGb ? ` + ${draftMemGb}GB` : ''}+ memory
-							</span>
-						{/if}
-					</div>
-
-					<div class="flex flex-wrap justify-end gap-1.5">
-						{#each row.files as file (file.path)}
-							{@const meta = HuggingFaceService.extractQuantMeta(file.path)}
-							{@const label = labelFor(file.path)}
-							{@const hfRepoWithTag = ModelsService.buildDownloadTag(
-								modelId,
-								meta?.quant ?? null,
-								meta?.sidecar ?? null
-							)}
-							{@const state = stateFor(hfRepoWithTag, file.path, Boolean(meta?.sidecar))}
-							{@const isDownloading = state.isDownloading}
-							{@const progress = state.progress}
-							{@const isDownloaded = state.isDownloaded}
-							{@const isFailed = state.isFailed}
-							{@const tooltipText = isDownloading
-								? `Downloading ${file.path}`
-								: isDownloaded
-									? `Already downloaded: ${file.path}`
-									: isFailed
-										? `Last attempt failed: ${file.path}`
-										: `Download ${file.path}`}
-							<Tooltip.Root>
-								<Tooltip.Trigger>
-									{#if isDownloaded}
-										<!-- downloaded files are not selectable, just marked as done -->
-										<div
-											aria-disabled="true"
-											aria-label={tooltipText}
-											class="inline-flex cursor-default items-center gap-1 rounded-md border bg-muted px-2 py-1 font-mono text-xs opacity-70"
-										>
-											{#if meta?.sidecar && !isAuxSidecar(meta.sidecar)}
-												<span
-													class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
-												>
-													{meta.sidecar}
-												</span>
-											{/if}
-
-											<span class="font-medium">{label}</span>
-
-											<span class="-my-1 w-px self-stretch bg-border"></span>
-
-											<span>{HuggingFaceService.formatFileSize(file.size ?? 0)}</span>
-
-											<Check class="h-3.5 w-3.5 shrink-0 text-green-500" />
-										</div>
-									{:else}
-										<ToggleGroupItem
-											aria-label={tooltipText}
-											class="relative inline-flex h-auto items-center gap-1 overflow-hidden rounded-md! border bg-muted px-2 py-1 text-left font-mono text-xs transition-colors data-[state=on]:border-primary data-[state=on]:bg-primary/10 {isFailed
-												? 'border-destructive'
-												: ''}"
-											value={file.path}
-										>
-											{#if isFailed && !isDownloading}
-												<span
-													class="rounded-md bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase"
-												>
-													Failed
-												</span>
-											{/if}
-
-											{#if meta?.sidecar && !isAuxSidecar(meta.sidecar)}
-												<span
-													class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
-												>
-													{meta.sidecar}
-												</span>
-											{/if}
-
-											<span class="font-medium">{label}</span>
-
-											<span class="-my-1 w-px self-stretch bg-border"></span>
-
-											<span>
-												{#if isDownloading && progress && progress.totalBytes > 0}
-													{Math.round((progress.downloadedBytes / progress.totalBytes) * 100)}%
-												{:else}
-													{HuggingFaceService.formatFileSize(file.size ?? 0)}
-												{/if}
-											</span>
-
-											{#if isDownloading && progress}
-												<DownloadProgressBar
-													downloadedBytes={progress.downloadedBytes}
-													overlay
-													totalBytes={progress.totalBytes}
-												/>
-											{/if}
-										</ToggleGroupItem>
-									{/if}
-								</Tooltip.Trigger>
-
-								<Tooltip.Content>
-									<p>{tooltipText}</p>
-								</Tooltip.Content>
-							</Tooltip.Root>
-						{/each}
-					</div>
-				</div>
+			{#each rows as row (row.bitDepth)}
+				<ModelsDiscoverModelDetailsDownloadOptionsRow bitDepth={row.bitDepth} files={row.files} />
 			{/each}
 		</ToggleGroup>
 
-		<!-- Terminal command with inline quant selects + download CTA -->
-		<div class="space-y-2 border-t px-4 pt-3 pb-4">
-			<div
-				class="flex flex-wrap items-center gap-2 rounded-md px-3 py-2"
-				style="background: var(--code-background); border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);"
-			>
-				<div
-					class="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-xs text-foreground/90"
-				>
-					<span>llama</span>
+		<!-- Download CTA + terminal command with inline quant selects -->
+		<div class="space-y-2.5 border-t border-border/50 px-4 pt-3.5 pb-4 dark:border-border/35">
+			<ModelsDiscoverModelDetailsDownloadOptionsDownloadButton
+				disabled={selected.length === 0 && !commandMain}
+				label={downloadLabel}
+				onclick={downloadSelected}
+			/>
 
-					<span>serve</span>
+			<div aria-hidden="true" class="flex items-center gap-3">
+				<span class="h-px flex-1 bg-border/50"></span>
 
-					<span>-hf</span>
+				<span class="text-xs whitespace-nowrap text-muted-foreground">
+					or download from your terminal
+				</span>
 
-					<span class="truncate">{modelId}{commandMainQuant ? ':' : ''}</span>
-
-					<!-- Base quant: always part of the command, the 8-bit file by default. -->
-					{#if baseOptions.length}
-						<select
-							aria-label="Base model quantization"
-							class="{selectClass} {mainEntry ? '' : 'border-dashed'} -ml-2"
-							onchange={(e) => setPick('main', e.currentTarget.value)}
-							title={mainEntry
-								? undefined
-								: 'Default quant - pick a file above or another quant here'}
-							value={basePick}
-						>
-							{#each baseOptions as option (option.path)}
-								<option disabled={option.disabled} value={option.path}>
-									{option.label}
-								</option>
-							{/each}
-						</select>
-					{/if}
-
-					<!-- Draft segment: appears once a draft is picked, quant inline too. -->
-					{#if draftEntry && draftSidecar}
-						<span>-hfd</span>
-
-						<span class="truncate">{modelId}{commandDraftQuant ? ':' : ''}</span>
-
-						<select
-							aria-label="Draft model quantization"
-							class={selectClass}
-							onchange={(e) => setPick('draft', e.currentTarget.value)}
-							value={draftPick}
-						>
-							{#each draftOptions as option (option.path)}
-								<option disabled={option.disabled} value={option.path}>
-									<!-- {option.badge ? `${option.badge.toUpperCase()} ` : ''} -->
-									{option.label}
-								</option>
-							{/each}
-						</select>
-
-						<span>--spec-type</span>
-
-						<span>{SPEC_TYPE[draftSidecar]}</span>
-					{/if}
-				</div>
-
-				<button
-					aria-label="Copy command"
-					class="ml-auto shrink-0 text-muted-foreground/60 transition-colors hover:text-foreground"
-					onclick={copyCommand}
-					type="button"
-				>
-					{#if copied}
-						<Check class="h-3.5 w-3.5 text-green-500" />
-					{:else}
-						<Copy class="h-3.5 w-3.5" />
-					{/if}
-				</button>
+				<span class="h-px flex-1 bg-border/50"></span>
 			</div>
 
-			<button
-				class="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-				disabled={selected.length === 0 && !commandMain}
-				onclick={downloadSelected}
-				type="button"
-			>
-				<Download class="h-4 w-4" />
-
-				{downloadLabel}
-			</button>
+			<ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand
+				{baseOptions}
+				{basePick}
+				command={serveCommand}
+				{draftOptions}
+				{draftPick}
+				draftQuant={commandDraftQuant}
+				mainQuant={commandMainQuant}
+				mainSelected={Boolean(mainEntry)}
+				{modelId}
+				onBasePick={(path) => setPick('main', path)}
+				onDraftPick={(path) => setPick('draft', path)}
+				specType={draftEntry && draftSidecar ? SPEC_TYPE[draftSidecar] : null}
+			/>
 		</div>
 	</section>
 {/if}

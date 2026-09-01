@@ -79,6 +79,37 @@ export { default as ModelsDiscoverModelDetailsHeader } from './ModelsDiscoverMod
 export { default as ModelsDiscoverModelDetailsDownloadOptions } from './ModelsDiscoverModelDetailsDownloadOptions.svelte';
 
 /**
+ * **ModelsDiscoverDetailsDownloadOptionsRow** - One bit-depth group of quants
+ *
+ * A single bit-depth row inside ModelsDiscoverModelDetailsDownloadOptions: the
+ * depth label with its memory hint and the quant chips of that depth.
+ */
+export { default as ModelsDiscoverModelDetailsDownloadOptionsRow } from './ModelsDiscoverModelDetailsDownloadOptionsRow.svelte';
+
+/**
+ * **ModelsDiscoverDetailsDownloadOptionsQuantToggle** - One quant chip
+ *
+ * A single GGUF file as a toggle chip inside the download options toggle
+ * group, or as a static done chip when the file is already downloaded.
+ */
+export { default as ModelsDiscoverModelDetailsDownloadOptionsQuantToggle } from './ModelsDiscoverModelDetailsDownloadOptionsQuantToggle.svelte';
+
+/**
+ * **ModelsDiscoverDetailsDownloadOptionsDownloadButton** - Download CTA
+ *
+ * Full-width primary button that queues the current selection for download.
+ */
+export { default as ModelsDiscoverModelDetailsDownloadOptionsDownloadButton } from './ModelsDiscoverModelDetailsDownloadOptionsDownloadButton.svelte';
+
+/**
+ * **ModelsDiscoverDetailsDownloadOptionsDownloadCommand** - Terminal command
+ *
+ * The `llama serve -hf ...` command box with inline quant selects and a copy
+ * button; the quant picks are delegated back to the parent via callbacks.
+ */
+export { default as ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand } from './ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand.svelte';
+
+/**
  * **ModelsDiscoverChatTemplateDialog** - Chat template viewer
  *
  * Shows the model's chat template in a scrollable dialog with a copy button.
