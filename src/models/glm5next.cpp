@@ -222,8 +222,10 @@ void llama_model_glm5next::load_arch_tensors(llama_model_loader & ml) {
             layer.ssm_g_b  = create_tensor(tn(LLM_TENSOR_SSM_G_B,  "weight", i), {head_dim, d_inner},   0);
             layer.ssm_beta = create_tensor(tn(LLM_TENSOR_SSM_BETA, "weight", i), {n_embd,   n_head},    0);
 
-            // ssm_a holds -exp(A_log), folded at conversion time (kimi-linear/kimi-k3 convention)
-            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {n_head}, 0);
+            // ssm_a holds -exp(A_log), folded at conversion time (kimi-linear/kimi-k3 convention).
+            // NOSCAN because the gate multiplies by it instead of running an SSM scan, as qwen3next
+            // does; both spellings write blk.N.ssm_a, only the declared op differs
+            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN, i), {n_head}, 0);
 
             // some converters emit dt_bias under the default ".weight" suffix
             layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {d_inner}, TENSOR_NOT_REQUIRED);
