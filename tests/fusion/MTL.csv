@@ -270,9 +270,11 @@ qwen3vlmoe          ,1   ,prefill ,RMS_NORM+MUL                ,      9
 qwen3vlmoe          ,1   ,decode  ,RMS_NORM+MUL                ,    144
 qwen4exp            ,0   ,prefill ,RMS_NORM+MUL                ,      5
 qwen4exp            ,0   ,prefill ,ADD+ADD+ADD                 ,      5
+qwen4exp            ,0   ,prefill ,ADD+ADD+ADD+ADD+ADD+ADD+ADD ,      9
 qwen4exp            ,0   ,prefill ,GATED_DELTA_NET+CPY         ,      1
 qwen4exp            ,0   ,decode  ,RMS_NORM+MUL                ,     80
 qwen4exp            ,0   ,decode  ,ADD+ADD+ADD                 ,     80
+qwen4exp            ,0   ,decode  ,ADD+ADD+ADD+ADD+ADD+ADD+ADD ,    144
 qwen4exp            ,0   ,decode  ,GATED_DELTA_NET+CPY         ,     16
 refact              ,0   ,prefill ,RMS_NORM+MUL                ,      5
 refact              ,0   ,decode  ,RMS_NORM+MUL                ,     80
