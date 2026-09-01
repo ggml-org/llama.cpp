@@ -58,15 +58,17 @@ Environment:
 - Target: arm64-apple-macosx15.6
 
 ```console
-+--------------------+-----+------------+------------+------------+
-| Build              | TUs | Frontend   | Backend    | Total      |
-+--------------------+-----+------------+------------+------------+
-| Minimal, master    | 256 |   154.5 s  |    94.8 s  |   249.3 s  |
-| Minimal, with PCH  | 261 |    65.9 s  |    90.0 s  |   155.9 s  |
-| Full,    master    | 407 |   265.7 s  |   209.7 s  |   475.4 s  |
-| Full,    with PCH  | 414 |   154.6 s  |   197.5 s  |   352.1 s  |
-+--------------------+-----+------------+------------+------------+
++------------------------+-----+------------+------------+------------+
+| Build                  | TUs | Frontend   | Backend    | Total      |
++------------------------+-----+------------+------------+------------+
+| Minimal, master        | 256 |   154.5 s  |    94.8 s  |   249.3 s  |
+| Minimal, with PCH      | 261 |    65.9 s  |    90.0 s  |   155.9 s  |
+| Full,    master        | 407 |   265.7 s  |   209.7 s  |   475.4 s  |
+| Full,    with PCH      | 414 |   154.6 s  |   197.5 s  |   352.1 s  |
+| Full,    with PCH + UB | 274 |   143.0 s  |   192.2 s  |   335.2 s  |
++------------------------+-----+------------+------------+------------+
 
 PCH = precompiled header.
 Full = includes building Server, Tools, and Tests.
+UB   = unity build for models
 ```
