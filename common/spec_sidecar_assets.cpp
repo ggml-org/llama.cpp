@@ -772,7 +772,7 @@ static bool file_identity(const std::string & input, std::string & identity, std
         return false;
     }
     std::ostringstream value;
-    value << path << '\n' << size << '\n' << modified.time_since_epoch().count();
+    value << path << '\n' << size << '\n' << static_cast<int64_t>(modified.time_since_epoch().count());
     identity = value.str();
     return true;
 }
