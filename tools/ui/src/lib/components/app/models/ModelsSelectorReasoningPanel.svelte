@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Check, ChevronDown, ChevronRight, Info, Lightbulb, LightbulbOff } from '@lucide/svelte';
+	import { Check, ChevronDown, ChevronUp, Info, Lightbulb, LightbulbOff } from '@lucide/svelte';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -28,12 +28,6 @@
 			     spread props.class, and the button is the menu item itself (the `child`
 			     snippet replaces Item's own div), so all styling must come from above. -->
 			<Collapsible.Trigger {...props}>
-				{#if expanded}
-					<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
-				{:else}
-					<ChevronRight class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
-				{/if}
-
 				{#if reasoning.isReasoningActive}
 					<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
 				{:else if reasoning.isOff}
@@ -42,11 +36,19 @@
 					<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
 				{/if}
 
-				<span class="flex-1 truncate">Reasoning</span>
+				<span class="flex min-w-0 flex-1 items-center gap-1.5">
+					<span class="truncate">Reasoning</span>
 
-				<span class="shrink-0 text-xs capitalize text-muted-foreground">
-					{reasoning.currentEffort}
+					<span class="shrink-0 text-xs capitalize text-muted-foreground">
+						{reasoning.currentEffort}
+					</span>
 				</span>
+
+				{#if expanded}
+					<ChevronUp class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
+				{:else}
+					<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
+				{/if}
 			</Collapsible.Trigger>
 		{/snippet}
 	</DropdownMenu.Item>
