@@ -128,7 +128,7 @@
           }:
           {
             # For standardised reproducible formatting with `nix fmt`
-            formatter = pkgs.nixfmt-rfc-style;
+            formatter = pkgs.nixfmt;
 
             # Unlike `.#packages`, legacyPackages may contain values of
             # arbitrary types (including nested attrsets) and may even throw
