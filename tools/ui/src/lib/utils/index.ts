@@ -345,7 +345,7 @@ export { detectOs, executeBrowserInfoTool } from './browser-info';
 export { detectToolUseSupport } from './chat-template-tool-detector';
 
 // Model memory estimation
-export { estimateModelMemoryBytes } from './model-compatibility';
+export { estimateModelMemoryBytes, minMemoryTierGb } from './model-compatibility';
 
 // Cryptography utilities
 
