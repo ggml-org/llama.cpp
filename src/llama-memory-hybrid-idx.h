@@ -94,6 +94,11 @@ public:
     bool kpool_is_dirty   () const { return kpool_dirty; }
     void kpool_clear_dirty()       { kpool_dirty = false; }
 
+    void set_mtp_dsa_index_share(bool enabled);
+    bool get_mtp_dsa_index_share() const { return mtp_dsa_index_share; }
+    void set_mtp_dsa_selection(const int32_t * data, size_t size);
+    const std::vector<int32_t> & get_mtp_dsa_selection() const { return mtp_dsa_selection; }
+
 private:
     // forget seq_id (all of it if seq_id < 0) in every cache at once, so a failed restore cannot leave the caches out of step
     // seq_id < 0 drops the whole context, as the caches themselves do on a failed restore
@@ -108,6 +113,9 @@ private:
     const uint32_t n_kpool;
 
     bool kpool_dirty = false;
+
+    bool mtp_dsa_index_share = false;
+    std::vector<int32_t> mtp_dsa_selection;
 };
 
 class llama_memory_hybrid_idx_context : public llama_memory_hybrid_context {
@@ -156,9 +164,14 @@ public:
     uint32_t get_n_kpool    () const; // Padded pool count, where the last pool is always unused.
     uint32_t get_n_kpool_new() const; // Exact count of pools completed by the current ubatch.
     bool get_kpool_cache_safe() const;
+    bool get_mtp_dsa_index_share() const;
+    size_t get_mtp_dsa_selection_size() const;
     void set_input_kpool(ggml_tensor * pool_cells, ggml_tensor * pool_idxs, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,
                          ggml_tensor * gather_mask, bool gather, ggml_tensor * new_pool_idxs, ggml_tensor * new_pool_rep,
                          const llama_ubatch * ubatch) const;
+    void set_input_mtp_dsa_selection(ggml_tensor * sel, ggml_tensor * mask, bool gather,
+                                     const llama_ubatch * ubatch) const;
+
     void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
                        ggml_tensor * bias, const llama_ubatch * ubatch, uint32_t ratio,
                        bool blk_bias) const;
