@@ -103,18 +103,25 @@ GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded
 It is shape- and topology-gated and falls back safely; leave it unset on other
 machines.
 
-### DFlash / MTP
+### MTP / DFlash sidecars
 
-Add the draft model only when it is compatible with the main model:
+The RDNA2 build helpers compile the sidecar libraries. With `SPEC_SIDECAR=1`,
+the server detects a compatible MTP target or DFlash draft, prepares the needed
+assets natively on first start, and reuses them from the llama.cpp cache:
 
 ```bash
-  --spec-type draft-dflash \
-  --spec-draft-model /path/to/dflash.gguf \
-  --spec-draft-n-max 6
+# MTP is detected from the main model
+SPEC_SIDECAR=1 ./build/bin/llama-server -m /path/to/main.gguf --spec-draft-n-max 3
+
+# DFlash is detected from the speculative model
+SPEC_SIDECAR=1 ./build/bin/llama-server -m /path/to/main.gguf \
+  -md /path/to/dflash.gguf --spec-draft-n-max 7
 ```
 
-`--spec-draft-n-max` is a workload setting, not a build requirement. Start with
-the draft model's supported block size and tune acceptance and throughput.
+No Python preparation step is required. Generated files default to
+`${LLAMA_CACHE:-~/.cache/llama.cpp}/spec-sidecar`; use
+`--spec-sidecar-cache /path` to choose another location. Existing explicit
+sidecar paths remain supported.
 
 ## What is automatic
 

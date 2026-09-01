@@ -1434,6 +1434,11 @@ std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
 }
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
+    // Resolve or build an explicitly enabled sidecar bundle before model-load
+    // policy decides whether a shared output head must remain mirrored.
+    (void) common_speculative_sidecar_candidate(
+            params.speculative, params.model.path, (uint32_t) params.n_parallel);
+
     const char * output_sharding = std::getenv("GGML_TP_SHARDED_OUTPUT");
     const bool use_vocab_sharded_output = params.split_mode == LLAMA_SPLIT_MODE_TENSOR &&
         output_sharding != nullptr && std::strcmp(output_sharding, "1") == 0;
