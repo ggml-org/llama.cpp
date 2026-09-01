@@ -669,7 +669,16 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
         cb(score, "indexer_score", il);
 
         const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool);
-        ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, score, n_top_pool)); // [n_top_pool, n_tokens]
+        ggml_tensor * top_k = ggml_top_k(ctx0, score, n_top_pool); // [n_top_pool, n_tokens], UNORDERED
+
+        // The gather mask marks the first min(nv, n_top_pool) slots as the visible pools, so order the set by descending score.
+        ggml_tensor * sel_score = ggml_get_rows(ctx0,
+                ggml_reshape_3d(ctx0, score, 1, n_pool, n_tokens), top_k); // [1, n_top_pool, n_tokens]
+        ggml_tensor * sel_order = ggml_argsort(ctx0,
+                ggml_reshape_2d(ctx0, sel_score, n_top_pool, n_tokens), GGML_SORT_ORDER_DESC);
+        top_k = ggml_get_rows(ctx0,
+                ggml_reshape_3d(ctx0, ggml_cast(ctx0, top_k, GGML_TYPE_F32), 1, n_top_pool, n_tokens), sel_order);
+        top_k = ggml_cast(ctx0, ggml_cont(ctx0, ggml_reshape_2d(ctx0, top_k, n_top_pool, n_tokens)), GGML_TYPE_I32);
         cb(top_k, "indexer_top_k", il);
 
         sel_idx = ggml_get_rows(ctx0, inp_kpool->pool_idxs,
