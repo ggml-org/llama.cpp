@@ -9,7 +9,7 @@
 		/** Full command text, copied to the clipboard as-is. */
 		command: string;
 		baseOptions: QuantOption[];
-		draftOptions: (QuantOption & { badge: ModelSidecar | null; shared: boolean })[];
+		draftOptions: (QuantOption & { badge: ModelSidecar | null })[];
 		/** Value of the base quant select, mirrored by the parent. */
 		basePick: string;
 		/** Value of the draft quant select; empty when no draft is picked. */
@@ -53,15 +53,6 @@
 <div
 	class="relative flex items-center gap-2 overflow-hidden rounded-lg border border-border/40 bg-background py-2.5 pl-4 pr-10 shadow-xs dark:border-border/35 dark:bg-background/50"
 >
-	<div
-		aria-hidden="true"
-		class="pointer-events-none absolute inset-y-0 left-0 w-px bg-primary/20"
-	></div>
-
-	<span aria-hidden="true" class="shrink-0 select-none font-mono text-xs text-muted-foreground/40"
-		>$</span
-	>
-
 	<!-- Single line: long commands scroll horizontally instead of wrapping. -->
 	<div
 		class="flex min-w-0 flex-1 items-center gap-x-2 overflow-x-auto py-0.5 font-mono text-xs whitespace-nowrap text-foreground/90"
@@ -99,16 +90,12 @@
 
 			<select
 				aria-label="Draft model quantization"
-				class={SELECT_CLASS}
+				class="{SELECT_CLASS} -ml-2"
 				onchange={(e) => onDraftPick(e.currentTarget.value)}
 				value={draftPick}
 			>
 				{#each draftOptions as option (option.path)}
 					<option disabled={option.disabled} value={option.path}>
-						{#if option.shared}
-							{option.badge?.toUpperCase()}-SHARED
-						{/if}
-
 						{option.label}
 					</option>
 				{/each}

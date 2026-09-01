@@ -17,7 +17,7 @@
 
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
-		class="grid gap-0 p-0 md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360!"
+		class="grid gap-0 p-0 md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-372!"
 		style="grid-template-columns: auto 1fr;"
 	>
 		<ModelsDiscover />
