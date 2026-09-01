@@ -33,17 +33,19 @@ Environment:
 - Target:    x86_64-pc-linux-gnu
 
 ```console
-+--------------------+-----+------------+------------+------------+
-| Build              | TUs | Frontend   | Backend    | Total      |
-+--------------------+-----+------------+------------+------------+
-| Minimal, master    | 249 |   468.2 s  |   270.3 s  |   738.5 s  |
-| Minimal, with PCH  | 253 |   177.1 s  |   265.8 s  |   442.9 s  |
-| Full,    master    | 396 |   811.0 s  |   692.2 s  | 1,503.2 s  |
-| Full,    with PCH  | 404 |   380.0 s  |   664.7 s  | 1,044.7 s  |
-+--------------------+-----+------------+------------+------------+
++------------------------+-----+------------+------------+------------+
+| Build                  | TUs | Frontend   | Backend    | Total      |
++------------------------+-----+------------+------------+------------+
+| Minimal, master        | 249 |   468.2 s  |   270.3 s  |   738.5 s  |
+| Minimal, with PCH      | 253 |   177.1 s  |   265.8 s  |   442.9 s  |
+| Full,    master        | 396 |   811.0 s  |   692.2 s  | 1,503.2 s  |
+| Full,    with PCH      | 405 |   380.0 s  |   664.7 s  | 1,044.7 s  |
+| Full,    with PCH + UB | 264 |   357.7 s  |   635.7 s  |   993.4 s  |
++------------------------+-----+------------+------------+------------+
 
-PCH = precompiled header.
+PCH  = precompiled header.
 Full = includes building Server, Tools, and Tests.
+UB   = unity build for models
 ```
 Note that the number of translation units (TUs) increases when using precompiled
 headers — each PCH target adds one extra TU for the precompilation step itself.
