@@ -1099,7 +1099,7 @@ static void handle_media(
         out_files.push_back(data);
 
     } else if (string_starts_with(url, "data:")) {
-        // try to decode base64 image
+        // try to decode base64 image, video, or audio
         std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
         if (parts.size() != 2) {
             throw std::invalid_argument("Invalid uri-encoded base64 value");
