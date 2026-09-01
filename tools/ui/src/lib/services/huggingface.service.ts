@@ -184,7 +184,12 @@ export class HuggingFaceService {
 	} | null {
 		if (!MODEL_ID.WEIGHT_EXTENSION_REGEX.test(filename)) return null;
 
-		let source = filename.replace(MODEL_ID.WEIGHT_EXTENSION_REGEX, '');
+		// HF repos may nest sidecars in a folder (e.g. `MTP/mtp-Model-Q4_0.gguf`);
+		// parse the file name only, the folder adds no quant information.
+		let source = (filename.split('/').pop() ?? filename).replace(
+			MODEL_ID.WEIGHT_EXTENSION_REGEX,
+			''
+		);
 		let sidecar: ModelSidecar | null = null;
 		let sidecarForm: SidecarForm | null = null;
 
