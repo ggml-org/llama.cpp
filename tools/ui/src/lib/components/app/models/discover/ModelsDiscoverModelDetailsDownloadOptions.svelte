@@ -236,6 +236,9 @@
 		draftEntry ? (HuggingFaceService.extractQuantMeta(draftEntry.path)?.sidecar ?? null) : null
 	);
 
+	/** True when the picked draft is the shared (target-borrowing) variant. */
+	let draftShared = $derived(draftEntry ? (HuggingFaceService.extractQuantMeta(draftEntry.path)?.shared ?? false) : false);
+
 	// LLAMA-APP-REUSE: --spec-type value for each draft sidecar
 	const SPEC_TYPE: Record<ModelSidecar, string> = {
 		[ModelAuxSidecar.MMPROJ]: '',
@@ -341,7 +344,7 @@
 	 */
 	let downloadLabel = $derived.by(() => {
 		const main = mainEntry ?? commandMain;
-		const draftLabel = draftSidecar?.toUpperCase();
+		const draftLabel = draftSidecar ? `${draftSidecar.toUpperCase()}${draftShared ? ' shared' : ''}` : undefined;
 
 		let label = 'Download';
 
@@ -396,7 +399,7 @@
 				<span class="h-px flex-1 bg-border/50"></span>
 
 				<span class="text-xs whitespace-nowrap text-muted-foreground">
-					or download from your terminal
+					or run in your terminal
 				</span>
 
 				<span class="h-px flex-1 bg-border/50"></span>

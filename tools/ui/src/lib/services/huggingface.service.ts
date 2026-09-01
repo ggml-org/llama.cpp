@@ -179,6 +179,8 @@ export class HuggingFaceService {
 	// LLAMA-APP-REUSE: quant + sidecar filename parser
 	static extractQuantMeta(filename: string): {
 		quant: string | null;
+		/** Draft-head-only variant borrowing embed/output weights from the target model. */
+		shared: boolean;
 		sidecar: ModelSidecar | null;
 		sidecarForm: SidecarForm | null;
 	} | null {
@@ -220,6 +222,9 @@ export class HuggingFaceService {
 		// - For main files like `Llama-3-8B-Q4_K_M.gguf` we land on the trailing quant.
 		const segments = source.split(MODEL_ID.SEGMENT_SEPARATOR);
 		const quantIdx = segments.findIndex((seg) => MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(seg));
+		// Unsloth ships draft heads in two layouts: `shared-` files borrow the
+		// embedding/output weights from the target model, others are self-contained.
+		const shared = segments.some((seg) => seg.toLowerCase() === 'shared');
 
 		let quant = quantIdx >= 0 ? segments[quantIdx].toUpperCase() : null;
 
@@ -232,7 +237,7 @@ export class HuggingFaceService {
 			quant = `${HF_UD_QUANT_PREFIX}-${quant}`;
 		}
 
-		return { quant, sidecar, sidecarForm };
+		return { quant, shared, sidecar, sidecarForm };
 	}
 
 	/**
