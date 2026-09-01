@@ -750,8 +750,12 @@ ggml_tensor * llama_model_glm5next::graph::build_dsa_top_k(
     // an intra-pool position bias and, with no rope anywhere, the only ordering signal here.
     m_g = ggml_add(ctx0, m_g, ggml_get_rows(ctx0, layer.indexer_comp_ape, inp->ape_slots));
 
-    // softmax normalizes ne[0], so bring the member axis there
-    ggml_tensor * w = ggml_soft_max(ctx0, ggml_cont(ctx0, ggml_permute(ctx0, m_g, 1, 0, 2, 3)));
+    // softmax normalizes ne[0], so bring the member axis there. (d, n_pool) are adjacent on
+    // the contiguous tensor, so folding them into one ne[1] leaves every row identical while
+    // moving n_pool off gridDim.y (65535 on CUDA) onto gridDim.x
+    ggml_tensor * wc = ggml_cont(ctx0, ggml_permute(ctx0, m_g, 1, 0, 2, 3));
+    ggml_tensor * w  = ggml_reshape_4d(ctx0,
+            ggml_soft_max(ctx0, ggml_reshape_3d(ctx0, wc, r, d*n_pool, ns)), r, d, n_pool, ns);
     ggml_tensor * v = ggml_cont(ctx0, ggml_permute(ctx0, m_k, 1, 0, 2, 3));
 
     ggml_tensor * pooled = ggml_sum_rows(ctx0, ggml_mul(ctx0, v, w));
