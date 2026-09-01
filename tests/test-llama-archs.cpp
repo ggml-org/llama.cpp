@@ -64,6 +64,15 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
     }
 }
 
+// depth-sweep overrides (0 = leave defaults). Set only by test_depth_sweep().
+static uint32_t g_depth_sweep_n_ctx = 0;
+static uint32_t g_depth_sweep_n_ub  = 0;
+static uint32_t g_sweep_iheads      = 0;
+static uint32_t g_sweep_iklen       = 0;
+static uint32_t g_sweep_layers      = 0;   // glm5next fixture layer-count override
+static uint32_t g_sweep_dlead       = 0;   // leading dense layers (real model: 3 of 45)
+static uint32_t g_sweep_heads       = 0;   // glm5next fixture attention-head override
+
 static void usage(char ** argv) {
     printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-v/--verbose]\n", argv[0]);
 }
@@ -125,6 +134,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_ff   = 192;
         if (arch == LLM_ARCH_GLM5NEXT && g_sweep_layers > 0) {
             n_layer = g_sweep_layers;
+        }
+        if (arch == LLM_ARCH_GLM5NEXT && g_sweep_heads > 0) {
+            n_head = g_sweep_heads;
         }
     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         n_layer = 3;
@@ -377,13 +389,6 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
     return true;
 }
 
-// depth-sweep overrides (0 = leave defaults). Set only by test_depth_sweep().
-static uint32_t g_depth_sweep_n_ctx = 0;
-static uint32_t g_depth_sweep_n_ub  = 0;
-static uint32_t g_sweep_iheads      = 0;
-static uint32_t g_sweep_iklen       = 0;
-static uint32_t g_sweep_layers      = 0;   // glm5next fixture layer-count override
-static uint32_t g_sweep_dlead       = 0;   // leading dense layers (real model: 3 of 45)
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
@@ -954,6 +959,9 @@ int main(int argc, char ** argv) {
         }
         if (strcmp(argv[i], "--layers") == 0 && i + 1 < argc) {
             g_sweep_layers = std::stoul(argv[++i]);
+        }
+        if (strcmp(argv[i], "--heads") == 0 && i + 1 < argc) {
+            g_sweep_heads = std::stoul(argv[++i]);
         }
         if (strcmp(argv[i], "--dlead") == 0 && i + 1 < argc) {
             g_sweep_dlead = std::stoul(argv[++i]);

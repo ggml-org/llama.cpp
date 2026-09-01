@@ -2605,12 +2605,40 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     } else {
-        ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
+        // fabley speed-conf 019 Patch A: packed-MQA decode transform.
+        // At decode (n_tokens==1) with an MQA cache (one KV head) and many
+        // query heads, mul_mat broadcasts over ne2 and Metal re-reads the
+        // whole K cache once per head (measured 6.03 ms/layer @108K).
+        // Packing heads into ne1 selects mul_mm (r2=1, K tiled once), then
+        // permutes back so softmax/mask see the original layout.
+        // Env-gated: LLAMA_PACKED_MQA_DECODE=1. Prefill is never affected.
+        static const bool fbl_packed_mqa = [] {
+            const char * e = getenv("LLAMA_PACKED_MQA_DECODE");
+            return e && atoi(e) != 0;
+        }();
+        const bool fbl_pack = fbl_packed_mqa &&
+            q->ne[1] == 1 && k->ne[2] == 1 && q->ne[2] > 8 && n_stream == 1;
+
+        ggml_tensor * kq = nullptr;
+        if (fbl_pack) {
+            static bool fbl_logged = false;
+            if (!fbl_logged) { fbl_logged = true; fprintf(stderr, "packed-MQA decode path ACTIVE\n"); }
+            ggml_tensor * qp = ggml_cont(ctx0, ggml_permute(ctx0, q, 0, 2, 1, 3)); // [d, n_head, 1]
+            cb(qp, "q_packed", il);
+            kq = ggml_mul_mat(ctx0, k, qp);                                        // [n_kv, n_head, 1]
+            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+            kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 0, 2, 1, 3));              // [n_kv, 1, n_head]
+            cb(kq, "kq_packed", il);
+        } else {
+            kq = ggml_mul_mat(ctx0, k, q);
+        }
         cb(kq, "kq", il);
 
         // note: this op tends to require high floating point range
         //       while for some models F16 is enough, for others it is not, so we default to F32 here
-        ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        if (!fbl_pack) {
+            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        }
 
         if (arch == LLM_ARCH_GROK) {
             // need to do the following:
@@ -2649,7 +2677,16 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             cb(v, "v_cont", il);
         }
 
-        ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
+        ggml_tensor * kqv = nullptr;
+        if (fbl_pack) {
+            ggml_tensor * kqp = ggml_cont(ctx0, ggml_permute(ctx0, kq, 0, 2, 1, 3)); // [n_kv, n_head, 1]
+            cb(kqp, "kq_soft_max_packed", il);
+            kqv = ggml_mul_mat(ctx0, v, kqp);                                        // [d_v, n_head, 1]
+            kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));              // [d_v, 1, n_head]
+            cb(kqv, "kqv_packed", il);
+        } else {
+            kqv = ggml_mul_mat(ctx0, v, kq);
+        }
         cb(kqv, "kqv", il);
 
         // for MLA with the absorption optimization, we need to "decompress" from MQA back to MHA
