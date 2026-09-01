@@ -51,9 +51,16 @@
 </script>
 
 <div
-	class="flex items-center gap-2 overflow-hidden rounded-md border border-border/40 bg-background py-2 pr-2 pl-3 shadow-xs dark:border-border/35 dark:bg-background/50"
+	class="relative flex items-center gap-2 overflow-hidden rounded-lg border border-border/40 bg-background py-2.5 pl-4 pr-10 shadow-xs dark:border-border/35 dark:bg-background/50"
 >
-	<span aria-hidden="true" class="shrink-0 font-mono text-xs text-muted-foreground/50">$</span>
+	<div
+		aria-hidden="true"
+		class="pointer-events-none absolute inset-y-0 left-0 w-px bg-primary/20"
+	></div>
+
+	<span aria-hidden="true" class="shrink-0 select-none font-mono text-xs text-muted-foreground/40"
+		>$</span
+	>
 
 	<!-- Single line: long commands scroll horizontally instead of wrapping. -->
 	<div
@@ -112,7 +119,7 @@
 
 	<button
 		aria-label="Copy command"
-		class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent/60 hover:text-foreground"
+		class="absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer rounded-md p-1.5 text-muted-foreground/70 transition-colors hover:bg-primary/10 hover:text-foreground"
 		onclick={copy}
 		type="button"
 	>
