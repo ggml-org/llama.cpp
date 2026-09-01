@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { type QuantOption, SELECT_CLASS } from './download-options.utils';
+	import { type QuantOption } from './download-options.utils';
 	import { Check, Copy } from '@lucide/svelte';
+	import * as Select from '$lib/components/ui/select';
 	import { type ModelSidecar } from '$lib/constants';
 	import { copyToClipboard } from '$lib/utils';
 
@@ -43,6 +44,14 @@
 
 	let copied = $state(false);
 
+	// Trigger labels: the select trigger has no automatic value rendering.
+	let baseSelectedLabel = $derived(
+		baseOptions.find((option) => option.path === basePick)?.label ?? basePick
+	);
+	let draftSelectedLabel = $derived(
+		draftOptions.find((option) => option.path === draftPick)?.label ?? draftPick
+	);
+
 	async function copy() {
 		await copyToClipboard(command);
 		copied = true;
@@ -67,19 +76,33 @@
 
 		<!-- Base quant: always part of the command, the 8-bit file by default. -->
 		{#if baseOptions.length}
-			<select
-				aria-label="Base model quantization"
-				class="{SELECT_CLASS} {mainSelected ? '' : 'border-dashed'} -ml-2"
-				onchange={(e) => onBasePick(e.currentTarget.value)}
-				title={mainSelected ? undefined : 'Default quant - pick a file above or another quant here'}
-				value={basePick}
-			>
-				{#each baseOptions as option (option.path)}
-					<option disabled={option.disabled} value={option.path}>
-						{option.label}
-					</option>
-				{/each}
-			</select>
+			<Select.Root onValueChange={(v) => v && onBasePick(v)} type="single" value={basePick}>
+				<Select.Trigger
+					aria-label="Base model quantization"
+					class="-ml-2 border-primary/15 bg-primary/[0.07] font-mono text-foreground hover:bg-primary/15 focus-visible:border-primary/40 focus-visible:ring-0 {mainSelected
+						? ''
+						: 'border-dashed'}"
+					size="xs"
+					title={mainSelected
+						? undefined
+						: 'Default quant - pick a file above or another quant here'}
+				>
+					{baseSelectedLabel}
+				</Select.Trigger>
+
+				<Select.Content class="font-mono text-xs">
+					{#each baseOptions as option (option.path)}
+						<Select.Item
+							class="text-xs"
+							disabled={option.disabled}
+							label={option.label}
+							value={option.path}
+						>
+							{option.label}
+						</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
 		{/if}
 
 		<!-- Draft segment: appears once a draft is picked, quant inline too. -->
@@ -88,18 +111,28 @@
 
 			<span class="shrink-0">{modelId}{draftQuant ? ':' : ''}</span>
 
-			<select
-				aria-label="Draft model quantization"
-				class="{SELECT_CLASS} -ml-2"
-				onchange={(e) => onDraftPick(e.currentTarget.value)}
-				value={draftPick}
-			>
-				{#each draftOptions as option (option.path)}
-					<option disabled={option.disabled} value={option.path}>
-						{option.label}
-					</option>
-				{/each}
-			</select>
+			<Select.Root onValueChange={(v) => v && onDraftPick(v)} type="single" value={draftPick}>
+				<Select.Trigger
+					aria-label="Draft model quantization"
+					class="-ml-2 border-primary/15 bg-primary/[0.07] font-mono text-foreground hover:bg-primary/15 focus-visible:border-primary/40 focus-visible:ring-0"
+					size="xs"
+				>
+					{draftSelectedLabel}
+				</Select.Trigger>
+
+				<Select.Content class="font-mono text-xs">
+					{#each draftOptions as option (option.path)}
+						<Select.Item
+							class="text-xs"
+							disabled={option.disabled}
+							label={option.label}
+							value={option.path}
+						>
+							{option.label}
+						</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
 
 			<span>--spec-type</span>
 

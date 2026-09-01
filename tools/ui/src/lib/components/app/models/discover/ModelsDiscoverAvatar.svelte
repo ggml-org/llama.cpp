@@ -4,6 +4,7 @@
 	import { HuggingFaceService } from '$lib/services';
 
 	interface Props {
+        class?: string;
 		/** Org whose avatar is shown (may differ from the repo's org for base models). */
 		org: string;
 		/** Repo's own org, shown as a small corner badge when provided. */
@@ -22,6 +23,7 @@
 
 	let {
 		baseImageClass = '',
+	    class: className = '',
 		org,
 		quantImageClass = 'h-full w-full',
 		quantOrg,
@@ -57,7 +59,7 @@
 	});
 </script>
 
-<span class="relative mt-0.5 inline-flex shrink-0">
+<span class="relative mt-0.5 inline-flex shrink-0 {className}">
 	{#if avatarError}
 		<span
 			aria-hidden="true"

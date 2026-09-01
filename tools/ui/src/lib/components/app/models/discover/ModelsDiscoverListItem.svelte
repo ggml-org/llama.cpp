@@ -135,7 +135,7 @@
 		onclick={() => onSelect?.(model.id)}
 		type="button"
 	>
-		<ModelsDiscoverAvatar org={avatarOrg} quantOrg={showBaseModelAvatar ? org : undefined} />
+		<ModelsDiscoverAvatar class="mt-1" org={avatarOrg} quantOrg={showBaseModelAvatar ? org : undefined} />
 
 		<span class="min-w-0 flex-1">
 			<ModelId
