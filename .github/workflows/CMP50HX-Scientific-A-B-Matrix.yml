@@ -1,0 +1,315 @@
+name: CMP 50HX Scientific A/B Matrix
+on:
+  workflow_dispatch:
+    inputs:
+      llama_ref:
+        description: 'Полный 40-символьный SHA коммита llama.cpp'
+        required: true
+        type: string
+      backend_name:
+        description: 'test-backend-ops backend name (usually CUDA0)'
+        required: true
+        default: 'CUDA0'
+        type: string
+
+jobs:
+  build-matrix:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout llama.cpp (pinned by dispatch input)
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ inputs.llama_ref }}
+          fetch-depth: 1
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: '12.8.0'
+
+      - name: Compile dp4a-emulation unit gate
+        shell: pwsh
+        run: |
+          @'
+          #include <cstdio>
+          #include <cstdint>
+          __device__ __forceinline__ int dp4a_emu(const int a, const int b, const int c) {
+              int a_lo, a_hi;
+              asm("prmt.b32 %0, %1, 0, 0x9180;" : "=r"(a_lo) : "r"(a));
+              asm("prmt.b32 %0, %1, 0, 0xB3A2;" : "=r"(a_hi) : "r"(a));
+              int r = c;
+              asm("dp2a.lo.s32.s32 %0, %1, %2, %0;" : "+r"(r) : "r"(a_lo), "r"(b));
+              asm("dp2a.hi.s32.s32 %0, %1, %2, %0;" : "+r"(r) : "r"(a_hi), "r"(b));
+              return r;
+          }
+          __device__ __forceinline__ int dp4a_ref_sw(const int a, const int b, const int c) {
+              const int8_t* a8 = (const int8_t*)&a;
+              const int8_t* b8 = (const int8_t*)&b;
+              return c + a8[0]*b8[0] + a8[1]*b8[1] + a8[2]*b8[2] + a8[3]*b8[3];
+          }
+          __global__ void test_random(int n, int* fails) {
+              const int i = blockIdx.x * blockDim.x + threadIdx.x;
+              if (i >= n) return;
+              unsigned int x = 0x9E3779B9u ^ (unsigned)i;
+              x ^= x << 13; x ^= x >> 17; x ^= x << 5;  const int a = (int)x;
+              x ^= x << 13; x ^= x >> 17; x ^= x << 5;  const int b = (int)x;
+              x ^= x << 13; x ^= x >> 17; x ^= x << 5;  const int c = (int)x;
+              const int hw = __dp4a(a, b, c);
+              const int sw = dp4a_ref_sw(a, b, c);
+              const int em = dp4a_emu(a, b, c);
+              if (hw != sw || hw != em) {
+                  if (atomicAdd(fails, 1) < 16)
+                      printf("MISMATCH a=%08x b=%08x c=%08x hw=%d sw=%d emu=%d\n", a, b, c, hw, sw, em);
+              }
+          }
+          __global__ void test_edges(int* fails) {
+              const int A[8] = {0, -1, (int)0x80808080u, 0x7F7F7F7F, 0x01020304, 0x80, (int)0x80000000u, (int)0x00FF00FFu};
+              const int B[8] = {0, -1, (int)0x80808080u, 0x7F7F7F7F, 0x01020304, 0x80, (int)0x80000000u, (int)0x00FF00FFu};
+              const int C[4] = {0, 0x7FFFFFFF, (int)0x80000000u, 0x12345678};
+              for (int ia = 0; ia < 8; ia++)
+              for (int ib = 0; ib < 8; ib++)
+              for (int ic = 0; ic < 4; ic++) {
+                  const int hw = __dp4a(A[ia], B[ib], C[ic]);
+                  if (hw != dp4a_ref_sw(A[ia], B[ib], C[ic]) || hw != dp4a_emu(A[ia], B[ib], C[ic]))
+                      atomicAdd(fails, 1);
+              }
+          }
+          int main() {
+              int* fails; cudaMalloc(&fails, sizeof(int)); cudaMemset(fails, 0, sizeof(int));
+              const int n = 1 << 22;
+              test_random<<<(n + 255) / 256, 256>>>(n, fails);
+              test_edges<<<1, 1>>>(fails);
+              int h = -1; cudaMemcpy(&h, fails, sizeof(int), cudaMemcpyDeviceToHost);
+              printf(h == 0 ? "DP4A-EMU GATE: PASS\n" : "DP4A-EMU GATE: FAIL (%d)\n", h);
+              return h == 0 ? 0 : 1;
+          }
+          '@ | Set-Content -Path test_dp4a_emu.cu -Encoding utf8NoBOM
+          nvcc -O2 -arch=sm_75 test_dp4a_emu.cu -o test_dp4a_emu.exe
+          if ($LASTEXITCODE -ne 0) { throw "nvcc failed" }
+
+      - name: Build 4-way A/B matrix
+        shell: pwsh
+        env:
+          LLAMA_REF: ${{ inputs.llama_ref }}
+          BACKEND_NAME: ${{ inputs.backend_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          
+          if ($env:LLAMA_REF -notmatch '^[0-9a-fA-F]{40}$') {
+              throw "llama_ref must be a full 40-character commit SHA"
+          }
+          
+          $cuhFile = "ggml/src/ggml-cuda/common.cuh"
+          $targetBlock = @'
+          #if __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
+              return __dp4a(a, b, c);
+          #else
+          '@
+          $patchedBlock = @'
+          #if (__CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)) && !defined(DISABLE_DP4A)
+              return __dp4a(a, b, c);
+          #elif defined(DISABLE_DP4A) && __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A
+              int a_lo, a_hi;
+              asm("prmt.b32 %0, %1, 0, 0x9180;" : "=r"(a_lo) : "r"(a));
+              asm("prmt.b32 %0, %1, 0, 0xB3A2;" : "=r"(a_hi) : "r"(a));
+              int r = c;
+              asm("dp2a.lo.s32.s32 %0, %1, %2, %0;" : "+r"(r) : "r"(a_lo), "r"(b));
+              asm("dp2a.hi.s32.s32 %0, %1, %2, %0;" : "+r"(r) : "r"(a_hi), "r"(b));
+              return r;
+          #else
+          '@
+          $targetLF  = $targetBlock  -replace "`r`n", "`n"
+          $patchedLF = $patchedBlock -replace "`r`n", "`n"
+          $tLines = $targetLF  -split "`n"
+          $pLines = $patchedLF -split "`n"
+          $expDel = @($tLines | Where-Object { $pLines -cnotcontains $_ })
+          $expAdd = @($pLines | Where-Object { $tLines -cnotcontains $_ })
+
+          Write-Host "Pinned commit: $(git rev-parse HEAD)"
+          if ($LASTEXITCODE -ne 0) { throw "git rev-parse failed" }
+          $rawNorm = (Get-Content $cuhFile -Raw) -replace "`r`n", "`n"
+          if (-not $rawNorm.Contains($targetLF)) {
+              Write-Host "---- Контекст dp4a-шим (для калибровки якоря под этот коммит): ----"
+              Select-String -Path $cuhFile -Pattern 'dp4a' -Context 6, 12 |
+                  ForEach-Object { $_.Context.PreContext; $_.Line; $_.Context.PostContext }
+              throw "Anchor not found в пиннутом дереве — скорректируйте якорь или смените SHA"
+          }
+          if (([regex]::Matches($rawNorm, [regex]::Escape($targetLF))).Count -ne 1) {
+              throw "Anchor occurs more than once — строковая замена небезопасна"
+          }
+
+          $variants = @(
+              @{ Name = "1_baseline";   CudaFlags = "" },
+              @{ Name = "2_dp2a_only";  CudaFlags = "-DDISABLE_DP4A" },
+              @{ Name = "3_nofma_only"; CudaFlags = "--fmad=false" },
+              @{ Name = "4_combined";   CudaFlags = "-DDISABLE_DP4A --fmad=false" }
+          )
+
+          New-Item -ItemType Directory -Force -Path suite/_runtime | Out-Null
+          $env:PATH = "$(Join-Path (Get-Location).Path 'suite/_runtime');$env:PATH"
+          
+          $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+              $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+              $dumpbin = Get-ChildItem "$installPath\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
+                         Sort-Object FullName -Descending | Select-Object -First 1 | Select-Object -ExpandProperty FullName
+          }
+          else {
+              $dumpbin = (Get-ChildItem "C:\Program Files (x86)\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
+                          Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          }
+          if (-not $dumpbin) { throw "dumpbin.exe not found on runner" }
+
+          function Copy-Deps([string]$Image, [string]$OutDir) {
+              $queue = [System.Collections.Generic.Queue[string]]::new()
+              $queue.Enqueue($Image)
+              $seen = @{}
+              while ($queue.Count) {
+                  $img = $queue.Dequeue()
+                  $dir = Split-Path $img -Parent
+                  $out = (& $dumpbin /dependents $img 2>$null) -join "`n"
+                  if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $img" }
+                  $deps = [regex]::Matches($out, '(?im)^\s+(\S+\.dll)\s*$') |
+                          ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() } | Select-Object -Unique
+                  foreach ($d in $deps) {
+                      if ($seen.ContainsKey($d)) { continue }
+                      $seen[$d] = $true
+                      $local = Join-Path $dir $d
+                      $cuda  = Join-Path $env:CUDA_PATH "bin/$d"
+                      if    (Test-Path $local) { $queue.Enqueue($local) }
+                      elseif (Test-Path $cuda) {
+                          Copy-Item $cuda (Join-Path $OutDir $d) -Force
+                          $queue.Enqueue((Join-Path $OutDir $d))
+                      }
+                      elseif ($d -in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
+                          $sys = Join-Path $env:SystemRoot "System32/$d"
+                          if (-not (Test-Path $sys)) {
+                              throw "VC++ runtime dependency '$d' not found on CI runner"
+                          }
+                          Write-Host "System dependency: $d (not bundled — install VC++ Redistributable x64 locally)"
+                      }
+                      elseif ($d -eq 'nvcuda.dll' -or $d -like 'api-ms-*') {
+                      }
+                      else { throw "Unresolved dependency '$d' (imported by $img)" }
+                  }
+              }
+          }
+
+          foreach ($v in $variants) {
+              Write-Host "=== $($v.Name) | CMAKE_CUDA_FLAGS='$($v.CudaFlags)' ==="
+              git restore --worktree --source=HEAD -- $cuhFile
+              if ($LASTEXITCODE -ne 0) { throw "git restore failed ($($v.Name))" }
+              if ((Get-Content $cuhFile -Raw).Contains("DISABLE_DP4A")) {
+                  throw "Leftover patch before $($v.Name) — restore не сработал"
+              }
+
+              if ($v.CudaFlags -match 'DISABLE_DP4A') {
+                  $orig    = Get-Content $cuhFile -Raw
+                  $wasCRLF = $orig.Contains("`r`n")
+                  $content = $orig -replace "`r`n", "`n"
+                  if (([regex]::Matches($content, [regex]::Escape($targetLF))).Count -ne 1) {
+                      throw "Anchor count != 1 for $($v.Name)"
+                  }
+                  $content = $content.Replace($targetLF, $patchedLF)
+                  $outText = if ($wasCRLF) { $content -replace "`n", "`r`n" } else { $content }
+                  [IO.File]::WriteAllText((Resolve-Path $cuhFile).Path, $outText, [Text.UTF8Encoding]::new($false))
+
+                  $st = @(git status --porcelain --untracked-files=no)
+                  if ($LASTEXITCODE -ne 0) { throw "git status failed" }
+                  if ($st.Count -ne 1 -or $st[0] -cne " M $cuhFile") {
+                      throw "Unexpected tree changes: $($st -join '; ')"
+                  }
+                  $diff = @(git diff -U0 -- $cuhFile)
+                  if ($LASTEXITCODE -ne 0) { throw "git diff failed" }
+                  $add = @($diff | Where-Object { $_ -match '^\+' -and $_ -notmatch '^\+\+\+' } | ForEach-Object { $_.Substring(1) })
+                  $del = @($diff | Where-Object { $_ -match '^-'  -and $_ -notmatch '^---'  } | ForEach-Object { $_.Substring(1) })
+                  if (($del -join "`n") -cne ($expDel -join "`n") -or ($add -join "`n") -cne ($expAdd -join "`n")) {
+                      throw "Patch delta mismatch — upstream менял соседний код"
+                  }
+                  
+                  # Проверка git diff --check на наличие whitespace errors
+                  git diff --check -- $cuhFile 2>&1 | ForEach-Object { Write-Warning "git diff --check: $_" }
+              }
+
+              $buildDir = "build_$($v.Name)"
+              cmake -B $buildDir -DGGML_CUDA=ON -DLLAMA_CURL=OFF `
+                    -DCMAKE_CUDA_ARCHITECTURES=75 `
+                    -DCMAKE_CUDA_RUNTIME_LIBRARY=Shared `
+                    -DCMAKE_CUDA_FLAGS="$($v.CudaFlags)"
+              if ($LASTEXITCODE -ne 0) { throw "configure failed ($($v.Name))" }
+
+              cmake --build $buildDir --config Release --target llama-bench test-backend-ops llama-cli -j 4
+              if ($LASTEXITCODE -ne 0) { throw "build failed ($($v.Name))" }
+
+              if ($v.CudaFlags) {
+                  $hit = Select-String -Path "$buildDir/ggml/src/ggml-cuda/*.vcxproj" -SimpleMatch $v.CudaFlags -Quiet
+                  if (-not $hit) { throw "CUDA flags lost in vcxproj ($($v.Name))" }
+              }
+
+              $outDir = "suite/$($v.Name)"
+              New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+              Copy-Item "$buildDir/bin/Release/*" $outDir -Recurse -Force
+              Copy-Deps "$outDir/ggml-cuda.dll"   "suite/_runtime"
+              Copy-Deps "$outDir/llama-bench.exe" "suite/_runtime"
+              Copy-Deps "$outDir/llama-cli.exe"   "suite/_runtime"
+              Copy-Deps "$outDir/test-backend-ops.exe" "suite/_runtime"
+
+              $smokeLog = Join-Path (Get-Location).Path "smoke_$($v.Name).log"
+              Push-Location $outDir
+              try {
+                  & .\llama-bench.exe --help > $null 2> $smokeLog
+                  if ($LASTEXITCODE -ne 0) { throw "Loader smoke test failed ($($v.Name)) — см. $smokeLog" }
+              } finally { Pop-Location }
+
+              if ($v.Name -eq "1_baseline") {
+                  & "$outDir\llama-bench.exe" --help      | Set-Content suite/_llama-bench_help.txt
+                  & "$outDir\test-backend-ops.exe" --help 2>&1 | Set-Content suite/_test-backend-ops_help.txt
+              }
+          }
+
+          $benchHelp = Get-Content suite/_llama-bench_help.txt -Raw
+          $faSyntax = "-fa on"
+          if ($benchHelp -match '(?m)^\s*-fa,?\s+.*<on\|off\|auto>') {
+              $faSyntax = "-fa on"
+          }
+          elseif ($benchHelp -match '(?m)^\s*-fa\b') {
+              $faSyntax = "-fa"
+          }
+          else {
+              throw "Flash Attention option not found in llama-bench --help"
+          }
+
+          $backendName = $env:BACKEND_NAME
+          $opsHelpRaw = Get-Content suite/_test-backend-ops_help.txt -Raw
+          if ($opsHelpRaw -notmatch [regex]::Escape($backendName)) {
+              throw "Backend name '$backendName' not found in test-backend-ops --help. Please check available backends for this pinned commit."
+          }
+
+          Copy-Item test_dp4a_emu.exe suite/ -Force
+          $nvccVer = (nvcc --version | Select-String 'release').ToString().Trim()
+          $cmakeVer = (cmake --version | Select-Object -First 1).ToString().Trim()
+          $flags   = foreach ($v in $variants) { "$($v.Name): CMAKE_CUDA_FLAGS='$($v.CudaFlags)'" }
+          @(
+              "llama.cpp commit: $(git rev-parse HEAD)",
+              "requested ref:    $env:LLAMA_REF",
+              $nvccVer,
+              $cmakeVer,
+              "generator: Visual Studio 17 2022",
+              "CMAKE_CUDA_ARCHITECTURES: 75",
+              "runner: windows-2022",
+              "",
+              "Build variants (каждая treatment-ветка изменяет одну логическую оптимизацию):",
+              $flags,
+              "",
+              "Actual CLI syntax for pinned commit:",
+              "  test-backend-ops command: test -b $backendName",
+              "  llama-bench flash-attention: $faSyntax"
+          ) | Set-Content suite/MANIFEST.txt
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: CMP50HX-Suite
+          path: suite/
+          retention-days: 14
