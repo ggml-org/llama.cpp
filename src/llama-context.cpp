@@ -17,8 +17,10 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 
 //
 // llama_context
@@ -1378,6 +1380,63 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             ret = GGML_STATUS_ALLOC_FAILED;
             return nullptr;
+        }
+
+        // fabley: alloc-map dump for the wrap-landing investigation (~/conference).
+        // Env-gated; dumps every tensor's VA pointer + owning buffer for graphs whose
+        // batched kq ne0 crosses LLAMA_ALLOCDUMP_MIN_NE0, at most every _STRIDE tokens.
+        {
+            static const char * fbl_path = getenv("LLAMA_ALLOCDUMP_FILE");
+            if (fbl_path) {
+                static long long fbl_gate   = getenv("LLAMA_ALLOCDUMP_MIN_NE0") ? atoll(getenv("LLAMA_ALLOCDUMP_MIN_NE0")) : 0;
+                static long long fbl_stride = getenv("LLAMA_ALLOCDUMP_STRIDE")  ? atoll(getenv("LLAMA_ALLOCDUMP_STRIDE"))  : 2048;
+                static long long fbl_last   = -1;
+                long long kq_ne0 = -1;
+                for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
+                    const ggml_tensor * n = ggml_graph_node(gf, i);
+                    if (strncmp(n->name, "kq-", 3) == 0 && n->ne[2] >= 8 && n->ne[0] > kq_ne0) {
+                        kq_ne0 = n->ne[0];
+                    }
+                }
+                if (kq_ne0 >= fbl_gate && (fbl_last < 0 || kq_ne0 - fbl_last >= fbl_stride)) {
+                    fbl_last = kq_ne0;
+                    if (FILE * f = fopen(fbl_path, "a")) {
+                        fprintf(f, "GRAPH kq_ne0=%lld n_nodes=%d n_tokens=%d\n",
+                            kq_ne0, ggml_graph_n_nodes(gf), (int) ubatch.n_tokens);
+                        std::unordered_set<const void *> fbl_seen;
+                        auto fbl_dump = [&](const char * tag, int idx, const ggml_tensor * t) {
+                            if (t == nullptr || fbl_seen.count(t)) {
+                                return;
+                            }
+                            fbl_seen.insert(t);
+                            ggml_backend_buffer_t buf = t->buffer;
+                            fprintf(f, "%s|%d|%s|%s|%p|%zu|%lld,%lld,%lld,%lld|%p|%zu|%s|%p\n",
+                                tag, idx, t->name, ggml_op_name(t->op), t->data, ggml_nbytes(t),
+                                (long long) t->ne[0], (long long) t->ne[1],
+                                (long long) t->ne[2], (long long) t->ne[3],
+                                buf ? ggml_backend_buffer_get_base(buf) : nullptr,
+                                buf ? ggml_backend_buffer_get_size(buf) : (size_t) 0,
+                                buf ? ggml_backend_buffer_name(buf) : "-",
+                                (const void *) t->view_src);
+                        };
+                        for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
+                            ggml_tensor * n = ggml_graph_node(gf, i);
+                            fbl_dump("N", i, n);
+                            if (n->view_src) {
+                                fbl_dump("V", i, n->view_src);
+                            }
+                            for (int j = 0; j < GGML_MAX_SRC; j++) {
+                                fbl_dump("S", i, n->src[j]);
+                                if (n->src[j] && n->src[j]->view_src) {
+                                    fbl_dump("V", i, n->src[j]->view_src);
+                                }
+                            }
+                        }
+                        fprintf(f, "ENDGRAPH\n");
+                        fclose(f);
+                    }
+                }
+            }
         }
     }
 
