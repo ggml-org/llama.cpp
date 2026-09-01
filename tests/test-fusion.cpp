@@ -472,9 +472,9 @@ int main(int argc, char ** argv) {
             os << "# test-fusion baseline for device " << base_name << "\n";
             os << "# " << std::left
                << std::setw(18) << "arch"  << '\t'
-               << std::setw(2)  << "moe"   << '\t'
-               << std::setw(6)  << "mode"  << '\t'
-               << std::setw(20) << "label" << '\t'
+               << std::setw(4)  << "moe"   << '\t'
+               << std::setw(8)  << "mode"  << '\t'
+               << std::setw(28) << "label" << '\t'
                << std::right << std::setw(7) << "count" << '\n';
         }
 
@@ -497,7 +497,7 @@ int main(int argc, char ** argv) {
                    << std::setw(20) << r.arch << '\t'
                    << std::setw(4)  << (r.moe ? "1" : "0") << '\t'
                    << std::setw(8)  << r.mode << '\t'
-                   << std::setw(22) << r.label << '\t'
+                   << std::setw(28) << r.label << '\t'
                    << std::right << std::setw(7) << r.count_fused << '\n';
             }
         }
