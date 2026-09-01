@@ -1,17 +1,41 @@
 #!/usr/bin/env bash
 # Compile-time profiling using clang -ftime-trace + ClangBuildAnalyzer.
 #
+# Usage:
+#   ./scripts/build-profile.sh [--full] [-jN]
+#
+# --full: include Server, Tools, and Tests (default: minimal build)
+# -jN   :  number of parallel jobs (default: all cores)
+#
 # Requires ClangBuildAnalyzer:
-# Install mac: brew install clang-build-analyzer
-# Install linux: https://github.com/aras-p/ClangBuildAnalyzer.git
+#   macOS: brew install clang-build-analyzer
+#   Linux: https://github.com/aras-p/ClangBuildAnalyzer.git
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-BUILD_DIR="${ROOT_DIR}/build-profile-baseline"
+
+FULL=0
+JOBS="-j$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+
+for arg in "$@"; do
+    case "${arg}" in
+        --full) FULL=1 ;;
+        -j*)    JOBS="${arg}" ;;
+        *) echo "error: unknown argument: ${arg}" >&2; exit 1 ;;
+    esac
+done
+
+if [ "${FULL}" -eq 1 ]; then
+    BUILD_DIR="${ROOT_DIR}/build-profile-full"
+    REPORT="${BUILD_DIR}/profile-report-full.txt"
+else
+    BUILD_DIR="${ROOT_DIR}/build-profile-baseline"
+    REPORT="${BUILD_DIR}/profile-report.txt"
+fi
+
 OUTPUT_BIN="${BUILD_DIR}/clang_analysis.bin"
-JOBS="${1:--j$(nproc 2>/dev/null || sysctl -n hw.ncpu)}"
 
 if ! command -v clang++ &>/dev/null; then
     echo "error: clang++ not found" >&2
@@ -50,10 +74,10 @@ cmake --fresh \
     -DGGML_CCACHE=OFF \
     -DGGML_OPENMP=ON \
     -DGGML_NATIVE=OFF \
-    -DLLAMA_BUILD_TESTS=OFF \
+    -DLLAMA_BUILD_TESTS=$([ "${FULL}" -eq 1 ] && echo ON || echo OFF) \
     -DLLAMA_BUILD_EXAMPLES=OFF \
-    -DLLAMA_BUILD_TOOLS=OFF \
-    -DLLAMA_BUILD_SERVER=OFF \
+    -DLLAMA_BUILD_TOOLS=$([ "${FULL}" -eq 1 ] && echo ON || echo OFF) \
+    -DLLAMA_BUILD_SERVER=$([ "${FULL}" -eq 1 ] && echo ON || echo OFF) \
     -DLLAMA_BUILD_APP=OFF
 
 echo
@@ -81,8 +105,11 @@ ClangBuildAnalyzer --stop "${BUILD_DIR}" "${OUTPUT_BIN}" > /dev/null
 
 echo
 echo "================================================================================"
-ClangBuildAnalyzer --analyze "${OUTPUT_BIN}" | tee "${BUILD_DIR}/profile-report.txt"
+TUS=$(grep -oP "Compilation \(\K[0-9]+" "${REPORT}" 2>/dev/null || echo "?")
+ClangBuildAnalyzer --analyze "${OUTPUT_BIN}" | tee "${REPORT}"
 
+echo
+echo "translation units: ${TUS}"
 echo
 echo "largest trace files (top 20 by size):"
 find "${BUILD_DIR}" -name "*.json" ! -name "compile_commands.json" \
@@ -92,5 +119,4 @@ find "${BUILD_DIR}" -name "*.json" ! -name "compile_commands.json" \
     | awk 'NR<=20 {printf "%8.1f KB  %s\n", $1/1024, $2}'
 
 echo
-echo "ClangBuildAnalyzer report was generated: ${BUILD_DIR}/profile-report.txt"
-
+echo "ClangBuildAnalyzer report was generated: ${REPORT}"
