@@ -521,7 +521,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
 
 int ggml_metal_op_encode(ggml_metal_op_t ctx, int idx) {
     if (ctx->use_capture) {
-        ggml_metal_encoder_debug_group_push(ctx->enc, ggml_op_desc(ctx->node(idx)));
+        // fabley: include the tensor name so traces attribute per graph stage
+        char dbg[192];
+        snprintf(dbg, sizeof(dbg), "%s|%s", ctx->node(idx)->name, ggml_op_desc(ctx->node(idx)));
+        ggml_metal_encoder_debug_group_push(ctx->enc, dbg);
     }
 
     int res = ggml_metal_op_encode_impl(ctx, idx);

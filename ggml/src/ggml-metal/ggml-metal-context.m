@@ -467,6 +467,23 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
         ctx->n_nodes_per_cb = (ctx->n_nodes_1 + ctx->n_cb - 1) / ctx->n_cb;
 
+        // fabley (speed conference 008/009): env-gated arm-file — when
+        // LLAMA_METAL_CAPTURE_ARM_FILE is set and the file exists, consume it
+        // and capture THIS compute. Production without the env pays nothing.
+        {
+            static const char * arm_path = NULL;
+            static bool arm_checked = false;
+            if (!arm_checked) {
+                arm_checked = true;
+                arm_path = getenv("LLAMA_METAL_CAPTURE_ARM_FILE");
+            }
+            if (arm_path && access(arm_path, F_OK) == 0) {
+                unlink(arm_path);
+                ctx->capture_compute = 1;
+                GGML_LOG_WARN("%s: capture armed via %s\n", __func__, arm_path);
+            }
+        }
+
         if (ctx->capture_compute >= 0) {
             ctx->capture_compute--;
         }
