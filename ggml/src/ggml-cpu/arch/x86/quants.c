@@ -2035,6 +2035,18 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
+// fused multiply-add of int16 pairs into an int32 accumulator: acc + madd_epi16(x, y).
+// Uses vpdpwssd where available; bit-identical to the two-instruction sequence.
+static inline __m256i madd_epi16_add_epi32(const __m256i acc, const __m256i x, const __m256i y) {
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
+    return _mm256_dpwssd_epi32(acc, x, y);
+#elif defined(__AVXVNNI__)
+    return _mm256_dpwssd_avx_epi32(acc, x, y);
+#else
+    return _mm256_add_epi32(acc, _mm256_madd_epi16(x, y));
+#endif
+}
+
 void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -2086,7 +2098,8 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const __m128i sc128  = _mm256_extracti128_si256(mins_and_scales, 0);
         const __m256i scales = MM256_SET_M128I(sc128, sc128);
 
-        __m256i sumi = _mm256_setzero_si256();
+        __m256i sumi  = _mm256_setzero_si256();
+        __m256i sumi2 = _mm256_setzero_si256();  // second accumulator breaks the vpdpwssd dependency chain
 
         for (int j = 0; j < QK_K/64; ++j) {
 
@@ -2098,16 +2111,12 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             const __m256i q4h = _mm256_and_si256(_mm256_srli_epi16(q4bits, 4), m4);
 
             const __m256i q8l = _mm256_loadu_si256((const __m256i*)q8); q8 += 32;
-            __m256i p16l = _mm256_maddubs_epi16(q4l, q8l);
-            p16l = _mm256_madd_epi16(scale_l, p16l);
+            sumi  = madd_epi16_add_epi32(sumi,  _mm256_maddubs_epi16(q4l, q8l), scale_l);
 
             const __m256i q8h = _mm256_loadu_si256((const __m256i*)q8); q8 += 32;
-            __m256i p16h = _mm256_maddubs_epi16(q4h, q8h);
-            p16h = _mm256_madd_epi16(scale_h, p16h);
-            const __m256i sumj = _mm256_add_epi32(p16l, p16h);
-
-            sumi = _mm256_add_epi32(sumi, sumj);
+            sumi2 = madd_epi16_add_epi32(sumi2, _mm256_maddubs_epi16(q4h, q8h), scale_h);
         }
+        sumi = _mm256_add_epi32(sumi, sumi2);
 
         __m256 vd = _mm256_set1_ps(d);
         acc = _mm256_fmadd_ps(vd, _mm256_cvtepi32_ps(sumi), acc);
@@ -2270,7 +2279,8 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const __m256i hbits = _mm256_loadu_si256((const __m256i*)x[i].qh);
         __m256i hmask = mone;
 
-        __m256i sumi = _mm256_setzero_si256();
+        __m256i sumi  = _mm256_setzero_si256();
+        __m256i sumi2 = _mm256_setzero_si256();
 
         int bit = 0;
 
@@ -2294,16 +2304,12 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             const __m256i q8_0 = _mm256_loadu_si256((const __m256i*)q8); q8 += 32;
             const __m256i q8_1 = _mm256_loadu_si256((const __m256i*)q8); q8 += 32;
 
-            __m256i p16_0 = _mm256_maddubs_epi16(q5_0, q8_0);
-            __m256i p16_1 = _mm256_maddubs_epi16(q5_1, q8_1);
-
-            p16_0 = _mm256_madd_epi16(scale_0, p16_0);
-            p16_1 = _mm256_madd_epi16(scale_1, p16_1);
-
-            sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_0, p16_1));
+            sumi  = madd_epi16_add_epi32(sumi,  _mm256_maddubs_epi16(q5_0, q8_0), scale_0);
+            sumi2 = madd_epi16_add_epi32(sumi2, _mm256_maddubs_epi16(q5_1, q8_1), scale_1);
 
         }
 
+        sumi = _mm256_add_epi32(sumi, sumi2);
         __m256 vd = _mm256_set1_ps(d);
         acc = _mm256_fmadd_ps(vd, _mm256_cvtepi32_ps(sumi), acc);
 
