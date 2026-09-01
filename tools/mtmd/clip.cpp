@@ -157,8 +157,8 @@ struct clip_ctx {
 
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
-    ggml_backend_buffer_ptr buf;
-
+    std::vector<ggml_backend_buffer_ptr> bufs;
+    bool use_extra_bufts = true;
 
     int max_nodes = 8192;
     ggml_backend_sched_ptr sched;
@@ -206,6 +206,8 @@ struct clip_ctx {
             backend = backend_cpu;
             LOG_INF("%s: CLIP using CPU backend\n", __func__);
         }
+
+        use_extra_bufts = ctx_params.use_extra_bufts;
 
         if (ctx_params.image_min_tokens > 0) {
             model.hparams.custom_image_min_tokens = ctx_params.image_min_tokens;
@@ -3598,8 +3600,9 @@ struct clip_model_loader {
 
             // alloc memory and offload data
             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
-            ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
-            ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            ggml_backend_buffer_ptr buf { ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft) };
+            ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            ctx_clip.bufs.emplace_back(std::move(buf));
             // read the weight from file
             if (!ctx_clip.no_alloc) {
                 size_t data_loaded = 0;
