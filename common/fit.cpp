@@ -420,7 +420,8 @@ static void common_params_fit_impl(
                             sum_projected_used_min_ctx += dmds_min_ctx[id].mb.total();
                         }
                     }
-                    if (sum_used_target > sum_projected_used_min_ctx) {
+                    if (sum_used_target > sum_projected_used_min_ctx && n_ctx_max > n_ctx_min_total
+                        && sum_projected_used > sum_projected_used_min_ctx) {
                         // linear interpolation between minimum and maximum context size:
                         cparams->n_ctx += (n_ctx_max - n_ctx_min_total) * (sum_used_target - sum_projected_used_min_ctx)
                             / (sum_projected_used - sum_projected_used_min_ctx);
@@ -690,7 +691,9 @@ static void common_params_fit_impl(
                 uint32_t delta = ngl_per_device_high[id].n_layer - ngl_per_device[id].n_layer;
                 LOG_TRC("%s: start filling device %" PRIu32 ", delta=%" PRIu32 "\n", __func__, id, delta);
                 while (delta > 1) {
-                    uint32_t step_size = int64_t(delta) * (targets[id] - mem[id]) / (mem_high[id] - mem[id]);
+                    // mem_high == mem on an already-full device: step is degenerate
+                    const int64_t headroom = mem_high[id] - mem[id];
+                    uint32_t step_size = headroom > 0 ? uint32_t(int64_t(delta) * (targets[id] - mem[id]) / headroom) : delta - 1;
                     step_size = std::max(step_size, uint32_t(1));
                     step_size = std::min(step_size, delta - 1);
 
@@ -762,7 +765,9 @@ static void common_params_fit_impl(
             assert(ngl_per_device_high[id].n_full() >= ngl_per_device[id].n_full());
             uint32_t delta = ngl_per_device_high[id].n_full() - ngl_per_device[id].n_full();
             while (delta > 1) {
-                uint32_t step_size = int64_t(delta) * (targets[id] - mem[id]) / (mem_high[id] - mem[id]);
+                // mem_high == mem on an already-full device: step is degenerate
+                const int64_t headroom = mem_high[id] - mem[id];
+                uint32_t step_size = headroom > 0 ? uint32_t(int64_t(delta) * (targets[id] - mem[id]) / headroom) : delta - 1;
                 step_size = std::max(step_size, uint32_t(1));
                 step_size = std::min(step_size, delta - 1);
 
