@@ -53,7 +53,7 @@ jobs:
           apt install -y cmake build-essential ninja-build libgomp1 git libssl-dev jq python3 python3-venv python3-pip
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: cuda-ubuntu-24.04-cuda
           save: false
@@ -108,7 +108,7 @@ jobs:
           sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev jq python3-venv
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: cuda-ubuntu-22.04-hip
           save: false
@@ -159,7 +159,7 @@ jobs:
           apt-get install -y build-essential git cmake libssl-dev jq
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: cuda-ubuntu-22.04-musa
           save: false

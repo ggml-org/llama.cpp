@@ -52,7 +52,7 @@ jobs:
           sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev python3
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: hip-quality-check-ubuntu-22.04
           evict-old-files: 1d

@@ -47,7 +47,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
 
@@ -152,7 +152,7 @@ jobs:
           & "${env:HIP_PATH}\lib\llvm\bin\clang.exe" --version
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           # TODO: this build does not match the build in release.yml, so we use a different cache key
           #       ideally, the builds should match, similar to the CUDA build above so that we would be able

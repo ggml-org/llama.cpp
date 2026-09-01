@@ -53,7 +53,7 @@ jobs:
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: vulkan-ubuntu-24.04-arm
           variant: ccache
@@ -112,7 +112,7 @@ jobs:
           strip: 1
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: vulkan-ubuntu-24.04-llvmpipe
           evict-old-files: 1d
@@ -160,7 +160,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: cpu-windows-2025-x64-vulkan
           variant: ccache
