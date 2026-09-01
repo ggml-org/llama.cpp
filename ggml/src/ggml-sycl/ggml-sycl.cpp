@@ -35,6 +35,7 @@
 #include <sycl/backend.hpp>
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
 #include <level_zero/ze_api.h>
+#include <level_zero/zes_api.h>
 #endif
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
 #    include <sycl/ext/oneapi/experimental/async_alloc/async_alloc.hpp>
@@ -61,6 +62,7 @@
 #include "ggml-sycl/fwht.hpp"
 #include "ggml-sycl/gemm.hpp"
 #include "ggml-sycl/getrows.hpp"
+#include "ggml-sycl/mem.hpp"
 #include "ggml-sycl/norm.hpp"
 #include "ggml-sycl/presets.hpp"
 #include "ggml-sycl/quantize.hpp"
@@ -105,6 +107,9 @@ int g_ggml_sycl_enable_flash_attention = 1;
 int g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
 int g_ggml_sycl_usm_system = 0;
 int g_ggml_sycl_enable_host_pinned_mem = 1;
+int g_ggml_sycl_host_pinned_mem_2g = 0;
+int g_ggml_sycl_get_mem_api = MEMORY_API_TYPE_LEVEL_ZERO;
+
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
@@ -301,10 +306,27 @@ static const char* dev2dev_int2str(int dev2dev) {
     }
 }
 
+/*
+* There are several entry APIs to be called as first function in SYCL backend in different cases.
+* It's the first internal function to be called by them in SYCL backend.
+* This function is used to do initialize work for the SYCL backend and set the global variables.
+*/
+void initialize_sycl_begining() {
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+    ze_result_t zes_init = zesInit(0);
+    if (zes_init != ZE_RESULT_SUCCESS) {
+        std::cerr << "Warning: zesInit failed [ggml_check_sycl] with code " << static_cast<int>(zes_init)
+                            << ". Sysman free-memory query may be unavailable.\n";
+    }
+#endif
+}
+
 static void ggml_check_sycl() try {
     static bool initialized = false;
 
     if (!initialized) {
+        initialize_sycl_begining();
+
         g_ggml_sycl_debug = ggml_sycl_get_env("GGML_SYCL_DEBUG", 0);
         g_ggml_sycl_enable_optimize = ggml_sycl_get_env("GGML_SYCL_ENABLE_OPT", 1);
         g_ggml_sycl_enable_graph = ggml_sycl_get_env("GGML_SYCL_ENABLE_GRAPH", 0);
@@ -317,8 +339,11 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
 
         g_ggml_sycl_dev2dev_memcpy = ggml_sycl_get_env("GGML_SYCL_DEV2DEV_MEMCPY", DEV2DEV_MEMCPY_SYCL);
+        g_ggml_sycl_get_mem_api = ggml_sycl_get_env("GGML_SYCL_GET_MEM_API", MEMORY_API_TYPE_LEVEL_ZERO);
+
         if (g_ggml_sycl_use_level_zero_api == 0) {
             g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
+            g_ggml_sycl_get_mem_api = MEMORY_API_TYPE_SYCL;
         }
 
 #ifdef SYCL_FLASH_ATTN
@@ -330,6 +355,9 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_usm_system = ggml_sycl_get_env("GGML_SYCL_USM_SYSTEM", 0);
         g_ggml_sycl_enable_host_pinned_mem =
             ggml_sycl_get_env("GGML_SYCL_ENABLE_HOST_PINNED_MEM", 1);
+
+        g_ggml_sycl_host_pinned_mem_2g =
+            ggml_sycl_get_env("GGML_SYCL_HOST_PINNED_MEM_2G", 0) & g_ggml_sycl_enable_host_pinned_mem;
 
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
 
@@ -374,9 +402,12 @@ static void ggml_check_sycl() try {
 
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
         GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d (%s)\n", g_ggml_sycl_dev2dev_memcpy, dev2dev_int2str(g_ggml_sycl_dev2dev_memcpy));
+        GGML_LOG_INFO("  GGML_SYCL_GET_MEM_API: %d (%s)\n", g_ggml_sycl_get_mem_api, mem_api_int2str(g_ggml_sycl_get_mem_api));
 #else
         GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d (%s), enable to SYCL API since missing GGML_SYCL_SUPPORT_LEVEL_ZERO_API\n",
                       g_ggml_sycl_dev2dev_memcpy, dev2dev_int2str(g_ggml_sycl_dev2dev_memcpy));
+        GGML_LOG_INFO("  GGML_SYCL_GET_MEM_API: %d (%s), enable to SYCL API since missing GGML_SYCL_SUPPORT_LEVEL_ZERO_API\n",
+                      g_ggml_sycl_get_mem_api, mem_api_int2str(g_ggml_sycl_get_mem_api));
 #endif
 
 #if defined(GGML_SYCL_DNNL)
@@ -429,6 +460,7 @@ static void ggml_check_sycl() try {
 
         GGML_LOG_INFO("  GGML_SYCL_USM_SYSTEM: %d\n", g_ggml_sycl_usm_system);
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_HOST_PINNED_MEM: %d\n", g_ggml_sycl_enable_host_pinned_mem);
+        GGML_LOG_INFO("  GGML_SYCL_HOST_PINNED_MEM_2G: %d\n", g_ggml_sycl_host_pinned_mem_2g);
 
 /* NOT REMOVE, keep it for next optimize for XMX.
 #if defined(SYCL_USE_XMX)
@@ -949,8 +981,12 @@ static size_t ggml_backend_sycl_buffer_type_get_alignment(ggml_backend_buffer_ty
 }
 
 static size_t ggml_backend_sycl_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    return dpct::get_current_device().get_max_mem_alloc_size();
-
+    size_t max_alloc_size = dpct::get_current_device().get_max_mem_alloc_size();
+    if (g_ggml_sycl_host_pinned_mem_2g) {
+        return std::min(max_alloc_size, (size_t) 2LL*1024*1024*1024);
+    } else {
+        return max_alloc_size;
+    }
     GGML_UNUSED(buft);
 }
 
@@ -1523,7 +1559,12 @@ static size_t ggml_backend_sycl_host_buffer_type_get_max_size(ggml_backend_buffe
 
     if (g_ggml_sycl_enable_host_pinned_mem) {
         ggml_backend_sycl_device_context * dev_ctx = (ggml_backend_sycl_device_context *) buft->device->context;
-        return dpct::dev_mgr::instance().get_device(dev_ctx->device).get_max_mem_alloc_size();
+        size_t max_alloc_size = dpct::dev_mgr::instance().get_device(dev_ctx->device).get_max_mem_alloc_size();
+        if (g_ggml_sycl_host_pinned_mem_2g) {
+            return std::min(max_alloc_size, (size_t) 2LL*1024*1024*1024);
+        } else {
+            return max_alloc_size;
+        }
     } else {
         return SIZE_MAX;
     }
@@ -5208,6 +5249,7 @@ catch (sycl::exception const &exc) {
 
 static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
     if (!g_sycl_loaded) return false;
+    initialize_sycl_begining();
 
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_sycl_split(dst->src[0]->buffer)) {
         ggml_sycl_set_peer_access(dst->src[1]->ne[1], ctx.device);
@@ -5590,18 +5632,16 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-void ggml_backend_sycl_get_device_memory(int device, size_t *free,
-                                                   size_t *total) try {
+void ggml_backend_sycl_get_device_memory(int device, size_t * free, size_t * total) try {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_get_device_memory\n");
-    ggml_sycl_set_device(device);
-
-    SYCL_CHECK(CHECK_TRY_ERROR(
-        dpct::dev_mgr::instance().get_device(device).get_memory_info(*free, *total)));
-}
-catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
+    bool res = get_memory_size(dpct::dev_mgr::instance().get_device(device), *free, *total,
+                               (MemoryAPIType) g_ggml_sycl_get_mem_api);
+    if (!res) {
+        GGML_ABORT("[%s] failed to get device memory size", __func__);
+    }
+} catch (const sycl::exception & exc) {
+    std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+    std::exit(1);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -6020,10 +6060,12 @@ static const char * ggml_backend_sycl_device_get_description(ggml_backend_dev_t 
 }
 
 static void ggml_backend_sycl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *)dev->context;
-    ggml_sycl_set_device(ctx->device);
-    SYCL_CHECK(CHECK_TRY_ERROR(
-    dpct::dev_mgr::instance().get_device(ctx->device).get_memory_info(*free, *total)));
+    ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *) dev->context;
+    bool res = get_memory_size(dpct::dev_mgr::instance().get_device(ctx->device), *free, *total,
+                               (MemoryAPIType) g_ggml_sycl_get_mem_api);
+    if (!res) {
+        GGML_ABORT("[%s] failed to get device memory size", __func__);
+    }
 }
 
 static enum ggml_backend_dev_type ggml_backend_sycl_device_get_type(ggml_backend_dev_t dev) {
@@ -6906,6 +6948,7 @@ ggml_backend_reg_t ggml_backend_sycl_reg() {
         static std::mutex mutex;
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
+            initialize_sycl_begining();
             ggml_backend_sycl_reg_context * ctx = new ggml_backend_sycl_reg_context;
             const int min_batch_size = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 
