@@ -353,7 +353,9 @@ static __host__ int ggml_cuda_fattn_mma_get_nstages(const int DKQ, const int DV,
 static constexpr __device__ int ggml_cuda_fattn_mma_get_nstages(
         const int DKQ, const int DV, const int ncols1, const int ncols2, const bool use_sparse) {
 #ifdef CP_ASYNC_AVAILABLE
-    return ncols2 >= 2 && !use_sparse ? ggml_cuda_fattn_mma_get_nstages_target(DKQ, DV, ncols1*ncols2) : 0;
+    const int nstages_target = ncols2 >= 2 ? ggml_cuda_fattn_mma_get_nstages_target(DKQ, DV, ncols1*ncols2) : 0;
+    // sparse gather is not implemented for multi-stage loading
+    return use_sparse && nstages_target > 1 ? 1 : nstages_target;
 #else
     GGML_UNUSED_VARS(DKQ, DV, ncols1, ncols2, use_sparse);
     return 0;
@@ -373,8 +375,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
     const int chunks_per_row = D2 / h2_per_chunk;
     if constexpr (use_cp_async) {
         static_assert(warp_size == 32, "bad warp_size");
-        static_assert(!oob_check, "OOB check not compatible with cp_async");
-        static_assert(!use_sparse, "sparse gather not compatible with cp_async");
+        static_assert(!oob_check || use_sparse, "OOB check not compatible with cp_async");
         constexpr int preload = 64;
 
         const unsigned int tile_KV_32 = ggml_cuda_cvta_generic_to_shared(tile_KV);
@@ -397,15 +398,24 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
                     break;
                 }
 
+                int64_t i_KV;
+                if constexpr (use_sparse) {
+                    // padded slots gather row 0, the -inf mask removes their contribution
+                    const int32_t index = i < i_sup ? indices[k_VKQ_0 + i] : 0;
+                    i_KV = index >= 0 ? index : 0;
+                } else {
+                    i_KV = k_VKQ_0 + i;
+                }
+
 #pragma unroll
                 for (int k0 = k0_start; k0 < k0_stop; k0 += stride_k) {
                     const int k = k0 + (stride_k == warp_size ? threadIdx.x : threadIdx.x % stride_k);
 
                     if constexpr (swz) {
                         const int smem_offs_b = ggml_cuda_fattn_smem_swizzle::bytes_rc<stride_tile>(i, k*h2_per_chunk);
-                        cp_async_cg_16<preload>(tile_KV_32 + smem_offs_b, KV + int64_t(k_VKQ_0 + i)*stride_KV + k*h2_per_chunk);
+                        cp_async_cg_16<preload>(tile_KV_32 + smem_offs_b, KV + i_KV*stride_KV + k*h2_per_chunk);
                     } else {
-                        cp_async_cg_16<preload>(tile_KV_32 + i*(stride_tile*sizeof(half2)) + k*16, KV + int64_t(k_VKQ_0 + i)*stride_KV + k*h2_per_chunk);
+                        cp_async_cg_16<preload>(tile_KV_32 + i*(stride_tile*sizeof(half2)) + k*16, KV + i_KV*stride_KV + k*h2_per_chunk);
                     }
                 }
             }
@@ -620,7 +630,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         flash_attn_ext_f16_load_tile<stride_tile_V, swz_V, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
             (V_h2, tile_V, nbatch_V2, stride_V, k_VKQ_0, k_VKQ_sup, nullptr);
     } else {
-        constexpr bool use_cp_async = nstages == 1;
+        // the sparse mask values are gathered per element, always load them synchronously
+        constexpr bool use_cp_async = nstages == 1 && !use_sparse;
         if (ncols2 > 1 || mask_h) {
             flash_attn_ext_f16_load_mask<ncols1, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
                 (mask_h, tile_mask, stride_mask, k_VKQ_0, k_VKQ_sup, jt*ncols1, ne01, indices);
