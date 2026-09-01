@@ -723,10 +723,8 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                 std::string status_nmse      = "\033[1;33mSKIP\033[0m";
                 std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                 char nmse_str[12] = {0};
-                // qwen4exp has never worked on the meta mirror; -sm tensor on real devices does
-                const bool skip_meta = dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && arch == LLM_ARCH_QWEN4EXP;
 
-                bool skip = !arch_supported(arch) || skip_meta || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
+                bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
                 if (!skip) {
                     if (logits_cpu.empty()) {
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
