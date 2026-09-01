@@ -6,6 +6,7 @@
 #import "ggml-metal-impl.h"
 #import "ggml-metal-common.h"
 #import "ggml-metal-ops.h"
+#import "ggml-metal-fuse.h"
 
 #import <Foundation/Foundation.h>
 
@@ -36,15 +37,14 @@ struct ggml_metal {
     // additional, inference-time compiled pipelines
     ggml_metal_pipelines_t pipelines_ext;
 
-    bool use_fusion;
     bool use_concurrency;
     bool use_graph_optimize;
 
     int debug_graph;
-    int debug_fusion;
 
-    // how many times a given op was fused
-    uint64_t fuse_cnt[GGML_OP_COUNT];
+    // shared fusion debugging context (NULL unless a test enabled fusion debugging)
+    // when non-NULL the graph is always encoded by a single thread (n_cb == 0)
+    struct ggml_metal_fusion * fusion;
 
     // capture state
     int capture_compute;
@@ -138,17 +138,11 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
         res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
-        res->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
         res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
 
         {
             const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
             res->debug_graph = val ? atoi(val) : 0;
-        }
-
-        {
-            const char * val = getenv("GGML_METAL_FUSION_DEBUG");
-            res->debug_fusion = val ? atoi(val) : 0;
         }
 
         res->use_graph_optimize = true;
@@ -157,9 +151,29 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
             res->use_graph_optimize = false;
         }
 
-        memset(res->fuse_cnt, 0, sizeof(res->fuse_cnt));
+        // when fusion debugging is enabled the backend registers with the shared, device-owned
+        // fusion debugging context and forces single-threaded encoding (n_cb == 0) so the
+        // counters are race-free
+        res->fusion = ggml_metal_device_get_fusion(dev);
+        if (res->fusion->stats) {
+            if (!res->fusion->labels_set) {
+                int n = 0;
+                const ggml_metal_fuse * all = ggml_metal_fuse_all(&n);
 
-        GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, res->use_fusion         ? "true" : "false");
+                // labels point into the static fuse table; labels[]/counts[] are freed by the
+                // device when the debug context is destroyed
+                res->fusion->labels = calloc(n > 0 ? n : 1, sizeof(char *));
+                res->fusion->counts = calloc(n > 0 ? n : 1, sizeof(uint64_t));
+                for (int i = 0; i < n; i++) {
+                    res->fusion->labels[i] = ggml_metal_fuse_label(&all[i]);
+                }
+                res->fusion->n_fusions  = n;
+                res->fusion->labels_set = true;
+            }
+            res->n_cb = 0;
+        }
+
+        GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, res->fusion->enabled    ? "true" : "false");
         GGML_LOG_INFO("%s: use concurrency    = %s\n", __func__, res->use_concurrency    ? "true" : "false");
         GGML_LOG_INFO("%s: use graph optimize = %s\n", __func__, res->use_graph_optimize ? "true" : "false");
 
@@ -221,15 +235,16 @@ void ggml_metal_free(ggml_metal_t ctx) {
         ctx->pipelines_ext = nil;
     }
 
-    if (ctx->debug_fusion > 0) {
+    if (ctx->fusion->debug > 0) {
         GGML_LOG_DEBUG("%s: fusion stats:\n", __func__);
-        for (int i = 0; i < GGML_OP_COUNT; i++) {
-            if (ctx->fuse_cnt[i] == 0) {
+
+        for (int i = 0; i < ctx->fusion->n_fusions; i++) {
+            if (ctx->fusion->counts[i] == 0) {
                 continue;
             }
 
             // note: cannot use ggml_log here
-            GGML_LOG_DEBUG("%s: - %s: %" PRIu64 "\n", __func__, ggml_op_name((enum ggml_op) i), ctx->fuse_cnt[i]);
+            GGML_LOG_DEBUG("%s: - %s: %" PRIu64 "\n", __func__, ctx->fusion->labels[i], ctx->fusion->counts[i]);
         }
     }
 
@@ -480,10 +495,17 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
     @autoreleasepool {
         ctx->gf = gf;
 
-        ctx->n_nodes_0 = MIN(n_main, gf->n_nodes);
-        ctx->n_nodes_1 = gf->n_nodes - ctx->n_nodes_0;
+        if (ctx->n_cb == 0) {
+            // single-threaded encoding: the whole graph is encoded by one command buffer
+            ctx->n_nodes_0      = gf->n_nodes;
+            ctx->n_nodes_1      = 0;
+            ctx->n_nodes_per_cb = 0;
+        } else {
+            ctx->n_nodes_0      = MIN(n_main, gf->n_nodes);
+            ctx->n_nodes_1      = gf->n_nodes - ctx->n_nodes_0;
 
-        ctx->n_nodes_per_cb = (ctx->n_nodes_1 + ctx->n_cb - 1) / ctx->n_cb;
+            ctx->n_nodes_per_cb = (ctx->n_nodes_1 + ctx->n_cb - 1) / ctx->n_cb;
+        }
 
         if (ctx->capture_compute >= 0) {
             ctx->capture_compute--;
@@ -681,6 +703,12 @@ ggml_metal_event_t ggml_metal_get_ev_cpy(ggml_metal_t ctx) {
 }
 
 void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
+    // when fusion stats are collected the graph must be encoded by a single thread so the
+    // counters are race-free; override whatever the caller requested
+    if (ctx->fusion->stats) {
+        n_cb = 0;
+    }
+
     if (ctx->n_cb != n_cb) {
         ctx->n_cb = MIN(n_cb, GGML_METAL_MAX_COMMAND_BUFFERS);
 
@@ -718,11 +746,10 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             ctx->gf,
             idx_start,
             idx_end,
-            ctx->use_fusion,
             ctx->use_concurrency,
             ctx->capture_compute,
             ctx->debug_graph,
-            ctx->debug_fusion);
+            ctx->fusion);
 
         for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
             const int res = ggml_metal_op_encode(ctx_op, idx);
