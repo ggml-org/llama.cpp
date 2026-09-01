@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import re
-
-from typing import TYPE_CHECKING, Callable, Iterable
+from typing import Iterable, TYPE_CHECKING
 
 import torch
 
@@ -16,196 +14,131 @@ from .deepseek import DeepseekV2Model
 
 @ModelBase.register("XingChen4ForCausalLM")
 class XingChen4Model(DeepseekV2Model):
-    # DeepSeek-V3 style MLA/MoE + Manifold-Constrained Hyper-Connections (MHC)
-    # multi-residual-stream blocks + a DeepSeek-V3 MTP head.
-    model_arch = gguf.MODEL_ARCH.XINGCHEN4
-    skip_mtp = False
-    supports_mtp_export = True
-    _n_main_layers: int | None = None
+    """XingChen4: DeepSeek-V2/V3 backbone (MLA + MoE) + mHC residual mixing."""
 
-    _HC_ALPHA = {"alpha_pre": 0, "alpha_post": 1, "alpha_res": 2}
+    model_arch = gguf.MODEL_ARCH.XINGCHEN4
+
+# map (prefix, kind) -> MODEL_TENSOR enum
+    _hc_tensor_map = {
+        ("hc_attn", "fn"):    gguf.MODEL_TENSOR.HC_ATTN_FN,
+        ("hc_attn", "base"):  gguf.MODEL_TENSOR.HC_ATTN_BASE,
+        ("hc_attn", "scale"): gguf.MODEL_TENSOR.HC_ATTN_SCALE,
+        ("hc_ffn",  "fn"):    gguf.MODEL_TENSOR.HC_FFN_FN,
+        ("hc_ffn",  "base"):  gguf.MODEL_TENSOR.HC_FFN_BASE,
+        ("hc_ffn",  "scale"): gguf.MODEL_TENSOR.HC_FFN_SCALE,
+    }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.block_count = self.hparams["num_hidden_layers"]
-        if not self.no_mtp:
-            self.block_count += self.hparams.get("num_nextn_predict_layers", 0)
-        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
-        # (bid, "attn_hc"|"ffn_hc") -> {0: alpha_pre, 1: alpha_post, 2: alpha_res}
-        self._hc_alpha: dict[tuple[int, str], dict[int, Tensor]] = {}
-
-    def index_tensors(self, remote_hf_model_id: str | None = None):
-        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
-        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
-
-    @classmethod
-    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        if (titem := super().filter_tensors(item)) is None:
-            return None
-        name, gen = titem
-
-        # legacy bias_* tensors are unused (vLLM load_weights skips them)
-        if re.search(r"(attn_hc|ffn_hc)\.bias_(pre|post|res)$", name):
-            return None
-
-        # the NextN/MTP block lives past num_hidden_layers (model.layers.40 -> blk.40)
-        assert cls._n_main_layers is not None
-        is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
-
-        # --no-mtp: drop the NextN block entirely.
-        if is_mtp and cls.no_mtp:
-            return None
-        # --mtp: keep only NextN-block tensors plus the shared embeddings/norm/lm_head.
-        if cls.mtp_only and not is_mtp and name not in (
-            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
-        ):
-            return None
-
-        return name, gen
-
-    def set_vocab(self):
-        # the checkpoint ships only the slow TeleChat3 tokenizer.model; build the
-        # BPE vocab and merges straight from the SentencePiece model
-        from sentencepiece import SentencePieceProcessor
-
-        tokenizer_path = self.dir_model / 'tokenizer.model'
-        tokenizer = SentencePieceProcessor()
-        tokenizer.LoadFromFile(str(tokenizer_path))
-
-        vocab_size = tokenizer.vocab_size()
-
-        tokens: list[bytes] = []
-        scores: list[float] = []
-        toktypes: list[int] = []
-        pieces: list[str] = []
-        for token_id in range(vocab_size):
-            piece = tokenizer.IdToPiece(token_id)
-            pieces.append(piece)
-            tokens.append(piece.encode("utf-8"))
-            scores.append(tokenizer.GetScore(token_id))
-
-            if tokenizer.IsUnknown(token_id):
-                toktypes.append(gguf.TokenType.UNKNOWN)
-            elif tokenizer.IsControl(token_id):
-                toktypes.append(gguf.TokenType.CONTROL)
-            elif tokenizer.IsUnused(token_id):
-                toktypes.append(gguf.TokenType.UNUSED)
-            elif tokenizer.IsByte(token_id):
-                toktypes.append(gguf.TokenType.BYTE)
-            else:
-                toktypes.append(gguf.TokenType.NORMAL)
-
-        # reclassify special tokens as CONTROL, but only when the added-token id
-        # lines up with the spm piece; tokenizer_config.json ids can drift from
-        # the spm model and the slow tokenizer (sp.encode) uses the spm ids
-        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
-        if tokenizer_config_file.is_file():
-            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
-                tokenizer_config_json = json.load(f)
-            for token_id, token_data in tokenizer_config_json.get("added_tokens_decoder", {}).items():
-                token_id = int(token_id)
-                if token_id >= vocab_size:
-                    continue
-                token: str = token_data["content"]
-                if pieces[token_id] != token:
-                    continue
-                if token_data.get("special") or self.does_token_look_special(token):
-                    toktypes[token_id] = gguf.TokenType.CONTROL
-                else:
-                    toktypes[token_id] = gguf.TokenType.USER_DEFINED
-
-        # merges, replicating transformers' SentencePieceExtractor.generate_merges():
-        # sorted by piece score desc, which is sentencepiece's merge priority and
-        # maps to llama.cpp's bpe rank 0 = highest priority
-        vocab = {piece: i for i, piece in enumerate(pieces)}
-        vocab_scores = {piece: score for piece, score in zip(pieces, scores)}
-        merges_raw: list[tuple[str, str, float]] = []
-        for merge, piece_score in vocab_scores.items():
-            local: list[tuple[str, str, float]] = []
-            for index in range(1, len(merge)):
-                piece_l, piece_r = merge[:index], merge[index:]
-                if piece_l in vocab and piece_r in vocab:
-                    local.append((piece_l, piece_r, piece_score))
-            local = sorted(local, key=lambda x: (vocab[x[0]], vocab[x[1]]))
-            merges_raw.extend(local)
-        merges_raw = sorted(merges_raw, key=lambda val: (val[2], len(val[0]), len(val[1])), reverse=True)
-        merges = [f"{val[0]} {val[1]}" for val in merges_raw]
-
-        self.gguf_writer.add_tokenizer_model("gpt2")
-        self.gguf_writer.add_tokenizer_pre("xingchen4")
-        self.gguf_writer.add_token_list(tokens)
-        self.gguf_writer.add_token_scores(scores)
-        self.gguf_writer.add_token_types(toktypes)
-
-        special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
-        special_vocab.merges = merges
-        # unk/pad ids are absent from config.json; take them from the spm trainer spec
-        special_vocab._set_special_token("unk", tokenizer.unk_id())
-        special_vocab._set_special_token("pad", tokenizer.pad_id())
-        special_vocab.add_to_gguf(self.gguf_writer)
-
-        # sentencepiece add_dummy_prefix -> BPE runtime prepends U+2581 to the text
-        self.gguf_writer.add_add_space_prefix(True)
+        # buffer for alpha tensors: {bid: {"attn": {}, "ffn": {}}}
+        self._tc4_alphas: dict[int, dict[str, dict[str, Tensor]]] = {}
 
     def set_gguf_parameters(self):
+        # XingChen4 config uses rope_scaling.type = "rope", which is equivalent
+        # to DeepSeek's "yarn" (vLLM maps it to "deepseek_yarn", TRT-LLM maps
+        # it to "yarn").  The base converter only recognises "yarn", so patch
+        # the rope_type before delegating to V2's set_gguf_parameters.
+        rope_type = self.rope_parameters.get("rope_type") or self.rope_parameters.get("type")
+        if rope_type == "rope":
+            self.rope_parameters["rope_type"] = "yarn"
+            if "type" in self.rope_parameters:
+                self.rope_parameters["type"] = "yarn"
+            # base.py's YARN branch accesses this with a direct key lookup
+            self.rope_parameters.setdefault("original_max_position_embeddings",
+                self.hparams.get("original_max_position_embeddings", 4096))
+
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        # NextN/MTP prediction layers
-        if not self.no_mtp and (num_nextn_predict_layers := hparams.get("num_nextn_predict_layers")) is not None:
-            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
+        # New config keys: hc_mult / hc_sinkhorn_iters / hc_eps
+        # Old config keys (fallback): num_residual_streams / mhc_sinkhorn_iterations / mhc_norm_eps
+        self.gguf_writer.add_hyper_connection_count(
+            hparams.get("hc_mult", hparams.get("num_residual_streams", 1)))
+        self.gguf_writer.add_hyper_connection_sinkhorn_iterations(
+            hparams.get("hc_sinkhorn_iters", hparams.get("mhc_sinkhorn_iterations", 20)))
+        self.gguf_writer.add_hyper_connection_epsilon(
+            hparams.get("hc_eps", hparams.get("mhc_norm_eps", 1e-6)))
 
-        # Manifold-Constrained Hyper-Connections (MHC)
-        self.gguf_writer.add_hyper_connection_count(hparams["hc_mult"])
-        self.gguf_writer.add_hyper_connection_sinkhorn_iterations(hparams["hc_sinkhorn_iters"])
-        self.gguf_writer.add_hyper_connection_epsilon(hparams["hc_eps"])
+    def set_vocab(self):
+        # TeleChat4 uses a SentencePiece tokenizer (tokenizer.model + Telechat3Tokenizer).
+        # V2's set_vocab tries GPT2/BPE first, which fails for SPM. Use the SPM path directly.
+        self._set_vocab_sentencepiece()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        hc_match = re.match(r"model\.layers\.(\d+)\.(attn_hc|ffn_hc)\.(\w+)$", name)
-        if hc_match is not None:
-            layer, module, leaf = hc_match.groups()
-            key = (int(layer), module)
-            hc = "attn" if module == "attn_hc" else "ffn"
+        # handle mHC tensors: new format is model.layers.{N}.{attn_hc|ffn_hc}.{hc_fn|hc_base|hc_scale}
+        #                      old format is model.layers.{N}.{attn_hc|ffn_hc}.{mapping_weight|bias|alpha_pre|alpha_post|alpha_res}
+        match = re.match(r"model\.layers\.(\d+)\.(attn_hc|ffn_hc)\.(.+)$", name)
+        if match:
+            layer_idx = int(match.group(1))
+            hc_type = match.group(2)  # "attn_hc" or "ffn_hc"
+            param = match.group(3)    # "hc_fn", "hc_base", "hc_scale" (new) or "mapping_weight", "bias", "alpha_*" (old)
 
-            if leaf == "mapping_weight":
-                # HF shape [hc_mix_dim, hc_dim]; the saver writes dims reversed,
-                # giving GGUF {hc_dim, hc_mix_dim} as the C++ loader expects
-                new_name = self.format_tensor_name(getattr(gguf.MODEL_TENSOR, f"HC_{hc.upper()}_FN"), key[0])
-                yield new_name, data_torch.to(torch.float32)
-            elif leaf == "bias":
-                new_name = self.format_tensor_name(getattr(gguf.MODEL_TENSOR, f"HC_{hc.upper()}_BASE"), key[0])
-                yield new_name, data_torch.to(torch.float32)
-            else:
-                alpha_index = self._HC_ALPHA.get(leaf)
-                if alpha_index is None:
-                    return
-                buf = self._hc_alpha.setdefault(key, {})
-                buf[alpha_index] = data_torch.to(torch.float32)
-                if len(buf) == 3:
-                    # all three alpha_* present -> emit hc_scale [3]
-                    scale = torch.stack([buf[i] for i in range(3)]).reshape(-1)
-                    new_name = self.format_tensor_name(getattr(gguf.MODEL_TENSOR, f"HC_{hc.upper()}_SCALE"), key[0])
-                    yield new_name, scale
+            if bid is None:
+                bid = layer_idx
+
+            prefix = "hc_attn" if hc_type == "attn_hc" else "hc_ffn"
+
+            # --- New format: hc_fn / hc_base / hc_scale (direct 1:1 mapping) ---
+            if param == "hc_fn":
+                tensor_enum = self._hc_tensor_map[(prefix, "fn")]
+                gguf_name = self.format_tensor_name(tensor_enum, bid)
+                yield (gguf_name, data_torch)
+                return
+
+            if param == "hc_base":
+                tensor_enum = self._hc_tensor_map[(prefix, "base")]
+                gguf_name = self.format_tensor_name(tensor_enum, bid)
+                yield (gguf_name, data_torch)
+                return
+
+            if param == "hc_scale":
+                tensor_enum = self._hc_tensor_map[(prefix, "scale")]
+                gguf_name = self.format_tensor_name(tensor_enum, bid)
+                yield (gguf_name, data_torch)
+                return
+
+            # --- Legacy format: mapping_weight / bias / alpha_pre+alpha_post+alpha_res (concatenated) ---
+            if param == "mapping_weight":
+                tensor_enum = self._hc_tensor_map[(prefix, "fn")]
+                gguf_name = self.format_tensor_name(tensor_enum, bid)
+                yield (gguf_name, data_torch)
+                return
+
+            if param == "bias":
+                tensor_enum = self._hc_tensor_map[(prefix, "base")]
+                gguf_name = self.format_tensor_name(tensor_enum, bid)
+                yield (gguf_name, data_torch)
+                return
+
+            if param in ("alpha_pre", "alpha_post", "alpha_res"):
+                # buffer and concatenate when all three are collected
+                if bid not in self._tc4_alphas:
+                    self._tc4_alphas[bid] = {}
+                if hc_type not in self._tc4_alphas[bid]:
+                    self._tc4_alphas[bid][hc_type] = {}
+                self._tc4_alphas[bid][hc_type][param] = data_torch
+
+                alphas = self._tc4_alphas[bid][hc_type]
+                if len(alphas) == 3:
+                    scale = torch.cat([
+                        alphas["alpha_pre"],
+                        alphas["alpha_post"],
+                        alphas["alpha_res"],
+                    ])
+                    tensor_enum = self._hc_tensor_map[(prefix, "scale")]
+                    gguf_name = self.format_tensor_name(tensor_enum, bid)
+                    del self._tc4_alphas[bid][hc_type]
+                    yield (gguf_name, scale)
+                return
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
 
-    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
-        # keep the small MHC weights in F32 for exact vLLM logit parity
-        if re.search(r"blk\.\d+\.hc_(attn|ffn)_(fn|base|scale)\.weight$", new_name):
-            return gguf.GGMLQuantizationType.F32
-        return super().tensor_force_quant(name, new_name, bid, n_dims)
-
-    def prepare_metadata(self, vocab_only: bool):
-        # give --mtp draft exports an 'mtp-' prefixed file name (mirrors DeepSeek-V4)
-        from_dir = self.fname_out.is_dir()
-        super().prepare_metadata(vocab_only=vocab_only)
-
-        if not self.mtp_only or not from_dir:
-            return
-
-        output_type: str = self.ftype.name.partition("_")[2]
-        fname_default: str = gguf.naming_convention(
-            self.metadata.name, self.metadata.basename, self.metadata.finetune,
-            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
-        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        for bid, hc_dict in self._tc4_alphas.items():
+            for hc_type, alphas in hc_dict.items():
+                if alphas:
+                    raise ValueError(
+                        f"Unprocessed mHC alpha tensors for layer {bid}, "
+                        f"{hc_type}: {list(alphas.keys())}")
