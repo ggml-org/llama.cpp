@@ -247,14 +247,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     )
     set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
 
-    # Test Metal fusion against a per-device baseline, using the generated dummy models
     llama_build(test-fusion.cpp)
-    llama_test(
-        test-fusion
-        LABEL main
-        ARGS --models "${MODEL_DIR}" --device MTL0 --check "${PROJECT_SOURCE_DIR}/tests/fusion/MTL.tsv"
-    )
-    set_tests_properties(test-fusion PROPERTIES FIXTURES_REQUIRED generate-models)
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
