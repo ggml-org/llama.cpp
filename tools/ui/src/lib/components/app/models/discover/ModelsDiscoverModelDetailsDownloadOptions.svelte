@@ -1,21 +1,21 @@
 <script lang="ts">
-	import { ToggleGroup } from '$lib/components/ui/toggle-group';
-	import { type ModelSidecar } from '$lib/constants';
-	import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
+	import {
+		type BitDepthRow,
+		classify,
+		type DownloadEntryState,
+		labelFor,
+		type QuantOption,
+		type SelectableFile
+	} from './download-options.utils';
 	import ModelsDiscoverModelDetailsDownloadOptionsDownloadButton from './ModelsDiscoverModelDetailsDownloadOptionsDownloadButton.svelte';
 	import ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand from './ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand.svelte';
 	import ModelsDiscoverModelDetailsDownloadOptionsRow from './ModelsDiscoverModelDetailsDownloadOptionsRow.svelte';
 	import ModelsDownloadManagerDownloadStatusToast from '$lib/components/app/models/download-manager/ModelsDownloadManagerDownloadStatusToast.svelte';
+	import { ToggleGroup } from '$lib/components/ui/toggle-group';
+	import { type ModelSidecar } from '$lib/constants';
+	import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
-	import {
-		classify,
-		labelFor,
-		type BitDepthRow,
-		type DownloadEntryState,
-		type QuantOption,
-		type SelectableFile
-	} from './download-options.utils';
 	import { toast } from 'svelte-sonner';
 
 	interface Props {

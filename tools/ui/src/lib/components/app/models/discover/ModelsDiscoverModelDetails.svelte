@@ -1,8 +1,8 @@
 <script lang="ts">
 	import ModelsDiscoverModelDetailsDownloadOptions from './ModelsDiscoverModelDetailsDownloadOptions.svelte';
 	import ModelsDiscoverModelDetailsHeader from './ModelsDiscoverModelDetailsHeader.svelte';
-	import ModelsDiscoverModelDetailsSkeleton from './ModelsDiscoverModelDetailsSkeleton.svelte';
 	import ModelsDiscoverModelDetailsReadme from './ModelsDiscoverModelDetailsReadme.svelte';
+	import ModelsDiscoverModelDetailsSkeleton from './ModelsDiscoverModelDetailsSkeleton.svelte';
 	import { isAuxSidecar } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types/huggingface';

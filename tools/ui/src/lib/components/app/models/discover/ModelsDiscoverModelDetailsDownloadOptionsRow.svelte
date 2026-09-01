@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { minMemoryTierGb } from '$lib/utils';
-	import ModelsDiscoverModelDetailsDownloadOptionsQuantToggle from './ModelsDiscoverModelDetailsDownloadOptionsQuantToggle.svelte';
 	import type { DownloadEntryState, SelectableFile } from './download-options.utils';
+	import ModelsDiscoverModelDetailsDownloadOptionsQuantToggle from './ModelsDiscoverModelDetailsDownloadOptionsQuantToggle.svelte';
+	import { minMemoryTierGb } from '$lib/utils';
 
 	interface Props {
 		/** Bit depth of the row; `99` renders as "Other". */
