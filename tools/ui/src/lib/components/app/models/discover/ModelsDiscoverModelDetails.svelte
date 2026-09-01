@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ModelsDiscoverModelDetailsDownloadOptions from './ModelsDiscoverModelDetailsDownloadOptions.svelte';
 	import ModelsDiscoverModelDetailsHeader from './ModelsDiscoverModelDetailsHeader.svelte';
+	import ModelsDiscoverModelDetailsSkeleton from './ModelsDiscoverModelDetailsSkeleton.svelte';
 	import ModelsDiscoverModelDetailsReadme from './ModelsDiscoverModelDetailsReadme.svelte';
 	import { isAuxSidecar } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
@@ -74,9 +75,7 @@
 </script>
 
 {#if loading}
-	<div class="flex h-full items-center justify-center py-20">
-		<p class="text-sm text-muted-foreground">Loading model...</p>
-	</div>
+	<ModelsDiscoverModelDetailsSkeleton />
 {:else if error}
 	<div class="flex h-full items-center justify-center py-20">
 		<p class="text-sm text-destructive">{error}</p>
