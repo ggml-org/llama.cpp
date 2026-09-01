@@ -124,10 +124,12 @@ normal HIP backend.
 ## Run MTP
 
 The default bundle layout needs only the master gate; provider paths are
-optional overrides:
+optional overrides. For tensor-parallel Qwen3.8 inference where target sampling remains on the CPU, `GGML_TP_VOCAB_SHARDED_OUTPUT=1` additionally removes the primary full-logit output AllReduce. The sidecar's compact draft head and provider-local device top-k remain active; server-wide or request-level target backend sampling falls back to CPU in this mode.
 
 ```sh
 export SPEC_SIDECAR=1
+# Optional TP2/TP4 CPU-target-sampling optimization:
+export GGML_TP_VOCAB_SHARDED_OUTPUT=1
 
 ./build-spec-sidecar/bin/llama-server \
   -m /absolute/models/Qwen3.8-27B-Q4_0.gguf \

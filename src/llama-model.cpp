@@ -7,6 +7,7 @@
 #include "llama-mmap.h"
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
+#include "llama-tp-output-policy.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -626,6 +627,10 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         }
         if (std::regex_match(tensor_name, pattern_output_bias)) {
+            const ggml_tensor * output_weight = ud->model->get_tensor("output.weight");
+            if (output_weight != nullptr && ud->model->is_tensor_parallel_output_head_vocab_sharded(output_weight)) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "output.weight");
+            }
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         }
 
@@ -2054,34 +2059,46 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
                 (type == LLM_TYPE_35B_A3B || type == LLM_TYPE_122B_A10B));
         const bool supported_arch = supported_qwen || arch == LLM_ARCH_DEEPSEEK4;
         const char * vocab_sharded = getenv("GGML_TP_VOCAB_SHARDED_OUTPUT");
-        const bool vocab_sharded_output = arch == LLM_ARCH_DEEPSEEK4 &&
-            vocab_sharded != nullptr && strcmp(vocab_sharded, "1") == 0;
+        const bool vocab_sharded_output = vocab_sharded != nullptr && strcmp(vocab_sharded, "1") == 0;
         const bool requested = enabled != nullptr && strcmp(enabled, "1") == 0;
         const bool automatic = enabled == nullptr || strcmp(enabled, "auto") == 0;
         const bool use_sharded_output = llama_model_rdna2_auto_enabled() &&
             (requested || (automatic && auto_qwen27));
+        auto output_mode = [&](bool primary_head) {
+            return llama_tp_output_policy_select({
+                use_sharded_output,
+                params.no_tp_output_head_sharding,
+                params.split_mode == LLAMA_SPLIT_MODE_TENSOR,
+                supported_arch,
+                vocab_sharded_output,
+                primary_head,
+            });
+        };
+        const auto primary_mode = output_mode(true);
+        const auto auxiliary_mode = output_mode(false);
         if (use_sharded_output && params.no_tp_output_head_sharding && supported_arch) {
             LLAMA_LOG_WARN("%s: keeping the output head mirrored because an external draft model shares it\n", __func__);
-        } else if (use_sharded_output && params.split_mode == LLAMA_SPLIT_MODE_TENSOR && supported_arch) {
+        } else if (primary_mode != llama_tp_output_split_mode::mirrored ||
+                   auxiliary_mode != llama_tp_output_split_mode::mirrored) {
             const size_t ndev = get_split_state_ud.n_devices;
-            auto valid_split = [&](const ggml_tensor * head, size_t rotation) {
-                if (head == nullptr || head == tok_embd || ggml_n_dims(head) != 2 ||
-                        head->ne[1] != (int64_t) vocab.n_tokens() || ndev < 2) {
+            auto valid_split = [&](const ggml_tensor * head, size_t rotation, llama_tp_output_split_mode mode) {
+                if (mode == llama_tp_output_split_mode::mirrored || head == nullptr || head == tok_embd ||
+                        ggml_n_dims(head) != 2 || head->ne[1] != (int64_t) vocab.n_tokens() || ndev < 2) {
                     return false;
                 }
                 const int64_t granularity = std::lcm((int64_t) ggml_blck_size(head->type), (int64_t) 128);
-                const int split_axis = vocab_sharded_output && head == output ? 1 : 0;
+                const int split_axis = mode == llama_tp_output_split_mode::vocabulary ? 1 : 0;
                 return llama_tensor_split_is_valid(head->ne[split_axis], granularity, tensor_split(), ndev, rotation);
             };
 
-            if (valid_split(output, hparams.n_layer() % ndev)) tp_sharded_output_heads.insert(output);
+            if (valid_split(output, hparams.n_layer() % ndev, primary_mode)) tp_sharded_output_heads.insert(output);
             for (size_t il = 0; il < layers.size(); ++il) {
                 size_t il_eff = 0;
                 for (size_t il_prev = 0; il_prev < il; ++il_prev) {
                     il_eff += hparams.is_recr(il_prev) == hparams.is_recr(il) &&
                               hparams.is_swa (il_prev) == hparams.is_swa (il);
                 }
-                if (valid_split(layers[il].nextn.shared_head_head, il_eff % ndev)) {
+                if (valid_split(layers[il].nextn.shared_head_head, il_eff % ndev, auxiliary_mode)) {
                     tp_sharded_output_heads.insert(layers[il].nextn.shared_head_head);
                 }
             }
@@ -2096,8 +2113,9 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
 
 bool llama_model::is_tensor_parallel_output_head_vocab_sharded(const ggml_tensor * tensor) const {
     const char * enabled = getenv("GGML_TP_VOCAB_SHARDED_OUTPUT");
-    return arch == LLM_ARCH_DEEPSEEK4 && enabled != nullptr && strcmp(enabled, "1") == 0 &&
-        is_tensor_parallel_output_head(tensor);
+    const bool supported_qwen = arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE;
+    return (arch == LLM_ARCH_DEEPSEEK4 || (supported_qwen && tensor == output)) &&
+        enabled != nullptr && strcmp(enabled, "1") == 0 && is_tensor_parallel_output_head(tensor);
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {

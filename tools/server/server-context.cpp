@@ -62,9 +62,15 @@ static bool server_env_enabled(const char * name) {
     return std::getenv(name) != nullptr && !server_env_disabled(name);
 }
 
+static bool server_vocab_sharded_output_enabled() {
+    const char * value = std::getenv("GGML_TP_VOCAB_SHARDED_OUTPUT");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
 static bool server_gfx1030_spec_target_backend_sampling_profile(const common_params & params) {
     if (!server_gfx1030_native_auto_enabled() ||
-            server_env_disabled("GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING")) {
+            server_env_disabled("GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING") ||
+            server_vocab_sharded_output_enabled()) {
         return false;
     }
 
@@ -2216,6 +2222,11 @@ private:
 
             // TODO: getting pre sampling logits is not yet supported with backend sampling
             use_backend_sampling &= !need_pre_sample_logits;
+            if (use_backend_sampling && server_vocab_sharded_output_enabled()) {
+                SLT_WRN(slot, "%s", "vocabulary-sharded target output is incompatible with backend sampling; using CPU fallback\n");
+                use_backend_sampling = false;
+                task.params.sampling.backend_sampling = false;
+            }
 
             if (use_backend_sampling) {
                 llama_sampler * backend_sampler = common_sampler_get(slot.smpl.get());

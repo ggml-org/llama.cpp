@@ -287,9 +287,11 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
     res->t_embd = cur;
 
     // LM head
-    cur = build_lora_mm(model.output, cur, model.output_s, model.is_tensor_parallel_output_head(model.output));
-    if (model.is_tensor_parallel_output_head(model.output)) {
-        cb(cur, "result_output_partial", -1);
+    const bool output_sharded = model.is_tensor_parallel_output_head(model.output);
+    const bool output_vocab_sharded = model.is_tensor_parallel_output_head_vocab_sharded(model.output);
+    cur = build_lora_mm(model.output, cur, model.output_s, output_sharded && !output_vocab_sharded);
+    if (output_sharded) {
+        cb(cur, output_vocab_sharded ? "result_output_sharded" : "result_output_partial", -1);
         cur = ggml_reshape_4d(ctx0, cur, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
     }
 
@@ -842,9 +844,11 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llama_model & model, const llm
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
     ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
     GGML_ASSERT(head_w && "QWEN35MOE MTP: missing LM head (nextn.shared_head_head or model.output)");
-    cur = build_lora_mm(head_w, cur, head_s, model.is_tensor_parallel_output_head(head_w));
-    if (model.is_tensor_parallel_output_head(head_w)) {
-        cb(cur, "result_output_partial", -1);
+    const bool output_sharded = model.is_tensor_parallel_output_head(head_w);
+    const bool output_vocab_sharded = model.is_tensor_parallel_output_head_vocab_sharded(head_w);
+    cur = build_lora_mm(head_w, cur, head_s, output_sharded && !output_vocab_sharded);
+    if (output_sharded) {
+        cb(cur, output_vocab_sharded ? "result_output_sharded" : "result_output_partial", -1);
         cur = ggml_reshape_4d(ctx0, cur, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
     }
     cb(cur, "result_output", -1);
