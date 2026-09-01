@@ -6,14 +6,14 @@
 //   - the NMSE between the fused and unfused logits
 //   - the NMSE between the device and a CPU reference
 //
-// the per-fusion-type counters are compared against a per-device baseline file (TSV) so a
+// the per-fusion-type counters are compared against a per-device baseline file (CSV) so a
 // fusion pattern that silently stops matching (or fires when it should not) is caught as a
 // regression.
 //
 // usage:
-//   test-fusion --models DIR --device MTL0 --record baseline.tsv   # generate a baseline
-//   test-fusion --models DIR --device MTL0 --check  baseline.tsv   # validate against it
-//   test-fusion --model FILE --device MTL0 --check  baseline.tsv   # validate a single model
+//   test-fusion --models DIR --device MTL0 --record baseline.csv   # generate a baseline
+//   test-fusion --models DIR --device MTL0 --check  baseline.csv   # validate against it
+//   test-fusion --model FILE --device MTL0 --check  baseline.csv   # validate a single model
 
 #include "common.h"
 #include "log.h"
@@ -84,7 +84,7 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
     return ret;
 }
 
-// trim leading/trailing whitespace (used when parsing padded TSV columns)
+// trim leading/trailing whitespace (used when parsing padded CSV columns)
 static std::string trim(const std::string & s) {
     const size_t b = s.find_first_not_of(" \t\r\n");
     if (b == std::string::npos) {
@@ -215,8 +215,8 @@ static void usage(const char * argv0) {
     printf("  --models DIR   run over all .gguf models in a directory\n");
     printf("  --model FILE   run over a single model file (mutually exclusive with --models)\n");
     printf("  --device NAME  device to run on (e.g. MTL0, CPU)\n");
-    printf("  --record TSV   write the golden baseline\n");
-    printf("  --check  TSV   validate the counters against a baseline (default)\n");
+    printf("  --record CSV   write the golden baseline\n");
+    printf("  --check  CSV   validate the counters against a baseline (default)\n");
     printf("  -h, --help     show this message and exit\n");
 }
 
@@ -343,7 +343,7 @@ int main(int argc, char ** argv) {
             }
             std::vector<std::string> cols;
             size_t pos = 0;
-            while ((pos = line.find('\t')) != std::string::npos) {
+            while ((pos = line.find(',')) != std::string::npos) {
                 cols.push_back(trim(line.substr(0, pos)));
                 line.erase(0, pos + 1);
             }
@@ -471,10 +471,10 @@ int main(int argc, char ** argv) {
         if (!record_path.empty()) {
             os << "# test-fusion baseline for device " << base_name << "\n";
             os << "# " << std::left
-               << std::setw(18) << "arch"  << '\t'
-               << std::setw(4)  << "moe"   << '\t'
-               << std::setw(8)  << "mode"  << '\t'
-               << std::setw(28) << "label" << '\t'
+               << std::setw(18) << "arch"  << ','
+               << std::setw(4)  << "moe"   << ','
+               << std::setw(8)  << "mode"  << ','
+               << std::setw(28) << "label" << ','
                << std::right << std::setw(7) << "count" << '\n';
         }
 
@@ -494,10 +494,10 @@ int main(int argc, char ** argv) {
                     (unsigned long long) r.expected, r.nmse_fus, r.nmse_dev, status);
             if (!record_path.empty()) {
                 os << std::left
-                   << std::setw(20) << r.arch << '\t'
-                   << std::setw(4)  << (r.moe ? "1" : "0") << '\t'
-                   << std::setw(8)  << r.mode << '\t'
-                   << std::setw(28) << r.label << '\t'
+                   << std::setw(20) << r.arch << ','
+                   << std::setw(4)  << (r.moe ? "1" : "0") << ','
+                   << std::setw(8)  << r.mode << ','
+                   << std::setw(28) << r.label << ','
                    << std::right << std::setw(7) << r.count_fused << '\n';
             }
         }

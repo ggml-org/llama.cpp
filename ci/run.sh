@@ -346,7 +346,7 @@ function gg_run_test_fusion {
 
         # generate the dummy models and run the fusion regression test
         ./build-ci-release/bin/test-llama-archs -o build-ci-fusion-models 2>&1
-        ./build-ci-release/bin/test-fusion --models build-ci-fusion-models --device MTL0 --check tests/fusion/MTL.tsv 2>&1
+        ./build-ci-release/bin/test-fusion --models build-ci-fusion-models --device MTL0 --check tests/fusion/MTL.csv 2>&1
     fi
 
     set +e
