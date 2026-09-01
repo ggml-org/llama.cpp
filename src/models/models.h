@@ -2276,9 +2276,15 @@ struct llama_model_qwen35 : public llama_model_base {
 
 
 struct llama_model_qwen4exp : public llama_model_base {
-    llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
+    llama_model_qwen4exp(const struct llama_model_params & params);
+    ~llama_model_qwen4exp() override;
 
     class llm_graph_input_qsa;
+
+    // --lazy-mode on-direct: pread() the lazy PLE table rows
+    // host-side instead of faulting them in through the mmap; see qwen4exp.cpp
+    struct ple_direct_reader;
+    std::unique_ptr<ple_direct_reader> ple_reader;
 
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
