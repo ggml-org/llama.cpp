@@ -2209,13 +2209,13 @@ bool rpc_server::comm_allreduce(const rpc_msg_comm_allreduce_req & request) {
 
     // rank 0 sends first, rank 1 receives first, so large payloads cannot deadlock
     if (state.rank == 0) {
-        if (!state.peer->send_data(state.send_buf.data(), wire_bytes) ||
+        if (!state.peer->send_data(state.send_buf.data(), wire_bytes) || !state.peer->flush() ||
             !state.peer->recv_data(state.recv_buf.data(), wire_bytes)) {
             return false;
         }
     } else {
         if (!state.peer->recv_data(state.recv_buf.data(), wire_bytes) ||
-            !state.peer->send_data(state.send_buf.data(), wire_bytes)) {
+            !state.peer->send_data(state.send_buf.data(), wire_bytes) || !state.peer->flush()) {
             return false;
         }
     }
