@@ -66,6 +66,15 @@ export { default as ModelsSelectorList } from './ModelsSelectorList.svelte';
 export { default as ModelsSelectorOption } from './ModelsSelectorOption.svelte';
 
 /**
+ * **ModelsSelectorReasoningPanel** - Inline reasoning effort picker
+ *
+ * Collapsible row that expands in place to reveal the reasoning effort levels.
+ * Used in the sticky footer of ModelsSelectorDropdown, where a flyout submenu
+ * would float over the model list it belongs to.
+ */
+export { default as ModelsSelectorReasoningPanel } from './ModelsSelectorReasoningPanel.svelte';
+
+/**
  * **ModelsSelectorSheet** - Mobile model selection sheet
  *
  * Bottom sheet variant of ModelsSelectorDropdown optimized for touch interaction

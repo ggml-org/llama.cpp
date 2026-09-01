@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { SearchInput } from '$lib/components/app';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -10,32 +9,46 @@
 		onSearchKeyDown?: (event: KeyboardEvent) => void;
 		emptyMessage?: string;
 		isEmpty?: boolean;
+		/** Extra classes for the wrapper around the option list. */
+		contentClass?: string;
+		/** Extra classes for the search input. */
+		searchClass?: string;
 		children: Snippet;
+		/**
+		 * Optional sticky footer. It sticks to the bottom of the dropdown content's
+		 * own scrollport, so it stays visible while the option list scrolls. For this
+		 * to work, DropdownMenu.Content must be the scroll container (keep its
+		 * overflow-y-auto and a max-height) and must not be `overflow-hidden`.
+		 */
 		footer?: Snippet;
 	}
 
 	let {
 		children,
+		contentClass = '',
 		emptyMessage = 'No items found',
 		footer,
 		isEmpty = false,
 		onSearchChange,
 		onSearchKeyDown,
 		placeholder = 'Search...',
+		searchClass = '',
 		searchValue = $bindable('')
 	}: Props = $props();
 </script>
 
-<div class="sticky top-0 z-10 mb-2 bg-popover p-1 pt-2">
+<!-- Sticks to the top of the dropdown content's scrollport. -->
+<div class="sticky top-0 z-20 px-1 pb-2 pt-2">
 	<SearchInput
 		bind:value={searchValue}
+		class={searchClass}
 		onInput={onSearchChange}
 		onKeyDown={onSearchKeyDown}
 		{placeholder}
 	/>
 </div>
 
-<div class="overflow-y-auto">
+<div class={contentClass}>
 	{@render children()}
 
 	{#if isEmpty}
@@ -44,7 +57,10 @@
 </div>
 
 {#if footer}
-	<DropdownMenu.Separator />
+	<!-- Sticks to the bottom of the dropdown content's scrollport. -->
+	<div class="sticky bottom-0 z-20 bg-popover px-1 pb-2">
+		<div class="-mx-1 mb-1 h-px bg-border/20"></div>
 
-	{@render footer()}
+		{@render footer()}
+	</div>
 {/if}
