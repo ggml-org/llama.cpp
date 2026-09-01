@@ -2732,10 +2732,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-lzm", "--lazy-mode"}, "MODE",
         "on-demand reading of certain tensors, for example per-layer embeddings (default: auto)\n"
         "- on: read the rows of such tensors from disk on demand instead of keeping them resident (requires mmap)\n"
+        "- on-direct: like on, but the arch reads the rows with explicit pread()s instead of demand paging the mmap (currently only the qwen4exp PLE table)\n"
         "- auto: on, but only for tensors larger than 4 GiB\n"
         "- off: always keep them resident",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "on")   { params.lazy_mode = LLAMA_LAZY_MODE_ON;   }
+            else if (value == "on-direct") { params.lazy_mode = LLAMA_LAZY_MODE_DIRECT; }
             else if (value == "auto") { params.lazy_mode = LLAMA_LAZY_MODE_AUTO; }
             else if (value == "off")  { params.lazy_mode = LLAMA_LAZY_MODE_OFF;  }
             else { throw std::invalid_argument("invalid value"); }
