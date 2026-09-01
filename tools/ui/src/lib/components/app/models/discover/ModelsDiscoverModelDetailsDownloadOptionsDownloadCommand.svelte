@@ -9,7 +9,7 @@
 		/** Full command text, copied to the clipboard as-is. */
 		command: string;
 		baseOptions: QuantOption[];
-		draftOptions: (QuantOption & { badge: ModelSidecar | null })[];
+		draftOptions: (QuantOption & { badge: ModelSidecar | null; shared: boolean })[];
 		/** Value of the base quant select, mirrored by the parent. */
 		basePick: string;
 		/** Value of the draft quant select; empty when no draft is picked. */
@@ -105,7 +105,10 @@
 			>
 				{#each draftOptions as option (option.path)}
 					<option disabled={option.disabled} value={option.path}>
-						<!-- {option.badge ? `${option.badge.toUpperCase()} ` : ''} -->
+						{#if option.shared}
+							{option.badge?.toUpperCase()}-SHARED
+						{/if}
+
 						{option.label}
 					</option>
 				{/each}

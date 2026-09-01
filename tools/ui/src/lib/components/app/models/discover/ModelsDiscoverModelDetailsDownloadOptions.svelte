@@ -131,7 +131,8 @@
 	let draftOptions = $derived(
 		draftFiles.map((f) => ({
 			...optionFor(f),
-			badge: HuggingFaceService.extractQuantMeta(f.path)?.sidecar ?? null
+			badge: HuggingFaceService.extractQuantMeta(f.path)?.sidecar ?? null,
+			shared: HuggingFaceService.extractQuantMeta(f.path)?.shared ?? false
 		}))
 	);
 
@@ -347,7 +348,7 @@
 	let downloadLabel = $derived.by(() => {
 		const main = mainEntry ?? commandMain;
 		const draftLabel = draftSidecar
-			? `${draftSidecar.toUpperCase()}${draftShared ? ' shared' : ''}`
+			? `${draftSidecar.toUpperCase()}${draftShared ? '-SHARED' : ''}`
 			: undefined;
 
 		let label = 'Download';

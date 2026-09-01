@@ -33,11 +33,11 @@ export function classify(path: string): 'main' | 'draft' | 'aux' {
 	return isAuxSidecar(sidecar) ? 'aux' : 'draft';
 }
 
-/** Display label of a file: its quant (plus `shared` for shared draft variants), else the file name without the extension. */
+/** Display label of a file: its quant, else the file name without the extension. */
 export function labelFor(path: string): string {
-	const meta = HuggingFaceService.extractQuantMeta(path);
+	const quant = HuggingFaceService.extractQuantMeta(path)?.quant;
 
-	if (meta?.quant) return meta.shared ? `${meta.quant} shared` : meta.quant;
+	if (quant) return quant;
 
 	const basename = path.split('/').pop() ?? path;
 
