@@ -33,7 +33,10 @@ export const HF_MODEL_LIST_EXPAND: readonly string[] = [
 	'lastModified',
 	'likes',
 	'pipeline_tag',
-	'siblings'
+	'siblings',
+	// `base_model:` tags, so search rows can show the base org's avatar as the
+	// main avatar with the quant org as the corner badge, like catalog rows.
+	'tags'
 ];
 
 // Repo file conventions
