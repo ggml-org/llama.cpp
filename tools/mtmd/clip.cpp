@@ -3686,8 +3686,6 @@ struct clip_model_loader {
             }
         }
 
-        ctx_clip.is_allocated = true; // mark buffers as allocated
-
         LOG_INF("%s: flash attention is %s\n", __func__,
             (ctx_clip.flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) ? "enabled" : "disabled");
 
@@ -3722,7 +3720,7 @@ struct clip_model_loader {
     // only initialize backend buffers, but do not allocate them yet
     static support_info_graph reserve_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
         ggml_cgraph * gf = clip_get_graph_builder(&ctx_clip, batch)->build();
-        ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
+        ctx_clip.is_allocated = ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
 
         ctx_clip.mem_compute.clear();
         for (size_t i = 0; i < ctx_clip.backend_ptrs.size(); ++i) {
@@ -4379,6 +4377,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     // if buffers are not allocated, we need to do a warmup run to allocate them
     if (!ctx->is_allocated) {
         clip_model_loader::warmup(*ctx, *params->imgs);
+        if (!ctx->is_allocated) {
+            LOG_ERR("%s: failed to allocate compute buffers\n", __func__);
+            return false;
+        }
     }
 
     if (params->seed != ctx->rng_seed) {
