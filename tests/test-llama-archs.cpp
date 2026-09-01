@@ -796,14 +796,19 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
 // depends on (depth, n_ctx, n_ubatch); this asks whether that reproduces at
 // toy scale, in minutes instead of hours.
 static int test_depth_sweep(const size_t seed, const uint32_t max_depth,
-                            const uint32_t n_ctx_arg, const uint32_t n_ub) {
+                            const uint32_t n_ctx_arg, const uint32_t n_ub,
+                            const uint32_t n_ub2, const bool b_on_cpu,
+                            const uint32_t topk_override) {
     g_depth_sweep_n_ctx = n_ctx_arg;
-    g_depth_sweep_n_ub  = n_ub;
 
     gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_GLM5NEXT, /*moe=*/true);
     // the fixture bakes context_length=128; the KV/pool structures must be
     // sized for the sweep target instead
     gguf_set_val_u32(gguf_ctx.get(), "glm5next.context_length", n_ctx_arg);
+    if (topk_override > 0) {
+        // real GLM-5.3-Flash: indexer.top_k = 2048, kpool = 4 (fixture: 8/4)
+        gguf_set_val_u32(gguf_ctx.get(), "glm5next.attention.indexer.top_k", topk_override);
+    }
 
     ggml_backend_dev_t dev_gpu = nullptr;
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
@@ -817,11 +822,18 @@ static int test_depth_sweep(const size_t seed, const uint32_t max_depth,
         printf("depth-sweep: no non-CPU device found\n");
         return 1;
     }
-    printf("depth-sweep: glm5next-moe, n_ctx=%u, n_ubatch=%u, max_depth=%u, device=%s\n",
-           n_ctx_arg, n_ub ? n_ub : 64, max_depth, ggml_backend_dev_description(dev_gpu));
+    // side A: CPU @ n_ub. side B: (cpu|device) @ (n_ub2 ? n_ub2 : n_ub).
+    const uint32_t ub_a = n_ub ? n_ub : 64;
+    const uint32_t ub_b = n_ub2 ? n_ub2 : ub_a;
+    printf("depth-sweep: glm5next-moe, n_ctx=%u, top_k=%s, max_depth=%u | A=cpu@ub%u  B=%s@ub%u\n",
+           n_ctx_arg, topk_override ? std::to_string(topk_override).c_str() : "fixture(8)",
+           max_depth, ub_a, b_on_cpu ? "cpu" : ggml_backend_dev_description(dev_gpu), ub_b);
 
+    g_depth_sweep_n_ub = ub_a;
     auto mc_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
-    auto mc_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {dev_gpu});
+    g_depth_sweep_n_ub = ub_b;
+    auto mc_dev = b_on_cpu ? get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {})
+                           : get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {dev_gpu});
     const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mc_cpu.first.get()));
 
     const std::vector<llama_token> tokens = get_tokens(max_depth, n_vocab, seed);
@@ -880,6 +892,9 @@ int main(int argc, char ** argv) {
     uint32_t depth_sweep = 0;
     uint32_t sweep_ctx = 131072;
     uint32_t sweep_ub = 0;
+    uint32_t sweep_ub2 = 0;
+    uint32_t sweep_topk = 0;
+    bool sweep_b_cpu = false;
     ggml_log_level log_level = GGML_LOG_LEVEL_ERROR;
     std::string out;
 
@@ -906,6 +921,15 @@ int main(int argc, char ** argv) {
         if (strcmp(argv[i], "--ub") == 0 && i + 1 < argc) {
             sweep_ub = std::stoul(argv[++i]);
         }
+        if (strcmp(argv[i], "--ub2") == 0 && i + 1 < argc) {
+            sweep_ub2 = std::stoul(argv[++i]);
+        }
+        if (strcmp(argv[i], "--b-cpu") == 0) {
+            sweep_b_cpu = true;
+        }
+        if (strcmp(argv[i], "--topk") == 0 && i + 1 < argc) {
+            sweep_topk = std::stoul(argv[++i]);
+        }
         if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
             if (i + 1 < argc) {
                 seed = std::stoull(argv[++i]);
@@ -931,7 +955,8 @@ int main(int argc, char ** argv) {
 
     try {
         if (depth_sweep > 0) {
-            return test_depth_sweep(seed, depth_sweep, sweep_ctx, sweep_ub);
+            return test_depth_sweep(seed, depth_sweep, sweep_ctx, sweep_ub,
+                                    sweep_ub2, sweep_b_cpu, sweep_topk);
         }
         if (!out.empty()) {
             return save_models(arch, seed, log_level, out);
