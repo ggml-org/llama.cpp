@@ -134,7 +134,8 @@ kernel void kernel_mul_mm(
 
     // Store result tile to output matrix (with batch offset)
     // cT.store handles bounds checking via tD's extents (M, N)
-    device float * dstBatch = (device float *)dst + im * N * M;
+    // int32 im*N*M wraps for KQ [n_kv, ub, 64] past 2^31 elements (glm5next collapse)
+    device float * dstBatch = (device float *)dst + (uint64_t)im * (uint64_t)N * (uint64_t)M;
 
     auto tD = tensor(dstBatch, dextents<int32_t, 2>(M, N), array<int, 2>({1, M}));
     cT.store(tD.slice(ra, rb));
@@ -318,7 +319,7 @@ kernel void kernel_mul_mm(
         // if no bounds checks on the output are needed, we can directly write to device memory
         device float * C = (device float *) dst +
             (r0 + 32*(sgitg &  1)) + \
-            (r1 + 16*(sgitg >> 1)) * args.ne0 + im*args.ne1*args.ne0;
+            (uint64_t)(r1 + 16*(sgitg >> 1)) * (uint64_t)args.ne0 + (uint64_t)im*(uint64_t)args.ne1*(uint64_t)args.ne0;
 
         for (short i = 0; i < 8; i++) {
             simdgroup_store(mc[i], C + 8*(i%4) + 8*args.ne0*(i/4), args.ne0, 0, false);
@@ -337,7 +338,7 @@ kernel void kernel_mul_mm(
 
         if (sgitg == 0) {
             for (int j = tiitg; j < nr1; j += NR1) {
-                device float  * D  = (device float  *) dst + r0 + (r1 + j)*args.ne0 + im*args.ne1*args.ne0;
+                device float  * D  = (device float  *) dst + r0 + (uint64_t)(r1 + j)*(uint64_t)args.ne0 + (uint64_t)im*(uint64_t)args.ne1*(uint64_t)args.ne0;
                 device float4 * D4 = (device float4 *) D;
 
                 threadgroup float  * C  = temp_str + (j*NR0);
