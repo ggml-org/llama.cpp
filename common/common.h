@@ -108,6 +108,7 @@ enum llama_example {
     LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
     LLAMA_EXAMPLE_DOWNLOAD,
     LLAMA_EXAMPLE_TOKENIZE,
+    LLAMA_EXAMPLE_SELF_SPEC_BIAS,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -740,6 +741,14 @@ struct common_params {
     bool tokenize_stdin      = false; // if true, read the prompt from stdin
     bool tokenize_no_bos     = false; // if true, do not add the BOS token
     bool tokenize_show_count = false; // if true, print the total token count
+
+    // spec-bias params
+    int32_t spec_bias_stream_interval = 3;     // expand each input line into prefixes every N words (0 = no expansion)
+    float   spec_bias_draft_beta      = 0.0f;  // probability bias applied while verifying the reused draft
+    float   spec_bias_target_beta     = 0.0f;  // probability bias applied while decoding past the draft
+    bool    spec_bias_draft_reuse     = true;  // reuse the previous output as a draft
+    bool    spec_bias_prompt_cache    = true;  // reuse the KV cache for the common prompt prefix
+    int32_t spec_bias_output_mask_k   = 0;     // do not transmit this many tokens from the end of a partial answer
 
     // common params
     std::string out_file; // output filename for all example programs

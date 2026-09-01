@@ -1404,6 +1404,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         params.out_file = "output.wav";
         params.sampling.penalty_repeat = 1.05f;
         params.sampling.penalty_last_n = -1;
+    } else if (ex == LLAMA_EXAMPLE_SELF_SPEC_BIAS) {
+        params.sampling.temp = 0.0f; // probability biasing requires greedy sampling
     }
 
     params.use_color = tty_can_use_colors();
@@ -1951,7 +1953,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.input_prefix = value;
             params.enable_chat_template = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_SELF_SPEC_BIAS}));
     add_opt(common_arg(
         {"--in-suffix"}, "STRING",
         "string to suffix after user inputs with (default: empty)",
@@ -1959,7 +1961,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.input_suffix = value;
             params.enable_chat_template = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_SELF_SPEC_BIAS}));
     add_opt(common_arg(
         {"--warmup"},
         {"--no-warmup"},
@@ -3171,7 +3173,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.out_file = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE,
-                    LLAMA_EXAMPLE_RESULTS, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS, LLAMA_EXAMPLE_CLI}));
+                    LLAMA_EXAMPLE_RESULTS, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SELF_SPEC_BIAS}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -3266,6 +3268,64 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.tokenize_show_count = true;
         }
     ).set_examples({LLAMA_EXAMPLE_TOKENIZE}));
+    add_opt(common_arg(
+        {"--stream-interval"}, "N",
+        string_format("expand each input line into growing word-prefixes every N words, 0 to disable (default: %d)", params.spec_bias_stream_interval),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.spec_bias_stream_interval = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SELF_SPEC_BIAS}));
+    add_opt(common_arg(
+        {"--draft-bias-beta"}, "N",
+        string_format("probability bias in [0, 1] applied while verifying the reused draft, 0 = greedy verify (default: %.2f)", (double) params.spec_bias_draft_beta),
+        [](common_params & params, const std::string & value) {
+            const float beta = std::stof(value);
+            if (beta < 0.0f || beta > 1.0f) {
+                throw std::invalid_argument("invalid value, must be in [0, 1]");
+            }
+            params.spec_bias_draft_beta = beta;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SELF_SPEC_BIAS}));
+    add_opt(common_arg(
+        {"--target-bias-beta"}, "N",
+        string_format("probability bias in [0, 1] applied while decoding past the draft, 0 = greedy (default: %.2f)", (double) params.spec_bias_target_beta),
+        [](common_params & params, const std::string & value) {
+            const float beta = std::stof(value);
+            if (beta < 0.0f || beta > 1.0f) {
+                throw std::invalid_argument("invalid value, must be in [0, 1]");
+            }
+            params.spec_bias_target_beta = beta;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SELF_SPEC_BIAS}));
+    add_opt(common_arg(
+        {"--draft-reuse"},
+        {"--no-draft-reuse"},
+        string_format("whether to reuse the previous output as a draft (default: %s)", params.spec_bias_draft_reuse ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.spec_bias_draft_reuse = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SELF_SPEC_BIAS}));
+    add_opt(common_arg(
+        {"--output-mask-k"}, "N",
+        string_format("mask-k: hold back N tokens from the end of every partial answer, the last answer of a line is always sent whole (default: %d)", params.spec_bias_output_mask_k),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.spec_bias_output_mask_k = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SELF_SPEC_BIAS}));
+    add_opt(common_arg(
+        {"--prompt-cache-prefix"},
+        {"--no-prompt-cache-prefix"},
+        string_format("whether to reuse the KV cache for the common prompt prefix (default: %s)", params.spec_bias_prompt_cache ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.spec_bias_prompt_cache = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SELF_SPEC_BIAS}));
     add_opt(common_arg(
         {"-pps"},
         string_format("is the prompt shared across parallel sequences (default: %s)", params.is_pp_shared ? "true" : "false"),

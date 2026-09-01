@@ -1,0 +1,12 @@
+# Optional, only needed to score a run. The example itself needs none of this.
+#
+#   pip install -r requirements.txt
+#
+# sacrebleu alone gives BLEU, chrF and normalized erasure.
+# unbabel-comet additionally provides COMET, and is a large download.
+# Japanese and Korean BLEU need the mecab extras, otherwise scoring falls back
+# to the char tokenizer and says so.
+sacrebleu
+unbabel-comet
+# sacrebleu[ja]
+# sacrebleu[ko]

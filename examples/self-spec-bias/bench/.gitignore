@@ -1,0 +1,9 @@
+# benchmark output
+out/
+out_*/
+
+# fetched test data
+data/
+
+# ggufs, put them here or symlink them
+models/
