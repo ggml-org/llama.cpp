@@ -68,10 +68,9 @@ void llama_model_glm5_next::load_arch_tensors(llama_model_loader & ml) {
     const int64_t hc         = hparams.dsv4_hc_mult;
     const int64_t hc_mix_dim = (2 + hc)*hc;
 
-    // the NextN block is loaded but only used by the MTP graph (TODO)
-    const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
-    const bool trunk_only = (n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
-    int mtp_flags = trunk_only ? TENSOR_NOT_REQUIRED : 0;
+    // the NextN block is loaded but only used by the MTP graph.
+    // Separated trunk_only/mtp_only handling TODO with DECODER_MTP graph in the MTP follow up
+    int mtp_flags = 0;
     if (!ml.load_mtp) {
         mtp_flags |= TENSOR_SKIP;
     }

@@ -441,9 +441,6 @@ class Glm5NextModel(TextModel):
             return None
         name, gen = titem
 
-        if name.startswith(("model.visual.", "visual.")):
-            return None
-
         assert cls._n_main_layers is not None
         m = re.match(r"model\.layers\.(\d+)\.", name)
         is_mtp = m is not None and int(m.group(1)) >= cls._n_main_layers
