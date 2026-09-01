@@ -8,7 +8,6 @@
 		currentModel: string | null;
 		activeId: string | null;
 		sectionHeaderClass?: string;
-		orgHeaderClass?: string;
 		onSelect: (modelId: string) => void;
 		onInfoClick: (modelName: string) => void;
 		renderOption?: import('svelte').Snippet<[ModelItem, boolean]>;
@@ -20,20 +19,19 @@
 		groups,
 		onInfoClick,
 		onSelect,
-		orgHeaderClass = 'px-2 py-2 text-[11px] font-semibold text-muted-foreground/50 select-none [&:not(:first-child)]:mt-1',
 		renderOption,
-		sectionHeaderClass = 'my-1 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none'
+		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none'
 	}: Props = $props();
 	let render = $derived(renderOption ?? defaultOption);
 </script>
 
-{#snippet defaultOption(item: ModelItem, hideOrgName: boolean)}
+{#snippet defaultOption(item: ModelItem, _hideOrgName: boolean)}
 	{@const { option } = item}
 	{@const isSelected = currentModel === option.model || activeId === option.id}
 	{@const isFav = modelsStore.favoriteModelIds.has(option.model)}
 
 	<ModelsSelectorOption
-		{hideOrgName}
+		hideOrgName
 		{isFav}
 		isHighlighted={false}
 		{isSelected}
@@ -42,11 +40,12 @@
 		onMouseEnter={() => {}}
 		{onSelect}
 		{option}
+		showBaseModelAvatar
 	/>
 {/snippet}
 
 {#if groups.loaded.length > 0}
-	<p class={sectionHeaderClass}>Loaded models</p>
+	<p class="{sectionHeaderClass} mt-0">Loaded models</p>
 
 	{#each groups.loaded as item (`loaded-${item.option.id}`)}
 		{@render render(item, false)}
@@ -62,13 +61,9 @@
 {/if}
 
 {#if groups.available.length > 0}
-	<p class={sectionHeaderClass}>Available models</p>
+	<h2 class={sectionHeaderClass}>Downloaded models</h2>
 
 	{#each groups.available as group (group.orgName)}
-		{#if group.orgName}
-			<p class={orgHeaderClass}>{group.orgName}</p>
-		{/if}
-
 		{#each group.items as item (item.option.id)}
 			{@render render(item, true)}
 		{/each}

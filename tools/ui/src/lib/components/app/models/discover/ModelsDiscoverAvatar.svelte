@@ -4,7 +4,7 @@
 	import { HuggingFaceService } from '$lib/services';
 
 	interface Props {
-        class?: string;
+		class?: string;
 		/** Org whose avatar is shown (may differ from the repo's org for base models). */
 		org: string;
 		/** Repo's own org, shown as a small corner badge when provided. */
@@ -23,7 +23,7 @@
 
 	let {
 		baseImageClass = '',
-	    class: className = '',
+		class: className = '',
 		org,
 		quantImageClass = 'h-full w-full',
 		quantOrg,

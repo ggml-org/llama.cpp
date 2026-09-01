@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ModelsDiscoverAvatar from './discover/ModelsDiscoverAvatar.svelte';
 	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
 	import {
 		CircleAlert,
@@ -11,11 +12,22 @@
 		RotateCw
 	} from '@lucide/svelte';
 	import { ActionIcon, ModelId } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import {
+		HF_BASE_MODEL_TAG_REGEX,
+		ICON_CLASS_DEFAULT,
+		MODEL_ID,
+		PATH_SEPARATOR
+	} from '$lib/constants';
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
+	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
-	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
+	import {
+		formatParameters,
+		modelLoadFraction,
+		modelLoadProgressText,
+		normalizeModelName
+	} from '$lib/utils';
 
 	interface Props {
 		option: ModelOption;
@@ -27,6 +39,8 @@
 		onMouseEnter: () => void;
 		onKeyDown: (e: KeyboardEvent) => void;
 		onInfoClick?: (modelName: string) => void;
+		/** Show the base model's org as the main avatar and the repo (quant) org as the corner badge; resolves the base org lazily via HF. */
+		showBaseModelAvatar?: boolean;
 	}
 
 	let {
@@ -38,7 +52,8 @@
 		onKeyDown,
 		onMouseEnter,
 		onSelect,
-		option
+		option,
+		showBaseModelAvatar = false
 	}: Props = $props();
 
 	let currentRouterModels = $derived(modelsStore.routerModels);
@@ -59,10 +74,82 @@
 	let loadPercent = $derived(Math.round(modelLoadFraction(loadProgress) * 100));
 	let loadTitle = $derived(modelLoadProgressText(loadProgress));
 	let modalities = $derived(option.modalities);
+	// Avatar: with showBaseModelAvatar the original base model's org is the main
+	// image and the repo (quantizer) org the corner badge, as in the models hub
+	// list. Loaded models usually carry the `base_model` tag on the option; GGUF
+	// repos only known to HF are resolved lazily via the cached getBaseModel
+	// lookup.
+	let parsedId = $derived(ModelsService.parseModelId(option.model));
+	let orgName = $derived(parsedId.orgName);
+	let tagBaseModel = $derived(
+		(option.tags ?? [])
+			.find((t) => HF_BASE_MODEL_TAG_REGEX.test(t))
+			?.match(HF_BASE_MODEL_TAG_REGEX)?.[1] ?? null
+	);
+	let fetchedBaseModelOrg = $state<string | null>(null);
+	let baseModelOrg = $derived(tagBaseModel?.split(PATH_SEPARATOR)[0] ?? fetchedBaseModelOrg);
+
+	$effect(() => {
+		fetchedBaseModelOrg = null;
+
+		if (!showBaseModelAvatar || !orgName || tagBaseModel) return;
+
+		let cancelled = false;
+
+		void HuggingFaceService.getBaseModel(option.model).then((base) => {
+			if (!cancelled && base?.org) fetchedBaseModelOrg = base.org;
+		});
+
+		return () => {
+			cancelled = true;
+		};
+	});
 	let capabilities = $derived.by(() => ({
 		reasoning: modelsStore.props.checkModelSupportsThinking(option.model),
 		tools: option.capabilities.includes(ModelCapability.TOOL_USE)
 	}));
+
+	// Params badge fallback: the id usually carries the count (`Qwen3-8B`), but
+	// ids like `Kimi-K3` do not. Prefer the loaded model's meta `n_params`, then
+	// the HF GGUF total (`gguf.total`), fetched lazily like the models hub list
+	// does, only when neither the id nor the meta has it.
+	let parsedParams = $derived(parsedId.params);
+	let metaParams = $derived.by(() => {
+		const value = option.meta?.n_params;
+
+		return typeof value === 'number' && value > 0 ? value : null;
+	});
+	// HF repo id: the `org/model` part without the `:revision/quant` suffix;
+	// local paths and bare names are not HF repos.
+	let hfRepoId = $derived.by(() => {
+		const [repo] = option.model.split(MODEL_ID.QUANTIZATION_SEPARATOR);
+		const normalized = normalizeModelName(repo ?? '');
+
+		return normalized.includes(MODEL_ID.ORG_SEPARATOR) ? normalized : null;
+	});
+	let fetchedParams = $state<number | null>(null);
+
+	$effect(() => {
+		fetchedParams = null;
+
+		if (parsedParams || metaParams || !hfRepoId) return;
+
+		let cancelled = false;
+
+		void HuggingFaceService.getDetails(hfRepoId).then((info) => {
+			if (!cancelled && info?.gguf?.total) fetchedParams = info.gguf.total;
+		});
+
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	let paramsFallback = $derived(
+		!parsedParams && (metaParams ?? fetchedParams)
+			? formatParameters(metaParams ?? fetchedParams)
+			: undefined
+	);
 </script>
 
 <div
@@ -84,12 +171,24 @@
 	tabindex="0"
 	title={loadTitle}
 >
+	{#if orgName}
+		<ModelsDiscoverAvatar
+			class="mt-0"
+			org={baseModelOrg ?? orgName}
+			quantOrg={showBaseModelAvatar ? orgName : undefined}
+			quantPositionClass="-bottom-1 -right-1"
+			quantSize="h-3 w-3"
+			size="h-6 w-6"
+		/>
+	{/if}
+
 	<ModelId
 		aliases={option.aliases}
 		class="flex-1"
 		{hideOrgName}
 		{modalities}
 		modelId={option.model}
+		params={paramsFallback}
 		showRawTooltip
 		supportsThinking={capabilities.reasoning}
 		supportsToolUse={capabilities.tools}
