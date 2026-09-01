@@ -51,20 +51,21 @@
 </script>
 
 <div
-	class="flex items-center gap-2 rounded-md border border-border/40 bg-background py-2 pr-2 pl-3 shadow-xs dark:border-border/35 dark:bg-background/50"
+	class="flex items-center gap-2 overflow-hidden rounded-md border border-border/40 bg-background py-2 pr-2 pl-3 shadow-xs dark:border-border/35 dark:bg-background/50"
 >
 	<span aria-hidden="true" class="shrink-0 font-mono text-xs text-muted-foreground/50">$</span>
 
+	<!-- Single line: long commands scroll horizontally instead of wrapping. -->
 	<div
-		class="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 py-0.5 font-mono text-xs text-foreground/90"
+		class="flex min-w-0 flex-1 items-center gap-x-2 overflow-x-auto py-0.5 font-mono text-xs whitespace-nowrap text-foreground/90"
 	>
-		<span>llama</span>
+		<span class="shrink-0">llama</span>
 
-		<span>serve</span>
+		<span class="shrink-0">serve</span>
 
-		<span>-hf</span>
+		<span class="shrink-0">-hf</span>
 
-		<span class="truncate">{modelId}{mainQuant ? ':' : ''}</span>
+		<span class="shrink-0">{modelId}{mainQuant ? ':' : ''}</span>
 
 		<!-- Base quant: always part of the command, the 8-bit file by default. -->
 		{#if baseOptions.length}
@@ -87,7 +88,7 @@
 		{#if specType !== null}
 			<span>-hfd</span>
 
-			<span class="truncate">{modelId}{draftQuant ? ':' : ''}</span>
+			<span class="shrink-0">{modelId}{draftQuant ? ':' : ''}</span>
 
 			<select
 				aria-label="Draft model quantization"
