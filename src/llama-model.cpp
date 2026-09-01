@@ -2584,7 +2584,10 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* type_idx          */ type_idx,
                             /* attn_v_mirror     */ [] {
                                 const char * e = getenv("LLAMA_MLA_V_MIRROR");
-                                return e && atoi(e) != 0;
+                                if (!e || strcmp(e, "0") == 0 || strcmp(e, "off") == 0) return false;
+                                if (strcmp(e, "1") == 0 || strcmp(e, "on") == 0) return true;
+                                fprintf(stderr, "LLAMA_MLA_V_MIRROR=%s unrecognized (want off|0|on|1) -> off\n", e);
+                                return false;
                             }());
                     }
                 } else {

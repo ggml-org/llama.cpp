@@ -165,6 +165,12 @@ llama_kv_cache::llama_kv_cache(
     const bool is_mla = hparams.is_mla();
 
     v_mirror = v_mirror_opt && is_mla && v_trans;   // Patch B opt-in, MLA transposed caches only
+    if (v_mirror_opt && !v_mirror) {
+        fprintf(stderr, "MLA_V_MIRROR requested but DISABLED (is_mla=%d v_trans=%d)\n", (int) is_mla, (int) v_trans);
+    }
+    if (v_mirror) {
+        GGML_ASSERT((type_k == GGML_TYPE_F16 || type_k == GGML_TYPE_F32) && "V mirror v0 requires F16/F32 type_k");
+    }
 
     for (uint32_t il = 0; il < n_layer; il++) {
         if (!hparams.has_kv(il)) {
@@ -256,6 +262,15 @@ llama_kv_cache::llama_kv_cache(
         map_layer_ids[il] = layers.size();
 
         layers.push_back({ il, k, v, k_stream, v_stream, });
+    }
+
+    if (v_mirror) {
+        for (const auto & layer : layers) {
+            if (layer.v) {
+                GGML_ASSERT(hparams.n_embd_k_gqa(layer.il) == mirror_w_max && "V mirror v0 requires uniform mirrored K width");
+            }
+        }
+        fprintf(stderr, "MLA_V_MIRROR ACTIVE width=%u type=%s\n", mirror_w_max, ggml_type_name(type_k));
     }
 
     if (reuse) {
@@ -857,11 +872,8 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
                 ggml_backend_tensor_copy(layer.k_stream[ssrc], layer.k_stream[sdst]);
 
                 if (layer.v_stream[ssrc]) {
+                    // mirror copied with the stream -> stays clean (codex 034 s4)
                     ggml_backend_tensor_copy(layer.v_stream[ssrc], layer.v_stream[sdst]);
-                }
-
-                if (v_mirror) {
-                    mirror_dirty = true;
                 }
             }
         }
@@ -2929,6 +2941,10 @@ ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) cons
 
 bool llama_kv_cache_context::get_has_v_mirror() const {
     return kv->get_has_v_mirror();
+}
+
+uint32_t llama_kv_cache_context::mirror_width_max() const {
+    return kv->mirror_width_max();
 }
 
 ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) const {

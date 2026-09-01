@@ -1185,6 +1185,12 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
 
+    if (inp_attn->self_v_idxs &&
+        (int64_t) inp_attn->self_v_idxs->ne[0] !=
+            (int64_t) params.ubatch.n_tokens * mctx->get_attn()->mirror_width_max()) {
+        return false;   // Patch B (grokk 033 2.3)
+    }
+
     return res;
 }
 
@@ -2994,13 +3000,20 @@ ggml_tensor * llm_graph_context::build_attn(
         const auto & k_idxs = inp->get_k_idxs();
 
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+
+        // Patch B (grokk 033 2.1): dense consumer maintains the mirror too
+        if (mctx_cur->get_has_v_mirror()) {
+            ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, k_cur, inp->get_v_idxs(), il));
+        }
     }
 
     const auto & kq_mask = inp->get_kq_mask();
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
-    ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
+    ggml_tensor * v = mctx_cur->get_has_v_mirror()
+        ? mctx_cur->get_v(ctx0, il)
+        : ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
