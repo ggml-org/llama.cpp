@@ -118,6 +118,14 @@ export { default as ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand } f
 export { default as ModelsDiscoverModelDetailsSkeleton } from './ModelsDiscoverModelDetailsSkeleton.svelte';
 
 /**
+ * **ModelsDiscoverDetailsMetadataItem** - Single metadata chip
+ *
+ * One label | value chip of the detail view's metadata row (model size,
+ * context, architecture, license).
+ */
+export { default as ModelsDiscoverModelDetailsMetadataItem } from './ModelsDiscoverModelDetailsMetadataItem.svelte';
+
+/**
  * **ModelsDiscoverChatTemplateDialog** - Chat template viewer
  *
  * Shows the model's chat template in a scrollable dialog with a copy button.
