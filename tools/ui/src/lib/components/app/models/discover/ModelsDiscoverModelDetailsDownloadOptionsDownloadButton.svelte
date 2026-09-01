@@ -11,7 +11,11 @@
 	let { label, disabled, onclick }: Props = $props();
 </script>
 
-<Button class="w-full transition-transform active:scale-[0.98]" {disabled} {onclick}>
+<Button
+	class="h-10 w-full rounded-lg transition-transform active:scale-[0.97]"
+	{disabled}
+	{onclick}
+>
 	<Download class="h-4 w-4" />
 
 	{label}
