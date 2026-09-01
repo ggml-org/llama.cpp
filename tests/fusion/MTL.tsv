@@ -1,4 +1,4 @@
-# test-fusion baseline for backend MTL0
+# test-fusion baseline for device MTL
 # arch	moe	mode	label	count
 arcee	0	prefill	RMS_NORM+MUL	5
 arcee	0	decode	RMS_NORM+MUL	80

@@ -296,6 +296,10 @@ int main(int argc, char ** argv) {
     // mechanism; a backend that does not adopt fusion debugging exports none of them
     auto * reg = ggml_backend_dev_backend_reg(dev);
 
+    // output naming uses the backend base name (e.g. "MTL") rather than the specific device
+    // name (e.g. "MTL0") the test was invoked with
+    const std::string base_name = ggml_backend_reg_name(reg);
+
     auto api_stats_init  = (fusion_stats_init_t)  ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_init");
     auto api_stats_reset = (fusion_stats_reset_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_reset");
     auto api_stats_get   = (fusion_stats_get_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_get");
@@ -342,7 +346,7 @@ int main(int argc, char ** argv) {
 
     std::vector<fusion_row> rows;
 
-    LOG_INF("%s: running fusion test over %zu models on '%s'\n", __func__, models.size(), device_name.c_str());
+    LOG_INF("%s: running fusion test over %zu models on '%s'\n", __func__, models.size(), base_name.c_str());
 
     const size_t seed = 1;
 
@@ -454,7 +458,7 @@ int main(int argc, char ** argv) {
         std::ofstream out(record_path);
         std::ostream & os = record_path.empty() ? std::cout : out;
         if (!record_path.empty()) {
-            os << "# test-fusion baseline for device " << device_name << "\n";
+            os << "# test-fusion baseline for device " << base_name << "\n";
             os << "# arch\tmoe\tmode\tlabel\tcount\n";
         }
 

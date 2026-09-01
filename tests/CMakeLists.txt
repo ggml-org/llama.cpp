@@ -252,7 +252,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_test(
         test-fusion
         LABEL main
-        ARGS --models "${MODEL_DIR}" --device MTL0 --check "${PROJECT_SOURCE_DIR}/tests/fusion/MTL0.tsv"
+        ARGS --models "${MODEL_DIR}" --device MTL0 --check "${PROJECT_SOURCE_DIR}/tests/fusion/MTL.tsv"
     )
     set_tests_properties(test-fusion PROPERTIES FIXTURES_REQUIRED generate-models)
 endif()
