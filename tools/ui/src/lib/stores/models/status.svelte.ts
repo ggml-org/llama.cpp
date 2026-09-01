@@ -125,6 +125,15 @@ export class ModelStatusManager {
 	constructor(private host: ModelStatusHost) {}
 
 	/**
+	 * Models registered on the router (i.e. already in its cache), as a list
+	 * for the download manager. Rows come and go with the feed's models_reload
+	 * and model_remove events.
+	 */
+	downloadedEntries(): { id: string; status: ServerModelStatus | null }[] {
+		return this.host.routerModels.map((m) => ({ id: m.id, status: m.status?.value ?? null }));
+	}
+
+	/**
 	 * All tracked downloads (in flight), as a list for the download manager.
 	 */
 	downloadEntries(): { progress: ModelDownloadProgress; repoWithTag: string }[] {

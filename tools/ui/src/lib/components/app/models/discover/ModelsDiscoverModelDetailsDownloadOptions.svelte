@@ -8,7 +8,7 @@
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { HfModelSibling } from '$lib/types/huggingface';
-	import { copyToClipboard, estimateModelMemoryBytes } from '$lib/utils';
+	import { copyToClipboard, minMemoryTierGb } from '$lib/utils';
 
 	/** Download state of a single repo entry, injected by the integration layer. */
 	export interface DownloadEntryState {
@@ -135,10 +135,11 @@
 	/** First selected main quant, drives the `-hf <repo>:<quant>` tag. */
 	let primaryQuant = $derived(selected.find((s) => !s.sidecar)?.quant ?? null);
 
-	/** First selected draft sidecar, drives the `--spec-type` flag. */
-	let draft = $derived(
-		selected.find((s) => s.sidecar && !isAuxSidecar(s.sidecar))?.sidecar ?? null
-	);
+	/** First selected draft sidecar entry. */
+	let draftEntry = $derived(selected.find((s) => s.sidecar && !isAuxSidecar(s.sidecar)) ?? null);
+
+	/** First selected draft sidecar type, drives the `--spec-type` flag. */
+	let draft = $derived(draftEntry?.sidecar ?? null);
 
 	// llama.cpp --spec-type value for each draft sidecar.
 	const SPEC_TYPE: Record<ModelSidecar, string> = {
@@ -177,15 +178,19 @@
 		const quantTag = primaryQuant ? `${modelId}:${primaryQuant}` : modelId;
 		const parts = ['llama', 'serve', '-hf', quantTag];
 
-		if (draft) parts.push('-hfd', modelId, '--spec-type', SPEC_TYPE[draft]);
+		if (draft) {
+			const draftTag = draftEntry?.quant ? `${modelId}:${draftEntry.quant}` : modelId;
+
+			parts.push('-hfd', draftTag, '--spec-type', SPEC_TYPE[draft]);
+		}
 
 		return parts.join(' ');
 	});
 </script>
 
 {#if bitDepthRows.length}
-	<section class="space-y-3 rounded-xl border p-4">
-		<div class="flex flex-wrap items-center justify-between gap-2">
+	<section class="rounded-xl border">
+		<div class="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-1">
 			<h2 class="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
 				<Download class="h-4 w-4" />
 				Downloadable options
@@ -197,18 +202,34 @@
 		</div>
 
 		<ToggleGroup
-			class="flex flex-col"
+			class="flex w-full flex-col items-stretch divide-y px-4 pb-1"
 			onValueChange={handleSelection}
 			type="multiple"
 			value={selectedPaths}
 		>
 			{#each bitDepthRows as row (row.bitDepth)}
-				<div class="grid grid-cols-[5rem_1fr] items-start gap-3 py-2">
+				{@const mainFile = row.files.find(
+					(f) => !HuggingFaceService.extractQuantMeta(f.path)?.sidecar
+				)}
+				{@const draftFile = row.files.find((f) => {
+					const sidecar = HuggingFaceService.extractQuantMeta(f.path)?.sidecar;
+
+					return sidecar && !isAuxSidecar(sidecar);
+				})}
+				{@const mainMemGb = mainFile ? minMemoryTierGb(mainFile.size ?? 0) : null}
+				{@const draftMemGb = draftFile ? minMemoryTierGb(draftFile.size ?? 0) : null}
+				<div class="grid grid-cols-[5rem_1fr] items-start gap-3 py-3">
 					<div class="pt-1 text-sm tabular-nums text-muted-foreground">
 						{#if row.bitDepth === 99}
 							Other
 						{:else}
 							{row.bitDepth}-bit
+						{/if}
+
+						{#if mainMemGb}
+							<span class="block text-[10px] whitespace-nowrap text-muted-foreground/60">
+								needs at least {mainMemGb}GB{draftMemGb ? ` + ${draftMemGb}GB` : ''}+ memory
+							</span>
 						{/if}
 					</div>
 
@@ -227,14 +248,13 @@
 							{@const progress = state.progress}
 							{@const isDownloaded = state.isDownloaded}
 							{@const isFailed = state.isFailed}
-							{@const memoryGb = Math.ceil(estimateModelMemoryBytes(file.size ?? 0) / 1024 ** 3)}
 							{@const tooltipText = isDownloading
 								? `Downloading ${file.path}`
 								: isDownloaded
 									? `Already downloaded: ${file.path}`
 									: isFailed
 										? `Last attempt failed: ${file.path}`
-										: `Download ${file.path} (requires ~${memoryGb} GB of memory)`}
+										: `Download ${file.path}`}
 							<Tooltip.Root>
 								<Tooltip.Trigger>
 									{#if isDownloaded}
@@ -317,7 +337,7 @@
 		</ToggleGroup>
 
 		<!-- Terminal command + download CTA for the current selection -->
-		<div class="space-y-2">
+		<div class="space-y-2 border-t px-4 pt-3 pb-4">
 			<div
 				class="flex items-center justify-between gap-2 rounded-md px-3 py-2"
 				style="background: var(--code-background); border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);"
