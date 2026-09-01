@@ -1534,11 +1534,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             verify_pos_first[seq_id] = batch_in.pos != nullptr
                     ? batch_in.pos[i_batch_beg[seq_id]] : -1;
 
-            // M-RoPE target positions are tuples whose temporal component can repeat across image
-            // tokens. The 1-D draft cache instead keeps exactly one dense row per target token.
-            // Server-side draft trimming guarantees that its current tail is the next token index.
-            llama_pos pos_next = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id) + 1;
-
             for (int32_t offset = 0; offset < n_rows; offset += n_ubatch) {
                 const int32_t n_chunk = std::min(n_ubatch, n_rows - offset);
 
