@@ -87,9 +87,12 @@ public:
                        ggml_tensor * bias, const llama_ubatch * ubatch, uint32_t ratio,
                        bool blk_bias) const;
 
+    // The model's indexer pool size.
+    uint32_t get_kpool() const { return n_kpool; }
+
     // Sequence edits invalidate cached relative pools.
     bool kpool_is_dirty   () const { return kpool_dirty; }
-    void kpool_clear_dirty() const { kpool_dirty = false; }
+    void kpool_clear_dirty()       { kpool_dirty = false; }
 
 private:
     // forget seq_id (all of it if seq_id < 0) in every cache at once, so a failed restore cannot leave the caches out of step
@@ -102,8 +105,9 @@ private:
 
     const std::unique_ptr<llama_kv_cache> mem_idx;
 
-    // Mutable because it is captured and cleared through const contexts.
-    mutable bool kpool_dirty = false;
+    const uint32_t n_kpool;
+
+    bool kpool_dirty = false;
 };
 
 class llama_memory_hybrid_idx_context : public llama_memory_hybrid_context {
@@ -148,20 +152,19 @@ public:
     // streams in the current slot info, the `ns` of get_k/get_v; 1 if unified
     uint32_t get_n_stream() const;
 
-    // glm5-next, complete pools of kpool consecutive positions per sequence, scored as whole pools
-    // Cache sequence-private complete pools and re-pool only changed pools.
-    uint32_t get_n_kpool    (uint32_t kpool) const; // Padded pool count, where the last pool is always unused.
-    uint32_t get_n_kpool_new(uint32_t kpool, const llama_ubatch * ubatch) const; // Exact count of new pools.
-    bool get_kpool_cache_safe(uint32_t kpool) const;
+    // glm5-next, complete pools of kpool consecutive positions per sequence, scored as whole pools.
+    uint32_t get_n_kpool    () const; // Padded pool count, where the last pool is always unused.
+    uint32_t get_n_kpool_new() const; // Exact count of pools completed by the current ubatch.
+    bool get_kpool_cache_safe() const;
     void set_input_kpool(ggml_tensor * pool_cells, ggml_tensor * pool_idxs, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,
                          ggml_tensor * gather_mask, bool gather, ggml_tensor * new_pool_idxs, ggml_tensor * new_pool_rep,
-                         const llama_ubatch * ubatch, uint32_t kpool) const;
+                         const llama_ubatch * ubatch) const;
     void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
                        ggml_tensor * bias, const llama_ubatch * ubatch, uint32_t ratio,
                        bool blk_bias) const;
 
 private:
-    const llama_memory_hybrid_idx * mem = nullptr;
+    llama_memory_hybrid_idx * mem = nullptr;
 
     // streams per ubatch, read from the slot infos before ctx_idx takes them
     // declared first, so it is initialised while sinfos_idx is still intact
@@ -173,10 +176,14 @@ private:
     // mirrors the base class's ubatch cursor, which is private there
     size_t i_cur = 0;
 
-    // Cached k-pool layout.
+    // K-pool layouts
     struct kpool_state;
-    kpool_state & kpool_get_state(uint32_t kpool, const llama_ubatch * ubatch) const;
-    mutable std::unique_ptr<kpool_state> kpool_st;
+    kpool_state kpool_build_state(const llama_ubatch * ubatch) const;
+    const kpool_state & kpool_cur() const;
+    std::vector<kpool_state> kpool_states;
+
+    // Whether this context tracks k-pool states.
+    bool kpool_track = false;
 
     // Clear a pending full re-pool only after the first ubatch succeeds
     bool kpool_dirty_batch = false;

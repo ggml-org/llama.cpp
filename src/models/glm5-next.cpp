@@ -241,7 +241,7 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override {
         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
-        mctx->set_input_kpool(pool_cells, pool_idxs, pool_mask, tail_idxs, gather_mask, gather, new_pool_idxs, new_pool_rep, ubatch, kpool);
+        mctx->set_input_kpool(pool_cells, pool_idxs, pool_mask, tail_idxs, gather_mask, gather, new_pool_idxs, new_pool_rep, ubatch);
     }
 
     bool can_reuse(const llm_graph_params & params) override {
@@ -255,14 +255,14 @@ public:
         bool res = true;
 
         res &= k_idxs->ne[0]     == params.ubatch.n_tokens;
-        res &= pool_cells->ne[0] == mctx->get_n_kpool(kpool);
+        res &= pool_cells->ne[0] == mctx->get_n_kpool();
         res &= pool_mask->ne[1]  == params.ubatch.n_tokens;
         res &= tail_idxs->ne[1]  == params.ubatch.n_tokens;
         // The scatter mask shape follows n_kv.
         res &= n_kv              == idx->get_n_kv();
         // The new pool path is sized exactly
-        res &= n_new             == mctx->get_n_kpool_new(kpool, &params.ubatch);
-        res &= cache_safe        == mctx->get_kpool_cache_safe(kpool);
+        res &= n_new             == mctx->get_n_kpool_new();
+        res &= cache_safe        == mctx->get_kpool_cache_safe();
 
         return res;
     }
@@ -290,10 +290,10 @@ llama_model_glm5_next::llm_graph_input_kpool * llama_model_glm5_next::graph::bui
     GGML_ASSERT(mctx_idx != nullptr);
 
     const uint32_t kpool  = hparams.indexer_kpool;
-    const uint32_t n_pool = mctx_hyb->get_n_kpool(kpool);
+    const uint32_t n_pool = mctx_hyb->get_n_kpool();
     const uint32_t n_kv   = mctx_idx->get_n_kv();
-    const uint32_t n_new  = mctx_hyb->get_n_kpool_new(kpool, &ubatch);
-    const bool cache_safe = mctx_hyb->get_kpool_cache_safe(kpool);
+    const uint32_t n_new  = mctx_hyb->get_n_kpool_new();
+    const bool cache_safe = mctx_hyb->get_kpool_cache_safe();
 
     // the fused lightning indexer wants an f16 mask
     const auto type_mask = cparams.fused_lid ? GGML_TYPE_F16 : GGML_TYPE_F32;
