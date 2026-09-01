@@ -1760,6 +1760,12 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 #endif // defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
 }
 
+static constexpr __host__ __device__ bool ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(
+        const int DKQ, const int DV, const int ncols1, const int ncols2) {
+    return (DKQ == 512 && DV == 512 && ncols1 == 1 && ncols2 == 8) ||
+           (DKQ == 576 && DV == 512 && ncols1 == 1 && ncols2 == 16);
+}
+
 template<int DKQ, int DV, int ncols1, int ncols2, bool use_logit_softcap, bool V_is_K_view, bool use_sparse>
 __launch_bounds__(ggml_cuda_fattn_mma_get_nthreads(DKQ, DV, ncols1*ncols2), ggml_cuda_fattn_mma_get_occupancy(DKQ, DV, ncols1*ncols2))
 static __global__ void flash_attn_ext_f16(
@@ -1786,15 +1792,15 @@ static __global__ void flash_attn_ext_f16(
                             const int32_t nb31, const int32_t nb32, const int64_t nb33) {
     ggml_cuda_pdl_sync(); // TODO optimize placement
 #if defined(FLASH_ATTN_AVAILABLE) && (defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE))
-    const char * GGML_CUDA_RESTRICT Q        = Q_ptr;
-    const char * GGML_CUDA_RESTRICT K        = K_ptr;
-    const char * GGML_CUDA_RESTRICT V        = V_ptr;
-    const char * GGML_CUDA_RESTRICT mask     = mask_ptr;
-    const char * GGML_CUDA_RESTRICT sinks    = sinks_ptr;
-    const int  * GGML_CUDA_RESTRICT KV_max   = use_sparse ? nullptr : KV_max_ptr;
-    const int32_t * GGML_CUDA_RESTRICT sparse_indices = use_sparse ? KV_max_ptr : nullptr;
-    float      * GGML_CUDA_RESTRICT dst      = dst_ptr;
-    float2     * GGML_CUDA_RESTRICT dst_meta = dst_meta_ptr;
+    const char * GGML_CUDA_RESTRICT Q              = Q_ptr;
+    const char * GGML_CUDA_RESTRICT K              = K_ptr;
+    const char * GGML_CUDA_RESTRICT V              = V_ptr;
+    const char * GGML_CUDA_RESTRICT mask           = mask_ptr;
+    const char * GGML_CUDA_RESTRICT sinks          = sinks_ptr;
+    const int  * GGML_CUDA_RESTRICT KV_max         = use_sparse ? nullptr : KV_max_ptr;
+    const int  * GGML_CUDA_RESTRICT sparse_indices = use_sparse ? KV_max_ptr : nullptr;
+    float      * GGML_CUDA_RESTRICT dst            = dst_ptr;
+    float2     * GGML_CUDA_RESTRICT dst_meta       = dst_meta_ptr;
 
     // Skip unused kernel variants for faster compilation:
     if (use_logit_softcap && !(DKQ == 128 || DKQ == 256 || DKQ == 512)) {
@@ -1802,6 +1808,11 @@ static __global__ void flash_attn_ext_f16(
         return;
     }
     if (DKQ == 192 && ncols2 != 8 && ncols2 != 16) {
+        NO_DEVICE_CODE;
+        return;
+    }
+
+    if (!ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, ncols1, ncols2) && use_sparse) {
         NO_DEVICE_CODE;
         return;
     }
@@ -1881,7 +1892,7 @@ static __global__ void flash_attn_ext_f16(
 
         const half2 * V_h2 = V_is_K_view ? K_h2 : (const half2 *) (V + nb23*sequence + nb22*z_KV);
         const float * sinks_f = sinks ? (const float *) sinks + zt_Q : nullptr;
-        const int32_t * indices = use_sparse ? sparse_indices + (int64_t(sequence % ne33)*ne31 + jt)*ne11 : nullptr;
+        const int32_t * indices = use_sparse ? sparse_indices + (int64_t(sequence % ne33)*ne31 + jt*ncols1)*ne11 : nullptr;
 
         const float slope = ncols2 == 1 ? get_alibi_slope(max_bias, zt_Q, n_head_log2, m0, m1) : 1.0f;
 
@@ -1953,12 +1964,6 @@ static __global__ void flash_attn_ext_f16(
               nb31, nb32, nb33);
     NO_DEVICE_CODE;
 #endif // defined(FLASH_ATTN_AVAILABLE) && (defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE))
-}
-
-static constexpr bool ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(
-        const int DKQ, const int DV, const int ncols1, const int ncols2) {
-    return (DKQ == 512 && DV == 512 && ncols1 == 1 && ncols2 == 8) ||
-           (DKQ == 576 && DV == 512 && ncols1 == 1 && ncols2 == 16);
 }
 
 bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
@@ -2035,7 +2040,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
                 }
             }
         } else
-#endif
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         {
             constexpr bool use_sparse_kernel = false;
             fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_sparse_kernel>;

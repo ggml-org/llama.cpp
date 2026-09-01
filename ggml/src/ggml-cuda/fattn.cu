@@ -49,6 +49,7 @@ static __global__ void flash_attn_mask_to_sparse_indices(
 
         if (tid == 0) {
             int offset = 0;
+#pragma unroll
             for (int iw = 0; iw < 256/WARP_SIZE; ++iw) {
                 const int count = warp_offsets[iw];
                 warp_offsets[iw] = offset;
@@ -85,15 +86,8 @@ static __global__ void flash_attn_mask_to_sparse_indices(
 
     // the dependent grid reads indices, signal once the row is complete
     ggml_cuda_pdl_lc();
-
-    if (count > n_kv_max) {
-        if (tid == 0) {
-            printf("flash attention sparse mask row exceeds n_kv_max (%d > %d)\n", count, n_kv_max);
-            __trap();
-        }
-    }
 }
-#endif
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 void ggml_cuda_flash_attn_ext_compact_mask(
         const ggml_tensor * mask, int32_t * indices, int32_t n_kv_max, cudaStream_t stream) {
@@ -109,7 +103,7 @@ void ggml_cuda_flash_attn_ext_compact_mask(
     ggml_cuda_kernel_launch(flash_attn_mask_to_sparse_indices, launch_params,
         (const half *) mask->data, indices, int(mask->ne[0]), n_kv_max, s31, s33);
     CUDA_CHECK(cudaGetLastError());
-#endif
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
 bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -132,7 +126,7 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ggml_backend_cuda_context
         mask != nullptr && n_kv_max > 0 && max_bias == 0.0f && logit_softcap == 0.0f &&
         mask->ne[0] == K->ne[1] && mask->ne[1] >= Q->ne[1] && mask->ne[2] == 1 &&
         K->ne[1] >= std::max<int64_t>(4096, 2LL*n_kv_max);
-#endif
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
 template <int DKQ, int DV, int ncols2>
@@ -147,7 +141,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
             return;
         }
     }
-#endif
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
     if constexpr (ncols2 <= 8) {
         if (turing_mma_available(cc) && Q->ne[1] <= 8/ncols2) {
