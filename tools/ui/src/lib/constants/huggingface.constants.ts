@@ -18,6 +18,23 @@ export const HF_FULL_DETAIL_PARAM = 'full=true';
 export const HF_RECURSIVE_TREE_PARAM = 'recursive=true';
 /** Search filter that restricts results to repos containing GGUF files. */
 export const HF_GGUF_FILTER = 'gguf';
+/** Repeatable `expand` query param selecting fields on the list endpoint. */
+export const HF_EXPAND_PARAM = 'expand';
+/**
+ * Fields the model list endpoint omits by default but the discover list rows
+ * render: `gguf` (chat template, context length, param count) drives the
+ * reasoning / tool-use icons and the context badge, `siblings` the vision and
+ * draft-sidecar badges. Without them those parts of a row stay empty.
+ */
+export const HF_MODEL_LIST_EXPAND: readonly string[] = [
+	'author',
+	'downloads',
+	'gguf',
+	'lastModified',
+	'likes',
+	'pipeline_tag',
+	'siblings'
+];
 
 // Repo file conventions
 
@@ -114,6 +131,19 @@ export const BYTE = 1;
 export const KILOBYTE = 1_000;
 export const MEGABYTE = 1_000_000;
 export const GIGABYTE = 1_000_000_000;
+export const TERABYTE = 1_000_000_000_000;
+
+/**
+ * Byte multiplier for a size suffix (`k` kilobyte, `m` megabyte, ...) as used by
+ * the llama.app catalog `size` strings, whose suffix is lowercase.
+ */
+export const HF_SIZE_SUFFIX_BYTES: Readonly<Record<string, number>> = {
+	b: BYTE,
+	g: GIGABYTE,
+	k: KILOBYTE,
+	m: MEGABYTE,
+	t: TERABYTE
+};
 
 export const BYTE_LABEL = 'B';
 export const KILOBYTE_LABEL = 'KB';

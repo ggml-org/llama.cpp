@@ -4,13 +4,28 @@
  * Owns the HuggingFace GGUF model list shown in the hub sidebar
  * (DialogModelsDiscover). The hub has no "nothing selected" screen: it always opens
  * a model, so `firstModel` drives the initial selection. By default the list
- * shows a curated set of official ggml-org GGUF models in a fixed display order;
- * search replaces the list with matching models across all of HuggingFace.
+ * shows a curated set of GGUF models in catalog order; search replaces the list
+ * with matching models across all of HuggingFace. Both paths fetch the same
+ * fields (chat template, context length, repo files), so a row renders the same
+ * badges and sizes whether it came from the catalog or from a query.
  * Detail data is loaded by ModelsDiscoverModelDetails, not here.
  */
 
+import { isAuxSidecar } from '$lib/constants';
 import { HuggingFaceService } from '$lib/services';
-import type { HfCatalogEntry, HfModelInfo } from '$lib/types/huggingface';
+import type {
+	HfCatalogBuild,
+	HfCatalogEntry,
+	HfModelInfo,
+	HfModelSibling
+} from '$lib/types/huggingface';
+import { SvelteMap } from 'svelte/reactivity';
+
+/** Min/max GGUF file size (bytes) across the quants of one repo. */
+export interface ModelsHubSizeRange {
+	max: number;
+	min: number;
+}
 
 class ModelsHubStore {
 	error = $state<string | null>(null);
@@ -27,9 +42,21 @@ class ModelsHubStore {
 	searching = $state(false);
 
 	private catalog: HfCatalogEntry[] = [];
+	/** Repo id -> size range, for catalog rows and lazily measured search rows. */
+	private catalogSizeRanges = new SvelteMap<string, ModelsHubSizeRange>();
 	private defaultModels: HfModelInfo[] = [];
 	private fetched = false;
 	private searchRequestId = 0;
+	/** In-flight `sizeRange()` lookups, keyed by repo id. */
+	private sizeRangePending = new Map<string, Promise<ModelsHubSizeRange | undefined>>();
+
+	/**
+	 * Cached size range for a repo, without measuring: the synchronous part of
+	 * `sizeRange()`, for rendering a row before its measurement resolves.
+	 */
+	cachedSizeRangeFor(modelId: string): ModelsHubSizeRange | undefined {
+		return this.catalogSizeRanges.get(modelId);
+	}
 
 	/**
 	 * Catalog family description for a repo id, or undefined when the repo is
@@ -42,9 +69,10 @@ class ModelsHubStore {
 	}
 
 	/**
-	 * Fetch the default list from the llama.app catalog, flattened to a flat
-	 * list of ggml-org repo ids in catalog order (one per size). Each repo is
-	 * fetched directly by ID, so the list is independent of download ranking.
+	 * Fetch the default list from the llama.app catalog, one repo per catalog
+	 * size in display order (newest family first). Every repo is fetched by ID
+	 * with its file tree, so the rows carry chat-template capabilities, context
+	 * length and a real size range - the same data a search result gets.
 	 * No-op when already loaded or in flight.
 	 */
 	async fetch(): Promise<void> {
@@ -57,14 +85,32 @@ class ModelsHubStore {
 			const catalog = await HuggingFaceService.getCatalog();
 
 			this.catalog = catalog;
-			const ids = this.catalogModelIds(catalog);
 
-			// getDetails returns full metadata (downloads, likes, lastModified,
-			// siblings, tags, gguf) for a single model.
-			this.defaultModels = (
-				await Promise.all(ids.map((id) => HuggingFaceService.getDetails(id)))
-			).filter((m): m is HfModelInfo => m !== null);
-			this.models = this.defaultModels;
+			const builds = this.catalogBuilds(catalog);
+			const fetched = await Promise.all(
+				builds.map(async (build) => {
+					const [info, tree] = await Promise.all([
+						HuggingFaceService.getDetails(build.repo),
+						HuggingFaceService.getTree(build.repo)
+					]);
+
+					return { build, info, tree };
+				})
+			);
+			const models: HfModelInfo[] = [];
+
+			for (const { build, info, tree } of fetched) {
+				if (!info) continue;
+
+				this.catalogSizeRanges.set(build.repo, this.sizeRangeFor(build, tree));
+
+				// The catalog row, not the repo, defines the id shown and used for
+				// selection: the HF response `id` is not always the catalog repo.
+				models.push({ ...info, id: build.repo, modelId: build.repo } as HfModelInfo);
+			}
+
+			this.defaultModels = models;
+			this.models = models;
 			this.fetched = true;
 		} catch (err) {
 			this.error = err instanceof Error ? err.message : 'Failed to fetch models';
@@ -98,7 +144,7 @@ class ModelsHubStore {
 		this.searching = true;
 
 		try {
-			const results = await HuggingFaceService.searchByQuery(trimmed, { full: true, limit: 50 });
+			const results = await HuggingFaceService.searchByQuery(trimmed, { limit: 50 });
 
 			if (requestId !== this.searchRequestId) return;
 
@@ -114,39 +160,123 @@ class ModelsHubStore {
 	}
 
 	/**
-	 * Min/max GGUF file size (bytes) across the available quants for a repo,
-	 * or undefined when the repo is not part of the catalog.
+	 * Size range for a repo not measured yet - a search result, or a catalog
+	 * repo whose tree came back empty. Fetches the file tree once per repo and
+	 * caches it, so remounting a row (scrolling, searching back) is free.
 	 */
-	sizeRangeFor(modelId: string): { min: number; max: number } | undefined {
-		for (const entry of this.catalog) {
-			for (const size of entry.sizes) {
-				const builds = size.builds.filter((b) => b.repo === modelId);
+	sizeRange(modelId: string): Promise<ModelsHubSizeRange | undefined> {
+		const cached = this.catalogSizeRanges.get(modelId);
 
-				if (builds.length === 0) continue;
+		if (cached) return Promise.resolve(cached);
 
-				const bytes = builds.map((b) => b.sizeBytes);
+		const pending = this.sizeRangePending.get(modelId);
 
-				return { max: Math.max(...bytes), min: Math.min(...bytes) };
-			}
-		}
+		if (pending) return pending;
 
-		return undefined;
+		const request = (async () => {
+			const tree = await HuggingFaceService.getTree(modelId);
+			const range = this.sizeRangeOfMainQuants(tree);
+
+			if (range) this.catalogSizeRanges.set(modelId, range);
+
+			return range;
+		})()
+			.catch(() => undefined)
+			.finally(() => this.sizeRangePending.delete(modelId));
+
+		this.sizeRangePending.set(modelId, request);
+
+		return request;
 	}
 
 	/**
-	 * Flatten the catalog to a flat list of ggml-org repo ids, newest family
-	 * first (by release date). Returns an empty array when the catalog is empty.
+	 * Bytes of every quant the catalog lists under this repo, parsed from the
+	 * `size` strings when a build carries no `sizeBytes`. Never empty: an
+	 * unparsable entry contributes the build's own size.
 	 */
-	private catalogModelIds(catalog: HfCatalogEntry[]): string[] {
+	private buildSizeBytes(build: HfCatalogBuild): number[] {
+		const sizes = this.catalog
+			.flatMap((entry) => entry.sizes)
+			.flatMap((size) => size.builds.filter((b) => b.repo === build.repo))
+			.map((b) => b.sizeBytes ?? HuggingFaceService.parseSizeBytes(b.size))
+			.filter((bytes): bytes is number => Boolean(bytes) && bytes > 0);
+
+		return sizes.length > 0 ? sizes : [build.sizeBytes ?? 0];
+	}
+
+	/**
+	 * One build per catalog size, newest family first (by release date).
+	 * Prefers the official ggml-org repo, falling back to the first build so
+	 * families published only by other orgs (mistralai, unsloth) still show up.
+	 * Returns an empty array when the catalog is empty.
+	 */
+	private catalogBuilds(catalog: HfCatalogEntry[]): HfCatalogBuild[] {
 		return [...catalog]
 			.sort((a, b) => b.released.localeCompare(a.released))
 			.flatMap((entry) =>
 				entry.sizes.flatMap((size) => {
-					const build = size.builds.find((b) => b.repo.startsWith('ggml-org/'));
+					const build = size.builds.find((b) => b.repo.startsWith('ggml-org/')) ?? size.builds[0];
 
-					return build ? [build.repo] : [];
+					return build ? [build] : [];
 				})
 			);
+	}
+
+	/** Byte sizes of every non-sidecar quant file in a tree, shards collapsed. */
+	private quantSizesOf(tree: HfModelSibling[]): number[] {
+		return HuggingFaceService.collapseGgufShards(
+			HuggingFaceService.filterByExtension(tree, '.gguf')
+		)
+			.filter((f) => {
+				const { quant, sidecar } = HuggingFaceService.extractQuantMeta(f.path) ?? {};
+
+				return Boolean(quant) && (sidecar === null || sidecar === undefined);
+			})
+			.map((f) => f.size ?? 0)
+			.filter((size) => size > 0);
+	}
+
+	/**
+	 * Size range of one catalog build: every quant in the repo's file tree, plus
+	 * the draft sidecars those files carry (mtp, dflash, ...) so the downloaded
+	 * model fits within the range. Falls back to the catalog `size` / `sizeBytes`
+	 * strings when the tree yielded nothing (partial fetch, sharded-only repo).
+	 */
+	private sizeRangeFor(build: HfCatalogBuild, tree: HfModelSibling[]): ModelsHubSizeRange {
+		const quantSizes = this.quantSizesOf(tree);
+
+		if (quantSizes.length === 0) {
+			const listed = this.buildSizeBytes(build);
+
+			return { max: Math.max(...listed), min: Math.min(...listed) };
+		}
+
+		const draftSizes = tree
+			.filter((f) => {
+				const sidecar = HuggingFaceService.extractQuantMeta(f.path)?.sidecar;
+
+				return sidecar !== null && sidecar !== undefined && !isAuxSidecar(sidecar);
+			})
+			.map((f) => f.size ?? 0)
+			.filter((size) => size > 0);
+		const extra = draftSizes.length > 0 ? Math.max(...draftSizes) : 0;
+
+		return {
+			max: Math.max(...quantSizes) + extra,
+			min: Math.min(...quantSizes) + (draftSizes.length > 0 ? Math.min(...draftSizes) : 0)
+		};
+	}
+
+	/**
+	 * Size range across the main-model quants of a file tree, draft sidecars
+	 * excluded (they only widen the range when a row advertises them).
+	 */
+	private sizeRangeOfMainQuants(tree: HfModelSibling[]): ModelsHubSizeRange | undefined {
+		const sizes = this.quantSizesOf(tree);
+
+		if (sizes.length === 0) return undefined;
+
+		return { max: Math.max(...sizes), min: Math.min(...sizes) };
 	}
 }
 

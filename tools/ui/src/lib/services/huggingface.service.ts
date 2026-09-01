@@ -28,6 +28,7 @@ import {
 	HF_LINK_NEXT_REGEX,
 	HF_MAIN_BRANCH,
 	HF_MAX_LIMIT,
+	HF_MODEL_LIST_EXPAND,
 	HF_PARAM_COUNT_REGEX,
 	HF_QUANT_PRECISION_REGEX,
 	HF_RAW_PATH,
@@ -38,6 +39,7 @@ import {
 	HF_SAFETENSORS_TAG,
 	HF_SHARD_PAD_WIDTH,
 	HF_SHARD_REGEX,
+	HF_SIZE_SUFFIX_BYTES,
 	HF_TASK_TAGS,
 	HF_TREE_PATH,
 	HF_UD_QUANT_PREFIX,
@@ -610,6 +612,25 @@ export class HuggingFaceService {
 	}
 
 	/**
+	 * Parse a human size string (`177GB`, `1.2 TB`, `500MB`) to bytes. Returns
+	 * null when it carries no number or no known suffix, so callers can fall
+	 * back to another source instead of showing a wrong size.
+	 */
+	// LLAMA-APP-REUSE: catalog size string parsing
+	static parseSizeBytes(size: string): number | null {
+		const match = /^\s*([\d.]+)\s*([a-z]+)\s*$/i.exec(size);
+
+		if (!match) return null;
+
+		const value = parseFloat(match[1]);
+		const multiplier = HF_SIZE_SUFFIX_BYTES[match[2].toLowerCase()];
+
+		if (!Number.isFinite(value) || multiplier === undefined) return null;
+
+		return value * multiplier;
+	}
+
+	/**
 	 * Parse model tags to extract useful information
 	 */
 	// LLAMA-APP-REUSE: tag parsing
@@ -633,12 +654,17 @@ export class HuggingFaceService {
 	}
 
 	/**
-	 * Search GGUF models with various filters and options
+	 * Search GGUF models with various filters and options.
+	 *
+	 * Always expands the fields the discover rows render (chat template, context
+	 * length, siblings, …) so a search result carries the same badges as a
+	 * catalog entry; caller-provided `expand` entries are merged in.
 	 */
 	static async search(params: HfModelSearchParams = {}): Promise<HfModelInfo[]> {
-		const { limit = HF_DEFAULT_LIMIT, ...restParams } = params;
+		const { expand, limit = HF_DEFAULT_LIMIT, ...restParams } = params;
 		const url = this.buildUrl({
 			...restParams,
+			expand: [...new Set([...HF_MODEL_LIST_EXPAND, ...(expand ?? [])])],
 			filter: HF_GGUF_FILTER,
 			limit: Math.min(limit, HF_MAX_LIMIT)
 		});

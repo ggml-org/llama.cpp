@@ -29,6 +29,12 @@ export interface HfModelSearchParams {
 	config?: string;
 	/** Return full model info */
 	full?: boolean;
+	/**
+	 * Fields to include beyond the default set (repeated as `expand=<field>`).
+	 * The list endpoint returns only `_id`, `id`, `modelId` and the sort field
+	 * unless this is given, so callers rendering badges must ask for them.
+	 */
+	expand?: string[];
 	/** Filter by visibility */
 	private?: boolean;
 	/** Filter by gated status */

@@ -4,6 +4,7 @@
 	import { isAuxSidecar, type ModelSidecar } from '$lib/constants';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsHubStore } from '$lib/stores';
+	import type { ModelsHubSizeRange } from '$lib/stores/models-hub/index.svelte';
 	import type { HfModelInfo } from '$lib/types/huggingface';
 	import type { ModelModalities } from '$lib/types/models';
 	import { detectThinkingSupport, detectToolUseSupport, formatParameters } from '$lib/utils';
@@ -35,8 +36,8 @@
 
 	// Params badge fallback: the id usually carries the count (`Qwen3.8-27B`),
 	// but ids like `Kimi-K3` do not. Fall back to the HF param count
-	// (`gguf.total`); search results omit `gguf`, so fetch details lazily only
-	// when the name has no params token.
+	// (`gguf.total`), fetched lazily only when neither the response nor the name
+	// has it.
 	let fetchedParams = $state<number | null>(null);
 
 	$effect(() => {
@@ -102,43 +103,21 @@
 		return [...set];
 	});
 
-	// Combined min/max size: the catalog gives main-model sizes per quant, and
-	// the repo file tree carries draft sidecar sizes (the detail siblings do
-	// not). Min = smallest main + smallest draft, max = largest main + largest
-	// draft, so the stored model fits within the range.
-	let sizeRange = $state<{ min: number; max: number } | null>(null);
+	// Min/max size across the repo's quants, draft sidecars included. The store
+	// has catalog rows covered already; any other row (a search hit) measures
+	// its repo once here and the result is cached per repo.
+	let measuredSize = $state<ModelsHubSizeRange | null>(null);
+	let sizeRange = $derived(modelsHubStore.cachedSizeRangeFor(model.id) ?? measuredSize);
 
 	$effect(() => {
-		const base = modelsHubStore.sizeRangeFor(model.id);
+		const id = model.id;
+
+		if (modelsHubStore.cachedSizeRangeFor(id)) return;
 
 		let cancelled = false;
 
-		if (draftSidecars.length === 0) {
-			sizeRange = base ?? null;
-
-			return;
-		}
-
-		void HuggingFaceService.getTree(model.id).then((tree) => {
-			if (cancelled) return;
-
-			const drafts = tree
-				.filter((f) => {
-					const sidecar = HuggingFaceService.extractQuantMeta(f.path)?.sidecar;
-
-					return sidecar && !isAuxSidecar(sidecar);
-				})
-				.map((f) => f.size ?? 0)
-				.filter((size) => size > 0);
-
-			if (base && drafts.length > 0) {
-				sizeRange = {
-					max: base.max + Math.max(...drafts),
-					min: base.min + Math.min(...drafts)
-				};
-			} else {
-				sizeRange = base ?? null;
-			}
+		void modelsHubStore.sizeRange(id).then((range) => {
+			if (!cancelled) measuredSize = range ?? null;
 		});
 
 		return () => {
