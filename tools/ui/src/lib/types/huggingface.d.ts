@@ -202,6 +202,7 @@ export interface HfCatalogBuild {
 }
 
 /** A size variant (e.g. `GPT-OSS 20B`) within a catalog entry. */
+// LLAMA-APP-REUSE: llama.pages catalog.json shapes (same feed the app consumes)
 export interface HfCatalogSize {
 	name: string;
 	params: string;
