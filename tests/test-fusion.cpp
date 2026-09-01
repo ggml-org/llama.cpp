@@ -35,9 +35,9 @@
 // generic fusion debugging API, resolved through the ad-hoc get_proc_address mechanism
 // (not part of the official ggml backend interface yet). a backend that adopts fusion debugging
 // exports these exact names.
-typedef void ( * fusion_enable_t)   (ggml_backend_dev_t, bool);
-typedef void ( * fusion_reset_t)    (ggml_backend_dev_t);
-typedef int  ( * fusion_get_stats_t)(ggml_backend_dev_t, const char **, uint64_t *, int);
+typedef void ( * fusion_stats_init_t) (ggml_backend_dev_t);
+typedef void ( * fusion_stats_reset_t)(ggml_backend_dev_t);
+typedef int  ( * fusion_stats_get_t)  (ggml_backend_dev_t, const char **, uint64_t *, int);
 typedef void ( * fusion_set_enabled_t)(ggml_backend_dev_t, bool);
 
 static bool silent_model_load_progress(float, void *) {
@@ -172,12 +172,12 @@ static std::vector<float> decode_token_by_token(llama_model * model, llama_conte
     return ret;
 }
 
-static void read_counts(fusion_get_stats_t get_stats, ggml_backend_dev_t dev,
+static void read_counts(fusion_stats_get_t api_stats_get, ggml_backend_dev_t dev,
                         std::vector<const char *> & labels, std::vector<uint64_t> & counts) {
-    const int n = get_stats(dev, nullptr, nullptr, 0);
+    const int n = api_stats_get(dev, nullptr, nullptr, 0);
     labels.assign(n, nullptr);
     counts.assign(n, 0);
-    get_stats(dev, labels.data(), counts.data(), n);
+    api_stats_get(dev, labels.data(), counts.data(), n);
 }
 
 // one row of the per-label report
@@ -261,21 +261,21 @@ int main(int argc, char ** argv) {
     // resolve the generic fusion debugging functions through the ad-hoc get_proc_address
     // mechanism; a backend that does not adopt fusion debugging exports none of them
     auto * reg = ggml_backend_dev_backend_reg(dev);
-    auto enable      = (fusion_enable_t)      ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_init");
-    auto reset       = (fusion_reset_t)       ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_reset");
-    auto get_stats   = (fusion_get_stats_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_get");
-    auto set_enabled = (fusion_set_enabled_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_set_enabled");
 
-    if (!enable || !set_enabled || !reset || !get_stats) {
+    auto api_stats_init  = (fusion_stats_init_t)  ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_init");
+    auto api_stats_reset = (fusion_stats_reset_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_reset");
+    auto api_stats_get   = (fusion_stats_get_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_get");
+    auto api_set_enabled = (fusion_set_enabled_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_set_enabled");
+
+    if (!api_stats_init || !api_set_enabled || !api_stats_reset || !api_stats_get) {
         LOG_ERR("%s: backend '%s' does not export the generic fusion debugging API "
                 "(ggml_backend_fusion_*) - cannot run the fusion regression test\n",
                 __func__, backend_name.c_str());
         return 1;
     }
 
-    // enabling fusion debugging also forces n_cb == 0 (single-threaded encoding) for every
-    // backend context created afterwards, so the counters are race-free
-    enable(dev, true);
+    // enable fusions stats
+    api_stats_init(dev);
 
     const bool has_counts = true;
 
@@ -357,12 +357,12 @@ int main(int argc, char ** argv) {
             {
                 llama_context_ptr ctx = create_ctx(model.get(), 32);
                 if (has_counts) {
-                    set_enabled(dev, true);
-                    reset(dev);
+                    api_set_enabled(dev, true);
+                    api_stats_reset(dev);
                 }
                 logits_fused = mode.decode(model.get(), ctx.get(), tokens);
                 if (has_counts) {
-                    read_counts(get_stats, dev, labels, counts_fused);
+                    read_counts(api_stats_get, dev, labels, counts_fused);
                 }
             }
 
@@ -372,20 +372,22 @@ int main(int argc, char ** argv) {
             {
                 llama_context_ptr ctx = create_ctx(model.get(), 32);
                 if (has_counts) {
-                    set_enabled(dev, false);
-                    reset(dev);
+                    api_set_enabled(dev, false);
+                    api_stats_reset(dev);
                 }
                 logits_unfused = mode.decode(model.get(), ctx.get(), tokens);
                 if (has_counts) {
-                    read_counts(get_stats, dev, labels, counts_unfused);
+                    read_counts(api_stats_get, dev, labels, counts_unfused);
                 }
             }
 
             const double nmse_fus = nmse(logits_fused, logits_unfused);
             const double nmse_dev = logits_cpu.empty() ? 0.0 : nmse(logits_fused, logits_cpu);
+
             // an arch that is already broken on the device (huge device-vs-CPU NMSE, e.g. plamo2
             // on Metal) produces garbage regardless of fusion, so the fused-vs-unfused NMSE is not
             // a meaningful signal - skip it and rely on the count regression check only
+            // TODO: run in Debug build to get an assert in `ggml-alloc.c` and fix it
             const bool dev_broken = !std::isnan(nmse_dev) && nmse_dev > 1e-4;
 
             // build the per-label rows
