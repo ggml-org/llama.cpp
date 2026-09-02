@@ -454,7 +454,7 @@ int main(int argc, char ** argv) {
             // on Metal) produces garbage regardless of fusion, so the fused-vs-unfused NMSE is not
             // a meaningful signal - skip it and rely on the count regression check only
             // TODO: run in Debug build to get an assert in `ggml-alloc.c` and fix it
-            const bool dev_broken = !std::isnan(nmse_dev) && nmse_dev > 1e-4;
+            const bool dev_broken = !std::isnan(nmse_dev) && nmse_dev > 1.0;
 
             if (has_counts) {
                 for (int i = 0; i < (int) labels.size(); i++) {
