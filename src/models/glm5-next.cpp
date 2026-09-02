@@ -19,10 +19,7 @@ void llama_model_glm5_next::load_arch_hparams(llama_model_loader & ml) {
     hparams.n_embd_head_v_full = hparams.n_lora_kv;
 
     for (uint32_t i = 0; i < hparams.n_layer_all; ++i) {
-        if (i >= hparams.n_layer()) {
-            hparams.n_head_kv_arr[i] = 1;
-        }
-        hparams.is_recr_impl[i] = i < hparams.n_layer() && hparams.n_head_kv(i) == 0;
+        hparams.is_recr_impl[i] = hparams.n_head_kv(i) == 0;
     }
 
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
