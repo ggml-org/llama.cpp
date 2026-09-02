@@ -14,8 +14,8 @@
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import { HF_BASE_MODEL_TAG_REGEX, ICON_CLASS_DEFAULT, PATH_SEPARATOR } from '$lib/constants';
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
-	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { useModelParamsFallback } from '$lib/hooks/use-model-params-fallback.svelte';
+	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
@@ -101,8 +101,8 @@
 	}));
 
 	const { paramsFallback } = useModelParamsFallback({
-		modelId: () => option.model,
-		metaParams: () => option.meta?.n_params
+		metaParams: () => option.meta?.n_params,
+		modelId: () => option.model
 	});
 </script>
 
@@ -132,7 +132,7 @@
 			quantOrg={showBaseModelAvatar ? orgName : undefined}
 			quantPositionClass="-bottom-1 -right-1"
 			quantSize="h-3 w-3"
-			size="h-6 w-6"
+			size="size-5"
 		/>
 	{/if}
 
