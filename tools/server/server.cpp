@@ -183,6 +183,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
             SRV_ERR("--connect is not available: %s\n", reason.c_str());
             return 1;
         }
+        params.server_connect_code = server_connect::resolve_code(params.server_connect_code);
     }
 
     // note: this is guaranteed to out-live ctx_http and tools

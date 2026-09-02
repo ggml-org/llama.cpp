@@ -1829,7 +1829,7 @@ void server_models_routes::init_routes() {
         if (name.empty()) {
             // main instance
             auto res = std::make_unique<server_http_res>();
-            res_ok(res, {
+            json props = {
                 // TODO: add support for this on web UI
                 {"role",                 "router"},
                 {"max_instances",        params.models_max},
@@ -1845,7 +1845,11 @@ void server_models_routes::init_routes() {
                 {"ui_settings",          ui_settings},
                 {"build_info",           std::string(llama_build_info())},
                 {"cors_proxy_enabled",   params.ui_mcp_proxy},
-            });
+            };
+            if (!params.server_connect_code.empty()) {
+                props["connect_code"] = params.server_connect_code;
+            }
+            res_ok(res, props);
             return res;
         }
         return proxy_get(req);

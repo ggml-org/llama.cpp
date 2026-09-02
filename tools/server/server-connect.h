@@ -24,6 +24,8 @@ struct server_connect {
     // why --connect cannot work here, empty if it can
     static std::string unavailable_reason(const common_params & params);
 
+    static std::string resolve_code(const std::string & code);
+
     bool start(const common_params & params);
 
     // idempotent, also called by the destructor

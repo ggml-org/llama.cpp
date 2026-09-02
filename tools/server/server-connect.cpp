@@ -56,7 +56,7 @@ static std::string format_share_code(const std::string & code) {
 }
 
 // whitespace is tolerated, the Web UI shows the code in blocks and users paste it back
-// returns an empty string if the key is not a valid share code
+// returns an empty string if it is not a valid share code
 static std::string normalize_share_code(const std::string & key) {
     std::string code;
     for (char c : key) {
@@ -161,6 +161,10 @@ std::string server_connect::unavailable_reason(const common_params & params) {
     return "";
 }
 
+std::string server_connect::resolve_code(const std::string & code) {
+    return code.empty() ? gen_share_code() : normalize_share_code(code);
+}
+
 bool server_connect::start(const common_params & params) {
     const std::string bin = find_binary();
     if (bin.empty()) {
@@ -168,10 +172,9 @@ bool server_connect::start(const common_params & params) {
         return false;
     }
 
-    // already validated by unavailable_reason()
-    const std::string code = params.server_connect_code.empty()
-                           ? gen_share_code()
-                           : normalize_share_code(params.server_connect_code);
+    // main() resolves this before anything can read it from /props
+    const std::string & code = params.server_connect_code;
+    GGML_ASSERT(!code.empty());
 
     // always loopback, params.hostname may be 0.0.0.0 or a unix socket which the child cannot dial
     const std::vector<std::string> args = {
@@ -179,8 +182,8 @@ bool server_connect::start(const common_params & params) {
         "--host", "127.0.0.1",
         "--port", std::to_string(params.port),
         "--code", code,
-        // the kernel closes our end of this pipe even if we are killed without cleanup,
-        // so the child cannot outlive us
+        // the kernel closes our end of this pipe even if we are killed without cleanup
+        // this is what stops the child from outliving us
         "--exit-on-stdin-eof",
     };
 
