@@ -49,15 +49,13 @@ class XingChen4Model(DeepseekV2Model):
 
         super().set_gguf_parameters()
         hparams = self.hparams
-
-        # New config keys: hc_mult / hc_sinkhorn_iters / hc_eps
-        # Old config keys (fallback): num_residual_streams / mhc_sinkhorn_iterations / mhc_norm_eps
+       
         self.gguf_writer.add_hyper_connection_count(
-            hparams.get("hc_mult", hparams.get("num_residual_streams", 1)))
+            hparams.get("hc_mult",  1))
         self.gguf_writer.add_hyper_connection_sinkhorn_iterations(
-            hparams.get("hc_sinkhorn_iters", hparams.get("mhc_sinkhorn_iterations", 20)))
+            hparams.get("hc_sinkhorn_iters",  20))
         self.gguf_writer.add_hyper_connection_epsilon(
-            hparams.get("hc_eps", hparams.get("mhc_norm_eps", 1e-6)))
+            hparams.get("hc_eps",1e-6))
 
     def set_vocab(self):
         # TeleChat4 uses a SentencePiece tokenizer (tokenizer.model + Telechat3Tokenizer).
