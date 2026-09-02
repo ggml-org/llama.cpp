@@ -104,7 +104,7 @@ bool common_spec_sidecar_dflash_probe(const std::string & library_path,
 // The sidecars are deliberately opt-in and model-specific. A loader object
 // keeps the library resident for the lifetime of the process because the
 // current release ABI has no shutdown operation. State/KV calls are serialized
-// by the speculative driver and sequence-scoped in ABI 4/5.
+// by the speculative driver and sequence-scoped in the release ABI.
 class common_spec_sidecar_mtp {
 public:
     common_spec_sidecar_mtp();
@@ -119,6 +119,7 @@ public:
               int32_t embedding_width,
               int32_t head_rows,
               int32_t n_seq,
+              int32_t max_context,
               std::string & error,
               int32_t device = -1);
 
@@ -168,6 +169,7 @@ public:
               int32_t encoded_width,
               int32_t block_size,
               int32_t n_seq,
+              int32_t max_context,
               std::string & error);
 
     bool active() const;

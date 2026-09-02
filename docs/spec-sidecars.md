@@ -191,9 +191,13 @@ export SPEC_SIDECAR=1
   in pending KV and only the accepted prefix is copied into persistent KV.
   The speculative manager wraps state by implementation type, so stacked
   implementations cannot consume one another's state. DFlash committed KV
-  storage starts at 16K rows and grows geometrically up to the hard
-  `LLAMA_SPEC_HIP_MAX_POS` ceiling (131072 by default); growth recaptures the
-  per-sequence graph once, and reset releases grown storage.
+  storage starts at 16K rows and grows geometrically up to the effective target
+  context; growth recaptures the per-sequence graph once, and
+  reset releases grown storage.
+- Sidecar KV capacity follows the effective per-sequence target context and is
+  allocated on demand. `LLAMA_SPEC_HIP_MAX_POS=N` may impose a lower position
+  cap to reduce VRAM use; it cannot raise capacity above the target context and
+  does not change the fixed F16 sidecar KV datatype.
 - Prompt and ordinary target rows are implicitly committed; target
   verification stages rows and acceptance commits only the accepted prefix.
   Checkpoint rollback discards pending rows and restores the cursor, slot reset

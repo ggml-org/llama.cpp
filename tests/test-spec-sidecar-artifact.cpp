@@ -197,8 +197,8 @@ int main(int argc, char ** argv) {
         unset_environment(qwen35moe_mtp->artifact_env);
     }
 
-    failures += require(SPEC_SIDECAR_MTP_RELEASE_ABI == 5 &&
-                        SPEC_SIDECAR_DFLASH_RELEASE_ABI == 6 &&
+    failures += require(SPEC_SIDECAR_MTP_RELEASE_ABI == 6 &&
+                        SPEC_SIDECAR_DFLASH_RELEASE_ABI == 7 &&
                         SPEC_SIDECAR_MTP_DRAFT_TOP_K == 32 &&
                         SPEC_SIDECAR_DFLASH_DRAFT_TOP_K == 16,
                         "sidecar release and stochastic top-k ABI constants match");
@@ -297,17 +297,27 @@ int main(int argc, char ** argv) {
 
     common_spec_sidecar_mtp mtp;
     error.clear();
-    failures += require(!mtp.load("relative-sidecar.so", "/absolute/artifacts", "/absolute/ids.bin", 5120, 40960, 1, error) &&
+    failures += require(!mtp.load("relative-sidecar.so", "/absolute/artifacts", "/absolute/ids.bin", 5120, 40960, 1, 262144, error) &&
                         error.find("absolute path") != std::string::npos,
                         "MTP loader rejects relative library paths");
     failures += require(!mtp.active(), "MTP loader remains inactive after path rejection");
+    error.clear();
+    failures += require(!mtp.load("/absolute/sidecar.so", "/absolute/artifacts", "/absolute/ids.bin",
+                                5120, 40960, 1, 0, error) &&
+                        error.find("context must be positive") != std::string::npos,
+                        "MTP loader rejects a non-positive target context");
 
     common_spec_sidecar_dflash dflash;
     error.clear();
-    failures += require(!dflash.load("relative-sidecar.so", "/absolute/artifacts", 25600, 8, 1, error) &&
+    failures += require(!dflash.load("relative-sidecar.so", "/absolute/artifacts", 25600, 8, 1, 262144, error) &&
                         error.find("absolute path") != std::string::npos,
                         "DFlash loader rejects relative library paths");
     failures += require(!dflash.active(), "DFlash loader remains inactive after path rejection");
+    error.clear();
+    failures += require(!dflash.load("/absolute/sidecar.so", "/absolute/artifacts",
+                                    25600, 8, 1, 0, error) &&
+                        error.find("context must be positive") != std::string::npos,
+                        "DFlash loader rejects a non-positive target context");
 
     if (failures == 0) std::puts("artifact_manifest_test: PASS");
     return failures == 0 ? 0 : 1;

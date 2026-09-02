@@ -169,6 +169,18 @@ unless disabled with `GGML_HIP_RDNA2_AUTO=0`, while
 `HSA_OVERRIDE_GFX_VERSION=10.3.0` selects the tested gfx1030 kernel profile.
 Explicit `GGML_HIP_GFX1030_*` variables remain per-feature overrides.
 
+With `SPEC_SIDECAR=1`, MTP and DFlash use the effective per-sequence target
+context and grow committed KV storage on demand. To trade context coverage for
+lower sidecar VRAM use, set an optional position cap before launch:
+
+```bash
+LLAMA_SPEC_HIP_MAX_POS=131072  # example lower cap
+```
+
+The cap cannot raise the sidecar above the target context. It controls capacity,
+not datatype; sidecar KV remains F16. Allocation failure disables the sidecar
+safely and leaves target-only decoding available.
+
 ### RDNA2 optimization status
 
 | Optimization | Status and activation | Scope / notes |

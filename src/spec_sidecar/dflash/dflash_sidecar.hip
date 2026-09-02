@@ -1,20 +1,23 @@
 // DFlash2 HIP drafter sidecar DLL — loaded by llama.cpp's impl_draft_dflash.
 // SPDX-License-Identifier: MIT
-// Release ABI 6 provides sequence-scoped state, device-input paths, bounded
-// draft graphs, and compact stochastic proposal distributions.
-// API: spec_dflash_init(dir, n_seq) / spec_dflash_chunk(seq, poss, feats, n) /
+// Release ABI 7 adds target-context-aware initialization to sequence state,
+// device-input paths, bounded graphs, and compact stochastic proposals.
+// API: spec_dflash_init_context(dir, n_seq, max_context) /
+//      spec_dflash_chunk(seq, poss, feats, n) /
 //      spec_dflash_draft(seq, id_last, n_past, out_ids[7]).
 #include "dflash_kernels.hip"
 #include "stochastic_distribution.h"
 #include "../artifact_manifest.h"
 #include "spec_sidecar/sidecar_abi.h"
 
+#include <array>
 #include <chrono>
 #include <cinttypes>
 
 #define DFC(x) do { hipError_t e_ = (x); if (e_ != hipSuccess) { fprintf(stderr, "[dflash-sidecar] %s @%d\n", hipGetErrorString(e_), __LINE__); return -1; } } while (0)
 
 using Tens = spec_sidecar_artifact::TensorDesc;
+static constexpr int32_t DF_LEGACY_MAX_CONTEXT = 131072;
 
 static void deq_q4k_host(const uint8_t * src, float * dst, size_t n) {
     const block_q4_K * bs = (const block_q4_K *) src;
@@ -166,7 +169,7 @@ struct DState {
     float * q8_probe = nullptr;
     int q8_probe_slots = 0;
     int *pos_d[8] = {}, *tok_d[8] = {}, *tk_pidx = nullptr, *tk_ids = nullptr;
-    int max_pos = 131072; // hard position ceiling; KV storage grows on demand
+    int max_pos = DF_LEGACY_MAX_CONTEXT; // KV storage grows on demand
     DSeqState seq[8];
     int tkparts = 0;
     // Host scratch copied with the existing compact top-k readback. It lets
@@ -266,26 +269,50 @@ static hipGraphExec_t g_draft_gexec[8][DF_BLOCK + 1] = {};
 // cached graph for this sequence; the next draft recaptures it (one-time).
 static int ensure_seq_storage(DSeqState & q, int needed) {
     if (needed <= q.kv_capacity) return 0;
-    if (needed > S.max_pos) return -1;
-    int capacity = q.kv_capacity > 0 ? q.kv_capacity : 16384;
-    while (capacity < needed) capacity *= 2;
-    if (capacity > S.max_pos) capacity = S.max_pos;
+    if (needed < 0 || needed > S.max_pos) return -1;
+    int64_t capacity = q.kv_capacity > 0 ? q.kv_capacity : 16384;
+    capacity = std::min<int64_t>(capacity, S.max_pos);
+    while (capacity < needed) {
+        capacity = std::min<int64_t>(capacity * 2, S.max_pos);
+    }
     const size_t kv_bytes = (size_t) capacity * DF_KV * DF_HDIM * sizeof(__half);
     const size_t row_bytes = (size_t) DF_KV * DF_HDIM * sizeof(__half);
-    DFC(hipStreamSynchronize(S.st));
-    for (int il = 0; il < DF_LAYERS; ++il) {
-        __half * nk = nullptr, * nv = nullptr;
-        DFC(hipMalloc(&nk, kv_bytes));
-        DFC(hipMalloc(&nv, kv_bytes));
-        if (q.state_pos_max > 0) {
-            DFC(hipMemcpyAsync(nk, q.Kc[il], (size_t) q.state_pos_max * row_bytes, hipMemcpyDeviceToDevice, S.st));
-            DFC(hipMemcpyAsync(nv, q.Vc[il], (size_t) q.state_pos_max * row_bytes, hipMemcpyDeviceToDevice, S.st));
+    std::array<__half *, DF_LAYERS> next_k{};
+    std::array<__half *, DF_LAYERS> next_v{};
+    auto discard_next = [&]() {
+        for (int il = 0; il < DF_LAYERS; ++il) {
+            if (next_k[il] != nullptr) (void) hipFree(next_k[il]);
+            if (next_v[il] != nullptr) (void) hipFree(next_v[il]);
         }
-        DFC(hipStreamSynchronize(S.st));
+    };
+
+    hipError_t status = hipStreamSynchronize(S.st);
+    for (int il = 0; il < DF_LAYERS && status == hipSuccess; ++il) {
+        status = hipMalloc(&next_k[il], kv_bytes);
+        if (status == hipSuccess) status = hipMalloc(&next_v[il], kv_bytes);
+        if (status == hipSuccess && q.state_pos_max > 0) {
+            const size_t used_bytes = (size_t) q.state_pos_max * row_bytes;
+            status = hipMemcpyAsync(next_k[il], q.Kc[il], used_bytes,
+                    hipMemcpyDeviceToDevice, S.st);
+            if (status == hipSuccess) {
+                status = hipMemcpyAsync(next_v[il], q.Vc[il], used_bytes,
+                        hipMemcpyDeviceToDevice, S.st);
+            }
+        }
+    }
+    if (status == hipSuccess) status = hipStreamSynchronize(S.st);
+    if (status != hipSuccess) {
+        discard_next();
+        fprintf(stderr, "[dflash-sidecar] KV growth to %lld rows failed: %s\n",
+                (long long) capacity, hipGetErrorString(status));
+        (void) hipGetLastError();
+        return -1;
+    }
+    for (int il = 0; il < DF_LAYERS; ++il) {
         if (q.Kc[il] != nullptr) DFC(hipFree(q.Kc[il]));
         if (q.Vc[il] != nullptr) DFC(hipFree(q.Vc[il]));
-        q.Kc[il] = nk;
-        q.Vc[il] = nv;
+        q.Kc[il] = next_k[il];
+        q.Vc[il] = next_v[il];
     }
     const int seq_idx = (int) (&q - S.seq);
     if (seq_idx >= 0 && seq_idx < 8) {
@@ -297,9 +324,10 @@ static int ensure_seq_storage(DSeqState & q, int needed) {
         }
     }
     if (q.kv_capacity > 0) {
-        fprintf(stderr, "[dflash-sidecar] seq %d KV cache grown %d -> %d rows\n", seq_idx, q.kv_capacity, capacity);
+        fprintf(stderr, "[dflash-sidecar] seq %d KV cache grown %d -> %lld rows\n",
+                seq_idx, q.kv_capacity, (long long) capacity);
     }
-    q.kv_capacity = capacity;
+    q.kv_capacity = (int) capacity;
     return 0;
 }
 
@@ -612,12 +640,30 @@ static bool validate_target_schema(const std::vector<Tens> & tensors, std::strin
     return true;
 }
 
-DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
-    if (S.ok) return n_seq == S.n_seq ? 0 : -1;
+static int32_t spec_dflash_resolve_max_context(int32_t requested) {
+    if (requested < 1) return -1;
+    int64_t effective = requested;
+    if (const char * value = getenv("LLAMA_SPEC_HIP_MAX_POS")) {
+        const int64_t override_limit = atoll(value);
+        if (override_limit < 1) return -1;
+        effective = std::min(effective, override_limit);
+    }
+    if (effective != requested) {
+        fprintf(stderr, "[dflash-sidecar] target context %d limited to %lld positions\n",
+                requested, (long long) effective);
+    }
+    return (int32_t) effective;
+}
+
+static int spec_dflash_init_impl(const char * dir, int32_t n_seq, int32_t requested_max_context) {
+    const int32_t max_context = spec_dflash_resolve_max_context(requested_max_context);
+    if (max_context < 1) return -1;
+    if (S.ok) return n_seq == S.n_seq && max_context == S.max_pos ? 0 : -1;
     DFlashDeviceGuard caller_device;
     if (!caller_device.valid) return -1;
     if (n_seq < 1 || n_seq > 8) return -1;
     S.n_seq = n_seq;
+    S.max_pos = max_context;
     // Q8_1-activation GEMV is the default on the qualified gfx1030 sidecar;
     // LLAMA_SPEC_HIP_DFLASH_Q8_DISABLE restores the pure-f32 kernels for A/B.
     S.q8_all = getenv("LLAMA_SPEC_HIP_DFLASH_Q8_DISABLE") == nullptr ||
@@ -827,14 +873,6 @@ DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
     if (!(t = DT("output_norm.weight"))) return -1; S.w_out_norm = (const float *) t->dev;
     if (!(t = DT("selector_hidden.weight"))) return -1; S.W_selhid = (const block_q4_K *) t->dev;
 
-    // Optional override of the hard position ceiling (storage still grows on
-    // demand from 16K rows; this only bounds the growth).
-    if (const char * mp = getenv("LLAMA_SPEC_HIP_MAX_POS")) {
-        long long v = atoll(mp);
-        if (v < 4096) v = 4096;
-        if (v > 131072) v = 131072;
-        S.max_pos = (int) v;
-    }
     DFC(hipStreamCreate(&S.owned_st));
     S.st = S.owned_st;
     S.owns_st = true;
@@ -884,6 +922,14 @@ DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
             S.max_pos, S.device, S.q8_head ? 1 : 0, S.q8_all ? 1 : 0, S.q8_process ? 1 : 0, S.q8_layers,
             S.q8_native_mmvq ? 1 : 0, S.q8_native_q4_only ? 1 : 0, S.bounded_stochastic_graph ? 1 : 0);
     return 0;
+}
+
+DF_API int spec_dflash_init_context(const char * dir, int32_t n_seq, int32_t max_context) {
+    return spec_dflash_init_impl(dir, n_seq, max_context);
+}
+
+DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
+    return spec_dflash_init_impl(dir, n_seq, DF_LEGACY_MAX_CONTEXT);
 }
 
 // Encoder + KV inject for up to n rows of target features. Target rows land in

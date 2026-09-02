@@ -39,7 +39,6 @@ static const int N_HEAD_ROWS = 40960;   // sliced draft head
 static constexpr int MTP_DRAFT_TOP_K = 32;
 static const float RMS_EPS   = 1e-6f;
 static const float FREQ_BASE = 10000000.0f;
-static const int MAX_POS   = 131072;    // matches production context ceiling (f16 KV: 512MB)
 
 // ---------------- q4_0 ----------------
 struct block_q4_0 { uint16_t d; uint8_t qs[16]; }; // f16 scale + 32 4-bit quants

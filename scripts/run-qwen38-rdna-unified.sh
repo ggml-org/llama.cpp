@@ -202,9 +202,6 @@ if ((USE_SIDECAR)); then
     else
         unset LLAMA_SPEC_HIP_WEIGHTS LLAMA_DRAFT_HEAD_IDS
     fi
-    sidecar_max_pos=$CTX_SIZE
-    ((sidecar_max_pos > 131072)) && sidecar_max_pos=131072
-    export LLAMA_SPEC_HIP_MAX_POS="$sidecar_max_pos"
     cmd+=(
         --spec-type draft-mtp,ngram-map-k4v
         --spec-ngram-map-k4v-size-n 12
@@ -214,7 +211,7 @@ if ((USE_SIDECAR)); then
         --spec-draft-ubatch-size 4096
     )
 else
-    unset SPEC_SIDECAR LLAMA_SPEC_HIP_SIDECAR LLAMA_SPEC_HIP_WEIGHTS LLAMA_DRAFT_HEAD_IDS LLAMA_SPEC_HIP_MAX_POS
+    unset SPEC_SIDECAR LLAMA_SPEC_HIP_SIDECAR LLAMA_SPEC_HIP_WEIGHTS LLAMA_DRAFT_HEAD_IDS
     cmd+=(--spec-type none)
 fi
 cmd+=("${EXTRA_ARGS[@]}")

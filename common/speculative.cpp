@@ -51,6 +51,11 @@ static bool common_speculative_sidecar_enabled() {
     return value != nullptr && std::strcmp(value, "1") == 0;
 }
 
+static int32_t common_speculative_sidecar_max_context(const llama_context * ctx_tgt) {
+    const uint64_t n_ctx_seq = llama_n_ctx_seq(ctx_tgt);
+    return (int32_t) std::min<uint64_t>(n_ctx_seq, INT32_MAX);
+}
+
 static common_speculative_dflash_controller_config common_speculative_dflash_controller_config_from_env(
         int32_t max_depth) {
     common_speculative_dflash_controller_config config;
@@ -1222,7 +1227,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     block_size == sidecar_profile->dflash_block_size) {
                 if (sidecar.load(paths.library, paths.artifact_dir,
                         sidecar_profile->dflash_encoded_width,
-                        sidecar_profile->dflash_block_size, (int32_t) n_seq, error)) {
+                        sidecar_profile->dflash_block_size, (int32_t) n_seq,
+                        common_speculative_sidecar_max_context(ctx_tgt), error)) {
                     for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
                         if (target_layer_ids[k] == n_layer_tgt) {
                             llama_set_embeddings_nextn_device_preferred(ctx_tgt, true);
@@ -2094,6 +2100,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     common_spec_sidecar_paths sidecar_paths;
     int32_t sidecar_embedding_width = 0;
     int32_t sidecar_head_rows = 0;
+    int32_t sidecar_max_context = 0;
     bool sidecar_load_pending = false;
     bool sidecar_target_only = false; // runtime failure or unsupported sampling mode
     bool sidecar_catchup_deferred = false;
@@ -2177,6 +2184,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         const llama_model * model_tgt = llama_get_model(ctx_tgt);
         const llama_model * model_dft = ctx_dft != nullptr ? llama_get_model(ctx_dft) : model_tgt;
+        sidecar_max_context = common_speculative_sidecar_max_context(ctx_tgt);
         n_embd = llama_model_n_embd_out(model_dft);
         GGML_ASSERT(n_embd == llama_model_n_embd_out(model_tgt) &&
                 "MTP input row width must match the target h_nextn width");
@@ -2376,7 +2384,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             // owns h_nextn. Bind the sidecar there before accepting any rows.
             if (!sidecar.load(sidecar_paths.library, sidecar_paths.artifact_dir,
                     sidecar_paths.ids, sidecar_embedding_width, sidecar_head_rows,
-                    (int32_t) n_seq, error, target_device)) {
+                    (int32_t) n_seq, sidecar_max_context, error, target_device)) {
                 sidecar_load_pending = false;
                 sidecar_target_only = true;
                 SPC_WRN("MTP sidecar unavailable on target device %d (%s); target-only mode\n",

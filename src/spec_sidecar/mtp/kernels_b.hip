@@ -185,18 +185,18 @@ __global__ void attn_1q_b_base(const float * __restrict__ q, const __half * __re
 // split-K single-query attention: grid (head, pos_chunk) so deep contexts use the
 // whole GPU; each block emits a partial online-softmax state, merged by attn_merge.
 #define ATTN_SPLIT 4096
-#define ATTN_MAX_PARTS 128
 __global__ void attn_1q_split(const float * __restrict__ q, const __half * __restrict__ Kc,
                               const __half * __restrict__ Vc, int n_pos,
                               float * __restrict__ part_m, float * __restrict__ part_l,
-                              float * __restrict__ part_acc) {
-    const int h = blockIdx.x, part = blockIdx.y;
+                              float * __restrict__ part_acc, int n_parts) {
+    const int h = int(blockIdx.x) / n_parts;
+    const int part = int(blockIdx.x) % n_parts;
     const int kh = h / (N_HEAD / N_HEAD_KV);
     const int lane = threadIdx.x;
     const int p0 = part * ATTN_SPLIT;
     if (p0 >= n_pos) {
-        if (lane == 0) { part_m[h * ATTN_MAX_PARTS + part] = -1e30f; part_l[h * ATTN_MAX_PARTS + part] = 0.0f; }
-        if (lane < HEAD_DIM) part_acc[((size_t) h * ATTN_MAX_PARTS + part) * HEAD_DIM + lane] = 0.0f;
+        if (lane == 0) { part_m[h * n_parts + part] = -1e30f; part_l[h * n_parts + part] = 0.0f; }
+        if (lane < HEAD_DIM) part_acc[((size_t) h * n_parts + part) * HEAD_DIM + lane] = 0.0f;
         return;
     }
     const int pn = min(ATTN_SPLIT, n_pos - p0);
@@ -235,14 +235,14 @@ __global__ void attn_1q_split(const float * __restrict__ q, const __half * __res
         if (lane < off) red[lane] += red[lane + off];
         __syncthreads();
     }
-    if (lane == 0) { part_m[h * ATTN_MAX_PARTS + part] = m_c; part_l[h * ATTN_MAX_PARTS + part] = red[0]; }
+    if (lane == 0) { part_m[h * n_parts + part] = m_c; part_l[h * n_parts + part] = red[0]; }
     __syncthreads();
     if (lane < HEAD_DIM) {
         float vsum = 0.0f;
         for (int p = 0; p < pn; ++p) {
             vsum += scores[p] * __half2float(Vc[((size_t) (p0 + p) * N_HEAD_KV + kh) * HEAD_DIM + lane]);
         }
-        part_acc[((size_t) h * ATTN_MAX_PARTS + part) * HEAD_DIM + lane] = vsum;
+        part_acc[((size_t) h * n_parts + part) * HEAD_DIM + lane] = vsum;
     }
 }
 
@@ -250,12 +250,12 @@ __global__ void attn_merge(const float * __restrict__ part_m, const float * __re
                            const float * __restrict__ part_acc, float * __restrict__ out, int n_parts) {
     const int h = blockIdx.x, lane = threadIdx.x; // lane over HEAD_DIM
     float m = -1e30f;
-    for (int c = 0; c < n_parts; ++c) m = fmaxf(m, part_m[h * ATTN_MAX_PARTS + c]);
+    for (int c = 0; c < n_parts; ++c) m = fmaxf(m, part_m[h * n_parts + c]);
     float l = 0.0f, acc = 0.0f;
     for (int c = 0; c < n_parts; ++c) {
-        const float w = expf(part_m[h * ATTN_MAX_PARTS + c] - m);
-        l   += w * part_l[h * ATTN_MAX_PARTS + c];
-        acc += w * part_acc[((size_t) h * ATTN_MAX_PARTS + c) * HEAD_DIM + lane];
+        const float w = expf(part_m[h * n_parts + c] - m);
+        l   += w * part_l[h * n_parts + c];
+        acc += w * part_acc[((size_t) h * n_parts + c) * HEAD_DIM + lane];
     }
     out[h * HEAD_DIM + lane] = acc / l;
 }
@@ -268,7 +268,7 @@ __global__ void attn_merge(const float * __restrict__ part_m, const float * __re
 __global__ void attn_1q_gqa(const float * __restrict__ q, const __half * __restrict__ Kc,
                             const __half * __restrict__ Vc, int n_pos,
                             float * __restrict__ part_m, float * __restrict__ part_l,
-                            float * __restrict__ part_acc) {
+                            float * __restrict__ part_acc, int part_stride) {
     const int kh = blockIdx.x, part = blockIdx.y;
     const int lane = threadIdx.x; // 256
     const int p0 = part * ATTN_SPLIT2;
@@ -304,8 +304,8 @@ __global__ void attn_1q_gqa(const float * __restrict__ q, const __half * __restr
     for (int g = 0; g < GQA_RATIO; ++g) {
         const int h = kh * GQA_RATIO + g;
         if (pn <= 0) {
-            if (lane == 0) { part_m[h * ATTN_MAX_PARTS + part] = -1e30f; part_l[h * ATTN_MAX_PARTS + part] = 0.0f; }
-            if (lane < HEAD_DIM) part_acc[((size_t) h * ATTN_MAX_PARTS + part) * HEAD_DIM + lane] = 0.0f;
+            if (lane == 0) { part_m[h * part_stride + part] = -1e30f; part_l[h * part_stride + part] = 0.0f; }
+            if (lane < HEAD_DIM) part_acc[((size_t) h * part_stride + part) * HEAD_DIM + lane] = 0.0f;
             continue;
         }
         float m = -1e30f;
@@ -330,7 +330,7 @@ __global__ void attn_1q_gqa(const float * __restrict__ q, const __half * __restr
             if (lane < off) red[lane] += red[lane + off];
             __syncthreads();
         }
-        if (lane == 0) { part_m[h * ATTN_MAX_PARTS + part] = m_c; part_l[h * ATTN_MAX_PARTS + part] = red[0]; }
+        if (lane == 0) { part_m[h * part_stride + part] = m_c; part_l[h * part_stride + part] = red[0]; }
         __syncthreads();
     }
 
@@ -344,7 +344,7 @@ __global__ void attn_1q_gqa(const float * __restrict__ q, const __half * __restr
         }
         #pragma unroll
         for (int g = 0; g < GQA_RATIO; ++g) {
-            part_acc[((size_t) (kh * GQA_RATIO + g) * ATTN_MAX_PARTS + part) * HEAD_DIM + lane] = acc[g];
+            part_acc[((size_t) (kh * GQA_RATIO + g) * part_stride + part) * HEAD_DIM + lane] = acc[g];
         }
     }
 }
