@@ -12,22 +12,13 @@
 		RotateCw
 	} from '@lucide/svelte';
 	import { ActionIcon, ModelId } from '$lib/components/app';
-	import {
-		HF_BASE_MODEL_TAG_REGEX,
-		ICON_CLASS_DEFAULT,
-		MODEL_ID,
-		PATH_SEPARATOR
-	} from '$lib/constants';
+	import { HF_BASE_MODEL_TAG_REGEX, ICON_CLASS_DEFAULT, PATH_SEPARATOR } from '$lib/constants';
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
+	import { useModelParamsFallback } from '$lib/hooks/use-model-params-fallback.svelte';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
-	import {
-		formatParameters,
-		modelLoadFraction,
-		modelLoadProgressText,
-		normalizeModelName
-	} from '$lib/utils';
+	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
 
 	interface Props {
 		option: ModelOption;
@@ -109,47 +100,10 @@
 		tools: option.capabilities.includes(ModelCapability.TOOL_USE)
 	}));
 
-	// Params badge fallback: the id usually carries the count (`Qwen3-8B`), but
-	// ids like `Kimi-K3` do not. Prefer the loaded model's meta `n_params`, then
-	// the HF GGUF total (`gguf.total`), fetched lazily like the models hub list
-	// does, only when neither the id nor the meta has it.
-	let parsedParams = $derived(parsedId.params);
-	let metaParams = $derived.by(() => {
-		const value = option.meta?.n_params;
-
-		return typeof value === 'number' && value > 0 ? value : null;
+	const { paramsFallback } = useModelParamsFallback({
+		modelId: () => option.model,
+		metaParams: () => option.meta?.n_params
 	});
-	// HF repo id: the `org/model` part without the `:revision/quant` suffix;
-	// local paths and bare names are not HF repos.
-	let hfRepoId = $derived.by(() => {
-		const [repo] = option.model.split(MODEL_ID.QUANTIZATION_SEPARATOR);
-		const normalized = normalizeModelName(repo ?? '');
-
-		return normalized.includes(MODEL_ID.ORG_SEPARATOR) ? normalized : null;
-	});
-	let fetchedParams = $state<number | null>(null);
-
-	$effect(() => {
-		fetchedParams = null;
-
-		if (parsedParams || metaParams || !hfRepoId) return;
-
-		let cancelled = false;
-
-		void HuggingFaceService.getDetails(hfRepoId).then((info) => {
-			if (!cancelled && info?.gguf?.total) fetchedParams = info.gguf.total;
-		});
-
-		return () => {
-			cancelled = true;
-		};
-	});
-
-	let paramsFallback = $derived(
-		!parsedParams && (metaParams ?? fetchedParams)
-			? formatParameters(metaParams ?? fetchedParams)
-			: undefined
-	);
 </script>
 
 <div

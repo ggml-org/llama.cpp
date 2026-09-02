@@ -9,6 +9,7 @@
 	} from '$lib/components/app';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { ServerModelStatus } from '$lib/enums';
+	import { useModelParamsFallback } from '$lib/hooks/use-model-params-fallback.svelte';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import { modelsStore } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
@@ -42,6 +43,15 @@
 			sheetOpen = open;
 		},
 		useGlobalSelection: () => useGlobalSelection
+	});
+
+	const selectedOption = $derived(ms.getDisplayOption());
+	const triggerModel = $derived(selectedOption?.model ?? null);
+
+	// Params badge fallback for trigger ids that carry no params token.
+	const { paramsFallback } = useModelParamsFallback({
+		metaParams: () => selectedOption?.meta?.n_params,
+		modelId: () => triggerModel
 	});
 
 	export function open() {
@@ -106,6 +116,7 @@
 						hideQuantization
 						hideTags
 						modelId={selectedOption?.model || ''}
+						params={paramsFallback}
 					/>
 				{/if}
 
@@ -190,7 +201,12 @@
 			>
 				<Package class="h-3.5 w-3.5 shrink-0" />
 
-				<ModelId class="font-medium" hideQuantization modelId={selectedOption?.model || ''} />
+				<ModelId
+					class="font-medium"
+					hideQuantization
+					modelId={selectedOption?.model || ''}
+					params={paramsFallback}
+				/>
 
 				{#if ms.updating}
 					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />

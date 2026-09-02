@@ -14,6 +14,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { MODEL_SELECTOR_ICON, SETTINGS_KEYS } from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
+	import { useModelParamsFallback } from '$lib/hooks/use-model-params-fallback.svelte';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { modelsStore, settingsStore } from '$lib/stores';
@@ -64,6 +65,15 @@
 	});
 
 	const reasoning = useReasoningMenu();
+
+	const selectedOption = $derived(ms.getDisplayOption());
+	const triggerModel = $derived(selectedOption?.model ?? null);
+
+	// Params badge fallback for trigger ids that carry no params token.
+	const { paramsFallback } = useModelParamsFallback({
+		modelId: () => triggerModel,
+		metaParams: () => selectedOption?.meta?.n_params
+	});
 
 	const showOrgNameInTrigger = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER] ?? false
@@ -179,8 +189,6 @@
 			<p class="text-xs text-muted-foreground">No models available.</p>
 		{/if}
 	{:else}
-		{@const selectedOption = ms.getDisplayOption()}
-		{@const triggerModel = selectedOption?.model}
 		{@const triggerStatus = triggerModel
 			? modelsStore.routerModels.find((m) => m.id === triggerModel)?.status?.value
 			: undefined}
@@ -223,6 +231,7 @@
 											hideOrgName={!showOrgNameInTrigger}
 											hideQuantization
 											modelId={selectedOption.model}
+											params={paramsFallback}
 										/>
 									{:else}
 										<span class="min-w-0 font-medium">Select model</span>
@@ -331,7 +340,6 @@
 							     Sticks to the bottom of the content scrollport. -->
 							<div onfocusin={clearHighlight} onmouseenter={clearHighlight} role="none">
 								<ModelsSelectorReasoningPanel />
-
 							</div>
 						{/snippet}
 					</DropdownMenuSearchable>
@@ -367,6 +375,7 @@
 									hideOrgName={!showOrgNameInTrigger}
 									hideQuantization
 									modelId={selectedOption.model}
+									params={paramsFallback}
 								/>
 							{/if}
 
