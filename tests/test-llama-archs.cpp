@@ -903,6 +903,34 @@ static int test_depth_sweep(const size_t seed, const uint32_t max_depth,
             diverged = true;
         }
     }
+    // grokk 054 s3: the chunked sweep never takes the n_tokens==1 decode gate,
+    // so packed/view decode branches were invisible to it. One explicit
+    // single-token decode exercises them; grep the ACTIVE marker after this.
+    if (!diverged) {
+        common_batch_clear(batch);
+        common_batch_add(batch, tokens[0], max_depth, {0}, true);
+        if (llama_decode(mc_cpu.second.get(), batch) || llama_decode(mc_dev.second.get(), batch)) {
+            printf("depth-sweep-1tok: decode failed\n");
+            llama_batch_free(batch);
+            return 1;
+        }
+        const float * lc = llama_get_logits_ith(mc_cpu.second.get(), 0);
+        const float * ld = llama_get_logits_ith(mc_dev.second.get(), 0);
+        double se = 0.0, ref = 0.0;
+        uint32_t amax_c = 0, amax_d = 0;
+        for (uint32_t j = 0; j < n_vocab; j++) {
+            const double d = (double) lc[j] - (double) ld[j];
+            se  += d * d;
+            ref += (double) lc[j] * (double) lc[j];
+            if (lc[j] > lc[amax_c]) amax_c = j;
+            if (ld[j] > ld[amax_d]) amax_d = j;
+        }
+        const double nmse_val = ref > 0.0 ? se / ref : se;
+        const bool bad = nmse_val > 1e-3 || amax_c != amax_d;
+        printf("depth-sweep-1tok: depth=%u nmse=%.3e argmax_cpu=%u argmax_dev=%u%s\n",
+               max_depth + 1, nmse_val, amax_c, amax_d, bad ? "  <-- DIVERGED" : "");
+        if (bad) diverged = true;
+    }
     llama_batch_free(batch);
     printf("depth-sweep: %s\n", diverged ? "DIVERGENCE FOUND" : "no divergence up to max depth");
     return diverged ? 2 : 0;
