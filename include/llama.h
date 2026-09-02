@@ -1028,6 +1028,9 @@ extern "C" {
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 
+    // Set evaluation callback
+    LLAMA_API void llama_set_eval_callback(struct llama_context * ctx, ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data);
+
     // Wait until all computations are finished
     // This is automatically done when using one of the functions below to obtain the computation results
     // and is not necessary to call it explicitly in most cases

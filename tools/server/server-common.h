@@ -220,6 +220,8 @@ public:
 
     bool empty() const { return tokens.empty(); }
 
+    bool has_media() const { return !map_idx_to_media.empty(); }
+
     void clear() {
         map_idx_to_media.clear();
         tokens.clear();

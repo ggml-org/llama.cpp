@@ -1158,6 +1158,17 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
     }
 }
 
+void llama_context::set_eval_callback(ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data) {
+    LLAMA_LOG_DEBUG("%s: call\n", __func__);
+
+    cparams.cb_eval           = cb_eval;
+    cparams.cb_eval_user_data = cb_eval_user_data;
+
+    if (sched) {
+        ggml_backend_sched_set_eval_callback(sched.get(), cb_eval, cb_eval_user_data);
+    }
+}
+
 void llama_context::set_embeddings(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -3809,6 +3820,14 @@ int32_t llama_n_threads_batch(llama_context * ctx) {
 
 void llama_set_abort_callback(llama_context * ctx, bool (*abort_callback)(void * data), void * abort_callback_data) {
     ctx->set_abort_callback(abort_callback, abort_callback_data);
+}
+
+void llama_set_eval_callback(llama_context * ctx, ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data) {
+    if (!ctx) {
+        return;
+    }
+
+    ctx->set_eval_callback(cb_eval, cb_eval_user_data);
 }
 
 void llama_set_embeddings(llama_context * ctx, bool embeddings) {
