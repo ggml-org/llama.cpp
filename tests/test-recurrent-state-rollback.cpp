@@ -2,6 +2,8 @@
 #include "common.h"
 #include "llama.h"
 
+#include "../src/llama-arch.h"
+
 #include <algorithm>
 #include <clocale>
 #include <cmath>
@@ -209,6 +211,11 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
 
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
+
+    if (!llm_arch_supports_rs_rollback(LLM_ARCH_QWEN4EXP)) {
+        fprintf(stderr, "%s : qwen4exp must support bounded recurrent rollback\n", __func__);
+        return 1;
+    }
 
     common_params params;
     params.sampling.seed = 1234;
@@ -430,6 +437,35 @@ int main(int argc, char ** argv) {
     for (int token = 0; token < n_vocab; ++token) {
         if (std::fabs(logits_resize[token] - logits_ref[token]) > eps) {
             fprintf(stderr, "%s : resize logits mismatch at token %d (%g != %g)\n",
+                    __func__, token, (double) logits_resize[token], (double) logits_ref[token]);
+            return 1;
+        }
+    }
+
+    // Repeat with a pending one-token rollback. This exercises copying each
+    // rollback plane across the changed memory stride, not just active plane 0.
+    if (!llama_memory_seq_rm(llama_get_memory(ctx_resize), 0, n_tokens, -1) ||
+        !llama_memory_seq_rm(llama_get_memory(ctx_ref),    0, n_tokens, -1)) {
+        fprintf(stderr, "%s : resize rollback setup failed\n", __func__);
+        return 1;
+    }
+    if (!llama_context_recurrent_shrink(ctx_resize, 1) || !llama_context_recurrent_expand(ctx_resize, 2)) {
+        fprintf(stderr, "%s : rollback-plane shrink/expand failed\n", __func__);
+        return 1;
+    }
+    if (!decode_one(ctx_resize, tokens.back(), n_tokens) || !decode_one(ctx_ref, tokens.back(), n_tokens)) {
+        fprintf(stderr, "%s : rollback-plane continuation failed\n", __func__);
+        return 1;
+    }
+    logits_resize = llama_get_logits_ith(ctx_resize, 0);
+    logits_ref    = llama_get_logits_ith(ctx_ref, 0);
+    if (logits_resize == nullptr || logits_ref == nullptr) {
+        fprintf(stderr, "%s : missing rollback-plane logits\n", __func__);
+        return 1;
+    }
+    for (int token = 0; token < n_vocab; ++token) {
+        if (std::fabs(logits_resize[token] - logits_ref[token]) > eps) {
+            fprintf(stderr, "%s : rollback-plane resize mismatch at token %d (%g != %g)\n",
                     __func__, token, (double) logits_resize[token], (double) logits_ref[token]);
             return 1;
         }
