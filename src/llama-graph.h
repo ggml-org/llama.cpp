@@ -337,15 +337,11 @@ public:
 
     ggml_tensor * get_kq_mask() const { return self_kq_mask_cnv; }
 
-    ggml_tensor * get_kq_mask_train() const { return self_kq_mask_train; }
-
     ggml_tensor * self_k_idxs = nullptr; // I64 [n_batch]
     ggml_tensor * self_v_idxs = nullptr; // I64 [n_batch] or [n_batch*n_embd_v_gqa]
 
     ggml_tensor * self_kq_mask     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_cnv = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
-
-    ggml_tensor * self_kq_mask_train = nullptr; // F32/F16 [n_tokens, n_tokens], see [TAG_TRAINING_NO_KV_CACHE]
 
     // note: assumes v_rot^2 == I
     ggml_tensor * self_k_rot = nullptr;

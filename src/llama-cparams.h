@@ -54,8 +54,6 @@ struct llama_cparams {
     bool kv_unified;
     bool pipeline_parallel;
 
-    bool training = false; // set by llama_opt_init(), see [TAG_TRAINING_NO_KV_CACHE]
-
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
 
     enum llama_context_type ctx_type;

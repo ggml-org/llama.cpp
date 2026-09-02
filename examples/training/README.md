@@ -6,7 +6,7 @@ Finetuning of Stories 260K and LLaMA 3.2 1b seems to work with 24 GB of memory.
 **For CPU training, compile llama.cpp without any additional backends such as CUDA.**
 **For CUDA training, use the maximum number of GPU layers.**
 
-Gradients cannot flow through the KV cache, so training attends to the tokens of the current ubatch instead. This requires `-c`, `-b` and `-ub` to be equal. Flash attention is disabled during training because `FLASH_ATTN_EXT` has no backward pass.
+Flash attention is disabled during training because `FLASH_ATTN_EXT` has no backward pass.
 
 Proof of concept:
 

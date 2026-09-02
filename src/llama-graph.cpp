@@ -405,54 +405,6 @@ static void print_mask(const T * data, int64_t n_tokens, int64_t n_kv, int64_t n
     }
 }
 
-static void fill_kq_mask_self(
-              ggml_tensor  * mask,
-       const llama_ubatch  * ubatch,
-       const llama_hparams & hparams,
-       const llama_cparams & cparams) {
-    GGML_ASSERT(mask);
-    GGML_ASSERT(ggml_backend_buffer_is_host(mask->buffer));
-
-    const int64_t n_tokens = ubatch->n_tokens;
-
-    GGML_ASSERT(mask->ne[0] == n_tokens && mask->ne[1] == n_tokens);
-
-    const auto fill = [&](auto * data) {
-        using T = std::remove_reference_t<decltype(*data)>;
-        std::fill(data, data + ggml_nelements(mask), llama_cast<T>(-INFINITY));
-
-        for (int64_t i1 = 0; i1 < n_tokens; ++i1) {
-            const llama_seq_id s1 = ubatch->seq_id[i1][0];
-            const llama_pos    p1 = ubatch->pos[i1];
-
-            for (int64_t i0 = 0; i0 < n_tokens; ++i0) {
-                const llama_seq_id s0 = ubatch->seq_id[i0][0];
-                const llama_pos    p0 = ubatch->pos[i0];
-
-                if (s0 != s1) {
-                    continue;
-                }
-
-                if (cparams.causal_attn && p0 > p1) {
-                    continue;
-                }
-
-                if (llama_hparams::is_masked_swa(hparams.n_swa, hparams.swa_type, p0, p1)) {
-                    continue;
-                }
-
-                data[i1*n_tokens + i0] = llama_cast<T>(hparams.use_alibi ? -std::abs(p0 - p1) : 0.0f);
-            }
-        }
-    };
-
-    if (mask->type == GGML_TYPE_F16) {
-        fill((ggml_fp16_t *) mask->data);
-    } else {
-        fill((float *) mask->data);
-    }
-}
-
 void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     const int64_t n_kv     = ubatch->n_tokens;
     const int64_t n_tokens = ubatch->n_tokens;
@@ -515,12 +467,6 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
 }
 
 void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
-    // the cache inputs do not exist when training, see [TAG_TRAINING_NO_KV_CACHE]
-    if (self_kq_mask_train) {
-        fill_kq_mask_self(self_kq_mask_train, ubatch, hparams, cparams);
-        return;
-    }
-
     mctx->set_input_k_idxs(self_k_idxs, ubatch);
     mctx->set_input_v_idxs(self_v_idxs, ubatch);
 
@@ -543,11 +489,6 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
     const auto * mctx = static_cast<const llama_kv_cache_context *>(params.mctx);
 
     this->mctx = mctx;
-
-    // [TAG_TRAINING_NO_KV_CACHE]
-    if (self_kq_mask_train) {
-        return self_kq_mask_train->ne[0] == params.ubatch.n_tokens;
-    }
 
     bool res = true;
 
@@ -2794,19 +2735,9 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
 
     auto inp = std::make_unique<llm_graph_input_attn_kv>(hparams, cparams, mctx_cur);
 
-    GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "Use llama_kv_cache_iswa for SWA");
-
-    // [TAG_TRAINING_NO_KV_CACHE] the cache is not used, so only build the mask
-    if (cparams.training) {
-        const auto type_mask = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
-
-        inp->self_kq_mask_train = ggml_new_tensor_4d(ctx0, type_mask, ubatch.n_tokens, ubatch.n_tokens, 1, 1);
-        ggml_set_input(inp->self_kq_mask_train);
-
-        return inp;
-    }
-
     {
+        GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "Use llama_kv_cache_iswa for SWA");
+
         inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
 
@@ -2861,32 +2792,20 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto * mctx_cur = inp->mctx;
 
-    ggml_tensor * kq_mask;
+    // store to KV cache
+    {
+        const auto & k_idxs = inp->get_k_idxs();
+        const auto & v_idxs = inp->get_v_idxs();
+
+        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+    }
+
+    ggml_tensor * kq_mask = inp->get_kq_mask();
 
     ggml_tensor * q = q_cur;
-    ggml_tensor * k;
-    ggml_tensor * v;
-
-    if (cparams.training) {
-        // [TAG_TRAINING_NO_KV_CACHE]
-        // when training, we don't use cache
-        kq_mask = inp->get_kq_mask_train();
-        k = k_cur;
-        v = v_cur;
-    } else {
-        // store to KV cache
-        {
-            const auto & k_idxs = inp->get_k_idxs();
-            const auto & v_idxs = inp->get_v_idxs();
-
-            ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
-            ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
-        }
-
-        kq_mask = inp->get_kq_mask();
-        k = mctx_cur->get_k(ctx0, il);
-        v = mctx_cur->get_v(ctx0, il);
-    }
+    ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+    ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
