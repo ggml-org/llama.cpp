@@ -4771,7 +4771,6 @@ struct test_mul_mat_hadamard : public test_mul_mat {
 
                 if (is_kronecker) {
                     const int64_t B = (n_cols % 12 == 0 && is_pow2(n_cols / 12)) ? 12 : 20;
-                    const int64_t M = n_cols / B;
                     for (int64_t r = 0; r < n_rows; r++) {
                         float *       row_data = data.data() + r * n_cols;
                         const int64_t r_mod    = r % n_cols;
