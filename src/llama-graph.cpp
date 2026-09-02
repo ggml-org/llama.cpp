@@ -2664,12 +2664,16 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             }
         }
         if (fbl_pack) {
-            ggml_tensor * qp = ggml_cont(ctx0, ggml_permute(ctx0, q, 0, 2, 1, 3)); // [d, n_head, 1]
+            // Patch C (view-only): singleton-axis permutes are already contiguous;
+            // ggml_cont here was a real Metal copy. Keep the logical shape as a view.
+            ggml_tensor * qp = ggml_permute(ctx0, q, 0, 2, 1, 3); // [d, n_head, 1] view
+            GGML_ASSERT(ggml_is_contiguous(qp));
             cb(qp, "q_packed", il);
             kq = ggml_mul_mat(ctx0, k, qp);                                        // [n_kv, n_head, 1]
             ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
             cb(kq, "kq", il);                       // grokk 020: historical name on the mul_mm
-            kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 0, 2, 1, 3));              // [n_kv, 1, n_head]
+            kq = ggml_permute(ctx0, kq, 0, 2, 1, 3);                                // [n_kv, 1, n_head] view (contiguous AND permuted)
+            GGML_ASSERT(ggml_is_contiguous(kq));
             cb(kq, "kq_unpacked", il);
         } else {
             kq = ggml_mul_mat(ctx0, k, q);
@@ -2721,14 +2725,16 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         ggml_tensor * kqv = nullptr;
         if (fbl_pack_o) {
-            ggml_tensor * kqp = ggml_cont(ctx0, ggml_permute(ctx0, kq, 0, 2, 1, 3)); // [n_kv, n_head, 1]
+            ggml_tensor * kqp = ggml_permute(ctx0, kq, 0, 2, 1, 3); // [n_kv, n_head, 1] view
+            GGML_ASSERT(ggml_is_contiguous(kqp));
             cb(kqp, "kq_soft_max_packed", il);
             kqv = ggml_mul_mat(ctx0, v, kqp);                                        // [d_v, n_head, 1]
             // packing moves this product from mul_mv (f32 accumulation) to mul_mm
             // (f16 tile accumulation by default) - request f32 like the KQ side
             ggml_mul_mat_set_prec(kqv, GGML_PREC_F32);
             cb(kqv, "kqv", il);                     // historical name on the mul_mm
-            kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));              // [d_v, 1, n_head]
+            kqv = ggml_permute(ctx0, kqv, 0, 2, 1, 3);                               // [d_v, 1, n_head] view
+            GGML_ASSERT(ggml_is_contiguous(kqv));
             cb(kqv, "kqv_unpacked", il);
         } else {
             kqv = ggml_mul_mat(ctx0, v, kq);
