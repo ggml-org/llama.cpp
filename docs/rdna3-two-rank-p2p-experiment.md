@@ -1,12 +1,14 @@
 # Experimental two-rank native P2P AllReduce
 
-This document records the guarded two-rank tensor-parallel experiment for
-qualified native RDNA2/gfx1030 and RDNA3/gfx1100 topologies. It is not enabled
-by the launcher or by either architecture's Auto profile.
+This document records the guarded two-rank tensor-parallel candidate for
+qualified native RDNA2/gfx1030 and RDNA3/gfx1100 topologies. It follows the
+architecture Auto policy: qualified gfx1030 TP2 uses `GGML_HIP_RDNA2_AUTO`
+(the existing RDNA2 Auto default), while qualified gfx1100 TP2 requires the
+opt-in `GGML_HIP_RDNA3_AUTO=1`. RCCL remains the fallback.
 
 ## Design
 
-The opt-in path is implemented in `ggml/src/ggml-cuda/ggml-cuda.cu` and is
+The path is implemented in `ggml/src/ggml-cuda/ggml-cuda.cu` and is
 available only in HIP+Linux+RCCL builds after all of these checks pass:
 
 - exactly two selected, non-aliased CUDA/HIP backends;
@@ -31,18 +33,26 @@ retained; the model-tested candidate uses mapped snapshots instead.
 
 ## Activation
 
-These are supervised A/B controls only:
+On a qualified gfx1030 TP2 topology, the existing RDNA2 Auto policy arms the
+candidate unless disabled:
 
 ```bash
-GGML_HIP_P2P_ALLREDUCE=1 \
-  GGML_CUDA_ALLREDUCE=nccl \
+GGML_HIP_RDNA2_AUTO=1 GGML_CUDA_ALLREDUCE=nccl \
   scripts/run-qwen38-rdna-unified.sh
 ```
 
-The earlier `GGML_HIP_RDNA3_P2P_ALLREDUCE` name remains accepted as an
-alias. The two-rank path is ordinary AllReduce only; the existing four-rank
-consumer-fused path remains separately gated. The switch remains unset in
-normal production launches. No NCCL algorithm, protocol, channel, or topology
+On a qualified gfx1100 TP2 topology, opt in to the RDNA3 Auto profile:
+
+```bash
+GGML_HIP_RDNA3_AUTO=1 GGML_CUDA_ALLREDUCE=nccl \
+  scripts/run-qwen38-rdna-unified.sh
+```
+
+`GGML_HIP_P2P_ALLREDUCE=1` remains a supervised explicit override for either
+architecture. `GGML_HIP_P2P_ALLREDUCE=0` suppresses the Auto candidate. The
+earlier `GGML_HIP_RDNA3_P2P_ALLREDUCE` name remains an alias. The two-rank
+path is ordinary AllReduce only; the existing four-rank consumer-fused path
+remains separately gated. No NCCL algorithm, protocol, channel, or topology
 override is implied.
 
 ## Measurements

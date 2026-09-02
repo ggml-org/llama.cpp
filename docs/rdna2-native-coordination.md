@@ -22,7 +22,7 @@ Policy is selected from collective and hardware properties rather than model ide
 - installed RCCL tuner ABI;
 - absence of user collective overrides.
 
-The initial certified policy is TP4 on four V620/gfx1030 devices with the measured all-pairs PCIe-hop2 topology. It selects `NCCL_P2P_LEVEL=PXB` before communicator creation and applies Ring/LL/3 only to 20,480-byte AllReduce. Other payload sizes remain RCCL Auto. TP1 and TP2/3/5/6/7/8 also remain RCCL Auto until a policy for that rank/topology tuple is measured. This prevents one machine's PXB result from being forced on PHB or other layouts.
+The initial certified tuner policy is TP4 on four V620/gfx1030 devices with the measured all-pairs PCIe-hop2 topology. It selects `NCCL_P2P_LEVEL=PXB` before communicator creation and applies Ring/LL/3 only to 20,480-byte AllReduce. Other payload sizes remain RCCL Auto. TP1 and TP2/3/5/6/7/8 remain RCCL Auto in the tuner until a policy for that rank/topology tuple is measured. Separately, the guarded two-rank host-snapshot candidate can follow `GGML_HIP_RDNA2_AUTO` on exact TP2 RDNA2 topologies after its per-width RCCL self-tests pass. This prevents one machine's PXB result from being forced on PHB or other layouts.
 
 The tuner is model-independent: another model using the same certified collective tuple can benefit. Unknown tuples are not modified.
 
@@ -37,6 +37,13 @@ Runtime tensor gates remain strict:
 - the validated `[5120,1,1,1]` `linear_attn_out-*` case.
 
 All misses use RCCL.
+
+A separate architecture-neutral two-rank candidate uses the same mapped-host
+snapshot/phase-flag family for qualified gfx1030 and gfx1100 TP2 layouts. It
+supports hidden-state widths 1 through 6 and follows `GGML_HIP_RDNA2_AUTO` on
+RDNA2 or `GGML_HIP_RDNA3_AUTO=1` on RDNA3. It is ordinary AllReduce only; the
+four-rank RDNA2 consumer-fused route remains separate. `GGML_HIP_P2P_ALLREDUCE`
+can explicitly enable or disable the two-rank candidate for supervised tests.
 
 ## Model-specific automatic paths
 
@@ -69,6 +76,8 @@ GGML_HIP_GFX1030_Q8_1_FUSION=0|1
 GGML_HIP_GFX1030_GDN_SIBLING_FUSION=0|1
 
 GGML_HIP_GFX1030_P2P_ALLREDUCE=off|auto|host|host-fused|host-mtp
+GGML_HIP_P2P_ALLREDUCE=0|1
+GGML_HIP_RDNA3_AUTO=0|1
 GGML_MTP_DEFER_CATCHUP=0|auto|1
 GGML_TP_SHARDED_OUTPUT=0|auto|1
 ```

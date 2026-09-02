@@ -97,7 +97,7 @@ exhaustion.
 
 | Optimization | Status and activation | Scope / notes |
 |---|---|---|
-| RCCL AllReduce and direct P2P | **Automatic** with `GGML_HIP_RDNA3_AUTO=1` and an RCCL build | Defaults only unset `GGML_CUDA_ALLREDUCE=nccl`, `GGML_CUDA_P2P=1`, and `NCCL_P2P_DISABLE=0`; RCCL level, algorithm, protocol, and channel tuning stay on Auto. |
+| RCCL AllReduce and direct P2P | **Automatic** with `GGML_HIP_RDNA3_AUTO=1` and an RCCL build | Defaults only unset `GGML_CUDA_ALLREDUCE=nccl`, `GGML_CUDA_P2P=1`, and `NCCL_P2P_DISABLE=0`; RCCL level, algorithm, protocol, and channel tuning stay on Auto. Qualified TP2 also runs the guarded two-rank host-snapshot candidate after per-width RCCL self-tests. |
 | gfx11 MMQ / WMMA | **Automatic** in a gfx11 build | Qualified Q4 prompt kernels and compatible F16 flash attention use the compiled gfx11 paths; no runtime switch is needed. |
 | gfx1100 flash-attention launch shapes | **Automatic** | Selected by architecture and shape under the safe profile. |
 | Q8_0 MMVQ VDR=4 | **Automatic** for native gfx1100 | Passed backend correctness and shape A/B tests on both RX 7900 XT cards; this is not end-to-end Q8 GGUF validation. |
@@ -180,7 +180,7 @@ Explicit `GGML_HIP_GFX1030_*` variables remain per-feature overrides.
 | Muse Q8_0 MMVQ | **Automatic** for the validated shape | Restricted to its qualified `K=6656, N=128` case. |
 | Q8_1 activation reuse and fusion | **Automatic** on RDNA2 | Includes the graph-owned cache and eligible routed projection staging. It is structurally disabled on RDNA3. |
 | GDN sibling projection fusion | **Automatic** when eligible | Applies to validated Qwen MoE loader/model conditions, not dense Qwen3.8-27B. |
-| V620 topology/P2P/RCCL policy | **Automatic** on the qualified topology | `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded` is an optional TP4 host-snapshot experiment, not a general default. |
+| V620 topology/P2P/RCCL policy | **Automatic** on the qualified topology | `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded` controls the certified TP4 host-snapshot experiment. Qualified TP2 uses the shared two-rank host-snapshot candidate under the RDNA2 Auto policy. |
 | TP output-head sharding | Explicit `GGML_TP_SHARDED_OUTPUT=1` | Uses vocabulary-axis output for CPU/sidecar sampling; an explicit backend-sampling request retains hidden-axis/full logits instead. |
 | Automatic MTP/DFlash assets | `SPEC_SIDECAR=1` | Detects supported runtime GGUFs, creates a validated first-start cache, and reuses it on warm starts. |
 

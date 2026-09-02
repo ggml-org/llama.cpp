@@ -1344,7 +1344,9 @@ static __global__ void ggml_cuda_rdna2_p2p_host_snapshot_reduce_add_rms_mul_5120
 // separate from the four-rank RDNA2 host-snapshot implementation above.
 // Direct peer pointers were not accepted as a production data path on the
 // model allocation layout, so this candidate uses portable mapped-host
-// snapshots and exact phase flags. It is opt-in and never changes RCCL Auto.
+// snapshots and exact phase flags. Qualified RDNA2 Auto and RDNA3 Auto
+// topologies may arm it; explicit generic P2P remains available for supervised
+// experiments, and RCCL remains the fallback.
 static constexpr int GGML_CUDA_RDNA3_P2P_FLAG_STRIDE = 32;
 static constexpr size_t GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS = 5120 * 6;
 static constexpr size_t GGML_CUDA_RDNA3_P2P_SNAPSHOT_SLOTS = 8;
@@ -1509,13 +1511,19 @@ static bool ggml_cuda_rdna3_p2p_flag_enabled(const char * name, const char * leg
 }
 
 // The generic names are shared by the RDNA2 and RDNA3 ports. Keep the old
-// RDNA3 names as aliases so the earlier supervised experiment remains usable.
-static bool ggml_cuda_rdna3_p2p_allreduce_requested() {
+// RDNA3 name as an alias so the earlier supervised experiment remains usable.
+static bool ggml_cuda_rdna3_p2p_explicitly_set() {
+    return std::getenv("GGML_HIP_P2P_ALLREDUCE") != nullptr ||
+        std::getenv("GGML_HIP_RDNA3_P2P_ALLREDUCE") != nullptr;
+}
+
+static bool ggml_cuda_rdna3_p2p_explicitly_enabled() {
     return ggml_cuda_rdna3_p2p_flag_enabled("GGML_HIP_P2P_ALLREDUCE", "GGML_HIP_RDNA3_P2P_ALLREDUCE");
 }
 
 static bool ggml_cuda_rdna3_p2p_ordinary_requested() {
-    return ggml_cuda_rdna3_p2p_flag_enabled("GGML_HIP_P2P_ALLREDUCE", "GGML_HIP_RDNA3_P2P_ALLREDUCE");
+    return !ggml_cuda_rdna3_p2p_explicitly_set() ||
+        ggml_cuda_rdna3_p2p_explicitly_enabled();
 }
 
 static void ggml_cuda_rdna3_p2p_release(ggml_backend_cuda_comm_context * comm_ctx) {
@@ -1588,14 +1596,14 @@ static bool ggml_cuda_rdna3_p2p_runtime_selftest(
     };
     auto cuda_ok = [&](cudaError_t rc, const char * operation) {
         if (rc == cudaSuccess) return true;
-        GGML_LOG_WARN("RDNA3 two-rank P2P startup self-test %s failed for %d elements: %s; using RCCL\n",
+        GGML_LOG_WARN("RDNA2/RDNA3 two-rank P2P startup self-test %s failed for %d elements: %s; using RCCL\n",
                 operation, ne, cudaGetErrorString(rc));
         (void) cudaGetLastError();
         return false;
     };
     auto nccl_ok = [&](ncclResult_t rc, const char * operation) {
         if (rc == ncclSuccess) return true;
-        GGML_LOG_WARN("RDNA3 two-rank P2P startup self-test %s failed for %d elements: %s; using RCCL\n",
+        GGML_LOG_WARN("RDNA2/RDNA3 two-rank P2P startup self-test %s failed for %d elements: %s; using RCCL\n",
                 operation, ne, ncclGetErrorString(rc));
         return false;
     };
@@ -1688,9 +1696,9 @@ static bool ggml_cuda_rdna3_p2p_runtime_selftest(
                 break;
             }
             if (std::memcmp(custom_host.data(), reference_host.data(), size_t(ne) * sizeof(float)) != 0) {
-                std::fprintf(stderr, "RDNA3 two-rank P2P startup self-test differs from RCCL: ne=%d rank=%d custom0=% .9e rccl0=% .9e\n",
+                std::fprintf(stderr, "RDNA2/RDNA3 two-rank P2P startup self-test differs from RCCL: ne=%d rank=%d custom0=% .9e rccl0=% .9e\n",
                         ne, rank, custom_host[0], reference_host[0]);
-                GGML_LOG_INFO("RDNA3 two-rank P2P startup self-test differs from installed RCCL for %d elements; using RCCL\n", ne);
+                GGML_LOG_INFO("RDNA2/RDNA3 two-rank P2P startup self-test differs from installed RCCL for %d elements; using RCCL\n", ne);
                 exact = false;
             }
         }
@@ -1698,14 +1706,17 @@ static bool ggml_cuda_rdna3_p2p_runtime_selftest(
 
     cleanup();
     if (exact) {
-        GGML_LOG_INFO("RDNA3 two-rank P2P startup self-test matched installed RCCL for %d elements (%d patterns)\n",
+        GGML_LOG_INFO("RDNA2/RDNA3 two-rank P2P startup self-test matched installed RCCL for %d elements (%d patterns)\n",
                 ne, patterns);
     }
     return exact;
 }
 
 static bool ggml_cuda_p2p_two_rank_qualified_topology(
-        const ggml_backend_cuda_comm_context * comm_ctx) {
+        const ggml_backend_cuda_comm_context * comm_ctx, bool * is_rdna2 = nullptr) {
+    if (is_rdna2 != nullptr) {
+        *is_rdna2 = false;
+    }
     if (comm_ctx == nullptr || comm_ctx->dev_ids.size() != 2) {
         return false;
     }
@@ -1753,6 +1764,9 @@ static bool ggml_cuda_p2p_two_rank_qualified_topology(
             return false;
         }
     }
+    if (is_rdna2 != nullptr) {
+        *is_rdna2 = have_rdna2;
+    }
     return true;
 }
 
@@ -1767,13 +1781,34 @@ static bool ggml_cuda_rdna3_p2p_width_exact(
 }
 
 static bool ggml_cuda_rdna3_p2p_init(ggml_backend_cuda_comm_context * comm_ctx) {
-    if (!ggml_cuda_rdna3_p2p_allreduce_requested() || comm_ctx->backends.size() != 2 ||
-            comm_ctx->dev_ids.size() != 2) {
+    if (comm_ctx->backends.size() != 2 || comm_ctx->dev_ids.size() != 2) {
         return false;
     }
-    std::fprintf(stderr, "two-rank RDNA2/RDNA3 P2P candidate init requested: backends=%zu devices=%d,%d\n",
-            comm_ctx->backends.size(), comm_ctx->dev_ids[0], comm_ctx->dev_ids[1]);
-    if (!ggml_cuda_p2p_two_rank_qualified_topology(comm_ctx)) {
+
+    bool is_rdna2 = false;
+    const bool topology_qualified = ggml_cuda_p2p_two_rank_qualified_topology(comm_ctx, &is_rdna2);
+    const bool auto_requested = topology_qualified &&
+        ((is_rdna2 && ggml_cuda_rdna2_auto_enabled()) ||
+         (!is_rdna2 && ggml_cuda_rdna3_auto_active));
+    const bool explicit_set = ggml_cuda_rdna3_p2p_explicitly_set();
+    const bool explicit_enabled = explicit_set && ggml_cuda_rdna3_p2p_explicitly_enabled();
+
+    // RDNA2_AUTO is the existing global kill switch for automatic RDNA2
+    // paths. RDNA3_AUTO is intentionally opt-in and is already topology
+    // qualified by ggml_cuda_rdna3_auto_apply(). An explicit generic flag can
+    // still request the supervised candidate on RDNA3, but never bypasses the
+    // RDNA2 global kill switch.
+    if (is_rdna2 && !ggml_cuda_rdna2_auto_enabled()) {
+        return false;
+    }
+    if (explicit_set ? !explicit_enabled : !auto_requested) {
+        return false;
+    }
+
+    std::fprintf(stderr, "two-rank RDNA2/RDNA3 P2P candidate init requested (%s): backends=%zu devices=%d,%d\n",
+            explicit_set ? "explicit" : "Auto", comm_ctx->backends.size(),
+            comm_ctx->dev_ids[0], comm_ctx->dev_ids[1]);
+    if (!topology_qualified) {
         GGML_LOG_INFO("two-rank P2P AllReduce: native RDNA2/RDNA3 identity/topology guard failed; using RCCL\n");
         return false;
     }
@@ -1802,7 +1837,7 @@ static bool ggml_cuda_rdna3_p2p_init(ggml_backend_cuda_comm_context * comm_ctx) 
     if (hipHostMalloc((void **) &comm_ctx->rdna3_p2p_flags_host,
                 2 * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE * sizeof(int),
                 hipHostMallocPortable | hipHostMallocMapped | hipHostMallocCoherent) != hipSuccess) {
-        GGML_LOG_WARN("RDNA3 two-rank P2P AllReduce: mapped flag allocation failed; using RCCL\n");
+        GGML_LOG_WARN("RDNA2/RDNA3 two-rank P2P AllReduce: mapped flag allocation failed; using RCCL\n");
         (void) hipGetLastError();
         return false;
     }
@@ -1810,7 +1845,7 @@ static bool ggml_cuda_rdna3_p2p_init(ggml_backend_cuda_comm_context * comm_ctx) 
             2 * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE * sizeof(int));
     if (hipHostGetDevicePointer((void **) &comm_ctx->rdna3_p2p_flags_dev,
                 comm_ctx->rdna3_p2p_flags_host, 0) != hipSuccess) {
-        GGML_LOG_WARN("RDNA3 two-rank P2P AllReduce: mapped flag device pointer failed; using RCCL\n");
+        GGML_LOG_WARN("RDNA2/RDNA3 two-rank P2P AllReduce: mapped flag device pointer failed; using RCCL\n");
         ggml_cuda_rdna3_p2p_release(comm_ctx);
         (void) hipGetLastError();
         return false;
@@ -1818,7 +1853,7 @@ static bool ggml_cuda_rdna3_p2p_init(ggml_backend_cuda_comm_context * comm_ctx) 
     if (hipHostMalloc((void **) &comm_ctx->rdna3_p2p_snapshots_host,
                 2 * GGML_CUDA_RDNA3_P2P_SNAPSHOT_SLOTS * 2 * GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS * sizeof(float),
                 hipHostMallocPortable | hipHostMallocMapped | hipHostMallocCoherent) != hipSuccess) {
-        GGML_LOG_WARN("RDNA3 two-rank P2P AllReduce: mapped snapshot allocation failed; using RCCL\n");
+        GGML_LOG_WARN("RDNA2/RDNA3 two-rank P2P AllReduce: mapped snapshot allocation failed; using RCCL\n");
         (void) hipGetLastError();
         ggml_cuda_rdna3_p2p_release(comm_ctx);
         return false;
@@ -1827,7 +1862,7 @@ static bool ggml_cuda_rdna3_p2p_init(ggml_backend_cuda_comm_context * comm_ctx) 
             2 * GGML_CUDA_RDNA3_P2P_SNAPSHOT_SLOTS * 2 * GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS * sizeof(float));
     if (hipHostGetDevicePointer((void **) &comm_ctx->rdna3_p2p_snapshots_dev,
                 comm_ctx->rdna3_p2p_snapshots_host, 0) != hipSuccess) {
-        GGML_LOG_WARN("RDNA3 two-rank P2P AllReduce: mapped snapshot device pointer failed; using RCCL\n");
+        GGML_LOG_WARN("RDNA2/RDNA3 two-rank P2P AllReduce: mapped snapshot device pointer failed; using RCCL\n");
         ggml_cuda_rdna3_p2p_release(comm_ctx);
         (void) hipGetLastError();
         return false;
@@ -2832,9 +2867,10 @@ static void ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * re
     }
     if (rc == ncclSuccess) {
 #if defined(GGML_USE_HIP) && defined(__linux__)
-        if (ggml_cuda_rdna3_p2p_allreduce_requested()) {
-            (void) ggml_cuda_rdna3_p2p_init(ret);
-        }
+        // The two-rank candidate decides between the architecture Auto policy,
+        // an explicit supervised override, and RCCL fallback after inspecting
+        // the selected topology.
+        (void) ggml_cuda_rdna3_p2p_init(ret);
 #endif
         if (ggml_cuda_rdna2_p2p_host_allreduce_enabled()) {
             bool canonical_order = n == 4;
