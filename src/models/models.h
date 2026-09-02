@@ -1376,14 +1376,17 @@ struct llama_model_glm5next : public llama_model_base {
                 ggml_tensor * cur,
                 int il) const;
 
-        // always stores the key and gate; when `scoring`, returns the selected CELL indices
+        // always stores the key and gate; when `scoring`, returns the selected CELL indices.
+        // out_slot_valid (optional, D0): expanded pool_bias of the selected pools,
+        // F32 [kpool*select_k, n_tps, n_stream], 0/-inf per slot (decode-1 only)
         ggml_tensor * build_indexer(
                 const llama_layer & layer,
                 llm_graph_input_kpool * inp_kp,
                 ggml_tensor * cur,
                 ggml_tensor * qr,
                 bool scoring,
-                int il) const;
+                int il,
+                ggml_tensor ** out_slot_valid = nullptr) const;
 
         ggml_tensor * build_layer_ffn(
                 const llama_model & model,

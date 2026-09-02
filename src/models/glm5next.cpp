@@ -330,13 +330,27 @@ ggml_tensor * llama_model_glm5next::graph::build_kda_layer(
 //   * k_norm is a LayerNorm WITH BIAS at eps 1e-6, not f_norm_rms_eps (transformers, vLLM)
 //   * the ReLU between the QK dot and the head weighting is real (modular_glm5_next.py)
 // no Hadamard rotation: H is orthogonal so (Hq).(Hk) == q.k; it only helps fp8.
+// D0 (speed conference 056-058): gathered sparse decode, strict opt-in
+static bool glm5_gathered_dsa_enabled() {
+    static const bool on = []() {
+        const char * e = getenv("LLAMA_GLM5_GATHERED_DSA");
+        if (e == nullptr)                              return false;
+        if (strcmp(e, "on") == 0 || strcmp(e, "1") == 0) return true;
+        if (strcmp(e, "off") == 0 || strcmp(e, "0") == 0) return false;
+        fprintf(stderr, "LLAMA_GLM5_GATHERED_DSA=%s unrecognized (want off|0|on|1) -> off\n", e);
+        return false;
+    }();
+    return on;
+}
+
 ggml_tensor * llama_model_glm5next::graph::build_indexer(
         const llama_layer & layer,
         llm_graph_input_kpool * inp_kp,
         ggml_tensor * cur,
         ggml_tensor * qr,
         bool scoring,
-        int il) const {
+        int il,
+        ggml_tensor ** out_slot_valid) const {
     const int64_t d_idx   = hparams.indexer_head_size;
     const int64_t n_ihead = hparams.indexer_n_head;
     const int64_t r       = hparams.indexer_kpool;
@@ -479,6 +493,22 @@ ggml_tensor * llama_model_glm5next::graph::build_indexer(
     ggml_tensor * pc3      = ggml_reshape_3d(ctx0, inp_kp->pool_cells, r, n_pools, n_stream);
     ggml_tensor * sel_flat = ggml_reshape_2d(ctx0, sel, select_k*n_tps, n_stream);
 
+    // D0: per-slot validity of the selection. gather pool_bias at the selected pool
+    // ordinals and expand each pool to its kpool member slots. decode-1 only: pool_bias
+    // is per-token, and this path is gated to n_tps==1.
+    if (out_slot_valid != nullptr) {
+        GGML_ASSERT(n_tps == 1 && n_stream == 1 && "gathered DSA is decode-1/one-stream only");
+
+        ggml_tensor * pb = ggml_reshape_3d(ctx0, inp_kp->pool_bias, 1, n_pools, n_stream);
+        ggml_tensor * sb = ggml_get_rows(ctx0, pb, sel_flat);   // F32 [1, select_k, 1]
+
+        ggml_tensor * rep = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, r, select_k, n_stream);
+        sb = ggml_repeat(ctx0, sb, rep);                        // member-major, matches top_k
+
+        *out_slot_valid = ggml_reshape_3d(ctx0, sb, r*select_k, n_tps, n_stream);
+        cb(*out_slot_valid, "indexer_slot_valid", il);
+    }
+
     ggml_tensor * top_k = ggml_get_rows(ctx0, pc3, sel_flat);
     GGML_ASSERT(top_k->type == GGML_TYPE_I32 && "pool_cells is I32, so the gather stays I32");
     top_k = ggml_reshape_3d(ctx0, top_k, r*select_k, n_tps, n_stream);
@@ -508,7 +538,14 @@ ggml_tensor * llama_model_glm5next::graph::build_dsa_layer(
     qr = build_norm(qr, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
     cb(qr, "dsa_q_a_norm", il);
 
-    ggml_tensor * top_k = inp_kp ? build_indexer(layer, inp_kp, cur, qr, scoring, il) : nullptr;
+    // D0 gate: strict env + decode-1 + one stream (mirrors fbl_gate's shape)
+    const bool gathered = glm5_gathered_dsa_enabled() && scoring && inp_kp != nullptr &&
+            n_tokens == 1 && inp_kp->sel_mask != nullptr && inp_kp->sel_mask->ne[3] == 1 &&
+            inp_kp->tail_cells != nullptr;
+
+    ggml_tensor * slot_valid = nullptr;
+    ggml_tensor * top_k = inp_kp ? build_indexer(layer, inp_kp, cur, qr, scoring, il,
+            gathered ? &slot_valid : nullptr) : nullptr;
 
     ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq_b, qr);
     q = ggml_reshape_3d(ctx0, q, qk_head_dim, n_head, n_tokens);
@@ -529,7 +566,17 @@ ggml_tensor * llama_model_glm5next::graph::build_dsa_layer(
     ggml_tensor * k = ggml_reshape_3d(ctx0, kv, kv_lora_rank, 1, n_tokens);
     cb(k, "dsa_kv_latent", il);
 
-    if (top_k) {
+    if (top_k && gathered) {
+        GGML_ASSERT(slot_valid != nullptr && inp_kp->tail_cells != nullptr);
+        // sel_mask is not consumed by the gathered graph, but set_input still fills it
+        // (one shared host fill for all paths); expand the leaf so it stays allocated
+        ggml_build_forward_expand(gf, inp_kp->sel_mask);
+        cur = build_attn_sparse_gathered(inp_attn,
+                layer.wo, nullptr, nullptr,
+                q, k, k, nullptr, nullptr, layer.wv_b,
+                top_k, slot_valid, inp_kp->tail_cells, inp_kp->tail_valid,
+                inp_kp->cand_mask, kq_scale, il);
+    } else if (top_k) {
         cur = build_attn_sparse(inp_attn,
                 layer.wo, nullptr, nullptr,
                 q, k, k, nullptr, nullptr, layer.wv_b,
@@ -617,7 +664,8 @@ llama_model_glm5next::graph::graph(const llama_model & model, const llm_graph_pa
             indexer_scoring = cparams.n_ctx > glm5next_n_select(hparams);
 
             inp_kp = build_inp_kpool(mctx_hyb,
-                    inp_mem->get_attn()->get_kq_mask(), indexer_scoring);
+                    inp_mem->get_attn()->get_kq_mask(), indexer_scoring,
+                    glm5_gathered_dsa_enabled() && n_tokens == 1);
         }
     }
 
@@ -785,7 +833,8 @@ llama_model_glm5next::graph_mtp::graph_mtp(const llama_model & model, const llm_
             indexer_scoring = cparams.n_ctx > glm5next_n_select(hparams);
 
             inp_kp = build_inp_kpool(mctx_hyb,
-                    inp_mem->get_attn()->get_kq_mask(), indexer_scoring);
+                    inp_mem->get_attn()->get_kq_mask(), indexer_scoring,
+                    glm5_gathered_dsa_enabled() && n_tokens == 1);
         }
     }
 

@@ -45,6 +45,8 @@ void llama_kv_cache_set_input_kpool(
               ggml_tensor    * pool_bias,
               ggml_tensor    * sel_mask,
               ggml_tensor    * cand_mask,
+              ggml_tensor    * tail_cells,   // optional, D0 gathered decode
+              ggml_tensor    * tail_valid,   // optional, with tail_cells
               ggml_tensor    * pool_reps,
               ggml_tensor    * new_pool_cells,
               ggml_tensor    * new_pool_reps,
@@ -100,6 +102,13 @@ public:
 
     ggml_tensor * sel_mask   = nullptr;   // F16 [n_kv, n_batch, 1, n_stream]
     ggml_tensor * cand_mask  = nullptr;   // F16 [n_kv, n_batch, 1, n_stream]
+
+    // D0 gathered DSA (codex 056 / grokk 057): the always-selected incomplete-pool tail as
+    // explicit cells so a gathered graph can concat them to top_k. slot t holds the cell at
+    // pos tail_start+t; unused slots are cell 0 with tail_valid -INFINITY (get_rows has no
+    // sentinel). tail length is (q+1)%kpool in [0, kpool-1].
+    ggml_tensor * tail_cells = nullptr;   // I32 [kpool-1, n_tps, n_stream]
+    ggml_tensor * tail_valid = nullptr;   // F32 [kpool-1, n_tps, n_stream]
 
     const llama_kv_cache_context * mctx_attn;
     const llama_kv_cache_context * mctx_idx;

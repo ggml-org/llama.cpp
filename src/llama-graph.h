@@ -1353,7 +1353,8 @@ struct llm_graph_context {
     llm_graph_input_kpool * build_inp_kpool(
             const llama_memory_hybrid_context * mctx_cur,
             ggml_tensor * kq_mask,
-            bool scoring) const;
+            bool scoring,
+            bool gathered = false) const;
 
     // build_attn, but masking with `top_k` over `sel_mask`; `cand_mask` drops over-budget picks
     ggml_tensor * build_attn_sparse(
@@ -1370,6 +1371,32 @@ struct llm_graph_context {
             ggml_tensor * top_k,     // I32 [n_select, n_tokens/n_stream, n_stream]
             ggml_tensor * sel_mask,  // F16/F32 [n_kv, n_batch, 1, n_stream]
             ggml_tensor * cand_mask, // F16/F32 [n_kv, n_batch, 1, n_stream]
+                  float   kq_scale,
+                    int   il) const;
+
+    // D0 gathered DSA (codex 056 / grokk 057): same contract as build_attn_sparse, but
+    // attention runs over the <= n_select+kpool-1 gathered rows instead of a dense masked
+    // n_kv. decode-1 / n_stream==1 only. slot_valid carries the expanded pool_bias of the
+    // selected pools (-INFINITY kills padded/duplicate picks BY SLOT; a gather, unlike the
+    // dense scatter, is not idempotent). K rows are gathered from the latent cache
+    // (F32 return, cast back), and V is the same compact tensor: v_trans is false, the
+    // per-token v_cont is ~2 MiB, and the V-mirror is not read (it IS still updated).
+    ggml_tensor * build_attn_sparse_gathered(
+            llm_graph_input_attn_k * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * wo_s,
+            ggml_tensor * q_cur,      // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur,      // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur,      // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * kq_b,
+            ggml_tensor * sinks,      // [n_head_q]
+            ggml_tensor * v_mla,      // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
+            ggml_tensor * top_k,      // I32 [n_select, 1, 1] physical cells
+            ggml_tensor * slot_valid, // F32 [n_select, 1, 1] 0/-inf per SLOT
+            ggml_tensor * tail_cells, // I32 [kpool-1, 1, 1]
+            ggml_tensor * tail_valid, // F32 [kpool-1, 1, 1]
+            ggml_tensor * cand_mask,  // F16 [n_kv, 1, 1, 1]
                   float   kq_scale,
                     int   il) const;
 

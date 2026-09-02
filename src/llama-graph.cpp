@@ -3652,7 +3652,8 @@ llm_graph_input_mem_hybrid_k * llm_graph_context::build_inp_mem_hybrid_k() const
 llm_graph_input_kpool * llm_graph_context::build_inp_kpool(
         const llama_memory_hybrid_context * mctx_cur,
         ggml_tensor * kq_mask,
-        bool scoring) const {
+        bool scoring,
+        bool gathered) const {
     const auto * mctx_attn = mctx_cur->get_attn();
     const auto * mctx_idx  = mctx_cur->get_idx();
 
@@ -3710,6 +3711,19 @@ llm_graph_input_kpool * llm_graph_context::build_inp_kpool(
         inp->cand_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F16, n_kv, n_tps, 1, n_stream);
         ggml_set_input(inp->cand_mask);
         ggml_set_name(inp->cand_mask, "kpool_cand_mask");
+
+        // D0 gathered decode inputs. ONLY when the gathered graph will consume them:
+        // an input tensor no node reads is never allocated, so the host fill would
+        // write through data == nullptr.
+        if (gathered) {
+        inp->tail_cells = ggml_new_tensor_3d(ctx0, GGML_TYPE_I32, kpool - 1, n_tps, n_stream);
+        ggml_set_input(inp->tail_cells);
+        ggml_set_name(inp->tail_cells, "kpool_tail_cells");
+
+        inp->tail_valid = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, kpool - 1, n_tps, n_stream);
+        ggml_set_input(inp->tail_valid);
+        ggml_set_name(inp->tail_valid, "kpool_tail_valid");
+        }
 
         // pooled-key cache. n_new_max is an exact bound on the pools one ubatch can
         // complete: a sequence's tokens are a contiguous position run, so a run of L tokens
@@ -3828,6 +3842,117 @@ ggml_tensor * llm_graph_context::build_attn_sparse(
         : ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, mask_top_k, sinks, v_mla, kq_scale, il);
+    cb(cur, "kqv_out", il);
+
+    if (wo) {
+        cur = build_lora_mm(wo, cur, wo_s);
+    }
+
+    if (wo_b) {
+        cur = ggml_add(ctx0, cur, wo_b);
+    }
+
+    return cur;
+}
+
+
+ggml_tensor * llm_graph_context::build_attn_sparse_gathered(
+        llm_graph_input_attn_k * inp,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * wo_s,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+        ggml_tensor * kq_b,
+        ggml_tensor * sinks,
+        ggml_tensor * v_mla,
+        ggml_tensor * top_k,
+        ggml_tensor * slot_valid,
+        ggml_tensor * tail_cells,
+        ggml_tensor * tail_valid,
+        ggml_tensor * cand_mask,
+              float   kq_scale,
+                int   il) const {
+    // these nodes are added in the same order as build_attn / build_attn_sparse
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, v_cur);
+    ggml_build_forward_expand(gf, k_cur);
+
+    const auto * mctx_cur = inp->mctx;
+
+    // store to KV cache, INCLUDING the V-mirror update: a gathered decode does not read
+    // the mirror, but the next dense graph (prefill, or env-off) will
+    {
+        const auto & k_idxs = inp->get_k_idxs();
+
+        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+
+        if (mctx_cur->get_has_v_mirror()) {
+            ggml_tensor * vupd = mctx_cur->cpy_v(ctx0, k_cur, inp->get_v_idxs(), il);
+            cb(vupd, "v_mirror_upd", il);
+            ggml_build_forward_expand(gf, vupd);
+        }
+    }
+
+    const auto & kq_mask = inp->get_kq_mask();
+
+    // decode-1, single stream only (the gate in the model guarantees this)
+    GGML_ASSERT(top_k->ne[1] == 1 && top_k->ne[2] == 1);
+    GGML_ASSERT(kq_mask->ne[1] == 1 && kq_mask->ne[3] == 1);
+    GGML_ASSERT(slot_valid->ne[0] == top_k->ne[0]);
+    GGML_ASSERT(ggml_are_same_shape(tail_cells, tail_valid));
+
+    const int64_t n_kv  = kq_mask->ne[0];
+    const int64_t n_sel = top_k->ne[0] + tail_cells->ne[0];
+
+    static bool logged_active = false;
+    if (!logged_active) {
+        fprintf(stderr, "GATHERED_DSA ACTIVE n_sel_max=%lld n_kv=%lld\n",
+                (long long) n_sel, (long long) n_kv);
+        logged_active = true;
+    }
+
+    // ids: selected cells then the always-selected tail. all entries are in [0, n_kv);
+    // invalid slots name cell 0 and die to the -inf slot mask below, BY SLOT.
+    ggml_tensor * ids = ggml_concat(ctx0,
+            ggml_reshape_1d(ctx0, top_k, top_k->ne[0]),
+            ggml_reshape_1d(ctx0, tail_cells, tail_cells->ne[0]), 0);
+    cb(ids, "gathered_ids", il);
+
+    // per-CELL additive mask, gathered: candidate-set rejection + causal/empty/foreign.
+    // never gather the causal mask alone (grokk 057 s3): padded picks name cell 0 and
+    // cell 0 can be a real visible token; only cand_mask keeps those -inf.
+    ggml_tensor * cell_mask = ggml_add(ctx0, cand_mask, kq_mask); // F16
+    ggml_tensor * mask_rows = ggml_reshape_3d(ctx0, cell_mask, 1, n_kv, 1);
+    ggml_tensor * mask_g    = ggml_get_rows(ctx0, mask_rows, ids); // -> F32 [1, n_sel, 1]
+    mask_g = ggml_reshape_2d(ctx0, mask_g, n_sel, 1);
+
+    // per-SLOT validity: expanded pool_bias of the selected pools, then the tail's
+    ggml_tensor * slot_mask = ggml_concat(ctx0,
+            ggml_reshape_1d(ctx0, slot_valid, slot_valid->ne[0]),
+            ggml_reshape_1d(ctx0, tail_valid, tail_valid->ne[0]), 0);
+    slot_mask = ggml_reshape_2d(ctx0, slot_mask, n_sel, 1);
+
+    mask_g = ggml_add(ctx0, mask_g, slot_mask);
+    mask_g = ggml_reshape_4d(ctx0, mask_g, n_sel, 1, 1, 1);
+    cb(mask_g, "gathered_mask", il);
+
+    // K rows: [512, 1, n_kv, 1] -> dim-1 view -> gather -> cast -> [512, 1, n_sel, 1].
+    // the final reshape is load-bearing (grokk 057 s3): build_attn_mha permutes (0,2,1,3)
+    // and packed KQ keys on post-permute k->ne[2]==1 (n_head_kv).
+    ggml_tensor * kfull = mctx_cur->get_k(ctx0, il);
+    ggml_tensor * krows = ggml_view_3d(ctx0, kfull,
+            kfull->ne[0], kfull->ne[2], kfull->ne[3],
+            kfull->nb[2], kfull->nb[3], 0);
+
+    ggml_tensor * kg = ggml_get_rows(ctx0, krows, ids); // F32 [512, n_sel, 1]
+    kg = ggml_cast(ctx0, kg, kfull->type);
+    kg = ggml_reshape_4d(ctx0, kg, kfull->ne[0], 1, n_sel, 1);
+    cb(kg, "gathered_k", il);
+
+    // V is the same compact latent; v_trans false -> compact v_cont inside mha
+    ggml_tensor * cur = build_attn_mha(q_cur, kg, kg, kq_b, mask_g, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {

@@ -71,6 +71,8 @@ void llama_kv_cache_set_input_kpool(
               ggml_tensor    * pool_bias,
               ggml_tensor    * sel_mask,
               ggml_tensor    * cand_mask,
+              ggml_tensor    * tail_cells,
+              ggml_tensor    * tail_valid,
               ggml_tensor    * pool_reps,
               ggml_tensor    * new_pool_cells,
               ggml_tensor    * new_pool_reps,
@@ -449,6 +451,28 @@ void llama_kv_cache_set_input_kpool(
                     }
                 }
 
+                // D0: emit the tail cells [tail_start, q] by slot; unused slots stay
+                // cell 0 / -INFINITY from the pre-fill below the loop
+                if (tail_cells) {
+                    const int64_t r_t     = r - 1;
+                    int32_t * cur_tcell   = (int32_t *) tail_cells->data + (s*n_tps + ii)*r_t;
+                    float   * cur_tvalid  = (float   *) tail_valid->data + (s*n_tps + ii)*r_t;
+
+                    for (int64_t t = 0; t < r_t; ++t) {
+                        cur_tcell [t] = 0;
+                        cur_tvalid[t] = -INFINITY;
+                    }
+                    for (int64_t j = 0; j < n_kv; ++j) {
+                        const llama_pos p = pos_at[j];
+                        if (p >= tail_start && p <= q) {
+                            const int64_t t = p - tail_start;
+                            GGML_ASSERT(t < r_t);
+                            cur_tcell [t] = (int32_t) j;
+                            cur_tvalid[t] = 0.0f;
+                        }
+                    }
+                }
+
                 // the query's own sequence run only; every other slot keeps the -INFINITY
                 // of the fill above, which is what keeps a foreign pool out of the budget
                 float * q_pool_bias = cur_pool_bias + ii*n_pools + run_off[ps];
@@ -512,6 +536,7 @@ void llm_graph_input_kpool::set_input(const llama_ubatch * ubatch) {
             mctx_attn->get_kv(),
             /* cell_pool */ nullptr, pool_cells, /* bias */ nullptr, pool_bias,
             sel_mask, cand_mask,
+            tail_cells, tail_valid,
             pool_reps, new_pool_cells, new_pool_reps,
             strm_of.empty() ? nullptr : strm_of.data(),
             pool_reps ? (int64_t) mctx_idx->get_kv()->get_size() : 0,
