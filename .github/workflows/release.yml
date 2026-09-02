@@ -356,6 +356,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # checkout runs as the host user; in-container steps run as root, so git
+      # flags the repo as "dubious ownership" - whitelist the workspace
+      - name: Git safe directory
+        run: git config --global --add safe.directory "${{ github.workspace }}"
+
       - name: Download UI build
         uses: actions/download-artifact@v7
         with:
