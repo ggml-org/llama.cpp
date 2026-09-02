@@ -1,45 +1,49 @@
 <script lang="ts">
 	import '../app.css';
-	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { untrack } from 'svelte';
-	import { onMount } from 'svelte';
-
-	import { SidebarNavigation, DialogConversationTitleUpdate } from '$lib/components/app';
-	import { DialogMcpServerRecommendations } from '$lib/components/app/dialogs';
+	import { SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
-	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
-
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { ModeWatcher } from 'mode-watcher';
-	import { ROUTES } from '$lib/constants/routes';
-	import { RouterService } from '$lib/services/router.service';
-	import { Toaster } from 'svelte-sonner';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
+	import {
+		FAVICON_PATHS,
+		FAVICON_SELECTORS,
+		HEADERS,
+		NEW_CHAT_TAB_ID,
+		ROUTES,
+		SETTINGS_KEYS,
+		TOOLTIP_DELAY_DURATION
+	} from '$lib/constants';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
-	import { useMcpRecommendations } from '$lib/hooks/use-mcp-recommendations.svelte';
-	import { conversations } from '$lib/stores/conversations.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
-	import { theme } from '$lib/stores/theme.svelte';
-	import { buildInfoStore } from '$lib/stores/build-info.svelte';
-
-	import { SETTINGS_KEYS } from '$lib/constants';
+	import { RouterService } from '$lib/services/router.service';
+	import {
+		chatStore,
+		conversationsStore,
+		deviceStore,
+		mcpStore,
+		modelsStore,
+		serverStore,
+		settingsStore,
+		tabsStore,
+		versionStore
+	} from '$lib/stores';
+	import { initStores } from '$lib/stores/init';
+	import { ModeWatcher } from 'mode-watcher';
+	import { untrack } from 'svelte';
+	import { onMount } from 'svelte';
+	import { Toaster } from 'svelte-sonner';
+	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
 	let { children } = $props();
+
+	// migrations and store startup, ordered explicitly instead of import side effects
+	void initStores();
+
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
-
-	const mcpRecommendations = useMcpRecommendations();
 
 	let chatSidebar:
 		| {
@@ -48,33 +52,53 @@
 		  }
 		| undefined = $state();
 
-	let showBuildVersion = $derived(config()[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean);
-
-	let titleUpdateDialogOpen = $state(false);
-	let titleUpdateCurrentTitle = $state('');
-	let titleUpdateNewTitle = $state('');
-	let titleUpdateResolve: ((value: boolean) => void) | null = null;
+	let showBuildVersion = $derived(
+		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
+	);
 
 	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
 	const pwa = usePwa();
 	const { needRefresh, updateServiceWorker } = pwa;
 
 	function updateFavicon() {
-		const dark = theme.isSystemDark;
+		const dark = deviceStore.systemTheme.isDark;
 
 		let icoLink = document.querySelector(FAVICON_SELECTORS.ICO_48X48) as HTMLLinkElement | null;
+
 		if (icoLink) {
 			icoLink.href = dark ? FAVICON_PATHS.ICO_DARK : FAVICON_PATHS.ICO_LIGHT;
 		}
 
 		let svgLink = document.querySelector(FAVICON_SELECTORS.SVG_ANY) as HTMLLinkElement | null;
+
 		if (svgLink) {
 			svgLink.href = dark ? FAVICON_PATHS.SVG_DARK : FAVICON_PATHS.SVG_LIGHT;
 		}
 	}
 
+	function navigateToTab(direction: -1 | 1) {
+		// only makes sense with conversation tabs enabled
+		if (!settingsStore.config.conversationTabs) return;
+
+		const openTabs = tabsStore.openTabs;
+
+		if (openTabs.length === 0) return;
+
+		const activeId = page.params.id ?? NEW_CHAT_TAB_ID;
+		const idx = openTabs.indexOf(activeId);
+		// active tab not in list (e.g. a non-chat route): start from an edge
+		const targetIdx =
+			idx === -1
+				? direction === 1
+					? 0
+					: openTabs.length - 1
+				: (idx + direction + openTabs.length) % openTabs.length;
+
+		void tabsStore.activate(openTabs[targetIdx]);
+	}
+
 	function navigateToConversation(direction: -1 | 1) {
-		const allConvs = conversations();
+		const allConvs = conversationsStore.conversations;
 
 		if (allConvs.length === 0) return;
 
@@ -95,22 +119,39 @@
 		if (targetIdx >= 0 && targetIdx < allConvs.length) {
 			goto(RouterService.chat(allConvs[targetIdx].id));
 		} else {
-			goto(ROUTES.NEW_CHAT);
+			conversationsStore.openNewChat();
 		}
 	}
 
+	// navigating away from the new-chat screen drops its tab, so it does not
+	// linger once the user moves to a real conversation or another route
+	let previousChatId = $state<string | undefined>(undefined);
+
+	$effect(() => {
+		const id = page.params.id ?? (page.route.id === '/(chat)' ? NEW_CHAT_TAB_ID : undefined);
+		const prev = untrack(() => previousChatId);
+
+		previousChatId = id;
+
+		if (id !== prev && prev && settingsStore.config.conversationTabs && prev === NEW_CHAT_TAB_ID) {
+			untrack(() => tabsStore.removeTabs([NEW_CHAT_TAB_ID]));
+		}
+	});
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
+		navigateToNextConversation: () => navigateToConversation(1),
+		navigateToNextTab: () => navigateToTab(1),
 		navigateToPrevConversation: () => navigateToConversation(-1),
-		navigateToNextConversation: () => navigateToConversation(1)
+		navigateToPrevTab: () => navigateToTab(-1)
 	});
 
 	function checkApiKey() {
-		const apiKey = config().apiKey;
+		const apiKey = settingsStore.config.apiKey;
 
-		// No API key configured — server doesn't require auth, no need to validate.
-		// This mirrors the early return in validateApiKey() to avoid redundant /props requests.
+		// Without a stored key there is nothing to re-validate here; the keyless
+		// 401 case is handled by validateApiKey() at navigation time, and the
+		// reload below must never fire in a keyless loop.
 		if (!apiKey || apiKey.trim() === '') {
 			return;
 		}
@@ -123,7 +164,7 @@
 			) {
 				const headers: Record<string, string> = {
 					'Content-Type': 'application/json',
-					Authorization: `Bearer ${apiKey.trim()}`
+					[HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKey.trim()}`
 				};
 
 				fetch(`${base}/props`, { headers })
@@ -139,24 +180,6 @@
 		});
 	}
 
-	function handleTitleUpdateCancel() {
-		titleUpdateDialogOpen = false;
-
-		if (titleUpdateResolve) {
-			titleUpdateResolve(false);
-			titleUpdateResolve = null;
-		}
-	}
-
-	function handleTitleUpdateConfirm() {
-		titleUpdateDialogOpen = false;
-
-		if (titleUpdateResolve) {
-			titleUpdateResolve(true);
-			titleUpdateResolve = null;
-		}
-	}
-
 	onMount(() => {
 		updateFavicon();
 		// snapshot of every backend running stream on first load, populates the sidebar spinners
@@ -168,11 +191,12 @@
 	// or ended while it was hidden. snapshot only, no polling
 	function handleVisibilityChange() {
 		if (document.visibilityState !== 'visible') return;
+
 		void chatStore.syncRemoteRunningStreams();
 	}
 
 	$effect(() => {
-		void theme.isSystemDark;
+		void deviceStore.systemTheme.isDark;
 
 		updateFavicon();
 	});
@@ -202,7 +226,7 @@
 	// textContent keeps the value as text, never parsed as HTML
 	function customCss(node: HTMLStyleElement) {
 		$effect(() => {
-			node.textContent = (config().customCss as string | undefined) ?? '';
+			node.textContent = (settingsStore.config.customCss as string | undefined) ?? '';
 		});
 	}
 
@@ -211,7 +235,7 @@
 	let routerModelsFetched = false;
 
 	$effect(() => {
-		const isRouter = isRouterMode();
+		const isRouter = serverStore.isRouterMode;
 		const modelsCount = modelsStore.models.length;
 
 		// Only fetch router models once when we have models loaded and in router mode
@@ -227,31 +251,37 @@
 	// Live model status and load progress via the /models/sse feed (router mode)
 	$effect(() => {
 		if (!browser) return;
-		if (!isRouterMode()) return;
+
+		if (!serverStore.isRouterMode) return;
 
 		untrack(() => {
-			modelsStore.subscribeStatus();
+			modelsStore.status.subscribe();
 		});
 
 		return () => {
-			modelsStore.unsubscribeStatus();
+			modelsStore.status.unsubscribe();
 		};
 	});
 
-	// Background MCP server health checks on app load
-	// Fetch enabled servers from settings and run health checks in background
+	// Background MCP server health checks on app load.
+	// Health-check every configured server with a URL - including disabled ones -
+	// so the /mcp-servers page can display health metadata for servers that are
+	// currently turned off. Disabled servers never get promoted to active
+	// connections (see runHealthCheck), so their tools/prompts/resources stay
+	// out of the chat-side stores.
+	// Only IDLE servers are checked; already-resolved (SUCCESS / ERROR) servers
+	// keep their existing state, so adding or removing a server does not flash
+	// every other card back through skeleton state.
 	$effect(() => {
 		if (!browser) return;
 
 		const mcpServers = mcpStore.getServers();
+		const serversWithUrls = mcpServers.filter((s) => s.url.trim());
 
-		// Only run health checks if we have enabled servers with URLs
-		const enabledServers = mcpServers.filter((s) => s.enabled && s.url.trim());
-
-		if (enabledServers.length > 0) {
+		if (serversWithUrls.length > 0) {
 			untrack(() => {
 				// Run health checks in background (don't await)
-				mcpStore.runHealthChecksForServers(enabledServers, false).catch((error) => {
+				mcpStore.runHealthChecksForServers(serversWithUrls, true).catch((error) => {
 					console.warn('[layout] MCP health checks failed:', error);
 				});
 			});
@@ -262,28 +292,14 @@
 	$effect(() => {
 		checkApiKey();
 	});
-
-	// Set up title update confirmation callback
-	$effect(() => {
-		conversationsStore.setTitleUpdateConfirmationCallback(
-			async (currentTitle: string, newTitle: string) => {
-				return new Promise<boolean>((resolve) => {
-					titleUpdateCurrentTitle = currentTitle;
-					titleUpdateNewTitle = newTitle;
-					titleUpdateResolve = resolve;
-					titleUpdateDialogOpen = true;
-				});
-			}
-		);
-	});
 </script>
 
 <svelte:head>
 	{#if pwaAssetsHead.themeColor}
-		<meta name="theme-color" content={pwaAssetsHead.themeColor.content} />
+		<meta content={pwaAssetsHead.themeColor.content} name="theme-color" />
 	{/if}
 
-	{#if config().customCss}
+	{#if settingsStore.config.customCss}
 		<style use:customCss></style>
 	{/if}
 
@@ -294,14 +310,14 @@
 	<PwaMetaTags />
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<svelte:window bind:innerHeight bind:innerWidth onkeydown={handleKeydown} />
 <svelte:document onvisibilitychange={handleVisibilityChange} />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<div class="flex flex-col md:flex-row">
 		<SidebarNavigation
 			onSearchClick={() => {
-				if (isMobile.current) {
+				if (deviceStore.isMobile) {
 					goto(ROUTES.SEARCH);
 				} else if (chatSidebar?.activateSearchMode) {
 					chatSidebar.activateSearchMode();
@@ -317,30 +333,17 @@
 	<ModeWatcher />
 
 	<Toaster richColors />
-
-	<DialogConversationTitleUpdate
-		bind:open={titleUpdateDialogOpen}
-		currentTitle={titleUpdateCurrentTitle}
-		newTitle={titleUpdateNewTitle}
-		onConfirm={handleTitleUpdateConfirm}
-		onCancel={handleTitleUpdateCancel}
-	/>
-
-	<DialogMcpServerRecommendations
-		open={mcpRecommendations.open}
-		onOpenChange={mcpRecommendations.handleOpenChange}
-	/>
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->
 <div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
-	{#if showBuildVersion && buildInfoStore.value}
-		<span class="text-[10px] tabular-nums text-muted-foreground">{buildInfoStore.value}</span>
+	{#if showBuildVersion && versionStore.build}
+		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.build}</span>
 	{/if}
 
 	<PwaRefreshAlert
-		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		forceReload={pwa.needRefreshByStorage}
+		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		{updateServiceWorker}
 	/>
 </div>

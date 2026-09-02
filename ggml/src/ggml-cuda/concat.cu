@@ -141,27 +141,25 @@ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE)
 
 template <typename T>
 static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, int dim, cudaStream_t stream) {
-    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+    if (dim != 3 && ggml_is_contiguous_to_3(src0) && ggml_is_contiguous_to_3(src1)) {
         const T * src0_d = (const T *) src0->data;
         const T * src1_d = (const T *) src1->data;
         T *       dst_d  = (T *) dst->data;
 
-        if (dim != 3) {
-            for (int64_t i3 = 0; i3 < dst->ne[3]; i3++) {
-                concat_cont_cuda(
-                        src0_d + i3*(src0->nb[3] / sizeof(T)),
-                        src1_d + i3*(src1->nb[3] / sizeof(T)),
-                        dst_d  + i3*( dst->nb[3] / sizeof(T)),
-                        ggml_row_size(src0->type, src0->ne[0])/sizeof(T), src0->ne[1], src0->ne[2],
-                        ggml_row_size(dst->type, dst->ne[0])/sizeof(T),  dst->ne[1],  dst->ne[2], dim, stream);
-            }
-        } else {
-            const size_t size0 = ggml_nbytes(src0);
-            const size_t size1 = ggml_nbytes(src1);
-
-            CUDA_CHECK(cudaMemcpyAsync((char *) dst->data,         src0->data, size0, cudaMemcpyDeviceToDevice, stream));
-            CUDA_CHECK(cudaMemcpyAsync((char *) dst->data + size0, src1->data, size1, cudaMemcpyDeviceToDevice, stream));
+        for (int64_t i3 = 0; i3 < dst->ne[3]; i3++) {
+            concat_cont_cuda(
+                    src0_d + i3*(src0->nb[3] / sizeof(T)),
+                    src1_d + i3*(src1->nb[3] / sizeof(T)),
+                    dst_d  + i3*( dst->nb[3] / sizeof(T)),
+                    ggml_row_size(src0->type, src0->ne[0])/sizeof(T), src0->ne[1], src0->ne[2],
+                    ggml_row_size(dst->type, dst->ne[0])/sizeof(T),  dst->ne[1],  dst->ne[2], dim, stream);
         }
+    } else if (dim == 3 && ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+        const size_t size0 = ggml_nbytes(src0);
+        const size_t size1 = ggml_nbytes(src1);
+
+        CUDA_CHECK(cudaMemcpyAsync((char *) dst->data,         src0->data, size0, cudaMemcpyDeviceToDevice, stream));
+        CUDA_CHECK(cudaMemcpyAsync((char *) dst->data + size0, src1->data, size1, cudaMemcpyDeviceToDevice, stream));
     } else {
         GGML_ASSERT(!ggml_is_quantized(src0->type));
 
@@ -208,12 +206,17 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->type  == src0->type);
 
     if (ggml_is_quantized(src0->type)) {
-        GGML_ASSERT(ggml_is_contiguous(src0));
-        GGML_ASSERT(ggml_is_contiguous(src1));
+        if (dim == 3) {
+            GGML_ASSERT(ggml_is_contiguous(src0));
+            GGML_ASSERT(ggml_is_contiguous(src1));
+        } else {
+            GGML_ASSERT(ggml_is_contiguous_to_3(src0));
+            GGML_ASSERT(ggml_is_contiguous_to_3(src1));
+        }
         GGML_ASSERT(src0->ne[0] % ggml_blck_size(src0->type) == 0);
         GGML_ASSERT(src1->ne[0] % ggml_blck_size(src1->type) == 0);
 
-        // if tensors are contiguous and ne[0] is multiple of the block size we can concat both tensors as byte tensors
+        // if first 3 dimensions are contiguous and ne[0] is multiple of the block size we can concat both tensors as byte tensors
         concat_cuda<uint8_t>(src0, src1, dst, dim, stream);
     } else {
         GGML_ASSERT(ggml_blck_size(src0->type) == 1);

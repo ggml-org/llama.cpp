@@ -201,7 +201,11 @@ uint32_t llama_hparams::n_embd_r() const {
     // TODO: maybe support other convolution strides than 1
     // NOTE: since the first column of the conv_state is shifted out each time, it's not actually needed
     // Corresponds to Mamba's conv_states size
-    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group*ssm_d_state);
+    const uint32_t n_conv = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group*ssm_d_state);
+
+    // PLE conv history needs its own row: Meta splits cache_r_l by head, so a history packed behind the first is unaddressable
+    // it lives in cache_ple_r_l instead, mirrored like the rest of the PLE module
+    return n_conv;
 }
 
 uint32_t llama_hparams::n_embd_s() const {
@@ -217,6 +221,13 @@ uint32_t llama_hparams::n_embd_s() const {
         return n_embd_head_kda * n_embd_head_kda * n_head();  // 128 * 128 * 32 = 524288
     }
 
+    if (n_embd_head_la != 0) {
+        // for MiniMax-Text-01 linear attention layers
+        // Full recurrent state: head_dim * head_dim * n_head
+        // tensor shape for linear attention: [head_dim, head_dim, n_head]
+        return n_embd_head_la * n_embd_head_la * n_head();  // 128 * 128 * 64 = 1048576
+    }
+
     // corresponds to Mamba's ssm_states size
     return ssm_d_state * ssm_d_inner;
 }
@@ -224,6 +235,23 @@ uint32_t llama_hparams::n_embd_s() const {
 bool llama_hparams::is_recr(uint32_t il) const {
     if (il < n_layer_all) {
         return is_recr_impl[il];
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
+}
+
+uint32_t llama_hparams::ple_conv_state() const {
+    if (ple_n_heads == 0 || ple_conv_kernel == 0) {
+        return 0;
+    }
+
+    // dilation equals the n-gram size, matching the reference module
+    return (ple_conv_kernel - 1) * ple_ngram_size * dsv4_hc_mult * n_embd;
+}
+
+bool llama_hparams::is_ple(uint32_t il) const {
+    if (il < n_layer_all) {
+        return is_ple_impl[il];
     }
 
     GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
@@ -248,6 +276,14 @@ bool llama_hparams::is_mla() const {
     return n_embd_head_k_mla_impl != 0 && n_embd_head_v_mla_impl != 0;
 }
 
+bool llama_hparams::is_indexer_full(uint32_t il) const {
+    if (il < n_layer()) {
+        return is_indexer_full_impl[il];
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer: %u)\n", __func__, il, n_layer());
+}
+
 uint32_t llama_hparams::n_embd_head_k_mla() const {
     return is_mla() ? n_embd_head_k_mla_impl : n_embd_head_k();
 }
@@ -267,6 +303,20 @@ bool llama_hparams::has_kv(uint32_t il) const {
 
     // by default, all layers have kv
     return true;
+}
+
+bool llama_hparams::has_rope(uint32_t il) const {
+    // the router layer stores adapter routing signal, not positional info,
+    // so it must not be RoPE-shifted
+    if (router_layer >= 0 && (int32_t) il == router_layer) {
+        return false;
+    }
+
+    if (il < n_layer_all) {
+        return rope_pattern[il] != 0;
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
 }
 
 uint32_t llama_hparams::n_layer() const {

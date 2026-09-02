@@ -2,7 +2,7 @@
 	import { Plus } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ATTACHMENT_TOOLTIP_TEXT } from '$lib/constants';
+	import { ATTACHMENT_TOOLTIP_TEXT, ICON_CLASS_DEFAULT } from '$lib/constants';
 
 	interface Props {
 		disabled?: boolean;
@@ -18,12 +18,12 @@
 			class="file-upload-button md:h-8 md:w-8 h-9 w-9 rounded-full p-0"
 			{disabled}
 			{onclick}
-			variant="secondary"
 			type="button"
+			variant="secondary"
 		>
 			<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
 
-			<Plus class="h-4 w-4" />
+			<Plus class={ICON_CLASS_DEFAULT} />
 		</Button>
 	</Tooltip.Trigger>
 

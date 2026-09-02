@@ -20,9 +20,6 @@ void llama_model_cohere2moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
 
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer");
-
     if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE) {
         hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
     }
@@ -55,7 +52,11 @@ void llama_model_cohere2moe::load_arch_tensors(llama_model_loader & ml) {
     const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
     const bool trunk_only = (hparams.n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
     const int trunk_flags = mtp_only  ? TENSOR_NOT_REQUIRED : 0;
-    const int mtp_flags   = trunk_only ? TENSOR_NOT_REQUIRED : 0;
+    int mtp_flags         = trunk_only ? TENSOR_NOT_REQUIRED : 0;
+
+    if (!ml.load_mtp) {
+        mtp_flags |= TENSOR_SKIP;
+    }
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 

@@ -6,7 +6,9 @@
 
 #include "ggml-opt.h"
 #include "ggml.h"
+#include "llama.h"
 
+#include <list>
 #include <set>
 #include <sstream>
 #include <string>
@@ -105,6 +107,7 @@ enum llama_example {
     LLAMA_EXAMPLE_RESULTS,
     LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
     LLAMA_EXAMPLE_DOWNLOAD,
+    LLAMA_EXAMPLE_TOKENIZE,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -171,6 +174,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
     COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,  // DSpark speculative decoding (DFlash + Markov head)
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
@@ -232,14 +236,14 @@ struct common_params_sampling {
     float   temp               = 0.80f;  // <= 0.0 to sample greedily, 0.0 to not output probabilities
     float   dynatemp_range     = 0.00f;  // 0.0 = disabled
     float   dynatemp_exponent  = 1.00f;  // controls how entropy maps to temperature in dynamic temperature sampler
-    int32_t penalty_last_n     = 64;     // last n tokens to penalize (0 = disable penalty, -1 = context size)
+    int32_t penalty_last_n     = 64;     // last n tokens to penalize (0 = disable penalty)
     float   penalty_repeat     = 1.00f;  // 1.0 = disabled
     float   penalty_freq       = 0.00f;  // 0.0 = disabled
     float   penalty_present    = 0.00f;  // 0.0 = disabled
     float   dry_multiplier     = 0.0f;   // 0.0 = disabled;      DRY repetition penalty for tokens extending repetition:
     float   dry_base           = 1.75f;  // 0.0 = disabled;      multiplier * base ^ (length of sequence before token - allowed length)
     int32_t dry_allowed_length = 2;      // tokens extending repetitions beyond this receive penalty
-    int32_t dry_penalty_last_n = -1;     // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
+    int32_t dry_penalty_last_n = 64;     // how many tokens to scan for repetitions (0 = disable penalty)
     float   adaptive_target    = -1.0f;  // select tokens near this probability (valid range 0.0 to 1.0; negative = disabled)
     float   adaptive_decay     = 0.90f;  // EMA decay for adaptation; history ≈ 1/(1-decay) tokens (0.0 - 0.99)
     int32_t mirostat           = 0;      // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
@@ -282,18 +286,14 @@ struct common_params_sampling {
 
     // reasoning budget sampler parameters
     // these are populated by the server/CLI based on chat template params
-    int32_t                  reasoning_budget_tokens   = -1;   // -1 = disabled, >= 0 = token budget
-    std::vector<llama_token> reasoning_budget_start;           // start tag token sequence
-    std::vector<llama_token> reasoning_budget_end;             // end tag token sequence
-    std::vector<llama_token> reasoning_budget_forced;          // forced sequence (message + end tag)
-    std::string              reasoning_budget_message;         // message injected before end tag when budget exhausted
-    bool                     reasoning_control = false;        // create the budget sampler on demand so reasoning can be ended at runtime
+    int32_t                   reasoning_budget_tokens   = -1;  // -1 = disabled, >= 0 = token budget
+    std::vector<llama_token>  reasoning_budget_start;          // start tag token sequence
+    std::vector<llama_tokens> reasoning_budget_end;            // end tag token sequences; the first tag is used as the forcing sequence
+    std::vector<llama_token>  reasoning_budget_forced;         // forced sequence (message + first end tag)
+    std::string               reasoning_budget_message;        // message injected before end tag when budget exhausted
+    bool                      reasoning_control = false;       // create the budget sampler on demand so reasoning can be ended at runtime
 
     bool backend_sampling = false;
-
-    bool has_logit_bias() const {
-        return !logit_bias.empty();
-    }
 
     // print the parameters into a string
     std::string print() const;
@@ -370,6 +370,9 @@ struct common_params_speculative_ngram_cache {
 struct common_params_speculative {
     std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
 
+    double synth_len = -1.0;
+    std::vector<double> synth_rates;
+
     // used by Simple, MTP, Eagle3, etc. - all methods that require some kind of draft model
     common_params_speculative_draft draft;
 
@@ -384,21 +387,17 @@ struct common_params_speculative {
         return !draft.mparams.empty();
     }
 
+    bool has_synth() const {
+        return synth_len != -1.0 || !synth_rates.empty();
+    }
+
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;
     }
-};
-
-struct common_params_vocoder {
-    struct common_params_model model;
-
-    std::string speaker_file; // speaker file path
-
-    bool use_guide_tokens = false; // enable guide tokens to improve TTS accuracy
 };
 
 struct common_params_diffusion {
@@ -456,6 +455,7 @@ struct common_params {
     int32_t n_parallel            =     1; // number of parallel sequences to decode
     int32_t n_sequences           =     1; // number of sequences to decode
     int32_t n_outputs_max         =     0; // max outputs in a batch (0 = n_batch)
+    int32_t n_outputs_max_per_seq =     1; // max outputs per sequence
     int32_t grp_attn_n            =     1; // group-attention factor
     int32_t grp_attn_w            =   512; // group-attention width
     int32_t n_print               =    -1; // print token count every n tokens (-1 = disabled)
@@ -481,6 +481,9 @@ struct common_params {
     std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
+    enum llama_load_mode  load_mode  = LLAMA_LOAD_MODE_AUTO; // how to load the model
+
+    enum llama_lazy_mode lazy_mode = LLAMA_LAZY_MODE_AUTO; // on-demand reading of tensors marked by the arch
 
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
@@ -497,7 +500,6 @@ struct common_params {
 
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
-    struct common_params_vocoder     vocoder;
     struct common_params_diffusion   diffusion;
 
     struct common_params_model model;
@@ -571,9 +573,6 @@ struct common_params {
     bool kv_unified        = false; // enable unified KV cache
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
-    bool use_mmap          = true;  // enable mmap to use filesystem cache
-    bool use_direct_io     = false; // read from disk without buffering
-    bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
     bool no_kv_offload     = false; // disable KV offloading
@@ -592,12 +591,18 @@ struct common_params {
 
     // multimodal models (see tools/mtmd)
     struct common_params_model mmproj;
-    bool mmproj_use_gpu = true;     // use GPU for multimodal model
-    bool no_mmproj = false;         // explicitly disable multimodal model
-    std::vector<std::string> image; // path to image file(s) ; TODO: change the name to "media"
+    bool mmproj_use_gpu = true;                 // use GPU for multimodal model
+    ggml_backend_dev_t mmproj_device = nullptr; // GPU device to use for multimodal model
+    bool no_mmproj = false;                     // explicitly disable multimodal model
+    std::vector<std::string> image;             // path to image file(s) ; TODO: change the name to "media"
     int image_min_tokens = -1;
     int image_max_tokens = -1;
     int mtmd_batch_max_tokens = 1024;
+
+    // for video input
+    float       video_fps                   = 4.0f;
+    int64_t     video_timestamp_interval_ms = 5000;
+    std::string video_ffmpeg_bin_dir        = "";
 
     // finetune
     struct lr_opt lr;
@@ -622,6 +627,7 @@ struct common_params {
     bool    cache_prompt        = true;  // whether to enable prompt caching
     bool    cache_idle_slots    = true;  // save and clear idle slots upon starting a new task
     int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
+    int32_t kv_unified_per_slot = 0;     // max context per parallel slot; 0 = unset
     int32_t checkpoint_min_step = 8192;  // minimum spacing between context checkpoints
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
@@ -630,6 +636,14 @@ struct common_params {
     std::string api_prefix    = "";                                                                         // NOLINT
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = true;                                                                                  // NOLINT
+
+    // server CORS params
+    std::string cors_origins = "*";
+    std::string cors_methods = "GET, POST, DELETE, OPTIONS";
+    std::string cors_headers = "*";
+    bool cors_credentials = true;
+    bool cors_origins_explicit = false; // for --agent option
+
     bool enable_chat_template = true;
     bool force_pure_content_parser = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
@@ -659,6 +673,11 @@ struct common_params {
 
     // enable built-in tools
     std::vector<std::string> server_tools;
+    std::string server_tools_runtime;
+
+    // MCP server configs (Cursor-compatible JSON)
+    std::string mcp_servers_config;   // path to JSON file with MCP server definitions
+    std::string mcp_servers_json;     // inline JSON with MCP server definitions
 
     // router server configs
     std::string models_dir    = "";     // directory containing models for the router server
@@ -716,6 +735,12 @@ struct common_params {
     // batched-bench params
     bool batched_bench_output_jsonl = false;
 
+    // tokenize params
+    bool tokenize_ids        = false; // if true, only print the token IDs
+    bool tokenize_stdin      = false; // if true, read the prompt from stdin
+    bool tokenize_no_bos     = false; // if true, do not add the BOS token
+    bool tokenize_show_count = false; // if true, print the total token count
+
     // common params
     std::string out_file; // output filename for all example programs
     // optional callback for model loading progress and cancellation:
@@ -724,6 +749,12 @@ struct common_params {
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
     bool no_alloc = false; // Don't allocate model buffers
+
+    // TTS params
+    std::string tts_lang = "";
+    std::string tts_speaker_file = "";
+
+    bool is_gen_docs = false; // whether we are running inside llama-gen-docs
 };
 
 // call once at the start of a program if it uses libcommon
@@ -849,6 +880,15 @@ std::string string_from(const struct llama_context * ctx, const struct llama_bat
 bool glob_match(const std::string & pattern, const std::string & str);
 
 //
+// Environment utils
+//
+
+// portable environment access, an unset variable reads as an empty string
+// and setting an empty value unsets the variable
+std::string common_get_env(const std::string & name);
+void        common_set_env(const std::string & name, const std::string & value);
+
+//
 // Filesystem utils
 //
 
@@ -858,6 +898,7 @@ bool fs_is_directory(const std::string & path);
 
 std::string fs_get_cache_directory();
 std::string fs_get_cache_file(const std::string & filename);
+std::string fs_get_config_directory();
 
 struct common_file_info {
     std::string path;
@@ -905,15 +946,39 @@ using common_init_result_ptr = std::unique_ptr<common_init_result>;
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
 
-struct llama_model_params     common_model_params_to_llama  (      common_params & params);
-struct llama_context_params   common_context_params_to_llama(const common_params & params);
-struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const common_cpu_params & params);
+struct llama_model_params   common_model_params_to_llama  (      common_params & params);
+struct llama_context_params common_context_params_to_llama(const common_params & params);
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
 
 // model endpoint from env
 std::string common_get_model_endpoint();
+
+// for testing purposes
+char * common_get_model_or_exit(int, char*[]);
+
+//
+// Threadpool utils
+//
+
+struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const common_cpu_params & params);
+
+struct common_threadpools {
+    common_threadpools() = default;
+    ~common_threadpools();
+
+    common_threadpools(const common_threadpools &) = delete;
+    common_threadpools & operator=(const common_threadpools &) = delete;
+
+    void init(llama_context * ctx, const common_params & params);
+
+private:
+    ggml_threadpool * threadpool       = nullptr;
+    ggml_threadpool * threadpool_batch = nullptr;
+
+    decltype(ggml_threadpool_free) * free_fn = nullptr;
+};
 
 //
 // Context utils
@@ -930,10 +995,17 @@ enum common_context_seq_rm_type {
 // note: clears the memory of the context
 common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx);
 
-// aborts execution on failure
-void common_context_seq_rm (llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1);
-void common_context_seq_add(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta);
-void common_context_seq_cp (llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1);
+struct common_memory {
+    llama_context * ctx_tgt = nullptr;
+    llama_context * ctx_dft = nullptr;
+
+    void init(llama_context * ctx_tgt, llama_context * ctx_dft = nullptr);
+
+    // aborts execution on failure
+    void seq_rm (llama_seq_id seq_id, llama_pos p0, llama_pos p1) const;
+    void seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) const;
+    void seq_cp (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) const;
+};
 
 //
 // Batch utils
@@ -1052,17 +1124,28 @@ const char * const LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count";
 }
 
 //
-// MoE utils
+// FFN offload utils
 //
 
 const char * const LLM_FFN_EXPS_REGEX = "\\.ffn_(up|down|gate|gate_up)_(ch|)exps";
 
-inline std::string llm_ffn_exps_block_regex(int idx) {
-    return string_format("blk\\.%d%s", idx, LLM_FFN_EXPS_REGEX);
+const char * const LLM_FFN_DENSE_REGEX = "\\.ffn_(up|down|gate)\\.";
+
+inline std::string llm_ffn_block_regex(int idx, const char * ffn_regex) {
+    return string_format("blk\\.%d%s", idx, ffn_regex);
 }
 
 inline llama_model_tensor_buft_override llm_ffn_exps_cpu_override() {
     return { LLM_FFN_EXPS_REGEX, ggml_backend_cpu_buffer_type() };
+}
+
+inline void llm_add_n_cpu_ffn_overrides(int n, const char * ffn_regex, std::vector<llama_model_tensor_buft_override> & overrides) {
+    // keep strings alive and avoid leaking memory by storing them in a static list
+    static std::list<std::string> buft_override_strings;
+    for (int i = 0; i < n; ++i) {
+        buft_override_strings.push_back(llm_ffn_block_regex(i, ffn_regex));
+        overrides.push_back({buft_override_strings.back().c_str(), ggml_backend_cpu_buffer_type()});
+    }
 }
 
 //
@@ -1080,6 +1163,9 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
 
 struct common_prompt_checkpoint {
     int64_t n_tokens;
+
+    // (optional) id of the task that created the checkpoint
+    int id_task = -1;
 
     llama_pos pos_min;
     llama_pos pos_max;

@@ -126,23 +126,23 @@ It is opt in via the `X-Conversation-Id` header on `POST /v1/chat/completions`. 
 
 The feature lives entirely in `server-stream.{h,cpp}` and rests on three types:
 
-- `stream_session`: a bounded ring buffer (4 MiB cap, oldest bytes drop first) plus a condvar. `append` pushes raw SSE bytes, `read_from` drains from any offset and blocks for live bytes or finalize, `finalize` wakes readers, `cancel` stops the producer. One conv maps to at most one live session.
+- `stream_session`: a bounded ring buffer (4 MiB cap, oldest bytes drop first) plus a condvar. `append` pushes raw SSE bytes, `read_from` drains from any offset and blocks for live bytes or finalize, `finalize` wakes readers, `cancel` sets the flag the producer polls. One conv maps to at most one live session.
 - `stream_session_manager`: a file-static singleton (`g_stream_sessions`) inside `server-stream.cpp`, owns all sessions keyed by conv id, enforces the one conv one session invariant via `create_or_replace`, and runs a GC thread that drops completed sessions past their TTL. Exposed to main only through `server_stream_session_manager_start/stop`.
 - `stream_pipe_producer` / `stream_pipe_consumer`: the write and read ends. The producer owns the session lifetime and finalizes it on destruction; the consumer is read only and never finalizes, so a reader detaching cannot kill a running generation.
 
-The implementation is hidden in `server-stream.cpp` (pimpl). The header exposes only the route handler factories, `server_stream_session_attach_pipe`, `server_stream_aware_should_stop`, `server_stream_conv_id_from_headers` and the GC lifecycle; the session, manager and consumer types stay in the `.cpp`.
+The implementation is hidden in `server-stream.cpp` (pimpl). The header exposes only the route handler factories, the `server_res_spipe` response base, `server_stream_conv_id_from_headers` and the GC lifecycle; the session, manager, consumer and the `server_stream_create_spipe` factory stay in the `.cpp`.
 
-Producer side: `server_res_generator` attaches a producer pipe when the header is present. The HTTP content provider mirrors every chunk into the ring before writing it to the socket. While a pipe is attached, `server_stream_aware_should_stop` ignores peer disconnect, so a dropped socket does not stop generation: only an explicit `DELETE` does. When the peer leaves early, `on_complete` calls `close()`, which drains the rest of the generation into the ring on the http worker.
+Producer side: `server_res_generator` extends `server_res_spipe`, which keeps all spipe logic out of the generic `server_http_res`. `set_req` attaches a producer when the header is present, and the wrapped `next` tees each chunk into the ring before the socket, so a chunk lost to a dead wire is already buffered. While attached, `should_stop` ignores peer disconnect: only a `DELETE` stops generation. On an early peer drop, `on_complete` drains the tail into the ring on the http worker.
 
-Lifetime safety: the producer pipe holds a shared `alive` flag also captured by the session cancel hook. `~server_res_generator` calls `cleanup()` to clear that hook while the reader is still alive, so a `cancel` arriving during teardown can never call `stop()` on a freed response. This ordering is the most fragile part of the feature: finalizing or destroying the producer before `cleanup()` runs reintroduces a use after free.
+Lifetime safety: the session holds no back reference to the response, so `spipe` is a plain `unique_ptr` touched only by the http worker. `cancel` raises an atomic the producer polls; the producer finalizes the session from its destructor, which also runs `~server_response_reader::stop()` to cancel the generation at the queue level. A `DELETE` stops work by raising the flag and letting the worker unwind.
 
-Consumer side: `GET /v1/stream/<conv_id>?from=N` opens a `text/event-stream` that replays buffered bytes from offset `N` and blocks for live bytes, so the browser reattaches like a fresh EventSource. An offset below the dropped prefix returns 400.
+Consumer side: `GET /v1/stream?conv_id=<id>&from=N` opens a `text/event-stream` that replays buffered bytes from offset `N` and blocks for live bytes, so the browser reattaches like a fresh EventSource. An offset below the dropped prefix returns 400.
 
 Routes:
 
-- `GET /v1/stream/:conv_id?from=N`: replay or live reattach.
+- `GET /v1/stream?conv_id=<id>&from=N`: replay or live reattach. The id travels in the query string because it can embed a model name containing slashes.
 - `POST /v1/streams/lookup` with `{"conversation_ids": [...]}`: returns session status only for ids the caller already owns. There is no listing route, so live sessions cannot be enumerated (an earlier `GET /v1/streams` was removed for exactly this reason).
-- `DELETE /v1/stream/:conv_id`: explicit Stop, idempotent (`evict_and_cancel`).
+- `DELETE /v1/stream?conv_id=<id>`: explicit Stop, idempotent (`evict_and_cancel`).
 
 Router mode binds the same paths to proxy handlers. A `conv_id -> child` map (`conv_models`), populated when a POST is routed, resolves the owning child in one lookup with no polling. The lookup groups ids per child; GET and DELETE proxy straight to the owner. This loopback REST hop is expected to move to a websocket IPC later, swapping only the transport.
 
@@ -166,8 +166,8 @@ graph TD
         GC[GC thread] -- drop after TTL --> Sess
     end
     Sess -- read_from offset --> Cons[stream_pipe_consumer]
-    Cons -- "GET /v1/stream/:id?from=N" --> Client
-    DEL[DELETE /v1/stream/:id] -- evict_and_cancel --> Sess
+    Cons -- "GET /v1/stream?conv_id=id&from=N" --> Client
+    DEL[DELETE /v1/stream?conv_id=id] -- evict_and_cancel --> Sess
 ```
 
 The diagram shows the buffer touch points. The live wire (chunks streamed to the original client during a normal generation) is the producer's default output, described under "Producer side" above.
@@ -189,7 +189,7 @@ This endpoint is intended to be used internally by the Web UI and subject to cha
 Get a list of tools, each tool has these fields:
 - `tool` (string): the ID name of the tool, to be used in POST call. Example: `read_file`
 - `display_name` (string): the name to be displayed on UI. Example: `Read file`
-- `type` (string): always be `"builtin"` for now
+- `type` (string): `"server"` for a server tool, or `"mcp"` for a tool exposed by an MCP server
 - `permissions` (object): a mapping string --> boolean that indicates the permission required by this tool. This is useful for the UI to ask the user before calling the tool. For now, the only permission supported is `"write"`
 - `definition` (object): the OAI-compat definition of this tool
 
@@ -199,7 +199,11 @@ Invoke a tool call, request body is a JSON object with:
 - `tool` (string): the name of the tool
 - `params` (object): a mapping from argument name (string) to argument value
 
-Returns JSON object. There are two response formats:
+Headers:
+- `x-tool-cwd`: optional; if set, use as the CWD for tool; this is not part of tool's params because it's meant to be set by the runtime, not the LLM itself
+- `x-tool-runtime`: optional; if set, run the tool inside this isolate instead of on the host. Either `docker-container:<id>` or `podman-container:<id>`, using an already-running container, or `ssh:<target>`, running the tool on a remote host
+
+Returns JSON object. There are two response formats (MCP tools use the same two formats: their result content is concatenated into `plain_text_response`, and RPC or tool errors are surfaced as the `error` string):
 
 Format 1: Plain text. The text will be placed into a field called `plain_text_response`, example:
 
@@ -235,6 +239,29 @@ That requires `JSON.stringify` when formatted to message content:
 }
 ```
 
+Set `stream: true` in the request body to stream a tool's output as it runs, instead of waiting for it to finish. Only certain tools accept this (for ex. `exec_shell_command`);
+returns 404 if tool doesn't support it.
+
+Response is SSE stream, one `data: <json>` line per chunk:
+
+```json
+{"chunk": "hello\n"}
+```
+
+followed by a final event once the tool returns:
+
+```json
+{"done": true}
+```
+
+or, if `invoke()` threw:
+
+```json
+{"done": true, "error": "..."}
+```
+
+There is no `[DONE]` sentinel (unlike `/chat/completions`), the stream ends after the `done`
+
 ### Router mode: how child <--> router communicates
 
 Upon spawning a new child process using `subprocess`, both child and router listen to the stdout/stderr (combined)
@@ -263,6 +290,36 @@ The flow for downloading a new model:
 - Child process runs the download and report status back to router via stdin/out
 - If a stop request comes in, the router asks the child process to stop (same mechanism as running a model in child process)
 - Otherwise, upon completion, we call `load_models()` to refresh the list of models
+
+### Sleep mode
+
+Sleep mode was initially introduced in PR [#18228](https://github.com/ggml-org/llama.cpp/pull/18228). The main idea is to have:
+- `server_queue` keeping track of the idle timeout
+- When the timeout is detected, `server_queue` signals to `server_context_impl` that it should go into sleep
+- `server_context_impl` frees all `llama_context` and `mtmd_context`
+
+Compared to simply exiting the whole process, this approach allows accessing some read-only endpoints during sleep, while also handling wakeup-on-request. Any inference request will wake the server up.
+
+Call stack on entering sleeping:
+- `server_queue::start_loop` (main thread) sees no task for `idle_sleep_ms` --> `sleeping = true`
+- `cb0(true)` --> `server_routes::update_cached_responses`
+    - snapshots `/props`, `/models` and metrics; the model is still alive here
+- `cb1(true)` --> `server_context_impl::handle_sleeping_state`
+    - `callback_state(SERVER_STATE_SLEEPING)` --> reported to router in child mode
+    - `destroy()` --> frees `llama_context` and `mtmd_context`
+- `condition_tasks.wait` until `req_stop_sleeping`
+
+Call stack on waking up:
+- `server_res_generator` constructor (HTTP thread) --> `server_queue::wait_until_no_sleep`
+    - sets `req_stop_sleeping = true`, then waits until `sleeping == false`
+- `server_queue::start_loop` (main thread) wakes up
+- `cb1(false)` --> `server_context_impl::handle_sleeping_state`
+    - `load_model()`, which then emits `callback_state(SERVER_STATE_READY)`
+- `cb0(false)` --> `server_routes::update_cached_responses`
+    - nothing to do, the cache is only read during sleep
+- `sleeping = false` --> `notify_all` unblocks the HTTP thread, the request is handled as usual
+
+Endpoints created with `create_response(true)` (`/health`, `/props`, `/models`, `/metrics`) skip `wait_until_no_sleep`, so they answer from the cached responses instead of waking the server.
 
 ### Notable Related PRs
 

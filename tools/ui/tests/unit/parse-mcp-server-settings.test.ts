@@ -1,15 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
 import { parseMcpServerSettings } from '$lib/utils/mcp';
-import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
+import { describe, expect, it, vi } from 'vitest';
 
 /**
  * Tests for the mcpServers settings parser.
  *
- * The branch seeds the MCP servers setting with a default value of
- * `JSON.stringify(RECOMMENDED_MCP_SERVERS)`, so the parser has to be
- * resilient to anything that may live in the user's localStorage: malformed
- * JSON, wrong shapes, missing fields, falsy-but-not-zero numbers, and entry
- * arrays that have been mutated by the user via the settings form.
+ * The parser has to be resilient to anything that may live in the
+ * user's localStorage: malformed JSON, wrong shapes, missing fields,
+ * falsy-but-not-zero numbers, and entry arrays that have been mutated
+ * by the user via the settings form.
  */
 describe('parseMcpServerSettings', () => {
 	it('returns an empty array for falsy or whitespace-only input', () => {
@@ -37,7 +36,7 @@ describe('parseMcpServerSettings', () => {
 
 	it('drops entries with no parseable id and substitutes a stable fallback', () => {
 		const parsed = parseMcpServerSettings(
-			JSON.stringify([{ url: 'https://a.test', enabled: true }, { url: 'https://b.test' }])
+			JSON.stringify([{ enabled: true, url: 'https://a.test' }, { url: 'https://b.test' }])
 		);
 
 		expect(parsed).toHaveLength(2);
@@ -59,31 +58,23 @@ describe('parseMcpServerSettings', () => {
 		expect(parsed[2]?.id).toBe('custom-3');
 	});
 
-	it('falls back to the configured default requestTimeoutSeconds only for nullish values', () => {
-		const fallback = DEFAULT_MCP_CONFIG.requestTimeoutSeconds;
-
+	it('does not emit a per-server timeout, the request timeout is a live global setting', () => {
+		// A stored per-server requestTimeoutSeconds was never editable in
+		// any UI and froze the global setting at server creation time,
+		// making the Settings value a no-op for existing servers. The
+		// parser drops the field so the global applies live everywhere.
 		const parsed = parseMcpServerSettings(
-			JSON.stringify([
-				{ id: 'a', url: 'https://a.test' },
-				{ id: 'b', url: 'https://b.test', requestTimeoutSeconds: undefined },
-				{ id: 'c', url: 'https://c.test', requestTimeoutSeconds: 0 },
-				{ id: 'd', url: 'https://d.test', requestTimeoutSeconds: 45 }
-			])
+			JSON.stringify([{ id: 'a', requestTimeoutSeconds: 45, url: 'https://a.test' }])
 		);
 
-		// The parser uses ?? for timeout fallback, which only triggers on
-		// null/undefined. Explicit 0 is preserved at face value.
-		expect(parsed[0]?.requestTimeoutSeconds).toBe(fallback);
-		expect(parsed[1]?.requestTimeoutSeconds).toBe(fallback);
-		expect(parsed[2]?.requestTimeoutSeconds).toBe(0);
-		expect(parsed[3]?.requestTimeoutSeconds).toBe(45);
+		expect(parsed[0]).not.toHaveProperty('requestTimeoutSeconds');
 	});
 
 	it('treats whitespace-only headers strings as undefined', () => {
 		const parsed = parseMcpServerSettings(
 			JSON.stringify([
-				{ id: 'a', url: 'https://a.test', headers: '   ' },
-				{ id: 'b', url: 'https://b.test', headers: '{"X-Foo":"bar"}' }
+				{ headers: '   ', id: 'a', url: 'https://a.test' },
+				{ headers: '{"X-Foo":"bar"}', id: 'b', url: 'https://b.test' }
 			])
 		);
 
@@ -96,8 +87,8 @@ describe('parseMcpServerSettings', () => {
 		const parsed = parseMcpServerSettings(
 			JSON.stringify([
 				{ id: 'a', url: 'https://a.test' },
-				{ id: 'b', url: 'https://b.test', enabled: true },
-				{ id: 'c', url: 'https://c.test', enabled: false },
+				{ enabled: true, id: 'b', url: 'https://b.test' },
+				{ enabled: false, id: 'c', url: 'https://c.test' },
 				{ id: 'd', url: 'https://d.test', useProxy: true }
 			])
 		);
@@ -109,13 +100,28 @@ describe('parseMcpServerSettings', () => {
 		expect(parsed[3]?.useProxy).toBe(true);
 	});
 
+	it('keeps disabled entries in the list, enabled is state and never a visibility filter', () => {
+		// Regression guard for issue #25625: filtering the server list on
+		// `enabled` hides a toggled-off server from every UI surface with
+		// no way to re-enable it. Any list derived from this parser must
+		// contain disabled entries.
+		const parsed = parseMcpServerSettings(
+			JSON.stringify([
+				{ enabled: true, id: 'on', url: 'https://on.test' },
+				{ enabled: false, id: 'off', url: 'https://off.test' }
+			])
+		);
+
+		expect(parsed.map((entry) => entry.id)).toEqual(['on', 'off']);
+		expect(parsed[1]?.enabled).toBe(false);
+	});
+
 	it('preserves input order when mapping entries', () => {
 		const source = [
 			{ id: 'gamma', url: 'https://c.test' },
 			{ id: 'alpha', url: 'https://a.test' },
 			{ id: 'beta', url: 'https://b.test' }
 		];
-
 		const parsed = parseMcpServerSettings(JSON.stringify(source));
 
 		expect(parsed.map((entry) => entry.id)).toEqual(['gamma', 'alpha', 'beta']);
@@ -124,7 +130,7 @@ describe('parseMcpServerSettings', () => {
 	it('passes non-string raw input through the JSON-equality path', () => {
 		const parsed = parseMcpServerSettings([
 			{ id: 'a', url: 'https://a.test' },
-			{ id: 'b', url: 'https://b.test', enabled: true }
+			{ enabled: true, id: 'b', url: 'https://b.test' }
 		]);
 
 		expect(parsed).toHaveLength(2);
