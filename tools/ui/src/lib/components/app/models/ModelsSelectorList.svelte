@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
 	import { ModelsSelectorOption } from '$lib/components/app';
 	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/navigation/utils';
 	import { modelsStore } from '$lib/stores';
@@ -23,6 +24,9 @@
 		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none'
 	}: Props = $props();
 	let render = $derived(renderOption ?? defaultOption);
+
+	/** In-flight / paused downloads, tracked by the status feed. */
+	let downloadEntries = $derived(modelsStore.status.downloadEntries());
 </script>
 
 {#snippet defaultOption(item: ModelItem, _hideOrgName: boolean)}
@@ -44,8 +48,16 @@
 	/>
 {/snippet}
 
+{#if downloadEntries.length > 0}
+	<p class="{sectionHeaderClass} mt-0">Download in progress</p>
+
+	{#each downloadEntries as entry (entry.repoWithTag)}
+		<ModelsSelectorDownloadItem {entry} />
+	{/each}
+{/if}
+
 {#if groups.loaded.length > 0}
-	<p class="{sectionHeaderClass} mt-0">Loaded models</p>
+	<p class={sectionHeaderClass}>Loaded models</p>
 
 	{#each groups.loaded as item (`loaded-${item.option.id}`)}
 		{@render render(item, false)}
