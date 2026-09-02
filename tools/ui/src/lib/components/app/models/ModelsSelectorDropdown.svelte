@@ -1,9 +1,8 @@
 <script lang="ts">
 	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
-	import { ChevronDown, Lightbulb, Loader2, PackageSearch } from '@lucide/svelte';
+	import { ChevronDown, Lightbulb, Loader2 } from '@lucide/svelte';
 	import {
 		DialogModelInformation,
-		DialogModelsDiscover,
 		DropdownMenuSearchable,
 		ModelId,
 		ModelsSelectorList,
@@ -40,7 +39,6 @@
 
 	let isOpen = $state(false);
 	let highlightedId = $state<string | null>(null);
-	let modelsHubOpen = $state(false);
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
@@ -329,19 +327,11 @@
 						</div>
 
 						{#snippet footer()}
-							<!-- Sticky actions footer: reasoning effort panel and discover
-							     models. Sticks to the bottom of the content scrollport. -->
+							<!-- Sticky actions footer: reasoning effort panel.
+							     Sticks to the bottom of the content scrollport. -->
 							<div onfocusin={clearHighlight} onmouseenter={clearHighlight} role="none">
 								<ModelsSelectorReasoningPanel />
 
-								<DropdownMenu.Item
-									class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.75 text-left text-sm transition-colors hover:bg-accent"
-									onclick={() => (modelsHubOpen = true)}
-								>
-									<PackageSearch class="h-4 w-4 shrink-0 text-muted-foreground" />
-
-									<span>Discover models</span>
-								</DropdownMenu.Item>
 							</div>
 						{/snippet}
 					</DropdownMenuSearchable>
@@ -408,5 +398,3 @@
 		open={ms.showModelDialog}
 	/>
 {/if}
-
-<DialogModelsDiscover bind:open={modelsHubOpen} />

@@ -5,6 +5,7 @@
 	import {
 		ActionIcon,
 		DialogConversationRename,
+		DialogModelsDiscover,
 		DialogSettingsChat,
 		Logo,
 		SidebarNavigationActions,
@@ -93,6 +94,7 @@
 
 	let renameDialogOpen = $state(false);
 	let settingsDialogOpen = $state(false);
+	let modelsHubOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
@@ -402,6 +404,7 @@
 					isSearchModeActive = false;
 					searchQuery = '';
 				}}
+				onDiscoverModelsClick={() => (modelsHubOpen = true)}
 				onSettingsClick={() => (settingsDialogOpen = true)}
 			/>
 
@@ -451,6 +454,8 @@
 />
 
 <DialogSettingsChat bind:open={settingsDialogOpen} />
+
+<DialogModelsDiscover bind:open={modelsHubOpen} />
 
 <style>
 	aside {

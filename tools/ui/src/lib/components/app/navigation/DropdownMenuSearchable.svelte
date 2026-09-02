@@ -58,8 +58,8 @@
 
 {#if footer}
 	<!-- Sticks to the bottom of the dropdown content's scrollport. -->
-	<div class="sticky bottom-0 z-20 bg-popover px-1 pb-2">
-		<div class="-mx-1 mb-1 h-px bg-border/20"></div>
+	<div class="sticky bottom-0 z-20 bg-popover py-1.5">
+		<div class="h-px bg-border/20 mb-1.5 mx-1.5"></div>
 
 		{@render footer()}
 	</div>
