@@ -277,10 +277,12 @@
 	let downloadQueue = $derived.by(() =>
 		mainEntry
 			? selected
-			: [
-					...selected.filter((f) => f.kind === 'main' || f.kind === 'aux'),
-					...(commandMain ? [commandMain] : [])
-				]
+			: draftEntry
+				? selected
+				: [
+						...selected.filter((f) => f.kind === 'main' || f.kind === 'aux'),
+						...(commandMain ? [commandMain] : [])
+					]
 	);
 
 	/** Total bytes the CTA would fetch; drives the size in the button label. */
