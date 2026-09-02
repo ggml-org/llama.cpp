@@ -981,7 +981,7 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->src_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
         FARF(HIGH, "prep-src #%u: data %p size %u : %u:%u:%u:%u", op->src[i], (void*) src->data, src->size,
-            src->ne[0], src->ne[1], src->ne[3], src->ne[3]);
+            src->ne[0], src->ne[1], src->ne[2], src->ne[3]);
     }
 
     htp_tensor_flush_all(octx->ctx, octx->src, HTP_OP_MAX_INPUTS);

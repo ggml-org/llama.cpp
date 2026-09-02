@@ -1138,6 +1138,15 @@ int op_gated_delta_net(struct htp_ops_context * octx) {
     gctx.vtcm_base = octx->ctx->vtcm_base;
     gctx.vtcm_per_thread = 2 * state_aligned;
 
+    FARF(HIGH, "gated-delta-net-f32: q(%ux%ux%ux%u) k(%ux%ux%ux%u) v(%ux%ux%ux%u) state(%ux%ux%ux%u) -> (%ux%ux%ux%u) : "
+         "vtcm-size %zu n_threads %u\n",
+         q->ne[0], q->ne[1], q->ne[2], q->ne[3],
+         k->ne[0], k->ne[1], k->ne[2], k->ne[3],
+         v->ne[0], v->ne[1], v->ne[2], v->ne[3],
+         state->ne[0], state->ne[1], state->ne[2], state->ne[3],
+         dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+         gctx.vtcm_per_thread * octx->n_threads, octx->n_threads);
+
     if (n_tokens == 1) {
         worker_pool_run_func(octx->ctx->worker_pool, gated_delta_net_f32_tg_thread, &gctx, octx->n_threads);
     } else {
