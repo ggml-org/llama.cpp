@@ -49,18 +49,22 @@ class XingChen4Model(DeepseekV2Model):
 
         super().set_gguf_parameters()
         hparams = self.hparams
-       
+
         self.gguf_writer.add_hyper_connection_count(
             hparams.get("hc_mult",  1))
         self.gguf_writer.add_hyper_connection_sinkhorn_iterations(
             hparams.get("hc_sinkhorn_iters",  20))
         self.gguf_writer.add_hyper_connection_epsilon(
-            hparams.get("hc_eps",1e-6))
+            hparams.get("hc_eps",  1e-6))
 
     def set_vocab(self):
-        # TeleChat4 uses a SentencePiece tokenizer (tokenizer.model + Telechat3Tokenizer).
+        # XingChen4 uses a SentencePiece tokenizer (tokenizer.model + XingChen4Tokenizer).
         # V2's set_vocab tries GPT2/BPE first, which fails for SPM. Use the SPM path directly.
         self._set_vocab_sentencepiece()
+        # Override the pre-tokenizer type: _set_vocab_sentencepiece writes "default",
+        # but XingChen4's SPM-style BPE needs a dedicated pre-type for correct pre-tokenization
+        # (no word-level pre-split, no byte encoding, just newline splitting — same as Gemma4).
+        self.gguf_writer.add_tokenizer_pre("xingchen4")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # handle mHC tensors: new format is model.layers.{N}.{attn_hc|ffn_hc}.{hc_fn|hc_base|hc_scale}
