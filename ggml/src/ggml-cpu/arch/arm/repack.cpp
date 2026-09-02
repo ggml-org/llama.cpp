@@ -518,7 +518,7 @@ void ggml_gemv_mxfp4_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
     UNUSED(blocklen);
 
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
-    if (svcntb() == 32) {
+    if (svcntb() * 8 == 256) {
         const svbool_t  pg16 = svptrue_pat_b8(SV_VL16);
         const svbool_t  pg4  = svptrue_pat_b32(SV_VL4);
         const svbool_t  pgb  = svptrue_b8();
