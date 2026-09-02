@@ -41,11 +41,16 @@
 	function stateFor(repoWithTag: string, filePath: string, isSidecar: boolean): DownloadEntryState {
 		if (getDownloadState) return getDownloadState(repoWithTag, filePath, isSidecar);
 
+		const isDownloading = modelsStore.status.isDownloadInProgress(repoWithTag);
+
 		return {
-			isDownloaded: isSidecar
-				? modelsStore.status.isDraftDownloaded(modelId, filePath)
-				: modelsStore.status.isModelDownloaded(repoWithTag),
-			isDownloading: modelsStore.status.isDownloadInProgress(repoWithTag),
+			// solo downloads register in /v1/models under the tag (args stay empty),
+			// while drafts pulled by a loaded model only show up as its --model-draft
+			isDownloaded:
+				!isDownloading &&
+				(modelsStore.status.isModelDownloaded(repoWithTag) ||
+					(isSidecar && modelsStore.status.isSidecarDownloaded(modelId, filePath))),
+			isDownloading,
 			isFailed: modelsStore.status.hasFailedDownload(repoWithTag),
 			progress: modelsStore.status.getDownloadProgress(repoWithTag)
 		};

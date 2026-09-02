@@ -7,6 +7,7 @@
  * modelsStore; the host owns the router model rows the feed updates.
  */
 
+import { HF_UD_QUANT_PREFIX_REGEX } from '$lib/constants';
 import { ServerModelsSseEventType, ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
@@ -33,13 +34,28 @@ export interface ModelStatusHost {
 	toDisplayName(id: string): string;
 }
 
+/**
+ * Comparison key of a `<repo>:<tag>` download identifier: uppercased, with the
+ * `UD-` quant prefix stripped. The router derives cached model names from the
+ * actual file, which drops the prefix, so `repo:UD-Q4_K_XL` and `repo:Q4_K_XL`
+ * must compare equal.
+ */
+function downloadIdKey(repoWithTag: string): string {
+	const idx = repoWithTag.indexOf(':');
+	const repo = idx === -1 ? repoWithTag : repoWithTag.slice(0, idx);
+	const tag = idx === -1 ? '' : repoWithTag.slice(idx + 1);
+
+	return `${repo.toUpperCase()}:${tag.toUpperCase().replace(HF_UD_QUANT_PREFIX_REGEX, '')}`;
+}
+
 export class ModelStatusManager {
 	/**
-	 * Draft sidecar files pulled by registered models, as `<repo>/<file>` keys.
-	 * Drafts are not separate /v1/models entries - the router pulls them as
-	 * sidecars of a main model and records them in its `--model-draft` arg.
+	 * Sidecar files pulled by registered models, as `<repo>/<file>` keys.
+	 * Sidecars are not separate /v1/models entries - the router pulls them as
+	 * sidecars of a main model and records them in its `--model-draft` /
+	 * `--mmproj` args.
 	 */
-	private downloadedDrafts = $derived.by(() => {
+	private downloadedSidecars = $derived.by(() => {
 		const result = new SvelteSet<string>();
 
 		for (const m of this.host.routerModels) {
@@ -48,7 +64,9 @@ export class ModelStatusManager {
 			if (!args) continue;
 
 			for (let i = 0; i < args.length - 1; i++) {
-				if (args[i] !== '--model-draft' && args[i] !== '-md') continue;
+				if (args[i] !== '--model-draft' && args[i] !== '-md' && args[i] !== '--mmproj') {
+					continue;
+				}
 
 				const parsed = HuggingFaceService.parseCachePath(args[i + 1]);
 
@@ -208,19 +226,22 @@ export class ModelStatusManager {
 	}
 
 	/**
-	 * True when the given draft sidecar file (repo-relative path) has been pulled
-	 * as the `--model-draft` of some registered model.
+	 * True when the given sidecar file (repo-relative path) has been pulled as
+	 * the `--model-draft` or `--mmproj` of some registered model.
 	 */
-	isDraftDownloaded(repoId: string, filePath: string): boolean {
-		return this.downloadedDrafts.has(`${repoId}/${filePath}`);
+	isSidecarDownloaded(repoId: string, filePath: string): boolean {
+		return this.downloadedSidecars.has(`${repoId}/${filePath}`);
 	}
 
 	/**
 	 * True when the given `<repo>:<tag>` is already a fully downloaded model
 	 * registered with the server (i.e. it shows up in the /v1/models list).
+	 * Both ids are normalized, see downloadIdKey().
 	 */
 	isModelDownloaded(repoWithTag: string): boolean {
-		return this.host.routerModels.some((m) => m.id === repoWithTag);
+		const key = downloadIdKey(repoWithTag);
+
+		return this.host.routerModels.some((m) => downloadIdKey(m.id) === key);
 	}
 
 	isOperationInProgress(modelId: string): boolean {
