@@ -33,25 +33,6 @@
 #define SCP_CONSUMED_OFF (SCP_READY_OFF + 64)                           // 4160
 #define SCP_PER_MINION   (SCP_CONSUMED_OFF + 64)                        // 4224
 
-// Signal a counter value to the other hart via L2 SCP.
-static inline void __attribute__((always_inline)) scp_signal(volatile uint32_t * flag, uint32_t value) {
-    *flag = value;
-    FENCE;
-    evict_to_l2((const void *) flag, 1, 64);
-    WAIT_CACHEOPS;
-}
-
-// Wait for a counter in L2 SCP to reach the expected value.
-static inline void __attribute__((always_inline)) scp_wait(volatile uint32_t * flag, uint32_t expected) {
-    while (1) {
-        evict_to_l2((const void *) flag, 1, 64);
-        WAIT_CACHEOPS;
-        if (*flag >= expected) {
-            return;
-        }
-    }
-}
-
 // Dequantize one 32-element Q4_0 block of TILE_M weight rows into the FP32
 // panel, written directly in TenB [k][m] order: panel[k*TILE_M + m].
 //   Low  nibble of byte i -> k = i
