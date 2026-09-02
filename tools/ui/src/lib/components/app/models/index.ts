@@ -57,6 +57,15 @@ export { default as ModelsSelectorDropdown } from './ModelsSelectorDropdown.svel
 export { default as ModelsSelectorList } from './ModelsSelectorList.svelte';
 
 /**
+ * **ModelsSelectorDownloadItem** - Single in-flight download row
+ *
+ * One "Download in progress" row for the models selector: live progress bar,
+ * pause / resume on click and a hover-revealed cancel, mirroring the discover
+ * quant chips.
+ */
+export { default as ModelsSelectorDownloadItem } from './ModelsSelectorDownloadItem.svelte';
+
+/**
  * **ModelsSelectorOption** - Single model option row
  *
  * Renders a single model option with selection state, favorite toggle,
