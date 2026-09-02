@@ -43,7 +43,7 @@ static void mkl_fa_pack_q_fp16(
     dpct::queue_ptr stream,
     sycl::half * __restrict dst,
     const float * __restrict q_src,
-    int n_queries, int n_query_rows, int DKQ,
+    int n_queries, int DKQ,
     int gqa_ratio, int kvh_base_head,
     float q_scale, int64_t q_row_stride, int64_t q_head_stride,
     int64_t wg_size) {
@@ -121,7 +121,7 @@ static void mkl_fa_online_softmax_chunk(
     float * __restrict VKQ_accum,
     int q0, int q_rows, int n_queries, int DV,
     int chunk_size, int chunk_start,
-    int kvh_head, int gqa_ratio,
+    int kvh_head,
     const sycl::half * mask_data, int64_t mask_head_stride,
     int64_t mask_row_stride, int mask_n_heads,
     float logit_softcap, int64_t wg_size) {
@@ -473,7 +473,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     MKL_ACCUM(dequant_time_us, t_deq);
 
     // --- Resolve mask pointers ---
-    const sycl::half * mask_data = nullptr;
     int64_t mask_head_stride = 0;
     int64_t mask_row_stride  = 0;
     int     mask_n_heads     = 0;
@@ -547,7 +546,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
             // 1. Pack all GQA Q heads into fp16 (full n_query_rows)
             mkl_fa_pack_q_fp16(stream,
                 Q_head_f16_ptr, Q_batch,
-                n_queries, n_query_rows, DKQ,
+                n_queries, DKQ,
                 gqa_ratio, kvh_base_head,
                 q_scale, q_row_stride, q_head_stride, wg_size);
 
@@ -605,7 +604,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                             KQ_max_ptr, KQ_sum_ptr, VKQ_accum_ptr,
                             q0, q_rows, n_queries, DV,
                             this_chunk, chunk_start,
-                            kvh_base_head, gqa_ratio,
+                            kvh_base_head,
                             mask_batch, mask_head_stride,
                             mask_row_stride, mask_n_heads,
                             logit_softcap, wg_size);

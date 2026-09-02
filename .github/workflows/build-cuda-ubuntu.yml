@@ -50,14 +50,22 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt update
-          apt install -y cmake build-essential ninja-build libgomp1 git libssl-dev
+          apt install -y cmake build-essential ninja-build libgomp1 git libssl-dev jq python3 python3-venv python3-pip
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: cuda-ubuntu-24.04-cuda
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: cuda-ubuntu-24.04-cuda
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build with CMake
         # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
@@ -72,6 +80,18 @@ jobs:
             -DGGML_CUDA_CUB_3DOT2=ON
           cmake --build build
 
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: cuda-ubuntu-24.04-cuda
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
   hip:
     runs-on: ubuntu-22.04
     container: rocm/dev-ubuntu-22.04:6.1.2
@@ -85,14 +105,22 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev jq python3-venv
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: cuda-ubuntu-22.04-hip
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: cuda-ubuntu-22.04-hip
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build with native CMake HIP support
         id: cmake_build
@@ -102,6 +130,18 @@ jobs:
             -DGPU_TARGETS="gfx1030" \
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: cuda-ubuntu-22.04-hip
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
   musa:
     runs-on: ubuntu-22.04
@@ -116,14 +156,22 @@ jobs:
         id: depends
         run: |
           apt-get update
-          apt-get install -y build-essential git cmake libssl-dev
+          apt-get install -y build-essential git cmake libssl-dev jq
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: cuda-ubuntu-22.04-musa
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: cuda-ubuntu-22.04-musa
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build with native CMake MUSA support
         id: cmake_build
@@ -131,3 +179,15 @@ jobs:
           cmake -B build -S . \
             -DGGML_MUSA=ON
           time cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: cuda-ubuntu-22.04-musa
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true

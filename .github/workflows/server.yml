@@ -80,7 +80,7 @@ jobs:
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: server-ubuntu-24.04-arm
           evict-old-files: 1d
@@ -128,6 +128,16 @@ jobs:
           export LLAMA_ARG_BACKEND_SAMPLING=1
           SLOW_TESTS=1 ./tests.sh
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: server-ubuntu-24.04-arm
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+
   windows:
     runs-on: windows-2025
 
@@ -140,7 +150,7 @@ jobs:
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: server-windows-2025-x64
           evict-old-files: 1d
@@ -181,3 +191,13 @@ jobs:
           cd tools/server/tests
           export SLOW_TESTS="1"
           ./tests.sh
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: server-windows-2025-x64
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

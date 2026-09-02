@@ -29,10 +29,10 @@
 			refreshAllMessages();
 		},
 
-		copy: async (message: DatabaseMessage) => {
+		copy: async (message: DatabaseMessage, contentOverride?: string) => {
 			const asPlainText = Boolean(currentConfig.copyTextAttachmentsAsPlainText);
 			const clipboardContent = formatMessageForClipboard(
-				message.content,
+				contentOverride ?? message.content,
 				message.extra,
 				asPlainText
 			);
@@ -227,14 +227,14 @@
 <div>
 	{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
 		<ChatMessage
-			class="mx-auto mt-12 w-full max-w-3xl"
 			{chatActions}
-			{message}
-			{toolMessages}
+			class="mx-auto mt-12 w-full max-w-3xl"
 			{isLastAssistantMessage}
 			{isLastUserMessage}
+			{message}
 			{nextAssistantMessage}
 			{siblingInfo}
+			{toolMessages}
 		/>
 	{/each}
 
@@ -247,10 +247,10 @@
 				class="mx-auto mt-12 w-full max-w-[48rem]"
 				content={pendingContent}
 				extras={agenticStore.getPendingSteeringMessageExtras(convId)}
-				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+				onDelete={() => agenticStore.clearSteeringMessage(convId)}
 				onEdit={(newContent, extras) =>
 					agenticStore.injectSteeringMessage(convId, newContent, extras)}
-				onDelete={() => agenticStore.clearSteeringMessage(convId)}
+				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
 			/>
 		{/if}
 	{:else if conversationsStore.activeConversation && chatStore.getPendingMessageContent(conversationsStore.activeConversation!.id)}
@@ -262,9 +262,9 @@
 				class="mx-auto mt-12 w-full max-w-[48rem]"
 				content={pendingContent}
 				extras={chatStore.getPendingMessageExtras(convId)}
-				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => chatStore.injectPendingMessage(convId, newContent, extras)}
 				onDelete={() => chatStore.clearPendingMessage(convId)}
+				onEdit={(newContent, extras) => chatStore.injectPendingMessage(convId, newContent, extras)}
+				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
 			/>
 		{/if}
 	{/if}
