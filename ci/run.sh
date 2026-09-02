@@ -334,6 +334,31 @@ function gg_sum_test_llama_archs_tensor_split {
     gg_printf '```\n'
 }
 
+# test_llama_archs_models
+
+function gg_run_test_llama_archs_models {
+    cd ${SRC}
+
+    set -e
+
+    rm -rf build-ci-models && mkdir -p build-ci-models
+
+    # generate the dummy models used by the model-dependent tests
+    ./build-ci-release/bin/test-llama-archs -o build-ci-models 2>&1
+
+    set +e
+}
+
+function gg_sum_test_llama_archs_models {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'Generates the dummy models used by the model-dependent tests\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '```\n'
+    gg_printf '%s\n' "$(cat $OUT/${ci}.log)"
+    gg_printf '```\n'
+}
+
 # test_fusion
 
 function gg_run_test_fusion {
@@ -342,11 +367,8 @@ function gg_run_test_fusion {
     set -e
 
     if [ ! -z ${GG_BUILD_METAL} ]; then
-        rm -rf build-ci-fusion-models && mkdir -p build-ci-fusion-models
-
-        # generate the dummy models and run the fusion regression test
-        ./build-ci-release/bin/test-llama-archs -o build-ci-fusion-models 2>&1
-        ./build-ci-release/bin/test-fusion --models build-ci-fusion-models --device MTL0 --check tests/fusion/MTL.csv 2>&1
+        # run the fusion regression test against the shared dummy models
+        ./build-ci-release/bin/test-fusion --models build-ci-models --device MTL0 --check tests/fusion/MTL.csv 2>&1
     fi
 
     set +e
@@ -355,7 +377,7 @@ function gg_run_test_fusion {
 function gg_sum_test_fusion {
     gg_printf '### %s\n\n' "${ci}"
 
-    gg_printf 'Runs test-fusion against the Metal baseline\n'
+    gg_printf 'Runs test-fusion against baseline\n'
     gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
     gg_printf '```\n'
     gg_printf '%s\n' "$(cat $OUT/${ci}.log)"
@@ -818,6 +840,7 @@ ret=0
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
+test $ret -eq 0 && gg_run test_llama_archs_models
 test $ret -eq 0 && gg_run test_llama_archs_tensor_split
 test $ret -eq 0 && gg_run test_fusion
 
