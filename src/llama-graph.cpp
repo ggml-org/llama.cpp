@@ -3920,13 +3920,19 @@ ggml_tensor * llm_graph_context::build_attn_sparse_gathered(
             ggml_reshape_1d(ctx0, tail_cells, tail_cells->ne[0]), 0);
     cb(ids, "gathered_ids", il);
 
-    // per-CELL additive mask, gathered: candidate-set rejection + causal/empty/foreign.
+    // per-CELL additive masks, gathered SEPARATELY then added compact (codex 059 P0:
+    // the dense cand+kq add ran once per DSA layer = eleven O(n_kv) ops per token).
     // never gather the causal mask alone (grokk 057 s3): padded picks name cell 0 and
     // cell 0 can be a real visible token; only cand_mask keeps those -inf.
-    ggml_tensor * cell_mask = ggml_add(ctx0, cand_mask, kq_mask); // F16
-    ggml_tensor * mask_rows = ggml_reshape_3d(ctx0, cell_mask, 1, n_kv, 1);
-    ggml_tensor * mask_g    = ggml_get_rows(ctx0, mask_rows, ids); // -> F32 [1, n_sel, 1]
-    mask_g = ggml_reshape_2d(ctx0, mask_g, n_sel, 1);
+    auto gather_mask = [&](ggml_tensor * m, const char * name) {
+        ggml_tensor * rows = ggml_reshape_3d(ctx0, m, 1, n_kv, 1);
+        ggml_tensor * out  = ggml_get_rows(ctx0, rows, ids); // -> F32 [1, n_sel, 1]
+        cb(out, name, il);
+        return ggml_reshape_2d(ctx0, out, n_sel, 1);
+    };
+    ggml_tensor * cand_g = gather_mask(cand_mask, "gathered_cand_rows");
+    ggml_tensor * kq_g   = gather_mask(kq_mask,   "gathered_kq_rows");
+    ggml_tensor * mask_g = ggml_add(ctx0, cand_g, kq_g);
 
     // per-SLOT validity: expanded pool_bias of the selected pools, then the tail's
     ggml_tensor * slot_mask = ggml_concat(ctx0,
@@ -3942,13 +3948,18 @@ ggml_tensor * llm_graph_context::build_attn_sparse_gathered(
     // the final reshape is load-bearing (grokk 057 s3): build_attn_mha permutes (0,2,1,3)
     // and packed KQ keys on post-permute k->ne[2]==1 (n_head_kv).
     ggml_tensor * kfull = mctx_cur->get_k(ctx0, il);
+    GGML_ASSERT(kfull->ne[1] == 1 && "gathered DSA is MQA-only (n_head_kv == 1)");
     ggml_tensor * krows = ggml_view_3d(ctx0, kfull,
             kfull->ne[0], kfull->ne[2], kfull->ne[3],
             kfull->nb[2], kfull->nb[3], 0);
 
-    ggml_tensor * kg = ggml_get_rows(ctx0, krows, ids); // F32 [512, n_sel, 1]
-    kg = ggml_cast(ctx0, kg, kfull->type);
-    kg = ggml_reshape_4d(ctx0, kg, kfull->ne[0], 1, n_sel, 1);
+    // name the actual compute owners (059 P0): the gather and the cast are what the
+    // per-node cut must price; the final reshape is a free view
+    ggml_tensor * kg32 = ggml_get_rows(ctx0, krows, ids); // F32 [512, n_sel, 1]
+    cb(kg32, "gathered_k_rows", il);
+    ggml_tensor * kg16 = ggml_cast(ctx0, kg32, kfull->type);
+    cb(kg16, "gathered_k_cast", il);
+    ggml_tensor * kg = ggml_reshape_4d(ctx0, kg16, kfull->ne[0], 1, n_sel, 1);
     cb(kg, "gathered_k", il);
 
     // V is the same compact latent; v_trans false -> compact v_cont inside mha

@@ -538,10 +538,9 @@ ggml_tensor * llama_model_glm5next::graph::build_dsa_layer(
     qr = build_norm(qr, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
     cb(qr, "dsa_q_a_norm", il);
 
-    // D0 gate: strict env + decode-1 + one stream (mirrors fbl_gate's shape)
-    const bool gathered = glm5_gathered_dsa_enabled() && scoring && inp_kp != nullptr &&
-            n_tokens == 1 && inp_kp->sel_mask != nullptr && inp_kp->sel_mask->ne[3] == 1 &&
-            inp_kp->tail_cells != nullptr;
+    // D0 gate: the tail inputs exist iff build_inp_kpool's single gathered_decode
+    // boolean was true — resource presence IS the policy (codex 059 P0)
+    const bool gathered = inp_kp != nullptr && inp_kp->tail_cells != nullptr;
 
     ggml_tensor * slot_valid = nullptr;
     ggml_tensor * top_k = inp_kp ? build_indexer(layer, inp_kp, cur, qr, scoring, il,
@@ -663,9 +662,16 @@ llama_model_glm5next::graph::graph(const llama_model & model, const llm_graph_pa
         if (mctx_hyb->get_idx() != nullptr) {
             indexer_scoring = cparams.n_ctx > glm5next_n_select(hparams);
 
+            // ONE owner for the D0 decision (codex 059 / grokk 060): the same boolean
+            // creates the tail inputs, requests slot_valid, and picks the builder.
+            // Producer/consumer gate disagreement was the 058 crash class.
+            const bool gathered_decode = glm5_gathered_dsa_enabled() &&
+                    indexer_scoring && n_tokens == 1 &&
+                    (cparams.kv_unified ? 1 : (int64_t) ubatch.n_seqs_unq) == 1;
+
             inp_kp = build_inp_kpool(mctx_hyb,
                     inp_mem->get_attn()->get_kq_mask(), indexer_scoring,
-                    glm5_gathered_dsa_enabled() && n_tokens == 1);
+                    gathered_decode);
         }
     }
 
@@ -832,9 +838,10 @@ llama_model_glm5next::graph_mtp::graph_mtp(const llama_model & model, const llm_
         if (mctx_hyb->get_idx() != nullptr) {
             indexer_scoring = cparams.n_ctx > glm5next_n_select(hparams);
 
+            // D0 stays OFF the NextN graph until MTP has its own oracle (grokk 060 s2)
             inp_kp = build_inp_kpool(mctx_hyb,
                     inp_mem->get_attn()->get_kq_mask(), indexer_scoring,
-                    glm5_gathered_dsa_enabled() && n_tokens == 1);
+                    /* gathered */ false);
         }
     }
 
