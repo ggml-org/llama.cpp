@@ -342,6 +342,13 @@ jobs:
       actions: write
 
     steps:
+      # the container has no git; install it before checkout so that a real git
+      # repository is created (the get-tag-name action and the build both need it)
+      - name: Install git
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
@@ -360,7 +367,7 @@ jobs:
         shell: bash
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential cmake ninja-build git libssl-dev jq python3-venv
+          apt-get install -y --no-install-recommends build-essential cmake ninja-build libssl-dev jq python3-venv
           # the container ships GCC 13, which does not know the 'sme' march
           # feature used by the armv9.2 CPU variant of GGML_CPU_ALL_VARIANTS
           if [[ "${{ matrix.build }}" == "arm64" ]]; then
