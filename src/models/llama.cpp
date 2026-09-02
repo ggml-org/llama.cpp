@@ -6,6 +6,8 @@ void llama_model_llama::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
+    ml.get_key(LLM_KV_ADAPTER_FEED_FORWARD_LENGTH, hparams.n_ff_adapter, false);
+
     if (hparams.n_expert == 8) {
         switch (hparams.n_layer()) {
             case 32: type = LLM_TYPE_8x7B; break;
@@ -66,7 +68,23 @@ void llama_model_llama::load_arch_tensors(llama_model_loader &) {
             layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
         }
 
-        if (n_expert == 0) {
+        if (hparams.n_ff_adapter > 0)
+        {
+            // sparse adapter MoE: dense FFN plus optional routed adapter tensors
+            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,  n_ff},  0);
+            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff , n_embd},  0);
+            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+
+            layer.ffn_gate_b = create_tensor(tn(LLM_TENSOR_FFN_GATE, "bias", i), {n_ff},   TENSOR_NOT_REQUIRED);
+            layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
+            layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i), {n_ff},   TENSOR_NOT_REQUIRED);
+
+            layer.ffn_moe_adapter_gate = create_tensor(tn(LLM_TENSOR_FFN_MOE_ADAPTER_GATE, "weight", i), {n_embd, n_expert}, TENSOR_NOT_REQUIRED);
+            layer.ffn_moe_adapter_down = create_tensor(tn(LLM_TENSOR_FFN_MOE_ADAPTER_DOWN, "weight", i), {n_embd, hparams.n_ff_adapter, n_expert}, TENSOR_NOT_REQUIRED);
+            layer.ffn_moe_adapter_up   = create_tensor(tn(LLM_TENSOR_FFN_MOE_ADAPTER_UP,   "weight", i), {hparams.n_ff_adapter, n_embd, n_expert}, TENSOR_NOT_REQUIRED);
+        }
+        
+        else if (n_expert == 0) {
             layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
@@ -186,13 +204,47 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
                     LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
-            cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   model.layers[il].ffn_up_s,
+            ggml_tensor * ffn_norm = cur;
+
+            ggml_tensor * dense_out = build_ffn(ffn_norm,
+                    model.layers[il].ffn_up, model.layers[il].ffn_up_b, model.layers[il].ffn_up_s,
                     model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, model.layers[il].ffn_gate_s,
                     model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
-            cb(cur, "ffn_out", il);
+
+            cb(dense_out, "ffn_out", il);
+
+            cur = dense_out;
+
+            if (model.layers[il].ffn_moe_adapter_gate != nullptr)
+            {   
+                ggml_tensor * router_logits = build_lora_mm(
+                        model.layers[il].ffn_moe_adapter_gate, ffn_norm);
+                        
+                cb(router_logits, "ffn_moe_adapter_logits", il);
+
+                ggml_tensor * adapter_out = build_moe_ffn(
+                        dense_out,
+                        nullptr,
+                        model.layers[il].ffn_moe_adapter_down,
+                        nullptr,
+                        model.layers[il].ffn_moe_adapter_up,
+                        nullptr,
+                        n_expert,
+                        n_expert_used,
+                        LLM_FFN_GELU,
+                        true,
+                        hparams.expert_weights_scale,
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        il,
+                        router_logits);
+                cb(adapter_out, "ffn_moe_adapter_out", il);
+
+                cur = ggml_add(ctx0, dense_out, adapter_out);
+                cb(cur, "ffn_out", il);
+            }
+
         } else {
             // MoE branch
             cur = build_norm(ffn_inp,
