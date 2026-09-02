@@ -289,6 +289,13 @@ std::unique_ptr<llm_graph_context> llama_model_qwen4exp::build_arch_graph(const 
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
         return std::make_unique<graph_mtp>(*this, params);
     }
+    // a draft-only export declares the trunk but ships the MTP block alone, so the trunk
+    // tensors are null and only the MTP graph above is buildable. a self-contained draft
+    // keeps token_embd, so it passes the borrow check and would reach here and walk nulls.
+    if (hc_head_norm == nullptr) {
+        throw std::runtime_error("this model is an MTP draft head without a trunk; "
+                                 "load it as a draft of its target model (-md), not on its own");
+    }
     return std::make_unique<graph>(*this, params);
 }
 
