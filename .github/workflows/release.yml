@@ -356,6 +356,8 @@ jobs:
 
       - name: Dependencies
         id: depends
+        # container jobs default to sh (dash); need bash for the [[ ]] below
+        shell: bash
         run: |
           apt-get update
           apt-get install -y --no-install-recommends build-essential cmake ninja-build libssl-dev jq python3-venv
