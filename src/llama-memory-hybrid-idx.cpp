@@ -647,8 +647,9 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(llama_memory_hy
         std::vector<uint32_t>() : std::vector<uint32_t>{ mem->get_mem_idx()->get_n_stream() }),
     ctx_idx(mem->get_mem_idx() == nullptr ? nullptr :
         new llama_kv_cache_context(mem->get_mem_idx())) {
-    if (mem->get_mem_idx() != nullptr && mem->get_kpool() > 0) {
-        kpool_states.push_back(kpool_build_layout());
+    if (kpool_track()) {
+        kpool_st = std::make_unique<kpool_state>(kpool_build_layout());
+        i_kpool  = 0;
     }
 }
 
@@ -673,7 +674,6 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(
     ns_ubatch(llama_memory_hybrid_idx_ns(sinfos_idx)),
     ctx_idx(mem->get_mem_idx() == nullptr ? nullptr :
         new llama_kv_cache_context(mem->get_mem_idx(), std::move(sinfos_idx), ubatches)) {
-    kpool_track = mem->get_mem_idx() != nullptr && mem->get_kpool() > 0;
     // Sequence edits require a full re-pool.
     kpool_stale_batch = mem->kpool_cache_is_stale();
 }
@@ -703,14 +703,17 @@ bool llama_memory_hybrid_idx_context::apply() {
     }
 
     // Fix the pool layout of this ubatch.
-    if (res && kpool_track) {
-        GGML_ASSERT(i_cur <= kpool_states.size());
-        kpool_states.resize(i_cur);
-
-        kpool_states.push_back(kpool_build_state(get_ubatch()));
+    if (res && kpool_track()) {
+        kpool_st = std::make_unique<kpool_state>(kpool_build_state(get_ubatch()));
+        i_kpool  = i_cur;
     }
 
     return res;
+}
+
+bool llama_memory_hybrid_idx_context::kpool_track() const {
+    // Derived from mem instead of being cached.
+    return mem != nullptr && mem->get_mem_idx() != nullptr && mem->get_kpool() > 0 && !ns_ubatch.empty();
 }
 
 const llama_kv_cache_context * llama_memory_hybrid_idx_context::get_idx() const {
@@ -870,9 +873,9 @@ llama_memory_hybrid_idx_context::kpool_state llama_memory_hybrid_idx_context::kp
 }
 
 const llama_memory_hybrid_idx_context::kpool_state & llama_memory_hybrid_idx_context::kpool_cur() const {
-    GGML_ASSERT(i_cur < kpool_states.size() && "k-pool state read before apply()");
+    GGML_ASSERT(kpool_st != nullptr && i_kpool == i_cur && "k-pool state read before apply()");
 
-    return kpool_states[i_cur];
+    return *kpool_st;
 }
 
 uint32_t llama_memory_hybrid_idx_context::get_n_kpool() const {

@@ -180,10 +180,15 @@ private:
     kpool_state kpool_build_layout() const;
     kpool_state kpool_build_state(const llama_ubatch & ubatch) const;
     const kpool_state & kpool_cur() const;
-    std::vector<kpool_state> kpool_states;
+
+    // unique_ptr because kpool_state is incomplete here.
+    std::unique_ptr<kpool_state> kpool_st;
+
+    // The ubatch kpool_st was built for, guards against reads before apply.
+    size_t i_kpool = SIZE_MAX;
 
     // Whether this context tracks k-pool states.
-    bool kpool_track = false;
+    bool kpool_track() const;
 
     // Clear a pending full re-pool only after the first ubatch succeeds
     bool kpool_stale_batch = false;
