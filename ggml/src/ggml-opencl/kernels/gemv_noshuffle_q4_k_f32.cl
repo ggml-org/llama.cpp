@@ -235,6 +235,23 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
     uint LINE_STRIDE_A  = M / 2;
     uint BLOCK_STRIDE_A = NSUBGROUPS * M;
 
+    // The x-grid is padded to CEIL_DIV(ne01/2,64)*64, so when ne01 % 128 != 0 the
+    // tail lanes hold gid >= ne01/2. The output stores below are guarded, but the
+    // input fetches are not: src0_d and src0_m are raw global half2 pointers,
+    // src0_s is a raw global uchar pointer, and read_imageui on an
+    // image1d_buffer_t is UNDEFINED out of range -- an image clamps only for
+    // SAMPLER reads, which these are not. Those lanes therefore read past the end
+    // of all three allocations. For a [2816, 2112] weight (2112 % 128 == 64) the
+    // top tail lane is gid = 1087 while only gid < 1056 is backed, and it runs
+    // 32 half2 past src0_d/src0_m, 31 uints past the quant image, and 63 bytes
+    // past src0_s.
+    //
+    // Clamp the row used for every fetch. The lanes stay ACTIVE, which the
+    // sub_group_broadcast in the dequant macros requires, and their results are
+    // still discarded by the existing output guard. No-op and byte-identical
+    // whenever ne01 % 128 == 0.
+    uint gid_s = min(gid, LINE_STRIDE_A - 1);
+
     private uint4     regA;
     private half2     regS;
     private half2     regM;
@@ -246,10 +263,10 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
         uint sb = k / 8;
         uint j  = k % 8;
 
-        half2 d   = src0_d[gid + sb * LINE_STRIDE_A];
-        half2 dm  = src0_m[gid + sb * LINE_STRIDE_A];
+        half2 d   = src0_d[gid_s + sb * LINE_STRIDE_A];
+        half2 dm  = src0_m[gid_s + sb * LINE_STRIDE_A];
 
-        global const uchar * sc0 = src0_s + sb * 12 * M + 2 * gid;
+        global const uchar * sc0 = src0_s + sb * 12 * M + 2 * gid_s;
         global const uchar * sc1 = sc0 + 1;
 
         uchar sv0, mn0, sv1, mn1;
@@ -265,20 +282,20 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
         }
 
         // load half weights for two blocks in consecutive rows
-        regA.s0 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
-        regA.s1 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
-        regA.s2 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
-        regA.s3 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
+        regA.s0 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
+        regA.s1 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
+        regA.s2 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
+        regA.s3 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
 #ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_sgbroadcast_8_hi(totalSum, as_ushort8(regA), regS, regM, regB);
 #else
         dequantizeBlockAccum_ns_sgbroadcast_1_hi(totalSum, as_ushort8(regA), regS, regM, regB);
 #endif // VECTOR_SUB_GROUP_BROADCAST
 
-        regA.s0 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
-        regA.s1 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
-        regA.s2 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
-        regA.s3 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
+        regA.s0 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
+        regA.s1 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
+        regA.s2 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
+        regA.s3 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
 #ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_sgbroadcast_8_lo(totalSum, as_ushort8(regA), regS, regM, regB);
 #else
