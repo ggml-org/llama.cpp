@@ -2515,6 +2515,9 @@ struct llama_model_kimi_k3 : public llama_model_base {
 
 struct llama_model_glm5_next : public llama_model_base {
     llama_model_glm5_next(const struct llama_model_params & params) : llama_model_base(params) {}
+
+    // False for trunk only GGUFs and no_mtp loads.
+    bool mtp_ready = false;
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
