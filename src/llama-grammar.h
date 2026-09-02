@@ -88,6 +88,7 @@ struct llama_grammar_parser {
     std::map<std::string, uint32_t> symbol_ids;
 
     llama_grammar_rules rules;
+    uint32_t parse_depth = 0; // current (...) nesting depth, capped by LLAMA_GRAMMAR_MAX_NESTING
 
     llama_grammar_parser(const struct llama_vocab * vocab = nullptr) : vocab(vocab) {}
 
