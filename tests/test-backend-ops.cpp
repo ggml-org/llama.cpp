@@ -1227,6 +1227,11 @@ struct test_case {
         }
     }
 
+    // re-draw data-dependent inputs between timed perf iterations
+    virtual void reinit_perf_iter(ggml_context * ctx) {
+        GGML_UNUSED(ctx);
+    }
+
     virtual size_t op_size(ggml_tensor * t) {
         size_t size = ggml_nbytes(t);
         // add source tensors
@@ -1661,6 +1666,9 @@ struct test_case {
             total_time_us += end_time - start_time;
             total_mem += mem;
             total_runs += n_runs;
+
+            // re-draw any data-dependent inputs (expert ids) outside the timed region
+            reinit_perf_iter(ctx.get());
         } while (total_time_us < 1000*1000); // run for at least 1 second
 
         // Create test result
@@ -4741,25 +4749,31 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     }
 };
 
-static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
+static void init_mul_mat_id_ids(ggml_context * ctx, int n_mats) {
     std::random_device rd;
     std::default_random_engine rng(rd());
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-        if (t->type == GGML_TYPE_I32) {
-            if (ggml_is_view_op(t->op)) { continue; }
-            // ids
-            for (int64_t r = 0; r < ggml_nrows(t); r++) {
-                std::vector<int32_t> data(t->ne[0]);
-                for (int i = 0; i < t->ne[0]; i++) {
-                    data[i] = i % n_mats;
-                }
-                std::shuffle(data.begin(), data.end(), rng);
-                ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+        if (t->type != GGML_TYPE_I32 || ggml_is_view_op(t->op)) {
+            continue;
+        }
+        for (int64_t r = 0; r < ggml_nrows(t); r++) {
+            std::vector<int32_t> data(t->ne[0]);
+            for (int i = 0; i < t->ne[0]; i++) {
+                data[i] = i % n_mats;
             }
-        } else {
+            std::shuffle(data.begin(), data.end(), rng);
+            ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+        }
+    }
+}
+
+static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->type != GGML_TYPE_I32) {
             init_tensor_uniform(t);
         }
     }
+    init_mul_mat_id_ids(ctx, n_mats);
 }
 
 // GGML_OP_MUL_MAT_ID
@@ -4825,6 +4839,10 @@ struct test_mul_mat_id : public test_case {
 
     void initialize_tensors(ggml_context * ctx) override {
         init_mul_mat_id_tensors(ctx, n_mats);
+    }
+
+    void reinit_perf_iter(ggml_context * ctx) override {
+        init_mul_mat_id_ids(ctx, n_mats);
     }
 };
 
@@ -9522,6 +9540,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16, 16, 256, {2, 3}, {1, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16, 16, 256, {2, 3}, {1, 1}, {0, 1, 3, 2}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16, 16, 256, {2, 3}, {1, 1}, {0, 3, 2, 1}));
+
+    // token-tile boundary coverage. With n_used == n_mats every token routes to every expert, so
+    // each expert receives exactly n rows, with no dependence on the random draw. mul_mm_id is used
+    // from 32 tokens up: n = 32, 33, 47, 48, 49 reach it, leaving a last tile of 32, 1, 15, 16 and
+    // 17 rows - 16 and 17 straddle the point where the upper half stops being skipped. The smaller
+    // n cover the same row counts on the mat-vec path.
+    for (ggml_type type_a : {GGML_TYPE_Q4_K, GGML_TYPE_IQ2_XS, GGML_TYPE_F16}) {
+        for (int n : {1, 15, 16, 17, 31, 32, 33, 47, 48, 49}) {
+            test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 4, false, 512, n, 256));
+        }
+        // experts that receive no rows at all
+        test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 8, 1, false, 512, 1, 256));
+    }
 
     for (ggml_type type_a : other_types) {
         for (ggml_type type_b : {GGML_TYPE_F32}) {
