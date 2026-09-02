@@ -344,8 +344,9 @@ public:
     ggml_tensor * self_k_idxs = nullptr; // I64 [n_batch]
     ggml_tensor * self_v_idxs = nullptr; // I64 [n_batch] or [n_batch*n_embd_v_gqa]
 
-    ggml_tensor * self_kq_mask     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]
+    ggml_tensor * self_kq_mask     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]; null on maskless gathered graphs (E0c)
     ggml_tensor * self_kq_mask_cnv = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
+    int64_t       b_n_kv           = -1;      // E0c: width witness when the mask is absent
 
     // note: assumes v_rot^2 == I
     ggml_tensor * self_k_rot = nullptr;
@@ -390,6 +391,7 @@ public:
     ggml_tensor * self_v_idxs = nullptr; // I64 expanded [n_batch*w] — Patch B mirror only
 
     ggml_tensor * self_kq_mask     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]
+    int64_t       b_n_kv       = -1;      // E0c: width witness when the mask is absent
     ggml_tensor * self_kq_mask_cnv = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
 
     const llama_hparams hparams;
@@ -1345,7 +1347,7 @@ struct llm_graph_context {
     //
 
     llm_graph_input_mem_hybrid * build_inp_mem_hybrid() const;
-    llm_graph_input_mem_hybrid_k * build_inp_mem_hybrid_k() const;
+    llm_graph_input_mem_hybrid_k * build_inp_mem_hybrid_k(bool maskless = false) const;
 
     llm_graph_input_mem_hybrid_iswa * build_inp_mem_hybrid_iswa() const;
 

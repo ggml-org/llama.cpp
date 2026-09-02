@@ -511,7 +511,9 @@ void llm_graph_input_attn_k::set_input(const llama_ubatch * ubatch) {
         mctx->set_input_v_idxs(self_v_idxs, ubatch);   // Patch B mirror
     }
 
-    mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+    if (self_kq_mask) {
+        mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+    }
 }
 
 bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
@@ -530,7 +532,12 @@ bool llm_graph_input_attn_k::can_reuse_impl(const llm_graph_params & params) {
         (int64_t) self_v_idxs->ne[0] ==
             (int64_t) params.ubatch.n_tokens * mctx->mirror_width_max();
 
-    res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+    if (self_kq_mask) {
+        res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+    } else {
+        // maskless graph: the width witness is the stored build-time n_kv
+        res &= b_n_kv == (int64_t) mctx->get_n_kv();
+    }
 
     return res;
 }
@@ -1099,7 +1106,9 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
     mctx->get_attn()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
     mctx->get_attn()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);
 
-    mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
+    if (inp_attn->self_kq_mask) {
+        mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
+    }
 
     if (inp_attn->self_k_rot) {
         mctx->get_attn()->set_input_k_rot(inp_attn->self_k_rot);
@@ -1132,7 +1141,11 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
     res &= inp_attn->self_k_idxs->ne[0] == params.ubatch.n_tokens;
   //res &= inp_attn->self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
-    res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
+    if (inp_attn->self_kq_mask) {
+        res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
+    } else {
+        res &= inp_attn->b_n_kv == (int64_t) mctx->get_attn()->get_n_kv();
+    }
 
     res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
 
@@ -1155,7 +1168,9 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
         mctx->get_attn()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);   // Patch B mirror
     }
 
-    mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
+    if (inp_attn->self_kq_mask) {
+        mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
+    }
 
     const int64_t n_rs = mctx->get_recr()->get_n_rs();
 
@@ -1179,7 +1194,11 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
 
     res &= inp_attn->self_k_idxs->ne[0] == params.ubatch.n_tokens;
 
-    res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
+    if (inp_attn->self_kq_mask) {
+        res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
+    } else {
+        res &= inp_attn->b_n_kv == (int64_t) mctx->get_attn()->get_n_kv();
+    }
 
     res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
 
@@ -2955,7 +2974,8 @@ static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
      const llama_ubatch & ubatch,
     const llama_hparams & hparams,
     const llama_cparams & cparams,
-    const llama_kv_cache_context * mctx_cur) {
+    const llama_kv_cache_context * mctx_cur,
+                     bool skip_kq_mask = false) {
 
     auto inp = std::make_unique<llm_graph_input_attn_k>(hparams, cparams, mctx_cur);
 
@@ -2968,8 +2988,13 @@ static std::unique_ptr<llm_graph_input_attn_k> build_attn_inp_k_impl(
             inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);   // Patch B
         }
 
-        inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
-        inp->self_kq_mask_cnv = inp->self_kq_mask;
+        // E0c: a maskless (gathered) graph never consumes the dense KQ mask; an
+        // unconsumed input is never allocated and the fill would fault (058 class)
+        if (!skip_kq_mask) {
+            inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
+            inp->self_kq_mask_cnv = inp->self_kq_mask;
+        }
+        inp->b_n_kv = mctx_cur->get_n_kv();
     }
 
     return inp;
@@ -3646,11 +3671,11 @@ llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
     return (llm_graph_input_mem_hybrid *) res->add_input(std::move(inp));
 }
 
-llm_graph_input_mem_hybrid_k * llm_graph_context::build_inp_mem_hybrid_k() const {
+llm_graph_input_mem_hybrid_k * llm_graph_context::build_inp_mem_hybrid_k(bool maskless) const {
     const auto * mctx_cur = static_cast<const llama_memory_hybrid_context *>(mctx);
 
     auto inp_rs   = build_rs_inp_impl     (ctx0, ubatch, mctx_cur->get_recr());
-    auto inp_attn = build_attn_inp_k_impl(ctx0, ubatch, hparams, cparams, mctx_cur->get_attn());
+    auto inp_attn = build_attn_inp_k_impl(ctx0, ubatch, hparams, cparams, mctx_cur->get_attn(), maskless);
 
     auto inp = std::make_unique<llm_graph_input_mem_hybrid_k>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
 
@@ -3695,10 +3720,11 @@ llm_graph_input_kpool * llm_graph_context::build_inp_kpool(
 
         const int64_t n_pools = llama_kpool_n_pools(n_kv, kpool, n_ps);
 
-        GGML_ASSERT(kq_mask->ne[0] == n_kv && kq_mask->ne[3] == n_stream);
+        GGML_ASSERT(kq_mask == nullptr || (kq_mask->ne[0] == n_kv && kq_mask->ne[3] == n_stream));
 
         // the selection terms below exist only for real queries
-        GGML_ASSERT(kq_mask->ne[1] == n_tps && "the pooled indexer needs an unpadded KQ mask");
+        GGML_ASSERT(kq_mask == nullptr ||
+                (kq_mask->ne[1] == n_tps && "the pooled indexer needs an unpadded KQ mask"));
 
         inp->pool_cells = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool*n_pools, n_stream);
         ggml_set_input(inp->pool_cells);
@@ -3716,7 +3742,10 @@ llm_graph_input_kpool * llm_graph_context::build_inp_kpool(
             ggml_set_name(inp->pool_bias_f16, "kpool_pool_bias_f16");
         }
 
-        // lossless in f16 (only 0.0f and -INFINITY), and f16 + f32 -> f16 adds the KQ mask uncast
+        // lossless in f16 (only 0.0f and -INFINITY), and f16 + f32 -> f16 adds the KQ mask uncast.
+        // E0c: the maskless gathered graph consumes neither dense mask — creating
+        // them unconsumed would leave unallocated inputs for the host fill (058)
+        if (!gathered) {
         inp->sel_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F16, n_kv, n_tps, 1, n_stream);
         ggml_set_input(inp->sel_mask);
         ggml_set_name(inp->sel_mask, "kpool_sel_mask");
@@ -3724,6 +3753,7 @@ llm_graph_input_kpool * llm_graph_context::build_inp_kpool(
         inp->cand_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F16, n_kv, n_tps, 1, n_stream);
         ggml_set_input(inp->cand_mask);
         ggml_set_name(inp->cand_mask, "kpool_cand_mask");
+        }
 
         // D0 gathered decode inputs. ONLY when the gathered graph will consume them:
         // an input tensor no node reads is never allocated, so the host fill would
@@ -3918,15 +3948,13 @@ ggml_tensor * llm_graph_context::build_attn_sparse_gathered(
         }
     }
 
-    const auto & kq_mask = inp->get_kq_mask();
-
     // decode-1, single stream only (the gate in the model guarantees this)
     GGML_ASSERT(top_k->ne[1] == 1 && top_k->ne[2] == 1);
-    GGML_ASSERT(kq_mask->ne[1] == 1 && kq_mask->ne[3] == 1);
     GGML_ASSERT(slot_valid->ne[0] == top_k->ne[0]);
     GGML_ASSERT(ggml_are_same_shape(tail_cells, tail_valid));
 
-    const int64_t n_kv  = kq_mask->ne[0];
+    // explicit active width — never derived from a mask that no longer exists
+    const int64_t n_kv  = mctx_cur->get_n_kv();
     const int64_t n_sel = top_k->ne[0] + tail_cells->ne[0];
 
     // printed at graph CONSTRUCTION (codex 063 s6) — reservation builds decode-1
@@ -3947,46 +3975,20 @@ ggml_tensor * llm_graph_context::build_attn_sparse_gathered(
             ggml_reshape_1d(ctx0, tail_cells, tail_cells->ne[0]), 0);
     cb(ids, "gathered_ids", il);
 
-    // per-CELL additive masks, gathered SEPARATELY then added compact (codex 059 P0:
-    // the dense cand+kq add ran once per DSA layer = eleven O(n_kv) ops per token).
-    // never gather the causal mask alone (grokk 057 s3): padded picks name cell 0 and
-    // cell 0 can be a real visible token; only cand_mask keeps those -inf.
-    auto gather_mask = [&](ggml_tensor * m, const char * name) {
-        ggml_tensor * rows = ggml_reshape_3d(ctx0, m, 1, n_kv, 1);
-        ggml_tensor * out  = ggml_get_rows(ctx0, rows, ids); // -> F32 [1, n_sel, 1]
-        cb(out, name, il);
-        return ggml_reshape_2d(ctx0, out, n_sel, 1);
-    };
-    ggml_tensor * cand_g = gather_mask(cand_mask, "gathered_cand_rows");
-    ggml_tensor * kq_g   = gather_mask(kq_mask,   "gathered_kq_rows");
-    ggml_tensor * mask_g = ggml_add(ctx0, cand_g, kq_g);
+    // E0b MASKLESS (codex 066, grokk 067, proven by E0a): the slot certificate
+    // subsumes cand+causal on this lane. Fail closed on the lane premises —
+    // outside them the dense masks can encode facts the certificate does not.
+    GGML_ASSERT(cparams.causal_attn && "maskless gathered decode requires causal attention");
+    GGML_ASSERT(!hparams.use_alibi && "maskless gathered decode: no ALiBi");
+    GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "maskless gathered decode: no SWA");
+    GGML_ASSERT(!ubatch.is_pos_2d() && "maskless gathered decode: scalar positions only");
 
-    // per-SLOT validity: expanded pool_bias of the selected pools, then the tail's
-    ggml_tensor * slot_mask = ggml_concat(ctx0,
+    ggml_tensor * mask_g = ggml_concat(ctx0,
             ggml_reshape_1d(ctx0, slot_valid, slot_valid->ne[0]),
             ggml_reshape_1d(ctx0, tail_valid, tail_valid->ne[0]), 0);
-    slot_mask = ggml_reshape_2d(ctx0, slot_mask, n_sel, 1);
-
-    mask_g = ggml_add(ctx0, mask_g, slot_mask);
     mask_g = ggml_reshape_4d(ctx0, mask_g, n_sel, 1, 1, 1);
     cb(mask_g, "gathered_mask", il);
 
-    // E0a (codex 066 s4 / grokk 067 s2): live certificate-subsumption invariant.
-    // Every mask value is exactly 0 or -inf, so exp() maps class to {1, 0} and
-    // sum(|exp(old) - exp(cert)|) is 0 iff cand_g+kq_g+slot == slot in class.
-    // Debug env only; read back and reported after compute in llama-context.
-    static const bool e0a_check = getenv("LLAMA_GLM5_E0A") != nullptr;
-    if (e0a_check) {
-        // backend-proof: expose BOTH raw masks as named graph outputs and do the
-        // 0-vs--inf class comparison on the host (a graph-side exp/abs/sum chain
-        // proved unreliable across backends for this shape)
-        ggml_tensor * cert = ggml_reshape_4d(ctx0, slot_mask, n_sel, 1, 1, 1);
-        ggml_format_name(cert,   "e0a_cert-%d", il);
-        ggml_tensor * oldm = ggml_cont(ctx0, mask_g);
-        ggml_format_name(oldm,   "e0a_old-%d", il);
-        ggml_build_forward_expand(gf, cert);
-        ggml_build_forward_expand(gf, oldm);
-    }
 
     // K rows: [512, 1, n_kv, 1] -> dim-1 view -> gather -> cast -> [512, 1, n_sel, 1].
     // the final reshape is load-bearing (grokk 057 s3): build_attn_mha permutes (0,2,1,3)

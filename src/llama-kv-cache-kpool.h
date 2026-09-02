@@ -47,6 +47,8 @@ void llama_kv_cache_set_input_kpool(
               ggml_tensor    * cand_mask,
               ggml_tensor    * tail_cells,   // optional, D0 gathered decode
               ggml_tensor    * tail_valid,   // optional, with tail_cells
+                  int64_t      n_kv_arg,     // explicit active width (E0c)
+                  int64_t      n_ns_arg,     // explicit stream count when masks are null
               ggml_tensor    * pool_reps,
               ggml_tensor    * new_pool_cells,
               ggml_tensor    * new_pool_reps,

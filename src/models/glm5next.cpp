@@ -567,9 +567,6 @@ ggml_tensor * llama_model_glm5next::graph::build_dsa_layer(
 
     if (top_k && gathered) {
         GGML_ASSERT(slot_valid != nullptr && inp_kp->tail_cells != nullptr);
-        // sel_mask is not consumed by the gathered graph, but set_input still fills it
-        // (one shared host fill for all paths); expand the leaf so it stays allocated
-        ggml_build_forward_expand(gf, inp_kp->sel_mask);
         cur = build_attn_sparse_gathered(inp_attn,
                 layer.wo, nullptr, nullptr,
                 q, k, k, nullptr, nullptr, layer.wv_b,
@@ -650,7 +647,13 @@ llama_model_glm5next::graph::graph(const llama_model & model, const llm_graph_pa
     ggml_tensor * inp         = build_inp_embd(model.tok_embd);
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    llm_graph_input_mem_hybrid_k * inp_mem = build_inp_mem_hybrid_k();
+    // E0c: the gathered decision is computed BEFORE the hybrid input so a
+    // maskless graph never creates (or fills) the dense KQ mask (codex 066 s4)
+    const bool fbl_gathered_decode = glm5_gathered_dsa_enabled() &&
+            cparams.n_ctx > glm5next_n_select(hparams) && n_tokens == 1 &&
+            (cparams.kv_unified ? 1 : (int64_t) ubatch.n_seqs_unq) == 1;
+
+    llm_graph_input_mem_hybrid_k * inp_mem = build_inp_mem_hybrid_k(fbl_gathered_decode);
 
     // one map for the whole ubatch; nothing in it depends on the layer. gated on n_ctx,
     // not n_kv, which grows and would flip the graph topology mid-run
@@ -662,16 +665,10 @@ llama_model_glm5next::graph::graph(const llama_model & model, const llm_graph_pa
         if (mctx_hyb->get_idx() != nullptr) {
             indexer_scoring = cparams.n_ctx > glm5next_n_select(hparams);
 
-            // ONE owner for the D0 decision (codex 059 / grokk 060): the same boolean
-            // creates the tail inputs, requests slot_valid, and picks the builder.
-            // Producer/consumer gate disagreement was the 058 crash class.
-            const bool gathered_decode = glm5_gathered_dsa_enabled() &&
-                    indexer_scoring && n_tokens == 1 &&
-                    (cparams.kv_unified ? 1 : (int64_t) ubatch.n_seqs_unq) == 1;
-
+            // ONE owner for the D0 decision; computed above, before the hybrid input
             inp_kp = build_inp_kpool(mctx_hyb,
                     inp_mem->get_attn()->get_kq_mask(), indexer_scoring,
-                    gathered_decode);
+                    fbl_gathered_decode);
         }
     }
 

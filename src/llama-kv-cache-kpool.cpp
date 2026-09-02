@@ -74,6 +74,8 @@ void llama_kv_cache_set_input_kpool(
               ggml_tensor    * cand_mask,
               ggml_tensor    * tail_cells,
               ggml_tensor    * tail_valid,
+                  int64_t      n_kv_arg,
+                  int64_t      n_ns_arg,
               ggml_tensor    * pool_reps,
               ggml_tensor    * new_pool_cells,
               ggml_tensor    * new_pool_reps,
@@ -87,22 +89,29 @@ void llama_kv_cache_set_input_kpool(
 
     GGML_ASSERT(ggml_backend_buffer_is_host(pool_cells->buffer));
     GGML_ASSERT(ggml_backend_buffer_is_host(pool_bias ->buffer));
+    GGML_ASSERT((sel_mask == nullptr) == (cand_mask == nullptr));
+    if (sel_mask) {
     GGML_ASSERT(ggml_backend_buffer_is_host(sel_mask  ->buffer));
     GGML_ASSERT(ggml_backend_buffer_is_host(cand_mask ->buffer));
+    }
 
     GGML_ASSERT(pool_cells->type == GGML_TYPE_I32);
     GGML_ASSERT(pool_bias ->type == GGML_TYPE_F32);
+    if (sel_mask) {
     GGML_ASSERT((sel_mask->type == GGML_TYPE_F16 || sel_mask->type == GGML_TYPE_F32) &&
             "sel_mask must be f16 or f32");
     GGML_ASSERT(cand_mask->type == sel_mask->type && "both masks must have the KQ mask's type");
-
-    GGML_ASSERT(ggml_is_contiguous(pool_cells));
-    GGML_ASSERT(ggml_is_contiguous(pool_bias));
     GGML_ASSERT(ggml_is_contiguous(sel_mask));
     GGML_ASSERT(ggml_is_contiguous(cand_mask));
+    GGML_ASSERT(sel_mask->ne[0] == n_kv_arg && "explicit n_kv must match the masks");
+    }
+    GGML_ASSERT(ggml_is_contiguous(pool_cells));
+    GGML_ASSERT(ggml_is_contiguous(pool_bias));
 
-    const int64_t n_kv     = sel_mask->ne[0];
-    const int64_t n_ns     = sel_mask->ne[3];
+    // E0c: n_kv is an explicit argument (grokk 067/070) — never inferred from
+    // a mask that may not exist
+    const int64_t n_kv     = n_kv_arg;
+    const int64_t n_ns     = sel_mask ? sel_mask->ne[3] : n_ns_arg;
     const int64_t r        = kpool;
     const int64_t n_tokens = ubatch->n_tokens;
 
@@ -117,13 +126,16 @@ void llama_kv_cache_set_input_kpool(
     GGML_ASSERT(pool_cells->ne[0] % r == 0);
     GGML_ASSERT(n_pools >= 2*n_ps);
     GGML_ASSERT(pool_cells->ne[1] == n_ns);
-    GGML_ASSERT(sel_mask->ne[2] == 1);
-    GGML_ASSERT(ggml_are_same_shape(cand_mask, sel_mask));
+    if (sel_mask) {
+        GGML_ASSERT(sel_mask->ne[2] == 1);
+        GGML_ASSERT(ggml_are_same_shape(cand_mask, sel_mask));
+    }
     GGML_ASSERT(pool_bias->ne[0] == n_pools && pool_bias->ne[2] == n_ns);
     GGML_ASSERT(n_tokens % n_ns == 0);
 
     const int64_t n_tps  = n_tokens/n_ns;
-    const int64_t n_padq = sel_mask->ne[1];
+    // maskless gathered decode has no query-pad tensor; n_tps==1 on that lane
+    const int64_t n_padq = sel_mask ? sel_mask->ne[1] : n_tps;
 
     GGML_ASSERT(pool_bias->ne[1] == n_tps);
     GGML_ASSERT(n_padq >= n_tps);
@@ -183,11 +195,11 @@ void llama_kv_cache_set_input_kpool(
     int32_t * dst_pool_cells = (int32_t *) pool_cells->data;
     float   * dst_bias       = bias ? (float *) bias->data : nullptr;
     float   * dst_pool_bias  = (float   *) pool_bias ->data;
-    char    * dst_sel_mask   = (char    *) sel_mask  ->data;
-    char    * dst_cand_mask  = (char    *) cand_mask ->data;
+    char    * dst_sel_mask   = sel_mask  ? (char *) sel_mask  ->data : nullptr;
+    char    * dst_cand_mask  = cand_mask ? (char *) cand_mask ->data : nullptr;
 
-    const bool   mask_f16 = sel_mask->type == GGML_TYPE_F16;
-    const size_t mask_ts  = ggml_type_size(sel_mask->type);
+    const bool   mask_f16 = sel_mask ? (sel_mask->type == GGML_TYPE_F16) : true;
+    const size_t mask_ts  = sel_mask ? ggml_type_size(sel_mask->type) : 0;
 
     // -1 marks a cell with no usable pool; host side only, never copied into cell_pool
     std::vector<int32_t>   pool_of(n_kv);
@@ -203,8 +215,8 @@ void llama_kv_cache_set_input_kpool(
 
     for (int64_t s = 0; s < n_ns; ++s) {
         int32_t * cur_pool_cells = dst_pool_cells + s*(r*n_pools);
-        char    * cur_sel_mask   = dst_sel_mask   + s*(n_padq*n_kv)*mask_ts;
-        char    * cur_cand_mask  = dst_cand_mask  + s*(n_padq*n_kv)*mask_ts;
+        char    * cur_sel_mask   = dst_sel_mask  ? dst_sel_mask  + s*(n_padq*n_kv)*mask_ts : nullptr;
+        char    * cur_cand_mask  = dst_cand_mask ? dst_cand_mask + s*(n_padq*n_kv)*mask_ts : nullptr;
         float   * cur_pool_bias  = dst_pool_bias  + s*(n_tps*n_pools);
 
         std::fill(cur_pool_cells, cur_pool_cells + r*n_pools, 0);
@@ -230,7 +242,9 @@ void llama_kv_cache_set_input_kpool(
         }
 
         // the token loop writes rows < n_tps in full; only the padding rows need clearing
-        if (mask_f16) {
+        if (!cur_sel_mask) {
+            // maskless gathered graph: no dense mask to pad (E0c)
+        } else if (mask_f16) {
             kpool_mask_fill((ggml_fp16_t *) (cur_sel_mask  + n_tps*n_kv*mask_ts), (n_padq - n_tps)*n_kv);
             kpool_mask_fill((ggml_fp16_t *) (cur_cand_mask + n_tps*n_kv*mask_ts), (n_padq - n_tps)*n_kv);
         } else {
@@ -432,10 +446,12 @@ void llama_kv_cache_set_input_kpool(
                 const int64_t bo_vis = std::max<int64_t>(0, tail_start/r - b_base);
 
                 float * cur_bias = dst_bias ? dst_bias + i*n_kv : nullptr;
-                char  * cur_sel  = cur_sel_mask  + ii*n_kv*mask_ts;
-                char  * cur_cand = cur_cand_mask + ii*n_kv*mask_ts;
+                char  * cur_sel  = cur_sel_mask  ? cur_sel_mask  + ii*n_kv*mask_ts : nullptr;
+                char  * cur_cand = cur_cand_mask ? cur_cand_mask + ii*n_kv*mask_ts : nullptr;
 
-                if (mask_f16) {
+                if (!sel_mask) {
+                    // masks absent on the maskless gathered graph (E0c)
+                } else if (mask_f16) {
                     kpool_mask_row((ggml_fp16_t *) cur_sel, (ggml_fp16_t *) cur_cand,
                             pos_at.data(), pool_of.data(), n_kv, q, tail_start, bo_vis);
                 } else {
@@ -623,6 +639,8 @@ void llm_graph_input_kpool::set_input(const llama_ubatch * ubatch) {
             /* cell_pool */ nullptr, pool_cells, /* bias */ nullptr, pool_bias,
             sel_mask, cand_mask,
             tail_cells, tail_valid,
+            (int64_t) mctx_attn->get_n_kv(),
+            (int64_t) (tail_cells ? tail_cells->ne[2] : 1),
             pool_reps, new_pool_cells, new_pool_reps,
             strm_of.empty() ? nullptr : strm_of.data(),
             pool_reps ? (int64_t) mctx_idx->get_kv()->get_size() : 0,
