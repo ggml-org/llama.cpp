@@ -602,6 +602,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
     const int64_t n_kv = k_all->ne[2];
 
     ggml_tensor * kg_all     = ggml_view_2d(ctx0, k_all, 2*n_embd_indexer, n_kv, k_all->nb[2], 0);
+    // View into the persistent pooled slots of the idx cache. Guarded by mem_idx_stale.
     ggml_tensor * pooled_all = ggml_view_2d(ctx0, k_all,   n_embd_indexer, n_kv, k_all->nb[2],
                                             ggml_row_size(k_all->type, 2*n_embd_indexer));
 

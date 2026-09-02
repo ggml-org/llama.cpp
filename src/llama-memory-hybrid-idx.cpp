@@ -157,7 +157,7 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
 
     if (mem_idx) {
         mem_idx->seq_rm(seq_id, p0, p1);
-        kpool_cache_stale = true;
+        mem_idx_stale = true;
     }
 
     return get_mem_attn()->seq_rm(seq_id, p0, p1);
@@ -168,7 +168,7 @@ void llama_memory_hybrid_idx::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_i
 
     if (mem_idx) {
         mem_idx->seq_cp(seq_id_src, seq_id_dst, p0, p1);
-        kpool_cache_stale = true;
+        mem_idx_stale = true;
     }
 }
 
@@ -177,7 +177,7 @@ void llama_memory_hybrid_idx::seq_keep(llama_seq_id seq_id) {
 
     if (mem_idx) {
         mem_idx->seq_keep(seq_id);
-        kpool_cache_stale = true;
+        mem_idx_stale = true;
     }
 }
 
@@ -186,7 +186,7 @@ void llama_memory_hybrid_idx::seq_add(llama_seq_id seq_id, llama_pos p0, llama_p
 
     if (mem_idx) {
         mem_idx->seq_add(seq_id, p0, p1, shift);
-        kpool_cache_stale = true;
+        mem_idx_stale = true;
     }
 }
 
@@ -195,7 +195,7 @@ void llama_memory_hybrid_idx::seq_div(llama_seq_id seq_id, llama_pos p0, llama_p
 
     if (mem_idx) {
         mem_idx->seq_div(seq_id, p0, p1, d);
-        kpool_cache_stale = true;
+        mem_idx_stale = true;
     }
 }
 
@@ -675,15 +675,15 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(
     ctx_idx(mem->get_mem_idx() == nullptr ? nullptr :
         new llama_kv_cache_context(mem->get_mem_idx(), std::move(sinfos_idx), ubatches)) {
     // Sequence edits require a full re-pool.
-    kpool_stale_batch = mem->kpool_cache_is_stale();
+    mem_idx_stale_batch = mem->mem_idx_is_stale();
 }
 
 llama_memory_hybrid_idx_context::~llama_memory_hybrid_idx_context() = default;
 
 bool llama_memory_hybrid_idx_context::next() {
     // Clear only after a successful ubatch.
-    if (i_cur == 0 && kpool_stale_batch && mem != nullptr) {
-        mem->kpool_cache_clear();
+    if (i_cur == 0 && mem_idx_stale_batch && mem != nullptr) {
+        mem->mem_idx_stale_clear();
     }
 
     if (ctx_idx) {
@@ -821,6 +821,13 @@ llama_memory_hybrid_idx_context::kpool_state llama_memory_hybrid_idx_context::kp
 }
 
 // Layout of the cells as of this ubatch plus which pools it completes or rewrites.
+// Pool cache lifecycle:
+// 1. cpy_k writes each token's key | gate into its idx cache row, pooled slot are zeroed.
+// 2. This scan derives the current grouping from mem_idx and marks the pools the ubatch touches or completes as is_new, during decode that's one pool every kpool tokens, zero elsewise.
+// 3. The graph pools only the is_new pools and set_rows each result into the pooled slot of the pool's last member row.
+// 4. All pools are gathered in one get_rows via pool_cells, fresh ones just written, older ones from whatever batch last wrote them.
+// Any seq_* edit regroups the pools, so it sets mem_idx_stale and the first ubatch of the next batch re-pools everything from the still-valid key | gate rows, rewriting the (possibly different) rep rows. 
+// Orphaned pooled slots are never cleared, a slot is only ever read through pool_cells, which is derived from the current grouping every ubatch.
 llama_memory_hybrid_idx_context::kpool_state llama_memory_hybrid_idx_context::kpool_build_state(
         const llama_ubatch & ubatch) const {
     kpool_state st = kpool_build_layout();
@@ -828,7 +835,7 @@ llama_memory_hybrid_idx_context::kpool_state llama_memory_hybrid_idx_context::kp
     const uint32_t kpool = mem->get_kpool();
 
     // Pools touched by this ubatch are re-pooled, shared cells cannot cache sequence relative pools.
-    const bool all_new = !st.cache_safe || (kpool_stale_batch && i_cur == 0);
+    const bool all_new = !st.cache_safe || (mem_idx_stale_batch && i_cur == 0);
 
     std::vector<std::vector<llama_pos>> upos(LLAMA_MAX_SEQ);
     if (!all_new) {

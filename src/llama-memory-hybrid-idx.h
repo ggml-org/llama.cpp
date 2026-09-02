@@ -92,8 +92,8 @@ public:
 
     // The pooled keys persist in the idx cache across batches.
     // Sequence edits shift the pool grid and stale the cached values.
-    bool kpool_cache_is_stale() const { return kpool_cache_stale; }
-    void kpool_cache_clear   ()       { kpool_cache_stale = false; }
+    bool mem_idx_is_stale() const { return mem_idx_stale; }
+    void mem_idx_stale_clear   ()       { mem_idx_stale = false; }
 
 private:
     // forget seq_id (all of it if seq_id < 0) in every cache at once, so a failed restore cannot leave the caches out of step
@@ -106,7 +106,7 @@ private:
 
     const std::unique_ptr<llama_kv_cache> mem_idx;
 
-    bool kpool_cache_stale = false;
+    bool mem_idx_stale = false;
 };
 
 class llama_memory_hybrid_idx_context : public llama_memory_hybrid_context {
@@ -191,5 +191,5 @@ private:
     bool kpool_track() const;
 
     // Clear a pending full re-pool only after the first ubatch succeeds
-    bool kpool_stale_batch = false;
+    bool mem_idx_stale_batch = false;
 };
