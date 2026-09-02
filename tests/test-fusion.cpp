@@ -207,7 +207,6 @@ struct fusion_row {
     double       nmse_dev;
     bool         ok_count; // counts match the baseline
     bool         ok_nmse;  // nmse within epsilon
-    bool         skip_nmse; // nmse unreliable (NaN logits or arch already broken on the device)
 };
 
 static void usage(const char * argv0) {
@@ -398,7 +397,6 @@ int main(int argc, char ** argv) {
             uint64_t count_unfused; // per graph
             double   nmse_fus;
             double   nmse_dev;
-            bool     skip_nmse;
             bool     ok_nmse;
         };
         std::map<std::string, std::array<mode_data, 2>> mdata;
@@ -450,12 +448,6 @@ int main(int argc, char ** argv) {
             const double nmse_fus = nmse(logits_fused, logits_unfused);
             const double nmse_dev = logits_cpu.empty() ? 0.0 : nmse(logits_fused, logits_cpu);
 
-            // an arch that is already broken on the device (huge device-vs-CPU NMSE, e.g. plamo2
-            // on Metal) produces garbage regardless of fusion, so the fused-vs-unfused NMSE is not
-            // a meaningful signal - skip it and rely on the count regression check only
-            // TODO: run in Debug build to get an assert in `ggml-alloc.c` and fix it
-            const bool dev_broken = !std::isnan(nmse_dev) && nmse_dev > 1.0;
-
             if (has_counts) {
                 for (int i = 0; i < (int) labels.size(); i++) {
                     const uint64_t fused   = counts_fused[i]   / mode.n_graphs;
@@ -463,20 +455,16 @@ int main(int argc, char ** argv) {
                     if (fused == 0 && unfused == 0) {
                         continue;
                     }
-                    const bool skip_nmse = dev_broken || std::isnan(nmse_fus);
                     auto & d = mdata[labels[i]][mi];
                     d.present       = true;
                     d.count_fused   = fused;
                     d.count_unfused = unfused;
                     d.nmse_fus      = nmse_fus;
                     d.nmse_dev      = nmse_dev;
-                    d.skip_nmse     = skip_nmse;
-                    d.ok_nmse  = !skip_nmse && nmse_fus <= 1e-4;
+                    d.ok_nmse       = nmse_fus <= 1e-4;
                 }
             } else {
-                const bool skip_nmse = dev_broken || std::isnan(nmse_fus);
-                rows.push_back({ arch, moe, mode.name, "?", 0, 0, 0, nmse_fus, nmse_dev, true,
-                                 !skip_nmse && nmse_fus <= 1e-4, skip_nmse });
+                rows.push_back({ arch, moe, mode.name, "?", 0, 0, 0, nmse_fus, nmse_dev, true, nmse_fus <= 1e-4 });
             }
         }
 
@@ -494,12 +482,11 @@ int main(int argc, char ** argv) {
                     const std::string any_key = arch + "|" + (moe ? "1" : "0") + "|any|" + label;
                     const uint64_t expected = baseline.count(any_key) ? baseline.at(any_key) : 0;
                     const bool ok_count = check_path.empty() || d[0].count_fused == expected;
-                    const bool skip_nmse = d[0].skip_nmse || d[1].skip_nmse;
                     const bool ok_nmse   = d[0].ok_nmse && d[1].ok_nmse;
                     const double nmse_fus = std::max(d[0].nmse_fus, d[1].nmse_fus);
                     const double nmse_dev = std::max(d[0].nmse_dev, d[1].nmse_dev);
                     rows.push_back({ arch, moe, "any", label, d[0].count_fused, d[0].count_unfused,
-                                     expected, nmse_fus, nmse_dev, ok_count, ok_nmse, skip_nmse });
+                                     expected, nmse_fus, nmse_dev, ok_count, ok_nmse });
                 } else {
                     // counts differ - keep a separate row per mode
                     for (int mi = 0; mi < 2; mi++) {
@@ -512,7 +499,7 @@ int main(int argc, char ** argv) {
                         const uint64_t expected = baseline.count(mode_key) ? baseline.at(mode_key) : 0;
                         const bool ok_count = check_path.empty() || a.count_fused == expected;
                         rows.push_back({ arch, moe, modes[mi].name, label, a.count_fused, a.count_unfused,
-                                         expected, a.nmse_fus, a.nmse_dev, ok_count, a.ok_nmse, a.skip_nmse });
+                                         expected, a.nmse_fus, a.nmse_dev, ok_count, a.ok_nmse });
                     }
                 }
             }
@@ -539,11 +526,9 @@ int main(int argc, char ** argv) {
                 "arch", "moe", "mode", "label", "fused", "unfused", "expected", "nmse_fus", "nmse_dev", "status");
         int n_ok = 0;
         int n_bad = 0;
-        int n_skip = 0;
         for (const auto & r : rows) {
-            const bool ok = r.ok_count && (r.skip_nmse || r.ok_nmse);
-            const char * status = ok ? (r.skip_nmse ? "skip" : "ok") : "FAIL";
-            if (r.skip_nmse) { n_skip++; }
+            const bool ok = r.ok_count && r.ok_nmse;
+            const char * status = ok ? "ok" : "FAIL";
             if (ok) { n_ok++; } else { n_bad++; }
             LOG_INF("%-20s %-4s %-8s %-22s %7llu %7llu %7llu %10.2e %10.2e %s\n",
                     r.arch.c_str(), r.moe ? "moe" : "dense", r.mode.c_str(), r.label.c_str(),
@@ -558,7 +543,7 @@ int main(int argc, char ** argv) {
                    << std::right << std::setw(7) << r.count_fused << '\n';
             }
         }
-        LOG_INF("summary: %d ok, %d failed, %d skipped (of %d rows)\n", n_ok, n_bad, n_skip, n_ok + n_bad);
+        LOG_INF("summary: %d ok, %d failed\n", n_ok, n_bad);
         if (!record_path.empty()) {
             LOG_INF("%s: baseline written to '%s'\n", __func__, record_path.c_str());
         }
