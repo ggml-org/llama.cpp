@@ -88,6 +88,15 @@
 
 	let primaryAlias = $derived(uniqueAliases.length === 1 ? uniqueAliases[0] : null);
 	let displayName = $derived(primaryAlias ?? parsed.modelName ?? modelId);
+
+	let hasBadges = $derived(
+		parsed.sidecar ||
+			((parsed.params || params) && !hideParameters) ||
+			(parsed.quantization && !resolvedHideQuantization) ||
+			primaryAlias ||
+			uniqueAliases.length > 1 ||
+			(uniqueTags.length > 0 && !resolvedHideTags)
+	);
 </script>
 
 {#if resolvedShowRaw}
@@ -166,47 +175,49 @@
 			</span>
 		{/if}
 
-		<span class="inline-flex items-center gap-1 {wrap ? 'flex-wrap' : ''}">
-			{#if parsed.sidecar}
-				<span class={variantBadgeClass} title={`${parsed.sidecar.toUpperCase()} draft model`}>
-					{parsed.sidecar}
-				</span>
-			{/if}
-
-			{#if (parsed.params || params) && !hideParameters}
-				<span class={badgeClass}>
-					{parsed.params ?? params}{parsed.activatedParams ? `-${parsed.activatedParams}` : ''}
-				</span>
-			{/if}
-
-			{#each uniqueDraftSidecars as sidecar (sidecar)}
-				<span class={variantBadgeClass} title={`${sidecar.toUpperCase()} draft model available`}>
-					{sidecar}
-				</span>
-			{/each}
-
-			{#if parsed.quantization && !resolvedHideQuantization}
-				<span class={badgeClass}>
-					{parsed.quantization}
-				</span>
-			{/if}
-
-			{#if primaryAlias}
-				{#if primaryAlias !== parsed.modelName}
-					<span class={badgeClass}>{parsed.modelName ?? modelId}</span>
+		{#if hasBadges}
+			<span class="inline-flex items-center gap-1 {wrap ? 'flex-wrap' : ''}">
+				{#if parsed.sidecar}
+					<span class={variantBadgeClass} title={`${parsed.sidecar.toUpperCase()} draft model`}>
+						{parsed.sidecar}
+					</span>
 				{/if}
-			{:else if uniqueAliases.length > 1}
-				{#each uniqueAliases as alias (alias)}
-					<span class={badgeClass}>{alias}</span>
-				{/each}
-			{/if}
 
-			{#if uniqueTags.length > 0 && !resolvedHideTags}
-				{#each uniqueTags as tag (tag)}
-					<span class={tagBadgeClass}>{tag}</span>
+				{#if (parsed.params || params) && !hideParameters}
+					<span class={badgeClass}>
+						{parsed.params ?? params}{parsed.activatedParams ? `-${parsed.activatedParams}` : ''}
+					</span>
+				{/if}
+
+				{#each uniqueDraftSidecars as sidecar (sidecar)}
+					<span class={variantBadgeClass} title={`${sidecar.toUpperCase()} draft model available`}>
+						{sidecar}
+					</span>
 				{/each}
-			{/if}
-		</span>
+
+				{#if parsed.quantization && !resolvedHideQuantization}
+					<span class={badgeClass}>
+						{parsed.quantization}
+					</span>
+				{/if}
+
+				{#if primaryAlias}
+					{#if primaryAlias !== parsed.modelName}
+						<span class={badgeClass}>{parsed.modelName ?? modelId}</span>
+					{/if}
+				{:else if uniqueAliases.length > 1}
+					{#each uniqueAliases as alias (alias)}
+						<span class={badgeClass}>{alias}</span>
+					{/each}
+				{/if}
+
+				{#if uniqueTags.length > 0 && !resolvedHideTags}
+					{#each uniqueTags as tag (tag)}
+						<span class={tagBadgeClass}>{tag}</span>
+					{/each}
+				{/if}
+			</span>
+		{/if}
 	{/snippet}
 
 	<span
@@ -233,26 +244,28 @@
 			{#if !iconsOnNewLine}{@render capabilityIcons()}{/if}
 		</span>
 
-		<span class="inline-flex items-center gap-1.5">
-			{#if iconsOnNewLine}{@render capabilityIcons()}{/if}
+		{#if iconsOnNewLine || contextLength || sizeRange}
+			<span class="inline-flex items-center gap-1.5">
+				{#if iconsOnNewLine}{@render capabilityIcons()}{/if}
 
-			{#if contextLength}
-				<span class="inline-flex items-center gap-1 text-muted-foreground">
-					<ScrollText class="h-3 w-3" />
+				{#if contextLength}
+					<span class="inline-flex items-center gap-1 text-muted-foreground">
+						<ScrollText class="h-3 w-3" />
 
-					<span class="text-xs">{formatParameters(contextLength)}</span>
-				</span>
-			{/if}
+						<span class="text-xs">{formatParameters(contextLength)}</span>
+					</span>
+				{/if}
 
-			{#if sizeRange}
-				<span class="inline-flex items-center gap-1 text-muted-foreground">
-					<Database class="h-3 w-3" />
+				{#if sizeRange}
+					<span class="inline-flex items-center gap-1 text-muted-foreground">
+						<Database class="h-3 w-3" />
 
-					<span class="text-xs"
-						>{HuggingFaceService.formatSizeRange(sizeRange.min, sizeRange.max)}</span
-					>
-				</span>
-			{/if}
-		</span>
+						<span class="text-xs"
+							>{HuggingFaceService.formatSizeRange(sizeRange.min, sizeRange.max)}</span
+						>
+					</span>
+				{/if}
+			</span>
+		{/if}
 	</span>
 {/if}

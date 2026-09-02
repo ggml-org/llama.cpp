@@ -19,7 +19,7 @@
 	let draftMemGb = $derived(draftFile ? minMemoryTierGb(draftFile.size ?? 0) : null);
 </script>
 
-<div class="grid grid-cols-[5rem_1fr] items-start gap-3 py-3">
+<div class="grid grid-cols-[5rem_1fr] items-center gap-3 py-3">
 	<div class="pt-1 text-sm tabular-nums text-muted-foreground">
 		{#if bitDepth === 99}
 			Other
