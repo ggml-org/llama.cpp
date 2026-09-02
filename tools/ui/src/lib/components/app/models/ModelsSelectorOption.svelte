@@ -58,6 +58,10 @@
 	let loadProgress = $derived(isLoading ? modelsStore.status.getLoadProgress(option.model) : null);
 	let loadPercent = $derived(Math.round(modelLoadFraction(loadProgress) * 100));
 	let loadTitle = $derived(modelLoadProgressText(loadProgress));
+	let modalities = $derived(option.modalities);
+	let capabilities = $derived.by(() => ({
+		reasoning: modelsStore.props.checkModelSupportsThinking(option.model)
+	}));
 </script>
 
 <div
@@ -65,9 +69,11 @@
 	class={[
 		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
 		'cursor-pointer',
-		isSelected && 'bg-accent/50 text-accent-foreground',
+		isSelected && !isHighlighted && 'bg-accent/50',
 		isHighlighted && 'bg-accent',
-		!isSelected && !isHighlighted && 'hover:bg-muted',
+		(isSelected || isHighlighted) && 'text-accent-foreground',
+		'hover:bg-accent',
+		'focus:bg-accent',
 		isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
 	]}
 	onclick={() => onSelect(option.id)}
@@ -79,9 +85,12 @@
 >
 	<ModelId
 		aliases={option.aliases}
+		{capabilities}
 		class="flex-1"
 		{hideOrgName}
+		{modalities}
 		modelId={option.model}
+		showRawTooltip
 		tags={option.tags}
 	/>
 

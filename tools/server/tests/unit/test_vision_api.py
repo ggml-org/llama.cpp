@@ -71,6 +71,7 @@ def test_v1_models_supports_multimodal_capability():
         ("What is this:\n", "malformed",              False, None),
         ("What is this:\n", "https://google.com/404", False, None), # non-existent image
         ("What is this:\n", "https://ggml.ai",        False, None), # non-image data
+        ("What is this:\n", "data:text/html;base64,aGVsbG8=", False, None), # unsupported data uri mime
         # TODO @ngxson : test with multiple images, no images and with audio
     ]
 )
