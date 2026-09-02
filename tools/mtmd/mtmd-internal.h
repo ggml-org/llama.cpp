@@ -10,10 +10,12 @@
 #define MTMD_INTERNAL_HEADER
 
 // bitmap is null for text parts
-struct mtmd_input_part {
+struct mtmd_internal_part {
     std::string text;
     const mtmd_bitmap * bitmap;
+    // only used for text parts
+    bool parse_special = false;
 };
 
 // [QWEN_VIDEO] merged parts are erased from `parts`, so one group always maps to one part
-std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::vector<mtmd_input_part> & parts, int n_merge);
+std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::vector<mtmd_internal_part> & parts, int n_merge);

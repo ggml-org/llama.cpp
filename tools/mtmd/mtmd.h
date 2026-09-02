@@ -73,6 +73,12 @@ struct mtmd_input_text {
     bool parse_special;
 };
 
+struct mtmd_input_part {
+    // only text or bitmap can be set, not both
+    const struct mtmd_input_text * text;
+    const struct mtmd_bitmap * bitmap;
+};
+
 //
 // C API
 //
@@ -83,6 +89,7 @@ typedef struct mtmd_image_tokens mtmd_image_tokens;
 typedef struct mtmd_input_chunk  mtmd_input_chunk;
 typedef struct mtmd_input_chunks mtmd_input_chunks;
 typedef struct mtmd_input_text   mtmd_input_text;
+typedef struct mtmd_input_part   mtmd_input_part;
 typedef struct mtmd_batch        mtmd_batch;
 
 typedef bool (*mtmd_progress_callback)(float progress, void * user_data);
@@ -276,10 +283,10 @@ struct mtmd_decoder_pos {
 // return relative position (for example, embedding 0 will have position (0, 0, 0); remember to adjust it to the current absolute position)
 MTMD_API struct mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i);
 
-// tokenize an input text prompt and a list of bitmaps (images/audio)
-// the prompt must have the input image marker (default: "<__media__>") in it
+// tokenize an input text prompt and a list of bitmaps (image/audio)
+// the prompt must have the input media marker (default: "<__media__>") in it
 // the default marker is defined by mtmd_default_marker()
-// the marker will be replaced with the image/audio chunk
+// the marker will be replaced with the media chunk
 // for example:
 //   "here is an image: <__media__>\ndescribe it in detail."
 //   this will gives 3 chunks:
@@ -291,12 +298,24 @@ MTMD_API struct mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_im
 // return values:
 //   0 on success
 //   1 on number of bitmaps not matching the number of markers
-//   2 on image preprocessing error
+//   2 on media preprocessing error
 MTMD_API int32_t mtmd_tokenize(mtmd_context * ctx,
                                mtmd_input_chunks * output,
                                const mtmd_input_text * text,
                                const mtmd_bitmap ** bitmaps,
                                size_t n_bitmaps);
+
+// same as mtmd_tokenize(), but takes an array of mtmd_input_part
+// use cases:
+// - when you don't want to use media markers (they will be tokenized as normal text)
+// - when you want to control parse_special for each text part
+// note: per-part add_special will be ignored
+// return 1 if a part has both text and bitmap set (or neither)
+MTMD_API int32_t mtmd_tokenize_from_parts(mtmd_context * ctx,
+                                          mtmd_input_chunks * output,
+                                          const mtmd_input_part ** parts,
+                                          size_t n_parts,
+                                          bool add_special);
 
 DEPRECATED(MTMD_API int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens),
            "use mtmd_encode_chunk() instead");

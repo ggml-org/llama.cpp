@@ -1097,7 +1097,7 @@ void mtmd_free(mtmd_context * ctx) {
     delete ctx;
 }
 
-std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::vector<mtmd_input_part> & parts, int n_merge) {
+std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::vector<mtmd_internal_part> & parts, int n_merge) {
     std::vector<std::vector<const mtmd_bitmap *>> output;
     for (size_t i = 0; i < parts.size(); i++) {
         if (parts[i].bitmap == nullptr) {
@@ -1124,7 +1124,7 @@ struct mtmd_tokenizer {
     bool parse_special;
     const llama_vocab * vocab;
 
-    using part = mtmd_input_part;
+    using part = mtmd_internal_part;
     std::vector<part> parts;
     // these will be freed when mtmd_tokenizer finishes
     std::vector<mtmd::bitmap> bm_from_lazy; // TODO @ngxson : refactor, free bm_from_lazy progressively
@@ -1160,7 +1160,7 @@ struct mtmd_tokenizer {
                 }
                 parts.push_back({"", bitmaps[i_bm++]});
             } else {
-                parts.push_back({std::move(part), nullptr});
+                parts.push_back({std::move(part), nullptr, parse_special});
             }
         }
 
@@ -1172,6 +1172,26 @@ struct mtmd_tokenizer {
         }
         if (n_markers != bitmaps.size()) {
             throw std::runtime_error(string_format("number of media markers in text (%zu) does not match number of bitmaps (%zu)", n_markers, bitmaps.size()));
+        }
+
+        expand_lazy_bitmaps();
+    }
+
+    mtmd_tokenizer(mtmd_context * ctx,
+            const mtmd_input_part ** input_parts,
+            size_t n_parts,
+            bool add_special) : ctx(ctx) {
+        this->add_special = add_special;
+        parse_special = true; // only used for text returned by lazy bitmaps
+        vocab         = ctx->vocab;
+
+        for (size_t i = 0; i < n_parts; i++) {
+            const mtmd_input_part * p = input_parts[i];
+            if (p->text != nullptr) {
+                parts.push_back({std::string(p->text->text, p->text->text_len), nullptr, p->text->parse_special});
+            } else {
+                parts.push_back({"", p->bitmap});
+            }
         }
 
         expand_lazy_bitmaps();
@@ -1201,7 +1221,7 @@ struct mtmd_tokenizer {
                             LOG_DBG("%s: lazy callback returned bitmap with dimensions %d x %d\n", __func__, out_bm->nx, out_bm->ny);
                         } else if (out_str) {
                             auto & ptr = text_from_lazy.emplace_back(out_str); // remember to free it later
-                            expanded.push_back({ptr, nullptr});
+                            expanded.push_back({ptr, nullptr, parse_special});
                             LOG_DBG("%s: lazy callback returned text: %s\n", __func__, out_str);
                         }
                     } else if (res == -1) {
@@ -1245,7 +1265,7 @@ struct mtmd_tokenizer {
                     return res;
                 }
             } else {
-                add_text(p.text, parse_special);
+                add_text(p.text, p.parse_special);
             }
         }
 
@@ -1720,6 +1740,30 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
             size_t n_bitmaps) {
     try {
         mtmd_tokenizer tokenizer(ctx, text, bitmaps, n_bitmaps);
+        return tokenizer.tokenize(output);
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: error: %s\n", __func__, e.what());
+        return 2;
+    }
+}
+
+int32_t mtmd_tokenize_from_parts(mtmd_context * ctx,
+            mtmd_input_chunks * output,
+            const mtmd_input_part ** parts,
+            size_t n_parts,
+            bool add_special) {
+    for (size_t i = 0; i < n_parts; i++) {
+        if ((parts[i]->text == nullptr) == (parts[i]->bitmap == nullptr)) {
+            LOG_ERR("%s: part %zu must have either text or bitmap set, not both\n", __func__, i);
+            return 1;
+        }
+        if (parts[i]->text != nullptr && parts[i]->text->text == nullptr) {
+            LOG_ERR("%s: part %zu has null text pointer\n", __func__, i);
+            return 1;
+        }
+    }
+    try {
+        mtmd_tokenizer tokenizer(ctx, parts, n_parts, add_special);
         return tokenizer.tokenize(output);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
