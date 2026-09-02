@@ -425,3 +425,36 @@ curl http://localhost:8080/v1/chat/completions -d '{
 ```
 
 </details>
+
+# Streaming tool calls
+
+With `"stream": true` a tool call does not arrive as one object. It arrives as deltas the client has to accumulate, keyed by `index`, so two tool calls in the same turn interleave as `index` 0 and `index` 1.
+
+- `id`, `type` and `function.name` are sent once, on the first chunk for that index
+- later chunks for the same index carry only `index` and `function.arguments`, so a client that switches on `type` has to remember it rather than expect it on every chunk
+- `function.arguments` arrives as raw JSON fragments that have to be concatenated per index; a single fragment is usually not valid JSON on its own
+
+Accumulating them looks like this:
+
+```python
+calls = {}
+
+for chunk in stream:
+    for tc in chunk.choices[0].delta.tool_calls or []:
+        call = calls.setdefault(tc.index, {"id": None, "name": None, "arguments": ""})
+        if tc.id:
+            call["id"] = tc.id
+        if tc.function and tc.function.name:
+            call["name"] = tc.function.name
+        if tc.function and tc.function.arguments:
+            call["arguments"] += tc.function.arguments
+```
+
+> [!TIP]
+> The final chunk carries `finish_reason: "tool_calls"`, or `"stop"` when the turn produced none. That is the point at which each accumulated `arguments` string is complete and can be parsed.
+
+# Tool calls and Jinja
+
+Tool calling goes through the Jinja template path, which is enabled by default; `--no-jinja` turns it off. The explicit `--jinja` in the examples above predates that default and is now redundant. With Jinja disabled, or with a template that is not tool-aware, tool calls come back as plain assistant text instead of in `tool_calls`, and nothing reports an error.
+
+If that happens, check `--no-jinja` first, then verify the template is tool-aware as described in [Usage - need tool-aware Jinja template](#usage---need-tool-aware-jinja-template).
