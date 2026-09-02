@@ -1,3 +1,4 @@
+#include "server-connect.h"
 #include "server-context.h"
 #include "server-http.h"
 #include "server-models.h"
@@ -173,6 +174,15 @@ int llama_server(common_params & params, int argc, char ** argv) {
     auto model_name = params.model.get_name();
     if (params.model_alias.empty() && !model_name.empty()) {
         params.model_alias.insert(model_name);
+    }
+
+    // check early, so a missing llama-connect fails-fast
+    if (params.server_connect) {
+        const std::string reason = server_connect::unavailable_reason(params);
+        if (!reason.empty()) {
+            SRV_ERR("--connect is not available: %s\n", reason.c_str());
+            return 1;
+        }
     }
 
     // note: this is guaranteed to out-live ctx_http and tools
@@ -513,6 +523,18 @@ int llama_server(common_params & params, int argc, char ** argv) {
     }
 
     SRV_INF("listening on %s\n", ctx_http.listening_address.c_str());
+
+    // spawn only once listening, so the child health check passes. the destructor stops it
+    server_connect connect_proc;
+    if (params.server_connect && !connect_proc.start(params)) {
+        SRV_ERR("%s", "exiting due to llama-connect error\n");
+        ctx_http.stop();
+        if (ctx_http.thread.joinable()) {
+            ctx_http.thread.join();
+        }
+        clean_up();
+        return 1;
+    }
 
     // TODO: remove this in the future
     // check the string to also handle the .sock case
