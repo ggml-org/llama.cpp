@@ -324,11 +324,8 @@ uint tq1_0_digit_of(uint e) {
          : e < 240u ? ((e - 160u) / 16u)
          : ((e - 240u) / 4u);
 }
-// Powers of 3 packed in one uint (7 bits each) to avoid a constant array
-// that may not land in registers.
-// The 8-bit truncation of the product IS part of the format (C reference:
-// `uint8_t q = qs[..] * pow3[n]`); without it the high digits overflow
-// their scale and the weights decode to noise.
+// The 8-bit truncation below is part of the format, not an optimisation:
+// the C reference does `uint8_t q = qs[..] * pow3[n]`.
 uint tq1_0_trit(uint qbyte, uint t) {
     const uint POW3_PACKED = (1u << 28) | (3u << 21) | (9u << 14) | (27u << 7) | 81u;
     return ((((qbyte * ((POW3_PACKED >> (7u * (4u - t))) & 0x7Fu)) & 255u) * 3u) >> 8);

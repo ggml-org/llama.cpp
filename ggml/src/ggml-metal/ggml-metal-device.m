@@ -1420,13 +1420,9 @@ static bool ggml_metal_supports_mul_mat_op(
         const struct ggml_tensor * op,
         bool src0_f16_has_mv,
         bool mm_path) {
-    if (!has_simdgroup_reduction || op->src[0]->type == GGML_TYPE_NVFP4) {
-        return false;
-    }
-
-    // TQ1_0: no Metal mat-mul kernels yet (its test-backend-ops cases are
-    // enabled by the Vulkan TQ1_0 PR; declining keeps the op on the CPU).
-    if (op->src[0]->type == GGML_TYPE_TQ1_0) {
+    if (!has_simdgroup_reduction ||
+        op->src[0]->type == GGML_TYPE_NVFP4 ||
+        op->src[0]->type == GGML_TYPE_TQ1_0) {
         return false;
     }
 
@@ -1820,8 +1816,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 };
             }
         case GGML_OP_GET_ROWS:
-            // TQ1_0: no Metal get_rows kernel yet (added to test-backend-ops
-            // by the Vulkan TQ1_0 PR; declining keeps the op on the CPU).
             return op->src[0]->type != GGML_TYPE_NVFP4 &&
                    op->src[0]->type != GGML_TYPE_TQ1_0;
         case GGML_OP_SET_ROWS:

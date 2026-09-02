@@ -251,8 +251,6 @@ layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ1
    block_tq1_0 block;
 };
 
-// TQ1_0: see types.glsl for the format and the shared decode helpers.
-// Same logic as dequant_tq1_0.comp, rewritten in the shape required here.
 float16_t dequantFuncTQ1_0(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
     const uint e = coordInBlock[1];
@@ -260,17 +258,6 @@ float16_t dequantFuncTQ1_0(const in decodeBufTQ1_0 bl, const in uint blockCoords
     const uint qbyte = uint(bidx < 48u ? bl.block.qs[bidx] : bl.block.qh[bidx - 48u]);
     const uint xi = tq1_0_trit(qbyte, tq1_0_digit_of(e));
     return bl.block.d * (float16_t(int(xi)) - float16_t(1.0));
-}
-
-f16vec4 dequantFuncTQ1_0_v(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
-{
-    uint c[2] = uint[2](coordInBlock[0], coordInBlock[1]);
-    f16vec4 r;
-    for (uint k = 0; k < 4; ++k) {
-        c[1] = coordInBlock[1] + k;
-        r[k] = dequantFuncTQ1_0(bl, blockCoords, c);
-    }
-    return r;
 }
 
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ2_0 {
@@ -1433,10 +1420,7 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #define dequantFuncA dequantFuncQ8_0
 #define dequantFuncA_v dequantFuncQ8_0_v
 #elif defined(DATA_A_TQ1_0)
-// TQ1_0 has no native vectorized variant: the base-3 layout is not aligned
-// to groups of 4 like TQ2_0, so _v is built from 4 scalar decodes.
 #define dequantFuncA dequantFuncTQ1_0
-#define dequantFuncA_v dequantFuncTQ1_0_v
 #elif defined(DATA_A_TQ2_0)
 #define dequantFuncA dequantFuncTQ2_0
 #define dequantFuncA_v dequantFuncTQ2_0_v

@@ -198,8 +198,6 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             store_a(col, k_pair,     FLOAT_TYPEV2(v.xy));
             store_a(col, k_pair + 1, FLOAT_TYPEV2(v.zw));
 #elif defined(DATA_A_TQ1_0)
-            // TQ1_0: see types.glsl for the format and the shared decode
-            // helpers (including why the 8-bit truncation is mandatory).
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
 
             const uint ib  = idx / 128;               // 2 values per idx

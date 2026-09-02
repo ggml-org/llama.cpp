@@ -9379,11 +9379,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
 
-    // TQ1_0 mat-vec with more than one block per row. The generic mul_mat_id
-    // loops below only reach n == 1 at k == 256, i.e. a single 256-element
-    // block per row, so the block-stride loop in mul_mat_vec_tq1_0.comp never
-    // iterates and a wrong per-expert base offset stays invisible. These two
-    // use k == 4096 / 2048 (16 / 8 blocks per row) with n_used < n_mats.
+    // multiple blocks per row: exercises the block-stride loop and the
+    // per-expert base offset, which k == 256 alone leaves untested
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_TQ1_0, GGML_TYPE_F32, 28, 10, false, 1024, 1, 4096));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_TQ1_0, GGML_TYPE_F32, 128, 8, false, 1024, 1, 2048));
 

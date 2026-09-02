@@ -609,8 +609,6 @@ vec2 get_dm(uint ib, uint a_offset) {
 #endif
 
 #if defined(DATA_A_TQ1_0)
-// TQ1_0: see types.glsl for the format and the shared decode helpers.
-// The scale `d` is applied by get_dm.
 float tq1_0_val(uint ib, uint e, uint a_offset) {
     const uint bidx = tq1_0_byte_of(e);
     const uint qbyte = uint(bidx < 48u ? data_a[a_offset + ib].qs[bidx]

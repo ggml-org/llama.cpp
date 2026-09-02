@@ -8,8 +8,6 @@ layout (binding = 0) readonly buffer A {block_tq1_0 data_a[];};
 layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
 
 void main() {
-    // one thread decodes 4 consecutive elements: a workgroup covers
-    // 256 * 4 = 1024 elements, matching wg_denoms in ggml-vulkan.cpp
     const uint i = gl_GlobalInvocationID.x * 4;
 
     if (i >= p.nel) {
