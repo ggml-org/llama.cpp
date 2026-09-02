@@ -1394,9 +1394,10 @@ struct llm_graph_context {
             ggml_tensor * v_mla,      // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
             ggml_tensor * top_k,      // I32 [n_select, 1, 1] physical cells
             ggml_tensor * slot_valid, // F32 [n_select, 1, 1] 0/-inf per SLOT
-            ggml_tensor * tail_cells, // I32 [kpool-1, 1, 1]
-            ggml_tensor * tail_valid, // F32 [kpool-1, 1, 1]
+            ggml_tensor * tail_cells, // I32 [n_tail_slots, 1, 1] (real tail + PAD32 dead slots)
+            ggml_tensor * tail_valid, // F32 [n_tail_slots, 1, 1]
             ggml_tensor * cand_mask,  // F16 [n_kv, 1, 1, 1]
+               uint32_t   kpool,
                   float   kq_scale,
                     int   il) const;
 

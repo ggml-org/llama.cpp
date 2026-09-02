@@ -3715,12 +3715,21 @@ llm_graph_input_kpool * llm_graph_context::build_inp_kpool(
         // D0 gathered decode inputs. ONLY when the gathered graph will consume them:
         // an input tensor no node reads is never allocated, so the host fill would
         // write through data == nullptr.
+        // PAD32 (codex 063 / grokk 064): packed mul_mm's fast path needs the compact
+        // reduction dim % 32 == 0 (bc_inp law); pad the tail slots so
+        // n_top + n_tail_slots lands on the tile. Dead slots are cell 0 / -inf —
+        // the exact representation the duplicate-cell-0 adversarial proved.
         if (gathered) {
-        inp->tail_cells = ggml_new_tensor_3d(ctx0, GGML_TYPE_I32, kpool - 1, n_tps, n_stream);
+        const int64_t n_top     = (int64_t) kpool *
+                llama_kpool_select_k((uint32_t) n_pools, hparams.indexer_top_k, kpool);
+        const int64_t n_sel_pad = GGML_PAD(n_top + kpool - 1, 32);
+        const int64_t n_tail    = n_sel_pad - n_top;
+
+        inp->tail_cells = ggml_new_tensor_3d(ctx0, GGML_TYPE_I32, n_tail, n_tps, n_stream);
         ggml_set_input(inp->tail_cells);
         ggml_set_name(inp->tail_cells, "kpool_tail_cells");
 
-        inp->tail_valid = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, kpool - 1, n_tps, n_stream);
+        inp->tail_valid = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_tail, n_tps, n_stream);
         ggml_set_input(inp->tail_valid);
         ggml_set_name(inp->tail_valid, "kpool_tail_valid");
         }
@@ -3872,6 +3881,7 @@ ggml_tensor * llm_graph_context::build_attn_sparse_gathered(
         ggml_tensor * tail_cells,
         ggml_tensor * tail_valid,
         ggml_tensor * cand_mask,
+           uint32_t   kpool,
               float   kq_scale,
                 int   il) const {
     // these nodes are added in the same order as build_attn / build_attn_sparse
@@ -3906,11 +3916,15 @@ ggml_tensor * llm_graph_context::build_attn_sparse_gathered(
     const int64_t n_kv  = kq_mask->ne[0];
     const int64_t n_sel = top_k->ne[0] + tail_cells->ne[0];
 
-    static bool logged_active = false;
-    if (!logged_active) {
-        fprintf(stderr, "GATHERED_DSA ACTIVE n_sel_max=%lld n_kv=%lld\n",
-                (long long) n_sel, (long long) n_kv);
-        logged_active = true;
+    // printed at graph CONSTRUCTION (codex 063 s6) — reservation builds decode-1
+    // graphs too, so this proves "gathered graph built", never "evaluated".
+    // Execution proof is a cb hit on gathered_k_rows/kqv_out plus the oracle.
+    static bool logged_graph = false;
+    if (!logged_graph) {
+        fprintf(stderr, "GATHERED_DSA GRAPH n_sel_pad=%lld n_finite_max=%lld n_kv=%lld\n",
+                (long long) n_sel, (long long) (top_k->ne[0] + kpool - 1),
+                (long long) n_kv);
+        logged_graph = true;
     }
 
     // ids: selected cells then the always-selected tail. all entries are in [0, n_kv);

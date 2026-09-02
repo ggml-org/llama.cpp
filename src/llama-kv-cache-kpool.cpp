@@ -454,11 +454,14 @@ void llama_kv_cache_set_input_kpool(
                 // D0: emit the tail cells [tail_start, q] by slot; unused slots stay
                 // cell 0 / -INFINITY from the pre-fill below the loop
                 if (tail_cells) {
-                    const int64_t r_t     = r - 1;
-                    int32_t * cur_tcell   = (int32_t *) tail_cells->data + (s*n_tps + ii)*r_t;
-                    float   * cur_tvalid  = (float   *) tail_valid->data + (s*n_tps + ii)*r_t;
+                    // width includes the PAD32 dead slots; the real tail occupies
+                    // only [0, kpool-1). Invariant: every slot t >= kpool-1 stays
+                    // cell 0 / -INFINITY from the pre-fill (grokk 064 s2).
+                    const int64_t n_ts    = tail_cells->ne[0];
+                    int32_t * cur_tcell   = (int32_t *) tail_cells->data + (s*n_tps + ii)*n_ts;
+                    float   * cur_tvalid  = (float   *) tail_valid->data + (s*n_tps + ii)*n_ts;
 
-                    for (int64_t t = 0; t < r_t; ++t) {
+                    for (int64_t t = 0; t < n_ts; ++t) {
                         cur_tcell [t] = 0;
                         cur_tvalid[t] = -INFINITY;
                     }
@@ -466,7 +469,7 @@ void llama_kv_cache_set_input_kpool(
                         const llama_pos p = pos_at[j];
                         if (p >= tail_start && p <= q) {
                             const int64_t t = p - tail_start;
-                            GGML_ASSERT(t < r_t);
+                            GGML_ASSERT(t < r - 1);
                             cur_tcell [t] = (int32_t) j;
                             cur_tvalid[t] = 0.0f;
                         }
