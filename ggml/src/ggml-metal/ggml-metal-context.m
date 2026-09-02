@@ -42,8 +42,6 @@ struct ggml_metal {
 
     int debug_graph;
 
-    // shared fusion debugging context (NULL unless a test enabled fusion debugging)
-    // when non-NULL the graph is always encoded by a single thread (n_cb == 0)
     struct ggml_metal_fusion * fusion;
 
     // capture state
@@ -151,17 +149,12 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
             res->use_graph_optimize = false;
         }
 
-        // when fusion debugging is enabled the backend registers with the shared, device-owned
-        // fusion debugging context and forces single-threaded encoding (n_cb == 0) so the
-        // counters are race-free
         res->fusion = ggml_metal_device_get_fusion(dev);
         if (res->fusion->stats) {
             if (!res->fusion->labels_set) {
                 int n = 0;
                 const ggml_metal_fuse * all = ggml_metal_fuse_all(&n);
 
-                // labels point into the static fuse table; labels[]/counts[] are freed by the
-                // device when the debug context is destroyed
                 res->fusion->labels = calloc(n > 0 ? n : 1, sizeof(char *));
                 res->fusion->counts = calloc(n > 0 ? n : 1, sizeof(uint64_t));
                 for (int i = 0; i < n; i++) {
@@ -744,12 +737,12 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             ctx->dev,
             cmd_buf,
             ctx->gf,
+            ctx->fusion,
             idx_start,
             idx_end,
             ctx->use_concurrency,
             ctx->capture_compute,
-            ctx->debug_graph,
-            ctx->fusion);
+            ctx->debug_graph);
 
         for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
             const int res = ggml_metal_op_encode(ctx_op, idx);

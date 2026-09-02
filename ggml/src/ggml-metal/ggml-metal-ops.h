@@ -14,12 +14,12 @@ ggml_metal_op_t ggml_metal_op_init(
         ggml_metal_device_t dev,
         ggml_metal_cmd_buf_t cmd_buf,
         struct ggml_cgraph * gf,
+        struct ggml_metal_fusion * fusion,
         int  idx_start,
         int  idx_end,
         bool use_concurrency,
         bool use_capture,
-        int  debug_graph,
-        struct ggml_metal_fusion * fusion);
+        int  debug_graph);
 
 void ggml_metal_op_free(ggml_metal_op_t ctx);
 

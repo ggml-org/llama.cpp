@@ -899,7 +899,7 @@ struct ggml_metal_device {
     // virtual address for GPU memory allocations
     atomic_uintptr_t addr_virt;
 
-    // shared fusion debugging context (NULL unless a test enabled fusion debugging)
+    // shared fusion debugging context
     struct ggml_metal_fusion * fusion;
 };
 

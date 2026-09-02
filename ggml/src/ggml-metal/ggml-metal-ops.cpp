@@ -32,13 +32,14 @@ struct ggml_metal_op {
         ggml_metal_device_t dev,
         ggml_metal_cmd_buf_t cmd_buf,
         ggml_cgraph * gf,
+        ggml_metal_fusion * fusion,
         int  idx_start,
         int  idx_end,
         bool use_concurrency,
         bool use_capture,
-        int  debug_graph,
-        ggml_metal_fusion * fusion) {
+        int  debug_graph) {
         this->dev             = dev;
+        this->fusion          = fusion;
         this->lib             = ggml_metal_device_get_library(dev);
         this->enc             = ggml_metal_encoder_init(cmd_buf, use_concurrency);
         this->mem_ranges      = ggml_mem_ranges_init(debug_graph);
@@ -47,7 +48,6 @@ struct ggml_metal_op {
         this->use_concurrency = use_concurrency;
         this->use_capture     = use_capture;
         this->debug_graph     = debug_graph;
-        this->fusion          = fusion;
         this->gf              = gf;
 
         idxs.reserve(gf->n_nodes);
@@ -107,6 +107,8 @@ struct ggml_metal_op {
     }
 
     ggml_metal_device_t  dev;
+    // shared fusion debugging context
+    struct ggml_metal_fusion * fusion;
     ggml_metal_library_t lib;
     ggml_metal_encoder_t enc;
     ggml_mem_ranges_t    mem_ranges;
@@ -115,9 +117,6 @@ struct ggml_metal_op {
     bool use_capture;
 
     int debug_graph;
-
-    // shared fusion debugging context (NULL unless fusion debugging is enabled)
-    struct ggml_metal_fusion * fusion;
 
 private:
     ggml_cgraph * gf;
@@ -133,22 +132,22 @@ ggml_metal_op_t ggml_metal_op_init(
         ggml_metal_device_t dev,
         ggml_metal_cmd_buf_t cmd_buf,
         ggml_cgraph * gf,
+        ggml_metal_fusion * fusion,
         int idx_start,
         int idx_end,
         bool use_concurrency,
         bool use_capture,
-        int debug_graph,
-        struct ggml_metal_fusion * fusion) {
+        int debug_graph) {
     ggml_metal_op_t res = new ggml_metal_op(
         dev,
         cmd_buf,
         gf,
+        fusion,
         idx_start,
         idx_end,
         use_concurrency,
         use_capture,
-        debug_graph,
-        fusion);
+        debug_graph);
 
     return res;
 }

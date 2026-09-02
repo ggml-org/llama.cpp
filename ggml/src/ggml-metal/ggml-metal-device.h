@@ -327,8 +327,6 @@ const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_de
 
 // shared fusion debugging context, owned by the device; newly created backend contexts for that
 // device register with it so the fusion counters are race-free and accumulate across contexts.
-// labels[] points into the static fuse table; labels[]/counts[] are allocated with calloc and
-// freed when the context is destroyed.
 struct ggml_metal_fusion {
     int           n_fusions;      // number of fusion patterns
     const char ** labels;         // one label per pattern (set by the context)
