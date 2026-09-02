@@ -37,6 +37,14 @@ fn op(a: f32, b: f32) -> f32 {
     return out_glu;
 }
 #endif
+#ifdef OP_SWIGLU_CLAMP
+fn op(a: DataType, b: DataType) -> DataType {
+    let limit = DataType(params.limit);
+    let gate = min(a, limit);
+    let up = clamp(b, -limit, limit);
+    return gate / (1.0 + exp(-gate)) * up;
+}
+#endif
 #ifdef OP_GEGLU_ERF
 const p_erf: DataType = 0.3275911;
 const a1_erf: DataType = 0.254829592;

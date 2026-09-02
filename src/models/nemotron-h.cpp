@@ -7,10 +7,6 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
     ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
-    // NextN/MTP: optional draft head appended as extra trailing block(s)
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_all");
-
     // A layer is recurrent IFF the n_head_kv value is set to 0 and
     // the n_ff value is set to 0. Appended MTP blocks are dense (non-recurrent)
     for (uint32_t i = 0; i < hparams.n_layer_all; ++i) {

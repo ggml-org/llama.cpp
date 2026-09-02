@@ -47,7 +47,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: apple-arm64
           evict-old-files: 1d
@@ -66,7 +66,13 @@ jobs:
             -DGGML_RPC=ON \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
           time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-          leaks -atExit -- ./build/bin/test-thread-safety -hf ggml-org/gemma-3-270m-qat-GGUF -ngl 99 -p "$(printf 'hello %.0s' {1..128})" -n 16 -c 512 -ub 32 -np 2 -t 2 -lv 1
+
+      - name: Check for leaks
+        run: |
+          cmd=(./build/bin/test-thread-safety -hf ggml-org/gemma-3-270m-qat-GGUF -ngl 99 -p "$(printf 'hello %.0s' {1..128})" -n 16 -c 512 -ub 32 -np 2 -t 2 -lv 1)
+          leaks -atExit -- "${cmd[@]}"
+          # Graphics devices are leaked by Metal in Apple code sometimes, so we ignore those leaks
+          OBJC_DEBUG_MISSING_POOLS=YES "${cmd[@]}" 2>&1 | awk '{ print } index($0, "autoreleased with no pool in place") && !/class [a-zA-Z0-9]+Device autoreleased/ { found = 1 } END { exit found }'
 
       - name: Test
         id: cmake_test
@@ -93,7 +99,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: apple-x64
           evict-old-files: 1d

@@ -127,6 +127,18 @@ else()
         configure_file(${src} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} COPYONLY)
     endforeach()
 
+    # CMAKE_OSX_SYSROOT is an SDK name or path - xcrun accepts both
+    set(METAL_SDK ${CMAKE_OSX_SYSROOT})
+    if (NOT METAL_SDK)
+        set(METAL_SDK macosx)
+    endif()
+
+    if (CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+        set(METAL_TARGET_SIM "-simulator")
+    else()
+        set(METAL_TARGET_SIM "")
+    endif()
+
     if (GGML_METAL_SHADER_DEBUG)
         # note: disabling fast math is needed in order to pass tests/test-backend-ops
         # note: adding -fno-inline fixes the tests when using MTL_SHADER_VALIDATION=1
@@ -138,9 +150,19 @@ else()
         set(XC_FLAGS -O3)
     endif()
 
+    execute_process(COMMAND xcrun -sdk ${METAL_SDK} --show-sdk-version OUTPUT_VARIABLE METAL_SDK_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if (METAL_SDK_VERSION VERSION_GREATER_EQUAL 26.0)
+        set(GGML_METAL_HAS_TENSOR_LIB ON)
+    else()
+        message(STATUS "Metal SDK ${METAL_SDK_VERSION} does not support the tensor API, skipping ggml-tensor.metallib")
+    endif()
+
     if (GGML_METAL_MACOSX_VERSION_MIN)
         message(STATUS "Adding  -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN} flag to metal compilation")
         list   (APPEND XC_FLAGS -mmacosx-version-min=${GGML_METAL_MACOSX_VERSION_MIN})
+    elseif (NOT GGML_METAL_TARGET_OS STREQUAL "macos" AND CMAKE_OSX_DEPLOYMENT_TARGET)
+        message(STATUS "Adding  -mtargetos=${GGML_METAL_TARGET_OS}${CMAKE_OSX_DEPLOYMENT_TARGET}${METAL_TARGET_SIM} flag to metal compilation")
+        list   (APPEND XC_FLAGS -mtargetos=${GGML_METAL_TARGET_OS}${CMAKE_OSX_DEPLOYMENT_TARGET}${METAL_TARGET_SIM})
     endif()
 
     if (GGML_METAL_STD)
@@ -156,26 +178,51 @@ else()
         list(APPEND AIR_FILES ${AIR})
         add_custom_command(
             OUTPUT ${AIR}
-            COMMAND xcrun -sdk macosx metal ${XC_FLAGS} -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} -o ${AIR}
+            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS} -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} -o ${AIR}
             DEPENDS ${src} kernels/common.h kernels/dequantize.h kernels/quantize.h ${METALLIB_COMMON} ggml-metal-impl.h
             COMMENT "Compiling ${src}"
             VERBATIM
         )
     endforeach()
 
+    set(METALLIB_FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib)
+
+    # the tensor API kernels go in a separate metallib, loaded only where supported
+    if (GGML_METAL_HAS_TENSOR_LIB)
+        set(AIR_MM_TENSOR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mul_mm_tensor.air")
+        # the tensor API needs OS 26+
+        set(XC_FLAGS_TENSOR ${XC_FLAGS} -mtargetos=${GGML_METAL_TARGET_OS}26.0${METAL_TARGET_SIM})
+        add_custom_command(
+            OUTPUT ${AIR_MM_TENSOR}
+            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS_TENSOR} -DGGML_METAL_HAS_TENSOR -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/mul_mm.metal -o ${AIR_MM_TENSOR}
+            DEPENDS kernels/mul_mm.metal kernels/common.h kernels/dequantize.h ${METALLIB_COMMON} ggml-metal-impl.h
+            COMMENT "Compiling kernels/mul_mm.metal (tensor API)"
+            VERBATIM
+        )
+
+        add_custom_command(
+            OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib
+            COMMAND xcrun -sdk ${METAL_SDK} metallib ${AIR_MM_TENSOR} -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib
+            DEPENDS ${AIR_MM_TENSOR}
+            COMMENT "Linking tensor API Metal kernels into ggml-tensor.metallib"
+        )
+
+        list(APPEND METALLIB_FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib)
+    endif()
+
     add_custom_command(
         OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
-        COMMAND xcrun -sdk macosx metallib ${AIR_FILES} -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
+        COMMAND xcrun -sdk ${METAL_SDK} metallib ${AIR_FILES} -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-common.h
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal-impl.h
         COMMAND rm -rf ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels
-        DEPENDS ${AIR_FILES}
+        DEPENDS ${AIR_FILES} ${AIR_MM_TENSOR}
         COMMENT "Linking Metal kernels into default.metallib"
     )
 
     add_custom_target(
         ggml-metal-lib ALL
-        DEPENDS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
+        DEPENDS ${METALLIB_FILES}
     )
 endif() # GGML_METAL_EMBED_LIBRARY
 
@@ -187,7 +234,7 @@ if (NOT GGML_METAL_EMBED_LIBRARY)
     )
 
     install(
-        FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
+        FILES ${METALLIB_FILES}
         DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 endif()
