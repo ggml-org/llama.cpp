@@ -112,6 +112,13 @@ void test_p2p_route_policy() {
     check(result.route == route::fallback && result.fallback_reason == reason::unrelated_shape,
             "unrelated tensor shape misclassified");
 
+    uint32_t token_state = 0;
+    check(ggml_cuda_p2p_next_nonzero_token(token_state) == 1 && token_state == 1,
+            "first P2P generation token is not one");
+    token_state = UINT32_MAX;
+    check(ggml_cuda_p2p_next_nonzero_token(token_state) == 1 && token_state == 1,
+            "P2P generation token wrap did not skip zero");
+
     check(ggml_cuda_p2p_two_rank_width_allowed(false, 1),
             "automatic two-rank width one was rejected");
     check(!ggml_cuda_p2p_two_rank_width_allowed(false, 2),

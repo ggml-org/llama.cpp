@@ -28,7 +28,7 @@ The tuner is model-independent: another model using the same certified collectiv
 
 ## Custom host-snapshot reductions
 
-The host-snapshot path uses allocation-local coherent mapped memory; users do not need `HSA_FORCE_FINE_GRAIN_PCIE`. Startup compares both supported custom schedules (`5,120` and `25,600` F32 elements) against the installed RCCL with four adversarial patterns and sixteen chained reductions. A schedule activates only after byte-for-byte agreement. Therefore newer ABI-compatible RCCL releases may use the tuner, while custom reductions independently fall back if chunk/rank order changed.
+The host-snapshot path uses allocation-local coherent mapped memory; users do not need `HSA_FORCE_FINE_GRAIN_PCIE`. Each rank resolves its own mapped device views, and exact system-scope generation flags plus same-stream dispatch protect the eight rotating snapshot slots. Startup compares the supported custom schedules against the installed RCCL with four adversarial patterns and sixteen chained reductions. A schedule activates only after byte-for-byte agreement. Therefore newer ABI-compatible RCCL releases may use the tuner, while custom reductions independently fall back if chunk/rank order changed.
 
 Runtime tensor gates remain strict:
 
