@@ -40,10 +40,20 @@ file(MAKE_DIRECTORY "${WORK_DIR}")
 
 message(STATUS "llama-connect: downloading ${URL}")
 
-file(DOWNLOAD "${URL}" "${ARCHIVE}" STATUS status TLS_VERIFY ON)
+# retry a few times, this runs in CI where a transient failure must not break the build
+foreach (attempt RANGE 1 3)
+    file(DOWNLOAD "${URL}" "${ARCHIVE}" STATUS status TLS_VERIFY ON INACTIVITY_TIMEOUT 60)
 
-list(GET status 0 code)
-list(GET status 1 msg)
+    list(GET status 0 code)
+    list(GET status 1 msg)
+
+    if (code EQUAL 0)
+        break()
+    endif()
+
+    message(STATUS "llama-connect: download attempt ${attempt} failed (${code}: ${msg})")
+    file(REMOVE "${ARCHIVE}")
+endforeach()
 
 if (NOT code EQUAL 0)
     file(REMOVE "${ARCHIVE}")

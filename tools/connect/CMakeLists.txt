@@ -20,10 +20,9 @@ if (APPLE)
         endif()
     endif()
 
+    # note: there is no macos-x64 asset, it is not built upstream (no Intel macOS runners)
     if (_arch MATCHES "^(arm64|aarch64)$")
         set(LLAMA_CONNECT_PLATFORM "macos-arm64")
-    elseif (_arch MATCHES "^(x86_64|AMD64|amd64|x64)$")
-        set(LLAMA_CONNECT_PLATFORM "macos-x64")
     endif()
 elseif (WIN32)
     # with Visual Studio generators, the target arch comes from -A
