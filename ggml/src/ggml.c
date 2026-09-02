@@ -7335,7 +7335,7 @@ void ggml_build_backward_expand(
         }
 
         // inplace operations are currently not supported
-        GGML_ASSERT(!node->view_src || node->op == GGML_OP_CPY || node->op == GGML_OP_VIEW ||
+        GGML_ASSERT(!node->view_src || node->op == GGML_OP_CPY || node->op == GGML_OP_SET_ROWS || node->op == GGML_OP_VIEW ||
             node->op == GGML_OP_RESHAPE || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_TRANSPOSE);
 
         const size_t ihash = ggml_hash_find(&cgraph->visited_hash_set, node);
