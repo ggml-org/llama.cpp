@@ -323,6 +323,10 @@ int op_cpy(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+    FARF(HIGH, "cpy-%s-%s: (%ux%ux%ux%u) -> (%ux%ux%ux%u) : use_dma=%d n_threads %u\n",
+         src0->type == HTP_TYPE_F32 ? "f32" : "f16", dst->type == HTP_TYPE_F32 ? "f32" : "f16",
+         ne00, ne01, ne02, ne03, ne0, ne1, ne2, ne3, use_dma, n_threads);
+
     if (use_dma) {
         cpy_dma_sametype_sameshape(octx, dst, src0, ct.src0_type_size, ne00, ne01, ne02, ne03, nb01, nb02, nb03, nb1, nb2, nb3);
     } else {
@@ -330,7 +334,7 @@ int op_cpy(struct htp_ops_context * octx) {
     }
 
     const struct htp_tensor *sync = octx->src[1];
-    if (sync) {
+    if (sync && (sync->flags & HTP_TENSOR_FENCE)) {
         if (!use_dma) {
             // htp_tensor_flush_all(octx->ctx, octx->dsts, 1);
             qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);

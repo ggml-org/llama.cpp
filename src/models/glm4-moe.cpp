@@ -17,10 +17,6 @@ void llama_model_glm4_moe::load_arch_hparams(llama_model_loader & ml) {
         hparams.expert_gating_func =  LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
     }
 
-    // NextN/MTP parameters
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_impl");
-
     switch (hparams.n_layer()) {
         case 46: type = LLM_TYPE_106B_A12B; break; // GLM-4.5-Air
         case 48: type = LLM_TYPE_102B_A12B; break; // Solar Open
