@@ -8,6 +8,7 @@
 #include "json.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -563,9 +564,37 @@ static hf_cache::hf_files get_split_files(const hf_cache::hf_files & files,
     return result;
 }
 
+// sidecar filename tokens, as used in `<quant>-<sidecar>` download tags,
+// e.g. `Q4_0-mtp` for `mtp-Model-Q4_0.gguf`, `BF16-mmproj` for `mmproj-BF16.gguf`
+static const std::vector<std::string> sidecar_tokens = {
+    "mtp", "eagle3", "dflash", "dspark", "mmproj",
+};
+
+static bool iequals(const std::string & a, const std::string & b) {
+    return a.size() == b.size() &&
+        std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+            return std::tolower((unsigned char) x) == std::tolower((unsigned char) y);
+        });
+}
+
+// split a `<quant>-<sidecar>` tag into its parts, e.g. `Q4_0-mtp` -> {`Q4_0`, `mtp`};
+// a bare sidecar tag (`mtp`) yields an empty quant; no sidecar yields an empty token
+static std::pair<std::string, std::string> split_sidecar_tag(const std::string & tag) {
+    for (const auto & t : sidecar_tokens) {
+        if (tag.size() > t.size() + 1 && iequals(tag.substr(tag.size() - t.size() - 1), "-" + t)) {
+            return { tag.substr(0, tag.size() - t.size() - 1), t };
+        }
+        if (iequals(tag, t)) {
+            return { "", t };
+        }
+    }
+    return { tag, "" };
+}
+
 // pick the best sibling GGUF whose filename contains `keyword` (e.g. "mmproj" / "mtp"),
 // preferring deeper shared directory prefix with the model, then exact `tag` match,
 // then closest quantization to the tag when given, or to the model otherwise
+// an empty `model` skips the directory constraint: the sidecar is matched by tag alone
 static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
                                            const std::string        & model,
                                            const std::string        & keyword,
@@ -589,7 +618,6 @@ static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
         model_bits = extract_quant_bits(model);
     }
     auto model_parts = string_split<std::string>(model, '/');
-    auto model_dir = model_parts.end() - 1;
 
     for (const auto & f : files) {
         if (!string_ends_with(f.path, ".gguf") ||
@@ -600,13 +628,16 @@ static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
         auto sib_parts = string_split<std::string>(f.path, '/');
         auto sib_dir = sib_parts.end() - 1;
 
-        auto [_, dir] = std::mismatch(model_parts.begin(), model_dir,
-                                      sib_parts.begin(), sib_dir);
-        if (dir != sib_dir) {
-            continue;
+        size_t depth = 0;
+        if (!model.empty()) {
+            auto model_dir = model_parts.end() - 1;
+            auto [_, dir] = std::mismatch(model_parts.begin(), model_dir,
+                                          sib_parts.begin(), sib_dir);
+            if (dir != sib_dir) {
+                continue;
+            }
+            depth = dir - sib_parts.begin();
         }
-
-        size_t depth = dir - sib_parts.begin();
         auto bits = extract_quant_bits(f.path);
         auto diff = std::abs(bits - model_bits);
 
@@ -765,8 +796,28 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model & 
         }
     } else {
         primary = find_best_model(all, tag);
+
+        // a `<quant>-<sidecar>` tag (e.g. `Q4_0-mtp`) requests that sidecar alone;
+        // the full tag is kept for embedded-draft files (e.g. `Model-Q4_0-mtp.gguf`),
+        // so this only runs when no model file matched
+        auto [base_tag, sidecar] = split_sidecar_tag(tag);
+
+        if (primary.path.empty() && !sidecar.empty()) {
+            auto keyword = sidecar == "mmproj" ? sidecar : sidecar + "-";
+            auto found = find_best_sibling(all, "", keyword, base_tag);
+
+            if (!found.path.empty()) {
+                if      (sidecar == "mtp")    plan.mtp    = found;
+                else if (sidecar == "eagle3") plan.eagle3 = found;
+                else if (sidecar == "dflash") plan.dflash = found;
+                else if (sidecar == "dspark") plan.dspark = found;
+                else                          plan.mmproj = found;
+            }
+        }
+
         // a requested sidecar can resolve on its own, without a full model of the same tag
-        if (primary.path.empty() && !opts.download_mtp && !opts.download_dflash && !opts.download_eagle3 && !opts.download_dspark) {
+        if (primary.path.empty() && sidecar.empty() &&
+            !opts.download_mtp && !opts.download_dflash && !opts.download_eagle3 && !opts.download_dspark) {
             LOG_ERR("%s: no GGUF files found in repository %s\n", __func__, repo.c_str());
             list_available_gguf_files(all);
             return plan;
@@ -794,7 +845,7 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model & 
         plan.dspark = find_best_dspark(all, primary.path, tag);
     }
 
-    if (primary.path.empty() &&
+    if (primary.path.empty() && plan.mmproj.local_path.empty() &&
         plan.mtp.local_path.empty() && plan.dflash.local_path.empty() && plan.eagle3.local_path.empty() && plan.dspark.local_path.empty()) {
         LOG_ERR("%s: no GGUF files found in repository %s\n", __func__, repo.c_str());
         list_available_gguf_files(all);
@@ -969,16 +1020,45 @@ std::vector<common_cached_model_info> common_list_cached_models() {
 
     for (const auto & f : files) {
         auto split = get_gguf_split_info(f.path);
-        if (split.index != 1 || split.tag.empty() ||
+        if (split.index != 1 || split.tag.empty()) {
+            continue;
+        }
+
+        bool is_sidecar =
             split.prefix.find("mmproj")  != std::string::npos ||
             split.prefix.find("mtp-")    != std::string::npos ||
             split.prefix.find("eagle3-") != std::string::npos ||
             split.prefix.find("dflash-") != std::string::npos ||
-            split.prefix.find("dspark-") != std::string::npos) {
-            continue;
+            split.prefix.find("dspark-") != std::string::npos;
+
+        std::string tag = split.tag;
+
+        if (is_sidecar) {
+            // a sidecar is listed under its own `<quant>-<sidecar>` tag, so a
+            // cached `mtp-Model-Q4_0.gguf` shows up as `<repo>:Q4_0-mtp`
+            auto base = f.path;
+            if (auto pos = base.rfind('/'); pos != std::string::npos) {
+                base = base.substr(pos + 1);
+            }
+
+            std::string sidecar;
+            for (const auto & t : sidecar_tokens) {
+                if (base.rfind(t + "-", 0) == 0) {
+                    sidecar = t;
+                    break;
+                }
+            }
+
+            // an unrecognized sidecar name cannot be re-requested by tag, stay hidden
+            if (sidecar.empty()) {
+                continue;
+            }
+
+            tag += "-" + sidecar;
         }
-        if (seen.insert(f.repo_id + ":" + split.tag).second) {
-            result.push_back({f.repo_id, split.tag});
+
+        if (seen.insert(f.repo_id + ":" + tag).second) {
+            result.push_back({f.repo_id, tag});
         }
     }
 
@@ -1019,6 +1099,15 @@ bool common_download_remove(const std::string & hf_repo_with_tag) {
         c = (char) std::toupper((unsigned char) c);
     }
 
+    // a sidecar tag (`Q4_0-mtp`) targets the sidecar file alone
+    auto [base_tag, sidecar] = split_sidecar_tag(tag);
+    if (!sidecar.empty()) {
+        tag_upper = base_tag;
+        for (char & c : tag_upper) {
+            c = (char) std::toupper((unsigned char) c);
+        }
+    }
+
     auto files = hf_cache::get_cached_files(repo_id);
     if (files.empty()) {
         return false;
@@ -1028,9 +1117,19 @@ bool common_download_remove(const std::string & hf_repo_with_tag) {
     std::vector<fs::path> to_remove;
     for (const auto & f : files) {
         auto split = get_gguf_split_info(f.path);
-        if (split.tag == tag_upper) {
-            to_remove.emplace_back(f.local_path);
+        if (split.tag != tag_upper) {
+            continue;
         }
+        if (!sidecar.empty()) {
+            auto base = f.path;
+            if (auto pos = base.rfind('/'); pos != std::string::npos) {
+                base = base.substr(pos + 1);
+            }
+            if (base.rfind(sidecar + "-", 0) != 0) {
+                continue;
+            }
+        }
+        to_remove.emplace_back(f.local_path);
     }
 
     if (to_remove.empty()) {
