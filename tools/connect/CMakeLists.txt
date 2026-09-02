@@ -75,6 +75,11 @@ add_custom_target(${TARGET} ALL
     VERBATIM
 )
 
+# building llama-server should also pull the binary (for convenience)
+if (TARGET llama-server)
+    add_dependencies(llama-server ${TARGET})
+endif()
+
 if (LLAMA_TOOLS_INSTALL)
     install(PROGRAMS "${LLAMA_CONNECT_OUT_DIR}/${LLAMA_CONNECT_BINARY}" TYPE BIN)
 endif()
