@@ -35,11 +35,6 @@
 
 	let selectedPaths = $state<string[]>([]);
 
-	// Quant picks shown inline in the command. `basePick` is preselected so the
-	// command is readable before the user touches anything.
-	let basePick = $state('');
-	let draftPick = $state('');
-
 	/** Bit depth to preselect for the base model; falls back to the closest one. */
 	const DEFAULT_BASE_BIT_DEPTH = 4;
 
@@ -164,30 +159,21 @@
 	}
 
 	/**
-	 * Mirror the selection into the selects. With no main chip on, the default
-	 * quant (4-bit, or the nearest one still to fetch) is preselected in both
-	 * the command and the chips, so the command is always complete; the dashed
-	 * border tells a default-only pick from a deliberate one.
+	 * Seed the default quant once, when the file list first resolves. After
+	 * that the selection is entirely user-driven; nothing re-applies it.
 	 */
+	let seeded = false;
+
 	$effect(() => {
-		const paths = selectedPaths;
-		const mainPath = mainFiles.find((f) => paths.includes(f.path))?.path ?? '';
+		if (seeded || !bitDepthRows.length) return;
 
-		if (mainPath) {
-			basePick = mainPath;
-		} else {
-			const fallback = defaultBasePath();
+		const fallback = defaultBasePath();
 
-			basePick = fallback;
-
-			// Still fetchable: also toggle the chip on. When everything is
-			// downloaded the chips stay off and only the command previews it.
-			if (fallback && !downloadedPaths.has(fallback)) {
-				selectedPaths = [...paths.filter((p) => classify(p) === 'aux'), fallback];
-			}
+		if (fallback) {
+			selectedPaths = [fallback];
 		}
 
-		draftPick = draftFiles.find((f) => paths.includes(f.path))?.path ?? '';
+		seeded = true;
 	});
 
 	/**
@@ -196,8 +182,6 @@
 	 */
 	function handleSelection(next: string[]) {
 		const added = next.find((p) => !selectedPaths.includes(p));
-
-		if (added && downloadedPaths.has(added)) return;
 
 		if (!added) {
 			selectedPaths = next;
@@ -231,6 +215,10 @@
 
 	/** Selected draft sidecar; its type drives the `--spec-type` flag. */
 	let draftEntry = $derived(selected.find((f) => f.kind === 'draft') ?? null);
+
+	/** Selected paths for the command preview; mirror the selection one-way. */
+	let basePick = $derived(mainEntry?.path ?? '');
+	let draftPick = $derived(draftEntry?.path ?? '');
 
 	let draftSidecar = $derived(
 		draftEntry ? (HuggingFaceService.extractQuantMeta(draftEntry.path)?.sidecar ?? null) : null
@@ -368,18 +356,6 @@
 	<section
 		class="rounded-3xl border border-border/30 bg-muted/40 shadow-xs transition-[box-shadow,border-color] focus-within:border-border focus-within:shadow-sm dark:border-border/20 dark:bg-muted/50"
 	>
-		<!-- header row is intentionally hidden for now
-		<div class="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-1">
-			<h2 class="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
-				Downloadable options
-			</h2>
-
-			{#if selectedPaths.length}
-				<span class="text-xs text-muted-foreground">{selected.length} selected</span>
-			{/if}
-		</div>
-		-->
-
 		<ToggleGroup
 			class="flex w-full flex-col items-stretch divide-y divide-border/50 px-4 pb-1 dark:divide-border/35"
 			onValueChange={handleSelection}
@@ -391,7 +367,7 @@
 			{/each}
 		</ToggleGroup>
 
-		<!-- Download CTA + terminal command with inline quant selects -->
+		<!-- Download CTA (draft-only when the draft chip is the sole pick) + inline quant selects -->
 		<div class="space-y-2.5 border-t border-border/50 px-4 pt-3.5 pb-4 dark:border-border/35">
 			<ModelsDiscoverModelDetailsDownloadOptionsDownloadButton
 				disabled={selected.length === 0 && !commandMain}
@@ -409,20 +385,22 @@
 				<span class="h-px flex-1 bg-border/50"></span>
 			</div>
 
-			<ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand
-				{baseOptions}
-				{basePick}
-				command={serveCommand}
-				{draftOptions}
-				{draftPick}
-				draftQuant={commandDraftQuant}
-				mainQuant={commandMainQuant}
-				mainSelected={Boolean(mainEntry)}
-				{modelId}
-				onBasePick={(path) => setPick('main', path)}
-				onDraftPick={(path) => setPick('draft', path)}
-				specType={draftEntry && draftSidecar ? SPEC_TYPE[draftSidecar] : null}
-			/>
+			{#if selected.length > 0}
+				<ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand
+					{baseOptions}
+					{basePick}
+					command={serveCommand}
+					{draftOptions}
+					{draftPick}
+					draftQuant={commandDraftQuant}
+					mainQuant={commandMainQuant}
+					mainSelected={Boolean(mainEntry)}
+					{modelId}
+					onBasePick={(path) => setPick('main', path)}
+					onDraftPick={(path) => setPick('draft', path)}
+					specType={draftEntry && draftSidecar ? SPEC_TYPE[draftSidecar] : null}
+				/>
+			{/if}
 		</div>
 	</section>
 {/if}
