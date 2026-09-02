@@ -1,5 +1,4 @@
 import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
-import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
 
@@ -62,11 +61,6 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		tooltip: 'New chat'
 	},
 	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
-	{
-		action: SidebarAction.MCP_SERVERS,
-		icon: McpLogo,
-		tooltip: 'MCP Servers'
-	},
 	{
 		action: SidebarAction.SETTINGS,
 		icon: Settings,
