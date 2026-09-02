@@ -259,6 +259,11 @@ static void parse_tensor_buffer_overrides(const std::string & value, std::vector
         if (buft) {
             buft_list[ggml_backend_buft_name(buft)] = buft;
         }
+        // host buffer types (e.g. CUDA_Host) so CPU-resident tensors can use pinned memory
+        auto * host_buft = ggml_backend_dev_host_buffer_type(dev);
+        if (host_buft) {
+            buft_list[ggml_backend_buft_name(host_buft)] = host_buft;
+        }
     }
 
     for (const auto & override : string_split<std::string>(value, ',')) {
