@@ -8,7 +8,7 @@
 
 import { base } from '$app/paths';
 import { API_MODELS, MODEL_ID, type ModelSidecar, sidecarFromFileToken } from '$lib/constants';
-import { ServerModelStatus } from '$lib/enums';
+import { ModelAuxSidecar, ModelDraftSidecar, ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
 import {
 	apiDelete,
@@ -20,8 +20,31 @@ import {
 } from '$lib/utils';
 import { getAuthHeaders } from '$lib/utils/api-headers';
 
+/** Sidecar filename tokens, mirrored from the enums for entry-tag checks. */
+const SIDECAR_TOKENS: readonly string[] = [
+	...Object.values(ModelDraftSidecar),
+	...Object.values(ModelAuxSidecar)
+];
+
 export class ModelsService {
 	private static readonly SSE_RECONNECT_MS = 1000;
+
+	/**
+	 * True when a router entry id is a sidecar-only entry, e.g. `org/model:Q4_0-mtp`
+	 * or `org/model:mmproj`. Such entries mark a downloaded sidecar file, not a
+	 * loadable model, so the selector skips them.
+	 */
+	static isSidecarEntry(modelId: string): boolean {
+		const idx = modelId.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
+
+		if (idx === MODEL_ID.NOT_FOUND) return false;
+
+		const tag = modelId.slice(idx + 1).toLowerCase();
+		const dash = tag.lastIndexOf(MODEL_ID.SEGMENT_SEPARATOR);
+		const token = dash === -1 ? tag : tag.slice(dash + 1);
+
+		return SIDECAR_TOKENS.includes(token);
+	}
 
 	/**
 	 * Build the `<repo>:<tag>` string expected by POST /models from a parsed
