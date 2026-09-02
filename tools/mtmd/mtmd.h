@@ -308,12 +308,14 @@ MTMD_API int32_t mtmd_tokenize(mtmd_context * ctx,
 // same as mtmd_tokenize(), but takes an array of mtmd_input_part
 // use cases:
 // - when you don't want to use media markers (they will be tokenized as normal text)
-// - when you want to control add_special for each text part
+// - when you want to control parse_special for each text part
+// note: per-part add_special will be ignored
 // return 1 if a part has both text and bitmap set (or neither)
 MTMD_API int32_t mtmd_tokenize_from_parts(mtmd_context * ctx,
                                           mtmd_input_chunks * output,
                                           const mtmd_input_part ** parts,
-                                          size_t n_parts);
+                                          size_t n_parts,
+                                          bool add_special);
 
 DEPRECATED(MTMD_API int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens),
            "use mtmd_encode_chunk() instead");

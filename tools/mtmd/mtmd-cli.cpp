@@ -287,11 +287,11 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
         return 1;
     }
 
-    // interleave text and media parts; only the first text part may add BOS
+    // interleave text and media parts
     std::vector<mtmd_input_text> texts(segments.size());
     std::vector<mtmd_input_part> parts;
     for (size_t i = 0; i < segments.size(); i++) {
-        texts[i] = {segments[i].data(), segments[i].size(), i == 0 && add_bos, /* parse_special */ true};
+        texts[i] = {segments[i].data(), segments[i].size(), /* add_special */ false, /* parse_special */ true};
         parts.push_back({&texts[i], nullptr});
         if (i < bitmaps_c_ptr.size()) {
             parts.push_back({nullptr, bitmaps_c_ptr[i]});
@@ -306,7 +306,8 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     int32_t res = mtmd_tokenize_from_parts(ctx.ctx_vision.get(),
                         chunks.ptr.get(), // output
                         parts_ptr.data(),
-                        parts_ptr.size());
+                        parts_ptr.size(),
+                        add_bos);
     if (res != 0) {
         LOG_ERR("Unable to tokenize prompt, res = %d\n", res);
         return 1;

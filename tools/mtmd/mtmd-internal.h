@@ -13,8 +13,7 @@
 struct mtmd_internal_part {
     std::string text;
     const mtmd_bitmap * bitmap;
-    // tokenizer flags, only used for text parts
-    bool add_special   = false;
+    // only used for text parts
     bool parse_special = false;
 };
 

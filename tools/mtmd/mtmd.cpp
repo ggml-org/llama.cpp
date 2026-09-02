@@ -1153,7 +1153,7 @@ struct mtmd_tokenizer {
                 }
                 parts.push_back({"", bitmaps[i_bm++]});
             } else {
-                parts.push_back({std::move(part), nullptr, false, parse_special});
+                parts.push_back({std::move(part), nullptr, parse_special});
             }
         }
 
@@ -1172,15 +1172,16 @@ struct mtmd_tokenizer {
 
     mtmd_tokenizer(mtmd_context * ctx,
             const mtmd_input_part ** input_parts,
-            size_t n_parts) : ctx(ctx) {
-        add_special   = false; // add_special is controlled per text part
-        parse_special = true;  // only used for text returned by lazy bitmaps
+            size_t n_parts,
+            bool add_special) : ctx(ctx) {
+        this->add_special = add_special;
+        parse_special = true; // only used for text returned by lazy bitmaps
         vocab         = ctx->vocab;
 
         for (size_t i = 0; i < n_parts; i++) {
             const mtmd_input_part * p = input_parts[i];
             if (p->text != nullptr) {
-                parts.push_back({std::string(p->text->text, p->text->text_len), nullptr, p->text->add_special, p->text->parse_special});
+                parts.push_back({std::string(p->text->text, p->text->text_len), nullptr, p->text->parse_special});
             } else {
                 parts.push_back({"", p->bitmap});
             }
@@ -1213,7 +1214,7 @@ struct mtmd_tokenizer {
                             LOG_DBG("%s: lazy callback returned bitmap with dimensions %d x %d\n", __func__, out_bm->nx, out_bm->ny);
                         } else if (out_str) {
                             auto & ptr = text_from_lazy.emplace_back(out_str); // remember to free it later
-                            expanded.push_back({ptr, nullptr, false, parse_special});
+                            expanded.push_back({ptr, nullptr, parse_special});
                             LOG_DBG("%s: lazy callback returned text: %s\n", __func__, out_str);
                         }
                     } else if (res == -1) {
@@ -1257,7 +1258,7 @@ struct mtmd_tokenizer {
                     return res;
                 }
             } else {
-                add_text(p.text, p.parse_special, p.add_special);
+                add_text(p.text, p.parse_special);
             }
         }
 
@@ -1297,12 +1298,12 @@ struct mtmd_tokenizer {
         return 0;
     }
 
-    void add_text(const std::string & txt, bool parse_special, bool add_special = false) {
+    void add_text(const std::string & txt, bool parse_special) {
         if (vocab == nullptr) {
             throw std::runtime_error("llama_vocab is not provided");
         }
         LOG_DBG("%s: %s\n", __func__, txt.c_str());
-        auto tokens = mtmd_tokenize_text_internal(vocab, txt, add_special, parse_special);
+        auto tokens = mtmd_tokenize_text_internal(vocab, txt, /* add_special */ false, parse_special);
         add_text(tokens);
     }
 
@@ -1730,15 +1731,20 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
 int32_t mtmd_tokenize_from_parts(mtmd_context * ctx,
             mtmd_input_chunks * output,
             const mtmd_input_part ** parts,
-            size_t n_parts) {
+            size_t n_parts,
+            bool add_special) {
     for (size_t i = 0; i < n_parts; i++) {
         if ((parts[i]->text == nullptr) == (parts[i]->bitmap == nullptr)) {
             LOG_ERR("%s: part %zu must have either text or bitmap set, not both\n", __func__, i);
             return 1;
         }
+        if (parts[i]->text != nullptr && parts[i]->text->text == nullptr) {
+            LOG_ERR("%s: part %zu has null text pointer\n", __func__, i);
+            return 1;
+        }
     }
     try {
-        mtmd_tokenizer tokenizer(ctx, parts, n_parts);
+        mtmd_tokenizer tokenizer(ctx, parts, n_parts, add_special);
         return tokenizer.tokenize(output);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
