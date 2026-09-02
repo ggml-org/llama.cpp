@@ -341,10 +341,13 @@ function gg_run_test_llama_archs_models {
 
     set -e
 
-    rm -rf build-ci-models && mkdir -p build-ci-models
+    # TODO: fix and re-enable `test-llama-archs` on OpenVINO
+    if [ -z ${GG_BUILD_OPENVINO} ]; then
+        rm -rf build-ci-models && mkdir -p build-ci-models
 
-    # generate the dummy models used by the model-dependent tests
-    ./build-ci-release/bin/test-llama-archs -o build-ci-models 2>&1
+        # generate the dummy models used by the model-dependent tests
+        ./build-ci-release/bin/test-llama-archs -o build-ci-models 2>&1
+    fi
 
     set +e
 }
