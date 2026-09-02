@@ -553,10 +553,26 @@ bool llm_graph_input_kpool::can_reuse(const llm_graph_params & params) {
     const int64_t n_pools = llama_kpool_n_pools((uint32_t) n_kv, kpool, (uint32_t) n_ps);
 
     res &= b_n_kv_attn == n_kv;
-    res &= sel_mask == nullptr || (sel_mask->ne[0] == n_kv && sel_mask->ne[1] == n_tps &&
-                                   sel_mask->ne[3] == n_stream);
+
+    // exhaustive optional-pair contract (codex 077 s4 / grokk 078 s1):
+    // presence, pairedness and exact shape for every optional tensor
+    res &= (sel_mask != nullptr) == (cand_mask != nullptr);
+    if (sel_mask != nullptr) {
+        res &= sel_mask->ne[0] == n_kv && sel_mask->ne[1] == n_tps && sel_mask->ne[3] == n_stream;
+        res &= ggml_are_same_shape(sel_mask, cand_mask);
+    }
     res &= pool_cells->ne[0] == (int64_t) kpool*n_pools && pool_cells->ne[1] == n_stream;
     res &= pool_bias->ne[0] == n_pools && pool_bias->ne[1] == n_tps && pool_bias->ne[2] == n_stream;
+    if (pool_reps != nullptr) {
+        res &= pool_reps->ne[0] == n_pools && pool_reps->ne[1] == n_stream;
+        res &= new_pool_cells != nullptr && new_pool_reps != nullptr;
+        res &= new_pool_cells->ne[0] == (int64_t) kpool*(int64_t) n_new_max &&
+               new_pool_cells->ne[1] == n_stream;
+        res &= new_pool_reps->ne[0] == (int64_t) n_new_max*n_stream;
+    } else {
+        res &= new_pool_cells == nullptr && new_pool_reps == nullptr;
+    }
+    res &= (tail_cells != nullptr) == (tail_valid != nullptr);
 
     // policy: rebuild mode and the fixed pooled-key emission bound must match
     // what a fresh build would choose (codex 068 s3)
@@ -567,6 +583,7 @@ bool llm_graph_input_kpool::can_reuse(const llm_graph_params & params) {
     res &= (int64_t) n_new_max == want_new_max;
 
     if (tail_cells != nullptr) {
+        res &= ggml_are_same_shape(tail_cells, tail_valid);
         // gathered graph: recompute the PAD32 width — never cache 2080 (grokk 070 s3)
         const int64_t n_top = (int64_t) kpool *
                 llama_kpool_select_k((uint32_t) n_pools, hparams_indexer_top_k, kpool);

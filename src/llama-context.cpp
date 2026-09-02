@@ -1481,11 +1481,25 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
                     std::sort(v.begin(), v.end());
                     return v.empty() ? (int64_t) 0 : v[(size_t) (p*(v.size() - 1))];
                 };
-                fprintf(stderr, "HOST_TIMERS n=%zu rebuild_us p50=%lld p95=%lld | set_inputs_us p50=%lld p95=%lld | reused=%d\n",
-                        fbl_host_rebuild_us.size(),
-                        (long long) pct(fbl_host_rebuild_us, 0.5), (long long) pct(fbl_host_rebuild_us, 0.95),
-                        (long long) pct(fbl_host_setinp_us, 0.5), (long long) pct(fbl_host_setinp_us, 0.95),
-                        n_reused);
+                // rebuild stats over NONZERO samples only: p50 of a 255:1 zero-heavy
+                // series hides the one pad-256 rebuild entirely (grokk 076 s3).
+                std::vector<int64_t> nz;
+                int64_t sum_rebuild = 0;
+                for (int64_t v : fbl_host_rebuild_us) {
+                    sum_rebuild += v;
+                    if (v > 0) nz.push_back(v);
+                }
+                const size_t n_tot = fbl_host_rebuild_us.size();
+                fprintf(stderr, "HOST_TIMERS n=%zu n_rebuild=%zu n_reuse=%zu | "
+                        "rebuild_nz_us p50=%lld p95=%lld max=%lld | "
+                        "burst_amort_us=%lld | serving_est_us=%lld | "
+                        "set_inputs_us p50=%lld p95=%lld\n",
+                        n_tot, nz.size(), n_tot - nz.size(),
+                        (long long) pct(nz, 0.5), (long long) pct(nz, 0.95),
+                        (long long) (nz.empty() ? 0 : *std::max_element(nz.begin(), nz.end())),
+                        (long long) (n_tot ? sum_rebuild/(int64_t) n_tot : 0),
+                        (long long) (pct(nz, 0.5)/256),
+                        (long long) pct(fbl_host_setinp_us, 0.5), (long long) pct(fbl_host_setinp_us, 0.95));
             }
         }
     }
@@ -3409,6 +3423,8 @@ llama_perf_context_data llama_context::perf_get_data() const {
 }
 
 void llama_context::perf_reset() {
+    fbl_host_rebuild_us.clear();
+    fbl_host_setinp_us.clear();
     t_start_us  = ggml_time_us();
     t_eval_us   = n_eval = 0;
     t_p_eval_us = n_p_eval = 0;
