@@ -311,6 +311,7 @@ jobs:
           key: release-${{ matrix.os }}-vulkan
 
   ubuntu-cuda:
+    name: ubuntu-cuda (${{ matrix.label }}, ${{ matrix.build }})
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
