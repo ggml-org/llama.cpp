@@ -1786,6 +1786,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         }
                     }
 
+                    if (memory->try_lazy_quantize(this)) {
+                        sched_need_reserve = true;
+                        sched_reserve();
+
+                        LLAMA_LOG_DEBUG("%s: retrying batch size %d after lazy KV cache quantization\n", __func__, balloc->get_n_tokens());
+
+                        continue;
+                    }
+
                     LLAMA_LOG_WARN("%s: failed to find a memory slot for batch of size %d\n", __func__, balloc->get_n_tokens());
 
                     return 1;
@@ -3388,6 +3397,8 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
     if (memory) {
         LLAMA_LOG_DEBUG("%s: - reading memory module\n", __func__);
 
+        // A partial or failed restore can change only part of the cache layout.
+        sched_need_reserve = sched_need_reserve || memory->get_has_lazy_quant();
         memory->state_read(io);
     }
 
@@ -3404,6 +3415,7 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     if (memory) {
+        sched_need_reserve = sched_need_reserve || memory->get_has_lazy_quant();
         memory->state_read(io, seq_id, flags);
     }
 
