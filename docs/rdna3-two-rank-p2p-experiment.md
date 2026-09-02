@@ -23,10 +23,9 @@ available only in HIP+Linux+RCCL builds after all of these checks pass:
 The candidate uses portable mapped-host snapshots and separate start/end phase
 flags. Snapshot storage has eight slots and the dispatch requires both ranks to
 use the same backend stream; unsupported shape, topology, or stream cases
-return to RCCL. The ordinary candidate supports hidden-state widths 1 through 6
-(`[5120,width,1,1]` F32). Each width is qualified independently, so a width
-that does not match the installed RCCL behavior falls back without disabling
-other widths.
+return to RCCL. RDNA2 Auto qualifies only width-one decode. Explicit mode
+supports hidden-state widths 1 through 6 (`[5120,width,1,1]` F32), qualifying
+each independently so a rejected width does not disable the others.
 
 Direct remote-device pointer reads were tested in a standalone microbenchmark,
 but failed exact validation against real model allocations. That route was not
@@ -53,8 +52,10 @@ GGML_HIP_RDNA3_AUTO=1 GGML_CUDA_ALLREDUCE=nccl \
 
 `GGML_HIP_P2P_ALLREDUCE=1` remains a supervised explicit override for the
 host-snapshot candidate on either architecture. `GGML_HIP_P2P_ALLREDUCE=0`
-suppresses it. The earlier `GGML_HIP_RDNA3_P2P_ALLREDUCE` name remains an
-alias. The two-rank path is ordinary AllReduce only; the existing four-rank
+suppresses it. With the explicit enable, `GGML_HIP_RDNA3_P2P_CHUNKED=1`
+enables the guarded two-block protocol for wider rows. The earlier
+`GGML_HIP_RDNA3_P2P_ALLREDUCE` name remains an alias. The two-rank path is
+ordinary AllReduce only; the existing four-rank
 consumer-fused path remains separately gated. No NCCL algorithm, protocol,
 channel, or topology override is implied.
 
@@ -75,3 +76,6 @@ Acceptance varied between the short runs (`0.88462` RCCL versus `0.85047`
 snapshot). On the later MQ-IQ4_XS_1 workload, disabling the host-snapshot
 candidate improved the warm result from `91.70` to `96.97` tok/s, so the
 candidate remains explicit on gfx1100 pending a different implementation.
+On V620/gfx1030, repeated target-only decode improved `38.44 → 40.40` tok/s,
+while speculative multi-row one-block and two-block paths remained below RCCL.
+Consequently RDNA2 Auto uses width one only; wider rows remain explicit.

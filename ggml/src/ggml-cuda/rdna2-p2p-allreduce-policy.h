@@ -128,6 +128,12 @@ inline ggml_cuda_rdna2_p2p_host_route_result ggml_cuda_rdna2_p2p_host_select_rou
              ggml_cuda_rdna2_p2p_host_fallback_reason::unsupported_width };
 }
 
+// The automatic two-rank profile is qualified only for single-row decode.
+// Explicit supervised modes retain widths 1-6 for matched experiments.
+inline bool ggml_cuda_p2p_two_rank_width_allowed(bool explicit_request, int64_t width) {
+    return width >= 1 && width <= 6 && (explicit_request || width == 1);
+}
+
 inline uint32_t ggml_cuda_rdna2_p2p_host_width_bit(int64_t width) {
     return width >= 1 && width <= 31 ? 1u << uint32_t(width) : 0;
 }

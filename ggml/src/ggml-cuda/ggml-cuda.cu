@@ -1345,10 +1345,10 @@ static __global__ void ggml_cuda_rdna2_p2p_host_snapshot_reduce_add_rms_mul_5120
 // Direct peer pointers were not accepted as a production data path on the
 // model allocation layout, so this candidate uses portable mapped-host
 // snapshots and exact phase flags. Qualified RDNA2 Auto topologies may arm
-// the original one-block form; RDNA3 Auto deliberately leaves this candidate
-// off. The optional chunked form is separately explicit-only after matched
-// gfx1100 testing found the first four-block version slightly slower end to
-// end. RCCL remains the fallback for every rejected shape or setup failure.
+// the original one-block form for width-one decode only; RDNA3 Auto leaves
+// this candidate off. Wider and chunked forms remain explicit-only after
+// matched gfx1100 testing found the first four-block version slightly slower
+// end to end. RCCL remains the fallback for every rejected shape or setup failure.
 static constexpr unsigned GGML_CUDA_RDNA3_P2P_FLAG_STRIDE = 32;
 static constexpr unsigned GGML_CUDA_RDNA3_P2P_END_FLAG_OFFSET = 16;
 static constexpr unsigned GGML_CUDA_RDNA3_P2P_MAX_BLOCKS = 2;
@@ -1942,10 +1942,14 @@ static bool ggml_cuda_rdna3_p2p_init(ggml_backend_cuda_comm_context * comm_ctx) 
         }
     }
 
-    // Qualify every width that the generic hidden-state path may submit. A
-    // failed width is refused independently; a passing width remains usable
-    // while RCCL handles unsupported or unqualified shapes.
+    // Auto is qualified only for ordinary width-one decode. Explicit modes
+    // retain wider self-tested shapes for supervised one-block/chunked A/Bs.
+    // A failed width is refused independently while RCCL handles every other
+    // shape.
     for (int width = 1; width <= 6; ++width) {
+        if (!ggml_cuda_p2p_two_rank_width_allowed(explicit_set, width)) {
+            continue;
+        }
         const bool exact = ggml_cuda_rdna3_p2p_runtime_selftest(comm_ctx, 5120 * width);
         if (exact) {
             comm_ctx->rdna3_p2p_exact_widths |= ggml_cuda_rdna3_p2p_width_bit(width);
