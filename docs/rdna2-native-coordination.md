@@ -41,9 +41,11 @@ All misses use RCCL.
 A separate architecture-neutral two-rank candidate uses the same mapped-host
 snapshot/phase-flag family for qualified gfx1030 and gfx1100 TP2 layouts. It
 supports hidden-state widths 1 through 6 and follows `GGML_HIP_RDNA2_AUTO` on
-RDNA2 or `GGML_HIP_RDNA3_AUTO=1` on RDNA3. It is ordinary AllReduce only; the
-four-rank RDNA2 consumer-fused route remains separate. `GGML_HIP_P2P_ALLREDUCE`
-can explicitly enable or disable the two-rank candidate for supervised tests.
+RDNA2. On gfx1100, `GGML_HIP_RDNA3_AUTO=1` deliberately keeps RCCL/direct-P2P
+because the host-snapshot candidate was slower in matched testing;
+`GGML_HIP_P2P_ALLREDUCE=1` explicitly enables it for supervised experiments.
+It is ordinary AllReduce only; the four-rank RDNA2 consumer-fused route remains
+separate.
 
 ## Model-specific automatic paths
 

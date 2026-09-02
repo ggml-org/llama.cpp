@@ -97,7 +97,7 @@ exhaustion.
 
 | Optimization | Status and activation | Scope / notes |
 |---|---|---|
-| RCCL AllReduce and direct P2P | **Automatic** with `GGML_HIP_RDNA3_AUTO=1` and an RCCL build | Defaults only unset `GGML_CUDA_ALLREDUCE=nccl`, `GGML_CUDA_P2P=1`, and `NCCL_P2P_DISABLE=0`; RCCL level, algorithm, protocol, and channel tuning stay on Auto. Qualified TP2 also runs the guarded two-rank host-snapshot candidate after per-width RCCL self-tests. |
+| RCCL AllReduce and direct P2P | **Automatic** with `GGML_HIP_RDNA3_AUTO=1` and an RCCL build | Defaults only unset `GGML_CUDA_ALLREDUCE=nccl`, `GGML_CUDA_P2P=1`, and `NCCL_P2P_DISABLE=0`; RCCL level, algorithm, protocol, and channel tuning stay on Auto. The preliminary TP2 host-snapshot candidate remains explicit via `GGML_HIP_P2P_ALLREDUCE=1` after gfx1100 A/B testing found it slower than RCCL. |
 | gfx11 MMQ / WMMA | **Automatic** in a gfx11 build | Qualified Q4 prompt kernels and compatible F16 flash attention use the compiled gfx11 paths; no runtime switch is needed. |
 | gfx1100 flash-attention launch shapes | **Automatic** | Selected by architecture and shape under the safe profile. |
 | Q8_0 MMVQ VDR=4 | **Automatic** for native gfx1100 | Passed backend correctness and shape A/B tests on both RX 7900 XT cards; this is not end-to-end Q8 GGUF validation. |

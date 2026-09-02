@@ -1344,9 +1344,10 @@ static __global__ void ggml_cuda_rdna2_p2p_host_snapshot_reduce_add_rms_mul_5120
 // separate from the four-rank RDNA2 host-snapshot implementation above.
 // Direct peer pointers were not accepted as a production data path on the
 // model allocation layout, so this candidate uses portable mapped-host
-// snapshots and exact phase flags. Qualified RDNA2 Auto and RDNA3 Auto
-// topologies may arm it; explicit generic P2P remains available for supervised
-// experiments, and RCCL remains the fallback.
+// snapshots and exact phase flags. Qualified RDNA2 Auto topologies may arm
+// it; RDNA3 Auto deliberately leaves this preliminary candidate off after
+// matched gfx1100 testing found it slower than RCCL. Explicit generic P2P
+// remains available for supervised experiments, and RCCL remains the fallback.
 static constexpr int GGML_CUDA_RDNA3_P2P_FLAG_STRIDE = 32;
 static constexpr size_t GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS = 5120 * 6;
 static constexpr size_t GGML_CUDA_RDNA3_P2P_SNAPSHOT_SLOTS = 8;
@@ -1787,17 +1788,18 @@ static bool ggml_cuda_rdna3_p2p_init(ggml_backend_cuda_comm_context * comm_ctx) 
 
     bool is_rdna2 = false;
     const bool topology_qualified = ggml_cuda_p2p_two_rank_qualified_topology(comm_ctx, &is_rdna2);
-    const bool auto_requested = topology_qualified &&
-        ((is_rdna2 && ggml_cuda_rdna2_auto_enabled()) ||
-         (!is_rdna2 && ggml_cuda_rdna3_auto_active));
+    const bool auto_requested = topology_qualified && is_rdna2 &&
+        ggml_cuda_rdna2_auto_enabled();
     const bool explicit_set = ggml_cuda_rdna3_p2p_explicitly_set();
     const bool explicit_enabled = explicit_set && ggml_cuda_rdna3_p2p_explicitly_enabled();
 
     // RDNA2_AUTO is the existing global kill switch for automatic RDNA2
     // paths. RDNA3_AUTO is intentionally opt-in and is already topology
-    // qualified by ggml_cuda_rdna3_auto_apply(). An explicit generic flag can
-    // still request the supervised candidate on RDNA3, but never bypasses the
-    // RDNA2 global kill switch.
+    // qualified by ggml_cuda_rdna3_auto_apply(), but it only installs the
+    // validated RCCL/direct-P2P policy; it does not arm this preliminary
+    // host-snapshot candidate. An explicit generic flag can still request the
+    // supervised candidate on RDNA3, but never bypasses the RDNA2 global kill
+    // switch.
     if (is_rdna2 && !ggml_cuda_rdna2_auto_enabled()) {
         return false;
     }

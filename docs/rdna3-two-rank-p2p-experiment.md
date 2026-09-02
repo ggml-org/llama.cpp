@@ -1,10 +1,11 @@
 # Experimental two-rank native P2P AllReduce
 
 This document records the guarded two-rank tensor-parallel candidate for
-qualified native RDNA2/gfx1030 and RDNA3/gfx1100 topologies. It follows the
-architecture Auto policy: qualified gfx1030 TP2 uses `GGML_HIP_RDNA2_AUTO`
-(the existing RDNA2 Auto default), while qualified gfx1100 TP2 requires the
-opt-in `GGML_HIP_RDNA3_AUTO=1`. RCCL remains the fallback.
+qualified native RDNA2/gfx1030 and RDNA3/gfx1100 topologies. Qualified gfx1030
+TP2 follows the existing `GGML_HIP_RDNA2_AUTO` policy. On gfx1100,
+`GGML_HIP_RDNA3_AUTO=1` retains the validated RCCL/direct-P2P policy; the
+preliminary host-snapshot candidate remains explicit because matched testing
+found it slower than RCCL. RCCL remains the fallback.
 
 ## Design
 
@@ -41,19 +42,21 @@ GGML_HIP_RDNA2_AUTO=1 GGML_CUDA_ALLREDUCE=nccl \
   scripts/run-qwen38-rdna-unified.sh
 ```
 
-On a qualified gfx1100 TP2 topology, opt in to the RDNA3 Auto profile:
+On a qualified gfx1100 TP2 topology, opt in to the validated RDNA3 Auto
+profile. This intentionally leaves the preliminary host-snapshot candidate
+on RCCL/direct-P2P:
 
 ```bash
 GGML_HIP_RDNA3_AUTO=1 GGML_CUDA_ALLREDUCE=nccl \
   scripts/run-qwen38-rdna-unified.sh
 ```
 
-`GGML_HIP_P2P_ALLREDUCE=1` remains a supervised explicit override for either
-architecture. `GGML_HIP_P2P_ALLREDUCE=0` suppresses the Auto candidate. The
-earlier `GGML_HIP_RDNA3_P2P_ALLREDUCE` name remains an alias. The two-rank
-path is ordinary AllReduce only; the existing four-rank consumer-fused path
-remains separately gated. No NCCL algorithm, protocol, channel, or topology
-override is implied.
+`GGML_HIP_P2P_ALLREDUCE=1` remains a supervised explicit override for the
+host-snapshot candidate on either architecture. `GGML_HIP_P2P_ALLREDUCE=0`
+suppresses it. The earlier `GGML_HIP_RDNA3_P2P_ALLREDUCE` name remains an
+alias. The two-rank path is ordinary AllReduce only; the existing four-rank
+consumer-fused path remains separately gated. No NCCL algorithm, protocol,
+channel, or topology override is implied.
 
 ## Measurements
 
@@ -69,4 +72,6 @@ boot; they are not a production performance claim:
 
 The MTP run exercised widths 2, 3, and 4, with all startup self-tests passing.
 Acceptance varied between the short runs (`0.88462` RCCL versus `0.85047`
-snapshot), so longer stock-boot A/B testing is required before any claim.
+snapshot). On the later MQ-IQ4_XS_1 workload, disabling the host-snapshot
+candidate improved the warm result from `91.70` to `96.97` tok/s, so the
+candidate remains explicit on gfx1100 pending a different implementation.
