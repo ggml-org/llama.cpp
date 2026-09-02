@@ -70,6 +70,33 @@
 	</div>
 </Story>
 
+<!-- Injected download states cover the non-idle chip looks: downloading,
+		paused, downloaded and the failed retry badge. -->
+<Story name="Download options (download states)">
+	<div class="w-200 p-4">
+		<ModelsDiscoverModelDetailsDownloadOptions
+			bitDepthRows={[
+				{ bitDepth: 4, files: files.filter((f) => f.path.includes('Q4_K_M')) },
+				{ bitDepth: 8, files: files.filter((f) => f.path.includes('Q8_0')) },
+				{ bitDepth: 16, files: files.filter((f) => f.path.includes('BF16')) }
+			]}
+			getDownloadState={(repoWithTag, filePath) => ({
+				isDownloaded: filePath.includes('BF16'),
+				isDownloading: filePath.includes('Q4_K_M') && !filePath.includes('mtp'),
+				isFailed: filePath.includes('mtp'),
+				isPaused: filePath.includes('Q8_0'),
+				progress: filePath.includes('Q4_K_M')
+					? { downloadedBytes: 3_200_000_000, files: {}, totalBytes: 7_300_000_000 }
+					: filePath.includes('Q8_0')
+						? { downloadedBytes: 1_300_000_000, files: {}, totalBytes: 13_100_000_000 }
+						: null,
+				repoWithTag
+			})}
+			modelId="ggml-org/gemma-4-12b-it-GGUF"
+		/>
+	</div>
+</Story>
+
 <Story name="Readme">
 	<div class="w-160 p-4">
 		<ModelsDiscoverModelDetailsReadme {readme} />

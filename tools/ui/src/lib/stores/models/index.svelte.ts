@@ -204,6 +204,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			const response = await ModelsService.list();
 
 			this.routerModels = response.data;
+			// keep the selector options in sync: a downloaded / deleted model shows
+			// up here too, not only in the router model rows
+			this.models = this.buildModelOptions(response);
 			await this.props.fetchModalitiesForLoadedModels();
 
 			const visible = this.getVisibleModels();

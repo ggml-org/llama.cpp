@@ -536,13 +536,3 @@ export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
  * @see ModelsDiscover in $lib/components/app/models/discover
  */
 export { default as DialogModelsDiscover } from './DialogModelsDiscover.svelte';
-
-/**
- * **DialogModelsDownloadManager** - download manager dialog.
- *
- * Lists all tracked model downloads with per-file progress, cancel and
- * delete actions.
- *
- * @see ModelsDownloadManager in $lib/components/app/models/download-manager
- */
-export { default as DialogModelsDownloadManager } from './DialogModelsDownloadManager.svelte';

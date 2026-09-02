@@ -73,8 +73,8 @@ export { default as ModelsDiscoverModelDetailsHeader } from './ModelsDiscoverMod
 /**
  * **ModelsDiscoverDetailsDownloadOptions** - GGUF download options
  *
- * Groups GGUF files by bit depth and renders per-file download buttons with
- * progress, owned by the download confirmation dialog.
+ * Groups GGUF files by bit depth and renders one independent download
+ * action chip per file, plus the standalone terminal command preview.
  */
 export { default as ModelsDiscoverModelDetailsDownloadOptions } from './ModelsDiscoverModelDetailsDownloadOptions.svelte';
 
@@ -87,25 +87,18 @@ export { default as ModelsDiscoverModelDetailsDownloadOptions } from './ModelsDi
 export { default as ModelsDiscoverModelDetailsDownloadOptionsRow } from './ModelsDiscoverModelDetailsDownloadOptionsRow.svelte';
 
 /**
- * **ModelsDiscoverDetailsDownloadOptionsQuantToggle** - One quant chip
+ * **ModelsDiscoverDetailsDownloadOptionsQuantDownloadButton** - One quant chip
  *
- * A single GGUF file as a toggle chip inside the download options toggle
- * group, or as a static done chip when the file is already downloaded.
+ * A single GGUF file as an independent action chip: download / retry when
+ * idle, pause / resume / cancel while in flight, delete when downloaded.
  */
-export { default as ModelsDiscoverModelDetailsDownloadOptionsQuantToggle } from './ModelsDiscoverModelDetailsDownloadOptionsQuantToggle.svelte';
-
-/**
- * **ModelsDiscoverDetailsDownloadOptionsDownloadButton** - Download CTA
- *
- * Full-width primary button that queues the current selection for download.
- */
-export { default as ModelsDiscoverModelDetailsDownloadOptionsDownloadButton } from './ModelsDiscoverModelDetailsDownloadOptionsDownloadButton.svelte';
+export { default as ModelsDiscoverModelDetailsDownloadOptionsQuantDownloadButton } from './ModelsDiscoverModelDetailsDownloadOptionsQuantDownloadButton.svelte';
 
 /**
  * **ModelsDiscoverDetailsDownloadOptionsDownloadCommand** - Terminal command
  *
  * The `llama serve -hf ...` command box with inline quant selects and a copy
- * button; the quant picks are delegated back to the parent via callbacks.
+ * button; owns its picks, nothing two-way binds them to the quant chips.
  */
 export { default as ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand } from './ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand.svelte';
 
@@ -138,14 +131,6 @@ export { default as ModelsDiscoverChatTemplateDialog } from './ModelsDiscoverCha
  * Renders the model card README as markdown.
  */
 export { default as ModelsDiscoverModelDetailsReadme } from './ModelsDiscoverModelDetailsReadme.svelte';
-
-/**
- * **DialogModelDownload** - Download confirmation / progress dialog
- *
- * Confirms a single GGUF download, tracks live progress over the SSE feed and
- * offers cancel / delete-&-retry flows.
- */
-export { default as DialogModelDownload } from './DialogModelDownload.svelte';
 
 /**
  * **DownloadProgressBar** - Thin download progress bar

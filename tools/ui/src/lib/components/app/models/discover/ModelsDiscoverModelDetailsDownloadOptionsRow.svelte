@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { DownloadEntryState, SelectableFile } from './download-options.utils';
-	import ModelsDiscoverModelDetailsDownloadOptionsQuantToggle from './ModelsDiscoverModelDetailsDownloadOptionsQuantToggle.svelte';
+	import ModelsDiscoverModelDetailsDownloadOptionsQuantDownloadButton from './ModelsDiscoverModelDetailsDownloadOptionsQuantDownloadButton.svelte';
 	import { minMemoryTierGb } from '$lib/utils';
 
 	interface Props {
@@ -36,7 +36,7 @@
 
 	<div class="flex flex-wrap justify-end gap-1.5">
 		{#each files as file (file.path)}
-			<ModelsDiscoverModelDetailsDownloadOptionsQuantToggle {file} state={file.state} />
+			<ModelsDiscoverModelDetailsDownloadOptionsQuantDownloadButton entry={file.state} {file} />
 		{/each}
 	</div>
 </div>
