@@ -34,6 +34,7 @@ options:
   -v, --verbose                             verbose output
   --progress                                print test progress indicators
   --no-warmup                               skip warmup runs before benchmarking
+  --bandwidth                               report effective bandwidth (model_size x t/s, weights only) for tg tests
   -fitt, --fit-target <MiB>                 fit model to device memory with this margin per device in MiB (default: off)
   -fitc, --fit-ctx <n>                      minimum ctx size for --fit-target (default: 4096)
   -rpc, --rpc <rpc_servers>                 register RPC devices (comma separated)
@@ -93,6 +94,8 @@ With the exception of `-r`, `-o` and `-v`, all options can be specified multiple
 Each test is repeated the number of times given by `-r`, and the results are averaged. The results are given in average tokens per second (t/s) and standard deviation. Some output formats (e.g. json) also include the individual results of each repetition.
 
 Using the `-d <n>` option, each test can be run at a specified context depth, prefilling the KV cache with `<n>` tokens.
+
+With `--bandwidth`, an effective bandwidth column is added: `model_size * t/s / 1e9`, in GB/s. It counts weight bytes only (the size reported by `llama_model_size`), not KV cache traffic, so it is only a bandwidth for tg tests on dense models, where every token reads the full weight set. The markdown output leaves it blank for pp and pp+tg rows; csv, json, jsonl and sql emit it for every row as `avg_gbs` and leave the filtering to the consumer. It is not a fraction of any peak, since llama-bench does not measure the memory system.
 
 For a description of the other options, see the [completion example](../completion/README.md).
 

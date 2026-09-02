@@ -373,6 +373,7 @@ struct cmd_params {
     bool                             verbose;
     bool                             progress;
     bool                             no_warmup;
+    bool                             bandwidth;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
 };
@@ -418,6 +419,7 @@ static const cmd_params cmd_params_defaults = {
     /* verbose              */ false,
     /* progress             */ false,
     /* no_warmup            */ false,
+    /* bandwidth            */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -437,6 +439,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                               verbose output\n");
     printf("  --progress                                  print test progress indicators\n");
     printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
+    printf("  --bandwidth                                 report effective bandwidth (model_size x t/s, weights only) for tg tests\n");
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
     printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 4096)\n");
     if (llama_supports_rpc()) {
@@ -536,6 +539,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.delay                = cmd_params_defaults.delay;
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
+    params.bandwidth            = cmd_params_defaults.bandwidth;
     params.offline              = cmd_params_defaults.offline;
 
     if (const char * env = getenv("HF_TOKEN")) {
@@ -1082,6 +1086,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.progress = true;
             } else if (arg == "--no-warmup") {
                 params.no_warmup = true;
+            } else if (arg == "--bandwidth") {
+                params.bandwidth = true;
             } else if (arg == "-fitt" || arg == "--fit-target") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1588,6 +1594,10 @@ struct test {
 
     double stdev_ts() const { return ::stdev(get_ts()); }
 
+    // effective bandwidth in GB/s: weight bytes (llama_model_size) streamed per token times tokens per second.
+    // only a bandwidth for tg tests on dense models, where every token reads the full weight set. KV cache traffic is not counted.
+    double avg_gbs() const { return model_size * avg_ts() / 1e9; }
+
     static std::string get_backend() {
         std::vector<std::string> backends;
         bool                     rpc_used = false;
@@ -1610,7 +1620,7 @@ struct test {
         return backends.empty() ? "CPU" : join(backends, ",");
     }
 
-    static const std::vector<std::string> & get_fields() {
+    static const std::vector<std::string> & get_fields(bool bandwidth = false) {
         static const std::vector<std::string> fields = {
             "build_commit",   "build_number",   "cpu_info",      "gpu_info",       "backends",
             "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
@@ -1623,7 +1633,12 @@ struct test {
             "n_prompt",       "n_gen",          "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
         };
-        return fields;
+        static const std::vector<std::string> fields_bandwidth = [] {
+            std::vector<std::string> f = fields;
+            f.push_back("avg_gbs");
+            return f;
+        }();
+        return bandwidth ? fields_bandwidth : fields;
     }
 
     enum field_type { STRING, BOOL, INT, FLOAT };
@@ -1640,7 +1655,7 @@ struct test {
             field == "embeddings" || field == "no_host") {
             return BOOL;
         }
-        if (field == "avg_ts" || field == "stddev_ts") {
+        if (field == "avg_ts" || field == "stddev_ts" || field == "avg_gbs") {
             return FLOAT;
         }
         if (field == "load_mode" || field == "lazy_mode") {
@@ -1649,7 +1664,7 @@ struct test {
         return STRING;
     }
 
-    std::vector<std::string> get_values() const {
+    std::vector<std::string> get_values(bool bandwidth = false) const {
         std::string tensor_split_str;
         std::string tensor_buft_overrides_str;
         int         max_nonzero = 0;
@@ -1727,6 +1742,9 @@ struct test {
                                             std::to_string(stdev_ns()),
                                             std::to_string(avg_ts()),
                                             std::to_string(stdev_ts()) };
+        if (bandwidth) {
+            values.push_back(std::to_string(avg_gbs()));
+        }
         return values;
     }
 
@@ -1747,6 +1765,7 @@ struct printer {
     virtual ~printer() {}
 
     FILE * fout;
+    bool   bandwidth = false;
 
     virtual void print_header(const cmd_params & params) { (void) params; }
 
@@ -1769,13 +1788,13 @@ struct csv_printer : public printer {
     }
 
     void print_header(const cmd_params & params) override {
-        std::vector<std::string> fields = test::get_fields();
+        std::vector<std::string> fields = test::get_fields(bandwidth);
         fprintf(fout, "%s\n", join(fields, ",").c_str());
         (void) params;
     }
 
     void print_test(const test & t) override {
-        std::vector<std::string> values = t.get_values();
+        std::vector<std::string> values = t.get_values(bandwidth);
         std::transform(values.begin(), values.end(), values.begin(), escape_csv);
         fprintf(fout, "%s\n", join(values, ",").c_str());
     }
@@ -1833,7 +1852,7 @@ struct json_printer : public printer {
             fprintf(fout, ",\n");
         }
         fprintf(fout, "  {\n");
-        print_fields(test::get_fields(), t.get_values());
+        print_fields(test::get_fields(bandwidth), t.get_values(bandwidth));
         fprintf(fout, "    \"samples_ns\": [ %s ],\n", join(t.samples_ns, ", ").c_str());
         fprintf(fout, "    \"samples_ts\": [ %s ]\n", join(t.get_ts(), ", ").c_str());
         fprintf(fout, "  }");
@@ -1853,7 +1872,7 @@ struct jsonl_printer : public printer {
 
     void print_test(const test & t) override {
         fprintf(fout, "{");
-        print_fields(test::get_fields(), t.get_values());
+        print_fields(test::get_fields(bandwidth), t.get_values(bandwidth));
         fprintf(fout, "\"samples_ns\": [ %s ],", join(t.samples_ns, ", ").c_str());
         fprintf(fout, "\"samples_ts\": [ %s ]", join(t.get_ts(), ", ").c_str());
         fprintf(fout, "}\n");
@@ -1870,6 +1889,9 @@ struct markdown_printer : public printer {
         }
         if (field == "t/s") {
             return 20;
+        }
+        if (field == "GB/s") {
+            return 10;
         }
         if (field == "size" || field == "params") {
             return 10;
@@ -2048,6 +2070,9 @@ struct markdown_printer : public printer {
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
+        if (params.bandwidth) {
+            fields.emplace_back("GB/s");
+        }
 
         fprintf(fout, "|");
         for (const auto & field : fields) {
@@ -2103,6 +2128,12 @@ struct markdown_printer : public printer {
             } else if (field == "t/s") {
                 snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_ts(), t.stdev_ts());
                 value = buf;
+            } else if (field == "GB/s") {
+                // left blank for pp and pp+tg rows, where the value is not a bandwidth
+                if (t.n_gen > 0 && t.n_prompt == 0) {
+                    snprintf(buf, sizeof(buf), "%.2f", t.avg_gbs());
+                    value = buf;
+                }
             } else if (vmap.find(field) != vmap.end()) {
                 value = vmap.at(field);
             } else {
@@ -2142,7 +2173,7 @@ struct sql_printer : public printer {
     }
 
     void print_header(const cmd_params & params) override {
-        std::vector<std::string> fields = test::get_fields();
+        std::vector<std::string> fields = test::get_fields(bandwidth);
         fprintf(fout, "CREATE TABLE IF NOT EXISTS llama_bench (\n");
         for (size_t i = 0; i < fields.size(); i++) {
             fprintf(fout, "  %s %s%s\n", fields.at(i).c_str(), get_sql_field_type(fields.at(i)).c_str(),
@@ -2154,9 +2185,9 @@ struct sql_printer : public printer {
     }
 
     void print_test(const test & t) override {
-        fprintf(fout, "INSERT INTO llama_bench (%s) ", join(test::get_fields(), ", ").c_str());
+        fprintf(fout, "INSERT INTO llama_bench (%s) ", join(test::get_fields(bandwidth), ", ").c_str());
         fprintf(fout, "VALUES (");
-        std::vector<std::string> values = t.get_values();
+        std::vector<std::string> values = t.get_values(bandwidth);
         for (size_t i = 0; i < values.size(); i++) {
             fprintf(fout, "'%s'%s", values.at(i).c_str(), i < values.size() - 1 ? ", " : "");
         }
@@ -2295,12 +2326,14 @@ int llama_bench(int argc, char ** argv) {
     std::unique_ptr<printer> p_err = create_printer(params.output_format_stderr);
 
     if (p) {
-        p->fout = stdout;
+        p->fout      = stdout;
+        p->bandwidth = params.bandwidth;
         p->print_header(params);
     }
 
     if (p_err) {
-        p_err->fout = stderr;
+        p_err->fout      = stderr;
+        p_err->bandwidth = params.bandwidth;
         p_err->print_header(params);
     }
 
