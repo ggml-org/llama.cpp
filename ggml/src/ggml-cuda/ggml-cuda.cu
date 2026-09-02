@@ -4369,10 +4369,6 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
         return;
     }
 
-    // This pass runs per scheduler split, and a split's nodes are all allocated on this
-    // backend's device, so multiple CUDA devices are safe as long as the fork/join events
-    // created below land on this device: make it current explicitly, since the scheduler
-    // thread may have a different device current when optimizing this split.
     ggml_cuda_set_device(cuda_ctx->device);
 
     // number of out-degrees for a particular node
