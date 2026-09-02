@@ -88,11 +88,12 @@ public:
                        bool blk_bias) const;
 
     // The model's indexer pool size.
-    uint32_t get_kpool() const { return n_kpool; }
+    uint32_t get_kpool() const { return hparams_idx.indexer_kpool; }
 
-    // Sequence edits invalidate cached relative pools.
-    bool kpool_is_dirty   () const { return kpool_dirty; }
-    void kpool_clear_dirty()       { kpool_dirty = false; }
+    // The pooled keys persist in the idx cache across batches.
+    // Sequence edits shift the pool grid and stale the cached values.
+    bool kpool_cache_is_stale() const { return kpool_cache_stale; }
+    void kpool_cache_clear   ()       { kpool_cache_stale = false; }
 
 private:
     // forget seq_id (all of it if seq_id < 0) in every cache at once, so a failed restore cannot leave the caches out of step
@@ -105,9 +106,7 @@ private:
 
     const std::unique_ptr<llama_kv_cache> mem_idx;
 
-    const uint32_t n_kpool;
-
-    bool kpool_dirty = false;
+    bool kpool_cache_stale = false;
 };
 
 class llama_memory_hybrid_idx_context : public llama_memory_hybrid_context {
@@ -178,7 +177,8 @@ private:
 
     // K-pool layouts
     struct kpool_state;
-    kpool_state kpool_build_state(const llama_ubatch * ubatch) const;
+    kpool_state kpool_build_layout() const;
+    kpool_state kpool_build_state(const llama_ubatch & ubatch) const;
     const kpool_state & kpool_cur() const;
     std::vector<kpool_state> kpool_states;
 
@@ -186,5 +186,5 @@ private:
     bool kpool_track = false;
 
     // Clear a pending full re-pool only after the first ubatch succeeds
-    bool kpool_dirty_batch = false;
+    bool kpool_stale_batch = false;
 };

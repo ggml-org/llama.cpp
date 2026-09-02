@@ -66,8 +66,7 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
             model, hparams_idx, type_k, type_v, v_trans, offload, unified,
             kv_size, n_seq_max, n_pad, n_swa, swa_type,
             nullptr, filter_idx, nullptr, nullptr, "idx_");
-    }()),
-    n_kpool(model.hparams.indexer_kpool) {}
+    }()) {}
 
 llama_memory_context_ptr llama_memory_hybrid_idx::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
     // note: repeats llama_memory_hybrid::init_batch, as the indexer needs the attention slot infos that the base context hides
@@ -158,7 +157,7 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
 
     if (mem_idx) {
         mem_idx->seq_rm(seq_id, p0, p1);
-        kpool_dirty = true;
+        kpool_cache_stale = true;
     }
 
     return get_mem_attn()->seq_rm(seq_id, p0, p1);
@@ -169,7 +168,7 @@ void llama_memory_hybrid_idx::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_i
 
     if (mem_idx) {
         mem_idx->seq_cp(seq_id_src, seq_id_dst, p0, p1);
-        kpool_dirty = true;
+        kpool_cache_stale = true;
     }
 }
 
@@ -178,7 +177,7 @@ void llama_memory_hybrid_idx::seq_keep(llama_seq_id seq_id) {
 
     if (mem_idx) {
         mem_idx->seq_keep(seq_id);
-        kpool_dirty = true;
+        kpool_cache_stale = true;
     }
 }
 
@@ -187,7 +186,7 @@ void llama_memory_hybrid_idx::seq_add(llama_seq_id seq_id, llama_pos p0, llama_p
 
     if (mem_idx) {
         mem_idx->seq_add(seq_id, p0, p1, shift);
-        kpool_dirty = true;
+        kpool_cache_stale = true;
     }
 }
 
@@ -196,7 +195,7 @@ void llama_memory_hybrid_idx::seq_div(llama_seq_id seq_id, llama_pos p0, llama_p
 
     if (mem_idx) {
         mem_idx->seq_div(seq_id, p0, p1, d);
-        kpool_dirty = true;
+        kpool_cache_stale = true;
     }
 }
 
@@ -649,7 +648,7 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(llama_memory_hy
     ctx_idx(mem->get_mem_idx() == nullptr ? nullptr :
         new llama_kv_cache_context(mem->get_mem_idx())) {
     if (mem->get_mem_idx() != nullptr && mem->get_kpool() > 0) {
-        kpool_states.push_back(kpool_build_state(nullptr));
+        kpool_states.push_back(kpool_build_layout());
     }
 }
 
@@ -676,15 +675,15 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(
         new llama_kv_cache_context(mem->get_mem_idx(), std::move(sinfos_idx), ubatches)) {
     kpool_track = mem->get_mem_idx() != nullptr && mem->get_kpool() > 0;
     // Sequence edits require a full re-pool.
-    kpool_dirty_batch = mem->kpool_is_dirty();
+    kpool_stale_batch = mem->kpool_cache_is_stale();
 }
 
 llama_memory_hybrid_idx_context::~llama_memory_hybrid_idx_context() = default;
 
 bool llama_memory_hybrid_idx_context::next() {
     // Clear only after a successful ubatch.
-    if (i_cur == 0 && kpool_dirty_batch && mem != nullptr) {
-        mem->kpool_clear_dirty();
+    if (i_cur == 0 && kpool_stale_batch && mem != nullptr) {
+        mem->kpool_cache_clear();
     }
 
     if (ctx_idx) {
@@ -708,7 +707,7 @@ bool llama_memory_hybrid_idx_context::apply() {
         GGML_ASSERT(i_cur <= kpool_states.size());
         kpool_states.resize(i_cur);
 
-        kpool_states.push_back(kpool_build_state(&get_ubatch()));
+        kpool_states.push_back(kpool_build_state(get_ubatch()));
     }
 
     return res;
@@ -739,8 +738,8 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
 
 // k-pool DSA indexer (glm5-next)
 
-llama_memory_hybrid_idx_context::kpool_state llama_memory_hybrid_idx_context::kpool_build_state(
-        const llama_ubatch * ubatch) const {
+// Layout only, used by the full cache context so get_n_kpool() works during graph reserve.
+llama_memory_hybrid_idx_context::kpool_state llama_memory_hybrid_idx_context::kpool_build_layout() const {
     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
     GGML_ASSERT(get_n_stream() == 1 && "TODO: k-pool indexer with multiple streams");
 
@@ -811,22 +810,28 @@ llama_memory_hybrid_idx_context::kpool_state llama_memory_hybrid_idx_context::kp
         st.n_pool_real += (uint32_t) sq.pools.size();
     }
 
-    if (ubatch == nullptr) {
-        for (auto & sq : st.seqs) {
-            sq.is_new.assign(sq.pools.size(), 0);
-        }
-
-        return st;
+    for (auto & sq : st.seqs) {
+        sq.is_new.assign(sq.pools.size(), 0);
     }
 
+    return st;
+}
+
+// Layout of the cells as of this ubatch plus which pools it completes or rewrites.
+llama_memory_hybrid_idx_context::kpool_state llama_memory_hybrid_idx_context::kpool_build_state(
+        const llama_ubatch & ubatch) const {
+    kpool_state st = kpool_build_layout();
+
+    const uint32_t kpool = mem->get_kpool();
+
     // Pools touched by this ubatch are re-pooled, shared cells cannot cache sequence relative pools.
-    const bool all_new = !st.cache_safe || (kpool_dirty_batch && i_cur == 0);
+    const bool all_new = !st.cache_safe || (kpool_stale_batch && i_cur == 0);
 
     std::vector<std::vector<llama_pos>> upos(LLAMA_MAX_SEQ);
     if (!all_new) {
-        for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
-            for (int32_t k = 0; k < ubatch->n_seq_id[i]; ++k) {
-                upos[ubatch->seq_id[i][k]].push_back(ubatch->pos[i]);
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            for (int32_t k = 0; k < ubatch.n_seq_id[i]; ++k) {
+                upos[ubatch.seq_id[i][k]].push_back(ubatch.pos[i]);
             }
         }
         for (auto & v : upos) {
