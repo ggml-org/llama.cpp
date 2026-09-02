@@ -1,5 +1,7 @@
 #include "llama-context.h"
 
+#include <algorithm>
+
 #include "ggml.h"
 #include "ggml-metal.h"
 #include "llama-arch.h"
@@ -1348,6 +1350,12 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
+    // R0 instrumentation (codex 072 s3): graph_rebuild_us and set_inputs_us are
+    // SEPARATE owners — R0 shrinks only the first, E0c/E1 only the second.
+    static const bool fbl_host_timers = getenv("LLAMA_HOST_TIMERS") != nullptr;
+    const int64_t fbl_t_rebuild0 = fbl_host_timers ? ggml_time_us() : 0;
+    bool fbl_reused = false;
+
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
 
@@ -1359,6 +1367,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
 
         n_reused++;
+        fbl_reused = true;
     } else {
         res->reset();
 
@@ -1451,12 +1460,33 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
     // set the input data for the input tensors
     {
-        //const auto t_start_us = ggml_time_us();
+        const int64_t fbl_t_set0 = fbl_host_timers ? ggml_time_us() : 0;
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
         res->set_inputs(&ubatch);
 
-        //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+        if (fbl_host_timers && ubatch.n_tokens == 1) {
+            // decode-1 only: prefill chunks would swamp the percentiles
+            const int64_t now = ggml_time_us();
+            fbl_host_rebuild_us.push_back(fbl_reused ? 0 : (fbl_t_set0 - fbl_t_rebuild0));
+            fbl_host_setinp_us.push_back(now - fbl_t_set0);
+            static const int64_t fbl_every = [](){
+                const char * e = getenv("LLAMA_HOST_TIMERS");
+                const long long v = e ? atoll(e) : 0;
+                return v > 0 ? v : 64;
+            }();
+            if ((int64_t) fbl_host_rebuild_us.size() % fbl_every == 0) {
+                auto pct = [](std::vector<int64_t> v, double p) {
+                    std::sort(v.begin(), v.end());
+                    return v.empty() ? (int64_t) 0 : v[(size_t) (p*(v.size() - 1))];
+                };
+                fprintf(stderr, "HOST_TIMERS n=%zu rebuild_us p50=%lld p95=%lld | set_inputs_us p50=%lld p95=%lld | reused=%d\n",
+                        fbl_host_rebuild_us.size(),
+                        (long long) pct(fbl_host_rebuild_us, 0.5), (long long) pct(fbl_host_rebuild_us, 0.95),
+                        (long long) pct(fbl_host_setinp_us, 0.5), (long long) pct(fbl_host_setinp_us, 0.95),
+                        n_reused);
+            }
+        }
     }
 
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);

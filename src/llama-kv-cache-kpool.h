@@ -76,6 +76,12 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
+    // R0 (codex 068 / grokk 070): exact reuse contract. Rebinds the two memory
+    // contexts and compares every value that determines tensor shape or graph
+    // policy against the new params. Without this override the inherited
+    // can_reuse() == false vetoed reuse of EVERY served GLM graph.
+    bool can_reuse(const llm_graph_params & params) override;
+
     ggml_tensor * k_idxs     = nullptr;   // I32 [n_tokens]
     ggml_tensor * pool_cells = nullptr;   // I32 [kpool*n_pools, n_stream]
     ggml_tensor * pool_bias  = nullptr;   // F32 [n_pools, n_tps, n_stream]
@@ -107,8 +113,16 @@ public:
     // explicit cells so a gathered graph can concat them to top_k. slot t holds the cell at
     // pos tail_start+t; unused slots are cell 0 with tail_valid -INFINITY (get_rows has no
     // sentinel). tail length is (q+1)%kpool in [0, kpool-1].
-    ggml_tensor * tail_cells = nullptr;   // I32 [kpool-1, n_tps, n_stream]
-    ggml_tensor * tail_valid = nullptr;   // F32 [kpool-1, n_tps, n_stream]
+    // PAD32: physical width is n_sel_pad - n_top (>= kpool-1); only the finite
+    // tail prefix [0, kpool-1) is ever written with live cells.
+    ggml_tensor * tail_cells = nullptr;   // I32 [n_tail_slots, n_tps, n_stream]
+    ggml_tensor * tail_valid = nullptr;   // F32 [n_tail_slots, n_tps, n_stream]
+
+    // build-time identity for can_reuse (explicit metadata, not inferred from
+    // mask tensors, so the contract survives E0c making the masks optional)
+    int64_t  b_n_kv_attn = -1;
+    int64_t  b_n_kv_idx  = -1;
+    uint32_t hparams_indexer_top_k = 0;
 
     const llama_kv_cache_context * mctx_attn;
     const llama_kv_cache_context * mctx_idx;

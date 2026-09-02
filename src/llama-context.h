@@ -391,4 +391,8 @@ private:
     mutable int32_t n_eval   = 0; // number of eval calls
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
+
+    // R0 host-interval buckets (env LLAMA_HOST_TIMERS, decode-1 samples only)
+    std::vector<int64_t> fbl_host_rebuild_us;
+    std::vector<int64_t> fbl_host_setinp_us;
 };

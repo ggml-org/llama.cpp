@@ -1,5 +1,7 @@
 #include "llama-graph.h"
 
+#include <typeinfo>
+
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-batch.h"
@@ -1439,7 +1441,7 @@ bool llm_graph_result::can_reuse(const llm_graph_params & params) {
         const bool cur = input->can_reuse(params);
 
         if (debug > 1) {
-            LLAMA_LOG_DEBUG("%s: can_reuse = %d\n", "placeholder", cur);
+            LLAMA_LOG_DEBUG("%s: can_reuse = %d\n", typeid(*input).name(), cur);
         }
 
         res = res && cur;
@@ -3673,6 +3675,11 @@ llm_graph_input_kpool * llm_graph_context::build_inp_kpool(
     inp->k_idxs = mctx_idx->build_input_k_idxs(ctx0, ubatch);
     ggml_set_input(inp->k_idxs);
     ggml_set_name(inp->k_idxs, "kpool_k_idxs");
+
+    // R0: build-time identity for can_reuse
+    inp->b_n_kv_idx  = mctx_idx->get_n_kv();
+    inp->b_n_kv_attn = mctx_attn->get_n_kv();
+    inp->hparams_indexer_top_k = hparams.indexer_top_k;
 
     if (scoring) {
         const int64_t n_kv = mctx_attn->get_n_kv();

@@ -2,6 +2,7 @@
 
 #include "llama-batch.h"
 #include "llama-kv-cache.h"
+#include "llama-memory-hybrid.h"
 #include "llama-kv-cells.h"
 
 #include <algorithm>
@@ -511,6 +512,71 @@ void llama_kv_cache_set_input_kpool(
             }
         }
     }
+}
+
+
+bool llm_graph_input_kpool::can_reuse(const llm_graph_params & params) {
+    const auto * mctx_hyb = static_cast<const llama_memory_hybrid_context *>(params.mctx);
+
+    const auto * attn = mctx_hyb->get_attn();
+    const auto * idx  = mctx_hyb->get_idx();
+
+    if (attn == nullptr || idx == nullptr) {
+        return false;
+    }
+
+    // rebind so a reused graph's set_input reads the new contexts
+    mctx_attn = attn;
+    mctx_idx  = idx;
+
+    bool res = true;
+
+    res &= k_idxs->ne[0] == (int64_t) params.ubatch.n_tokens;
+    res &= b_n_kv_idx == (int64_t) idx->get_n_kv();
+
+    if (pool_cells == nullptr) {
+        // non-scoring graph: only the key/gate store exists
+        return res;
+    }
+
+    const int64_t n_kv     = attn->get_n_kv();
+    const int64_t n_stream = params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq;
+
+    if (n_stream <= 0 || params.ubatch.n_tokens % n_stream != 0 ||
+            (int64_t) params.ubatch.n_seqs_unq % n_stream != 0) {
+        return false;
+    }
+
+    const int64_t n_tps = params.ubatch.n_tokens/n_stream;
+    const int64_t n_ps  = (int64_t) params.ubatch.n_seqs_unq/n_stream;
+
+    const int64_t n_pools = llama_kpool_n_pools((uint32_t) n_kv, kpool, (uint32_t) n_ps);
+
+    res &= b_n_kv_attn == n_kv;
+    res &= sel_mask == nullptr || (sel_mask->ne[0] == n_kv && sel_mask->ne[1] == n_tps &&
+                                   sel_mask->ne[3] == n_stream);
+    res &= pool_cells->ne[0] == (int64_t) kpool*n_pools && pool_cells->ne[1] == n_stream;
+    res &= pool_bias->ne[0] == n_pools && pool_bias->ne[1] == n_tps && pool_bias->ne[2] == n_stream;
+
+    // policy: rebuild mode and the fixed pooled-key emission bound must match
+    // what a fresh build would choose (codex 068 s3)
+    const bool    want_rebuild = mctx_attn->get_kv()->get_kpool_dirty();
+    const int64_t want_new_max = want_rebuild ? n_pools : n_tps/(int64_t) kpool + n_ps;
+
+    res &= rebuild == want_rebuild;
+    res &= (int64_t) n_new_max == want_new_max;
+
+    if (tail_cells != nullptr) {
+        // gathered graph: recompute the PAD32 width — never cache 2080 (grokk 070 s3)
+        const int64_t n_top = (int64_t) kpool *
+                llama_kpool_select_k((uint32_t) n_pools, hparams_indexer_top_k, kpool);
+        const int64_t n_sel_pad = GGML_PAD(n_top + kpool - 1, 32);
+
+        res &= tail_cells->ne[0] == n_sel_pad - n_top;
+        res &= n_tps == 1 && n_stream == 1;
+    }
+
+    return res;
 }
 
 void llm_graph_input_kpool::set_input(const llama_ubatch * ubatch) {
