@@ -7,9 +7,9 @@
 // Hysteresis state machine with a climb counter and a weighted drop-pressure
 // accumulator. The depth N climbs one step after N_CLIMB(N) consecutive verifies
 // that accepted every drafted token. The climb cost is low at the floor and at
-// depth, high in the middle: 2 at depth 1, 4 at depth 2, 6 at depth 3, then
-// 5/4/3/2 from depth 4 upward. Getting from the floor to depth 3 needs only 6
-// full accepts, but pushing past 3 (where prose acceptance collapses) costs 6
+// depth, high in the middle: 2 at depth 1, 4 at depth 2, 10 at depth 3, then
+// 6/3/2/2 from depth 4 upward. Getting from the floor to depth 3 needs only 6
+// full accepts, but pushing past 3 (where prose acceptance collapses) costs 10
 // full accepts of 3-token drafts, which predictable content clears quickly and
 // marginal content never does. Any miss adds (n_draft - n_accepted) to a
 // drop-pressure accumulator; when it reaches depth * 5 the depth drops one step
