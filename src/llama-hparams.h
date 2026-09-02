@@ -277,7 +277,7 @@ struct llama_hparams {
     uint32_t dsv4_hash_layer_count     = 0;
     float    dsv4_compress_rope_base   = 0.0f;
     float    dsv4_hc_eps               = 0.0f;
-    std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios = {};
 
     // 0 = full rank (DeepSeek-V4)
     uint32_t hc_low_rank = 0;
@@ -302,11 +302,6 @@ struct llama_hparams {
 
     // PLE conv history rows: (kernel - 1) * ngram_size; 0 without a PLE module
     uint32_t ple_conv_state() const;
-
-    // XingChen4 (DeepSeek-V3 style MLA/MoE + MHC multi-residual-stream blocks)
-    uint32_t xc4_hc_mult              = 0;
-    uint32_t xc4_hc_sinkhorn_iters    = 0;
-    float    xc4_hc_eps               = 0.0f;
 
     // qwen3vl deepstack
     // When parsed from GGUF, this implies the first N layers consume the first
