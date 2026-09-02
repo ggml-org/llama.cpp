@@ -2,6 +2,11 @@
 
 #include <string>
 
+// row slice used as a get_rows index, materialized because the Vulkan path needs an aligned offset
+static ggml_tensor * row_ids(ggml_context * ctx0, ggml_tensor * src, int64_t n, int64_t row) {
+    return ggml_cont(ctx0, ggml_view_1d(ctx0, src, n, (size_t) row * src->nb[1]));
+}
+
 // on-device sampling: top-k, top-p, then a random draw
 ggml_tensor * clip_graph_qwen3tts_gen::code_gen::do_sampling(ggml_tensor * logits, ggml_tensor * inp_rand) const {
     logits = ggml_reshape_1d(ctx0, logits, ggml_nelements(logits));
@@ -248,7 +253,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code_gen::step(
     const int     pos      = step_idx + 1; // new cache row and RoPE position
 
     // embed the previous code via this step's codebook table (rows are already scalars)
-    ggml_tensor * code_in = ggml_view_1d(ctx0, out_code_cache, 1, (size_t) step_idx * out_code_cache->nb[1]);
+    ggml_tensor * code_in = row_ids(ctx0, out_code_cache, 1, step_idx);
 
     ggml_tensor * embd_w = model.gen_code_embd_w; // [n_embd_talker, vocab, n_acoustic]
     ggml_tensor * embd_g = ggml_view_2d(ctx0, embd_w, embd_w->ne[0], embd_w->ne[1], embd_w->nb[1],
@@ -390,7 +395,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::quant_decode(ggml_tensor * inp_
 
     // ids for codebook group g over all T frames, [T] I32
     auto group_ids = [&](int g) {
-        return ggml_view_1d(ctx0, inp_codes, T, (size_t) g * inp_codes->nb[1]);
+        return row_ids(ctx0, inp_codes, T, g);
     };
 
     ggml_tensor * sem     = ggml_get_rows(ctx0, c2w.quant_first_cb_w, group_ids(0)); // [256, T]
@@ -719,7 +724,7 @@ ggml_cgraph * clip_graph_qwen3tts_gen::build() {
     // output 2: sum of all 16 codebook embeddings, fed back to the talker for the next frame
     ggml_tensor * out_embd = code0_embd;
     for (int g = 1; g <= n_acoustic; g++) {
-        ggml_tensor * code_g = ggml_view_1d(ctx0, out_code_cache, 1, (size_t) g * out_code_cache->nb[1]);
+        ggml_tensor * code_g = row_ids(ctx0, out_code_cache, 1, g);
 
         ggml_tensor * embd_g = ggml_view_2d(ctx0, model.gen_code_embd_w, model.gen_code_embd_w->ne[0], model.gen_code_embd_w->ne[1],
                                             model.gen_code_embd_w->nb[1], (size_t) (g - 1) * model.gen_code_embd_w->nb[2]);
