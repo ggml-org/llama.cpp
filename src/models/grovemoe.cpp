@@ -1,7 +1,7 @@
 #include "models.h"
 
 void llama_model_grovemoe::load_arch_hparams(llama_model_loader & ml) {
-    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp_arr, hparams.n_layer_all);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp, false);
     ml.get_key(LLM_KV_EXPERT_GROUP_SCALE,                hparams.expert_group_scale);
     ml.get_key(LLM_KV_EXPERTS_PER_GROUP,                 hparams.n_group_experts);
