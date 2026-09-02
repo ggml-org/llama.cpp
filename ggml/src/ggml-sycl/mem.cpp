@@ -9,8 +9,6 @@
 #include <cstdint>
 #include <iostream>
 #include <vector>
-#include <unistd.h>
-#include <stddef.h>
 
 #include "base.hpp"
 #include "mem.hpp"
