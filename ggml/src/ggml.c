@@ -1779,9 +1779,31 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         view_src   = view_src->view_src;
     }
 
+    // Validate ne[] dimensions before computing data_size to prevent
+    // silent integer overflow when multiplying attacker-controlled values
+    // (e.g. from a malicious GGUF file). ggml_row_size() is not overflow-safe
+    // for very large ne[0], so we bound it first.
+    for (int i = 0; i < n_dims; i++) {
+        if (ne[i] <= 0) {
+            GGML_LOG_ERROR("%s: invalid tensor dimension ne[%d] = %" PRId64 "\n",
+                           __func__, i, ne[i]);
+            return NULL;
+        }
+    }
+    if ((size_t)ne[0] > SIZE_MAX / MAX((size_t)ggml_type_size(type), (size_t)1)) {
+        GGML_LOG_ERROR("%s: tensor row size overflow: ne[0]=%" PRId64 " type_size=%zu\n",
+                       __func__, ne[0], ggml_type_size(type));
+        return NULL;
+    }
     size_t data_size = ggml_row_size(type, ne[0]);
     for (int i = 1; i < n_dims; i++) {
-        data_size *= ne[i];
+        if ((size_t)ne[i] > SIZE_MAX / (data_size > 0 ? data_size : 1)) {
+            GGML_LOG_ERROR("%s: tensor data size overflow at dim %d: "
+                           "data_size=%zu ne[%d]=%" PRId64 "\n",
+                           __func__, i, data_size, i, ne[i]);
+            return NULL;
+        }
+        data_size *= (size_t)ne[i];
     }
 
     GGML_ASSERT(view_src == NULL || data_size == 0 || data_size + view_offs <= ggml_nbytes(view_src));
