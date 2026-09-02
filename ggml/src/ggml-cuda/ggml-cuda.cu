@@ -1345,20 +1345,29 @@ static __global__ void ggml_cuda_rdna2_p2p_host_snapshot_reduce_add_rms_mul_5120
 // Direct peer pointers were not accepted as a production data path on the
 // model allocation layout, so this candidate uses portable mapped-host
 // snapshots and exact phase flags. Qualified RDNA2 Auto topologies may arm
-// it; RDNA3 Auto deliberately leaves this preliminary candidate off after
-// matched gfx1100 testing found it slower than RCCL. Explicit generic P2P
-// remains available for supervised experiments, and RCCL remains the fallback.
-static constexpr int GGML_CUDA_RDNA3_P2P_FLAG_STRIDE = 32;
+// the original one-block form; RDNA3 Auto deliberately leaves this candidate
+// off. The optional chunked form is separately explicit-only after matched
+// gfx1100 testing found the first four-block version slightly slower end to
+// end. RCCL remains the fallback for every rejected shape or setup failure.
+static constexpr unsigned GGML_CUDA_RDNA3_P2P_FLAG_STRIDE = 32;
+static constexpr unsigned GGML_CUDA_RDNA3_P2P_END_FLAG_OFFSET = 16;
+static constexpr unsigned GGML_CUDA_RDNA3_P2P_MAX_BLOCKS = 2;
 static constexpr size_t GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS = 5120 * 6;
 static constexpr size_t GGML_CUDA_RDNA3_P2P_SNAPSHOT_SLOTS = 8;
 
+static_assert(GGML_CUDA_RDNA3_P2P_END_FLAG_OFFSET + GGML_CUDA_RDNA3_P2P_MAX_BLOCKS <=
+        GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
+        "RDNA3 P2P chunk flags must fit inside one rank's flag stride");
+
 static __device__ __forceinline__ void ggml_cuda_rdna3_p2p_barrier2(
-        volatile int * local_flag, volatile int * peer_flag, int token) {
+        unsigned * local_flag, const unsigned * peer_flag, uint32_t token) {
+    // The fence must precede the release publication. Equality is deliberate:
+    // accepting a future token could pair this read with the wrong snapshot.
     __syncthreads();
     if (threadIdx.x == 0) {
-        *local_flag = token;
         __threadfence_system();
-        while (*peer_flag != token) {
+        __hip_atomic_store(local_flag, token, __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_SYSTEM);
+        while (__hip_atomic_load(peer_flag, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM) != token) {
 #if defined(__HIP_PLATFORM_AMD__)
             __builtin_amdgcn_s_sleep(1);
 #endif
@@ -1368,21 +1377,32 @@ static __device__ __forceinline__ void ggml_cuda_rdna3_p2p_barrier2(
 }
 
 static __global__ __launch_bounds__(1024, 1) void ggml_cuda_rdna3_p2p_host_reduce(
-        float * dst, const float * local, float * snapshot, const volatile float * peer_snapshot, int ne,
-        volatile int * start_local_flag, volatile int * start_peer_flag,
-        volatile int * end_local_flag, volatile int * end_peer_flag,
-        int start_token, int end_token) {
-    for (int i = int(blockIdx.x * blockDim.x + threadIdx.x); i < ne;
-            i += int(blockDim.x * gridDim.x)) {
+        float * dst, const float * local, volatile float * snapshot,
+        const volatile float * peer_snapshot, int ne,
+        unsigned * start_local_flags, const unsigned * start_peer_flags,
+        unsigned * end_local_flags, const unsigned * end_peer_flags,
+        uint32_t start_token, uint32_t end_token) {
+    const int block = int(blockIdx.x);
+    const int nblocks = int(gridDim.x);
+    const int chunk = (ne + nblocks - 1) / nblocks;
+    const int start = block * chunk;
+    const int end = min(ne, start + chunk);
+    for (int i = start + int(threadIdx.x); i < end; i += int(blockDim.x)) {
         snapshot[i] = local[i];
     }
+    // Every writer fences before the block-wide barrier; thread zero then
+    // publishes the block's start token with a system-scope release store.
     __threadfence_system();
-    ggml_cuda_rdna3_p2p_barrier2(start_local_flag, start_peer_flag, start_token);
-    for (int i = int(blockIdx.x * blockDim.x + threadIdx.x); i < ne;
-            i += int(blockDim.x * gridDim.x)) {
-        dst[i] = reinterpret_cast<const volatile float *>(snapshot)[i] + peer_snapshot[i];
+    ggml_cuda_rdna3_p2p_barrier2(
+            start_local_flags + block, start_peer_flags + block, start_token);
+    for (int i = start + int(threadIdx.x); i < end; i += int(blockDim.x)) {
+        dst[i] = snapshot[i] + peer_snapshot[i];
     }
-    ggml_cuda_rdna3_p2p_barrier2(end_local_flag, end_peer_flag, end_token);
+    // Do not reuse this parity slot until both ranks have completed all reads
+    // in this block. The end flags occupy a disjoint range from start flags.
+    ggml_cuda_rdna3_p2p_barrier2(
+            end_local_flags + GGML_CUDA_RDNA3_P2P_END_FLAG_OFFSET + block,
+            end_peer_flags + GGML_CUDA_RDNA3_P2P_END_FLAG_OFFSET + block, end_token);
 }
 
 #endif
@@ -1442,13 +1462,17 @@ struct ggml_backend_cuda_comm_context {
     // Opt-in two-rank RDNA2/RDNA3 host-snapshot reduction resources. These
     // are independent from the guarded four-rank RDNA2 resources.
     float * rdna3_p2p_snapshots_host = nullptr;
-    float * rdna3_p2p_snapshots_dev = nullptr;
-    int * rdna3_p2p_flags_host = nullptr;
-    int * rdna3_p2p_flags_dev = nullptr;
+    // Mapped host pointers are device-local on some HIP platforms. Keep one
+    // view per rank instead of assuming that the device-0 view is valid on
+    // the peer device.
+    std::array<float *, 2> rdna3_p2p_snapshots_dev = {};
+    unsigned * rdna3_p2p_flags_host = nullptr;
+    std::array<unsigned *, 2> rdna3_p2p_flags_dev = {};
     std::mutex rdna3_p2p_launch_mutex;
     uint32_t rdna3_p2p_token = 0;
     uint64_t rdna3_p2p_calls = 0;
     bool rdna3_p2p_initialized = false;
+    bool rdna3_p2p_chunked = false;
     uint32_t rdna3_p2p_logged_widths = 0;
     uint32_t rdna3_p2p_exact_widths = 0;
 #endif
@@ -1527,6 +1551,31 @@ static bool ggml_cuda_rdna3_p2p_ordinary_requested() {
         ggml_cuda_rdna3_p2p_explicitly_enabled();
 }
 
+// Chunking is a second, independently opt-in switch. This keeps the original
+// one-block candidate available for a matched control and prevents an Auto
+// policy from silently selecting the mapped-host experiment.
+static bool ggml_cuda_rdna3_p2p_chunked_enabled() {
+    const char * value = std::getenv("GGML_HIP_RDNA3_P2P_CHUNKED");
+    if (value == nullptr) {
+        return false;
+    }
+    const auto flag = ggml_cuda_rdna3_auto_parse(value);
+    if (flag == ggml_cuda_rdna3_auto_flag::invalid) {
+        GGML_LOG_WARN("GGML_HIP_RDNA3_P2P_CHUNKED=\"%s\" is not recognized; using one-block P2P candidate\n",
+                value);
+        return false;
+    }
+    return flag == ggml_cuda_rdna3_auto_flag::enabled;
+}
+
+static int ggml_cuda_rdna3_p2p_nblocks(int ne, bool chunked) {
+    if (!chunked) {
+        return 1;
+    }
+    return std::min(int(GGML_CUDA_RDNA3_P2P_MAX_BLOCKS),
+            std::max(1, (ne + 8191) / 8192));
+}
+
 static void ggml_cuda_rdna3_p2p_release(ggml_backend_cuda_comm_context * comm_ctx) {
     if (!comm_ctx->dev_ids.empty()) {
         ggml_cuda_set_device(comm_ctx->dev_ids[0]);
@@ -1538,20 +1587,27 @@ static void ggml_cuda_rdna3_p2p_release(ggml_backend_cuda_comm_context * comm_ct
         (void) hipHostFree(comm_ctx->rdna3_p2p_flags_host);
     }
     comm_ctx->rdna3_p2p_snapshots_host = nullptr;
-    comm_ctx->rdna3_p2p_snapshots_dev = nullptr;
+    comm_ctx->rdna3_p2p_snapshots_dev.fill(nullptr);
     comm_ctx->rdna3_p2p_flags_host = nullptr;
-    comm_ctx->rdna3_p2p_flags_dev = nullptr;
+    comm_ctx->rdna3_p2p_flags_dev.fill(nullptr);
     comm_ctx->rdna3_p2p_initialized = false;
+    comm_ctx->rdna3_p2p_chunked = false;
+    comm_ctx->rdna3_p2p_token = 0;
+    comm_ctx->rdna3_p2p_logged_widths = 0;
+    comm_ctx->rdna3_p2p_exact_widths = 0;
 }
 
 static void ggml_cuda_rdna3_p2p_next_tokens(
-        ggml_backend_cuda_comm_context * comm_ctx, int & start_token, int & end_token) {
+        ggml_backend_cuda_comm_context * comm_ctx, uint32_t & start_token, uint32_t & end_token) {
     uint32_t serial = ++comm_ctx->rdna3_p2p_token;
-    if (serial == 0) serial = ++comm_ctx->rdna3_p2p_token;
-    // The process cannot reach this wrap in practice; retaining equality-based
-    // barriers keeps the flag protocol robust across ordinary token reuse.
-    start_token = int(serial * 2u);
-    end_token = int(serial * 2u + 1u);
+    // Serial zero is the memset value of a fresh flag array. Serial
+    // 0x80000000 would make the even start token wrap to zero as well; skip
+    // both values so a stale initialized flag can never satisfy a new call.
+    if (serial == 0 || serial == 0x80000000u) serial = ++comm_ctx->rdna3_p2p_token;
+    // Keep token comparisons unsigned and exact. A future token must never be
+    // accepted as proof that this call's peer snapshot is ready.
+    start_token = serial * 2u;
+    end_token = start_token + 1u;
 }
 
 static std::vector<float> ggml_cuda_rdna3_p2p_selftest_input(int rank, int pattern, int ne) {
@@ -1642,24 +1698,25 @@ static bool ggml_cuda_rdna3_p2p_runtime_selftest(
         }
         if (!exact) break;
 
-        int start_token = 0;
-        int end_token = 0;
+        uint32_t start_token = 0;
+        uint32_t end_token = 0;
         ggml_cuda_rdna3_p2p_next_tokens(comm_ctx, start_token, end_token);
         const size_t parity_offset = size_t(comm_ctx->rdna3_p2p_token & (GGML_CUDA_RDNA3_P2P_SNAPSHOT_SLOTS - 1)) *
             2 * GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS;
-        float * snapshots[2] = {
-            comm_ctx->rdna3_p2p_snapshots_dev + parity_offset,
-            comm_ctx->rdna3_p2p_snapshots_dev + parity_offset + GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS,
-        };
+        const int nblocks = ggml_cuda_rdna3_p2p_nblocks(ne, comm_ctx->rdna3_p2p_chunked);
         for (int rank = 0; rank < nr; ++rank) {
             auto * ctx = static_cast<ggml_backend_cuda_context *>(comm_ctx->backends[rank]->context);
             ggml_cuda_set_device(ctx->device);
-            ggml_cuda_rdna3_p2p_host_reduce<<<1, 1024, 0, ctx->stream()>>>(
-                custom[rank], inputs[rank], snapshots[rank], snapshots[rank ^ 1], ne,
-                comm_ctx->rdna3_p2p_flags_dev + rank * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
-                comm_ctx->rdna3_p2p_flags_dev + (rank ^ 1) * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
-                comm_ctx->rdna3_p2p_flags_dev + rank * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE + 1,
-                comm_ctx->rdna3_p2p_flags_dev + (rank ^ 1) * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE + 1,
+            float * snapshot_base = comm_ctx->rdna3_p2p_snapshots_dev[rank] + parity_offset;
+            unsigned * flags_base = comm_ctx->rdna3_p2p_flags_dev[rank];
+            ggml_cuda_rdna3_p2p_host_reduce<<<nblocks, 1024, 0, ctx->stream()>>>(
+                custom[rank], inputs[rank],
+                snapshot_base + rank * GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS,
+                snapshot_base + (rank ^ 1) * GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS, ne,
+                flags_base + rank * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
+                flags_base + (rank ^ 1) * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
+                flags_base + rank * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
+                flags_base + (rank ^ 1) * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
                 start_token, end_token);
             if (!cuda_ok(cudaGetLastError(), "custom launch")) {
                 exact = false;
@@ -1835,22 +1892,32 @@ static bool ggml_cuda_rdna3_p2p_init(ggml_backend_cuda_comm_context * comm_ctx) 
         (void) cudaGetLastError();
     }
 
+    // A chunked run must be explicitly requested together with the generic
+    // P2P enable flag; RDNA2 Auto may retain the one-block candidate but can
+    // never silently promote itself to this newer protocol.
+    comm_ctx->rdna3_p2p_chunked = explicit_set && ggml_cuda_rdna3_p2p_chunked_enabled();
+
     ggml_cuda_set_device(comm_ctx->dev_ids[0]);
     if (hipHostMalloc((void **) &comm_ctx->rdna3_p2p_flags_host,
-                2 * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE * sizeof(int),
+                2 * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE * sizeof(unsigned),
                 hipHostMallocPortable | hipHostMallocMapped | hipHostMallocCoherent) != hipSuccess) {
         GGML_LOG_WARN("RDNA2/RDNA3 two-rank P2P AllReduce: mapped flag allocation failed; using RCCL\n");
         (void) hipGetLastError();
         return false;
     }
     std::memset(comm_ctx->rdna3_p2p_flags_host, 0,
-            2 * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE * sizeof(int));
-    if (hipHostGetDevicePointer((void **) &comm_ctx->rdna3_p2p_flags_dev,
-                comm_ctx->rdna3_p2p_flags_host, 0) != hipSuccess) {
-        GGML_LOG_WARN("RDNA2/RDNA3 two-rank P2P AllReduce: mapped flag device pointer failed; using RCCL\n");
-        ggml_cuda_rdna3_p2p_release(comm_ctx);
-        (void) hipGetLastError();
-        return false;
+            2 * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE * sizeof(unsigned));
+    for (int rank = 0; rank < 2; ++rank) {
+        ggml_cuda_set_device(comm_ctx->dev_ids[rank]);
+        if (hipHostGetDevicePointer((void **) &comm_ctx->rdna3_p2p_flags_dev[rank],
+                    comm_ctx->rdna3_p2p_flags_host, 0) != hipSuccess ||
+                comm_ctx->rdna3_p2p_flags_dev[rank] == nullptr) {
+            GGML_LOG_WARN("RDNA2/RDNA3 two-rank P2P AllReduce: mapped flag device pointer failed on rank %d; using RCCL\n",
+                    rank);
+            ggml_cuda_rdna3_p2p_release(comm_ctx);
+            (void) hipGetLastError();
+            return false;
+        }
     }
     if (hipHostMalloc((void **) &comm_ctx->rdna3_p2p_snapshots_host,
                 2 * GGML_CUDA_RDNA3_P2P_SNAPSHOT_SLOTS * 2 * GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS * sizeof(float),
@@ -1862,12 +1929,17 @@ static bool ggml_cuda_rdna3_p2p_init(ggml_backend_cuda_comm_context * comm_ctx) 
     }
     std::memset(comm_ctx->rdna3_p2p_snapshots_host, 0,
             2 * GGML_CUDA_RDNA3_P2P_SNAPSHOT_SLOTS * 2 * GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS * sizeof(float));
-    if (hipHostGetDevicePointer((void **) &comm_ctx->rdna3_p2p_snapshots_dev,
-                comm_ctx->rdna3_p2p_snapshots_host, 0) != hipSuccess) {
-        GGML_LOG_WARN("RDNA2/RDNA3 two-rank P2P AllReduce: mapped snapshot device pointer failed; using RCCL\n");
-        ggml_cuda_rdna3_p2p_release(comm_ctx);
-        (void) hipGetLastError();
-        return false;
+    for (int rank = 0; rank < 2; ++rank) {
+        ggml_cuda_set_device(comm_ctx->dev_ids[rank]);
+        if (hipHostGetDevicePointer((void **) &comm_ctx->rdna3_p2p_snapshots_dev[rank],
+                    comm_ctx->rdna3_p2p_snapshots_host, 0) != hipSuccess ||
+                comm_ctx->rdna3_p2p_snapshots_dev[rank] == nullptr) {
+            GGML_LOG_WARN("RDNA2/RDNA3 two-rank P2P AllReduce: mapped snapshot device pointer failed on rank %d; using RCCL\n",
+                    rank);
+            ggml_cuda_rdna3_p2p_release(comm_ctx);
+            (void) hipGetLastError();
+            return false;
+        }
     }
 
     // Qualify every width that the generic hidden-state path may submit. A
@@ -1885,8 +1957,9 @@ static bool ggml_cuda_rdna3_p2p_init(ggml_backend_cuda_comm_context * comm_ctx) 
         return false;
     }
     comm_ctx->rdna3_p2p_initialized = true;
-    GGML_LOG_INFO("armed experimental two-rank RDNA2/RDNA3 host-snapshot AllReduce after RCCL self-tests (width_mask=0x%x)\n",
-            comm_ctx->rdna3_p2p_exact_widths);
+    GGML_LOG_INFO("armed experimental two-rank RDNA2/RDNA3 host-snapshot AllReduce after RCCL self-tests (width_mask=0x%x, chunked=%d, max_blocks=%u)\n",
+            comm_ctx->rdna3_p2p_exact_widths, comm_ctx->rdna3_p2p_chunked ? 1 : 0,
+            GGML_CUDA_RDNA3_P2P_MAX_BLOCKS);
     return true;
 }
 
@@ -1916,29 +1989,31 @@ static bool ggml_backend_cuda_comm_allreduce_rdna3_p2p(
     }
     const auto * ctx0 = static_cast<const ggml_backend_cuda_context *>(comm_ctx->backends[0]->context);
     const auto * ctx1 = static_cast<const ggml_backend_cuda_context *>(comm_ctx->backends[1]->context);
-    if (ctx0->curr_stream_no != ctx1->curr_stream_no) return false;
+    if (ctx0 == nullptr || ctx1 == nullptr ||
+            ctx0->device != comm_ctx->dev_ids[0] || ctx1->device != comm_ctx->dev_ids[1] ||
+            ctx0->curr_stream_no != ctx1->curr_stream_no) return false;
 
     std::lock_guard<std::mutex> lock(comm_ctx->rdna3_p2p_launch_mutex);
-    int start_token = 0;
-    int end_token = 0;
+    uint32_t start_token = 0;
+    uint32_t end_token = 0;
     ggml_cuda_rdna3_p2p_next_tokens(comm_ctx, start_token, end_token);
     const int64_t nelements = ggml_nelements(tensor);
     const size_t parity_offset = size_t(comm_ctx->rdna3_p2p_token & (GGML_CUDA_RDNA3_P2P_SNAPSHOT_SLOTS - 1)) *
         2 * GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS;
-    float * snapshots[2] = {
-        comm_ctx->rdna3_p2p_snapshots_dev + parity_offset,
-        comm_ctx->rdna3_p2p_snapshots_dev + parity_offset + GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS,
-    };
+    const int nblocks = ggml_cuda_rdna3_p2p_nblocks(int(nelements), comm_ctx->rdna3_p2p_chunked);
     for (int rank = 0; rank < 2; ++rank) {
         auto * ctx = static_cast<ggml_backend_cuda_context *>(comm_ctx->backends[rank]->context);
         ggml_cuda_set_device(ctx->device);
-        ggml_cuda_rdna3_p2p_host_reduce<<<1, 1024, 0, ctx->stream()>>>(
+        float * snapshot_base = comm_ctx->rdna3_p2p_snapshots_dev[rank] + parity_offset;
+        unsigned * flags_base = comm_ctx->rdna3_p2p_flags_dev[rank];
+        ggml_cuda_rdna3_p2p_host_reduce<<<nblocks, 1024, 0, ctx->stream()>>>(
             static_cast<float *>(tensors[rank]->data), static_cast<const float *>(tensors[rank]->data),
-            snapshots[rank], snapshots[rank ^ 1], int(nelements),
-            comm_ctx->rdna3_p2p_flags_dev + rank * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
-            comm_ctx->rdna3_p2p_flags_dev + (rank ^ 1) * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
-            comm_ctx->rdna3_p2p_flags_dev + rank * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE + 1,
-            comm_ctx->rdna3_p2p_flags_dev + (rank ^ 1) * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE + 1,
+            snapshot_base + rank * GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS,
+            snapshot_base + (rank ^ 1) * GGML_CUDA_RDNA3_P2P_MAX_ELEMENTS, int(nelements),
+            flags_base + rank * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
+            flags_base + (rank ^ 1) * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
+            flags_base + rank * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
+            flags_base + (rank ^ 1) * GGML_CUDA_RDNA3_P2P_FLAG_STRIDE,
             start_token, end_token);
         CUDA_CHECK(cudaGetLastError());
     }
@@ -1946,8 +2021,8 @@ static bool ggml_backend_cuda_comm_allreduce_rdna3_p2p(
     const uint32_t bit = ggml_cuda_rdna3_p2p_width_bit(tensor->ne[1]);
     if ((comm_ctx->rdna3_p2p_logged_widths & bit) == 0) {
         comm_ctx->rdna3_p2p_logged_widths |= bit;
-        std::fprintf(stderr, "using experimental two-rank native P2P host-snapshot AllReduce for %s [5120,%" PRId64 ",1,1] F32\n",
-                tensor->name, tensor->ne[1]);
+        std::fprintf(stderr, "using experimental two-rank native P2P host-snapshot AllReduce for %s [5120,%" PRId64 ",1,1] F32 (blocks=%d)\n",
+                tensor->name, tensor->ne[1], nblocks);
     }
     return true;
 }
