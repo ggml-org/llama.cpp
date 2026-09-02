@@ -6897,7 +6897,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                         }
 
 #if defined(VK_KHR_shader_bfloat16) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
-                        if (prop.AType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
+                        if (bfloat16_support &&
+                            prop.AType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
                             prop.BType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
                             prop.CType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
                             prop.ResultType == VK_COMPONENT_TYPE_FLOAT32_KHR) {
@@ -7017,7 +7018,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                     device->coopmat_int_k = prop.KSize;
                 }
 #if defined(VK_KHR_shader_bfloat16) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
-                if (prop.AType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
+                if (bfloat16_support &&
+                    prop.AType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
                     prop.BType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
                     prop.CType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
                     prop.ResultType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
@@ -7042,19 +7044,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 GGML_LOG_DEBUG("ggml_vulkan: WARNING: No suitable matrix core mode found. Disabling matrix cores.\n");
                 device->coopmat_support = false;
             }
-            if (getenv("GGML_VK_DISABLE_BFLOAT16")) {
-                device->coopmat_bf16_support = false;
-            }
         }
 
         if (device->coopmat_support) {
             device_extensions.push_back("VK_KHR_cooperative_matrix");
         }
-#if defined(VK_KHR_shader_bfloat16)
-        if (device->coopmat_bf16_support) {
-            device_extensions.push_back("VK_KHR_shader_bfloat16");
-        }
-#endif
 #endif
         device->name = GGML_VK_NAME + std::to_string(idx);
 
