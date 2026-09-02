@@ -23,6 +23,15 @@
 
 #define UNUSED GGML_UNUSED
 
+// MSVC declares the NEON vector types as unions in <arm64_neon.h> instead of using the
+// GCC/Clang vector extensions, so they cannot be brace initialized. Note that clang-cl
+// defines _MSC_VER as well, but uses its own header where brace initialization works.
+#if defined(_MSC_VER) && !defined(__clang__)
+#define GGML_MAKE_F32X4(a, b, c, d) vld1q_f32(((const float[4]) { (a), (b), (c), (d) }))
+#else
+#define GGML_MAKE_F32X4(a, b, c, d) ((float32x4_t) { (a), (b), (c), (d) })
+#endif
+
 #if defined(__ARM_NEON)
 #define B1(c,s,n)  0x ## n ## c ,  0x ## n ## s
 #define B2(c,s,n) B1(c,s,n ## c), B1(c,s,n ## s)
@@ -2591,8 +2600,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 memcpy(scales_mins, x0->scales, 12);
                 const uint32_t mins_0_3 = scales_mins[1] & kmask1;
                 const uint32_t mins_4_7 = ((scales_mins[2] >> 4) & kmask2) | (((scales_mins[1] >> 6) & kmask3) << 4);
-                const uint32_t mins_pair[2] = {mins_0_3, mins_4_7};
-                const uint32x2_t mins = vld1_u32(mins_pair);
+                const uint32x2_t mins = vcreate_u32((uint64_t)mins_0_3 | ((uint64_t)mins_4_7 << 32));
                 x0_mins = vreinterpretq_s16_u16(vmovl_u8(vreinterpret_u8_u32(mins)));
                 uint32_t scales[2];
                 scales[0] = scales_mins[0] & kmask1; // scales 0~3
@@ -2604,8 +2612,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 memcpy(scales_mins, x1->scales, 12);
                 const uint32_t mins_0_3 = scales_mins[1] & kmask1;
                 const uint32_t mins_4_7 = ((scales_mins[2] >> 4) & kmask2) | (((scales_mins[1] >> 6) & kmask3) << 4);
-                const uint32_t mins_pair[2] = {mins_0_3, mins_4_7};
-                const uint32x2_t mins = vld1_u32(mins_pair);
+                const uint32x2_t mins = vcreate_u32((uint64_t)mins_0_3 | ((uint64_t)mins_4_7 << 32));
                 x1_mins = vreinterpretq_s16_u16(vmovl_u8(vreinterpret_u8_u32(mins)));
                 uint32_t scales[2];
                 scales[0] = scales_mins[0] & kmask1; // scales 0~3
@@ -2639,13 +2646,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 // process 32 data points (share same block scale) per iteration
                 for (int k = 0; k < 2; ++k) {
                     const int blk = j * 2 + k;
-                    const int32_t block_scale_arr[4] = {
-                        x0_scales[blk],
-                        x0_scales[blk],
-                        x1_scales[blk],
-                        x1_scales[blk],
-                    };
-                    const int32x4_t block_scale = vld1q_s32(block_scale_arr);
+                    const int32x4_t block_scale = vcombine_s32(vdup_n_s32(x0_scales[blk]), vdup_n_s32(x1_scales[blk]));
 
                     int32x4_t vr = vdupq_n_s32(0);
                     for (int l = 0; l < 2; ++l) {
@@ -2681,22 +2682,20 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                                                vmull_s16(vget_high_s16(y0_sums), vget_high_s16(x1_mins))));
                 bias[3] = vaddvq_s32(vaddq_s32(vmull_s16(vget_low_s16(y1_sums), vget_low_s16(x1_mins)),
                                                vmull_s16(vget_high_s16(y1_sums), vget_high_s16(x1_mins))));
-                const float dmins_arr[4] = {
+                const float32x4_t dmins = GGML_MAKE_F32X4(
                     GGML_CPU_FP16_TO_FP32(x0->dmin) * y0->d,
                     GGML_CPU_FP16_TO_FP32(x0->dmin) * y1->d,
                     GGML_CPU_FP16_TO_FP32(x1->dmin) * y0->d,
-                    GGML_CPU_FP16_TO_FP32(x1->dmin) * y1->d,
-                };
-                const float32x4_t dmins = vld1q_f32(dmins_arr);
+                    GGML_CPU_FP16_TO_FP32(x1->dmin) * y1->d
+                );
                 vfsum = vmlsq_f32(vfsum, vcvtq_f32_s32(vld1q_s32(bias)), dmins);
 
-                const float superblock_scale_arr[4] = {
+                const float32x4_t superblock_scale = GGML_MAKE_F32X4(
                     GGML_CPU_FP16_TO_FP32(x0->d) * y0->d,
                     GGML_CPU_FP16_TO_FP32(x0->d) * y1->d,
                     GGML_CPU_FP16_TO_FP32(x1->d) * y0->d,
-                    GGML_CPU_FP16_TO_FP32(x1->d) * y1->d,
-                };
-                const float32x4_t superblock_scale = vld1q_f32(superblock_scale_arr);
+                    GGML_CPU_FP16_TO_FP32(x1->d) * y1->d
+                );
                 vfsum = vmlaq_f32(vfsum, vcvtq_f32_s32(visum), superblock_scale);
             }
         }
@@ -3266,13 +3265,7 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                     qy0 += 16;
                     qy1 += 16;
 
-                    const int32_t block_scale_arr[4] = {
-                        x0->scales[blk],
-                        x0->scales[blk],
-                        x1->scales[blk],
-                        x1->scales[blk],
-                    };
-                    const int32x4_t block_scale = vld1q_s32(block_scale_arr);
+                    const int32x4_t block_scale = vcombine_s32(vdup_n_s32(x0->scales[blk]), vdup_n_s32(x1->scales[blk]));
 
                     // calculate four results at once with outer product
                     const int8x16_t vx_l = vreinterpretq_s8_s64(vzip1q_s64(vreinterpretq_s64_s8(vx0[k]), vreinterpretq_s64_s8(vx1[k])));
@@ -3325,13 +3318,12 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
                 const int32x4_t vibias = vmulq_n_s32(vld1q_s32(bias), 32);
 
-                const float superblock_scale_arr[4] = {
+                const float32x4_t superblock_scale = GGML_MAKE_F32X4(
                     GGML_CPU_FP16_TO_FP32(x0->d) * y0->d,
                     GGML_CPU_FP16_TO_FP32(x0->d) * y1->d,
                     GGML_CPU_FP16_TO_FP32(x1->d) * y0->d,
-                    GGML_CPU_FP16_TO_FP32(x1->d) * y1->d,
-                };
-                const float32x4_t superblock_scale = vld1q_f32(superblock_scale_arr);
+                    GGML_CPU_FP16_TO_FP32(x1->d) * y1->d
+                );
 
                 visum = vsubq_s32(visum, vibias);
                 vfsum = vmlaq_f32(vfsum, vcvtq_f32_s32(visum), superblock_scale);
