@@ -2988,9 +2988,9 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_QWEN3TTS_GEN:
                 {
-                    // code_predictor
-                    model.gen_code_proj_in_w = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN, "weight"));
-                    model.gen_code_proj_in_b = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN, "bias"));
+                    // code_predictor, proj_in is absent when the talker and the predictor share the hidden size
+                    model.gen_code_proj_in_w = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN, "weight"), false);
+                    model.gen_code_proj_in_b = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN, "bias"),   false);
                     model.gen_code_embd_w     = get_tensor(string_format(TN_A_GEN_CODE_EMBD,     "weight"));
                     model.gen_code_head_w     = get_tensor(string_format(TN_A_GEN_CODE_HEAD,     "weight"));
                     model.gen_code_out_embd_w = get_tensor(string_format(TN_A_GEN_CODE_OUT_EMBD, "weight"));
