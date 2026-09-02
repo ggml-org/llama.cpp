@@ -12,6 +12,8 @@
 #include "mtmd-helper-common.h"
 #include "llama.h"
 
+#include "hash/hash.h"
+
 #include <algorithm>
 #include <cinttypes>
 #include <vector>
@@ -40,6 +42,11 @@
 #ifdef MTMD_VIDEO
 #include "sheredom/subprocess.h"
 #include <thread>
+#ifndef _WIN32
+#include <csignal>
+#include <fcntl.h>
+#include <pthread.h>
+#endif
 #endif
 
 //
@@ -356,25 +363,27 @@ static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int 
 
 } // namespace audio_helpers
 
-// Computes FNV-1a hash of the data
-static std::string fnv_hash(const uint8_t * data, size_t len) {
-    const uint64_t fnv_prime = 0x100000001b3ULL;
-    uint64_t hash = 0xcbf29ce484222325ULL;
-
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= data[i];
-        hash *= fnv_prime;
-    }
-    return std::to_string(hash);
+static bool is_webp_file(const unsigned char * buf, size_t len) {
+    // WEBP ref: https://developers.google.com/speed/webp/docs/riff_container
+    return len >= 12 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WEBP", 4) == 0;
 }
 
-mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder) {
+#ifdef MTMD_VIDEO
+static mtmd_bitmap * decode_webp_with_ffmpeg(mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder,
+                                             const mtmd_helper_video_init_params & params);
+#endif
+
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder,
+                                                            mtmd_helper_init_opt opt) {
     // calculate the hash if needed
     std::string id;
     mtmd_bitmap * result = nullptr;
 
+    GGML_UNUSED(opt); // only used by video code paths
+
     if (!placeholder) {
-        id = fnv_hash(buf, len);
+        // use sha256 to prevent cache poisoning
+        id = hash_sha256_hex(buf, len);
     }
 
     if (audio_helpers::is_audio_file((const char *)buf, len)) {
@@ -406,11 +415,23 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
         // otherwise, fallthrough to video decoding (if supported)
     }
 
+#ifdef MTMD_VIDEO
+    // stb_image does not support webp; decode it with ffmpeg as a single frame
+    if (!result && is_webp_file(buf, len)) {
+        result = decode_webp_with_ffmpeg(ctx, buf, len, placeholder, opt.video_params);
+        if (!result) {
+            LOG_ERR("%s: failed to decode webp buffer\n", __func__);
+            return {nullptr, nullptr};
+        }
+        mtmd_bitmap_set_id(result, id.empty() ? nullptr : id.c_str());
+        return {result, nullptr};
+    }
+#endif
+
     // last try: load as video
 #ifdef MTMD_VIDEO
     if (!result) {
-        auto params = mtmd_helper_video_init_params_default();
-        auto video_ctx = mtmd_helper_video_init_from_buf(ctx, buf, len, params);
+        auto video_ctx = mtmd_helper_video_init_from_buf(ctx, buf, len, opt.video_params);
         if (!video_ctx) {
             LOG_ERR("%s: failed to decode buffer as either image/audio/video\n", __func__);
             return {nullptr, nullptr};
@@ -438,7 +459,8 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
     return {nullptr, nullptr};
 }
 
-mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder) {
+mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder,
+                                                             mtmd_helper_init_opt opt) {
 #ifdef _WIN32
     int wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, NULL, 0);
     if (!wlen) {
@@ -479,7 +501,7 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx,
         return {nullptr, nullptr};
     }
 
-    return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size(), placeholder);
+    return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size(), placeholder, opt);
 }
 
 bool mtmd_helper_support_video(mtmd_context * ctx) {
@@ -509,7 +531,8 @@ struct mtmd_helper_video {
     // RAII wrapper for managing subprocess
     struct subprocess_handle {
         struct subprocess_s proc = {};
-        bool alive = false;
+        bool created = false; // process exists and must be cleaned up
+        bool alive   = false; // process can still give us data
         std::thread feeder;
 
         subprocess_handle() = default;
@@ -518,18 +541,27 @@ struct mtmd_helper_video {
         ~subprocess_handle() { stop(); }
 
         void stop() {
-            if (alive) {
-                subprocess_terminate(&proc);
+            // note: alive becomes false on stdout EOF, but the process still needs cleanup
+            if (!created) {
+                return;
             }
+            subprocess_terminate(&proc);
+#ifdef _WIN32
+            // no SIGPIPE on windows: a blocked feeder only gets a broken pipe once we close our read end of the child stdin
+            if (proc.hStdInput) {
+                CloseHandle(proc.hStdInput);
+                proc.hStdInput = nullptr;
+            }
+#endif
             // join before destroy: feeder holds a FILE* from subprocess_stdin;
             // subprocess_destroy closes it, so the thread must finish first
             if (feeder.joinable()) {
                 feeder.join();
             }
-            if (alive) {
-                subprocess_destroy(&proc);
-                alive = false;
-            }
+            subprocess_join(&proc, nullptr); // reap the child, or else it stays a zombie
+            subprocess_destroy(&proc);
+            created = false;
+            alive   = false;
         }
 
         FILE * stdout_pipe() {
@@ -539,10 +571,21 @@ struct mtmd_helper_video {
         // buf is tied to lifetime of mtmd_helper_video, so it's guaranteed to outlive the feeder thread
         void start_feeder(const std::vector<uint8_t> & buf) {
             feeder = std::thread([this, &buf]() {
+#ifndef _WIN32
+                // ffmpeg can exit before it reads all the input, for example when ffprobe already got the metadata.
+                // the write below must then fail with EPIPE, instead of killing the process with SIGPIPE
+                sigset_t sigpipe_set;
+                sigemptyset(&sigpipe_set);
+                sigaddset(&sigpipe_set, SIGPIPE);
+                pthread_sigmask(SIG_BLOCK, &sigpipe_set, nullptr); // linux sends the signal to the writing thread
+#endif
                 FILE * f = subprocess_stdin(&proc);
                 if (!f) {
                     return;
                 }
+#ifdef F_SETNOSIGPIPE
+                fcntl(fileno(f), F_SETNOSIGPIPE, 1); // macos/bsd send it to the process, so turn it off per fd
+#endif
                 fwrite(buf.data(), 1, buf.size(), f);
                 fclose(f);
                 proc.stdin_file = nullptr; // prevent double-close in subprocess_destroy
@@ -588,7 +631,8 @@ struct mtmd_helper_video {
             LOG_ERR("%s: failed to launch ffprobe\n", __func__);
             return false;
         }
-        probe_sp.alive = true;
+        probe_sp.created = true;
+        probe_sp.alive   = true;
 
         if (is_buf_input()) {
             probe_sp.start_feeder(input_buf);
@@ -660,6 +704,11 @@ struct mtmd_helper_video {
         }
 
         cmd.push_back("-nostdin");
+        if (is_buf_input()) {
+            // remove the 64KB read-ahead limit of cache:, or else ffmpeg cannot reach a moov atom at end of file
+            cmd.push_back("-read_ahead_limit");
+            cmd.push_back("-1");
+        }
         cmd.push_back("-i");
         // cache:pipe:0 wraps stdin with a seekable in-memory cache, letting ffmpeg seek
         // backwards for container headers (e.g. MP4 moov atom at end of file)
@@ -698,7 +747,8 @@ struct mtmd_helper_video {
             subprocess_option_search_user_path | subprocess_option_inherit_environment,
             &sp.proc);
 
-        sp.alive = (ret == 0);
+        sp.created = (ret == 0);
+        sp.alive   = (ret == 0);
         LOG_DBG("%s: subprocess_create ret=%d proc_alive=%d\n", __func__, ret, (int)sp.alive);
 
         if (sp.alive && is_buf_input()) {
@@ -736,7 +786,9 @@ struct mtmd_helper_video {
 
         LOG_DBG("%s: frame %d read OK\n", __func__, current_frame);
         current_frame++;
-        return mtmd_bitmap_init(info.width, info.height, frame_buf.data());
+        mtmd_bitmap * frame = mtmd_bitmap_init(info.width, info.height, frame_buf.data());
+        mtmd_bitmap_set_mergeable(frame, true);
+        return frame;
     }
 
     int32_t read_next(mtmd_bitmap ** out_bitmap, char ** out_text) {
@@ -807,6 +859,12 @@ mtmd_helper_video_init_params mtmd_helper_video_init_params_default() {
     };
 }
 
+mtmd_helper_init_opt mtmd_helper_init_opt_default() {
+    return {
+        /* video_params */ mtmd_helper_video_init_params_default(),
+    };
+}
+
 static std::string video_resolve_bin(const char * bin_dir, const char * name) {
     if (!bin_dir || bin_dir[0] == '\0') {
         return name; // rely on PATH
@@ -826,6 +884,33 @@ static std::string video_resolve_bin(const char * bin_dir, const char * name) {
 #endif
     return result;
 }
+
+#ifdef MTMD_VIDEO
+static mtmd_bitmap * decode_webp_with_ffmpeg(mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder,
+                                             const mtmd_helper_video_init_params & params) {
+    mtmd_helper_video vctx;
+    vctx.mctx        = mctx;
+    vctx.input_buf.assign(buf, buf + len);
+    vctx.ffmpeg_bin  = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
+    vctx.ffprobe_bin = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
+    if (!vctx.probe(0.0f)) {
+        return nullptr;
+    }
+    if (placeholder) {
+        return mtmd_bitmap_init(vctx.info.width, vctx.info.height, nullptr);
+    }
+    // still image: the fps filter would output no frame, so disable it
+    vctx.fps_target = 0.0f;
+    if (!vctx.start_ffmpeg(0.0f)) {
+        return nullptr;
+    }
+    mtmd_bitmap * frame = vctx.read_next_frame();
+    if (frame) {
+        mtmd_bitmap_set_mergeable(frame, false);
+    }
+    return frame;
+}
+#endif
 
 mtmd_helper_video * mtmd_helper_video_init(
         mtmd_context * mctx,

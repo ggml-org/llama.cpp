@@ -75,6 +75,7 @@
 #define KEY_SAM_N_HEAD             "clip.vision.sam.head_count"
 #define KEY_SAM_N_BLOCK            "clip.vision.sam.block_count"
 #define KEY_SAM_N_EMBD             "clip.vision.sam.embedding_length"
+#define KEY_VISION_N_EXPERT_USED   "clip.vision.expert_used_count"
 // audio-specific
 #define KEY_AUDIO_PROJ_TYPE        "clip.audio.projector_type" // for models with mixed modalities
 #define KEY_A_NUM_MEL_BINS         "clip.audio.num_mel_bins"
@@ -119,7 +120,11 @@
 #define TN_FFN_DOWN        "%s.blk.%d.ffn_down.%s"
 #define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
 #define TN_FFN_UP          "%s.blk.%d.ffn_up.%s"
-#define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
+#define TN_FFN_GATE_INP    "%s.blk.%d.ffn_gate_inp.%s"    // MoE router (dots3note)
+#define TN_FFN_GATE_EXPS   "%s.blk.%d.ffn_gate_exps.%s"
+#define TN_FFN_UP_EXPS     "%s.blk.%d.ffn_up_exps.%s"
+#define TN_FFN_DOWN_EXPS   "%s.blk.%d.ffn_down_exps.%s"
+#define TN_FFN_EXP_PROBS_B "%s.blk.%d.exp_probs_b.%s"
 #define TN_LN_1            "%s.blk.%d.ln1.%s" // layer norm
 #define TN_LN_2            "%s.blk.%d.ln2.%s" // layer norm
 #define TN_LS_1            "%s.blk.%d.ls1.%s"         // layer scale
@@ -471,6 +476,8 @@ enum projector_type {
     PROJECTOR_TYPE_COGVLM,
     PROJECTOR_TYPE_JANUS_PRO,
     PROJECTOR_TYPE_DOTS_OCR,
+    PROJECTOR_TYPE_DOTS3NOTE_V,
+    PROJECTOR_TYPE_DOTS3NOTE_A,
     PROJECTOR_TYPE_DEEPSEEKOCR,
     PROJECTOR_TYPE_DEEPSEEKOCR2,
     PROJECTOR_TYPE_LFM2A,
@@ -533,6 +540,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_COGVLM,            "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO,         "janus_pro"},
     { PROJECTOR_TYPE_DOTS_OCR,          "dots_ocr"},
+    { PROJECTOR_TYPE_DOTS3NOTE_V,       "dots3note_v"},
+    { PROJECTOR_TYPE_DOTS3NOTE_A,       "dots3note_a"},
     { PROJECTOR_TYPE_DEEPSEEKOCR,       "deepseekocr"},
     { PROJECTOR_TYPE_DEEPSEEKOCR2,      "deepseekocr2"},
     { PROJECTOR_TYPE_LFM2A,             "lfm2a"},
@@ -858,6 +867,9 @@ static std::ifstream open_ifstream_binary(const std::string & fname) {
 }
 #endif
 
+// in test-mtmd-impl, we include woth common.h and this file, and these functions are duplicated
+// this is a quick fix to avoid compilation errors
+#ifndef DIRECTORY_SEPARATOR
 static std::string string_format(const char * fmt, ...) {
     va_list ap;
     va_list ap2;
@@ -915,6 +927,7 @@ inline bool string_ends_with(std::string_view str, std::string_view suffix) {
     return str.size() >= suffix.size() &&
            str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
+#endif
 
 //
 // gguf utils

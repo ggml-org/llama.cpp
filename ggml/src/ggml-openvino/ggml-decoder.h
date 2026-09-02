@@ -47,6 +47,7 @@ struct ComputeParams {
     int seq_active_start = 0;
     int attention_size = -1;
     int attention_size_swa = -1;
+    int attention_size_static = -1;  // encoder/cross-attn KV fill level (whisper)
     int input_len = -1;
     int token_len_per_seq = -1;
     int past_kv_len = -1;
@@ -84,14 +85,15 @@ struct ComputeParams {
 
     struct RsWriteback {
         int slot_begin = 0;  // first cache slot written by the CPY
-        int src_begin = 0;   // where the copied data starts in the source tensor (in rows of it)
+        int src_begin = 0;   // first source row or column copied by the CPY
     };
 
     std::map<std::string, RsWriteback> rs_writebacks;
-    // Offsets of the state cache writeback CPY nodes, keyed by node name. They change with the
-    // batch (kv head, active sequence count, token count) and, with rollback enabled
-    // (cparams.n_rs_seq > 0), the conv state is written back once per snapshot slot, each snapshot
-    // taking a different conv_input window. Passed to the cached model as runtime inputs.
+    // Destination slot offset of each state cache writeback CPY node, keyed by node name. It
+    // changes with the batch (kv head, active sequence count) and, with rollback enabled
+    // (cparams.n_rs_seq > 0), the conv state is written back once per snapshot slot. Passed to the
+    // cached model as a runtime input. Dynamic models also receive the source-side offset; static
+    // models use a fixed end-anchored offset in the translator.
 };
 
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {

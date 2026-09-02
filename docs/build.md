@@ -70,17 +70,23 @@ cmake --build build --config Release
     - Tab Workload: Desktop-development with C++
     - Tab Components (select quickly via search): C++-_CMake_ Tools for Windows, _Git_ for Windows, C++-_Clang_ Compiler for Windows, MS-Build Support for LLVM-Toolset (clang)
     - Please remember to always use a Developer Command Prompt / PowerShell for VS2022 for git, build, test
-    - For Windows on ARM (arm64, WoA) build with:
-    ```bash
-    cmake --preset arm64-windows-llvm-release -D GGML_OPENMP=OFF
-    cmake --build build-arm64-windows-llvm-release
-    ```
-    For building with ninja generator and clang compiler as default:
-      -set path:set LIB=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\um\x64;C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.41.34120\lib\x64\uwp;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\ucrt\x64
+    - For Windows on ARM (arm64, WoA), build with:
       ```bash
-      cmake --preset x64-windows-llvm-release
-      cmake --build build-x64-windows-llvm-release
+      cmake --preset arm64-windows-llvm-release -D GGML_OPENMP_FETCH=ON
+      cmake --build build-arm64-windows-llvm-release
       ```
+      - Use `ARM64 Native Tools Command Prompt for VS 2022` if you are building on an ARM64 machine.
+      - `GGML_OPENMP_FETCH` downloads the official LLVM OpenMP runtime and requires Clang, 7-Zip and network access during configuration. CMake selects the runtime from the target architecture, so this also works when cross-compiling for WoA from x64. The extracted header, import library, DLL and OpenMP license are placed under `build/_deps`. The build copies `libomp.dll` and `LICENSE-LLVM-OpenMP` to the runtime output directory and installs them together. Omit the option to use CMake's normal OpenMP detection, or pass `-D GGML_OPENMP=OFF` to disable OpenMP.
+    - For building with ninja generator and clang compiler as default:
+      - Set path:
+        ```
+        set LIB=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\um\x64;C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.41.34120\lib\x64\uwp;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\ucrt\x64
+        ```
+      - Run:
+        ```bash
+        cmake --preset x64-windows-llvm-release
+        cmake --build build-x64-windows-llvm-release
+        ```
 - If you want HTTPS/TLS features, you may install OpenSSL development libraries. If not installed, the project will build and run without SSL support.
   - **Debian / Ubuntu:** `sudo apt-get install libssl-dev`
   - **Fedora / RHEL / Rocky / Alma:** `sudo dnf install openssl-devel`
@@ -608,30 +614,100 @@ You can test with:
 For detailed information about hardware support, setup instructions, and performance optimization, refer to [llama.cpp for ZenDNN](./backend/ZenDNN.md).
 
 ## Arm® KleidiAI™
-KleidiAI is a library of optimized microkernels for AI workloads, specifically designed for Arm CPUs. These microkernels enhance performance and can be enabled for use by the CPU backend.
+KleidiAI provides optimized Arm CPU microkernels used by the ggml CPU backend. Enabling it at build time makes those kernels available; it does not force every operation to use KleidiAI. At runtime, llama.cpp selects the best compatible CPU kernel from the detected CPU features, tensor type, operation shape, and active backend priority.
 
-To enable KleidiAI, go to the llama.cpp directory and build using CMake
+Supported targets:
+
+| Platform | Supported ABI / architecture | Notes |
+| --- | --- | --- |
+| Linux | AArch64 / arm64 | Runtime CPU feature detection is automatic. |
+| Android | `arm64-v8a` | Use the Android NDK command below for a portable build. |
+| Apple | arm64 | Runtime CPU feature detection is automatic. Non-streaming SVE vector length is treated as unavailable. |
+| Windows | arm64 | Runtime CPU feature detection is automatic. SMCU count is treated as unknown until a detection path is verified. |
+
+`GGML_CPU_KLEIDIAI=ON` is valid only for AArch64/arm64 builds. Do not enable it for x86, 32-bit Arm, or Android ABIs other than `arm64-v8a`.
+
+### Native AArch64/arm64 build
+
+From the llama.cpp source directory:
+
 ```bash
-cmake -B build -DGGML_CPU_KLEIDIAI=ON
+cmake -S . -B build -DGGML_CPU_KLEIDIAI=ON
 cmake --build build --config Release
 ```
-You can verify that KleidiAI is being used by running
+
+### Android arm64-v8a NDK build
+
+Set `ANDROID_NDK` to the Android NDK root, then run the following from the llama.cpp source directory. This command configures a portable Android `arm64-v8a` build with KleidiAI enabled and avoids Android dependencies that are not part of the NDK stable native API set.
+
+```bash
+cmake -S . -B build-android \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-28 \
+  -DGGML_CPU_KLEIDIAI=ON \
+  -DGGML_NATIVE=OFF \
+  -DGGML_OPENMP=OFF \
+  -DGGML_LLAMAFILE=OFF \
+  -DLLAMA_OPENSSL=OFF
+cmake --build build-android --config Release --parallel
+cmake --install build-android --prefix {install-dir} --config Release
+```
+
+Important Android options:
+
+- `GGML_CPU_KLEIDIAI=ON` enables KleidiAI for Android `arm64-v8a`.
+- `GGML_NATIVE=OFF` is required for cross-compilation because the build host CPU is not the Android target CPU.
+- `GGML_OPENMP=OFF` avoids adding an OpenMP runtime dependency to this NDK command-line build.
+- `GGML_LLAMAFILE=OFF` avoids the llamafile backend, which is not supported on Android.
+- `LLAMA_OPENSSL=OFF` avoids depending on OpenSSL, which is not part of the Android NDK stable native API set.
+
+The Android Studio project under `examples/llama.android` enables KleidiAI automatically for `arm64-v8a`. For Android command-line CMake builds on `arm64-v8a`, pass `-DGGML_CPU_KLEIDIAI=ON` explicitly.
+
+Global -march flags such as `-march=armv8.7a` flag are not required for a portable Android `arm64-v8a` build. Global `-march` flags raise the baseline instruction set for generic code. No manual architecture-specific source selection is required; llama.cpp selects compatible KleidiAI kernels at runtime. The KleidiAI libraries internal CMake handles the -march flags for each particular kernel.
+
+### Verifying the build
+
+Run an installed or in-tree binary:
+
 ```bash
 ./build/bin/llama-cli -m PATH_TO_MODEL -p "What is a car?"
 ```
-If KleidiAI is enabled, the output will contain a line similar to:
+
+If KleidiAI is enabled, the output contains a line similar to:
+
 ```
 load_tensors: CPU_KLEIDIAI model buffer size =  3474.00 MiB
 ```
-KleidiAI’s microkernels implement optimized tensor operations using Arm CPU features such as dotprod, int8mm, SVE, and SME. Llama.cpp selects the most efficient kernels at runtime based on detected CPU capabilities.
-On CPUs that support SME, SME microkernels are enabled automatically using runtime detection.
-The environment variable GGML_KLEIDIAI_SME can be used to control SME behavior:
-- Not set: enable SME automatically if supported and detected.
-- 0: disable SME.
-- <n> > 0: enable SME and assume <n> available SME units (override auto detection).
-If SME is not supported by the CPU, SME microkernels are always disabled.
 
-Depending on your build target, other higher priority backends may be enabled by default. To ensure the CPU backend is used, you must disable the higher priority backends either at compile time, e.g. -DGGML_METAL=OFF, or during run-time using the command line option `--device none`.
+This confirms that the model has tensors allocated through the KleidiAI CPU buffer. It does not prove that every operation, or any specific SME-family operation, used a KleidiAI microkernel. Runtime CPU features, tensor type, operation shape, and backend priority still control dispatch.
+
+Depending on the build target, another backend may have higher priority than the CPU backend. To force CPU execution for a run, disable higher priority backends at build time, for example `-DGGML_METAL=OFF`, or use a runtime device option such as `--device none` where supported.
+
+### Runtime dispatch
+
+KleidiAI microkernels use Arm CPU features such as dotprod, i8mm, SVE, and SME/SME2. Build-time configuration makes the kernels available. Runtime dispatch selects a compatible kernel for the detected CPU and operation. Older or lower-feature CPUs fall back automatically to compatible kernels.
+
+KleidiAI accelerates selected `GGML_OP_MUL_MAT` paths for F32 and common quantized formats. Exact coverage depends on the bundled KleidiAI version and the llama.cpp runtime selector, so unsupported tensor types, unsupported operation shapes, or higher priority backends may bypass KleidiAI even when the CPU supports the required Arm feature. This is also why a model may not use SME-family kernels on SME-capable hardware.
+
+The current llama.cpp KleidiAI SVE selector only enables SVE kernels when the runtime SVE vector length is known to be QK8_0 bytes, currently 32 bytes. Linux and Android query this at runtime. Apple reports SVE capability separately from userspace non-streaming SVE availability, so llama.cpp treats the SVE vector length as unknown there. Windows exposes SVE feature presence but not the runtime SVE vector length used by this selector, so that value is also treated as unknown. Windows arm64 also treats SMCU count as unknown until a detection mechanism is verified.
+
+The set of available SME-family kernels depends on the bundled KleidiAI version and the detected CPU capabilities. Production configuration does not require any KleidiAI runtime environment variables.
+
+### Diagnostics and debug overrides
+
+KleidiAI runtime environment variables are diagnostics/debug overrides, not production configuration. Leave them unset for normal use.
+
+`GGML_KLEIDIAI_SME` controls SME-family kernel selection and overrides the maximum number of threads assigned to selected quantized SME-family kernels:
+
+- Not set: use automatic runtime detection.
+- `0`: disable SME-family kernels.
+- `<n> > 0`: enable compatible SME-family kernels and allow up to `<n>` threads for quantized SME-family kernels.
+
+On Windows arm64, use `GGML_KLEIDIAI_SME=<n>` as the temporary diagnostics/debug override for SME thread-cap calibration until automatic SMCU count detection is verified.
+
+If the CPU does not support the required SME-family capability for a bundled kernel, that kernel is disabled regardless of the environment variable.
 
 ## OpenCL
 

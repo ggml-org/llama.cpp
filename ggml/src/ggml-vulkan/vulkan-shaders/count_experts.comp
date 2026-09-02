@@ -2,7 +2,13 @@
 
 #extension GL_EXT_control_flow_attributes : enable
 
+#ifdef USE_SUBGROUPS
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#endif
+
 #include "types.glsl"
+#include "utils.glsl"
 
 layout (push_constant) uniform parameter
 {
@@ -11,6 +17,10 @@ layout (push_constant) uniform parameter
     uint32_t nb00;
     uint32_t nb01;
     uint32_t a_offset;
+    uint32_t n_experts;
+    uint32_t hoist_row_ids;
+    uint32_t ne00mp;
+    uint32_t ne00L;
 } p;
 
 #define BLOCK_SIZE 256
@@ -21,16 +31,90 @@ layout (binding = 0) readonly buffer A {uint data_a[];};
 layout (binding = 1) writeonly buffer D {uint data_d[];};
 
 shared uint vals[BLOCK_SIZE];
+shared uint offsets[BLOCK_SIZE];
+shared uint cursors[BLOCK_SIZE];
 
+// data_d layout when p.hoist_row_ids is set:
+//   [0,              n_experts)   per-expert row count
+//   [n_experts,    2*n_experts)   per-expert start offset into the row id region
+//   [2*n_experts]                 total row count
+//   [2*n_experts + 1,         )   row ids grouped by expert, packed as (i01 << 16) | (i00 & 0xffff)
+// Otherwise only data_d[expert_id] is written, holding that expert's row count.
 void main() {
     const uint expert_id = gl_WorkGroupID.x;
     const uint num_elements = p.ne00 * p.ne01;
     const uint tid = gl_LocalInvocationID.x;
 
+    if (p.hoist_row_ids != 0) {
+        if (tid < p.n_experts) {
+            vals[tid] = 0;
+        }
+        barrier();
+
+        for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
+            const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
+            const uint i00 = idx - i01 * p.ne00;
+            const uint expert = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00];
+            if (expert < p.n_experts) {
+                atomicAdd(vals[expert], 1);
+            }
+        }
+        barrier();
+
+#ifdef USE_SUBGROUPS
+        if (gl_SubgroupID == 0) {
+            // pad the trip count so the subgroup ops stay in uniform control flow
+            const uint n_experts_padded = (p.n_experts + gl_SubgroupSize - 1) & ~(gl_SubgroupSize - 1);
+            uint base = 0;
+            for (uint expert = gl_SubgroupInvocationID; expert < n_experts_padded; expert += gl_SubgroupSize) {
+                const bool in_range = expert < p.n_experts;
+                const uint count = in_range ? vals[expert] : 0;
+                const uint offset = base + subgroupExclusiveAdd(count);
+                if (in_range) {
+                    data_d[expert] = count;
+                    data_d[p.n_experts + expert] = offset;
+                    offsets[expert] = offset;
+                    cursors[expert] = 0;
+                }
+                base += subgroupAdd(count);
+            }
+            if (subgroupElect()) {
+                data_d[2 * p.n_experts] = base;
+            }
+        }
+#else
+        if (tid == 0) {
+            uint offset = 0;
+            for (uint expert = 0; expert < p.n_experts; ++expert) {
+                const uint count = vals[expert];
+                data_d[expert] = count;
+                data_d[p.n_experts + expert] = offset;
+                offsets[expert] = offset;
+                cursors[expert] = 0;
+                offset += count;
+            }
+            data_d[2 * p.n_experts] = offset;
+        }
+#endif
+        barrier();
+
+        for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
+            const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
+            const uint i00 = idx - i01 * p.ne00;
+            const uint expert = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00];
+            if (expert < p.n_experts) {
+                const uint row = atomicAdd(cursors[expert], 1);
+                const uint packed_row_id = (i01 << 16) | (i00 & 0xffffu);
+                data_d[2 * p.n_experts + 1 + offsets[expert] + row] = packed_row_id;
+            }
+        }
+        return;
+    }
+
     uint count = 0;
     for (uint idx = tid; idx < num_elements; idx += BLOCK_SIZE) {
-        const uint i01 = idx / p.ne00;
-        const uint i00 = idx % p.ne00;
+        const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
+        const uint i00 = idx - i01 * p.ne00;
         const uint a = data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00];
 
         count += uint(a == expert_id);

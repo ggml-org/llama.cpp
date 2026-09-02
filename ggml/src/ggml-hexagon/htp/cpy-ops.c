@@ -4,6 +4,7 @@
 
 #include <HAP_farf.h>
 #include <HAP_perf.h>
+#include <qurt_memory.h>
 
 #include <math.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 #include "htp-ops.h"
 #include "htp-ops.h"
 #include "hvx-utils.h"
+#include "htp-tensor.h"
 
 struct htp_copy_context {
     struct htp_ops_context * octx;
@@ -78,7 +80,7 @@ static void cpy_thread_##NAME##_sameshape(unsigned int nth, unsigned int ith, vo
     }                                                                                                          \
 }
 
-DEFINE_CPY_SAMESHAPE(f32, float, 4)
+DEFINE_CPY_SAMESHAPE(f32,  float, 4)
 DEFINE_CPY_SAMESHAPE(f16, __fp16, 2)
 
 #define DEFINE_CPY_RESHAPE(NAME, ELEM_TYPE, ELEM_SIZE)                                                         \
@@ -179,7 +181,7 @@ static void cpy_thread_##NAME##_reshape(unsigned int nth, unsigned int ith, void
     }                                                                                                          \
 }
 
-DEFINE_CPY_RESHAPE(f32, float, 4)
+DEFINE_CPY_RESHAPE(f32,  float, 4)
 DEFINE_CPY_RESHAPE(f16, __fp16, 2)
 
 static void cpy_thread_f16_f32_sameshape(unsigned int nth, unsigned int ith, void * data) {
@@ -232,6 +234,41 @@ static void cpy_thread_f32_f16_sameshape(unsigned int nth, unsigned int ith, voi
     }
 }
 
+static inline void cpy_dma_sametype_sameshape(
+    struct htp_ops_context * octx,
+    const struct htp_tensor * dst,
+    const struct htp_tensor * src0,
+    uint32_t elem_size,
+    uint32_t ne00, uint32_t ne01, uint32_t ne02, uint32_t ne03,
+    uint32_t nb01, uint32_t nb02, uint32_t nb03,
+    uint32_t  nb1, uint32_t  nb2, uint32_t nb3
+) {
+    const bool contiguous_outer =
+        (ne02 == 1 || (nb02 == ne01 * nb01 && nb2 == ne01 * nb1)) &&
+        (ne03 == 1 || (nb03 == ne02 * nb02 && nb3 == ne02 * nb2));
+
+    dma_queue * q = octx->ctx->dma[0];
+
+    if (contiguous_outer) {
+        dma_queue_push(q, dma_make_ptr((void *) dst->data, (const void *) src0->data), nb1, nb01, ne00 * elem_size, ne01 * ne02 * ne03);
+        dma_queue_pop(q);
+        return;
+    }
+
+    for (uint32_t i03 = 0; i03 < ne03; i03++) {
+        for (uint32_t i02 = 0; i02 < ne02; i02++) {
+            uint8_t* dst_ptr  = (uint8_t*) dst->data  + i02*nb2  + i03*nb3;
+            uint8_t* src0_ptr = (uint8_t*) src0->data + i02*nb02 + i03*nb03;
+            if (!dma_queue_push(q, dma_make_ptr(dst_ptr, src0_ptr), nb1, nb01, ne00 * elem_size, ne01)) {
+                dma_queue_flush(q);
+                dma_queue_push(q, dma_make_ptr(dst_ptr, src0_ptr), nb1, nb01, ne00 * elem_size, ne01);
+            }
+        }
+    }
+
+    dma_queue_flush(q);
+}
+
 int op_cpy(struct htp_ops_context * octx) {
     cpy_preamble;
 
@@ -264,14 +301,11 @@ int op_cpy(struct htp_ops_context * octx) {
 
     ct.src0_nrows_per_thread = (nr + n_threads - 1) / n_threads;
 
-    worker_callback_t copy_fun;
+    worker_callback_t copy_fun = NULL;
+    bool use_dma = false;
 
     if (sametype && sameshape) {
-        if (src0->type == HTP_TYPE_F32) {
-            copy_fun = cpy_thread_f32_sameshape;
-        } else {
-            copy_fun = cpy_thread_f16_sameshape;
-        }
+        use_dma = true;
     } else if (sameshape) {
         /**/ if (dst->type == HTP_TYPE_F16 && src0->type == HTP_TYPE_F32)
             copy_fun = cpy_thread_f16_f32_sameshape;
@@ -289,7 +323,32 @@ int op_cpy(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    worker_pool_run_func(octx->ctx->worker_pool, copy_fun, &ct, n_threads);
+    FARF(HIGH, "cpy-%s-%s: (%ux%ux%ux%u) -> (%ux%ux%ux%u) : use_dma=%d n_threads %u\n",
+         src0->type == HTP_TYPE_F32 ? "f32" : "f16", dst->type == HTP_TYPE_F32 ? "f32" : "f16",
+         ne00, ne01, ne02, ne03, ne0, ne1, ne2, ne3, use_dma, n_threads);
+
+    if (use_dma) {
+        cpy_dma_sametype_sameshape(octx, dst, src0, ct.src0_type_size, ne00, ne01, ne02, ne03, nb01, nb02, nb03, nb1, nb2, nb3);
+    } else {
+        worker_pool_run_func(octx->ctx->worker_pool, copy_fun, &ct, n_threads);
+    }
+
+    const struct htp_tensor *sync = octx->src[1];
+    if (sync && (sync->flags & HTP_TENSOR_FENCE)) {
+        if (!use_dma) {
+            // htp_tensor_flush_all(octx->ctx, octx->dsts, 1);
+            qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
+        }
+
+        atomic_uint * sync_fence = (atomic_uint *) sync->data;
+        const uint32_t seq = (uint32_t) octx->op_params[0];
+
+        atomic_store(&sync_fence[0], seq);
+        asm volatile ("syncht" : : : "memory");
+        Q6_dccleaninva_A((void *) sync_fence);
+
+        FARF(HIGH, "ggml-hex: sync-release : fence %p seq %u\n", sync_fence, seq);
+    }
 
     return HTP_STATUS_OK;
 }

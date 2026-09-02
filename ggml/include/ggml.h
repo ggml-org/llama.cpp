@@ -627,6 +627,7 @@ extern "C" {
         GGML_GLU_OP_SWIGLU_OAI,
         GGML_GLU_OP_GEGLU_ERF,
         GGML_GLU_OP_GEGLU_QUICK,
+        GGML_GLU_OP_SWIGLU_CLAMP,
 
         GGML_GLU_OP_COUNT,
     };
@@ -1367,6 +1368,12 @@ extern "C" {
             float                 alpha,
             float                 limit);
 
+    GGML_API struct ggml_tensor * ggml_swiglu_clamp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            float                 limit);
+
     // normalize along rows
     GGML_API struct ggml_tensor * ggml_norm(
             struct ggml_context * ctx,
@@ -1724,6 +1731,19 @@ extern "C" {
             struct ggml_tensor  * a,
             int                   n_past);
 
+    GGML_API struct ggml_tensor * ggml_clamp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 min,
+            float                 max);
+
+    // in-place, returns view(a)
+    GGML_API struct ggml_tensor * ggml_clamp_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 min,
+            float                 max);
+
     GGML_API struct ggml_tensor * ggml_soft_max(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1981,14 +2001,14 @@ extern "C" {
             float                 beta_fast,
             float                 beta_slow);
 
-
-    // clamp
-    // in-place, returns view(a)
-    GGML_API struct ggml_tensor * ggml_clamp(
-            struct ggml_context * ctx,
+    // set the offset dims for RoPE
+    // a must be GGML_OP_ROPE or GGML_OP_ROPE_BACK
+    // vision RoPE is not supported
+    // example: (marking: x = rotated, 0 = unrotated)
+    //     n_embd = 10, n_dims = 4, offset = 2 --> [00xxxx0000]
+    GGML_API struct ggml_tensor * ggml_rope_set_offset(
             struct ggml_tensor  * a,
-            float                 min,
-            float                 max);
+            int                   n_offs);
 
     // im2col
     // converts data into a format that effectively results in a convolution when combined with matrix multiplication

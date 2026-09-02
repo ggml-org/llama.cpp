@@ -58,22 +58,7 @@ struct img_tool {
 
         if (padding == PAD_NONE) {
             // direct resize
-            switch (algo) {
-                case RESIZE_ALGO_BILINEAR:
-                    resize_bilinear(src, dst, target_resolution.width, target_resolution.height);
-                    break;
-                case RESIZE_ALGO_BICUBIC:
-                    resize_bicubic(src, dst, target_resolution.width, target_resolution.height);
-                    break;
-                case RESIZE_ALGO_BICUBIC_PILLOW:
-                    resize_bicubic_pillow(src, dst, target_resolution.width, target_resolution.height);
-                    break;
-                case RESIZE_ALGO_LANCZOS:
-                    resize_lanczos_pillow(src, dst, target_resolution.width, target_resolution.height);
-                    break;
-                default:
-                    throw std::runtime_error("Unsupported resize algorithm");
-            }
+            resize_pillow(src, dst, target_resolution.width, target_resolution.height, algo);
         } else {
             // resize with padding
             clip_image_u8 resized_image;
@@ -90,22 +75,7 @@ struct img_tool {
                 new_height = std::min(static_cast<int>(std::ceil(src.get_size().height * scale)), target_resolution.height);
             }
 
-            switch (algo) {
-                case RESIZE_ALGO_BILINEAR:
-                    resize_bilinear(src, resized_image, new_width, new_height);
-                    break;
-                case RESIZE_ALGO_BICUBIC:
-                    resize_bicubic(src, resized_image, new_width, new_height);
-                    break;
-                case RESIZE_ALGO_BICUBIC_PILLOW:
-                    resize_bicubic_pillow(src, resized_image, new_width, new_height);
-                    break;
-                case RESIZE_ALGO_LANCZOS:
-                    resize_lanczos_pillow(src, resized_image, new_width, new_height);
-                    break;
-                default:
-                    throw std::runtime_error("Unsupported resize algorithm");
-            }
+            resize_pillow(src, resized_image, new_width, new_height, algo);
 
             // fill dst with pad_color
             fill(dst, pad_color);
@@ -224,152 +194,37 @@ struct img_tool {
     }
 
 private:
-    // Bilinear resize function
-    static void resize_bilinear(const clip_image_u8 & src, clip_image_u8 & dst, int target_width, int target_height) {
-        const auto src_size = src.get_size();
-        if (src_size.width == 0 || src_size.height == 0) { dst.set_size({0, 0}, false); return; }
-        if (target_width  <= 0) target_width  = 1;
-        if (target_height <= 0) target_height = 1;
-
-        dst.set_size({target_width, target_height}, false);
-
-        if (src.is_placeholder()) {
-            // no-op for placeholder image, just set the size and return
-            return;
-        }
-
-        float x_ratio = target_width  > 1 ? static_cast<float>(src_size.width  - 1) / (target_width  - 1) : 0.0f;
-        float y_ratio = target_height > 1 ? static_cast<float>(src_size.height - 1) / (target_height - 1) : 0.0f;
-
-        for (int y = 0; y < target_height; ++y) {
-            for (int x = 0; x < target_width; ++x) {
-                float px = x * x_ratio;
-                float py = y * y_ratio;
-
-                int x0 = std::min(static_cast<int>(px), src_size.width  - 1);
-                int y0 = std::min(static_cast<int>(py), src_size.height - 1);
-                int x1 = std::min(x0 + 1, src_size.width  - 1);
-                int y1 = std::min(y0 + 1, src_size.height - 1);
-
-                float xf = px - x0;
-                float yf = py - y0;
-
-                const auto p00 = src.get_pixel(x0, y0);
-                const auto p10 = src.get_pixel(x1, y0);
-                const auto p01 = src.get_pixel(x0, y1);
-                const auto p11 = src.get_pixel(x1, y1);
-
-                std::array<uint8_t, 3> pixel;
-                for (int c = 0; c < 3; ++c) {
-                    float top    = lerp(static_cast<float>(p00[c]), static_cast<float>(p10[c]), xf);
-                    float bottom = lerp(static_cast<float>(p01[c]), static_cast<float>(p11[c]), xf);
-                    pixel[c] = static_cast<uint8_t>(lerp(top, bottom, yf));
-                }
-                dst.set_pixel(x, y, pixel);
-            }
-        }
-    }
-
-    // Bicubic resize function
-    // part of image will be cropped if the aspect ratio is different
-    static void resize_bicubic(const clip_image_u8 & img, clip_image_u8 & dst, int target_width, int target_height) {
-        const auto img_size = img.get_size();
-        const int nx = img_size.width;
-        const int ny = img_size.height;
-
-        dst.set_size({target_width, target_height}, false);
-
-        if (img.is_placeholder()) {
-            // no-op for placeholder image, just set the size and return
-            return;
-        }
-
-        float Cc;
-        float C[5] = {};
-        float d0, d2, d3, a0, a1, a2, a3;
-        int i, j, k, jj;
-        int x, y;
-        float dx, dy;
-        float tx, ty;
-
-        tx = (float)nx / (float)target_width;
-        ty = (float)ny / (float)target_height;
-
-        // Bicubic interpolation; adapted from ViT.cpp, inspired from :
-        //    -> https://github.com/yglukhov/bicubic-interpolation-image-processing/blob/master/libimage.c#L36
-        //    -> https://en.wikipedia.org/wiki/Bicubic_interpolation
-
-        for (i = 0; i < target_height; i++) {
-            for (j = 0; j < target_width; j++) {
-                x = (int)(tx * j);
-                y = (int)(ty * i);
-
-                dx = tx * j - x;
-                dy = ty * i - y;
-
-                std::array<uint8_t, 3> pixel;
-                for (k = 0; k < 3; k++) {
-                    for (jj = 0; jj <= 3; jj++) {
-                        d0 = img.get_pixel(clip(x - 1, 0, nx - 1), clip(y - 1 + jj, 0, ny - 1))[k] - img.get_pixel(clip(x, 0, nx - 1), clip(y - 1 + jj, 0, ny - 1))[k];
-                        d2 = img.get_pixel(clip(x + 1, 0, nx - 1), clip(y - 1 + jj, 0, ny - 1))[k] - img.get_pixel(clip(x, 0, nx - 1), clip(y - 1 + jj, 0, ny - 1))[k];
-                        d3 = img.get_pixel(clip(x + 2, 0, nx - 1), clip(y - 1 + jj, 0, ny - 1))[k] - img.get_pixel(clip(x, 0, nx - 1), clip(y - 1 + jj, 0, ny - 1))[k];
-                        a0 = img.get_pixel(clip(x, 0, nx - 1), clip(y - 1 + jj, 0, ny - 1))[k];
-
-                        a1 = -1.0 / 3 * d0 + d2 - 1.0 / 6 * d3;
-                        a2 =  1.0 / 2 * d0 +      1.0 / 2 * d2;
-                        a3 = -1.0 / 6 * d0 -      1.0 / 2 * d2 + 1.0 / 6 * d3;
-
-                        C[jj] = a0 + a1 * dx + a2 * dx * dx + a3 * dx * dx * dx;
-
-                        d0 = C[0] - C[1];
-                        d2 = C[2] - C[1];
-                        d3 = C[3] - C[1];
-                        a0 = C[1];
-                        a1 = -1.0 / 3 * d0 + d2 - 1.0 / 6 * d3;
-                        a2 =  1.0 / 2 * d0 +      1.0 / 2 * d2;
-                        a3 = -1.0 / 6 * d0 -      1.0 / 2 * d2 + 1.0 / 6 * d3;
-                        Cc = a0 + a1 * dy + a2 * dy * dy + a3 * dy * dy * dy;
-
-                        const uint8_t Cc2 = std::min(std::max(std::round(Cc), 0.0f), 255.0f);
-                        pixel[k] = Cc2;
-                    }
-                }
-                dst.set_pixel(j, i, pixel);
-            }
-        }
-    }
-
-    // Pillow-compatible separable resampling (Bicubic and Lanczos)
+    // Pillow-compatible separable resampling (Bilinear, Bicubic and Lanczos)
     // Adapted from https://github.com/python-pillow/Pillow/blob/main/src/libImaging/Resample.c
     //
     // Key properties:
     // 1. Separable filtering: horizontal pass followed by vertical pass
     // 2. Pre-computes normalized filter coefficients for each output pixel
     // 3. Fixed-point integer arithmetic (22 fractional bits) for speed and determinism
-    static bool resize_bicubic_pillow(const clip_image_u8 & img, clip_image_u8 & dst, int target_width, int target_height) {
-        return resize_pillow(img, dst, target_width, target_height, /*use_lanczos=*/false);
-    }
-
-    // Lanczos-3 (support radius 3), matches Pillow's Image.LANCZOS
-    static bool resize_lanczos_pillow(const clip_image_u8 & img, clip_image_u8 & dst, int target_width, int target_height) {
-        return resize_pillow(img, dst, target_width, target_height, /*use_lanczos=*/true);
-    }
-
     static bool resize_pillow(
             const clip_image_u8 & img,
             clip_image_u8 & dst,
             int target_width,
             int target_height,
-            bool use_lanczos) {
+            resize_algo algo) {
         // Fixed-point precision: 22 bits = 32 (int32_t) - 8 (uint8_t pixels) - 2 (headroom for accumulation)
         // This allows encoding fractional weights as integers: weight * 2^22
         const int PRECISION_BITS = 32 - 8 - 2;
 
-        // Resample filter: Lanczos-3 (support [-3, 3]) or bicubic with a = -0.5 (support [-2, 2])
-        // Note: GGML/PyTorch bicubic uses a = -0.75, Pillow uses a = -0.5
+        // Filter support radius
+        double filter_support;
+        switch (algo) {
+            case RESIZE_ALGO_BILINEAR: filter_support = 1.0; break;
+            case RESIZE_ALGO_BICUBIC:  filter_support = 2.0; break;
+            case RESIZE_ALGO_LANCZOS:  filter_support = 3.0; break;
+            default:
+                throw std::runtime_error("Unsupported resize algorithm");
+        }
+
         // Returns filter weight for distance x from pixel center
-        auto resample_filter = [use_lanczos](double x) -> double {
-            if (use_lanczos) {
+        // Note: for bicubic, Pillow uses a = -0.5 while GGML/PyTorch use a = -0.75
+        auto resample_filter = [algo](double x) -> double {
+            if (algo == RESIZE_ALGO_LANCZOS) {
                 if (-3.0 <= x && x < 3.0) {
                     auto sinc = [](double v) {
                         if (v == 0.0) {
@@ -383,10 +238,15 @@ private:
                 return 0.0;
             }
 
-            constexpr double a = -0.5;
             if (x < 0.0) {
                 x = -x;
             }
+
+            if (algo == RESIZE_ALGO_BILINEAR) {
+                return x < 1.0 ? 1.0 - x : 0.0;
+            }
+
+            constexpr double a = -0.5;
             if (x < 1.0) {
                 return ((a + 2.0) * x - (a + 3.0)) * x * x + 1;
             }
@@ -395,9 +255,6 @@ private:
             }
             return 0.0;  // Zero outside [-2, 2]
         };
-
-        // Filter support radius: 2 for bicubic, 3 for lanczos
-        const double filter_support = use_lanczos ? 3.0 : 2.0;
 
         // Clipping function for 8-bit values
         auto clip8 = [](int val) -> uint8_t {
@@ -493,100 +350,92 @@ private:
             const double fxp_scale = std::ldexp(1.0, PRECISION_BITS); // 1.0 * 2^PRECISION_BITS
 
             for (int i = 0; i < outSize * ksize; i++) {
-                if (use_lanczos) {
-                    // Pillow adds +/- 0.5 then truncates toward zero; std::round would round twice
-                    const double rounded = pre_weights[i] * fxp_scale + (pre_weights[i] < 0 ? -0.5 : 0.5);
-                    weights[i] = static_cast<int32_t>(rounded);
-                    continue;
-                }
-                double tmp_val = pre_weights[i] * fxp_scale;
-                if (pre_weights[i] < 0) {
-                    tmp_val -= 0.5;
-                } else {
-                    tmp_val += 0.5;
-                }
-                tmp_val = std::round(tmp_val);
-                tmp_val = std::clamp(tmp_val,
-                                     static_cast<double>(std::numeric_limits<int32_t>::min()),
-                                     static_cast<double>(std::numeric_limits<int32_t>::max()));
-                weights[i] = static_cast<int32_t>(tmp_val);
+                // Pillow adds +/- 0.5 then truncates toward zero; std::round would round twice
+                const double rounded = pre_weights[i] * fxp_scale + (pre_weights[i] < 0 ? -0.5 : 0.5);
+                weights[i] = static_cast<int32_t>(rounded);
             }
 
             return ksize;
         };
 
         // Horizontal resampling pass
-        // Resizes width from imIn to out_nx, preserving height
-        auto resample_horizontal = [&](const clip_image_u8 & imIn, clip_image_u8 & imOut,
+        // Resizes width from src to out_nx, preserving height
+        auto resample_horizontal = [&](const uint8_t * src, int in_nx, int in_ny,
                                        int out_nx,
                                        int ksize, const std::vector<int> & bounds, const std::vector<int32_t> & weights) {
-            const int in_ny = imIn.get_size().height;
-            imOut.set_size({out_nx, in_ny}, false);
+            std::vector<uint8_t> out((size_t) out_nx * in_ny * 3);
 
             // Process each row independently
             for (int yy = 0; yy < in_ny; yy++) {
+                const uint8_t * src_row = src + (size_t) yy * in_nx * 3;
+                uint8_t * dst_row = out.data() + (size_t) yy * out_nx * 3;
+
                 // For each output pixel in this row
                 for (int xx = 0; xx < out_nx; xx++) {
-                    // Get the range of input pixels and filter coefficients
-                    int xmin = bounds[xx * 2 + 0];  // First input pixel index
-                    int xcnt = bounds[xx * 2 + 1];  // Number of input pixels
+                    const int xmin = bounds[xx * 2 + 0];  // First input pixel index
+                    const int xcnt = bounds[xx * 2 + 1];  // Number of input pixels
+                    const int32_t * k = &weights[xx * ksize];
+                    const uint8_t * p = src_row + (size_t) xmin * 3;
 
-                    // Initialize accumulators for RGB channels with rounding bias (0.5 in fixed-point)
+                    // Accumulators for RGB channels, with rounding bias (0.5 in fixed-point)
                     int32_t ss0 = 1 << (PRECISION_BITS - 1);
                     int32_t ss1 = 1 << (PRECISION_BITS - 1);
                     int32_t ss2 = 1 << (PRECISION_BITS - 1);
 
                     // Convolve: sum weighted input pixels
                     for (int x = 0; x < xcnt; x++) {
-                        const auto src_px = imIn.get_pixel(x + xmin, yy);
-                        ss0 += src_px[0] * weights[xx * ksize + x];  // R channel
-                        ss1 += src_px[1] * weights[xx * ksize + x];  // G channel
-                        ss2 += src_px[2] * weights[xx * ksize + x];  // B channel
+                        ss0 += p[0] * k[x];
+                        ss1 += p[1] * k[x];
+                        ss2 += p[2] * k[x];
+                        p += 3;
                     }
 
                     // Convert back from fixed-point (divide by 2^PRECISION_BITS) and clamp to [0,255]
-                    imOut.set_pixel(xx, yy, {clip8(ss0 >> PRECISION_BITS),
-                                             clip8(ss1 >> PRECISION_BITS),
-                                             clip8(ss2 >> PRECISION_BITS)});
+                    dst_row[xx * 3 + 0] = clip8(ss0 >> PRECISION_BITS);
+                    dst_row[xx * 3 + 1] = clip8(ss1 >> PRECISION_BITS);
+                    dst_row[xx * 3 + 2] = clip8(ss2 >> PRECISION_BITS);
                 }
             }
+
+            return out;
         };
 
         // Vertical resampling pass
-        // Resizes height from imIn to out_ny, preserving width
-        auto resample_vertical = [&](const clip_image_u8 & imIn, clip_image_u8 & imOut,
+        // Resizes height from src to out_ny, preserving width
+        // Accumulates whole rows at once (contiguous access, auto-vectorizes well)
+        auto resample_vertical = [&](const uint8_t * src, int in_nx,
                                      int out_ny,
                                      int ksize, const std::vector<int> & bounds, const std::vector<int32_t> & weight) {
-            const int in_nx = imIn.get_size().width;
-            imOut.set_size({in_nx, out_ny}, false);
+            const size_t row_elems = (size_t) in_nx * 3;
+            std::vector<uint8_t> out(row_elems * out_ny);
+            std::vector<int32_t> acc(row_elems);
 
             // For each output row
             for (int yy = 0; yy < out_ny; yy++) {
-                // Get the range of input rows and filter coefficients
-                int ymin = bounds[yy * 2 + 0];  // First input row index
-                int ycnt = bounds[yy * 2 + 1];  // Number of input rows
+                const int ymin = bounds[yy * 2 + 0];  // First input row index
+                const int ycnt = bounds[yy * 2 + 1];  // Number of input rows
+                const int32_t * k = &weight[yy * ksize];
 
-                // Process each column in this output row
-                for (int xx = 0; xx < in_nx; xx++) {
-                    // Initialize accumulators for RGB channels with rounding bias
-                    int32_t ss0 = 1 << (PRECISION_BITS - 1);
-                    int32_t ss1 = 1 << (PRECISION_BITS - 1);
-                    int32_t ss2 = 1 << (PRECISION_BITS - 1);
+                // Rounding bias (0.5 in fixed-point)
+                std::fill(acc.begin(), acc.end(), 1 << (PRECISION_BITS - 1));
 
-                    // Convolve: sum weighted input pixels vertically
-                    for (int y = 0; y < ycnt; y++) {
-                        const auto src_px = imIn.get_pixel(xx, y + ymin);
-                        ss0 += src_px[0] * weight[yy * ksize + y];  // R channel
-                        ss1 += src_px[1] * weight[yy * ksize + y];  // G channel
-                        ss2 += src_px[2] * weight[yy * ksize + y];  // B channel
+                // Convolve: accumulate each weighted input row
+                for (int y = 0; y < ycnt; y++) {
+                    const uint8_t * src_row = src + (size_t) (ymin + y) * row_elems;
+                    const int32_t w = k[y];
+                    for (size_t i = 0; i < row_elems; i++) {
+                        acc[i] += src_row[i] * w;
                     }
+                }
 
-                    // Convert back from fixed-point and clamp to [0,255]
-                    imOut.set_pixel(xx, yy, {clip8(ss0 >> PRECISION_BITS),
-                                             clip8(ss1 >> PRECISION_BITS),
-                                             clip8(ss2 >> PRECISION_BITS)});
+                // Convert back from fixed-point and clamp to [0,255]
+                uint8_t * dst_row = out.data() + (size_t) yy * row_elems;
+                for (size_t i = 0; i < row_elems; i++) {
+                    dst_row[i] = clip8(acc[i] >> PRECISION_BITS);
                 }
             }
+
+            return out;
         };
 
         // Main resampling logic using separable two-pass approach
@@ -610,35 +459,24 @@ private:
         }
 
         // Perform two-pass resampling
+        const uint8_t * src = img.get_ro_buf().data();
         if (need_horizontal && need_vertical) {
-            // Both horizontal and vertical
-            clip_image_u8 temp;
-            resample_horizontal(img, temp, target_width, ksize_horiz, bounds_horiz, weights_horiz);
-            resample_vertical(temp, dst, target_height, ksize_vert, bounds_vert, weights_vert);
+            auto temp = resample_horizontal(src, src_width, src_height, target_width, ksize_horiz, bounds_horiz, weights_horiz);
+            dst.set_size({target_width, target_height}, false);
+            dst.cpy_buf(resample_vertical(temp.data(), target_width, target_height, ksize_vert, bounds_vert, weights_vert));
         } else if (need_horizontal) {
-            // Only horizontal
-            resample_horizontal(img, dst, target_width, ksize_horiz, bounds_horiz, weights_horiz);
+            dst.set_size({target_width, src_height}, false);
+            dst.cpy_buf(resample_horizontal(src, src_width, src_height, target_width, ksize_horiz, bounds_horiz, weights_horiz));
         } else if (need_vertical) {
-            // Only vertical
-            resample_vertical(img, dst, target_height, ksize_vert, bounds_vert, weights_vert);
+            dst.set_size({src_width, target_height}, false);
+            dst.cpy_buf(resample_vertical(src, src_width, target_height, ksize_vert, bounds_vert, weights_vert));
         } else {
             // No resizing needed - direct copy
-            dst.set_size(img.get_size(), img.is_placeholder());
-            if (!img.is_placeholder()) {
-                dst.cpy_buf(img.get_ro_buf());
-            }
+            dst.set_size(img.get_size(), false);
+            dst.cpy_buf(img.get_ro_buf());
         }
 
         return true;
-    }
-
-    static inline int clip(int x, int lower, int upper) {
-        return std::max(lower, std::min(x, upper));
-    }
-
-    // Linear interpolation between two points
-    static inline float lerp(float s, float e, float t) {
-        return s + (e - s) * t;
     }
 };
 
@@ -999,14 +837,45 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_mi
 // mtmd_image_preprocessor_lfm2
 //
 
+mtmd_image_preproc_out mtmd_image_preprocessor_lfm2::preprocess(const clip_image_u8 & img) {
+    auto const inst = get_slice_instructions(img.get_size());
+    if (!inst.slices.empty()) {
+        return mtmd_image_preprocessor_llava_uhd::preprocess(img);
+    }
+
+    // single tile: no thumbnail
+    // note: not using output.overview here because it will emit <|img_thumbnail|> token, which we don't want in this case
+    auto sliced = slice_image(img, inst);
+    mtmd_image_preproc_out output;
+    output.append(hparams, sliced.overview, true);
+    return output;
+}
+
+bool mtmd_image_preprocessor_lfm2::should_tile(
+        const clip_hparams & hparams,
+        const clip_image_size & original_size) {
+    const int align_size = hparams.patch_size * hparams.n_merge;
+
+    const auto round_by_factor = [align_size](float x) {
+        // see https://github.com/ggml-org/llama.cpp/pull/27057#discussion_r3796264887
+        return static_cast<int>(std::nearbyint(static_cast<double>(x) / align_size)) * align_size;
+    };
+
+    const int h_bar = std::max(hparams.patch_size, round_by_factor(original_size.height));
+    const int w_bar = std::max(hparams.patch_size, round_by_factor(original_size.width));
+
+    return static_cast<double>(h_bar) * static_cast<double>(w_bar) >
+           static_cast<double>(hparams.image_max_pixels) * max_pixels_tolerance;
+}
+
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_lfm2::get_slice_instructions(const clip_image_size & original_size) {
     mtmd_image_preprocessor_llava_uhd::slice_instructions inst;
     const int align_size = hparams.patch_size * hparams.n_merge;
     inst.overview_size = img_tool::calc_size_preserved_ratio(
                             original_size,
                             { align_size, hparams.image_min_pixels, hparams.image_max_pixels, 0 });
-    // tile if either dimension exceeds tile_size with tolerance
-    const bool needs_tiling = original_size.width > tile_size * max_pixels_tolerance || original_size.height > tile_size * max_pixels_tolerance;
+
+    const bool needs_tiling = should_tile(hparams, original_size);
 
     if (!needs_tiling) {
         inst.refined_size = clip_image_size{0, 0};
@@ -1233,7 +1102,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const cli
     clip_image_u8 padded;
     img_tool::resize(img, padded,
                     { base_size, base_size },
-                    RESIZE_ALGO_BICUBIC_PILLOW,
+                    RESIZE_ALGO_BICUBIC,
                     PAD_NEAREST,
                     hparams.image_pad_color);
     output.append_overview(hparams, padded, true);
@@ -1249,7 +1118,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const cli
         grid_h = grid.height;
 
         clip_image_u8 refined;
-        img_tool::resize(img, refined, { tile_size * grid_w, tile_size * grid_h }, RESIZE_ALGO_BICUBIC_PILLOW,
+        img_tool::resize(img, refined, { tile_size * grid_w, tile_size * grid_h }, RESIZE_ALGO_BICUBIC,
                          PAD_NONE);
 
         for (int row = 0; row < grid_h; row++) {
@@ -1606,11 +1475,15 @@ mtmd_image_preproc_out mtmd_image_preprocessor_granite::preprocess(const clip_im
 
     const clip_image_size orig_size = img.get_size();
     const int             tile_size = hparams.image_size;
+    GGML_ASSERT(tile_size > 0);
 
     // llava-next always encodes an overview plus a grid of tiles, even for small images
     const clip_image_size refined_size = select_best_resolution(orig_size, hparams.image_res_candidates);
     const int             grid_x       = refined_size.width  / tile_size;
     const int             grid_y       = refined_size.height / tile_size;
+
+    // the tiles are stacked on the Y axis, a big grid overflows the stacked image height
+    GGML_ASSERT(grid_x >= 0 && grid_x <= 1024 && grid_y >= 0 && grid_y <= 1024);
 
     clip_image_u8 overview;
     img_tool::resize(img, overview, {tile_size, tile_size}, hparams.image_resize_algo_ov,
