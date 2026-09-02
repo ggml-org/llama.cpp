@@ -71,8 +71,8 @@
 
 	// Params badge fallback for trigger ids that carry no params token.
 	const { paramsFallback } = useModelParamsFallback({
-		modelId: () => triggerModel,
-		metaParams: () => selectedOption?.meta?.n_params
+		metaParams: () => selectedOption?.meta?.n_params,
+		modelId: () => triggerModel
 	});
 
 	const showOrgNameInTrigger = $derived(
@@ -264,7 +264,7 @@
 
 				<DropdownMenu.Content
 					align="end"
-					class="w-full md:min-w-80 md:max-w-[26rem] max-w-[calc(100vw-2rem)] !py-0"
+					class="w-full md:min-w-80 md:max-w-[26rem] max-w-[calc(100vw-2rem)] p-0!"
 					onOpenAutoFocus={(event) => event.preventDefault()}
 				>
 					<DropdownMenuSearchable
@@ -278,7 +278,7 @@
 					>
 						<!-- Option list; the search header sticks to the top and the actions
 						     footer to the bottom of the content scrollport. -->
-						<div class="models-list">
+						<div class="models-list px-1.5">
 							{#if !ms.isCurrentModelInCache && currentModel}
 								<!-- Show unavailable model as first option (disabled) -->
 								<button
@@ -338,7 +338,12 @@
 						{#snippet footer()}
 							<!-- Sticky actions footer: reasoning effort panel.
 							     Sticks to the bottom of the content scrollport. -->
-							<div onfocusin={clearHighlight} onmouseenter={clearHighlight} role="none">
+							<div
+								class="px-1.5"
+								onfocusin={clearHighlight}
+								onmouseenter={clearHighlight}
+								role="none"
+							>
 								<ModelsSelectorReasoningPanel />
 							</div>
 						{/snippet}

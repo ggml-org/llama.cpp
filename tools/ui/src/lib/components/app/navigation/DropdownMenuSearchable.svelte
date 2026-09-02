@@ -38,7 +38,7 @@
 </script>
 
 <!-- Sticks to the top of the dropdown content's scrollport. -->
-<div class="sticky top-0 z-20 px-1 pb-2 pt-2">
+<div class="sticky top-0 z-20 p-1.5">
 	<SearchInput
 		bind:value={searchValue}
 		class={searchClass}
