@@ -67,6 +67,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 // depth-sweep overrides (0 = leave defaults). Set only by test_depth_sweep().
 static uint32_t g_depth_sweep_n_ctx = 0;
 static uint32_t g_depth_sweep_n_ub  = 0;
+static std::string g_dump_1tok;
 static uint32_t g_sweep_iheads      = 0;
 static uint32_t g_sweep_iklen       = 0;
 static uint32_t g_sweep_layers      = 0;   // glm5next fixture layer-count override
@@ -930,6 +931,16 @@ static int test_depth_sweep(const size_t seed, const uint32_t max_depth,
         printf("depth-sweep-1tok: depth=%u nmse=%.3e argmax_cpu=%u argmax_dev=%u%s\n",
                max_depth + 1, nmse_val, amax_c, amax_d, bad ? "  <-- DIVERGED" : "");
         if (bad) diverged = true;
+        if (!g_dump_1tok.empty()) {
+            FILE * fh = fopen(g_dump_1tok.c_str(), "wb");
+            if (fh) {
+                fwrite(ld, sizeof(float), n_vocab, fh);  // device logits
+                fwrite(lc, sizeof(float), n_vocab, fh);  // cpu logits
+                fclose(fh);
+                printf("depth-sweep-1tok: dumped %u+%u logits to %s\n",
+                       n_vocab, n_vocab, g_dump_1tok.c_str());
+            }
+        }
     }
     llama_batch_free(batch);
     printf("depth-sweep: %s\n", diverged ? "DIVERGENCE FOUND" : "no divergence up to max depth");
@@ -944,6 +955,7 @@ int main(int argc, char ** argv) {
     llm_arch arch = LLM_ARCH_UNKNOWN;
     size_t seed = rd();
     uint32_t depth_sweep = 0;
+    std::string dump_1tok;
     uint32_t sweep_ctx = 131072;
     uint32_t sweep_ub = 0;
     uint32_t sweep_ub2 = 0;
@@ -968,6 +980,9 @@ int main(int argc, char ** argv) {
         }
         if (strcmp(argv[i], "--depth-sweep") == 0 && i + 1 < argc) {
             depth_sweep = std::stoul(argv[++i]);
+        }
+        if (strcmp(argv[i], "--dump-1tok") == 0 && i + 1 < argc) {
+            dump_1tok = argv[++i];
         }
         if (strcmp(argv[i], "--ctx") == 0 && i + 1 < argc) {
             sweep_ctx = std::stoul(argv[++i]);
@@ -1023,6 +1038,7 @@ int main(int argc, char ** argv) {
     printf("%s: using seed %zu\n", __func__, seed);
 
     try {
+        g_dump_1tok = dump_1tok;
         if (depth_sweep > 0) {
             return test_depth_sweep(seed, depth_sweep, sweep_ctx, sweep_ub,
                                     sweep_ub2, sweep_b_cpu, sweep_topk);
