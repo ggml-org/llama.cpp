@@ -289,3 +289,105 @@ def test_embedding_openai_library_base64():
     # make sure the decoded data is the same as the original
     for x, y in zip(floats, vec0):
         assert abs(x - y) < EPSILON
+
+
+def test_embedding_dimensions():
+    server.start()
+    test_input = "I believe the meaning of life is"
+    test_dimensions = 128
+    res = server.make_request("POST", "/embeddings", data={
+        "input": test_input,
+        "dimensions": test_dimensions,
+    })
+    assert res.status_code == 200
+    assert len(res.body) == 1
+
+    embedding = res.body[0]['embedding']
+    assert len(embedding) == 1
+    vec = embedding[0]
+    assert len(vec) == test_dimensions
+
+    # truncated embedding must be L2-normalized
+    assert abs(sum([x ** 2 for x in vec]) - 1) < EPSILON
+
+
+def test_embedding_openai_dimensions():
+    server.start()
+    test_input = "I believe the meaning of life is"
+    test_dimensions = 128
+    res = server.make_request("POST", "/v1/embeddings", data={
+        "input": test_input,
+        "dimensions": test_dimensions,
+    })
+    assert res.status_code == 200
+    assert len(res.body['data']) == 1
+    vec = res.body['data'][0]['embedding']
+    assert len(vec) == test_dimensions
+
+    # truncated embedding must be L2-normalized
+    assert abs(sum([x ** 2 for x in vec]) - 1) < EPSILON
+
+
+def test_embedding_openai_dimensions_correctness():
+    server.start()
+    test_input = "I believe the meaning of life is"
+
+    # full
+    res_full = server.make_request("POST", "/v1/embeddings", data={
+        "input": test_input,
+    })
+    assert res_full.status_code == 200
+    full = res_full.body['data'][0]['embedding']
+    full_dimensions = len(full)
+
+    # half (truncated)
+    dim = full_dimensions // 2
+    res_trunc = server.make_request("POST", "/v1/embeddings", data={
+        "input": test_input,
+        "dimensions": dim,
+    })
+    assert res_trunc.status_code == 200
+    truncated = res_trunc.body['data'][0]['embedding']
+    assert len(truncated) == dim
+
+    # MRL: truncate full embedding to first N dims, then L2-renormalize
+    full_slice = full[:dim]
+    norm_c = sum([x ** 2 for x in full_slice]) ** 0.5
+    expected = [x / norm_c for x in full_slice]
+
+    for x, y in zip(truncated, expected):
+        assert abs(x - y) < EPSILON
+
+
+@pytest.mark.parametrize("dimensions", [0, -5, 99999])
+def test_embedding_openai_dimensions_invalid(dimensions):
+    server.start()
+    test_input = "I believe the meaning of life is"
+    res = server.make_request("POST", "/v1/embeddings", data={
+        "input": test_input,
+        "dimensions": dimensions,
+    })
+    assert res.status_code != 200
+    assert "dimensions" in res.body["error"]["message"]
+
+
+def test_embedding_openai_dimensions_base64():
+    server.start()
+    test_input = "I believe the meaning of life is"
+    test_dims = 128
+    res = server.make_request("POST", "/v1/embeddings", data={
+        "input": test_input,
+        "dimensions": test_dims,
+        "encoding_format": "base64",
+    })
+    assert res.status_code == 200
+    embedding_data = res.body["data"][0]
+    assert isinstance(embedding_data["embedding"], str)
+
+    decoded = base64.b64decode(embedding_data["embedding"])
+    floats_count = len(decoded) // 4
+    floats = struct.unpack(f'{floats_count}f', decoded)
+    assert len(floats) == test_dims
+
+    # truncated embedding must be L2-normalized
+    assert abs(sum([x ** 2 for x in floats]) - 1) < EPSILON
