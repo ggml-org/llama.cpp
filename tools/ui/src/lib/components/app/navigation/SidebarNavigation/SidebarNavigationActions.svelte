@@ -26,6 +26,7 @@
 		onSearchDeactivated?: () => void;
 		onSearchClick?: () => void;
 		onNewChat?: () => void;
+		onDiscoverModelsClick?: () => void;
 		onSettingsClick?: () => void;
 	}
 
@@ -34,6 +35,7 @@
 		isExpandedMode = false,
 		isSearchModeActive = $bindable(false),
 		onNewChat,
+		onDiscoverModelsClick,
 		onSearchClick,
 		onSearchDeactivated,
 		onSettingsClick,
@@ -117,16 +119,18 @@
 							onNewChat?.();
 							void conversationsStore.openNewChat();
 						}
-					: item.action === SidebarAction.SETTINGS
-						? () => onSettingsClick?.()
-						: item.route
-							? () => {
-									onNewChat?.();
-									goto(item.route!);
-								}
-							: isSearchOnMobile
-								? undefined
-								: onSearchClick}
+					: item.action === SidebarAction.DISCOVER_MODELS
+						? () => onDiscoverModelsClick?.()
+						: item.action === SidebarAction.SETTINGS
+							? () => onSettingsClick?.()
+							: item.route
+								? () => {
+										onNewChat?.();
+										goto(item.route!);
+									}
+								: isSearchOnMobile
+									? undefined
+									: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -173,16 +177,18 @@
 							onNewChat?.();
 							void conversationsStore.openNewChat();
 						}
-					: item.action === SidebarAction.SETTINGS
-						? () => onSettingsClick?.()
-						: item.route
-							? () => {
-									onNewChat?.();
-									goto(item.route!);
-								}
-							: isSearchOnMobile
-								? undefined
-								: onSearchClick}
+					: item.action === SidebarAction.DISCOVER_MODELS
+						? () => onDiscoverModelsClick?.()
+						: item.action === SidebarAction.SETTINGS
+							? () => onSettingsClick?.()
+							: item.route
+								? () => {
+										onNewChat?.();
+										goto(item.route!);
+									}
+								: isSearchOnMobile
+									? undefined
+									: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
