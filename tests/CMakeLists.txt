@@ -148,7 +148,6 @@ if (LLAMA_LLGUIDANCE)
     llama_build_and_test(test-grammar-llguidance.cpp ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
 endif ()
 
-llama_build(test-llama-archs.cpp)
 llama_build(test-recurrent-state-rollback.cpp)
 llama_build(test-save-load-state.cpp)
 
@@ -196,6 +195,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     #llama_test(test-tokenizer-1-spm  NAME test-tokenizer-1-baichuan  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-baichuan.gguf)
 
     # llama_build_and_test(test-double-float.cpp) # SLOW
+
+    llama_build(test-llama-archs.cpp)
 
     set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
     file(MAKE_DIRECTORY "${MODEL_DIR}")
