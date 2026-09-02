@@ -2455,7 +2455,7 @@ extern "C" {
 
     // Use finite mask entries as a sparse K/V set. Set 0 to disable.
     // n_kv_max must bound the number of finite entries in every mask row.
-    GGML_API void ggml_flash_attn_ext_set_sparse(
+    GGML_API void ggml_flash_attn_ext_set_n_kv_max(
             struct ggml_tensor * a,
             int32_t              n_kv_max);
 
