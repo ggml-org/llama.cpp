@@ -3971,6 +3971,23 @@ ggml_tensor * llm_graph_context::build_attn_sparse_gathered(
     mask_g = ggml_reshape_4d(ctx0, mask_g, n_sel, 1, 1, 1);
     cb(mask_g, "gathered_mask", il);
 
+    // E0a (codex 066 s4 / grokk 067 s2): live certificate-subsumption invariant.
+    // Every mask value is exactly 0 or -inf, so exp() maps class to {1, 0} and
+    // sum(|exp(old) - exp(cert)|) is 0 iff cand_g+kq_g+slot == slot in class.
+    // Debug env only; read back and reported after compute in llama-context.
+    static const bool e0a_check = getenv("LLAMA_GLM5_E0A") != nullptr;
+    if (e0a_check) {
+        // backend-proof: expose BOTH raw masks as named graph outputs and do the
+        // 0-vs--inf class comparison on the host (a graph-side exp/abs/sum chain
+        // proved unreliable across backends for this shape)
+        ggml_tensor * cert = ggml_reshape_4d(ctx0, slot_mask, n_sel, 1, 1, 1);
+        ggml_format_name(cert,   "e0a_cert-%d", il);
+        ggml_tensor * oldm = ggml_cont(ctx0, mask_g);
+        ggml_format_name(oldm,   "e0a_old-%d", il);
+        ggml_build_forward_expand(gf, cert);
+        ggml_build_forward_expand(gf, oldm);
+    }
+
     // K rows: [512, 1, n_kv, 1] -> dim-1 view -> gather -> cast -> [512, 1, n_sel, 1].
     // the final reshape is load-bearing (grokk 057 s3): build_attn_mha permutes (0,2,1,3)
     // and packed KQ keys on post-permute k->ne[2]==1 (n_head_kv).

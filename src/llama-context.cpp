@@ -1,6 +1,7 @@
 #include "llama-context.h"
 
 #include <algorithm>
+#include <map>
 
 #include "ggml.h"
 #include "ggml-metal.h"
@@ -1490,6 +1491,49 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     }
 
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+
+    // E0a: report any layer where the gathered mask is not subsumed by the
+    // slot certificate (debug env; nodes exist only when the env is set)
+    static const bool fbl_e0a = getenv("LLAMA_GLM5_E0A") != nullptr;
+    if (fbl_e0a && status == GGML_STATUS_SUCCESS) {
+        ggml_cgraph * gfc = res->get_gf();
+        std::map<int, std::pair<ggml_tensor *, ggml_tensor *>> layers;
+        for (int i = 0; i < ggml_graph_n_nodes(gfc); ++i) {
+            ggml_tensor * t = ggml_graph_node(gfc, i);
+            if (strncmp(t->name, "e0a_old-", 8) == 0) {
+                layers[atoi(t->name + 8)].first = t;
+            } else if (strncmp(t->name, "e0a_cert-", 9) == 0) {
+                layers[atoi(t->name + 9)].second = t;
+            }
+        }
+        for (auto & kv : layers) {
+            ggml_tensor * to = kv.second.first;
+            ggml_tensor * tc = kv.second.second;
+            if (!to || !tc) continue;
+            const int64_t n = to->ne[0];
+            std::vector<float> vo(n), vc(n);
+            ggml_backend_tensor_get(to, vo.data(), 0, n*sizeof(float));
+            ggml_backend_tensor_get(tc, vc.data(), 0, n*sizeof(float));
+            int bad = 0, finite = 0;
+            for (int64_t j = 0; j < n; ++j) {
+                const bool fo = vo[j] > -1e30f;
+                const bool fc = vc[j] > -1e30f;
+                finite += fc;
+                if (fo != fc) bad++;
+            }
+            if (bad) {
+                fprintf(stderr, "E0A VIOLATION layer=%d n=%lld class_mismatch=%d finite_cert=%d\n",
+                        kv.first, (long long) n, bad, finite);
+            } else {
+                static bool logged = false;
+                if (!logged) {
+                    fprintf(stderr, "E0A CHECK ACTIVE n=%lld finite=%d (layer %d clean)\n",
+                            (long long) n, finite, kv.first);
+                    logged = true;
+                }
+            }
+        }
+    }
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
