@@ -20,7 +20,7 @@
 	     through the `child` snippet to keep Collapsible.Trigger's native button.
 	     closeOnSelect keeps the menu open while the effort list is being used. -->
 	<DropdownMenu.Item
-		class="w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.75 text-left text-sm"
+		class="w-full min-w-0 cursor-pointer items-center gap-2 py-2 rounded-md text-left text-sm"
 		closeOnSelect={false}
 	>
 		{#snippet child({ props })}
@@ -36,10 +36,10 @@
 					<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
 				{/if}
 
-				<span class="flex min-w-0 flex-1 items-center gap-1.5">
+				<span class="flex min-w-0 flex-1 items-center gap-2">
 					<span class="truncate">Reasoning</span>
 
-					<span class="shrink-0 text-xs capitalize text-muted-foreground">
+					<span class="shrink-0 capitalize text-muted-foreground">
 						{reasoning.currentEffort}
 					</span>
 				</span>
