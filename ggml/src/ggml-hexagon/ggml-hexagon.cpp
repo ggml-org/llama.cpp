@@ -4005,8 +4005,10 @@ static void ggml_hexagon_precompute_unary_params(
 
     kparams->n_threads = n_threads;
 
-    const size_t src0_data_row_size = src0->ne[0] * sizeof(float);
-    const size_t dst_data_row_size  = dst->ne[0]  * sizeof(float);
+    const size_t elem_size = ggml_type_size(src0->type);
+
+    const size_t src0_data_row_size = src0->ne[0] * elem_size;
+    const size_t dst_data_row_size  = dst->ne[0]  * ggml_type_size(dst->type);
 
     const size_t src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
     const size_t dst_row_size_aligned  = hex_round_up(dst_data_row_size,  128);
@@ -4020,7 +4022,7 @@ static void ggml_hexagon_precompute_unary_params(
 
     if (op == HTP_OP_RMS_NORM_MUL) {
         GGML_ASSERT(src1 != nullptr);
-        src1_data_row_size = src1->ne[0] * sizeof(float);
+        src1_data_row_size = src1->ne[0] * ggml_type_size(src1->type);
         src1_row_size_aligned = hex_round_up(src1_data_row_size, 128);
         broadcast_weight = (src1->ne[1] * src1->ne[2] * src1->ne[3] == 1);
     }
@@ -4034,7 +4036,7 @@ static void ggml_hexagon_precompute_unary_params(
 
     htp_unary_vtcm_layout_build(&L, op, src0->ne[0], dst->ne[0],
                                 op == HTP_OP_RMS_NORM_MUL ? src1->ne[0] : 0,
-                                broadcast_weight, n_threads, sess->vtcm_size,
+                                broadcast_weight, n_threads, sess->vtcm_size, elem_size,
                                 &col_tile, &vtcm_row_per_thread);
 
     kparams->col_tile = col_tile;
@@ -4451,15 +4453,39 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if (src0->type != GGML_TYPE_F32) {
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) {
         return false;
     }
-    if (dst->type != GGML_TYPE_F32) {
+    if (dst->type != src0->type) {
         return false;
     }
     if (!ggml_is_contiguous_rows(src0)) {
         return false;
     }
+
+    // F16 device kernels only cover this explicit whitelist (must stay in sync with
+    // the is_f16 whitelist in execute_op_unary(), unary-ops.c).
+    if (src0->type == GGML_TYPE_F16) {
+        switch (op->op) {
+            case GGML_OP_NORM:
+            case GGML_OP_RMS_NORM:
+            case GGML_OP_L2_NORM:
+            case GGML_OP_SCALE:
+            case GGML_OP_CLAMP:
+            case GGML_OP_SQR:
+            case GGML_OP_SQRT:
+            case GGML_OP_LOG:
+                break;
+            case GGML_OP_UNARY:
+                if (ggml_get_unary_op(op) != GGML_UNARY_OP_ABS) {
+                    return false;
+                }
+                break;
+            default:
+                return false;
+        }
+    }
+
     if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
