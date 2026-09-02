@@ -35,6 +35,7 @@
 #include <sycl/backend.hpp>
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
 #include <level_zero/ze_api.h>
+#include <level_zero/zes_api.h>
 #endif
 #if defined(GGML_SYCL_GRAPH) && SYCL_EXT_ONEAPI_ASYNC_MEMORY_ALLOC
 #    include <sycl/ext/oneapi/experimental/async_alloc/async_alloc.hpp>
@@ -58,8 +59,10 @@
 #include "ggml-sycl/backend.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/element_wise.hpp"
+#include "ggml-sycl/fwht.hpp"
 #include "ggml-sycl/gemm.hpp"
 #include "ggml-sycl/getrows.hpp"
+#include "ggml-sycl/mem.hpp"
 #include "ggml-sycl/norm.hpp"
 #include "ggml-sycl/presets.hpp"
 #include "ggml-sycl/quantize.hpp"
@@ -77,6 +80,7 @@
 #include "ggml-sycl/fill.hpp"
 #include "ggml-sycl/cumsum.hpp"
 #include "ggml-sycl/diag.hpp"
+#include "ggml-sycl/opt-step.hpp"
 #include "ggml-sycl/solve_tri.hpp"
 #include "ggml-sycl/gated_delta_net.hpp"
 #include "ggml-sycl/pool.hpp"
@@ -103,11 +107,21 @@ int g_ggml_sycl_enable_flash_attention = 1;
 int g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
 int g_ggml_sycl_usm_system = 0;
 int g_ggml_sycl_enable_host_pinned_mem = 1;
+int g_ggml_sycl_host_pinned_mem_2g = 0;
+int g_ggml_sycl_get_mem_api = MEMORY_API_TYPE_LEVEL_ZERO;
+
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
 
-    info.device_count = dpct::dev_mgr::instance().device_count();
+    // Do not hard crash when there exists no SYCL devices.
+    // We want to allow the user to use non-SYCL tools when SYCL is compiled (such as llama-quantize)
+    try {
+        info.device_count = dpct::dev_mgr::instance().device_count();
+    } catch (sycl::exception const &exc) {
+        GGML_LOG_INFO("%s: no SYCL device available: %s\n", __func__, exc.what());
+        info.device_count = 0;
+    }
     if (info.device_count == 0) {
         GGML_LOG_ERROR("%s: failed to initialize: %s\n", GGML_SYCL_NAME, __func__);
         return info;
@@ -292,10 +306,27 @@ static const char* dev2dev_int2str(int dev2dev) {
     }
 }
 
+/*
+* There are several entry APIs to be called as first function in SYCL backend in different cases.
+* It's the first internal function to be called by them in SYCL backend.
+* This function is used to do initialize work for the SYCL backend and set the global variables.
+*/
+void initialize_sycl_begining() {
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+    ze_result_t zes_init = zesInit(0);
+    if (zes_init != ZE_RESULT_SUCCESS) {
+        std::cerr << "Warning: zesInit failed [ggml_check_sycl] with code " << static_cast<int>(zes_init)
+                            << ". Sysman free-memory query may be unavailable.\n";
+    }
+#endif
+}
+
 static void ggml_check_sycl() try {
     static bool initialized = false;
 
     if (!initialized) {
+        initialize_sycl_begining();
+
         g_ggml_sycl_debug = ggml_sycl_get_env("GGML_SYCL_DEBUG", 0);
         g_ggml_sycl_enable_optimize = ggml_sycl_get_env("GGML_SYCL_ENABLE_OPT", 1);
         g_ggml_sycl_enable_graph = ggml_sycl_get_env("GGML_SYCL_ENABLE_GRAPH", 0);
@@ -308,8 +339,11 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
 
         g_ggml_sycl_dev2dev_memcpy = ggml_sycl_get_env("GGML_SYCL_DEV2DEV_MEMCPY", DEV2DEV_MEMCPY_SYCL);
+        g_ggml_sycl_get_mem_api = ggml_sycl_get_env("GGML_SYCL_GET_MEM_API", MEMORY_API_TYPE_LEVEL_ZERO);
+
         if (g_ggml_sycl_use_level_zero_api == 0) {
             g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
+            g_ggml_sycl_get_mem_api = MEMORY_API_TYPE_SYCL;
         }
 
 #ifdef SYCL_FLASH_ATTN
@@ -321,6 +355,9 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_usm_system = ggml_sycl_get_env("GGML_SYCL_USM_SYSTEM", 0);
         g_ggml_sycl_enable_host_pinned_mem =
             ggml_sycl_get_env("GGML_SYCL_ENABLE_HOST_PINNED_MEM", 1);
+
+        g_ggml_sycl_host_pinned_mem_2g =
+            ggml_sycl_get_env("GGML_SYCL_HOST_PINNED_MEM_2G", 0) & g_ggml_sycl_enable_host_pinned_mem;
 
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
 
@@ -365,9 +402,12 @@ static void ggml_check_sycl() try {
 
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
         GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d (%s)\n", g_ggml_sycl_dev2dev_memcpy, dev2dev_int2str(g_ggml_sycl_dev2dev_memcpy));
+        GGML_LOG_INFO("  GGML_SYCL_GET_MEM_API: %d (%s)\n", g_ggml_sycl_get_mem_api, mem_api_int2str(g_ggml_sycl_get_mem_api));
 #else
         GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d (%s), enable to SYCL API since missing GGML_SYCL_SUPPORT_LEVEL_ZERO_API\n",
                       g_ggml_sycl_dev2dev_memcpy, dev2dev_int2str(g_ggml_sycl_dev2dev_memcpy));
+        GGML_LOG_INFO("  GGML_SYCL_GET_MEM_API: %d (%s), enable to SYCL API since missing GGML_SYCL_SUPPORT_LEVEL_ZERO_API\n",
+                      g_ggml_sycl_get_mem_api, mem_api_int2str(g_ggml_sycl_get_mem_api));
 #endif
 
 #if defined(GGML_SYCL_DNNL)
@@ -420,6 +460,7 @@ static void ggml_check_sycl() try {
 
         GGML_LOG_INFO("  GGML_SYCL_USM_SYSTEM: %d\n", g_ggml_sycl_usm_system);
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_HOST_PINNED_MEM: %d\n", g_ggml_sycl_enable_host_pinned_mem);
+        GGML_LOG_INFO("  GGML_SYCL_HOST_PINNED_MEM_2G: %d\n", g_ggml_sycl_host_pinned_mem_2g);
 
 /* NOT REMOVE, keep it for next optimize for XMX.
 #if defined(SYCL_USE_XMX)
@@ -912,16 +953,16 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
 
     void * dev_ptr;
     if (use_usm_system) {
-        GGML_SYCL_DEBUG("[SYCL] allocating %lu Bytes with USM system\n", size);
+        GGML_SYCL_DEBUG("[SYCL] allocating %zu Bytes with USM system\n", size);
         dev_ptr = (void *)aligned_malloc_host(alignment, aligned_size);
         if (!dev_ptr) {
-            GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on host\n", __func__, size);
+            GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on host\n", __func__, size);
             return nullptr;
         }
     } else {
         SYCL_CHECK(CHECK_TRY_ERROR(dev_ptr = (void *)ggml_sycl_malloc_device(size, *stream)));
         if (!dev_ptr) {
-          GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
+          GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on device\n", __func__, size);
           return nullptr;
         }
     }
@@ -940,13 +981,20 @@ static size_t ggml_backend_sycl_buffer_type_get_alignment(ggml_backend_buffer_ty
 }
 
 static size_t ggml_backend_sycl_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    return dpct::get_current_device().get_max_mem_alloc_size();
-
+    size_t max_alloc_size = dpct::get_current_device().get_max_mem_alloc_size();
+    if (g_ggml_sycl_host_pinned_mem_2g) {
+        return std::min(max_alloc_size, (size_t) 2LL*1024*1024*1024);
+    } else {
+        return max_alloc_size;
+    }
     GGML_UNUSED(buft);
 }
 
 static size_t ggml_backend_sycl_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-    size_t size = ggml_nbytes(tensor);
+    // Reserve the additional scratch so it's visible to the graph allocator
+    size_t size = tensor->op == GGML_OP_FLASH_ATTN_EXT
+        ? ggml_sycl_flash_attn_ext_get_alloc_size(tensor)
+        : ggml_nbytes(tensor);
     int64_t ne0 = tensor->ne[0];
 
     if (ggml_is_quantized(tensor->type)) {
@@ -1168,7 +1216,7 @@ ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_buffer_t buffer,
         SYCL_CHECK(CHECK_TRY_ERROR(buf = (char *)ggml_sycl_malloc_device(size, *stream)));
         if (!buf) {
             char err_buf[1024];
-            snprintf(err_buf, 1023, "%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
+            snprintf(err_buf, 1023, "%s: can't allocate %zu Bytes of memory on device\n", __func__, size);
             throw std::runtime_error(err_buf);
         }
         // set padding to 0 to avoid possible NaN values
@@ -1508,8 +1556,18 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
 }
 
 static size_t ggml_backend_sycl_host_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    ggml_backend_sycl_device_context * dev_ctx = (ggml_backend_sycl_device_context *) buft->device->context;
-    return dpct::dev_mgr::instance().get_device(dev_ctx->device).get_max_mem_alloc_size();
+
+    if (g_ggml_sycl_enable_host_pinned_mem) {
+        ggml_backend_sycl_device_context * dev_ctx = (ggml_backend_sycl_device_context *) buft->device->context;
+        size_t max_alloc_size = dpct::dev_mgr::instance().get_device(dev_ctx->device).get_max_mem_alloc_size();
+        if (g_ggml_sycl_host_pinned_mem_2g) {
+            return std::min(max_alloc_size, (size_t) 2LL*1024*1024*1024);
+        } else {
+            return max_alloc_size;
+        }
+    } else {
+        return SIZE_MAX;
+    }
 }
 
 ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type() {
@@ -1637,7 +1695,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
 
         SYCL_CHECK(CHECK_TRY_ERROR(ptr = (void *)ggml_sycl_malloc_device(look_ahead_size, *qptr)));
         if (!ptr) {
-            GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device/GPU\n", __func__, look_ahead_size);
+            GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on device/GPU\n", __func__, look_ahead_size);
             return nullptr;
         }
 
@@ -1649,7 +1707,7 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
                 (uint32_t)(max_size/1024/1024), (uint32_t)(g_sycl_pool_size[id]/1024/1024), (uint32_t)(size/1024/1024));
 #endif
 
-        // GGML_SYCL_DEBUG("ggml_sycl_pool_malloc_leg look_ahead_size=%lu, return %p\n", look_ahead_size, ptr);
+        // GGML_SYCL_DEBUG("ggml_sycl_pool_malloc_leg look_ahead_size=%zu, return %p\n", look_ahead_size, ptr);
         return ptr;
     }
 
@@ -1829,7 +1887,7 @@ struct ggml_sycl_pool_host : public ggml_sycl_pool {
 
             SYCL_CHECK(CHECK_TRY_ERROR(ptr = (void *) sycl::malloc_host(size, *qptr)));
             if (!ptr) {
-                GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on host\n", __func__, size);
+                GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on host\n", __func__, size);
                 return nullptr;
             }
             pool_size += size;
@@ -2385,7 +2443,138 @@ static void argsort_f32_i32_sycl(const float *x, int *dst, const int ncols,
     }
 }
 
+// Scan and block merge, shared by every launch shape below so a partitioned row uses the
+// same insertion order as an unpartitioned one.
+//
+// src_map  != nullptr: report src_map[col] instead of col, so a merge pass can carry the
+//                      original column index through.
+// out_vals != nullptr: also emit the k winning values, for a later merge pass.
+// swap01:              emit in the output order the single-pass path uses.
+static void top_k_scan_merge_f32(
+    const float *   src_vals,
+    const int32_t * src_map,
+    const int       begin,
+    const int       end,
+    const int       k,
+    const int       block_size,
+    float *         shared_vals,
+    int *           shared_idx,
+    float *         out_vals,
+    int32_t *       out_idx,
+    const bool      swap01,
+    const sycl::nd_item<1> & item_ct1
+) {
+    const int tid = item_ct1.get_local_id(0);
+
+    // The running top-k lives in SLM (shared local memory) rather than a private array:
+    // an array indexed by a runtime position cannot be register-allocated, so a private
+    // one lands in scratch, i.e. device memory, and insertion is this kernel's dominant
+    // cost.
+    //
+    // Lane-strided (lv[i * block_size]) rather than lane-blocked (lv[i]) so a given i is
+    // contiguous across lanes; a k-strided layout would put every lane of a shift step in
+    // the same SLM bank.
+    float * lv = shared_vals + tid;
+    int * li = shared_idx + tid;
+
+    for (int i = 0; i < k; i++) {
+        lv[i * block_size] = -FLT_MAX;
+        li[i * block_size] = -1;
+    }
+
+    // The k-th best, cached in a register. The reject test is taken for the large
+    // majority of elements scanned, and in that case touches no memory.
+    float kth = -FLT_MAX;
+
+    for (int col = begin + tid; col < end; col += block_size) {
+        float val = src_vals[col];
+
+        if (val > kth) {
+            int pos = k - 1;
+            while (pos > 0 && val > lv[(pos - 1) * block_size]) {
+                pos--;
+            }
+
+            for (int i = k - 1; i > pos; i--) {
+                lv[i * block_size] = lv[(i - 1) * block_size];
+                li[i * block_size] = li[(i - 1) * block_size];
+            }
+            lv[pos * block_size] = val;
+            li[pos * block_size] = src_map ? src_map[col] : col;
+
+            kth = lv[(k - 1) * block_size];
+        }
+    }
+
+    item_ct1.barrier(sycl::access::fence_space::local_space);
+
+    if (tid != 0) {
+        return;
+    }
+
+    // Same treatment for the merge accumulator, past the per-lane region.
+    float * fv = shared_vals + (size_t) k * block_size;
+    int * fi = shared_idx + (size_t) k * block_size;
+
+    for (int i = 0; i < k; i++) {
+        fv[i] = -FLT_MAX;
+        fi[i] = -1;
+    }
+
+    float fkth = -FLT_MAX;
+
+    // Candidates are visited in the same (t, i) order as before, so tie-breaking is
+    // unchanged.
+    for (int t = 0; t < block_size; t++) {
+        for (int i = 0; i < k; i++) {
+            float val = shared_vals[i * block_size + t];
+
+            if (val <= fkth) {
+                // Lane t's list is sorted descending, so once one of its entries loses
+                // to the k-th best, every later entry loses too. fkth only rises, so
+                // that stays true for the rest of the merge. This turns the merge from
+                // block_size*k steps into roughly block_size plus the candidates
+                // accepted.
+                break;
+            }
+
+            int idx = shared_idx[i * block_size + t];
+
+            int pos = k - 1;
+            while (pos > 0 && val > fv[pos - 1]) {
+                pos--;
+            }
+
+            for (int j = k - 1; j > pos; j--) {
+                fv[j] = fv[j - 1];
+                fi[j] = fi[j - 1];
+            }
+            fv[pos] = val;
+            fi[pos] = idx;
+
+            fkth = fv[k - 1];
+        }
+    }
+
+    if (out_vals) {
+        for (int i = 0; i < k; i++) {
+            out_vals[i] = fv[i];
+        }
+    }
+
+    for (int i = 0; i < k; i++) {
+        out_idx[i] = fi[i];
+    }
+
+    if (swap01 && k > 1) {
+        int32_t temp = out_idx[0];
+        out_idx[0] = out_idx[1];
+        out_idx[1] = temp;
+    }
+}
+
 static void top_k_f32_sycl(
+    ggml_backend_sycl_context & ctx,
     const float * src,
     int32_t * dst_indices,
     const int64_t ncols,
@@ -2393,98 +2582,107 @@ static void top_k_f32_sycl(
     const int k,
     dpct::queue_ptr main_stream
 ) {
+    // A row is scanned by exactly one work-group, so a vocabulary-sized row leaves the
+    // rest of the device idle. What the scan is short of is memory requests in flight,
+    // not bandwidth or per-request latency, so lanes in flight is the lever: split the
+    // row across independent work-groups, have each emit its partition's top-k, and
+    // merge those nsplit*k candidates in a second launch.
+    //
+    // split_block trades parallelism against SLM residency. Its cost is
+    // (split_block + 1) * k * 8 bytes of SLM per group, so at the k <= 32 ceiling 128
+    // lanes need about 33 KB, which leaves a single resident group per Xe-core. Revisit
+    // if the supported k ever grows.
+    constexpr int split_block = 128;
+    constexpr int max_splits  = 128;
+    constexpr int min_cols    = 8192;
+
+    int nsplit = 1;
+    if (ncols >= min_cols) {
+        // A partition is then always >= split_block = 128 columns, hence always more than
+        // the k <= 32 ceiling, so no pass is ever padded with -FLT_MAX sentinels.
+        const int64_t want = ncols / split_block;
+        nsplit = (int) (want > max_splits ? max_splits : want);
+    }
+
+    if (nsplit > 1) {
+        const int nchunk = (int) ((ncols + nsplit - 1) / nsplit);
+        const size_t ncand = (size_t) nrows * nsplit * k;
+
+        ggml_sycl_pool_alloc<float>   part_vals(ctx.pool(), ncand);
+        ggml_sycl_pool_alloc<int32_t> part_idx(ctx.pool(), ncand);
+
+        float *   pv = part_vals.get();
+        int32_t * pi = part_idx.get();
+
+        const sycl::range<1> block_dims(split_block);
+
+        main_stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<float, 1> shared_vals(sycl::range<1>((split_block + 1) * k), cgh);
+            sycl::local_accessor<int, 1> shared_idx(sycl::range<1>((split_block + 1) * k), cgh);
+
+            cgh.parallel_for(
+                sycl::nd_range<1>(sycl::range<1>(nrows * nsplit) * block_dims, block_dims),
+                [=](sycl::nd_item<1> item_ct1) {
+                    const int grp = item_ct1.get_group(0);
+                    const int row = grp / nsplit;
+                    const int part = grp % nsplit;
+
+                    const int begin = part * nchunk;
+                    int end = begin + nchunk;
+                    if (end > (int) ncols) {
+                        end = (int) ncols;
+                    }
+
+                    top_k_scan_merge_f32(
+                        src + (int64_t) row * ncols, nullptr, begin, end, k, split_block,
+                        shared_vals.get_multi_ptr<sycl::access::decorated::no>().get(),
+                        shared_idx.get_multi_ptr<sycl::access::decorated::no>().get(),
+                        pv + (size_t) grp * k, pi + (size_t) grp * k, false, item_ct1);
+                });
+        });
+
+        main_stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<float, 1> shared_vals(sycl::range<1>((split_block + 1) * k), cgh);
+            sycl::local_accessor<int, 1> shared_idx(sycl::range<1>((split_block + 1) * k), cgh);
+
+            cgh.parallel_for(
+                sycl::nd_range<1>(sycl::range<1>(nrows) * block_dims, block_dims),
+                [=](sycl::nd_item<1> item_ct1) {
+                    const int row = item_ct1.get_group(0);
+                    const size_t off = (size_t) row * nsplit * k;
+
+                    top_k_scan_merge_f32(
+                        pv + off, pi + off, 0, nsplit * k, k, split_block,
+                        shared_vals.get_multi_ptr<sycl::access::decorated::no>().get(),
+                        shared_idx.get_multi_ptr<sycl::access::decorated::no>().get(),
+                        nullptr, dst_indices + (int64_t) row * k, true, item_ct1);
+                });
+        });
+
+        return;
+    }
+
     const int block_size = 128;
 
     const sycl::range<1> block_dims(block_size);
     const sycl::range<1> grid_dims(nrows);
 
     main_stream->submit([&](sycl::handler &cgh) {
-        sycl::local_accessor<float, 1> shared_vals(sycl::range<1>(block_size * k), cgh);
-        sycl::local_accessor<int, 1> shared_idx(sycl::range<1>(block_size * k), cgh);
+        sycl::local_accessor<float, 1> shared_vals(sycl::range<1>((block_size + 1) * k), cgh);
+        sycl::local_accessor<int, 1> shared_idx(sycl::range<1>((block_size + 1) * k), cgh);
 
         cgh.parallel_for(
             sycl::nd_range<1>(grid_dims * block_dims, block_dims),
             [=](sycl::nd_item<1> item_ct1) {
                 const int row = item_ct1.get_group(0);
-                const int tid = item_ct1.get_local_id(0);
 
                 if (row >= nrows) return;
 
-                const float * src_row = src + row * ncols;
-                int32_t * dst_idx_row = dst_indices + row * k;
-
-                float local_vals[32];
-                int local_idx[32];
-
-                for (int i = 0; i < k; i++) {
-                    local_vals[i] = -FLT_MAX;
-                    local_idx[i] = -1;
-                }
-
-                for (int col = tid; col < ncols; col += block_size) {
-                    float val = src_row[col];
-
-                    if (val > local_vals[k-1]) {
-                        int pos = k - 1;
-                        while (pos > 0 && val > local_vals[pos - 1]) {
-                            pos--;
-                        }
-
-                        for (int i = k - 1; i > pos; i--) {
-                            local_vals[i] = local_vals[i - 1];
-                            local_idx[i] = local_idx[i - 1];
-                        }
-                        local_vals[pos] = val;
-                        local_idx[pos] = col;
-                    }
-                }
-
-                for (int i = 0; i < k; i++) {
-                    shared_vals[tid * k + i] = local_vals[i];
-                    shared_idx[tid * k + i] = local_idx[i];
-                }
-                item_ct1.barrier(sycl::access::fence_space::local_space);
-
-                if (tid == 0) {
-                    float final_vals[32];
-                    int final_idx[32];
-
-                    for (int i = 0; i < k; i++) {
-                        final_vals[i] = -FLT_MAX;
-                        final_idx[i] = -1;
-                    }
-
-                    for (int t = 0; t < block_size; t++) {
-                        for (int i = 0; i < k; i++) {
-                            float val = shared_vals[t * k + i];
-                            int idx = shared_idx[t * k + i];
-
-                            if (val > final_vals[k-1]) {
-                                int pos = k - 1;
-                                while (pos > 0 && val > final_vals[pos - 1]) {
-                                    pos--;
-                                }
-
-                                for (int j = k - 1; j > pos; j--) {
-                                    final_vals[j] = final_vals[j - 1];
-                                    final_idx[j] = final_idx[j - 1];
-                                }
-                                final_vals[pos] = val;
-                                final_idx[pos] = idx;
-                            }
-                        }
-                    }
-
-                    for (int i = 0; i < k; i++) {
-                        dst_idx_row[i] = final_idx[i];
-                    }
-
-                    if (k > 1) {
-                        int32_t temp = dst_idx_row[0];
-                        dst_idx_row[0] = dst_idx_row[1];
-                        dst_idx_row[1] = temp;
-                    }
-                }
+                top_k_scan_merge_f32(
+                    src + (int64_t) row * ncols, nullptr, 0, (int) ncols, k, block_size,
+                    shared_vals.get_multi_ptr<sycl::access::decorated::no>().get(),
+                    shared_idx.get_multi_ptr<sycl::access::decorated::no>().get(),
+                    nullptr, dst_indices + (int64_t) row * k, true, item_ct1);
             });
     });
 }
@@ -2765,9 +2963,9 @@ inline void ggml_sycl_op_mul_mat_sycl(
         const float * src1_ddf1_i = src1->type == GGML_TYPE_F32 ? (const float *) src1_ddf_i : src1_ddq_as_f32.get();
 
         {
+#if GGML_SYCL_DNNL
             const int64_t gemm_flops = (int64_t)row_diff * src1_ncols * ne10;
             const bool use_mkl_direct = gemm_flops < 256 * 256 * 256;
-#if GGML_SYCL_DNNL
             if (g_ggml_sycl_enable_dnn && !use_mkl_direct) {
                 DnnlGemmWrapper::row_gemm(ctx, row_diff, src1_ncols, ne10, src0_ddf_i,
                                           DnnlGemmWrapper::to_dt<float>(), src1_ddf1_i, DnnlGemmWrapper::to_dt<float>(),
@@ -2885,7 +3083,7 @@ static void ggml_sycl_op_top_k(ggml_backend_sycl_context & ctx, ggml_tensor * ds
     GGML_ASSERT(k > 0 && k <= 32);
     GGML_ASSERT(k <= ncols);
 
-    top_k_f32_sycl(src0_dd, dst_dd, ncols, nrows, k, main_stream);
+    top_k_f32_sycl(ctx, src0_dd, dst_dd, ncols, nrows, k, main_stream);
 }
 
 inline void ggml_sycl_op_argmax(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -3504,7 +3702,9 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
     float *            dst_ddf  = static_cast<float *>(dst->data);
 
     const sycl::half * src1_f16       = static_cast<const sycl::half *>(src1->data);
+#if GGML_SYCL_DNNL
     const size_t       type_size_src0 = ggml_type_size(src0->type);
+#endif
     const size_t       type_size_src1 = ggml_type_size(src1->type);
 
     bool is_src0_cont_2 = ggml_is_contiguous_2(src0);
@@ -3521,6 +3721,7 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
         scope_op_debug_print    scope_dbg_print(__func__, "/to_fp16_nc_sycl", dst, /*num_src=*/2,
                                                 " : converting src1 to fp16");
 
+#if GGML_SYCL_DNNL
         // iterate tensor dims and find the slowest moving dim and stride
         int last_dim=0;
         int last_str=0;
@@ -3540,7 +3741,6 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
             }
 
         }
-#if GGML_SYCL_DNNL
         // oneDNN handles strided data and does not need overhead of ggml_get_to_fp16_nc_sycl
         const int64_t ne_src1 = src1->nb[last_str] * src1->ne[last_dim] / type_size_src1;
         src1_f16_alloc.alloc(ne_src1);
@@ -3780,6 +3980,7 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
         case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
@@ -3793,8 +3994,10 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
 static bool ggml_sycl_supports_reorder_esimd(enum ggml_type type) {
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD
     switch (type) {
+        case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
             return true;
         default:
@@ -4472,6 +4675,18 @@ static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * 
 
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+
+    // Handle HADAMARAD hint given from further up the pipeline and pass it to the correct
+    // kernel.
+    //
+    // The op check is not redundant: this backend also routes MUL_MAT_ID through here with a
+    // stack copy of dst, which carries MUL_MAT_ID's own op_params. ggml_mul_mat_set_hint()
+    // asserts GGML_OP_MUL_MAT for the same reason.
+    if (dst->op == GGML_OP_MUL_MAT && ggml_get_op_params_i32(dst, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
+        ggml_sycl_op_fwht(ctx, src1, dst)) {
+        return;
+    }
+
     const bool split = ggml_backend_buffer_is_sycl_split(src0->buffer);
     int64_t min_compute_capability = INT_MAX;
 
@@ -5034,6 +5249,7 @@ catch (sycl::exception const &exc) {
 
 static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
     if (!g_sycl_loaded) return false;
+    initialize_sycl_begining();
 
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_sycl_split(dst->src[0]->buffer)) {
         ggml_sycl_set_peer_access(dst->src[1]->ne[1], ctx.device);
@@ -5199,6 +5415,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
                 case GGML_GLU_OP_SWIGLU_OAI:
                     ggml_sycl_swiglu_oai(ctx, dst);
                     break;
+                case GGML_GLU_OP_SWIGLU_CLAMP:
+                    ggml_sycl_swiglu_clamp(ctx, dst);
+                    break;
                 case GGML_GLU_OP_GEGLU_ERF:
                     ggml_sycl_geglu_erf(ctx, dst);
                     break;
@@ -5355,6 +5574,12 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_GATED_DELTA_NET:
             ggml_sycl_gated_delta_net(ctx, dst);
             break;
+        case GGML_OP_OPT_STEP_ADAMW:
+            ggml_sycl_opt_step_adamw(ctx, dst);
+            break;
+        case GGML_OP_OPT_STEP_SGD:
+            ggml_sycl_opt_step_sgd(ctx, dst);
+            break;
         case GGML_OP_SSM_CONV:
             ggml_sycl_ssm_conv(ctx, dst);
             break;
@@ -5407,18 +5632,16 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
-void ggml_backend_sycl_get_device_memory(int device, size_t *free,
-                                                   size_t *total) try {
+void ggml_backend_sycl_get_device_memory(int device, size_t * free, size_t * total) try {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_get_device_memory\n");
-    ggml_sycl_set_device(device);
-
-    SYCL_CHECK(CHECK_TRY_ERROR(
-        dpct::dev_mgr::instance().get_device(device).get_memory_info(*free, *total)));
-}
-catch (sycl::exception const &exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
+    bool res = get_memory_size(dpct::dev_mgr::instance().get_device(device), *free, *total,
+                               (MemoryAPIType) g_ggml_sycl_get_mem_api);
+    if (!res) {
+        GGML_ABORT("[%s] failed to get device memory size", __func__);
+    }
+} catch (const sycl::exception & exc) {
+    std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+    std::exit(1);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -5837,10 +6060,12 @@ static const char * ggml_backend_sycl_device_get_description(ggml_backend_dev_t 
 }
 
 static void ggml_backend_sycl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *)dev->context;
-    ggml_sycl_set_device(ctx->device);
-    SYCL_CHECK(CHECK_TRY_ERROR(
-    dpct::dev_mgr::instance().get_device(ctx->device).get_memory_info(*free, *total)));
+    ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *) dev->context;
+    bool res = get_memory_size(dpct::dev_mgr::instance().get_device(ctx->device), *free, *total,
+                               (MemoryAPIType) g_ggml_sycl_get_mem_api);
+    if (!res) {
+        GGML_ABORT("[%s] failed to get device memory size", __func__);
+    }
 }
 
 static enum ggml_backend_dev_type ggml_backend_sycl_device_get_type(ggml_backend_dev_t dev) {
@@ -5953,6 +6178,7 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                 case GGML_GLU_OP_SWIGLU_OAI:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
+                case GGML_GLU_OP_SWIGLU_CLAMP:
                     return ggml_is_contiguous_1(op->src[0]);
                 default:
                     return false;
@@ -5981,6 +6207,11 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                     a->ne[0] > 128 && a->ne[2] == 1 && src0_type == GGML_TYPE_F16) {
                     return false;
                 }
+
+                if (src0_type == GGML_TYPE_TQ2_0) {
+                    return false;
+                }
+
                 return true;
             }
         case GGML_OP_OUT_PROD:
@@ -6031,6 +6262,9 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_SET_ROWS:
             {
+                if (op->type == GGML_TYPE_TQ2_0) {
+                    return false;
+                }
                 auto res = (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 ||
                             op->src[0]->type == GGML_TYPE_BF16) &&
                            (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32);
@@ -6149,9 +6383,14 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                         src1_type == GGML_TYPE_IQ3_XXS ||
                         src1_type == GGML_TYPE_IQ3_S ||
                         src1_type == GGML_TYPE_IQ1_S ||
-                        src1_type == GGML_TYPE_IQ1_M) {
+                        src1_type == GGML_TYPE_IQ1_M ||
+                        src1_type == GGML_TYPE_TQ2_0) {
                         return false;
                     }
+                }
+
+                if (src0_type == GGML_TYPE_TQ2_0 || src1_type == GGML_TYPE_TQ2_0) {
+                    return false;
                 }
 
                 return true;
@@ -6263,6 +6502,8 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_RWKV_WKV7:
         case GGML_OP_GATED_LINEAR_ATTN:
         case GGML_OP_GATED_DELTA_NET:
+        case GGML_OP_OPT_STEP_ADAMW:
+        case GGML_OP_OPT_STEP_SGD:
             return true;
         case GGML_OP_SSM_CONV:
             return op->type == GGML_TYPE_F32 &&
@@ -6707,6 +6948,7 @@ ggml_backend_reg_t ggml_backend_sycl_reg() {
         static std::mutex mutex;
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
+            initialize_sycl_begining();
             ggml_backend_sycl_reg_context * ctx = new ggml_backend_sycl_reg_context;
             const int min_batch_size = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 

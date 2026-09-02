@@ -34,6 +34,11 @@ struct clip_graph_pixtral : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_deepseek4v : clip_graph {
+    clip_graph_deepseek4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_qwen2vl : clip_graph {
     clip_graph_qwen2vl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -116,6 +121,11 @@ struct clip_graph_paddleocr : clip_graph {
 
 struct clip_graph_dotsocr : clip_graph {
     clip_graph_dotsocr(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
+struct clip_graph_dots3note_a : clip_graph {
+    clip_graph_dots3note_a(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 

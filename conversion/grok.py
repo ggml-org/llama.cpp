@@ -13,6 +13,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("GrokForCausalLM", "Grok1ForCausalLM")
+@ModelBase.example("keyfan/grok-1-hf")
 class GrokModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GROK
 

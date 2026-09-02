@@ -129,6 +129,22 @@ struct mtmd_image_preprocessor_longest_edge : mtmd_image_preprocessor {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
+// ref: inference/image_processor.py in the HF repo (DeepSeek-V4-Flash-Vision)
+struct mtmd_image_preprocessor_deepseek4v : mtmd_image_preprocessor {
+    mtmd_image_preprocessor_deepseek4v(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
+
+private:
+    struct grid_info {
+        int n_llm_h;
+        int n_llm_w;
+        int n_tokens; // token count of the block (incl. newline/pad rows and start/end, excl. lead pads)
+    };
+    static grid_info grid_tokens(int best_height, int best_width, int patch_size, int r);
+    static void solve_resize_ratio(int height, int width, int p, int r, int max_n_token, int & best_height, int & best_width);
+    static void safe_resize(int height, int width, int & best_height, int & best_width, int p, int r, int max_n_token);
+};
+
 // custom llava-uhd slicing logic for MiniCPM-V
 struct mtmd_image_preprocessor_minicpmv : mtmd_image_preprocessor_llava_uhd {
     using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
@@ -145,7 +161,10 @@ struct mtmd_image_preprocessor_lfm2 : mtmd_image_preprocessor_llava_uhd {
     static constexpr int   tile_size            = 512;
 
     using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
     slice_instructions get_slice_instructions(const clip_image_size & original_size) override;
+
+    static bool should_tile(const clip_hparams & hparams, const clip_image_size & original_size);
 
 private:
     clip_image_size find_closest_aspect_ratio(

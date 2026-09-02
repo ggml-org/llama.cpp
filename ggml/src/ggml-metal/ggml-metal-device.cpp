@@ -1,6 +1,7 @@
 #include "ggml-metal-device.h"
 
 #include "ggml-metal-impl.h"
+#include "ggml-metal-tuning.h"
 
 #include "ggml-impl.h"
 
@@ -17,10 +18,10 @@ struct ggml_metal_device_deleter {
 
 typedef std::unique_ptr<ggml_metal_device, ggml_metal_device_deleter> ggml_metal_device_ptr;
 
-ggml_metal_device_t ggml_metal_device_get(int device) {
+ggml_metal_device_t ggml_metal_device_get(int device, int n_devices) {
     static std::vector<ggml_metal_device_ptr> devs;
 
-    devs.emplace_back(ggml_metal_device_init(device));
+    devs.emplace_back(ggml_metal_device_init(device, n_devices));
 
     return devs.back().get();
 }
@@ -317,6 +318,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_glu(ggml_metal_l
                 case GGML_GLU_OP_SWIGLU_OAI:   op_str = "swiglu_oai";   break;
                 case GGML_GLU_OP_GEGLU_ERF:    op_str = "geglu_erf";    break;
                 case GGML_GLU_OP_GEGLU_QUICK:  op_str = "geglu_quick";  break;
+                case GGML_GLU_OP_SWIGLU_CLAMP: op_str = "swiglu_clamp"; break;
                 default: GGML_ABORT("fatal error");
             } break;
         default: GGML_ABORT("fatal error");
@@ -571,7 +573,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_conv_batched
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan(ggml_metal_library_t lib, const ggml_tensor * op)  {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan(ggml_metal_library_t lib, const ggml_tensor * op, bool tail)  {
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
 
     char base[256];
@@ -579,7 +581,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan(ggml_me
 
     const int nsg = (ne00 + 31)/32;
 
-    snprintf(base, 256, "kernel_ssm_scan_%s", ggml_type_name(op->src[0]->type));
+    snprintf(base, 256, "kernel_ssm_scan_%s%s", ggml_type_name(op->src[0]->type), tail ? "_tail" : "");
     snprintf(name, 256, "%s_nsg=%d", base, nsg);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
@@ -592,7 +594,28 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan(ggml_me
     // - sgptg floats for shared_x_dt (nsg)
     // - sgptg floats for shared_dA (nsg)
     // Total: nsg * (32 + 2) floats
-    res.smem = (32 + 2)*sizeof(float)*nsg;
+    res.smem = GGML_PAD((32 + 2)*sizeof(float)*nsg, 16);
+
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan_ssd_mma(ggml_metal_library_t lib, const ggml_tensor * op)  {
+    char base[256];
+    char name[256];
+
+    snprintf(base, 256, "kernel_ssm_scan_ssd_mma_%s", ggml_type_name(op->src[0]->type));
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    // acs/exp(acs)/state-decay vectors + dtX + SAM rows + two 8x8 tiles per simdgroup
+    res.smem = (3*OP_SSM_SCAN_SSD_CS +
+                OP_SSM_SCAN_SSD_CS*OP_SSM_SCAN_SSD_HD +
+                OP_SSM_SCAN_SSD_NSG*8*OP_SSM_SCAN_SSD_CS +
+                OP_SSM_SCAN_SSD_NSG*2*8*8)*sizeof(float);
 
     return res;
 }
@@ -1007,6 +1030,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id_map0(g
     }
 
     res.smem = (size_t) ne02*ne20*sizeof(uint16_t);
+    res.smem = GGML_PAD(res.smem, 16);
 
     return res;
 }
@@ -1312,7 +1336,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_fwht(ggml_metal_
     return res;
 }
 
-// note: reuse the argsort kernel for top_k
+// note: reuse the argsort kernel for the bitonic top_k fallback
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k(ggml_metal_library_t lib, const ggml_tensor * op) {
     assert(op->op == GGML_OP_TOP_K);
 
@@ -1330,6 +1354,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k(ggml_metal
     };
 
     snprintf(base, 256, "kernel_argsort_%s_%s_%s", ggml_type_name(op->src[0]->type), ggml_type_name(op->type), order_str);
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k_radix(ggml_metal_library_t lib, const ggml_tensor * op) {
+    assert(op->op == GGML_OP_TOP_K);
+
+    char base[256];
+    char name[256];
+
+    snprintf(base, 256, "kernel_top_k_%s_%s", ggml_type_name(op->src[0]->type), ggml_type_name(op->type));
     snprintf(name, 256, "%s", base);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
@@ -1409,6 +1450,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_p
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_kv_f16(
+        ggml_metal_library_t lib,
+        const ggml_tensor * op) {
+    assert(op->op == GGML_OP_FLASH_ATTN_EXT);
+
+    char base[256];
+
+    snprintf(base, 256, "kernel_flash_attn_ext_kv_%s_f16", ggml_type_name(op->src[1]->type));
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, base);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, base, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_blk(
         ggml_metal_library_t lib,
         const struct ggml_tensor * op,
@@ -1460,7 +1518,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         bool    has_bias,
         bool    has_scap,
         bool    has_kvpad,
-        int32_t nsg) {
+        int32_t nsg,
+        bool    use_kv_f16,
+        int32_t ns10,
+        int32_t ns20) {
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
     char base[256];
@@ -1469,15 +1530,14 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     const int32_t dk = (int32_t) op->src[1]->ne[0];
     const int32_t dv = (int32_t) op->src[2]->ne[0];
 
-    const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
-    const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
+    const char * type = use_kv_f16 ? "f16" : ggml_type_name(op->src[1]->type);
 
     // do bounds checks for the mask?
     const bool bc_mask = op->src[3] && (op->src[3]->ne[1] % 8 != 0);
 
     snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
             "flash_attn_ext",
-            ggml_type_name(op->src[1]->type),
+            type,
             dk,
             dv);
 
@@ -1525,8 +1585,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
         bool    has_bias,
         bool    has_scap,
         bool    has_kvpad,
+        int32_t nqpsg,
+        int32_t ne,
         int32_t nsg,
-        int32_t nwg) {
+        int32_t nwg,
+        bool    use_kv_f16,
+        int32_t ns10,
+        int32_t ns20) {
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
     char base[256];
@@ -1535,14 +1600,19 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
     const int32_t dk = (int32_t) op->src[1]->ne[0];
     const int32_t dv = (int32_t) op->src[2]->ne[0];
 
-    const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
-    const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
+    const char * type = use_kv_f16 ? "f16" : ggml_type_name(op->src[1]->type);
 
-    snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
+    char qne_suffix[16] = {0};
+    if (!(nqpsg == 1 && ne == ggml_metal_tuning::fa_vec_baseline_ne(dk, dv))) {
+        snprintf(qne_suffix, sizeof(qne_suffix), "_q%d_ne%d", nqpsg, ne);
+    }
+
+    snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d%s",
             "flash_attn_ext_vec",
-            ggml_type_name(op->src[1]->type),
+            type,
             dk,
-            dv);
+            dv,
+            qne_suffix);
 
     snprintf(name, 256, "%s_mask=%d_sink=%d_bias=%d_scap=%d_kvpad=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
             base,

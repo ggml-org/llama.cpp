@@ -21,6 +21,7 @@ on:
     paths: [
       '.github/workflows/build-cpu.yml',
       '.github/workflows/build-cmake-pkg.yml',
+      'ggml/src/ggml-rpc/**',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -61,7 +62,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: cpu-${{ matrix.os }}
           evict-old-files: 1d
@@ -96,8 +97,7 @@ jobs:
           cmake -B build \
             -DGGML_NATIVE=OFF \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DGGML_RPC=ON \
-            -DGGML_NATIVE=OFF
+            -DGGML_RPC=ON
           time cmake --build build --config Release -j $(nproc)
 
       - name: Test
@@ -117,29 +117,38 @@ jobs:
           ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
           ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
+      # note: real deletion only on push to master (same condition as the ccache save),
+      #       dry-run otherwise (the token is read-only on PRs from forks)
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: cpu-${{ matrix.os }}
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+
   windows:
+    name: windows / ${{ matrix.build }}
     runs-on: windows-2025
 
     env:
       OPENBLAS_VERSION: 0.3.23
       SDE_VERSION: 9.33.0-2024-01-07
-      VULKAN_VERSION: 1.4.357.0
 
     strategy:
       matrix:
         include:
           - build: 'x64-cpu-static'
             arch: 'x64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=OFF'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DGGML_OPENMP_FETCH=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=OFF'
           - build: 'x64-openblas'
             arch: 'x64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
-          - build: 'x64-vulkan'
-            arch: 'x64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
           - build: 'arm64'
             arch: 'arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DGGML_OPENMP_FETCH=ON -DLLAMA_BUILD_SERVER=ON'
 
     steps:
       - name: Clone
@@ -147,7 +156,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: cpu-windows-2025-${{ matrix.build }}
           variant: ccache
@@ -166,15 +175,6 @@ jobs:
           $msvc = $(join-path $vcdir $('VC\Tools\MSVC\'+$(gc -raw $(join-path $vcdir 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()))
           $lib =  $(join-path $msvc 'bin\Hostx64\x64\lib.exe')
           & $lib /machine:x64 "/def:${env:RUNNER_TEMP}/openblas/lib/libopenblas.def" "/out:${env:RUNNER_TEMP}/openblas/lib/openblas.lib" /name:openblas.dll
-
-      - name: Install Vulkan SDK
-        id: get_vulkan
-        if: ${{ matrix.build == 'x64-vulkan' }}
-        run: |
-          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
-          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
-          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
-          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
 
       - name: Install Ninja
         id: install_ninja
@@ -215,3 +215,13 @@ jobs:
       #     cd build
       #     $env:LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR = 1
       #     & $sde -future -- ctest -L main -C Release --verbose --timeout 900
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: cpu-windows-2025-${{ matrix.build }}
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

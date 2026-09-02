@@ -1006,12 +1006,16 @@ class ModelBase:
                     else:
                         raise ValueError(f"Unknown file type: {self.ftype.name}")
 
+                # a chunked tensor quantizes as one chunk at a time, while it is written
+                quantize = data.quantize if isinstance(data, gguf.LazyChunkedTensor) else (
+                    lambda qtype, d=data: gguf.quants.quantize(d, qtype))
+
                 try:
-                    data = gguf.quants.quantize(data, data_qtype)
+                    data = quantize(data_qtype)
                 except gguf.QuantError as e:
                     logger.warning("%s, %s", e, "falling back to F16")
                     data_qtype = gguf.GGMLQuantizationType.F16
-                    data = gguf.quants.quantize(data, data_qtype)
+                    data = quantize(data_qtype)
 
                 shape = gguf.quant_shape_from_byte_shape(data.shape, data_qtype) if data.dtype == np.uint8 else data.shape
 
@@ -1146,6 +1150,14 @@ class ModelBase:
             model_type = ModelType.MMPROJ if modelcls.model_arch == gguf.MODEL_ARCH.MMPROJ else ModelType.TEXT
             for name in names:
                 cls._model_classes[model_type][name] = modelcls
+            return modelcls
+        return func
+
+    @classmethod
+    def example(cls, *hf_repos: str) -> Callable[[AnyModel], AnyModel]:
+        del hf_repos  # unused
+
+        def func(modelcls: AnyModel) -> AnyModel:
             return modelcls
         return func
 

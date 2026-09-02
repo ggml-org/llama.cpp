@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 
-#define RPC_PROTO_MAJOR_VERSION    5
+#define RPC_PROTO_MAJOR_VERSION    6
 #define RPC_PROTO_MINOR_VERSION    0
 #define RPC_PROTO_PATCH_VERSION    0
 
