@@ -155,6 +155,19 @@ llama_memory_context_ptr llama_kv_cache_dsa::init_update(llama_context * lctx, b
     return std::make_unique<llama_kv_cache_dsa_context>(this, lctx, optimize);
 }
 
+bool llama_kv_cache_dsa::try_lazy_quantize(llama_context * lctx) {
+    const bool mla = kv_mla->try_lazy_quantize(lctx);
+    const bool lid = kv_lid->try_lazy_quantize(lctx);
+
+    GGML_ASSERT(mla == lid);
+
+    return mla || lid;
+}
+
+bool llama_kv_cache_dsa::get_has_lazy_quant() const {
+    return kv_mla->get_has_lazy_quant() || kv_lid->get_has_lazy_quant();
+}
+
 bool llama_kv_cache_dsa::get_can_shift() const {
     return kv_mla->get_can_shift() &&
            kv_lid->get_can_shift() &&

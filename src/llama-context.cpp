@@ -1740,6 +1740,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     sched_reserve();
 
     bool did_optimize = false;
+    bool did_lazy_quantize = false;
 
     // handle any pending shifts/copies
     memory_update(false);
@@ -1769,6 +1770,19 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
                         if (memory_update(true)) {
                             LLAMA_LOG_DEBUG("%s: retrying batch size %d after cache optimization\n", __func__, balloc->get_n_tokens());
+
+                            continue;
+                        }
+                    }
+
+                    if (!did_lazy_quantize) {
+                        did_lazy_quantize = true;
+
+                        if (memory->try_lazy_quantize(this)) {
+                            sched_need_reserve = true;
+                            sched_reserve();
+
+                            LLAMA_LOG_DEBUG("%s: retrying batch size %d after lazy KV cache quantization\n", __func__, balloc->get_n_tokens());
 
                             continue;
                         }
@@ -3309,7 +3323,9 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
     if (memory) {
         LLAMA_LOG_DEBUG("%s: - reading memory module\n", __func__);
 
+        const bool had_lazy_quant = memory->get_has_lazy_quant();
         memory->state_read(io);
+        sched_need_reserve = sched_need_reserve || (had_lazy_quant && !memory->get_has_lazy_quant());
     }
 
     return io.n_bytes();
@@ -3325,7 +3341,9 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     if (memory) {
+        const bool had_lazy_quant = memory->get_has_lazy_quant();
         memory->state_read(io, seq_id, flags);
+        sched_need_reserve = sched_need_reserve || (had_lazy_quant && !memory->get_has_lazy_quant());
     }
 
     return io.n_bytes();

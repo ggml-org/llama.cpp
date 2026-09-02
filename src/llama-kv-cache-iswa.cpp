@@ -250,6 +250,17 @@ llama_memory_context_ptr llama_kv_cache_iswa::init_update(llama_context * lctx, 
     return std::make_unique<llama_kv_cache_iswa_context>(this, lctx, optimize);
 }
 
+bool llama_kv_cache_iswa::try_lazy_quantize(llama_context * lctx) {
+    const bool base = kv_base->try_lazy_quantize(lctx);
+    const bool swa  = kv_swa ->try_lazy_quantize(lctx);
+
+    return base || swa;
+}
+
+bool llama_kv_cache_iswa::get_has_lazy_quant() const {
+    return kv_base->get_has_lazy_quant() || kv_swa->get_has_lazy_quant();
+}
+
 bool llama_kv_cache_iswa::get_can_shift() const {
     return kv_base->get_can_shift() &&
            kv_swa->get_can_shift() &&

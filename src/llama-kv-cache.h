@@ -131,6 +131,10 @@ public:
 
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
+    bool try_lazy_quantize(llama_context * lctx) override;
+
+    bool get_has_lazy_quant() const override;
+
     bool get_can_shift() const override;
 
     void clear(bool data) override;
@@ -255,8 +259,14 @@ private:
         ggml_tensor * k;
         ggml_tensor * v;
 
+        ggml_tensor * k_target;
+        ggml_tensor * v_target;
+
         std::vector<ggml_tensor *> k_stream;
         std::vector<ggml_tensor *> v_stream;
+
+        std::vector<ggml_tensor *> k_stream_target;
+        std::vector<ggml_tensor *> v_stream_target;
     };
 
     bool v_trans = true;  // the value tensor is transposed
@@ -266,6 +276,9 @@ private:
 
     // required padding
     const uint32_t n_pad = 1;
+
+    uint32_t kv_size_target = 0;
+    bool lazy_quant = false;
 
     // SWA
     const uint32_t n_swa = 0;

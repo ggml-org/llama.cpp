@@ -58,6 +58,31 @@ static void ggml_gen_hadamard(ggml_tensor * tensor) {
     }
 }
 
+static ggml_tensor * llama_kv_cache_view_as_3d(
+        ggml_context * ctx,
+        ggml_tensor  * src,
+        ggml_type      type,
+        int64_t        ne0,
+        int64_t        ne1,
+        int64_t        ne2) {
+    ggml_tensor * result = ggml_new_tensor_3d(ctx, type, ne0, ne1, ne2);
+
+    GGML_ASSERT(result->data == nullptr);
+    GGML_ASSERT(result->view_src == nullptr);
+    GGML_ASSERT(ggml_nbytes(result) <= ggml_nbytes(src));
+
+    result->view_src = src;
+
+    return result;
+}
+
+static uint32_t llama_kv_cache_q8_f16_size(uint32_t kv_size, uint32_t n_pad) {
+    const uint64_t num = (uint64_t) kv_size * ggml_type_size(GGML_TYPE_Q8_0);
+    const uint64_t den = (uint64_t) ggml_blck_size(GGML_TYPE_Q8_0) * sizeof(ggml_fp16_t);
+
+    return (num / den / n_pad) * n_pad;
+}
+
 //
 // llama_kv_cache
 //
@@ -99,6 +124,33 @@ llama_kv_cache::llama_kv_cache(
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
+    kv_size_target = kv_size;
+
+    const char * LLAMA_KV_CACHE_LAZY_QUANT = getenv("LLAMA_KV_CACHE_LAZY_QUANT");
+    const bool lazy_requested = LLAMA_KV_CACHE_LAZY_QUANT ? atoi(LLAMA_KV_CACHE_LAZY_QUANT) != 0 : false;
+    const bool may_share_cache = model.arch == LLM_ARCH_GEMMA4;
+
+    lazy_quant =
+        lazy_requested &&
+        type_k == GGML_TYPE_Q8_0 &&
+        type_v == GGML_TYPE_Q8_0 &&
+        !may_share_cache &&
+        !v_trans &&
+        n_stream == 1 &&
+        other == nullptr &&
+        !hparams.no_alloc;
+
+    if (lazy_quant) {
+        kv_size = llama_kv_cache_q8_f16_size(kv_size_target, std::max(n_pad, 256u));
+        if (kv_size == 0) {
+            lazy_quant = false;
+            kv_size = kv_size_target;
+        } else {
+            LLAMA_LOG_INFO("%s: lazy KV quantization enabled, f16 cells = %u, q8_0 cells = %u\n",
+                    __func__, kv_size, kv_size_target);
+        }
+    }
+
     const uint32_t n_layer = hparams.n_layer_all;
 
     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
@@ -114,7 +166,7 @@ llama_kv_cache::llama_kv_cache(
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
-                /*.mem_size   =*/ size_t(2u*(1 + n_stream)*n_layer*ggml_tensor_overhead()),
+                /*.mem_size   =*/ size_t(2u*(lazy_quant ? 2 : 1)*(1 + n_stream)*n_layer*ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -230,23 +282,43 @@ llama_kv_cache::llama_kv_cache(
         const bool has_k = true;
         const bool has_v = !is_mla;
 
-        ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
-        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
+        ggml_tensor * k_target = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size_target, n_stream) : nullptr;
+        ggml_tensor * v_target = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size_target, n_stream) : nullptr;
+
+        ggml_tensor * k = lazy_quant && has_k ?
+            llama_kv_cache_view_as_3d(ctx, k_target, GGML_TYPE_F16, n_embd_k_gqa, kv_size, n_stream) : k_target;
+        ggml_tensor * v = lazy_quant && has_v ?
+            llama_kv_cache_view_as_3d(ctx, v_target, GGML_TYPE_F16, n_embd_v_gqa, kv_size, n_stream) : v_target;
 
         has_k && ggml_format_name(k, "cache_%sk_l%d", name_tag, il);
         has_v && ggml_format_name(v, "cache_%sv_l%d", name_tag, il);
 
+        if (lazy_quant) {
+            has_k && ggml_format_name(k_target, "cache_%sk_l%d_target", name_tag, il);
+            has_v && ggml_format_name(v_target, "cache_%sv_l%d_target", name_tag, il);
+        }
+
         std::vector<ggml_tensor *> k_stream;
         std::vector<ggml_tensor *> v_stream;
+
+        std::vector<ggml_tensor *> k_stream_target;
+        std::vector<ggml_tensor *> v_stream_target;
 
         for (uint32_t s = 0; s < n_stream; ++s) {
             k_stream.push_back(has_k ? ggml_view_2d(ctx, k, n_embd_k_gqa, kv_size, k->nb[1], s*k->nb[2]) : nullptr);
             v_stream.push_back(has_v ? ggml_view_2d(ctx, v, n_embd_v_gqa, kv_size, v->nb[1], s*v->nb[2]) : nullptr);
+
+            k_stream_target.push_back(lazy_quant && has_k ?
+                ggml_view_2d(ctx, k_target, n_embd_k_gqa, kv_size_target, k_target->nb[1], s*k_target->nb[2]) :
+                k_stream.back());
+            v_stream_target.push_back(lazy_quant && has_v ?
+                ggml_view_2d(ctx, v_target, n_embd_v_gqa, kv_size_target, v_target->nb[1], s*v_target->nb[2]) :
+                v_stream.back());
         }
 
         map_layer_ids[il] = layers.size();
 
-        layers.push_back({ il, k, v, k_stream, v_stream, });
+        layers.push_back({ il, k, v, k_target, v_target, k_stream, v_stream, k_stream_target, v_stream_target, });
     }
 
     if (reuse) {
@@ -297,11 +369,13 @@ llama_kv_cache::llama_kv_cache(
     {
         const size_t memory_size_k = size_k_bytes();
         const size_t memory_size_v = size_v_bytes();
+        const ggml_type type_k_cur = layers.empty() ? type_k : layers[0].k->type;
+        const ggml_type type_v_cur = layers.empty() || !layers[0].v ? type_v : layers[0].v->type;
 
         LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
                 (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
-                ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
-                ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+                ggml_type_name(type_k_cur), (float)memory_size_k / (1024.0f * 1024.0f),
+                ggml_type_name(type_v_cur), (float)memory_size_v / (1024.0f * 1024.0f));
     }
 
     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
@@ -746,6 +820,88 @@ llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool 
     bool do_shift = get_has_shift();
 
     return std::make_unique<llama_kv_cache_context>(this, lctx, do_shift, std::move(sc_info));
+}
+
+static void llama_kv_cache_quantize_q8_0(ggml_tensor * src, ggml_tensor * dst, int64_t n_rows) {
+    GGML_ASSERT(src->type == GGML_TYPE_F16);
+    GGML_ASSERT(dst->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(src->ne[0] == dst->ne[0]);
+    GGML_ASSERT(src->ne[2] == 1 && dst->ne[2] == 1);
+    GGML_ASSERT(src->ne[3] == 1 && dst->ne[3] == 1);
+    GGML_ASSERT(n_rows <= src->ne[1]);
+
+    const int64_t n_per_row = src->ne[0];
+    const size_t src_row_size = ggml_row_size(src->type, n_per_row);
+    const size_t dst_row_size = ggml_row_size(dst->type, n_per_row);
+    const int64_t chunk_rows = 256;
+
+    std::vector<ggml_fp16_t> data_f16(chunk_rows*n_per_row);
+    std::vector<float>       data_f32(chunk_rows*n_per_row);
+    std::vector<uint8_t>     data_q8(chunk_rows*dst_row_size);
+
+    for (int64_t row = 0; row < n_rows; row += chunk_rows) {
+        const int64_t n = std::min(chunk_rows, n_rows - row);
+
+        ggml_backend_tensor_get(src, data_f16.data(), row*src_row_size, n*src_row_size);
+        ggml_fp16_to_fp32_row(data_f16.data(), data_f32.data(), n*n_per_row);
+
+        const size_t nbytes = ggml_quantize_chunk(
+                GGML_TYPE_Q8_0, data_f32.data(), data_q8.data(), 0, n, n_per_row, nullptr);
+
+        GGML_ASSERT(nbytes == (size_t) n*dst_row_size);
+
+        ggml_backend_tensor_set(dst, data_q8.data(), row*dst_row_size, nbytes);
+    }
+
+    const size_t converted_size = n_rows*dst_row_size;
+    if (converted_size < ggml_nbytes(dst)) {
+        ggml_backend_tensor_memset(dst, 0, converted_size, ggml_nbytes(dst) - converted_size);
+    }
+}
+
+bool llama_kv_cache::try_lazy_quantize(llama_context * lctx) {
+    if (!lazy_quant) {
+        return false;
+    }
+
+    const int64_t t_start = ggml_time_us();
+    const uint32_t kv_size_f16 = v_cells[0].size();
+    const uint32_t n_rows = v_cells[0].used_max_p1();
+
+    if (lctx) {
+        lctx->synchronize();
+    }
+
+    for (auto & layer : layers) {
+        llama_kv_cache_quantize_q8_0(layer.k, layer.k_target, n_rows);
+        if (layer.v) {
+            llama_kv_cache_quantize_q8_0(layer.v, layer.v_target, n_rows);
+        }
+
+        layer.k = layer.k_target;
+        layer.v = layer.v_target;
+
+        layer.k_stream = layer.k_stream_target;
+        layer.v_stream = layer.v_stream_target;
+    }
+
+    for (uint32_t s = 0; s < n_stream; ++s) {
+        const llama_kv_cells cells = v_cells[s].cp(0, v_cells[s].size());
+
+        v_cells[s].resize(kv_size_target);
+        v_cells[s].set(0, cells);
+    }
+
+    lazy_quant = false;
+
+    LLAMA_LOG_INFO("%s: converted %u populated f16 cells to q8_0 and expanded %u cells to %u in %.2f ms\n",
+            __func__, n_rows, kv_size_f16, kv_size_target, (ggml_time_us() - t_start)/1000.0);
+
+    return true;
+}
+
+bool llama_kv_cache::get_has_lazy_quant() const {
+    return lazy_quant;
 }
 
 llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
@@ -2174,6 +2330,10 @@ const slot_info_vec_t *   sinfos_in) {
 
         const uint32_t strm = seq_id == -1 ? s : seq_to_stream[seq_id];
 
+        if (lazy_quant && cell_count > v_cells[strm].size()) {
+            try_lazy_quantize(nullptr);
+        }
+
         slot_info sinfo;
 
         bool res = true;
@@ -2558,6 +2718,12 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
         // Read type of key
         int32_t k_type_i_ref;
         io.read(&k_type_i_ref, sizeof(k_type_i_ref));
+
+        if (lazy_quant && k_type_i_ref == (int32_t) layer.k_target->type) {
+            try_lazy_quantize(nullptr);
+            k = layer.k_stream[strm];
+        }
+
         const int32_t k_type_i = (int32_t) k->type;
         if (k_type_i != k_type_i_ref) {
             LLAMA_LOG_ERROR("%s: mismatched key type (%d != %d, layer %d)\n", __func__, k_type_i, k_type_i_ref, il);
