@@ -66,6 +66,9 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     }
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     hparams.set_swa_pattern(0);
+    // tokens of an image span attend bidirectionally to the whole span, the window only applies to older tokens
+    // ref: get_window_topk_idxs_visible in the reference impl
+    hparams.swa_full_non_causal = true;
     for (uint32_t il = hparams.n_layer(); il < hparams.n_layer_all; ++il) {
         hparams.is_swa_impl[il] = true;
     }
@@ -156,6 +159,8 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader & ml) {
         } else {
             layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, flags);
         }
+        // vision variant only: routing bias for image tokens
+        layer.ffn_exp_probs_b_vl = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B_VL, "bias", i), {n_expert}, flags | TENSOR_NOT_REQUIRED);
         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, flags);
 
         layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff_exp, n_expert}, flags);
@@ -1275,7 +1280,14 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
         const auto & layer = model.layers[il];
         ggml_tensor * selected_experts = nullptr;
         ggml_tensor * exp_probs_b = layer.ffn_exp_probs_b;
-        if ((uint32_t) il < hparams.dsv4_hash_layer_count) {
+
+        // may apply exp_probs_b_vl is input is from mtmd
+        const bool is_media = ubatch.embd != nullptr;
+        if (is_media) {
+            if (layer.ffn_exp_probs_b_vl) {
+                exp_probs_b = layer.ffn_exp_probs_b_vl;
+            }
+        } else if ((uint32_t) il < hparams.dsv4_hash_layer_count) {
             selected_experts = ggml_get_rows(ctx0, layer.ffn_gate_tid2eid, res->t_inp_tokens);
             exp_probs_b = nullptr;
         }

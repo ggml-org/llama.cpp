@@ -161,6 +161,10 @@ struct llama_hparams {
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
 
+    // deepseek4 vision: when decoding non-causally (multimodal input), SWA is not applied between tokens of the current ubatch (the image span); older tokens are still window-clipped
+    // for other models (like gemma 3, gemma 4): SWA is always applied to match transformers implementation
+    bool swa_full_non_causal = false;
+
     // if is_swa_impl[il] == 1, then layer il is SWA
     // if is_swa_impl[il] == 0, then layer il is dense (i.e. non-SWA)
     // by default, all layers are dense
