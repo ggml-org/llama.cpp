@@ -113,8 +113,8 @@ phi3                ,0   ,any     ,RMS_NORM+MUL                ,      5
 phimoe              ,1   ,any     ,RMS_NORM+MUL+ADD            ,      5
 plamo               ,0   ,any     ,ADD+ADD                     ,      2
 plamo               ,0   ,any     ,RMS_NORM+MUL                ,      3
-plamo2              ,0   ,any     ,RMS_NORM+MUL                ,     11
-plamo2              ,0   ,any     ,RMS_NORM+MUL+ADD            ,      3
+plamo2              ,0   ,any     ,RMS_NORM+MUL                ,     10
+plamo2              ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
 pockettts           ,0   ,any     ,NORM+MUL+ADD                ,      5
 qwen                ,0   ,any     ,RMS_NORM+MUL                ,      5
 qwen2               ,0   ,any     ,RMS_NORM+MUL                ,      5
