@@ -3,10 +3,10 @@
 #include "common.h"
 #include "llama.h"
 
-#include <string>
-#include <unordered_set>
 #include <list>
 #include <map>
+#include <string>
+#include <unordered_set>
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
@@ -31,11 +31,11 @@ enum server_task_type {
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
 enum task_response_type {
-    TASK_RESPONSE_TYPE_NONE, // llama.cpp native format
+    TASK_RESPONSE_TYPE_NONE,  // llama.cpp native format
     TASK_RESPONSE_TYPE_OAI_CHAT,
     TASK_RESPONSE_TYPE_OAI_CMPL,
     TASK_RESPONSE_TYPE_OAI_RESP,
-    TASK_RESPONSE_TYPE_OAI_ASR, // transcriptions API
+    TASK_RESPONSE_TYPE_OAI_ASR,  // transcriptions API
     TASK_RESPONSE_TYPE_OAI_EMBD,
     TASK_RESPONSE_TYPE_ANTHROPIC,
 };
@@ -50,19 +50,20 @@ enum stop_type {
 struct task_params {
     bool stream          = false;
     bool include_usage   = false;
-    bool cache_prompt    = true; // remember the prompt to avoid reprocessing all prompt
+    bool cache_prompt    = true;  // remember the prompt to avoid reprocessing all prompt
     bool return_tokens   = false;
     bool return_progress = false;
 
-    int32_t sse_ping_interval = 30; // seconds between SSE comment pings while the stream stays silent, -1 disables
+    int32_t sse_ping_interval = 30;  // seconds between SSE comment pings while the stream stays silent, -1 disables
 
-    int32_t n_keep    =  0; // number of tokens to keep from initial prompt
-    int32_t n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
-    int32_t n_predict = -1; // new tokens to predict
-    int32_t n_indent  =  0; // minimum line indentation for the generated text in number of whitespace characters
-    int32_t n_cmpl    =  1; // number of completions to generate from this prompt
+    int32_t n_keep = 0;              // number of tokens to keep from initial prompt
+    int32_t n_discard =
+        0;  // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
+    int32_t n_predict = -1;     // new tokens to predict
+    int32_t n_indent  = 0;      // minimum line indentation for the generated text in number of whitespace characters
+    int32_t n_cmpl    = 1;      // number of completions to generate from this prompt
 
-    int32_t n_cache_reuse = 0; // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
+    int32_t n_cache_reuse = 0;  // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
 
     // Per-request: number of leading prompt tokens that form a stable
     // prefix (system prompt + thread_summary). When set, the LCP matcher
@@ -71,10 +72,10 @@ struct task_params {
     // produces a high-similarity match. 0 = disabled (legacy behavior).
     int32_t prompt_stable_prefix_tokens = 0;
 
-    int64_t t_max_prompt_ms  = -1; // TODO: implement
-    int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
+    int64_t t_max_prompt_ms  = -1;  // TODO: implement
+    int64_t t_max_predict_ms = -1;  // if positive, limit the generation phase to this time limit
 
-    std::map<int, float> lora; // mapping adapter ID -> scale
+    std::map<int, float> lora;      // mapping adapter ID -> scale
 
     std::vector<std::string> antiprompt;
     std::vector<std::string> response_fields;
@@ -82,7 +83,7 @@ struct task_params {
     bool timings_per_token   = false;
     bool post_sampling_probs = false;
 
-    struct common_params_sampling sampling;
+    struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
 
     // response formatting
@@ -92,8 +93,8 @@ struct task_params {
     std::string        oaicompat_cmpl_id;
 
     // realtime control (SERVER_TASK_TYPE_CONTROL)
-    std::string        control_action;
-    std::string        control_cmpl_id;
+    std::string control_action;
+    std::string control_cmpl_id;
 
     // per-request parameters for chat parsing
     common_chat_parser_params chat_parser_params;
@@ -102,7 +103,7 @@ struct task_params {
     common_chat_msg_spans message_spans;
 
     // Embeddings
-    int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
+    int32_t embd_normalize = 2;  // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
@@ -112,39 +113,38 @@ struct task_params {
 struct task_result_state {
     // tracking diffs for partial tool calls
     std::vector<common_chat_msg_diff> diffs;
-    common_chat_parser_params chat_parser_params;
-    common_chat_msg chat_msg;
-    std::string generated_text; // append new chunks of generated text here
-    std::vector<std::string> generated_tool_call_ids;
-    std::unordered_set<size_t> sent_tool_call_names;
+    common_chat_parser_params         chat_parser_params;
+    common_chat_msg                   chat_msg;
+    std::string                       generated_text;  // append new chunks of generated text here
+    std::vector<std::string>          generated_tool_call_ids;
+    std::unordered_set<size_t>        sent_tool_call_names;
 
     // for OpenAI Responses and Anthropic streaming API:
     // track output item / content block state across chunks
     bool thinking_block_started = false;
-    bool text_block_started = false;
+    bool text_block_started     = false;
 
     // for OpenAI Responses streaming API
-    bool oai_resp_created = false;
+    bool              oai_resp_created = false;
     const std::string oai_resp_id;
     const std::string oai_resp_reasoning_id;
     const std::string oai_resp_message_id;
-    std::string oai_resp_fc_id; // function call ID for current args delta
+    std::string       oai_resp_fc_id;  // function call ID for current args delta
 
     task_result_state(const common_chat_parser_params & chat_parser_params);
 
     // parse partial tool calls and update the internal state
-    common_chat_msg update_chat_msg(
-        const std::string & text_added,
-        bool is_partial,
-        std::vector<common_chat_msg_diff> & diffs,
-        bool filter_tool_calls = false);
+    common_chat_msg update_chat_msg(const std::string &                 text_added,
+                                    bool                                is_partial,
+                                    std::vector<common_chat_msg_diff> & diffs,
+                                    bool                                filter_tool_calls = false);
 };
 
 struct server_task {
-    int id = -1; // to be filled by server_queue
+    int id = -1;  // to be filled by server_queue
 
     // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
-    size_t index = 0; // used when there are multiple prompts (batch request)
+    size_t index = 0;  // used when there are multiple prompts (batch request)
 
     // explicit, operator-declared user identity. empty = anonymous bucket.
     // validated against ^[a-zA-Z0-9\-_]+$ and <= 512 chars at request time.
@@ -156,7 +156,7 @@ struct server_task {
     int id_slot   = -1;
 
     // used by parallel sampling (multiple completions from same prompt)
-    int id_parent  = -1;
+    int                      id_parent = -1;
     // temporary store of child tasks for scheduling
     // note: accessing to elements is invalid after the task is moved to server_slot
     std::vector<server_task> child_tasks;
@@ -175,25 +175,24 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_SLOT_SAVE, SERVER_TASK_TYPE_SLOT_RESTORE, SERVER_TASK_TYPE_SLOT_ERASE
     struct slot_action {
-        int id_slot;
+        int         id_slot;
         std::string filename;
         std::string filepath;
     };
+
     slot_action slot_action;
 
     // used by SERVER_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
 
     // used by SERVER_TASK_TYPE_SET_LORA
-    std::map<int, float> set_lora; // mapping adapter ID -> scale
+    std::map<int, float> set_lora;  // mapping adapter ID -> scale
 
     server_task() = default;
 
     server_task(server_task_type type) : type(type) {}
 
-    int32_t n_tokens() const {
-        return tokens.size();
-    }
+    int32_t n_tokens() const { return tokens.size(); }
 
     bool need_embd() const {
         switch (type) {
@@ -225,12 +224,11 @@ struct server_task {
         }
     }
 
-    static task_params params_from_json_cmpl(
-        const llama_vocab * vocab,
-        const common_params & params_base,
-        const int n_ctx_slot,
-        const std::vector<llama_logit_bias> & logit_bias_eog,
-        const json & data);
+    static task_params params_from_json_cmpl(const llama_vocab *                   vocab,
+                                             const common_params &                 params_base,
+                                             const int                             n_ctx_slot,
+                                             const std::vector<llama_logit_bias> & logit_bias_eog,
+                                             const json &                          data);
 
     // validate a user_id against the allowed character set and length.
     // returns the input on success, throws std::invalid_argument on failure.
@@ -257,12 +255,12 @@ struct server_task {
         copy.params    = params;
         copy.type      = type;
         copy.tokens    = tokens.clone();
-        copy.id_slot   = -1; // child tasks cannot specify slot
+        copy.id_slot   = -1;  // child tasks cannot specify slot
 
         // use different sampling seed for each child
         // note: https://github.com/ggml-org/llama.cpp/pull/18700#discussion_r2675115723
         if (copy.params.sampling.seed != LLAMA_DEFAULT_SEED) {
-            copy.params.sampling.seed += (uint32_t)child_tasks.size() + 1;
+            copy.params.sampling.seed += (uint32_t) child_tasks.size() + 1;
         }
 
         child_tasks.push_back(std::move(copy));
@@ -270,71 +268,67 @@ struct server_task {
 
     // the task will be moved into queue, then onto slots
     // however, the state must be kept by caller (e.g., HTTP thread)
-    task_result_state create_state() const {
-        return task_result_state(params.chat_parser_params);
-    }
+    task_result_state create_state() const { return task_result_state(params.chat_parser_params); }
 
-    bool is_parent() const {
-        return child_tasks.size() > 0;
-    }
+    bool is_parent() const { return child_tasks.size() > 0; }
 
-    bool is_child() const {
-        return id_parent != -1;
-    }
+    bool is_child() const { return id_parent != -1; }
 };
 
 struct result_timings {
     int32_t cache_n = -1;
 
-    int32_t prompt_n = -1;
-    double prompt_ms = 0.0;
-    double prompt_per_token_ms = 0.0;
-    double prompt_per_second = 0.0;
+    int32_t prompt_n            = -1;
+    double  prompt_ms           = 0.0;
+    double  prompt_per_token_ms = 0.0;
+    double  prompt_per_second   = 0.0;
 
-    int32_t predicted_n = -1;
-    double predicted_ms = 0.0;
-    double predicted_per_token_ms = 0.0;
-    double predicted_per_second = 0.0;
+    int32_t predicted_n            = -1;
+    double  predicted_ms           = 0.0;
+    double  predicted_per_token_ms = 0.0;
+    double  predicted_per_second   = 0.0;
 
     // Optional speculative metrics - only included when > 0
-    int32_t draft_n = 0;
+    int32_t draft_n          = 0;
     int32_t draft_n_accepted = 0;
 
     json to_json() const;
 };
 
 struct result_prompt_progress {
-    int32_t total = 0;
-    int32_t cache = 0;
+    int32_t total     = 0;
+    int32_t cache     = 0;
     int32_t processed = 0;
-    int64_t time_ms = 0;
+    int64_t time_ms   = 0;
 
     json to_json() const;
 };
 
 struct server_task_result {
-    int id           = -1;
-    int id_slot      = -1;
+    int id      = -1;
+    int id_slot = -1;
 
     // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
-    size_t index = 0; // to be used for batched tasks
+    size_t index = 0;  // to be used for batched tasks
 
     virtual bool is_error() {
         // only used by server_task_result_error
         return false;
     }
+
     virtual bool is_stop() {
         // only used by server_task_result_cmpl_*
         return true;
     }
+
     virtual void update(task_result_state &) {
         // only used by server_task_result_cmpl_*
     }
-    virtual json to_json() = 0;
+
+    virtual json to_json()        = 0;
     virtual ~server_task_result() = default;
-    virtual server_task_result * clone() const {
-        GGML_ABORT("not implemented for this task type");
-    }
+
+    virtual server_task_result * clone() const { GGML_ABORT("not implemented for this task type"); }
 };
 
 // using shared_ptr for polymorphism of server_task_result
@@ -342,13 +336,15 @@ using server_task_result_ptr = std::unique_ptr<server_task_result>;
 
 struct completion_token_output {
     llama_token tok;
-    float prob;
+    float       prob;
     std::string text_to_send;
+
     struct prob_info {
         llama_token tok;
         std::string txt;
-        float prob;
+        float       prob;
     };
+
     std::vector<prob_info> probs;
 
     json to_json(bool post_sampling_probs) const;
@@ -358,30 +354,29 @@ struct completion_token_output {
     static float logarithm(float x);
 
     static std::vector<unsigned char> str_to_bytes(const std::string & str);
-
 };
 
 struct server_task_result_cmpl_final : server_task_result {
-    std::string content;
+    std::string  content;
     llama_tokens tokens;
 
-    bool stream;
-    bool include_usage;
+    bool           stream;
+    bool           include_usage;
     result_timings timings;
-    std::string prompt;
+    std::string    prompt;
 
-    bool truncated;
-    int32_t n_decoded;
-    int32_t n_prompt_tokens;
-    int32_t n_prompt_tokens_cache;
-    int32_t n_tokens_cached;
-    bool has_new_line;
+    bool        truncated;
+    int32_t     n_decoded;
+    int32_t     n_prompt_tokens;
+    int32_t     n_prompt_tokens_cache;
+    int32_t     n_tokens_cached;
+    bool        has_new_line;
     std::string stopping_word;
-    stop_type stop = STOP_TYPE_NONE;
+    stop_type   stop = STOP_TYPE_NONE;
 
-    bool post_sampling_probs;
+    bool                                 post_sampling_probs;
     std::vector<completion_token_output> probs_output;
-    std::vector<std::string>  response_fields;
+    std::vector<std::string>             response_fields;
 
     task_params generation_params;
 
@@ -390,10 +385,10 @@ struct server_task_result_cmpl_final : server_task_result {
     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;
-    common_chat_msg    oaicompat_msg; // to be populated by update()
+    common_chat_msg    oaicompat_msg;                       // to be populated by update()
 
-    std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
-    bool is_updated = false;
+    std::vector<common_chat_msg_diff> oaicompat_msg_diffs;  // to be populated by update()
+    bool                              is_updated = false;
 
     // for OpenAI Responses API
     std::string oai_resp_id;
@@ -401,18 +396,18 @@ struct server_task_result_cmpl_final : server_task_result {
     std::string oai_resp_message_id;
 
     virtual bool is_stop() override {
-        return true; // in stream mode, final responses are considered stop
+        return true;  // in stream mode, final responses are considered stop
     }
 
     virtual json to_json() override;
 
     virtual void update(task_result_state & state) override {
-        is_updated = true;
+        is_updated    = true;
         oaicompat_msg = state.update_chat_msg(content, false, oaicompat_msg_diffs);
 
-        oai_resp_id = state.oai_resp_id;
+        oai_resp_id           = state.oai_resp_id;
         oai_resp_reasoning_id = state.oai_resp_reasoning_id;
-        oai_resp_message_id = state.oai_resp_message_id;
+        oai_resp_message_id   = state.oai_resp_message_id;
     }
 
     json to_json_non_oaicompat();
@@ -444,28 +439,28 @@ struct server_task_result_cmpl_partial : server_task_result {
     int32_t n_prompt_tokens;
     int32_t n_prompt_tokens_cache;
 
-    bool post_sampling_probs;
-    bool is_progress = false;
-    bool is_begin = false; // whether to send 200 status to HTTP client (begin of SSE stream)
-                           // ref: https://github.com/ggml-org/llama.cpp/pull/23884
+    bool                    post_sampling_probs;
+    bool                    is_progress = false;
+    bool                    is_begin    = false;  // whether to send 200 status to HTTP client (begin of SSE stream)
+                                                  // ref: https://github.com/ggml-org/llama.cpp/pull/23884
     completion_token_output prob_output;
-    result_timings timings;
-    result_prompt_progress progress;
+    result_timings          timings;
+    result_prompt_progress  progress;
 
     // response formatting
-    bool               verbose  = false;
-    task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
-    std::string        oaicompat_model;
-    std::string        oaicompat_cmpl_id;
-    std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
-    bool is_updated = false;
+    bool                              verbose  = false;
+    task_response_type                res_type = TASK_RESPONSE_TYPE_NONE;
+    std::string                       oaicompat_model;
+    std::string                       oaicompat_cmpl_id;
+    std::vector<common_chat_msg_diff> oaicompat_msg_diffs;  // to be populated by update()
+    bool                              is_updated = false;
 
     // Streaming state copied from task_result_state for this chunk
     bool thinking_block_started = false;
     bool text_block_started     = false;
 
     // for OpenAI Responses API
-    bool oai_resp_created = false;
+    bool        oai_resp_created = false;
     std::string oai_resp_id;
     std::string oai_resp_reasoning_id;
     std::string oai_resp_message_id;
@@ -475,7 +470,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     bool anthropic_has_reasoning = false;
 
     virtual bool is_stop() override {
-        return false; // in stream mode, partial responses are not considered stop
+        return false;  // in stream mode, partial responses are not considered stop
     }
 
     virtual void update(task_result_state & state) override;
@@ -519,24 +514,22 @@ struct server_task_result_rerank : server_task_result {
 };
 
 struct server_task_result_error : server_task_result {
-    error_type err_type = ERROR_TYPE_SERVER;
+    error_type  err_type = ERROR_TYPE_SERVER;
     std::string err_msg;
 
     // for ERROR_TYPE_EXCEED_CONTEXT_SIZE
     int32_t n_prompt_tokens = 0;
     int32_t n_ctx           = 0;
 
-    virtual bool is_error() override {
-        return true;
-    }
+    virtual bool is_error() override { return true; }
 
     virtual json to_json() override;
 };
 
 struct server_task_result_metrics : server_task_result {
-    int n_idle_slots;
-    int n_processing_slots;
-    int n_tasks_deferred;
+    int     n_idle_slots;
+    int     n_processing_slots;
+    int     n_tasks_deferred;
     int64_t t_start;
 
     // TODO: somehow reuse server_metrics in the future, instead of duplicating the fields
@@ -556,9 +549,9 @@ struct server_task_result_metrics : server_task_result {
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
 
-    uint64_t n_draft_tokens_total      = 0;
-    uint64_t n_draft_accepted_total    = 0;
-    uint64_t n_draft_verif_steps_total = 0;
+    uint64_t              n_draft_tokens_total      = 0;
+    uint64_t              n_draft_accepted_total    = 0;
+    uint64_t              n_draft_verif_steps_total = 0;
     std::vector<uint64_t> n_accepted_per_pos_total;
 
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
@@ -566,11 +559,13 @@ struct server_task_result_metrics : server_task_result {
     json slots_data = json::array();
 
     virtual json to_json() override;
+
+    virtual server_task_result * clone() const override { return new server_task_result_metrics(*this); }
 };
 
 struct server_task_result_slot_save_load : server_task_result {
     std::string filename;
-    bool is_save; // true = save, false = load
+    bool        is_save;  // true = save, false = load
 
     size_t n_tokens;
     size_t n_bytes;
@@ -587,10 +582,12 @@ struct server_task_result_slot_erase : server_task_result {
 
 struct server_task_result_control : server_task_result {
     bool        success = false;
-    std::string message; // optional detail when success is false
+    std::string message;  // optional detail when success is false
 
     virtual json to_json() override {
-        json out = json { { "success", success } };
+        json out = json{
+            { "success", success }
+        };
         if (!message.empty()) {
             out["message"] = message;
         }
@@ -601,9 +598,10 @@ struct server_task_result_control : server_task_result {
 struct server_task_result_get_lora : server_task_result {
     struct lora {
         common_adapter_lora_info info;
-        std::string  alora_invocation_string;
-        llama_tokens alora_invocation_tokens;
+        std::string              alora_invocation_string;
+        llama_tokens             alora_invocation_tokens;
     };
+
     std::vector<lora> loras;
 
     virtual json to_json() override;
@@ -623,12 +621,10 @@ struct server_prompt {
         checkpoints.clear();
     }
 
-    int n_tokens() const {
-        return tokens.size();
-    }
+    int n_tokens() const { return tokens.size(); }
 
     server_prompt clone() const {
-        return server_prompt {
+        return server_prompt{
             tokens.clone(),
             checkpoints,
         };
@@ -639,13 +635,11 @@ struct server_prompt_data {
     std::vector<uint8_t> main;
     std::vector<uint8_t> drft;
 
-    size_t size() const {
-        return main.size() + drft.size();
-    }
+    size_t size() const { return main.size() + drft.size(); }
 };
 
 struct server_prompt_cache_state {
-    server_prompt prompt;
+    server_prompt      prompt;
     server_prompt_data data;
 
     // timestamp of last access (used for smarter cache eviction)
@@ -664,7 +658,7 @@ struct server_prompt_cache_state {
 
 struct server_prompt_cache {
     server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
-        this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
+        this->limit_size   = 1024ull * 1024ull * (limit_size_mib < 0 ? 0 : limit_size_mib);
         this->limit_tokens = limit_tokens;
     }
 
@@ -682,7 +676,11 @@ struct server_prompt_cache {
 
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+    bool load(server_prompt &       prompt,
+              const server_tokens & tokens_new,
+              llama_context *       ctx_tgt,
+              llama_context *       ctx_dft,
+              int32_t               id_slot);
 
     // update cache, evicting entries that exceed memory limits
     // tokens_ref: the incoming task tokens, used to compute overlap for smarter eviction
@@ -693,7 +691,7 @@ struct server_prompt_cache {
     // Returns true if an entry was evicted, false if cache is empty.
     bool evict(const server_tokens * tokens_ref = nullptr);
 
-private:
+  private:
     // Find the least valuable cache entry to evict.
     // Scores entries by: recency (older = more evictable), size (larger = more evictable),
     // and overlap with tokens_ref (less overlap = more evictable).
@@ -704,8 +702,8 @@ private:
 // used exclusively by router mode
 struct server_task_result_router : server_task_result {
     json data;
+
     virtual json to_json() override { return data; }
-    virtual server_task_result * clone() const override {
-        return new server_task_result_router(*this);
-    }
+
+    virtual server_task_result * clone() const override { return new server_task_result_router(*this); }
 };

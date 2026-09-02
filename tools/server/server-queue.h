@@ -5,24 +5,24 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
-#include <vector>
 #include <unordered_set>
+#include <vector>
 
 // struct for managing server tasks
 // in most cases, use server_response_reader to post new tasks and retrieve results
 struct server_queue {
-private:
-    int id = 0;
-    bool running  = false;
-    bool sleeping = false;
-    bool req_stop_sleeping = false;
-    int64_t time_last_task = 0;
+  private:
+    int     id                = 0;
+    bool    running           = false;
+    bool    sleeping          = false;
+    bool    req_stop_sleeping = false;
+    int64_t time_last_task    = 0;
 
     // queues
     std::deque<server_task> queue_tasks;
     std::deque<server_task> queue_tasks_deferred;
 
-public:
+  public:
     // mutable so const server_context_impl methods (e.g. is_user_at_cap)
     // can lock it for read-side cap checks. locking is the synchronization
     // point; this is the standard 'mutable mutex' idiom. made public
@@ -30,7 +30,7 @@ public:
     // this class.
     mutable std::mutex mutex_tasks;
 
-private:
+  private:
     std::condition_variable condition_tasks;
 
     // callback functions
@@ -38,7 +38,7 @@ private:
     std::function<void(void)>           callback_update_slots;
     std::function<void(bool)>           callback_sleeping_state;
 
-public:
+  public:
     // Add a new task to the end of the queue
     int post(server_task && task, bool front = false);
 
@@ -94,21 +94,17 @@ public:
     //
 
     // Register function to process a new task
-    void on_new_task(std::function<void(server_task &&)> callback) {
-        callback_new_task = std::move(callback);
-    }
+    void on_new_task(std::function<void(server_task &&)> callback) { callback_new_task = std::move(callback); }
 
     // Register the function to be called when all slots data is ready to be processed
-    void on_update_slots(std::function<void(void)> callback) {
-        callback_update_slots = std::move(callback);
-    }
+    void on_update_slots(std::function<void(void)> callback) { callback_update_slots = std::move(callback); }
 
     // Register callback for sleeping state change; multiple callbacks are allowed
     // note: when entering sleeping state, the callback is called AFTER sleeping is set to true
     //       when leaving sleeping state, the callback is called BEFORE sleeping is set to false
     void on_sleeping_state(std::function<void(bool)> callback) {
         if (callback_sleeping_state) {
-            auto prev_callback = std::move(callback_sleeping_state);
+            auto prev_callback      = std::move(callback_sleeping_state);
             callback_sleeping_state = [prev_callback, callback](bool sleeping) {
                 prev_callback(sleeping);
                 callback(sleeping);
@@ -118,14 +114,14 @@ public:
         }
     }
 
-private:
+  private:
     void cleanup_pending_task(int id_target);
 };
 
 // struct for managing server responses
 // in most cases, use server_response_reader to retrieve results
 struct server_response {
-private:
+  private:
     bool running = true;
 
     // for keeping track of all tasks waiting for the result
@@ -134,10 +130,10 @@ private:
     // the main result queue (using ptr for polymorphism)
     std::vector<server_task_result_ptr> queue_results;
 
-    std::mutex mutex_results;
+    std::mutex              mutex_results;
     std::condition_variable condition_results;
 
-public:
+  public:
     // add the id_task to the list of tasks waiting for response
     void add_waiting_task_id(int id_task);
 
@@ -166,8 +162,42 @@ public:
     // (used by router mode)
     void broadcast(server_task_result_ptr && result);
 
+    // check if there are any waiting tasks
+    bool has_waiting_tasks() {
+        std::unique_lock<std::mutex> lock(mutex_results);
+        return !waiting_task_ids.empty();
+    }
+
     // terminate the waiting loop
     void terminate();
+};
+
+// Generic RAII client wrapper for server_response SSE streams
+struct server_sse_client {
+    server_response & queue_results;
+    int               client_id;
+
+    server_sse_client(server_response & q) : queue_results(q) {
+        static std::atomic<int> sse_client_id_counter{ 1000000 };
+        client_id = sse_client_id_counter.fetch_add(1, std::memory_order_relaxed);
+        queue_results.add_waiting_task_id(client_id);
+    }
+
+    ~server_sse_client() { queue_results.remove_waiting_task_id(client_id); }
+
+    // return nullptr if should_stop() is true before receiving a result
+    server_task_result_ptr next(const std::function<bool()> & should_stop, int polling_seconds = 1) {
+        while (true) {
+            server_task_result_ptr result = queue_results.recv_with_timeout({ client_id }, polling_seconds);
+            if (result == nullptr) {
+                if (should_stop && should_stop()) {
+                    return nullptr;
+                }
+            } else {
+                return result;
+            }
+        }
+    }
 };
 
 // RAII wrapper to make working with server_queue and server_response easier
@@ -175,26 +205,25 @@ public:
 // support pooling connection state and aggregating multiple results
 struct server_response_reader {
     std::unordered_set<int> id_tasks;
-    server_queue & queue_tasks;
-    server_response & queue_results;
-    size_t received_count = 0;
-    bool cancelled = false;
-    int polling_interval_seconds;
+    server_queue &          queue_tasks;
+    server_response &       queue_results;
+    size_t                  received_count = 0;
+    bool                    cancelled      = false;
+    int                     polling_interval_seconds;
 
     // tracking generation state and partial tool calls
     // only used by streaming completions
     std::vector<task_result_state> states;
 
     // should_stop function will be called each polling_interval_seconds
-    server_response_reader(server_queue & queue_tasks, server_response & queue_results, int polling_interval_seconds)
-        : queue_tasks(queue_tasks), queue_results(queue_results), polling_interval_seconds(polling_interval_seconds) {}
-    ~server_response_reader() {
-        stop();
-    }
+    server_response_reader(server_queue & queue_tasks, server_response & queue_results, int polling_interval_seconds) :
+        queue_tasks(queue_tasks),
+        queue_results(queue_results),
+        polling_interval_seconds(polling_interval_seconds) {}
 
-    int get_new_id() {
-        return queue_tasks.get_new_id();
-    }
+    ~server_response_reader() { stop(); }
+
+    int get_new_id() { return queue_tasks.get_new_id(); }
 
     // if front = true, the task will be posted to the front of the queue (high priority)
     void post_task(server_task && task, bool front = false);
@@ -206,10 +235,11 @@ struct server_response_reader {
     server_task_result_ptr next(const std::function<bool()> & should_stop);
 
     struct batch_response {
-        bool is_terminated = false; // if true, indicates that processing was stopped before all results were received
+        bool is_terminated = false;  // if true, indicates that processing was stopped before all results were received
         std::vector<server_task_result_ptr> results;
-        server_task_result_ptr error; // nullptr if no error
+        server_task_result_ptr              error;  // nullptr if no error
     };
+
     // aggregate multiple results
     batch_response wait_for_all(const std::function<bool()> & should_stop);
 

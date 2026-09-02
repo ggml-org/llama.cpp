@@ -11,6 +11,7 @@
 #include <cctype>
 
 #include "server-http.h"
+#include "server-models.h"
 
 static std::string proxy_header_to_lower(std::string header) {
     std::transform(header.begin(), header.end(), header.begin(), [](unsigned char c) {
