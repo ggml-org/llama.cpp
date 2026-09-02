@@ -648,14 +648,13 @@ __global__ void df_sanitize(float * values, int n) {
     values[i] = v != v ? 0.0f : (isinf(v) ? (v > 0.0f ? 65504.0f : -65504.0f) : v);
 }
 
-// non-causal SWA attention for the 8-row block. Cache holds injected positions
-// 0..n_past-1 (valid) plus the block rows are provided separately (kb/vb) so all
-// 8 rows attend to: cache positions in (q_pos-2047 .. n_past-1) AND all 8 block
-// rows (non-causal within block). grid (32 q-heads, 8 rows); 256 threads.
+// non-causal SWA attention for up to the trained 8-row block. Cache holds
+// injected positions 0..n_past-1; every active block row attends to every
+// other active row plus the matching cache window.
 __global__ void df_attn(const float * __restrict__ q, const __half * __restrict__ Kc,
                         const __half * __restrict__ Vc, const float * __restrict__ kb,
                         const float * __restrict__ vb, float * __restrict__ out,
-                        int n_past_unused, const int * __restrict__ q_poss) {
+                        int n_past_unused, const int * __restrict__ q_poss, int ncols) {
     (void) n_past_unused;
     const int n_past = q_poss[0]; // block row 0 sits at n_past (graph-capture safe)
     const int h = blockIdx.x, row = blockIdx.y, lane = threadIdx.x;
@@ -670,14 +669,14 @@ __global__ void df_attn(const float * __restrict__ q, const __half * __restrict_
     // pass 1: cache scores -> streaming max/sum with block rows
     float m = -1e30f, l = 0.0f, accd = 0.0f; // acc for dim `lane` if lane<128
     // block-row scores first (small, shared)
-    if (lane < DF_BLOCK) {
+    if (lane < ncols) {
         const float * kp = kb + ((size_t) lane * DF_KV + kh) * DF_HDIM;
         float s = 0.0f;
         for (int i = 0; i < DF_HDIM; ++i) s += qh[i] * kp[i];
         sc_blk[lane] = s * kq_scale;
     }
     __syncthreads();
-    for (int i2 = 0; i2 < DF_BLOCK; ++i2) m = fmaxf(m, sc_blk[i2]);
+    for (int i2 = 0; i2 < ncols; ++i2) m = fmaxf(m, sc_blk[i2]);
 
     // chunked cache pass
     const int CH = 1024;
@@ -734,13 +733,13 @@ __global__ void df_attn(const float * __restrict__ q, const __half * __restrict_
         __shared__ float wblk[DF_BLOCK];
         const float m_new = m; // block max already folded into m at start
         if (lane == 0) {
-            for (int i2 = 0; i2 < DF_BLOCK; ++i2) wblk[i2] = expf(sc_blk[i2] - m_new);
+            for (int i2 = 0; i2 < ncols; ++i2) wblk[i2] = expf(sc_blk[i2] - m_new);
         }
         __syncthreads();
-        for (int i2 = 0; i2 < DF_BLOCK; ++i2) lb += wblk[i2];
+        for (int i2 = 0; i2 < ncols; ++i2) lb += wblk[i2];
         if (lane < DF_HDIM) {
             float vs = 0.0f;
-            for (int i2 = 0; i2 < DF_BLOCK; ++i2) vs += wblk[i2] * vb[((size_t) i2 * DF_KV + kh) * DF_HDIM + lane];
+            for (int i2 = 0; i2 < ncols; ++i2) vs += wblk[i2] * vb[((size_t) i2 * DF_KV + kh) * DF_HDIM + lane];
             accd += vs;
         }
         l += lb;

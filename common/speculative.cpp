@@ -12,6 +12,7 @@
 #include "spec_sidecar.h"
 #include "spec_sidecar_assets.h"
 #include "speculative-sidecar-cap.h"
+#include "speculative-dflash-controller.h"
 #include "../include/spec_sidecar/sidecar_abi.h"
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
@@ -48,6 +49,24 @@ static bool common_speculative_rdna2_auto_enabled() {
 static bool common_speculative_sidecar_enabled() {
     const char * value = std::getenv("SPEC_SIDECAR");
     return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
+static common_speculative_dflash_controller_config common_speculative_dflash_controller_config_from_env(
+        int32_t max_depth) {
+    common_speculative_dflash_controller_config config;
+    config.max_depth = max_depth;
+    const char * mode = std::getenv("LLAMA_SPEC_DFLASH_DYNAMIC_DEPTH");
+    if (mode == nullptr || std::strcmp(mode, "0") == 0 ||
+            std::strcmp(mode, "off") == 0 || std::strcmp(mode, "false") == 0) {
+        return config;
+    }
+    if (std::strcmp(mode, "batch") == 0 || std::strcmp(mode, "1") == 0 ||
+            std::strcmp(mode, "on") == 0) {
+        config.mode = common_speculative_dflash_controller_mode::BATCH;
+    } else if (std::strcmp(mode, "trace") == 0) {
+        config.mode = common_speculative_dflash_controller_mode::TRACE;
+    }
+    return config;
 }
 
 static bool common_spec_sidecar_paths_from_params(
@@ -92,27 +111,33 @@ static uint64_t common_spec_sidecar_stochastic_key(uint32_t seed, llama_seq_id s
 }
 
 static bool common_spec_sidecar_validate_distribution(const int32_t * ids, const float * probs,
-        int count, int32_t n_vocab, common_speculative_token_dist & dist) {
+        int count, int32_t n_vocab, llama_token selected, common_speculative_token_dist & dist) {
     if (ids == nullptr || probs == nullptr || count <= 0) {
         return false;
     }
     dist.ids.resize((size_t) count);
     dist.probs.resize((size_t) count);
     float sum = 0.0f;
+    bool selected_supported = false;
     for (int i = 0; i < count; ++i) {
         if (ids[i] < 0 || ids[i] >= n_vocab || !std::isfinite(probs[i]) || probs[i] < 0.0f) {
             return false;
         }
+        for (int j = 0; j < i; ++j) {
+            if (ids[j] == ids[i]) {
+                return false;
+            }
+        }
         dist.ids[i] = (llama_token) ids[i];
         dist.probs[i] = probs[i];
         sum += probs[i];
+        selected_supported |= ids[i] == selected && probs[i] > 0.0f;
     }
-    if (!std::isfinite(sum) || sum <= 0.0f) {
+    if (!selected_supported || !std::isfinite(sum) || std::abs(sum - 1.0f) > 1e-3f) {
         return false;
     }
-    // Normalize defensively at the ABI boundary. The sidecar samples the same
-    // top-k row before returning it, while this removes harmless reduction
-    // round-off before the target residual sampler consumes q.
+    // Remove harmless reduction round-off only after verifying that the
+    // provider returned the normalized q distribution it sampled.
     for (float & value : dist.probs) {
         value /= sum;
     }
@@ -1081,6 +1106,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     common_spec_sidecar_dflash sidecar;
     bool sidecar_target_only = false; // runtime failure or unsupported sampling mode
+    common_speculative_dflash_controller_config controller_config;
 
     common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
             common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
@@ -1172,6 +1198,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             this->params.n_min = std::min(this->params.n_min, n_draft_max);
         }
         this->n_max = this->params.n_max;
+        controller_config = common_speculative_dflash_controller_config_from_env(this->params.n_max);
+        if (controller_config.mode != common_speculative_dflash_controller_mode::OFF) {
+            SPC_INF("DFlash active-batch depth %s: max=%d schedule=2:2,other:fixed\n",
+                    controller_config.mode == common_speculative_dflash_controller_mode::TRACE ? "trace" : "active",
+                    controller_config.max_depth);
+        }
 
         // speculative sidecar's DFlash DLL is selected only after the preflight probe.
         // A sidecar-only construction has no native draft context to fall back
@@ -1663,6 +1695,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             return;
         }
 
+        int32_t controller_active_batch = 0;
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            controller_active_batch += dparams[seq_id].drafting && !sidecar_stale[seq_id];
+        }
+
         if (sidecar.active()) {
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 auto & dp = dparams[seq_id];
@@ -1682,7 +1719,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     return;
                 }
 
-                const int limit = std::min(params.n_max, dp.n_max > 0 ? dp.n_max : params.n_max);
+                const int full_limit = std::min(params.n_max, dp.n_max > 0 ? dp.n_max : params.n_max);
+                const int limit = stochastic
+                        ? common_speculative_dflash_controller_pre_draft_cap(
+                                controller_config, controller_active_batch, full_limit,
+                                dp.n_max_user_override)
+                        : full_limit;
                 if (limit < 1) {
                     return;
                 }
@@ -1735,7 +1777,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                         if (!common_spec_sidecar_validate_distribution(
                                     dist_ids.data() + (size_t) i * SPEC_SIDECAR_DFLASH_DRAFT_TOP_K,
                                     dist_probs.data() + (size_t) i * SPEC_SIDECAR_DFLASH_DRAFT_TOP_K,
-                                    SPEC_SIDECAR_DFLASH_DRAFT_TOP_K, n_vocab, dist)) {
+                                    SPEC_SIDECAR_DFLASH_DRAFT_TOP_K, n_vocab, ids[i], dist)) {
                             result.clear();
                             dp.dists->clear();
                             sidecar.disable();
@@ -1749,6 +1791,23 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 if (result.size() < (size_t) params.n_min) {
                     result.clear();
                     if (dp.dists != nullptr) dp.dists->clear();
+                }
+
+                if (stochastic && !result.empty() &&
+                        controller_config.mode != common_speculative_dflash_controller_mode::OFF) {
+                    const auto decision = common_speculative_dflash_controller_select(
+                            controller_config, controller_active_batch, full_limit);
+                    const bool applied = controller_config.mode == common_speculative_dflash_controller_mode::BATCH &&
+                            !dp.n_max_user_override && decision.limited_by_batch;
+                    if (controller_config.mode == common_speculative_dflash_controller_mode::TRACE) {
+                        SPC_INF("DFLASHCTRL seq=%d active=%d mode=trace full=%d scheduled=%d selected=%zu applied=%d override=%d\n",
+                                (int) seq_id, controller_active_batch, full_limit, decision.depth, result.size(),
+                                (int) applied, (int) dp.n_max_user_override);
+                    } else {
+                        SPC_DBG("DFLASHCTRL seq=%d active=%d mode=batch full=%d scheduled=%d selected=%zu applied=%d override=%d\n",
+                                (int) seq_id, controller_active_batch, full_limit, decision.depth, result.size(),
+                                (int) applied, (int) dp.n_max_user_override);
+                    }
                 }
             }
             return;
@@ -2506,10 +2565,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         for (int32_t k = 0; sidecar_all_logits && k < n_tokens; ++k) {
             sidecar_all_logits = batch_in.logits[k] != 0;
         }
+        const bool sidecar_defer_width =
+                (this->params.n_max == 4 && n_tokens == 5) ||
+                (this->params.n_max == 5 && (n_tokens == 5 || n_tokens == 6));
         const bool sidecar_defer_catchup = (sidecar.active() || sidecar_load_pending) &&
                 sidecar_defer_requested && n_seq == 1 && n_mtp_layers == 1 &&
-                !chain_heads && !is_mem_shared && this->params.n_max == 4 &&
-                n_tokens == 5 && sidecar_all_logits;
+                !chain_heads && !is_mem_shared && sidecar_defer_width && sidecar_all_logits;
 
         if (sidecar.active() || sidecar_load_pending) {
             if (batch_in.pos == nullptr) {
@@ -2669,7 +2730,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     return;
                 }
 
-                const int limit = std::min(params.n_max, dp.n_max > 0 ? dp.n_max : params.n_max);
+                const int limit = std::min(
+                        params.n_max, dp.n_max > 0 ? dp.n_max : params.n_max);
                 if (limit < 1) {
                     return;
                 }
@@ -2725,7 +2787,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                         if (!common_spec_sidecar_validate_distribution(
                                     dist_ids.data() + (size_t) i * SPEC_SIDECAR_MTP_DRAFT_TOP_K,
                                     dist_probs.data() + (size_t) i * SPEC_SIDECAR_MTP_DRAFT_TOP_K,
-                                    SPEC_SIDECAR_MTP_DRAFT_TOP_K, n_vocab, dist)) {
+                                    SPEC_SIDECAR_MTP_DRAFT_TOP_K, n_vocab, ids[i], dist)) {
                             result.clear();
                             dp.dists->clear();
                             sidecar.disable();

@@ -1,10 +1,11 @@
 // DFlash2 HIP drafter sidecar DLL — loaded by llama.cpp's impl_draft_dflash.
 // SPDX-License-Identifier: MIT
-// Release ABI 5 adds lazy accepted-prefix commits, device-input paths,
-// sequence-scoped state operations, and compact stochastic top-k proposals.
+// Release ABI 6 provides sequence-scoped state, device-input paths, bounded
+// draft graphs, and compact stochastic proposal distributions.
 // API: spec_dflash_init(dir, n_seq) / spec_dflash_chunk(seq, poss, feats, n) /
 //      spec_dflash_draft(seq, id_last, n_past, out_ids[7]).
 #include "dflash_kernels.hip"
+#include "stochastic_distribution.h"
 #include "../artifact_manifest.h"
 #include "spec_sidecar/sidecar_abi.h"
 
@@ -160,6 +161,7 @@ struct DState {
     bool q8_process = false;
     bool q8_native_mmvq = false;
     bool q8_native_q4_only = false;
+    bool bounded_stochastic_graph = false;
     int q8_layers = 5;
     float * q8_probe = nullptr;
     int q8_probe_slots = 0;
@@ -248,12 +250,14 @@ __global__ void shift_kv_rows(__half * kv, int src_min, int src_max, int delta, 
 #define DF_API extern "C"
 #endif
 
-static constexpr int32_t DF_RELEASE_ABI = 5;
+static constexpr int32_t DF_RELEASE_ABI = SPEC_SIDECAR_DFLASH_RELEASE_ABI;
 
 static_assert(DF_TOPK == SPEC_SIDECAR_DFLASH_DRAFT_TOP_K,
               "DFlash stochastic top-k ABI mismatch");
 
-static hipGraphExec_t g_draft_gexec[8] = {};
+// Width-specific graphs let bounded stochastic requests avoid executing and
+// reading back suffix rows that cannot reach target verification.
+static hipGraphExec_t g_draft_gexec[8][DF_BLOCK + 1] = {};
 
 // Grow the committed KV cache to hold at least `needed` rows. Storage starts
 // at 16K positions (~335 MB/seq) and doubles on demand up to S.max_pos, so
@@ -284,9 +288,13 @@ static int ensure_seq_storage(DSeqState & q, int needed) {
         q.Vc[il] = nv;
     }
     const int seq_idx = (int) (&q - S.seq);
-    if (seq_idx >= 0 && seq_idx < 8 && g_draft_gexec[seq_idx] != nullptr) {
-        DFC(hipGraphExecDestroy(g_draft_gexec[seq_idx]));
-        g_draft_gexec[seq_idx] = nullptr;
+    if (seq_idx >= 0 && seq_idx < 8) {
+        for (int rows = 1; rows <= DF_BLOCK; ++rows) {
+            if (g_draft_gexec[seq_idx][rows] != nullptr) {
+                DFC(hipGraphExecDestroy(g_draft_gexec[seq_idx][rows]));
+                g_draft_gexec[seq_idx][rows] = nullptr;
+            }
+        }
     }
     if (q.kv_capacity > 0) {
         fprintf(stderr, "[dflash-sidecar] seq %d KV cache grown %d -> %d rows\n", seq_idx, q.kv_capacity, capacity);
@@ -391,9 +399,13 @@ DF_API int spec_dflash_reset_state(int32_t seq_id) {
                 if (q->Vc[il] != nullptr) { (void) hipFree(q->Vc[il]); q->Vc[il] = nullptr; }
             }
             const int seq_idx = (int) (q - S.seq);
-            if (seq_idx >= 0 && seq_idx < 8 && g_draft_gexec[seq_idx] != nullptr) {
-                (void) hipGraphExecDestroy(g_draft_gexec[seq_idx]);
-                g_draft_gexec[seq_idx] = nullptr;
+            if (seq_idx >= 0 && seq_idx < 8) {
+                for (int rows = 1; rows <= DF_BLOCK; ++rows) {
+                    if (g_draft_gexec[seq_idx][rows] != nullptr) {
+                        (void) hipGraphExecDestroy(g_draft_gexec[seq_idx][rows]);
+                        g_draft_gexec[seq_idx][rows] = nullptr;
+                    }
+                }
             }
             fprintf(stderr, "[dflash-sidecar] seq %d KV cache shrunk %d -> 0 rows on reset\n", seq_idx, q->kv_capacity);
             q->kv_capacity = 0;
@@ -626,6 +638,15 @@ DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
         (native_all || getenv("LLAMA_SPEC_HIP_DFLASH_DISABLE_NATIVE_Q4_MMVQ") == nullptr);
     S.q8_native_q4_only = native_q4 && !native_all;
     S.q8_native_mmvq = native_q4 || native_all;
+#if defined(SPEC_SIDECAR_GFX1030)
+    S.bounded_stochastic_graph = true;
+#else
+    S.bounded_stochastic_graph = false;
+#endif
+    if (const char * bounded = getenv("LLAMA_SPEC_HIP_DFLASH_BOUNDED_GRAPH")) {
+        S.bounded_stochastic_graph = strcmp(bounded, "0") != 0 &&
+                strcmp(bounded, "off") != 0 && strcmp(bounded, "false") != 0;
+    }
     S.q8_layers = 5;
     if (const char * layers = getenv("LLAMA_SPEC_HIP_DFLASH_Q8_LAYERS")) {
         S.q8_layers = std::max(0, std::min(DF_LAYERS, std::atoi(layers)));
@@ -859,9 +880,9 @@ DF_API int spec_dflash_init(const char * dir, int32_t n_seq) {
     DFC(hipMalloc(&S.tk_ids,  8 * DF_TOPK * 4));
     DFC(hipMalloc(&S.tk_vals, 8 * DF_TOPK * 4));
     S.ok = true;
-    fprintf(stderr, "[dflash-sidecar] initialized (max_pos=%d, device=%d, q8_head=%d, q8_all=%d, q8_process=%d, q8_layers=%d, q8_native_mmvq=%d, q8_native_q4_only=%d)\n",
+    fprintf(stderr, "[dflash-sidecar] initialized (max_pos=%d, device=%d, q8_head=%d, q8_all=%d, q8_process=%d, q8_layers=%d, q8_native_mmvq=%d, q8_native_q4_only=%d, bounded_graph=%d)\n",
             S.max_pos, S.device, S.q8_head ? 1 : 0, S.q8_all ? 1 : 0, S.q8_process ? 1 : 0, S.q8_layers,
-            S.q8_native_mmvq ? 1 : 0, S.q8_native_q4_only ? 1 : 0);
+            S.q8_native_mmvq ? 1 : 0, S.q8_native_q4_only ? 1 : 0, S.bounded_stochastic_graph ? 1 : 0);
     return 0;
 }
 
@@ -990,14 +1011,16 @@ DF_API int spec_dflash_chunk_device(int32_t seq_id, const int32_t * poss,
                                   n_layers, layer_width, true, n);
 }
 
-DF_API int spec_dflash_draft(int32_t seq_id, int32_t id_last, int32_t n_past, int32_t * out_ids) {
+static int spec_dflash_draft_rows(int32_t seq_id, int32_t id_last, int32_t n_past,
+        int32_t * out_ids, int draft_rows) {
     DSeqState * q = get_seq(seq_id);
-    if (!S.ok || q == nullptr || !out_ids || id_last < 0 || id_last >= DF_VOCAB) return -1;
+    if (!S.ok || q == nullptr || !out_ids || id_last < 0 || id_last >= DF_VOCAB ||
+            draft_rows < 2 || draft_rows > DF_BLOCK) return -1;
     if (n_past < 1 || n_past != q->state_pos_max || q->kv_capacity < n_past) return -1;
     // The hard ceiling is not an error: report an empty draft so the host
     // falls through to the stacked n-gram drafters instead of disabling the
     // sidecar for the rest of the process.
-    if (static_cast<uint64_t>(n_past) + DF_BLOCK > static_cast<uint64_t>(S.max_pos)) return 0;
+    if (static_cast<uint64_t>(n_past) + draft_rows > static_cast<uint64_t>(S.max_pos)) return 0;
     DFlashDeviceGuard device_guard(S.device);
     if (!device_guard.valid) return -1;
     const int NROT = 128;
@@ -1016,112 +1039,115 @@ DF_API int spec_dflash_draft(int32_t seq_id, int32_t id_last, int32_t n_past, in
     // one hipGraph for the whole ~205-kernel draft: all kernel args are static
     // device pointers (contents vary per call), n_past is read from pos_d[0]
     int q8_probe_slot = 0;
-    if (g_draft_gexec[seq_id] != nullptr) {
-        DFC(hipGraphLaunch(g_draft_gexec[seq_id], S.st));
+    hipGraphExec_t & draft_graph = g_draft_gexec[seq_id][draft_rows];
+    if (draft_graph != nullptr) {
+        DFC(hipGraphLaunch(draft_graph, S.st));
         goto readback;
     }
     DFC(hipStreamBeginCapture(S.st, hipStreamCaptureModeThreadLocal));
-    df_embed_rows<<<dim3((DF_EMBD + 255) / 256, DF_BLOCK), 256, 0, S.st>>>(S.W_embd, S.tok_d[seq_id], S.x, DF_EMBD);
+    df_embed_rows<<<dim3((DF_EMBD + 255) / 256, draft_rows), 256, 0, S.st>>>(S.W_embd, S.tok_d[seq_id], S.x, DF_EMBD);
     for (int il = 0; il < DF_LAYERS; ++il) {
         auto & L = S.L[il];
         const bool q8_layer = S.q8_all && il < S.q8_layers;
-        df_rmsnorm<<<DF_BLOCK, 256, 0, S.st>>>(S.x, L.attn_norm, S.xn, DF_EMBD);
+        df_rmsnorm<<<draft_rows, 256, 0, S.st>>>(S.x, L.attn_norm, S.xn, DF_EMBD);
         if (q8_layer) {
-            df_quantize_q8_1<<<dim3(DF_EMBD / 256, DF_BLOCK), 256, 0, S.st>>>(
+            df_quantize_q8_1<<<dim3(DF_EMBD / 256, draft_rows), 256, 0, S.st>>>(
                     S.xn, S.q8_xn, DF_EMBD);
-            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.xn, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_EMBD);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.xn, S.q8_probe + 4 * q8_probe_slot++, draft_rows * DF_EMBD);
         }
-        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.conv_a_proj, S.xn, S.q8_xn, S.dyn_a, DF_EMBD, DF_CONVDYN, q8_layer, S.q8_native_mmvq, S.st);
-        df_conv_gate<<<dim3((DF_EMBD + 255) / 256, DF_BLOCK), 256, 0, S.st>>>(S.xn, S.dyn_a, L.conv_a_base, S.cg, 0, DF_BLOCK);
+        DISPATCH_Q4K_ANY_NATIVE(draft_rows, L.conv_a_proj, S.xn, S.q8_xn, S.dyn_a, DF_EMBD, DF_CONVDYN, q8_layer, S.q8_native_mmvq, S.st);
+        df_conv_gate<<<dim3((DF_EMBD + 255) / 256, draft_rows), 256, 0, S.st>>>(S.xn, S.dyn_a, L.conv_a_base, S.cg, 0, draft_rows);
         if (q8_layer) {
-            df_quantize_q8_1<<<dim3(DF_EMBD / 256, DF_BLOCK), 256, 0, S.st>>>(
+            df_quantize_q8_1<<<dim3(DF_EMBD / 256, draft_rows), 256, 0, S.st>>>(
                     S.cg, S.q8_cg, DF_EMBD);
-            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.cg, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_EMBD);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.cg, S.q8_probe + 4 * q8_probe_slot++, draft_rows * DF_EMBD);
         }
-        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.wq, S.cg, S.q8_cg, S.q, DF_EMBD, DF_HEADS * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
-        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.wk, S.cg, S.q8_cg, S.k, DF_EMBD, DF_KV * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
-        if (L.wv_q6) DISPATCH_Q6K_ANY_NATIVE(DF_BLOCK, (const block_q6_K *) L.wv, S.cg, S.q8_cg, S.v, DF_EMBD, DF_KV * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
-        else         DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, (const block_q4_K *) L.wv, S.cg, S.q8_cg, S.v, DF_EMBD, DF_KV * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
-        df_rmsnorm_head<<<dim3(DF_HEADS, DF_BLOCK), 128, 0, S.st>>>(S.q, L.qn, DF_HEADS);
-        df_rmsnorm_head<<<dim3(DF_KV, DF_BLOCK), 128, 0, S.st>>>(S.k, L.kn, DF_KV);
-        df_rope<<<dim3(DF_HEADS, DF_BLOCK), NROT / 2, 0, S.st>>>(S.q, DF_HEADS, S.pos_d[seq_id], NROT);
-        df_rope<<<dim3(DF_KV, DF_BLOCK), NROT / 2, 0, S.st>>>(S.k, DF_KV, S.pos_d[seq_id], NROT);
-        df_attn<<<dim3(DF_HEADS, DF_BLOCK), 256, 0, S.st>>>(S.q, q->Kc[il], q->Vc[il], S.k, S.v, S.att, n_past, S.pos_d[seq_id]);
+        DISPATCH_Q4K_ANY_NATIVE(draft_rows, L.wq, S.cg, S.q8_cg, S.q, DF_EMBD, DF_HEADS * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
+        DISPATCH_Q4K_ANY_NATIVE(draft_rows, L.wk, S.cg, S.q8_cg, S.k, DF_EMBD, DF_KV * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
+        if (L.wv_q6) DISPATCH_Q6K_ANY_NATIVE(draft_rows, (const block_q6_K *) L.wv, S.cg, S.q8_cg, S.v, DF_EMBD, DF_KV * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
+        else         DISPATCH_Q4K_ANY_NATIVE(draft_rows, (const block_q4_K *) L.wv, S.cg, S.q8_cg, S.v, DF_EMBD, DF_KV * DF_HDIM, q8_layer, S.q8_native_mmvq, S.st);
+        df_rmsnorm_head<<<dim3(DF_HEADS, draft_rows), 128, 0, S.st>>>(S.q, L.qn, DF_HEADS);
+        df_rmsnorm_head<<<dim3(DF_KV, draft_rows), 128, 0, S.st>>>(S.k, L.kn, DF_KV);
+        df_rope<<<dim3(DF_HEADS, draft_rows), NROT / 2, 0, S.st>>>(S.q, DF_HEADS, S.pos_d[seq_id], NROT);
+        df_rope<<<dim3(DF_KV, draft_rows), NROT / 2, 0, S.st>>>(S.k, DF_KV, S.pos_d[seq_id], NROT);
+        df_attn<<<dim3(DF_HEADS, draft_rows), 256, 0, S.st>>>(S.q, q->Kc[il], q->Vc[il], S.k, S.v, S.att, n_past, S.pos_d[seq_id], draft_rows);
         if (q8_layer) {
-            df_quantize_q8_1<<<dim3((DF_HEADS * DF_HDIM) / 256, DF_BLOCK), 256, 0, S.st>>>(
+            df_quantize_q8_1<<<dim3((DF_HEADS * DF_HDIM) / 256, draft_rows), 256, 0, S.st>>>(
                     S.att, S.q8_att, DF_HEADS * DF_HDIM);
-            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.att, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_HEADS * DF_HDIM);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.att, S.q8_probe + 4 * q8_probe_slot++, draft_rows * DF_HEADS * DF_HDIM);
         }
-        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.wo, S.att, S.q8_att, S.wo_out, DF_HEADS * DF_HDIM, DF_EMBD, q8_layer, S.q8_native_mmvq, S.st);
-        df_conv_gate<<<dim3((DF_EMBD + 255) / 256, DF_BLOCK), 256, 0, S.st>>>(S.wo_out, S.dyn_a, L.conv_a_base, S.cg, 1, DF_BLOCK);
-        df_add<<<(DF_BLOCK * DF_EMBD + 255) / 256, 256, 0, S.st>>>(S.x, S.cg, DF_BLOCK * DF_EMBD);
-        df_rmsnorm<<<DF_BLOCK, 256, 0, S.st>>>(S.x, L.ffn_norm, S.xn, DF_EMBD);
+        DISPATCH_Q4K_ANY_NATIVE(draft_rows, L.wo, S.att, S.q8_att, S.wo_out, DF_HEADS * DF_HDIM, DF_EMBD, q8_layer, S.q8_native_mmvq, S.st);
+        df_conv_gate<<<dim3((DF_EMBD + 255) / 256, draft_rows), 256, 0, S.st>>>(S.wo_out, S.dyn_a, L.conv_a_base, S.cg, 1, draft_rows);
+        df_add<<<(draft_rows * DF_EMBD + 255) / 256, 256, 0, S.st>>>(S.x, S.cg, draft_rows * DF_EMBD);
+        df_rmsnorm<<<draft_rows, 256, 0, S.st>>>(S.x, L.ffn_norm, S.xn, DF_EMBD);
         if (q8_layer) {
-            df_quantize_q8_1<<<dim3(DF_EMBD / 256, DF_BLOCK), 256, 0, S.st>>>(
+            df_quantize_q8_1<<<dim3(DF_EMBD / 256, draft_rows), 256, 0, S.st>>>(
                     S.xn, S.q8_xn, DF_EMBD);
-            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.xn, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_EMBD);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.xn, S.q8_probe + 4 * q8_probe_slot++, draft_rows * DF_EMBD);
         }
-        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.conv_f_proj, S.xn, S.q8_xn, S.dyn_f, DF_EMBD, DF_CONVDYN, q8_layer, S.q8_native_mmvq, S.st);
-        df_conv_gate<<<dim3((DF_EMBD + 255) / 256, DF_BLOCK), 256, 0, S.st>>>(S.xn, S.dyn_f, L.conv_f_base, S.cg, 0, DF_BLOCK);
+        DISPATCH_Q4K_ANY_NATIVE(draft_rows, L.conv_f_proj, S.xn, S.q8_xn, S.dyn_f, DF_EMBD, DF_CONVDYN, q8_layer, S.q8_native_mmvq, S.st);
+        df_conv_gate<<<dim3((DF_EMBD + 255) / 256, draft_rows), 256, 0, S.st>>>(S.xn, S.dyn_f, L.conv_f_base, S.cg, 0, draft_rows);
         if (q8_layer) {
-            df_quantize_q8_1<<<dim3(DF_EMBD / 256, DF_BLOCK), 256, 0, S.st>>>(
+            df_quantize_q8_1<<<dim3(DF_EMBD / 256, draft_rows), 256, 0, S.st>>>(
                     S.cg, S.q8_cg, DF_EMBD);
-            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.cg, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_EMBD);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.cg, S.q8_probe + 4 * q8_probe_slot++, draft_rows * DF_EMBD);
         }
-        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.up, S.cg, S.q8_cg, S.fu, DF_EMBD, DF_FF, q8_layer, S.q8_native_mmvq, S.st);
-        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, L.gate, S.cg, S.q8_cg, S.fg, DF_EMBD, DF_FF, q8_layer, S.q8_native_mmvq, S.st);
+        DISPATCH_Q4K_ANY_NATIVE(draft_rows, L.up, S.cg, S.q8_cg, S.fu, DF_EMBD, DF_FF, q8_layer, S.q8_native_mmvq, S.st);
+        DISPATCH_Q4K_ANY_NATIVE(draft_rows, L.gate, S.cg, S.q8_cg, S.fg, DF_EMBD, DF_FF, q8_layer, S.q8_native_mmvq, S.st);
         if (q8_layer) {
-            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.fu, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_FF);
-            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.fg, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_FF);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.fu, S.q8_probe + 4 * q8_probe_slot++, draft_rows * DF_FF);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.fg, S.q8_probe + 4 * q8_probe_slot++, draft_rows * DF_FF);
         }
-        df_silu_mul<<<(DF_BLOCK * DF_FF + 255) / 256, 256, 0, S.st>>>(S.fg, S.fu, DF_BLOCK * DF_FF);
+        df_silu_mul<<<(draft_rows * DF_FF + 255) / 256, 256, 0, S.st>>>(S.fg, S.fu, draft_rows * DF_FF);
         if (q8_layer) {
-            df_quantize_q8_1<<<dim3(DF_FF / 256, DF_BLOCK), 256, 0, S.st>>>(
+            df_quantize_q8_1<<<dim3(DF_FF / 256, draft_rows), 256, 0, S.st>>>(
                     S.fg, S.q8_fg, DF_FF);
-            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.fg, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_FF);
+            if (S.q8_process) df_probe_f32<<<1, 1, 0, S.st>>>(S.fg, S.q8_probe + 4 * q8_probe_slot++, draft_rows * DF_FF);
         }
-        if (L.down_q6) DISPATCH_Q6K_ANY_NATIVE(DF_BLOCK, (const block_q6_K *) L.down, S.fg, S.q8_fg, S.ftmp, DF_FF, DF_EMBD, q8_layer, S.q8_native_mmvq, S.st);
-        else           DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, (const block_q4_K *) L.down, S.fg, S.q8_fg, S.ftmp, DF_FF, DF_EMBD, q8_layer, S.q8_native_mmvq, S.st);
-        df_conv_gate<<<dim3((DF_EMBD + 255) / 256, DF_BLOCK), 256, 0, S.st>>>(S.ftmp, S.dyn_f, L.conv_f_base, S.cg, 1, DF_BLOCK);
-        df_add<<<(DF_BLOCK * DF_EMBD + 255) / 256, 256, 0, S.st>>>(S.x, S.cg, DF_BLOCK * DF_EMBD);
+        if (L.down_q6) DISPATCH_Q6K_ANY_NATIVE(draft_rows, (const block_q6_K *) L.down, S.fg, S.q8_fg, S.ftmp, DF_FF, DF_EMBD, q8_layer, S.q8_native_mmvq, S.st);
+        else           DISPATCH_Q4K_ANY_NATIVE(draft_rows, (const block_q4_K *) L.down, S.fg, S.q8_fg, S.ftmp, DF_FF, DF_EMBD, q8_layer, S.q8_native_mmvq, S.st);
+        df_conv_gate<<<dim3((DF_EMBD + 255) / 256, draft_rows), 256, 0, S.st>>>(S.ftmp, S.dyn_f, L.conv_f_base, S.cg, 1, draft_rows);
+        df_add<<<(draft_rows * DF_EMBD + 255) / 256, 256, 0, S.st>>>(S.x, S.cg, draft_rows * DF_EMBD);
     }
-    df_rmsnorm<<<DF_BLOCK, 256, 0, S.st>>>(S.x, S.w_out_norm, S.tE, DF_EMBD);
+    df_rmsnorm<<<draft_rows, 256, 0, S.st>>>(S.x, S.w_out_norm, S.tE, DF_EMBD);
     if (S.q8_head) {
-        df_quantize_q8_1<<<dim3(DF_EMBD / 256, DF_BLOCK), 256, 0, S.st>>>(
+        df_quantize_q8_1<<<dim3(DF_EMBD / 256, draft_rows), 256, 0, S.st>>>(
                 S.tE, S.tE_q8, DF_EMBD);
         if (S.q8_process) {
-            df_probe_f32<<<1, 1, 0, S.st>>>(S.tE, S.q8_probe + 4 * q8_probe_slot++, DF_BLOCK * DF_EMBD);
+            df_probe_f32<<<1, 1, 0, S.st>>>(S.tE, S.q8_probe + 4 * q8_probe_slot++, draft_rows * DF_EMBD);
         }
-        DISPATCH_Q6K_ANY_NATIVE(DF_BLOCK, S.W_head, S.tE, S.tE_q8, S.logits, DF_EMBD, S.n_head, true, S.q8_native_mmvq, S.st);
+        DISPATCH_Q6K_ANY_NATIVE(draft_rows, S.W_head, S.tE, S.tE_q8, S.logits, DF_EMBD, S.n_head, true, S.q8_native_mmvq, S.st);
     } else {
-        gemv8t_q6_K<DF_BLOCK><<<(S.n_head + 7) / 8, 512, 0, S.st>>>(
-                S.W_head, S.tE, S.logits, DF_EMBD, S.n_head);
+        DISPATCH_Q6K(draft_rows, S.W_head, S.tE, S.logits, DF_EMBD, S.n_head, S.st);
     }
     if (S.q8_head) {
-        DISPATCH_Q4K_ANY_NATIVE(DF_BLOCK, S.W_selhid, S.tE, S.tE_q8, S.selhid, DF_EMBD, DF_RANK, true, S.q8_native_mmvq, S.st);
+        DISPATCH_Q4K_ANY_NATIVE(draft_rows, S.W_selhid, S.tE, S.tE_q8, S.selhid, DF_EMBD, DF_RANK, true, S.q8_native_mmvq, S.st);
     } else {
-        DISPATCH_Q4K(DF_BLOCK, S.W_selhid, S.tE, S.selhid, DF_EMBD, DF_RANK, S.st);
+        DISPATCH_Q4K(draft_rows, S.W_selhid, S.tE, S.selhid, DF_EMBD, DF_RANK, S.st);
     }
     for (int s2 = 0; s2 < DF_TOPK; ++s2) {
-        dfa_argmax_partial<<<dim3(S.tkparts, DF_BLOCK), 256, 0, S.st>>>(S.logits, S.n_head, S.tk_pmax, S.tk_pidx, S.tkparts);
-        dfa_argmax_final_mask<<<DF_BLOCK, 1, 0, S.st>>>(S.logits, S.n_head, S.tk_pmax, S.tk_pidx, S.tkparts, S.tk_ids, S.tk_vals, s2, DF_TOPK);
+        dfa_argmax_partial<<<dim3(S.tkparts, draft_rows), 256, 0, S.st>>>(S.logits, S.n_head, S.tk_pmax, S.tk_pidx, S.tkparts);
+        dfa_argmax_final_mask<<<draft_rows, 1, 0, S.st>>>(S.logits, S.n_head, S.tk_pmax, S.tk_pidx, S.tkparts, S.tk_ids, S.tk_vals, s2, DF_TOPK);
     }
     {
         hipGraph_t graph = nullptr;
         DFC(hipStreamEndCapture(S.st, &graph));
-        DFC(hipGraphInstantiate(&g_draft_gexec[seq_id], graph, nullptr, nullptr, 0));
+        DFC(hipGraphInstantiate(&draft_graph, graph, nullptr, nullptr, 0));
         S.q8_probe_slots = q8_probe_slot;
         DFC(hipGraphDestroy(graph));
-        fprintf(stderr, "[dflash-sidecar] draft graph captured for seq %d\n", seq_id);
-        DFC(hipGraphLaunch(g_draft_gexec[seq_id], S.st));
+        fprintf(stderr, "[dflash-sidecar] draft graph captured for seq %d rows %d\n", seq_id, draft_rows);
+        DFC(hipGraphLaunch(draft_graph, S.st));
     }
 readback:
     int   h_ids[8 * DF_TOPK];
     float h_vals[8 * DF_TOPK];
     float sh[8 * DF_RANK];
-    DFC(hipMemcpyAsync(h_ids, S.tk_ids, sizeof(h_ids), hipMemcpyDeviceToHost, S.st));
-    DFC(hipMemcpyAsync(h_vals, S.tk_vals, sizeof(h_vals), hipMemcpyDeviceToHost, S.st));
-    DFC(hipMemcpyAsync(sh, S.selhid, sizeof(sh), hipMemcpyDeviceToHost, S.st));
+    const size_t ids_bytes = (size_t) draft_rows * DF_TOPK * sizeof(h_ids[0]);
+    const size_t vals_bytes = (size_t) draft_rows * DF_TOPK * sizeof(h_vals[0]);
+    const size_t hidden_bytes = (size_t) draft_rows * DF_RANK * sizeof(sh[0]);
+    DFC(hipMemcpyAsync(h_ids, S.tk_ids, ids_bytes, hipMemcpyDeviceToHost, S.st));
+    DFC(hipMemcpyAsync(h_vals, S.tk_vals, vals_bytes, hipMemcpyDeviceToHost, S.st));
+    DFC(hipMemcpyAsync(sh, S.selhid, hidden_bytes, hipMemcpyDeviceToHost, S.st));
     DFC(hipStreamSynchronize(S.st));
     if (dbg && S.q8_all && S.q8_head) {
         static bool trace_q8_values = false;
@@ -1149,13 +1175,13 @@ readback:
             }
         }
     }
-    std::memcpy(S.last_tk_ids, h_ids, sizeof(h_ids));
-    std::memcpy(S.last_tk_vals, h_vals, sizeof(h_vals));
-    std::memcpy(S.last_selhid, sh, sizeof(sh));
+    std::memcpy(S.last_tk_ids, h_ids, ids_bytes);
+    std::memcpy(S.last_tk_vals, h_vals, vals_bytes);
+    std::memcpy(S.last_selhid, sh, hidden_bytes);
     if (dbg) {
         static int trace_blocks = 0;
         if (trace_blocks++ < 1) {
-            for (int t = 1; t < 4; ++t) {
+            for (int t = 1; t < std::min(4, draft_rows); ++t) {
                 fprintf(stderr, "[dflash-sidecar] raw topk t=%d", t);
                 for (int kx = 0; kx < 8; ++kx) {
                     fprintf(stderr, " %d:%.6g", h_ids[t * DF_TOPK + kx], h_vals[t * DF_TOPK + kx]);
@@ -1167,7 +1193,7 @@ readback:
 
     int pred_idx = 0;
     int n_out = 0;
-    for (int t = 1; t < 8; ++t) {
+    for (int t = 1; t < draft_rows; ++t) {
         const float * hid = sh + (size_t) t * DF_RANK;
         const int ps = (t == 1) ? -1 : h_ids[(t - 1) * DF_TOPK + pred_idx];
         const int pred_id = (t == 1) ? id_last : ((ps >= 0 && ps < S.n_head) ? S.remap[ps] : -1);
@@ -1203,9 +1229,14 @@ readback:
     return n_out;
 }
 
-// Stochastic DFlash reuses the same single graph and compact top-k readback as
-// greedy DFlash. The selector scores are reconstructed for the sampled
-// predecessor on the host (7 * 16 * 256 multiply-adds), avoiding both a full
+DF_API int spec_dflash_draft(int32_t seq_id, int32_t id_last, int32_t n_past, int32_t * out_ids) {
+    return spec_dflash_draft_rows(seq_id, id_last, n_past, out_ids, DF_BLOCK);
+}
+
+// Stochastic DFlash reuses the compact top-k path. A bounded graph can
+// execute only the anchor plus requested proposal rows. Selector scores are
+// reconstructed for the sampled predecessor on the host (up to 7 * 16 * 256
+// multiply-adds), avoiding both a full
 // vocabulary transfer and a second decoder execution.
 DF_API int spec_dflash_stochastic_top_k() {
     return DF_TOPK;
@@ -1222,7 +1253,8 @@ DF_API int spec_dflash_draft_stochastic(int32_t seq_id, int32_t id_last, int32_t
     }
 
     int32_t greedy_ids[7] = {};
-    const int greedy_rc = spec_dflash_draft(seq_id, id_last, n_past, greedy_ids);
+    const int draft_rows = S.bounded_stochastic_graph ? max_draft + 1 : DF_BLOCK;
+    const int greedy_rc = spec_dflash_draft_rows(seq_id, id_last, n_past, greedy_ids, draft_rows);
     if (greedy_rc < 0) {
         return -1;
     }
@@ -1244,6 +1276,7 @@ DF_API int spec_dflash_draft_stochastic(int32_t seq_id, int32_t id_last, int32_t
         const float * pv = S.sel_prev.data() + (size_t) pred_id * DF_RANK;
         float scores[DF_TOPK] = {};
         float probs[DF_TOPK] = {};
+        bool valid_scores[DF_TOPK] = {};
         float max_score = -1e30f;
         int valid = 0;
         for (int kx = 0; kx < DF_TOPK; ++kx) {
@@ -1264,6 +1297,7 @@ DF_API int spec_dflash_draft_stochastic(int32_t seq_id, int32_t id_last, int32_t
                 continue;
             }
             scores[kx] = score;
+            valid_scores[kx] = true;
             max_score = std::max(max_score, score);
             ++valid;
         }
@@ -1272,9 +1306,7 @@ DF_API int spec_dflash_draft_stochastic(int32_t seq_id, int32_t id_last, int32_t
         }
         float sum = 0.0f;
         for (int kx = 0; kx < DF_TOPK; ++kx) {
-            const int cs = S.last_tk_ids[t * DF_TOPK + kx];
-            const int cid = cs >= 0 && cs < S.n_head ? S.remap[cs] : -1;
-            if (cid < 0 || cid >= DF_VOCAB || !std::isfinite(scores[kx])) {
+            if (!valid_scores[kx]) {
                 probs[kx] = 0.0f;
                 continue;
             }
@@ -1284,16 +1316,11 @@ DF_API int spec_dflash_draft_stochastic(int32_t seq_id, int32_t id_last, int32_t
         if (!(sum > 0.0f) || !std::isfinite(sum)) {
             break;
         }
-        int selected = DF_TOPK - 1;
-        double cumulative = 0.0;
         const double u = spec_sidecar_stochastic_uniform(rng_key, (uint32_t) n_out);
-        for (int kx = 0; kx < DF_TOPK; ++kx) {
-            probs[kx] /= sum;
-            cumulative += probs[kx];
-            if (u < cumulative) {
-                selected = kx;
-                break;
-            }
+        const int selected = spec_sidecar_dflash::normalize_and_select(
+                probs, DF_TOPK, sum, u);
+        if (selected < 0) {
+            break;
         }
         const int cs = S.last_tk_ids[t * DF_TOPK + selected];
         const int cid = cs >= 0 && cs < S.n_head ? S.remap[cs] : -1;

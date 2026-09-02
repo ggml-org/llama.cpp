@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "artifact_manifest.h"
+#include "dflash/stochastic_distribution.h"
 #include "mtp/catchup_alignment.h"
 #include "spec_sidecar.h"
 #include "spec_sidecar_assets.h"
@@ -7,6 +8,7 @@
 #include "../include/spec_sidecar/sidecar_abi.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -195,14 +197,26 @@ int main(int argc, char ** argv) {
         unset_environment(qwen35moe_mtp->artifact_env);
     }
 
-    failures += require(SPEC_SIDECAR_MTP_DRAFT_TOP_K == 32 &&
+    failures += require(SPEC_SIDECAR_MTP_RELEASE_ABI == 5 &&
+                        SPEC_SIDECAR_DFLASH_RELEASE_ABI == 6 &&
+                        SPEC_SIDECAR_MTP_DRAFT_TOP_K == 32 &&
                         SPEC_SIDECAR_DFLASH_DRAFT_TOP_K == 16,
-                        "sidecar stochastic top-k constants are stable");
+                        "sidecar release and stochastic top-k ABI constants match");
     const double u0 = spec_sidecar_stochastic_uniform(UINT64_C(1234), 0);
     failures += require(u0 >= 0.0 && u0 < 1.0 &&
                         u0 == spec_sidecar_stochastic_uniform(UINT64_C(1234), 0) &&
                         u0 != spec_sidecar_stochastic_uniform(UINT64_C(1234), 1),
                         "sidecar proposal RNG is deterministic and bounded");
+
+    float proposal_probs[] = { 2.0f, 1.0f, 1.0f, 0.0f };
+    const int proposal_selected = spec_sidecar_dflash::normalize_and_select(
+            proposal_probs, 4, 4.0f, 0.8);
+    failures += require(proposal_selected == 2 &&
+                        std::abs(proposal_probs[0] - 0.5f) < 1e-6f &&
+                        std::abs(proposal_probs[1] - 0.25f) < 1e-6f &&
+                        std::abs(proposal_probs[2] - 0.25f) < 1e-6f &&
+                        proposal_probs[3] == 0.0f,
+                        "DFlash normalizes the complete q row before selection");
 
     std::vector<TensorDesc> tensors;
     const char * valid =

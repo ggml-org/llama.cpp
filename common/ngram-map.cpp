@@ -386,10 +386,9 @@ void common_ngram_map_draft(common_ngram_map & map,
         // simple mode:
         // Fill in the draft with the m tokens following the key.
         // We work with value values[0] only.
-        int n_draft_tokens = std::min((int) m, (int) curr_key.values[0].n_accepted);
-        if (map.draft_limit > 0) {
-            n_draft_tokens = std::min(n_draft_tokens, (int) map.draft_limit);
-        }
+        const int n_draft_tokens = map.draft_limit > 0
+                ? std::min((int) m, (int) map.draft_limit)
+                : std::min((int) m, (int) curr_key.values[0].n_accepted);
 
         for (int i = 0; i < n_draft_tokens; ++i) {
             draft.push_back(inp[match_pos + n + i]);
@@ -506,10 +505,9 @@ void common_ngram_map_draft(common_ngram_map & map,
 
     // We use the most frequent value values[slot_max] for the draft.
     // Fill in the draft with the m tokens following the key.
-    int n_draft_tokens = std::min((int) m, (int) curr_key.values[slot_max].n_accepted);
-    if (map.draft_limit > 0) {
-        n_draft_tokens = std::min(n_draft_tokens, (int) map.draft_limit);
-    }
+    const int n_draft_tokens = map.draft_limit > 0
+            ? std::min((int) m, (int) map.draft_limit)
+            : std::min((int) m, (int) curr_key.values[slot_max].n_accepted);
 
     for (int i = 0; i < n_draft_tokens; ++i) {
         draft.push_back(inp[match_pos + n + i]);

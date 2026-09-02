@@ -679,9 +679,7 @@ static bool write_ids(const fs::path & path, const std::vector<int32_t> & ids, s
 
 static bool write_full_head(gguf_file & target, const fs::path & path, std::string & error) {
     const ggml_tensor * head = target.tensor("output.weight");
-    if (!check_shape(head, {5120, QWEN35_VOCAB}, "output.weight", error) ||
-            head->type != GGML_TYPE_Q6_K) {
-        if (error.empty()) error = "DFlash full head requires Q6_K output.weight";
+    if (!check_shape(head, {5120, QWEN35_VOCAB}, "output.weight", error)) {
         return false;
     }
     uint64_t offset = 0;
@@ -691,7 +689,23 @@ static bool write_full_head(gguf_file & target, const fs::path & path, std::stri
         error = "cannot create " + path.string();
         return false;
     }
-    return write_direct_range(target, offset, ggml_nbytes(head), output, error);
+    uint64_t written = 0;
+    if (head->type == GGML_TYPE_Q6_K) {
+        written = ggml_nbytes(head);
+        if (!write_direct_range(target, offset, written, output, error)) {
+            return false;
+        }
+    } else if (!write_converted_tensor(target, head, offset, GGML_TYPE_Q6_K,
+            output, written, error)) {
+        return false;
+    }
+    const uint64_t expected = static_cast<uint64_t>(QWEN35_VOCAB) *
+            ggml_row_size(GGML_TYPE_Q6_K, 5120);
+    if (written != expected) {
+        error = "failed writing converted DFlash full head";
+        return false;
+    }
+    return true;
 }
 
 static bool build_mtp_bundle(const common_spec_sidecar_profile & profile, gguf_file & target,
@@ -718,13 +732,15 @@ static bool build_dflash_bundle(const common_spec_sidecar_profile & profile, ggu
     const std::vector<tensor_spec> embedding = {
         make_spec("token_embd.weight", GGML_TYPE_Q4_0, {5120, QWEN35_VOCAB}),
     };
-    if (!validate_specs(target, embedding, true, false, error)) {
+    // The runtime sidecar consumes a compact Q4_0 embedding and Q6_K head,
+    // but target GGUFs do not have to use those storage types. Automatic
+    // preparation streams supported source rows through f32 and writes the
+    // provider's fixed artifact schema once into the cache.
+    if (!validate_specs(target, embedding, false, false, error)) {
         return false;
     }
     const ggml_tensor * head = target.tensor("output.weight");
-    if (!check_shape(head, {5120, QWEN35_VOCAB}, "output.weight", error) ||
-            head->type != GGML_TYPE_Q6_K) {
-        if (error.empty()) error = "DFlash sidecar requires Q6_K output.weight";
+    if (!check_shape(head, {5120, QWEN35_VOCAB}, "output.weight", error)) {
         return false;
     }
 
@@ -1061,6 +1077,13 @@ bool common_spec_sidecar_prepare_artifacts(
         fs::remove_all(destination, ec);
         ec.clear();
     } else if (fs::exists(destination, ec)) {
+        if (validation_error.empty()) {
+            LOG_WRN("spec sidecar: rebuilding incomplete %s cache at %s\n",
+                    profile.name, destination.string().c_str());
+        } else {
+            LOG_WRN("spec sidecar: rebuilding damaged %s cache at %s (%s)\n",
+                    profile.name, destination.string().c_str(), validation_error.c_str());
+        }
         fs::remove_all(destination, ec);
         if (ec) {
             error = "cannot clear incomplete sidecar cache entry: " + ec.message();

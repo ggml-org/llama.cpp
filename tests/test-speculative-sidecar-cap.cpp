@@ -32,6 +32,10 @@ static void test_ngram_map_fixed_width() {
     llama_tokens normal_draft;
     common_ngram_map_draft(normal, prompt, 2, normal_draft);
     require(normal_draft.size() == 6, "normal map uses configured width");
+    common_ngram_map_accept(normal, 1);
+    normal_draft.clear();
+    common_ngram_map_draft(normal, prompt, 2, normal_draft);
+    require(normal_draft.size() == 1, "normal map adapts to last accepted width");
 
     common_ngram_map capped(2, 6, true, 1);
     common_ngram_map_begin(capped, prompt);
@@ -39,6 +43,10 @@ static void test_ngram_map_fixed_width() {
     llama_tokens capped_draft;
     common_ngram_map_draft(capped, prompt, 2, capped_draft);
     require(capped_draft.size() == 3, "map honors fixed sidecar cap");
+    common_ngram_map_accept(capped, 1);
+    capped_draft.clear();
+    common_ngram_map_draft(capped, prompt, 2, capped_draft);
+    require(capped_draft.size() == 3, "fixed sidecar cap owns width after partial acceptance");
 
     common_ngram_map complex(2, 6, false, 1);
     common_ngram_map_begin(complex, prompt);

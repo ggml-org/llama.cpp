@@ -47,8 +47,10 @@ static_assert(sizeof(spec_sidecar_state) == 24,
 // buffers; only the first returned-token-count rows are valid.
 #define SPEC_SIDECAR_MTP_DRAFT_TOP_K    32
 #define SPEC_SIDECAR_DFLASH_DRAFT_TOP_K 16
+#define SPEC_SIDECAR_MTP_RELEASE_ABI      5
+#define SPEC_SIDECAR_DFLASH_RELEASE_ABI   6
 
-// Qwen3.8-27B MTP sidecar ABI (release ABI 4).
+// Qwen3.8-27B MTP sidecar ABI.
 // State and KV operations are sequence-scoped. catchup writes only pending
 // target rows; commit_state is the only operation that makes rows persistent.
 // hidden_device, when non-null, is the already-selected accepted hidden row.
@@ -121,7 +123,7 @@ SPEC_SIDECAR_API int spec_hip_draft_stochastic_device(
         int32_t * dist_ids,
         float * dist_probs);
 
-// Qwen3.8-27B DFlash sidecar ABI (release ABI 5). Target chunks are staged
+// Qwen3.8-27B DFlash sidecar ABI. Target chunks are staged
 // until commit_state; device-layer input pointers are borrowed for the call.
 SPEC_SIDECAR_API int spec_dflash_release_abi(void);
 SPEC_SIDECAR_API int spec_dflash_check(int32_t encoded_width, int32_t block_size, int32_t n_seq);

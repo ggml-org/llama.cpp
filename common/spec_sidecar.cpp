@@ -1,4 +1,5 @@
 #include "spec_sidecar.h"
+#include "ggml.h"
 #include "gguf.h"
 #include "llama.h"
 #include "../src/spec_sidecar/artifact_manifest.h"
@@ -563,7 +564,20 @@ static bool validate_profile_artifacts_impl(const common_spec_sidecar_profile & 
         return false;
     }
     const char * head_name = paths.dflash_full_head ? "target_head.bin" : "target_head_sliced.bin";
-    if (!require_file(join_path(paths.artifact_dir, head_name), "DFlash target head", error)) {
+    const std::string head_path = join_path(paths.artifact_dir, head_name);
+    if (!require_file(head_path, "DFlash target head", error)) {
+        return false;
+    }
+    uint64_t head_size = 0;
+    const int64_t head_rows = paths.dflash_full_head ? profile.target_n_vocab : profile.dflash_head_rows;
+    const size_t row_size = ggml_row_size(GGML_TYPE_Q6_K, profile.target_n_embd);
+    const uint64_t expected_head_size = head_rows > 0 && row_size > 0
+            ? static_cast<uint64_t>(head_rows) * row_size : 0;
+    if (!get_file_size(head_path, head_size, error) ||
+            expected_head_size == 0 || head_size != expected_head_size) {
+        if (error.empty()) {
+            error = "DFlash target head has an unexpected size: " + head_path;
+        }
         return false;
     }
     if (!paths.dflash_full_head && !validate_id_table(
@@ -786,7 +800,7 @@ bool common_spec_sidecar_mtp_probe(const std::string & library_path,
         resolve_symbol(handle, "spec_hip_stochastic_top_k", top_k, error) &&
         resolve_symbol(handle, "spec_hip_draft_stochastic", stochastic, error) &&
         resolve_symbol(handle, "spec_hip_draft_stochastic_device", stochastic_device, error);
-    const bool compatible = symbols && release() == 4 &&
+    const bool compatible = symbols && release() == SPEC_SIDECAR_MTP_RELEASE_ABI &&
             check(embedding_width, head_rows, n_seq) == 0 &&
             top_k() == SPEC_SIDECAR_MTP_DRAFT_TOP_K;
     if (!compatible && error.empty()) {
@@ -836,7 +850,7 @@ bool common_spec_sidecar_dflash_probe(const std::string & library_path,
         resolve_symbol(handle, "spec_dflash_check", check, error) &&
         resolve_symbol(handle, "spec_dflash_stochastic_top_k", top_k, error) &&
         resolve_symbol(handle, "spec_dflash_draft_stochastic", stochastic, error);
-    const bool compatible = symbols && release() == 5 &&
+    const bool compatible = symbols && release() == SPEC_SIDECAR_DFLASH_RELEASE_ABI &&
             check(encoded_width, block_size, n_seq) == 0 &&
             top_k() == SPEC_SIDECAR_DFLASH_DRAFT_TOP_K;
     if (!compatible && error.empty()) {
@@ -935,8 +949,9 @@ bool common_spec_sidecar_mtp::load(const std::string & library_path,
         close_library(handle);
         return false;
     }
-    if (release_abi() != 4) {
-        error = "MTP sidecar ABI version mismatch (expected 4)";
+    if (release_abi() != SPEC_SIDECAR_MTP_RELEASE_ABI) {
+        error = "MTP sidecar ABI version mismatch (expected " +
+                std::to_string(SPEC_SIDECAR_MTP_RELEASE_ABI) + ")";
         close_library(handle);
         return false;
     }
@@ -1152,8 +1167,9 @@ bool common_spec_sidecar_dflash::load(const std::string & library_path,
         close_library(handle);
         return false;
     }
-    if (release_abi() != 5) {
-        error = "DFlash sidecar ABI version mismatch (expected 5)";
+    if (release_abi() != SPEC_SIDECAR_DFLASH_RELEASE_ABI) {
+        error = "DFlash sidecar ABI version mismatch (expected " +
+                std::to_string(SPEC_SIDECAR_DFLASH_RELEASE_ABI) + ")";
         close_library(handle);
         return false;
     }

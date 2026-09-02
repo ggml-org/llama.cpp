@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // HIP draft sidecar: C API around the MTP-block kernels, built as a DLL that
 // llama.cpp's speculative driver loads at runtime (LLAMA_SPEC_HIP_SIDECAR).
-// Release ABI 4 adds lazy accepted-prefix commits, device-input paths,
-// sequence-scoped state operations, and compact stochastic top-k proposals.
+// Release ABI 5 provides lazy accepted-prefix commits, device-input paths,
+// sequence-scoped state, and normalized stochastic top-k proposals.
 // The harness build (-DSIDECAR_HARNESS) replays golden.bin through the same
 // sequence-scoped lazy-catchup/commit API.
 #include "kernels.hip"
@@ -220,7 +220,7 @@ void block_phase2(Scratch & c, hipStream_t st, int pos, int * tok_dst,
 #define SC_API extern "C"
 #endif
 
-static constexpr int32_t SC_RELEASE_ABI = 4;
+static constexpr int32_t SC_RELEASE_ABI = SPEC_SIDECAR_MTP_RELEASE_ABI;
 
 static_assert(MTP_DRAFT_TOP_K == SPEC_SIDECAR_MTP_DRAFT_TOP_K,
               "MTP stochastic top-k ABI mismatch");

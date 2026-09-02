@@ -304,6 +304,9 @@ llama_build_and_test(test-backend-ops.cpp)
 llama_build_and_test(test-spec-sidecar-artifact.cpp)
 llama_build_and_test(test-speculative-sidecar-cap.cpp)
 target_include_directories(test-speculative-sidecar-cap PRIVATE ${PROJECT_SOURCE_DIR}/common)
+
+llama_build_and_test(test-speculative-dflash-controller.cpp)
+target_include_directories(test-speculative-dflash-controller PRIVATE ${PROJECT_SOURCE_DIR}/common)
 target_include_directories(test-spec-sidecar-artifact PRIVATE ${PROJECT_SOURCE_DIR}/src/spec_sidecar)
 
 # Pure host-side selector contract for the guarded RDNA2 BF16 hidden AllReduce.

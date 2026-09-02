@@ -343,9 +343,9 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q8_0_16_q8_1_
     return d8_1*sumf;
 }
 
-#if defined(RDNA3_0)
-// Native gfx1100 MXFP4 decode: VDR=4 was faster in matched MMVQ and MTP
-// probes; keep the generic VDR=2 schedule on other architectures.
+#if defined(RDNA3_0) || defined(RDNA2)
+// Native gfx1100 and gfx1030 use VDR=4 for the MXFP4 dot4 MMVQ path;
+// keep the generic VDR=2 schedule on other architectures.
 #define VDR_MXFP4_Q8_1_MMVQ 4
 #else
 #define VDR_MXFP4_Q8_1_MMVQ 2

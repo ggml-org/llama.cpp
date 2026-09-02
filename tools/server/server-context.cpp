@@ -124,6 +124,33 @@ static int32_t server_gfx1030_neural_k4v_cycle_cap(const common_params & params)
     return server_spec_gfx1030_neural_k4v_cycle_cap(params.speculative);
 }
 
+static bool server_gfx1030_sidecar_runtime_profile(const common_params & params) {
+    if (!server_gfx1030_native_auto_enabled() ||
+            !server_vocab_sharded_output_enabled() ||
+            !server_env_enabled("SPEC_SIDECAR") ||
+            params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+        return false;
+    }
+
+    size_t n_rocm_devices = 0;
+    for (ggml_backend_dev_t device : params.devices) {
+        if (device == nullptr) continue;
+        const char * name = ggml_backend_dev_name(device);
+        if (ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_GPU ||
+                name == nullptr || std::strncmp(name, "ROCm", 4) != 0) {
+            return false;
+        }
+        ++n_rocm_devices;
+    }
+    return n_rocm_devices == 4;
+}
+
+static bool server_gfx1030_dflash_dynamic_depth_profile(const common_params & params) {
+    return server_gfx1030_sidecar_runtime_profile(params) &&
+            server_spec_gfx1030_dflash_dynamic_depth_profile(params.speculative) &&
+            params.n_parallel >= 1 && params.n_parallel <= 4;
+}
+
 static bool server_greedy_backend_sampling_eligible(const common_params_sampling & sampling) {
     if (sampling.samplers.empty() || sampling.samplers.back() != COMMON_SAMPLER_TYPE_TEMPERATURE) {
         return false;
@@ -429,6 +456,7 @@ struct server_slot {
     // target prompt. Host prompt-cache and slot-file restores replace target KV
     // without restoring the sidecar's private device KV.
     bool spec_prompt_state_valid = true;
+    bool spec_n_max_user_override = false;
     std::mt19937 spec_synth_rng;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
@@ -573,6 +601,7 @@ struct server_slot {
 
         spec_is_replay = false;
         spec_grammar_fallback_logged = false;
+        spec_n_max_user_override = false;
 
         last_nl_pos    = 0;
         generated_text = "";
@@ -1371,6 +1400,17 @@ private:
         if (prime_auto_backend_sampling) {
             params_base.sampling.backend_sampling = true;
             SRV_INF("%s", "reserving target backend-sampling buffers for gfx1030 speculative auto policy\n");
+        }
+
+        if (server_gfx1030_dflash_dynamic_depth_profile(params_base) &&
+                std::getenv("LLAMA_SPEC_DFLASH_DYNAMIC_DEPTH") == nullptr) {
+#if defined(_WIN32)
+            _putenv_s("LLAMA_SPEC_DFLASH_DYNAMIC_DEPTH", "batch");
+#else
+            setenv("LLAMA_SPEC_DFLASH_DYNAMIC_DEPTH", "batch", 0);
+#endif
+            SRV_INF("%s", "enabling active-batch DFlash depth schedule for qualified gfx1030 TP4 sidecar; "
+                    "set LLAMA_SPEC_DFLASH_DYNAMIC_DEPTH=off to disable\n");
         }
 
         llama_init = common_init_from_params(params_base);
@@ -2199,7 +2239,8 @@ private:
 
         // initialize samplers
         if (task.need_sampling()) {
-            if (task.params.speculative_n_max < 0 && gfx1030_neural_k4v_cycle_cap > 0) {
+            slot.spec_n_max_user_override = task.params.speculative_n_max >= 0;
+            if (!slot.spec_n_max_user_override && gfx1030_neural_k4v_cycle_cap > 0) {
                 task.params.speculative_n_max = gfx1030_neural_k4v_cycle_cap;
             }
 
@@ -3508,7 +3549,7 @@ private:
                         common_speculative_get_draft_params(spec.get(), slot.id) = {
                             /* .drafting = */ true,
                             /* .n_max    = */ n_draft_max,
-                            /* .n_max_user_override = */ slot.task->params.speculative_n_max >= 0,
+                            /* .n_max_user_override = */ slot.spec_n_max_user_override,
                             /* .n_past   = */ slot.prompt.n_tokens(),
                             /* .id_last  = */ slot.sampled,
                             /* .prompt   = */ &slot.spec_prompt,

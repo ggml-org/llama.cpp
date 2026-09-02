@@ -606,18 +606,23 @@ __global__ void sample_topk(const int * __restrict__ ids, const float * __restri
         *active = 0;
         return;
     }
-    int selected = topk - 1;
+    for (int k = 0; k < topk; ++k) {
+        probs[k] /= sum;
+    }
+    int selected = -1;
     double cumulative = 0.0;
     const double u = uniform < 1.0 ? (uniform > 0.0 ? uniform : 0.0) : 0.9999999999999999;
     for (int k = 0; k < topk; ++k) {
-        probs[k] /= sum;
+        if (!(probs[k] > 0.0f)) {
+            continue;
+        }
+        selected = k;
         cumulative += probs[k];
         if (u < cumulative) {
-            selected = k;
             break;
         }
     }
-    if (probs[selected] < p_min || ids[selected] < 0) {
+    if (selected < 0 || probs[selected] < p_min || ids[selected] < 0) {
         *active = 0;
         return;
     }
