@@ -229,8 +229,7 @@ struct llama_layer_nextn {
     struct ggml_tensor * shared_head_head_in_s = nullptr;
     struct ggml_tensor * shared_head_norm      = nullptr;
 
-    // qwen4exp: the MTP head's own final hyper-connection mixer, which stands in for both
-    // the stream collapse and the output norm (the trunk has no separate output_norm either)
+    // qwen4exp: the MTP head's mixer; collapses the streams and stands in for the output norm
     struct ggml_tensor * hc_head_norm          = nullptr;
     struct ggml_tensor * hc_head_down          = nullptr;
     struct ggml_tensor * hc_head_up            = nullptr;

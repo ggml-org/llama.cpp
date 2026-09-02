@@ -1110,8 +1110,7 @@ bool llama_model_loader::lazy_read::add(const std::string & name, const ggml_ten
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model);
 
 struct ggml_tensor * llama_model_loader::borrow_shared_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne) {
-    // only the tensors a draft head is allowed to leave out, checked first so no other
-    // tensor in any model costs a metadata lookup
+    // checked first so no other tensor in any model pays a metadata lookup
     if (tn.tensor != LLM_TENSOR_TOKEN_EMBD && tn.tensor != LLM_TENSOR_OUTPUT && tn.tensor != LLM_TENSOR_OUTPUT_NORM) {
         return nullptr;
     }
@@ -1125,7 +1124,6 @@ struct ggml_tensor * llama_model_loader::borrow_shared_tensor(const LLM_TN_IMPL 
         return nullptr;
     }
 
-    // a file that declares the flag and still ships the tensor keeps its own copy
     const std::string name = tn.str();
     if (get_weight(name.c_str()) != nullptr) {
         return nullptr;
@@ -1148,7 +1146,7 @@ struct ggml_tensor * llama_model_loader::borrow_shared_tensor(const LLM_TN_IMPL 
                     __func__, name.c_str()));
     }
 
-    // the draft uses the tensor directly, so the shapes must agree exactly
+    // used directly, so the shapes must agree exactly
     size_t dim = 0;
     for (const int64_t n : ne) {
         if (dim >= GGML_MAX_DIMS || src->ne[dim] != n) {
@@ -1166,8 +1164,7 @@ struct ggml_tensor * llama_model_loader::borrow_shared_tensor(const LLM_TN_IMPL 
 
     LLAMA_LOG_INFO("%s: tensor %s taken from the target model\n", __func__, name.c_str());
 
-    // not counted in n_created or size_data: the tensor is not in this file and is neither
-    // allocated nor freed here
+    // not counted in n_created/size_data: not in this file, neither allocated nor freed here
     return src;
 }
 
@@ -1391,8 +1388,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         return ret;
     }
 
-    // must run before check_tensor_dims: the tensor is absent from this file by design, and for
-    // the lm head it must also win over the arch fallback that ties the head to token_embd
+    // must precede check_tensor_dims, and must win over the arch fallback that ties output to token_embd
     if (ggml_tensor * shared = borrow_shared_tensor(tn, ne)) {
         return shared;
     }

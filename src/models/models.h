@@ -2286,7 +2286,7 @@ struct llama_model_qwen4exp : public llama_model_base {
     struct graph : public llm_build_delta_net_base {
         graph(const llama_model & model, const llm_graph_params & params);
     protected:
-        // tag-dispatched ctor for graph_mtp: binds the members without building the trunk
+        // graph_mtp ctor: binds the members without building the trunk
         struct no_build_t {};
         graph(const llama_model & model, const llm_graph_params & params, no_build_t) :
             llm_build_delta_net_base(params), model(model) {}
@@ -2382,7 +2382,6 @@ struct llama_model_qwen4exp : public llama_model_base {
         const llama_model & model;
     };
 
-    // LLM_GRAPH_TYPE_DECODER_MTP draft head: one HC-wrapped dense-attention + MoE block
     struct graph_mtp : public graph {
         graph_mtp(const llama_model & model, const llm_graph_params & params);
     };

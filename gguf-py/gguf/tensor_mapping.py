@@ -2765,7 +2765,6 @@ class TensorNameMap:
             MODEL_TENSOR.HC_HEAD_UP: (
                 "model.hyper_connection_mixer.input_mix_weight_up",
             ),
-            # the MTP head carries its own copy of the head mixer above
             MODEL_TENSOR.NEXTN_HC_HEAD_NORM: (
                 "model.layers.{bid}.hyper_connection_mixer.hc_norm",
             ),

@@ -120,7 +120,6 @@ class ModelBase:
     supports_mtp_export: bool = False
     mtp_only: bool = False
     no_mtp: bool = False
-    # with mtp_only, leave the shared embeddings and lm head to the target model
     mtp_shared_embd: bool = False
 
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
@@ -1034,7 +1033,7 @@ class ModelBase:
 
     def prepare_metadata(self, vocab_only: bool):
 
-        # tells the loader the shared embeddings and lm head are missing on purpose
+        # tells the loader they are missing on purpose
         if self.mtp_only and self.mtp_shared_embd:
             self.gguf_writer.add_nextn_shared_target_tensors(True)
 

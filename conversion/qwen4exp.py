@@ -34,18 +34,13 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self._ple_shards: dict[int, str] = {}
         self._ple_row_dim: int | None = None
 
-    # The MTP head is one trunk-shaped block (dense attention + MoE, wrapped in
-    # hyper-connections) plus a combiner, so once _QwenMtpMixin renames
-    # `mtp.layers.0.*` to the trailing block index its tensors ride the existing
-    # qwen4exp mappings unchanged. Only the two head-level pieces below differ.
-
+    # _QwenMtpMixin renames mtp.layers.0.* to the trailing block index, so the head reuses the
+    # existing qwen4exp mappings; only the two pieces below differ.
     _MTP_MIXER_PREFIX = "mtp.hyper_connection_mixer."
 
     @classmethod
     def filter_tensors(cls, item):
-        # the head carries its own copy of the trunk's hc_head_* output mixer,
-        # which qwen4exp has in place of a final norm; it is unindexed in the
-        # checkpoint and per-block in the GGUF
+        # unindexed in the checkpoint, per-block in the GGUF
         name, gen = item
         if name.startswith("model." + cls._MTP_MIXER_PREFIX):
             name = name.replace("model.", "", 1)
@@ -57,9 +52,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         return super().filter_tensors((name, gen))
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        # qwen4exp splits the combiner the shared NextN code calls eh_proj into
-        # fc_embedding and fc_hidden; W_e@e + W_h@h == [W_e|W_h] @ concat(e, h),
-        # so the two fuse back into the single expected matmul
+        # W_e@e + W_h@h == [W_e|W_h] @ concat(e, h), so fc_embedding and fc_hidden fuse into eh_proj
         tensors = super().index_tensors(remote_hf_model_id=remote_hf_model_id)
 
         emb = tensors.pop("mtp.fc_embedding.weight", None)
@@ -73,8 +66,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             )
 
         assert self._original_block_count is not None
-        # fc_embedding first: the graph concatenates the token embedding ahead of
-        # the hidden state, so the fused weight has to be ordered to match
+        # fc_embedding first: the graph concatenates the embedding ahead of the hidden state
         name = f"model.layers.{self._original_block_count}.eh_proj.weight"
         tensors[name] = lambda: torch.cat([emb(), hid()], dim=1)
         return tensors
@@ -108,15 +100,12 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         ratio = hp["indexer_compress_ratio"]
         layer_types = hp["layer_types"]
         ratios = [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
-        # llama.cpp reads this array with length block_count, and the MTP blocks
-        # trailing the trunk attend densely, which is what a ratio of 0 selects
+        # read with length block_count; 0 selects dense, which is how the MTP blocks attend
         ratios += [0] * (self.block_count - n_layer)
         self.gguf_writer.add_attention_compress_ratios(ratios)
 
         # ple_layer_ids is 1-based in the HF config; empty means no n-gram table,
-        # so emit no PLE keys rather than optional ones.
-        # a draft-only export carries no trunk tensors, so it carries no PLE table
-        # to describe either
+        # so emit no PLE keys rather than optional ones. a draft-only export has no PLE table either.
         ple_layers = [i - 1 for i in hp["ple_layer_ids"]]
         if not ple_layers or self.mtp_only:
             return
