@@ -30,6 +30,8 @@ const char * mem_api_int2str(int mem_api) {
 * Depend on to call zesInit(0) before any other Level Zero API calls, otherwise the Level Zero API calls may fail.
 */
 bool query_free_memory_by_ze(sycl::device dev, size_t & free_bytes, size_t & total_bytes) {
+    GGML_SYCL_DEBUG("[%s] Querying free memory using Level Zero API.\n", __func__);
+
     free_bytes  = 0;
     total_bytes = 0;
 
@@ -85,7 +87,8 @@ bool query_free_memory_by_ze(sycl::device dev, size_t & free_bytes, size_t & tot
             GGML_SYCL_DEBUG("Level Zero memory query returned zero total bytes.\n");
             return false;
         }
-        return true;
+        return total_bytes >= free_bytes;
+
     } catch (const sycl::exception & e) {
         GGML_SYCL_DEBUG("Level Zero memory query failed: %s\n", e.what());
         return false;
@@ -94,7 +97,7 @@ bool query_free_memory_by_ze(sycl::device dev, size_t & free_bytes, size_t & tot
 #endif
 
 bool get_memory_size_by_sycl_api(sycl::device dev, size_t & free_bytes, size_t & total_bytes) {
-    GGML_SYCL_DEBUG("[%s]Querying free memory using SYCL API.\n", __func__);
+    GGML_SYCL_DEBUG("[%s] Querying free memory using SYCL API.\n", __func__);
     total_bytes = dev.get_info<sycl::info::device::global_mem_size>();
 
 #if (defined(__SYCL_COMPILER_VERSION) && __SYCL_COMPILER_VERSION >= 20221105)
@@ -129,12 +132,12 @@ bool get_memory_size(sycl::device dev, size_t & free_bytes, size_t & total_bytes
 
     if (api_type == MEMORY_API_TYPE_LEVEL_ZERO) {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
-        GGML_SYCL_DEBUG("[%s]Querying free memory using Level Zero API.\n", __func__);
+        GGML_SYCL_DEBUG("[%s] Querying free memory using Level Zero API.\n", __func__);
         if (query_free_memory_by_ze(dev, free_bytes, total_bytes)) {
             return true;
         }
         //fallback to SYCL API if Level Zero API fails
-        GGML_SYCL_DEBUG("[%s]Falling back to SYCL API for memory query.\n", __func__);
+        GGML_SYCL_DEBUG("[%s] Falling back to SYCL API for memory query.\n", __func__);
 #endif
     }
 
