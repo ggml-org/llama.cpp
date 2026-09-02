@@ -290,6 +290,7 @@ class _QwenMtpMixin:
     tensor_map: gguf.TensorNameMap
     no_mtp: bool
     mtp_only: bool
+    mtp_shared_embd: bool
     _original_block_count: int | None = None
     opt_num_mtp_layers: int = 0
 
