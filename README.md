@@ -169,8 +169,9 @@ unless disabled with `GGML_HIP_RDNA2_AUTO=0`, while
 `HSA_OVERRIDE_GFX_VERSION=10.3.0` selects the tested gfx1030 kernel profile.
 Explicit `GGML_HIP_GFX1030_*` variables remain per-feature overrides.
 
-With `SPEC_SIDECAR=1`, MTP and DFlash use the effective per-sequence target
-context and grow committed KV storage on demand. To trade context coverage for
+With `SPEC_SIDECAR=1`, the Qwen3.8-27B MTP and DFlash providers use the
+effective per-sequence target context and grow committed KV storage on demand.
+To trade context coverage for
 lower sidecar VRAM use, set an optional position cap before launch:
 
 ```bash
@@ -195,6 +196,7 @@ safely and leaves target-only decoding available.
 | V620 topology/P2P/RCCL policy | **Automatic** on the qualified topology | `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded` controls the certified TP4 host-snapshot experiment. Qualified TP2 uses the shared two-rank host-snapshot candidate under the RDNA2 Auto policy. |
 | TP output-head sharding | Explicit `GGML_TP_SHARDED_OUTPUT=1` | Uses vocabulary-axis output for CPU/sidecar sampling; an explicit backend-sampling request retains hidden-axis/full logits instead. |
 | Automatic MTP/DFlash assets | `SPEC_SIDECAR=1` | Detects supported runtime GGUFs, creates a validated first-start cache, and reuses it on warm starts. |
+| Flash Next MTP sidecar | `SPEC_SIDECAR=1` with the matching Qwen4Exp provider bundle | Uses the separate 10,240-wide handoff/full-vocabulary provider; batch and ubatch 128 are the validated gfx1030 settings. |
 
 ## Shared rules
 

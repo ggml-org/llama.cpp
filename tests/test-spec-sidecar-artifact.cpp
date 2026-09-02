@@ -118,10 +118,11 @@ int main(int argc, char ** argv) {
                         "built-in Apache-2.0 draft vocabulary passes its integrity check");
 
     const auto profile_count = common_spec_sidecar_profile_count();
-    failures += require(profile_count >= 3, "provider registry exposes all independent profiles");
+    failures += require(profile_count >= 4, "provider registry exposes all independent profiles");
     const common_spec_sidecar_profile * qwen35_mtp = nullptr;
     const common_spec_sidecar_profile * qwen35moe_mtp = nullptr;
     const common_spec_sidecar_profile * qwen35_dflash = nullptr;
+    const common_spec_sidecar_profile * qwen4exp_mtp = nullptr;
     for (size_t i = 0; i < profile_count; ++i) {
         const auto * profile = common_spec_sidecar_profile_at(i);
         if (profile == nullptr || profile->name == nullptr) {
@@ -130,14 +131,17 @@ int main(int argc, char ** argv) {
         if (std::strcmp(profile->name, "qwen35-mtp") == 0) qwen35_mtp = profile;
         if (std::strcmp(profile->name, "qwen35moe-mtp") == 0) qwen35moe_mtp = profile;
         if (std::strcmp(profile->name, "qwen35-dflash") == 0) qwen35_dflash = profile;
+        if (std::strcmp(profile->name, "qwen4exp-mtp") == 0) qwen4exp_mtp = profile;
     }
     failures += require(qwen35_mtp != nullptr && qwen35moe_mtp != nullptr &&
-                        qwen35_dflash != nullptr &&
+                        qwen35_dflash != nullptr && qwen4exp_mtp != nullptr &&
                         qwen35_mtp->kind == COMMON_SPEC_SIDECAR_KIND_MTP &&
                         qwen35moe_mtp->kind == COMMON_SPEC_SIDECAR_KIND_MTP &&
-                        qwen35_dflash->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH,
-                        "Qwen3.8-27B providers use distinct named profiles");
-    failures += require(qwen35_mtp != nullptr && qwen35moe_mtp != nullptr && qwen35_dflash != nullptr &&
+                        qwen35_dflash->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH &&
+                        qwen4exp_mtp->kind == COMMON_SPEC_SIDECAR_KIND_MTP,
+                        "model-specific providers use distinct named profiles");
+    failures += require(qwen35_mtp != nullptr && qwen35moe_mtp != nullptr &&
+                        qwen35_dflash != nullptr && qwen4exp_mtp != nullptr &&
                         common_spec_sidecar_profile_name_matches(*qwen35_mtp, "Qwen/Qwen3.8-27B") &&
                         common_spec_sidecar_profile_name_matches(*qwen35_mtp, "..") &&
                         common_spec_sidecar_profile_name_matches(*qwen35_dflash, "..") &&
@@ -159,8 +163,33 @@ int main(int argc, char ** argv) {
                         std::strcmp(qwen35moe_mtp->default_library_name,
                                     "spec_qwen35moe_mtp_sidecar.so") == 0 &&
                         qwen35_dflash->dflash_encoded_width == 25600 && qwen35_dflash->dflash_block_size == 8 &&
-                        qwen35_dflash->dflash_head_rows == 40960,
-                        "Qwen3.8-27B providers retain narrow identity and independent capability contracts");
+                        qwen35_dflash->dflash_head_rows == 40960 &&
+                        std::strcmp(qwen4exp_mtp->target_architecture, "qwen4exp") == 0 &&
+                        qwen4exp_mtp->target_n_embd == 2560 &&
+                        qwen4exp_mtp->target_n_embd_out == 10240 &&
+                        qwen4exp_mtp->target_n_layer == 48 &&
+                        qwen4exp_mtp->target_n_layer_nextn == 0 &&
+                        qwen4exp_mtp->target_n_vocab == 248320 &&
+                        qwen4exp_mtp->mtp_embedding_width == 10240 &&
+                        qwen4exp_mtp->mtp_head_rows == 248320,
+                        "providers retain narrow identity and independent capability contracts");
+
+    if (qwen4exp_mtp != nullptr) {
+        if (const char * target = std::getenv("LLAMA_TEST_QWEN4EXP_TARGET")) {
+            std::string fixture_error;
+            const auto * fixture = common_spec_sidecar_profile_for_target_file(
+                    COMMON_SPEC_SIDECAR_KIND_MTP, target, fixture_error);
+            failures += require(fixture != nullptr && fixture->name != nullptr &&
+                                std::strcmp(fixture->name, "qwen4exp-mtp") == 0,
+                                "real Flash Next target selects qwen4exp-mtp");
+            set_environment("SPEC_SIDECAR", "1");
+            common_params_speculative probe_params;
+            probe_params.types = { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
+            failures += require(common_speculative_sidecar_candidate(probe_params, target, 8),
+                                "Flash Next provider and artifact pass the eight-slot probe");
+            unset_environment("SPEC_SIDECAR");
+        }
+    }
 
     if (qwen35_mtp != nullptr) {
         set_environment(qwen35_mtp->library_env, "/definitely/missing/spec_hip_sidecar.so");

@@ -1,9 +1,8 @@
-# speculative sidecar Qwen3.8-27B sidecars
+# speculative sidecars for Qwen3.8
 
-This tree carries an optional, host-mediated speculative sidecar integration for the
-Qwen3.8-27B MTP and DFlash2 drafters. The target model remains authoritative:
-the sidecar proposes token IDs and the normal target verifier accepts or
-rejects them.
+This tree carries optional host-mediated sidecars for Qwen3.8-27B MTP/DFlash2
+and Qwen3.8 Flash Next MTP. The target model remains authoritative: sidecars
+propose token IDs and the normal target verifier accepts or rejects them.
 
 The sidecars are intentionally **not** enabled by default. Runtime activation
 requires the exact opt-in `SPEC_SIDECAR=1`; an unset value, `0`, or any other
@@ -88,6 +87,21 @@ production speed recommendation. Its full-vocabulary target output is reduced
 to the 40,960 IDs in the artifact, so acceptance and throughput must be
 qualified against native MTP on the user's exact model and prompt family.
 
+## Prepare the Flash Next artifacts
+
+Flash Next uses its own provider and cannot reuse the 27B bundle. Prepare it
+from the matching base target and Qwen4Exp MTP GGUF:
+
+```sh
+python3 tools/spec-sidecar/prepare_assets.py qwen4exp-mtp \
+  --target /models/Qwen3.8-Flash-Next-00001-of-00004.gguf \
+  --draft /models/Qwen3.8-Flash-Next-MTP-Q4_0.gguf \
+  --output /artifacts/spec-sidecar-qwen4exp-mtp
+```
+
+The profile requires `qwen4exp`, width 2,560 with a 10,240-wide target handoff,
+48 target blocks, 512 experts, and vocabulary 248,320.
+
 ## Build
 
 The unified RDNA build script (`scripts/build-rdna-unified.sh`) compiles the
@@ -111,15 +125,18 @@ cmake -S . -B build-spec-sidecar \
   -DCMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc
 cmake --build build-spec-sidecar \
   --target spec-sidecar-hip-mtp spec-sidecar-hip-dflash \
-           spec-sidecar-hip-qwen35moe-mtp llama-server
+           spec-sidecar-hip-qwen35moe-mtp \
+           spec-sidecar-hip-qwen4exp-mtp llama-server
 ```
 
 The resulting libraries are `spec_hip_sidecar.so`, `spec_dflash_sidecar.so`,
-and `spec_qwen35moe_mtp_sidecar.so` in the build `bin` directory. For automatic
+`spec_qwen35moe_mtp_sidecar.so`, and `spec_qwen4exp_mtp_sidecar.so` in the
+build `bin` directory. For automatic
 runtime discovery of the qualified providers, put the prepared bundles at
 `bin/spec-sidecar-mtp` and `bin/spec-sidecar-dflash` beside those libraries (or
-under the documented installed `share/llama.cpp/spec-sidecar` layout). The
-Qwen35MoE bundle is intentionally explicit-path only until its end-to-end speed
+under the documented installed `share/llama.cpp/spec-sidecar` layout). Flash
+Next uses `spec-sidecar-qwen4exp-mtp` or its dedicated explicit path variables.
+The Qwen35MoE bundle is intentionally explicit-path only until its end-to-end speed
 and acceptance matrix is complete. These targets are optional because each
 provider contains fixed model dimensions and is not a replacement for the
 normal HIP backend.
@@ -142,6 +159,25 @@ export GGML_TP_SHARDED_OUTPUT=1
   -np 1 --no-context-shift \
   --ctx-checkpoints 0 --cache-ram 0 --no-cache-idle-slots
 ```
+
+## Run Flash Next MTP
+
+Install the matching bundle as `bin/spec-sidecar-qwen4exp-mtp`, or set
+`LLAMA_SPEC_QWEN4EXP_HIP_SIDECAR`, `LLAMA_SPEC_QWEN4EXP_HIP_WEIGHTS`, and
+`LLAMA_QWEN4EXP_DRAFT_HEAD_IDS` explicitly. No `-md` model is used by this
+sidecar path.
+
+```sh
+SPEC_SIDECAR=1 ./build/bin/llama-server \
+  -m /models/Qwen3.8-Flash-Next-00001-of-00004.gguf \
+  --spec-type draft-mtp,ngram-map-k4v --spec-draft-n-max 3 \
+  --batch-size 128 --ubatch-size 128 --spec-draft-ubatch-size 128 \
+  --parallel 1 --ctx-checkpoints 0
+```
+
+Batch and ubatch 128 are the validated gfx1030 Flash Attention settings. The
+current Flash Next provider supports up to 131,072 positions; larger target
+contexts safely fall back after that boundary.
 
 ## Run DFlash2
 
@@ -194,8 +230,8 @@ export SPEC_SIDECAR=1
   storage starts at 16K rows and grows geometrically up to the effective target
   context; growth recaptures the per-sequence graph once, and
   reset releases grown storage.
-- Sidecar KV capacity follows the effective per-sequence target context and is
-  allocated on demand. `LLAMA_SPEC_HIP_MAX_POS=N` may impose a lower position
+- Qwen3.8-27B sidecar KV capacity follows the effective per-sequence target
+  context and is allocated on demand. `LLAMA_SPEC_HIP_MAX_POS=N` may impose a lower position
   cap to reduce VRAM use; it cannot raise capacity above the target context and
   does not change the fixed F16 sidecar KV datatype.
 - Prompt and ordinary target rows are implicitly committed; target

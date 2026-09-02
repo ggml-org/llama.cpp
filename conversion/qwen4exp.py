@@ -46,6 +46,44 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self._ple_offsets: list[int] | None = None
         self._ple_vocab_sizes: list[int] | None = None
 
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        if not self.mtp_only or remote_hf_model_id is not None:
+            return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+        # The released checkpoint keeps its MTP head in model_mtp.safetensors.
+        # MTP export needs only that file plus the shared embedding and LM head;
+        # do not open the enormous target/PLE shards merely to filter them out.
+        index_path = self.dir_model / "model.safetensors.index.json"
+        with open(index_path, "r", encoding="utf-8") as file:
+            weight_map = json.load(file).get("weight_map", {})
+        selected = {
+            name: part for name, part in weight_map.items()
+            if name.startswith("mtp.") or name in (
+                "model.language_model.embed_tokens.weight",
+                "lm_head.weight",
+            )
+        }
+        required = {"model.language_model.embed_tokens.weight", "lm_head.weight"}
+        if not required.issubset(selected) or not any(name.startswith("mtp.") for name in selected):
+            raise ValueError("Qwen4Exp MTP export is missing its shared or auxiliary tensors")
+
+        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
+        type(self)._original_block_count = int(hparams["num_hidden_layers"])
+        type(self).opt_num_mtp_layers = 0
+        type(self).saw_mtp_tensor = False
+        tensors = {}
+        for part_name in sorted(set(selected.values())):
+            with gguf.utility.SafetensorsLocal(self.dir_model / part_name) as model_part:
+                for name, source_part in selected.items():
+                    if source_part != part_name:
+                        continue
+                    data = model_part[name]
+                    data_gen = lambda data=data: LazyTorchTensor.from_local_tensor(data)
+                    if titem := self.filter_tensors((name, data_gen)):
+                        tensor_name, tensor_gen = titem
+                        tensors[tensor_name] = tensor_gen
+        return tensors
+
     def _read_hash_constants(self, suffix: str) -> list[int]:
         """Read an int64 PLE constant straight from the checkpoint.
 
