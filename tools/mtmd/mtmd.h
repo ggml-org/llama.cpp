@@ -75,8 +75,8 @@ struct mtmd_input_text {
 
 struct mtmd_input_part {
     // only text or bitmap can be set, not both
-    struct mtmd_input_text * text;
-    struct mtmd_bitmap * bitmap;
+    const struct mtmd_input_text * text;
+    const struct mtmd_bitmap * bitmap;
 };
 
 //
