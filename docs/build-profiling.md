@@ -20,10 +20,36 @@ cmake --build build -j$(nproc)
 sudo cp build/ClangBuildAnalyzer /usr/local/bin/
 ```
 
-### Usage
+Windows: install LLVM/clang and Ninja (e.g. via the
+[LLVM releases page](https://github.com/llvm/llvm-project/releases) and
+`winget install Ninja-build.Ninja`), then build ClangBuildAnalyzer the same
+way as on Linux:
 ```console
-$ ./scripts/build-profile-baseline.sh
+git clone https://github.com/aras-p/ClangBuildAnalyzer.git
+cd ClangBuildAnalyzer
+cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
 ```
+Then add `ClangBuildAnalyzer\build` to `PATH`.
+
+### Usage
+Mac/Linux:
+```console
+$ ./scripts/build-profile.sh
+```
+
+Windows:
+```console
+> .\scripts\build-profile.ps1
+```
+
+Both accept `--full`/`-Full` (include Server, Tools, and Tests) and a jobs
+override (`-jN` / `-Jobs N`).
+
+Note: on Windows, `cmake` defaults to the Visual Studio generator, which
+ignores `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER` and silently falls back to
+MSVC. `build-profile.ps1` passes `-G Ninja` so clang is actually used, this
+is required on ARM64.
 
 ### Linux (Ubuntu 24.04)
 
@@ -66,6 +92,28 @@ Environment:
 | Full,    master        | 407 |   265.7 s  |   209.7 s  |   475.4 s  |
 | Full,    with PCH      | 414 |   154.6 s  |   197.5 s  |   352.1 s  |
 | Full,    with PCH + UB | 274 |   143.0 s  |   192.2 s  |   335.2 s  |
++------------------------+-----+------------+------------+------------+
+
+PCH = precompiled header.
+Full = includes building Server, Tools, and Tests.
+UB   = unity build for models
+```
+
+### Windows (ARM64)
+
+Environment:
+- Clang:  clang version 22.1.8 (LLVM, `C:\Program Files\LLVM`)
+- STL:    MSVC STL (Visual Studio 2022 Build Tools 14.44.35207)
+- Target: aarch64-pc-windows-msvc
+
+```console
++------------------------+-----+------------+------------+------------+
+| Build                  | TUs | Frontend   | Backend    | Total      |
++------------------------+-----+------------+------------+------------+
+| Minimal, master        | 249 |   159.4 s  |    82.2 s  |   241.6 s  |
+| Full,    master        | 373 |   337.2 s  |   167.4 s  |   504.6 s  |
+| Minimal, with PCH + UB | 113 |    62.3 s  |    82.4 s  |   144.7 s  |
+| Full,    with PCH + UB | 240 |   233.0 s  |   185.1 s  |   418.1 s  |
 +------------------------+-----+------------+------------+------------+
 
 PCH = precompiled header.
