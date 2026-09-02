@@ -518,6 +518,7 @@ class NemotronHModel(GraniteHybridModel):
 
 
 @ModelBase.register("NemotronHPuzzleForCausalLM")
+@ModelBase.example("nvidia/NVIDIA-Nemotron-Labs-3-Puzzle-75B-A9B-BF16")
 class NemotronHPuzzleModel(NemotronHModel):
     """NVIDIA Puzzle: NemotronH with a per-block MoE config (block_configs).
 
