@@ -359,27 +359,41 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	 * they differ only in which endpoint is called.
 	 */
 	private buildModelOptions(response: ApiModelsListResponse): ModelOption[] {
-		return response.data.map((item: ApiModelDataEntry, index: number) => {
-			const details = response.models?.[index];
-			const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
-			const displayNameSource =
-				details?.name && details.name.trim().length > 0 ? details.name : item.id;
-			const modelId = details?.model || item.id;
+		const entries: {
+			details?: ApiModelsListResponse['models'][number];
+			item: ApiModelDataEntry;
+		}[] = response.data.map((item: ApiModelDataEntry, index: number) => ({
+			details: response.models?.[index],
+			item
+		}));
 
-			return {
-				aliases: item.aliases ?? [],
-				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
-				description: details?.description,
-				details: details?.details,
-				id: item.id,
-				meta: item.meta ?? null,
-				modalities: this.props.buildArchitectureModalities(item.architecture),
-				model: modelId,
-				name: this.toDisplayName(displayNameSource),
-				parsedId: ModelsService.parseModelId(modelId),
-				tags: item.tags ?? []
-			};
-		});
+		return (
+			entries
+				// sidecar entries mark downloaded sidecar files, not loadable models
+				.filter(({ item }) => !ModelsService.isSidecarEntry(item.id))
+				.map(({ details, item }) => {
+					const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
+					const displayNameSource =
+						details?.name && details.name.trim().length > 0 ? details.name : item.id;
+					const modelId = details?.model || item.id;
+
+					return {
+						aliases: item.aliases ?? [],
+						capabilities: rawCapabilities.filter((value: unknown): value is string =>
+							Boolean(value)
+						),
+						description: details?.description,
+						details: details?.details,
+						id: item.id,
+						meta: item.meta ?? null,
+						modalities: this.props.buildArchitectureModalities(item.architecture),
+						model: modelId,
+						name: this.toDisplayName(displayNameSource),
+						parsedId: ModelsService.parseModelId(modelId),
+						tags: item.tags ?? []
+					};
+				})
+		);
 	}
 
 	/** Fetch models in MODEL mode (single model, standard OpenAI-compatible). */
