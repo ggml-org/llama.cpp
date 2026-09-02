@@ -2162,6 +2162,10 @@ static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
 }
 
 static void llama_null_log_callback(enum ggml_log_level level, const char * text, void * user_data) {
+    if (level == GGML_LOG_LEVEL_ERROR) {
+        fprintf(stderr, "%s", text);
+        return;
+    }
     (void) level;
     (void) text;
     (void) user_data;
