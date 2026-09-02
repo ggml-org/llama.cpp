@@ -1481,24 +1481,42 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
                     std::sort(v.begin(), v.end());
                     return v.empty() ? (int64_t) 0 : v[(size_t) (p*(v.size() - 1))];
                 };
-                // rebuild stats over NONZERO samples only: p50 of a 255:1 zero-heavy
-                // series hides the one pad-256 rebuild entirely (grokk 076 s3).
-                std::vector<int64_t> nz;
-                int64_t sum_rebuild = 0;
-                for (int64_t v : fbl_host_rebuild_us) {
-                    sum_rebuild += v;
-                    if (v > 0) nz.push_back(v);
-                }
+                // rebuild EVENT LEDGER, chronological (codex 082 s3): the first
+                // event is the cold graph after restore, never a pad-256 cost
+                // (grokk 081 s2); later events are the width-cadence oracle.
+                // Percentiles over one or two events pretend to knowledge that
+                // does not exist, so raw ordinals+values are printed instead.
                 const size_t n_tot = fbl_host_rebuild_us.size();
+                int64_t sum_rebuild = 0;
+                std::string events;
+                int64_t first_us = 0, later_max = 0;
+                size_t  later_n = 0;
+                char buf[64];
+                for (size_t j = 0; j < n_tot; ++j) {
+                    const int64_t v = fbl_host_rebuild_us[j];
+                    sum_rebuild += v;
+                    if (v > 0) {
+                        if (first_us == 0) {
+                            first_us = v;
+                        } else {
+                            later_n++;
+                            later_max = std::max(later_max, v);
+                        }
+                        if (events.size() < 256) {
+                            snprintf(buf, sizeof(buf), "%s%zu:%lld",
+                                     events.empty() ? "" : ",", j + 1, (long long) v);
+                            events += buf;
+                        }
+                    }
+                }
                 fprintf(stderr, "HOST_TIMERS n=%zu n_rebuild=%zu n_reuse=%zu | "
-                        "rebuild_nz_us p50=%lld p95=%lld max=%lld | "
-                        "burst_amort_us=%lld | serving_est_us=%lld | "
+                        "first_rebuild_us=%lld later_n=%zu later_max_us=%lld | "
+                        "rebuild_events=%s | burst_amort_us=%lld | "
                         "set_inputs_us p50=%lld p95=%lld\n",
-                        n_tot, nz.size(), n_tot - nz.size(),
-                        (long long) pct(nz, 0.5), (long long) pct(nz, 0.95),
-                        (long long) (nz.empty() ? 0 : *std::max_element(nz.begin(), nz.end())),
+                        n_tot, (size_t) (later_n + (first_us > 0)), n_tot - later_n - (first_us > 0),
+                        (long long) first_us, later_n, (long long) later_max,
+                        events.empty() ? "none" : events.c_str(),
                         (long long) (n_tot ? sum_rebuild/(int64_t) n_tot : 0),
-                        (long long) (pct(nz, 0.5)/256),
                         (long long) pct(fbl_host_setinp_us, 0.5), (long long) pct(fbl_host_setinp_us, 0.95));
             }
         }
