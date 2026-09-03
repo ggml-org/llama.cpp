@@ -1332,14 +1332,22 @@ bool server_models::remove(const std::string & name) {
         return true;
     }
 
-    // join before erasing - thread no longer acquires this mutex
-    if (it->second.th.joinable()) {
-        it->second.th.join();
+    // on the cancelled-download path the status flips to DOWNLOADED while the
+    // monitoring thread still has a mutex-guarded step left, so joining under
+    // the lock would deadlock - join outside, as load_models() does
+    std::thread th = std::move(it->second.th);
+    mapping.erase(name);
+    lk.unlock();
+
+    // join first so the monitoring thread's final mutex-guarded cleanup cannot
+    // race the disk removal, then remove from disk without holding the lock
+    // (best-effort: cancelled downloads may have no cached files)
+    if (th.joinable()) {
+        th.join();
     }
 
-    // remove from disk (best-effort: cancelled downloads may have no cached files)
     bool ok = common_download_remove(name);
-    mapping.erase(name);
+
     if (!ok) {
         SRV_WRN("removing model name=%s from disk returned false (no cached files?)\n", name.c_str());
     }
