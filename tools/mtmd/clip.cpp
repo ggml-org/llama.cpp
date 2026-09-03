@@ -1200,8 +1200,32 @@ static std::map<ggml_tensor*, clip_weight_ops> clip_collect_weight_ops(ggml_cont
     return w_ops_map;
 }
 
-static bool clip_weight_buft_supported (ggml_tensor * w, const clip_weight_ops & wo, ggml_backend_buffer_type_t buft) {
-    return false;
+static bool clip_weight_buft_supported(ggml_tensor *              w,
+                                       const clip_weight_ops &    wops,
+                                       ggml_backend_buffer_type_t buft,
+                                       ggml_backend_dev_t         dev) {
+    if (wops.used_via_view || wops.ops.empty()) {
+        return false;
+    }
+    GGML_ASSERT(w->buffer == nullptr);
+    ggml_backend_buffer_ptr buf{ ggml_backend_buft_alloc_buffer(buft, 0) };
+    if (!buf) {
+        return false;
+    }
+
+    // supports_op checks the buffer type of op struct
+    // temporarily create a zero-size candidate
+    w->buffer = buf.get();
+    bool supported = true;
+    for (ggml_tensor * op : wops.ops) {
+        if (!ggml_backend_dev_supports_op(dev, op)) {
+            supported = false;
+            break;
+        }
+    }
+    w->buffer = nullptr;
+
+    return supported;
 }
 
 //
@@ -3669,11 +3693,11 @@ struct clip_model_loader {
                             ggml_cgraph * gf        = clip_get_graph_builder(&ctx_clip, batch)->build();
                             const auto    w_ops_map = clip_collect_weight_ops(ctx_clip.ctx_data.get(), gf);
                             for (const auto & i : w_ops_map) {
-                                const auto & w        = i.first;
-                                const auto & wops_map = i.second;
+                                const auto & w    = i.first;
+                                const auto & wops = i.second;
                                 for (ggml_backend_buffer_type_t * it = extra_bufts; *it; ++it) {
                                     ggml_backend_buffer_type_t extra_buft = *it;
-                                    if (clip_weight_buft_supported(w, wops_map, extra_buft)) {
+                                    if (clip_weight_buft_supported(w, wops, extra_buft, dev)) {
                                         extra_tensors[extra_buft].push_back(w);
                                         break;
                                     }
