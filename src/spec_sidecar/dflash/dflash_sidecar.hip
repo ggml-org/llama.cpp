@@ -165,6 +165,7 @@ struct DState {
     bool q8_native_mmvq = false;
     bool q8_native_q4_only = false;
     bool bounded_stochastic_graph = false;
+    bool window_catchup = false;
     int q8_layers = 5;
     float * q8_probe = nullptr;
     int q8_probe_slots = 0;
@@ -475,6 +476,9 @@ DF_API int spec_dflash_commit_state(int32_t seq_id, int32_t pos_max) {
                                n_rows * row_bytes, hipMemcpyDeviceToDevice, S.st));
         }
         q->state_pos_max = pos_max;
+        if (S.window_catchup) {
+            q->state_pos_min = std::max(q->state_pos_min, q->state_pos_max - DF_WINDOW);
+        }
     }
     discard_pending(*q);
     if (sync_timing) {
@@ -686,12 +690,18 @@ static int spec_dflash_init_impl(const char * dir, int32_t n_seq, int32_t reques
     S.q8_native_mmvq = native_q4 || native_all;
 #if defined(SPEC_SIDECAR_GFX1030)
     S.bounded_stochastic_graph = true;
+    S.window_catchup = true;
 #else
     S.bounded_stochastic_graph = false;
+    S.window_catchup = false;
 #endif
     if (const char * bounded = getenv("LLAMA_SPEC_HIP_DFLASH_BOUNDED_GRAPH")) {
         S.bounded_stochastic_graph = strcmp(bounded, "0") != 0 &&
                 strcmp(bounded, "off") != 0 && strcmp(bounded, "false") != 0;
+    }
+    if (const char * window = getenv("LLAMA_SPEC_HIP_DFLASH_WINDOW_CATCHUP")) {
+        S.window_catchup = strcmp(window, "0") != 0 &&
+                strcmp(window, "off") != 0 && strcmp(window, "false") != 0;
     }
     S.q8_layers = 5;
     if (const char * layers = getenv("LLAMA_SPEC_HIP_DFLASH_Q8_LAYERS")) {
@@ -918,9 +928,10 @@ static int spec_dflash_init_impl(const char * dir, int32_t n_seq, int32_t reques
     DFC(hipMalloc(&S.tk_ids,  8 * DF_TOPK * 4));
     DFC(hipMalloc(&S.tk_vals, 8 * DF_TOPK * 4));
     S.ok = true;
-    fprintf(stderr, "[dflash-sidecar] initialized (max_pos=%d, device=%d, q8_head=%d, q8_all=%d, q8_process=%d, q8_layers=%d, q8_native_mmvq=%d, q8_native_q4_only=%d, bounded_graph=%d)\n",
+    fprintf(stderr, "[dflash-sidecar] initialized (max_pos=%d, device=%d, q8_head=%d, q8_all=%d, q8_process=%d, q8_layers=%d, q8_native_mmvq=%d, q8_native_q4_only=%d, bounded_graph=%d, window_catchup=%d)\n",
             S.max_pos, S.device, S.q8_head ? 1 : 0, S.q8_all ? 1 : 0, S.q8_process ? 1 : 0, S.q8_layers,
-            S.q8_native_mmvq ? 1 : 0, S.q8_native_q4_only ? 1 : 0, S.bounded_stochastic_graph ? 1 : 0);
+            S.q8_native_mmvq ? 1 : 0, S.q8_native_q4_only ? 1 : 0, S.bounded_stochastic_graph ? 1 : 0,
+            S.window_catchup ? 1 : 0);
     return 0;
 }
 
@@ -965,7 +976,16 @@ static int spec_dflash_chunk_impl(int32_t seq_id, const int32_t * poss,
     const int NROT = 128;
     q->pending_pos_min = q->state_pos_max;
     q->pending_pos_max = q->state_pos_max + n;
-    for (int off = 0; off < n; off += 8) {
+    // The decoder's trained attention window is 2,048 positions. On a large
+    // linear catch-up batch, rows older than the final window cannot be read by
+    // this or any later draft. Keep the logical cursor contiguous while
+    // omitting only those independently projected K/V rows.
+    const int first_needed = S.window_catchup ? std::max(0, n - DF_WINDOW) : 0;
+    // Keep the provider's original eight-row launch boundaries. The fixed-M
+    // Q4/Q6 kernels are numerically stable within a launch shape, while
+    // re-basing a tail row to a different column can alter proposal rounding.
+    const int first_row = first_needed - first_needed % 8;
+    for (int off = first_row; off < n; off += 8) {
         const int nb = std::min(8, n - off);
         if (device_features) {
             const float * layer0 = static_cast<const float *>(layer_features_device[0]) + (size_t) off * layer_width;
