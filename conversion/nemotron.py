@@ -5,6 +5,7 @@ from typing import Any, Callable, Iterable, TYPE_CHECKING
 import torch
 
 if TYPE_CHECKING:
+    from pathlib import Path
     from torch import Tensor
 
 from .base import MmprojModel, ModelBase, TextModel, gguf, logger
@@ -201,6 +202,7 @@ class NemotronHModel(GraniteHybridModel):
     model_arch = gguf.MODEL_ARCH.NEMOTRON_H
     is_moe: bool = False
     supports_mtp_export = True
+    _experts: list[dict[str, Tensor]] | None = None
 
     _SSM_LAYER_TYPES = {"mamba", "linear_attention"}
     _ATTN_LAYER_TYPES = {"attention", "full_attention"}
@@ -513,3 +515,88 @@ class NemotronHModel(GraniteHybridModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("NemotronHPuzzleForCausalLM")
+@ModelBase.example("nvidia/NVIDIA-Nemotron-Labs-3-Puzzle-75B-A9B-BF16")
+class NemotronHPuzzleModel(NemotronHModel):
+    """NVIDIA Puzzle: NemotronH with a per-block MoE config (block_configs).
+
+    The checkpoint also ships an MTP draft head (mtp.safetensors). It is skipped
+    here: there is no Puzzle MTP inference path in tree, and the head is laid out
+    by mtp_block_configs rather than the mtp.layers.* form NemotronHModel maps."""
+
+    model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
+    is_moe: bool = True
+    supports_mtp_export = False
+
+    def __init__(self, dir_model: "Path", *args, **kwargs):
+        hparams = dict(kwargs.pop("hparams", None) or ModelBase.load_hparams(dir_model, self.is_mistral_format))
+
+        self.block_configs: list[dict] = hparams["block_configs"]
+        self.n_layer_trunk = len(self.block_configs)
+
+        # block_configs carries the per-block MoE shape, and is the authority on the
+        # block pattern too: the layers_block_type the HF config wrapper computes is
+        # not sized to it.
+        hparams["num_hidden_layers"] = self.n_layer_trunk
+        hparams["layers_block_type"] = [bc["block_type"] for bc in self.block_configs]
+
+        self.model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
+
+        # Bypass NemotronHModel.__init__: it assumes a flat num_experts_per_tok /
+        # moe_intermediate_size and a layers_block_type sized to block_count, neither
+        # of which hold for Puzzle's per-block config.
+        GraniteHybridModel.__init__(self, dir_model, *args, hparams=hparams, **kwargs)
+
+        self.head_dim = self.find_hparam(["head_dim", "attention_head_dim"])
+        self.d_inner = self.find_hparam(["num_heads"]) * self.d_model
+
+        # NemotronHModel.__init__ folds an MTP block into block_count when the
+        # config carries num_nextn_predict_layers; Puzzle's config does, but its
+        # head has a different layout and no inference path, so stay opted out.
+        self._mtp_bid = None
+
+    def set_gguf_parameters(self):
+        GraniteHybridModel.set_gguf_parameters(self)
+
+        head_dim = self.head_dim
+        if head_dim is None:
+            raise ValueError("Could not find the attention head dim in config")
+        self.gguf_writer.add_key_length(head_dim)
+        self.gguf_writer.add_value_length(head_dim)
+
+        ffn_lengths = [bc.get("moe_intermediate_size") or 0 for bc in self.block_configs]
+        experts_used = [bc.get("num_experts_per_tok") or 0 for bc in self.block_configs]
+
+        self.gguf_writer.add_feed_forward_length(ffn_lengths)
+        self.gguf_writer.add_expert_feed_forward_length(ffn_lengths)
+        self.gguf_writer.add_expert_used_count(experts_used)
+
+        self.gguf_writer.add_expert_shared_feed_forward_length(self.hparams["moe_shared_expert_intermediate_size"])
+        self.gguf_writer.add_expert_count(self.hparams["n_routed_experts"])
+        self.gguf_writer.add_expert_shared_count(self.hparams["n_shared_experts"])
+        self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
+        self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
+        self.gguf_writer.add_expert_group_count(self.hparams["n_group"])
+        self.gguf_writer.add_moe_latent_size(self.hparams["moe_latent_size"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # The official BF16 checkpoint (NVIDIA-Nemotron-Labs-3-Puzzle-75B-A9B-BF16)
+        # names the trunk "model.*" (model.layers.*, model.embeddings, model.norm_f)
+        # where the original release used the NemotronH-style "backbone.*", and spells
+        # the router bias "e_score_correction_bias" instead of "e_score_correction.bias";
+        # normalize so both convert identically.
+        if name.startswith("model."):
+            name = "backbone." + name[len("model."):]
+        if name.endswith("mixer.gate.e_score_correction_bias"):
+            name = name[: -len("e_score_correction_bias")] + "e_score_correction.bias"
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        # Drop the MTP head unconditionally; see the class docstring.
+        if item[0].startswith("mtp."):
+            return None
+        return super().filter_tensors(item)
