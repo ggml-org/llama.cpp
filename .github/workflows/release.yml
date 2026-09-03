@@ -427,11 +427,15 @@ jobs:
       - name: Pack CUDA runtime
         id: pack_cuda_runtime
         run: |
+          major="${{ matrix.label }}"
+          major="${major%%.*}"
           mkdir -p ./cudart
-          cp /usr/local/cuda/lib64/libcudart.so.1* ./cudart/
-          cp /usr/local/cuda/lib64/libcublas.so.1* ./cudart/
-          cp /usr/local/cuda/lib64/libcublasLt.so.1* ./cudart/
-          cp "$(find /usr -name libnccl.so.2 | head -n1)" ./cudart/
+          # cp -L dereferences the SONAME symlinks into plain files, so the
+          # tarball holds exactly 4 files with no versioned duplicates
+          cp -L /usr/local/cuda/lib64/libcudart.so.${major} ./cudart/
+          cp -L /usr/local/cuda/lib64/libcublas.so.${major} ./cudart/
+          cp -L /usr/local/cuda/lib64/libcublasLt.so.${major} ./cudart/
+          cp -L "$(find /usr -name libnccl.so.2 | head -n1)" ./cudart/
           tar -czvf cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz --transform "s,^\.,cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}," -C ./cudart .
 
       - name: Upload CUDA runtime
