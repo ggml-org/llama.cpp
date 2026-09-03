@@ -86,6 +86,8 @@ struct cpuid_x86 {
     bool AMX_INT8(void) { return f_7_edx[25]; }
     bool AMX_FP16(void) { return f_7_1_eax[21]; }
     bool AMX_BF16(void) { return f_7_edx[22]; }
+    bool OS_AVX(void) { return (xcr0 & 0x6) == 0x6; }
+    bool OS_AVX512(void) { return (xcr0 & 0xe6) == 0xe6; }
 
 #ifdef _MSC_VER
     static void cpuid(int cpu_info[4], int eax) {
@@ -93,6 +95,9 @@ struct cpuid_x86 {
     }
     static void cpuidex(int cpu_info[4], int eax, int ecx) {
         __cpuidex(cpu_info, eax, ecx);
+    }
+    static uint64_t xgetbv(unsigned int index) {
+        return _xgetbv(index);
     }
 #else
     static void cpuid(int cpu_info[4], int eax) {
@@ -106,6 +111,12 @@ struct cpuid_x86 {
             "cpuid"
             : "=a"(cpu_info[0]), "=b"(cpu_info[1]), "=c"(cpu_info[2]), "=d"(cpu_info[3])
             : "a"(eax), "c"(ecx));
+    }
+    static uint64_t xgetbv(unsigned int index) {
+        uint32_t eax;
+        uint32_t edx;
+        __asm__ __volatile__("xgetbv" : "=a"(eax), "=d"(edx) : "c"(index));
+        return (static_cast<uint64_t>(edx) << 32) | eax;
     }
 #endif
 
@@ -150,6 +161,11 @@ struct cpuid_x86 {
             f_7_1_eax = cpui[0];
         }
 
+        // capture OS-enabled XSAVE state, if supported
+        if (OSXSAVE()) {
+            xcr0 = xgetbv(0);
+        }
+
         // calling __cpuid with 0x80000000 as the function_id argument
         // gets the number of the highest valid extended ID.
         cpuid(cpui.data(), 0x80000000);
@@ -189,6 +205,7 @@ struct cpuid_x86 {
     std::bitset<32> f_7_1_eax;
     std::bitset<32> f_81_ecx;
     std::bitset<32> f_81_edx;
+    uint64_t xcr0 = 0;
 };
 
 #if 0
@@ -257,12 +274,12 @@ void test_x86_is() {
     printf("amx_int8: %d\n", is.AMX_INT8());
     printf("amx_fp16: %d\n", is.AMX_FP16());
     printf("amx_bf16: %d\n", is.AMX_BF16());
+    printf("OS_AVX: %d\n", is.OS_AVX());
+    printf("OS_AVX512: %d\n", is.OS_AVX512());
 }
 #endif
 
 static int ggml_backend_cpu_x86_score() {
-    // FIXME: this does not check for OS support
-
     int score = 1;
     cpuid_x86 is;
 
@@ -283,19 +300,19 @@ static int ggml_backend_cpu_x86_score() {
     score += 1<<3;
 #endif
 #ifdef GGML_AVX
-    if (!is.AVX()) { return 0; }
+    if (!is.AVX() || !is.OS_AVX()) { return 0; }
     score += 1<<4;
 #endif
 #ifdef GGML_AVX2
-    if (!is.AVX2()) { return 0; }
+    if (!is.AVX2() || !is.OS_AVX()) { return 0; }
     score += 1<<5;
 #endif
 #ifdef GGML_AVX_VNNI
-    if (!is.AVX_VNNI()) { return 0; }
+    if (!is.AVX_VNNI() || !is.OS_AVX()) { return 0; }
     score += 1<<6;
 #endif
 #ifdef GGML_AVX512
-    if (!is.AVX512F()) { return 0; }
+    if (!is.AVX512F() || !is.OS_AVX512()) { return 0; }
     if (!is.AVX512CD()) { return 0; }
     if (!is.AVX512VL()) { return 0; }
     if (!is.AVX512DQ()) { return 0; }
@@ -303,18 +320,19 @@ static int ggml_backend_cpu_x86_score() {
     score += 1<<7;
 #endif
 #ifdef GGML_AVX512_VBMI
-    if (!is.AVX512_VBMI()) { return 0; }
+    if (!is.AVX512_VBMI() || !is.OS_AVX512()) { return 0; }
     score += 1<<8;
 #endif
 #ifdef GGML_AVX512_BF16
-    if (!is.AVX512_BF16()) { return 0; }
+    if (!is.AVX512_BF16() || !is.OS_AVX512()) { return 0; }
     score += 1<<9;
 #endif
 #ifdef GGML_AVX512_VNNI
-    if (!is.AVX512_VNNI()) { return 0; }
+    if (!is.AVX512_VNNI() || !is.OS_AVX512()) { return 0; }
     score += 1<<10;
 #endif
 #ifdef GGML_AMX_INT8
+    // FIXME: This doesn't include OS support
     if (!is.AMX_INT8()) { return 0; }
     score += 1<<11;
 #endif
