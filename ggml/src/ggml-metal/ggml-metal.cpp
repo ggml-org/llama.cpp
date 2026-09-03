@@ -232,6 +232,7 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
                 res += ggml_metal_op_flash_attn_ext_extra_blk(tensor);
                 res += ggml_metal_op_flash_attn_ext_extra_tmp(tensor);
                 res += ggml_metal_op_flash_attn_ext_extra_kv_f16(tensor);
+                res += ggml_metal_op_flash_attn_ext_extra_idx(tensor);
             } break;
         case GGML_OP_CUMSUM:
         case GGML_OP_ARGSORT:
@@ -558,7 +559,9 @@ static void ggml_backend_metal_event_wait(ggml_backend_t backend, ggml_backend_e
     ggml_metal_event_wait(ctx, ev);
 }
 
-static void ggml_backend_metal_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph) {
+static void ggml_backend_metal_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph, ggml_backend_graph_optimize_params * params) {
+    GGML_UNUSED(params);
+
     ggml_metal_t ctx = (ggml_metal_t)backend->context;
 
     ggml_metal_graph_optimize(ctx, cgraph);

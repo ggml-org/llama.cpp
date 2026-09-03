@@ -358,6 +358,54 @@ static inline void hvx_clamp_scalar_f32(uint8_t * restrict dst, const uint8_t * 
     }
 }
 
+#define HVX_OP_CLAMP_SCALAR_F16(v)                                       \
+    ({                                                                   \
+        HVX_VectorPred pred_cap_right = Q6_Q_vcmp_gt_VhfVhf(v, max_vec); \
+        HVX_VectorPred pred_cap_left  = Q6_Q_vcmp_gt_VhfVhf(min_vec, v); \
+        HVX_Vector tmp = Q6_V_vmux_QVV(pred_cap_right, max_vec, v);      \
+        Q6_V_vmux_QVV(pred_cap_left, min_vec, tmp);                      \
+    })
+
+static inline void hvx_clamp_scalar_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, const _Float16 min, const _Float16 max, uint32_t n) {
+    const HVX_Vector min_vec = hvx_vec_splat_f16(min);
+    const HVX_Vector max_vec = hvx_vec_splat_f16(max);
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_scalar_loop_body(HVX_Vector, HVX_Vector, sizeof(_Float16), hvx_vec_store_a, HVX_OP_CLAMP_SCALAR_F16);
+}
+
+static inline void hvx_clamp_scalar_f16_au(uint8_t * restrict dst, const uint8_t * restrict src, const _Float16 min, const _Float16 max, uint32_t n) {
+    const HVX_Vector min_vec = hvx_vec_splat_f16(min);
+    const HVX_Vector max_vec = hvx_vec_splat_f16(max);
+    assert((unsigned long) dst % 128 == 0);
+    hvx_scalar_loop_body(HVX_Vector, HVX_UVector, sizeof(_Float16), hvx_vec_store_a, HVX_OP_CLAMP_SCALAR_F16);
+}
+
+static inline void hvx_clamp_scalar_f16_ua(uint8_t * restrict dst, const uint8_t * restrict src, const _Float16 min, const _Float16 max, uint32_t n) {
+    const HVX_Vector min_vec = hvx_vec_splat_f16(min);
+    const HVX_Vector max_vec = hvx_vec_splat_f16(max);
+    assert((unsigned long) src % 128 == 0);
+    hvx_scalar_loop_body(HVX_UVector, HVX_Vector, sizeof(_Float16), hvx_vec_store_u, HVX_OP_CLAMP_SCALAR_F16);
+}
+
+static inline void hvx_clamp_scalar_f16_uu(uint8_t * restrict dst, const uint8_t * restrict src, const _Float16 min, const _Float16 max, uint32_t n) {
+    const HVX_Vector min_vec = hvx_vec_splat_f16(min);
+    const HVX_Vector max_vec = hvx_vec_splat_f16(max);
+    hvx_scalar_loop_body(HVX_UVector, HVX_UVector, sizeof(_Float16), hvx_vec_store_u, HVX_OP_CLAMP_SCALAR_F16);
+}
+
+static inline void hvx_clamp_scalar_f16(uint8_t * restrict dst, const uint8_t * restrict src, const _Float16 min, const _Float16 max, const int num_elems) {
+    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src, 128)) {
+        hvx_clamp_scalar_f16_aa(dst, src, min, max, num_elems);
+    } else if (hex_is_aligned((void *) dst, 128)) {
+        hvx_clamp_scalar_f16_au(dst, src, min, max, num_elems);
+    } else if (hex_is_aligned((void *) src, 128)) {
+        hvx_clamp_scalar_f16_ua(dst, src, min, max, num_elems);
+    } else {
+        hvx_clamp_scalar_f16_uu(dst, src, min, max, num_elems);
+    }
+}
+
 //
 // Abs
 //
@@ -386,11 +434,69 @@ static inline void hvx_abs_f32_aa(uint8_t * restrict dst, const uint8_t * restri
     }
 }
 
+#define hvx_abs_f16_loop_body(dst_type, src_type, vec_store)               \
+    do {                                                                   \
+        dst_type * restrict vdst  = (dst_type *) dst;                      \
+        src_type * restrict vsrc = (src_type *) src;                       \
+                                                                           \
+        const uint32_t elem_size = sizeof(_Float16);                       \
+        const uint32_t epv  = 128 / elem_size;                             \
+        const uint32_t nvec = n / epv;                                     \
+        const uint32_t nloe = n % epv;                                     \
+                                                                           \
+        uint32_t i = 0;                                                    \
+                                                                           \
+        _Pragma("unroll(4)")                                               \
+        for (; i < nvec; i++) {                                            \
+            vdst[i] = hvx_vec_abs_f16(vsrc[i]);                            \
+        }                                                                  \
+        if (nloe) {                                                        \
+            HVX_Vector v = hvx_vec_abs_f16(vsrc[i]);                       \
+            vec_store((void *) &vdst[i], nloe * elem_size, v);             \
+        }                                                                  \
+    } while(0)
+
+static inline void hvx_abs_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_abs_f16_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+static inline void hvx_abs_f16_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    hvx_abs_f16_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a);
+}
+
+static inline void hvx_abs_f16_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) src % 128 == 0);
+    hvx_abs_f16_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u);
+}
+
+static inline void hvx_abs_f16_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    hvx_abs_f16_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
+}
+
+static inline void hvx_abs_f16(uint8_t * restrict dst, const uint8_t * restrict src, const uint32_t num_elems) {
+    if (hex_is_aligned((void *) dst, 128)) {
+        if (hex_is_aligned((void *) src, 128)) {
+            hvx_abs_f16_aa(dst, src, num_elems);
+        } else {
+            hvx_abs_f16_au(dst, src, num_elems);
+        }
+    } else {
+        if (hex_is_aligned((void *) src, 128)) {
+            hvx_abs_f16_ua(dst, src, num_elems);
+        } else {
+            hvx_abs_f16_uu(dst, src, num_elems);
+        }
+    }
+}
+
 //
 // Square
 //
 
-#define hvx_sqr_f32_loop_body(dst_type, src_type, vec_store)           \
+#define hvx_sqr_f32_loop_body(dst_type, src_type, vec_store)               \
     do {                                                                   \
         dst_type * restrict vdst  = (dst_type *) dst;                      \
         src_type * restrict vsrc = (src_type *) src;                       \
@@ -404,10 +510,10 @@ static inline void hvx_abs_f32_aa(uint8_t * restrict dst, const uint8_t * restri
                                                                            \
         _Pragma("unroll(4)")                                               \
         for (; i < nvec; i++) {                                            \
-            vdst[i] = HVX_OP_MUL_F32(vsrc[i], vsrc[i]);                        \
+            vdst[i] = HVX_OP_MUL_F32(vsrc[i], vsrc[i]);                    \
         }                                                                  \
         if (nloe) {                                                        \
-            HVX_Vector v = HVX_OP_MUL_F32(vsrc[i], vsrc[i]);                   \
+            HVX_Vector v = HVX_OP_MUL_F32(vsrc[i], vsrc[i]);               \
             vec_store((void *) &vdst[i], nloe * elem_size, v);             \
         }                                                                  \
     } while(0)
@@ -448,6 +554,64 @@ static inline void hvx_sqr_f32(uint8_t * restrict dst, const uint8_t * restrict 
     }
 }
 
+#define hvx_sqr_f16_loop_body(dst_type, src_type, vec_store)               \
+    do {                                                                   \
+        dst_type * restrict vdst  = (dst_type *) dst;                      \
+        src_type * restrict vsrc = (src_type *) src;                       \
+                                                                           \
+        const uint32_t elem_size = sizeof(_Float16);                       \
+        const uint32_t epv  = 128 / elem_size;                             \
+        const uint32_t nvec = n / epv;                                     \
+        const uint32_t nloe = n % epv;                                     \
+                                                                           \
+        uint32_t i = 0;                                                    \
+                                                                           \
+        _Pragma("unroll(4)")                                               \
+        for (; i < nvec; i++) {                                            \
+            vdst[i] = HVX_OP_MUL_F16(vsrc[i], vsrc[i]);                    \
+        }                                                                  \
+        if (nloe) {                                                        \
+            HVX_Vector v = HVX_OP_MUL_F16(vsrc[i], vsrc[i]);               \
+            vec_store((void *) &vdst[i], nloe * elem_size, v);             \
+        }                                                                  \
+    } while(0)
+
+static inline void hvx_sqr_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_sqr_f16_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+static inline void hvx_sqr_f16_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    hvx_sqr_f16_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a);
+}
+
+static inline void hvx_sqr_f16_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) src % 128 == 0);
+    hvx_sqr_f16_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u);
+}
+
+static inline void hvx_sqr_f16_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    hvx_sqr_f16_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
+}
+
+static inline void hvx_sqr_f16(uint8_t * restrict dst, const uint8_t * restrict src, const uint32_t num_elems) {
+    if (hex_is_aligned((void *) dst, 128)) {
+        if (hex_is_aligned((void *) src, 128)) {
+            hvx_sqr_f16_aa(dst, src, num_elems);
+        } else {
+            hvx_sqr_f16_au(dst, src, num_elems);
+        }
+    } else {
+        if (hex_is_aligned((void *) src, 128)) {
+            hvx_sqr_f16_ua(dst, src, num_elems);
+        } else {
+            hvx_sqr_f16_uu(dst, src, num_elems);
+        }
+    }
+}
+
 #undef HVX_OP_ADD_F32
 #undef HVX_OP_SUB_F32
 #undef HVX_OP_MUL_F32
@@ -464,6 +628,7 @@ static inline void hvx_sqr_f32(uint8_t * restrict dst, const uint8_t * restrict 
 #undef hvx_scalar_loop_body
 #undef HVX_OP_MIN_SCALAR
 #undef HVX_OP_CLAMP_SCALAR
+#undef HVX_OP_CLAMP_SCALAR_F16
 #undef DEFINE_HVX_BINARY_OP_VARIANTS
 #undef HVX_BINARY_DISPATCHER
 #undef UNUSED

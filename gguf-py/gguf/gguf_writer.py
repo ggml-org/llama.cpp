@@ -467,10 +467,15 @@ class GGUFWriter:
                     shard_bar.reset(total=(total if total > 0 else None))
 
                 # relying on the fact that Python dicts preserve insertion order (since 3.7)
-                for ti in tensors.values():
+                for name, ti in tensors.items():
                     assert ti.tensor is not None  # can only iterate once over the tensors
                     assert ti.tensor.nbytes == ti.nbytes
+                    start = fout.tell()
                     ti.tensor.tofile(fout)
+                    # a short write here would only surface as a corrupt file at load time
+                    if fout.tell() - start != ti.nbytes:
+                        raise ValueError(
+                            f"tensor {name!r} wrote {fout.tell() - start} bytes, expected {ti.nbytes}")
                     if shard_bar is not None:
                         shard_bar.update(ti.nbytes)
                     if bar is not None:
@@ -728,8 +733,11 @@ class GGUFWriter:
         else:
             self.add_array(Keys.LLM.FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 
-    def add_expert_feed_forward_length(self, length: int) -> None:
-        self.add_uint32(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
+    def add_expert_feed_forward_length(self, length: int | Sequence[int]) -> None:
+        if isinstance(length, int):
+            self.add_uint32(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
+        else:
+            self.add_array(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 
     def add_expert_shared_feed_forward_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_SHARED_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
@@ -855,8 +863,11 @@ class GGUFWriter:
     def add_expert_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_COUNT.format(arch=self.arch), count)
 
-    def add_expert_used_count(self, count: int) -> None:
-        self.add_uint32(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
+    def add_expert_used_count(self, count: int | Sequence[int]) -> None:
+        if isinstance(count, int):
+            self.add_uint32(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
+        else:
+            self.add_array(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
 
     def add_expert_shared_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_SHARED_COUNT.format(arch=self.arch), count)

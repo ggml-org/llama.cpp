@@ -110,7 +110,7 @@ jobs:
       #   cache on:  https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78224189394
       #
       #- name: ccache
-      #  uses: ggml-org/ccache-action@v1.2.21
+      #  uses: ggml-org/ccache-action@v1.2.24
       #  with:
       #    key: android-ubuntu-arm64
       #    evict-old-files: 1d
