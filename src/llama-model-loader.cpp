@@ -1644,6 +1644,15 @@ bool llama_model_loader::load_all_data(
                 auto & mmap_used = mmaps_used[weight->idx];
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+            } else if (ggml_backend_buffer_is_host(cur->buffer)) {
+                // The destination is host memory (e.g. a pinned CUDA_Host buffer selected by -ot), so it can be
+                // filled directly from the file. Copying from the mapping instead would fault in every page one
+                // by one at queue depth 1 - and with --numa distribute the whole mapping carries POSIX_MADV_RANDOM,
+                // which disables readahead entirely. A plain read gets full readahead and is an order of magnitude
+                // faster. Non-host destinations keep the memcpy from the mapping below.
+                const auto & file = files.at(weight->idx);
+                file->seek(weight->offs, SEEK_SET);
+                file->read_raw(cur->data, n_size);
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }
