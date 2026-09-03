@@ -3979,6 +3979,46 @@ static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& s
     };
 }
 
+// SHMEM_STRIDE_PAD for mul_mm.comp (constantID=12), in FLOAT_TYPEV2 units.
+//
+// mul_mm.comp stages the shared A/B tiles at SHMEM_STRIDE = BK/2 + pad. Each element is one
+// dword, so the stride maps 1:1 onto the 32 LDS banks and gcd(SHMEM_STRIDE, 32) is the conflict
+// factor. With BK=32 the shader default of 4 gives stride 20 (gcd 4, four-way conflict). Pad 2
+// gives stride 18 (gcd 2, 16 banks) and is a large win on the quantised path on gfx1151.
+//
+// But the coopmat path passes SHMEM_STRIDE to coopMatLoad as its Stride operand, and
+// VUID-RuntimeSpirv-OpCooperativeMatrixLoadKHR-08986 needs a 16 byte aligned stride for the
+// 16x16 f16 tiles. Stride bytes are (BK/2 + pad) * 4, so only pad % 4 == 0 is in contract.
+// RADV before 25.3 lowers coopMatLoad to ds_read_b128, which the contract entitles it to, and
+// the misaligned rows then pay runtime splits: pp512 drops by more than 2x. RADV 25.3 and later
+// lowers to ds_read_b64, which the 72 byte stride always suits, so the extra bank spread wins.
+// Use pad 2 only where it is measured to win.
+//
+// The float path keeps pad 4 on measurement, not theory: the f32/f16 shaders #define BK 32
+// whatever the host pushes, so they run the same stride, yet pad 2 measures worse on both. The
+// host warptile's BK labels the pipeline even where the shader overrides the value.
+//
+// GGML_VK_SHMEM_PAD=N overrides both paths, for probing.
+static uint32_t ggml_vk_coopmat_shmem_pad(const vk_device& device, uint32_t bk) {
+    if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support &&
+        device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
+        return 0;
+    }
+    static const int env_pad = [] {
+        const char * e = getenv("GGML_VK_SHMEM_PAD");
+        return e ? atoi(e) : -1;
+    }();
+    if (env_pad >= 0) {
+        return (uint32_t) env_pad;
+    }
+    if (device->coopmat_support && bk >= 32 &&
+        device->driver_id == vk::DriverId::eMesaRadv &&
+        device->properties.driverVersion >= VK_MAKE_API_VERSION(0, 25, 3, 0)) {
+        return 2;
+    }
+    return 4;  // mul_mm.comp default
+}
+
 static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
 
     uint32_t lut_size = 0;
@@ -4019,9 +4059,9 @@ static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vec
 
     // Needs to be kept up to date on shader changes
     // Needs to stay aligned with ggml_vk_mul_mm_spec.
-    const bool intel_shmem_stride_pad_zero = device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support &&
-                                              device->driver_id == vk::DriverId::eIntelProprietaryWindows;
-    const uint32_t bank_conflict_offset = intel_shmem_stride_pad_zero ? 0 : (device->coopmat_support ? 8 : 1);
+    // The shared tiles are (BK/2 + pad) FLOAT_TYPEV2 per row, i.e. (BK + 2*pad)
+    // elements, so the byte-space offset below is twice the shader's pad.
+    const uint32_t bank_conflict_offset = device->coopmat_support ? 2 * ggml_vk_coopmat_shmem_pad(device, warptile[3]) : 1;
     const uint32_t type_size = device->fp16 ? sizeof(ggml_fp16_t) : sizeof(float);
     const uint32_t warps = warptile[0] / warptile[10];
 
@@ -4646,10 +4686,12 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
     auto const &ggml_vk_mul_mm_spec = [&device](std::vector<uint32_t> spec, bool aligned) {
         spec.push_back(aligned ? 1u : 0u);  // constantID=11: ALIGNED
-        if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support &&
-            device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
-            spec.push_back(0u);  // constantID=12: SHMEM_STRIDE_PAD = 0
-            spec.push_back(1u);  // constantID=13: APPLY_SLM_A_RESHAPE = true
+        const uint32_t pad = ggml_vk_coopmat_shmem_pad(device, spec[3]);  // spec[3] is the warptile BK
+        const bool intel_slm = device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support &&
+                               device->driver_id == vk::DriverId::eIntelProprietaryWindows;
+        if (intel_slm || pad != 4) {
+            spec.push_back(pad);                  // constantID=12: SHMEM_STRIDE_PAD
+            spec.push_back(intel_slm ? 1u : 0u);  // constantID=13: APPLY_SLM_A_RESHAPE
         }
         return spec;
     };
