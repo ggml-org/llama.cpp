@@ -1117,7 +1117,7 @@ std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::
 }
 
 struct mtmd_tokenizer {
-    mtmd_context * ctx;
+    const mtmd_context * ctx;
 
     std::string input_text; // note: can contain null bytes; do not use c_str()
     bool add_special;
@@ -1140,7 +1140,7 @@ struct mtmd_tokenizer {
         }
     }
 
-    mtmd_tokenizer(mtmd_context * ctx,
+    mtmd_tokenizer(const mtmd_context * ctx,
             const mtmd_input_text * text,
             const mtmd_bitmap ** bmps,
             size_t n_bitmaps) : ctx(ctx) {
@@ -1177,7 +1177,7 @@ struct mtmd_tokenizer {
         expand_lazy_bitmaps();
     }
 
-    mtmd_tokenizer(mtmd_context * ctx,
+    mtmd_tokenizer(const mtmd_context * ctx,
             const mtmd_input_part ** input_parts,
             size_t n_parts,
             bool add_special) : ctx(ctx) {
@@ -1733,7 +1733,7 @@ struct mtmd_tokenizer {
     }
 };
 
-int32_t mtmd_tokenize(mtmd_context * ctx,
+int32_t mtmd_tokenize(const mtmd_context * ctx,
             mtmd_input_chunks * output,
             const mtmd_input_text * text,
             const mtmd_bitmap ** bitmaps,
@@ -1747,7 +1747,7 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
     }
 }
 
-int32_t mtmd_tokenize_from_parts(mtmd_context * ctx,
+int32_t mtmd_tokenize_from_parts(const mtmd_context * ctx,
             mtmd_input_chunks * output,
             const mtmd_input_part ** parts,
             size_t n_parts,
@@ -2271,7 +2271,7 @@ void mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable) {
     bitmap->mergeable = mergeable;
 }
 
-mtmd_bitmap * mtmd_bitmap_init_lazy(mtmd_context * ctx,
+mtmd_bitmap * mtmd_bitmap_init_lazy(const mtmd_context * ctx,
                                     const char * id,
                                     void * user_data,
                                     mtmd_bitmap_lazy_callback callback) {
