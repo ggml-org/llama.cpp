@@ -81,7 +81,7 @@ static const char * const LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS   = "quantize.imatrix
 
 static bool striequals(const char * a, const char * b) {
     while (*a && *b) {
-        if (std::tolower((unsigned char)*a) != std::tolower((unsigned char)*b)) {
+        if (std::tolower(static_cast<unsigned char>(*a)) != std::tolower(static_cast<unsigned char>(*b))) {
             return false;
         }
         a++; b++;
@@ -93,7 +93,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
     std::string ftype_str;
 
     for (auto ch : ftype_str_in) {
-        ftype_str.push_back(std::toupper((unsigned char)ch));
+        ftype_str.push_back(std::toupper(static_cast<unsigned char>(ch)));
     }
     for (const auto & it : QUANT_OPTIONS) {
         if (striequals(it.name.c_str(), ftype_str.c_str())) {

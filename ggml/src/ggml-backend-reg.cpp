@@ -306,7 +306,7 @@ void ggml_backend_device_register(ggml_backend_dev_t device) {
 // Backend (reg) enumeration
 static bool striequals(const char * a, const char * b) {
     for (; *a && *b; a++, b++) {
-        if (std::tolower((unsigned char)*a) != std::tolower((unsigned char)*b)) {
+        if (std::tolower(static_cast<unsigned char>(*a)) != std::tolower(static_cast<unsigned char>(*b))) {
             return false;
         }
     }
