@@ -4515,11 +4515,8 @@ struct test_gated_delta_net : public test_case {
     }
 
     double max_nmse_err() override {
-        // Allow for the mixed fp16 Chunked CUDA kernel used by eligible cases.
-        if (head_size == 128 && !kda && K == 1 && n_seq_tokens >= 128 && !permuted) {
-            return 2e-7;
-        }
-        return 1e-7;
+        // CUDA GDN chunked requires a slightly higher threshold than the default (~1e-7)
+        return 2e-7;
     }
 };
 

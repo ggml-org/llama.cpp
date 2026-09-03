@@ -220,9 +220,11 @@ static void launch_gated_delta_net(
     }
 }
 
-// Shared routing predicate for dispatch and CUDA-graph eligibility. Both must use the same result
-// because the chunked path uses pool allocations that cannot be captured.
-bool ggml_cuda_gdn_op_is_chunked(const ggml_tensor * dst) {
+// Shape-only half of the chunked predicate, split out because the buffer-type get_alloc_size hook
+// has to size the chunked scratch. That sizing must NOT depend on which device is current: deciding
+// from shape alone can only over-allocate on a device that ends up ineligible, never under-allocate
+// (which would corrupt memory). See ggml_cuda_gdn_get_alloc_size.
+bool ggml_cuda_gdn_chunked_shape_eligible(const ggml_tensor * dst) {
     if (dst->op != GGML_OP_GATED_DELTA_NET) {
         return false;
     }
@@ -242,24 +244,13 @@ bool ggml_cuda_gdn_op_is_chunked(const ggml_tensor * dst) {
     const bool    kda      = (src_g->ne[0] == S_v);
     const int     K        = ggml_get_op_params_i32(dst, 0);
 
-    // Disabled only when explicitly truthy; "0" (or unset) keeps the chunked path on.
-    static const bool chunk_disabled = [] {
-        const char * s = getenv("GGML_CUDA_DISABLE_GDN_CHUNK");
-        return s && s[0] && !(s[0] == '0' && s[1] == '\0');
-    }();
-    const int  cc_dev    = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    // NVIDIA-only for now. The HIP/MUSA ggml_cuda_mma backend intentionally not dispatched until validated.
-    const bool is_nvidia = GGML_CUDA_CC_IS_NVIDIA(cc_dev);
-
-    // - NVIDIA Ampere+ (fp16 WMMA); not KDA; K == 1 (final state only)
-    // - Q/K/G/beta/state must be contiguous
-    //   (nb[0]/nb[1] packed) with arbitrary token stride (fused QKV view) 
-    // - V is packed per token (nb[2]) and across sequences (nb[3] == n_tokens*nb[2]).
+    // - not KDA; K == 1 (final state only)
+    // - Q/K/G/beta/state must be contiguous; V must be contiguous within each token (nb[0]/nb[1]
+    //   packed) and packed across sequences (nb[3] == n_tokens*nb[2]), with an arbitrary per-token
+    //   stride nb[2] (fused QKV view). The nb[3] check matches the chunked-entry assert: without it a
+    //   view with inter-sequence padding would pass dispatch and then read the wrong batch slice.
     // - 128-wide heads, GQA-aligned head counts, n_tokens >= 128
-    return is_nvidia
-        && cc_dev >= GGML_CUDA_CC_AMPERE
-        && !chunk_disabled
-        && !kda && K == 1
+    return !kda && K == 1
         && neq0 == 128 && S_v == 128 && nev1 % neq1 == 0
         && src_k->ne[1] == neq1
         && n_tokens >= 128
@@ -267,6 +258,23 @@ bool ggml_cuda_gdn_op_is_chunked(const ggml_tensor * dst) {
         && src_v->nb[0] == ggml_type_size(src_v->type) && src_v->nb[1] == (size_t)S_v * ggml_type_size(src_v->type)
         && src_v->nb[3] == (size_t) n_tokens * src_v->nb[2]
         && ggml_is_contiguous(src_beta) && ggml_is_contiguous(src_state);
+}
+
+bool ggml_cuda_should_use_chunked_gdn(const ggml_tensor * dst) {
+#ifdef GGML_CUDA_NO_GDN_CHUNK
+    // Recurrent-only baseline build (see tools/bench_ab_*): everything routes to the recurrent
+    // kernel, which also re-enables CUDA graphs for the op.
+    GGML_UNUSED(dst);
+    return false;
+#else
+    if (!ggml_cuda_gdn_chunked_shape_eligible(dst)) {
+        return false;
+    }
+    // NVIDIA Ampere+ only (fp16 WMMA). The HIP/MUSA ggml_cuda_mma backend is intentionally not
+    // dispatched until validated.
+    const int cc_dev = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    return GGML_CUDA_CC_IS_NVIDIA(cc_dev) && cc_dev >= GGML_CUDA_CC_AMPERE;
+#endif // GGML_CUDA_NO_GDN_CHUNK
 }
 
 static void ggml_cuda_op_gated_delta_net_impl(
@@ -336,8 +344,11 @@ static void ggml_cuda_op_gated_delta_net_impl(
     const bool keep_rs = K > 1;
 
     // Route to the chunked prefill kernel when eligible.
-    if (cache == nullptr && ggml_cuda_gdn_op_is_chunked(dst)) {
-        ggml_cuda_op_gated_delta_net_chunked(ctx, dst);
+    // Passes cache so the kernel can write the final state directly to the fused destination
+    // (cache->data). Scratch lives in dst's own allocation, so its address is stable across CUDA
+    // graph capture and replay.
+    if (ggml_cuda_should_use_chunked_gdn(dst)) {
+        ggml_cuda_op_gated_delta_net_chunked(ctx, dst, cache);
         return;
     }
 

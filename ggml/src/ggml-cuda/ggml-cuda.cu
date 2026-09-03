@@ -59,6 +59,7 @@
 #include "ggml-cuda/upscale.cuh"
 #include "ggml-cuda/wkv.cuh"
 #include "ggml-cuda/gla.cuh"
+#include "ggml-cuda/chunk_gated_delta_net.cuh"
 #include "ggml-cuda/gated_delta_net.cuh"
 #include "ggml-cuda/dsv4-hc.cuh"
 #include "ggml-cuda/set.cuh"
@@ -911,9 +912,12 @@ static size_t ggml_backend_cuda_buffer_type_get_alignment(ggml_backend_buffer_ty
 static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
     ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
 
-    size_t size = tensor->op == GGML_OP_FLASH_ATTN_EXT
-        ? ggml_cuda_flash_attn_ext_get_alloc_size(buft_ctx->device, tensor)
-        : ggml_nbytes(tensor);
+    size_t size = ggml_nbytes(tensor);
+    if (tensor->op == GGML_OP_FLASH_ATTN_EXT) {
+        size = ggml_cuda_flash_attn_ext_get_alloc_size(buft_ctx->device, tensor);
+    } else if (tensor->op == GGML_OP_GATED_DELTA_NET) {
+        size = ggml_cuda_gdn_get_alloc_size(tensor);
+    }
     int64_t ne0 = tensor->ne[0];
 
     // [TAG_ALLOC_SIZE_EXPAND]
@@ -2575,16 +2579,6 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
             }
         }
 
-        // Chunked GDN allocates scratch via ggml_cuda_pool_alloc; on pool_leg those addresses can
-        // be freed/reused between capture and replay, corrupting the baked-in kernel pointers.
-        // Decode is unaffected (T=1 is ineligible)
-        if (ggml_cuda_gdn_op_is_chunked(node)) {
-            use_cuda_graph = false;
-#ifndef NDEBUG
-            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to chunked GATED_DELTA_NET\n", __func__);
-#endif
-        }
-
         if (!use_cuda_graph) {
             break;
         }
@@ -2767,7 +2761,7 @@ static int ggml_cuda_try_gdn_cache_fusion(
 
     // Chunked prefill writes state to dst; it cannot scatter into the snapshot cache, so skip fusion.
     // Decode and fallback recurrent (T < 128) do fuse.
-    if (ggml_cuda_gdn_op_is_chunked(gdn)) {
+    if (ggml_cuda_should_use_chunked_gdn(gdn)) {
         return 0;
     }
 

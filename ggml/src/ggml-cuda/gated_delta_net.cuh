@@ -1,3 +1,4 @@
+#pragma once
 #include "common.cuh"
 #include "ggml.h"
 
@@ -14,4 +15,8 @@ void ggml_cuda_op_gated_delta_net_fused_cache(ggml_backend_cuda_context & ctx, g
                                               ggml_cuda_gated_delta_net_fused_cache cache);
 
 // Returns true if chunked prefill can be used; false for recurrent kernel
-bool ggml_cuda_gdn_op_is_chunked(const ggml_tensor * dst);
+bool ggml_cuda_should_use_chunked_gdn(const ggml_tensor * dst);
+
+// Shape-only part of the above, with no dependence on the current device. Used to size the chunked
+// scratch at allocation time, where the eventual execution device may not be current yet.
+bool ggml_cuda_gdn_chunked_shape_eligible(const ggml_tensor * dst);
