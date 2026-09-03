@@ -3,6 +3,7 @@
 	import ModelsDiscoverAvatar from './discover/ModelsDiscoverAvatar.svelte';
 	import { Loader2, Pause, Play, X } from '@lucide/svelte';
 	import { ModelId } from '$lib/components/app';
+	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelDownloadProgress } from '$lib/types';
@@ -13,6 +14,9 @@
 	}
 
 	let { entry }: Props = $props();
+
+	// cancel confirmation state
+	let confirmCancelOpen = $state(false);
 
 	let percent = $derived(
 		entry.progress && entry.progress.totalBytes > 0
@@ -101,7 +105,7 @@
 	<button
 		aria-label="Cancel downloading"
 		class="inline-flex h-4 w-4 shrink-0 scale-75 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 opacity-0 transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:text-destructive group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
-		onclick={() => void modelsStore.status.cancelDownload(entry.repoWithTag)}
+		onclick={() => (confirmCancelOpen = true)}
 		type="button"
 	>
 		<X class="h-4 w-4" />
@@ -115,3 +119,18 @@
 		/>
 	{/if}
 </div>
+
+<DialogConfirmation
+	cancelText="Keep downloading"
+	confirmText="Cancel download"
+	description={`This stops the download of ${modelsStore.toDisplayName(entry.repoWithTag)} and removes the partial files. Pause it instead to keep the progress.`}
+	onCancel={() => (confirmCancelOpen = false)}
+	onConfirm={() => {
+		confirmCancelOpen = false;
+
+		void modelsStore.status.cancelDownload(entry.repoWithTag);
+	}}
+	open={confirmCancelOpen}
+	title="Cancel download"
+	variant="destructive"
+/>
