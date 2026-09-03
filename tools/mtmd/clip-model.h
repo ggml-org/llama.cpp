@@ -131,6 +131,24 @@ struct clip_hparams {
     int32_t audio_proj_downsample_rate = 0;
     int32_t audio_proj_head_count      = 0;
 
+    bool gt_asr_enabled                = false;
+    int32_t gt_asr_schema_version      = 0;
+    int32_t gt_asr_stage               = 0;
+    int32_t gt_asr_encoder_dim         = 0;
+    int32_t gt_asr_text_dim            = 0;
+    int32_t gt_asr_hidden_dim          = 0;
+    int32_t gt_asr_conv_kernel_size    = 0;
+    int32_t gt_asr_head_count          = 0;
+    int32_t gt_asr_ffn_dim             = 0;
+    float gt_asr_norm_eps              = 1e-5f;
+    float gt_asr_max_residual_scale    = 0.0f;
+    bool gt_asr_local_fusion           = false;
+    bool gt_asr_local_uncertainty_gate = false;
+    bool gt_asr_nonlinear_frame_head   = false;
+    bool gt_asr_global_zero_anchor     = false;
+    bool gt_asr_null_mixture           = false;
+    std::vector<int32_t> gt_asr_eos_token_ids;
+
     // audio-to-mel preprocessor params
     int32_t audio_chunk_len   = -1; // in seconds
     int32_t audio_sample_rate = -1;
@@ -768,6 +786,26 @@ struct clip_model {
     ggml_tensor * conv2d_2_b = nullptr;
     ggml_tensor * conv2d_3_w = nullptr;
     ggml_tensor * conv2d_3_b = nullptr;
+
+    ggml_tensor * gt_asr_input_norm_w = nullptr;
+    ggml_tensor * gt_asr_input_norm_b = nullptr;
+    std::array<ggml_tensor *, 2> gt_asr_temporal_w = {nullptr};
+    std::array<ggml_tensor *, 2> gt_asr_temporal_b = {nullptr};
+    clip_layer gt_asr_context;
+    ggml_tensor * gt_asr_output_norm_w = nullptr;
+    ggml_tensor * gt_asr_output_norm_b = nullptr;
+    ggml_tensor * gt_asr_frame_confidence_w = nullptr;
+    ggml_tensor * gt_asr_frame_confidence_b = nullptr;
+    ggml_tensor * gt_asr_global_uncertainty_w = nullptr;
+    ggml_tensor * gt_asr_global_uncertainty_b = nullptr;
+    std::array<ggml_tensor *, 2> gt_asr_frame_evidence_w = {nullptr};
+    std::array<ggml_tensor *, 2> gt_asr_frame_evidence_b = {nullptr};
+    ggml_tensor * gt_asr_local_projection_w = nullptr;
+    ggml_tensor * gt_asr_local_projection_b = nullptr;
+    std::array<ggml_tensor *, 2> gt_asr_global_projection_w = {nullptr};
+    std::array<ggml_tensor *, 2> gt_asr_global_projection_b = {nullptr};
+    ggml_tensor * gt_asr_local_scale_raw = nullptr;
+    ggml_tensor * gt_asr_global_scale_raw = nullptr;
 
     // qwen3tts speaker encoder (ECAPA-TDNN)
     // reused tensors: stem conv is conv1d_1_w/b, feature aggregation is conv_out_w/b, output proj is mm_fc_w/b
