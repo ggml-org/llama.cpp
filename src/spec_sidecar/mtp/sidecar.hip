@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // HIP draft sidecar: C API around the MTP-block kernels, built as a DLL that
 // llama.cpp's speculative driver loads at runtime (LLAMA_SPEC_HIP_SIDECAR).
-// Release ABI 4 adds lazy accepted-prefix commits, device-input paths,
-// sequence-scoped state operations, and compact stochastic top-k proposals.
+// Release ABI 6 adds target-context-aware initialization to lazy accepted-
+// prefix commits, device-input paths, sequence state, and normalized top-k.
 // The harness build (-DSIDECAR_HARNESS) replays golden.bin through the same
 // sequence-scoped lazy-catchup/commit API.
 #include "kernels.hip"
@@ -11,9 +11,18 @@
 #include "../artifact_manifest.h"
 #include "spec_sidecar/sidecar_abi.h"
 
+#if defined(__has_include)
+#    if __has_include(<rocprim/device/device_topk.hpp>)
+#        include <rocprim/device/device_topk.hpp>
+#        include <rocprim/iterator/counting_iterator.hpp>
+#        define SPEC_SIDECAR_ROCPRIM_TOPK
+#    endif
+#endif
+
 // ---------------- host: weights ----------------
 using Tensor = spec_sidecar_artifact::TensorDesc;
 static constexpr int SC_N_VOCAB = 248320;
+static constexpr int32_t SC_LEGACY_MAX_CONTEXT = 131072;
 
 // ---------------- sidecar state ----------------
 namespace {
@@ -42,6 +51,7 @@ struct SeqState {
     float  * h_committed = nullptr;
     int pending_capacity = 0;
     int pending_h_capacity = 0;
+    int kv_capacity = 0;
     int32_t pending_pos_min = 0;
     int32_t pending_pos_max = 0;
     int32_t state_pos_min = 0;
@@ -58,23 +68,22 @@ struct State {
     hipStream_t st = nullptr;       // active target/draft stream
     hipStream_t owned_st = nullptr; // fallback stream owned by the sidecar
     bool owns_st = true;
+    bool parallel_topk_final = false;
     Scratch scr[N_SCR];             // shared serialized scratch; scr[0] is draft scratch
     BatchScratch bs;
     float *part_m = nullptr, *part_l = nullptr, *part_acc = nullptr; // split-K attention partials
+    int attn_parts = 0;
     float *logits = nullptr, *pmax = nullptr;
     float *draft_logits = nullptr, *draft_probs = nullptr;
-#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
-    float *topk_vals = nullptr;
-    void  *topk_tmp = nullptr;
-    size_t topk_tmp_bytes = 0;
-#endif
     int *pidx = nullptr, *tok_out = nullptr;
-#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
-    int *topk_idx = nullptr;
-#endif
     int *draft_ids = nullptr, *draft_count = nullptr, *draft_active = nullptr;
+#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
+    void *topk_temp = nullptr;
+    size_t topk_temp_bytes = 0;
+    bool topk_rocprim = false;
+#endif
     int nparts = 0;
-    size_t max_pos = 131072;
+    size_t max_pos = SC_LEGACY_MAX_CONTEXT;
     SeqState seq[SC_MAX_SEQ];
     hipEvent_t ev_a = nullptr, ev_b = nullptr; // GPU-side timing (debug)
     // weights
@@ -150,8 +159,10 @@ void block_phase2(Scratch & c, hipStream_t st, int pos, int * tok_dst,
     // split-K attention (winner of v3/v4/v5 shootout): workgroup per (q-head,
     // 4096-position chunk). The GQA shared-K variants lost to LDS pressure.
     const int att_parts = (pos + 1 + ATTN_SPLIT - 1) / ATTN_SPLIT;
-    attn_1q_split<<<dim3(N_HEAD, att_parts), 256, 0, st>>>(c.q, Kc, Vc, pos + 1, s.part_m, s.part_l, s.part_acc);
-    attn_merge<<<N_HEAD, HEAD_DIM, 0, st>>>(s.part_m, s.part_l, s.part_acc, c.attout, att_parts);
+    attn_1q_split<<<N_HEAD * att_parts, 256, 0, st>>>(
+            c.q, Kc, Vc, pos + 1, s.part_m, s.part_l, s.part_acc, att_parts);
+    attn_merge<<<N_HEAD, HEAD_DIM, 0, st>>>(
+            s.part_m, s.part_l, s.part_acc, c.attout, att_parts);
     sigmoid_gate<<<(N_HEAD * HEAD_DIM + 255) / 256, 256, 0, st>>>(c.attout, c.gate, N_HEAD * HEAD_DIM);
     gemv_q4_0<<<N_EMBD, 32, 0, st>>>(s.W_o, c.attout, c.resid, N_HEAD * HEAD_DIM, N_EMBD);
     add_inplace<<<(N_EMBD + 255) / 256, 256, 0, st>>>(c.resid, c.proj, N_EMBD);
@@ -215,7 +226,7 @@ void block_phase2(Scratch & c, hipStream_t st, int pos, int * tok_dst,
 #define SC_API extern "C"
 #endif
 
-static constexpr int32_t SC_RELEASE_ABI = 4;
+static constexpr int32_t SC_RELEASE_ABI = SPEC_SIDECAR_MTP_RELEASE_ABI;
 
 static_assert(MTP_DRAFT_TOP_K == SPEC_SIDECAR_MTP_DRAFT_TOP_K,
               "MTP stochastic top-k ABI mismatch");
@@ -228,15 +239,61 @@ static SeqState * get_seq_checked(int32_t seq_id) {
     return valid_seq(seq_id) ? &S.seq[seq_id] : nullptr;
 }
 
-static int ensure_seq_storage(SeqState & q) {
-    if (q.allocated) {
-        return 0;
+static int ensure_seq_storage(SeqState & q, int needed) {
+    if (needed < 0 || (size_t) needed > S.max_pos) return -1;
+    if (q.h_committed == nullptr) {
+        SC_CHECK(hipMalloc(&q.h_committed, N_EMBD * sizeof(float)));
     }
-    const size_t kv_bytes = S.max_pos * N_HEAD_KV * HEAD_DIM * sizeof(__half);
-    SC_CHECK(hipMalloc(&q.Kc, kv_bytes));
-    SC_CHECK(hipMalloc(&q.Vc, kv_bytes));
-    SC_CHECK(hipMalloc(&q.h_committed, N_EMBD * sizeof(float)));
+    if (needed <= q.kv_capacity) {
+        q.allocated = q.Kc != nullptr && q.Vc != nullptr;
+        return q.allocated ? 0 : -1;
+    }
+
+    int64_t capacity = q.kv_capacity > 0 ? q.kv_capacity : 16384;
+    capacity = std::min<int64_t>(capacity, S.max_pos);
+    while (capacity < needed) {
+        capacity = std::min<int64_t>(capacity * 2, S.max_pos);
+    }
+    const size_t kv_bytes = (size_t) capacity * N_HEAD_KV * HEAD_DIM * sizeof(__half);
+    __half * next_k = nullptr;
+    __half * next_v = nullptr;
+    hipError_t status = hipStreamSynchronize(S.st);
+    if (status == hipSuccess) status = hipMalloc(&next_k, kv_bytes);
+    if (status == hipSuccess) status = hipMalloc(&next_v, kv_bytes);
+    if (status != hipSuccess) {
+        if (next_k != nullptr) (void) hipFree(next_k);
+        if (next_v != nullptr) (void) hipFree(next_v);
+        fprintf(stderr, "[hip-sidecar] KV growth to %lld rows failed: %s\n",
+                (long long) capacity, hipGetErrorString(status));
+        (void) hipGetLastError();
+        return -1;
+    }
+    if (q.state_pos_max > 0) {
+        const size_t used_bytes = (size_t) q.state_pos_max * N_HEAD_KV * HEAD_DIM * sizeof(__half);
+        status = hipMemcpyAsync(next_k, q.Kc, used_bytes, hipMemcpyDeviceToDevice, S.st);
+        if (status == hipSuccess) {
+            status = hipMemcpyAsync(next_v, q.Vc, used_bytes, hipMemcpyDeviceToDevice, S.st);
+        }
+        if (status == hipSuccess) status = hipStreamSynchronize(S.st);
+        if (status != hipSuccess) {
+            (void) hipFree(next_k);
+            (void) hipFree(next_v);
+            fprintf(stderr, "[hip-sidecar] KV growth copy failed: %s\n", hipGetErrorString(status));
+            (void) hipGetLastError();
+            return -1;
+        }
+    }
+    if (q.Kc != nullptr) SC_CHECK(hipFree(q.Kc));
+    if (q.Vc != nullptr) SC_CHECK(hipFree(q.Vc));
+    const int old_capacity = q.kv_capacity;
+    q.Kc = next_k;
+    q.Vc = next_v;
+    q.kv_capacity = (int) capacity;
     q.allocated = true;
+    if (old_capacity > 0) {
+        fprintf(stderr, "[hip-sidecar] KV cache grown %d -> %d rows\n",
+                old_capacity, q.kv_capacity);
+    }
     return 0;
 }
 
@@ -344,6 +401,17 @@ SC_API int spec_hip_reset_state(int32_t seq_id) {
     if (++q->state_epoch == 0) {
         q->state_epoch = 1;
     }
+    if (q->kv_capacity > 16384) {
+        SC_CHECK(hipStreamSynchronize(S.st));
+        SC_CHECK(hipFree(q->Kc));
+        SC_CHECK(hipFree(q->Vc));
+        fprintf(stderr, "[hip-sidecar] KV cache released from %d rows on reset\n",
+                q->kv_capacity);
+        q->Kc = nullptr;
+        q->Vc = nullptr;
+        q->kv_capacity = 0;
+        q->allocated = false;
+    }
     q->state_pos_min = 0;
     q->state_pos_max = 0;
     q->h_valid = false;
@@ -423,7 +491,8 @@ SC_API int spec_hip_rebase_state(int32_t seq_id, int32_t pos_min, int32_t pos_ma
 
     const int64_t new_min = (int64_t) pos_min + delta;
     const int64_t new_max = (int64_t) q->state_pos_max + delta;
-    if (new_min < 0 || new_max < new_min || new_max > (int64_t) S.max_pos) {
+    if (new_min < 0 || new_max < new_min || new_max > (int64_t) S.max_pos ||
+            ensure_seq_storage(*q, (int) new_max) != 0) {
         return -1;
     }
 
@@ -470,20 +539,45 @@ SC_API int spec_hip_attach_target_stream(void * stream, int32_t device) {
     return 0;
 }
 
+static int32_t spec_hip_resolve_max_context(int32_t requested) {
+    if (requested < 1) return -1;
+    int64_t effective = requested;
+    if (const char * value = getenv("LLAMA_SPEC_HIP_MAX_POS")) {
+        const int64_t override_limit = atoll(value);
+        if (override_limit < 1) return -1;
+        effective = std::min(effective, override_limit);
+    }
+    if (effective != requested) {
+        fprintf(stderr, "[hip-sidecar] target context %d limited to %lld positions\n",
+                requested, (long long) effective);
+    }
+    return (int32_t) effective;
+}
+
 // init: weights_dir holds drafter_manifest.json + drafter_weights.bin;
 // ids_path = little-endian i32 slice->full-vocab remap table (40960 entries).
 // requested_device >= 0 binds all sidecar allocations and streams to that
 // target device. -1 preserves the legacy "current device" behavior for the
 // standalone harness and older callers.
 static int spec_hip_init_impl(const char * weights_dir, const char * ids_path,
-        int32_t n_seq, int32_t requested_device) {
+        int32_t n_seq, int32_t requested_device, int32_t requested_max_context) {
     if (requested_device < -1) return -1;
+    const int32_t max_context = spec_hip_resolve_max_context(requested_max_context);
+    if (max_context < 1) return -1;
     if (S.ok) {
-        return n_seq == S.n_seq &&
+        return n_seq == S.n_seq && S.max_pos == (size_t) max_context &&
                 (requested_device < 0 || requested_device == S.device) ? 0 : -1;
     }
     if (n_seq < 1 || n_seq > SC_MAX_SEQ) return -1;
     S.n_seq = n_seq;
+    S.max_pos = (size_t) max_context;
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    S.parallel_topk_final = true;
+#endif
+    if (const char * value = getenv("LLAMA_SPEC_HIP_MTP_PARALLEL_TOPK_FINAL")) {
+        S.parallel_topk_final = strcmp(value, "0") != 0 &&
+                strcmp(value, "off") != 0 && strcmp(value, "false") != 0;
+    }
     if (requested_device >= 0) {
         SC_CHECK(hipSetDevice(requested_device));
     }
@@ -632,9 +726,13 @@ static int spec_hip_init_impl(const char * weights_dir, const char * ids_path,
         SC_CHECK(hipMalloc(&b.ffn_tmp, N_BATCH * N_EMBD * 4));
         SC_CHECK(hipMalloc(&b.resid, N_BATCH * N_EMBD * 4));
     }
-    SC_CHECK(hipMalloc(&s.part_m,   N_HEAD * ATTN_MAX_PARTS * 4));
-    SC_CHECK(hipMalloc(&s.part_l,   N_HEAD * ATTN_MAX_PARTS * 4));
-    SC_CHECK(hipMalloc(&s.part_acc, (size_t) N_HEAD * ATTN_MAX_PARTS * HEAD_DIM * 4));
+    const int64_t attn_parts = ((int64_t) s.max_pos + ATTN_SPLIT - 1) / ATTN_SPLIT;
+    if (attn_parts < 1 || attn_parts > INT32_MAX / N_HEAD) return -1;
+    s.attn_parts = (int) attn_parts;
+    SC_CHECK(hipMalloc(&s.part_m,   (size_t) N_HEAD * s.attn_parts * sizeof(float)));
+    SC_CHECK(hipMalloc(&s.part_l,   (size_t) N_HEAD * s.attn_parts * sizeof(float)));
+    SC_CHECK(hipMalloc(&s.part_acc,
+            (size_t) N_HEAD * s.attn_parts * HEAD_DIM * sizeof(float)));
     SC_CHECK(hipMalloc(&s.logits, N_HEAD_ROWS * 4));
     s.nparts = (N_HEAD_ROWS + 256 * 8 - 1) / (256 * 8);
     SC_CHECK(hipMalloc(&s.pmax, (size_t) s.nparts * MTP_DRAFT_TOP_K * 4));
@@ -643,43 +741,39 @@ static int spec_hip_init_impl(const char * weights_dir, const char * ids_path,
     SC_CHECK(hipMalloc(&s.draft_ids, (size_t) 8 * MTP_DRAFT_TOP_K * 4));
     SC_CHECK(hipMalloc(&s.draft_logits, (size_t) 8 * MTP_DRAFT_TOP_K * 4));
     SC_CHECK(hipMalloc(&s.draft_probs, (size_t) 8 * MTP_DRAFT_TOP_K * 4));
-#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
-    SC_CHECK(hipMalloc(&s.topk_vals, (size_t) MTP_DRAFT_TOP_K * sizeof(float)));
-    SC_CHECK(hipMalloc(&s.topk_idx, (size_t) MTP_DRAFT_TOP_K * sizeof(int)));
-    {
-        rocprim::counting_iterator<int> indices(0);
-        const hipError_t status = rocprim::topk_pairs<rocprim::default_config, true>(
-                nullptr, s.topk_tmp_bytes, s.logits, s.topk_vals, indices, s.topk_idx,
-                (uint32_t) N_HEAD_ROWS, (uint32_t) MTP_DRAFT_TOP_K,
-                rocprim::identity_decomposer{}, nullptr);
-        if (status != hipSuccess) {
-            fprintf(stderr, "[hip-sidecar] rocPRIM top-k query failed: %s\n", hipGetErrorString(status));
-            return -1;
-        }
-        SC_CHECK(hipMalloc(&s.topk_tmp, s.topk_tmp_bytes));
-    }
-#endif
     SC_CHECK(hipMalloc(&s.draft_count, 4));
     SC_CHECK(hipMalloc(&s.draft_active, 4));
-    if (const char * mp = getenv("LLAMA_SPEC_HIP_MAX_POS")) {
-        const long long v = atoll(mp);
-        // hard capacity: the split-attention partial buffers cover at most
-        // ATTN_MAX_PARTS * ATTN_SPLIT positions; a larger max_pos would send the
-        // kernel grid out of bounds. Clamp to [4096, that capacity] and cap at
-        // the model's trained context.
-        const long long cap = (long long) ATTN_MAX_PARTS * ATTN_SPLIT;
-        long long c2 = v;
-        if (c2 < 4096) c2 = 4096;
-        if (c2 > cap) c2 = cap;
-        if (c2 > 131072) c2 = 131072;
-        if (c2 != v) fprintf(stderr, "[hip-sidecar] LLAMA_SPEC_HIP_MAX_POS=%lld clamped to %lld\n", v, c2);
-        s.max_pos = (size_t) c2;
-    }
     SC_CHECK(hipStreamCreate(&s.owned_st));
     s.st = s.owned_st;
     s.owns_st = true;
     SC_CHECK(hipEventCreate(&s.ev_a));
     SC_CHECK(hipEventCreate(&s.ev_b));
+
+#if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
+    {
+        const rocprim::counting_iterator<int> indices(0);
+        size_t bytes = 0;
+        const hipError_t status = rocprim::topk_pairs<rocprim::default_config, true>(
+                nullptr, bytes, s.logits, s.pmax, indices, s.pidx,
+                (uint32_t) N_HEAD_ROWS, (uint32_t) MTP_DRAFT_TOP_K,
+                rocprim::identity_decomposer{}, s.st);
+        if (status == hipSuccess) {
+            s.topk_temp_bytes = bytes;
+            if (bytes == 0 || hipMalloc(&s.topk_temp, bytes) == hipSuccess) {
+                s.topk_rocprim = true;
+            } else {
+                fprintf(stderr, "[hip-sidecar] rocPRIM top-k scratch allocation failed; using fallback\n");
+            }
+        } else {
+            fprintf(stderr, "[hip-sidecar] rocPRIM top-k query failed (%s); using fallback\n",
+                    hipGetErrorString(status));
+        }
+        if (getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr) {
+            fprintf(stderr, "[hip-sidecar] stochastic top-k: %s\n",
+                    s.topk_rocprim ? "rocPRIM" : "fallback");
+        }
+    }
+#endif
 
     auto W  = [&](const char * n) { return (const block_q4_0 *) find_tensor(n)->dev; };
     auto Wf = [&](const char * n) { return (const float *) find_tensor(n)->dev; };
@@ -713,13 +807,23 @@ static int spec_hip_init_impl(const char * weights_dir, const char * ids_path,
     return 0;
 }
 
+SC_API int spec_hip_init_device_context(const char * weights_dir, const char * ids_path,
+        int32_t n_seq, int32_t device, int32_t max_context) {
+    return spec_hip_init_impl(weights_dir, ids_path, n_seq, device, max_context);
+}
+
+SC_API int spec_hip_init_context(const char * weights_dir, const char * ids_path,
+        int32_t n_seq, int32_t max_context) {
+    return spec_hip_init_impl(weights_dir, ids_path, n_seq, -1, max_context);
+}
+
 SC_API int spec_hip_init_device(const char * weights_dir, const char * ids_path,
         int32_t n_seq, int32_t device) {
-    return spec_hip_init_impl(weights_dir, ids_path, n_seq, device);
+    return spec_hip_init_impl(weights_dir, ids_path, n_seq, device, SC_LEGACY_MAX_CONTEXT);
 }
 
 SC_API int spec_hip_init(const char * weights_dir, const char * ids_path, int32_t n_seq) {
-    return spec_hip_init_impl(weights_dir, ids_path, n_seq, -1);
+    return spec_hip_init_impl(weights_dir, ids_path, n_seq, -1, SC_LEGACY_MAX_CONTEXT);
 }
 
 // Catch-up rows are staged in pending KV. The host path synchronizes only to
@@ -736,7 +840,8 @@ static int spec_hip_catchup_impl(int32_t seq_id, const int32_t * toks, const int
         return -1;
     }
     if (n > (int) S.max_pos - q->state_pos_max ||
-            q->pending_pos_max != q->state_pos_max || ensure_seq_storage(*q) != 0 ||
+            q->pending_pos_max != q->state_pos_max ||
+            ensure_seq_storage(*q, q->state_pos_max + n) != 0 ||
             ensure_pending_storage(*q, n) != 0) return -1;
     for (int r = 0; r < n; ++r) {
         if (toks[r] < 0 || toks[r] >= SC_N_VOCAB) {
@@ -991,27 +1096,33 @@ static int spec_hip_draft_stochastic_impl(int32_t seq_id, int32_t id_last, int32
         block_phase1(c, S.st, xh_in, n_past + j, q->Kc, q->Vc);
         block_phase2(c, S.st, n_past + j, nullptr, q->Kc, q->Vc, true);
 #if defined(SPEC_SIDECAR_ROCPRIM_TOPK)
-        {
-            rocprim::counting_iterator<int> indices(0);
-            size_t topk_bytes = S.topk_tmp_bytes;
+        if (S.topk_rocprim) {
+            const rocprim::counting_iterator<int> indices(0);
+            size_t topk_bytes = S.topk_temp_bytes;
             const hipError_t status = rocprim::topk_pairs<rocprim::default_config, true>(
-                    S.topk_tmp, topk_bytes, S.logits, S.topk_vals, indices, S.topk_idx,
+                    S.topk_temp, topk_bytes, S.logits, S.pmax, indices, S.pidx,
                     (uint32_t) N_HEAD_ROWS, (uint32_t) MTP_DRAFT_TOP_K,
                     rocprim::identity_decomposer{}, S.st);
-            if (status != hipSuccess) {
-                fprintf(stderr, "[hip-sidecar] rocPRIM top-k failed: %s\n", hipGetErrorString(status));
-                return -1;
+            SC_CHECK(status);
+            if (S.parallel_topk_final) {
+                sort_remap_topk<<<1, MTP_DRAFT_TOP_K, 0, S.st>>>(
+                        S.pmax, S.pidx, S.remap_d, SC_N_VOCAB,
+                        S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
+                        S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
+            } else {
+                topk_final<<<1, 256, 0, S.st>>>(
+                        S.pmax, S.pidx, 1, S.remap_d, SC_N_VOCAB,
+                        S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
+                        S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
             }
-            topk_final<<<1, 1, 0, S.st>>>(S.topk_vals, S.topk_idx, 1, S.remap_d, SC_N_VOCAB,
+        } else
+#endif
+        {
+            topk_partial<<<S.nparts, 256, 0, S.st>>>(S.logits, N_HEAD_ROWS, S.pmax, S.pidx);
+            topk_final<<<1, 256, 0, S.st>>>(S.pmax, S.pidx, S.nparts, S.remap_d, SC_N_VOCAB,
                     S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
                     S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
         }
-#else
-        topk_partial<<<S.nparts, 256, 0, S.st>>>(S.logits, N_HEAD_ROWS, S.pmax, S.pidx);
-        topk_final<<<1, 256, 0, S.st>>>(S.pmax, S.pidx, S.nparts, S.remap_d, SC_N_VOCAB,
-                S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
-                S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
-#endif
         sample_topk<<<1, 1, 0, S.st>>>(
                 S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
                 S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K,

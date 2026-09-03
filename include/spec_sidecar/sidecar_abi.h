@@ -45,10 +45,12 @@ static_assert(sizeof(spec_sidecar_state) == 24,
 // The sidecars use a small top-k proposal distribution for stochastic
 // drafting. The distribution is returned in row-major [max_draft][top_k]
 // buffers; only the first returned-token-count rows are valid.
-#define SPEC_SIDECAR_MTP_DRAFT_TOP_K    32
-#define SPEC_SIDECAR_DFLASH_DRAFT_TOP_K 16
+#define SPEC_SIDECAR_MTP_DRAFT_TOP_K       32
+#define SPEC_SIDECAR_DFLASH_DRAFT_TOP_K    16
+#define SPEC_SIDECAR_MTP_RELEASE_ABI         6
+#define SPEC_SIDECAR_DFLASH_RELEASE_ABI      7
 
-// Qwen3.8-27B MTP sidecar ABI (release ABI 4).
+// Qwen3.8-27B MTP sidecar ABI.
 // State and KV operations are sequence-scoped. catchup writes only pending
 // target rows; commit_state is the only operation that makes rows persistent.
 // hidden_device, when non-null, is the already-selected accepted hidden row.
@@ -64,6 +66,12 @@ SPEC_SIDECAR_API int spec_hip_rebase_state(int32_t seq_id, int32_t pos_min, int3
 // stream is borrowed from the target HIP backend and must remain valid for
 // the sidecar lifetime. Passing null restores the sidecar-owned stream.
 SPEC_SIDECAR_API int spec_hip_attach_target_stream(void * stream, int32_t device);
+// Context-aware hosts pass the effective per-sequence target context. The
+// legacy entry points remain for standalone callers at their historical cap.
+SPEC_SIDECAR_API int spec_hip_init_context(
+        const char * weights_dir, const char * ids_path, int32_t n_seq, int32_t max_context);
+SPEC_SIDECAR_API int spec_hip_init_device_context(
+        const char * weights_dir, const char * ids_path, int32_t n_seq, int32_t device, int32_t max_context);
 SPEC_SIDECAR_API int spec_hip_init(const char * weights_dir, const char * ids_path, int32_t n_seq);
 SPEC_SIDECAR_API int spec_hip_catchup(
         int32_t seq_id,
@@ -121,7 +129,7 @@ SPEC_SIDECAR_API int spec_hip_draft_stochastic_device(
         int32_t * dist_ids,
         float * dist_probs);
 
-// Qwen3.8-27B DFlash sidecar ABI (release ABI 5). Target chunks are staged
+// Qwen3.8-27B DFlash sidecar ABI. Target chunks are staged
 // until commit_state; device-layer input pointers are borrowed for the call.
 SPEC_SIDECAR_API int spec_dflash_release_abi(void);
 SPEC_SIDECAR_API int spec_dflash_check(int32_t encoded_width, int32_t block_size, int32_t n_seq);
@@ -133,6 +141,8 @@ SPEC_SIDECAR_API int spec_dflash_truncate_state(int32_t seq_id, int32_t pos_max)
 SPEC_SIDECAR_API int spec_dflash_commit_state(int32_t seq_id, int32_t pos_max);
 SPEC_SIDECAR_API int spec_dflash_rebase_state(int32_t seq_id, int32_t pos_min, int32_t pos_max, int32_t delta);
 SPEC_SIDECAR_API int spec_dflash_attach_target_stream(void * stream, int32_t device);
+SPEC_SIDECAR_API int spec_dflash_init_context(
+        const char * artifact_directory, int32_t n_seq, int32_t max_context);
 SPEC_SIDECAR_API int spec_dflash_init(const char * artifact_directory, int32_t n_seq);
 SPEC_SIDECAR_API int spec_dflash_chunk(
         int32_t seq_id,

@@ -11,6 +11,8 @@
 #include "sampling.h"
 #include "spec_sidecar.h"
 #include "spec_sidecar_assets.h"
+#include "speculative-sidecar-cap.h"
+#include "speculative-dflash-controller.h"
 #include "../include/spec_sidecar/sidecar_abi.h"
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
@@ -47,6 +49,29 @@ static bool common_speculative_rdna2_auto_enabled() {
 static bool common_speculative_sidecar_enabled() {
     const char * value = std::getenv("SPEC_SIDECAR");
     return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
+static int32_t common_speculative_sidecar_max_context(const llama_context * ctx_tgt) {
+    const uint64_t n_ctx_seq = llama_n_ctx_seq(ctx_tgt);
+    return (int32_t) std::min<uint64_t>(n_ctx_seq, INT32_MAX);
+}
+
+static common_speculative_dflash_controller_config common_speculative_dflash_controller_config_from_env(
+        int32_t max_depth) {
+    common_speculative_dflash_controller_config config;
+    config.max_depth = max_depth;
+    const char * mode = std::getenv("LLAMA_SPEC_DFLASH_DYNAMIC_DEPTH");
+    if (mode == nullptr || std::strcmp(mode, "0") == 0 ||
+            std::strcmp(mode, "off") == 0 || std::strcmp(mode, "false") == 0) {
+        return config;
+    }
+    if (std::strcmp(mode, "batch") == 0 || std::strcmp(mode, "1") == 0 ||
+            std::strcmp(mode, "on") == 0) {
+        config.mode = common_speculative_dflash_controller_mode::BATCH;
+    } else if (std::strcmp(mode, "trace") == 0) {
+        config.mode = common_speculative_dflash_controller_mode::TRACE;
+    }
+    return config;
 }
 
 static bool common_spec_sidecar_paths_from_params(
@@ -91,27 +116,33 @@ static uint64_t common_spec_sidecar_stochastic_key(uint32_t seed, llama_seq_id s
 }
 
 static bool common_spec_sidecar_validate_distribution(const int32_t * ids, const float * probs,
-        int count, int32_t n_vocab, common_speculative_token_dist & dist) {
+        int count, int32_t n_vocab, llama_token selected, common_speculative_token_dist & dist) {
     if (ids == nullptr || probs == nullptr || count <= 0) {
         return false;
     }
     dist.ids.resize((size_t) count);
     dist.probs.resize((size_t) count);
     float sum = 0.0f;
+    bool selected_supported = false;
     for (int i = 0; i < count; ++i) {
         if (ids[i] < 0 || ids[i] >= n_vocab || !std::isfinite(probs[i]) || probs[i] < 0.0f) {
             return false;
         }
+        for (int j = 0; j < i; ++j) {
+            if (ids[j] == ids[i]) {
+                return false;
+            }
+        }
         dist.ids[i] = (llama_token) ids[i];
         dist.probs[i] = probs[i];
         sum += probs[i];
+        selected_supported |= ids[i] == selected && probs[i] > 0.0f;
     }
-    if (!std::isfinite(sum) || sum <= 0.0f) {
+    if (!selected_supported || !std::isfinite(sum) || std::abs(sum - 1.0f) > 1e-3f) {
         return false;
     }
-    // Normalize defensively at the ABI boundary. The sidecar samples the same
-    // top-k row before returning it, while this removes harmless reduction
-    // round-off before the target residual sampler consumes q.
+    // Remove harmless reduction round-off only after verifying that the
+    // provider returned the normalized q distribution it sampled.
     for (float & value : dist.probs) {
         value /= sum;
     }
@@ -154,6 +185,20 @@ struct common_speculative_config {
     common_speculative_config(common_speculative_type t,
             const common_params_speculative & p = common_params_speculative{}) : type(t), params(p) {}
 };
+
+// Sidecar MTP+n-gram stacks use a fixed n-gram proposal cap.  The cap is
+// derived from the configured MTP width, preserving the anti-stutter policy
+// without acceptance-driven width changes.
+static common_speculative_sidecar_cap_config common_speculative_sidecar_cap_config_for(
+        const common_params_speculative & params, int ceiling) {
+    if (!params.draft.sidecar_only ||
+            params.draft.sidecar_type != COMMON_SPECULATIVE_TYPE_DRAFT_MTP ||
+            params.draft.n_max <= 0 || ceiling <= params.draft.n_max) {
+        return {};
+    }
+
+    return { std::max(1, params.draft.n_max) };
+}
 
 static bool common_speculative_are_compatible(
     const llama_model * model_tgt,
@@ -1066,6 +1111,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     common_spec_sidecar_dflash sidecar;
     bool sidecar_target_only = false; // runtime failure or unsupported sampling mode
+    common_speculative_dflash_controller_config controller_config;
 
     common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
             common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
@@ -1157,6 +1203,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             this->params.n_min = std::min(this->params.n_min, n_draft_max);
         }
         this->n_max = this->params.n_max;
+        controller_config = common_speculative_dflash_controller_config_from_env(this->params.n_max);
+        if (controller_config.mode != common_speculative_dflash_controller_mode::OFF) {
+            SPC_INF("DFlash active-batch depth %s: max=%d schedule=2:2,other:fixed\n",
+                    controller_config.mode == common_speculative_dflash_controller_mode::TRACE ? "trace" : "active",
+                    controller_config.max_depth);
+        }
 
         // speculative sidecar's DFlash DLL is selected only after the preflight probe.
         // A sidecar-only construction has no native draft context to fall back
@@ -1175,7 +1227,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     block_size == sidecar_profile->dflash_block_size) {
                 if (sidecar.load(paths.library, paths.artifact_dir,
                         sidecar_profile->dflash_encoded_width,
-                        sidecar_profile->dflash_block_size, (int32_t) n_seq, error)) {
+                        sidecar_profile->dflash_block_size, (int32_t) n_seq,
+                        common_speculative_sidecar_max_context(ctx_tgt), error)) {
                     for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
                         if (target_layer_ids[k] == n_layer_tgt) {
                             llama_set_embeddings_nextn_device_preferred(ctx_tgt, true);
@@ -1648,6 +1701,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             return;
         }
 
+        int32_t controller_active_batch = 0;
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            controller_active_batch += dparams[seq_id].drafting && !sidecar_stale[seq_id];
+        }
+
         if (sidecar.active()) {
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 auto & dp = dparams[seq_id];
@@ -1667,7 +1725,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     return;
                 }
 
-                const int limit = std::min(params.n_max, dp.n_max > 0 ? dp.n_max : params.n_max);
+                const int full_limit = std::min(params.n_max, dp.n_max > 0 ? dp.n_max : params.n_max);
+                const int limit = stochastic
+                        ? common_speculative_dflash_controller_pre_draft_cap(
+                                controller_config, controller_active_batch, full_limit,
+                                dp.n_max_user_override)
+                        : full_limit;
                 if (limit < 1) {
                     return;
                 }
@@ -1720,7 +1783,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                         if (!common_spec_sidecar_validate_distribution(
                                     dist_ids.data() + (size_t) i * SPEC_SIDECAR_DFLASH_DRAFT_TOP_K,
                                     dist_probs.data() + (size_t) i * SPEC_SIDECAR_DFLASH_DRAFT_TOP_K,
-                                    SPEC_SIDECAR_DFLASH_DRAFT_TOP_K, n_vocab, dist)) {
+                                    SPEC_SIDECAR_DFLASH_DRAFT_TOP_K, n_vocab, ids[i], dist)) {
                             result.clear();
                             dp.dists->clear();
                             sidecar.disable();
@@ -1734,6 +1797,23 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 if (result.size() < (size_t) params.n_min) {
                     result.clear();
                     if (dp.dists != nullptr) dp.dists->clear();
+                }
+
+                if (stochastic && !result.empty() &&
+                        controller_config.mode != common_speculative_dflash_controller_mode::OFF) {
+                    const auto decision = common_speculative_dflash_controller_select(
+                            controller_config, controller_active_batch, full_limit);
+                    const bool applied = controller_config.mode == common_speculative_dflash_controller_mode::BATCH &&
+                            !dp.n_max_user_override && decision.limited_by_batch;
+                    if (controller_config.mode == common_speculative_dflash_controller_mode::TRACE) {
+                        SPC_INF("DFLASHCTRL seq=%d active=%d mode=trace full=%d scheduled=%d selected=%zu applied=%d override=%d\n",
+                                (int) seq_id, controller_active_batch, full_limit, decision.depth, result.size(),
+                                (int) applied, (int) dp.n_max_user_override);
+                    } else {
+                        SPC_DBG("DFLASHCTRL seq=%d active=%d mode=batch full=%d scheduled=%d selected=%zu applied=%d override=%d\n",
+                                (int) seq_id, controller_active_batch, full_limit, decision.depth, result.size(),
+                                (int) applied, (int) dp.n_max_user_override);
+                    }
                 }
             }
             return;
@@ -2020,6 +2100,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     common_spec_sidecar_paths sidecar_paths;
     int32_t sidecar_embedding_width = 0;
     int32_t sidecar_head_rows = 0;
+    int32_t sidecar_max_context = 0;
     bool sidecar_load_pending = false;
     bool sidecar_target_only = false; // runtime failure or unsupported sampling mode
     bool sidecar_catchup_deferred = false;
@@ -2103,6 +2184,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         const llama_model * model_tgt = llama_get_model(ctx_tgt);
         const llama_model * model_dft = ctx_dft != nullptr ? llama_get_model(ctx_dft) : model_tgt;
+        sidecar_max_context = common_speculative_sidecar_max_context(ctx_tgt);
         n_embd = llama_model_n_embd_out(model_dft);
         GGML_ASSERT(n_embd == llama_model_n_embd_out(model_tgt) &&
                 "MTP input row width must match the target h_nextn width");
@@ -2302,7 +2384,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             // owns h_nextn. Bind the sidecar there before accepting any rows.
             if (!sidecar.load(sidecar_paths.library, sidecar_paths.artifact_dir,
                     sidecar_paths.ids, sidecar_embedding_width, sidecar_head_rows,
-                    (int32_t) n_seq, error, target_device)) {
+                    (int32_t) n_seq, sidecar_max_context, error, target_device)) {
                 sidecar_load_pending = false;
                 sidecar_target_only = true;
                 SPC_WRN("MTP sidecar unavailable on target device %d (%s); target-only mode\n",
@@ -2491,10 +2573,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         for (int32_t k = 0; sidecar_all_logits && k < n_tokens; ++k) {
             sidecar_all_logits = batch_in.logits[k] != 0;
         }
+        const bool sidecar_defer_width =
+                (this->params.n_max == 4 && n_tokens == 5) ||
+                (this->params.n_max == 5 && (n_tokens == 5 || n_tokens == 6));
         const bool sidecar_defer_catchup = (sidecar.active() || sidecar_load_pending) &&
                 sidecar_defer_requested && n_seq == 1 && n_mtp_layers == 1 &&
-                !chain_heads && !is_mem_shared && this->params.n_max == 4 &&
-                n_tokens == 5 && sidecar_all_logits;
+                !chain_heads && !is_mem_shared && sidecar_defer_width && sidecar_all_logits;
 
         if (sidecar.active() || sidecar_load_pending) {
             if (batch_in.pos == nullptr) {
@@ -2654,7 +2738,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     return;
                 }
 
-                const int limit = std::min(params.n_max, dp.n_max > 0 ? dp.n_max : params.n_max);
+                const int limit = std::min(
+                        params.n_max, dp.n_max > 0 ? dp.n_max : params.n_max);
                 if (limit < 1) {
                     return;
                 }
@@ -2710,7 +2795,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                         if (!common_spec_sidecar_validate_distribution(
                                     dist_ids.data() + (size_t) i * SPEC_SIDECAR_MTP_DRAFT_TOP_K,
                                     dist_probs.data() + (size_t) i * SPEC_SIDECAR_MTP_DRAFT_TOP_K,
-                                    SPEC_SIDECAR_MTP_DRAFT_TOP_K, n_vocab, dist)) {
+                                    SPEC_SIDECAR_MTP_DRAFT_TOP_K, n_vocab, ids[i], dist)) {
                             result.clear();
                             dp.dists->clear();
                             sidecar.disable();
@@ -3114,21 +3199,24 @@ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
 
     // shared across all sequences
     common_ngram_simple_config config;
+    common_speculative_sidecar_cap_config sidecar_cap;
 
     common_speculative_impl_ngram_simple(
             const common_params_speculative & params, uint32_t n_seq,
-            common_ngram_simple_config config)
+            common_ngram_simple_config config,
+            common_speculative_sidecar_cap_config cap_cfg = {})
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, n_seq, params.ngram_simple.size_m)
         , params(params.ngram_simple)
         , config(config)
+        , sidecar_cap(cap_cfg)
     {
+
         SPC_TRC("%s", "adding speculative implementation 'ngram-simple'\n");
         SPC_TRC("- size_n=%d, size_m=%d, min_hits=%d\n",
                 this->params.size_n, this->params.size_m, this->params.min_hits);
     }
 
     void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
-        // noop
     }
 
     bool process(const llama_batch & /*batch*/) override {
@@ -3146,27 +3234,32 @@ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
             }
 
             *dp.result = common_ngram_simple_draft(config, *dp.prompt, dp.id_last);
+            common_speculative_sidecar_cap_trim(sidecar_cap, dp, *dp.result);
         }
     }
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
-        // noop
     }
 };
 
 struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
     // n_seq configs
     std::vector<common_ngram_map> config;
+    common_speculative_sidecar_cap_config sidecar_cap;
 
     common_speculative_impl_ngram_map_k(
             const common_ngram_map & config,
-            uint32_t n_seq)
+            uint32_t n_seq,
+            common_speculative_sidecar_cap_config cap_cfg = {})
         : common_speculative_impl(config.key_only ? COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K
             : COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, n_seq, config.size_value)
+        , sidecar_cap(cap_cfg)
     {
         for (uint32_t i = 0; i < n_seq; i++) {
             this->config.push_back(config);
         }
+
+
 
         SPC_TRC("adding speculative implementation '%s'\n", common_speculative_type_to_str(this->type).c_str());
         SPC_TRC("- size_key=%d, size_value=%d, key_only=%d, min_hits=%d\n",
@@ -3175,6 +3268,7 @@ struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
 
     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
         GGML_ASSERT(seq_id < (llama_seq_id) n_seq);
+
 
         common_ngram_map_begin(config[seq_id], prompt);
     }
@@ -3193,18 +3287,24 @@ struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
                 continue;
             }
 
+            const bool cap_request = common_speculative_sidecar_cap_request_enabled(
+                    sidecar_cap, dp);
+            config[seq_id].draft_limit = cap_request
+                    ? (uint16_t) std::min(common_speculative_sidecar_cap_limit(
+                            sidecar_cap, dp), (int) UINT16_MAX)
+                    : 0;
             common_ngram_map_draft(config[seq_id], *dp.prompt, dp.id_last, *dp.result);
+            common_speculative_sidecar_cap_trim(sidecar_cap, dp, *dp.result);
         }
     }
 
     void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
-        GGML_ASSERT((seq_id < (llama_seq_id) config.size()));
-
-        if (is_other) {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) config.size()) {
             return;
         }
-
-        common_ngram_map_accept(config[seq_id], n_accepted);
+        if (!is_other) {
+            common_ngram_map_accept(config[seq_id], n_accepted);
+        }
     }
 };
 
@@ -3229,14 +3329,18 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
     };
 
     std::vector<seq_info> sinfos;
+    common_speculative_sidecar_cap_config sidecar_cap;
 
     common_speculative_impl_ngram_mod(
             const common_params_speculative & params,
-            uint32_t n_seq)
+            uint32_t n_seq,
+            common_speculative_sidecar_cap_config cap_cfg = {})
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_MOD, n_seq, params.ngram_mod.n_max)
         , params(params.ngram_mod)
         , mod(params.ngram_mod.n_match, 4*1024*1024)
-        , verbose(std::getenv("LLAMA_TRACE") != nullptr) {
+        , verbose(std::getenv("LLAMA_TRACE") != nullptr)
+        , sidecar_cap(cap_cfg)
+        {
         static_assert(sizeof(llama_token) == sizeof(common_ngram_mod::entry_t));
 
         SPC_TRC("%s", "adding speculative implementation 'ngram-mod'\n");
@@ -3251,6 +3355,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         }
 
         sinfos.resize(n_seq);
+
     }
 
     void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
@@ -3258,6 +3363,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         sinfo.i_last = 0;
         sinfo.n_draft_last = 0;
+
 
         const size_t n = mod.get_n();
         if (prompt.size() < n) {
@@ -3352,6 +3458,8 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
             }
 
             draft_one(seq_id, dp);
+            common_speculative_sidecar_cap_trim(sidecar_cap, dp, *dp.result);
+            sinfos[seq_id].n_draft_last = dp.result->size();
         }
     }
 
@@ -3400,6 +3508,7 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
     };
 
     std::vector<seq_info> sinfos;
+    common_speculative_sidecar_cap_config sidecar_cap;
 
     common_speculative_impl_ngram_cache(
             const common_params_speculative & params,
@@ -3408,12 +3517,14 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
             const std::string & path_static,
             const std::string & path_dynamic,
             bool save_dynamic,
-            bool save_static)
+            bool save_static,
+            common_speculative_sidecar_cap_config cap_cfg = {})
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, n_seq, n_draft)
         , params(params.ngram_cache)
         , n_draft(n_draft)
         , save_dynamic(save_dynamic)
         , save_static(save_static)
+        , sidecar_cap(cap_cfg)
     {
         SPC_TRC("%s", "adding speculative implementation 'ngram-cache'\n");
         SPC_TRC("- n_draft=%d, cache_static=%s, cache_dynamic=%s\n",
@@ -3422,6 +3533,7 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
                 path_dynamic.empty() ? "none" : path_dynamic.c_str());
 
         sinfos.resize(n_seq);
+
 
         if (!path_static.empty()) {
             try {
@@ -3451,7 +3563,6 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
     }
 
     void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
-        // noop
     }
 
     void draft_one(
@@ -3514,11 +3625,11 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
             }
 
             draft_one(seq_id, dp);
+            common_speculative_sidecar_cap_trim(sidecar_cap, dp, *dp.result);
         }
     }
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
-        // noop
     }
 };
 
@@ -3549,14 +3660,16 @@ static common_speculative_impl_ngram_cache create_state_ngram_cache(
         const common_speculative_config & config,
         uint32_t n_seq,
         const std::string & path_static,
-        const std::string & path_dynamic) {
+        const std::string & path_dynamic,
+        common_speculative_sidecar_cap_config cap_cfg = {}) {
     uint16_t n_draft = 8; // TODO get from config?
 
     // TODO bool param in common/common.h to set save_static/save_dynamic?
     bool save_static = false;
     bool save_dynamic = false;
 
-    common_speculative_impl_ngram_cache state(config.params, n_seq, n_draft, path_static, path_dynamic, save_static, save_dynamic);
+    common_speculative_impl_ngram_cache state(config.params, n_seq, n_draft, path_static,
+            path_dynamic, save_static, save_dynamic, cap_cfg);
 
     return state;
 }
@@ -4213,6 +4326,20 @@ common_speculative * common_speculative_init(common_params_speculative & params,
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
 
+    const bool mtp_sidecar = params.draft.sidecar_only &&
+            params.draft.sidecar_type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+    const bool has_ngram = std::any_of(params.types.begin(), params.types.end(), [](common_speculative_type type) {
+        return type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE ||
+               type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K ||
+               type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V ||
+               type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD ||
+               type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE;
+    });
+    if (mtp_sidecar && has_ngram && params.draft.n_max > 0) {
+        SPC_INF("sidecar ngram verification fixed at MTP width %d; explicit speculative.n_max remains authoritative\n",
+                params.draft.n_max);
+    }
+
     for (const common_speculative_config & config : configs) {
         switch (config.type) {
             case COMMON_SPECULATIVE_TYPE_NONE:
@@ -4251,7 +4378,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 auto state = std::make_unique<common_speculative_impl_ngram_simple>(
                     /* .params = */ config.params,
                     /* .n_seq  = */ n_seq,
-                    /* .state  = */ config_simple
+                    /* .state  = */ config_simple,
+                    /* .cap_cfg = */ common_speculative_sidecar_cap_config_for(
+                        params, config_simple.size_mgram)
                 );
                 impls.push_back(std::move(state));
                 break;
@@ -4259,25 +4388,33 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K: {
                 impls.push_back(
                         std::make_unique<common_speculative_impl_ngram_map_k>(
-                            get_common_ngram_map(config.type, config.params.ngram_map_k), n_seq));
+                            get_common_ngram_map(config.type, config.params.ngram_map_k), n_seq,
+                            common_speculative_sidecar_cap_config_for(
+                                params, config.params.ngram_map_k.size_m)));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: {
                 impls.push_back(
                         std::make_unique<common_speculative_impl_ngram_map_k>(
-                            get_common_ngram_map(config.type, config.params.ngram_map_k4v), n_seq));
+                            get_common_ngram_map(config.type, config.params.ngram_map_k4v), n_seq,
+                            common_speculative_sidecar_cap_config_for(
+                                params, config.params.ngram_map_k4v.size_m)));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_MOD: {
                 impls.push_back(
-                        std::make_unique<common_speculative_impl_ngram_mod>(config.params, n_seq));
+                        std::make_unique<common_speculative_impl_ngram_mod>(
+                            config.params, n_seq,
+                            common_speculative_sidecar_cap_config_for(
+                                params, config.params.ngram_mod.n_max)));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE: {
                 auto state = create_state_ngram_cache(
                         config, n_seq,
                         params.ngram_cache.lookup_cache_static,
-                        params.ngram_cache.lookup_cache_dynamic);
+                        params.ngram_cache.lookup_cache_dynamic,
+                        common_speculative_sidecar_cap_config_for(params, 8));
                 impls.push_back(std::make_unique<common_speculative_impl_ngram_cache>(state));
                 break;
             }

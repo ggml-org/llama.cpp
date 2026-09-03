@@ -124,6 +124,33 @@ static int32_t server_gfx1030_neural_k4v_cycle_cap(const common_params & params)
     return server_spec_gfx1030_neural_k4v_cycle_cap(params.speculative);
 }
 
+static bool server_gfx1030_sidecar_runtime_profile(const common_params & params) {
+    if (!server_gfx1030_native_auto_enabled() ||
+            !server_vocab_sharded_output_enabled() ||
+            !server_env_enabled("SPEC_SIDECAR") ||
+            params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+        return false;
+    }
+
+    size_t n_rocm_devices = 0;
+    for (ggml_backend_dev_t device : params.devices) {
+        if (device == nullptr) continue;
+        const char * name = ggml_backend_dev_name(device);
+        if (ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_GPU ||
+                name == nullptr || std::strncmp(name, "ROCm", 4) != 0) {
+            return false;
+        }
+        ++n_rocm_devices;
+    }
+    return n_rocm_devices == 4;
+}
+
+static bool server_gfx1030_dflash_dynamic_depth_profile(const common_params & params) {
+    return server_gfx1030_sidecar_runtime_profile(params) &&
+            server_spec_gfx1030_dflash_dynamic_depth_profile(params.speculative) &&
+            params.n_parallel >= 1 && params.n_parallel <= 4;
+}
+
 static bool server_greedy_backend_sampling_eligible(const common_params_sampling & sampling) {
     if (sampling.samplers.empty() || sampling.samplers.back() != COMMON_SAMPLER_TYPE_TEMPERATURE) {
         return false;
@@ -429,6 +456,7 @@ struct server_slot {
     // target prompt. Host prompt-cache and slot-file restores replace target KV
     // without restoring the sidecar's private device KV.
     bool spec_prompt_state_valid = true;
+    bool spec_n_max_user_override = false;
     std::mt19937 spec_synth_rng;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
@@ -573,6 +601,7 @@ struct server_slot {
 
         spec_is_replay = false;
         spec_grammar_fallback_logged = false;
+        spec_n_max_user_override = false;
 
         last_nl_pos    = 0;
         generated_text = "";
@@ -1373,6 +1402,17 @@ private:
             SRV_INF("%s", "reserving target backend-sampling buffers for gfx1030 speculative auto policy\n");
         }
 
+        if (server_gfx1030_dflash_dynamic_depth_profile(params_base) &&
+                std::getenv("LLAMA_SPEC_DFLASH_DYNAMIC_DEPTH") == nullptr) {
+#if defined(_WIN32)
+            _putenv_s("LLAMA_SPEC_DFLASH_DYNAMIC_DEPTH", "batch");
+#else
+            setenv("LLAMA_SPEC_DFLASH_DYNAMIC_DEPTH", "batch", 0);
+#endif
+            SRV_INF("%s", "enabling active-batch DFlash depth schedule for qualified gfx1030 TP4 sidecar; "
+                    "set LLAMA_SPEC_DFLASH_DYNAMIC_DEPTH=off to disable\n");
+        }
+
         llama_init = common_init_from_params(params_base);
 
         if (prime_auto_backend_sampling) {
@@ -1399,7 +1439,7 @@ private:
             const bool is_mtp = std::find(params_base.speculative.types.begin(),
                                           params_base.speculative.types.end(),
                                           COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
-            SRV_INF("capping automatic gfx1030 TP4 %s+K4V cycles at %d draft tokens "
+            SRV_INF("capping automatic gfx1030 %s+K4V cycles at %d draft tokens "
                     "(configured K4V m=%u); explicit request speculative.n_max overrides\n",
                     is_mtp ? "MTP" : "DFlash", gfx1030_neural_k4v_cycle_cap,
                     params_base.speculative.ngram_map_k4v.size_m);
@@ -2199,7 +2239,8 @@ private:
 
         // initialize samplers
         if (task.need_sampling()) {
-            if (task.params.speculative_n_max < 0 && gfx1030_neural_k4v_cycle_cap > 0) {
+            slot.spec_n_max_user_override = task.params.speculative_n_max >= 0;
+            if (!slot.spec_n_max_user_override && gfx1030_neural_k4v_cycle_cap > 0) {
                 task.params.speculative_n_max = gfx1030_neural_k4v_cycle_cap;
             }
 
@@ -2225,7 +2266,8 @@ private:
 
             // TODO: getting pre sampling logits is not yet supported with backend sampling
             use_backend_sampling &= !need_pre_sample_logits;
-            if (use_backend_sampling && server_vocab_sharded_output_enabled()) {
+            if (use_backend_sampling && server_vocab_sharded_output_enabled() &&
+                    !params_base.sampling.backend_sampling) {
                 SLT_WRN(slot, "%s", "vocabulary-sharded target output is incompatible with backend sampling; using CPU fallback\n");
                 use_backend_sampling = false;
                 task.params.sampling.backend_sampling = false;
@@ -3507,6 +3549,7 @@ private:
                         common_speculative_get_draft_params(spec.get(), slot.id) = {
                             /* .drafting = */ true,
                             /* .n_max    = */ n_draft_max,
+                            /* .n_max_user_override = */ slot.spec_n_max_user_override,
                             /* .n_past   = */ slot.prompt.n_tokens(),
                             /* .id_last  = */ slot.sampled,
                             /* .prompt   = */ &slot.spec_prompt,

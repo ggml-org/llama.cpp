@@ -120,6 +120,9 @@ llama_tokens common_ngram_simple_draft(
 
 void common_ngram_map_begin(
     common_ngram_map & map, const llama_tokens & tokens) {
+    // The fixed sidecar width is set again for every draft call; do not let
+    // an internal per-call override leak across a new generation.
+    map.draft_limit = 0;
     size_t size_begin = tokens.size();
 
     LOG_DBG("%s: begin, idx_last_draft=%zu, new begin=%zu, #keys=%zu\n", __func__,
@@ -383,7 +386,9 @@ void common_ngram_map_draft(common_ngram_map & map,
         // simple mode:
         // Fill in the draft with the m tokens following the key.
         // We work with value values[0] only.
-        int n_draft_tokens = std::min((int) m, (int) curr_key.values[0].n_accepted);
+        const int n_draft_tokens = map.draft_limit > 0
+                ? std::min((int) m, (int) map.draft_limit)
+                : std::min((int) m, (int) curr_key.values[0].n_accepted);
 
         for (int i = 0; i < n_draft_tokens; ++i) {
             draft.push_back(inp[match_pos + n + i]);
@@ -500,7 +505,9 @@ void common_ngram_map_draft(common_ngram_map & map,
 
     // We use the most frequent value values[slot_max] for the draft.
     // Fill in the draft with the m tokens following the key.
-    int n_draft_tokens = std::min((int) m, (int) curr_key.values[slot_max].n_accepted);
+    const int n_draft_tokens = map.draft_limit > 0
+            ? std::min((int) m, (int) map.draft_limit)
+            : std::min((int) m, (int) curr_key.values[slot_max].n_accepted);
 
     for (int i = 0; i < n_draft_tokens; ++i) {
         draft.push_back(inp[match_pos + n + i]);

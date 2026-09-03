@@ -6,6 +6,7 @@
 // with a 2048-wide hidden state. Its artifact is generated from the trained
 // block in the target GGUF and is fail-closed by an exact manifest contract.
 #include "kernels.hip"
+#include "batch_kernels.hip"
 #include "../artifact_manifest.h"
 #include "../mtp/catchup_alignment.h"
 #include "spec_sidecar/sidecar_abi.h"
@@ -19,15 +20,26 @@
 #include <string>
 #include <vector>
 
+#if defined(__has_include)
+#    if __has_include(<rocprim/device/device_topk.hpp>)
+#        include <rocprim/device/device_topk.hpp>
+#        include <rocprim/iterator/counting_iterator.hpp>
+#        define QWEN35MOE_SIDECAR_ROCPRIM_TOPK
+#    endif
+#endif
+
 namespace {
 
 using Tensor = spec_sidecar_artifact::TensorDesc;
 using namespace qwen35moe_sidecar;
 
-static constexpr int SC_RELEASE_ABI = 4;
+static constexpr int SC_RELEASE_ABI = SPEC_SIDECAR_MTP_RELEASE_ABI;
 static constexpr int SC_MAX_SEQ = 8;
 static constexpr int SC_MAX_POS_DEFAULT = 262144;
 static constexpr size_t N_PARTS = (N_HEAD_ROWS + 256 * 8 - 1) / (256 * 8);
+
+static_assert(MTP_DRAFT_TOP_K == SPEC_SIDECAR_MTP_DRAFT_TOP_K,
+        "Qwen35MoE stochastic top-k ABI mismatch");
 
 struct SeqState {
     __half * key_committed = nullptr;
@@ -94,6 +106,20 @@ struct Scratch {
     float * zero = nullptr;
 };
 
+static constexpr int CATCHUP_BATCH = 64;
+
+struct CatchupScratch {
+    float * token = nullptr;
+    float * hidden = nullptr;
+    float * token_norm = nullptr;
+    float * hidden_norm = nullptr;
+    float * concat = nullptr;
+    float * projected = nullptr;
+    float * attention_input = nullptr;
+    float * key = nullptr;
+    float * value = nullptr;
+};
+
 struct Weights {
     const block_q4_0 * token_embedding = nullptr;
     const block_q4_0 * eh_proj = nullptr;
@@ -128,13 +154,21 @@ struct State {
     hipStream_t stream = nullptr;
     hipStream_t owned_stream = nullptr;
     bool owns_stream = true;
+    bool parallel_router = false;
+    bool batched_catchup = false;
     std::vector<Tensor> tensors;
     Weights weights;
     Scratch scratch;
+    CatchupScratch catchup;
     SeqState seq[SC_MAX_SEQ];
     int32_t * remap = nullptr;
     hipEvent_t event_a = nullptr;
     hipEvent_t event_b = nullptr;
+#if defined(QWEN35MOE_SIDECAR_ROCPRIM_TOPK)
+    void * topk_temp = nullptr;
+    size_t topk_temp_bytes = 0;
+    bool topk_rocprim = false;
+#endif
 };
 
 State S;
@@ -257,8 +291,13 @@ static void run_full_block(Scratch & c, const int * token, const float * hidden,
 
     gemv_f32<<<N_EXPERT, 32, 0, S.stream>>>(
             S.weights.ffn_gate_inp, c.post_norm, c.router, N_EMBD, N_EXPERT);
-    router_top8<<<1, 1, 0, S.stream>>>(
-            c.router, c.expert_ids, c.expert_weights);
+    if (S.parallel_router) {
+        router_top8_parallel<<<1, N_EXPERT, 0, S.stream>>>(
+                c.router, c.expert_ids, c.expert_weights);
+    } else {
+        router_top8<<<1, 1, 0, S.stream>>>(
+                c.router, c.expert_ids, c.expert_weights);
+    }
     dim3 expert_grid(N_FF, N_EXPERT_USED);
 #if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
     gemv_q4_q8_experts_dot8<<<expert_grid, 32, 0, S.stream>>>(
@@ -337,11 +376,39 @@ static void run_full_block(Scratch & c, const int * token, const float * hidden,
     }
 }
 
+static int32_t resolve_max_context(int32_t requested) {
+    if (requested < 1) return -1;
+    int64_t effective = std::min<int64_t>(requested, SC_MAX_POS_DEFAULT);
+    if (const char * value = std::getenv("LLAMA_SPEC_HIP_MAX_POS")) {
+        const int64_t cap = std::atoll(value);
+        if (cap < 1) return -1;
+        effective = std::min(effective, cap);
+    }
+    return effective <= INT32_MAX ? static_cast<int32_t>(effective) : -1;
+}
+
 static int initialize_impl(const char * weights_dir, const char * ids_path,
-        int32_t n_seq, int32_t requested_device) {
-    if (requested_device < -1 || n_seq < 1 || n_seq > SC_MAX_SEQ) return -1;
-    if (S.ok) return n_seq == S.n_seq && (requested_device < 0 || requested_device == S.device) ? 0 : -1;
+        int32_t n_seq, int32_t requested_device, int32_t requested_max_context) {
+    const int32_t max_context = resolve_max_context(requested_max_context);
+    if (requested_device < -1 || n_seq < 1 || n_seq > SC_MAX_SEQ || max_context < 1) return -1;
+    if (S.ok) {
+        return n_seq == S.n_seq && max_context == S.max_pos &&
+                (requested_device < 0 || requested_device == S.device) ? 0 : -1;
+    }
     S.n_seq = n_seq;
+    S.max_pos = max_context;
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    S.parallel_router = true;
+    S.batched_catchup = true;
+#endif
+    if (const char * value = std::getenv("LLAMA_SPEC_QWEN35MOE_PARALLEL_ROUTER")) {
+        S.parallel_router = std::strcmp(value, "0") != 0 &&
+                std::strcmp(value, "off") != 0 && std::strcmp(value, "false") != 0;
+    }
+    if (const char * value = std::getenv("LLAMA_SPEC_QWEN35MOE_BATCHED_CATCHUP")) {
+        S.batched_catchup = std::strcmp(value, "0") != 0 &&
+                std::strcmp(value, "off") != 0 && std::strcmp(value, "false") != 0;
+    }
     if (requested_device >= 0) SC_CHECK(hipSetDevice(requested_device));
     SC_CHECK(hipGetDevice(&S.device));
     if (requested_device >= 0 && S.device != requested_device) return -1;
@@ -515,19 +582,60 @@ static int initialize_impl(const char * weights_dir, const char * ids_path,
     SC_CHECK(hipMemset(c.zero, 0, N_EMBD * sizeof(float)));
 #undef MALLOC_F32
 
-    for (SeqState & seq : S.seq) seq = {};
-    if (const char * max_pos = std::getenv("LLAMA_SPEC_HIP_MAX_POS")) {
-        long long requested = std::atoll(max_pos);
-        requested = std::max<long long>(4096, std::min<long long>(SC_MAX_POS_DEFAULT, requested));
-        S.max_pos = static_cast<int>(requested);
+    if (S.batched_catchup) {
+        CatchupScratch & b = S.catchup;
+#define MALLOC_CATCHUP(field, count) SC_CHECK(hipMalloc(&b.field, static_cast<size_t>(count) * sizeof(float)))
+        MALLOC_CATCHUP(token, CATCHUP_BATCH * N_EMBD);
+        MALLOC_CATCHUP(hidden, CATCHUP_BATCH * N_EMBD);
+        MALLOC_CATCHUP(token_norm, CATCHUP_BATCH * N_EMBD);
+        MALLOC_CATCHUP(hidden_norm, CATCHUP_BATCH * N_EMBD);
+        MALLOC_CATCHUP(concat, CATCHUP_BATCH * 2 * N_EMBD);
+        MALLOC_CATCHUP(projected, CATCHUP_BATCH * N_EMBD);
+        MALLOC_CATCHUP(attention_input, CATCHUP_BATCH * N_EMBD);
+        MALLOC_CATCHUP(key, CATCHUP_BATCH * N_HEAD_KV * HEAD_DIM);
+        MALLOC_CATCHUP(value, CATCHUP_BATCH * N_HEAD_KV * HEAD_DIM);
+#undef MALLOC_CATCHUP
     }
+
+    for (SeqState & seq : S.seq) seq = {};
     SC_CHECK(hipStreamCreate(&S.owned_stream));
     S.stream = S.owned_stream;
     SC_CHECK(hipEventCreate(&S.event_a));
     SC_CHECK(hipEventCreate(&S.event_b));
+#if defined(QWEN35MOE_SIDECAR_ROCPRIM_TOPK)
+    {
+        const char * value = std::getenv("LLAMA_SPEC_QWEN35MOE_ROCPRIM_TOPK");
+        const bool enabled = value == nullptr || (std::strcmp(value, "0") != 0 &&
+                std::strcmp(value, "off") != 0 && std::strcmp(value, "false") != 0);
+        if (enabled) {
+            const rocprim::counting_iterator<int> indices(0);
+            size_t bytes = 0;
+            const hipError_t status = rocprim::topk_pairs<rocprim::default_config, true>(
+                    nullptr, bytes, c.logits, c.partial_max, indices, c.partial_idx,
+                    static_cast<uint32_t>(N_HEAD_ROWS), static_cast<uint32_t>(MTP_DRAFT_TOP_K),
+                    rocprim::identity_decomposer{}, S.stream);
+            if (status == hipSuccess) {
+                S.topk_temp_bytes = bytes;
+                if (bytes == 0 || hipMalloc(&S.topk_temp, bytes) == hipSuccess) {
+                    S.topk_rocprim = true;
+                } else {
+                    std::fprintf(stderr, "[qwen35moe-sidecar] rocPRIM top-k scratch allocation failed; using fallback\n");
+                }
+            } else {
+                std::fprintf(stderr, "[qwen35moe-sidecar] rocPRIM top-k query failed (%s); using fallback\n",
+                        hipGetErrorString(status));
+            }
+        }
+        if (std::getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr) {
+            std::fprintf(stderr, "[qwen35moe-sidecar] stochastic top-k: %s\n",
+                    S.topk_rocprim ? "rocPRIM" : "fallback");
+        }
+    }
+#endif
     S.ok = true;
-    std::fprintf(stderr, "[qwen35moe-sidecar] initialized: %zu tensors, KV %d positions f16, device=%d\n",
-            S.tensors.size(), S.max_pos, S.device);
+    std::fprintf(stderr, "[qwen35moe-sidecar] initialized: %zu tensors, KV %d positions f16, device=%d, router=%s, catchup=%s\n",
+            S.tensors.size(), S.max_pos, S.device, S.parallel_router ? "parallel" : "scalar",
+            S.batched_catchup ? "batched" : "scalar");
     return 0;
 }
 
@@ -552,25 +660,80 @@ static int catchup_impl(int32_t seq_id, const int32_t * tokens, const int32_t * 
     seq->pending_pos_min = seq->state_pos_max;
     seq->pending_pos_max = seq->state_pos_max + count;
     Scratch & c = S.scratch;
-    for (int i = 0; i < count; ++i) {
-        const float * hidden = nullptr;
-        if (i == 0) {
-            if (seq->hidden_valid) {
-                SC_CHECK(hipMemcpyAsync(c.hidden, seq->hidden_committed,
+    if (S.batched_catchup) {
+        CatchupScratch & b = S.catchup;
+        const float * pending_hidden = hidden_device ? hidden_rows : seq->hidden_pending;
+        for (int row0 = 0; row0 < count; row0 += CATCHUP_BATCH) {
+            const int n_rows = std::min(CATCHUP_BATCH, count - row0);
+            if (row0 == 0) {
+                SC_CHECK(hipMemcpyAsync(b.hidden,
+                        seq->hidden_valid ? seq->hidden_committed : c.zero,
                         N_EMBD * sizeof(float), hipMemcpyDeviceToDevice, S.stream));
+                if (n_rows > 1) {
+                    SC_CHECK(hipMemcpyAsync(b.hidden + N_EMBD, pending_hidden,
+                            static_cast<size_t>(n_rows - 1) * N_EMBD * sizeof(float),
+                            hipMemcpyDeviceToDevice, S.stream));
+                }
             } else {
-                SC_CHECK(hipMemcpyAsync(c.hidden, c.zero,
-                        N_EMBD * sizeof(float), hipMemcpyDeviceToDevice, S.stream));
+                SC_CHECK(hipMemcpyAsync(b.hidden,
+                        pending_hidden + static_cast<size_t>(row0 - 1) * N_EMBD,
+                        static_cast<size_t>(n_rows) * N_EMBD * sizeof(float),
+                        hipMemcpyDeviceToDevice, S.stream));
             }
-            hidden = c.hidden;
-        } else if (hidden_device) {
-            hidden = hidden_rows + static_cast<size_t>(i - 1) * N_EMBD;
-        } else {
-            hidden = seq->hidden_pending + static_cast<size_t>(i - 1) * N_EMBD;
+
+            for (int token_row = 0; token_row < n_rows; token_row += 8) {
+                const int n_token_rows = std::min(8, n_rows - token_row);
+                const int32_t t0 = tokens[row0 + token_row];
+                const int32_t t1 = n_token_rows > 1 ? tokens[row0 + token_row + 1] : 0;
+                const int32_t t2 = n_token_rows > 2 ? tokens[row0 + token_row + 2] : 0;
+                const int32_t t3 = n_token_rows > 3 ? tokens[row0 + token_row + 3] : 0;
+                const int32_t t4 = n_token_rows > 4 ? tokens[row0 + token_row + 4] : 0;
+                const int32_t t5 = n_token_rows > 5 ? tokens[row0 + token_row + 5] : 0;
+                const int32_t t6 = n_token_rows > 6 ? tokens[row0 + token_row + 6] : 0;
+                const int32_t t7 = n_token_rows > 7 ? tokens[row0 + token_row + 7] : 0;
+                deq_rows_q4_0_b8<<<dim3((N_EMBD + 255) / 256, n_token_rows), 256, 0, S.stream>>>(
+                        S.weights.token_embedding, t0, t1, t2, t3, t4, t5, t6, t7,
+                        b.token + static_cast<size_t>(token_row) * N_EMBD, n_token_rows);
+            }
+            rmsnorm_b<<<n_rows, 256, 0, S.stream>>>(
+                    b.token, S.weights.enorm, b.token_norm, N_EMBD);
+            rmsnorm_b<<<n_rows, 256, 0, S.stream>>>(
+                    b.hidden, S.weights.hnorm, b.hidden_norm, N_EMBD);
+            concat2_b<<<dim3((2 * N_EMBD + 255) / 256, n_rows), 256, 0, S.stream>>>(
+                    b.token_norm, b.hidden_norm, b.concat);
+            gemv_q4_0_b<<<dim3(N_EMBD, n_rows), 32, 0, S.stream>>>(
+                    S.weights.eh_proj, b.concat, b.projected, 2 * N_EMBD, N_EMBD);
+            rmsnorm_b<<<n_rows, 256, 0, S.stream>>>(
+                    b.projected, S.weights.attn_norm, b.attention_input, N_EMBD);
+            gemv_q4_0_b<<<dim3(N_HEAD_KV * HEAD_DIM, n_rows), 32, 0, S.stream>>>(
+                    S.weights.attn_k, b.attention_input, b.key, N_EMBD, N_HEAD_KV * HEAD_DIM);
+            gemv_q4_0_b<<<dim3(N_HEAD_KV * HEAD_DIM, n_rows), 32, 0, S.stream>>>(
+                    S.weights.attn_v, b.attention_input, b.value, N_EMBD, N_HEAD_KV * HEAD_DIM);
+            rmsnorm_heads_b<<<dim3(N_HEAD_KV, n_rows), 256, 0, S.stream>>>(
+                    b.key, S.weights.attn_k_norm, b.key, N_HEAD_KV);
+            rope_neox_b<<<dim3(N_HEAD_KV, n_rows), N_ROT / 2, 0, S.stream>>>(
+                    b.key, N_HEAD_KV, positions[row0]);
+            kv_store_b<<<dim3((N_HEAD_KV * HEAD_DIM + 255) / 256, n_rows), 256, 0, S.stream>>>(
+                    b.key, b.value, seq->key_pending, seq->value_pending,
+                    positions[row0], seq->pending_pos_min);
         }
-        SC_CHECK(hipMemcpyAsync(c.id_dev, &tokens[i], sizeof(int), hipMemcpyHostToDevice, S.stream));
-        project_input(c, c.id_dev, hidden, positions[i], positions[i] - seq->pending_pos_min,
-                seq->key_pending, seq->value_pending, false);
+    } else {
+        for (int i = 0; i < count; ++i) {
+            const float * hidden = nullptr;
+            if (i == 0) {
+                SC_CHECK(hipMemcpyAsync(c.hidden,
+                        seq->hidden_valid ? seq->hidden_committed : c.zero,
+                        N_EMBD * sizeof(float), hipMemcpyDeviceToDevice, S.stream));
+                hidden = c.hidden;
+            } else if (hidden_device) {
+                hidden = hidden_rows + static_cast<size_t>(i - 1) * N_EMBD;
+            } else {
+                hidden = seq->hidden_pending + static_cast<size_t>(i - 1) * N_EMBD;
+            }
+            SC_CHECK(hipMemcpyAsync(c.id_dev, &tokens[i], sizeof(int), hipMemcpyHostToDevice, S.stream));
+            project_input(c, c.id_dev, hidden, positions[i], positions[i] - seq->pending_pos_min,
+                    seq->key_pending, seq->value_pending, false);
+        }
     }
     if (!hidden_device) SC_CHECK(hipStreamSynchronize(S.stream));
     return 0;
@@ -635,12 +798,29 @@ static int stochastic_impl(int32_t seq_id, int32_t last_token, int32_t past_toke
         const float * input_hidden = i == 0 ? hidden : c.h_next;
         run_full_block(c, token, input_hidden, past_tokens + i,
                 seq->key_committed, seq->value_committed, true);
-        topk_partial<<<N_PARTS, 256, 0, S.stream>>>(
-                c.logits, c.partial_max, c.partial_idx, N_PARTS);
-        topk_final<<<1, 1, 0, S.stream>>>(
-                c.partial_max, c.partial_idx, N_PARTS, S.remap,
-                c.draft_ids + static_cast<size_t>(i) * MTP_DRAFT_TOP_K,
-                c.draft_logits + static_cast<size_t>(i) * MTP_DRAFT_TOP_K);
+#if defined(QWEN35MOE_SIDECAR_ROCPRIM_TOPK)
+        if (S.topk_rocprim) {
+            const rocprim::counting_iterator<int> indices(0);
+            size_t bytes = S.topk_temp_bytes;
+            const hipError_t status = rocprim::topk_pairs<rocprim::default_config, true>(
+                    S.topk_temp, bytes, c.logits, c.partial_max, indices, c.partial_idx,
+                    static_cast<uint32_t>(N_HEAD_ROWS), static_cast<uint32_t>(MTP_DRAFT_TOP_K),
+                    rocprim::identity_decomposer{}, S.stream);
+            SC_CHECK(status);
+            sort_remap_topk<<<1, MTP_DRAFT_TOP_K, 0, S.stream>>>(
+                    c.partial_max, c.partial_idx, S.remap,
+                    c.draft_ids + static_cast<size_t>(i) * MTP_DRAFT_TOP_K,
+                    c.draft_logits + static_cast<size_t>(i) * MTP_DRAFT_TOP_K);
+        } else
+#endif
+        {
+            topk_partial<<<N_PARTS, 256, 0, S.stream>>>(
+                    c.logits, c.partial_max, c.partial_idx, N_PARTS);
+            topk_final<<<1, 1, 0, S.stream>>>(
+                    c.partial_max, c.partial_idx, N_PARTS, S.remap,
+                    c.draft_ids + static_cast<size_t>(i) * MTP_DRAFT_TOP_K,
+                    c.draft_logits + static_cast<size_t>(i) * MTP_DRAFT_TOP_K);
+        }
         sample_topk<<<1, 1, 0, S.stream>>>(
                 c.draft_ids + static_cast<size_t>(i) * MTP_DRAFT_TOP_K,
                 c.draft_logits + static_cast<size_t>(i) * MTP_DRAFT_TOP_K,
@@ -821,12 +1001,20 @@ SC_API int spec_hip_attach_target_stream(void * stream, int32_t device) {
     return 0;
 }
 
+SC_API int spec_hip_init_context(const char * weights_dir, const char * ids_path,
+        int32_t n_seq, int32_t max_context) {
+    return initialize_impl(weights_dir, ids_path, n_seq, -1, max_context);
+}
+SC_API int spec_hip_init_device_context(const char * weights_dir, const char * ids_path,
+        int32_t n_seq, int32_t device, int32_t max_context) {
+    return initialize_impl(weights_dir, ids_path, n_seq, device, max_context);
+}
 SC_API int spec_hip_init(const char * weights_dir, const char * ids_path, int32_t n_seq) {
-    return initialize_impl(weights_dir, ids_path, n_seq, -1);
+    return initialize_impl(weights_dir, ids_path, n_seq, -1, SC_MAX_POS_DEFAULT);
 }
 SC_API int spec_hip_init_device(const char * weights_dir, const char * ids_path,
         int32_t n_seq, int32_t device) {
-    return initialize_impl(weights_dir, ids_path, n_seq, device);
+    return initialize_impl(weights_dir, ids_path, n_seq, device, SC_MAX_POS_DEFAULT);
 }
 SC_API int spec_hip_catchup(int32_t seq_id, const int32_t * tokens, const int32_t * positions,
         const float * hidden_rows, int count) {

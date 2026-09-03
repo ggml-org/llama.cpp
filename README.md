@@ -1,66 +1,159 @@
-<p align="center">
-  <img src="rdna-2-llama-cpp.png" alt="llama.cpp RDNA2" />
-</p>
+# llama.cpp RDNA2 / RDNA3
 
-# llama.cpp RDNA2 / V620 user guide
+This fork keeps the RDNA2/gfx1030 and RDNA3/gfx1100 paths separate. Use only
+the section matching the GPU you are building for.
+Unsupported models, shapes, quantizations, and topologies retain the normal
+llama.cpp fallbacks.
 
-This branch (`perf/v620-native-mtp-auto-dflash2`, PR #16) contains the tested
-HIP/RCCL paths for AMD RDNA2 `gfx1030`, especially four Radeon Pro V620 GPUs.
-The native profile is automatic at runtime: users should not need to copy a
-large list of feature variables.
+## At a glance
 
-Unsupported models, shapes, quantizations, and topologies keep the normal
-llama.cpp fallback.
+| GPU | Build helper | Runtime profile |
+|---|---|---|
+| Native RDNA3/gfx1100 | `scripts/build-rdna3-portable.sh` | `GGML_HIP_RDNA3_AUTO=1` with the RCCL-enabled build |
+| RDNA2/gfx1030/V620 | `scripts/build-rdna2-portable.sh` | `HSA_OVERRIDE_GFX_VERSION=10.3.0` plus the RDNA2 profile |
 
-## Quick start
+`HSA_OVERRIDE_GFX_VERSION=10.3.0` is **never** used on native gfx1100.
 
-### 1. Requirements
+## RDNA3: native gfx1100
 
-- Linux, CMake, and a ROCm installation with HIP clang and RCCL.
-- For the validated path: four V620/`gfx1030` GPUs with tensor splitting.
-- A compatible main GGUF; an optional DFlash/MTP draft GGUF may be supplied.
+The RDNA3 profile is qualified for two or more matching AMD Radeon RX 7900 XT /
+`gfx1100` cards. The launcher selects all matching cards by default. For Auto to
+activate, every visible physical GPU must match and every pair must support
+bidirectional peer access. The current machine has two cards, so runtime
+measurements for a 3+ card topology remain to be collected on suitable hardware.
 
-### 2. Build
+### Build
 
-Use the portable user build helper. It discovers ROCm, clang, RCCL, and the GPU
-architecture where possible:
+The portable helper discovers ROCm and clang, detects one gfx11 target, builds
+the server and speculative sidecars, and disables embedded/prebuilt UI assets:
+
+```bash
+./scripts/build-rdna3-portable.sh
+```
+
+Defaults are `GGML_HIP_RCCL=ON`, `BUILD_SIDECARS=ON`, and `BUILD_TESTS=OFF`.
+If discovery is ambiguous, provide the installation and target explicitly:
+
+```bash
+ROCM_PATH=/opt/rocm/core-10.0 \
+TARGET_ARCH=gfx1100 \
+./scripts/build-rdna3-portable.sh --jobs 2
+```
+
+The lower-level `scripts/build-rdna-unified.sh` helper remains available for
+maintainer-controlled builds; set `GGML_HIP_RCCL=ON` when using it for RDNA3
+Auto.
+
+### Model and sidecar assets
+
+The supplied launcher requires the verified Qwen3.8-27B Q4 model, projector,
+and sidecar assets. Set `MODEL_DIR` if they are not under the default model
+location. The pinned model revision is:
+
+```text
+04a41723de3622e56bb499676ebaaacaa430f345
+Qwen3.8-27B-Q4_0-AutoRound-Code.gguf  6f02e53c762a4a29a795a2346704c07f35c8a8ae7b74967aa1c0fda6bf047100
+mmproj-model.gguf                     9da757136cb044abdf552334c56f2dcb63839799ea54c705ba4bcee807abdad2
+```
+
+With `SPEC_SIDECAR=1`, the server detects the embedded MTP block and prepares
+the required 40,960-row sidecar assets natively on first start. Later starts
+reuse the validated cache under `${LLAMA_CACHE:-~/.cache/llama.cpp}/spec-sidecar`.
+No Python preparation step is required; use `--spec-sidecar-cache /path` to
+choose a different cache root. The launcher uses this automatic path unless an
+existing explicit bundle is supplied with `--bundle`.
+
+### Launch: all available RDNA3 options
+
+This enables the available RDNA3 options: RCCL/direct-P2P auto policy, sidecar
+MTP plus ngram drafting (launcher default), experimental chunked GDN, and the
+validated but default-off Add+RMSNorm fusion.
+
+```bash
+GGML_HIP_RDNA3_AUTO=1 \
+./scripts/run-qwen38-rdna-unified.sh \
+  --build-dir build-gfx1100-portable \
+  --profile experimental \
+  --gfx1100-add-rms-fusion
+```
+
+For the conservative production profile, leave the two experimental options
+out. The sidecar and ngram path remains enabled by default:
+
+```bash
+GGML_HIP_RDNA3_AUTO=1 \
+./scripts/run-qwen38-rdna-unified.sh \
+  --build-dir build-gfx1100-portable \
+  --profile safe
+```
+
+The launcher dynamically verifies the RX 7900 XT identity tuple, uses all
+matching GPUs by default, and generates the tensor split. Set
+`REQUIRE_GPUS=N` only when an exact number of matching GPUs is wanted. At very
+large context sizes it keeps the vision projector on the CPU to avoid GPU VRAM
+exhaustion.
+
+### RDNA3 optimization status
+
+| Optimization | Status and activation | Scope / notes |
+|---|---|---|
+| RCCL AllReduce and direct P2P | **Automatic** with `GGML_HIP_RDNA3_AUTO=1` and an RCCL build | Defaults only unset `GGML_CUDA_ALLREDUCE=nccl`, `GGML_CUDA_P2P=1`, and `NCCL_P2P_DISABLE=0`; RCCL level, algorithm, protocol, and channel tuning stay on Auto. The preliminary TP2 host-snapshot candidate remains explicit via `GGML_HIP_P2P_ALLREDUCE=1` after gfx1100 A/B testing found it slower than RCCL. |
+| gfx11 MMQ / WMMA | **Automatic** in a gfx11 build | Qualified Q4 prompt kernels and compatible F16 flash attention use the compiled gfx11 paths; no runtime switch is needed. |
+| gfx1100 flash-attention launch shapes | **Automatic** | Selected by architecture and shape under the safe profile. |
+| Q8_0 MMVQ VDR=4 | **Automatic** for native gfx1100 | Passed backend correctness and shape A/B tests on both RX 7900 XT cards; this is not end-to-end Q8 GGUF validation. |
+| MTP sidecar + ngram drafting | **Automatic** in the launcher | First start prepares and caches the embedded MTP assets natively; exact 262K native/in-process MTP does not fit, so the HIP sidecar is the validated path. |
+| TP output-head sharding | Explicit `GGML_TP_SHARDED_OUTPUT=1` | Supported Qwen35/Qwen35MoE models can shard the primary output head along vocabulary rows and avoid the full-logit output AllReduce for CPU/sidecar sampling. If `--backend-sampling` is enabled at model load, the primary head safely retains hidden-axis/full-logit output so target backend sampling works; vocabulary-axis sharding and target backend sampling are not combined yet. Sidecar-local sampling remains available. Unset/`auto` retain hidden-axis/full-logit output. |
+| Sidecar n-gram verification cap | **Automatic** for MTP-sidecar stacks | Caps n-gram proposals at the configured MTP width (the launcher uses 3) to avoid oversized target verification bursts; explicit `speculative.n_max` remains authoritative. |
+| Chunked GDN prefill | `--profile experimental` | Default-off in `safe`; keep experimental until workload-specific validation is complete. |
+| Add+RMSNorm+MUL fusion | `--gfx1100-add-rms-fusion` | Exact output parity; prompt-heavy throughput improved historically, while decode was effectively neutral. Default-off. |
+
+The following are intentionally not RDNA3 defaults: the retired MMVQ wide-load
+and native-dot8/Q8-cache trials, and the block-08 Q8_1/SSM fusion pending exact
+parity testing. Do not set `HSA_OVERRIDE_GFX_VERSION` on gfx1100.
+
+### RDNA3 runtime rules
+
+- Use the single `GGML_HIP_RDNA3_AUTO=1` runtime opt-in; manual NCCL/RCCL
+  variables are not required.
+- Explicit values always win. For example, `NCCL_P2P_DISABLE=1` remains a
+  request to disable RCCL P2P.
+- The auto profile activates only when all visible physical devices are identical
+  native RX 7900 XT/`gfx1100` cards, there are at least two, every pair has
+  bidirectional peer access, and `GGML_HIP_RCCL` is compiled in. Mixed, virtual,
+  or partial-peer topologies stay on the safe generic behavior.
+- Do not force `NCCL_P2P_LEVEL=PXB`, `NCCL_ALGO`, or `NCCL_PROTO` on this topology;
+  RCCL Auto selected the tested direct transport.
+- `GGML_TP_SHARDED_OUTPUT=1` is an explicit Qwen35/Qwen35MoE output policy: it
+  selects vocabulary-axis primary output for CPU/sidecar sampling. When
+  `--backend-sampling` is enabled at model load, the loader instead selects the
+  hidden-axis/full-logit primary policy so target backend sampling remains
+  usable; the two output layouts are not combined yet. Sidecar-local sampling
+  is unaffected. Unset/`auto` preserve the normal hidden-axis/full-logit policy.
+- With the launcher’s stacked MTP+K4V configuration, sidecar n-gram proposals
+  are capped at the configured `--spec-draft-n-max` width (the launcher uses 3)
+  to avoid oversized target verification bursts. The same fixed cap applies to
+  the other sidecar n-gram stacks without changing their command-line settings.
+  Explicit request `speculative.n_max` remains authoritative and intentionally
+  bypasses this internal sidecar cap.
+
+## RDNA2: gfx1030 / V620
+
+Use this section only for native RDNA2/gfx1030 systems, especially the validated
+four-V620 topology.
+
+### Build and launch
 
 ```bash
 ./scripts/build-rdna2-portable.sh
 ```
 
-If discovery is ambiguous, provide values without editing the script:
-
-```bash
-ROCM_PATH=/path/to/rocm \
-TARGET_ARCH=gfx1030 \
-BUILD_DIR=build \
-./scripts/build-rdna2-portable.sh
-```
-
-The helper enables HIP, RCCL, HIP graphs, the RDNA2 no-VMM path, shared/dynamic
-backends, CPU variants, the server, examples, and tools. It builds Release
-with tests disabled. `GGML_BACKEND_DL=ON` requires shared libraries; the helper
-sets both explicitly.
-
-The existing `scripts/build-rdna2-rocm.sh` remains the maintainer-oriented
-V620/ROCm-7.14 helper. The new portable helper is the recommended user entry
-point.
-
-### 3. Launch
-
-`HSA_OVERRIDE_GFX_VERSION=10.3.0` is required for the tested V620/`gfx1030`
-native profile. Do not force it on another GPU architecture. Use these
-recommended runtime environments:
-
-**TP2 and higher** (the example uses four GPUs):
+For the tested V620 native profile:
 
 ```bash
 HSA_OVERRIDE_GFX_VERSION=10.3.0 \
-HSA_NO_SCRATCH_RECLAIM=1 \
 GGML_HIP_RDNA2_AUTO=1 \
+HSA_NO_SCRATCH_RECLAIM=1 \
 GGML_HIP_SAFE_STATE_IO=1 \
-GGML_TP_SHARDED_OUTPUT=1 \
 ./build/bin/llama-server \
   -m /path/to/main.gguf \
   -ngl all \
@@ -71,119 +164,50 @@ GGML_TP_SHARDED_OUTPUT=1 \
   --port 8080
 ```
 
-Use one tensor-split value per device; for TP2 use `--tensor-split 1,1`.
-For TP1, omit tensor splitting and the output-sharding variable:
+The RDNA2 auto control is a legacy broad profile: it is enabled by default
+unless disabled with `GGML_HIP_RDNA2_AUTO=0`, while
+`HSA_OVERRIDE_GFX_VERSION=10.3.0` selects the tested gfx1030 kernel profile.
+Explicit `GGML_HIP_GFX1030_*` variables remain per-feature overrides.
+
+With `SPEC_SIDECAR=1`, the Qwen3.8-27B MTP and DFlash providers use the
+effective per-sequence target context and grow committed KV storage on demand.
+To trade context coverage for
+lower sidecar VRAM use, set an optional position cap before launch:
 
 ```bash
-HSA_OVERRIDE_GFX_VERSION=10.3.0 \
-HSA_NO_SCRATCH_RECLAIM=1 \
-GGML_HIP_SAFE_STATE_IO=1 \
-./build/bin/llama-server \
-  -m /path/to/main.gguf \
-  -ngl all \
-  --flash-attn on \
-  --host 0.0.0.0 \
-  --port 8080
+LLAMA_SPEC_HIP_MAX_POS=131072  # example lower cap
 ```
 
-Linux normally selects RCCL automatically after an RCCL build. Set
-`GGML_CUDA_ALLREDUCE=nccl` only when an explicit collective selection is
-needed. Add `--device` only when the backend should use a specific device list,
-for example `--device ROCm0,ROCm1,ROCm2,ROCm3`. Unsupported models retain the
-mirrored output-head fallback even when `GGML_TP_SHARDED_OUTPUT=1` is set; an
-external DFlash shared head also intentionally remains mirrored.
+The cap cannot raise the sidecar above the target context. It controls capacity,
+not datatype; sidecar KV remains F16. Allocation failure disables the sidecar
+safely and leaves target-only decoding available.
 
-For the validated four-V620 ordinary TP4 host-snapshot expansion, the optional
-new-branch mode is:
+### RDNA2 optimization status
 
-```bash
-GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded
-```
-
-It is shape- and topology-gated and falls back safely; leave it unset on other
-machines.
-
-### MTP / DFlash sidecars
-
-The RDNA2 build helpers compile the sidecar libraries. With `SPEC_SIDECAR=1`,
-the server detects a compatible MTP target or DFlash draft, prepares the needed
-assets natively on first start, and reuses them from the llama.cpp cache:
-
-```bash
-# MTP is detected from the main model
-SPEC_SIDECAR=1 ./build/bin/llama-server -m /path/to/main.gguf --spec-draft-n-max 3
-
-# DFlash is detected from the speculative model
-SPEC_SIDECAR=1 ./build/bin/llama-server -m /path/to/main.gguf \
-  -md /path/to/dflash.gguf --spec-draft-n-max 7
-```
-
-No Python preparation step is required. Generated files default to
-`${LLAMA_CACHE:-~/.cache/llama.cpp}/spec-sidecar`; use
-`--spec-sidecar-cache /path` to choose another location. Existing explicit
-sidecar paths remain supported.
-
-## What is automatic
-
-With `HSA_OVERRIDE_GFX_VERSION=10.3.0` set before starting the process, the
-following retained paths inherit the native RDNA2 profile. Explicit per-feature
-variables remain available for A/B testing, but are not required for normal
-use.
-
-Earlier absolute throughput measurements were removed because they predate this
-branch's later optimizations. Use matched before/after runs on the current
-commit when comparing performance.
-
-| Optimization | Default user action | Scope / behavior |
+| Optimization | Status and activation | Scope / notes |
 |---|---|---|
-| RDNA2 native kernel profile | Set `HSA_OVERRIDE_GFX_VERSION=10.3.0` | Q4_0 DOT8 MMVQ, native tiled FlashAttention arithmetic/reductions, and chunked GDN prefill; exact gates retain stock fallback. |
-| Routed MMQ selection | Automatic | RDNA2 typical-expert-width selection and validated model-specific J16 hints for routed workloads. |
-| Routed Q4_K/Q6_K MMVQ | Automatic | Conservative six-row dispatch; higher-risk routing remains on stock MMQ. |
-| MTP/DFlash width-eight rows2 | Automatic for eligible shapes | Validated Q4_K/Q6_K/MXFP4 rows2 paths; `GGML_HIP_GFX1030_MMVQ_W8_ROWS2=1` is an override, not a requirement. |
-| MXFP4/NVFP4 native arithmetic | Automatic | Certified rows2/scale-decode paths with exact RDNA2 scale handling; unsupported widths retain normal kernels. |
-| Muse Q8_0 MMVQ | Automatic | Eight-wave dispatch only for the validated `K=6656, N=128` shape. |
-| ADD/RMSNorm graph fusion | Automatic | Fuses validated residual-add/RMSNorm graph prefixes while preserving stock fallback. |
-| Q8_1 activation reuse | Automatic | Graph-owned standard Q8_1 cache and the dual F32/Q8_1 RMSNorm producer for eligible TG projections. |
-| Routed SwiGLU Q8_1 staging | Automatic | Prompt-only fused SwiGLU-to-Q8_1 staging for eligible routed down projections. |
-| GDN sibling projection fusion | Automatic when eligible | Qwen3.5/Qwen3.6 MoE sibling weights are packed only for validated MoE loader/model conditions; it is not used by the dense Qwen3.8-27B path. |
-| RCCL/topology policy | Automatic after `GGML_HIP_RCCL=ON` build | RCCL tuner and guarded host-snapshot/P2P schedules self-test before activation; unknown topologies use RCCL defaults. |
-| TP4 host-snapshot consumer fusion | Optional `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded` | Exact ordinary TP4 F32 boundaries can fuse reduction with residual/RMSNorm/mul; this is not selected by the supplied command unless explicitly added. |
-| TP output-head sharding | Explicit `GGML_TP_SHARDED_OUTPUT=1` for CPU/sidecar-oriented output | On Qwen35/Qwen35MoE, explicit `1` selects vocabulary-axis sharding for the primary LM head and removes the full-logit output AllReduce; target/native-MTP backend sampling falls back to CPU while sidecar-local sampling remains active. Unset/`auto` retains hidden-axis/full-logit output for backend sampling. |
-| Recurrent state safety | Add `GGML_HIP_SAFE_STATE_IO=1` for state-heavy workloads | Protects multi-GPU pageable state save/restore; it is a reliability workaround, not an inference-kernel switch. |
-| DFlash/MTP correctness paths | Automatic | Native Qwen3.8 MTP rows, exact NVFP4 handling, grammar fallback, recurrent cache/state handling, and safe graph boundaries are selected by model/shape. |
+| Native RDNA2 kernel profile | `HSA_OVERRIDE_GFX_VERSION=10.3.0` | Q4_0 DOT8 MMVQ, native tiled flash attention, and chunked GDN with architecture/shape fallbacks. |
+| Routed MMQ and Q4_K/Q6_K MMVQ | **Automatic** | Validated expert-width and conservative six-row dispatch policies. |
+| MTP/DFlash rows2 width-eight paths | **Automatic** for eligible shapes | Q4_K/Q6_K/MXFP4 paths; `GGML_HIP_GFX1030_MMVQ_W8_ROWS2` is an override only. |
+| MXFP4/NVFP4 native arithmetic | **Automatic** for qualified shapes | Unsupported widths retain normal kernels. |
+| Muse Q8_0 MMVQ | **Automatic** for the validated shape | Restricted to its qualified `K=6656, N=128` case. |
+| Q8_1 activation reuse and fusion | **Automatic** on RDNA2 | Includes the graph-owned cache and eligible routed projection staging. It is structurally disabled on RDNA3. |
+| GDN sibling projection fusion | **Automatic** when eligible | Applies to validated Qwen MoE loader/model conditions, not dense Qwen3.8-27B. |
+| V620 topology/P2P/RCCL policy | **Automatic** on the qualified topology | `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded` controls the certified TP4 host-snapshot experiment. Qualified TP2 uses the shared two-rank host-snapshot candidate under the RDNA2 Auto policy. |
+| TP output-head sharding | Explicit `GGML_TP_SHARDED_OUTPUT=1` | Uses vocabulary-axis output for CPU/sidecar sampling; an explicit backend-sampling request retains hidden-axis/full logits instead. |
+| Automatic MTP/DFlash assets | `SPEC_SIDECAR=1` | Detects supported runtime GGUFs, creates a validated first-start cache, and reuses it on warm starts. |
+| Flash Next MTP sidecar | `SPEC_SIDECAR=1` with the matching Qwen4Exp provider bundle | Uses the separate 10,240-wide handoff/full-vocabulary provider; batch and ubatch 128 are the validated gfx1030 settings. |
 
-## Variables users normally do not need
+## Shared rules
 
-These are redundant when the HSA umbrella is active and should be omitted unless
-performing an A/B test or forcing a fallback:
+- The launcher and build helpers use architecture-specific paths. Build gfx1030
+  and gfx1100 separately; do not reuse a HIP build directory across targets.
+- The launcher matches complete GPU identity tuples and never hard-codes PCI
+  addresses or ordinals.
+- The server requires `SOURCE.txt` and `SHA256SUMS` evidence beside the verified
+  model. Do not bypass those integrity checks.
+- After an ROCm illegal-memory fault, reset the affected GPUs or reboot before
+  trusting subsequent measurements.
 
-```text
-GGML_HIP_RDNA2_AUTO=1
-GGML_HIP_GFX1030_NATIVE=1
-GGML_HIP_GFX1030_MMVQ_W8_ROWS2=1
-GGML_HIP_GFX1030_Q8_CACHE=1
-GGML_HIP_GFX1030_Q8_1_FUSION=1
-GGML_HIP_GFX1030_GDN_SIBLING_FUSION=1
-GGML_HIP_GRAPHS=1              # runtime variable; CMake enables graphs
-GGML_CUDA_P2P=1                # not required by the RCCL policy
-```
-
-Use `GGML_HIP_RDNA2_AUTO=0` to disable the automatic RDNA2/model coordination
-profile for comparison or recovery. Explicit `0` values for individual feature
-variables similarly disable only that feature.
-
-## Important limits
-
-- Results are validated primarily on four V620 `gfx1030` GPUs, ROCm 7.14, and
-the tested PCIe topology; other systems retain conservative fallbacks.
-- `GGML_TP_SHARDED_OUTPUT=1` selects vocabulary-axis primary output on supported
-  Qwen35/Qwen35MoE models; unset/`auto` retains hidden-axis/full-logit output,
-  and `0` disables output-head sharding.
-- External draft models can force a shared output head to remain mirrored.
-- After a ROCm illegal-memory fault, reset the affected GPUs or reboot before
-trusting later measurements.
-
----
-
-This is a fork-specific RDNA2/V620 guide. For the upstream project, general
-llama.cpp documentation, and releases, see the [original llama.cpp repository](https://github.com/ggml-org/llama.cpp).
+For general llama.cpp documentation and releases, see the
+[upstream llama.cpp repository](https://github.com/ggml-org/llama.cpp).

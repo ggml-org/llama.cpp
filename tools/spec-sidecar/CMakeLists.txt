@@ -10,6 +10,9 @@ if (WIN32)
     message(FATAL_ERROR "speculative sidecar CMake builds are currently supported on Linux; use a HIP build script on Windows")
 endif()
 
+# HIP is enabled by the ggml backend in a sibling directory. Enable it in this
+# directory too so CMake initializes the HIP compile rules for sidecar sources.
+enable_language(HIP)
 find_package(hip REQUIRED)
 
 # ggml builds HIP sources either through a hipcc CXX driver or through native
@@ -23,16 +26,16 @@ endif()
 set(LLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES "" CACHE STRING
     "HIP architectures for speculative sidecars (empty inherits CMAKE_HIP_ARCHITECTURES)")
 
-function(spec_sidecar_add_sidecar target output source)
-    add_library(${target} SHARED ${source})
+function(spec_sidecar_add_sidecar target output)
+    add_library(${target} SHARED ${ARGN})
     # Mirror ggml's HIP compiler split.  ROCm's hipcc wrapper is used as a
     # CXX compiler on this tree; native CMake HIP mode is only used when the
     # caller has explicitly enabled it.
     if (CMAKE_CXX_COMPILER MATCHES "hipcc(\\.bat)?$")
-        set_source_files_properties(${source} PROPERTIES LANGUAGE CXX)
+        set_source_files_properties(${ARGN} PROPERTIES LANGUAGE CXX)
         set(_spec_sidecar_hip_link hip::device)
     else()
-        set_source_files_properties(${source} PROPERTIES LANGUAGE HIP)
+        set_source_files_properties(${ARGN} PROPERTIES LANGUAGE HIP)
         set(_spec_sidecar_hip_link hip::host)
     endif()
     target_compile_features(${target} PRIVATE cxx_std_17)
@@ -78,3 +81,17 @@ spec_sidecar_add_sidecar(
     spec_qwen35moe_mtp_sidecar
     ${PROJECT_SOURCE_DIR}/src/spec_sidecar/qwen35moe_mtp/sidecar.hip)
 
+spec_sidecar_add_sidecar(
+    spec-sidecar-hip-qwen4exp-mtp
+    spec_qwen4exp_mtp_sidecar
+    ${PROJECT_SOURCE_DIR}/src/spec_sidecar/qwen4exp_mtp/sidecar.hip
+    ${PROJECT_SOURCE_DIR}/src/spec_sidecar/qwen4exp_mtp/native_attention.hip)
+target_compile_definitions(spec-sidecar-hip-qwen4exp-mtp PRIVATE
+    QWEN4EXP_SIDECAR_PRODUCTION=1
+    GGML_USE_HIP
+    GGML_HIP_NO_VMM
+    GGML_SCHED_MAX_COPIES=4)
+target_include_directories(spec-sidecar-hip-qwen4exp-mtp PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/include
+    ${PROJECT_SOURCE_DIR}/ggml/src
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-cuda)

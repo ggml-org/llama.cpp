@@ -39,7 +39,6 @@ static const int N_HEAD_ROWS = 40960;   // sliced draft head
 static constexpr int MTP_DRAFT_TOP_K = 32;
 static const float RMS_EPS   = 1e-6f;
 static const float FREQ_BASE = 10000000.0f;
-static const int MAX_POS   = 131072;    // matches production context ceiling (f16 KV: 512MB)
 
 // ---------------- q4_0 ----------------
 struct block_q4_0 { uint16_t d; uint8_t qs[16]; }; // f16 scale + 32 4-bit quants
@@ -570,6 +569,55 @@ __global__ void topk_final(const float * __restrict__ pvals, const int * __restr
     }
 }
 
+__device__ __forceinline__ bool topk_pair_better(
+        float lhs_value, int lhs_index, float rhs_value, int rhs_index) {
+    return lhs_index >= 0 && (rhs_index < 0 || lhs_value > rhs_value ||
+            (lhs_value == rhs_value && lhs_index < rhs_index));
+}
+
+// rocPRIM returns one duplicate-free top-k set without promising its order.
+// Sort the 32 values cooperatively to preserve the fallback's exact
+// value-descending/index-ascending proposal distribution without rerunning the
+// scalar partition merger on a one-row result.
+__global__ void sort_remap_topk(const float * __restrict__ values,
+        const int * __restrict__ indices, const int * __restrict__ remap, int vocab,
+        int * __restrict__ output_ids, float * __restrict__ output_values) {
+    __shared__ float sorted_values[MTP_DRAFT_TOP_K];
+    __shared__ int sorted_indices[MTP_DRAFT_TOP_K];
+    const int tid = static_cast<int>(threadIdx.x);
+    if (blockIdx.x != 0 || tid >= MTP_DRAFT_TOP_K) return;
+    sorted_values[tid] = values[tid];
+    sorted_indices[tid] = indices[tid];
+    __syncthreads();
+
+    for (int width = 2; width <= MTP_DRAFT_TOP_K; width <<= 1) {
+        for (int stride = width >> 1; stride > 0; stride >>= 1) {
+            const int peer = tid ^ stride;
+            if (peer > tid) {
+                const bool better_first = (tid & width) == 0;
+                const bool peer_better = topk_pair_better(sorted_values[peer], sorted_indices[peer],
+                        sorted_values[tid], sorted_indices[tid]);
+                const bool self_better = topk_pair_better(sorted_values[tid], sorted_indices[tid],
+                        sorted_values[peer], sorted_indices[peer]);
+                if ((better_first && peer_better) || (!better_first && self_better)) {
+                    const float value = sorted_values[tid];
+                    const int index = sorted_indices[tid];
+                    sorted_values[tid] = sorted_values[peer];
+                    sorted_indices[tid] = sorted_indices[peer];
+                    sorted_values[peer] = value;
+                    sorted_indices[peer] = index;
+                }
+            }
+            __syncthreads();
+        }
+    }
+
+    const int index = sorted_indices[tid];
+    const int token = index >= 0 ? (remap ? remap[index] : index) : -1;
+    output_values[tid] = sorted_values[tid];
+    output_ids[tid] = token >= 0 && token < vocab ? token : -1;
+}
+
 // Normalize a top-k row and sample it using the caller-provided deterministic
 // counter-based uniform. The active flag makes a p_min stop sticky while the
 // enclosing sidecar continues issuing the already-pipelined fixed number of
@@ -606,18 +654,23 @@ __global__ void sample_topk(const int * __restrict__ ids, const float * __restri
         *active = 0;
         return;
     }
-    int selected = topk - 1;
+    for (int k = 0; k < topk; ++k) {
+        probs[k] /= sum;
+    }
+    int selected = -1;
     double cumulative = 0.0;
     const double u = uniform < 1.0 ? (uniform > 0.0 ? uniform : 0.0) : 0.9999999999999999;
     for (int k = 0; k < topk; ++k) {
-        probs[k] /= sum;
+        if (!(probs[k] > 0.0f)) {
+            continue;
+        }
+        selected = k;
         cumulative += probs[k];
         if (u < cumulative) {
-            selected = k;
             break;
         }
     }
-    if (probs[selected] < p_min || ids[selected] < 0) {
+    if (selected < 0 || probs[selected] < p_min || ids[selected] < 0) {
         *active = 0;
         return;
     }

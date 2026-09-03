@@ -348,6 +348,7 @@ extern "C" {
         bool no_alloc;        // only load metadata and simulate memory allocations
         bool load_mtp;        // whether to load MTP layers
         bool no_tp_output_head_sharding; // keep a shared output head mirrored for an external draft context
+        bool no_tp_output_vocab_sharding; // retain hidden-axis/full-logit output when backend sampling needs it
     };
 
     struct llama_sampler_seq_config {

@@ -756,7 +756,8 @@ bool llama_memory_recurrent::resize(uint32_t new_mem_size) {
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
-                /*.mem_size   =*/ size_t(2u * n_layer * ggml_tensor_overhead()),
+                // r and s per layer, plus the separate PLE convolution row when present
+                /*.mem_size   =*/ size_t((hparams.ple_conv_state() > 0 ? 3u : 2u) * n_layer * ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -770,30 +771,38 @@ bool llama_memory_recurrent::resize(uint32_t new_mem_size) {
         return it->second.get();
     };
 
-    std::vector<ggml_tensor *> old_r_l = r_l;
-    std::vector<ggml_tensor *> old_s_l = s_l;
+    const std::vector<ggml_tensor *> old_r_l = r_l;
+    const std::vector<ggml_tensor *> old_s_l = s_l;
+    const std::vector<ggml_tensor *> old_p_l = p_l;
+    std::vector<ggml_tensor *> new_r_l(n_layer, nullptr);
+    std::vector<ggml_tensor *> new_s_l(n_layer, nullptr);
+    std::vector<ggml_tensor *> new_p_l(n_layer, nullptr);
 
     for (int i = 0; i < n_layer; i++) {
-        if (!old_r_l[i] && !old_s_l[i]) {
+        ggml_tensor * exemplar = old_r_l[i] ? old_r_l[i] : (old_s_l[i] ? old_s_l[i] : old_p_l[i]);
+        if (!exemplar) {
             continue;
         }
 
-        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(old_r_l[i] ? old_r_l[i]->buffer : old_s_l[i]->buffer);
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(exemplar->buffer);
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
             LLAMA_LOG_ERROR("%s: failed to create ggml context for resized rs cache\n", __func__);
             return false;
         }
 
+        const int64_t n_rows = (int64_t) new_mem_size * (1 + n_rs_seq);
         if (old_r_l[i]) {
-            ggml_tensor * r = ggml_new_tensor_2d(ctx, old_r_l[i]->type, n_embd_r, new_mem_size * (1 + n_rs_seq));
-            ggml_format_name(r, "%s_r_l%d", name_prefix.c_str(), i);
-            r_l[i] = r;
+            new_r_l[i] = ggml_new_tensor_2d(ctx, old_r_l[i]->type, old_r_l[i]->ne[0], n_rows);
+            ggml_format_name(new_r_l[i], "%s_r_l%d", name_prefix.c_str(), i);
         }
         if (old_s_l[i]) {
-            ggml_tensor * s = ggml_new_tensor_2d(ctx, old_s_l[i]->type, n_embd_s, new_mem_size * (1 + n_rs_seq));
-            ggml_format_name(s, "%s_s_l%d", name_prefix.c_str(), i);
-            s_l[i] = s;
+            new_s_l[i] = ggml_new_tensor_2d(ctx, old_s_l[i]->type, old_s_l[i]->ne[0], n_rows);
+            ggml_format_name(new_s_l[i], "%s_s_l%d", name_prefix.c_str(), i);
+        }
+        if (old_p_l[i]) {
+            new_p_l[i] = ggml_new_tensor_2d(ctx, old_p_l[i]->type, old_p_l[i]->ne[0], n_rows);
+            ggml_format_name(new_p_l[i], "%s", old_p_l[i]->name);
         }
     }
 
@@ -802,8 +811,6 @@ bool llama_memory_recurrent::resize(uint32_t new_mem_size) {
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
         if (!buf) {
             LLAMA_LOG_ERROR("%s: failed to allocate resized rs buffer\n", __func__);
-            r_l = old_r_l;
-            s_l = old_s_l;
             return false;
         }
         ggml_backend_buffer_clear(buf, 0);
@@ -811,24 +818,34 @@ bool llama_memory_recurrent::resize(uint32_t new_mem_size) {
     }
 
     if (n_copy > 0) {
-        const uint32_t n_copy_rows = n_copy * (1 + n_rs_seq);
         std::vector<uint8_t> tmp;
+        auto copy_planes = [&](const ggml_tensor * src, ggml_tensor * dst) {
+            if (!src || !dst) {
+                return;
+            }
+            const size_t row_size = ggml_row_size(src->type, src->ne[0]);
+            const size_t bytes = row_size * n_copy;
+            tmp.resize(bytes);
+            // Snapshot planes are laid out as [plane][memory cell]. Resizing
+            // changes the plane stride, so copying one contiguous prefix would
+            // silently interleave cells from adjacent rollback planes.
+            for (uint32_t plane = 0; plane <= n_rs_seq; ++plane) {
+                const size_t src_offset = (size_t) plane * old_size * row_size;
+                const size_t dst_offset = (size_t) plane * new_mem_size * row_size;
+                ggml_backend_tensor_get(src, tmp.data(), src_offset, bytes);
+                ggml_backend_tensor_set(dst, tmp.data(), dst_offset, bytes);
+            }
+        };
         for (int i = 0; i < n_layer; i++) {
-            if (old_r_l[i] && r_l[i]) {
-                size_t bytes = ggml_row_size(old_r_l[i]->type, n_embd_r) * n_copy_rows;
-                tmp.resize(bytes);
-                ggml_backend_tensor_get(old_r_l[i], tmp.data(), 0, bytes);
-                ggml_backend_tensor_set(r_l[i], tmp.data(), 0, bytes);
-            }
-            if (old_s_l[i] && s_l[i]) {
-                size_t bytes = ggml_row_size(old_s_l[i]->type, n_embd_s) * n_copy_rows;
-                tmp.resize(bytes);
-                ggml_backend_tensor_get(old_s_l[i], tmp.data(), 0, bytes);
-                ggml_backend_tensor_set(s_l[i], tmp.data(), 0, bytes);
-            }
+            copy_planes(old_r_l[i], new_r_l[i]);
+            copy_planes(old_s_l[i], new_s_l[i]);
+            copy_planes(old_p_l[i], new_p_l[i]);
         }
     }
 
+    r_l = std::move(new_r_l);
+    s_l = std::move(new_s_l);
+    p_l = std::move(new_p_l);
     ctxs_bufs = std::move(new_ctxs_bufs);
     cells.resize(new_mem_size);
     size = new_mem_size;

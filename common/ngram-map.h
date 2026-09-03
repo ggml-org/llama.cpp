@@ -69,6 +69,11 @@ struct common_ngram_map {
 
     bool     show_key_map_stats = false; // true, if statistics of the key_map should be printed.
 
+    // Internal sidecar fixed-width override. Zero preserves the normal
+    // value's last-accepted-width behavior; nonzero makes the fixed
+    // sidecar cap own the width for the current draft call.
+    uint16_t draft_limit = 0;
+
     common_ngram_map(uint16_t sz_key, uint16_t sz_value, bool only_keys,
                      uint16_t min_hits)
         : size_key(sz_key), size_value(sz_value), key_only(only_keys),

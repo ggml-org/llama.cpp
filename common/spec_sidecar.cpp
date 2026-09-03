@@ -1,4 +1,5 @@
 #include "spec_sidecar.h"
+#include "ggml.h"
 #include "gguf.h"
 #include "llama.h"
 #include "../src/spec_sidecar/artifact_manifest.h"
@@ -372,10 +373,42 @@ static const common_spec_sidecar_profile QWEN35_DFLASH_PROFILE = {
     /* .matches_target_file   = */ profile_matches_target_file,
 };
 
+static const common_spec_sidecar_profile QWEN4EXP_MTP_PROFILE = {
+    /* .name                  = */ "qwen4exp-mtp",
+    /* .kind                  = */ COMMON_SPEC_SIDECAR_KIND_MTP,
+    /* .target_architecture   = */ "qwen4exp",
+    /* .target_name           = */ "Qwen3.8 Flash Next",
+    /* .target_size_label     = */ "512x56B",
+    /* .target_n_embd         = */ 2560,
+    /* .target_n_embd_out     = */ 10240,
+    /* .target_n_layer        = */ 48,
+    /* .target_n_layer_nextn  = */ 0,
+    /* .target_n_vocab        = */ 248320,
+    /* .mtp_embedding_width   = */ 10240,
+    /* .mtp_head_rows         = */ 248320,
+    /* .dflash_encoded_width  = */ 0,
+    /* .dflash_decoder_width  = */ 0,
+    /* .dflash_block_size     = */ 0,
+    /* .dflash_selector_top_k = */ 0,
+    /* .dflash_head_rows      = */ 0,
+    /* .dflash_target_layer_ids = */ nullptr,
+    /* .dflash_target_layer_ids_n = */ 0,
+    /* .library_env           = */ "LLAMA_SPEC_QWEN4EXP_HIP_SIDECAR",
+    /* .artifact_env          = */ "LLAMA_SPEC_QWEN4EXP_HIP_WEIGHTS",
+    /* .ids_env               = */ "LLAMA_QWEN4EXP_DRAFT_HEAD_IDS",
+    /* .full_head_env         = */ nullptr,
+    /* .default_library_name  = */ "spec_qwen4exp_mtp_sidecar.so",
+    /* .default_artifact_dir_name = */ "spec-sidecar-qwen4exp-mtp",
+    /* .explicit_paths_only   = */ false,
+    /* .matches_model         = */ profile_matches_model,
+    /* .matches_target_file   = */ profile_matches_target_file,
+};
+
 static const common_spec_sidecar_profile * const ALL_PROFILES[] = {
     &QWEN35_MTP_PROFILE,
     &QWEN35MOE_MTP_PROFILE,
     &QWEN35_DFLASH_PROFILE,
+    &QWEN4EXP_MTP_PROFILE,
 };
 
 static const char * env_value(const char * name) {
@@ -563,7 +596,20 @@ static bool validate_profile_artifacts_impl(const common_spec_sidecar_profile & 
         return false;
     }
     const char * head_name = paths.dflash_full_head ? "target_head.bin" : "target_head_sliced.bin";
-    if (!require_file(join_path(paths.artifact_dir, head_name), "DFlash target head", error)) {
+    const std::string head_path = join_path(paths.artifact_dir, head_name);
+    if (!require_file(head_path, "DFlash target head", error)) {
+        return false;
+    }
+    uint64_t head_size = 0;
+    const int64_t head_rows = paths.dflash_full_head ? profile.target_n_vocab : profile.dflash_head_rows;
+    const size_t row_size = ggml_row_size(GGML_TYPE_Q6_K, profile.target_n_embd);
+    const uint64_t expected_head_size = head_rows > 0 && row_size > 0
+            ? static_cast<uint64_t>(head_rows) * row_size : 0;
+    if (!get_file_size(head_path, head_size, error) ||
+            expected_head_size == 0 || head_size != expected_head_size) {
+        if (error.empty()) {
+            error = "DFlash target head has an unexpected size: " + head_path;
+        }
         return false;
     }
     if (!paths.dflash_full_head && !validate_id_table(
@@ -733,8 +779,8 @@ using attach_stream_fn_t     = int (*)(void *, int32_t);
 
 using mtp_release_abi_fn = int (*)();
 using mtp_check_fn      = int (*)(int32_t, int32_t, int32_t);
-using mtp_init_fn       = int (*)(const char *, const char *, int32_t);
-using mtp_init_device_fn = int (*)(const char *, const char *, int32_t, int32_t);
+using mtp_init_context_fn = int (*)(const char *, const char *, int32_t, int32_t);
+using mtp_init_device_context_fn = int (*)(const char *, const char *, int32_t, int32_t, int32_t);
 using mtp_catchup_fn    = int (*)(int32_t, const int32_t *, const int32_t *, const float *, int);
 using mtp_catchup_device_fn = int (*)(int32_t, const int32_t *, const int32_t *, const float *, int);
 using mtp_draft_fn      = int (*)(int32_t, int32_t, int32_t, const float *, int, int32_t *);
@@ -745,7 +791,7 @@ using mtp_draft_stochastic_device_fn = int (*)(int32_t, int32_t, int32_t, float,
 
 using dflash_release_abi_fn = int (*)();
 using dflash_check_fn       = int (*)(int32_t, int32_t, int32_t);
-using dflash_init_fn        = int (*)(const char *, int32_t);
+using dflash_init_context_fn = int (*)(const char *, int32_t, int32_t);
 using dflash_chunk_fn       = int (*)(int32_t, const int32_t *, const float *, int);
 using dflash_chunk_device_fn = int (*)(int32_t, const int32_t *, const void * const *, int, int, int);
 using dflash_draft_fn       = int (*)(int32_t, int32_t, int32_t, int32_t *);
@@ -777,16 +823,20 @@ bool common_spec_sidecar_mtp_probe(const std::string & library_path,
     }
     mtp_release_abi_fn release = nullptr;
     mtp_check_fn check = nullptr;
+    mtp_init_context_fn init_context = nullptr;
+    mtp_init_device_context_fn init_device_context = nullptr;
     mtp_stochastic_top_k_fn top_k = nullptr;
     mtp_draft_stochastic_fn stochastic = nullptr;
     mtp_draft_stochastic_device_fn stochastic_device = nullptr;
     const bool symbols =
         resolve_symbol(handle, "spec_hip_release_abi", release, error) &&
         resolve_symbol(handle, "spec_hip_check", check, error) &&
+        resolve_symbol(handle, "spec_hip_init_context", init_context, error) &&
+        resolve_symbol(handle, "spec_hip_init_device_context", init_device_context, error) &&
         resolve_symbol(handle, "spec_hip_stochastic_top_k", top_k, error) &&
         resolve_symbol(handle, "spec_hip_draft_stochastic", stochastic, error) &&
         resolve_symbol(handle, "spec_hip_draft_stochastic_device", stochastic_device, error);
-    const bool compatible = symbols && release() == 4 &&
+    const bool compatible = symbols && release() == SPEC_SIDECAR_MTP_RELEASE_ABI &&
             check(embedding_width, head_rows, n_seq) == 0 &&
             top_k() == SPEC_SIDECAR_MTP_DRAFT_TOP_K;
     if (!compatible && error.empty()) {
@@ -829,14 +879,16 @@ bool common_spec_sidecar_dflash_probe(const std::string & library_path,
     }
     dflash_release_abi_fn release = nullptr;
     dflash_check_fn check = nullptr;
+    dflash_init_context_fn init_context = nullptr;
     dflash_stochastic_top_k_fn top_k = nullptr;
     dflash_draft_stochastic_fn stochastic = nullptr;
     const bool symbols =
         resolve_symbol(handle, "spec_dflash_release_abi", release, error) &&
         resolve_symbol(handle, "spec_dflash_check", check, error) &&
+        resolve_symbol(handle, "spec_dflash_init_context", init_context, error) &&
         resolve_symbol(handle, "spec_dflash_stochastic_top_k", top_k, error) &&
         resolve_symbol(handle, "spec_dflash_draft_stochastic", stochastic, error);
-    const bool compatible = symbols && release() == 5 &&
+    const bool compatible = symbols && release() == SPEC_SIDECAR_DFLASH_RELEASE_ABI &&
             check(encoded_width, block_size, n_seq) == 0 &&
             top_k() == SPEC_SIDECAR_DFLASH_DRAFT_TOP_K;
     if (!compatible && error.empty()) {
@@ -857,7 +909,6 @@ struct common_spec_sidecar_mtp::impl {
     mtp_state_commit_fn_t state_commit_fn = nullptr;
     state_rebase_fn_t state_rebase_fn = nullptr;
     attach_stream_fn_t attach_stream_fn = nullptr;
-    mtp_init_device_fn init_device_fn = nullptr;
     mtp_catchup_fn catchup_fn = nullptr;
     mtp_catchup_device_fn catchup_device_fn = nullptr;
     mtp_draft_fn draft_fn = nullptr;
@@ -878,13 +929,17 @@ common_spec_sidecar_mtp::~common_spec_sidecar_mtp() {
 bool common_spec_sidecar_mtp::load(const std::string & library_path,
         const std::string & weights_dir, const std::string & ids_path,
         int32_t embedding_width, int32_t head_rows, int32_t n_seq,
-        std::string & error, int32_t device) {
+        int32_t max_context, std::string & error, int32_t device) {
     if (active()) {
         error = "MTP sidecar is already loaded";
         return false;
     }
     if (n_seq < 1 || n_seq > 8) {
         error = "MTP sidecar supports 1..8 sequences";
+        return false;
+    }
+    if (max_context < 1) {
+        error = "MTP sidecar target context must be positive";
         return false;
     }
     if (!require_absolute(library_path, "MTP sidecar library path", error) ||
@@ -900,8 +955,8 @@ bool common_spec_sidecar_mtp::load(const std::string & library_path,
 
     mtp_release_abi_fn release_abi = nullptr;
     mtp_check_fn check = nullptr;
-    mtp_init_fn init = nullptr;
-    mtp_init_device_fn init_device = nullptr;
+    mtp_init_context_fn init_context = nullptr;
+    mtp_init_device_context_fn init_device_context = nullptr;
     if (!resolve_symbol(handle, "spec_hip_release_abi", release_abi, error) ||
         !resolve_symbol(handle, "spec_hip_check", check, error) ||
         !resolve_symbol(handle, "spec_hip_state_size", pimpl->state_size_fn, error) ||
@@ -912,7 +967,8 @@ bool common_spec_sidecar_mtp::load(const std::string & library_path,
         !resolve_symbol(handle, "spec_hip_commit_state", pimpl->state_commit_fn, error) ||
         !resolve_symbol(handle, "spec_hip_rebase_state", pimpl->state_rebase_fn, error) ||
         !resolve_symbol(handle, "spec_hip_attach_target_stream", pimpl->attach_stream_fn, error) ||
-        !resolve_symbol(handle, "spec_hip_init", init, error) ||
+        !resolve_symbol(handle, "spec_hip_init_context", init_context, error) ||
+        !resolve_symbol(handle, "spec_hip_init_device_context", init_device_context, error) ||
         !resolve_symbol(handle, "spec_hip_catchup", pimpl->catchup_fn, error) ||
         !resolve_symbol(handle, "spec_hip_catchup_device", pimpl->catchup_device_fn, error) ||
         !resolve_symbol(handle, "spec_hip_draft", pimpl->draft_fn, error) ||
@@ -923,20 +979,9 @@ bool common_spec_sidecar_mtp::load(const std::string & library_path,
         close_library(handle);
         return false;
     }
-    // The device-aware entry point is an additive ABI-4 capability. Keep the
-    // legacy entry point for standalone/older callers, but require the new
-    // symbol whenever the caller asks us to bind the sidecar explicitly.
-    std::string init_device_error;
-    if (resolve_symbol(handle, "spec_hip_init_device", init_device, init_device_error)) {
-        pimpl->init_device_fn = init_device;
-    }
-    if (device >= 0 && init_device == nullptr) {
-        error = "MTP sidecar lacks explicit device-binding entry point";
-        close_library(handle);
-        return false;
-    }
-    if (release_abi() != 4) {
-        error = "MTP sidecar ABI version mismatch (expected 4)";
+    if (release_abi() != SPEC_SIDECAR_MTP_RELEASE_ABI) {
+        error = "MTP sidecar ABI version mismatch (expected " +
+                std::to_string(SPEC_SIDECAR_MTP_RELEASE_ABI) + ")";
         close_library(handle);
         return false;
     }
@@ -963,9 +1008,9 @@ bool common_spec_sidecar_mtp::load(const std::string & library_path,
         pimpl->draft_fn = nullptr;
         return false;
     }
-    const int init_rc = init_device != nullptr
-            ? init_device(weights_dir.c_str(), ids_path.c_str(), n_seq, device)
-            : init(weights_dir.c_str(), ids_path.c_str(), n_seq);
+    const int init_rc = device >= 0
+            ? init_device_context(weights_dir.c_str(), ids_path.c_str(), n_seq, device, max_context)
+            : init_context(weights_dir.c_str(), ids_path.c_str(), n_seq, max_context);
     if (init_rc != 0) {
         error = "MTP sidecar initialization failed";
         close_library(handle);
@@ -1111,13 +1156,17 @@ common_spec_sidecar_dflash::~common_spec_sidecar_dflash() {
 
 bool common_spec_sidecar_dflash::load(const std::string & library_path,
         const std::string & artifact_dir, int32_t encoded_width, int32_t block_size,
-        int32_t n_seq, std::string & error) {
+        int32_t n_seq, int32_t max_context, std::string & error) {
     if (active()) {
         error = "DFlash sidecar is already loaded";
         return false;
     }
     if (n_seq < 1 || n_seq > 8) {
         error = "DFlash sidecar supports 1..8 sequences";
+        return false;
+    }
+    if (max_context < 1) {
+        error = "DFlash sidecar target context must be positive";
         return false;
     }
     if (!require_absolute(library_path, "DFlash sidecar library path", error) ||
@@ -1132,7 +1181,7 @@ bool common_spec_sidecar_dflash::load(const std::string & library_path,
 
     dflash_release_abi_fn release_abi = nullptr;
     dflash_check_fn check = nullptr;
-    dflash_init_fn init = nullptr;
+    dflash_init_context_fn init_context = nullptr;
     if (!resolve_symbol(handle, "spec_dflash_release_abi", release_abi, error) ||
         !resolve_symbol(handle, "spec_dflash_check", check, error) ||
         !resolve_symbol(handle, "spec_dflash_state_size", pimpl->state_size_fn, error) ||
@@ -1143,7 +1192,7 @@ bool common_spec_sidecar_dflash::load(const std::string & library_path,
         !resolve_symbol(handle, "spec_dflash_commit_state", pimpl->state_commit_fn, error) ||
         !resolve_symbol(handle, "spec_dflash_rebase_state", pimpl->state_rebase_fn, error) ||
         !resolve_symbol(handle, "spec_dflash_attach_target_stream", pimpl->attach_stream_fn, error) ||
-        !resolve_symbol(handle, "spec_dflash_init", init, error) ||
+        !resolve_symbol(handle, "spec_dflash_init_context", init_context, error) ||
         !resolve_symbol(handle, "spec_dflash_chunk", pimpl->chunk_fn, error) ||
         !resolve_symbol(handle, "spec_dflash_chunk_device", pimpl->chunk_device_fn, error) ||
         !resolve_symbol(handle, "spec_dflash_draft", pimpl->draft_fn, error) ||
@@ -1152,8 +1201,9 @@ bool common_spec_sidecar_dflash::load(const std::string & library_path,
         close_library(handle);
         return false;
     }
-    if (release_abi() != 5) {
-        error = "DFlash sidecar ABI version mismatch (expected 5)";
+    if (release_abi() != SPEC_SIDECAR_DFLASH_RELEASE_ABI) {
+        error = "DFlash sidecar ABI version mismatch (expected " +
+                std::to_string(SPEC_SIDECAR_DFLASH_RELEASE_ABI) + ")";
         close_library(handle);
         return false;
     }
@@ -1180,7 +1230,7 @@ bool common_spec_sidecar_dflash::load(const std::string & library_path,
         pimpl->draft_fn = nullptr;
         return false;
     }
-    if (init(artifact_dir.c_str(), n_seq) != 0) {
+    if (init_context(artifact_dir.c_str(), n_seq, max_context) != 0) {
         error = "DFlash sidecar initialization failed";
         close_library(handle);
         pimpl->state_size_fn = nullptr;

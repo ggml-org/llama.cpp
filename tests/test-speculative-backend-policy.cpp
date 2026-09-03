@@ -132,6 +132,20 @@ int main() {
     expect_profile(make_spec({COMMON_SPECULATIVE_TYPE_NONE}, 4),
             server_spec_target_backend_profile_kind::NONE, false);
 
+    require(server_spec_gfx1030_dflash_dynamic_depth_profile(
+                make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH}, 4)),
+            "DFlash width four selects dynamic depth profile");
+    require(server_spec_gfx1030_dflash_dynamic_depth_profile(
+                make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,
+                           COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V}, 4)),
+            "DFlash width four plus K4V selects dynamic depth profile");
+    require(!server_spec_gfx1030_dflash_dynamic_depth_profile(
+                make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH}, 3)),
+            "other DFlash widths retain fixed depth");
+    require(!server_spec_gfx1030_dflash_dynamic_depth_profile(
+                make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_MTP}, 4)),
+            "MTP does not select DFlash depth schedule");
+
     auto dflash_k4v = make_spec({
         COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,
         COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
@@ -145,9 +159,20 @@ int main() {
             "already narrow DFlash+K4V stack is unchanged");
 
     dflash_k4v.ngram_map_k4v.size_m = 48;
+    dflash_k4v.draft.n_max = 4;
+    require(server_spec_gfx1030_neural_k4v_cycle_cap(dflash_k4v) == 4,
+            "DFlash width four prevents unbounded 49-row K4V verification");
+    dflash_k4v.ngram_map_k4v.size_m = 4;
+    require(server_spec_gfx1030_neural_k4v_cycle_cap(dflash_k4v) == -1,
+            "already width-four DFlash+K4V stack is unchanged");
+
+    dflash_k4v.ngram_map_k4v.size_m = 48;
+    dflash_k4v.draft.n_max = 3;
+    require(server_spec_gfx1030_neural_k4v_cycle_cap(dflash_k4v) == -1,
+            "unqualified narrow DFlash cycle width is unchanged");
     dflash_k4v.draft.n_max = 7;
     require(server_spec_gfx1030_neural_k4v_cycle_cap(dflash_k4v) == -1,
-            "unqualified DFlash cycle width is unchanged");
+            "unqualified wide DFlash cycle width is unchanged");
 
     auto dflash_only = make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH}, 5);
     dflash_only.ngram_map_k4v.size_m = 48;
@@ -171,13 +196,17 @@ int main() {
             "narrow MTP+K4V stack is capped at MTP width two");
 
     mtp_k4v.draft.n_max = 5;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(mtp_k4v) == -1,
-            "unqualified MTP width five is unchanged");
+    require(server_spec_gfx1030_neural_k4v_cycle_cap(mtp_k4v) == 5,
+            "bounded MTP+K4V capacity five uses K4V width five");
 
     mtp_k4v.draft.n_max = 4;
     mtp_k4v.ngram_map_k4v.size_m = 4;
     require(server_spec_gfx1030_neural_k4v_cycle_cap(mtp_k4v) == -1,
             "already narrow MTP+K4V stack is unchanged");
+    mtp_k4v.draft.n_max = 5;
+    mtp_k4v.ngram_map_k4v.size_m = 5;
+    require(server_spec_gfx1030_neural_k4v_cycle_cap(mtp_k4v) == -1,
+            "already narrow width-five K4V does not need capping");
 
     auto mtp_only = make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_MTP}, 4);
     mtp_only.ngram_map_k4v.size_m = 48;

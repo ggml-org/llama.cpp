@@ -76,8 +76,12 @@ struct common_speculative_draft_params {
     bool drafting = false;
 
     // overrides individual configurations (-1 disabled)
-    // can be used to constraint the max draft based on the remaining context size
+    // can be used to constrain the max draft based on the remaining context size
     int32_t n_max = -1;
+
+    // Set by the server only when the request supplied speculative.n_max.
+    // This is internal metadata; it does not add a command-line/API setting.
+    bool n_max_user_override = false;
 
     llama_pos   n_past;
     llama_token id_last;

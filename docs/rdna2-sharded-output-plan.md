@@ -2,9 +2,10 @@
 
 > **Status:** This document describes the hidden-axis/full-logit policy selected
 > by unset/`auto` output-sharding mode. Explicit
-> `GGML_TP_SHARDED_OUTPUT=1` now selects the vocabulary-axis primary output mode
-> for supported Qwen35/Qwen35MoE models; see
-> `docs/gfx1030-native-optimizations.md` for its CPU/sidecar sampling contract.
+> `GGML_TP_SHARDED_OUTPUT=1` selects the vocabulary-axis primary output mode for
+> supported Qwen35/Qwen35MoE CPU/sidecar workloads. When server-wide
+> `--backend-sampling` is enabled at model load, the loader safely retains the
+> hidden-axis/full-logit policy instead; see `docs/gfx1030-native-optimizations.md`.
 
 ## Goal
 

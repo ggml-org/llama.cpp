@@ -8,6 +8,38 @@
 #include <cstdio>
 #include <cstdlib>
 
+#ifndef GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS
+#define GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS 0
+#endif
+#ifndef GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS
+#define GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS 0
+#endif
+#ifndef GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS
+#define GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS 0
+#endif
+#ifndef GGML_HIP_RDNA3_Q4_K_MMQ_WIDE_LDS
+#define GGML_HIP_RDNA3_Q4_K_MMQ_WIDE_LDS 0
+#endif
+#ifndef GGML_HIP_RDNA3_Q5_K_MMQ_WIDE_LDS
+#define GGML_HIP_RDNA3_Q5_K_MMQ_WIDE_LDS 0
+#endif
+#ifndef GGML_HIP_RDNA3_Q6_K_MMQ_WIDE_LDS
+#define GGML_HIP_RDNA3_Q6_K_MMQ_WIDE_LDS 0
+#endif
+#if defined(RDNA2)
+#define GGML_HIP_RDNA_WIDE_LDS_Q4_K GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS
+#define GGML_HIP_RDNA_WIDE_LDS_Q5_K GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS
+#define GGML_HIP_RDNA_WIDE_LDS_Q6_K GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS
+#elif defined(RDNA3)
+#define GGML_HIP_RDNA_WIDE_LDS_Q4_K GGML_HIP_RDNA3_Q4_K_MMQ_WIDE_LDS
+#define GGML_HIP_RDNA_WIDE_LDS_Q5_K GGML_HIP_RDNA3_Q5_K_MMQ_WIDE_LDS
+#define GGML_HIP_RDNA_WIDE_LDS_Q6_K GGML_HIP_RDNA3_Q6_K_MMQ_WIDE_LDS
+#else
+#define GGML_HIP_RDNA_WIDE_LDS_Q4_K 0
+#define GGML_HIP_RDNA_WIDE_LDS_Q5_K 0
+#define GGML_HIP_RDNA_WIDE_LDS_Q6_K 0
+#endif
+
 #define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
 #define MMQ_ITER_K             256
 #define MMQ_ITER_K_FP4         512
@@ -370,6 +402,10 @@ static constexpr __device__ int ggml_cuda_mmq_get_sram_stride(ggml_type type, in
 static __host__ int ggml_cuda_mmq_get_J_max(const ggml_type type, const bool fallback, const int cc, const int64_t ne11) {
     int ret = std::min(ne11, int64_t(512));
     ret -= ret % 8;
+    const char * env = getenv("GGML_CUDA_MMQ_J_MAX");
+    if (env != nullptr) {
+        ret = std::min(ret, std::atoi(env));
+    }
     for (;ret > 0; ret -= 8) {
         if (ggml_cuda_mmq_get_config(type, ret, fallback, cc).type != GGML_TYPE_COUNT) {
             return ret;
@@ -890,10 +926,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     constexpr ggml_cuda_mmq_vec_dot_t    vec_dot    = ggml_cuda_mmq_get_vec_dot<type, J, fallback>();
     constexpr ggml_cuda_mmq_write_back_t write_back = ggml_cuda_mmq_get_write_back<type, J, fallback>();
 
-    #if defined(GGML_USE_HIP) && defined(RDNA2) && \
-    ((defined(GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) || \
-     (defined(GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS) || \
-     (defined(GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS))
+    #if defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3)) && (GGML_HIP_RDNA_WIDE_LDS_Q4_K || GGML_HIP_RDNA_WIDE_LDS_Q5_K || GGML_HIP_RDNA_WIDE_LDS_Q6_K)
     extern __shared__ int4 data_mul_mat_q_aligned[];
     int * data_mul_mat_q = reinterpret_cast<int *>(data_mul_mat_q_aligned);
 #else
@@ -1027,10 +1060,7 @@ static __global__ void mul_mat_q(
     // Initialize the ids for writing back data with just the index.
     // For regular matrix multiplications this is never changed.
     // For MoE the correct indices are loaded from ids_dst.
-    #if defined(GGML_USE_HIP) && defined(RDNA2) && \
-    ((defined(GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) || \
-     (defined(GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS) || \
-     (defined(GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS))
+    #if defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3)) && (GGML_HIP_RDNA_WIDE_LDS_Q4_K || GGML_HIP_RDNA_WIDE_LDS_Q5_K || GGML_HIP_RDNA_WIDE_LDS_Q6_K)
     extern __shared__ int4 ids_dst_shared_aligned[]; // Stored at beginning of shared memory.
     int * ids_dst_shared = reinterpret_cast<int *>(ids_dst_shared_aligned);
 #else

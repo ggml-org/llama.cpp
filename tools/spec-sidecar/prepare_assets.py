@@ -35,6 +35,7 @@ else:
 
 from validate_assets import (
     QWEN35MOE_MTP_SCHEMA,
+    QWEN4EXP_MTP_SCHEMA,
     dflash_schema,
     validate_schema,
 )
@@ -494,6 +495,101 @@ def prepare_qwen35moe_mtp(args: argparse.Namespace) -> None:
     print(f"prepared Qwen3.6 35B-A3B MTP bundle: {args.output}")
 
 
+def prepare_qwen4exp_mtp(args: argparse.Namespace) -> None:
+    """Prepare the separate Qwen3.8 Flash Next auxiliary layer bundle."""
+    args.output.mkdir(parents=True, exist_ok=True)
+    outputs = [
+        args.output / "drafter_weights.bin",
+        args.output / "drafter_manifest.json",
+        args.output / "draft_head_ids.bin",
+    ]
+    refuse_existing(outputs, args.force)
+
+    target = open_gguf(args.target)
+    draft = open_gguf(args.draft)
+    require_metadata(
+        target,
+        {
+            "general.architecture": "qwen4exp",
+            "general.size_label": "512x56B",
+            "qwen4exp.block_count": 48,
+            "qwen4exp.embedding_length": 2560,
+            "qwen4exp.hyper_connection.count": 4,
+            "qwen4exp.hyper_connection.low_rank": 320,
+            "qwen4exp.attention.head_count": 24,
+            "qwen4exp.attention.head_count_kv": 2,
+            "qwen4exp.attention.key_length": 256,
+            "qwen4exp.attention.value_length": 256,
+            "qwen4exp.attention.indexer.head_count": 4,
+            "qwen4exp.attention.indexer.key_length": 128,
+            "qwen4exp.attention.indexer.top_k": 2048,
+            "qwen4exp.expert_count": 512,
+            "qwen4exp.expert_used_count": 10,
+            "qwen4exp.expert_feed_forward_length": 640,
+            "qwen4exp.rope.dimension_count": 64,
+        },
+        "Qwen3.8 Flash Next target",
+    )
+    target_name = str(metadata_value(target, "general.name"))
+    if "Qwen3.8 Flash Next" not in target_name:
+        raise ValueError(f"target model identity is not Qwen3.8 Flash Next: {target_name!r}")
+    target_nextn = target.get_field("qwen4exp.nextn_predict_layers")
+    if target_nextn is not None and target_nextn.contents() != 0:
+        raise ValueError("Qwen3.8 Flash Next target must not contain an auxiliary layer")
+    target_tokens = metadata_value(target, "tokenizer.ggml.tokens")
+    if len(target_tokens) != 248_320:
+        raise ValueError(
+            f"Qwen3.8 Flash Next target must have 248,320 tokens, found {len(target_tokens):,}"
+        )
+
+    require_metadata(
+        draft,
+        {
+            "general.architecture": "qwen4exp",
+            "qwen4exp.block_count": 49,
+            "qwen4exp.embedding_length": 2560,
+            "qwen4exp.nextn_predict_layers": 1,
+            "qwen4exp.hyper_connection.count": 4,
+            "qwen4exp.hyper_connection.low_rank": 320,
+            "qwen4exp.attention.head_count": 24,
+            "qwen4exp.attention.head_count_kv": 2,
+            "qwen4exp.attention.key_length": 256,
+            "qwen4exp.attention.value_length": 256,
+            "qwen4exp.attention.indexer.head_count": 4,
+            "qwen4exp.attention.indexer.key_length": 128,
+            "qwen4exp.attention.indexer.top_k": 2048,
+            "qwen4exp.expert_count": 512,
+            "qwen4exp.expert_used_count": 10,
+            "qwen4exp.expert_feed_forward_length": 640,
+            "qwen4exp.rope.dimension_count": 64,
+        },
+        "Qwen3.8 Flash Next MTP model",
+    )
+    if nextn_block(draft) != 48:
+        raise ValueError("Qwen3.8 Flash Next MTP model must use auxiliary block 48")
+    validate_schema(tensor_entries(draft), QWEN4EXP_MTP_SCHEMA, "Qwen3.8 Flash Next MTP source")
+
+    target_hash = sha256(args.target)
+    draft_hash = sha256(args.draft)
+    identity_ids = list(range(248_320))
+    id_hash = hashlib.sha256(struct.pack(f"<{len(identity_ids)}i", *identity_ids)).hexdigest()
+    write_blob(
+        draft.tensors,
+        args.output / "drafter_weights.bin",
+        args.output / "drafter_manifest.json",
+        args.draft,
+        draft_hash,
+        {
+            "provider": "qwen4exp-mtp",
+            "target_source_file": args.target.name,
+            "target_source_sha256": target_hash,
+            "draft_ids_sha256": id_hash,
+        },
+    )
+    write_ids(args.output / "draft_head_ids.bin", identity_ids)
+    print(f"prepared Qwen3.8 Flash Next MTP bundle: {args.output}")
+
+
 def prepare_dflash(args: argparse.Namespace) -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     outputs = [
@@ -608,6 +704,12 @@ def build_parser() -> argparse.ArgumentParser:
     qwen35moe_mtp.add_argument("--force", action="store_true", help="replace existing outputs")
     qwen35moe_mtp.set_defaults(run=prepare_qwen35moe_mtp)
 
+    qwen4exp_mtp = commands.add_parser("qwen4exp-mtp")
+    qwen4exp_mtp.add_argument("--target", type=Path, required=True)
+    qwen4exp_mtp.add_argument("--draft", type=Path, required=True)
+    qwen4exp_mtp.add_argument("--output", type=Path, required=True)
+    qwen4exp_mtp.add_argument("--force", action="store_true", help="replace existing outputs")
+    qwen4exp_mtp.set_defaults(run=prepare_qwen4exp_mtp)
 
     dflash = commands.add_parser("dflash")
     dflash.add_argument("--target", type=Path, required=True)

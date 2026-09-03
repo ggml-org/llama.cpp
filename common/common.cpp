@@ -1444,12 +1444,11 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
         output_sharding != nullptr && std::strcmp(output_sharding, "1") == 0;
     if (use_vocab_sharded_output) {
         if (params.sampling.backend_sampling) {
-            COM_WRN("%s", "vocabulary-sharded target output is incompatible with backend sampling; using CPU target sampling\n");
-            params.sampling.backend_sampling = false;
+            COM_WRN("%s", "backend sampling requested with GGML_TP_SHARDED_OUTPUT=1; using hidden-axis/full-logit output instead of vocabulary sharding\n");
         }
         const bool has_mtp = std::find(params.speculative.types.begin(), params.speculative.types.end(),
             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
-        if (has_mtp && params.speculative.draft.backend_sampling) {
+        if (!params.sampling.backend_sampling && has_mtp && params.speculative.draft.backend_sampling) {
             COM_WRN("%s", "vocabulary-sharded output disables native MTP backend draft sampling; sidecar-local sampling is unaffected\n");
             params.speculative.draft.backend_sampling = false;
         }
@@ -1733,6 +1732,11 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
         common_speculative_sidecar_candidate(params.speculative, params.model.path,
             (uint32_t) params.n_parallel);
     mparams.no_tp_output_head_sharding = has_external_shared_head_draft && !sidecar_only_candidate;
+
+    const char * output_sharding = std::getenv("GGML_TP_SHARDED_OUTPUT");
+    mparams.no_tp_output_vocab_sharding = params.sampling.backend_sampling &&
+        params.split_mode == LLAMA_SPLIT_MODE_TENSOR &&
+        output_sharding != nullptr && std::strcmp(output_sharding, "1") == 0;
 
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;

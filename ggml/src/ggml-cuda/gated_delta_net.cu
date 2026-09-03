@@ -8,11 +8,18 @@ static bool ggml_cuda_gdn_use_gfx1030_chunked(const int64_t n_tokens) {
     if (n_tokens <= 1) {
         return false;
     }
-    if (!ggml_cuda_rdna2_native_profile_enabled()) {
-        return false;
-    }
     const int device = ggml_cuda_get_device();
-    return GGML_CUDA_CC_IS_RDNA2(ggml_cuda_info().devices[device].cc);
+    const int cc = ggml_cuda_info().devices[device].cc;
+    if (GGML_CUDA_CC_IS_RDNA2(cc)) {
+        // Keep the existing gfx1030 automatic profile unchanged.
+        return ggml_cuda_rdna2_native_profile_enabled();
+    }
+    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
+        // gfx11+ prefill remains separately opt-in until model-level parity is verified.
+        const char * env = std::getenv("GGML_HIP_RDNA3_GDN_CHUNKED");
+        return env != nullptr && std::atoi(env) != 0;
+    }
+    return false;
 #else
     GGML_UNUSED(n_tokens);
     return false;
