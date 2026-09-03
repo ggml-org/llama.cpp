@@ -614,7 +614,8 @@ static std::vector<uint32_t> llama_memory_hybrid_idx_ns(const llama_kv_cache::sl
 struct llama_memory_hybrid_idx_context::kpool_state {
     struct seq {
         llama_pos pos_min = 0;
-        std::vector<std::pair<llama_pos, uint32_t>> cells; // Position and cell pairs, sorted by position
+        uint32_t  strm    = 0; // Stream holding this sequence's cells
+        std::vector<std::pair<llama_pos, uint32_t>> cells; // Position and stream local cell pairs, sorted by position.
         std::vector<uint32_t> pools;
         std::vector<uint8_t>  is_new;
     };
@@ -744,37 +745,56 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
 // Layout only, used by the full cache context so get_n_kpool() works during graph reserve.
 llama_memory_hybrid_idx_context::kpool_state llama_memory_hybrid_idx_context::kpool_build_layout() const {
     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
-    GGML_ASSERT(get_n_stream() == 1 && "TODO: k-pool indexer with multiple streams");
 
     const uint32_t kpool = mem->get_kpool();
 
     kpool_state st;
     st.seqs.resize(LLAMA_MAX_SEQ);
 
-    const auto & cells = mem->get_mem_idx()->get_cells(0);
+    const auto * kv = mem->get_mem_idx();
+    const uint32_t n_stream_kv = kv->get_n_stream();
 
-    // Scan only active sequences
-    std::vector<llama_seq_id> active;
-    for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
-        if (cells.seq_pos_min(s) >= 0) {
-            active.push_back(s);
-        }
-    }
+    if (n_stream_kv == 1) {
+        const auto & cells = kv->get_cells(0);
 
-    for (uint32_t i = 0; i < cells.size(); ++i) {
-        if (cells.is_empty(i)) {
-            continue;
-        }
-        const llama_pos p = cells.pos_get(i);
-        uint32_t n_seq_cell = 0;
-        for (const llama_seq_id s : active) {
-            if (cells.seq_has(i, s)) {
-                st.seqs[s].cells.emplace_back(p, i);
-                ++n_seq_cell;
+        // Scan only active sequences
+        std::vector<llama_seq_id> active;
+        for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
+            if (cells.seq_pos_min(s) >= 0) {
+                active.push_back(s);
             }
         }
-        if (n_seq_cell > 1) {
-            st.cache_safe = false;
+
+        for (uint32_t i = 0; i < cells.size(); ++i) {
+            if (cells.is_empty(i)) {
+                continue;
+            }
+            const llama_pos p = cells.pos_get(i);
+            uint32_t n_seq_cell = 0;
+            for (const llama_seq_id s : active) {
+                if (cells.seq_has(i, s)) {
+                    st.seqs[s].cells.emplace_back(p, i);
+                    ++n_seq_cell;
+                }
+            }
+            if (n_seq_cell > 1) {
+                st.cache_safe = false;
+            }
+        }
+    } else {
+        // When kv is non unified, one stream per sequence, so streams never share cells. Cell indices stay stream-local.
+        for (llama_seq_id s = 0; s < (llama_seq_id) n_stream_kv; ++s) {
+            const auto & cells = kv->get_cells(s);
+            if (cells.seq_pos_min(s) < 0) {
+                continue;
+            }
+            auto & sq = st.seqs[s];
+            sq.strm = kv->get_stream(s);
+            for (uint32_t i = 0; i < cells.size(); ++i) {
+                if (!cells.is_empty(i) && cells.seq_has(i, s)) {
+                    sq.cells.emplace_back(cells.pos_get(i), i);
+                }
+            }
         }
     }
 
@@ -901,7 +921,6 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
         ggml_tensor * gather_mask, bool gather, ggml_tensor * new_pool_idxs, ggml_tensor * new_pool_rep,
         const llama_ubatch * ubatch) const {
     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
-    GGML_ASSERT(get_n_stream() == 1 && "TODO: k-pool indexer with multiple streams");
     GGML_ASSERT(ggml_backend_buffer_is_host(pool_cells->buffer));
     GGML_ASSERT(ggml_backend_buffer_is_host(pool_idxs->buffer));
     GGML_ASSERT(ggml_backend_buffer_is_host(pool_mask->buffer));
@@ -933,14 +952,29 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
         }
     }
 
+    const uint32_t kv_size = mem->get_mem_idx()->get_size();
+    const uint32_t n_stream_kv = mem->get_mem_idx()->get_n_stream();
+
+    auto gcell = [&](const kpool_state::seq & sq, uint32_t cell) {
+        return (int64_t) sq.strm*kv_size + cell;
+    };
+
+    // Sequences present in this ubatch, pools of absent sequences must fall on the scatter sentinel row.
+    std::vector<uint8_t> seq_in_ub(LLAMA_MAX_SEQ, 0);
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        for (int32_t k = 0; k < ubatch->n_seq_id[i]; ++k) {
+            seq_in_ub[ubatch->seq_id[i][k]] = 1;
+        }
+    }
+
     // Use the first ubatch cell for padded gathers.
-    uint32_t dummy_cell = 0;
+    int64_t dummy_cell = 0;
     {
         const llama_seq_id s = ubatch->seq_id[0][0];
         const auto & sq = st.seqs[s];
         auto it = std::lower_bound(sq.cells.begin(), sq.cells.end(), std::make_pair(ubatch->pos[0], 0u));
         GGML_ASSERT(it != sq.cells.end() && it->first == ubatch->pos[0]);
-        dummy_cell = it->second;
+        dummy_cell = gcell(sq, it->second);
     }
 
     // Gather maps padding to a real cell and masks it separately.
@@ -974,6 +1008,9 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
     for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
         const auto & sq = st.seqs[s];
         seq_pool_start[s] = (uint32_t) pool_end.size();
+
+        const bool inert = !gather && n_stream_kv > 1 && !seq_in_ub[s];
+
         for (size_t pi = 0; pi < sq.pools.size(); ++pi) {
             const uint32_t j  = sq.pools[pi];
             const uint32_t ip = (uint32_t) pool_end.size();
@@ -981,19 +1018,20 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
 
             // The pooled key lives in the last member's row.
             const uint32_t rep = sq.cells[j + kpool - 1].second;
-            pcell[ip] = (int32_t) rep;
+            pcell[ip] = (int32_t) gcell(sq, rep);
 
             for (uint32_t k = 0; k < kpool; ++k) {
-                pidx[(size_t) ip*kpool + k] = (int32_t) sq.cells[j + k].second;
+                pidx[(size_t) ip*kpool + k] = inert ? sentinel :
+                    (int32_t) (gather ? gcell(sq, sq.cells[j + k].second) : (int64_t) sq.cells[j + k].second);
             }
 
             if (sq.is_new[pi]) {
                 GGML_ASSERT(i_new < n_new);
                 for (uint32_t k = 0; k < kpool; ++k) {
-                    nidx[(size_t) i_new*kpool + k] = (int32_t) sq.cells[j + k].second;
+                    nidx[(size_t) i_new*kpool + k] = (int32_t) gcell(sq, sq.cells[j + k].second);
                 }
                 if (nrep != nullptr) {
-                    nrep[i_new] = (int64_t) rep;
+                    nrep[i_new] = gcell(sq, rep);
                 }
                 ++i_new;
             }
@@ -1005,7 +1043,7 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
 
     const uint32_t n_pool_real = (uint32_t) pool_end.size();
     for (uint32_t ip = n_pool_real; ip < n_pool; ++ip) {
-        pcell[ip] = (int32_t) dummy_cell;
+        pcell[ip] = (int32_t) dummy_cell; // pool_cells always addresses the K storage
         for (uint32_t k = 0; k < kpool; ++k) {
             pidx[(size_t) ip*kpool + k] = sentinel;
         }
@@ -1059,7 +1097,7 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
                 const llama_pos pt = p - (llama_pos) k;
                 auto it = std::lower_bound(sq.cells.begin(), sq.cells.end(), std::make_pair(pt, 0u));
                 if (it != sq.cells.end() && it->first == pt) {
-                    cell = (int32_t) it->second;
+                    cell = (int32_t) (gather ? gcell(sq, it->second) : (int64_t) it->second);
                     real = true;
                 }
             }

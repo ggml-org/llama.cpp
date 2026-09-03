@@ -2313,9 +2313,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             } break;
         case LLM_ARCH_GLM5_NEXT:
             {
-                if (!cparams.kv_unified && cparams.n_seq_max > 1) {
-                    throw std::runtime_error("GLM5-Next requires a unified KV cache for multiple sequences, use --kv-unified");
-                }
                 // KDA layers are recurrent, the DSA layers use a K-only MLA cache plus an indexer cache.
                 // tThe Nextn block is never attended by the trunk graph
                 llama_memory_hybrid_idx::layer_filter_cb filter_attn = [&](uint32_t il) {
