@@ -88,6 +88,21 @@ LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
 
 LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i);
 
+// EXPERIMENTAL (--mmproj-evict-draft): runtime-evict/restore the model's unique GPU
+// weight buffers. prepare() is one-time (must run after the model is loaded and before any
+// evict); evict() frees the device weight buffers (a host copy is held); restore() reallocates and
+// refills them. Shared tensors (tok_embd/output borrowed via ctx_other) are not in the model's own
+// buffers and are never touched. evict()/restore() are not all-or-nothing across buffers: a failure
+// partway leaves the model in a partially swapped state (every tensor still points at a valid,
+// filled buffer, so inference stays correct); a later evict()/restore() retries the remaining parts.
+LLAMA_API bool llama_model_weights_swap_prepare(const struct llama_model * model);
+LLAMA_API bool llama_model_weights_swap_evict(const struct llama_model * model);
+LLAMA_API bool llama_model_weights_swap_restore(const struct llama_model * model);
+// Total bytes of the unique, non-shared device weight buffers recorded by
+// llama_model_weights_swap_prepare() (i.e. what an evict moves to host RAM). 0 until prepare() has
+// run, or when no buffer is swappable.
+LLAMA_API size_t llama_model_weights_swap_size(const struct llama_model * model);
+
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
 
 // Set whether the context outputs nextn embeddings or not

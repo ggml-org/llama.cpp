@@ -732,6 +732,13 @@ struct llama_model {
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
+    // EXPERIMENTAL (--mmproj-evict-draft): snapshot then runtime-evict/restore the model's GPU
+    // weight buffers (host copy held while evicted). prepare() is one-time; evict/restore toggle.
+    bool weight_swap_prepare();
+    bool weight_swap_evict();
+    bool weight_swap_restore();
+    size_t weight_swap_size() const;
+
     // total number of parameters in the model
     uint64_t n_elements() const;
 

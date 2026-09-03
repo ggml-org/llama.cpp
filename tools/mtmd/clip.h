@@ -58,6 +58,10 @@ struct clip_context_params {
     bool no_alloc;
     mtmd_progress_callback progress_callback;
     void * progress_callback_user_data;
+    // EXPERIMENTAL (--mmproj-evict-draft): keep weights in a host buffer and move them to the
+    // compute backend's GPU buffer only while an encode is in flight. Skips the load-time warmup
+    // (compute buffers are reserved lazily on the first encode, after weights are on GPU).
+    bool weights_evict;
 };
 
 struct clip_init_result {
@@ -131,6 +135,12 @@ bool clip_support_batch(const struct clip_ctx * ctx);
 int clip_model_n_temporal_merge(const struct clip_ctx * ctx); // TODO @ngxson : remove, refactor this
 
 std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * ctx);
+
+// --mmproj-evict-draft: move the weight buffer between the persistent host buffer and the
+// compute backend's GPU buffer. Only valid when the ctx was created with weights_evict.
+// on_gpu=true: allocate the GPU buffer, host->device copy, tensors point at GPU.
+// on_gpu=false: free the GPU buffer, tensors point back at the host buffer.
+bool clip_weights_set_gpu(struct clip_ctx * ctx, bool on_gpu);
 
 struct clip_cap {
     bool has_vision;

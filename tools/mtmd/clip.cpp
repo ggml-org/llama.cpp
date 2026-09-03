@@ -157,13 +157,45 @@ struct clip_ctx {
 
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
-    ggml_backend_buffer_ptr buf;
+    ggml_backend_buffer_ptr buf; // GPU weight buffer (weights_evict: allocated on demand)
+    ggml_backend_buffer_ptr buf_host; // weights_evict: persistent host copy of the weights
 
 
     int max_nodes = 8192;
     ggml_backend_sched_ptr sched;
     clip_flash_attn_type flash_attn_type = CLIP_FLASH_ATTN_TYPE_AUTO;
     bool is_allocated = false;
+
+    bool weights_evict = false; // weights live in buf_host and are streamed to buf on demand
+    bool weights_on_gpu = false; // true while buf (GPU) is allocated and tensors point at it
+
+    // eval callback, stored so create_sched() can re-attach it after the scheduler is
+    // freed between image requests
+    ggml_backend_sched_eval_callback cb_eval = nullptr;
+    void * cb_eval_user_data = nullptr;
+
+    // (re)create the scheduler (and its compute/activation buffer, reclaimed by free_sched
+    // between image requests when weights_evict is set). The weights live in a separate buffer
+    // (buf/buf_host), so this only touches activation memory, which is rebuilt on every encode.
+    void create_sched() {
+        sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), (int) backend_ptrs.size(), max_nodes, false, true));
+        if (cb_eval != nullptr) {
+            ggml_backend_sched_set_eval_callback(sched.get(), cb_eval, cb_eval_user_data);
+        }
+    }
+    void free_sched() {
+        if (sched) {
+            size_t sz = 0;
+            for (ggml_backend_t b : backend_ptrs) {
+                sz += ggml_backend_sched_get_buffer_size(sched.get(), b);
+            }
+            LOG_DBG("%s: freeing mmproj compute buffer (%.2f MiB); reclaimed until next image encode\n",
+                    __func__, sz / 1024.0 / 1024.0);
+        }
+        sched.reset(); // ggml_backend_sched_free releases the compute buffer
+        is_allocated = false;
+        mem_compute.clear(); // report the freed compute buffer as absent until the next encode
+    }
 
     bool debug_output_embeddings = false;
 
@@ -181,6 +213,7 @@ struct clip_ctx {
     clip_ctx(clip_context_params & ctx_params) {
         flash_attn_type = ctx_params.flash_attn_type;
         no_alloc = ctx_params.no_alloc;
+        weights_evict = ctx_params.weights_evict;
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
         if (!backend_cpu) {
             throw std::runtime_error("failed to initialize CPU backend");
@@ -217,13 +250,9 @@ struct clip_ctx {
         backend_ptrs.push_back(backend_cpu);
         backend_buft.push_back(ggml_backend_get_default_buffer_type(backend_cpu));
 
-        sched.reset(
-            ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), 8192, false, true)
-        );
-
-        if (ctx_params.cb_eval != nullptr) {
-            ggml_backend_sched_set_eval_callback(sched.get(), ctx_params.cb_eval, ctx_params.cb_eval_user_data);
-        }
+        cb_eval           = ctx_params.cb_eval;
+        cb_eval_user_data = ctx_params.cb_eval_user_data;
+        create_sched();
 
         debug_output_embeddings = std::getenv("MTMD_DEBUG_EMBEDDINGS") != nullptr;
     }
@@ -2148,7 +2177,12 @@ struct clip_model_loader {
                 loaded_tensor_names.insert(name);
                 cur = data_tensor;
                 // add to weight memory counter
-                ctx_clip.mem_usage[ggml_backend_get_device(ctx_clip.backend)] += ggml_nbytes(cur);
+                // weights_evict: the weights are host-resident, so attribute them to the host
+                // device (not the compute device) for the -fit worst-case estimate
+                const ggml_backend_dev_t mem_dev = ctx_clip.weights_evict
+                    ? ggml_backend_get_device(ctx_clip.backend_cpu)
+                    : ggml_backend_get_device(ctx_clip.backend);
+                ctx_clip.mem_usage[mem_dev] += ggml_nbytes(cur);
             }
             return cur;
         };
@@ -3598,9 +3632,21 @@ struct clip_model_loader {
             }
 
             // alloc memory and offload data
-            ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
-            ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
-            ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            // --mmproj-evict-draft: keep the weights in a persistent host buffer and stream them
+            // to the compute backend's GPU buffer only while an encode is in flight
+            const bool evict = ctx_clip.weights_evict && !ctx_clip.no_alloc;
+            ggml_backend_buffer_type_t buft;
+            if (evict) {
+                buft = ggml_backend_get_default_buffer_type(ctx_clip.backend_cpu);
+                ctx_clip.buf_host.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+                ggml_backend_buffer_set_usage(ctx_clip.buf_host.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                ctx_clip.weights_on_gpu = false;
+            } else {
+                buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
+                ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+                ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                ctx_clip.weights_on_gpu = true;
+            }
             // read the weight from file
             if (!ctx_clip.no_alloc) {
                 size_t data_loaded = 0;
@@ -3972,7 +4018,9 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             loader.load_hparams(ctx_vision->model, CLIP_MODALITY_VISION);
             loader.load_tensors(*ctx_vision);
             loader.init_ctx(*ctx_vision);
-            if (ctx_params.warmup) {
+            // skip the warmup when weights are evicted: it is deferred to the first encode,
+            // which runs after the weights have been streamed to the GPU buffer
+            if (ctx_params.warmup && !ctx_params.weights_evict) {
                 loader.warmup(*ctx_vision);
             }
 
@@ -3986,7 +4034,8 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
             loader.load_hparams(ctx_audio->model, CLIP_MODALITY_AUDIO);
             loader.load_tensors(*ctx_audio);
             loader.init_ctx(*ctx_audio);
-            if (ctx_params.warmup) {
+            // skip the warmup when weights are evicted (deferred to the first encode), same as vision
+            if (ctx_params.warmup && !ctx_params.weights_evict) {
                 loader.warmup(*ctx_audio);
             }
         }
@@ -4422,6 +4471,12 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     if (!ctx->support_batch && n_batch_cur > clip_model_n_temporal_merge(ctx)) {
         LOG_ERR("%s: batch size %d exceeds maximum supported batch/temporal-merge size %d\n", __func__, n_batch_cur, clip_model_n_temporal_merge(ctx));
         return false;
+    }
+
+    // weights_evict: the scheduler (and its compute buffer) is freed on the exit path to
+    // reclaim VRAM, so recreate it here if it is gone; the warmup below re-reserves it.
+    if (ctx->sched == nullptr) {
+        ctx->create_sched();
     }
 
     // if buffers are not allocated, we need to do a warmup run to allocate them
@@ -6061,6 +6116,66 @@ std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * 
         result[dev] += size;
     }
     return result;
+}
+
+// re-point every tensor of ctx from one buffer to another, keeping each tensor's absolute
+// offset. Tensor offsets from the ggml allocator are multiples of GGML_MEM_ALIGN (the minimum
+// alignment ggml guarantees) and both buffer bases are aligned to at least GGML_MEM_ALIGN, so
+// to_base + off is a valid, aligned placement in a destination buffer of the same total size.
+// (Same offset-preserving repoint for the draft model buffers: model_wswap_repoint, src/llama-model.cpp)
+static void clip_repoint_ctx(ggml_context * ctx, ggml_backend_buffer_t from, ggml_backend_buffer_t to) {
+    auto * from_base = reinterpret_cast<uint8_t *>(ggml_backend_buffer_get_base(from));
+    auto * to_base   = reinterpret_cast<uint8_t *>(ggml_backend_buffer_get_base(to));
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->buffer != from) {
+            continue;
+        }
+        if (t->data) {
+            const ptrdiff_t off = reinterpret_cast<uint8_t *>(t->data) - from_base;
+            t->data = to_base + off;
+        }
+        t->buffer = to;
+    }
+}
+
+bool clip_weights_set_gpu(clip_ctx * ctx, bool on_gpu) {
+    if (!ctx->weights_evict) {
+        return true; // weights are statically on the compute backend; nothing to swap
+    }
+    if (on_gpu == ctx->weights_on_gpu) {
+        return true; // already in the requested state
+    }
+    if (on_gpu) {
+        const auto buft = ggml_backend_get_default_buffer_type(ctx->backend);
+        const size_t size = ggml_backend_buffer_get_size(ctx->buf_host.get());
+        ctx->buf.reset(ggml_backend_buft_alloc_buffer(buft, size));
+        if (ctx->buf == nullptr) {
+            LOG_ERR("%s: failed to allocate %zu byte GPU weight buffer\n", __func__, size);
+            return false;
+        }
+        clip_repoint_ctx(ctx->ctx_data.get(), ctx->buf_host.get(), ctx->buf.get());
+        auto * host_base = reinterpret_cast<uint8_t *>(ggml_backend_buffer_get_base(ctx->buf_host.get()));
+        auto * gpu_base  = reinterpret_cast<uint8_t *>(ggml_backend_buffer_get_base(ctx->buf.get()));
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx->ctx_data.get()); t != nullptr; t = ggml_get_next_tensor(ctx->ctx_data.get(), t)) {
+            if (t->buffer == ctx->buf.get() && t->view_src == nullptr && t->data) {
+                const ptrdiff_t off = reinterpret_cast<uint8_t *>(t->data) - gpu_base;
+                ggml_backend_tensor_set(t, host_base + off, 0, ggml_nbytes(t));
+            }
+        }
+        ggml_backend_buffer_set_usage(ctx->buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        ggml_backend_synchronize(ctx->backend);
+        ctx->weights_on_gpu = true;
+    } else {
+        clip_repoint_ctx(ctx->ctx_data.get(), ctx->buf.get(), ctx->buf_host.get());
+        ctx->buf.reset(); // free the GPU buffer; the host copy remains the source of truth
+        ctx->weights_on_gpu = false;
+        // reclaim the compute/activation buffer too: the scheduler owns it, and it is only
+        // needed while an image encode is running. It is recreated and re-reserved on the
+        // next encode. Without this the mmproj compute memory would stay resident for the
+        // whole session after the first image.
+        ctx->free_sched();
+    }
+    return true;
 }
 
 //

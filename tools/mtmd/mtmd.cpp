@@ -465,6 +465,7 @@ mtmd_context_params mtmd_context_params_default() {
         /* media_marker      */ mtmd_default_marker(),
         /* flash_attn_type   */ LLAMA_FLASH_ATTN_TYPE_AUTO,
         /* warmup            */ true,
+        /* weights_evict     */ false,
         /* image_min_tokens  */ -1,
         /* image_max_tokens  */ -1,
         /* cb_eval           */ nullptr,
@@ -577,6 +578,7 @@ struct mtmd_context {
             /* no_alloc          */ no_alloc,
             /* progress_callback */ ctx_params.progress_callback,
             /* progress_callback_user_data */ ctx_params.progress_callback_user_data,
+            /* weights_evict     */ ctx_params.weights_evict,
         };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);
@@ -2728,4 +2730,16 @@ std::map<ggml_backend_dev_t, size_t> mtmd_get_memory_usage(const char * mmproj_f
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return {};
     }
+}
+
+bool mtmd_set_mmproj_modality_weights_gpu(mtmd_context * ctx, enum mtmd_mmproj_modality mod, bool on_gpu) {
+    struct clip_ctx * c = mod == MTMD_MMPROJ_MOD_AUDIO ? ctx->ctx_a : ctx->ctx_v;
+    if (c == nullptr) {
+        return true; // modality not present in this mmproj
+    }
+    return clip_weights_set_gpu(c, on_gpu);
+}
+
+bool mtmd_has_gen_audio(mtmd_context * ctx) {
+    return ctx != nullptr && ctx->ctx_gen_a != nullptr;
 }
