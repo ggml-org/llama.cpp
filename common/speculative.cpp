@@ -37,7 +37,13 @@ static void spec_retune(
         std::vector<common_params_sampling> & cfg,
         const llama_model * model,
         llama_seq_id seq_id,
-        const common_speculative_draft_params & dp) {
+        common_speculative_draft_params & dp,
+        bool probabilistic) {
+    // greedy drafting leaves no candidates behind, so the verifier falls back to sample-and-match
+    if (!probabilistic) {
+        dp.result_q = nullptr;
+    }
+
     if (dp.result_q == nullptr || dp.sampling == nullptr) {
         return;
     }
@@ -360,7 +366,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
             n_drafting++;
             drafting[seq_id] = true;
-            spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp);
+            spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp, params.probabilistic);
 
             common_sampler_reset(smpls[seq_id].get());
 
@@ -1644,7 +1650,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             n_drafting++;
             drafting[seq_id] = true;
-            spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp);
+            spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp, params.probabilistic);
 
             common_sampler_reset(smpls[seq_id].get());
 
