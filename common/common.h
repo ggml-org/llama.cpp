@@ -593,6 +593,11 @@ struct common_params {
     struct common_params_model mmproj;
     bool mmproj_use_gpu = true;                 // use GPU for multimodal model
     ggml_backend_dev_t mmproj_device = nullptr; // GPU device to use for multimodal model
+    // Encode images on the GPU even when the projector does not fit alongside
+    // the model: hand the LLM's idle compute buffers back for the duration of
+    // the encode (llama_sched_release()), run the projector there, then give
+    // the memory straight back. Only meaningful with mmproj_use_gpu = false.
+    bool mmproj_vram_swap = false;
     bool no_mmproj = false;                     // explicitly disable multimodal model
     std::vector<std::string> image;             // path to image file(s) ; TODO: change the name to "media"
     int image_min_tokens = -1;
