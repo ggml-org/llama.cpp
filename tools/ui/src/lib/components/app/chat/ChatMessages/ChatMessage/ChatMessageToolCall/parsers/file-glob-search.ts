@@ -6,7 +6,8 @@
 
 import { parseToolArgs } from './_shared';
 import { BuiltInTool } from '$lib/enums';
-import { type AgenticSection, splitSearchSummaryList } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
+import { splitSearchSummaryList } from '$lib/utils';
 
 export type FileGlobSearchMeta = {
 	path: string;
@@ -18,7 +19,7 @@ export type FileGlobSearchMeta = {
 };
 
 export function parseFileGlobSearchMeta(section: AgenticSection): FileGlobSearchMeta | null {
-	const args = parseToolArgs(BuiltInTool.FILE_GLOB_SEARCH, section);
+	const args = parseToolArgs(BuiltInTool.SERVER_FILE_GLOB_SEARCH, section);
 
 	if (!args) return null;
 

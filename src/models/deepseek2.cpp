@@ -37,11 +37,6 @@ void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
         hparams.rope_yarn_log_mul /= 0.1f;
     }
 
-    // NextN/MTP
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn == 0 ||
-        hparams.n_layer() + hparams.n_layer_nextn == hparams.n_layer_all);
-
     // (optional) temperature tuning - used by mistral-large
     ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE,  hparams.f_attn_temp_scale,       false);
     ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_LENGTH, hparams.n_attn_temp_floor_scale, false); // FIXME why not use temperature_length?
@@ -524,17 +519,9 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
                 q = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
                 cb(q, "q", il);
             }
-            // split into {n_embd_head_qk_nope, n_head, n_tokens}
-            ggml_tensor * q_nope =
-                ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens, ggml_row_size(q->type, n_embd_head_k),
-                             ggml_row_size(q->type, n_embd_head_k) * n_head, 0);
-            cb(q_nope, "q_nope", il);
-
-            // and {n_embd_head_qk_rope, n_head, n_tokens}
-            ggml_tensor * q_pe = ggml_view_3d(
-                ctx0, q, n_embd_head_qk_rope, n_head, n_tokens, ggml_row_size(q->type, n_embd_head_k),
-                ggml_row_size(q->type, n_embd_head_k) * n_head, ggml_row_size(q->type, n_embd_head_qk_nope));
-            cb(q_pe, "q_pe", il);
+            // {n_embd_head_k, n_head, n_tokens}
+            q = ggml_reshape_3d(ctx0, q, n_embd_head_k, n_head, n_tokens);
+            cb(q, "q", il);
 
             ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, model.layers[il].wkv_a_mqa, cur);
             cb(kv_cmpr_pe, "kv_cmpr_pe", il);
@@ -552,10 +539,6 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
                                               ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
             cb(k_pe, "k_pe", il);
 
-            q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
-            cb(q_pe, "q_pe", il);
-
             k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                                  ext_factor, attn_factor, beta_fast, beta_slow);
             cb(k_pe, "k_pe", il);
@@ -564,6 +547,20 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
             cb(kv_cmpr, "kv_cmpr", il);
 
             if (is_mla) {
+                // split into {n_embd_head_qk_nope, n_head, n_tokens}
+                ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
+                                                    q->nb[1], q->nb[2], 0);
+                cb(q_nope, "q_nope", il);
+
+                // and {n_embd_head_qk_rope, n_head, n_tokens}
+                ggml_tensor * q_pe = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
+                                                  q->nb[1], q->nb[2], ggml_row_size(q->type, n_embd_head_qk_nope));
+                cb(q_pe, "q_pe", il);
+
+                q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                                     ext_factor, attn_factor, beta_fast, beta_slow);
+                cb(q_pe, "q_pe", il);
+
                 // {n_embd_head_qk_nope, n_tokens, n_head}
                 q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
                 cb(q_nope, "q_nope_perm", il);
@@ -623,10 +620,14 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
                 Vcur = ggml_cont(ctx0, Vcur);
                 cb(Vcur, "Vcur_cont", il);
 
-                ggml_tensor * Qcur = ggml_concat(ctx0, q_nope, q_pe, 0);
+                // RoPE is applied to the trailing dims only
+                ggml_tensor * Qcur = ggml_rope_ext(ctx0, q, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
+                                                   freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+                Qcur = ggml_rope_set_offset(Qcur, n_embd_head_qk_nope);
                 cb(Qcur, "Qcur", il);
 
-                ggml_tensor * Kcur = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_pe, q_pe), 0);
+                ggml_tensor * Kcur = ggml_concat(ctx0, k_nope,
+                        ggml_repeat_4d(ctx0, k_pe, n_embd_head_qk_rope, n_head, n_tokens, 1), 0);
                 cb(Kcur, "Kcur", il);
 
                 if (inp_attn_scale) {

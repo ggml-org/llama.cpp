@@ -91,7 +91,7 @@ export { default as ChatAttachmentsListItemThumbnailImage } from './ChatAttachme
  * preview without carousel, or a gallery/carousel view when multiple items exist.
  * Uses ChatAttachmentPreviewSingle internally for each item's content.
  */
-export { default as ChatAttachmentsPreview } from './ChatAttachments/ChatAttachmentsPreview.svelte';
+export { default as ChatAttachmentsPreview } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreview.svelte';
 export { default as ChatAttachmentsPreviewNavButtons } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewNavButtons.svelte';
 export { default as ChatAttachmentsPreviewFileInfo } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewFileInfo.svelte';
 export { default as ChatAttachmentsPreviewThumbnailStrip } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewThumbnailStrip.svelte';
@@ -120,8 +120,8 @@ export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/
  * Used by ChatScreenForm and ChatMessageEditForm for both new conversations and message editing.
  *
  * **Architecture:**
- * - Composes ChatFormTextarea (or ChatFormContenteditable for messages with
- *   file mention links), ChatFormActions, and ChatFormPickerMcpPrompts
+ * - Composes ChatFormInput (a plain textarea, or a ChatFormInputRich for
+ *   messages with file mention links), ChatFormActions, and ChatFormPickerMcpPrompts
  * - Manages file upload state via `uploadedFiles` bindable prop
  * - Integrates with ModelsSelectorDropdown for model selection in router mode
  * - Communicates with parent via callbacks (onSubmit, onFilesAdd, onStop, etc.)
@@ -221,27 +221,6 @@ export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/Chat
 export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddToolsSubmenu.svelte';
 
 /**
- * Dropdown submenu for managing MCP servers in the chat form.
- *
- * Displays a searchable list of enabled MCP servers with toggle switches
- * to enable/disable each server for chat. Shows server favicon, health status,
- * and a "Manage MCP Servers" settings link.
- *
- * Features:
- * - Search/filter servers by name or URL
- * - Per-server toggle to enable/disable for chat
- * - Health check indicator (shows "Error" badge for failed servers)
- * - Server favicon display
- * - Settings link to manage MCP server configuration
- *
- * @example
- * ```svelte
- * <ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
- * ```
- */
-export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddMcpServersSubmenu.svelte';
-
-/**
  * Dropdown submenu for selecting reasoning effort level.
  *
  * Shows a "Reasoning" sub-menu item with a lightbulb icon indicating
@@ -258,7 +237,7 @@ export { default as ChatFormContextGauge } from './ChatForm/ChatFormContextGauge
 /**
  * Hidden file input element for programmatic file selection.
  */
-export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileInputInvisible.svelte';
+export { default as ChatFormInputFileInputInvisible } from './ChatForm/ChatFormInput/ChatFormInputFileInputInvisible.svelte';
 
 /**
  * Displays MCP Resource attachments as a horizontal carousel.
@@ -267,28 +246,23 @@ export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileIn
 export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResourcesList.svelte';
 
 /**
- * Auto-resizing contenteditable input that renders `[name](file://...)`
- * mention links as inline chips while keeping the value as the markdown
- * source string. ChatForm swaps it in once a mention link lands in the
- * buffer. Shares the focus()/resetHeight()/caret handle with the textarea.
+ * The message editor. Renders a plain auto-resizing textarea by default,
+ * or a ChatFormInputRich that renders `[name](file://...)` mention links as
+ * inline chips (keeping the value as the markdown source string) once a
+ * mention link lands in the buffer. The variant is selected via the
+ * `useRichInput` prop; both share one imperative handle.
  */
-export { default as ChatFormContenteditable } from './ChatForm/ChatFormContenteditable.svelte';
-
-/**
- * Plain auto-resizing textarea with IME composition support. Default input
- * renderer inside ChatForm until a file mention lands.
- */
-export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte';
+export { default as ChatFormInput } from './ChatForm/ChatFormInput/ChatFormInput.svelte';
 
 /**
  * Working directory selector for agent mode. Renders a chip below the chat
  * form; clicking it opens a popover with a directory picker backed by the
- * server's `file_glob_search` built-in tool (POST /tools). The picked
+ * server's `file_glob_search` server tool (POST /tools). The picked
  * directory is exposed via `bind:directory`; changing it records a
  * synthetic "Set working directory to ..." user message into chat history
  * and is enforced on tool calls via the `x-tool-cwd` request header.
  */
-export { default as ChatFormWorkingDirectory } from './ChatForm/ChatFormWorkingDirectory.svelte';
+export { default as ChatFormCurrentWorkingDirectory } from './ChatForm/ChatFormCurrentWorkingDirectory/ChatFormCurrentWorkingDirectory.svelte';
 
 /**
  * **ChatFormPickerMcpPrompts** - MCP prompt selection interface
@@ -359,14 +333,14 @@ export { default as ChatFormPickerPopover } from './ChatForm/ChatFormPickers/Cha
  * Generic scrollable list for picker popovers. Provides search input,
  * scroll-into-view for keyboard navigation, loading skeletons, empty state,
  * and optional footer. Uses Svelte 5 snippets for item/skeleton/footer rendering.
- * Shared by ChatFormPickerMcpPrompts and ChatFormMentionPicker.
+ * Shared by ChatFormPickerMcpPrompts and ChatFormPickerMention.
  */
 export { default as ChatFormPickerList } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerList.svelte';
 
 /**
  * Generic button wrapper for picker list items. Provides consistent styling,
  * hover/selected states, and data-picker-index attribute for scroll-into-view.
- * Shared by ChatFormPickerMcpPrompts and ChatFormMentionPicker.
+ * Shared by ChatFormPickerMcpPrompts and ChatFormPickerMention.
  */
 export { default as ChatFormPickerListItem } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerListItem.svelte';
 
@@ -385,18 +359,18 @@ export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPi
 
 /**
  * `@`-triggered file/folder mention picker. Resolves `@<query>` in the chat
- * input to a filesystem match via the server's `file_glob_search` built-in
+ * input to a filesystem match via the server's `file_glob_search` server tool
  * tool, scoped to the conversation cwd (or server home when unset).
  * Selection splices a `[name](file:///<abs path>)` link into the input.
  */
-export { default as ChatFormMentionPicker } from './ChatForm/ChatFormPickers/ChatFormMentionPicker.svelte';
+export { default as ChatFormPickerMention } from './ChatForm/ChatFormPickers/ChatFormPickerMention.svelte';
 
 /**
  * `/`-triggered slash-command picker. Lists the available slash commands
  * (`/prompt`, `/cwd`, `/model`) filtered by the typed query; selection
  * hands the command to the parent for dispatch.
  */
-export { default as ChatFormCommandPicker } from './ChatForm/ChatFormPickers/ChatFormCommandPicker.svelte';
+export { default as ChatFormPickerCommand } from './ChatForm/ChatFormPickers/ChatFormPickerCommand.svelte';
 
 /**
  * Hosts the chat-form pickers (slash-command, MCP prompt, file mention)
@@ -690,6 +664,18 @@ export { default as ChatMessageSystem } from './ChatMessages/ChatMessage/ChatMes
  * ```
  */
 export { default as ChatScreen } from './ChatScreen/ChatScreen.svelte';
+
+/**
+ * **ChatTabs** - Browser-style tab bar for open conversations
+ *
+ * Horizontal strip of tabs rendered above ChatScreen in the chat layout,
+ * one per conversation tracked by tabsStore. The active tab follows the
+ * route's conversation id; clicking a tab navigates to it, middle-click or
+ * the close button closes it (switching to the left neighbor when closing
+ * the active tab), and a trailing "+" button starts a new chat. Shows a
+ * spinner on tabs with a running generation. Desktop-only.
+ */
+export { default as ChatTabs } from './ChatTabs/ChatTabs.svelte';
 
 /**
  * Visual overlay displayed when user drags files over the chat screen.

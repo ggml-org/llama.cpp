@@ -7,10 +7,6 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
     ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
-    // NextN/MTP: optional draft head appended as extra trailing block(s)
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_all");
-
     // A layer is recurrent IFF the n_head_kv value is set to 0 and
     // the n_ff value is set to 0. Appended MTP blocks are dense (non-recurrent)
     for (uint32_t i = 0; i < hparams.n_layer_all; ++i) {
@@ -177,8 +173,11 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
     auto * inp = build_inp_mem_hybrid();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
+    const bool extract_final_inp = (size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer];
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         struct ggml_tensor * inpSA = inpL;
 
         // norm
@@ -195,7 +194,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
             cur = build_ffn_layer(cur, model, il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked && !extract_final_inp) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -209,6 +208,13 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
     }
 
     cur = inpL;
+    if (extract_final_inp) {
+        res->t_layer_inp[n_layer] = cur;
+
+        if (inp_out_ids && cparams.embeddings_nextn_masked) {
+            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+        }
+    }
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
 

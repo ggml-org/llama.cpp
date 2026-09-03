@@ -10,9 +10,9 @@
 	} from '$lib/components/app/mcp';
 	import * as Card from '$lib/components/ui/card';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { HealthCheckStatus } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { HealthCheckState, MCPServerSettingsEntry } from '$lib/types';
 	import { tick } from 'svelte';
 
@@ -22,9 +22,10 @@
 		onToggle: (enabled: boolean) => void;
 		onUpdate: (updates: Partial<MCPServerSettingsEntry>) => void;
 		onDelete: () => void;
+		onBrowseResources?: () => void;
 	}
 
-	let { enabled, onDelete, onToggle, onUpdate, server }: Props = $props();
+	let { enabled, onBrowseResources, onDelete, onToggle, onUpdate, server }: Props = $props();
 
 	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
 	let displayName = $derived(mcpStore.getServerLabel(server));
@@ -111,22 +112,23 @@
 	{#if isEditing}
 		<McpServerCardEditForm
 			bind:this={editFormRef}
+			onCancel={cancelEditing}
+			onSave={saveEditing}
 			serverId={server.id}
+			serverLabel={displayName}
 			serverUrl={server.url}
 			serverUseProxy={server.useProxy}
-			serverLabel={displayName}
-			onSave={saveEditing}
-			onCancel={cancelEditing}
 		/>
 	{:else}
 		<McpServerCardHeader
-			{displayName}
-			{faviconUrl}
-			enabled={enabled ?? server.enabled}
+			{capabilities}
 			disabled={isError}
+			{displayName}
+			enabled={enabled ?? server.enabled}
+			{faviconUrl}
+			{onBrowseResources}
 			{onToggle}
 			{serverInfo}
-			{capabilities}
 			{transportType}
 		/>
 
@@ -145,11 +147,15 @@
 				<div class="space-y-2">
 					<div class="flex items-center gap-2">
 						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
+
 						<Skeleton class="h-3 w-24" />
 					</div>
+
 					<div class="flex flex-wrap gap-1.5">
 						<Skeleton class="h-5 w-16 rounded-full" />
+
 						<Skeleton class="h-5 w-20 rounded-full" />
+
 						<Skeleton class="h-5 w-14 rounded-full" />
 					</div>
 				</div>
@@ -157,6 +163,7 @@
 				<div class="space-y-1.5">
 					<div class="flex items-center gap-2">
 						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
+
 						<Skeleton class="h-3 w-32" />
 					</div>
 				</div>
@@ -170,7 +177,7 @@
 				{/if}
 
 				{#if connectionLogs.length > 0}
-					<McpConnectionLogs logs={connectionLogs} {connectionTimeMs} />
+					<McpConnectionLogs {connectionTimeMs} logs={connectionLogs} />
 				{/if}
 			{/if}
 		</div>
@@ -186,12 +193,14 @@
 				</div>
 			{/if}
 
-			<McpServerCardActions
-				{isHealthChecking}
-				onEdit={startEditing}
-				onRefresh={handleHealthCheck}
-				onDelete={handleDeleteClick}
-			/>
+			<div class="flex items-center gap-2">
+				<McpServerCardActions
+					{isHealthChecking}
+					onDelete={handleDeleteClick}
+					onEdit={startEditing}
+					onRefresh={handleHealthCheck}
+				/>
+			</div>
 		</div>
 	{/if}
 </Card.Root>
@@ -199,6 +208,6 @@
 <McpServerCardDeleteDialog
 	bind:open={showDeleteDialog}
 	{displayName}
-	onOpenChange={(open) => (showDeleteDialog = open)}
 	onConfirm={onDelete}
+	onOpenChange={(open) => (showDeleteDialog = open)}
 />

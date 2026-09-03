@@ -1,7 +1,6 @@
 import { browser } from '$app/environment';
-import { SW_CONFIG } from '$lib/constants/pwa';
-import { BUILD_VERSION_LOCALSTORAGE_KEY } from '$lib/constants/storage';
-import { versionStore } from '$lib/stores/version.svelte';
+import { BUILD_VERSION_LOCALSTORAGE_KEY, SW_CONFIG } from '$lib/constants';
+import { versionStore } from '$lib/stores';
 import { useRegisterSW } from 'virtual:pwa-register/svelte';
 
 /**
@@ -59,7 +58,7 @@ export function usePwa() {
 		// PWA pages update via the service worker path; the storage check is the non-PWA fallback only
 		if (navigator.serviceWorker?.controller) return;
 
-		const currentVersion = versionStore.value;
+		const currentVersion = versionStore.frontend;
 
 		if (!currentVersion) return;
 

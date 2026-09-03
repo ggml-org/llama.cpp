@@ -6,7 +6,8 @@
 import { parseToolArgs } from './_shared';
 import { FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
-import { type AgenticSection, tryParseToolResultObject } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
+import { tryParseToolResultObject } from '$lib/utils';
 
 export type EditFileEdit = {
 	oldText: string;
@@ -23,7 +24,7 @@ export type EditFileMeta = {
 };
 
 export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null {
-	const args = parseToolArgs(BuiltInTool.EDIT_FILE, section, { partial: true });
+	const args = parseToolArgs(BuiltInTool.SERVER_EDIT_FILE, section, { partial: true });
 
 	if (!args) return null;
 

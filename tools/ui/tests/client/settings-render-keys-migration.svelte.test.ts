@@ -4,9 +4,9 @@
 // returns to its own default. The toggle is removed from the persisted
 // config so it does not stay orphaned in localStorage.
 
-import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants/storage';
+import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 import { MigrationService } from '$lib/services/migration.service';
-import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 const RENDER_KEYS_MIGRATION_ID = 'render-keys-unfold-v1';
@@ -33,22 +33,22 @@ describe('renderContentAsRawText unfolding', () => {
 
 	it('maps raw text to user content as plain text', async () => {
 		await seedConfig({ renderContentAsRawText: true });
-		expect(config().renderUserContentAsMarkdown).toBe(false);
+		expect(settingsStore.config.renderUserContentAsMarkdown).toBe(false);
 	});
 
 	it('maps markdown to user content as markdown', async () => {
 		await seedConfig({ renderContentAsRawText: false });
-		expect(config().renderUserContentAsMarkdown).toBe(true);
+		expect(settingsStore.config.renderUserContentAsMarkdown).toBe(true);
 	});
 
 	it('leaves thinking on its own default', async () => {
 		await seedConfig({ renderContentAsRawText: true });
-		expect(config().renderThinkingAsMarkdown).toBe(true);
+		expect(settingsStore.config.renderThinkingAsMarkdown).toBe(true);
 	});
 
 	it('keeps an explicit user preference over the toggle', async () => {
 		await seedConfig({ renderContentAsRawText: true, renderUserContentAsMarkdown: true });
-		expect(config().renderUserContentAsMarkdown).toBe(true);
+		expect(settingsStore.config.renderUserContentAsMarkdown).toBe(true);
 	});
 
 	it('drops the toggle from the persisted config', async () => {
@@ -58,7 +58,7 @@ describe('renderContentAsRawText unfolding', () => {
 
 	it('leaves both surfaces on markdown when nothing is stored', async () => {
 		await seedConfig({});
-		expect(config().renderUserContentAsMarkdown).toBe(true);
-		expect(config().renderThinkingAsMarkdown).toBe(true);
+		expect(settingsStore.config.renderUserContentAsMarkdown).toBe(true);
+		expect(settingsStore.config.renderThinkingAsMarkdown).toBe(true);
 	});
 });

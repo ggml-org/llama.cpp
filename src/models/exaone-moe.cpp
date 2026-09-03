@@ -20,9 +20,6 @@ void llama_model_exaone_moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead, false);
 
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_impl");
-
     switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_30B_A3B; break;
         case 48: type = LLM_TYPE_235B_A22B; break;

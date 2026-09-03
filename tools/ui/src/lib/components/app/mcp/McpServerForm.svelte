@@ -2,15 +2,9 @@
 	import { KeyValuePairs } from '$lib/components/app';
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
-	import {
-		AUTHORIZATION_HEADER,
-		BEARER_PREFIX,
-		CLI_FLAGS,
-		MCP_SERVER_URL_PLACEHOLDER,
-		REDACTED_HEADERS
-	} from '$lib/constants';
+	import { CLI_FLAGS, HEADERS, MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants';
 	import { UrlProtocol } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { KeyValuePair } from '$lib/types';
 	import { parseHeadersToArray, serializeHeaders } from '$lib/utils';
 
@@ -72,10 +66,10 @@
 	// carry a Bearer scheme. Anything else (e.g. Basic, raw tokens) stays in the
 	// KV section so the user can still edit those values verbatim.
 	const matchesAuthorizationKey = (key: string): boolean =>
-		REDACTED_HEADERS.has(key.trim().toLowerCase());
+		HEADERS.REDACTED.has(key.trim().toLowerCase());
 
 	const isBearerScheme = (value: string): boolean =>
-		value.trim().toLowerCase().startsWith(BEARER_PREFIX.toLowerCase());
+		value.trim().toLowerCase().startsWith(HEADERS.BEARER.toLowerCase());
 
 	const ownedByBearerUi = (p: KeyValuePair): boolean =>
 		matchesAuthorizationKey(p.key) && isBearerScheme(p.value);
@@ -102,7 +96,7 @@
 
 		if (!auth) return '';
 
-		return auth.value.trim().slice(BEARER_PREFIX.length).trim();
+		return auth.value.trim().slice(HEADERS.BEARER.length).trim();
 	});
 
 	$effect(() => {
@@ -125,7 +119,7 @@
 		const trimmed = token.trim();
 
 		if (trimmed) {
-			filtered.push({ key: AUTHORIZATION_HEADER, value: `${BEARER_PREFIX}${trimmed}` });
+			filtered.push({ key: HEADERS.AUTHORIZATION, value: `${HEADERS.BEARER}${trimmed}` });
 		}
 
 		updateHeaderPairs(filtered);
@@ -146,18 +140,18 @@
 
 <div class="grid gap-2">
 	<div class="mb-4">
-		<label for="server-url-{id}" class="mb-2 block text-xs font-medium select-none">
+		<label class="mb-2 block text-xs font-medium select-none" for="server-url-{id}">
 			Server URL <span class="text-destructive">*</span>
 		</label>
 
 		<Input
-			id="server-url-{id}"
-			type="url"
-			placeholder={MCP_SERVER_URL_PLACEHOLDER}
-			value={url}
-			oninput={(e) => onUrlChange(e.currentTarget.value)}
-			class={urlError ? 'border-destructive' : ''}
 			bind:ref={urlInput}
+			class={urlError ? 'border-destructive' : ''}
+			id="server-url-{id}"
+			oninput={(e) => onUrlChange(e.currentTarget.value)}
+			placeholder={MCP_SERVER_URL_PLACEHOLDER}
+			type="url"
+			value={url}
 		/>
 
 		{#if urlError}
@@ -166,25 +160,25 @@
 	</div>
 
 	<div class="mb-4">
-		<label for="server-name-{id}" class="mb-2 block text-xs font-medium select-none">
+		<label class="mb-2 block text-xs font-medium select-none" for="server-name-{id}">
 			Display name
 		</label>
 
 		<Input
 			id="server-name-{id}"
-			type="text"
-			placeholder={namePlaceholder}
-			value={name}
 			oninput={(e) => onNameChange?.(e.currentTarget.value)}
+			placeholder={namePlaceholder}
+			type="text"
+			value={name}
 		/>
 	</div>
 
 	<label class="flex items-center gap-2 cursor-pointer select-none">
 		<Switch
-			id="use-authorization-{id}"
 			checked={showAuthorization}
-			onCheckedChange={setUseAuthorization}
 			disabled={required}
+			id="use-authorization-{id}"
+			onCheckedChange={setUseAuthorization}
 		/>
 
 		<span class="text-xs text-muted-foreground">
@@ -196,14 +190,14 @@
 	{#if showAuthorization}
 		<div class="relative mt-2">
 			<Input
-				id="bearer-token-{id}"
-				type="password"
-				autocomplete="off"
-				placeholder="Paste token here"
-				value={bearerToken}
-				oninput={(e) => updateBearerToken(e.currentTarget.value)}
-				class="pl-16"
 				bind:ref={bearerInput}
+				autocomplete="off"
+				class="pl-16"
+				id="bearer-token-{id}"
+				oninput={(e) => updateBearerToken(e.currentTarget.value)}
+				placeholder="Paste token here"
+				type="password"
+				value={bearerToken}
 			/>
 
 			<span
@@ -215,19 +209,19 @@
 	{/if}
 
 	<KeyValuePairs
+		addButtonLabel="Add"
 		class="mt-3"
-		pairs={headerPairs.filter((p) => !ownedByBearerUi(p))}
+		emptyMessage="No custom headers configured."
+		keyPlaceholder="Header name"
 		onPairsChange={(pairs) => {
 			const auth = headerPairs.find(ownedByBearerUi);
 
 			updateHeaderPairs(auth ? [...pairs, auth] : pairs);
 		}}
-		keyPlaceholder="Header name"
-		valuePlaceholder="Value"
-		addButtonLabel="Add"
-		emptyMessage="No custom headers configured."
+		pairs={headerPairs.filter((p) => !ownedByBearerUi(p))}
 		sectionLabel="Custom Headers"
 		sectionLabelOptional
+		valuePlaceholder="Value"
 	/>
 
 	{#if !isWebSocket && onUseProxyChange}
@@ -239,10 +233,10 @@
 			]}
 		>
 			<Switch
-				class="mt-1"
-				id="use-proxy-{id}"
 				checked={useProxy}
+				class="mt-1"
 				disabled={!mcpStore.isProxyAvailable}
+				id="use-proxy-{id}"
 				onCheckedChange={(checked) => onUseProxyChange?.(checked)}
 			/>
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { UI_DATA_ATTRS } from '$lib/constants';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -23,11 +24,11 @@
 </script>
 
 <button
-	type="button"
-	data-picker-index={dataIndex}
 	{disabled}
 	{onclick}
 	{onmouseenter}
+	type="button"
+	{...{ [UI_DATA_ATTRS.PICKER_INDEX]: dataIndex }}
 	class="flex w-full cursor-pointer items-start gap-3 rounded-lg px-3 py-2 text-left hover:bg-accent/50 {isSelected
 		? 'bg-accent/50'
 		: ''} {disabled ? 'cursor-not-allowed opacity-50' : ''} {className}"

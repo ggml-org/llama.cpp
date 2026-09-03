@@ -149,9 +149,11 @@ if (LLAMA_LLGUIDANCE)
 endif ()
 
 llama_build(test-recurrent-state-rollback.cpp)
+llama_build(test-save-load-state.cpp)
 
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+    llama_build_and_test(test-unicode.cpp)
     llama_build_and_test(test-sampling.cpp)
     llama_build_and_test(test-reasoning-budget.cpp)
     llama_build_and_test(test-grammar-parser.cpp)
@@ -217,6 +219,33 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
+
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-nemotron-h
+        LABEL main
+        ARGS -m "${MODEL_DIR}/nemotron_h-dense.gguf"
+    )
+    set_tests_properties(test-recurrent-state-rollback-nemotron-h PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-dsv4
+        LABEL main
+        ARGS -m "${MODEL_DIR}/deepseek4-moe.gguf"
+    )
+    set_tests_properties(test-recurrent-state-rollback-dsv4 PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
+
+    # Test state save/load functionality across all architectures, using the generated dummy models
+    llama_test(
+        test-save-load-state
+        LABEL main
+        ARGS --models "${MODEL_DIR}"
+    )
+    set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
@@ -224,6 +253,8 @@ llama_build_and_test(test-jinja.cpp)
 llama_test(test-jinja NAME test-jinja-py ARGS -py LABEL python)
 llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 llama_build_and_test(test-chat-template.cpp)
+# debug tool for chat template differential analysis (not registered as a test, run it manually)
+llama_build(test-chat-analysis.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build_and_test(
     test-peg-parser.cpp
@@ -268,6 +299,14 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
 endif()
 llama_build_and_test(test-backend-ops.cpp)
 
+# the tensor API kernels come from a separate metallib - check they produce correct results
+# ref: https://github.com/ggml-org/llama.cpp/issues/27473
+if (GGML_METAL AND NOT GGML_METAL_EMBED_LIBRARY)
+    llama_test(test-backend-ops NAME test-backend-ops-metallib-tensor
+               ARGS test -b MTL0 -o MUL_MAT -p type_a=q6_K)
+    set_tests_properties(test-backend-ops-metallib-tensor PROPERTIES ENVIRONMENT GGML_METAL_TENSOR_ENABLE=1)
+endif()
+
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
@@ -276,10 +315,6 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 # Requires a model, uses same args pattern as test-thread-safety
 llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED test-download-model)
-
-# Test state save/load functionality
-llama_build_and_test(test-save-load-state.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
-set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 if (APPLE)
     llama_build(test-rset-release.cpp)
@@ -299,6 +334,9 @@ set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)
 target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
 unset(LLAMA_TEST_NAME)
+
+llama_build_and_test(test-mtmd-impl.cpp)
+target_link_libraries(test-mtmd-impl PRIVATE mtmd)
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)

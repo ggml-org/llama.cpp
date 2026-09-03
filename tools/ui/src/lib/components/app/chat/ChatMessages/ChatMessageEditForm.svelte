@@ -3,12 +3,12 @@
 	import { ChatForm, DialogConfirmation } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
-	import { getMessageEditContext } from '$lib/contexts';
+	import { getChatMessageEditContext } from '$lib/contexts';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
-	import { chatStore } from '$lib/stores/chat.svelte';
+	import { chatStore } from '$lib/stores';
 	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
 
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);
@@ -102,35 +102,34 @@
 
 <div class="relative w-full max-w-[80%]">
 	<ChatForm
-		value={editCtx.editedContent}
-		attachments={editCtx.editedExtras}
 		bind:uploadedFiles={editCtx.editedUploadedFiles}
-		placeholder="Edit your message..."
-		showMcpPromptButton
-		showAddButton={editCtx.messageRole === MessageRole.USER}
-		showModelSelector={editCtx.messageRole === MessageRole.USER}
-		onValueChange={editCtx.setContent}
+		attachments={editCtx.editedExtras}
 		onAttachmentRemove={handleAttachmentRemove}
-		onUploadedFileRemove={handleUploadedFileRemove}
 		onFilesAdd={handleFilesAdd}
 		onSubmit={handleSubmit}
+		onUploadedFileRemove={handleUploadedFileRemove}
+		onValueChange={editCtx.setContent}
+		placeholder="Edit your message..."
+		showAddButton={editCtx.messageRole === MessageRole.USER}
+		showModelSelector={editCtx.messageRole === MessageRole.USER}
+		value={editCtx.editedContent}
 	/>
 </div>
 
 <div class="mt-2 flex w-full max-w-[80%] items-center justify-between">
 	{#if isUserMessage && editCtx.showSaveOnlyOption}
 		<div class="flex items-center gap-2">
-			<Switch id="save-only-switch" bind:checked={saveWithoutRegenerate} class="scale-75" />
+			<Switch bind:checked={saveWithoutRegenerate} class="scale-75" id="save-only-switch" />
 
-			<label for="save-only-switch" class="cursor-pointer text-xs text-muted-foreground">
+			<label class="cursor-pointer text-xs text-muted-foreground" for="save-only-switch">
 				Update without re-sending
 			</label>
 		</div>
 	{:else if isAssistantMessage}
 		<div class="flex items-center gap-2">
-			<Switch id="branch-after-edit" bind:checked={branchAfterEdit} class="scale-75" />
+			<Switch bind:checked={branchAfterEdit} class="scale-75" id="branch-after-edit" />
 
-			<label for="branch-after-edit" class="cursor-pointer text-xs text-muted-foreground">
+			<label class="cursor-pointer text-xs text-muted-foreground" for="branch-after-edit">
 				Branch conversation after edit
 			</label>
 		</div>
@@ -147,12 +146,12 @@
 
 <DialogConfirmation
 	bind:open={showDiscardDialog}
-	title="Discard changes?"
-	description="You have unsaved changes. Are you sure you want to discard them?"
-	confirmText="Discard"
 	cancelText="Keep editing"
-	variant="destructive"
+	confirmText="Discard"
+	description="You have unsaved changes. Are you sure you want to discard them?"
 	icon={AlertTriangle}
-	onConfirm={editCtx.cancel}
 	onCancel={() => (showDiscardDialog = false)}
+	onConfirm={editCtx.cancel}
+	title="Discard changes?"
+	variant="destructive"
 />

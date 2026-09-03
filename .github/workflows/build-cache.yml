@@ -10,33 +10,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ubuntu-24-vulkan-cache:
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Get latest Vulkan SDK version
-        id: vulkan_sdk_version
-        run: |
-          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
-
-      - name: Setup Cache
-        uses: actions/cache@v5
-        id: cache-sdk
-        with:
-          path: ./vulkan_sdk
-          key: cache-gha-vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
-
-      - name: Setup Vulkan SDK
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-vulkan
-        with:
-          path: ./vulkan_sdk
-          version: ${{ env.VULKAN_SDK_VERSION }}
-
   #ubuntu-24-spacemit-cache:
   #  runs-on: ubuntu-24.04
 
@@ -67,9 +40,9 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.3.1"
+      OPENVINO_VERSION_FULL: "2026.3.1.22476.56d9685302d"
 
     steps:
       - name: Clone
@@ -96,8 +69,8 @@ jobs:
 
     env:
       # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+      OPENVINO_VERSION_MAJOR: "2026.3.1"
+      OPENVINO_VERSION_FULL: "2026.3.1.22476.56d9685302d"
 
     steps:
       - name: Clone
@@ -119,27 +92,27 @@ jobs:
           version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
           version_full: ${{ env.OPENVINO_VERSION_FULL }}
 
-  windows-2022-rocm-cache:
-    runs-on: windows-2022
+  # windows-2022-rocm-cache:
+  #   runs-on: windows-2022
 
-    env:
-      # Make sure this is in sync with release.yml and build-cuda-windows.yml
-      ROCM_VERSION: "7.14.0"
+  #   env:
+  #     # Make sure this is in sync with release.yml and build-cuda-windows.yml
+  #     ROCM_VERSION: "7.14.0"
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
+  #   steps:
+  #     - name: Clone
+  #       id: checkout
+  #       uses: actions/checkout@v6
 
-      - name: Setup Cache
-        uses: actions/cache@v5
-        id: cache-rocm
-        with:
-          path: C:\TheRock\build
-          key: rocm-wheels-${{ env.ROCM_VERSION }}-multi-arch-${{ runner.os }}
+  #     - name: Setup Cache
+  #       uses: actions/cache@v5
+  #       id: cache-rocm
+  #       with:
+  #         path: C:\TheRock\build
+  #         key: rocm-wheels-${{ env.ROCM_VERSION }}-multi-arch-${{ runner.os }}
 
-      - name: Setup ROCm
-        if: steps.cache-rocm.outputs.cache-hit != 'true'
-        uses: ./.github/actions/windows-setup-rocm
-        with:
-          version: ${{ env.ROCM_VERSION }}
+  #     - name: Setup ROCm
+  #       if: steps.cache-rocm.outputs.cache-hit != 'true'
+  #       uses: ./.github/actions/windows-setup-rocm
+  #       with:
+  #         version: ${{ env.ROCM_VERSION }}

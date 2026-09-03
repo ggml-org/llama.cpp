@@ -39,9 +39,9 @@ jobs:
     strategy:
       matrix:
         include:
+        # thread and address doesn't run properly on some self hosted machines, so run it on Github instead
         - sanitizer: ADDRESS
-          machine: [self-hosted, X64, Linux]
-        # thread doesn't run properly on some self hosted machines, so run it on Github instead
+          machine: ubuntu-24.04
         - sanitizer: THREAD
           machine: ubuntu-24.04
         - sanitizer: UNDEFINED
@@ -54,14 +54,14 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        if: ${{ matrix.sanitizer == 'THREAD' }}
-        with:
-          key: ctest-thread-ubuntu-24.04
-          variant: ccache
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.24
+      #   if: ${{ matrix.sanitizer != 'UNDEFINED' }}
+      #   with:
+      #     key: ctest-${{ matrix.sanitizer }}-ubuntu-24.04
+      #     variant: ccache
+      #     evict-old-files: 1d
+      #     save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       # with UNDEFINED sanitizer, we have to build in Debug to avoid GCC 13 false-positive warnings
       - name: Build (undefined)

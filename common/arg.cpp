@@ -5,6 +5,7 @@
 #include "common.h"
 #include "download.h"
 #include "json-schema-to-grammar.h"
+#include "json.h"
 #include "llama.h"
 #include "log.h"
 #include "sampling.h"
@@ -21,9 +22,6 @@
 #include <shellapi.h>
 #endif
 
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
-
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
@@ -32,9 +30,11 @@
 #include <filesystem>
 #include <fstream>
 #include <list>
+#include <numeric>
 #include <regex>
 #include <set>
 #include <string>
+#include <system_error>
 #include <thread> // for hardware_concurrency
 #include <vector>
 
@@ -54,7 +54,7 @@
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 using namespace common_arg_utils;
 
 static std::initializer_list<enum llama_example> mmproj_examples = {
@@ -560,6 +560,15 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         }
     }
 
+    // infer the speculative type from the draft GGUF metadata when none is requested
+    // note: reads only the first split - sharded drafts need an explicit --spec-type
+    if (spec_types_is_default(params) && !params.speculative.draft.mparams.path.empty()) {
+        const auto types_gguf = common_speculative_types_from_gguf(params.speculative.draft.mparams.path);
+        if (!types_gguf.empty()) {
+            params.speculative.types = types_gguf;
+        }
+    }
+
     // when a sidecar type is requested, the draft repo resolves to its sidecar instead of a full model
     const bool spec_sidecar_found = !plan_spec.mtp.local_path.empty() ||
                                     !plan_spec.dflash.local_path.empty() ||
@@ -704,11 +713,60 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 // CLI argument parsing functions
 //
 
+// apply config files (if present), a later file overrides an earlier one:
+// 1. system-wide: /etc/llama.cpp/config.ini (%PROGRAMDATA%\llama.cpp\config.ini on windows)
+// 2. user-level: ${XDG_CONFIG_HOME:-~/.config}/llama.cpp/config.ini (%APPDATA%\llama.cpp\config.ini on windows)
+static void common_params_apply_system_config(common_params & params, llama_example ex) {
+    std::vector<std::string> paths;
+
+#if defined(_WIN32)
+    const std::string program_data = common_get_env("PROGRAMDATA");
+    if (!program_data.empty()) {
+        paths.push_back(program_data + "\\llama.cpp\\config.ini");
+    }
+#else
+    paths.push_back("/etc/llama.cpp/config.ini");
+#endif
+
+    try {
+        paths.push_back(fs_get_config_directory() + "config.ini");
+    } catch (const std::exception & e) {
+        LOG_DBG("cannot read user-level config file, skipping: %s\n", e.what());
+    }
+
+    std::vector<std::string> found;
+    for (const auto & path : paths) {
+        std::error_code ec;
+        if (std::filesystem::exists(path, ec)) {
+            found.push_back(path);
+        }
+    }
+    if (found.empty()) {
+        return;
+    }
+
+    common_preset_context ctx(ex);
+    ctx.ignore_unknown_keys = true; // the same config file is shared by all programs
+    for (const auto & path : found) {
+        LOG_INF("using config file: %s\n", path.c_str());
+        common_preset global;
+        common_presets presets = ctx.load_from_ini(path, global);
+        global.apply_to_params(params);
+        auto it = presets.find(COMMON_PRESET_DEFAULT_NAME);
+        if (it != presets.end()) {
+            it->second.apply_to_params(params);
+        }
+    }
+}
+
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
 
     // setup log directly from params.verbosity: see tools/cli/cli.cpp
     common_log_set_verbosity_thold(params.verbosity);
+
+    // config file applies first, so env variables and CLI arguments override it
+    common_params_apply_system_config(params, ctx_arg.ex);
 
     std::unordered_map<std::string, std::pair<common_arg *, bool>> arg_to_options;
     for (auto & opt : ctx_arg.options) {
@@ -900,6 +958,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             params.chat_template.c_str(),
             params.use_jinja ? "" : "\nnote: llama.cpp was started without --jinja, we only support commonly used templates"
         ));
+    }
+
+    // if the preserve_reasoning kwarg was not specified explicitly, enable it by default
+    if (!params.default_template_kwargs.count("preserve_reasoning")) {
+        params.default_template_kwargs["preserve_reasoning"] = "true";
     }
 
     return true;
@@ -1390,8 +1453,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--version"},
         "show version and build info",
         [](common_params &) {
-            fprintf(stderr, "version: %d (%s)\n", llama_build_number(), llama_commit());
-            fprintf(stderr, "built with %s for %s\n", llama_compiler(), llama_build_target());
+            llama_print_build_info(llama_version());
             exit(0);
         }
     ));
@@ -1586,6 +1648,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_CTX_SIZE"));
+    add_opt(common_arg(
+        { "--kv-unified-per-slot" }, "N",
+        "context limit per parallel slot (default: unset, behavior unchanged).\n"
+        "when set without -c/--ctx-size, the shared KV pool is sized to n_parallel*N",
+        [](common_params & params, int value) {
+            params.kv_unified_per_slot = value;
+        }
+    ).set_env("LLAMA_ARG_KV_UNIFIED_PER_SLOT").set_examples({ LLAMA_EXAMPLE_SERVER }));
     add_opt(common_arg(
         {"-n", "--predict", "--n-predict"}, "N",
         string_format(
@@ -1840,7 +1910,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, bool value) {
             params.conversation_mode = value ? COMMON_CONVERSATION_MODE_ENABLED : COMMON_CONVERSATION_MODE_DISABLED;
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"-st", "--single-turn"},
         "run conversation for a single turn only, then exit when done\n"
@@ -2538,6 +2608,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_OFFLOAD"));
     add_opt(common_arg(
+        // note: "-mmdev" must sort after "--rpc" in the preset map, else RPC devices are not registered yet
+        {"-mmdev", "--mmproj-device"}, "DEVICE",
+        "device to use for multimodal projector (none = don't offload, default: auto)\n"
+        "use --list-devices to see a list of available devices",
+        [](common_params & params, const std::string & value) {
+            if (value == "none") {
+                params.mmproj_use_gpu = false;
+                params.mmproj_device  = nullptr;
+                return;
+            }
+            auto devices = parse_device_list(value);
+            // parse_device_list pushes nullptr at back so devices is length 2 for single device.
+            if (devices.size() > 2) {
+                throw std::invalid_argument("only one device may be specified for mmproj");
+            }
+            params.mmproj_use_gpu = true;
+            params.mmproj_device  = devices.front();
+        }
+    ).set_examples(mmproj_examples).set_env("MTMD_BACKEND_DEVICE")); // no LLAMA_ARG_ prefix for backward compatibility reason
+    add_opt(common_arg(
         {"--image", "--audio", "--video"}, "FILE",
         "path to an image, audio, or video file. use with multimodal models, use comma-separated values for multiple files\n",
         [](common_params & params, const std::string & value) {
@@ -2567,6 +2657,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.mtmd_batch_max_tokens = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MTMD_BATCH_MAX_TOKENS"));
+    add_opt(common_arg(
+        {"--video-fps"}, "N",
+        string_format("target video frame rate (default: %.1f)", params.video_fps),
+        [](common_params & params, const std::string & value) {
+            params.video_fps = std::stof(value);
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_VIDEO_FPS"));
+    add_opt(common_arg(
+        {"--video-timestamp-interval"}, "N",
+        string_format("interval in milliseconds between text timestamps (default: %" PRId64 ")", params.video_timestamp_interval_ms),
+        [](common_params & params, int value) {
+            params.video_timestamp_interval_ms = value;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_VIDEO_TIMESTAMP_INTERVAL"));
+    add_opt(common_arg(
+        {"--video-ffmpeg-dir"}, "DIR",
+        "path to the directory containing ffmpeg and ffprobe (default: search in PATH)",
+        [](common_params & params, const std::string & value) {
+            params.video_ffmpeg_bin_dir = value;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_VIDEO_FFMPEG_DIR"));
     if (params.is_gen_docs || llama_supports_rpc()) {
         add_opt(common_arg(
             {"--rpc"}, "SERVERS",
@@ -2623,6 +2734,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_LOAD_MODE"));
     add_opt(common_arg(
+        {"-lzm", "--lazy-mode"}, "MODE",
+        "on-demand reading of certain tensors, for example per-layer embeddings (default: auto)\n"
+        "- on: read the rows of such tensors from disk on demand instead of keeping them resident (requires mmap)\n"
+        "- auto: on, but only for tensors larger than 4 GiB\n"
+        "- off: always keep them resident",
+        [](common_params & params, const std::string & value) {
+            /**/ if (value == "on")   { params.lazy_mode = LLAMA_LAZY_MODE_ON;   }
+            else if (value == "auto") { params.lazy_mode = LLAMA_LAZY_MODE_AUTO; }
+            else if (value == "off")  { params.lazy_mode = LLAMA_LAZY_MODE_OFF;  }
+            else { throw std::invalid_argument("invalid value"); }
+        }
+    ).set_env("LLAMA_ARG_LAZY_MODE"));
+    add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"
         "- distribute: spread execution evenly over all nodes\n"
@@ -2673,14 +2797,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (value < 0) {
                 throw std::invalid_argument("invalid value");
             }
-            for (int i = 0; i < value; ++i) {
-                // keep strings alive and avoid leaking memory by storing them in a static vector
-                static std::list<std::string> buft_overrides;
-                buft_overrides.push_back(llm_ffn_exps_block_regex(i));
-                params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), ggml_backend_cpu_buffer_type()});
-            }
+            llm_add_n_cpu_ffn_overrides(value, LLM_FFN_EXPS_REGEX, params.tensor_buft_overrides);
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
+    add_opt(common_arg(
+        {"-ncffn", "--n-cpu-ffn"}, "N",
+        "keep the dense FFN weights of the first N layers in the CPU\n"
+        "(dense models; for MoE expert weights use --n-cpu-moe)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            llm_add_n_cpu_ffn_overrides(value, LLM_FFN_DENSE_REGEX, params.tensor_buft_overrides);
+        }
+    ).set_env("LLAMA_ARG_N_CPU_FFN"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
@@ -3304,7 +3434,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
         "specify \"all\" to enable all tools\n"
-        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_datetime, get_info\n"
+        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info\n"
         "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, const std::string & value) {
             params.server_tools = parse_csv_row(value);
@@ -3427,6 +3557,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 if (item.key() == "enable_thinking") {
                     LOG_WRN("Setting 'enable_thinking' via --chat-template-kwargs is deprecated. "
                             "Use --reasoning on / --reasoning off instead.\n");
+                }
+                if (item.key() == "preserve_reasoning") {
+                    LOG_WRN("Setting 'preserve_reasoning' via --chat-template-kwargs is deprecated. "
+                            "Use --reasoning-preserve / --no-reasoning-preserve instead.\n");
                 }
                 params.default_template_kwargs[item.key()] = item.value().dump();
             }
@@ -3589,6 +3723,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING"));
     add_opt(common_arg(
+        {"--reasoning-effort"}, "LEVEL",
+        "reasoning effort level given to the chat template: 'default' to keep the template default,\n"
+        "or a level such as 'minimal', 'low', 'medium', 'high', 'xhigh' or 'max' (default: default)",
+        [](common_params & params, const std::string & value) {
+            if (value == "default") {
+                params.default_template_kwargs.erase("reasoning_effort");
+            } else {
+                params.default_template_kwargs["reasoning_effort"] = json(value).dump();
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING_EFFORT"));
+    add_opt(common_arg(
         {"--reasoning-budget"}, "N",
         "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)",
         [](common_params & params, int value) {
@@ -3606,7 +3752,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--reasoning-preserve"},
         {"--no-reasoning-preserve"},
-        "preserve reasoning trace in the full history, not just the last assistant message (default: template default)\n"
+        "preserve reasoning trace in the full history, not just the last assistant message (default: enabled)\n"
         "compatible with certain templates having 'supports_preserve_reasoning' capability\n"
         "example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking",
         [](common_params & params, bool value) {
@@ -3615,6 +3761,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             } else {
                 params.default_template_kwargs["preserve_reasoning"] = "false";
             }
+            params.preserve_reasoning_specified = true;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING_PRESERVE"));
     add_opt(common_arg(
@@ -3995,11 +4142,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (value < 0) {
                 throw std::invalid_argument("invalid value");
             }
-            for (int i = 0; i < value; ++i) {
-                static std::list<std::string> buft_overrides_draft;
-                buft_overrides_draft.push_back(llm_ffn_exps_block_regex(i));
-                params.speculative.draft.tensor_buft_overrides.push_back({buft_overrides_draft.back().c_str(), ggml_backend_cpu_buffer_type()});
-            }
+            llm_add_n_cpu_ffn_overrides(value, LLM_FFN_EXPS_REGEX, params.speculative.draft.tensor_buft_overrides);
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_CPU_MOE"));
 
@@ -4007,6 +4150,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--spec-draft-n-max"}, "N",
         string_format("number of tokens to draft for speculative decoding (default: %d)", params.speculative.draft.n_max),
         [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
             params.speculative.draft.n_max = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MAX"));
@@ -4017,6 +4163,38 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.draft.n_min = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MIN"));
+    add_opt(common_arg(
+        {"--spec-synth-len"}, "L",
+        "target mean synthetic acceptance length, including the target token (benchmarking only)",
+        [](common_params & params, const std::string & value) {
+            const std::string text = string_strip(value);
+            size_t pos = 0;
+            const double length = std::stod(text, &pos);
+            if (pos != text.size() || length == -1.0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.speculative.synth_len = length;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_SYNTH_LEN"));
+    add_opt(common_arg(
+        {"--spec-synth-rates"}, "P0,P1,...",
+        "comma-separated unconditional per-position synthetic acceptance probabilities (benchmarking only)",
+        [](common_params & params, const std::string & value) {
+            const auto values = string_split<std::string>(value, ',');
+            std::vector<double> rates;
+            rates.reserve(values.size());
+            for (const auto & raw : values) {
+                const std::string text = string_strip(raw);
+                size_t pos = 0;
+                const double rate = std::stod(text, &pos);
+                if (pos != text.size()) {
+                    throw std::invalid_argument("invalid value");
+                }
+                rates.push_back(rate);
+            }
+            params.speculative.synth_rates = std::move(rates);
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_SYNTH_RATES"));
 
     add_opt(common_arg(
         {"--spec-draft-p-split", "--draft-p-split"}, "P",
@@ -4584,6 +4762,12 @@ void common_params_add_preset_options(std::vector<common_arg> & args) {
         "in server router mode, force-kill model instance after this many seconds of graceful shutdown",
         [](common_params &, int) { /* unused */ }
     ).set_env(COMMON_ARG_PRESET_STOP_TIMEOUT).set_preset_only());
+
+    args.push_back(common_arg(
+        {"dedup-cache-models"}, "0|1",
+        "in server router mode, hide a cached model from the model list when this preset resolves to the same model file",
+        [](common_params &, const std::string &) { /* unused */ }
+    ).set_env(COMMON_ARG_PRESET_DEDUP_CACHE_MODELS).set_preset_only());
 
     // args.push_back(common_arg(
     //     {"pin"},

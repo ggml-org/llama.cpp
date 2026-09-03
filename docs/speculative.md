@@ -106,6 +106,10 @@ acceptance (from the draft's confidence head, if present) falls below `P` (defau
 Currently only drafts with a Qwen3 backbone are supported; support for other backbones
 (e.g. Gemma4) is planned.
 
+DSpark drafts exported in the [speculators](https://github.com/vllm-project/speculators) format
+(for example [`RedHatAI/gemma-4-31B-it-speculator.dspark`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dspark))
+convert the same way.
+
 See:
 
 - #25173
@@ -207,6 +211,15 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 Use `--backend-sampling` to run supported target-model samplers on the model backend. Draft-model sampling uses the backend by default and can be controlled with `--spec-draft-backend-sampling` and `--no-spec-draft-backend-sampling`.
 
 Unsupported samplers and device layouts fall back to CPU sampling. Tensor split mode does not support backend sampling. A fixed seed produces repeatable random draws, but stochastic CPU and backend sampling can still select different tokens because floating-point operations can differ between implementations and devices. Use greedy sampling when exact output matching is required.
+
+### Synthetic Acceptance
+
+`llama-server` and `llama-cli` can replace normal speculative verification with synthetic decisions for benchmarking. The generated output is not valid model output because accepted draft tokens do not have to match the target model.
+
+Use exactly one of these options:
+
+- `--spec-synth-rates P0,P1,...` sets unconditional per-position acceptance probabilities. Entry `i` is the probability that the first `i+1` draft tokens are all accepted. The number of entries must match the effective maximum draft length. Values must be finite, within `[0, 1]`, and monotonically non-increasing.
+- `--spec-synth-len L` sets the target mean acceptance length, including the target token. For `K` maximum draft tokens, `L` must be within `[1, K+1]`. The server finds a constant conditional probability `p` such that `p + p^2 + ... + p^K = L - 1`, then uses unconditional rates `[p, p^2, ..., p^K]`.
 
 ### General Speculative Parameters
 

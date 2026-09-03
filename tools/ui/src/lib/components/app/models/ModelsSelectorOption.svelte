@@ -11,9 +11,9 @@
 		RotateCw
 	} from '@lucide/svelte';
 	import { ActionIcon, ModelId } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
 
@@ -41,13 +41,13 @@
 		option
 	}: Props = $props();
 
-	let currentRouterModels = $derived(routerModels());
+	let currentRouterModels = $derived(modelsStore.routerModels);
 	let serverStatus = $derived.by(() => {
 		const model = currentRouterModels.find((m) => m.id === option.model);
 
 		return (model?.status?.value as ServerModelStatus) ?? null;
 	});
-	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
+	let isOperationInProgress = $derived(modelsStore.status.isOperationInProgress(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
 	let isSleeping = $derived(serverStatus === ServerModelStatus.SLEEPING);
 	let isLoaded = $derived(
@@ -55,34 +55,43 @@
 	);
 	let isLoading = $derived(serverStatus === ServerModelStatus.LOADING || isOperationInProgress);
 
-	let loadProgress = $derived(isLoading ? modelsStore.getLoadProgress(option.model) : null);
+	let loadProgress = $derived(isLoading ? modelsStore.status.getLoadProgress(option.model) : null);
 	let loadPercent = $derived(Math.round(modelLoadFraction(loadProgress) * 100));
 	let loadTitle = $derived(modelLoadProgressText(loadProgress));
+	let modalities = $derived(option.modalities);
+	let capabilities = $derived.by(() => ({
+		reasoning: modelsStore.props.checkModelSupportsThinking(option.model)
+	}));
 </script>
 
 <div
+	aria-selected={isSelected || isHighlighted}
 	class={[
 		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
 		'cursor-pointer',
-		isSelected && 'bg-accent/50 text-accent-foreground',
+		isSelected && !isHighlighted && 'bg-accent/50',
 		isHighlighted && 'bg-accent',
-		!isSelected && !isHighlighted && 'hover:bg-muted',
+		(isSelected || isHighlighted) && 'text-accent-foreground',
+		'hover:bg-accent',
+		'focus:bg-accent',
 		isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
 	]}
-	role="option"
-	aria-selected={isSelected || isHighlighted}
-	title={loadTitle}
-	tabindex="0"
 	onclick={() => onSelect(option.id)}
-	onmouseenter={onMouseEnter}
 	onkeydown={onKeyDown}
+	onmouseenter={onMouseEnter}
+	role="option"
+	tabindex="0"
+	title={loadTitle}
 >
 	<ModelId
-		modelId={option.model}
-		{hideOrgName}
 		aliases={option.aliases}
-		tags={option.tags}
+		{capabilities}
 		class="flex-1"
+		{hideOrgName}
+		{modalities}
+		modelId={option.model}
+		showRawTooltip
+		tags={option.tags}
 	/>
 
 	<div class="flex shrink-0 items-center gap-1">
@@ -94,30 +103,30 @@
 		>
 			{#if isFav}
 				<ActionIcon
-					iconSize="h-2.5 w-2.5"
-					icon={HeartOff}
-					tooltip="Remove from favorites"
 					class="h-3 w-3 hover:text-foreground"
+					icon={HeartOff}
+					iconSize="h-2.5 w-2.5"
 					onclick={() => modelsStore.toggleFavorite(option.model)}
+					tooltip="Remove from favorites"
 				/>
 			{:else}
 				<ActionIcon
-					iconSize="h-2.5 w-2.5"
-					icon={Heart}
-					tooltip="Add to favorites"
 					class="h-3 w-3 hover:text-foreground"
+					icon={Heart}
+					iconSize="h-2.5 w-2.5"
 					onclick={() => modelsStore.toggleFavorite(option.model)}
+					tooltip="Add to favorites"
 				/>
 			{/if}
 
 			<!-- info button: only shown when model is loaded and callback is provided -->
 			{#if isLoaded && onInfoClick}
 				<ActionIcon
-					iconSize="h-2.5 w-2.5"
-					icon={Info}
-					tooltip="Model information"
 					class="h-3 w-3 hover:text-foreground"
+					icon={Info}
+					iconSize="h-2.5 w-2.5"
 					onclick={() => onInfoClick(option.model)}
+					tooltip="Model information"
 				/>
 			{/if}
 		</div>
@@ -134,12 +143,12 @@
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						iconSize="h-2.5 w-2.5"
-						icon={RotateCw}
-						tooltip="Retry loading model"
 						class="h-3 w-3 text-red-500 hover:text-foreground"
-						onclick={() => modelsStore.loadModel(option.model)}
+						icon={RotateCw}
+						iconSize="h-2.5 w-2.5"
+						onclick={() => modelsStore.status.load(option.model)}
 						stopPropagationOnClick
+						tooltip="Retry loading model"
 					/>
 				</div>
 			</div>
@@ -151,14 +160,14 @@
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						iconSize="h-2.5 w-2.5"
-						icon={PowerOff}
-						tooltip="Unload model"
 						class="h-3 w-3 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-amber-500 [@media(pointer:coarse)]:hover:text-amber-600"
+						icon={PowerOff}
+						iconSize="h-2.5 w-2.5"
 						onclick={(e) => {
 							e?.stopPropagation();
-							modelsStore.unloadModel(option.model);
+							modelsStore.status.unload(option.model);
 						}}
+						tooltip="Unload model"
 					/>
 				</div>
 			</div>
@@ -170,12 +179,12 @@
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						iconSize="h-2.5 w-2.5"
-						icon={PowerOff}
-						tooltip="Unload model"
 						class="h-3 w-3 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-green-500 [@media(pointer:coarse)]:hover:text-green-600"
-						onclick={() => modelsStore.unloadModel(option.model)}
+						icon={PowerOff}
+						iconSize="h-2.5 w-2.5"
+						onclick={() => modelsStore.status.unload(option.model)}
 						stopPropagationOnClick
+						tooltip="Unload model"
 					/>
 				</div>
 			</div>
@@ -187,12 +196,12 @@
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						iconSize="h-2.5 w-2.5"
-						icon={Power}
-						tooltip="Load model"
 						class="h-3 w-3 [@media(pointer:coarse)]:text-muted-foreground"
-						onclick={() => modelsStore.loadModel(option.model)}
+						icon={Power}
+						iconSize="h-2.5 w-2.5"
+						onclick={() => modelsStore.status.load(option.model)}
 						stopPropagationOnClick
+						tooltip="Load model"
 					/>
 				</div>
 			</div>

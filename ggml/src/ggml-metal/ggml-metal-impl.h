@@ -87,6 +87,9 @@
 #define N_R0_IQ4_XS 2
 #define N_SG_IQ4_XS 2
 
+#define N_R0_TQ2_0 4
+#define N_SG_TQ2_0 2
+
 // function constants offsets
 #define FC_FLASH_ATTN_EXT_PAD          100
 #define FC_FLASH_ATTN_EXT_BLK          200
@@ -154,6 +157,10 @@
 
 #define OP_SUM_ROWS_NUM_SUM_ROWS 10
 #define OP_SUM_ROWS_NUM_MEAN     11
+
+#define OP_SSM_SCAN_SSD_CS  64 // Metal-specific; Chunk Size; 64 is largest multiple of 8 (simdgroup tile) fitting into 32 KiB Metal threadgroup mem limit (~26.75 KiB shared mem; see smem layout comment in kernel_ssm_scan_ssd_mma_f32)
+#define OP_SSM_SCAN_SSD_HD  64 // Metal-specific; Head Dim the MMA kernel is specialized for (Mamba-2); use_mma gates on d_inner == this
+#define OP_SSM_SCAN_SSD_NSG 4  // Metal-specific; Number of SimdGroups per threadgroup; NSG*32 == threads dispatched per threadgroup
 
 // kernel argument structs
 //
@@ -326,6 +333,7 @@ typedef struct {
     uint64_t nb3;
     int32_t  n_past;
     int32_t  n_dims;
+    int32_t  n_offs;
     int32_t  n_ctx_orig;
     float    freq_base;
     float    freq_scale;
@@ -338,7 +346,20 @@ typedef struct {
     int32_t  sect_2;
     int32_t  sect_3;
     bool     src2;
+    bool     inplace;
 } ggml_metal_kargs_rope;
+
+typedef struct {
+    int32_t  ne0;
+    int32_t  ne1;
+    int32_t  ne2;
+    int32_t  ne3;
+    uint64_t nb0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    int32_t  nblocks;
+} ggml_metal_kargs_flash_attn_ext_kv_f16;
 
 typedef struct {
     int32_t  ne11;
@@ -639,6 +660,7 @@ typedef struct {
     uint64_t nb0;
     uint64_t nb1;
     uint64_t nb2;
+    uint64_t nb3;
 } ggml_metal_kargs_conv_transpose_2d;
 
 typedef struct {
@@ -876,7 +898,10 @@ typedef struct {
     int64_t  n_head;
     int64_t  n_group;
     int64_t  n_seq_tokens;
+    int64_t  n_seq_tokens_total;
+    int64_t  token_offset;
     int64_t  n_seqs;
+    int64_t  K;
     uint64_t s_off;
     uint64_t nb00;
     uint64_t nb01;
@@ -1163,6 +1188,17 @@ typedef struct {
     int32_t  top_k;
     int32_t  len;
 } ggml_metal_kargs_argsort_merge;
+
+typedef struct {
+    int32_t  ne00;   // number of columns (elements per row)
+    int32_t  ne01;   // rows
+    int32_t  ne02;
+    int32_t  ne03;
+    uint64_t nb01;   // row stride in src0
+    uint64_t nb02;
+    uint64_t nb03;
+    int32_t  top_k;  // k
+} ggml_metal_kargs_top_k;
 
 typedef struct {
     int32_t nrows;

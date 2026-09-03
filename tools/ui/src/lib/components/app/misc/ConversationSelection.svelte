@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
+	import { UI_DATA_ATTRS } from '$lib/constants';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -123,7 +124,7 @@
 				<tbody>
 					{#if filteredConversations.length === 0}
 						<tr>
-							<td colspan="3" class="p-8 text-center text-sm text-muted-foreground">
+							<td class="p-8 text-center text-sm text-muted-foreground" colspan="3">
 								{#if searchQuery}
 									No conversations found matching "{searchQuery}"
 								{:else}
@@ -138,9 +139,9 @@
 								class="cursor-pointer border-b transition-colors hover:bg-muted/50 {checked
 									? 'bg-muted/75'
 									: ''}"
-								data-conversation-row={conv.id}
-								onmousedown={(event) => marquee.rowMouseDown(conv.id, event)}
+								{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conv.id }}
 								onclick={(event) => marquee.rowClick(conv.id, event.shiftKey)}
+								onmousedown={(event) => marquee.rowMouseDown(conv.id, event)}
 							>
 								<td class="p-3">
 									<Checkbox
@@ -171,9 +172,9 @@
 	</div>
 
 	<div class="flex justify-end gap-2">
-		<Button variant="outline" onclick={handleCancel}>Cancel</Button>
+		<Button onclick={handleCancel} variant="outline">Cancel</Button>
 
-		<Button onclick={handleConfirm} disabled={selectedIds.size === 0}>
+		<Button disabled={selectedIds.size === 0} onclick={handleConfirm}>
 			{mode === 'export' ? 'Export' : 'Import'} ({selectedIds.size})
 		</Button>
 	</div>
