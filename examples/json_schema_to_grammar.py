@@ -734,6 +734,9 @@ class SchemaConverter:
             )
             optional_props.append("*")
 
+        if not required_props and not optional_props:
+            return '"{" space "}"'
+
         rule = '"{" space '
         rule += ' "," space '.join(prop_kv_rule_names[k] for k in required_props)
 
