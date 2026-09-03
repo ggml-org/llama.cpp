@@ -337,7 +337,7 @@ static const common_spec_sidecar_profile QWEN35MOE_MTP_PROFILE = {
     /* .full_head_env         = */ nullptr,
     /* .default_library_name  = */ "spec_qwen35moe_mtp_sidecar.so",
     /* .default_artifact_dir_name = */ "spec-sidecar-qwen35moe-mtp",
-    /* .explicit_paths_only   = */ true,
+    /* .explicit_paths_only   = */ false,
     /* .matches_model         = */ profile_matches_model,
     /* .matches_target_file   = */ profile_matches_target_file,
 };
@@ -419,9 +419,8 @@ static bool profile_paths_are_available(const common_spec_sidecar_profile & prof
     if (!profile.explicit_paths_only) {
         return true;
     }
-    // The MoE provider is an explicit experimental compatibility path until
-    // its sidecar arithmetic and throughput are independently qualified. Do
-    // not let merely placing the DLL beside llama-server replace native MTP.
+    // Profiles marked explicit remain opt-in even when their provider files are
+    // discoverable. All providers are still gated globally by SPEC_SIDECAR=1.
     return env_value(profile.library_env) != nullptr && env_value(profile.artifact_env) != nullptr;
 }
 
