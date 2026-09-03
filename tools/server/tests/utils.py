@@ -519,11 +519,6 @@ class ServerProcess:
 server_instances: Set[ServerProcess] = set()
 
 
-def server_base_port() -> int:
-    """Return the base port for this worker. Offset secondary servers from this value."""
-    return int(os.environ.get("BASE_PORT", "8080"))
-
-
 class ServerPreset:
     @staticmethod
     def load_all() -> None:
