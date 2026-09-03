@@ -4,10 +4,8 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_shuffle : require
 
-// Each token's 4x4 comb matrix lives in 16 consecutive subgroup lanes, indexed
-// idst + hc*isrc to match the CPU reference. That puts idst in bits 0..1 and
-// isrc in bits 2..3, so subgroupShuffleXor by 1|2 reduces a row and by 4|8
-// reduces a column.
+// 16 lanes per token, indexed idst + hc*isrc: idst in bits 0..1, isrc in bits 2..3,
+// so subgroupShuffleXor by 1|2 reduces a row and by 4|8 a column.
 
 layout(constant_id = 0) const uint SUBGROUP_SIZE = 32;
 
@@ -49,9 +47,7 @@ void main() {
     const uint sg = gl_WorkGroupID.x * gl_WorkGroupSize.y + gl_SubgroupID;
     const uint it = sg * TOKENS_PER_SUBGROUP + blk;
 
-    // No early return: every lane must stay active through the last shuffle.
-    // Out-of-range blocks compute a discarded value; the masks stay inside a
-    // 16-lane block, so they cannot contaminate a live token.
+    // no early return, the shuffles need every lane; out-of-range blocks compute a discarded value
     const bool in_range = it < n_tokens;
 
     const float scale_comb = data_s[s_offset + 2 * nbs0];

@@ -815,11 +815,6 @@ struct vk_device_struct {
     bool subgroup_clustered;
     bool subgroup_vote;
     bool multi_add;
-    // DeepSeek-V4 hyper-connection ops, per-op so a kernel can be bisected
-    // against the unfused graph.
-    bool dsv4_hc_comb;
-    bool dsv4_hc_pre;
-    bool dsv4_hc_post;
     bool shader_int64;
     bool buffer_device_address;
     bool vulkan_memory_model;
@@ -6770,11 +6765,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
                             device->properties.limits.maxPushConstantsSize >= sizeof(vk_op_multi_add_push_constants) &&
                             getenv("GGML_VK_DISABLE_MULTI_ADD") == nullptr;
 
-        const bool dsv4_hc_all = getenv("GGML_VK_DISABLE_DSV4_HC") == nullptr;
-        device->dsv4_hc_comb = dsv4_hc_all && getenv("GGML_VK_DISABLE_DSV4_HC_COMB") == nullptr;
-        device->dsv4_hc_pre  = dsv4_hc_all && getenv("GGML_VK_DISABLE_DSV4_HC_PRE")  == nullptr;
-        device->dsv4_hc_post = dsv4_hc_all && getenv("GGML_VK_DISABLE_DSV4_HC_POST") == nullptr;
-
         device->shader_int64 = device_features2.features.shaderInt64;
         device->buffer_device_address = vk12_features.bufferDeviceAddress;
         device->vulkan_memory_model = vk12_features.vulkanMemoryModel;
@@ -10095,32 +10085,8 @@ static void ggml_vk_fwht(ggml_backend_vk_context * ctx, vk_context& subctx, cons
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src_buf, dst_buf }, pc, { workgroups_x, 1, 1 });
 }
 
-// Element stride; supports_op checks that the byte strides divide evenly.
 static uint32_t ggml_vk_nb_elem(const ggml_tensor * t, int i) {
     return (uint32_t)(t->nb[i] / ggml_type_size(t->type));
-}
-
-// The HC shaders address their tensors in whole f32 elements.
-static bool ggml_vk_dsv4_hc_strides_ok(const ggml_tensor * op) {
-    auto const & strides_ok = [](const ggml_tensor * t) {
-        const size_t ts = ggml_type_size(t->type);
-        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-            if (t->nb[i] % ts != 0) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    if (!strides_ok(op)) {
-        return false;
-    }
-    for (uint32_t i = 0; i < GGML_MAX_SRC; ++i) {
-        if (op->src[i] && !strides_ok(op->src[i])) {
-            return false;
-        }
-    }
-    return true;
 }
 
 static void ggml_vk_dsv4_hc_comb(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * mixes, const ggml_tensor * scale, const ggml_tensor * base, ggml_tensor * dst) {
@@ -18627,20 +18593,13 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_DSV4_HC_PRE:
         case GGML_OP_DSV4_HC_POST:
             {
-                const bool enabled =
-                    op->op == GGML_OP_DSV4_HC_COMB ? device->dsv4_hc_comb :
-                    op->op == GGML_OP_DSV4_HC_PRE  ? device->dsv4_hc_pre  :
-                                                     device->dsv4_hc_post;
-                if (!enabled || op->type != GGML_TYPE_F32) {
+                if (op->type != GGML_TYPE_F32) {
                     return false;
                 }
                 for (uint32_t i = 0; i < GGML_MAX_SRC; ++i) {
                     if (op->src[i] && op->src[i]->type != GGML_TYPE_F32) {
                         return false;
                     }
-                }
-                if (!ggml_vk_dsv4_hc_strides_ok(op)) {
-                    return false;
                 }
                 // hc is hardcoded to 4 in the shaders. ggml only constrains it
                 // to 4 for COMB, so PRE/POST have to be checked here.
@@ -18653,9 +18612,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 if (op->op == GGML_OP_DSV4_HC_COMB) {
                     return device->pipeline_dsv4_hc_comb_f32 != nullptr;
                 }
-                // pre/post launch one workgroup row per token
-                const uint32_t n_tokens = (uint32_t)(op->op == GGML_OP_DSV4_HC_PRE ? op->src[0]->ne[2] : op->src[0]->ne[1]);
-                return n_tokens <= device->properties.limits.maxComputeWorkGroupCount[1];
+                return true;
             }
         case GGML_OP_SOLVE_TRI:
             {
