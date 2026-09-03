@@ -3473,7 +3473,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                           (int) op->src[1]->type,
                           (int) ne00, (int) ne20,   // dk, dv (ne00 == dk for FA)
                           ne11, ne01);
-        int nqptg = cfg.Q;                             // queries per threadgroup
+
+        int nqptg = cfg.Q; // queries per threadgroup
+
         const int ncpsg = OP_FLASH_ATTN_EXT_VEC_NCPSG; // cache values per simdgroup !! sync with kernel template arguments !!
         const int nhptg = 1;                           // heads per threadgroup
 
@@ -3487,6 +3489,8 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
         if (use_sparse) {
             assert(ggml_metal_op_flash_attn_ext_extra_idx(op) != 0);
+
+            GGML_ASSERT(ne30 == ne11);
 
             ggml_metal_kargs_flash_attn_ext_vec_idx args0 = {
                 /*.ne30              =*/ ne30,
@@ -3666,8 +3670,6 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         GGML_ASSERT(smem <= props_dev->max_theadgroup_memory_size);
 
         if (nwg == 1) {
-            assert(ggml_metal_op_flash_attn_ext_extra_tmp(op) == 0);
-
             // using 1 workgroup -> write the result directly into dst
             ggml_metal_encoder_set_buffer(enc, bid_pad, 6);
             ggml_metal_encoder_set_buffer(enc, bid_dst, 7);
