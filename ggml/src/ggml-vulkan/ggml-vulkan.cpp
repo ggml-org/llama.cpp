@@ -923,6 +923,7 @@ struct vk_device_struct {
 
     vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat_id[GGML_TYPE_COUNT];
     vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat_id_q8_1[GGML_TYPE_COUNT];
+    vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_COUNT];
 
     vk_pipeline pipeline_matmul_split_k_reduce;
     vk_pipeline pipeline_quantize_q8_1_x4;
@@ -4019,6 +4020,27 @@ static uint32_t ggml_vk_coopmat_shmem_pad(const vk_device& device, uint32_t bk) 
     return 4;  // mul_mm.comp default
 }
 
+// GGML_VK_DENSE_F16B: feed the coopmat1 quantized matmuls an f16 B operand. The _f16 SPIR-V
+// is already built for every type, but upstream only uses it on coopmat2. It halves the B bytes
+// moved and the buf_b shared memory, and it does not change the result: mul_mm stages B into
+// shared FLOAT_TYPE either way, so the f32-B kernel already rounds B to f16.
+static bool ggml_vk_dense_f16b_enabled() {
+    static const bool enabled = [] {
+        const char * e = getenv("GGML_VK_DENSE_F16B");
+        return e == nullptr || atoi(e) != 0;
+    }();
+    return enabled;
+}
+
+// GGML_VK_MMID_F16B: the same for the quantized MUL_MAT_ID pipelines.
+static bool ggml_vk_mmid_f16b_enabled() {
+    static const bool enabled = [] {
+        const char * e = getenv("GGML_VK_MMID_F16B");
+        return e == nullptr || atoi(e) != 0;
+    }();
+    return enabled;
+}
+
 static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
 
     uint32_t lut_size = 0;
@@ -4880,6 +4902,21 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             CREATE_MM2(GGML_TYPE_NVFP4,   pipeline_dequant_mul_mat_mat[GGML_TYPE_NVFP4],   matmul_nvfp4_f32,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         }
 
+        // f16-B variants of the same quant pipelines. The _f16 SPIR-V is already built for
+        // every type; upstream only uses it in the coopmat2 branch.
+        if (ggml_vk_dense_f16b_enabled()) {
+        CREATE_MM2(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q4_0], matmul_q4_0_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        CREATE_MM2(GGML_TYPE_Q4_1, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q4_1], matmul_q4_1_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        CREATE_MM2(GGML_TYPE_Q5_0, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q5_0], matmul_q5_0_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        CREATE_MM2(GGML_TYPE_Q5_1, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q5_1], matmul_q5_1_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        CREATE_MM2(GGML_TYPE_Q8_0, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q8_0], matmul_q8_0_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        CREATE_MM2(GGML_TYPE_Q2_K, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q2_K], matmul_q2_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        CREATE_MM2(GGML_TYPE_Q3_K, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q3_K], matmul_q3_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        CREATE_MM2(GGML_TYPE_Q4_K, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q4_K], matmul_q4_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        CREATE_MM2(GGML_TYPE_Q5_K, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q5_K], matmul_q5_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        CREATE_MM2(GGML_TYPE_Q6_K, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q6_K], matmul_q6_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        }
+
         GGML_ASSERT(device->subgroup_ballot);
 
         CREATE_MM(GGML_TYPE_F32, pipeline_matmul_id_f32, matmul_id_subgroup_f32_f32, , wg_denoms, warptile, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
@@ -4922,6 +4959,20 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         {
             CREATE_MM2(GGML_TYPE_MXFP4,   pipeline_dequant_mul_mat_mat_id[GGML_TYPE_MXFP4],   matmul_id_subgroup_mxfp4_f32,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
             CREATE_MM2(GGML_TYPE_NVFP4,   pipeline_dequant_mul_mat_mat_id[GGML_TYPE_NVFP4],   matmul_id_subgroup_nvfp4_f32,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
+        }
+
+        // f16-B variants of the same quant matmul_id pipelines.
+        if (ggml_vk_mmid_f16b_enabled()) {
+        CREATE_MM2(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q4_0], matmul_id_subgroup_q4_0_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
+        CREATE_MM2(GGML_TYPE_Q4_1, pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q4_1], matmul_id_subgroup_q4_1_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
+        CREATE_MM2(GGML_TYPE_Q5_0, pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q5_0], matmul_id_subgroup_q5_0_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
+        CREATE_MM2(GGML_TYPE_Q5_1, pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q5_1], matmul_id_subgroup_q5_1_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
+        CREATE_MM2(GGML_TYPE_Q8_0, pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q8_0], matmul_id_subgroup_q8_0_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
+        CREATE_MM2(GGML_TYPE_Q2_K, pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q2_K], matmul_id_subgroup_q2_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
+        CREATE_MM2(GGML_TYPE_Q3_K, pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q3_K], matmul_id_subgroup_q3_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
+        CREATE_MM2(GGML_TYPE_Q4_K, pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q4_K], matmul_id_subgroup_q4_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
+        CREATE_MM2(GGML_TYPE_Q5_K, pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q5_K], matmul_id_subgroup_q5_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
+        CREATE_MM2(GGML_TYPE_Q6_K, pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q6_K], matmul_id_subgroup_q6_k_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
         }
 #undef CREATE_MM2
 #undef CREATE_MM
@@ -7837,7 +7888,8 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_pipeline(ggml_backend_vk_conte
         return pipelines;
     }
 
-    if (src1_type != GGML_TYPE_F32 && !ctx->device->coopmat2) {
+    if (src1_type != GGML_TYPE_F32 && !ctx->device->coopmat2 &&
+        !(src1_type == GGML_TYPE_F16 && ggml_vk_dense_f16b_enabled())) {
         return nullptr;
     }
 
@@ -7876,7 +7928,9 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_pipeline(ggml_backend_vk_conte
         return prec == GGML_PREC_DEFAULT ? ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type].f32acc;
     }
     if (ctx->device->coopmat_support) {
-        return (ctx->device->fp16 && ctx->device->coopmat_acc_f16_support && prec == GGML_PREC_DEFAULT) ? ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f32acc;
+        vk_matmul_pipeline2 & p = (src1_type == GGML_TYPE_F16) ? ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type]
+                                                              : ctx->device->pipeline_dequant_mul_mat_mat[src0_type];
+        return (ctx->device->fp16 && ctx->device->coopmat_acc_f16_support && prec == GGML_PREC_DEFAULT) ? p.f16acc : p.f32acc;
     }
     return (ctx->device->fp16 && prec == GGML_PREC_DEFAULT) ? ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f32acc;
 }
@@ -8003,7 +8057,9 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_id_pipeline(ggml_backend_vk_co
         return pipelines;
     }
 
-    GGML_ASSERT(src1_type == GGML_TYPE_F32 || (ctx->device->coopmat2 && src1_type == GGML_TYPE_F16));
+    const bool mmid_f16b = src1_type == GGML_TYPE_F16 && ggml_vk_mmid_f16b_enabled() && !ctx->device->coopmat2;
+
+    GGML_ASSERT(src1_type == GGML_TYPE_F32 || mmid_f16b || (ctx->device->coopmat2 && src1_type == GGML_TYPE_F16));
 
     switch (src0_type) {
         case GGML_TYPE_Q1_0:
@@ -8035,7 +8091,8 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_id_pipeline(ggml_backend_vk_co
             return nullptr;
     }
 
-    vk_matmul_pipeline2& mmp = ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type];
+    vk_matmul_pipeline2& mmp = mmid_f16b ? ctx->device->pipeline_dequant_mul_mat_mat_id_f16b[src0_type]
+                                         : ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type];
     // XXX TODO 'prec' is not actually allowed in mul_mat_id.
     bool prefer_fp16acc = ctx->device->fp16 /*&& prec == GGML_PREC_DEFAULT*/;
     bool support_fp16acc = !mmp.f16acc->is_empty();
@@ -9335,7 +9392,15 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     // Reformat and convert to fp16 if non-contiguous, or for coopmat2 for better perf
     const bool x_non_contig = (ctx->device->coopmat2 && src0->type == GGML_TYPE_F32) ||
                               !ggml_vk_dim01_contiguous(src0);
-    const bool y_non_contig = (ctx->device->coopmat2 && src1->type == GGML_TYPE_F32) ||
+    // Route quantized MUL_MAT through the f16-B kernels. Treating contiguous f32 B as
+    // y_non_contig reuses the convert-to-prealloc_y plumbing, the same way coopmat2 does.
+    const bool dense_f16b = ggml_vk_dense_f16b_enabled() &&
+                            ctx->device->coopmat_support && !ctx->device->coopmat2 &&
+                            ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 &&
+                            !(ctx->device->pipeline_dequant_mul_mat_mat_f16[src0->type].f16acc->is_empty() &&
+                              ctx->device->pipeline_dequant_mul_mat_mat_f16[src0->type].f32acc->is_empty());
+    const bool y_non_contig = dense_f16b ||
+                              (ctx->device->coopmat2 && src1->type == GGML_TYPE_F32) ||
                               (src0->type == GGML_TYPE_BF16 && src1->type != GGML_TYPE_BF16) ||
                               !ggml_vk_dim01_contiguous(src1);
 
@@ -10277,7 +10342,14 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
 #else
     const bool y_decode_vector_staging = false;
 #endif
-    const bool y_non_contig = y_decode_vector_staging ||
+    // Same for MUL_MAT_ID.
+    const bool mmid_f16b = ggml_vk_mmid_f16b_enabled() &&
+                           ctx->device->coopmat_support && !ctx->device->coopmat2 &&
+                           ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 &&
+                           !(ctx->device->pipeline_dequant_mul_mat_mat_id_f16b[src0->type].f16acc->is_empty() &&
+                             ctx->device->pipeline_dequant_mul_mat_mat_id_f16b[src0->type].f32acc->is_empty());
+    const bool y_non_contig = mmid_f16b ||
+                              y_decode_vector_staging ||
                               (ctx->device->coopmat2 && src1->type == GGML_TYPE_F32) ||
                               (src0->type == GGML_TYPE_BF16 && src1->type != GGML_TYPE_BF16) ||
                               !ggml_vk_dim01_contiguous(src1);
