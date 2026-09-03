@@ -113,8 +113,8 @@ static __global__ void top_k_nary_search_cuda(
                 __syncthreads();
             }
         } else {
-            const int radix_bits = warpSize == 64 ? 6 : 5;
-            const int radix_size = 1 << radix_bits;
+            constexpr int radix_bits = 6;
+            constexpr int radix_size = 1 << radix_bits;
             int shift = 32 - radix_bits;
             uint32_t mask = ((1U << radix_bits) - 1) << shift;
             uint32_t range_min = 0;
@@ -122,6 +122,7 @@ static __global__ void top_k_nary_search_cuda(
             uint32_t total = 0;
 
             while (mask != 0) {
+                __syncthreads();
                 if (tid < radix_size) {
                     counts[tid] = 0;
                 }
@@ -133,20 +134,33 @@ static __global__ void top_k_nary_search_cuda(
                 }
                 __syncthreads();
 
-                if (tid < radix_size) {
-                    uint32_t partial = counts[radix_size - 1 - tid];
-                    for (int offset = 1; offset < radix_size; offset *= 2) {
-                        const uint32_t previous = __shfl_up(partial, offset, radix_size);
+                if (tid < 32) {
+                    uint32_t high_partial = counts[radix_size - 1 - tid];
+                    uint32_t low_partial  = counts[31 - tid];
+                    for (int offset = 1; offset < 32; offset *= 2) {
+                        const uint32_t high_previous = __shfl_up(high_partial, offset, 32);
+                        const uint32_t low_previous  = __shfl_up(low_partial, offset, 32);
                         if (tid >= offset) {
-                            partial += previous;
+                            high_partial += high_previous;
+                            low_partial += low_previous;
                         }
                     }
-                    partial += total;
-                    const unsigned long long selected = __ballot(partial >= (uint32_t) limit);
-                    const int first = __ffsll(selected) - 1;
-                    if (tid == first) {
-                        selected_bucket = radix_size - 1 - first;
-                        selected_total = partial;
+                    high_partial += total;
+                    low_partial += __shfl(high_partial, 31, 32);
+                    const unsigned long long high_selected = __ballot(high_partial >= (uint32_t) limit);
+                    if (high_selected != 0) {
+                        const int first = __ffsll(high_selected) - 1;
+                        if (tid == first) {
+                            selected_bucket = radix_size - 1 - first;
+                            selected_total  = high_partial;
+                        }
+                    } else {
+                        const unsigned long long low_selected = __ballot(low_partial >= (uint32_t) limit);
+                        const int                first        = __ffsll(low_selected) - 1;
+                        if (tid == first) {
+                            selected_bucket = 31 - first;
+                            selected_total  = low_partial;
+                        }
                     }
                 }
                 __syncthreads();
@@ -214,47 +228,85 @@ static __global__ void top_k_nary_search_cuda(
     }
 }
 
-template<int BLOCK_SIZE>
-static __device__ __forceinline__ int2 top_k_one_reduce(
-        int2 * candidates,
-        int2 value,
-        int original_ncols) {
+template <int BLOCK_SIZE, bool USE_SHUFFLE>
+static __device__ __forceinline__ int2 top_k_one_reduce(int2 * candidates, int2 value, int original_ncols) {
     const int tid = threadIdx.x;
-    candidates[tid] = value;
-    __syncthreads();
+    if constexpr (USE_SHUFFLE) {
+        const int     lane       = tid & 31;
+        const int     wave       = tid >> 5;
+        constexpr int wave_count = BLOCK_SIZE / 32;
 
-#pragma unroll
-    for (int stride = BLOCK_SIZE / 2; stride >= 1; stride /= 2) {
-        if (tid < stride) {
-            const int2 a = candidates[tid];
-            const int2 b = candidates[tid + stride];
-            if (a.x >= original_ncols ||
-                (b.x < original_ncols && __int_as_float(b.y) > __int_as_float(a.y))) {
-                candidates[tid] = b;
+#    pragma unroll
+        for (int offset = 16; offset >= 1; offset /= 2) {
+            const int2 other = make_int2(__shfl_down(value.x, offset, 32), __shfl_down(value.y, offset, 32));
+            if (lane + offset < 32 &&
+                (value.x >= original_ncols ||
+                 (other.x < original_ncols && __int_as_float(other.y) > __int_as_float(value.y)))) {
+                value = other;
             }
         }
+        if (lane == 0) {
+            candidates[wave] = value;
+        }
         __syncthreads();
+
+        if (wave == 0) {
+            value = lane < wave_count ? candidates[lane] : make_int2(original_ncols, (int) 0xff800000U);
+#    pragma unroll
+            for (int offset = 16; offset >= 1; offset /= 2) {
+                const int2 other = make_int2(__shfl_down(value.x, offset, 32), __shfl_down(value.y, offset, 32));
+                if (lane + offset < 32 &&
+                    (value.x >= original_ncols ||
+                     (other.x < original_ncols && __int_as_float(other.y) > __int_as_float(value.y)))) {
+                    value = other;
+                }
+            }
+        }
+        return value;
+    } else {
+        candidates[tid] = value;
+        __syncthreads();
+
+#    pragma unroll
+        for (int stride = BLOCK_SIZE / 2; stride >= 1; stride /= 2) {
+            if (tid < stride) {
+                const int2 a = candidates[tid];
+                const int2 b = candidates[tid + stride];
+                if (a.x >= original_ncols || (b.x < original_ncols && __int_as_float(b.y) > __int_as_float(a.y))) {
+                    candidates[tid] = b;
+                }
+            }
+            __syncthreads();
+        }
+        return candidates[0];
     }
-    return candidates[0];
 }
 
-template<int BLOCK_SIZE>
-static __global__ void top_k_one_first_cuda(
-        const float * __restrict__ src,
-        int2 * __restrict__ dst_pairs,
-        int original_ncols,
-        int ncols_input,
-        int ncols_output,
-        int nrows) {
+template <int BLOCK_SIZE, int ITEMS_PER_THREAD, bool USE_SHUFFLE>
+static __global__ void top_k_one_first_cuda(const float * __restrict__ src,
+                                            int2 * __restrict__ dst_pairs,
+                                            int original_ncols,
+                                            int ncols_input,
+                                            int ncols_output,
+                                            int nrows) {
     const int tid = threadIdx.x;
-    __shared__ int2 candidates[BLOCK_SIZE];
+    __shared__ int2 candidates[USE_SHUFFLE ? BLOCK_SIZE / 32 : BLOCK_SIZE];
 
     for (int row = blockIdx.y; row < nrows; row += gridDim.y) {
-        const int col = blockIdx.x * BLOCK_SIZE + tid;
-        const int2 value = col < ncols_input
-            ? make_int2(col, __float_as_int(src[(size_t) row * ncols_input + col]))
-            : make_int2(original_ncols, (int) 0xff800000U);
-        const int2 result = top_k_one_reduce<BLOCK_SIZE>(candidates, value, original_ncols);
+        const int col   = blockIdx.x * (ITEMS_PER_THREAD * BLOCK_SIZE) + tid;
+        int2      value = col < ncols_input ? make_int2(col, __float_as_int(src[(size_t) row * ncols_input + col])) :
+                                              make_int2(original_ncols, (int) 0xff800000U);
+#    pragma unroll
+        for (int item = 1; item < ITEMS_PER_THREAD; ++item) {
+            const int other_col = col + item * BLOCK_SIZE;
+            if (other_col < ncols_input) {
+                const int2 other = make_int2(other_col, __float_as_int(src[(size_t) row * ncols_input + other_col]));
+                if (value.x >= original_ncols || __int_as_float(other.y) > __int_as_float(value.y)) {
+                    value = other;
+                }
+            }
+        }
+        const int2 result = top_k_one_reduce<BLOCK_SIZE, USE_SHUFFLE>(candidates, value, original_ncols);
         if (tid == 0) {
             dst_pairs[(size_t) row * ncols_output + blockIdx.x] = result;
         }
@@ -262,22 +314,30 @@ static __global__ void top_k_one_first_cuda(
     }
 }
 
-template<int BLOCK_SIZE>
-static __global__ void top_k_one_first_last_cuda(
-        const float * __restrict__ src,
-        int * __restrict__ dst,
-        int original_ncols,
-        int ncols_input,
-        int nrows) {
+template <int BLOCK_SIZE, int ITEMS_PER_THREAD, bool USE_SHUFFLE>
+static __global__ void top_k_one_first_last_cuda(const float * __restrict__ src,
+                                                 int * __restrict__ dst,
+                                                 int original_ncols,
+                                                 int ncols_input,
+                                                 int nrows) {
     const int tid = threadIdx.x;
-    __shared__ int2 candidates[BLOCK_SIZE];
+    __shared__ int2 candidates[USE_SHUFFLE ? BLOCK_SIZE / 32 : BLOCK_SIZE];
 
     for (int row = blockIdx.y; row < nrows; row += gridDim.y) {
-        const int col = blockIdx.x * BLOCK_SIZE + tid;
-        const int2 value = col < ncols_input
-            ? make_int2(col, __float_as_int(src[(size_t) row * ncols_input + col]))
-            : make_int2(original_ncols, (int) 0xff800000U);
-        const int2 result = top_k_one_reduce<BLOCK_SIZE>(candidates, value, original_ncols);
+        const int col   = blockIdx.x * (ITEMS_PER_THREAD * BLOCK_SIZE) + tid;
+        int2      value = col < ncols_input ? make_int2(col, __float_as_int(src[(size_t) row * ncols_input + col])) :
+                                              make_int2(original_ncols, (int) 0xff800000U);
+#    pragma unroll
+        for (int item = 1; item < ITEMS_PER_THREAD; ++item) {
+            const int other_col = col + item * BLOCK_SIZE;
+            if (other_col < ncols_input) {
+                const int2 other = make_int2(other_col, __float_as_int(src[(size_t) row * ncols_input + other_col]));
+                if (value.x >= original_ncols || __int_as_float(other.y) > __int_as_float(value.y)) {
+                    value = other;
+                }
+            }
+        }
+        const int2 result = top_k_one_reduce<BLOCK_SIZE, USE_SHUFFLE>(candidates, value, original_ncols);
         if (tid == 0) {
             dst[row] = result.x;
         }
@@ -285,23 +345,31 @@ static __global__ void top_k_one_first_last_cuda(
     }
 }
 
-template<int BLOCK_SIZE>
-static __global__ void top_k_one_middle_cuda(
-        const int2 * __restrict__ src_pairs,
-        int2 * __restrict__ dst_pairs,
-        int original_ncols,
-        int ncols_input,
-        int ncols_output,
-        int nrows) {
+template <int BLOCK_SIZE, int ITEMS_PER_THREAD, bool USE_SHUFFLE>
+static __global__ void top_k_one_middle_cuda(const int2 * __restrict__ src_pairs,
+                                             int2 * __restrict__ dst_pairs,
+                                             int original_ncols,
+                                             int ncols_input,
+                                             int ncols_output,
+                                             int nrows) {
     const int tid = threadIdx.x;
-    __shared__ int2 candidates[BLOCK_SIZE];
+    __shared__ int2 candidates[USE_SHUFFLE ? BLOCK_SIZE / 32 : BLOCK_SIZE];
 
     for (int row = blockIdx.y; row < nrows; row += gridDim.y) {
-        const int col = blockIdx.x * BLOCK_SIZE + tid;
-        const int2 value = col < ncols_input
-            ? src_pairs[(size_t) row * ncols_input + col]
-            : make_int2(original_ncols, (int) 0xff800000U);
-        const int2 result = top_k_one_reduce<BLOCK_SIZE>(candidates, value, original_ncols);
+        const int col   = blockIdx.x * (ITEMS_PER_THREAD * BLOCK_SIZE) + tid;
+        int2      value = col < ncols_input ? src_pairs[(size_t) row * ncols_input + col] :
+                                              make_int2(original_ncols, (int) 0xff800000U);
+#    pragma unroll
+        for (int item = 1; item < ITEMS_PER_THREAD; ++item) {
+            const int other_col = col + item * BLOCK_SIZE;
+            if (other_col < ncols_input) {
+                const int2 other = src_pairs[(size_t) row * ncols_input + other_col];
+                if (value.x >= original_ncols || __int_as_float(other.y) > __int_as_float(value.y)) {
+                    value = other;
+                }
+            }
+        }
+        const int2 result = top_k_one_reduce<BLOCK_SIZE, USE_SHUFFLE>(candidates, value, original_ncols);
         if (tid == 0) {
             dst_pairs[(size_t) row * ncols_output + blockIdx.x] = result;
         }
@@ -309,22 +377,30 @@ static __global__ void top_k_one_middle_cuda(
     }
 }
 
-template<int BLOCK_SIZE>
-static __global__ void top_k_one_last_cuda(
-        const int2 * __restrict__ src_pairs,
-        int * __restrict__ dst,
-        int original_ncols,
-        int ncols_input,
-        int nrows) {
+template <int BLOCK_SIZE, int ITEMS_PER_THREAD, bool USE_SHUFFLE>
+static __global__ void top_k_one_last_cuda(const int2 * __restrict__ src_pairs,
+                                           int * __restrict__ dst,
+                                           int original_ncols,
+                                           int ncols_input,
+                                           int nrows) {
     const int tid = threadIdx.x;
-    __shared__ int2 candidates[BLOCK_SIZE];
+    __shared__ int2 candidates[USE_SHUFFLE ? BLOCK_SIZE / 32 : BLOCK_SIZE];
 
     for (int row = blockIdx.y; row < nrows; row += gridDim.y) {
-        const int col = blockIdx.x * BLOCK_SIZE + tid;
-        const int2 value = col < ncols_input
-            ? src_pairs[(size_t) row * ncols_input + col]
-            : make_int2(original_ncols, (int) 0xff800000U);
-        const int2 result = top_k_one_reduce<BLOCK_SIZE>(candidates, value, original_ncols);
+        const int col   = blockIdx.x * (ITEMS_PER_THREAD * BLOCK_SIZE) + tid;
+        int2      value = col < ncols_input ? src_pairs[(size_t) row * ncols_input + col] :
+                                              make_int2(original_ncols, (int) 0xff800000U);
+#    pragma unroll
+        for (int item = 1; item < ITEMS_PER_THREAD; ++item) {
+            const int other_col = col + item * BLOCK_SIZE;
+            if (other_col < ncols_input) {
+                const int2 other = src_pairs[(size_t) row * ncols_input + other_col];
+                if (value.x >= original_ncols || __int_as_float(other.y) > __int_as_float(value.y)) {
+                    value = other;
+                }
+            }
+        }
+        const int2 result = top_k_one_reduce<BLOCK_SIZE, USE_SHUFFLE>(candidates, value, original_ncols);
         if (tid == 0) {
             dst[row] = result.x;
         }
@@ -455,66 +531,143 @@ static int top_k_nary_block_log2(int ncols, int k) {
     return block;
 }
 
-template<int BLOCK_SIZE>
-static void top_k_one_cuda_launch(
-        const float * src,
-        const int2 * src_pairs,
-        int * dst,
-        int2 * dst_pairs,
-        int original_ncols,
-        int ncols_input,
-        int ncols_output,
-        int nrows,
-        bool first_pass,
-        bool last_pass,
-        cudaStream_t stream) {
-    const dim3 grid((ncols_input + BLOCK_SIZE - 1) / BLOCK_SIZE, std::min(nrows, 65535), 1);
+template <int BLOCK_SIZE, int ITEMS_PER_THREAD, bool USE_SHUFFLE>
+static void top_k_one_cuda_launch(const float * src,
+                                  const int2 *  src_pairs,
+                                  int *         dst,
+                                  int2 *        dst_pairs,
+                                  int           original_ncols,
+                                  int           ncols_input,
+                                  int           ncols_output,
+                                  int           nrows,
+                                  bool          first_pass,
+                                  bool          last_pass,
+                                  cudaStream_t  stream) {
+    constexpr int TILE_SIZE = BLOCK_SIZE * ITEMS_PER_THREAD;
+    const dim3    grid((ncols_input + TILE_SIZE - 1) / TILE_SIZE, std::min(nrows, 65535), 1);
     if (first_pass && last_pass) {
-        top_k_one_first_last_cuda<BLOCK_SIZE><<<grid, BLOCK_SIZE, 0, stream>>>(
-            src, dst, original_ncols, ncols_input, nrows);
+        top_k_one_first_last_cuda<BLOCK_SIZE, ITEMS_PER_THREAD, USE_SHUFFLE>
+            <<<grid, BLOCK_SIZE, 0, stream>>>(src, dst, original_ncols, ncols_input, nrows);
     } else if (first_pass) {
-        top_k_one_first_cuda<BLOCK_SIZE><<<grid, BLOCK_SIZE, 0, stream>>>(
-            src, dst_pairs, original_ncols, ncols_input, ncols_output, nrows);
+        top_k_one_first_cuda<BLOCK_SIZE, ITEMS_PER_THREAD, USE_SHUFFLE>
+            <<<grid, BLOCK_SIZE, 0, stream>>>(src, dst_pairs, original_ncols, ncols_input, ncols_output, nrows);
     } else if (last_pass) {
-        top_k_one_last_cuda<BLOCK_SIZE><<<grid, BLOCK_SIZE, 0, stream>>>(
-            src_pairs, dst, original_ncols, ncols_input, nrows);
+        top_k_one_last_cuda<BLOCK_SIZE, ITEMS_PER_THREAD, USE_SHUFFLE>
+            <<<grid, BLOCK_SIZE, 0, stream>>>(src_pairs, dst, original_ncols, ncols_input, nrows);
     } else {
-        top_k_one_middle_cuda<BLOCK_SIZE><<<grid, BLOCK_SIZE, 0, stream>>>(
-            src_pairs, dst_pairs, original_ncols, ncols_input, ncols_output, nrows);
+        top_k_one_middle_cuda<BLOCK_SIZE, ITEMS_PER_THREAD, USE_SHUFFLE>
+            <<<grid, BLOCK_SIZE, 0, stream>>>(src_pairs, dst_pairs, original_ncols, ncols_input, ncols_output, nrows);
     }
 }
 
-static void top_k_one_cuda_launch(
-        int block_log2,
-        const float * src,
-        const int2 * src_pairs,
-        int * dst,
-        int2 * dst_pairs,
-        int original_ncols,
-        int ncols_input,
-        int ncols_output,
-        int nrows,
-        bool first_pass,
-        bool last_pass,
-        cudaStream_t stream) {
+template <bool USE_SHUFFLE>
+static void top_k_one_cuda_launch(int           block_log2,
+                                  const float * src,
+                                  const int2 *  src_pairs,
+                                  int *         dst,
+                                  int2 *        dst_pairs,
+                                  int           original_ncols,
+                                  int           ncols_input,
+                                  int           ncols_output,
+                                  int           nrows,
+                                  bool          first_pass,
+                                  bool          last_pass,
+                                  cudaStream_t  stream) {
     switch (block_log2) {
         case 6:
-            top_k_one_cuda_launch<64>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input, ncols_output, nrows, first_pass, last_pass, stream);
+            top_k_one_cuda_launch<64, 1, USE_SHUFFLE>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input,
+                                                      ncols_output, nrows, first_pass, last_pass, stream);
             break;
         case 7:
-            top_k_one_cuda_launch<128>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input, ncols_output, nrows, first_pass, last_pass, stream);
+            top_k_one_cuda_launch<128, 1, USE_SHUFFLE>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input,
+                                                       ncols_output, nrows, first_pass, last_pass, stream);
             break;
         case 8:
-            top_k_one_cuda_launch<256>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input, ncols_output, nrows, first_pass, last_pass, stream);
+            top_k_one_cuda_launch<256, 1, USE_SHUFFLE>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input,
+                                                       ncols_output, nrows, first_pass, last_pass, stream);
             break;
         case 9:
-            top_k_one_cuda_launch<512>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input, ncols_output, nrows, first_pass, last_pass, stream);
+            top_k_one_cuda_launch<512, 1, USE_SHUFFLE>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input,
+                                                       ncols_output, nrows, first_pass, last_pass, stream);
             break;
         case 10:
-            top_k_one_cuda_launch<1024>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input, ncols_output, nrows, first_pass, last_pass, stream);
+            top_k_one_cuda_launch<1024, 1, USE_SHUFFLE>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input,
+                                                        ncols_output, nrows, first_pass, last_pass, stream);
             break;
         default:
             GGML_ABORT("invalid HIP TOP_K block size");
+    }
+}
+
+enum top_k_one_mode {
+    TOP_K_ONE_SHARED,
+    TOP_K_ONE_SHUFFLE,
+    TOP_K_ONE_SHUFFLE_2,
+    TOP_K_ONE_SHUFFLE_4,
+};
+
+static top_k_one_mode top_k_one_select_mode(int ncols, int nrows) {
+    if (ncols <= 32 || (nrows == 1 && ncols > 131072)) {
+        return TOP_K_ONE_SHARED;
+    }
+    if (ncols <= 4096) {
+        return TOP_K_ONE_SHUFFLE;
+    }
+    return nrows > 1 ? TOP_K_ONE_SHUFFLE_4 : TOP_K_ONE_SHUFFLE_2;
+}
+
+static int top_k_one_items_per_thread(top_k_one_mode mode) {
+    switch (mode) {
+        case TOP_K_ONE_SHUFFLE_2:
+            return 2;
+        case TOP_K_ONE_SHUFFLE_4:
+            return 4;
+        default:
+            return 1;
+    }
+}
+
+static int top_k_one_block_log2(top_k_one_mode mode, int ncols) {
+    switch (mode) {
+        case TOP_K_ONE_SHUFFLE_2:
+            return 7;
+        case TOP_K_ONE_SHUFFLE_4:
+            return 6;
+        default:
+            return top_k_nary_block_log2(ncols, 1);
+    }
+}
+
+static void top_k_one_cuda_launch(top_k_one_mode mode,
+                                  int            block_log2,
+                                  const float *  src,
+                                  const int2 *   src_pairs,
+                                  int *          dst,
+                                  int2 *         dst_pairs,
+                                  int            original_ncols,
+                                  int            ncols_input,
+                                  int            ncols_output,
+                                  int            nrows,
+                                  bool           first_pass,
+                                  bool           last_pass,
+                                  cudaStream_t   stream) {
+    switch (mode) {
+        case TOP_K_ONE_SHARED:
+            top_k_one_cuda_launch<false>(block_log2, src, src_pairs, dst, dst_pairs, original_ncols, ncols_input,
+                                         ncols_output, nrows, first_pass, last_pass, stream);
+            break;
+        case TOP_K_ONE_SHUFFLE:
+            top_k_one_cuda_launch<true>(block_log2, src, src_pairs, dst, dst_pairs, original_ncols, ncols_input,
+                                        ncols_output, nrows, first_pass, last_pass, stream);
+            break;
+        case TOP_K_ONE_SHUFFLE_2:
+            top_k_one_cuda_launch<128, 2, true>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input,
+                                                ncols_output, nrows, first_pass, last_pass, stream);
+            break;
+        case TOP_K_ONE_SHUFFLE_4:
+            top_k_one_cuda_launch<64, 4, true>(src, src_pairs, dst, dst_pairs, original_ncols, ncols_input,
+                                               ncols_output, nrows, first_pass, last_pass, stream);
+            break;
     }
 }
 
@@ -581,13 +734,15 @@ static void top_k_small_cuda(
         int nrows,
         int k,
         cudaStream_t stream) {
-    int block_log2 = top_k_nary_block_log2(ncols, k);
+    const top_k_one_mode one_mode             = top_k_one_select_mode(ncols, nrows);
+    const int            one_items_per_thread = top_k_one_items_per_thread(one_mode);
+    int                  block_log2 = k == 1 ? top_k_one_block_log2(one_mode, ncols) : top_k_nary_block_log2(ncols, k);
     if (block_log2 < 0) {
         top_k_radix_select_cuda(src, dst, ncols, nrows, k, stream);
         return;
     }
 
-    const int block_size = 1 << block_log2;
+    const int                  block_size       = (k == 1 ? one_items_per_thread : 1) << block_log2;
     const int first_output = (ncols / block_size) * k + std::min(k, ncols % block_size);
     const size_t scratch_elements = (size_t) first_output * nrows;
     ggml_cuda_pool_alloc<int2> scratch_alloc(pool, 2 * scratch_elements);
@@ -597,15 +752,14 @@ static void top_k_small_cuda(
     int buffer = 0;
     bool first_pass = true;
     while (ncols_input > k || first_pass) {
-        block_log2 = top_k_nary_block_log2(ncols_input, k);
-        const int current_block_size = 1 << block_log2;
+        block_log2 = k == 1 ? top_k_one_block_log2(one_mode, ncols_input) : top_k_nary_block_log2(ncols_input, k);
+        const int  current_block_size = (k == 1 ? one_items_per_thread : 1) << block_log2;
         const int ncols_output = (ncols_input / current_block_size) * k + std::min(k, ncols_input % current_block_size);
         const bool last_pass = ncols_output == k;
         if (k == 1) {
-            top_k_one_cuda_launch(
-                block_log2, src, first_pass ? nullptr : scratch[buffer], dst,
-                last_pass ? nullptr : scratch[buffer ^ 1], ncols, ncols_input,
-                ncols_output, nrows, first_pass, last_pass, stream);
+            top_k_one_cuda_launch(one_mode, block_log2, src, first_pass ? nullptr : scratch[buffer], dst,
+                                  last_pass ? nullptr : scratch[buffer ^ 1], ncols, ncols_input, ncols_output, nrows,
+                                  first_pass, last_pass, stream);
         } else {
             top_k_nary_search_cuda_launch(
                 block_log2, src, first_pass ? nullptr : scratch[buffer], dst,
