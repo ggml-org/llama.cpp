@@ -67,7 +67,12 @@
 					<DropdownMenu.Item
 						class="flex w-full cursor-pointer gap-3 px-2 py-1.5"
 						closeOnSelect={false}
-						onSelect={() => reasoning.select(level)}
+						onSelect={() => {
+							reasoning.select(level);
+
+							// collapse so the footer returns to its resting single-row look
+							expanded = false;
+						}}
 					>
 						{#if reasoning.isSelected(level)}
 							<Check class="{ICON_CLASS_DEFAULT} shrink-0 text-foreground" />
