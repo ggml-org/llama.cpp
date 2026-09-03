@@ -40,6 +40,18 @@ set(AVX2_CODE "
     }
 ")
 
+set(AVX_VNNI_CODE "
+    #include <immintrin.h>
+    int main()
+    {
+        __m256i acc = _mm256_setzero_si256();
+        const __m256i a = _mm256_set1_epi8(1);
+        const __m256i b = _mm256_set1_epi8(2);
+        acc = _mm256_dpbusd_avx_epi32(acc, a, b);
+        return _mm256_extract_epi32(acc, 0) == 8 ? 0 : 1;
+    }
+")
+
 set(FMA_CODE "
     #include <immintrin.h>
     int main()
@@ -90,6 +102,13 @@ if ((NOT ${AVX2_FOUND}) OR (NOT ${FMA_FOUND}))
     set(GGML_AVX2 OFF)
 else()
     set(GGML_AVX2 ON)
+endif()
+
+check_sse("AVX_VNNI" " ;/arch:AVX2")
+if ((NOT ${AVX_VNNI_FOUND}) OR (NOT ${AVX2_FOUND}))
+    set(GGML_AVX_VNNI OFF)
+else()
+    set(GGML_AVX_VNNI ON)
 endif()
 
 check_sse("AVX512" " ;/arch:AVX512")
