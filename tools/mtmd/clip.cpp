@@ -3740,17 +3740,20 @@ struct clip_model_loader {
                 ctx_clip.bufs.emplace_back(std::move(cur_buf));
             }
 
-            ggml_backend_buffer_ptr buf { ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft) };
-            if (buf) {
+            bool needs_alloc = false;
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx_clip.ctx_data.get()); t; t = ggml_get_next_tensor(ctx_clip.ctx_data.get(), t)) {
+                if (!t->buffer && ggml_nbytes(t) > 0) {
+                    needs_alloc = true;
+                    break;
+                }
+            }
+            if (needs_alloc) {
+                ggml_backend_buffer_ptr buf { ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft) };
+                if (!buf) {
+                    throw std::runtime_error(string_format("%s: unable to allocate %s buffer\n", __func__, ggml_backend_buft_name(buft)));
+                }
                 ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                 ctx_clip.bufs.emplace_back(std::move(buf));
-            }
-            // a null result above can also mean there was nothing left to allocate,
-            // so verify that every tensor ended up with a buffer
-            for (ggml_tensor * t = ggml_get_first_tensor(ctx_clip.ctx_data.get()); t; t = ggml_get_next_tensor(ctx_clip.ctx_data.get(), t)) {
-                if (!t->buffer) {
-                    throw std::runtime_error(string_format("%s: failed to allocate buffer for tensor %s\n", __func__, t->name));
-                }
             }
             // read the weight from file
             if (!ctx_clip.no_alloc) {
@@ -3758,6 +3761,11 @@ struct clip_model_loader {
                 for (auto & t : tensors_to_load) {
                     ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
                     GGML_ASSERT(cur && "tensor not found in ctx_data");
+                    size_t num_bytes = ggml_nbytes(cur);
+                    if (num_bytes == 0) {
+                        continue; // zero-sized tensors have no data and may have no buffer
+                    }
+                    GGML_ASSERT(cur->buffer && "tensor not allocated");
                     auto it_off = tensor_offset.find(t->name);
                     GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
                     const size_t offset = it_off->second;
@@ -3765,12 +3773,11 @@ struct clip_model_loader {
                     if (!fin) {
                         throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
                     }
-                    size_t num_bytes = ggml_nbytes(cur);
-                    if (ggml_backend_buft_is_host(buft)) {
-                        // for the CPU and Metal backend, we can read directly into the tensor
+                    if (ggml_backend_buffer_is_host(cur->buffer)) {
+                        // host buffers (e.g. CPU and Metal) can be read into directly
                         fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
                     } else {
-                        // read into a temporary buffer first, then copy to device memory
+                        // read into a temporary buffer firt, then copy/convert the layout to device memory
                         read_buf.resize(num_bytes);
                         fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
                         ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
