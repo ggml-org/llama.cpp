@@ -471,7 +471,7 @@ static std::string detect_gguf_filename(const std::string & repo, const std::str
 
     std::vector<std::string> matches;
     std::string quant_upper = quant;
-    for (char & c : quant_upper) { c = (char)toupper(c); }
+    for (char & c : quant_upper) { c = (char)toupper((unsigned char)c); }
 
     for (const auto & sibling : j["siblings"]) {
         if (!sibling.contains("rfilename")) { continue; }
@@ -481,7 +481,7 @@ static std::string detect_gguf_filename(const std::string & repo, const std::str
         }
 
         std::string fname_upper = fname;
-        for (char & c : fname_upper) { c = (char)toupper(c); }
+        for (char & c : fname_upper) { c = (char)toupper((unsigned char)c); }
         if (fname_upper.find(quant_upper) != std::string::npos) {
             matches.push_back(fname);
         }
