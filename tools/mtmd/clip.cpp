@@ -3717,14 +3717,18 @@ struct clip_model_loader {
                 const auto & tensors = group.second;
                 const size_t align = ggml_backend_buft_get_alignment(cur_buft);
                 size_t total = 0;
+                size_t total_nbytes = 0;
                 for (ggml_tensor * t : tensors) {
                     total += GGML_PAD(ggml_backend_buft_get_alloc_size(cur_buft, t), align);
+                    total_nbytes += ggml_nbytes(t);
                 }
                 ggml_backend_buffer_ptr cur_buf { ggml_backend_buft_alloc_buffer(cur_buft, total) };
                 if (!cur_buf) {
                     LOG_WRN("%s: failed to allocate %s buffer, using default buffer type\n", __func__, ggml_backend_buft_name(cur_buft));
                     continue;
                 }
+                // the weight memory counter assumed ggml_nbytes, account for the actual allocated size
+                ctx_clip.mem_usage[dev] += total - total_nbytes;
                 ggml_backend_buffer_set_usage(cur_buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                 char * base = (char *) ggml_backend_buffer_get_base(cur_buf.get());
                 size_t offset = 0;
