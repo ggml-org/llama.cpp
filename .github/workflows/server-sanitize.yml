@@ -103,7 +103,7 @@ jobs:
           source .venv/bin/activate
           cd tools/server/tests
           export ${{ matrix.extra_args }}
-          PYTEST_WORKERS=2 ./tests.sh
+          PYTEST_WORKERS=1 ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow
