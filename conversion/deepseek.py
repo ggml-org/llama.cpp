@@ -1011,8 +1011,8 @@ class DeepseekV4DSparkModel(DeepseekV4Model):
         # the DFlash draft uses the plain exp-probs bias (ffn.gate.bias -> FFN_EXP_PROBS_B);
         # the mtmd-only hash routing tensors (bias_vl, tid2eid) are not part of the DFLASH arch
         if name.endswith(".ffn.gate.bias_vl"):
-            return []
-        return super().modify_tensors(data_torch, name, bid)
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def set_vocab(self):
         if self.target_model_dir is None:
