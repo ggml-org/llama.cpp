@@ -55,6 +55,7 @@
 #include "ggml-cuda/mean.cuh"
 #include "ggml-cuda/tsembd.cuh"
 #include "ggml-cuda/topk-moe.cuh"
+#include "ggml-cuda/moe-ffn.cuh"
 #include "ggml-cuda/unary.cuh"
 #include "ggml-cuda/upscale.cuh"
 #include "ggml-cuda/wkv.cuh"
@@ -89,6 +90,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -726,6 +728,8 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
 // cuda buffer
 
+static size_t ggml_backend_cuda_tensor_alloc_size_base(int device, const ggml_tensor * tensor);
+
 struct ggml_backend_cuda_buffer_context {
     int device;
     void * dev_ptr = nullptr;
@@ -837,6 +841,7 @@ static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, co
             CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, dst_physical, src->data, src_physical, ggml_nbytes(src), cudaStreamPerThread));
 #endif
         }
+        ggml_cuda_set_device(dst_ctx->device);
         CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
         return true;
     }
@@ -908,21 +913,25 @@ static size_t ggml_backend_cuda_buffer_type_get_alignment(ggml_backend_buffer_ty
     GGML_UNUSED(buft);
 }
 
-static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-    ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
-
+static size_t ggml_backend_cuda_tensor_alloc_size_base(int device, const ggml_tensor * tensor) {
     size_t size = tensor->op == GGML_OP_FLASH_ATTN_EXT
-        ? ggml_cuda_flash_attn_ext_get_alloc_size(buft_ctx->device, tensor)
+        ? ggml_cuda_flash_attn_ext_get_alloc_size(device, tensor)
         : ggml_nbytes(tensor);
-    int64_t ne0 = tensor->ne[0];
 
     // [TAG_ALLOC_SIZE_EXPAND]
     if (ggml_is_quantized(tensor->type)) {
+        const int64_t ne0 = tensor->ne[0];
         if (ne0 % MATRIX_ROW_PADDING != 0) {
             GGML_ASSERT(tensor->nb[0] == ggml_element_size(tensor));
             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
         }
     }
+    return size;
+}
+
+static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
+    ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
+    const size_t size = ggml_backend_cuda_tensor_alloc_size_base(buft_ctx->device, tensor);
 
     return size;
 }
@@ -1815,7 +1824,9 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     return use_mul_mat_vec_q;
 }
 
-static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+static void ggml_cuda_mul_mat(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+        ggml_tensor * dst) {
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int32_t hint = ggml_get_op_params_i32(dst, 1);
@@ -2257,6 +2268,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_MUL_MAT_ID:
             ggml_cuda_mul_mat_id(ctx, dst);
             break;
+        case GGML_OP_MOE_FFN:
+            ggml_cuda_moe_ffn(ctx, dst);
+            break;
         case GGML_OP_OUT_PROD:
             ggml_cuda_out_prod(ctx, dst);
             break;
@@ -2533,6 +2547,7 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
         // src and dst are on the same backend
         CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
     }
+    ggml_cuda_set_device(cuda_ctx_dst->device);
     return true;
 }
 
@@ -4317,6 +4332,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     continue;
                 }
 
+
                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
 
                 if (nodes_to_skip != 0) {
@@ -5169,6 +5185,43 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     default:
                         return false;
                 }
+            } break;
+        case GGML_OP_MOE_FFN:
+            {
+                const ggml_tensor * x         = op->src[0];
+                const ggml_tensor * gate_inp  = op->src[1];
+                const ggml_tensor * up_exps   = op->src[2];
+                const ggml_tensor * down_exps = op->src[4];
+
+                if (x->type != GGML_TYPE_F32 || gate_inp->type != GGML_TYPE_F32) {
+                    return false;
+                }
+
+                // merged gate_up is split by pointer offset, which has to stay float4-aligned
+                if (!op->src[3] && (up_exps->ne[1]/2) % 4 != 0) {
+                    return false;
+                }
+
+                // needs an instantiation of the topk-moe kernel
+                const int64_t n_expert = gate_inp->ne[1];
+                if (((n_expert & (n_expert - 1)) != 0 || n_expert > 512) && n_expert != 288 && n_expert != 576) {
+                    return false;
+                }
+
+                const int    cc    = ggml_cuda_info().devices[dev_ctx->device].cc;
+                const size_t smpbo = ggml_cuda_info().devices[dev_ctx->device].smpbo;
+
+                // mm_ids_helper keeps all token slots of one expert in shared memory
+                if (x->ne[1]*sizeof(int32_t) > smpbo) {
+                    return false;
+                }
+
+                for (const ggml_tensor * exps : { up_exps, down_exps }) {
+                    if (!ggml_cuda_should_use_mmq(exps->type, cc, x->ne[1], n_expert)) {
+                        return false;
+                    }
+                }
+                return true;
             } break;
         case GGML_OP_OUT_PROD:
             return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
