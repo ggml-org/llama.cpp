@@ -240,7 +240,9 @@ void server_connect::stop() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    // no-op if the child already exited; also unblocks the log thread by closing its stdout
+    // no-op if the child already exited. the log thread leaves fgets() on EOF, which the kernel
+    // raises once every writer of the stdout pipe is gone, so llama-connect must not spawn
+    // children of its own: one of them holding that pipe blocks the join below forever
     proc->terminate();
 
     if (log_thread.joinable()) {

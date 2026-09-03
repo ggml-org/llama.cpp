@@ -184,6 +184,10 @@ int llama_server(common_params & params, int argc, char ** argv) {
             return 1;
         }
         params.server_connect_code = server_connect::resolve_code(params.server_connect_code);
+    } else if (!params.server_connect_code.empty()) {
+        // the code is only meaningful while the tunnel runs, and /props keys off it being set
+        SRV_WRN("%s", "--connect-code is ignored without --connect\n");
+        params.server_connect_code.clear();
     }
 
     // note: this is guaranteed to out-live ctx_http and tools
