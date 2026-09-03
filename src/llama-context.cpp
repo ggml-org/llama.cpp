@@ -2109,7 +2109,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
 #if defined(GGML_USE_HIP)
-                if (embd_nextn_device_preferred && ggml_backend_is_cuda(backend_h)) {
+                // Borrowed device tensors survive only a single-ubatch decode.
+                // A later ubatch reuses the graph storage, so deferring that
+                // copy would retain a stale pointer (and possibly the previous
+                // ubatch's larger byte count). Materialize multi-ubatch rows in
+                // stream order instead.
+                if (device_views_valid && embd_nextn_device_preferred && ggml_backend_is_cuda(backend_h)) {
                     pending_embd_nextn_copies.push_back({
                         t_h_nextn, backend_h, embd_nextn_out,
                         (size_t) n_rows * n_embd * sizeof(float) });
@@ -2388,7 +2393,7 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
             embd_layer_inp_device[il] = {};
         }
 #if defined(GGML_USE_HIP)
-        if (il < embd_layer_inp_device_preferred.size() &&
+        if (device_views_valid && il < embd_layer_inp_device_preferred.size() &&
                 embd_layer_inp_device_preferred[il] && ggml_backend_is_cuda(backend)) {
             pending_embd_layer_inp_copies[il].push_back({
                 t, backend, embd_layer_inp[il].data + dst_offset, nbytes });
