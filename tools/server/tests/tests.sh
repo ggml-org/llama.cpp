@@ -11,11 +11,10 @@ WORKERS="${PYTEST_WORKERS:-auto}"
 if [ $# -lt 1 ]
 then
     if [[ "${SLOW_TESTS:-0}" == 1 ]]; then
-        # --dist=loadfile means that all tests in the same file will be sent to the same worker.
-        pytest --durations=30 -v -x -n "${WORKERS}" --dist=loadfile
+        pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal
     else
-        pytest --durations=30 -v -x -n "${WORKERS}" --dist=loadfile -m "not slow"
+        pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal -m "not slow"
     fi
 else
-    pytest --durations=30 -n "${WORKERS}" --dist=loadfile "$@"
+    pytest --durations=30 -n "${WORKERS}" --dist=worksteal "$@"
 fi
