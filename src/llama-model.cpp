@@ -1816,6 +1816,14 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         return true;
     }
 
+    // without mmap, load non-host buffers first: their tensors go through a staging buffer, which is cheapest while the fewest weights are resident
+    if (!ml.use_mmap) {
+        std::stable_partition(ctx_buf_maps.begin(), ctx_buf_maps.end(), [](const auto & ctx_buf_map) {
+            const auto & buf_map = ctx_buf_map.second;
+            return !buf_map.empty() && !ggml_backend_buffer_is_host(buf_map.begin()->second);
+        });
+    }
+
     // load tensor data
     for (auto & [ctx, buf_map] : ctx_buf_maps) {
         if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
