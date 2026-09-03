@@ -1329,6 +1329,17 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `parse_tool_calls`: Whether to parse the generated tool call.
 
+`tools[].function.defer_loading`: When `true`, the tool is still declared to the sampling grammar - so the model can call it - but its schema is left out of the rendered prompt. This lets a client keep a large tool set available without paying for every schema in context, and reveal a schema to the model on demand (via a tool result, a system message, or its own search tool) without changing the declared tool set. Because the declared set is what the prompt is built from, keeping it constant is also what preserves the prompt cache: tools render at the very start of the prompt, so adding one mid-conversation invalidates the whole cached prefix. At least one tool must be left un-deferred, otherwise the request is rejected - templates render their tool section conditionally on a non-empty tool list, and deferring everything would produce a prompt that never mentions tools while the grammar still expects calls.
+
+```json
+{
+  "tools": [
+    { "type": "function", "function": { "name": "search_tools", "description": "...", "parameters": {} } },
+    { "type": "function", "function": { "name": "get_weather", "description": "...", "parameters": {}, "defer_loading": true } }
+  ]
+}
+```
+
 `parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
 
 For multimodal input (typed content, `messages[i].content[j]`):
