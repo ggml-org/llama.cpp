@@ -792,7 +792,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
 
 // The canvas is ceil-aligned to patch_size*n_merge and fitted to the token budget.
 // Only rescaled to meet the budget and sits top-left, with black padding on the right and bottom
-mtmd_image_preproc_out mtmd_image_preprocessor_glm5v::preprocess(const clip_image_u8 & img) {
+mtmd_image_preproc_out mtmd_image_preprocessor_glm5v::preprocess(const clip_image_u8 & img) const {
     GGML_ASSERT(hparams.image_min_pixels > 0 && hparams.image_max_pixels > 0);
 
     const int64_t factor  = hparams.patch_size * hparams.n_merge;
