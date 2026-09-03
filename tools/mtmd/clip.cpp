@@ -1636,7 +1636,6 @@ struct clip_model_loader {
                             hparams.patch_size = hparams.patch_size * hparams.n_merge;
                             hparams.n_merge = 1;
                         }
-                        // @ngxson : the model performs quite poor with small images, we need to bump minimum image tokens to 70 to avoid that
                         hparams.set_limit_image_tokens(70, 1120);
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
