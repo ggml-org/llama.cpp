@@ -337,7 +337,7 @@ void main() {
     if (tid < BN) {
         row_ids[tid] = u16vec4(0);
     }
-#if !defined(NEEDS_INIT_IQ_SHMEM) && !defined(MULMAT_QUANT)
+#if !defined(NEEDS_INIT_IQ_SHMEM)
     barrier();
 #endif
 #endif
@@ -424,15 +424,8 @@ void main() {
 #endif
     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> tensorLayoutD = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
 
-#ifndef MULMAT_QUANT
-#if QUANT_K > 1
-    tensorLayoutA = setTensorLayoutBlockSizeNV(tensorLayoutA, 1, QUANT_K);
-    tensorLayoutAClamp = setTensorLayoutBlockSizeNV(tensorLayoutAClamp, 1, QUANT_K);
-#endif
-#else
     tensorLayoutA = setTensorLayoutBlockSizeNV(tensorLayoutA, 1, qk);
     tensorLayoutAClamp = setTensorLayoutBlockSizeNV(tensorLayoutAClamp, 1, qk);
-#endif
 #if defined(MUL_MAT_ID) && defined(GGML_VULKAN_COOPMAT2_DECODE_VECTOR)
     tensorLayoutB = setTensorLayoutBlockSizeNV(tensorLayoutB, 1, BK);
 #endif
