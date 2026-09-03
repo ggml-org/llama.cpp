@@ -942,6 +942,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
                 nsg = N_SG_IQ3_XXS;
                 nr0 = N_R0_IQ3_XXS;
                 smem = 256*4+128;
+
+                // use the row-split kernel when there are fewer than 32 chunks per row
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ3_XXS_SPLIT;
+                    suffix = "_split";
+                }
             } break;
         case GGML_TYPE_IQ3_S:
             {
@@ -1177,6 +1184,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
                 nsg = N_SG_IQ3_XXS;
                 nr0 = N_R0_IQ3_XXS;
                 smem = 256*4+128;
+
+                // use the row-split kernel when there are fewer than 32 chunks per row
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ3_XXS_SPLIT;
+                    suffix = "_split";
+                }
             } break;
         case GGML_TYPE_IQ3_S:
             {
