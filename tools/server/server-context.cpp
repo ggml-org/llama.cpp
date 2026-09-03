@@ -474,10 +474,9 @@ struct server_slot {
         return !!spec;
     }
 
-    // at temp 0 both p and q are point masses, so rejection is the same as sample-and-match.
-    // a grammar rules it out entirely: the residual is drawn from an unfiltered candidate array
+    // at temp 0 both p and q are point masses, so rejection is the same as sample-and-match
     bool use_spec_rejection() const {
-        return task && task->params.sampling.temp > 0.0f && task->params.sampling.grammar.empty();
+        return task && task->params.sampling.temp > 0.0f;
     }
 
     void add_token(const completion_token_output & token) {
