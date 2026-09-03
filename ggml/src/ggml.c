@@ -1253,10 +1253,10 @@ static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "SWIGLU_OAI",
     "GEGLU_ERF",
     "GEGLU_QUICK",
+    "SWIGLU_CLAMP",
 };
 
-static_assert(GGML_GLU_OP_COUNT == 6, "GGML_GLU_OP_COUNT != 6");
-
+static_assert(GGML_GLU_OP_COUNT == 7, "GGML_GLU_OP_COUNT != 7");
 
 static_assert(sizeof(struct ggml_object)%GGML_MEM_ALIGN == 0, "ggml_object size must be a multiple of GGML_MEM_ALIGN");
 static_assert(sizeof(struct ggml_tensor)%GGML_MEM_ALIGN == 0, "ggml_tensor size must be a multiple of GGML_MEM_ALIGN");
@@ -3119,6 +3119,17 @@ struct ggml_tensor * ggml_swiglu_oai(
     return result;
 }
 
+struct ggml_tensor * ggml_swiglu_clamp(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        float                 limit) {
+    struct ggml_tensor * result = ggml_glu_impl(ctx, a, b, GGML_GLU_OP_SWIGLU_CLAMP, false);
+    ggml_set_op_params_f32(result, 3, limit);
+
+    return result;
+}
+
 // ggml_norm
 
 static struct ggml_tensor * ggml_norm_impl(
@@ -4042,6 +4053,41 @@ struct ggml_tensor * ggml_diag_mask_zero_inplace(
     return ggml_diag_mask_zero_impl(ctx, a, n_past, true);
 }
 
+// ggml_clamp
+
+static struct ggml_tensor * ggml_clamp_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 min,
+        float                 max,
+        bool                  inplace) {
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+
+    float params[] = { min, max };
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_CLAMP;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_clamp(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    float                 min,
+    float                 max) {
+    return ggml_clamp_impl(ctx, a, min, max, false);
+}
+
+struct ggml_tensor * ggml_clamp_inplace(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    float                 min,
+    float                 max) {
+    return ggml_clamp_impl(ctx, a, min, max, true);
+}
+
 // ggml_soft_max
 
 static struct ggml_tensor * ggml_soft_max_impl(
@@ -4436,25 +4482,6 @@ struct ggml_tensor * ggml_rope_set_offset(
 
     ggml_set_op_params_i32(a, 15, n_offs);
     return a;
-}
-
-// ggml_clamp
-
-struct ggml_tensor * ggml_clamp(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        float                 min,
-        float                 max) {
-    // TODO: when implement backward, fix this:
-    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
-
-    float params[] = { min, max };
-    ggml_set_op_params(result, params, sizeof(params));
-
-    result->op     = GGML_OP_CLAMP;
-    result->src[0] = a;
-
-    return result;
 }
 
 static int64_t ggml_calc_conv_output_size(int64_t ins, int64_t ks, int s, int p, int d) {
@@ -5477,6 +5504,15 @@ enum ggml_prec ggml_flash_attn_ext_get_prec(
     const int32_t prec_i32 = ggml_get_op_params_i32(a, 3);
 
     return (enum ggml_prec) prec_i32;
+}
+
+void ggml_flash_attn_ext_set_n_kv_max(
+        struct ggml_tensor * a,
+        int32_t              n_kv_max) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(n_kv_max >= 0);
+
+    ggml_set_op_params_i32(a, 4, n_kv_max);
 }
 
 void ggml_flash_attn_ext_add_sinks(
@@ -7299,7 +7335,7 @@ void ggml_build_backward_expand(
         }
 
         // inplace operations are currently not supported
-        GGML_ASSERT(!node->view_src || node->op == GGML_OP_CPY || node->op == GGML_OP_VIEW ||
+        GGML_ASSERT(!node->view_src || node->op == GGML_OP_CPY || node->op == GGML_OP_SET_ROWS || node->op == GGML_OP_VIEW ||
             node->op == GGML_OP_RESHAPE || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_TRANSPOSE);
 
         const size_t ihash = ggml_hash_find(&cgraph->visited_hash_set, node);

@@ -75,6 +75,7 @@
 #define KEY_SAM_N_HEAD             "clip.vision.sam.head_count"
 #define KEY_SAM_N_BLOCK            "clip.vision.sam.block_count"
 #define KEY_SAM_N_EMBD             "clip.vision.sam.embedding_length"
+#define KEY_VISION_N_EXPERT_USED   "clip.vision.expert_used_count"
 // audio-specific
 #define KEY_AUDIO_PROJ_TYPE        "clip.audio.projector_type" // for models with mixed modalities
 #define KEY_A_NUM_MEL_BINS         "clip.audio.num_mel_bins"
@@ -119,7 +120,11 @@
 #define TN_FFN_DOWN        "%s.blk.%d.ffn_down.%s"
 #define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
 #define TN_FFN_UP          "%s.blk.%d.ffn_up.%s"
-#define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
+#define TN_FFN_GATE_INP    "%s.blk.%d.ffn_gate_inp.%s"    // MoE router (dots3note)
+#define TN_FFN_GATE_EXPS   "%s.blk.%d.ffn_gate_exps.%s"
+#define TN_FFN_UP_EXPS     "%s.blk.%d.ffn_up_exps.%s"
+#define TN_FFN_DOWN_EXPS   "%s.blk.%d.ffn_down_exps.%s"
+#define TN_FFN_EXP_PROBS_B "%s.blk.%d.exp_probs_b.%s"
 #define TN_LN_1            "%s.blk.%d.ln1.%s" // layer norm
 #define TN_LN_2            "%s.blk.%d.ln2.%s" // layer norm
 #define TN_LS_1            "%s.blk.%d.ls1.%s"         // layer scale
@@ -148,6 +153,9 @@
 #define TN_MM_MERGER_FC1   "mm.merger.fc1.%s"            // minimax-m3 patch-merge MLP
 #define TN_MM_MERGER_FC2   "mm.merger.fc2.%s"
 #define TN_TOK_IMG_BREAK   "v.token_embd.img_break"     // pixtral
+#define TN_TOK_IMG_START   "v.token_embd.img_start"     // deepseek4v
+#define TN_TOK_IMG_END     "v.token_embd.img_end"       // deepseek4v
+#define TN_TOK_IMG_PAD     "v.token_embd.img_pad"       // deepseek4v
 #define TN_TOK_GLM_BOI     "adapter.boi"                // glm-edge (these embeddings are not in text model)
 #define TN_TOK_GLM_EOI     "adapter.eoi"                // glm-edge (these embeddings are not in text model)
 #define TN_DEEPSTACK_NORM  "v.deepstack.%d.norm.%s"     // qwen3vl deepstack
@@ -291,8 +299,8 @@
 
 // hunyuanvl (shared GGUF tensor names)
 #define TN_MM_PRE_NORM     "mm.pre_norm.%s"
-#define TN_TOK_IMG_BEGIN   "mm.image_begin"
-#define TN_TOK_IMG_END     "mm.image_end"
+#define TN_MM_IMG_BEGIN    "mm.image_begin" // note: legacy name, new models should use v.token_embd.*
+#define TN_MM_IMG_END      "mm.image_end"   // note: legacy name, new models should use v.token_embd.*
 
 // deepseek-ocr
 #define TN_SAM_POS_EMBD   "v.sam.pos_embd.%s"
@@ -471,8 +479,11 @@ enum projector_type {
     PROJECTOR_TYPE_COGVLM,
     PROJECTOR_TYPE_JANUS_PRO,
     PROJECTOR_TYPE_DOTS_OCR,
+    PROJECTOR_TYPE_DOTS3NOTE_V,
+    PROJECTOR_TYPE_DOTS3NOTE_A,
     PROJECTOR_TYPE_DEEPSEEKOCR,
     PROJECTOR_TYPE_DEEPSEEKOCR2,
+    PROJECTOR_TYPE_DEEPSEEK4V,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_YOUTUVL,
@@ -533,8 +544,11 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_COGVLM,            "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO,         "janus_pro"},
     { PROJECTOR_TYPE_DOTS_OCR,          "dots_ocr"},
+    { PROJECTOR_TYPE_DOTS3NOTE_V,       "dots3note_v"},
+    { PROJECTOR_TYPE_DOTS3NOTE_A,       "dots3note_a"},
     { PROJECTOR_TYPE_DEEPSEEKOCR,       "deepseekocr"},
     { PROJECTOR_TYPE_DEEPSEEKOCR2,      "deepseekocr2"},
+    { PROJECTOR_TYPE_DEEPSEEK4V,        "deepseek4v"},
     { PROJECTOR_TYPE_LFM2A,             "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,             "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,           "youtuvl"},
@@ -646,6 +660,9 @@ struct clip_image_f32 {
     // appends a learned newline (or EOI) token after the image
     // no model uses it now (Granite4 Vision moved to anyres), kept for future models
     bool add_newline = false;
+    // deepseek4v: number of leading IMAGE_PAD embeddings, aligns IMAGE_START to the LLM compressor ratio
+    // depends on the chunk position, set at tokenize time (see mtmd_tokenizer::add_media)
+    int32_t lead_pad = 0;
 
     // llava-next "anyres" tiling, used by Granite4 Vision
     // the whole grid is encoded and assembled in a single graph
@@ -760,6 +777,22 @@ static inline void clip_anyres_unpad(int cur_w, int cur_h, int orig_w, int orig_
         off_x = (cur_w - new_w) / 2;
         out_w = cur_w - 2 * off_x;
     }
+}
+
+// deepseek4v: layout of the LLM token block built from the aligner grid
+struct dsv4_block_layout {
+    int rows;     // grid rows, padded to an even count
+    int row_len;  // grid width + 1 newline
+    int pad_last; // trailing pads
+    int n_out;    // total block size, including lead pads and the start/end sentinels
+};
+static inline dsv4_block_layout dsv4_get_block_layout(int n_llm_w, int n_llm_h, int lead_pad) {
+    dsv4_block_layout bl;
+    bl.rows     = n_llm_h + (n_llm_h % 2);
+    bl.row_len  = n_llm_w + 1;
+    bl.pad_last = (bl.rows / 2 * bl.row_len) % 2 * 2;
+    bl.n_out    = lead_pad + 1 + bl.rows * bl.row_len + bl.pad_last + 1;
+    return bl;
 }
 
 //

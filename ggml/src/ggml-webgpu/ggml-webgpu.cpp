@@ -2714,6 +2714,7 @@ static webgpu_encoded_op ggml_webgpu_rope(webgpu_context & ctx,
     const int n_dims     = ((int32_t *) dst->op_params)[1];
     const int mode       = ((int32_t *) dst->op_params)[2];
     const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
+    const int n_offs     = ((int32_t *) dst->op_params)[15];
 
     float freq_base;
     float freq_scale;
@@ -2762,7 +2763,8 @@ static webgpu_encoded_op ggml_webgpu_rope(webgpu_context & ctx,
         (uint32_t) sections[0],
         (uint32_t) sections[1],
         (uint32_t) sections[2],
-        (uint32_t) sections[3]
+        (uint32_t) sections[3],
+        (uint32_t) n_offs
     };
 
     std::vector<wgpu::BindGroupEntry> entries     = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0),
@@ -2833,7 +2835,7 @@ static webgpu_encoded_op ggml_webgpu_glu(webgpu_context & ctx,
         (uint32_t) dst->ne[2],
         (uint32_t) ((int32_t *) dst->op_params)[1],                // swapped
         ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 2)),  // alpha, for swiglu_oai
-        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 3)),  // limit, for swiglu_oai
+        ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 3)),  // limit
     };
 
     std::vector<wgpu::BindGroupEntry> entries;
@@ -3711,11 +3713,18 @@ static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
 
     size_t total_offset = ggml_webgpu_tensor_offset(tensor) + offset;
 
-    size_t final_size = size;
-    if (size % 4 != 0) {
+    size_t local_offset = total_offset % 4;
+    if (local_offset != 0) {
+        // If offset is not a multiple of 4, we need to round it down to the previous
+        // multiple of 4
+        total_offset -= local_offset;
+    }
+
+    size_t final_size = size + local_offset;
+    if (final_size % 4 != 0) {
         // If size is not a multiple of 4, we need to round it up to the next
         // multiple of 4
-        final_size = size + (4 - (size % 4));
+        final_size += 4 - (final_size % 4);
     }
 
     std::lock_guard<std::recursive_mutex> lock(buf_ctx->global_ctx->mutex);
@@ -3746,7 +3755,7 @@ static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
     const void * mapped_range = buf_ctx->global_ctx->get_tensor_staging_buf.GetConstMappedRange(0, final_size);
 
     // Copy the data from the mapped range to the output buffer
-    std::memcpy(data, mapped_range, size);
+    std::memcpy(data, (const void *) ((const char *) mapped_range + local_offset), size);
     buf_ctx->global_ctx->get_tensor_staging_buf.Unmap();
     WEBGPU_CPU_PROFILE_TOTAL_END(get_tensor, buf_ctx->global_ctx);
 }
@@ -4472,9 +4481,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = (op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32) && ggml_is_contiguous_rows(src0);
             break;
         case GGML_OP_ROPE:
-            // FIXME: support ggml_rope_set_offset
-            supports_op =
-                (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && ((const int32_t *) op->op_params)[15] == 0;
+            supports_op = op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16;
             break;
         case GGML_OP_GLU:
             switch (ggml_get_glu_op(op)) {
@@ -4483,6 +4490,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 case GGML_GLU_OP_SWIGLU:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
+                case GGML_GLU_OP_SWIGLU_CLAMP:
                     supports_op = op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16;
                     break;
                 case GGML_GLU_OP_SWIGLU_OAI:

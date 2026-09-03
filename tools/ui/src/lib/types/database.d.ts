@@ -1,6 +1,11 @@
-import { AttachmentType, ReasoningEffort } from '$lib/enums';
+import { AttachmentType, ReasoningEffort, ToolSource } from '$lib/enums';
 import type { ChatMessageTimings, ChatMessageType, ChatRole } from '$lib/types/chat';
 
+/**
+ * @deprecated Legacy per-conversation MCP server flags. MCP server enabled
+ * state is global now; per-conversation tool policy lives in
+ * `disabledTools` / `disabledToolCategories`. Read by the migration only.
+ */
 export interface McpServerOverride {
 	serverId: string;
 	enabled: boolean;
@@ -11,10 +16,15 @@ export interface DatabaseConversation {
 	id: string;
 	lastModified: number;
 	name: string;
+	/** @deprecated See {@link McpServerOverride}. Kept on rows for downgrade compatibility. */
 	mcpServerOverrides?: McpServerOverride[];
 	thinkingEnabled?: boolean;
 	reasoningEffort?: ReasoningEffort;
 	cwd?: string;
+	/** Tool keys disabled for this conversation, incl. server-scoped MCP group keys (`mcp:<serverId>`) */
+	disabledTools?: string[];
+	/** Tool categories disabled for this conversation */
+	disabledToolCategories?: ToolSource[];
 	forkedFromConversationId?: string;
 	pinned?: boolean;
 }

@@ -467,10 +467,15 @@ class GGUFWriter:
                     shard_bar.reset(total=(total if total > 0 else None))
 
                 # relying on the fact that Python dicts preserve insertion order (since 3.7)
-                for ti in tensors.values():
+                for name, ti in tensors.items():
                     assert ti.tensor is not None  # can only iterate once over the tensors
                     assert ti.tensor.nbytes == ti.nbytes
+                    start = fout.tell()
                     ti.tensor.tofile(fout)
+                    # a short write here would only surface as a corrupt file at load time
+                    if fout.tell() - start != ti.nbytes:
+                        raise ValueError(
+                            f"tensor {name!r} wrote {fout.tell() - start} bytes, expected {ti.nbytes}")
                     if shard_bar is not None:
                         shard_bar.update(ti.nbytes)
                     if bar is not None:
@@ -728,8 +733,11 @@ class GGUFWriter:
         else:
             self.add_array(Keys.LLM.FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 
-    def add_expert_feed_forward_length(self, length: int) -> None:
-        self.add_uint32(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
+    def add_expert_feed_forward_length(self, length: int | Sequence[int]) -> None:
+        if isinstance(length, int):
+            self.add_uint32(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
+        else:
+            self.add_array(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 
     def add_expert_shared_feed_forward_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_SHARED_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
@@ -784,6 +792,15 @@ class GGUFWriter:
 
     def add_key_length_swa(self, length: int) -> None:
         self.add_uint32(Keys.Attention.KEY_LENGTH_SWA.format(arch=self.arch), length)
+
+    def add_key_length_mla_swa(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.KEY_LENGTH_MLA_SWA.format(arch=self.arch), length)
+
+    def add_value_length_mla_swa(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.VALUE_LENGTH_MLA_SWA.format(arch=self.arch), length)
+
+    def add_kv_lora_rank_swa(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.KV_LORA_RANK_SWA.format(arch=self.arch), length)
 
     def add_value_length_swa(self, length: int) -> None:
         self.add_uint32(Keys.Attention.VALUE_LENGTH_SWA.format(arch=self.arch), length)
@@ -846,8 +863,11 @@ class GGUFWriter:
     def add_expert_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_COUNT.format(arch=self.arch), count)
 
-    def add_expert_used_count(self, count: int) -> None:
-        self.add_uint32(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
+    def add_expert_used_count(self, count: int | Sequence[int]) -> None:
+        if isinstance(count, int):
+            self.add_uint32(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
+        else:
+            self.add_array(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
 
     def add_expert_shared_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_SHARED_COUNT.format(arch=self.arch), count)
@@ -984,8 +1004,23 @@ class GGUFWriter:
     def add_block_size(self, value: int) -> None:
         self.add_uint32(Keys.LLM.BLOCK_SIZE.format(arch=self.arch), value)
 
+    def add_conv_kernel_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.CONV_KERNEL_SIZE.format(arch=self.arch), value)
+
+    def add_conv_group_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.CONV_GROUP_SIZE.format(arch=self.arch), value)
+
+    def add_selector_rank(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.SELECTOR_RANK.format(arch=self.arch), value)
+
+    def add_selector_top_k(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.SELECTOR_TOP_K.format(arch=self.arch), value)
+
     def add_sample_from_anchor(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SAMPLE_FROM_ANCHOR.format(arch=self.arch), value)
+
+    def add_has_confidence_head(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.HAS_CONFIDENCE_HEAD.format(arch=self.arch), value)
 
     def add_target_layers(self, value: Sequence[int]) -> None:
         self.add_array(Keys.LLM.TARGET_LAYERS.format(arch=self.arch), value)
@@ -1019,6 +1054,40 @@ class GGUFWriter:
 
     def add_hyper_connection_epsilon(self, value: float) -> None:
         self.add_float32(Keys.HyperConnection.EPSILON.format(arch=self.arch), value)
+
+    def add_hyper_connection_low_rank(self, value: int) -> None:
+        self.add_uint32(Keys.HyperConnection.LOW_RANK.format(arch=self.arch), value)
+
+    def add_ple_layers(self, values: Sequence[int]) -> None:
+        self.add_array(Keys.PerLayerEmbedding.LAYERS.format(arch=self.arch), values)
+
+    def add_ple_ngram_size(self, value: int) -> None:
+        self.add_uint32(Keys.PerLayerEmbedding.NGRAM_SIZE.format(arch=self.arch), value)
+
+    def add_ple_heads_per_ngram(self, value: int) -> None:
+        self.add_uint32(Keys.PerLayerEmbedding.HEADS_PER_NGRAM.format(arch=self.arch), value)
+
+    def add_ple_conv_kernel(self, value: int) -> None:
+        self.add_uint32(Keys.PerLayerEmbedding.CONV_KERNEL.format(arch=self.arch), value)
+
+    # multipliers reach ~2.4e13; default INT32 inference would truncate them
+    def _add_u64_array(self, key: str, values: Sequence[int]) -> None:
+        self.add_key_value(key, list(values), GGUFValueType.ARRAY, GGUFValueType.UINT64)
+
+    def add_ple_layer_multipliers(self, values: Sequence[int]) -> None:
+        self._add_u64_array(Keys.PerLayerEmbedding.LAYER_MULTIPLIERS.format(arch=self.arch), values)
+
+    def add_ple_head_offsets(self, values: Sequence[int]) -> None:
+        self._add_u64_array(Keys.PerLayerEmbedding.HEAD_OFFSETS.format(arch=self.arch), values)
+
+    def add_ple_head_vocab_sizes(self, values: Sequence[int]) -> None:
+        self._add_u64_array(Keys.PerLayerEmbedding.HEAD_VOCAB_SIZES.format(arch=self.arch), values)
+
+    def add_ple_eos_token_id(self, value: int) -> None:
+        self.add_uint32(Keys.PerLayerEmbedding.EOS_TOKEN_ID.format(arch=self.arch), value)
+
+    def add_ple_image_token_id(self, value: int) -> None:
+        self.add_uint32(Keys.PerLayerEmbedding.IMAGE_TOKEN_ID.format(arch=self.arch), value)
 
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)
@@ -1317,6 +1386,12 @@ class GGUFWriter:
 
     def add_vision_spatial_merge_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SPATIAL_MERGE_SIZE, value)
+
+    def add_vision_expert_count_per_layer(self, value: Sequence[int]) -> None:
+        self.add_array(Keys.ClipVision.EXPERT_COUNT_PER_LAYER, value)
+
+    def add_vision_expert_used_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.EXPERT_USED_COUNT, value)
 
     def add_vision_use_gelu(self, value: bool) -> None:
         self.add_bool(Keys.ClipVision.USE_GELU, value)

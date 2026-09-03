@@ -1,7 +1,5 @@
 <script lang="ts">
 	import { RefreshCw } from '@lucide/svelte';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
 	import {
 		SettingsChatDesktopSidebar,
 		SettingsChatFields,
@@ -15,24 +13,32 @@
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
 		SETTINGS_CHAT_SECTIONS,
-		SETTINGS_SECTION_TITLES
+		SETTINGS_SECTION_SLUGS
 	} from '$lib/constants';
 	import { ColorMode } from '$lib/enums/ui.enums';
-	import { RouterService } from '$lib/services/router.service';
-	import { modelsStore, serverStore, settingsReferrer, settingsStore } from '$lib/stores';
-	import type { SettingsSection } from '$lib/types';
+	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
+	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
 	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';
 	interface Props {
 		initialSection?: string;
-		getSectionHref?: (section: SettingsSection) => string;
+		onSectionChange?: (section: SettingsSectionTitle) => void;
+		onClose?: () => void;
 	}
 
-	let { getSectionHref, initialSection }: Props = $props();
+	let { initialSection, onClose, onSectionChange }: Props = $props();
 
-	let activeSlug = $derived(
-		initialSection ?? (page.params as Record<string, string | undefined>).section ?? 'general'
-	);
+	let activeSlug = $derived(initialSection ?? 'general');
+
+	function handleSectionChange(section: SettingsSectionTitle) {
+		const found = SETTINGS_CHAT_SECTIONS.find((s) => s.title === section);
+
+		if (found) {
+			activeSlug = found.slug;
+		}
+
+		onSectionChange?.(section);
+	}
 
 	let currentSection = $derived(
 		SETTINGS_CHAT_SECTIONS.find((section) => section.slug === activeSlug) ||
@@ -46,13 +52,13 @@
 	let fetchInitiated = false;
 
 	$effect(() => {
-		if (serverStore.isRouterMode && currentSection.fields && !fetchInitiated) {
+		if (serverStore.isRouterMode && currentSection.fields?.length && !fetchInitiated) {
 			fetchInitiated = true;
 
 			void modelsStore
 				.fetch()
 				.then(() => modelsStore.fetchRouterModels())
-				.then(() => modelsStore.fetchModalitiesForLoadedModels())
+				.then(() => modelsStore.props.fetchModalitiesForLoadedModels())
 				.then(() => modelsStore.ensureFirstModelSelected());
 		}
 	});
@@ -115,7 +121,7 @@
 		}
 
 		settingsStore.updateMultipleConfig(processedConfig);
-		goto(settingsReferrer.url);
+		onClose?.();
 	}
 
 	export function reset() {
@@ -123,34 +129,27 @@
 	}
 </script>
 
-<div class="mx-auto flex h-full w-full flex-col md:pl-8" in:fade={{ duration: 150 }}>
-	<div class="flex flex-1 flex-col gap-4 md:flex-row">
+<div in:fade={{ duration: 150 }} class="mx-auto flex h-full w-full flex-col">
+	<div class="flex flex-1 flex-col md:flex-row md:gap-4">
 		<SettingsChatDesktopSidebar
-			sections={SETTINGS_CHAT_SECTIONS}
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
-			getHref={getSectionHref ??
-				((section: SettingsSection) => RouterService.settings(section.slug))}
+			onSectionChange={handleSectionChange}
+			sections={SETTINGS_CHAT_SECTIONS}
 		/>
 
 		<SettingsChatMobileHeader
-			sections={SETTINGS_CHAT_SECTIONS}
-			isActive={(section: SettingsSection) => section.slug === activeSlug}
-			getHref={getSectionHref ??
-				((section: SettingsSection) => RouterService.settings(section.slug))}
 			bind:this={mobileHeader}
+			isActive={(section: SettingsSection) => section.slug === activeSlug}
+			onSectionChange={handleSectionChange}
+			sections={SETTINGS_CHAT_SECTIONS}
 		/>
 
-		<div class="mx-auto max-w-3xl flex-1">
-			<div class="space-y-6 p-4 md:p-6 md:pt-28">
+		<div class="mx-auto max-w-2xl px-4 flex-1 md:mt-4">
+			<div class="space-y-6 pt-3">
 				<div class="grid">
-					<div class="mb-6 flex items-center gap-2 border-b border-border/30 pb-6 md:flex">
-						<currentSection.icon class="h-5 w-5" />
-						<h3 class="text-lg font-semibold">{currentSection.title}</h3>
-					</div>
-
-					{#if currentSection.title === SETTINGS_SECTION_TITLES.TOOLS}
+					{#if currentSection.slug === SETTINGS_SECTION_SLUGS.TOOLS}
 						<SettingsChatToolsTab />
-					{:else if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
+					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.IMPORT_EXPORT}
 						<SettingsChatImportExportTab />
 					{:else if currentSection.fields}
 						<div class="space-y-6">
@@ -161,9 +160,9 @@
 								onThemeChange={handleThemeChange}
 							/>
 
-							{#if currentSection.title === SETTINGS_SECTION_TITLES.GENERAL}
+							{#if currentSection.slug === SETTINGS_SECTION_SLUGS.GENERAL}
 								<div class="flex justify-end">
-									<Button variant="outline" onclick={() => window.location.reload()}>
+									<Button onclick={() => window.location.reload()} variant="outline">
 										<RefreshCw class="h-3 w-3" />
 										Reload app
 									</Button>
