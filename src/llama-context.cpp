@@ -93,6 +93,7 @@ llama_context::llama_context(
 
     t_start_us = model.t_start_us;
     t_load_us  = model.t_load_us;
+    t_tensor_load_us = model.t_tensor_load_us;
 
     const auto & hparams = model.hparams;
 
@@ -3348,6 +3349,10 @@ llama_perf_context_data llama_context::perf_get_data() const {
     return data;
 }
 
+double llama_context::perf_get_tensor_load_ms() const {
+    return 1e-3 * t_tensor_load_us;
+}
+
 void llama_context::perf_reset() {
     t_start_us  = ggml_time_us();
     t_eval_us   = n_eval = 0;
@@ -4273,6 +4278,7 @@ void llama_perf_context_print(const llama_context * ctx) {
     const double t_end_ms = 1e-3 * ggml_time_us();
 
     LLAMA_LOG_INFO("%s:        load time = %10.2f ms\n", __func__, data.t_load_ms);
+    LLAMA_LOG_INFO("%s: tensor load time = %10.2f ms\n", __func__, ctx->perf_get_tensor_load_ms());
     LLAMA_LOG_INFO("%s: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
             __func__, data.t_p_eval_ms, data.n_p_eval, data.t_p_eval_ms / data.n_p_eval, 1e3 / data.t_p_eval_ms * data.n_p_eval);
     LLAMA_LOG_INFO("%s:        eval time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
