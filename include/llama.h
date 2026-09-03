@@ -1396,7 +1396,7 @@ extern "C" {
 
     /// @details SynthID text watermarking, compatible with the SynthIDTextWatermarkLogitsProcessor from HF transformers
     /// place it after truncation and temperature samplers and before the dist sampler
-    /// @param keys one watermarking key per tournament layer
+    /// @param keys secret watermarking keys, each key adds one tournament round (the HF default config uses 30 keys)
     /// @param sampling_table table of 0/1 values, maps a hashed ngram to a g-value
     /// @param ngram_len number of tokens hashed together (context of ngram_len - 1 tokens plus the candidate)
     /// @param context_history_size number of recent contexts to remember, a repeated context is not watermarked
