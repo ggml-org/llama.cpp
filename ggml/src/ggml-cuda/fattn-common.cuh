@@ -48,10 +48,56 @@ struct ggml_cuda_flash_attn_ext_f16_extra_data {
     uintptr_t K;
     uintptr_t V;
     uintptr_t end;
+    int64_t   kv_per_chunk; // 0 == no chunking
 };
 
+// Max size in bytes for the scratch buffers holding the K/V data converted to f16.
+// If exceeded, it is consumed in chunks (serial split-KV, see the chunk loop in launch_fattn).
+static int64_t ggml_cuda_flash_attn_ext_convert_bytes_max() {
+    static const int64_t convert_bytes_max = []() {
+        const char * env = getenv("GGML_CUDA_FATTN_CONVERT_BYTES");
+        return env ? std::max<int64_t>(atoll(env), 0) : 64ll*1024*1024;
+    }();
+    return convert_bytes_max;
+}
+
+// KV cache types for which scratch buffer chunking is enabled.
+// KV quantized q8_0 and below is where VRAM saving matters
+static bool ggml_cuda_fattn_type_chunk_enabled(ggml_type type) {
+    return ggml_is_quantized(type);
+}
+
+static int64_t ggml_cuda_flash_attn_ext_kv_per_chunk(
+        const ggml_tensor * K, const ggml_tensor * V,
+        const bool convert_K, const bool convert_V, const bool V_is_K_view, const bool kernel_supports_chunking) {
+    if (!kernel_supports_chunking) {
+        return 0;
+    }
+
+    if ((convert_K && !ggml_cuda_fattn_type_chunk_enabled(K->type)) ||
+        (convert_V && !ggml_cuda_fattn_type_chunk_enabled(V->type))) {
+        return 0;
+    }
+
+    int64_t bytes_per_kv = 0; // f16 bytes per KV cache position, summed over the converted tensors.
+    if (convert_K) {
+        bytes_per_kv += K->ne[0]*K->ne[2]*K->ne[3]*ggml_type_size(GGML_TYPE_F16);
+    }
+    if (convert_V && !V_is_K_view) {
+        bytes_per_kv += V->ne[0]*V->ne[2]*V->ne[3]*ggml_type_size(GGML_TYPE_F16);
+    }
+
+    const int64_t convert_bytes_max = ggml_cuda_flash_attn_ext_convert_bytes_max();
+    if (bytes_per_kv*K->ne[1] <= convert_bytes_max) {
+        return 0;
+    }
+
+    const int64_t rows_max = std::max((int64_t) FATTN_KQ_STRIDE, (convert_bytes_max/bytes_per_kv/FATTN_KQ_STRIDE)*FATTN_KQ_STRIDE);
+    return rows_max < K->ne[1] ? rows_max : 0;
+}
+
 static inline ggml_cuda_flash_attn_ext_f16_extra_data ggml_cuda_flash_attn_ext_get_f16_extra_data(
-        const ggml_tensor * dst, const bool need_f16_K, const bool need_f16_V) {
+        const ggml_tensor * dst, const bool need_f16_K, const bool need_f16_V, const bool kernel_supports_chunking) {
     GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
 
     const ggml_tensor * K = dst->src[1];
@@ -62,22 +108,28 @@ static inline ggml_cuda_flash_attn_ext_f16_extra_data ggml_cuda_flash_attn_ext_g
 
     const bool V_is_K_view = V->view_src && (V->view_src == K || (V->view_src == K->view_src && V->view_offs == K->view_offs));
 
-    ggml_cuda_flash_attn_ext_f16_extra_data data = {};
-    data.end = (uintptr_t) dst->data + ggml_nbytes(dst);
+    const bool convert_K = need_f16_K && K->type != GGML_TYPE_F16;
+    const bool convert_V = need_f16_V && V->type != GGML_TYPE_F16;
 
-    if (need_f16_K && K->type != GGML_TYPE_F16) {
+    ggml_cuda_flash_attn_ext_f16_extra_data data = {};
+    data.end          = (uintptr_t) dst->data + ggml_nbytes(dst);
+    data.kv_per_chunk = ggml_cuda_flash_attn_ext_kv_per_chunk(K, V, convert_K, convert_V, V_is_K_view, kernel_supports_chunking);
+
+    if (convert_K) {
         data.end = GGML_PAD(data.end, 128);
         data.K   = data.end;
-        data.end += ggml_nelements(K)*ggml_type_size(GGML_TYPE_F16);
+        const int64_t ne1 = data.kv_per_chunk > 0 ? data.kv_per_chunk : K->ne[1];
+        data.end += K->ne[0]*ne1*K->ne[2]*K->ne[3]*ggml_type_size(GGML_TYPE_F16);
     }
 
-    if (need_f16_V && V->type != GGML_TYPE_F16) {
+    if (convert_V) {
         if (V_is_K_view) {
             data.V = data.K;
         } else {
             data.end = GGML_PAD(data.end, 128);
             data.V   = data.end;
-            data.end += ggml_nelements(V)*ggml_type_size(GGML_TYPE_F16);
+            const int64_t ne1 = data.kv_per_chunk > 0 ? data.kv_per_chunk : V->ne[1];
+            data.end += V->ne[0]*ne1*V->ne[2]*V->ne[3]*ggml_type_size(GGML_TYPE_F16);
         }
     }
 
@@ -723,6 +775,7 @@ __launch_bounds__(D, 1)
 static __global__ void flash_attn_stream_k_fixup_uniform(
         float * dst_ptr,
         const float2 * dst_fixup_ptr,
+        float2 * dst_meta_partial_ptr,
         const int ne01, const int ne02,
         const int ne12, const int nblocks_stream_k,
         const int gqa_ratio,
@@ -732,8 +785,9 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
         const uint3 fd_iter_j) {
     constexpr int ncols = ncols1*ncols2;
     ggml_cuda_pdl_lc();
-    float        * GGML_CUDA_RESTRICT dst       = dst_ptr;
-    const float2 * GGML_CUDA_RESTRICT dst_fixup = dst_fixup_ptr;
+    float        * GGML_CUDA_RESTRICT dst              = dst_ptr;
+    const float2 * GGML_CUDA_RESTRICT dst_fixup        = dst_fixup_ptr;
+    float2       * GGML_CUDA_RESTRICT dst_meta_partial = dst_meta_partial_ptr; // != nullptr when the result is an unnormalized partial.
 
     const int tile_idx = blockIdx.x; // One block per output tile.
     const int j        = blockIdx.y;
@@ -796,8 +850,16 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
         max_val = max_val_new;
     }
 
-    // Write back final result:
-    *dst = dst_val / rowsum;
+    if (dst_meta_partial == nullptr) {
+        *dst = dst_val / rowsum;
+        return;
+    }
+
+    // Unnormalized partial with (max, sum) per output row, for flash_attn_combine_results
+    *dst = dst_val;
+    if (tid == 0) {
+        dst_meta_partial[(sequence*ne01 + jt*ncols1 + j)*ne02 + zt_Q + c] = make_float2(max_val, rowsum);
+    }
 }
 
 // General fixup kernel for the case where the number of blocks per tile is not uniform across tiles
@@ -807,6 +869,7 @@ __launch_bounds__(D, 1)
 static __global__ void flash_attn_stream_k_fixup_general(
         float * dst_ptr,
         const float2 * dst_fixup_ptr,
+        float2 * dst_meta_partial_ptr,
         const int ne01, const int ne02,
         const int gqa_ratio,
         const int total_work,
@@ -814,8 +877,9 @@ static __global__ void flash_attn_stream_k_fixup_general(
         const uint3 fd_iter_k_j_z,
         const uint3 fd_iter_k_j,
         const uint3 fd_iter_k) {
-    float        * GGML_CUDA_RESTRICT dst       = dst_ptr;
-    const float2 * GGML_CUDA_RESTRICT dst_fixup = dst_fixup_ptr;
+    float        * GGML_CUDA_RESTRICT dst              = dst_ptr;
+    const float2 * GGML_CUDA_RESTRICT dst_fixup        = dst_fixup_ptr;
+    float2       * GGML_CUDA_RESTRICT dst_meta_partial = dst_meta_partial_ptr;
     constexpr int ncols = ncols1*ncols2;
 
     const int bidx0 = blockIdx.x;
@@ -907,8 +971,16 @@ static __global__ void flash_attn_stream_k_fixup_general(
         kbc_stop = kbc;
     }
 
-    // Write back final result:
-    *dst = dst_val / rowsum;
+    if (dst_meta_partial == nullptr) {
+        *dst = dst_val / rowsum;
+        return;
+    }
+
+    // Unnormalized partial with (max, sum) per output row, for flash_attn_combine_results
+    *dst = dst_val;
+    if (tid == 0) {
+        dst_meta_partial[(sequence*ne01 + jt*ncols1 + j)*ne02 + zt_Q + c] = make_float2(max_val, rowsum);
+    }
 }
 
 template<int D> // D == head size
@@ -916,12 +988,19 @@ __launch_bounds__(D, 1)
 static __global__ void flash_attn_combine_results(
         const float  * VKQ_parts_ptr,
         const float2 * VKQ_meta_ptr,
-        float * dst_ptr,
-        const int parallel_blocks) {
+        float        * dst_ptr,
+        float        * acc_O_ptr,
+        float2       * acc_meta_ptr,
+        const float  * sinks_ptr,
+        const int      parallel_blocks,
+        const bool     first) {
     ggml_cuda_pdl_lc();
     const float  * GGML_CUDA_RESTRICT VKQ_parts = VKQ_parts_ptr;
     const float2 * GGML_CUDA_RESTRICT VKQ_meta  = VKQ_meta_ptr;
     float        * GGML_CUDA_RESTRICT dst       = dst_ptr;
+    float        * GGML_CUDA_RESTRICT acc_O     = acc_O_ptr;
+    float2       * GGML_CUDA_RESTRICT acc_meta  = acc_meta_ptr;
+    const float  * GGML_CUDA_RESTRICT sinks     = sinks_ptr;
     // Dimension 0: threadIdx.x
     // Dimension 1: blockIdx.x
     // Dimension 2: blockIdx.y
@@ -939,7 +1018,6 @@ static __global__ void flash_attn_combine_results(
 
     VKQ_parts += j_dst_unrolled * parallel_blocks*D;
     VKQ_meta  += j_dst_unrolled * parallel_blocks;
-    dst       += j_dst_unrolled *                 D;
 
     const int tid = threadIdx.x;
     __builtin_assume(tid < D);
@@ -952,13 +1030,18 @@ static __global__ void flash_attn_combine_results(
 
     __syncthreads();
 
-    float kqmax = meta[0].x;
-    for (int l = 1; l < parallel_blocks; ++l) {
+    // Seed with the sink logit, applied exactly once - chunks are launched without sinks
+    const float2 acc = first ? make_float2(sinks ? sinks[head] : -FLT_MAX/2.0f, sinks ? 1.0f : 0.0f) : acc_meta[j_dst_unrolled];
+
+    float kqmax = acc.x;
+    for (int l = 0; l < parallel_blocks; ++l) {
         kqmax = max(kqmax, meta[l].x);
     }
 
-    float VKQ_numerator   = 0.0f;
-    float VKQ_denominator = 0.0f;
+    const float acc_scale = expf(acc.x - kqmax);
+
+    float VKQ_numerator   = first ? 0.0f : acc_scale * acc_O[j_dst_unrolled*D + tid];
+    float VKQ_denominator = acc_scale * acc.y;
     for (int l = 0; l < parallel_blocks; ++l) {
         const float KQ_max_scale = expf(meta[l].x - kqmax);
 
@@ -966,13 +1049,36 @@ static __global__ void flash_attn_combine_results(
         VKQ_denominator += KQ_max_scale * meta[l].y;
     }
 
-    dst[tid] = VKQ_numerator / VKQ_denominator;
+    if (dst) {
+        dst[j_dst_unrolled*D + tid] = VKQ_numerator / VKQ_denominator;
+        return;
+    }
+
+    acc_O[j_dst_unrolled*D + tid] = VKQ_numerator;
+    if (tid == 0) {
+        acc_meta[j_dst_unrolled] = make_float2(kqmax, VKQ_denominator);
+    }
+}
+
+template<int D> // D == head size
+static void launch_flash_attn_combine_results(
+        const float * VKQ_parts, const float2 * VKQ_meta, float * dst,
+        float * acc_O, float2 * acc_meta, const float * sinks, const int parallel_blocks, const bool first,
+        const int ne01, const int ne02, const int ne03, cudaStream_t stream) {
+    const dim3 block_dim_combine(D, 1, 1);
+    const dim3 blocks_num_combine(ne01, ne02, ne03);
+    const size_t nbytes_shared_combine = parallel_blocks*sizeof(float2);
+
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, nbytes_shared_combine, stream);
+    ggml_cuda_kernel_launch(flash_attn_combine_results<D>, launch_params,
+        VKQ_parts, VKQ_meta, dst, acc_O, acc_meta, sinks, parallel_blocks, first);
 }
 
 template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
-    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const int warp_size = WARP_SIZE
+    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool kernel_supports_chunking,
+    const bool stream_k, const int warp_size = WARP_SIZE
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -1003,85 +1109,19 @@ void launch_fattn(
     const int nsm = ggml_cuda_info().devices[id].nsm;
 
     const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
-        ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V);
+        ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V, kernel_supports_chunking);
 
     ggml_cuda_pool_alloc<int>    KV_max(pool);
     ggml_cuda_pool_alloc<float>  dst_tmp(pool);
     ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
 
-    const char * K_data = (const char *) K->data;
-    size_t nb11 = K->nb[1];
-    size_t nb12 = K->nb[2];
-    size_t nb13 = K->nb[3];
+    // Buffers for the running accumulator if the KV cache is consumed in chunks
+    ggml_cuda_pool_alloc<float>  acc_O(pool);
+    ggml_cuda_pool_alloc<float2> acc_meta(pool);
 
-    const char * V_data = (const char *) V->data;
-    size_t nb21 = V->nb[1];
-    size_t nb22 = V->nb[2];
-    size_t nb23 = V->nb[3];
-
-    if (need_f16_K && K->type != GGML_TYPE_F16) {
-        const size_t bs = ggml_blck_size(K->type);
-        const size_t ts = ggml_type_size(K->type);
-
-        GGML_ASSERT(f16_extra.K != 0);
-        half * K_f16 = (half *) f16_extra.K;
-        if (ggml_is_contiguously_allocated(K)) {
-            to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(K->type);
-            to_fp16(K_data, K_f16, ggml_nelements(K), main_stream);
-
-            nb11 = nb11*bs*sizeof(half)/ts;
-            nb12 = nb12*bs*sizeof(half)/ts;
-            nb13 = nb13*bs*sizeof(half)/ts;
-        } else {
-            GGML_ASSERT(K->nb[0] == ts);
-            to_fp16_nc_cuda_t to_fp16 = ggml_get_to_fp16_nc_cuda(K->type);
-            const int64_t s01 = nb11 / ts;
-            const int64_t s02 = nb12 / ts;
-            const int64_t s03 = nb13 / ts;
-            to_fp16(K_data, K_f16, K->ne[0], K->ne[1], K->ne[2], K->ne[3], s01, s02, s03, main_stream);
-
-            nb11 = K->ne[0] * sizeof(half);
-            nb12 = K->ne[1] * nb11;
-            nb13 = K->ne[2] * nb12;
-        }
-        K_data = (char *) K_f16;
-    }
-
-    if (need_f16_V && V->type != GGML_TYPE_F16) {
-        if (V_is_K_view) {
-            V_data = K_data;
-            nb21   = nb11;
-            nb22   = nb12;
-            nb23   = nb13;
-        } else {
-            const size_t bs = ggml_blck_size(V->type);
-            const size_t ts = ggml_type_size(V->type);
-
-            GGML_ASSERT(f16_extra.V != 0);
-            half * V_f16 = (half *) f16_extra.V;
-            if (ggml_is_contiguously_allocated(V)) {
-                to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(V->type);
-                to_fp16(V_data, V_f16, ggml_nelements(V), main_stream);
-                V_data = (char *) V_f16;
-
-                nb21 = nb21*bs*sizeof(half)/ts;
-                nb22 = nb22*bs*sizeof(half)/ts;
-                nb23 = nb23*bs*sizeof(half)/ts;
-            } else {
-                GGML_ASSERT(V->nb[0] == ts);
-                to_fp16_nc_cuda_t to_fp16 = ggml_get_to_fp16_nc_cuda(V->type);
-                const int64_t s01 = nb21 / ts;
-                const int64_t s02 = nb22 / ts;
-                const int64_t s03 = nb23 / ts;
-                to_fp16(V_data, V_f16, V->ne[0], V->ne[1], V->ne[2], V->ne[3], s01, s02, s03, main_stream);
-
-                nb21 = V->ne[0] * sizeof(half);
-                nb22 = V->ne[1] * nb21;
-                nb23 = V->ne[2] * nb22;
-            }
-            V_data = (char *) V_f16;
-        }
-    }
+    const int64_t kv_per_chunk = f16_extra.kv_per_chunk;
+    const bool    chunked      = kv_per_chunk > 0;
+    const int     n_chunks     = chunked ? (K->ne[1] + kv_per_chunk - 1) / kv_per_chunk : 1;
 
     const int ntiles_x     = ((Q->ne[1] + ncols1 - 1) / ncols1);
     const int gqa_ratio    = Q->ne[2] / K->ne[2];
@@ -1091,7 +1131,7 @@ void launch_fattn(
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths.
-    if (mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1)) {
+    if (!chunked && mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1)) {
         const int64_t s31 = mask->nb[1] / sizeof(half2);
         const int64_t s33 = mask->nb[3] / sizeof(half2);
 
@@ -1112,45 +1152,11 @@ void launch_fattn(
     int max_blocks_per_sm = 1; // Max. number of active blocks limited by occupancy.
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
     GGML_ASSERT(max_blocks_per_sm > 0);
-    int parallel_blocks = max_blocks_per_sm;
 
-    const int ntiles_KV = (K->ne[1] + nbatch_fa - 1) / nbatch_fa; // Max. number of parallel blocks limited by KV cache length.
-
-    dim3 blocks_num;
-    if (stream_k) {
-        // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
-        const int max_blocks = max_blocks_per_sm*nsm;
-        const int tiles_nwaves = (ntiles_dst + max_blocks - 1) / max_blocks;
-        const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
-
-        const bool use_stream_k = cc >= GGML_CUDA_CC_ADA_LOVELACE || amd_wmma_available(cc) || tiles_efficiency_percent < 75;
-
-        blocks_num.x = ntiles_dst;
-        blocks_num.y = 1;
-        blocks_num.z = 1;
-
-        if(use_stream_k) {
-            const int nblocks_stream_k_raw = std::min(max_blocks, ntiles_KV*ntiles_dst);
-            // Round down to a multiple of ntiles_dst so that each output tile gets the same number of blocks (avoids fixup).
-            // Only do this if the occupancy loss from rounding is acceptable.
-            const int nblocks_stream_k_rounded = (nblocks_stream_k_raw / ntiles_dst) * ntiles_dst;
-            const int max_efficiency_loss_percent = 5;
-            const int efficiency_loss_percent = nblocks_stream_k_rounded > 0
-                ? 100 * (nblocks_stream_k_raw - nblocks_stream_k_rounded) / nblocks_stream_k_raw
-                : 100;
-            const int nblocks_stream_k = efficiency_loss_percent <= max_efficiency_loss_percent
-                ? nblocks_stream_k_rounded
-                : nblocks_stream_k_raw;
-
-            blocks_num.x = nblocks_stream_k;
-        }
-
-        if (ntiles_dst % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
-            dst_tmp_meta.alloc((size_t(blocks_num.x) * ncols * (2 + DV/2)));
-        }
-    } else {
+    auto calc_parallel_blocks = [&](const int64_t kv_len) {
         // parallel_blocks must not be larger than what the tensor size allows:
-        parallel_blocks = std::min(parallel_blocks, ntiles_KV);
+        const int ntiles_KV = (kv_len + nbatch_fa - 1) / nbatch_fa; // Max. number of parallel blocks limited by KV cache length.
+        int parallel_blocks = std::min(max_blocks_per_sm, ntiles_KV);
 
         // If ntiles_total % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
         // Test whether parallel_blocks can be set to a higher value for better efficiency.
@@ -1174,14 +1180,30 @@ void launch_fattn(
             }
         }
 
-        blocks_num.x = ntiles_x;
-        blocks_num.y = parallel_blocks;
-        blocks_num.z = ntiles_z_gqa*K->ne[2]*Q->ne[3];
+        return parallel_blocks;
+    };
 
-        if (parallel_blocks > 1) {
-            dst_tmp.alloc(parallel_blocks*ggml_nelements(KQV));
-            dst_tmp_meta.alloc(parallel_blocks*ggml_nrows(KQV));
+    if (chunked) {
+        // Serial split-KV: the KV dimension is split into chunks that are converted and consumed
+        // one after another, analogous to serial split-K for GEMM but across kernel launches.
+        // Chunks are launched without normalization and with (max, sum) per output row,
+        // using the same layout as the buffers of flash_attn_combine_results.
+        // flash_attn_combine_results folds each chunk into the running accumulator acc_O/acc_meta.
+        int parallel_blocks_max = 1;
+        if (!stream_k) {
+            const int64_t kv_len_last = K->ne[1] - (n_chunks - 1)*kv_per_chunk;
+            // Chunks always launch as split-K (>= 2 blocks), see the chunk loop.
+            parallel_blocks_max = std::max(2, std::max(calc_parallel_blocks(kv_per_chunk), calc_parallel_blocks(kv_len_last)));
         }
+        dst_tmp.alloc(parallel_blocks_max*ggml_nelements(KQV));
+        if (stream_k) {
+            // The per-row meta data goes to the start of the buffer, the stream-k fixup data behind it.
+            dst_tmp_meta.alloc(ggml_nrows(KQV) + size_t(max_blocks_per_sm)*nsm * ncols * (2 + DV/2));
+        } else {
+            dst_tmp_meta.alloc(parallel_blocks_max*ggml_nrows(KQV));
+        }
+        acc_O.alloc(ggml_nelements(KQV));
+        acc_meta.alloc(ggml_nrows(KQV));
     }
 
     float scale         = 1.0f;
@@ -1207,68 +1229,204 @@ void launch_fattn(
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
+    for (int chunk = 0; chunk < n_chunks; ++chunk) {
+        const int64_t kv_off = chunk*kv_per_chunk; // == 0 if not chunked
+        const int64_t kv_len = chunked ? std::min(kv_per_chunk, K->ne[1] - kv_off) : K->ne[1];
+
+        const char * K_data = (const char *) K->data;
+        size_t nb11 = K->nb[1];
+        size_t nb12 = K->nb[2];
+        size_t nb13 = K->nb[3];
+
+        const char * V_data = (const char *) V->data;
+        size_t nb21 = V->nb[1];
+        size_t nb22 = V->nb[2];
+        size_t nb23 = V->nb[3];
+
+        // Convert [kv_off, kv_off + kv_len) of a K/V tensor to f16, updating the data pointer and strides
+        const auto convert_to_f16 = [&](const ggml_tensor * t, const uintptr_t buf, const char * & data, size_t & nb1, size_t & nb2, size_t & nb3) {
+            const size_t bs = ggml_blck_size(t->type);
+            const size_t ts = ggml_type_size(t->type);
+
+            GGML_ASSERT(buf != 0);
+            half * f16 = (half *) buf;
+            // A row-chunk of a contiguously allocated tensor is itself a contiguous slice
+            // if the row dimension is outermost in memory; convert it with the (much faster)
+            // contiguous kernel instead of the generic strided one.
+            const bool cont_full  = !chunked && ggml_is_contiguously_allocated(t);
+            const bool cont_slice =  chunked && ggml_is_contiguously_allocated(t) && t->ne[3] == 1 && nb1 >= nb2;
+            if (cont_full || cont_slice) {
+                to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(t->type);
+                to_fp16(data + kv_off*nb1, f16, cont_slice ? t->ne[0]*t->ne[2]*kv_len : ggml_nelements(t), main_stream);
+
+                nb1 = nb1*bs*sizeof(half)/ts;
+                nb2 = nb2*bs*sizeof(half)/ts;
+                nb3 = nb3*bs*sizeof(half)/ts;
+            } else {
+                GGML_ASSERT(t->nb[0] == ts);
+                to_fp16_nc_cuda_t to_fp16 = ggml_get_to_fp16_nc_cuda(t->type);
+                const int64_t s01 = nb1 / ts;
+                const int64_t s02 = nb2 / ts;
+                const int64_t s03 = nb3 / ts;
+                to_fp16(data + kv_off*nb1, f16, t->ne[0], kv_len, t->ne[2], t->ne[3], s01, s02, s03, main_stream);
+
+                nb1 = t->ne[0] * sizeof(half);
+                nb2 = kv_len   * nb1;
+                nb3 = t->ne[2] * nb2;
+            }
+            data = (const char *) f16;
+        };
+
+        if (need_f16_K && K->type != GGML_TYPE_F16) {
+            convert_to_f16(K, f16_extra.K, K_data, nb11, nb12, nb13);
+        } else if (kv_off > 0) {
+            K_data += kv_off*nb11;
+        }
+
+        if (need_f16_V && V->type != GGML_TYPE_F16) {
+            if (V_is_K_view) {
+                V_data = K_data;
+                nb21   = nb11;
+                nb22   = nb12;
+                nb23   = nb13;
+            } else {
+                convert_to_f16(V, f16_extra.V, V_data, nb21, nb22, nb23);
+            }
+        } else if (kv_off > 0) {
+            V_data += kv_off*nb21;
+        }
+
+        dim3 blocks_num;
+        int parallel_blocks = 1;
+        if (stream_k) {
+            // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
+            const int max_blocks = max_blocks_per_sm*nsm;
+            const int tiles_nwaves = (ntiles_dst + max_blocks - 1) / max_blocks;
+            const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
+
+            const bool use_stream_k = cc >= GGML_CUDA_CC_ADA_LOVELACE || amd_wmma_available(cc) || tiles_efficiency_percent < 75;
+
+            blocks_num.x = ntiles_dst;
+            blocks_num.y = 1;
+            blocks_num.z = 1;
+
+            if(use_stream_k) {
+                const int ntiles_KV = (kv_len + nbatch_fa - 1) / nbatch_fa; // Max. number of parallel blocks limited by KV cache length.
+                const int nblocks_stream_k_raw = std::min(max_blocks, ntiles_KV*ntiles_dst);
+                // Round down to a multiple of ntiles_dst so that each output tile gets the same number of blocks (avoids fixup).
+                // Only do this if the occupancy loss from rounding is acceptable.
+                const int nblocks_stream_k_rounded = (nblocks_stream_k_raw / ntiles_dst) * ntiles_dst;
+                const int max_efficiency_loss_percent = 5;
+                const int efficiency_loss_percent = nblocks_stream_k_rounded > 0
+                    ? 100 * (nblocks_stream_k_raw - nblocks_stream_k_rounded) / nblocks_stream_k_raw
+                    : 100;
+                const int nblocks_stream_k = efficiency_loss_percent <= max_efficiency_loss_percent
+                    ? nblocks_stream_k_rounded
+                    : nblocks_stream_k_raw;
+
+                blocks_num.x = nblocks_stream_k;
+            }
+
+            if (!chunked && ntiles_dst % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
+                dst_tmp_meta.alloc((size_t(blocks_num.x) * ncols * (2 + DV/2)));
+            }
+        } else {
+            parallel_blocks = calc_parallel_blocks(kv_len);
+            if (chunked) {
+                // The tile kernel emits an unnormalized partial with (max, sum) per row iff gridDim.y != 1, so chunks
+                // always launch as split-K. A block without KV tiles of its own (short last chunk) contributes an
+                // empty partial (max == -FLT_MAX/2, sum == 0) that the combine weighs with 0.
+                parallel_blocks = std::max(parallel_blocks, 2);
+            }
+
+            blocks_num.x = ntiles_x;
+            blocks_num.y = parallel_blocks;
+            blocks_num.z = ntiles_z_gqa*K->ne[2]*Q->ne[3];
+
+            if (!chunked && parallel_blocks > 1) {
+                dst_tmp.alloc(parallel_blocks*ggml_nelements(KQV));
+                dst_tmp_meta.alloc(parallel_blocks*ggml_nrows(KQV));
+            }
+        }
+
+        // Chunks emit an unnormalized partial with per-row (max, sum) at the start of dst_tmp_meta, for stream-k
+        // launches the fixup data goes behind it. The kernel receives the base pointer: the write_partial MMA
+        // variant derives the fixup area itself and the split-K tile path writes its partials at the base.
+        // The fixup kernels receive both pointers explicitly.
+        float2 * const dst_meta         = chunked && stream_k ? dst_tmp_meta.ptr + ggml_nrows(KQV) : dst_tmp_meta.ptr;
+        float2 * const dst_meta_partial = chunked             ? dst_tmp_meta.ptr                    : nullptr;
+
         ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num, block_dim, nbytes_shared, main_stream);
         ggml_cuda_kernel_launch(fattn_kernel, launch_params,
-        (const char *) Q->data,
-        K_data,
-        V_data,
-        mask ? ((const char *) mask->data) : nullptr,
-        sinks ? ((const char *) sinks->data) : nullptr,
-        KV_max.ptr,
-        !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
-        scale, max_bias, m0, m1, n_head_log2, logit_softcap,
-        Q->ne[0], ne01,     Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
-        K->ne[0], K->ne[1], K->ne[2], K->ne[3], nb11, nb12, nb13,
-        nb21, nb22, nb23,
-        mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
-        mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
-    );
-    CUDA_CHECK(cudaGetLastError());
+            (const char *) Q->data,
+            K_data,
+            V_data,
+            mask  ?            ((const char *) mask->data) + kv_off*sizeof(half) : nullptr,
+            sinks && !chunked ? ((const char *) sinks->data)                     : nullptr, // For chunks the sink is applied by the combine instead
+            KV_max.ptr,
+            chunked || (!stream_k && parallel_blocks > 1) ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
+            scale, max_bias, m0, m1, n_head_log2, logit_softcap,
+            Q->ne[0], ne01,     Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
+            K->ne[0], kv_len,   K->ne[2], K->ne[3], nb11, nb12, nb13,
+            nb21, nb22, nb23,
+            mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
+            mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
+        );
+        CUDA_CHECK(cudaGetLastError());
 
-    if (stream_k) {
-        if ((int)blocks_num.x % ntiles_dst == 0 && (int)blocks_num.x > ntiles_dst) {
-            // Optimized fixup: nblocks_stream_k is a multiple of ntiles_dst, launch one block per tile.
-            const int nblocks_sk  = (int)blocks_num.x;
-            const int bpt         = nblocks_sk / ntiles_dst;
+        if (stream_k) {
+            // For chunks the fixup emits an unnormalized partial into the chunk buffers instead of KQV
+            float * const fixup_dst = chunked ? dst_tmp.ptr : (float *) KQV->data;
 
-            const uint3 fd0 = init_fastdiv_values(ntiles_x * ntiles_z_gqa * K->ne[2]);
-            const uint3 fd1 = init_fastdiv_values(ntiles_x * ntiles_z_gqa);
-            const uint3 fd2 = init_fastdiv_values(ntiles_x);
+            if ((int)blocks_num.x % ntiles_dst == 0 && (int)blocks_num.x > ntiles_dst) {
+                // Optimized fixup: nblocks_stream_k is a multiple of ntiles_dst, launch one block per tile.
+                const int nblocks_sk  = (int)blocks_num.x;
+                const int bpt         = nblocks_sk / ntiles_dst;
 
-            const dim3 block_dim_combine(DV, 1, 1);
-            const dim3 blocks_num_combine = {(unsigned)ntiles_dst, ncols1, ncols2};
+                const uint3 fd0 = init_fastdiv_values(ntiles_x * ntiles_z_gqa * K->ne[2]);
+                const uint3 fd1 = init_fastdiv_values(ntiles_x * ntiles_z_gqa);
+                const uint3 fd2 = init_fastdiv_values(ntiles_x);
 
-            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, 0, main_stream);
-            ggml_cuda_kernel_launch(flash_attn_stream_k_fixup_uniform<DV, ncols1, ncols2>, launch_params,
-                (float *) KQV->data, dst_tmp_meta.ptr,
-                 Q->ne[1], Q->ne[2], K->ne[2], nblocks_sk,
-                 gqa_ratio, bpt, fd0, fd1, fd2);
-        } else if (ntiles_dst % blocks_num.x != 0) {
-            // General fixup for the cases where nblocks_stream_k < ntiles_dst.
-            const int total_work = ntiles_KV * ntiles_dst;
+                const dim3 block_dim_combine(DV, 1, 1);
+                const dim3 blocks_num_combine = {(unsigned)ntiles_dst, ncols1, ncols2};
 
-            const uint3 fd_k_j_z_ne12 = init_fastdiv_values(ntiles_KV * ntiles_x * ntiles_z_gqa * K->ne[2]);
-            const uint3 fd_k_j_z      = init_fastdiv_values(ntiles_KV * ntiles_x * ntiles_z_gqa);
-            const uint3 fd_k_j        = init_fastdiv_values(ntiles_KV * ntiles_x);
-            const uint3 fd_k          = init_fastdiv_values(ntiles_KV);
+                const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, 0, main_stream);
+                ggml_cuda_kernel_launch(flash_attn_stream_k_fixup_uniform<DV, ncols1, ncols2>, launch_params,
+                    fixup_dst, dst_meta, dst_meta_partial,
+                     Q->ne[1], Q->ne[2], K->ne[2], nblocks_sk,
+                     gqa_ratio, bpt, fd0, fd1, fd2);
+            } else if (ntiles_dst % blocks_num.x != 0) {
+                // General fixup for the cases where nblocks_stream_k < ntiles_dst.
+                const int ntiles_KV = (kv_len + nbatch_fa - 1) / nbatch_fa;
+                const int total_work = ntiles_KV * ntiles_dst;
 
-            const dim3 block_dim_combine(DV, 1, 1);
-            const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
+                const uint3 fd_k_j_z_ne12 = init_fastdiv_values(ntiles_KV * ntiles_x * ntiles_z_gqa * K->ne[2]);
+                const uint3 fd_k_j_z      = init_fastdiv_values(ntiles_KV * ntiles_x * ntiles_z_gqa);
+                const uint3 fd_k_j        = init_fastdiv_values(ntiles_KV * ntiles_x);
+                const uint3 fd_k          = init_fastdiv_values(ntiles_KV);
 
-            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, 0, main_stream);
-            ggml_cuda_kernel_launch(flash_attn_stream_k_fixup_general<DV, ncols1, ncols2>, launch_params,
-                (float *) KQV->data, dst_tmp_meta.ptr,
-                 Q->ne[1], Q->ne[2], gqa_ratio, total_work,
-                 fd_k_j_z_ne12, fd_k_j_z, fd_k_j, fd_k);
+                const dim3 block_dim_combine(DV, 1, 1);
+                const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
+
+                const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, 0, main_stream);
+                ggml_cuda_kernel_launch(flash_attn_stream_k_fixup_general<DV, ncols1, ncols2>, launch_params,
+                    fixup_dst, dst_meta, dst_meta_partial,
+                     Q->ne[1], Q->ne[2], gqa_ratio, total_work,
+                     fd_k_j_z_ne12, fd_k_j_z, fd_k_j, fd_k);
+            }
+        } else if (!chunked && parallel_blocks > 1) {
+            launch_flash_attn_combine_results<DV>(dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data,
+                nullptr, nullptr, nullptr, parallel_blocks, true,
+                Q->ne[1], Q->ne[2], Q->ne[3], main_stream);
         }
-    } else if (parallel_blocks > 1) {
-        const dim3 block_dim_combine(DV, 1, 1);
-        const dim3 blocks_num_combine(Q->ne[1], Q->ne[2], Q->ne[3]);
-        const size_t nbytes_shared_combine = parallel_blocks*sizeof(float2);
 
-        const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream);
-        ggml_cuda_kernel_launch(flash_attn_combine_results<DV>, launch_params,
-            dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
+        if (chunked) {
+            launch_flash_attn_combine_results<DV>(dst_tmp.ptr, dst_tmp_meta.ptr,
+                chunk == n_chunks - 1 ? (float *) KQV->data : nullptr,
+                acc_O.ptr, acc_meta.ptr, sinks ? (const float *) sinks->data : nullptr,
+                stream_k ? 1 : parallel_blocks, chunk == 0,
+                Q->ne[1], Q->ne[2], Q->ne[3], main_stream);
+        }
+        CUDA_CHECK(cudaGetLastError());
     }
-    CUDA_CHECK(cudaGetLastError());
 }

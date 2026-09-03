@@ -10193,6 +10193,44 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {2, 1}, 1024, 32, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 4, {2, 1}, 1024,  4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
+    // chunk-boundary coverage for backends that convert K/V to f16 in chunks.
+    // kv is a multiple of the 256-token chunk size, batch >= 4 avoids the batch-1 vector path.
+    {
+        // over the default conversion budget, so these chunk as-is (128 head dim, 32 KV heads -> 16 KiB/position)
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 32, {2, 1}, 8192,  8, true,  false, 0, 0,
+                                                        GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 32, {2, 1}, 8192,  8, true,  true,  0, 0,
+                                                        GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 32, {1, 1}, 8192,  8, false, true,  0, 0,
+                                                        GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 32, {2, 1}, 8192, 32, true,  false, 8.0f, 10.0f,
+                                                        GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+        test_cases.emplace_back(new test_flash_attn_ext( 64,  64, 32, {2, 2}, 8192,  8, true,  false, 0, 0,
+                                                        GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+        // MLA, V is a sub-view of K, ragged final chunk (9 KiB per position -> 7168 + 1024)
+        test_cases.emplace_back(new test_flash_attn_ext(576, 512,  8, {4, 1}, 8192,  4, true,  false, 0, 0,
+                                                        GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, true));
+
+        // below the budget: these chunk only if it is lowered (CUDA: GGML_CUDA_FATTN_CONVERT_BYTES)
+        for (int64_t hs : { 80, 96, 256 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {2, 1}, 768, 8, true, false, 0, 0,
+                                                            GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+        }
+        // mixed K/V, only the quantized tensor is converted (CUDA: needs GGML_CUDA_FA_ALL_QUANTS)
+        for (auto types : { std::make_pair(GGML_TYPE_Q8_0, GGML_TYPE_F16),
+                            std::make_pair(GGML_TYPE_F16,  GGML_TYPE_Q8_0),
+                            std::make_pair(GGML_TYPE_Q8_0, GGML_TYPE_Q4_0) }) {
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 1280, 8, true, true, 0, 0,
+                                                            GGML_PREC_F32, types.first, types.second));
+        }
+        // f32 K/V is converted but never chunked
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 1024,  8, true,  false, 0, 0,
+                                                        GGML_PREC_F32, GGML_TYPE_F32,  GGML_TYPE_F32));
+        // MLA at a GQA ratio the kv 8192 case does not cover
+        test_cases.emplace_back(new test_flash_attn_ext(576, 512,  1, {16, 1}, 1024,  8, true, false, 0, 0,
+                                                        GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, true));
+    }
+
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   10, 5, 4, 3}));
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {30000, 1, 1, 1}));
     test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {   10, 5, 4, 3}));
