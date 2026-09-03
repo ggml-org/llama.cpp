@@ -424,18 +424,33 @@ jobs:
 
       # ship the CUDA runtime libraries the backend links against, mirroring
       # the windows-cuda cudart zip - extract next to the binaries ($ORIGIN rpath)
+      # NCCL is redistributed here, so its license must accompany the binary
+      # - fetch it from the NVIDIA/nccl tag matching the installed version
       - name: Pack CUDA runtime
         id: pack_cuda_runtime
         run: |
           major="${{ matrix.label }}"
           major="${major%%.*}"
           mkdir -p ./cudart
+          # libnccl ships in the apt triplet dir, not under /usr/local/cuda
+          so="$(find /usr -name libnccl.so.2 | head -n1)"
           # cp -L dereferences the SONAME symlinks into plain files, so the
           # tarball holds exactly 4 files with no versioned duplicates
           cp -L /usr/local/cuda/lib64/libcudart.so.${major} ./cudart/
           cp -L /usr/local/cuda/lib64/libcublas.so.${major} ./cudart/
           cp -L /usr/local/cuda/lib64/libcublasLt.so.${major} ./cudart/
-          cp -L "$(find /usr -name libnccl.so.2 | head -n1)" ./cudart/
+          cp -L "${so}" ./cudart/
+          # license: derive the NCCL version from the installed nccl.h and
+          # fetch LICENSE.txt from the matching tag - no fallback, a missing
+          # license must fail the release build
+          hdr="$(dirname "${so}")/../../include/nccl.h"
+          ver="$(grep -oE '#define NCCL_(MAJOR|MINOR|PATCH) [0-9]+' "$hdr" \
+                 | awk '{printf "%s.", $3}' | sed 's/.$//')"
+          tag="v${ver}-1"
+          echo "installed NCCL version: ${ver} (tag ${tag})"
+          curl -fsSL --retry 3 --retry-delay 2 -o ./cudart/LICENSE.nccl.txt \
+               "https://raw.githubusercontent.com/NVIDIA/nccl/${tag}/LICENSE.txt"
+          test -s ./cudart/LICENSE.nccl.txt
           tar -czvf cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz --transform "s,^\.,cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}," -C ./cudart .
 
       - name: Upload CUDA runtime
