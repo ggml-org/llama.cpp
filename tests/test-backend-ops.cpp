@@ -10682,10 +10682,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
-    // Q4_K multi-column mat-vec, at ffn_up/ffn_gate geometry (k = n_embd, m = n_ff): n sweeps the
-    // per-column specializations used for short prompts and speculative/MTP verify, and m brackets
-    // the row count at which the SYCL backend switches to two output rows per subgroup
-    // (Q4_K_MMVQ_ROW_PAIR_MIN_NROWS in ggml-sycl/mmvq.cpp), so both sides of it can be measured.
+    // Q4_K multi-column mat-vec
     for (int64_t m : {4096, 6144, 6272, 14336}) {
         for (int bs : {1, 2, 3, 4, 8}) {
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, m, bs, 4096, {1, 1}, {1, 1}));
