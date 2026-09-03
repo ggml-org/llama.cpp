@@ -17,8 +17,9 @@
 
 	let { entry, file }: Props = $props();
 
-	// delete confirmation state
+	// delete / cancel confirmation state
 	let confirmDeleteOpen = $state(false);
+	let confirmCancelOpen = $state(false);
 
 	/** Queue the download; a failed attempt leaves partial files, drop them first. */
 	async function startDownload() {
@@ -112,18 +113,20 @@
 		variant="destructive"
 	/>
 {:else if entry.isDownloading || entry.isPaused}
-	<!-- in-flight / paused chips: the chip itself pauses / resumes on click, the
-	     trailing X cancels (stops and discards the partial files). The X slot is
-	     reserved, so the chip row never reflows when the affordance fades in -->
-	<span class="group/cancel inline-flex items-center gap-1">
+	<!-- in-flight / paused chips: the chip body pauses / resumes on click, the X
+	     inside the chip cancels (stops and discards the partial files). The X slot
+	     is reserved, so the chip never reflows when the affordance fades in -->
+	<div
+		class="group relative inline-flex h-auto items-center gap-1 overflow-hidden rounded-md! border px-2 py-1 text-left font-mono text-xs shadow-xs transition-[background-color,border-color,transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97]
+			{entry.isPaused
+			? 'border-yellow-600/40 bg-yellow-500/10 hover:bg-yellow-500/20 dark:border-yellow-500/30 dark:bg-yellow-500/10'
+			: 'border-border/30 bg-background hover:bg-muted-foreground/10 dark:border-border/20 dark:bg-muted-foreground/15'}"
+	>
 		<Tooltip.Root>
 			<Tooltip.Trigger>
 				<button
 					aria-label={tooltipText}
-					class="group relative inline-flex h-auto cursor-pointer items-center gap-1 overflow-hidden rounded-md! border px-2 py-1 text-left font-mono text-xs shadow-xs transition-[background-color,border-color,transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97]
-						{entry.isPaused
-						? 'border-yellow-600/40 bg-yellow-500/10 hover:bg-yellow-500/20 dark:border-yellow-500/30 dark:bg-yellow-500/10'
-						: 'border-border/30 bg-background hover:bg-muted-foreground/10 dark:border-border/20 dark:bg-muted-foreground/15'}"
+					class="flex h-auto min-w-0 flex-1 cursor-pointer items-center gap-1 text-left"
 					onclick={() => {
 						if (entry.isDownloading) void modelsStore.status.pauseDownload(entry.repoWithTag);
 						else void modelsStore.status.downloadModel(entry.repoWithTag).catch(() => {});
@@ -143,7 +146,7 @@
 					<span class="-my-1 mx-0.75 w-px self-stretch bg-border"></span>
 
 					{#if percent !== null}
-						<span class="tabular-nums">{percent}%</span>
+						<span class="mr-1 tabular-nums">{percent}%</span>
 					{:else if entry.isPaused}
 						<span>Paused</span>
 					{:else}
@@ -170,14 +173,6 @@
 							/>
 						</span>
 					{/if}
-
-					{#if percent !== null}
-						<DownloadProgressBar
-							downloadedBytes={entry.progress?.downloadedBytes ?? 0}
-							overlay
-							totalBytes={entry.progress?.totalBytes ?? 0}
-						/>
-					{/if}
 				</button>
 			</Tooltip.Trigger>
 
@@ -187,14 +182,18 @@
 		</Tooltip.Root>
 
 		<Tooltip.Root>
-			<Tooltip.Trigger>
+			<Tooltip.Trigger class="grid">
+				<!-- cancel slot: same fixed slot and fade as the pause / play affordances
+					 so the two icons line up exactly; the X turns destructive on its hover -->
 				<button
 					aria-label="Cancel downloading"
-					class="inline-flex h-3.5 w-3.5 shrink-0 cursor-pointer scale-75 items-center justify-center rounded-sm text-muted-foreground/70 opacity-0 transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:text-destructive group-hover/cancel:scale-100 group-hover/cancel:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
-					onclick={() => void modelsStore.status.cancelDownload(entry.repoWithTag)}
+					class="relative inline-flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center text-muted-foreground/70"
+					onclick={() => (confirmCancelOpen = true)}
 					type="button"
 				>
-					<X class="h-3.5 w-3.5" />
+					<X
+						class="h-3.5 w-3.5 transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] text-destructive [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+					/>
 				</button>
 			</Tooltip.Trigger>
 
@@ -202,7 +201,15 @@
 				<p>Cancel downloading</p>
 			</Tooltip.Content>
 		</Tooltip.Root>
-	</span>
+
+		{#if percent !== null}
+			<DownloadProgressBar
+				downloadedBytes={entry.progress?.downloadedBytes ?? 0}
+				overlay
+				totalBytes={entry.progress?.totalBytes ?? 0}
+			/>
+		{/if}
+	</div>
 {:else}
 	<Tooltip.Root>
 		<Tooltip.Trigger>
@@ -254,3 +261,18 @@
 		</Tooltip.Content>
 	</Tooltip.Root>
 {/if}
+
+<DialogConfirmation
+	cancelText="Keep downloading"
+	confirmText="Cancel download"
+	description={`This stops the download of ${modelsStore.toDisplayName(entry.repoWithTag)} and removes the partial files. Pause it instead to keep the progress.`}
+	onCancel={() => (confirmCancelOpen = false)}
+	onConfirm={() => {
+		confirmCancelOpen = false;
+
+		void modelsStore.status.cancelDownload(entry.repoWithTag);
+	}}
+	open={confirmCancelOpen}
+	title="Cancel download"
+	variant="destructive"
+/>
