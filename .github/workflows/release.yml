@@ -375,7 +375,7 @@ jobs:
         shell: bash
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential cmake ninja-build libssl-dev jq python3-venv
+          apt-get install -y --no-install-recommends build-essential cmake ninja-build curl libssl-dev jq python3-venv
           # the container ships GCC 13, which does not know the 'sme' march
           # feature used by the armv9.2 CPU variant of GGML_CPU_ALL_VARIANTS
           if [[ "${{ matrix.build }}" == "arm64" ]]; then
