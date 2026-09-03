@@ -282,7 +282,7 @@ struct common_sampler * common_sampler_init(
         auto tokens = common_tokenize(vocab, params.generation_prompt, false, true);
         for (size_t i = 0; i < tokens.size(); i++) {
             std::string piece = common_token_to_piece(vocab, tokens[i], true);
-            if (i == 0 && std::isspace(piece[0]) && !std::isspace(params.generation_prompt[0])) {
+            if (i == 0 && std::isspace(static_cast<unsigned char>(piece[0])) && !std::isspace(static_cast<unsigned char>(params.generation_prompt[0]))) {
                 // Some tokenizers will add a space before the first special token, need to exclude
                 continue;
             }

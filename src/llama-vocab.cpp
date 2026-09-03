@@ -3058,7 +3058,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         // model name to lowercase
         std::transform(model_name.begin(), model_name.end(), model_name.begin(),
             [] (const std::string::value_type x) {
-                return std::tolower(x);
+                return std::tolower(static_cast<unsigned char>(x));
             }
         );
 
