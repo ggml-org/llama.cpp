@@ -1117,7 +1117,7 @@ std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::
 }
 
 struct mtmd_tokenizer {
-    mtmd_context * ctx;
+    const mtmd_context * ctx;
 
     std::string input_text; // note: can contain null bytes; do not use c_str()
     bool add_special;
@@ -1140,9 +1140,9 @@ struct mtmd_tokenizer {
         }
     }
 
-    mtmd_tokenizer(mtmd_context * ctx,
+    mtmd_tokenizer(const mtmd_context * ctx,
             const mtmd_input_text * text,
-            const mtmd_bitmap ** bmps,
+            const mtmd_bitmap * const * bmps,
             size_t n_bitmaps) : ctx(ctx) {
         add_special   = text->add_special;
         parse_special = text->parse_special;
@@ -1177,8 +1177,8 @@ struct mtmd_tokenizer {
         expand_lazy_bitmaps();
     }
 
-    mtmd_tokenizer(mtmd_context * ctx,
-            const mtmd_input_part ** input_parts,
+    mtmd_tokenizer(const mtmd_context * ctx,
+            const mtmd_input_part * const * input_parts,
             size_t n_parts,
             bool add_special) : ctx(ctx) {
         this->add_special = add_special;
@@ -1733,10 +1733,10 @@ struct mtmd_tokenizer {
     }
 };
 
-int32_t mtmd_tokenize(mtmd_context * ctx,
+int32_t mtmd_tokenize(const mtmd_context * ctx,
             mtmd_input_chunks * output,
             const mtmd_input_text * text,
-            const mtmd_bitmap ** bitmaps,
+            const mtmd_bitmap * const * bitmaps,
             size_t n_bitmaps) {
     try {
         mtmd_tokenizer tokenizer(ctx, text, bitmaps, n_bitmaps);
@@ -1747,9 +1747,9 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
     }
 }
 
-int32_t mtmd_tokenize_from_parts(mtmd_context * ctx,
+int32_t mtmd_tokenize_from_parts(const mtmd_context * ctx,
             mtmd_input_chunks * output,
-            const mtmd_input_part ** parts,
+            const mtmd_input_part * const * parts,
             size_t n_parts,
             bool add_special) {
     for (size_t i = 0; i < n_parts; i++) {
@@ -2271,7 +2271,7 @@ void mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable) {
     bitmap->mergeable = mergeable;
 }
 
-mtmd_bitmap * mtmd_bitmap_init_lazy(mtmd_context * ctx,
+mtmd_bitmap * mtmd_bitmap_init_lazy(const mtmd_context * ctx,
                                     const char * id,
                                     void * user_data,
                                     mtmd_bitmap_lazy_callback callback) {
