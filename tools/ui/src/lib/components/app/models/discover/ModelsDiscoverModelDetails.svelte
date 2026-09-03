@@ -3,7 +3,7 @@
 	import ModelsDiscoverModelDetailsHeader from './ModelsDiscoverModelDetailsHeader.svelte';
 	import ModelsDiscoverModelDetailsReadme from './ModelsDiscoverModelDetailsReadme.svelte';
 	import ModelsDiscoverModelDetailsSkeleton from './ModelsDiscoverModelDetailsSkeleton.svelte';
-	import { isAuxSidecar } from '$lib/constants';
+	import { ModelAuxSidecar } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types/huggingface';
 	import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
@@ -37,11 +37,7 @@
 	// Capabilities derived from HF metadata. Vision comes from an mmproj sidecar
 	// or a multimodal pipeline tag; tool use / reasoning from the chat template.
 	let hasMmproj = $derived(
-		files.some((f) => {
-			const sidecar = HuggingFaceService.extractQuantMeta(f.path)?.sidecar;
-
-			return sidecar !== null && sidecar !== undefined && isAuxSidecar(sidecar);
-		})
+		files.some((f) => HuggingFaceService.extractQuantMeta(f.path)?.sidecar === ModelAuxSidecar.MMPROJ)
 	);
 	let hasVision = $derived(hasMmproj || details?.pipeline_tag === 'image-text-to-text');
 	let hasTools = $derived(detectToolUseSupport(gguf?.chat_template ?? ''));
@@ -57,8 +53,9 @@
 		for (const file of files) {
 			const meta = HuggingFaceService.extractQuantMeta(file.path);
 
-			// mmproj sidecars are already conveyed by the Vision capability badge.
-			if (meta?.sidecar && isAuxSidecar(meta.sidecar)) continue;
+			// mmproj sidecars are already conveyed by the Vision capability badge;
+			// imatrix ships as a normal chip with its own badge.
+			if (meta?.sidecar === ModelAuxSidecar.MMPROJ) continue;
 
 			const depth = meta?.quant ? HuggingFaceService.getBitDepth(meta.quant) : null;
 			const bucket = depth ?? 99;

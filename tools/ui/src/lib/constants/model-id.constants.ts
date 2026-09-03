@@ -75,10 +75,12 @@ export const MODEL_ID = {
 	/**
 	 * Trailing `-<type>` suffix marking a GGUF with an embedded draft in the
 	 * same weight file (MTP) or a sidecar download entry, e.g.
-	 * `Hy3-IQ1_M-mtp.gguf`, `Q4_K_M-dspark`. The captured prefix is the
-	 * candidate model id; the caller decides whether it looks quantized.
+	 * `Hy3-IQ1_M-mtp.gguf`, `Q4_K_M-dspark`. An optional `-draft` tail covers
+	 * standalone sidecar files, e.g. `Model-MTP-draft.gguf`. The captured
+	 * prefix is the candidate model id; the caller decides whether it looks
+	 * quantized.
 	 */
-	SIDECAR_SUFFIX_REGEX: new RegExp(`^(.*)-(${SIDECAR_TOKEN_ALTERNATION})$`, 'i'),
+	SIDECAR_SUFFIX_REGEX: new RegExp(`^(.*)-(${SIDECAR_TOKEN_ALTERNATION})(-draft)?$`, 'i'),
 
 	/** Matches a trailing weight file extension, e.g. `model.gguf` -> `model`. */
 	WEIGHT_EXTENSION_REGEX: /\.(gguf|ggml)$/i

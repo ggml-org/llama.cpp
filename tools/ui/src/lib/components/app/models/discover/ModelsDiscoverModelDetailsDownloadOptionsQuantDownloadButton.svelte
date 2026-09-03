@@ -4,7 +4,6 @@
 	import { Check, Download, Loader2, Pause, Play, RotateCw, X } from '@lucide/svelte';
 	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { isAuxSidecar } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { HfModelSibling } from '$lib/types';
@@ -65,7 +64,7 @@
 				onclick={() => (confirmDeleteOpen = true)}
 				type="button"
 			>
-				{#if meta?.sidecar && !isAuxSidecar(meta.sidecar)}
+				{#if meta?.sidecar}
 					<span
 						class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
 					>
@@ -131,7 +130,7 @@
 					}}
 					type="button"
 				>
-					{#if meta?.sidecar && !isAuxSidecar(meta.sidecar)}
+					{#if meta?.sidecar}
 						<span
 							class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
 						>
@@ -224,7 +223,7 @@
 					</span>
 				{/if}
 
-				{#if meta?.sidecar && !isAuxSidecar(meta.sidecar)}
+				{#if meta?.sidecar}
 					<span
 						class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
 					>

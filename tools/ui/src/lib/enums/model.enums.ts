@@ -32,5 +32,7 @@ export enum ModelDraftSidecar {
  */
 export enum ModelAuxSidecar {
 	/** Multimodal projector: unlocks vision and/or audio input modalities. */
-	MMPROJ = 'mmproj'
+	MMPROJ = 'mmproj',
+	/** Importance-matrix data used to build imatrix quants; not loaded at serve time. */
+	IMATRIX = 'imatrix'
 }

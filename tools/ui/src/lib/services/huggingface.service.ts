@@ -168,8 +168,9 @@ export class HuggingFaceService {
 	 * Extract the GGUF quantization token (e.g. `Q4_K_M`) and any sidecar type
 	 * (`mtp`, `dflash`, `mmproj`, ...) from a `.gguf` filename. The sidecar token
 	 * shows up either as a sidecar prefix (`mtp-<name>.gguf`, `dflash-<name>.gguf`,
-	 * `mmproj-<name>.gguf`) or as the `-mtp` suffix when the draft model is
-	 * embedded in the same GGUF weight file.
+	 * `mmproj-<name>.gguf`), as a `-mtp` suffix, or as the whole filename
+	 * (`imatrix.gguf`); a `-draft` tail marks a standalone sidecar file
+	 * (`Model-MTP-draft.gguf`).
 	 *
 	 * `sidecarForm` records which side of the filename the sidecar token sat
 	 * on so callers can render badges differently (e.g. prefix on the left of
@@ -197,6 +198,14 @@ export class HuggingFaceService {
 		let sidecar: ModelSidecar | null = null;
 		let sidecarForm: SidecarForm | null = null;
 
+		// A file named just the sidecar token (`imatrix.gguf`) is the sidecar
+		// itself: no name or quant segments to parse.
+		const bareSidecar = sidecarFromFileToken(source.toLowerCase());
+
+		if (bareSidecar) {
+			return { quant: null, shared: false, sidecar: bareSidecar, sidecarForm: SidecarForm.PREFIX };
+		}
+
 		const prefixMatch = source.match(MODEL_ID.SIDECAR_PREFIX_REGEX);
 
 		if (prefixMatch) {
@@ -207,14 +216,12 @@ export class HuggingFaceService {
 			const suffixMatch = source.match(MODEL_ID.SIDECAR_SUFFIX_REGEX);
 
 			if (suffixMatch) {
-				const candidate = suffixMatch[1];
-				const headSeg = candidate.split(MODEL_ID.SEGMENT_SEPARATOR).pop();
-
-				if (headSeg && MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(headSeg)) {
-					sidecar = sidecarFromFileToken(suffixMatch[2].toLowerCase());
-					sidecarForm = SidecarForm.SUFFIX;
-					source = candidate;
-				}
+				// Take the suffix sidecar even when the head carries no quant:
+				// embedded drafts end in one (`Hy3-IQ1_M-mtp`), standalone sidecar
+				// files do not (`Model-MTP-draft`, `Model-imatrix`).
+				sidecar = sidecarFromFileToken(suffixMatch[2].toLowerCase());
+				sidecarForm = SidecarForm.SUFFIX;
+				source = suffixMatch[1];
 			}
 		}
 
