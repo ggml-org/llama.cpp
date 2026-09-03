@@ -348,6 +348,10 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
     // disable spirv-opt for bf16 shaders for https://github.com/ggml-org/llama.cpp/issues/15344
     // disable spirv-opt for rope shaders for https://github.com/ggml-org/llama.cpp/issues/16860
     // disable spirv-opt for dot2 shaders (spirv-opt doesn't recognize SPV_VALVE_mixed_float_dot_product capability)
+    // Beyond these known-bad shader families, an older bundled spirv-tools (e.g. some Linux
+    // distro / Termux packages) can still fail to optimize other shaders as new SPIR-V
+    // capabilities are introduced upstream; that's handled generically below by retrying
+    // with -O0 only on that specific failure, instead of guessing more names ahead of time.
     if (!coopmat && name.find("bf16") == std::string::npos && name.find("rope") == std::string::npos && name.find("_dot2") == std::string::npos) {
         cmd.push_back("-O");
     }
@@ -384,6 +388,27 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
         // std::cout << std::endl;
 
         int exit_code = execute_command(cmd, stdout_str, stderr_str);
+
+        // Some spirv-tools/shaderc builds are too old to optimize certain SPIR-V capabilities
+        // emitted by newer shaders (fails with e.g. "Invalid capability operand: N" / "failed
+        // to optimize"). Retry once without optimization rather than hard-coding which shader
+        // names are affected -- that list has already had to grow multiple times (coopmat,
+        // bf16, rope, dot2 above) as new shaders were added.
+        if ((exit_code != 0 || !stderr_str.empty()) &&
+            stderr_str.find("failed to optimize") != std::string::npos) {
+            auto it = std::find(cmd.begin(), cmd.end(), "-O");
+            if (it != cmd.end()) {
+                *it = "-O0";
+                std::string retry_stdout, retry_stderr;
+                int retry_exit_code = execute_command(cmd, retry_stdout, retry_stderr);
+                if (retry_exit_code == 0 && retry_stderr.empty()) {
+                    exit_code = retry_exit_code;
+                    stdout_str = retry_stdout;
+                    stderr_str = retry_stderr;
+                }
+            }
+        }
+
         if (exit_code != 0 || !stderr_str.empty()) {
             std::cerr << "cannot compile " << name << " (exit code " << exit_code << ")\n\n";
             for (const auto& part : cmd) {
