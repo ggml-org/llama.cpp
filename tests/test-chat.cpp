@@ -1551,8 +1551,9 @@ class peg_test_builder {
             std::string template_path_lower = tester_.template_path();
             std::string filter_lower        = g_template_filter;
             std::transform(template_path_lower.begin(), template_path_lower.end(), template_path_lower.begin(),
-                           ::tolower);
-            std::transform(filter_lower.begin(), filter_lower.end(), filter_lower.begin(), ::tolower);
+                           [](unsigned char c) { return (char)std::tolower(c); });
+            std::transform(filter_lower.begin(), filter_lower.end(), filter_lower.begin(),
+                           [](unsigned char c) { return (char)std::tolower(c); });
             if (template_path_lower.find(filter_lower) == std::string::npos) {
                 // Skip this test
                 return;

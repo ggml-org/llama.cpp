@@ -210,7 +210,7 @@ bool create_directory(const std::string& path) {
 std::string to_uppercase(const std::string& input) {
     std::string result = input;
     for (char& c : result) {
-        c = std::toupper(c);
+        c = (char)std::toupper((unsigned char)c);
     }
     return result;
 }

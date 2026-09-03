@@ -20,11 +20,11 @@ static std::string trim(const std::string & str) {
     size_t start = 0;
     size_t end = str.size();
 
-    while (start < end && isspace(str[start])) {
+    while (start < end && isspace((unsigned char)str[start])) {
         start += 1;
     }
 
-    while (end > start && isspace(str[end - 1])) {
+    while (end > start && isspace((unsigned char)str[end - 1])) {
         end -= 1;
     }
 
