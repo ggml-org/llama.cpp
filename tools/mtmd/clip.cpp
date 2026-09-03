@@ -1784,6 +1784,51 @@ struct clip_model_loader {
                         hparams.audio_n_fft        = 400;
                         hparams.audio_window_len   = 400;
                         hparams.audio_hop_len      = 160;
+
+                        if (model.proj_type == PROJECTOR_TYPE_QWEN3A) {
+                            get_bool(KEY_A_GT_ASR_ENABLED, hparams.gt_asr_enabled, false);
+                            if (hparams.gt_asr_enabled) {
+                                get_u32(KEY_A_GT_ASR_SCHEMA,      hparams.gt_asr_schema_version);
+                                get_u32(KEY_A_GT_ASR_STAGE,       hparams.gt_asr_stage);
+                                get_u32(KEY_A_GT_ASR_ENCODER_DIM, hparams.gt_asr_encoder_dim);
+                                get_u32(KEY_A_GT_ASR_TEXT_DIM,    hparams.gt_asr_text_dim);
+                                get_u32(KEY_A_GT_ASR_HIDDEN_DIM,  hparams.gt_asr_hidden_dim);
+                                get_u32(KEY_A_GT_ASR_CONV_KERNEL, hparams.gt_asr_conv_kernel_size);
+                                get_u32(KEY_A_GT_ASR_HEAD_COUNT,  hparams.gt_asr_head_count);
+                                get_u32(KEY_A_GT_ASR_FFN_DIM,     hparams.gt_asr_ffn_dim);
+                                get_f32(KEY_A_GT_ASR_NORM_EPS,    hparams.gt_asr_norm_eps);
+                                get_f32(KEY_A_GT_ASR_MAX_SCALE,   hparams.gt_asr_max_residual_scale);
+                                get_bool(KEY_A_GT_ASR_LOCAL,       hparams.gt_asr_local_fusion);
+                                get_bool(KEY_A_GT_ASR_LOCAL_GATE,  hparams.gt_asr_local_uncertainty_gate);
+                                get_bool(KEY_A_GT_ASR_FRAME_HEAD,  hparams.gt_asr_nonlinear_frame_head);
+                                get_bool(KEY_A_GT_ASR_ZERO_ANCHOR, hparams.gt_asr_global_zero_anchor);
+                                get_bool(KEY_A_GT_ASR_NULL_MIXTURE, hparams.gt_asr_null_mixture);
+                                std::vector<int> gt_asr_eos_token_ids;
+                                get_arr_int(KEY_A_GT_ASR_EOS_IDS, gt_asr_eos_token_ids);
+                                hparams.gt_asr_eos_token_ids.assign(
+                                    gt_asr_eos_token_ids.begin(), gt_asr_eos_token_ids.end());
+
+                                const bool supported =
+                                    hparams.gt_asr_schema_version == 1 &&
+                                    hparams.gt_asr_stage == 2 &&
+                                    hparams.gt_asr_encoder_dim == 1024 &&
+                                    hparams.gt_asr_text_dim == 2048 &&
+                                    hparams.gt_asr_hidden_dim == 256 &&
+                                    hparams.gt_asr_conv_kernel_size == 5 &&
+                                    hparams.gt_asr_head_count == 4 &&
+                                    hparams.gt_asr_ffn_dim == 1024 &&
+                                    hparams.gt_asr_local_fusion &&
+                                    hparams.gt_asr_local_uncertainty_gate &&
+                                    hparams.gt_asr_nonlinear_frame_head &&
+                                    hparams.gt_asr_global_zero_anchor &&
+                                    hparams.gt_asr_null_mixture &&
+                                    hparams.gt_asr_eos_token_ids.size() == 2;
+                                if (!supported) {
+                                    throw std::runtime_error("unsupported Qwen3-ASR GT-ASR contract");
+                                }
+                                LOG_INF("%s: Qwen3-ASR GT-ASR stage %d enabled\n", __func__, hparams.gt_asr_stage);
+                            }
+                        }
                     } break;
                 case PROJECTOR_TYPE_MIMO_AUDIO:
                     {
@@ -2862,6 +2907,50 @@ struct clip_model_loader {
                     model.mm_1_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "bias"));
                     model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
                     model.mm_2_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "bias"));
+
+                    if (hparams.gt_asr_enabled) {
+                        model.gt_asr_input_norm_w = get_tensor(string_format(TN_A_GT_ASR, "input_norm.weight"));
+                        model.gt_asr_input_norm_b = get_tensor(string_format(TN_A_GT_ASR, "input_norm.bias"));
+                        for (int i = 0; i < 2; ++i) {
+                            model.gt_asr_temporal_w[i] = get_tensor(string_format(TN_A_GT_ASR, string_format("temporal.%d.weight", i).c_str()));
+                            model.gt_asr_temporal_b[i] = get_tensor(string_format(TN_A_GT_ASR, string_format("temporal.%d.bias", i).c_str()));
+                        }
+
+                        auto & layer = model.gt_asr_context;
+                        layer.q_w = get_tensor(string_format(TN_A_GT_ASR, "blk.0.attn_q.weight"));
+                        layer.q_b = get_tensor(string_format(TN_A_GT_ASR, "blk.0.attn_q.bias"));
+                        layer.k_w = get_tensor(string_format(TN_A_GT_ASR, "blk.0.attn_k.weight"));
+                        layer.k_b = get_tensor(string_format(TN_A_GT_ASR, "blk.0.attn_k.bias"));
+                        layer.v_w = get_tensor(string_format(TN_A_GT_ASR, "blk.0.attn_v.weight"));
+                        layer.v_b = get_tensor(string_format(TN_A_GT_ASR, "blk.0.attn_v.bias"));
+                        layer.o_w = get_tensor(string_format(TN_A_GT_ASR, "blk.0.attn_out.weight"));
+                        layer.o_b = get_tensor(string_format(TN_A_GT_ASR, "blk.0.attn_out.bias"));
+                        layer.ln_1_w = get_tensor(string_format(TN_A_GT_ASR, "blk.0.attn_norm.weight"));
+                        layer.ln_1_b = get_tensor(string_format(TN_A_GT_ASR, "blk.0.attn_norm.bias"));
+                        layer.ff_up_w = get_tensor(string_format(TN_A_GT_ASR, "blk.0.ffn_up.weight"));
+                        layer.ff_up_b = get_tensor(string_format(TN_A_GT_ASR, "blk.0.ffn_up.bias"));
+                        layer.ff_down_w = get_tensor(string_format(TN_A_GT_ASR, "blk.0.ffn_down.weight"));
+                        layer.ff_down_b = get_tensor(string_format(TN_A_GT_ASR, "blk.0.ffn_down.bias"));
+                        layer.ln_2_w = get_tensor(string_format(TN_A_GT_ASR, "blk.0.ffn_norm.weight"));
+                        layer.ln_2_b = get_tensor(string_format(TN_A_GT_ASR, "blk.0.ffn_norm.bias"));
+
+                        model.gt_asr_output_norm_w = get_tensor(string_format(TN_A_GT_ASR, "output_norm.weight"));
+                        model.gt_asr_output_norm_b = get_tensor(string_format(TN_A_GT_ASR, "output_norm.bias"));
+                        model.gt_asr_frame_confidence_w = get_tensor(string_format(TN_A_GT_ASR, "frame_confidence.weight"));
+                        model.gt_asr_frame_confidence_b = get_tensor(string_format(TN_A_GT_ASR, "frame_confidence.bias"));
+                        model.gt_asr_global_uncertainty_w = get_tensor(string_format(TN_A_GT_ASR, "global_uncertainty.weight"));
+                        model.gt_asr_global_uncertainty_b = get_tensor(string_format(TN_A_GT_ASR, "global_uncertainty.bias"));
+                        for (int i = 0; i < 2; ++i) {
+                            model.gt_asr_frame_evidence_w[i] = get_tensor(string_format(TN_A_GT_ASR, string_format("frame_evidence.%d.weight", i).c_str()));
+                            model.gt_asr_frame_evidence_b[i] = get_tensor(string_format(TN_A_GT_ASR, string_format("frame_evidence.%d.bias", i).c_str()));
+                            model.gt_asr_global_projection_w[i] = get_tensor(string_format(TN_A_GT_ASR, string_format("global_projection.%d.weight", i).c_str()));
+                            model.gt_asr_global_projection_b[i] = get_tensor(string_format(TN_A_GT_ASR, string_format("global_projection.%d.bias", i).c_str()));
+                        }
+                        model.gt_asr_local_projection_w = get_tensor(string_format(TN_A_GT_ASR, "local_projection.weight"));
+                        model.gt_asr_local_projection_b = get_tensor(string_format(TN_A_GT_ASR, "local_projection.bias"));
+                        model.gt_asr_local_scale_raw = get_tensor(string_format(TN_A_GT_ASR, "local_scale_raw"));
+                        model.gt_asr_global_scale_raw = get_tensor(string_format(TN_A_GT_ASR, "global_scale_raw"));
+                    }
                 } break;
             case PROJECTOR_TYPE_MIMO_AUDIO:
                 {
@@ -4253,7 +4342,12 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                 // chunk_size=100 frames --> 3x stride-2 conv2d --> 13 tokens per chunk
                 const int chunk_size       = 100;
                 const int tokens_per_chunk = 13;
-                n_patches = (img->nx() / chunk_size) * tokens_per_chunk;
+                const int n_frames = ctx->model.hparams.gt_asr_enabled ? img->audio_n_frames() : img->nx();
+                const int tail_frames = n_frames % chunk_size;
+                n_patches = (n_frames / chunk_size) * tokens_per_chunk;
+                if (tail_frames > 0) {
+                    n_patches += (tail_frames + 7) / 8;
+                }
             } break;
         case PROJECTOR_TYPE_GLMA:
             {
@@ -4396,11 +4490,12 @@ bool clip_image_encode(struct clip_ctx * ctx, int n_threads, const clip_image_f3
     return clip_image_batch_encode(ctx, n_threads, &imgs, out_vec);
 }
 
-bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32_batch * imgs_c_ptr, std::vector<float> & out_batch_embd) {
+bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32_batch * imgs_c_ptr, std::vector<float> & out_batch_embd, float * out_speech_probability) {
     clip_encode_params params;
     params.imgs = imgs_c_ptr;
     params.n_threads = n_threads;
     params.out_embd = &out_batch_embd;
+    params.out_speech_probability = out_speech_probability;
 
     return clip_encode(ctx, &params);
 }
@@ -5782,6 +5877,15 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         }
     }
 
+    if (params->out_speech_probability != nullptr) {
+        ggml_tensor * probability = ggml_graph_get_tensor(gf, "gt_asr_speech_probability");
+        if (probability == nullptr || ggml_nelements(probability) != 1) {
+            LOG_ERR("%s: GT-ASR speech probability output is missing or invalid\n", __func__);
+            return false;
+        }
+        ggml_backend_tensor_get(probability, params->out_speech_probability, 0, sizeof(float));
+    }
+
     //
     // for audio gen models
     //
@@ -6023,6 +6127,14 @@ bool clip_has_vision_encoder(const struct clip_ctx * ctx) {
 
 bool clip_has_audio_encoder(const struct clip_ctx * ctx) {
     return ctx->model.modality == CLIP_MODALITY_AUDIO;
+}
+
+bool clip_has_speech_probability(const struct clip_ctx * ctx) {
+    return ctx->model.hparams.gt_asr_enabled;
+}
+
+const std::vector<int32_t> & clip_get_speech_probability_eos_token_ids(const struct clip_ctx * ctx) {
+    return ctx->model.hparams.gt_asr_eos_token_ids;
 }
 
 bool clip_support_batch(const struct clip_ctx * ctx) {

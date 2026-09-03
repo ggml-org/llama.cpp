@@ -118,6 +118,10 @@ def parse_args() -> argparse.Namespace:
         help="Export multimodal projector (mmproj) for vision models. This will only work on some vision models. An 'mmproj-' prefix will be added to the output file name.",
     )
     parser.add_argument(
+        "--gt-asr-adapter", type=Path,
+        help="GT-ASR adapter directory to embed in a Qwen3-ASR mmproj GGUF.",
+    )
+    parser.add_argument(
         "--mtp", action="store_true",
         help="Export only the multi-token prediction (MTP) head as a separate GGUF, suitable for use as a speculative draft. An 'mtp-' prefix will be added to the output file name.",
     )
@@ -169,6 +173,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
+    if args.gt_asr_adapter is not None and not args.mmproj:
+        parser.error("--gt-asr-adapter requires --mmproj")
     return args
 
 
@@ -258,6 +264,12 @@ def main() -> None:
             from conversion.mistral import MistralModel
             model_class = MistralModel
 
+        if args.gt_asr_adapter is not None and (
+            is_mistral_format or model_architecture != "Qwen3ASRForConditionalGeneration"
+        ):
+            logger.error("--gt-asr-adapter is only supported for Qwen3-ASR")
+            sys.exit(1)
+
         if sum((args.mtp, args.no_mtp, args.dspark)) > 1:
             logger.error("--mtp, --no-nextn, and --dspark are mutually exclusive")
             sys.exit(1)
@@ -288,6 +300,7 @@ def main() -> None:
                                      remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template,
                                      sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
                                      target_model_dir=Path(args.target_model_dir) if args.target_model_dir else None,
+                                     gt_asr_adapter=args.gt_asr_adapter,
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
                                      )

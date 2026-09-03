@@ -420,6 +420,8 @@ struct mtmd_batch {
     mtmd_context * ctx;
     std::vector<const mtmd_input_chunk *> entries;
     std::vector<float> output_embd; // aggregated output embedding for the whole batch
+    float output_speech_probability = 0.0f;
+    bool has_output_speech_probability = false;
     mtmd_batch(mtmd_context * ctx): ctx(ctx) {}
     int32_t n_tokens() const {
         int32_t n = 0;
@@ -1796,7 +1798,11 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
     return ok ? 0 : 1;
 }
 
-static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk * chunk, std::vector<float> & out_embd) {
+static int32_t mtmd_encode_chunk_impl(
+        mtmd_context * ctx,
+        const mtmd_input_chunk * chunk,
+        std::vector<float> & out_embd,
+        float * out_speech_probability = nullptr) {
     if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         LOG_WRN("mtmd_encode_chunk has no effect for text chunks\n");
         return 0;
@@ -1833,7 +1839,8 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
             ctx->ctx_a,
             ctx->n_threads,
             &chunk->tokens_audio->batch_f32,
-            out_embd);
+            out_embd,
+            out_speech_probability);
         return ok ? 0 : 1;
     }
 
@@ -2131,15 +2138,24 @@ static int32_t mtmd_batch_encode_impl(mtmd_batch * batch) {
 
     LOG_DBG("%s: encoding batch with %zu entries and total %zu tokens\n",
             __func__, batch->entries.size(), mtmd_input_chunk_get_n_tokens(batch_chunk.get()));
+    batch->has_output_speech_probability = mtmd_support_speech_probability(batch->ctx);
     int32_t res = mtmd_encode_chunk_impl(
         batch->ctx,
         batch_chunk.get(),
-        batch->output_embd);
+        batch->output_embd,
+        batch->has_output_speech_probability ? &batch->output_speech_probability : nullptr);
+    if (res != 0) {
+        batch->has_output_speech_probability = false;
+    }
     return res;
 }
 
 int32_t mtmd_batch_encode(mtmd_batch * batch) {
     try {
+        if (mtmd_support_speech_probability(batch->ctx) && batch->entries.size() != 1) {
+            LOG_ERR("%s: speech-probability models require exactly one audio chunk per batch\n", __func__);
+            return 1;
+        }
         return mtmd_batch_encode_impl(batch);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
@@ -2165,6 +2181,23 @@ float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * 
         }
     }
     return nullptr; // not found
+}
+
+bool mtmd_batch_get_output_speech_probability(
+        mtmd_batch * batch,
+        const mtmd_input_chunk * chunk,
+        struct mtmd_speech_probability * output) {
+    if (!batch->has_output_speech_probability ||
+        output == nullptr ||
+        batch->entries.size() != 1 ||
+        batch->entries[0] != chunk) {
+        return false;
+    }
+    const auto & eos_token_ids = clip_get_speech_probability_eos_token_ids(batch->ctx->ctx_a);
+    output->value = batch->output_speech_probability;
+    output->eos_token_ids = eos_token_ids.data();
+    output->n_eos_token_ids = eos_token_ids.size();
+    return true;
 }
 
 bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk) {
@@ -2193,6 +2226,10 @@ bool mtmd_support_vision(const mtmd_context * ctx) {
 
 bool mtmd_support_audio(const mtmd_context * ctx) {
     return ctx->ctx_a != nullptr;
+}
+
+bool mtmd_support_speech_probability(const mtmd_context * ctx) {
+    return ctx->ctx_a && clip_has_speech_probability(ctx->ctx_a);
 }
 
 int mtmd_get_audio_sample_rate(const mtmd_context * ctx) {
