@@ -50,7 +50,7 @@ void llama_model_glm5next::load_arch_hparams(llama_model_loader & ml) {
     GGML_ASSERT(hparams.n_rot() == 0 && "GLM5NEXT is nope-only: rope.dimension_count must be 0");
 
     // MoE
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,  hparams.n_layer_dense_lead, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,       hparams.expert_weights_scale, false);
@@ -146,7 +146,7 @@ void llama_model_glm5next::load_arch_tensors(llama_model_loader & ml) {
 
     const int64_t q_lora_rank     = hparams.n_lora_q;
     const int64_t kv_lora_rank    = hparams.n_lora_kv;
-    const int64_t n_ff_exp        = hparams.n_ff_exp;
+    const int64_t n_ff_exp        = hparams.n_ff_exp();
     const int64_t n_expert_shared = std::max<int64_t>(1, hparams.n_expert_shared);
 
     const int64_t n_embd_head_k_mla   = hparams.n_embd_head_k_mla();
