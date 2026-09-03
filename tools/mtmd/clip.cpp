@@ -1213,8 +1213,8 @@ static bool clip_weight_buft_supported(ggml_tensor *              w,
         return false;
     }
 
-    // supports_op checks the buffer type of op struct
-    // temporarily create a zero-size candidate
+    // supports_op checks the buffer type of op
+    // temporarily attach a zero-size buffer of the qtype to the weights
     w->buffer = buf.get();
     bool supported = true;
     for (ggml_tensor * op : wops.ops) {
@@ -3711,6 +3711,35 @@ struct clip_model_loader {
                     }
                 }
             }
+            // Allocate one grouped buffer per extra buffer type and place its selected weights in it
+            for (const auto & group : extra_tensors) {
+                ggml_backend_buffer_type_t cur_buft = group.first;
+                const auto & tensors = group.second;
+                const size_t align = ggml_backend_buft_get_alignment(cur_buft);
+                size_t total = 0;
+                for (ggml_tensor * t : tensors) {
+                    total += GGML_PAD(ggml_backend_buft_get_alloc_size(cur_buft, t), align);
+                }
+                ggml_backend_buffer_ptr cur_buf { ggml_backend_buft_alloc_buffer(cur_buft, total) };
+                if (!cur_buf) {
+                    LOG_WRN("%s: failed to allocate %s buffer, using default buffer type\n", __func__, ggml_backend_buft_name(cur_buft));
+                    continue;
+                }
+                ggml_backend_buffer_set_usage(cur_buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                char * base = (char *) ggml_backend_buffer_get_base(cur_buf.get());
+                size_t offset = 0;
+                for (ggml_tensor * t : tensors) {
+                    if (ggml_backend_tensor_alloc(cur_buf.get(), t, base + offset) != GGML_STATUS_SUCCESS) {
+                        throw std::runtime_error(string_format("%s: failed to allocate tensor %s in %s buffer\n",
+                                                               __func__, t->name, ggml_backend_buft_name(cur_buft)));
+                    }
+                    offset += GGML_PAD(ggml_backend_buft_get_alloc_size(cur_buft, t), align);
+                }
+                LOG_INF("%s: %10s buffer size = %8.2f MiB (%zu tensors)\n", __func__,
+                        ggml_backend_buft_name(cur_buft), total / 1024.0 / 1024.0, tensors.size());
+                ctx_clip.bufs.emplace_back(std::move(cur_buf));
+            }
+
             ggml_backend_buffer_ptr buf { ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft) };
             ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
             ctx_clip.bufs.emplace_back(std::move(buf));
