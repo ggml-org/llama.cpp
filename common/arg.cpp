@@ -3208,6 +3208,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--process-mtp"},
+        string_format("collect data for the MTP (NextN) head (default: %s)", params.process_mtp ? "true" : "false"),
+        [](common_params & params) {
+            params.process_mtp = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"--ppl"},
         {"--no-ppl"},
         string_format("whether to compute perplexity (default: %s)", params.compute_ppl ? "true" : "false"),

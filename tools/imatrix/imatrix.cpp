@@ -2,14 +2,18 @@
 #include "common.h"
 #include "imatrix-loader.h"
 #include "log.h"
+#include "speculative.h"
 #include "llama.h"
 #include "gguf.h"
+
+#include "../../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn (used by --process-mtp)
 
 #include <algorithm>
 #include <chrono>
 #include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <thread>
@@ -29,7 +33,7 @@ static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s \\\n"
             "       -m model.gguf -f some-text.txt [-o imatrix.gguf] [--output-format {gguf,dat}] [--no-ppl] \\\n"
-            "       [--process-output] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \\\n"
+            "       [--process-output] [--process-mtp] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \\\n"
             "       [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \\\n"
             "       [--show-statistics] [...]\n" , argv[0]);
     LOG("\n");
@@ -788,7 +792,70 @@ static void process_logits(
     }
 }
 
-static bool compute_imatrix(llama_context * ctx, const common_params & params, const int32_t n_ctx) {
+// The MTP (NextN) head is not part of the trunk graph, so the collector never sees its weights.
+// Run the head as a second context on the same model, fed with the trunk tokens and the trunk
+// hidden state of the previous position, mirroring common_speculative_impl_draft_mtp::process().
+struct mtp_feed {
+    llama_context * ctx = nullptr;
+
+    int32_t n_embd = 0;
+
+    llama_batch batch = {};
+
+    std::vector<float> h_last; // [n_seq][n_embd]: trunk state of the last row of each seq in the previous batch
+
+    void init(llama_context * ctx_mtp, int32_t n_tokens, int32_t n_seq) {
+        ctx    = ctx_mtp;
+        n_embd = llama_model_n_embd_out(llama_get_model(ctx_mtp));
+
+        // llama_batch_init allocates only one of token/embd; MTP needs both
+        batch       = llama_batch_init(n_tokens, n_embd, 1);
+        batch.token = (llama_token *) malloc(sizeof(llama_token) * n_tokens);
+
+        h_last.resize((size_t) n_seq * n_embd);
+    }
+
+    ~mtp_feed() {
+        if (ctx == nullptr) {
+            return;
+        }
+        free(batch.token);
+        batch.token = nullptr;
+        llama_batch_free(batch);
+    }
+
+    // call at the start of each chunk: no previous position exists yet
+    void reset() {
+        llama_memory_clear(llama_get_memory(ctx), true);
+        std::fill(h_last.begin(), h_last.end(), 0.0f);
+    }
+
+    // batch_tgt rows are laid out seq-major: row = seq*batch_size + k
+    bool decode(llama_context * ctx_tgt, const llama_batch & batch_tgt, int32_t n_seq_batch, int32_t batch_size, bool logits) {
+        const size_t row_bytes = (size_t) n_embd * sizeof(float);
+
+        const float * h_tgt = llama_get_embeddings_nextn(ctx_tgt);
+
+        common_batch_clear(batch);
+
+        for (int seq = 0; seq < n_seq_batch; ++seq) {
+            for (int k = 0; k < batch_size; ++k) {
+                const int r = seq*batch_size + k;
+
+                const float * h_prev = k == 0 ? h_last.data() + (size_t) seq * n_embd : h_tgt + (size_t) (r - 1) * n_embd;
+                std::memcpy(batch.embd + (size_t) r * n_embd, h_prev, row_bytes);
+
+                common_batch_add(batch, batch_tgt.token[r], batch_tgt.pos[r], { batch_tgt.seq_id[r][0] }, logits);
+            }
+
+            std::memcpy(h_last.data() + (size_t) seq * n_embd, h_tgt + (size_t) (seq*batch_size + batch_size - 1) * n_embd, row_bytes);
+        }
+
+        return llama_decode(ctx, batch) == 0;
+    }
+};
+
+static bool compute_imatrix(llama_context * ctx, llama_context * ctx_mtp, const common_params & params, const int32_t n_ctx) {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -847,6 +914,11 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
     llama_batch batch = llama_batch_init(std::min(n_batch, n_ctx*n_seq), 0, 1);
 
+    mtp_feed mtp;
+    if (ctx_mtp) {
+        mtp.init(ctx_mtp, std::min(n_batch, n_ctx*n_seq), n_seq);
+    }
+
     std::vector<float> logits;
     if (params.compute_ppl && num_batches > 1) {
         logits.reserve((size_t)n_ctx * n_vocab);
@@ -866,6 +938,10 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
         // clear the KV cache
         llama_memory_clear(llama_get_memory(ctx), true);
+
+        if (ctx_mtp) {
+            mtp.reset();
+        }
 
         for (int j = 0; j < num_batches; ++j) {
             const int batch_start = start + j * n_batch;
@@ -898,6 +974,13 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
             if (llama_decode(ctx, batch)) {
                 LOG_ERR("%s : failed to eval\n", __func__);
+                llama_batch_free(batch);
+                return false;
+            }
+
+            // the head's LM matmul runs only over the requested outputs; all other block weights see every token
+            if (ctx_mtp && !mtp.decode(ctx, batch, n_seq_batch, batch_size, params.process_output)) {
+                LOG_ERR("%s : failed to eval the MTP head\n", __func__);
                 llama_batch_free(batch);
                 return false;
             }
@@ -1119,6 +1202,12 @@ int main(int argc, char ** argv) {
 
     g_collector.set_params(params);
 
+    if (params.process_mtp) {
+        // load the NextN block; nothing is drafted, so no rollback snapshots are needed
+        params.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
+        params.speculative.draft.n_max = 0;
+    }
+
     for (const auto & in_file : params.in_files) {
         LOG_INF("%s : loading imatrix from '%s'\n", __func__, in_file.c_str());
         if (!g_collector.load_imatrix(in_file.c_str())) {
@@ -1166,6 +1255,28 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    common_speculative_init_result_ptr mtp_init;
+
+    llama_context * ctx_mtp = nullptr;
+
+    if (params.process_mtp) {
+        if (llama_model_n_layer_nextn(model) <= 0) {
+            LOG_ERR("%s : --process-mtp requires a model with an MTP (NextN) head\n", __func__);
+            return 1;
+        }
+
+        mtp_init = common_speculative_init_from_params(params, model, ctx);
+        ctx_mtp  = mtp_init->context();
+
+        if (ctx_mtp == nullptr) {
+            LOG_ERR("%s : failed to create the MTP context\n", __func__);
+            return 1;
+        }
+
+        // every token is an output here, so the masked rows cover the whole batch in batch order
+        llama_set_embeddings_nextn(ctx, true, /*masked*/ true);
+    }
+
     const int n_ctx_train = llama_model_n_ctx_train(model);
     if (params.n_ctx > n_ctx_train) {
         LOG_WRN("%s: model was trained on only %d context tokens (%d specified)\n",
@@ -1178,7 +1289,7 @@ int main(int argc, char ** argv) {
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
 
-    if (!compute_imatrix(ctx, params, n_ctx)) {
+    if (!compute_imatrix(ctx, ctx_mtp, params, n_ctx)) {
         return 1;
     }
 
