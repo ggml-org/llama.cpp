@@ -226,9 +226,11 @@ never be read by a later draft. Set
   sampler. `p_min` is applied to the sampled q probability. The Qwen3.8 HIP
   MTP provider uses capability-gated rocPRIM top-k when available and retains
   the portable reduction fallback; this is compiled independently for gfx1030
-  and gfx1100. The gfx1030 Qwen35/MTP provider likewise uses rocPRIM device
-  top-k when its headers are available and otherwise retains the portable
-  two-stage device reduction. These provider-local optimizations are
+  and gfx1100. On gfx1030, `LLAMA_SPEC_HIP_MTP_PARALLEL_TOPK_FINAL=0` restores
+  the scalar final merge for diagnostics. The gfx1030 Qwen35/MTP provider
+  likewise uses rocPRIM device top-k when its headers are available and
+  otherwise retains the portable two-stage device reduction. These
+  provider-local optimizations are
   independent of the Qwen4Exp sidecar.
 - Text-only, contiguous positions are the supported sidecar input. Vision
   batches, unsupported interleaving, and migration disable the sidecar safely.

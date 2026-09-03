@@ -68,6 +68,7 @@ struct State {
     hipStream_t st = nullptr;       // active target/draft stream
     hipStream_t owned_st = nullptr; // fallback stream owned by the sidecar
     bool owns_st = true;
+    bool parallel_topk_final = false;
     Scratch scr[N_SCR];             // shared serialized scratch; scr[0] is draft scratch
     BatchScratch bs;
     float *part_m = nullptr, *part_l = nullptr, *part_acc = nullptr; // split-K attention partials
@@ -570,6 +571,13 @@ static int spec_hip_init_impl(const char * weights_dir, const char * ids_path,
     if (n_seq < 1 || n_seq > SC_MAX_SEQ) return -1;
     S.n_seq = n_seq;
     S.max_pos = (size_t) max_context;
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    S.parallel_topk_final = true;
+#endif
+    if (const char * value = getenv("LLAMA_SPEC_HIP_MTP_PARALLEL_TOPK_FINAL")) {
+        S.parallel_topk_final = strcmp(value, "0") != 0 &&
+                strcmp(value, "off") != 0 && strcmp(value, "false") != 0;
+    }
     if (requested_device >= 0) {
         SC_CHECK(hipSetDevice(requested_device));
     }
@@ -1096,9 +1104,17 @@ static int spec_hip_draft_stochastic_impl(int32_t seq_id, int32_t id_last, int32
                     (uint32_t) N_HEAD_ROWS, (uint32_t) MTP_DRAFT_TOP_K,
                     rocprim::identity_decomposer{}, S.st);
             SC_CHECK(status);
-            topk_final<<<1, 256, 0, S.st>>>(S.pmax, S.pidx, 1, S.remap_d, SC_N_VOCAB,
-                    S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
-                    S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
+            if (S.parallel_topk_final) {
+                sort_remap_topk<<<1, MTP_DRAFT_TOP_K, 0, S.st>>>(
+                        S.pmax, S.pidx, S.remap_d, SC_N_VOCAB,
+                        S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
+                        S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
+            } else {
+                topk_final<<<1, 256, 0, S.st>>>(
+                        S.pmax, S.pidx, 1, S.remap_d, SC_N_VOCAB,
+                        S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
+                        S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
+            }
         } else
 #endif
         {
