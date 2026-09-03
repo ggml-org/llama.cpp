@@ -191,6 +191,24 @@ int main(int argc, char ** argv) {
         }
     }
 
+    if (qwen35moe_mtp != nullptr) {
+        const char * provider = std::getenv("LLAMA_TEST_QWEN35MOE_PROVIDER");
+        const char * bundle = std::getenv("LLAMA_TEST_QWEN35MOE_BUNDLE");
+        if (provider != nullptr || bundle != nullptr) {
+            std::string provider_error;
+            const std::string weights = bundle != nullptr ? bundle : "";
+            const std::string ids = weights.empty() ? "" : weights + "/draft_head_ids.bin";
+            failures += require(provider != nullptr && bundle != nullptr &&
+                            common_spec_sidecar_mtp_probe(provider, weights, ids,
+                                qwen35moe_mtp->mtp_embedding_width,
+                                qwen35moe_mtp->mtp_head_rows, 1, provider_error),
+                        "Qwen35MoE provider exports the current MTP release ABI");
+            if (!provider_error.empty()) {
+                std::fprintf(stderr, "Qwen35MoE provider probe: %s\n", provider_error.c_str());
+            }
+        }
+    }
+
     if (qwen35_mtp != nullptr) {
         set_environment(qwen35_mtp->library_env, "/definitely/missing/spec_hip_sidecar.so");
         std::string library;

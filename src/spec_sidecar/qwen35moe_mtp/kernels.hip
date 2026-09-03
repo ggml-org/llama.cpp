@@ -484,6 +484,74 @@ __global__ void router_top8(const float * __restrict__ logits,
     for (int slot = 0; slot < N_EXPERT_USED; ++slot) weights[slot] /= selected_sum;
 }
 
+// Parallel form of router_top8 with the same arithmetic order for the softmax
+// and selected-weight normalizations. Only the independent exponentials and
+// top-8 searches are distributed across the 256 lanes.
+__global__ void router_top8_parallel(const float * __restrict__ logits,
+        int32_t * __restrict__ selected, float * __restrict__ weights) {
+    __shared__ float probabilities[N_EXPERT];
+    __shared__ float reduction_values[N_EXPERT];
+    __shared__ int reduction_indices[N_EXPERT];
+    __shared__ float maximum;
+    __shared__ float total;
+    const int tid = static_cast<int>(threadIdx.x);
+
+    reduction_values[tid] = fmaxf(-1e30f, logits[tid]);
+    __syncthreads();
+    for (int offset = N_EXPERT / 2; offset > 0; offset >>= 1) {
+        if (tid < offset) {
+            reduction_values[tid] = fmaxf(reduction_values[tid], reduction_values[tid + offset]);
+        }
+        __syncthreads();
+    }
+    if (tid == 0) maximum = reduction_values[0];
+    __syncthreads();
+
+    probabilities[tid] = expf(logits[tid] - maximum);
+    __syncthreads();
+    if (tid == 0) {
+        float sum = 0.0f;
+        for (int i = 0; i < N_EXPERT; ++i) sum += probabilities[i];
+        total = fmaxf(sum, 1e-30f);
+    }
+    __syncthreads();
+    probabilities[tid] /= total;
+    __syncthreads();
+
+    for (int slot = 0; slot < N_EXPERT_USED; ++slot) {
+        bool used = false;
+        for (int prior = 0; prior < slot; ++prior) used = used || selected[prior] == tid;
+        reduction_values[tid] = used ? -1e30f : probabilities[tid];
+        reduction_indices[tid] = used ? -1 : tid;
+        __syncthreads();
+        for (int offset = N_EXPERT / 2; offset > 0; offset >>= 1) {
+            if (tid < offset) {
+                const int rhs_index = reduction_indices[tid + offset];
+                if (rhs_index >= 0 && (reduction_indices[tid] < 0 ||
+                        reduction_values[tid + offset] > reduction_values[tid] ||
+                        (reduction_values[tid + offset] == reduction_values[tid] &&
+                         rhs_index < reduction_indices[tid]))) {
+                    reduction_values[tid] = reduction_values[tid + offset];
+                    reduction_indices[tid] = rhs_index;
+                }
+            }
+            __syncthreads();
+        }
+        if (tid == 0) {
+            selected[slot] = reduction_indices[0];
+            weights[slot] = reduction_values[0];
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        float selected_sum = 0.0f;
+        for (int slot = 0; slot < N_EXPERT_USED; ++slot) selected_sum += weights[slot];
+        selected_sum = fmaxf(selected_sum, 6.103515625e-5f);
+        for (int slot = 0; slot < N_EXPERT_USED; ++slot) weights[slot] /= selected_sum;
+    }
+}
+
 __global__ void gemv_q4_experts(const block_q4_0 * __restrict__ weights,
         const float * __restrict__ input, const int32_t * __restrict__ experts,
         float * __restrict__ output, int n_in, int n_out, int experts_used) {
@@ -646,6 +714,54 @@ __global__ void topk_final(const float * __restrict__ partial_values,
         output_values[slot] = best;
         output_ids[slot] = best_index >= 0 ? remap[best_index] : -1;
     }
+}
+
+__device__ __forceinline__ bool topk_better(
+        float lhs_value, int lhs_index, float rhs_value, int rhs_index) {
+    return lhs_index >= 0 && (rhs_index < 0 || lhs_value > rhs_value ||
+            (lhs_value == rhs_value && lhs_index < rhs_index));
+}
+
+// rocPRIM returns one duplicate-free top-k row, but does not promise result
+// order. Sort its 32 entries cooperatively before remapping. This preserves the
+// legacy value-descending/index-ascending proposal order without rerunning the
+// O(k^3) scalar partition merger (about 0.5 ms per drafted token on gfx1030).
+__global__ void sort_remap_topk(const float * __restrict__ values,
+        const int * __restrict__ indices, const int * __restrict__ remap,
+        int * __restrict__ output_ids, float * __restrict__ output_values) {
+    __shared__ float sorted_values[MTP_DRAFT_TOP_K];
+    __shared__ int sorted_indices[MTP_DRAFT_TOP_K];
+    const int tid = static_cast<int>(threadIdx.x);
+    if (blockIdx.x != 0 || tid >= MTP_DRAFT_TOP_K) return;
+    sorted_values[tid] = values[tid];
+    sorted_indices[tid] = indices[tid];
+    __syncthreads();
+
+    for (int width = 2; width <= MTP_DRAFT_TOP_K; width <<= 1) {
+        for (int stride = width >> 1; stride > 0; stride >>= 1) {
+            const int peer = tid ^ stride;
+            if (peer > tid) {
+                const bool better_first = (tid & width) == 0;
+                const bool peer_better = topk_better(sorted_values[peer], sorted_indices[peer],
+                        sorted_values[tid], sorted_indices[tid]);
+                const bool self_better = topk_better(sorted_values[tid], sorted_indices[tid],
+                        sorted_values[peer], sorted_indices[peer]);
+                if ((better_first && peer_better) || (!better_first && self_better)) {
+                    const float value = sorted_values[tid];
+                    const int index = sorted_indices[tid];
+                    sorted_values[tid] = sorted_values[peer];
+                    sorted_indices[tid] = sorted_indices[peer];
+                    sorted_values[peer] = value;
+                    sorted_indices[peer] = index;
+                }
+            }
+            __syncthreads();
+        }
+    }
+
+    const int index = sorted_indices[tid];
+    output_values[tid] = sorted_values[tid];
+    output_ids[tid] = index >= 0 ? remap[index] : -1;
 }
 
 __global__ void sample_topk(const int * __restrict__ ids, const float * __restrict__ logits,
