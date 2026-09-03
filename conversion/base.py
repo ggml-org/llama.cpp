@@ -1033,10 +1033,6 @@ class ModelBase:
 
     def prepare_metadata(self, vocab_only: bool):
 
-        # tells the loader they are missing on purpose
-        if self.mtp_only and self.mtp_shared_embd:
-            self.gguf_writer.add_nextn_shared_target_tensors(True)
-
         total_params, shared_params, expert_params, expert_count = self.gguf_writer.get_total_parameter_count()
 
         self.metadata = gguf.Metadata.load(self.metadata_override, self.dir_model_card, self.model_name, total_params)
