@@ -22,7 +22,7 @@ void llama_model_glm5_next::load_arch_hparams(llama_model_loader & ml) {
         hparams.is_recr_impl[i] = hparams.n_head_kv(i) == 0;
     }
 
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,  hparams.n_layer_dense_lead, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,       hparams.expert_weights_scale, false);
@@ -160,7 +160,7 @@ void llama_model_glm5_next::load_arch_tensors(llama_model_loader & ml) {
             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
         } else {
-            const int64_t n_ff_exp        = hparams.n_ff_exp;
+            const int64_t n_ff_exp        = hparams.n_ff_exp(i);
             const int64_t n_expert_shared = hparams.n_expert_shared;
 
             layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, flags);
@@ -809,7 +809,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
         ggml_tensor * k = mctx_mla->get_k(ctx0, il);
         ggml_tensor * v = ggml_view_4d(ctx0, k, kv_lora_rank, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
-        out = build_attn_mha(q_absorbed, k, v, nullptr, mask, nullptr, layer.wv_b, kq_scale, il);
+        out = build_attn_mha(q_absorbed, k, v, nullptr, mask, nullptr, layer.wv_b, 0, kq_scale, il);
     }
     cb(out, "kqv_out", il);
 
