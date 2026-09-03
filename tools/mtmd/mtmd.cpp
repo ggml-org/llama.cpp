@@ -1142,7 +1142,7 @@ struct mtmd_tokenizer {
 
     mtmd_tokenizer(const mtmd_context * ctx,
             const mtmd_input_text * text,
-            const mtmd_bitmap ** bmps,
+            const mtmd_bitmap * const * bmps,
             size_t n_bitmaps) : ctx(ctx) {
         add_special   = text->add_special;
         parse_special = text->parse_special;
@@ -1178,7 +1178,7 @@ struct mtmd_tokenizer {
     }
 
     mtmd_tokenizer(const mtmd_context * ctx,
-            const mtmd_input_part ** input_parts,
+            const mtmd_input_part * const * input_parts,
             size_t n_parts,
             bool add_special) : ctx(ctx) {
         this->add_special = add_special;
@@ -1736,7 +1736,7 @@ struct mtmd_tokenizer {
 int32_t mtmd_tokenize(const mtmd_context * ctx,
             mtmd_input_chunks * output,
             const mtmd_input_text * text,
-            const mtmd_bitmap ** bitmaps,
+            const mtmd_bitmap * const * bitmaps,
             size_t n_bitmaps) {
     try {
         mtmd_tokenizer tokenizer(ctx, text, bitmaps, n_bitmaps);
@@ -1749,7 +1749,7 @@ int32_t mtmd_tokenize(const mtmd_context * ctx,
 
 int32_t mtmd_tokenize_from_parts(const mtmd_context * ctx,
             mtmd_input_chunks * output,
-            const mtmd_input_part ** parts,
+            const mtmd_input_part * const * parts,
             size_t n_parts,
             bool add_special) {
     for (size_t i = 0; i < n_parts; i++) {

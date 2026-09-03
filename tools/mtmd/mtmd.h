@@ -302,7 +302,7 @@ MTMD_API struct mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_im
 MTMD_API int32_t mtmd_tokenize(const mtmd_context * ctx,
                                mtmd_input_chunks * output,
                                const mtmd_input_text * text,
-                               const mtmd_bitmap ** bitmaps,
+                               const mtmd_bitmap * const * bitmaps,
                                size_t n_bitmaps);
 
 // same as mtmd_tokenize(), but takes an array of mtmd_input_part
@@ -313,7 +313,7 @@ MTMD_API int32_t mtmd_tokenize(const mtmd_context * ctx,
 // return 1 if a part has both text and bitmap set (or neither)
 MTMD_API int32_t mtmd_tokenize_from_parts(const mtmd_context * ctx,
                                           mtmd_input_chunks * output,
-                                          const mtmd_input_part ** parts,
+                                          const mtmd_input_part * const * parts,
                                           size_t n_parts,
                                           bool add_special);
 
