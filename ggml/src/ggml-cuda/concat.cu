@@ -194,6 +194,104 @@ static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml
     }
 }
 
+static __global__ void __launch_bounds__(256)
+    concat_f32_transpose(
+        const char * src0,
+        const char * src1,
+              char * dst,
+           int64_t   ne00,
+           int64_t   ne10,
+           int64_t   ne1,
+           int64_t   ne2,
+          uint64_t   nb00,
+          uint64_t   nb01,
+          uint64_t   nb02,
+          uint64_t   nb03,
+          uint64_t   nb10,
+          uint64_t   nb11,
+          uint64_t   nb12,
+          uint64_t   nb13,
+          uint64_t   nb0,
+          uint64_t   nb1,
+          uint64_t   nb2,
+          uint64_t   nb3) {
+    constexpr int tile_dim   = 32;
+    constexpr int block_rows = 8;
+
+    __shared__ float tile[tile_dim][tile_dim + 1];
+
+    const int64_t i2 = blockIdx.z % ne2;
+    const int64_t i3 = blockIdx.z / ne2;
+    const int64_t i1 = (int64_t) blockIdx.x * tile_dim + threadIdx.x;
+    const int64_t i0 = (int64_t) blockIdx.y * tile_dim + threadIdx.y;
+
+    ggml_cuda_pdl_sync();
+#pragma unroll
+    for (int j = 0; j < tile_dim; j += block_rows) {
+        if (i0 + j < ne10 && i1 < ne1) {
+            tile[threadIdx.y + j][threadIdx.x] =
+                *(const float *) (src1 + i3*nb13 + i2*nb12 + i1*nb11 + (i0 + j)*nb10);
+        }
+    }
+
+    if (blockIdx.y == 0) {
+        const int tid = threadIdx.y * tile_dim + threadIdx.x;
+        for (int64_t i = tid; i < ne00 * tile_dim; i += tile_dim * block_rows) {
+            const int64_t state   = i % ne00;
+            const int64_t channel = (int64_t) blockIdx.x * tile_dim + i / ne00;
+            if (channel < ne1) {
+                *(float *) (dst + i3*nb3 + i2*nb2 + channel*nb1 + state*nb0) =
+                    *(const float *) (src0 + i3*nb03 + i2*nb02 + channel*nb01 + state*nb00);
+            }
+        }
+    }
+
+    __syncthreads();
+
+    const int64_t dst_i0 = (int64_t) blockIdx.y * tile_dim + threadIdx.x;
+    const int64_t dst_i1 = (int64_t) blockIdx.x * tile_dim + threadIdx.y;
+#pragma unroll
+    for (int j = 0; j < tile_dim; j += block_rows) {
+        if (dst_i0 < ne10 && dst_i1 + j < ne1) {
+            *(float *) (dst + i3*nb3 + i2*nb2 + (dst_i1 + j)*nb1 + (ne00 + dst_i0)*nb0) =
+                tile[threadIdx.x][threadIdx.y + j];
+        }
+    }
+}
+
+static bool concat_try_f32_transpose(
+        const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, int dim, cudaStream_t stream) {
+    constexpr int     tile_dim  = 32;
+    constexpr int64_t max_grid_z = 65535;
+
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    if (dim != 0 ||
+        src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+        !GGML_CUDA_CC_IS_RDNA3_5(cc) ||
+        (src1->ne[0] != 512 && src1->ne[0] != 1024 && src1->ne[0] != 2048) ||
+        !ggml_is_contiguous(src0) || !ggml_is_contiguous(dst) ||
+        src1->nb[1] != sizeof(float) ||
+        src1->nb[0] != (size_t) src1->ne[1] * src1->nb[1] ||
+        src1->nb[2] != (size_t) src1->ne[0] * src1->nb[0] ||
+        src1->nb[3] != (size_t) src1->ne[2] * src1->nb[2] ||
+        dst->ne[2] * dst->ne[3] > max_grid_z) {
+        return false;
+    }
+
+    constexpr int block_rows = 8;
+    const dim3 block_dim(tile_dim, block_rows, 1);
+    const dim3 grid_dim((dst->ne[1] + tile_dim - 1) / tile_dim,
+                        (src1->ne[0] + tile_dim - 1) / tile_dim,
+                        dst->ne[2] * dst->ne[3]);
+    concat_f32_transpose<<<grid_dim, block_dim, 0, stream>>>(
+        (const char *) src0->data, (const char *) src1->data, (char *) dst->data,
+        src0->ne[0], src1->ne[0], dst->ne[1], dst->ne[2],
+        src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
+        src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3],
+        dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3]);
+    return true;
+}
+
 void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -204,6 +302,10 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     GGML_ASSERT(src0->type == src1->type);
     GGML_ASSERT(dst->type  == src0->type);
+
+    if (concat_try_f32_transpose(src0, src1, dst, dim, stream)) {
+        return;
+    }
 
     if (ggml_is_quantized(src0->type)) {
         if (dim == 3) {
