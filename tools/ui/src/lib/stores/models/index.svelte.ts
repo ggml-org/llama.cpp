@@ -374,6 +374,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			entries
 				// sidecar entries mark downloaded sidecar files, not loadable models
 				.filter(({ item }) => !ModelsService.isSidecarEntry(item.id))
+				// in-flight downloads are not usable models yet; the selector tracks
+				// them in its "Download in progress" section instead
+				.filter(({ item }) => item.status?.value !== ServerModelStatus.DOWNLOADING)
 				.map(({ details, item }) => {
 					const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
 					const displayNameSource =
