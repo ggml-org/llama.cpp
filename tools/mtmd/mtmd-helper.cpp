@@ -1016,7 +1016,7 @@ int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
 #endif
 }
 
-bool mtmd_helper_model_can_chat(llama_context * lctx, const mtmd_context * mctx) {
+bool mtmd_helper_model_can_chat(const llama_context * lctx, const mtmd_context * mctx) {
     if (!mctx) {
         return true;
     }

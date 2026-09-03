@@ -177,7 +177,7 @@ MTMD_API int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
             char ** out_text);
 
 // return true if model can be used for chat
-MTMD_API bool mtmd_helper_model_can_chat(struct llama_context * lctx, const struct mtmd_context * mctx);
+MTMD_API bool mtmd_helper_model_can_chat(const struct llama_context * lctx, const struct mtmd_context * mctx);
 
 //
 // Audio generation helpers
