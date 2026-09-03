@@ -406,12 +406,16 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
                                            arguments.name_suffix) +
                            arguments.value_prefix +
-                           (schema_info.resolves_to_string(param_schema) ?
-                                p.ac(p.tool_arg_string_value(until_suffix) +
-                                    p.tool_arg_close(p.literal(arguments.value_suffix)), arguments.value_suffix) :
-                                (p.tool_arg_json_value(p.schema(
-                                    p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
-                                    p.tool_arg_close(p.literal(arguments.value_suffix)))));
+                            (schema_info.resolves_to_string(param_schema) ?
+                                 p.ac(p.tool_arg_string_value(until_suffix) +
+                                     p.tool_arg_close(p.literal(arguments.value_suffix)), arguments.value_suffix) :
+                                 // Non-string args (array<object>, object, number, bool): capture raw
+                                 // text up to the closing tag and normalize to JSON at extraction time
+                                 // (normalize_container_value). Constraining this branch with an inline
+                                 // p.schema(p.json(), ...) aborts matching on nested array<object> values
+                                 // inside <parameter> tags (#21771); raw capture sidesteps that coupling.
+                                 (p.tool_arg_json_value(until_suffix) +
+                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));
 
             auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
             if (is_required) {
