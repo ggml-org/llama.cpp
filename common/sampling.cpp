@@ -735,6 +735,8 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
 
     std::vector<llama_token_data> residual;
 
+    std::vector<llama_token_data> cand; // candidate array masked by the grammar, if there is one
+
     size_t i = 0;
     for (; i < draft.size(); i++) {
         // leaves the target distribution in the candidate array
@@ -743,9 +745,28 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
         const auto * cur_p = common_sampler_get_candidates(gsmpl, true);
         const auto & q     = draft_q[i];
 
+        const bool masked = !grammar_first && grammar_should_apply(gsmpl);
+        if (masked) {
+            cand.assign(cur_p->data, cur_p->data + cur_p->size);
+            llama_token_data_array arr = { cand.data(), cand.size(), -1, false };
+            llama_sampler_apply(gsmpl->grmr, &arr);
+        }
+
+        // a candidate the grammar rejects carries no probability, whatever the target thinks
+        auto p_of = [&](size_t k) {
+            return masked && cand[k].logit == -INFINITY ? 0.0f : cur_p->data[k].p;
+        };
+
         // q_x is never 0 for a token the draft produced, but guard the divide
         const float q_x = prob_of(q.data(), q.size(), draft[i]);
-        const float p_x = prob_of(cur_p->data, cur_p->size, draft[i]);
+
+        float p_x = 0.0f;
+        for (size_t k = 0; k < cur_p->size; ++k) {
+            if (cur_p->data[k].id == draft[i]) {
+                p_x = p_of(k);
+                break;
+            }
+        }
 
         if (q_x > 0.0f && (p_x >= q_x || uni(gsmpl->rng) < p_x / q_x)) {
             common_sampler_accept(gsmpl, draft[i], true);
@@ -757,7 +778,7 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
         residual.clear();
         float sum = 0.0f;
         for (size_t k = 0; k < cur_p->size; ++k) {
-            const float r = cur_p->data[k].p - prob_of(q.data(), q.size(), cur_p->data[k].id);
+            const float r = p_of(k) - prob_of(q.data(), q.size(), cur_p->data[k].id);
             if (r > 0.0f) {
                 residual.push_back({ cur_p->data[k].id, 0.0f, r });
                 sum += r;
