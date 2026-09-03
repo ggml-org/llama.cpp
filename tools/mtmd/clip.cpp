@@ -3677,7 +3677,7 @@ struct clip_model_loader {
             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
             std::map<ggml_backend_buffer_type_t, std::vector<ggml_tensor *>> extra_tensors;
             ggml_backend_dev_t dev = ggml_backend_get_device(ctx_clip.backend);
-            // Avoiding GEN_AUDIO
+            // GEN_AUDIO graph variants depend on runtime parameters, skip converting weights to extra bufts
             const bool can_build_graph = model.modality == CLIP_MODALITY_VISION ||
                                          model.modality == CLIP_MODALITY_AUDIO;
             if (dev) {
@@ -3777,7 +3777,7 @@ struct clip_model_loader {
                         // host buffers (e.g. CPU and Metal) can be read into directly
                         fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
                     } else {
-                        // read into a temporary buffer firt, then copy/convert the layout to device memory
+                        // read into a temporary buffer first, then copy/convert the layout to device memory
                         read_buf.resize(num_bytes);
                         fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
                         ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
