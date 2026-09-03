@@ -58,7 +58,7 @@ HIP_LIB="$BUILD_DIR/bin/libggml-hip.so.0"
 [ -f "$HIP_LIB" ] || fail "HIP backend library was not produced"
 case "$BUILD_SPEC_SIDECARS" in
     ON|1|TRUE|on|true)
-        for so in spec_hip_sidecar.so spec_dflash_sidecar.so spec_qwen35moe_mtp_sidecar.so; do
+        for so in spec_hip_sidecar.so spec_dflash_sidecar.so spec_qwen35moe_mtp_sidecar.so spec_qwen4exp_mtp_sidecar.so; do
             [ -f "$BUILD_DIR/bin/$so" ] || fail "speculative sidecar was not produced: $so"
         done
         ;;

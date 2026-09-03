@@ -133,15 +133,14 @@ cmake -S . -B build-spec-sidecar \
   -DLLAMA_BUILD_SPEC_SIDECARS=ON \
   -DLLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES=gfx1030 \
   -DCMAKE_CXX_COMPILER=/opt/rocm/bin/hipcc
-cmake --build build-spec-sidecar \
-  --target spec-sidecar-hip-mtp spec-sidecar-hip-dflash \
-           spec-sidecar-hip-qwen35moe-mtp \
-           spec-sidecar-hip-qwen4exp-mtp llama-server
+cmake --build build-spec-sidecar --target llama-server
 ```
 
-The resulting libraries are `spec_hip_sidecar.so`, `spec_dflash_sidecar.so`,
+When `LLAMA_BUILD_SPEC_SIDECARS=ON`, `llama-server` depends on the complete
+registered provider set. A targeted server build therefore produces
+`spec_hip_sidecar.so`, `spec_dflash_sidecar.so`,
 `spec_qwen35moe_mtp_sidecar.so`, and `spec_qwen4exp_mtp_sidecar.so` in the
-build `bin` directory. For automatic
+build `bin` directory; providers do not need to be named manually. For automatic
 runtime discovery of the qualified providers, put the prepared bundles at
 `bin/spec-sidecar-mtp` and `bin/spec-sidecar-dflash` beside those libraries (or
 under the documented installed `share/llama.cpp/spec-sidecar` layout). Flash

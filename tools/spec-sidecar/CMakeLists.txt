@@ -95,3 +95,20 @@ target_include_directories(spec-sidecar-hip-qwen4exp-mtp PRIVATE
     ${PROJECT_SOURCE_DIR}/ggml/include
     ${PROJECT_SOURCE_DIR}/ggml/src
     ${PROJECT_SOURCE_DIR}/ggml/src/ggml-cuda)
+
+# Runtime discovery is intentionally automatic once SPEC_SIDECAR=1, so an
+# enabled server build must be artifact-complete as well.  Without this
+# dependency, an explicit `--target llama-server` build can succeed while
+# silently omitting every provider shared library and forcing native fallback.
+set(LLAMA_SPEC_SIDECAR_TARGETS
+    spec-sidecar-hip-mtp
+    spec-sidecar-hip-dflash
+    spec-sidecar-hip-qwen35moe-mtp
+    spec-sidecar-hip-qwen4exp-mtp)
+
+add_custom_target(llama-spec-sidecars
+    DEPENDS ${LLAMA_SPEC_SIDECAR_TARGETS})
+
+if (TARGET llama-server)
+    add_dependencies(llama-server llama-spec-sidecars)
+endif()

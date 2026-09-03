@@ -262,10 +262,9 @@ echo "  ROCm:   $ROCM_PATH"
 echo "  clang:  $HIPCXX"
 echo "  target: $TARGET_ARCH"
 cmake -S "$ROOT_DIR" -B "$BUILD_DIR" "${CMAKE_FLAGS[@]}"
+# When enabled, llama-server depends on the complete provider set through
+# tools/spec-sidecar/CMakeLists.txt. Do not duplicate that list here.
 targets=(llama-server)
-if [[ "$BUILD_SIDECARS" == ON || "$BUILD_SIDECARS" == 1 || "$BUILD_SIDECARS" == TRUE || "$BUILD_SIDECARS" == on || "$BUILD_SIDECARS" == true ]]; then
-    targets+=(spec-sidecar-hip-mtp spec-sidecar-hip-dflash)
-fi
 if [[ "$BUILD_TESTS" == ON || "$BUILD_TESTS" == 1 || "$BUILD_TESTS" == TRUE || "$BUILD_TESTS" == on || "$BUILD_TESTS" == true ]]; then
     targets+=(test-backend-ops)
 fi
@@ -274,6 +273,11 @@ cmake --build "$BUILD_DIR" --target "${targets[@]}" --config "$BUILD_TYPE" --par
 SERVER="$BUILD_DIR/bin/llama-server"
 HIP_LIB="$BUILD_DIR/bin/libggml-hip.so"
 [[ -x "$SERVER" && -e "$HIP_LIB" ]] || fail "server/HIP backend artifacts were not produced"
+if [[ "$BUILD_SIDECARS" == ON || "$BUILD_SIDECARS" == 1 || "$BUILD_SIDECARS" == TRUE || "$BUILD_SIDECARS" == on || "$BUILD_SIDECARS" == true ]]; then
+    for so in spec_hip_sidecar.so spec_dflash_sidecar.so spec_qwen35moe_mtp_sidecar.so spec_qwen4exp_mtp_sidecar.so; do
+        [[ -f "$BUILD_DIR/bin/$so" ]] || fail "speculative sidecar was not produced: $so"
+    done
+fi
 if ldd "$SERVER" "$HIP_LIB" | grep -q 'not found'; then
     ldd "$SERVER" "$HIP_LIB" | grep 'not found' >&2
     fail "unresolved shared library"

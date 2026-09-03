@@ -113,20 +113,20 @@ printf 'Configuring unified RDNA build\n  source: %s\n  build:  %s\n  ROCm:   %s
     "$ROOT_DIR" "$BUILD_DIR" "$ROCM_PATH" "$TARGET_ARCH" "$JOBS"
 cmake -S "$ROOT_DIR" -B "$BUILD_DIR" "${cmake_flags[@]}"
 
+# When enabled, llama-server depends on the complete provider set through
+# tools/spec-sidecar/CMakeLists.txt. Do not duplicate that list here.
 targets=(llama-server)
-if [[ $BUILD_SIDECARS == ON ]]; then
-    targets+=(
-        spec-sidecar-hip-mtp
-        spec-sidecar-hip-dflash
-        spec-sidecar-hip-qwen35moe-mtp
-    )
-fi
 if [[ $BUILD_TESTS == ON ]]; then targets+=(test-backend-ops); fi
 cmake --build "$BUILD_DIR" --target "${targets[@]}" --parallel "$JOBS"
 
 SERVER=$BUILD_DIR/bin/llama-server
 HIP_LIB=$BUILD_DIR/bin/libggml-hip.so
 [[ -x $SERVER && -e $HIP_LIB ]] || fail "expected server/HIP artifacts were not produced"
+if [[ $BUILD_SIDECARS == ON ]]; then
+    for so in spec_hip_sidecar.so spec_dflash_sidecar.so spec_qwen35moe_mtp_sidecar.so spec_qwen4exp_mtp_sidecar.so; do
+        [[ -f $BUILD_DIR/bin/$so ]] || fail "speculative sidecar was not produced: $so"
+    done
+fi
 if ldd "$SERVER" "$HIP_LIB" | grep -q 'not found'; then
     ldd "$SERVER" "$HIP_LIB" | grep 'not found' >&2
     fail "unresolved shared library"
