@@ -1913,6 +1913,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     // per-tensor activation precision policy
     prec_policy.load(ml, *this);
 
+    const int64_t t_tensor_load_start_us = ggml_time_us();
+
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 
@@ -2071,6 +2073,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     load_tensors_hadamard();
+
+    t_tensor_load_us = ggml_time_us() - t_tensor_load_start_us;
 
     return true;
 }
