@@ -2456,7 +2456,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         if (arr_type == GGUF_TYPE_INT32) {
             iscores = (const int *) gguf_get_arr_data(ctx, score_idx);
         } else {
-        scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
+            scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
         }
     }
 
