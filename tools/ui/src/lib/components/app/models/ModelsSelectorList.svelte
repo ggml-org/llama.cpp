@@ -48,8 +48,16 @@
 	/>
 {/snippet}
 
+{#if groups.favorites.length > 0}
+	<p class={sectionHeaderClass}>Favorite models</p>
+
+	{#each groups.favorites as item (`fav-${item.option.id}`)}
+		{@render render(item, true)}
+	{/each}
+{/if}
+
 {#if downloadEntries.length > 0}
-	<p class="{sectionHeaderClass} mt-0">Download in progress</p>
+	<p class={sectionHeaderClass}>Download in progress</p>
 
 	{#each downloadEntries as entry (entry.repoWithTag)}
 		<ModelsSelectorDownloadItem {entry} />
@@ -61,14 +69,6 @@
 
 	{#each groups.loaded as item (`loaded-${item.option.id}`)}
 		{@render render(item, false)}
-	{/each}
-{/if}
-
-{#if groups.favorites.length > 0}
-	<p class={sectionHeaderClass}>Favorite models</p>
-
-	{#each groups.favorites as item (`fav-${item.option.id}`)}
-		{@render render(item, true)}
 	{/each}
 {/if}
 
