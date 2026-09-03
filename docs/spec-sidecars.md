@@ -82,10 +82,20 @@ export LLAMA_SPEC_QWEN35MOE_HIP_WEIGHTS=/absolute/artifacts/spec-sidecar-qwen35m
 # The ID path defaults to $LLAMA_SPEC_QWEN35MOE_HIP_WEIGHTS/draft_head_ids.bin.
 ```
 
-The current implementation is correctness/lifecycle validated but not yet a
-production speed recommendation. Its full-vocabulary target output is reduced
-to the 40,960 IDs in the artifact, so acceptance and throughput must be
-qualified against native MTP on the user's exact model and prompt family.
+On gfx1030 the provider uses rocPRIM for the 40,960-row stochastic top-k,
+cooperatively sorts/remaps its 32 candidates, and routes the 8-of-256 MoE in a
+256-lane kernel. The portable scalar paths remain available through
+`LLAMA_SPEC_QWEN35MOE_ROCPRIM_TOPK=0` and
+`LLAMA_SPEC_QWEN35MOE_PARALLEL_ROUTER=0`. Batched prompt catch-up can be
+reverted with `LLAMA_SPEC_QWEN35MOE_BATCHED_CATCHUP=0`.
+
+The provider remains explicit-path because profitability depends on the
+request shape. On the validated four-gfx1030 layer-split model, 256-token
+code/prose/JSON runs improved 28.6–40.3% over native MTP. A 6,336-token prompt
+with only 128 output tokens remained slower end to end because reconstructing
+the sidecar's MTP KV is less efficient than the native large-batch graph.
+Qualify acceptance and prompt/output balance on the exact deployment workload;
+do not reuse the Qwen3.8-27B tensor-split launch policy for this MoE model.
 
 ## Prepare the Flash Next artifacts
 
@@ -197,6 +207,12 @@ export SPEC_SIDECAR=1
   --ctx-checkpoints 0 --cache-ram 0 --no-cache-idle-slots
 ```
 
+On gfx1030, long linear catch-up omits K/V projections older than DFlash2's
+trained 2,048-token attention window while preserving the original eight-row
+kernel boundaries. The logical cursor remains contiguous and skipped rows can
+never be read by a later draft. Set
+`LLAMA_SPEC_HIP_DFLASH_WINDOW_CATCHUP=0` to restore full-prefix processing.
+
 ## State, safety, and current limits
 
 - Up to eight sidecar sequences are supported. Each sequence has an isolated
@@ -219,7 +235,10 @@ export SPEC_SIDECAR=1
   With a single HIP target ubatch on the matching device, the host passes
   borrowed target device pointers and attaches the sidecar to the target HIP
   stream; the target context defers those host output copies until a host
-  getter is requested. Otherwise it uses the synchronized host-copy path.
+  getter is requested. A borrowed graph tensor cannot survive a later ubatch,
+  so multi-ubatch logical decodes materialize each ubatch in stream order before
+  its graph storage is reused. Otherwise the sidecar uses the synchronized
+  host-copy path.
 - The ABI exposes sequence-scoped `state_size`, `get_state`, `set_state`,
   `reset_state`, `truncate_state`, `commit_state`, and `rebase_state` for both
   sidecars. Snapshots contain only a position cursor plus an epoch; the large
