@@ -6333,6 +6333,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         bool dot2_f16_support = false;
         bool ocp_microscaling_extension = false;
         bool shader_float8_extension = false;
+        bool timeline_semaphore_support = false;
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_KHR_maintenance4", properties.extensionName) == 0) {
@@ -6401,6 +6402,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 internally_sync_support = true;
             } else if (strcmp("VK_EXT_device_fault", properties.extensionName) == 0) {
                 device->device_fault = true;
+            } else if (strcmp("VK_KHR_timeline_semaphore", properties.extensionName) == 0) {
+                timeline_semaphore_support = true;
             }
         }
 
@@ -6596,12 +6599,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device_features2.pNext = nullptr;
         device_features2.features = (VkPhysicalDeviceFeatures)device_features;
 
-        VkPhysicalDeviceVulkan11Features vk11_features;
+        VkPhysicalDeviceVulkan11Features vk11_features{};
         vk11_features.pNext = nullptr;
         vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
         device_features2.pNext = &vk11_features;
 
-        VkPhysicalDeviceVulkan12Features vk12_features;
+        VkPhysicalDeviceVulkan12Features vk12_features{};
         vk12_features.pNext = nullptr;
         vk12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         vk11_features.pNext = &vk12_features;
@@ -6617,6 +6620,17 @@ static vk_device ggml_vk_get_device(size_t idx) {
             last_struct->pNext = (VkBaseOutStructure *)&internally_synchronized_queues_features;
             last_struct = (VkBaseOutStructure *)&internally_synchronized_queues_features;
             device_extensions.push_back(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME);
+        }
+
+        VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timeline_semaphore_features{};
+        timeline_semaphore_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
+        timeline_semaphore_features.pNext = nullptr;
+        timeline_semaphore_features.timelineSemaphore = VK_TRUE;
+
+        if (timeline_semaphore_support && !vk12_features.timelineSemaphore) {
+            last_struct->pNext = (VkBaseOutStructure *)&timeline_semaphore_features;
+            last_struct = (VkBaseOutStructure *)&timeline_semaphore_features;
+            device_extensions.push_back("VK_KHR_timeline_semaphore");
         }
 
         VkPhysicalDevicePipelineRobustnessFeaturesEXT pl_robustness_features;
@@ -6806,7 +6820,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
                             getenv("GGML_VK_DISABLE_MULTI_ADD") == nullptr;
 
         device->shader_int64 = device_features2.features.shaderInt64;
-        device->buffer_device_address = vk12_features.bufferDeviceAddress;
+        device->buffer_device_address = vk12_features.bufferDeviceAddress && device->properties.apiVersion >= VK_API_VERSION_1_2;
         device->vulkan_memory_model = vk12_features.vulkanMemoryModel;
 
         if (device->subgroup_size_control) {
@@ -7059,6 +7073,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device_create_info.setPNext(&device_features2);
         device->device = device->physical_device.createDevice(device_create_info);
 
+        ggml_vk_default_dispatcher().init(device->device);
+
         if (device->device_fault) {
             device->pfn_vkGetDeviceFaultInfoEXT = (PFN_vkGetDeviceFaultInfoEXT)
                 vkGetDeviceProcAddr(device->device, "vkGetDeviceFaultInfoEXT");
@@ -7308,12 +7324,12 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     device_features2.pNext = nullptr;
 
-    VkPhysicalDeviceVulkan11Features vk11_features;
+    VkPhysicalDeviceVulkan11Features vk11_features{};
     vk11_features.pNext = nullptr;
     vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     device_features2.pNext = &vk11_features;
 
-    VkPhysicalDeviceVulkan12Features vk12_features;
+    VkPhysicalDeviceVulkan12Features vk12_features{};
     vk12_features.pNext = nullptr;
     vk12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     vk11_features.pNext = &vk12_features;
@@ -19482,7 +19498,7 @@ static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
     VkPhysicalDeviceFeatures2 device_features2;
     device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 
-    VkPhysicalDeviceVulkan11Features vk11_features;
+    VkPhysicalDeviceVulkan11Features vk11_features{};
     vk11_features.pNext = nullptr;
     vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     device_features2.pNext = &vk11_features;
