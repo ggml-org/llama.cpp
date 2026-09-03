@@ -573,7 +573,7 @@ static void top_k_nary_search_cuda_launch(
     }
 }
 
-static void top_k_vulkan_cuda(
+static void top_k_small_cuda(
         ggml_cuda_pool & pool,
         const float * src,
         int * dst,
@@ -770,7 +770,7 @@ static void top_k_parallel_radix_cuda(
             src, dst, states, ncols, k, blocks_per_row);
 }
 
-static bool top_k_use_vulkan(int ncols, int nrows, int k) {
+static bool top_k_use_small_kernel(int ncols, int nrows, int k) {
     if (k == 1) {
         return true;
     }
@@ -815,8 +815,8 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     }
 #elif defined(GGML_USE_HIP)
     ggml_cuda_pool & pool = ctx.pool();
-    if (top_k_use_vulkan(ncols, nrows, k)) {
-        top_k_vulkan_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
+    if (top_k_use_small_kernel(ncols, nrows, k)) {
+        top_k_small_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
     } else if (ncols > 1024) {
         top_k_parallel_radix_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
     } else {
