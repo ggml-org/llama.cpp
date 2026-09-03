@@ -1,4 +1,4 @@
-import { isAuxSidecar, type ModelSidecar } from '$lib/constants';
+import { isAuxSidecar, isDraftSidecar, type ModelSidecar } from '$lib/constants';
 import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services';
 import type { HfModelSibling } from '$lib/types/huggingface';
@@ -43,9 +43,13 @@ export function classify(path: string): 'main' | 'draft' | 'aux' {
 
 /** Display label of a file: its quant, else the file name without the extension. */
 export function labelFor(path: string): string {
-	const quant = HuggingFaceService.extractQuantMeta(path)?.quant;
+	const meta = HuggingFaceService.extractQuantMeta(path);
 
-	if (quant) return quant;
+	if (meta?.quant) return meta.quant;
+
+	// Quantless sidecar files: the chip badge already carries the sidecar type,
+	// so the label only marks draft files; aux sidecars badge alone.
+	if (meta?.sidecar) return isDraftSidecar(meta.sidecar) ? 'draft' : '';
 
 	const basename = path.split('/').pop() ?? path;
 
@@ -65,9 +69,10 @@ export function quantBitDepth(quant: string | null): number {
 	return bit ? Number(bit) : 99;
 }
 
-// LLAMA-APP-REUSE: --spec-type value for each draft sidecar
+// LLAMA-APP-REUSE: --spec-type value for each draft sidecar; aux sidecars stay empty
 export const SPEC_TYPE: Record<ModelSidecar, string> = {
 	[ModelAuxSidecar.MMPROJ]: '',
+	[ModelAuxSidecar.IMATRIX]: '',
 	[ModelDraftSidecar.DFLASH]: 'draft-dflash',
 	[ModelDraftSidecar.DSPARK]: 'draft-dspark',
 	[ModelDraftSidecar.EAGLE3]: 'eagle3',
