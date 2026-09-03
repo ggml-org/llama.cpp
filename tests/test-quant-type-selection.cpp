@@ -210,7 +210,7 @@ static std::string model_name_from_repo(const char * repo) {
 static std::string snapshot_file_from_name(const std::string & name) {
     std::string lower = name;
     for (auto & c : lower) {
-        c = (char)std::tolower((unsigned char)c);
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
     return lower;
 }

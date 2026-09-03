@@ -24,7 +24,7 @@ struct powerpc_features {
                 // Extractt a numeric suffix, if one exists
                 int vpos = -1;
                 for (int i = platform.length() - 1; i >= 0; i--) {
-                    if (std::isdigit((unsigned char)platform[i])) {
+                    if (std::isdigit(static_cast<unsigned char>(platform[i]))) {
                         vpos = i;
                     } else {
                         break;

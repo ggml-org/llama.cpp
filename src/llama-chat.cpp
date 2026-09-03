@@ -425,7 +425,7 @@ int32_t llm_chat_apply_template(
             if (role == "system") {
                 ss << message->content << "<|end_of_turn|>";
             } else {
-                role[0] = (char)toupper((unsigned char)role[0]);
+                role[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(role[0])));
                 ss << "GPT4 Correct " << role << ": " << message->content << "<|end_of_turn|>";
             }
         }
