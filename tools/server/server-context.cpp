@@ -18,6 +18,7 @@
 #include "mtmd-helper.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
@@ -26,6 +27,7 @@
 #include <random>
 #include <utility>
 #include <fstream>
+#include <limits>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -287,6 +289,10 @@ struct server_slot {
     bool has_new_line   = false;
     bool truncated      = false;
 
+    bool has_speech_probability = false;
+    float speech_probability = 0.0f;
+    std::vector<llama_token> speech_probability_eos_token_ids;
+
     stop_type stop;
 
     std::string stopping_word;
@@ -387,6 +393,9 @@ struct server_slot {
         generated_tokens.clear();
         generated_token_probs.clear();
         json_schema = json();
+        has_speech_probability = false;
+        speech_probability = 0.0f;
+        speech_probability_eos_token_ids.clear();
 
         task_prev = std::move(task);
         task.reset();
@@ -468,7 +477,7 @@ struct server_slot {
     }
 
     bool can_speculate() const {
-        return !!spec;
+        return !!spec && !(mctx && mtmd_support_speech_probability(mctx));
     }
 
     void add_token(const completion_token_output & token) {
@@ -728,6 +737,9 @@ struct server_slot {
         other.i_batch = i_batch;
 
         other.stats = stats;
+        other.has_speech_probability = has_speech_probability;
+        other.speech_probability = speech_probability;
+        other.speech_probability_eos_token_ids = speech_probability_eos_token_ids;
 
         other.prompt = prompt.clone();
         other.init_sampler();
@@ -739,7 +751,7 @@ struct server_slot {
 // note: this is not a member of server_slot because we want to run it inside yield_to_queue
 //       slot is passed as const to avoid accidental modification of the slot state
 //       some pointers are allowed to be used, they are not used by to_json()
-static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx, size_t & n_tokens_out) {
+static int process_mtmd_chunk(server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx, size_t & n_tokens_out) {
     GGML_ASSERT(slot.mctx);
     const auto & mctx = slot.mctx;
     const auto & input_tokens = slot.task->tokens;
@@ -750,8 +762,25 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
         if (mbatch) {
             float * embd = mtmd_batch_get_output_embd(mbatch.get(), chunk.get());
             if (embd) {
-                void * cb_data = slot.spec;
+                struct mtmd_speech_probability probability;
+                if (mtmd_batch_get_output_speech_probability(mbatch.get(), chunk.get(), &probability)) {
+                    if (slot.has_speech_probability) {
+                        SLT_ERR(slot, "%s", "multiple GT-ASR audio inputs in one request are not supported\n");
+                        return -1;
+                    }
+                    slot.has_speech_probability = true;
+                    slot.speech_probability = probability.value;
+                    slot.speech_probability_eos_token_ids.assign(
+                        probability.eos_token_ids,
+                        probability.eos_token_ids + probability.n_eos_token_ids);
+                    SLT_DBG(slot, "GT-ASR speech probability = %.6f\n", slot.speech_probability);
+                }
+
+                void * cb_data = slot.can_speculate() ? slot.spec : nullptr;
                 static auto cb = [](llama_batch batch, void * user_data) {
+                    if (user_data == nullptr) {
+                        return 0;
+                    }
                     common_speculative * spec = static_cast<common_speculative *>(user_data);
                     if (!common_speculative_process(spec, batch)) {
                         return 1;
@@ -1790,6 +1819,9 @@ private:
             const bool need_pre_sample_logits = task.params.sampling.n_probs > 0 && !task.params.post_sampling_probs;
 
             bool use_backend_sampling = task.params.sampling.backend_sampling;
+
+            // GT-ASR needs to adjust the first-token logits after the audio encoder runs.
+            use_backend_sampling &= !(mctx && mtmd_support_speech_probability(mctx));
 
             // TODO: getting pre sampling logits is not yet supported with backend sampling
             use_backend_sampling &= !need_pre_sample_logits;
@@ -3837,6 +3869,68 @@ private:
             llama_token id;
             {
                 scoped_timer timer(t_sampl, n_sampl);
+                if (slot.stats.n_gen == 0 && slot.has_speech_probability) {
+                    if (slot.speech_probability_eos_token_ids.empty()) {
+                        throw std::runtime_error("GT-ASR speech probability has no EOS token IDs");
+                    }
+                    llama_synchronize(slot.ctx_tgt);
+                    float * logits = llama_get_logits_ith(slot.ctx_tgt, tok_idx);
+                    if (logits == nullptr) {
+                        throw std::runtime_error("GT-ASR first-token logits are unavailable");
+                    }
+                    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+                    const char * gt_asr_debug_logits_dir = std::getenv("GT_ASR_DEBUG_LOGITS_DIR");
+                    auto dump_gt_asr_logits = [&](const char * name) {
+                        if (gt_asr_debug_logits_dir == nullptr) {
+                            return;
+                        }
+                        const std::string base = std::string(gt_asr_debug_logits_dir) + "/" + name;
+                        std::ofstream data_file(base + ".f32", std::ios::binary);
+                        if (!data_file.is_open()) {
+                            SRV_ERR("cannot open GT-ASR debug logits output %s.f32\n", base.c_str());
+                            return;
+                        }
+                        data_file.write(
+                            reinterpret_cast<const char *>(logits),
+                            (size_t) n_vocab * sizeof(float));
+                        std::ofstream shape_file(base + ".shape");
+                        shape_file << n_vocab << " 1 1 1\n";
+                    };
+                    dump_gt_asr_logits("first_token_logits_raw");
+
+                    const float probability = std::clamp(
+                        slot.speech_probability,
+                        1.0e-7f,
+                        1.0f - 1.0e-7f);
+                    float max_logit = -std::numeric_limits<float>::infinity();
+                    for (int32_t i = 0; i < n_vocab; ++i) {
+                        max_logit = std::max(max_logit, logits[i]);
+                    }
+                    double sum_exp = 0.0;
+                    for (int32_t i = 0; i < n_vocab; ++i) {
+                        sum_exp += std::exp((double) logits[i] - max_logit);
+                    }
+                    const float log_normalizer = max_logit + std::log(sum_exp);
+                    const float speech_log_probability = std::log(probability);
+                    const float null_log_probability =
+                        std::log1p(-probability) -
+                        std::log((float) slot.speech_probability_eos_token_ids.size());
+                    for (int32_t i = 0; i < n_vocab; ++i) {
+                        logits[i] = logits[i] - log_normalizer + speech_log_probability;
+                    }
+                    for (llama_token eos_token_id : slot.speech_probability_eos_token_ids) {
+                        if (eos_token_id < 0 || eos_token_id >= n_vocab) {
+                            continue;
+                        }
+                        const float a = logits[eos_token_id];
+                        const float b = null_log_probability;
+                        const float maximum = std::max(a, b);
+                        logits[eos_token_id] = std::isinf(maximum)
+                            ? maximum
+                            : maximum + std::log(std::exp(a - maximum) + std::exp(b - maximum));
+                    }
+                    dump_gt_asr_logits("first_token_logits_adjusted");
+                }
                 id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
             }
 
