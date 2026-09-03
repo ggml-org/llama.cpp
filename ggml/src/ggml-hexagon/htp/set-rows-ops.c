@@ -216,6 +216,14 @@ int op_set_rows(struct htp_ops_context * octx) {
         default:            return HTP_STATUS_NO_SUPPORT;
     }
 
+    FARF(HIGH, "set-rows: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : src0-vtcm-size %zu dst-vtcm-size %zu n_threads %d\n",
+         octx->src[0]->ne[0], octx->src[0]->ne[1], octx->src[0]->ne[2], octx->src[0]->ne[3],
+         octx->src[1]->ne[0], octx->src[1]->ne[1], octx->src[1]->ne[2], octx->src[1]->ne[3],
+         octx->dst->ne[0], octx->dst->ne[1], octx->dst->ne[2], octx->dst->ne[3],
+         srctx.vtcm_layout.src0_bytes_per_thread * kparams->n_threads,
+         srctx.vtcm_layout.dst_bytes_per_thread  * kparams->n_threads,
+         kparams->n_threads);
+
     work_queue_run(octx->ctx->work_queue, q_func, &srctx, kparams->n_threads);
 
     return HTP_STATUS_OK;
