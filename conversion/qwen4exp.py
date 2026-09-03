@@ -34,13 +34,10 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self._ple_shards: dict[int, str] = {}
         self._ple_row_dim: int | None = None
 
-    # _QwenMtpMixin renames mtp.layers.0.* to the trailing block index, so the head reuses the
-    # existing qwen4exp mappings; only the two pieces below differ.
     _MTP_MIXER_PREFIX = "mtp.hyper_connection_mixer."
 
     @classmethod
     def filter_tensors(cls, item):
-        # unindexed in the checkpoint, per-block in the GGUF
         name, gen = item
         if name.startswith("model." + cls._MTP_MIXER_PREFIX):
             name = name.replace("model.", "", 1)
@@ -52,7 +49,6 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         return super().filter_tensors((name, gen))
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        # W_e@e + W_h@h == [W_e|W_h] @ concat(e, h), so fc_embedding and fc_hidden fuse into eh_proj
         tensors = super().index_tensors(remote_hf_model_id=remote_hf_model_id)
 
         emb = tensors.pop("mtp.fc_embedding.weight", None)
@@ -66,7 +62,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             )
 
         assert self._original_block_count is not None
-        # fc_embedding first: the graph concatenates the embedding ahead of the hidden state
+        # W_e@e + W_h@h == [W_e|W_h] @ concat(e, h); embedding first, matching the graph's concat.
         name = f"model.layers.{self._original_block_count}.eh_proj.weight"
         tensors[name] = lambda: torch.cat([emb(), hid()], dim=1)
         return tensors
@@ -100,12 +96,11 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         ratio = hp["indexer_compress_ratio"]
         layer_types = hp["layer_types"]
         ratios = [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
-        # read with length block_count; 0 selects dense, which is how the MTP blocks attend
+        # 0 selects dense, which is how the MTP block attends.
         ratios += [0] * (self.block_count - n_layer)
         self.gguf_writer.add_attention_compress_ratios(ratios)
 
         # ple_layer_ids is 1-based in the HF config; empty means no n-gram table,
-        # so emit no PLE keys rather than optional ones. a draft-only export has no PLE table either.
         ple_layers = [i - 1 for i in hp["ple_layer_ids"]]
         if not ple_layers or self.mtp_only:
             return
