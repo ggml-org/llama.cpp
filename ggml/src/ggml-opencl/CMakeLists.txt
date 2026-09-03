@@ -85,6 +85,7 @@ set(GGML_OPENCL_KERNELS
     mul_mv_f16_f32_1row
     mul_mv_f16_f32_l4
     mul_mv_f16_f32
+    mul_mv_f16_f32_mrow
     mul_mv_f32_f32
     mul_mv_q1_0_f32
     mul_mv_q1_0_f32_flat
@@ -180,9 +181,14 @@ set(GGML_OPENCL_KERNELS
     gemv_noshuffle_q8_0_f32
     gemm_noshuffle_q8_0_f32
     gemv_noshuffle_q4_k_f32
+    gemv_noshuffle_q4_k_f32_o4
+    gemv_noshuffle_q4_k_f32_tiled
     gemm_noshuffle_q4_k_f32
     gemv_noshuffle_q6_k_f32
+    gemv_noshuffle_q6_k_f32_o4
+    gemv_noshuffle_q6_k_f32_tiled
     gemm_noshuffle_q6_k_f32
+    gemm_noshuffle_q6_k_f32_tiled
     gemv_noshuffle_q5_k_f32
     gemm_noshuffle_q5_k_f32
     mul
