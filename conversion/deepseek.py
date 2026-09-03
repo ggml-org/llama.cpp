@@ -578,6 +578,8 @@ class DeepseekV4Model(TextModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
+        if name.startswith(("aligner.", "image_")):
+            return None
         if name.startswith("mtp."):
             if not cls.mtp_only:
                 cls._skipped_mtp_tensors += 1
@@ -853,6 +855,7 @@ class DeepseekV4Model(TextModel):
             "ffn_norm.weight": (gguf.MODEL_TENSOR.FFN_NORM, ".weight"),
             "ffn.gate.weight": (gguf.MODEL_TENSOR.FFN_GATE_INP, ".weight"),
             "ffn.gate.bias": (gguf.MODEL_TENSOR.FFN_EXP_PROBS_B, ".bias"),
+            "ffn.gate.bias_vl": (gguf.MODEL_TENSOR.FFN_EXP_PROBS_B_VL, ".bias"),
             "ffn.gate.tid2eid": (gguf.MODEL_TENSOR.FFN_GATE_TID2EID, ".weight"),
             "ffn.shared_experts.w1.weight": (gguf.MODEL_TENSOR.FFN_GATE_SHEXP, ".weight"),
             "ffn.shared_experts.w2.weight": (gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, ".weight"),
@@ -876,6 +879,10 @@ class DeepseekV4Model(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if re.match(r"layers\.\d+\.ffn\.experts\.\d+\.w[123]\.(weight|scale)$", name):
+            return []
+
+        # hash layers route text tokens via tid2eid and image tokens via bias_vl; gate.bias is unused
+        if name.endswith(".ffn.gate.bias") and bid is not None and bid < self.hparams["num_hash_layers"]:
             return []
 
         tensor_key, suffix = self._map_dsv4_tensor_name(name, bid)
@@ -1018,3 +1025,73 @@ class DeepseekV4DSparkModel(DeepseekV4Model):
 
         self.gguf_writer.add_block_size(self.hparams["dspark_block_size"])
         self.gguf_writer.add_target_layers([layer + 1 for layer in self.hparams["dspark_target_layer_ids"]])
+
+
+@ModelBase.register("DeepseekV4ForCausalLM")
+@ModelBase.example("deepseek-ai/DeepSeek-V4-Flash-Vision-Exp")
+class DeepseekV4FlashVisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        # no preprocessor_config.json in the repo; normalization is (x/255 - 0.5) / 0.5
+        # ref: inference/image_processor.py (load_image)
+        self.preprocessor_config = {
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std":  [0.5, 0.5, 0.5],
+            **self.preprocessor_config,
+        }
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        cfg = self.global_config
+        if cfg.get("vision_n_layers", 0) == 0:
+            raise ValueError("DeepseekV4FlashVisionModel requires vision_n_layers > 0 in the model config")
+        return {
+            "num_hidden_layers":   cfg["vision_n_layers"],
+            "hidden_size":         cfg["vision_dim"],
+            "num_attention_heads": cfg["vision_n_heads"],
+            "intermediate_size":   cfg["vision_inter_dim"],
+            "patch_size":          cfg["vision_patch_size"],
+            # dynamic resolution; only used for compat / warmup
+            "image_size":          cfg["vision_patch_size"] * cfg["vision_downsample_ratio"] * 16,
+            "rope_theta":          cfg.get("vision_rope_theta", 10000.0),
+            "downsample_ratio":    cfg["vision_downsample_ratio"],
+            "min_pixels":          cfg["vision_min_pixels"],
+        }
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.DEEPSEEK4V)
+        # vision RMSNorm eps is the pytorch default, NOT the LLM's rms_norm_eps (1e-20)
+        # ref: inference/vision.py (RMSNorm)
+        self.gguf_writer.add_vision_attention_layernorm_eps(1e-6)
+        self.gguf_writer.add_vision_use_silu(True) # SwiGLU MLP
+        self.gguf_writer.add_vision_projector_scale_factor(self.hparams_vision["downsample_ratio"])
+        self.gguf_writer.add_vision_min_pixels(self.hparams_vision["min_pixels"])
+        # hardcoded on the C++ side (see PROJECTOR_TYPE_DEEPSEEK4V in clip.cpp)
+        # if future models use different values, add GGUF keys for those
+        assert self.global_config["vision_max_n_token"] == 384
+        assert self.global_config["vision_max_wh_ratio"] == 8
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        if not (name.startswith(("vision.", "aligner.", "image_"))):
+            return None
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        assert self.hparams_vision is not None
+        if name == "vision.patch_embed.proj.weight":
+            # nn.Linear over flattened (3, p, p) patches == conv2d weight
+            p = self.hparams_vision["patch_size"]
+            data_torch = data_torch.reshape(data_torch.shape[0], 3, p, p)
+
+        if ".mlp.w1." in name:
+            # fused SwiGLU gate+up
+            gate, up = data_torch.chunk(2, dim=0)
+            yield from super().modify_tensors(gate, name.replace("w1", "w1_gate"), bid)
+            yield from super().modify_tensors(up, name.replace("w1", "w1_up"), bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)

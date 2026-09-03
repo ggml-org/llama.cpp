@@ -22,7 +22,6 @@ void llama_model_bailingmoe3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,             hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,              hparams.expert_weights_norm, false);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,               hparams.expert_gating_func);
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,             hparams.n_layer_nextn, false);
     ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,           hparams.swiglu_clamp_exp,   hparams.n_layer_all, false);
     ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP,         hparams.swiglu_clamp_shexp, hparams.n_layer_all, false);
 
@@ -87,7 +86,7 @@ void llama_model_bailingmoe3::load_arch_tensors(llama_model_loader & ml) {
             create_tensor_qkv(layer, il, n_embd, d_inner, d_inner, d_inner, trunk_flags);
             layer.ssm_f_a = create_tensor(tn(LLM_TENSOR_SSM_F_A, "weight", il), { n_embd, d_inner }, trunk_flags);
             layer.ssm_beta = create_tensor(tn(LLM_TENSOR_SSM_BETA, "weight", il), { n_embd, n_head }, trunk_flags);
-            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, il), { 1, n_head }, trunk_flags);
+            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A_NOSCAN, il), { 1, n_head }, trunk_flags);
             layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", il), { d_inner }, trunk_flags);
             layer.ssm_g_a = create_tensor(tn(LLM_TENSOR_SSM_G_A, "weight", il), { n_embd, d_inner }, trunk_flags);
             layer.ssm_o_norm = create_tensor(tn(LLM_TENSOR_SSM_NORM, "weight", il), { head_dim }, trunk_flags);
