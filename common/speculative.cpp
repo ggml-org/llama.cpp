@@ -1537,6 +1537,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     continue;
                 }
 
+                const int32_t i_first = i_batch_beg[seq_id];
+                if (batch_in.pos[i_first] == 0) {
+                    std::fill(pending_h[seq_id].begin(), pending_h[seq_id].end(), 0.0f);
+                }
+
                 set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
             }
 
