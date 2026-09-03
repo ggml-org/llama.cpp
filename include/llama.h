@@ -1394,6 +1394,20 @@ extern "C" {
     /// @details Top n sigma sampling as described in academic paper "Top-nσ: Not All Logits Are You Need" https://arxiv.org/pdf/2411.07641
     LLAMA_API struct llama_sampler * llama_sampler_init_top_n_sigma(float   n);
 
+    /// @details SynthID text watermarking, compatible with the SynthIDTextWatermarkLogitsProcessor from HF transformers
+    /// place it after truncation and temperature samplers and before the dist sampler
+    /// @param keys one watermarking key per tournament layer
+    /// @param sampling_table table of 0/1 values, maps a hashed ngram to a g-value
+    /// @param ngram_len number of tokens hashed together (context of ngram_len - 1 tokens plus the candidate)
+    /// @param context_history_size number of recent contexts to remember, a repeated context is not watermarked
+    LLAMA_API struct llama_sampler * llama_sampler_init_synthid(
+                       const int64_t * keys,
+                              size_t   n_keys,
+                       const uint8_t * sampling_table,
+                              size_t   sampling_table_size,
+                             int32_t   ngram_len,
+                             int32_t   context_history_size);
+
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.
     /// @param candidates A vector of `llama_token_data` containing the candidate tokens, their probabilities (p), and log-odds (logit) for the current position in the generated text.
     /// @param tau  The target cross-entropy (or surprise) value you want to achieve for the generated text. A higher value corresponds to more surprising or less predictable text, while a lower value corresponds to less surprising or more predictable text.
