@@ -27,6 +27,7 @@ The following sections describe how to build with different backends and options
 * [OpenCL](#opencl)
 * [Android](#android-1)
 * [OpenVINO](#openvino)
+* [Hexagon](#hexagon)
 * [Notes about GPU-accelerated backends](#notes-about-gpu-accelerated-backends)
 
 ## CPU Build
@@ -830,6 +831,9 @@ To read documentation for how to build on IBM Z & LinuxONE, [click here](./build
 
 For build instructions and usage examples, refer to [OPENVINO.md](backend/OPENVINO.md).
 
+### Hexagon
+
+Check [README.md](./backend/snapdragon/README.md) for target specific build and run info.
 
 ---
 ## Notes about GPU-accelerated backends
