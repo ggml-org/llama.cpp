@@ -3741,8 +3741,17 @@ struct clip_model_loader {
             }
 
             ggml_backend_buffer_ptr buf { ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft) };
-            ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-            ctx_clip.bufs.emplace_back(std::move(buf));
+            if (buf) {
+                ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                ctx_clip.bufs.emplace_back(std::move(buf));
+            }
+            // a null result above can also mean there was nothing left to allocate,
+            // so verify that every tensor ended up with a buffer
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx_clip.ctx_data.get()); t; t = ggml_get_next_tensor(ctx_clip.ctx_data.get(), t)) {
+                if (!t->buffer) {
+                    throw std::runtime_error(string_format("%s: failed to allocate buffer for tensor %s\n", __func__, t->name));
+                }
+            }
             // read the weight from file
             if (!ctx_clip.no_alloc) {
                 size_t data_loaded = 0;
