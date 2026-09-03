@@ -131,6 +131,8 @@ set_target_properties(${TARGET} PROPERTIES
 target_include_directories(${TARGET} PUBLIC .)
 target_link_libraries     (${TARGET} PUBLIC vendor::nlohmann vendor::sheredom)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
+target_precompile_headers (${TARGET} PRIVATE common.h)
+target_precompile_headers (${TARGET} PRIVATE chat.h)
 
 if (LLAMA_SUBPROCESS)
     target_compile_definitions(${TARGET} PUBLIC LLAMA_SUBPROCESS)
