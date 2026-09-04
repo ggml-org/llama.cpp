@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { quantBitDepth } from './download-options.utils';
 	import { Check, Copy, Plus, X } from '@lucide/svelte';
 	import * as Select from '$lib/components/ui/select';
 	import {
 		DEFAULT_BASE_BIT_DEPTH,
 		MODEL_ID,
 		type ModelSidecar,
+		OTHER_BIT_DEPTH,
 		SERVE_COMMAND,
 		SPEC_TYPE
 	} from '$lib/constants';
@@ -30,7 +30,9 @@
 	let withDraft = $state(false);
 
 	function bitDepthOf(path: string): number {
-		return quantBitDepth(HuggingFaceService.extractQuantMeta(path)?.quant ?? null);
+		const quant = HuggingFaceService.extractQuantMeta(path)?.quant;
+
+		return quant ? (HuggingFaceService.getBitDepth(quant) ?? OTHER_BIT_DEPTH) : OTHER_BIT_DEPTH;
 	}
 
 	/**

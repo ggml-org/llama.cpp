@@ -2,19 +2,11 @@ import {
 	DRAFT_FILE_LABEL,
 	isAuxSidecar,
 	isDraftSidecar,
-	OTHER_BIT_DEPTH,
+	MODEL_ID,
 	PATH_SEPARATOR
 } from '$lib/constants';
 import { SelectableFileKind } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services';
-
-/** Leading `UD-` (Unsloth Dynamic) quant prefix and its length. */
-const UD_QUANT_PREFIX = 'UD-';
-const UD_QUANT_PREFIX_REGEX = /^UD-(?=.)/i;
-/** Captures the bit-depth digits of a quant token, e.g. `Q4_K_M` -> `4`. */
-const QUANT_BIT_DEPTH_REGEX = /(?:I?Q|F)(\d+)/i;
-/** Trailing weight extension, stripped from a quantless file's label. */
-const WEIGHT_EXTENSION_LABEL_REGEX = /\.gguf$/i;
 
 /** Kind of a file path: the main weights, a draft sidecar, or an aux sidecar (mmproj). */
 export function classify(path: string): SelectableFileKind {
@@ -37,18 +29,5 @@ export function labelFor(path: string): string {
 
 	const basename = path.split(PATH_SEPARATOR).pop() ?? path;
 
-	return basename.replace(WEIGHT_EXTENSION_LABEL_REGEX, '');
-}
-
-/**
- * Bit depth of a quant token; `OTHER_BIT_DEPTH` when it carries none. The `UD-`
- * unsloth prefix is stripped before matching.
- */
-export function quantBitDepth(quant: string | null): number {
-	if (!quant) return OTHER_BIT_DEPTH;
-
-	const stripped = UD_QUANT_PREFIX_REGEX.test(quant) ? quant.slice(UD_QUANT_PREFIX.length) : quant;
-	const bit = stripped.match(QUANT_BIT_DEPTH_REGEX)?.[1];
-
-	return bit ? Number(bit) : OTHER_BIT_DEPTH;
+	return basename.replace(MODEL_ID.WEIGHT_EXTENSION_REGEX, '');
 }
