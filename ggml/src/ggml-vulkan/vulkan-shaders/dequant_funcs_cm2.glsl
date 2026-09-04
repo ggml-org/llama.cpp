@@ -1041,7 +1041,7 @@ float16_t dequantFuncIQ2_S(const in decodeBufIQ2_S bl, const in uint blockCoords
     const uint scale = (bl.block.scales[ib32] >> ((idx & 0x10) >> 2)) & 0xf;
     const uint qs = bl.block.qs[ib8];
     const uint qh = bl.block.qh[ib32];
-    const uint sign = bl.block.qs[QUANT_K / 8 + ib8] >> (idx & 0x6);
+    const uint sign = bl.block.qs[QUANT_K_IQ2_S / 8 + ib8] >> (idx & 0x6);
 
     const float d = float(bl.block.d);
     const float db = d * 0.25 * (0.5 + scale);
@@ -1063,7 +1063,7 @@ f16vec4 dequantFuncIQ2_S_v(const in decodeBufIQ2_S bl, const in uint blockCoords
     const uint scale = (bl.block.scales[ib32] >> ((idx & 0x10) >> 2)) & 0xf;
     const uint qs    = bl.block.qs[ib8];
     const uint qh    = bl.block.qh[ib32];
-    const uint sb    = uint(bl.block.qs[QUANT_K / 8 + ib8]) >> (idx & 0x6u);
+    const uint sb    = uint(bl.block.qs[QUANT_K_IQ2_S / 8 + ib8]) >> (idx & 0x6u);
 
     const float d  = float(bl.block.d);
     const float db = d * 0.25 * (0.5 + scale);
@@ -1094,7 +1094,7 @@ float16_t dequantFuncIQ3_XXS(const in decodeBufIQ3_XXS bl, const in uint blockCo
     uint idx = coordInBlock[1];
 
     const uint iqs = (idx & 0xFC) >> 2;             // 0..63
-    const uint is = QUANT_K / 4 + ((idx & 0xE0) >> 3);// 8 values
+    const uint is = QUANT_K_IQ3_XXS / 4 + ((idx & 0xE0) >> 3);// 8 values
 
     const float d = float(bl.block.d);
     const uint qs = bl.block.qs[iqs];
@@ -1117,7 +1117,7 @@ f16vec4 dequantFuncIQ3_XXS_v(const in decodeBufIQ3_XXS bl, const in uint blockCo
     const uint idx = coordInBlock[1];
 
     const uint iqs = idx >> 2;
-    const uint is  = QUANT_K / 4 + ((idx & 0xE0) >> 3);
+    const uint is  = QUANT_K_IQ3_XXS / 4 + ((idx & 0xE0) >> 3);
 
     const float d     = float(bl.block.d);
     const uint  qs    = bl.block.qs[iqs];

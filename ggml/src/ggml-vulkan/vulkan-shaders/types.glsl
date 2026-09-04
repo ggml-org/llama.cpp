@@ -920,6 +920,7 @@ shared uint16_t iq1s_grid[2048];
 shared uint32_t iq1s_grid_gpu[2048];
 #endif
 
+#if defined(DATA_A_IQ1_S) || defined(DATA_A_IQ1_M)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -942,6 +943,17 @@ void init_iq_shmem(uvec3 wgsize)
 #endif
     barrier();
 }
+#endif
+#endif
+
+#if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S)
+#if defined(DATA_A_IQ2_S)
+shared uvec2 iq2s_grid[1024];
+#elif defined(DATA_A_IQ2_XS)
+shared uvec2 iq2xs_grid[512];
+#else
+shared uvec2 iq2xxs_grid[256];
+#endif
 #endif
 
 #define QUANT_K_IQ2_XXS 256
@@ -1028,8 +1040,7 @@ const uvec2[256] iq2xxs_grid_const = {
     uvec2(0x08080808, 0x2b2b082b), uvec2(0x08192b08, 0x2b2b1908), uvec2(0x19190808, 0x2b2b2b08), uvec2(0x08081908, 0x2b2b2b19)
 };
 
-shared uvec2 iq2xxs_grid[256];
-
+#if defined(DATA_A_IQ2_XXS)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1041,11 +1052,14 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
+#endif
 
+#if defined(DATA_A_IQ2_XXS)
 #define QUANT_K QUANT_K_IQ2_XXS
 #define QUANT_R QUANT_R_IQ2_XXS
 #define A_TYPE block_iq2_xxs
 #define A_TYPE_PACKED16 block_iq2_xxs_packed16
+#endif
 #endif
 
 #define QUANT_K_IQ2_XS 256
@@ -1198,8 +1212,7 @@ const uvec2 iq2xs_grid_const[512] = {
     uvec2(0x082b2b08, 0x2b2b2b2b), uvec2(0x082b2b2b, 0x2b2b2b2b), uvec2(0x2b190819, 0x2b2b2b2b), uvec2(0x2b2b2b2b, 0x2b2b2b2b),
 };
 
-shared uvec2 iq2xs_grid[512];
-
+#if defined(DATA_A_IQ2_XS)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1211,11 +1224,14 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
+#endif
 
+#if defined(DATA_A_IQ2_XS)
 #define QUANT_K QUANT_K_IQ2_XS
 #define QUANT_R QUANT_R_IQ2_XS
 #define A_TYPE block_iq2_xs
 #define A_TYPE_PACKED16 block_iq2_xs_packed16
+#endif
 #endif
 
 #define QUANT_K_IQ2_S 256
@@ -1498,8 +1514,7 @@ const uvec2 iq2s_grid_const[1024] = {
     uvec2(0x082b082b, 0x2b2b2b2b), uvec2(0x082b2b08, 0x2b2b2b2b), uvec2(0x2b082b08, 0x2b2b2b2b), uvec2(0x2b2b2b2b, 0x2b2b2b2b)
 };
 
-shared uvec2 iq2s_grid[1024];
-
+#if defined(DATA_A_IQ2_S)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1511,11 +1526,22 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
+#endif
 
+#if defined(DATA_A_IQ2_S)
 #define QUANT_K QUANT_K_IQ2_S
 #define QUANT_R QUANT_R_IQ2_S
 #define A_TYPE block_iq2_s
 #define A_TYPE_PACKED16 block_iq2_s_packed16
+#endif
+#endif
+
+#if defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S)
+#if defined(DATA_A_IQ3_S)
+shared uint32_t iq3s_grid[512];
+#else
+shared uint32_t iq3xxs_grid[256];
+#endif
 #endif
 
 #define QUANT_K_IQ3_XXS 256
@@ -1570,8 +1596,7 @@ const uint32_t iq3xxs_grid_const[256] = {
     0x3e1c1c1c, 0x3e1c3404, 0x3e24140c, 0x3e24240c, 0x3e2c0404, 0x3e2c0414, 0x3e2c1424, 0x3e341c04,
 };
 
-shared uint32_t iq3xxs_grid[256];
-
+#if defined(DATA_A_IQ3_XXS)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1583,11 +1608,14 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
+#endif
 
+#if defined(DATA_A_IQ3_XXS)
 #define QUANT_K QUANT_K_IQ3_XXS
 #define QUANT_R QUANT_R_IQ3_XXS
 #define A_TYPE block_iq3_xxs
 #define A_TYPE_PACKED16 block_iq3_xxs_packed16
+#endif
 #endif
 
 #define QUANT_K_IQ3_S 256
@@ -1680,8 +1708,7 @@ const uint32_t iq3s_grid_const[512] = {
     0x0f090307, 0x0f090501, 0x0f090b01, 0x0f0b0505, 0x0f0b0905, 0x0f0d0105, 0x0f0d0703, 0x0f0f0101,
 };
 
-shared uint32_t iq3s_grid[512];
-
+#if defined(DATA_A_IQ3_S)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1693,11 +1720,14 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
+#endif
 
+#if defined(DATA_A_IQ3_S)
 #define QUANT_K QUANT_K_IQ3_S
 #define QUANT_R QUANT_R_IQ3_S
 #define A_TYPE block_iq3_s
 #define A_TYPE_PACKED16 block_iq3_s_packed16
+#endif
 #endif
 
 #define QUANT_K_IQ4_XS 256
@@ -1812,6 +1842,7 @@ const int8_t kvalues_iq4nl_const[16] = {
 
 shared FLOAT_TYPE kvalues_iq4nl[16];
 
+#if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1821,6 +1852,7 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
+#endif
 #endif
 
 #if defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
@@ -1851,7 +1883,7 @@ float ue4m3_to_fp32_build(uint u) {
 }
 #endif
 
-#if !defined(USE_OCP_FP4)
+#if (defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)) && !defined(USE_OCP_FP4)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
