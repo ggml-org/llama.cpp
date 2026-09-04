@@ -64,6 +64,9 @@ int main(int argc, char ** argv) {
     failures += require(spec_sidecar_mtp::committed_hidden_matches_tip(7, 7) &&
                         !spec_sidecar_mtp::committed_hidden_matches_tip(7, 5),
                         "MTP restore retains hidden state only at the unchanged committed tip");
+    failures += require(spec_sidecar_mtp::draft_storage_required(16381, 4) == 16385 &&
+                        spec_sidecar_mtp::draft_storage_required(32766, 3) == 32769,
+                        "MTP draft storage includes lookahead across geometric KV boundaries");
 
     // The master gate must run before target metadata, artifact, or library
     // inspection. The deliberately invalid model pointer makes an accidental
@@ -159,7 +162,7 @@ int main(int argc, char ** argv) {
                         qwen35moe_mtp->target_n_vocab == 248320 &&
                         qwen35moe_mtp->mtp_embedding_width == 2048 &&
                         qwen35moe_mtp->mtp_head_rows == 40960 &&
-                        qwen35moe_mtp->explicit_paths_only &&
+                        !qwen35moe_mtp->explicit_paths_only &&
                         std::strcmp(qwen35moe_mtp->default_library_name,
                                     "spec_qwen35moe_mtp_sidecar.so") == 0 &&
                         qwen35_dflash->dflash_encoded_width == 25600 && qwen35_dflash->dflash_block_size == 8 &&

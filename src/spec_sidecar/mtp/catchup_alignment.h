@@ -24,4 +24,10 @@ constexpr bool committed_hidden_matches_tip(int32_t current_pos_max, int32_t res
     return current_pos_max == restored_pos_max;
 }
 
+// Draft kernels write KV ahead of the committed cursor. Capacity checks must
+// include that entire lookahead, not just the latest catch-up row.
+constexpr int64_t draft_storage_required(int32_t n_past, int32_t n_draft) {
+    return (int64_t) n_past + (int64_t) n_draft;
+}
+
 } // namespace spec_sidecar_mtp

@@ -983,9 +983,13 @@ static int spec_hip_draft_impl(int32_t seq_id, int32_t id_last, int32_t n_past,
         fprintf(stderr, "[hip-sidecar] draft: invalid id_last %d\n", id_last);
         return -1;
     }
+    const int64_t required = spec_sidecar_mtp::draft_storage_required(n_past, n);
     if (n_past < 0 || n_past != q->state_pos_max || !q->allocated ||
-            (h_device && !q->h_valid) ||
-            static_cast<size_t>(n_past) + static_cast<size_t>(n) > S.max_pos) return -1;
+            (h_device && !q->h_valid) || required > (int64_t) S.max_pos) return -1;
+    // Catch-up grows for committed target rows, but drafting writes ahead of
+    // that cursor. Reserve the complete speculative lookahead before kv_store
+    // can cross a geometric allocation boundary (16K, 32K, ...).
+    if (ensure_seq_storage(*q, (int) required) != 0) return -1;
     // fault-injection hook for hardening tests: returns garbage ids once
     if (getenv("LLAMA_SPEC_HIP_FAULT_BADID") != nullptr) {
         static bool fired = false;
@@ -1070,12 +1074,13 @@ static int spec_hip_draft_stochastic_impl(int32_t seq_id, int32_t id_last, int32
             !std::isfinite(p_min) || p_min < 0.0f) {
         return -1;
     }
+    const int64_t required = spec_sidecar_mtp::draft_storage_required(n_past, n);
     if (id_last < 0 || id_last >= SC_N_VOCAB || n_past < 0 ||
             n_past != q->state_pos_max || !q->allocated ||
-            (h_device && !q->h_valid) ||
-            static_cast<size_t>(n_past) + static_cast<size_t>(n) > S.max_pos) {
+            (h_device && !q->h_valid) || required > (int64_t) S.max_pos) {
         return -1;
     }
+    if (ensure_seq_storage(*q, (int) required) != 0) return -1;
 
     auto & c = S.scr[0];
     if (h_device) {
