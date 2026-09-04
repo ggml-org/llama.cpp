@@ -330,9 +330,9 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     cb(b, "b_in", il);
     cb(g, "g_in", il);
 
-    // GDA: [1,  1,  H_v, n_seqs]
-    // KDA: [1, S_k, H_v, n_seqs]
-    g = ggml_reshape_4d(ctx0, g, 1, g->ne[0], H_v, n_seqs);
+    // the state is indexed [key, value]: ne0 is the key axis, so KDA's per-key-channel
+    // decay must broadcast over ne1, not ne0 (for GDA g->ne[0] is 1 and both agree)
+    g = ggml_reshape_4d(ctx0, g, g->ne[0], 1, H_v, n_seqs);
     b = ggml_reshape_4d(ctx0, b, 1,        1, H_v, n_seqs);
 
     // [S_v, S_v, H_v, n_seqs]

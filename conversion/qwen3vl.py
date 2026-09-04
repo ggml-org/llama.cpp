@@ -228,10 +228,13 @@ class Qwen3ASRMmprojModel(Qwen3OmniMmprojModel):
 @ModelBase.register("Glm4vForConditionalGeneration", "Glm4vMoeForConditionalGeneration", "GlmOcrForConditionalGeneration")
 @ModelBase.example("zai-org/GLM-4.1V-9B-Thinking", "zai-org/GLM-4.5V")
 class Glm4VVisionModel(Qwen3VLVisionModel):
+    # subclasses that share this tower but need their own clip graph override this
+    clip_projector_type = gguf.VisionProjectorType.GLM4V
+
     def set_gguf_parameters(self):
         MmprojModel.set_gguf_parameters(self) # skip Qwen3VLVisionModel parameters
         assert self.hparams_vision is not None
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GLM4V)
+        self.gguf_writer.add_clip_projector_type(self.clip_projector_type)
 
         hidden_act = str(self.hparams_vision.get("hidden_act", "")).lower()
         if hidden_act == "gelu":

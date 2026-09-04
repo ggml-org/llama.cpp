@@ -39,6 +39,7 @@ add_library(mtmd
             models/gemma4ua.cpp
             models/gemma4uv.cpp
             models/glm4v.cpp
+            models/glm5next-vision.cpp
             models/granite-speech.cpp
             models/granite4-vision.cpp
             models/hunyuanvl.cpp

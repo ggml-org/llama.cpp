@@ -820,6 +820,9 @@ class GGUFWriter:
     def add_indexer_local_blocks(self, local_blocks: int) -> None:
         self.add_uint32(Keys.Attention.Indexer.LOCAL_BLOCKS.format(arch=self.arch), local_blocks)
 
+    def add_indexer_kpool(self, kpool: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.KPOOL.format(arch=self.arch), kpool)
+
     def add_indexer_types(self, value: Sequence[bool]) -> None:
         key = Keys.Attention.Indexer.TYPES.format(arch=self.arch)
         self.add_array(key, value)
@@ -1386,6 +1389,9 @@ class GGUFWriter:
 
     def add_vision_spatial_merge_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SPATIAL_MERGE_SIZE, value)
+
+    def add_vision_swiglu_limit(self, value: float) -> None:
+        self.add_float32(Keys.ClipVision.SWIGLU_LIMIT, value)
 
     def add_vision_expert_count_per_layer(self, value: Sequence[int]) -> None:
         self.add_array(Keys.ClipVision.EXPERT_COUNT_PER_LAYER, value)

@@ -867,6 +867,13 @@ struct mtmd_context {
                     img_end = "<|end_of_image|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_GLM5NEXT:
+                {
+                    // glm5next spells video with its own token pair, but video is not supported here
+                    img_beg = "<|begin_of_image|>";
+                    img_end = "<|end_of_image|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_glm5next>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_PADDLEOCR:
                 {
                     // <|IMAGE_START|> ... (image embeddings) ... <|IMAGE_END|>

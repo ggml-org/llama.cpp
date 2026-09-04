@@ -2541,6 +2541,20 @@ class MmprojModel(ModelBase):
         if not self.has_vision_encoder and not self.has_audio_encoder:
             raise ValueError("MmprojModel must have either vision or audio encoder")
 
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        # an mmproj has no vocab-only mode, so an empty one is always a silent mapping failure
+        # rather than a supported output; count and size are both checked because a tensor map
+        # that produces only zero-sized entries is just as broken as one that produces none
+        n_tensors = sum(len(t) for t in self.gguf_writer.tensors)
+        n_bytes = sum(ti.nbytes for t in self.gguf_writer.tensors for ti in t.values())
+        if n_tensors == 0 or n_bytes == 0:
+            raise ValueError(
+                f"refusing to write an mmproj with no tensor data (n_tensors = {n_tensors}, n_bytes = {n_bytes}); "
+                "check that the model's vision/audio tensors are named as the tensor map expects"
+            )
+
     def write_vocab(self):
         raise ValueError("MmprojModel does not support vocab writing")
 

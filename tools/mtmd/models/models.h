@@ -183,6 +183,11 @@ struct clip_graph_glm4v : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_glm5next : clip_graph_glm4v {
+    clip_graph_glm5next(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph_glm4v(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_hunyuanvl : clip_graph {
     clip_graph_hunyuanvl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;

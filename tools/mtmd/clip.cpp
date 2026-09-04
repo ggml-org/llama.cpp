@@ -684,6 +684,19 @@ ggml_tensor * clip_graph::build_ffn(
                 cur = ggml_sqr(ctx0, cur);
                 cb(cur, "ffn_relu_sqr", il);
             } break;
+        case FFN_SILU_CLAMP:
+            {
+                // not ggml_swiglu_oai: it clamps the same way but adds one to the up branch
+                GGML_ASSERT(gate && "FFN_SILU_CLAMP is a gated activation");
+                const float limit = hparams.swiglu_limit;
+                GGML_ASSERT(limit > 0.0f);
+                tmp = ggml_clamp(ctx0, tmp, -limit, limit);
+                cb(tmp, "ffn_up_clamped", il);
+                cur = ggml_clamp(ctx0, cur, -INFINITY, limit);
+                cb(cur, "ffn_gate_clamped", il);
+                cur = ggml_swiglu_split(ctx0, cur, tmp);
+                cb(cur, "ffn_swiglu_limited", il);
+            } break;
     }
 
     if (down) {
@@ -1084,6 +1097,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
         case PROJECTOR_TYPE_GLM4V:
             {
                 builder = std::make_unique<clip_graph_glm4v>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_GLM5NEXT:
+            {
+                builder = std::make_unique<clip_graph_glm5next>(ctx, img);
             } break;
         case PROJECTOR_TYPE_QWEN3A:
             {
@@ -1753,6 +1770,20 @@ struct clip_model_loader {
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         hparams.set_limit_image_tokens(8, 4096);
+                        hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
+                    } break;
+                case PROJECTOR_TYPE_GLM5NEXT:
+                    {
+                        hparams.rope_theta = 10000.0f;
+                        hparams.n_merge = 2;
+                        // the reference asks for PILImageResampling.BICUBIC, which this only approximates
+                        hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        get_f32(KEY_VISION_SWIGLU_LIMIT, hparams.swiglu_limit);
+                        hparams.ffn_op = FFN_SILU_CLAMP;
+                        log_ffn_op = "silu_clamp";
+                        // the preprocessor's min_pixels/max_pixels, in tokens
+                        hparams.set_limit_image_tokens(16, 8000);
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_LLAMA4:
@@ -2572,6 +2603,7 @@ struct clip_model_loader {
                     }
                 } break;
             case PROJECTOR_TYPE_GLM4V:
+            case PROJECTOR_TYPE_GLM5NEXT:
                 {
                     model.mm_fc_w        = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
                     model.mm_ffn_up_w    = get_tensor(string_format(TN_MM_UP,        "weight"));
@@ -4042,6 +4074,7 @@ int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_GLM5NEXT:
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
@@ -4068,6 +4101,7 @@ int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_GLM5NEXT:
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_YOUTUVL:
@@ -4149,6 +4183,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_MINIMAX_M3:
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_GLM5NEXT:
         case PROJECTOR_TYPE_YOUTUVL:
         case PROJECTOR_TYPE_MUSE_GLIMMER:
             {
@@ -4781,6 +4816,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_GLM5NEXT:
             {
                 const int merge_ratio = hparams.n_merge;
                 const int pw = image_size_width  / patch_size;
@@ -5995,6 +6031,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GRANITE4_VISION:
             return ctx->model.qf_proj_blocks.size() * ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_GLM5NEXT:
             return ctx->model.mm_ffn_down_w->ne[1];
         case PROJECTOR_TYPE_MIMO_AUDIO:
             return ctx->model.mm_2_w->ne[1];

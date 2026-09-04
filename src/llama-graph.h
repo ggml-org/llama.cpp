@@ -32,6 +32,8 @@ class llama_memory_recurrent_context;
 class llama_memory_hybrid_context;
 class llama_memory_hybrid_iswa_context;
 
+class llm_graph_input_kpool;
+
 // certain models (typically multi-modal) can produce different types of graphs
 enum llm_graph_type {
     LLM_GRAPH_TYPE_DEFAULT,
@@ -1344,6 +1346,30 @@ struct llm_graph_context {
     llm_graph_input_mem_hybrid_k * build_inp_mem_hybrid_k() const;
 
     llm_graph_input_mem_hybrid_iswa * build_inp_mem_hybrid_iswa() const;
+
+    // one pooling map per ubatch (see llama-kv-cache-kpool.h); `scoring` false gives only k_idxs
+    llm_graph_input_kpool * build_inp_kpool(
+            const llama_memory_hybrid_context * mctx_cur,
+            ggml_tensor * kq_mask,
+            bool scoring) const;
+
+    // build_attn, but masking with `top_k` over `sel_mask`; `cand_mask` drops over-budget picks
+    ggml_tensor * build_attn_sparse(
+            llm_graph_input_attn_k * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * wo_s,
+            ggml_tensor * q_cur,     // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur,     // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur,     // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * kq_b,
+            ggml_tensor * sinks,     // [n_head_q]
+            ggml_tensor * v_mla,     // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
+            ggml_tensor * top_k,     // I32 [n_select, n_tokens/n_stream, n_stream]
+            ggml_tensor * sel_mask,  // F16/F32 [n_kv, n_batch, 1, n_stream]
+            ggml_tensor * cand_mask, // F16/F32 [n_kv, n_batch, 1, n_stream]
+                  float   kq_scale,
+                    int   il) const;
 
     //
     // pooling

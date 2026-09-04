@@ -1216,6 +1216,18 @@ bool llama_kv_cache::get_has_shift() const {
     return result;
 }
 
+void llama_kv_cache::set_kpool_dirty() {
+    kpool_dirty = true;
+}
+
+bool llama_kv_cache::get_kpool_dirty() const {
+    return kpool_dirty;
+}
+
+void llama_kv_cache::clear_kpool_dirty() const {
+    kpool_dirty = false;
+}
+
 ggml_type llama_kv_cache::type_k() const {
     return layers[0].k->type;
 }
@@ -1348,6 +1360,30 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
 
     // store the current K values into the cache
     return ggml_set_rows(ctx, k, k_cur, k_idxs);
+}
+
+ggml_tensor * llama_kv_cache::cpy_k_part(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il,
+        int64_t n_embd, int64_t i_off) const {
+    const int32_t ikv = map_layer_ids.at(il);
+
+    ggml_tensor * k = layers[ikv].k;
+
+    const int64_t n_embd_gqa = k->ne[0];
+    const int64_t kv_size    = get_size();
+    const int64_t n_stream   = k->ne[2];
+
+    GGML_ASSERT(i_off >= 0 && i_off + n_embd <= n_embd_gqa);
+    GGML_ASSERT(k_cur->ne[0] == n_embd);
+
+    // merge the streams: k_idxs are global, exactly as in cpy_k
+    ggml_tensor * k2 = ggml_reshape_2d(ctx, k, n_embd_gqa, kv_size*n_stream);
+
+    // a row-slice view of every cell. ggml_set_rows needs contiguous rows in the DEST,
+    // which ggml_is_contiguous_rows() grants for a view whose ne[0] slice is contiguous.
+    ggml_tensor * dst = ggml_view_2d(ctx, k2, n_embd, kv_size*n_stream,
+            k2->nb[1], ggml_row_size(k2->type, i_off));
+
+    return ggml_set_rows(ctx, dst, k_cur, k_idxs);
 }
 
 ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const {
@@ -2744,6 +2780,22 @@ ggml_type llama_kv_cache_context::type_v() const {
     return kv->type_v();
 }
 
+uint32_t llama_kv_cache_context::get_n_stream() const {
+    return sinfos[i_cur].s1 - sinfos[i_cur].s0 + 1;
+}
+
+uint32_t llama_kv_cache_context::get_strm(uint32_t s) const {
+    const auto & sinfo = sinfos[i_cur];
+
+    GGML_ASSERT(s < sinfo.strm.size());
+
+    return sinfo.strm[s];
+}
+
+const llama_kv_cache * llama_kv_cache_context::get_kv() const {
+    return kv;
+}
+
 ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {
     return kv->get_k(ctx, il, n_kv, sinfos[i_cur]);
 }
@@ -2754,6 +2806,11 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
 
 ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
     return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
+}
+
+ggml_tensor * llama_kv_cache_context::cpy_k_part(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il,
+        int64_t n_embd, int64_t i_off) const {
+    return kv->cpy_k_part(ctx, k_cur, k_idxs, il, n_embd, i_off);
 }
 
 ggml_tensor * llama_kv_cache_context::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const {
