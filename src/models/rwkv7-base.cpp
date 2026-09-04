@@ -129,7 +129,7 @@ ggml_tensor * llm_build_rwkv7_base::build_rwkv7_time_mix(llm_graph_input_rs * in
     cur = ggml_add(ctx0, cur, ggml_reshape_2d(ctx0, ggml_mul(ctx0, v, rk), n_embd, n_tokens));
 
     if (has_gating) {
-        cur = ggml_mul(ctx0, cur, g);
+        cur = ggml_mul(ctx0, g, cur);
     }
     cur = build_lora_mm(layer.time_mix_output, cur);
 
