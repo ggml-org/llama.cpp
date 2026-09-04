@@ -3,9 +3,10 @@
 	import ModelsDiscoverDetailsHeader from './ModelsDiscoverDetailsHeader.svelte';
 	import ModelsDiscoverDetailsReadme from './ModelsDiscoverDetailsReadme.svelte';
 	import ModelsDiscoverDetailsSkeleton from './ModelsDiscoverDetailsSkeleton.svelte';
+	import { OTHER_BIT_DEPTH } from '$lib/constants';
 	import { ModelAuxSidecar } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
-	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types/huggingface';
+	import type { BitDepthRow, HfModelDetailInfo, HfModelSibling } from '$lib/types';
 	import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
 	import { SvelteMap } from 'svelte/reactivity';
 
@@ -48,7 +49,6 @@
 	// Draft sidecars (mtp, dflash, dspark, eagle3) present in the repo, e.g.
 	// speculative-decoding drafts. mmproj is excluded: it is vision.
 
-	type BitDepthRow = { bitDepth: number; files: HfModelSibling[] };
 	let bitDepthRows = $derived.by<BitDepthRow[]>(() => {
 		const rows = new SvelteMap<number, HfModelSibling[]>();
 
@@ -60,7 +60,7 @@
 			if (meta?.sidecar === ModelAuxSidecar.MMPROJ) continue;
 
 			const depth = meta?.quant ? HuggingFaceService.getBitDepth(meta.quant) : null;
-			const bucket = depth ?? 99;
+			const bucket = depth ?? OTHER_BIT_DEPTH;
 			const list = rows.get(bucket) ?? [];
 
 			list.push(file);

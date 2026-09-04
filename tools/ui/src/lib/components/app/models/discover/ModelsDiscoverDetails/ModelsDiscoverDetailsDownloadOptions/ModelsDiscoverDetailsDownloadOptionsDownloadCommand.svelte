@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { quantBitDepth, type QuantOption, SPEC_TYPE } from './download-options.utils';
+	import { quantBitDepth } from './download-options.utils';
 	import { Check, Copy, Plus, X } from '@lucide/svelte';
 	import * as Select from '$lib/components/ui/select';
-	import { type ModelSidecar } from '$lib/constants';
+	import { DEFAULT_BASE_BIT_DEPTH, type ModelSidecar,SPEC_TYPE } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
+	import type { QuantOption } from '$lib/types';
 	import { copyToClipboard } from '$lib/utils';
 
 	interface Props {
@@ -21,9 +22,6 @@
 	let draftPick = $state<string | null>(null);
 	let draftTypePick = $state<ModelSidecar | null>(null);
 	let withDraft = $state(false);
-
-	/** Bit depth to prefer in the default base quant; the closest one wins. */
-	const DEFAULT_BASE_BIT_DEPTH = 4;
 
 	function bitDepthOf(path: string): number {
 		return quantBitDepth(HuggingFaceService.extractQuantMeta(path)?.quant ?? null);

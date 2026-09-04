@@ -31,8 +31,18 @@ export enum ModelDraftSidecar {
  * accompanying the main model weights.
  */
 export enum ModelAuxSidecar {
-	/** Multimodal projector: unlocks vision and/or audio input modalities. */
-	MMPROJ = 'mmproj',
 	/** Importance-matrix data used to build imatrix quants; not loaded at serve time. */
-	IMATRIX = 'imatrix'
+	IMATRIX = 'imatrix',
+	/** Multimodal projector: unlocks vision and/or audio input modalities. */
+	MMPROJ = 'mmproj'
+}
+
+/**
+ * Role of a selectable GGUF in the download options: the main weights, a
+ * speculative-decoding draft sidecar, or an auxiliary sidecar (mmproj).
+ */
+export enum SelectableFileKind {
+	AUX = 'aux',
+	DRAFT = 'draft',
+	MAIN = 'main'
 }

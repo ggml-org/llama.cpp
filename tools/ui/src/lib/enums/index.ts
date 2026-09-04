@@ -69,7 +69,13 @@ export {
 	JsonSchemaType
 } from './mcp.enums';
 
-export { ModelAuxSidecar, ModelCapability, ModelDraftSidecar, ModelModality } from './model.enums';
+export {
+	ModelAuxSidecar,
+	ModelCapability,
+	ModelDraftSidecar,
+	ModelModality,
+	SelectableFileKind
+} from './model.enums';
 
 export { ServerRole, ServerModelStatus, ServerModelsSseEventType } from './server.enums';
 

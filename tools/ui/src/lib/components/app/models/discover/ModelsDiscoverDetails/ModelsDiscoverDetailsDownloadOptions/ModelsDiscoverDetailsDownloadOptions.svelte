@@ -1,16 +1,11 @@
 <script lang="ts">
-	import {
-		type BitDepthRow,
-		classify,
-		type DownloadEntryState,
-		labelFor,
-		type QuantOption,
-		type SelectableFile
-	} from './download-options.utils';
+	import { classify, labelFor } from './download-options.utils';
 	import ModelsDiscoverDetailsDownloadOptionsDownloadCommand from './ModelsDiscoverDetailsDownloadOptionsDownloadCommand.svelte';
 	import ModelsDiscoverDetailsDownloadOptionsRow from './ModelsDiscoverDetailsDownloadOptionsRow.svelte';
+	import { SelectableFileKind } from '$lib/enums';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
+	import type { BitDepthRow, DownloadEntryState, QuantOption, SelectableFile } from '$lib/types';
 
 	interface Props {
 		/** Full HuggingFace repo id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */
@@ -98,7 +93,9 @@
 	}
 
 	/** Non-draft quants for the command's base select, in row order. */
-	let mainOptions = $derived(selectableFiles.filter((f) => f.kind === 'main').map(optionFor));
+	let mainOptions = $derived(
+		selectableFiles.filter((f) => f.kind === SelectableFileKind.MAIN).map(optionFor)
+	);
 
 	/**
 	 * Draft options for the command's draft select, with their sidecar type
@@ -106,7 +103,7 @@
 	 */
 	let draftOptions = $derived(
 		selectableFiles
-			.filter((f) => f.kind === 'draft')
+			.filter((f) => f.kind === SelectableFileKind.DRAFT)
 			.map((f) => ({
 				...optionFor(f),
 				badge: HuggingFaceService.extractQuantMeta(f.path)?.sidecar ?? null

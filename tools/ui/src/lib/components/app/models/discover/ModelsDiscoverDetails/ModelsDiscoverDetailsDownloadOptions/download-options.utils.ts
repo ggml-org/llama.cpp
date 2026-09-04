@@ -1,44 +1,24 @@
-import { isAuxSidecar, isDraftSidecar, type ModelSidecar } from '$lib/constants';
-import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
+import { DRAFT_FILE_LABEL, isAuxSidecar, isDraftSidecar, OTHER_BIT_DEPTH } from '$lib/constants';
+import { SelectableFileKind } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services';
-import type { HfModelSibling } from '$lib/types/huggingface';
 
-/**
- * Option of a quant `<select>`; the picks only compose the serve command and
- * are not bound to the quant chips.
- */
-export interface QuantOption {
-	/** Quant token, or the file name when the file carries no quant (e.g. BF16). */
-	label: string;
-	/** Repo-relative file path the option stands for. */
-	path: string;
-}
-
-/** Download state of a single repo entry, injected by the integration layer. */
-export interface DownloadEntryState {
-	/** Server identifier the entry's actions (pause / resume / cancel / retry) target. */
-	repoWithTag: string;
-	isDownloading: boolean;
-	progress: ModelDownloadProgress | null;
-	isDownloaded: boolean;
-	isPaused: boolean;
-	isFailed: boolean;
-}
-
-/** Download state of a single repo entry, injected by the integration layer. */
-
-export type BitDepthRow = { bitDepth: number; files: HfModelSibling[] };
-
-/** A selectable GGUF, tagged with its kind: main weights, draft, or aux (mmproj). */
-export type SelectableFile = HfModelSibling & { kind: 'main' | 'draft' | 'aux' };
+/** Leading `UD-` (Unsloth Dynamic) quant prefix and its length. */
+const UD_QUANT_PREFIX = 'UD-';
+const UD_QUANT_PREFIX_REGEX = /^UD-(?=.)/i;
+/** Captures the bit-depth digits of a quant token, e.g. `Q4_K_M` -> `4`. */
+const QUANT_BIT_DEPTH_REGEX = /(?:I?Q|F)(\d+)/i;
+/** Trailing weight extension, stripped from a quantless file's label. */
+const WEIGHT_EXTENSION_LABEL_REGEX = /\.gguf$/i;
+/** Path separator between path segments. */
+const PATH_SEPARATOR = '/';
 
 /** Kind of a file path: the main weights, a draft sidecar, or an aux sidecar (mmproj). */
-export function classify(path: string): 'main' | 'draft' | 'aux' {
+export function classify(path: string): SelectableFileKind {
 	const sidecar = HuggingFaceService.extractQuantMeta(path)?.sidecar;
 
-	if (!sidecar) return 'main';
+	if (!sidecar) return SelectableFileKind.MAIN;
 
-	return isAuxSidecar(sidecar) ? 'aux' : 'draft';
+	return isAuxSidecar(sidecar) ? SelectableFileKind.AUX : SelectableFileKind.DRAFT;
 }
 
 /** Display label of a file: its quant, else the file name without the extension. */
@@ -49,32 +29,22 @@ export function labelFor(path: string): string {
 
 	// Quantless sidecar files: the chip badge already carries the sidecar type,
 	// so the label only marks draft files; aux sidecars badge alone.
-	if (meta?.sidecar) return isDraftSidecar(meta.sidecar) ? 'draft' : '';
+	if (meta?.sidecar) return isDraftSidecar(meta.sidecar) ? DRAFT_FILE_LABEL : '';
 
-	const basename = path.split('/').pop() ?? path;
+	const basename = path.split(PATH_SEPARATOR).pop() ?? path;
 
-	return basename.replace(/\.gguf$/i, '');
+	return basename.replace(WEIGHT_EXTENSION_LABEL_REGEX, '');
 }
 
 /**
- * Bit depth of a quant token; `99` (Other) when it carries none. The `UD-`
+ * Bit depth of a quant token; `OTHER_BIT_DEPTH` when it carries none. The `UD-`
  * unsloth prefix is stripped before matching.
  */
 export function quantBitDepth(quant: string | null): number {
-	if (!quant) return 99;
+	if (!quant) return OTHER_BIT_DEPTH;
 
-	const stripped = quant.match(/^UD-(?=.)/i) ? quant.slice(3) : quant;
-	const bit = stripped.match(/(?:I?Q|F)(\d+)/i)?.[1];
+	const stripped = UD_QUANT_PREFIX_REGEX.test(quant) ? quant.slice(UD_QUANT_PREFIX.length) : quant;
+	const bit = stripped.match(QUANT_BIT_DEPTH_REGEX)?.[1];
 
-	return bit ? Number(bit) : 99;
+	return bit ? Number(bit) : OTHER_BIT_DEPTH;
 }
-
-// LLAMA-APP-REUSE: --spec-type value for each draft sidecar; aux sidecars stay empty
-export const SPEC_TYPE: Record<ModelSidecar, string> = {
-	[ModelAuxSidecar.IMATRIX]: '',
-	[ModelAuxSidecar.MMPROJ]: '',
-	[ModelDraftSidecar.DFLASH]: 'draft-dflash',
-	[ModelDraftSidecar.DSPARK]: 'draft-dspark',
-	[ModelDraftSidecar.EAGLE3]: 'eagle3',
-	[ModelDraftSidecar.MTP]: 'draft-mtp'
-};

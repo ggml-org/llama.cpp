@@ -115,6 +115,14 @@ export type {
 	ModalityCapabilities
 } from './models';
 
+// Models discover types
+export type {
+	BitDepthRow,
+	DownloadEntryState,
+	QuantOption,
+	SelectableFile
+} from './models-discover';
+
 // Settings types
 export type {
 	SettingsConfigValue,

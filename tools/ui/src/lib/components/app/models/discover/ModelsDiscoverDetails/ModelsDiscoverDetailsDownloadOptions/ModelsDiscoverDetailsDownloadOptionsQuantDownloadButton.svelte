@@ -1,12 +1,12 @@
 <script lang="ts">
 	import DownloadProgressBar from '../../DownloadProgressBar.svelte';
-	import { type DownloadEntryState, labelFor } from './download-options.utils';
+	import { labelFor } from './download-options.utils';
 	import { Check, Download, Loader2, Pause, Play, RotateCw, X } from '@lucide/svelte';
 	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
-	import type { HfModelSibling } from '$lib/types';
+	import type { DownloadEntryState, HfModelSibling } from '$lib/types';
 
 	interface Props {
 		/** GGUF file the chip stands for. */

@@ -1,6 +1,7 @@
 <script lang="ts">
-	import type { DownloadEntryState, SelectableFile } from './download-options.utils';
 	import ModelsDiscoverDetailsDownloadOptionsQuantDownloadButton from './ModelsDiscoverDetailsDownloadOptionsQuantDownloadButton.svelte';
+	import { SelectableFileKind } from '$lib/enums';
+	import type { DownloadEntryState, SelectableFile } from '$lib/types';
 	import { minMemoryTierGb } from '$lib/utils';
 
 	interface Props {
@@ -12,8 +13,8 @@
 
 	let { bitDepth, files }: Props = $props();
 
-	let mainFile = $derived(files.find((f) => f.kind === 'main') ?? null);
-	let draftFile = $derived(files.find((f) => f.kind === 'draft') ?? null);
+	let mainFile = $derived(files.find((f) => f.kind === SelectableFileKind.MAIN) ?? null);
+	let draftFile = $derived(files.find((f) => f.kind === SelectableFileKind.DRAFT) ?? null);
 
 	let mainMemGb = $derived(mainFile ? minMemoryTierGb(mainFile.size ?? 0) : null);
 	let draftMemGb = $derived(draftFile ? minMemoryTierGb(draftFile.size ?? 0) : null);
