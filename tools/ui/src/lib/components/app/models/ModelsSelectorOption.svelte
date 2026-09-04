@@ -86,12 +86,13 @@
 >
 	<ModelId
 		aliases={option.aliases}
-		{capabilities}
 		class="flex-1"
 		{hideOrgName}
 		{modalities}
 		modelId={option.model}
 		showRawTooltip
+		supportsThinking={capabilities.reasoning}
+		supportsToolUse={capabilities.tools}
 		tags={option.tags}
 	/>
 
