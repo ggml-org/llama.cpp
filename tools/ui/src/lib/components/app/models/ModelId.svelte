@@ -31,8 +31,6 @@
 		contextLength?: number;
 		/** Min/max GGUF file size (main + draft) across quants; renders a range when set. */
 		sizeRange?: { min: number; max: number } | null;
-		/** Params badge fallback (formatted) when the model id carries no params token. */
-		params?: string;
 		draftSidecars?: ModelSidecar[];
 		/** Allow badges to wrap onto new lines instead of truncating. */
 		wrap?: boolean;
@@ -54,7 +52,6 @@
 		iconsOnNewLine = false,
 		modalities,
 		modelId,
-		params,
 		showRaw = undefined,
 		showRawTooltip = false,
 		sizeRange,
@@ -91,7 +88,7 @@
 
 	let hasBadges = $derived(
 		parsed.sidecar ||
-			((parsed.params || params) && !hideParameters) ||
+			(parsed.params && !hideParameters) ||
 			(parsed.quantization && !resolvedHideQuantization) ||
 			primaryAlias ||
 			uniqueAliases.length > 1 ||
@@ -183,9 +180,9 @@
 					</span>
 				{/if}
 
-				{#if (parsed.params || params) && !hideParameters}
+				{#if parsed.params && !hideParameters}
 					<span class={badgeClass}>
-						{parsed.params ?? params}{parsed.activatedParams ? `-${parsed.activatedParams}` : ''}
+						{parsed.params}{parsed.activatedParams ? `-${parsed.activatedParams}` : ''}
 					</span>
 				{/if}
 

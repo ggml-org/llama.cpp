@@ -14,7 +14,6 @@
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import { HF_BASE_MODEL_TAG_REGEX, ICON_CLASS_DEFAULT, PATH_SEPARATOR } from '$lib/constants';
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
-	import { useModelParamsFallback } from '$lib/hooks/use-model-params-fallback.svelte';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -99,11 +98,6 @@
 		reasoning: modelsStore.props.checkModelSupportsThinking(option.model),
 		tools: option.capabilities.includes(ModelCapability.TOOL_USE)
 	}));
-
-	const { paramsFallback } = useModelParamsFallback({
-		metaParams: () => option.meta?.n_params,
-		modelId: () => option.model
-	});
 </script>
 
 <div
@@ -142,7 +136,6 @@
 		{hideOrgName}
 		{modalities}
 		modelId={option.model}
-		params={paramsFallback}
 		showRawTooltip
 		supportsThinking={capabilities.reasoning}
 		supportsToolUse={capabilities.tools}

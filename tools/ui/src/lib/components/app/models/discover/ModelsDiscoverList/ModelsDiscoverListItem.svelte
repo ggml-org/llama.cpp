@@ -8,12 +8,12 @@
 		MODEL_ID,
 		type ModelSidecar
 	} from '$lib/constants';
-	import { HuggingFaceService, ModelsService } from '$lib/services';
+	import { HuggingFaceService } from '$lib/services';
 	import { modelsHubStore } from '$lib/stores';
 	import type { ModelsHubSizeRange } from '$lib/stores/models-hub/index.svelte';
 	import type { HfModelInfo } from '$lib/types/huggingface';
 	import type { ModelModalities } from '$lib/types/models';
-	import { detectThinkingSupport, detectToolUseSupport, formatParameters } from '$lib/utils';
+	import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
@@ -39,35 +39,6 @@
 	});
 
 	let contextLength = $derived(model.gguf?.context_length);
-
-	// Params badge fallback: the id usually carries the count (`Qwen3.8-27B`),
-	// but ids like `Kimi-K3` do not. Fall back to the HF param count
-	// (`gguf.total`), fetched lazily only when neither the response nor the name
-	// has it.
-	let fetchedParams = $state<number | null>(null);
-
-	$effect(() => {
-		fetchedParams = null;
-
-		if (model.gguf?.total || ModelsService.parseModelId(model.id).params) return;
-
-		let cancelled = false;
-
-		void HuggingFaceService.getDetails(model.id).then((info) => {
-			if (!cancelled && info?.gguf?.total) fetchedParams = info.gguf.total;
-		});
-
-		return () => {
-			cancelled = true;
-		};
-	});
-
-	let hfParams = $derived(model.gguf?.total ?? fetchedParams);
-	let paramsFallback = $derived(
-		hfParams && !ModelsService.parseModelId(model.id).params
-			? formatParameters(hfParams)
-			: undefined
-	);
 
 	// Reasoning support from the chat template, matching the details view.
 	let supportsThinking = $derived(detectThinkingSupport(model.gguf?.chat_template ?? ''));
@@ -152,7 +123,6 @@
 				iconsOnNewLine
 				{modalities}
 				modelId={model.id}
-				params={paramsFallback}
 				{sizeRange}
 				{supportsThinking}
 				{supportsToolUse}

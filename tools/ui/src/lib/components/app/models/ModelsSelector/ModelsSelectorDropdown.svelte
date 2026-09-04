@@ -18,7 +18,6 @@
 		SETTINGS_KEYS
 	} from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
-	import { useModelParamsFallback } from '$lib/hooks/use-model-params-fallback.svelte';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { modelsStore, settingsStore } from '$lib/stores';
@@ -72,12 +71,6 @@
 
 	const selectedOption = $derived(ms.getDisplayOption());
 	const triggerModel = $derived(selectedOption?.model ?? null);
-
-	// Params badge fallback for trigger ids that carry no params token.
-	const { paramsFallback } = useModelParamsFallback({
-		metaParams: () => selectedOption?.meta?.n_params,
-		modelId: () => triggerModel
-	});
 
 	const showOrgNameInTrigger = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER] ?? false
@@ -235,7 +228,6 @@
 											hideOrgName={!showOrgNameInTrigger}
 											hideQuantization
 											modelId={selectedOption.model}
-											params={paramsFallback}
 										/>
 									{:else}
 										<span class="min-w-0 font-medium">Select model</span>
@@ -384,7 +376,6 @@
 									hideOrgName={!showOrgNameInTrigger}
 									hideQuantization
 									modelId={selectedOption.model}
-									params={paramsFallback}
 								/>
 							{/if}
 
