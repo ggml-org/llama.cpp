@@ -55,3 +55,13 @@ export enum ModelDownloadStopRequest {
 	CANCEL = 'cancel',
 	PAUSE = 'pause'
 }
+
+/**
+ * Destructive download action the user is asked to confirm: stop and discard an
+ * in-flight download, or delete an already-downloaded model from disk. Both
+ * resolve through the same store removal call, differing only in the copy.
+ */
+export enum ModelDownloadConfirmAction {
+	CANCEL = 'cancel',
+	DELETE = 'delete'
+}
