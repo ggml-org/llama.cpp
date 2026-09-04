@@ -1,4 +1,4 @@
-import { FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
+import { FILE_PATH_SEPARATOR_REGEX, MODEL_ID } from '$lib/constants';
 
 /**
  * Normalizes a model name by extracting the filename from a path, but preserves Hugging Face repository format.
@@ -55,4 +55,15 @@ export function normalizeModelName(modelName: string): string {
  */
 export function isValidModelName(modelName: string): boolean {
 	return normalizeModelName(modelName).length > 0;
+}
+
+/**
+ * Org segment of a HuggingFace repo id (`ggml-org/Qwen3-8B` -> `ggml-org`).
+ * Returns the input itself when it carries no org separator, and an empty string
+ * for a missing id, so callers can use `||` against their own fallback org.
+ */
+export function orgOf(repoId: string | null | undefined): string {
+	if (!repoId) return '';
+
+	return repoId.split(MODEL_ID.ORG_SEPARATOR)[0] || repoId;
 }
