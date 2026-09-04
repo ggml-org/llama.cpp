@@ -306,6 +306,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_apertus(params);
         case LLM_ARCH_MINIMAX_01:
             return new llama_model_minimax_01(params);
+        case LLM_ARCH_LUMMA:
+            return new llama_model_lumma(params);
         case LLM_ARCH_MINIMAX_M2:
             return new llama_model_minimax_m2(params);
         case LLM_ARCH_MINIMAX_M3:
@@ -2942,7 +2944,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_SEED_OSS:
         case LLM_ARCH_GROVEMOE:
         case LLM_ARCH_APERTUS:
-        case LLM_ARCH_MINIMAX_01:
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MINIMAX_M3:
         case LLM_ARCH_COGVLM:

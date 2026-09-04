@@ -502,6 +502,13 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_LUMMA:
+                regex_exprs = {
+                    // original regex from tokenizer.json
+                    // "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?(?:\\p{L}\\p{M}*)+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?(?:\\p{L}\\p{M}*)+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_EXAONE_MOE:
                 regex_exprs = {
                     // original regex from tokenizer.json
@@ -2371,6 +2378,11 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_LAGUNA;
                 clean_spaces = false;
             } else if (
+                tokenizer_pre == "lumma") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_LUMMA;
+                add_bos = true;
+                add_space_prefix = true;
+            } else if (
                 tokenizer_pre == "minimax-m2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MINIMAX_M2;
                 clean_spaces = false;
@@ -3448,13 +3460,22 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 } else {
                     session = std::make_unique<llm_tokenizer_bpe_session>(vocab, *tok_bpe);
                 }
+                bool is_after_bos = false;
 
                 if (add_special) {
-                    session->append_bos(output);
+                    is_after_bos = session->append_bos(output);
                 }
+
                 for (const auto & fragment : fragment_buffer) {
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
-                        std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+                        std::string text;
+
+                        if (add_space_prefix && is_after_bos) {
+                            text = ' ';
+                        }
+                        is_after_bos = false;
+
+                        text += fragment.raw_text.substr(fragment.offset, fragment.length);
 
                         if (escape_whitespaces) {
                             llama_escape_whitespace(text);

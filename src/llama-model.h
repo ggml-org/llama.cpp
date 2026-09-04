@@ -619,6 +619,7 @@ struct llama_model {
     std::vector<std::string> classifier_labels;
 
     struct ggml_tensor * tok_embd   = nullptr;
+    struct ggml_tensor * tok_embd_proj = nullptr; // lumma factorized input projection
     struct ggml_tensor * type_embd  = nullptr;
     struct ggml_tensor * pos_embd   = nullptr;
     struct ggml_tensor * tok_norm   = nullptr;
@@ -628,6 +629,7 @@ struct llama_model {
     struct ggml_tensor * output_res_score = nullptr; // kimi-k3: final cross-layer residual mix
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
+    struct ggml_tensor * output_proj       = nullptr; // lumma factorized output projection
     struct ggml_tensor * output_b        = nullptr;
     struct ggml_tensor * output_norm_enc = nullptr;
 

@@ -449,16 +449,20 @@ void llama_model_saver::add_kv_from_model() {
 }
 
 void llama_model_saver::add_tensors_from_model() {
-    if (model->output != nullptr &&
+    if (model->tok_embd != nullptr && model->tok_embd_proj != nullptr) {
+        add_tensor(model->tok_embd);
+    } else if (model->output != nullptr &&
             std::string(model->output->name) != std::string(model->tok_embd->name)) {
-        add_tensor(model->tok_embd); // some models use the same tensor for tok_embd and output
+        add_tensor(model->tok_embd);
     }
+    add_tensor(model->tok_embd_proj);
     add_tensor(model->type_embd);
     add_tensor(model->pos_embd);
     add_tensor(model->tok_norm);
     add_tensor(model->tok_norm_b);
     add_tensor(model->output_norm);
     add_tensor(model->output_norm_b);
+    add_tensor(model->output_proj);
     add_tensor(model->output);
     add_tensor(model->output_b);
     add_tensor(model->output_norm_enc);

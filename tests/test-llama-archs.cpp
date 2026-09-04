@@ -128,6 +128,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_vocab = 10240;
     } else if (arch == LLM_ARCH_QWEN3TTS) {
         n_vocab = 4096; // must be >= the hard-coded codec head size (3072)
+    } else if (arch == LLM_ARCH_LUMMA) {
+        ms.add_kv(LLM_KV_EMBEDDING_LENGTH_OUT, n_embd / 2);
     }
 
     uint32_t n_head_kv = n_head;
@@ -348,6 +350,24 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ACTIVATION_SITU_BETA,      4.0f);
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,      -5.0f);
+
+    if (arch == LLM_ARCH_LUMMA) {
+        ggml_tensor t;
+        memset(&t, 0, sizeof(ggml_tensor));
+        t.type = GGML_TYPE_F16;
+        t.ne[0] = n_embd / 2;
+        t.ne[1] = n_vocab;
+        ggml_set_name(&t, "token_embd.weight");
+        gguf_add_tensor(ms.gguf_ctx, &t);
+        t.ne[0] = n_embd / 2;
+        t.ne[1] = n_embd;
+        ggml_set_name(&t, "token_embd_proj.weight");
+        gguf_add_tensor(ms.gguf_ctx, &t);
+        t.ne[0] = n_embd;
+        t.ne[1] = n_embd / 2;
+        ggml_set_name(&t, "output_proj.weight");
+        gguf_add_tensor(ms.gguf_ctx, &t);
+    }
 
     for (uint32_t il = 0; il < n_layer; il++) {
         ggml_tensor t;
