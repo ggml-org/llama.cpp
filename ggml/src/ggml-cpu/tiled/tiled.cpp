@@ -5,6 +5,9 @@
 #include "tiled.h"
 
 #include "ggml-quants.h"
+// kvalues table (impl section) for the iq4_xs unpack
+#define GGML_COMMON_IMPL_CPP
+#include "ggml-common.h"
 #include "tiled-kernel.h"
 
 #include <assert.h>
@@ -194,6 +197,38 @@ static void tiled_unpack_src0(const block_q2_K * rows, int64_t row_stride, int n
     }
 }
 
+// iq4_xs: 4-bit codes through the kvalues_iq4nl LUT, 6-bit scales per 32, no min.
+// LUT values are stored as kvalues + 128 so the +128 shift the kernel applies to
+// the activations cancels against the bsums correction (BIAS = 128)
+static void tiled_unpack_src0(const block_iq4_xs * rows, int64_t row_stride, int n_rows, tiled_tile_src0 * tile) {
+    GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
+    constexpr int NB = 8; // 32-wide subblocks
+
+    for (int r = 0; r < n_rows; r++) {
+        const block_iq4_xs & x = rows[r * row_stride];
+        tile->d[r] = ggml_fp16_to_fp32(x.d);
+
+        // 6-bit scale per 32, stored as (ls - 32); same extraction as dequantize_row_iq4_xs
+        for (int s = 0; s < NB; s++) {
+            const int ls = ((x.scales_l[s / 2] >> 4 * (s % 2)) & 0xf) | (((x.scales_h >> 2 * s) & 3) << 4);
+            tile->scales[r * NB + s] = (int32_t) ls - 32;
+        }
+
+        // 4-bit codes through the LUT: low nibbles of a byte pair come first
+        uint8_t * q = &tile->q[r * TILED_TILE_K];
+        uint8_t lo[32], hi[32];
+        for (int u = 0; u < 4; u++) {
+            tiled_unpk_nib4(x.qs + 32 * u, lo, hi);
+            for (int e = 0; e < 16; e++) {
+                q[64 * u + e]       = (uint8_t) (kvalues_iq4nl[lo[e]] + 128);
+                q[64 * u + 16 + e]  = (uint8_t) (kvalues_iq4nl[hi[e]] + 128);
+                q[64 * u + 32 + e]  = (uint8_t) (kvalues_iq4nl[lo[16 + e]] + 128);
+                q[64 * u + 48 + e]  = (uint8_t) (kvalues_iq4nl[hi[16 + e]] + 128);
+            }
+        }
+    }
+}
+
 // unpack src1 tile from q8_K rows
 static void tiled_unpack_src1_q8_K(const block_q8_K * rows, int64_t row_stride, int n_rows, tiled_tile_src1 * tile,
                                    const int8_t * qv, int64_t nr1_pad, int64_t r_start, int64_t kblk) {
@@ -297,6 +332,13 @@ static bool ggml_tiled_matmul_supported(const struct ggml_tensor * src0,
     if (!ggml_tiled_matmul_enabled()) {
         return false;
     }
+    // A/B switch between the tiled kernel and the iqp panel; read per op so the flag can change within a process (harness)
+    if (const char * const mm_path = getenv("GGML_CPU_MM_PATH")) {
+        if (strcmp(mm_path, "iqp") == 0) {
+            return false;
+        }
+    }
+
 
     // hard constraints: the kernel is only correct/defined for these
 
@@ -304,9 +346,10 @@ static bool ggml_tiled_matmul_supported(const struct ggml_tensor * src0,
     if (src0->extra != NULL) {
         return false;
     }
-    // K-quant weights only for now
+    // K-quant weights and iq4_xs (the latter is LUT-expanded in the unpacker)
     if (src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K &&
-        src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_Q3_K && src0->type != GGML_TYPE_Q2_K) {
+        src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_Q3_K &&
+        src0->type != GGML_TYPE_Q2_K && src0->type != GGML_TYPE_IQ4_XS) {
         return false;
     }
     if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_Q8_K) {
@@ -565,7 +608,7 @@ static void ggml_compute_forward_mul_mat_tiled_driver(
     const int64_t nr1 = ne1 * ne2 * ne3;
 
     // Now select a reasonable chunk size.
-    int chunk_size = TILED_TILE_ROWS;
+    int chunk_size = 256; //TILED_TILE_ROWS;
 
     // distribute the work across the inner or outer loop based on which one is larger
     // The number of chunks in the 0/1 dim. CEIL(nr/chunk_size)
@@ -632,6 +675,9 @@ bool ggml_compute_forward_mul_mat_tiled(
             break;
         case GGML_TYPE_Q2_K:
             ggml_compute_forward_mul_mat_tiled_driver<block_q2_K, 16, true,  0>(params, dst);
+            break;
+        case GGML_TYPE_IQ4_XS:
+            ggml_compute_forward_mul_mat_tiled_driver<block_iq4_xs, 32, false, 128>(params, dst);
             break;
         default:
             return false;

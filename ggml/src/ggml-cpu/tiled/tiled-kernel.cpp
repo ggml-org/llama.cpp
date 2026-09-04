@@ -402,6 +402,10 @@ void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & s
 // explicit instantiations for the in-use formats (q4_K and q5_K share the constants)
 template void tiled_run_microtile<32, true, 0>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                int i0, int j0, float * buf, int buf_stride);
+// iq4_xs: LUT-expanded codes, BIAS = 128
+
+template void tiled_run_microtile<32, false, 128>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
+                                                  int i0, int j0, float * buf, int buf_stride);
 template void tiled_run_microtile<16, false, 32>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                  int i0, int j0, float * buf, int buf_stride);
 template void tiled_run_microtile<16, false, 4>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
