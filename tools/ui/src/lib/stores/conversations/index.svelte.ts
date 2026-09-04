@@ -168,15 +168,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		if (convIds.length === 0) return;
 
 		try {
-			const fetched = await DatabaseService.getConversationsWithMessages(convIds);
-			const activeId = this.activeConversation?.id;
-			const overridden = fetched.get(activeId ?? '');
-
-			if (overridden && activeId) {
-				overridden.conv = { ...this.activeConversation! };
-			}
-
-			const exported = [...fetched.values()];
+			const exported = await this.getConversationsForExport(convIds);
 
 			if (exported.length === 0) {
 				toast.error('No conversations to export');
@@ -365,16 +357,11 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 * @param convId - The conversation ID to download
 	 */
 	async downloadConversation(convId: string): Promise<void> {
-		const conversation =
-			this.activeConversation?.id === convId
-				? this.activeConversation
-				: await DatabaseService.getConversation(convId);
+		const [exportedConversation] = await this.getConversationsForExport([convId]);
 
-		if (!conversation) return;
+		if (!exportedConversation) return;
 
-		const messages = await DatabaseService.getConversationMessages(convId);
-
-		ConversationTransferService.downloadConversationFile({ conv: conversation, messages });
+		ConversationTransferService.downloadConversationFile(exportedConversation);
 	}
 
 	/**
@@ -451,6 +438,19 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 */
 	async getConversationMessages(convId: string): Promise<DatabaseMessage[]> {
 		return await DatabaseService.getConversationMessages(convId);
+	}
+
+	/**
+	 * Gets conversations and their messages from the database for export.
+	 * @param convIds - Conversation IDs
+	 * @returns List of conversations with messages, ordered by the input IDs
+	 */
+	async getConversationsForExport(convIds: string[]): Promise<ExportedConversation[]> {
+		const fetched = await DatabaseService.getConversationsWithMessages(convIds);
+
+		return convIds
+			.map((id) => fetched.get(id))
+			.filter((entry): entry is ExportedConversation => entry !== undefined);
 	}
 
 	/**
