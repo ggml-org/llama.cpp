@@ -220,8 +220,7 @@ export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/Chat
  */
 export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddToolsSubmenu.svelte';
 
-/**
- * Dropdown submenu for selecting reasoning effort level.
+/** Dropdown submenu for selecting reasoning effort level.
  *
  * Shows a "Reasoning" sub-menu item with a lightbulb icon indicating
  * thinking status, and a nested list of effort levels.
