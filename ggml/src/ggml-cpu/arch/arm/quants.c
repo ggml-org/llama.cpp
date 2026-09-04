@@ -2637,7 +2637,12 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 // process 32 data points (share same block scale) per iteration
                 for (int k = 0; k < 2; ++k) {
                     const int blk = j * 2 + k;
-                    const int32x4_t block_scale = vcombine_s32(vdup_n_s32(x0_scales[blk]), vdup_n_s32(x1_scales[blk]));
+                    const int32x4_t block_scale = vld1q_s32(((const int32_t[4]) {
+                        x0_scales[blk],
+                        x0_scales[blk],
+                        x1_scales[blk],
+                        x1_scales[blk],
+                    }));
 
                     int32x4_t vr = vdupq_n_s32(0);
                     for (int l = 0; l < 2; ++l) {
