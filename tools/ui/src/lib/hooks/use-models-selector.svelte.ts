@@ -1,4 +1,4 @@
-import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
+import { filterModelOptions, groupModelOptions } from '$lib/components/app/navigation/utils';
 import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
 import { modelsStore, serverStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
