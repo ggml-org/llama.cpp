@@ -127,6 +127,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: true,
+				help: 'Show the Discover Models sidebar action to browse and download HuggingFace GGUF models. Only available in router mode.',
+				key: SETTINGS_KEYS.ENABLE_DISCOVER_MODELS,
+				label: 'Enable Discover Models',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
 				help: 'Choose how conversation titles are generated. The first non-empty line uses a fast deterministic rule; the LLM option uses a model-generated title from the first message exchange.',
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
 				label: 'Conversation title',
