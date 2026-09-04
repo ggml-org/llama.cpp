@@ -56,19 +56,8 @@ export class ModelsService {
 	 *
 	 * @returns List of available models with basic metadata
 	 */
-	static async list(): Promise<ApiModelListResponse> {
-		return apiFetch<ApiModelListResponse>(API_MODELS.LIST);
-	}
-
-	/**
-	 * Fetch list of all models with detailed metadata (ROUTER mode).
-	 * Returns models with load status, paths, and other metadata
-	 * beyond what the OpenAI-compatible endpoint provides.
-	 *
-	 * @returns List of models with detailed status and configuration info
-	 */
-	static async listRouter(): Promise<ApiRouterModelsListResponse> {
-		return apiFetch<ApiRouterModelsListResponse>(API_MODELS.LIST);
+	static async list(): Promise<ApiModelsListResponse> {
+		return apiFetch<ApiModelsListResponse>(API_MODELS.LIST);
 	}
 
 	/**
@@ -80,14 +69,14 @@ export class ModelsService {
 	 * @param extraArgs - Optional additional arguments to pass to the model instance
 	 * @returns Load response from the server
 	 */
-	static async load(modelId: string, extraArgs?: string[]): Promise<ApiRouterModelsLoadResponse> {
+	static async load(modelId: string, extraArgs?: string[]): Promise<ApiModelsLoadResponse> {
 		const payload: { model: string; extra_args?: string[] } = { model: modelId };
 
 		if (extraArgs && extraArgs.length > 0) {
 			payload.extra_args = extraArgs;
 		}
 
-		return apiPost<ApiRouterModelsLoadResponse>(API_MODELS.LOAD, payload);
+		return apiPost<ApiModelsLoadResponse>(API_MODELS.LOAD, payload);
 	}
 
 	/**
@@ -220,8 +209,8 @@ export class ModelsService {
 	 * @param modelId - Model identifier to unload
 	 * @returns Unload response from the server
 	 */
-	static async unload(modelId: string): Promise<ApiRouterModelsUnloadResponse> {
-		return apiPost<ApiRouterModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
+	static async unload(modelId: string): Promise<ApiModelsUnloadResponse> {
+		return apiPost<ApiModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
 	}
 
 	/**

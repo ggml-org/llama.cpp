@@ -49,7 +49,7 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'headers'> {
  * @example
  * ```typescript
  * // GET request
- * const models = await apiFetch<ApiModelListResponse>('/v1/models');
+ * const models = await apiFetch<ApiModelsListResponse>('/v1/models');
  *
  * // POST request
  * const result = await apiFetch<ApiResponse>('/models/load', {
