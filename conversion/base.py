@@ -1422,15 +1422,15 @@ class TextModel(ModelBase):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
-        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
-        assert max(tokenizer.vocab.values()) < vocab_size
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
+        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
-        added_vocab = tokenizer.get_added_vocab()
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
 
-        added_tokens_decoder = tokenizer.added_tokens_decoder
+        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
 
         for i in range(vocab_size):
             if i not in reverse_vocab:
@@ -1443,7 +1443,7 @@ class TextModel(ModelBase):
                     # To avoid unexpected issues - we make sure to normalize non-normalized tokens
                     if not added_tokens_decoder[i].normalized:
                         previous_token = token
-                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False)) 
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[unresolved-attribute, invalid-assignment] 
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
@@ -1452,7 +1452,7 @@ class TextModel(ModelBase):
                     else:
                         # NOTE: this was added for Gemma.
                         # Encoding and decoding the tokens above isn't sufficient for this case.
-                        token = token.replace(b"\xe2\x96\x81".decode("utf-8"), " ")
+                        token = token.replace(b"\xe2\x96\x81".decode("utf-8"), " ")  # pre-normalize user-defined spaces
                         toktypes.append(gguf.TokenType.USER_DEFINED)
                 else:
                     toktypes.append(gguf.TokenType.NORMAL)
