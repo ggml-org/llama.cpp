@@ -942,6 +942,7 @@ void init_iq_shmem(uvec3 wgsize)
 #endif
     barrier();
 }
+
 #endif
 
 #define QUANT_K_IQ2_XXS 256
@@ -1810,17 +1811,36 @@ const int8_t kvalues_iq4nl_const[16] = {
     int8_t(1), int8_t(13), int8_t(25), int8_t(38), int8_t(53), int8_t(69), int8_t(89), int8_t(113)
 };
 
+#ifdef KVALUES_IQ4NL_I8
+shared int8_t kvalues_iq4nl[16];
+#else
 shared FLOAT_TYPE kvalues_iq4nl[16];
+#endif
 
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
     for (uint i = gl_LocalInvocationIndex.x; i < kvalues_iq4nl.length(); i += wgsize.x) {
+#ifdef KVALUES_IQ4NL_I8
+        kvalues_iq4nl[i] = kvalues_iq4nl_const[i];
+#else
         kvalues_iq4nl[i] = FLOAT_TYPE(kvalues_iq4nl_const[i]);
+#endif
     }
     barrier();
 }
+
+#ifdef KVALUES_IQ4NL_I8
+i32vec2 iq4nl_to_i8x8(uint32_t vui) {
+    const u8vec4 i0 = unpack8( vui       & 0x0F0F0F0F);
+    const u8vec4 i1 = unpack8((vui >> 4) & 0x0F0F0F0F);
+
+    return i32vec2(
+        pack32(i8vec4(kvalues_iq4nl[i0.x], kvalues_iq4nl[i0.y], kvalues_iq4nl[i0.z], kvalues_iq4nl[i0.w])),
+        pack32(i8vec4(kvalues_iq4nl[i1.x], kvalues_iq4nl[i1.y], kvalues_iq4nl[i1.z], kvalues_iq4nl[i1.w])));
+}
+#endif
 #endif
 
 #if defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
