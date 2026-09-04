@@ -119,6 +119,14 @@ static __device__ __forceinline__ void dequantize_q8_0(const void * vx, const in
     v.y *= d;
 }
 
+static __device__ __forceinline__ void dequantize_f8_e4m3(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const ggml_fp8_e4m3_t * x = (const ggml_fp8_e4m3_t *) vx;
+
+    v.x = ggml_cuda_f8_e4m3_to_fp32(x[ib + 0].bits);
+    v.y = ggml_cuda_f8_e4m3_to_fp32(x[ib + 1].bits);
+    GGML_UNUSED(iqs);
+}
+
 //================================== k-quants
 
 // Each call dequantizes one super-block of QK_K values into y using the
