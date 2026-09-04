@@ -48,6 +48,7 @@ struct server_context_meta {
     enum llama_vocab_type model_vocab_type;
     int32_t model_vocab_n_tokens;
     int32_t model_n_ctx_train;
+    int32_t model_n_layer;
     int32_t model_n_embd_inp;
     uint64_t model_n_params;
     uint64_t model_size;
@@ -130,6 +131,7 @@ struct server_routes {
     // they won't be called until ctx_http.is_ready is set to true
     server_http_context::handler_t get_health;
     server_http_context::handler_t get_metrics;
+    server_http_context::handler_t get_memory;
     server_http_context::handler_t get_slots;
     server_http_context::handler_t post_slots;
     server_http_context::handler_t get_props;
@@ -186,6 +188,8 @@ private:
     json           cached_models  = nullptr;
     json           cached_props   = nullptr;
     server_metrics cached_metrics;
+    // the memory series rendered from the breakdown taken right before sleeping
+    std::string    cached_memory_metrics;
     // set when a scrape during sleep already reported the throughput buckets
     bool           should_reset_buckets = false;
     // call right before sleep to update the cached responses
