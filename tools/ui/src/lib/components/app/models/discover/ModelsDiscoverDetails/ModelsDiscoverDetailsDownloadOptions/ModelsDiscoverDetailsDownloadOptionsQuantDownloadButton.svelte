@@ -1,6 +1,6 @@
 <script lang="ts">
+	import DownloadProgressBar from '../../DownloadProgressBar.svelte';
 	import { type DownloadEntryState, labelFor } from './download-options.utils';
-	import DownloadProgressBar from './DownloadProgressBar.svelte';
 	import { Check, Download, Loader2, Pause, Play, RotateCw, X } from '@lucide/svelte';
 	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';

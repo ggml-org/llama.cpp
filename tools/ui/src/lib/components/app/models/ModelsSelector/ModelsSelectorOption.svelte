@@ -1,6 +1,6 @@
 <script lang="ts">
-	import ModelsDiscoverAvatar from './discover/ModelsDiscoverAvatar.svelte';
-	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
+	import ModelsDiscoverAvatar from '../discover/ModelsDiscoverAvatar.svelte';
+	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
 	import {
 		CircleAlert,
 		Heart,

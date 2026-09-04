@@ -7,8 +7,8 @@
 		type QuantOption,
 		type SelectableFile
 	} from './download-options.utils';
-	import ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand from './ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand.svelte';
-	import ModelsDiscoverModelDetailsDownloadOptionsRow from './ModelsDiscoverModelDetailsDownloadOptionsRow.svelte';
+	import ModelsDiscoverDetailsDownloadOptionsDownloadCommand from './ModelsDiscoverDetailsDownloadOptionsDownloadCommand.svelte';
+	import ModelsDiscoverDetailsDownloadOptionsRow from './ModelsDiscoverDetailsDownloadOptionsRow.svelte';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 
@@ -120,17 +120,13 @@
 			 lifecycle state; nothing here selects anything. -->
 		<div class="flex w-full flex-col divide-y divide-border/50 px-4 pb-1 dark:divide-border/35">
 			{#each rows as row (row.bitDepth)}
-				<ModelsDiscoverModelDetailsDownloadOptionsRow bitDepth={row.bitDepth} files={row.files} />
+				<ModelsDiscoverDetailsDownloadOptionsRow bitDepth={row.bitDepth} files={row.files} />
 			{/each}
 		</div>
 
 		<!-- Terminal command preview, standalone: its picks are not bound to the chips. -->
 		<div class="border-t border-border/50 px-4 pt-3.5 pb-4 dark:border-border/35">
-			<ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand
-				{draftOptions}
-				{mainOptions}
-				{modelId}
-			/>
+			<ModelsDiscoverDetailsDownloadOptionsDownloadCommand {draftOptions} {mainOptions} {modelId} />
 		</div>
 	</section>
 {/if}

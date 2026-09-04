@@ -1,6 +1,6 @@
 <script lang="ts">
-	import ModelsDiscoverAvatar from './ModelsDiscoverAvatar.svelte';
-	import ModelsDiscoverModelDetailsMetadata from './ModelsDiscoverModelDetailsMetadata.svelte';
+	import ModelsDiscoverAvatar from '../ModelsDiscoverAvatar.svelte';
+	import ModelsDiscoverDetailsMetadata from './ModelsDiscoverDetailsMetadata.svelte';
 	import { Download, ExternalLink, Heart, Image, Lightbulb, Wrench } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ICON_CLASS_SM } from '$lib/constants';
@@ -137,5 +137,5 @@
 		{/if}
 	</div>
 
-	<ModelsDiscoverModelDetailsMetadata {details} {gguf} {licenseTag} {modelId} />
+	<ModelsDiscoverDetailsMetadata {details} {gguf} {licenseTag} {modelId} />
 </header>

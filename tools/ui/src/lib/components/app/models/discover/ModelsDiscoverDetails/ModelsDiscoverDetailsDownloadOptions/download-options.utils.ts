@@ -71,8 +71,8 @@ export function quantBitDepth(quant: string | null): number {
 
 // LLAMA-APP-REUSE: --spec-type value for each draft sidecar; aux sidecars stay empty
 export const SPEC_TYPE: Record<ModelSidecar, string> = {
-	[ModelAuxSidecar.MMPROJ]: '',
 	[ModelAuxSidecar.IMATRIX]: '',
+	[ModelAuxSidecar.MMPROJ]: '',
 	[ModelDraftSidecar.DFLASH]: 'draft-dflash',
 	[ModelDraftSidecar.DSPARK]: 'draft-dspark',
 	[ModelDraftSidecar.EAGLE3]: 'eagle3',

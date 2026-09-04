@@ -1,9 +1,11 @@
 /**
  *
- * MODELS HUB
+ * MODELS DISCOVER
  *
- * Components for the Models Hub route (`/models-hub`): a sidebar list of
- * HuggingFace GGUF models and a detail view for the selected model.
+ * Components for the Models Discover hub: a sidebar search + list of
+ * HuggingFace GGUF models and a detail view for the selected model, used as the
+ * body of the discovery dialog. The list and detail trees live in their own
+ * subfolders; this barrel re-exports them alongside the shared leaves.
  *
  */
 
@@ -17,124 +19,21 @@
 export { default as ModelsDiscover } from './ModelsDiscover.svelte';
 
 /**
- * **ModelsDiscoverList** - Sidebar model list
- *
- * Renders the hub's model list as a navigable column. Each row links to the
- * model's detail route and highlights the active one.
- */
-export { default as ModelsDiscoverList } from './ModelsDiscoverList.svelte';
-
-/**
- * **ModelsDiscoverListSearch** - Sidebar search input
- *
- * Debounced search field for the model list.
- */
-export { default as ModelsDiscoverListSearch } from './ModelsDiscoverListSearch.svelte';
-
-/**
- * **ModelsDiscoverItem** - Single sidebar row
- *
- * One model entry in the sidebar list. Links to `/models-hub/[org]/[model]`.
- */
-export { default as ModelsDiscoverListItem } from './ModelsDiscoverListItem.svelte';
-
-/**
- * **ModelsDiscoverListItemSkeleton** - Skeleton sidebar row
- *
- * Pulsing placeholder matching a ModelsDiscoverListItem row, shown while the
- * list is loading.
- */
-export { default as ModelsDiscoverListItemSkeleton } from './ModelsDiscoverListItemSkeleton.svelte';
-
-/**
  * **ModelsDiscoverAvatar** - Org avatar for a model row
  *
  * Shows the org's avatar image, falling back to a monogram on a stable hue
- * derived from the org name when the image fails to load.
+ * derived from the org name when the image fails to load. Shared by the list,
+ * the detail header and the model selector rows.
  */
 export { default as ModelsDiscoverAvatar } from './ModelsDiscoverAvatar.svelte';
-
-/**
- * **ModelsDiscoverDetails** - Model detail view
- *
- * Detail pane for the selected model. Loads its own data (details + GGUF file
- * list) from HuggingFaceService based on the `modelId` route param.
- */
-export { default as ModelsDiscoverModelDetails } from './ModelsDiscoverModelDetails.svelte';
-
-/**
- * **ModelsDiscoverDetailsHeader** - Detail view header
- *
- * Shows the model avatar (base org + quant org corner badge), name, base model
- * info, stats, metadata chips and capability badges.
- */
-export { default as ModelsDiscoverModelDetailsHeader } from './ModelsDiscoverModelDetailsHeader.svelte';
-
-/**
- * **ModelsDiscoverDetailsDownloadOptions** - GGUF download options
- *
- * Groups GGUF files by bit depth and renders one independent download
- * action chip per file, plus the standalone terminal command preview.
- */
-export { default as ModelsDiscoverModelDetailsDownloadOptions } from './ModelsDiscoverModelDetailsDownloadOptions.svelte';
-
-/**
- * **ModelsDiscoverDetailsDownloadOptionsRow** - One bit-depth group of quants
- *
- * A single bit-depth row inside ModelsDiscoverModelDetailsDownloadOptions: the
- * depth label with its memory hint and the quant chips of that depth.
- */
-export { default as ModelsDiscoverModelDetailsDownloadOptionsRow } from './ModelsDiscoverModelDetailsDownloadOptionsRow.svelte';
-
-/**
- * **ModelsDiscoverDetailsDownloadOptionsQuantDownloadButton** - One quant chip
- *
- * A single GGUF file as an independent action chip: download / retry when
- * idle, pause / resume / cancel while in flight, delete when downloaded.
- */
-export { default as ModelsDiscoverModelDetailsDownloadOptionsQuantDownloadButton } from './ModelsDiscoverModelDetailsDownloadOptionsQuantDownloadButton.svelte';
-
-/**
- * **ModelsDiscoverDetailsDownloadOptionsDownloadCommand** - Terminal command
- *
- * The `llama serve -hf ...` command box with inline quant selects and a copy
- * button; owns its picks, nothing two-way binds them to the quant chips.
- */
-export { default as ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand } from './ModelsDiscoverModelDetailsDownloadOptionsDownloadCommand.svelte';
-
-/**
- * **ModelsDiscoverDetailsSkeleton** - Detail view loading skeleton
- *
- * Static placeholder matching the detail layout: header with avatar and name,
- * metadata chips, the download options box and readme text lines.
- */
-export { default as ModelsDiscoverModelDetailsSkeleton } from './ModelsDiscoverModelDetailsSkeleton.svelte';
-
-/**
- * **ModelsDiscoverDetailsMetadataItem** - Single metadata chip
- *
- * One label | value chip of the detail view's metadata row (model size,
- * context, architecture, license).
- */
-export { default as ModelsDiscoverModelDetailsMetadataItem } from './ModelsDiscoverModelDetailsMetadataItem.svelte';
-
-/**
- * **ModelsDiscoverChatTemplateDialog** - Chat template viewer
- *
- * Shows the model's chat template in a scrollable dialog with a copy button.
- */
-export { default as ModelsDiscoverChatTemplateDialog } from './ModelsDiscoverChatTemplateDialog.svelte';
-
-/**
- * **ModelsDiscoverDetailsReadme** - Detail view README
- *
- * Renders the model card README as markdown.
- */
-export { default as ModelsDiscoverModelDetailsReadme } from './ModelsDiscoverModelDetailsReadme.svelte';
 
 /**
  * **DownloadProgressBar** - Thin download progress bar
  *
  * Normalizes bytes to a 0..100% bar; can pin to the bottom edge as an overlay.
+ * Shared by the quant chips and the model selector's download rows.
  */
 export { default as DownloadProgressBar } from './DownloadProgressBar.svelte';
+
+export * from './ModelsDiscoverList';
+export * from './ModelsDiscoverDetails';

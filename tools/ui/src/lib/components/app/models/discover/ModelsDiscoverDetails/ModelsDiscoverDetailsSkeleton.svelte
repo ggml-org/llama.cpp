@@ -2,7 +2,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 </script>
 
-<!-- Static skeleton of ModelsDiscoverModelDetails: header, metadata chips, download options and readme lines. -->
+<!-- Static skeleton of ModelsDiscoverDetails: header, metadata chips, download options and readme lines. -->
 <div class="space-y-6 p-6" data-slot="model-details-skeleton">
 	<!-- Header: avatar, name with capability icons, base model line, HF link -->
 	<div class="space-y-3">
