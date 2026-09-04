@@ -1,6 +1,6 @@
 <script lang="ts">
-	import ModelId from '../ModelId.svelte';
-	import ModelsDiscoverAvatar from './ModelsDiscoverAvatar.svelte';
+	import ModelId from '../../ModelId.svelte';
+	import ModelsDiscoverAvatar from '../ModelsDiscoverAvatar.svelte';
 	import { isAuxSidecar, type ModelSidecar } from '$lib/constants';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsHubStore } from '$lib/stores';

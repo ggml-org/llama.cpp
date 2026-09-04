@@ -1,11 +1,11 @@
 <script lang="ts" module>
 	import { mockDetails, mockSiblings } from './fixtures/models-discover';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ModelsDiscoverChatTemplateDialog from '$lib/components/app/models/discover/ModelsDiscoverChatTemplateDialog.svelte';
-	import ModelsDiscoverModelDetails from '$lib/components/app/models/discover/ModelsDiscoverModelDetails.svelte';
-	import ModelsDiscoverModelDetailsDownloadOptions from '$lib/components/app/models/discover/ModelsDiscoverModelDetailsDownloadOptions.svelte';
-	import ModelsDiscoverModelDetailsHeader from '$lib/components/app/models/discover/ModelsDiscoverModelDetailsHeader.svelte';
-	import ModelsDiscoverModelDetailsReadme from '$lib/components/app/models/discover/ModelsDiscoverModelDetailsReadme.svelte';
+	import ModelsDiscoverChatTemplateDialog from '$lib/components/app/models/discover/ModelsDiscoverDetails/ModelsDiscoverChatTemplateDialog.svelte';
+	import ModelsDiscoverDetails from '$lib/components/app/models/discover/ModelsDiscoverDetails/ModelsDiscoverDetails.svelte';
+	import ModelsDiscoverDetailsDownloadOptions from '$lib/components/app/models/discover/ModelsDiscoverDetails/ModelsDiscoverDetailsDownloadOptions/ModelsDiscoverDetailsDownloadOptions.svelte';
+	import ModelsDiscoverDetailsHeader from '$lib/components/app/models/discover/ModelsDiscoverDetails/ModelsDiscoverDetailsHeader.svelte';
+	import ModelsDiscoverDetailsReadme from '$lib/components/app/models/discover/ModelsDiscoverDetails/ModelsDiscoverDetailsReadme.svelte';
 	import type { HfModelSibling } from '$lib/types';
 
 	const { Story } = defineMeta({
@@ -31,7 +31,7 @@
 
 <Story name="Header">
 	<div class="w-160 p-4">
-		<ModelsDiscoverModelDetailsHeader
+		<ModelsDiscoverDetailsHeader
 			baseModels={mockDetails.cardData?.base_model ? [String(mockDetails.cardData.base_model)] : []}
 			details={mockDetails}
 			hasReasoning
@@ -47,7 +47,7 @@
 
 <Story name="Download options">
 	<div class="w-200 p-4">
-		<ModelsDiscoverModelDetailsDownloadOptions
+		<ModelsDiscoverDetailsDownloadOptions
 			bitDepthRows={[
 				{ bitDepth: 4, files: files.filter((f) => f.path.includes('Q4_K_M')) },
 				{ bitDepth: 8, files: files.filter((f) => f.path.includes('Q8_0')) },
@@ -60,7 +60,7 @@
 
 <Story name="Download options (unknown device)">
 	<div class="w-200 p-4">
-		<ModelsDiscoverModelDetailsDownloadOptions
+		<ModelsDiscoverDetailsDownloadOptions
 			bitDepthRows={[
 				{ bitDepth: 4, files: files.filter((f) => f.path.includes('Q4_K_M')) },
 				{ bitDepth: 8, files: files.filter((f) => f.path.includes('Q8_0')) }
@@ -74,7 +74,7 @@
 		paused, downloaded and the failed retry badge. -->
 <Story name="Download options (download states)">
 	<div class="w-200 p-4">
-		<ModelsDiscoverModelDetailsDownloadOptions
+		<ModelsDiscoverDetailsDownloadOptions
 			bitDepthRows={[
 				{ bitDepth: 4, files: files.filter((f) => f.path.includes('Q4_K_M')) },
 				{ bitDepth: 8, files: files.filter((f) => f.path.includes('Q8_0')) },
@@ -99,7 +99,7 @@
 
 <Story name="Readme">
 	<div class="w-160 p-4">
-		<ModelsDiscoverModelDetailsReadme {readme} />
+		<ModelsDiscoverDetailsReadme {readme} />
 	</div>
 </Story>
 
@@ -111,7 +111,7 @@
 
 <Story name="Details (loading)">
 	<div class="h-96 w-200 border">
-		<ModelsDiscoverModelDetails
+		<ModelsDiscoverDetails
 			details={null}
 			files={[]}
 			loading
@@ -123,7 +123,7 @@
 
 <Story name="Details (error)">
 	<div class="h-96 w-200 border">
-		<ModelsDiscoverModelDetails
+		<ModelsDiscoverDetails
 			details={null}
 			error="Model not found"
 			files={[]}
@@ -135,7 +135,7 @@
 
 <Story name="Details (loaded)">
 	<div class="h-96 w-200 overflow-y-auto border">
-		<ModelsDiscoverModelDetails
+		<ModelsDiscoverDetails
 			details={mockDetails}
 			{files}
 			modelId={mockDetails.id ?? 'ggml-org/gemma-4-12b-it-GGUF'}

@@ -2,8 +2,8 @@
 	import { mockGemma, mockListModels, mockQwen } from './fixtures/models-discover';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ModelsDiscoverAvatar from '$lib/components/app/models/discover/ModelsDiscoverAvatar.svelte';
-	import ModelsDiscoverList from '$lib/components/app/models/discover/ModelsDiscoverList.svelte';
-	import ModelsDiscoverListItem from '$lib/components/app/models/discover/ModelsDiscoverListItem.svelte';
+	import ModelsDiscoverList from '$lib/components/app/models/discover/ModelsDiscoverList/ModelsDiscoverList.svelte';
+	import ModelsDiscoverListItem from '$lib/components/app/models/discover/ModelsDiscoverList/ModelsDiscoverListItem.svelte';
 
 	const { Story } = defineMeta({
 		tags: ['autodocs'],

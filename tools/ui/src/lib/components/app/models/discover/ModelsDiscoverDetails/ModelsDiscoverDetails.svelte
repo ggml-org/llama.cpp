@@ -1,8 +1,8 @@
 <script lang="ts">
-	import ModelsDiscoverModelDetailsDownloadOptions from './ModelsDiscoverModelDetailsDownloadOptions.svelte';
-	import ModelsDiscoverModelDetailsHeader from './ModelsDiscoverModelDetailsHeader.svelte';
-	import ModelsDiscoverModelDetailsReadme from './ModelsDiscoverModelDetailsReadme.svelte';
-	import ModelsDiscoverModelDetailsSkeleton from './ModelsDiscoverModelDetailsSkeleton.svelte';
+	import { ModelsDiscoverDetailsDownloadOptions } from './ModelsDiscoverDetailsDownloadOptions';
+	import ModelsDiscoverDetailsHeader from './ModelsDiscoverDetailsHeader.svelte';
+	import ModelsDiscoverDetailsReadme from './ModelsDiscoverDetailsReadme.svelte';
+	import ModelsDiscoverDetailsSkeleton from './ModelsDiscoverDetailsSkeleton.svelte';
 	import { ModelAuxSidecar } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types/huggingface';
@@ -37,7 +37,9 @@
 	// Capabilities derived from HF metadata. Vision comes from an mmproj sidecar
 	// or a multimodal pipeline tag; tool use / reasoning from the chat template.
 	let hasMmproj = $derived(
-		files.some((f) => HuggingFaceService.extractQuantMeta(f.path)?.sidecar === ModelAuxSidecar.MMPROJ)
+		files.some(
+			(f) => HuggingFaceService.extractQuantMeta(f.path)?.sidecar === ModelAuxSidecar.MMPROJ
+		)
 	);
 	let hasVision = $derived(hasMmproj || details?.pipeline_tag === 'image-text-to-text');
 	let hasTools = $derived(detectToolUseSupport(gguf?.chat_template ?? ''));
@@ -72,14 +74,14 @@
 </script>
 
 {#if loading}
-	<ModelsDiscoverModelDetailsSkeleton />
+	<ModelsDiscoverDetailsSkeleton />
 {:else if error}
 	<div class="flex h-full items-center justify-center py-20">
 		<p class="text-sm text-destructive">{error}</p>
 	</div>
 {:else if details}
 	<div class="space-y-6 p-6">
-		<ModelsDiscoverModelDetailsHeader
+		<ModelsDiscoverDetailsHeader
 			{baseModels}
 			{details}
 			{gguf}
@@ -90,8 +92,8 @@
 			{modelId}
 		/>
 
-		<ModelsDiscoverModelDetailsDownloadOptions {bitDepthRows} {modelId} />
+		<ModelsDiscoverDetailsDownloadOptions {bitDepthRows} {modelId} />
 
-		<ModelsDiscoverModelDetailsReadme {readme} />
+		<ModelsDiscoverDetailsReadme {readme} />
 	</div>
 {/if}

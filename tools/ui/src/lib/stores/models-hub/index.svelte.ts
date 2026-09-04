@@ -8,7 +8,7 @@
  * with matching models across all of HuggingFace. Both paths fetch the same
  * fields (chat template, context length, repo files), so a row renders the same
  * badges and sizes whether it came from the catalog or from a query.
- * Detail data is loaded by ModelsDiscoverModelDetails, not here.
+ * Detail data is loaded by ModelsDiscoverDetails, not here.
  */
 
 import { isAuxSidecar } from '$lib/constants';

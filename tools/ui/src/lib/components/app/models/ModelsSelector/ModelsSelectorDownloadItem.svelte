@@ -1,6 +1,6 @@
 <script lang="ts">
-	import DownloadProgressBar from './discover/DownloadProgressBar.svelte';
-	import ModelsDiscoverAvatar from './discover/ModelsDiscoverAvatar.svelte';
+	import DownloadProgressBar from '../discover/DownloadProgressBar.svelte';
+	import ModelsDiscoverAvatar from '../discover/ModelsDiscoverAvatar.svelte';
 	import { Loader2, Pause, Play, X } from '@lucide/svelte';
 	import { ModelId } from '$lib/components/app';
 	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';

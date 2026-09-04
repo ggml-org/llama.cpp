@@ -1,8 +1,8 @@
 <script lang="ts">
 	import {
+		ModelsDiscoverDetails,
 		ModelsDiscoverList,
-		ModelsDiscoverListSearch,
-		ModelsDiscoverModelDetails
+		ModelsDiscoverListSearch
 	} from '$lib/components/app/models/discover';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsHubStore } from '$lib/stores';
@@ -119,7 +119,7 @@
 
 <main class="overflow-y-auto">
 	{#if selectedId}
-		<ModelsDiscoverModelDetails
+		<ModelsDiscoverDetails
 			{details}
 			error={detailError}
 			{files}

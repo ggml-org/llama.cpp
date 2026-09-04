@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelsDiscoverChatTemplateDialog from './ModelsDiscoverChatTemplateDialog.svelte';
-	import ModelsDiscoverModelDetailsMetadataItem from './ModelsDiscoverModelDetailsMetadataItem.svelte';
+	import ModelsDiscoverDetailsMetadataItem from './ModelsDiscoverDetailsMetadataItem.svelte';
 	import { MessageSquareCode } from '@lucide/svelte';
 	import { modelsHubStore } from '$lib/stores';
 	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
@@ -31,21 +31,21 @@
 <!-- Metadata chips: label | value pairs, matching the HF model page style -->
 <div class="flex flex-wrap items-center gap-1.5">
 	{#if gguf?.total}
-		<ModelsDiscoverModelDetailsMetadataItem
+		<ModelsDiscoverDetailsMetadataItem
 			label="Model size"
 			value="{formatParameters(gguf.total)} params"
 		/>
 	{/if}
 
 	{#if gguf?.context_length}
-		<ModelsDiscoverModelDetailsMetadataItem
+		<ModelsDiscoverDetailsMetadataItem
 			label="Context"
 			value={gguf.context_length.toLocaleString()}
 		/>
 	{/if}
 
 	{#if gguf?.architecture}
-		<ModelsDiscoverModelDetailsMetadataItem label="Architecture" value={gguf.architecture} />
+		<ModelsDiscoverDetailsMetadataItem label="Architecture" value={gguf.architecture} />
 	{/if}
 
 	{#if gguf?.chat_template}
@@ -60,7 +60,7 @@
 	{/if}
 
 	{#if licenseTag}
-		<ModelsDiscoverModelDetailsMetadataItem label="License" value={licenseTag} />
+		<ModelsDiscoverDetailsMetadataItem label="License" value={licenseTag} />
 	{/if}
 
 	{#if details.gated === true}
