@@ -39,6 +39,8 @@ import {
 	HF_SAFETENSORS_TAG,
 	HF_SHARD_PAD_WIDTH,
 	HF_SHARD_REGEX,
+	HF_SHARED_DRAFT_TOKEN,
+	HF_SIZE_STRING_REGEX,
 	HF_SIZE_SUFFIX_BYTES,
 	HF_TASK_TAGS,
 	HF_TREE_PATH,
@@ -191,7 +193,7 @@ export class HuggingFaceService {
 
 		// HF repos may nest sidecars in a folder (e.g. `MTP/mtp-Model-Q4_0.gguf`);
 		// parse the file name only, the folder adds no quant information.
-		let source = (filename.split('/').pop() ?? filename).replace(
+		let source = (filename.split(PATH_SEPARATOR).pop() ?? filename).replace(
 			MODEL_ID.WEIGHT_EXTENSION_REGEX,
 			''
 		);
@@ -233,7 +235,7 @@ export class HuggingFaceService {
 		const quantIdx = segments.findIndex((seg) => MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(seg));
 		// Unsloth ships draft heads in two layouts: `shared-` files borrow the
 		// embedding/output weights from the target model, others are self-contained.
-		const shared = segments.some((seg) => seg.toLowerCase() === 'shared');
+		const shared = segments.some((seg) => seg.toLowerCase() === HF_SHARED_DRAFT_TOKEN);
 
 		let quant = quantIdx >= 0 ? segments[quantIdx].toUpperCase() : null;
 
@@ -623,9 +625,8 @@ export class HuggingFaceService {
 	 * null when it carries no number or no known suffix, so callers can fall
 	 * back to another source instead of showing a wrong size.
 	 */
-	// LLAMA-APP-REUSE: catalog size string parsing
 	static parseSizeBytes(size: string): number | null {
-		const match = /^\s*([\d.]+)\s*([a-z]+)\s*$/i.exec(size);
+		const match = HF_SIZE_STRING_REGEX.exec(size);
 
 		if (!match) return null;
 

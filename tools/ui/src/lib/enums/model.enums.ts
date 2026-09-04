@@ -46,3 +46,13 @@ export enum SelectableFileKind {
 	DRAFT = 'draft',
 	MAIN = 'main'
 }
+
+/**
+ * Why an in-flight download is being stopped, so the terminal `download_failed`
+ * feed event can be attributed: a user pause (resumable) or a user cancel
+ * (discard). Distinguishes these from a genuine download failure.
+ */
+export enum DownloadStopRequest {
+	CANCEL = 'cancel',
+	PAUSE = 'pause'
+}

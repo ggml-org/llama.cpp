@@ -7,8 +7,8 @@
  * modelsStore; the host owns the router model rows the feed updates.
  */
 
-import { HF_UD_QUANT_PREFIX_REGEX } from '$lib/constants';
-import { ServerModelsSseEventType, ServerModelStatus } from '$lib/enums';
+import { CLI_FLAGS, HF_UD_QUANT_PREFIX_REGEX, MODEL_ID, PATH_SEPARATOR } from '$lib/constants';
+import { DownloadStopRequest, ServerModelsSseEventType, ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
 import type { ModelPropsManager } from '$lib/stores/models/props.svelte';
@@ -41,7 +41,7 @@ export interface ModelStatusHost {
  * must compare equal.
  */
 function downloadIdKey(repoWithTag: string): string {
-	const idx = repoWithTag.indexOf(':');
+	const idx = repoWithTag.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
 	const repo = idx === -1 ? repoWithTag : repoWithTag.slice(0, idx);
 	const tag = idx === -1 ? '' : repoWithTag.slice(idx + 1);
 
@@ -64,13 +64,17 @@ export class ModelStatusManager {
 			if (!args) continue;
 
 			for (let i = 0; i < args.length - 1; i++) {
-				if (args[i] !== '--model-draft' && args[i] !== '-md' && args[i] !== '--mmproj') {
+				if (
+					args[i] !== CLI_FLAGS.MODEL_DRAFT &&
+					args[i] !== CLI_FLAGS.MODEL_DRAFT_SHORT &&
+					args[i] !== CLI_FLAGS.MMPROJ
+				) {
 					continue;
 				}
 
 				const parsed = HuggingFaceService.parseCachePath(args[i + 1]);
 
-				if (parsed) result.add(`${parsed.repo}/${parsed.file}`);
+				if (parsed) result.add(`${parsed.repo}${PATH_SEPARATOR}${parsed.file}`);
 			}
 		}
 
@@ -91,7 +95,7 @@ export class ModelStatusManager {
 		{ target: ServerModelStatus; resolve: () => void; reject: (e: Error) => void }
 	>();
 	/** Tags the user asked to stop (pause or cancel); the download_failed the stop triggers is intentional, not a failure. */
-	private stopRequests = new SvelteMap<string, 'pause' | 'cancel'>();
+	private stopRequests = new SvelteMap<string, DownloadStopRequest>();
 
 	/**
 	 * Cancel an in-flight download or remove a previously downloaded/failed model
@@ -110,7 +114,7 @@ export class ModelStatusManager {
 		// in-flight: the kill triggers download_failed over the feed; mark it as a
 		// user cancel so it settles silently instead of toasting a failure
 		if (this.downloadProgress.has(repoWithTag)) {
-			this.stopRequests.set(repoWithTag, 'cancel');
+			this.stopRequests.set(repoWithTag, DownloadStopRequest.CANCEL);
 		}
 
 		// a downloaded model registers under the name the router derived from the
@@ -342,7 +346,7 @@ export class ModelStatusManager {
 
 		this.subscribe();
 
-		this.stopRequests.set(repoWithTag, 'pause');
+		this.stopRequests.set(repoWithTag, DownloadStopRequest.PAUSE);
 
 		try {
 			await ModelsService.unload(repoWithTag);
@@ -416,7 +420,7 @@ export class ModelStatusManager {
 	 * delete-and-retry path.
 	 */
 	private applyDownloadFinished(event: ApiModelsSseEvent): void {
-		let request: 'pause' | 'cancel' | undefined;
+		let request: DownloadStopRequest | undefined;
 
 		if (event.event === ServerModelsSseEventType.DOWNLOAD_FAILED) {
 			request = this.stopRequests.get(event.model);
@@ -427,7 +431,7 @@ export class ModelStatusManager {
 
 		this.downloadProgress.delete(event.model);
 
-		if (request === 'cancel') {
+		if (request === DownloadStopRequest.CANCEL) {
 			// user cancel: settle silently, the feed's model_remove cleans up the entry
 			this.failedDownloads.delete(event.model);
 			this.pausedDownloads.delete(event.model);
@@ -435,7 +439,7 @@ export class ModelStatusManager {
 			return;
 		}
 
-		if (request === 'pause') {
+		if (request === DownloadStopRequest.PAUSE) {
 			this.pausedDownloads.set(event.model, progress);
 			this.failedDownloads.delete(event.model);
 

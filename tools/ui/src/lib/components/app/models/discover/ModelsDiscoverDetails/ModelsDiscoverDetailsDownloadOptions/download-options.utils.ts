@@ -1,4 +1,10 @@
-import { DRAFT_FILE_LABEL, isAuxSidecar, isDraftSidecar, OTHER_BIT_DEPTH } from '$lib/constants';
+import {
+	DRAFT_FILE_LABEL,
+	isAuxSidecar,
+	isDraftSidecar,
+	OTHER_BIT_DEPTH,
+	PATH_SEPARATOR
+} from '$lib/constants';
 import { SelectableFileKind } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services';
 
@@ -9,8 +15,6 @@ const UD_QUANT_PREFIX_REGEX = /^UD-(?=.)/i;
 const QUANT_BIT_DEPTH_REGEX = /(?:I?Q|F)(\d+)/i;
 /** Trailing weight extension, stripped from a quantless file's label. */
 const WEIGHT_EXTENSION_LABEL_REGEX = /\.gguf$/i;
-/** Path separator between path segments. */
-const PATH_SEPARATOR = '/';
 
 /** Kind of a file path: the main weights, a draft sidecar, or an aux sidecar (mmproj). */
 export function classify(path: string): SelectableFileKind {

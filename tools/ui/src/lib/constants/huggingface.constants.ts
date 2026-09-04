@@ -79,6 +79,11 @@ export const HF_SHARD_PAD_WIDTH = 5;
 export const HF_UD_QUANT_PREFIX = 'UD';
 export const HF_UD_QUANT_PREFIX_REGEX = /^UD-/i;
 /**
+ * Segment marking an Unsloth `shared-` draft head that borrows the target
+ * model's embedding/output weights, e.g. `...-shared-Q4_K_M.gguf`.
+ */
+export const HF_SHARED_DRAFT_TOKEN = 'shared';
+/**
  * Extracts the leading precision digits from a quant token, e.g.
  * `Q4_K_XL` -> 4, `IQ2_XXS` -> 2, `TQ1_0` -> 1, `BF16` -> 16.
  */
@@ -135,6 +140,13 @@ export const KILOBYTE = 1_000;
 export const MEGABYTE = 1_000_000;
 export const GIGABYTE = 1_000_000_000;
 export const TERABYTE = 1_000_000_000_000;
+
+/**
+ * Matches a human size string (`177GB`, `1.2 TB`, `500MB`), capturing the
+ * numeric value and its unit suffix. Used by `parseSizeBytes`.
+ */
+// LLAMA-APP-REUSE: catalog size string parsing
+export const HF_SIZE_STRING_REGEX = /^\s*([\d.]+)\s*([a-z]+)\s*$/i;
 
 /**
  * Byte multiplier for a size suffix (`k` kilobyte, `m` megabyte, ...) as used by
