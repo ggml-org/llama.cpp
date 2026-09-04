@@ -214,6 +214,7 @@ class Keys:
         VALUE_LENGTH_MLA_SWA         = "{arch}.attention.value_length_mla_swa"
         KV_LORA_RANK_SWA             = "{arch}.attention.kv_lora_rank_swa"
         SHARED_KV_LAYERS             = "{arch}.attention.shared_kv_layers"
+        RECURRENT_LAYERS             = "{arch}.attention.recurrent_layers"
         SLIDING_WINDOW_PATTERN       = "{arch}.attention.sliding_window_pattern"
         TEMPERATURE_SCALE            = "{arch}.attention.temperature_scale"
         ROPE_PATTERN                 = "{arch}.attention.rope_pattern"
@@ -513,6 +514,7 @@ class MODEL_ARCH(IntEnum):
     QWEN35           = auto()
     QWEN35MOE        = auto()
     QWEN4EXP         = auto()
+    GIGACHAT35       = auto()
     PHI2             = auto()
     PHI3             = auto()
     PHIMOE           = auto()
@@ -658,6 +660,8 @@ class MODEL_TENSOR(IntEnum):
     HC_HEAD_NORM         = auto() # qwen4exp
     HC_HEAD_DOWN         = auto() # qwen4exp
     HC_HEAD_UP           = auto() # qwen4exp
+    OUTPUT_NORM_GATE_UP  = auto()
+    OUTPUT_NORM_GATE_DOWN = auto()
     ROPE_FREQS           = auto()
     ROPE_FACTORS_LONG    = auto()
     ROPE_FACTORS_SHORT   = auto()
@@ -667,18 +671,26 @@ class MODEL_TENSOR(IntEnum):
     ATTN_QKV             = auto()
     ATTN_OUT             = auto()
     ATTN_NORM            = auto()
+    ATTN_NORM_GATE_UP    = auto()
+    ATTN_NORM_GATE_DOWN  = auto()
     ATTN_NORM_2          = auto()
     ATTN_OUT_NORM        = auto()
     ATTN_POST_NORM       = auto()
+    ATTN_POST_NORM_GATE_UP = auto()
+    ATTN_POST_NORM_GATE_DOWN = auto()
     ATTN_ROT_EMBD        = auto()
     ATTN_SINKS           = auto()
     ATTN_GATE            = auto()
     FFN_GATE_INP         = auto()
     FFN_GATE_INP_SHEXP   = auto()
     FFN_NORM             = auto()
+    FFN_NORM_GATE_UP     = auto()
+    FFN_NORM_GATE_DOWN   = auto()
     FFN_PRE_NORM         = auto() # alias of FFN_NORM
     FFN_PRE_NORM_2       = auto() # gemma4
     FFN_POST_NORM        = auto()
+    FFN_POST_NORM_GATE_UP = auto()
+    FFN_POST_NORM_GATE_DOWN = auto()
     FFN_POST_NORM_1      = auto() # gemma4
     FFN_POST_NORM_2      = auto() # gemma4
     FFN_GATE             = auto()
@@ -792,6 +804,8 @@ class MODEL_TENSOR(IntEnum):
     ATTN_K_B             = auto()
     ATTN_V_B             = auto()
     ATTN_Q_A_NORM        = auto()
+    ATTN_Q_A_NORM_GATE_UP = auto()
+    ATTN_Q_A_NORM_GATE_DOWN = auto()
     ATTN_KV_A_NORM       = auto()
     ATTN_KV              = auto()
     ATTN_KV_NORM         = auto()
@@ -821,6 +835,8 @@ class MODEL_TENSOR(IntEnum):
     ATTN_COMPRESSOR_WGATE = auto()
     ATTN_COMPRESSOR_APE  = auto()
     ATTN_COMPRESSOR_NORM = auto()
+    ATTN_KV_A_NORM_GATE_UP = auto()
+    ATTN_KV_A_NORM_GATE_DOWN = auto()
     FFN_SUB_NORM         = auto()
     ATTN_SUB_NORM        = auto()
     DEC_ATTN_NORM        = auto()
@@ -1176,9 +1192,15 @@ class MODEL_TENSOR(IntEnum):
     NEXTN_EH_PROJ          = auto()
     NEXTN_EMBED_TOKENS     = auto()
     NEXTN_ENORM            = auto()
+    NEXTN_ENORM_GATE_UP    = auto()
+    NEXTN_ENORM_GATE_DOWN  = auto()
     NEXTN_HNORM            = auto()
+    NEXTN_HNORM_GATE_UP    = auto()
+    NEXTN_HNORM_GATE_DOWN  = auto()
     NEXTN_SHARED_HEAD_HEAD = auto()
     NEXTN_SHARED_HEAD_NORM = auto()
+    NEXTN_SHARED_HEAD_NORM_GATE_UP   = auto()
+    NEXTN_SHARED_HEAD_NORM_GATE_DOWN = auto()
     # eagle3
     FC                     = auto()  # feature fusion layer
     D2T                    = auto()  # draft to target vocabulary mapping
@@ -1265,6 +1287,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN35:           "qwen35",
     MODEL_ARCH.QWEN35MOE:        "qwen35moe",
     MODEL_ARCH.QWEN4EXP:         "qwen4exp",
+    MODEL_ARCH.GIGACHAT35:       "gigachat35",
     MODEL_ARCH.PHI2:             "phi2",
     MODEL_ARCH.PHI3:             "phi3",
     MODEL_ARCH.PHIMOE:           "phimoe",
@@ -1400,6 +1423,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.MASKED_EMBD_ORDERING:      "masked_embd_ordering",
     MODEL_TENSOR.POS_EMBD:                  "position_embd",
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
+    MODEL_TENSOR.OUTPUT_NORM_GATE_UP:       "output_norm_gate_up",
+    MODEL_TENSOR.OUTPUT_NORM_GATE_DOWN:     "output_norm_gate_down",
     MODEL_TENSOR.OUTPUT:                    "output",
     MODEL_TENSOR.DENSE_2_OUT:               "dense_2", # embeddinggemma 2_Dense
     MODEL_TENSOR.DENSE_3_OUT:               "dense_3", # embeddinggemma 2_Dense
@@ -1413,6 +1438,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ROPE_FACTORS_LONG:         "rope_factors_long",
     MODEL_TENSOR.ROPE_FACTORS_SHORT:        "rope_factors_short",
     MODEL_TENSOR.ATTN_NORM:                 "blk.{bid}.attn_norm",
+    MODEL_TENSOR.ATTN_NORM_GATE_UP:         "blk.{bid}.attn_norm_gate_up",
+    MODEL_TENSOR.ATTN_NORM_GATE_DOWN:       "blk.{bid}.attn_norm_gate_down",
     MODEL_TENSOR.ATTN_NORM_2:               "blk.{bid}.attn_norm_2",
     MODEL_TENSOR.ATTN_QKV:                  "blk.{bid}.attn_qkv",
     MODEL_TENSOR.ATTN_Q:                    "blk.{bid}.attn_q",
@@ -1426,11 +1453,17 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_K_NORM:               "blk.{bid}.attn_k_norm",
     MODEL_TENSOR.ATTN_OUT_NORM:             "blk.{bid}.attn_output_norm",
     MODEL_TENSOR.ATTN_POST_NORM:            "blk.{bid}.post_attention_norm",
+    MODEL_TENSOR.ATTN_POST_NORM_GATE_UP:    "blk.{bid}.post_attention_norm_gate_up",
+    MODEL_TENSOR.ATTN_POST_NORM_GATE_DOWN:  "blk.{bid}.post_attention_norm_gate_down",
     MODEL_TENSOR.FFN_GATE_INP:              "blk.{bid}.ffn_gate_inp",
     MODEL_TENSOR.FFN_GATE_INP_SHEXP:        "blk.{bid}.ffn_gate_inp_shexp",
     MODEL_TENSOR.FFN_NORM:                  "blk.{bid}.ffn_norm",
+    MODEL_TENSOR.FFN_NORM_GATE_UP:          "blk.{bid}.ffn_norm_gate_up",
+    MODEL_TENSOR.FFN_NORM_GATE_DOWN:        "blk.{bid}.ffn_norm_gate_down",
     MODEL_TENSOR.FFN_PRE_NORM:              "blk.{bid}.ffn_norm",
     MODEL_TENSOR.FFN_POST_NORM:             "blk.{bid}.post_ffw_norm",
+    MODEL_TENSOR.FFN_POST_NORM_GATE_UP:     "blk.{bid}.post_ffw_norm_gate_up",
+    MODEL_TENSOR.FFN_POST_NORM_GATE_DOWN:   "blk.{bid}.post_ffw_norm_gate_down",
     MODEL_TENSOR.FFN_PRE_NORM_2:            "blk.{bid}.pre_ffw_norm_2",  # gemma4
     MODEL_TENSOR.FFN_POST_NORM_1:           "blk.{bid}.post_ffw_norm_1", # gemma4
     MODEL_TENSOR.FFN_POST_NORM_2:           "blk.{bid}.post_ffw_norm_2", # gemma4
@@ -1543,6 +1576,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_K_B:                  "blk.{bid}.attn_k_b",
     MODEL_TENSOR.ATTN_V_B:                  "blk.{bid}.attn_v_b",
     MODEL_TENSOR.ATTN_Q_A_NORM:             "blk.{bid}.attn_q_a_norm",
+    MODEL_TENSOR.ATTN_Q_A_NORM_GATE_UP:     "blk.{bid}.attn_q_a_norm_gate_up",
+    MODEL_TENSOR.ATTN_Q_A_NORM_GATE_DOWN:   "blk.{bid}.attn_q_a_norm_gate_down",
     MODEL_TENSOR.ATTN_KV_A_NORM:            "blk.{bid}.attn_kv_a_norm",
     MODEL_TENSOR.ATTN_KV:                   "blk.{bid}.attn_kv",
     MODEL_TENSOR.ATTN_KV_NORM:              "blk.{bid}.attn_kv_a_norm",
@@ -1572,6 +1607,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_COMPRESSOR_WGATE:     "blk.{bid}.attn_compressor_gate",
     MODEL_TENSOR.ATTN_COMPRESSOR_APE:       "blk.{bid}.attn_compressor_ape",
     MODEL_TENSOR.ATTN_COMPRESSOR_NORM:      "blk.{bid}.attn_compressor_norm",
+    MODEL_TENSOR.ATTN_KV_A_NORM_GATE_UP:    "blk.{bid}.attn_kv_a_norm_gate_up",
+    MODEL_TENSOR.ATTN_KV_A_NORM_GATE_DOWN:  "blk.{bid}.attn_kv_a_norm_gate_down",
     MODEL_TENSOR.ATTN_SUB_NORM:             "blk.{bid}.attn_sub_norm",
     MODEL_TENSOR.FFN_SUB_NORM:              "blk.{bid}.ffn_sub_norm",
     MODEL_TENSOR.DEC_ATTN_NORM:             "dec.blk.{bid}.attn_norm",
@@ -1957,9 +1994,15 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_EH_PROJ:             "blk.{bid}.nextn.eh_proj",
     MODEL_TENSOR.NEXTN_EMBED_TOKENS:        "blk.{bid}.nextn.embed_tokens",
     MODEL_TENSOR.NEXTN_ENORM:               "blk.{bid}.nextn.enorm",
+    MODEL_TENSOR.NEXTN_ENORM_GATE_UP:       "blk.{bid}.nextn.enorm_gate_up",
+    MODEL_TENSOR.NEXTN_ENORM_GATE_DOWN:     "blk.{bid}.nextn.enorm_gate_down",
     MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.nextn.hnorm",
+    MODEL_TENSOR.NEXTN_HNORM_GATE_UP:       "blk.{bid}.nextn.hnorm_gate_up",
+    MODEL_TENSOR.NEXTN_HNORM_GATE_DOWN:     "blk.{bid}.nextn.hnorm_gate_down",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
+    MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_UP:   "blk.{bid}.nextn.shared_head_norm_gate_up",
+    MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_DOWN: "blk.{bid}.nextn.shared_head_norm_gate_down",
     MODEL_TENSOR.FC:                        "fc",
     MODEL_TENSOR.DSPARK_MARKOV_W1:          "markov_w1",
     MODEL_TENSOR.DSPARK_MARKOV_W2:          "markov_w2",
@@ -2925,6 +2968,69 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.PLE_NORM_QUERY,
         MODEL_TENSOR.PLE_NORM_CONV,
         MODEL_TENSOR.PLE_CONV1D,
+    ],
+    MODEL_ARCH.GIGACHAT35: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT_NORM_GATE_UP,
+        MODEL_TENSOR.OUTPUT_NORM_GATE_DOWN,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_NORM_GATE_UP,
+        MODEL_TENSOR.ATTN_NORM_GATE_DOWN,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM_GATE_UP,
+        MODEL_TENSOR.ATTN_POST_NORM_GATE_DOWN,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_NORM_GATE_UP,
+        MODEL_TENSOR.FFN_NORM_GATE_DOWN,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.FFN_POST_NORM_GATE_UP,
+        MODEL_TENSOR.FFN_POST_NORM_GATE_DOWN,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_Q_A_NORM_GATE_UP,
+        MODEL_TENSOR.ATTN_Q_A_NORM_GATE_DOWN,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.ATTN_KV_A_NORM_GATE_UP,
+        MODEL_TENSOR.ATTN_KV_A_NORM_GATE_DOWN,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_ENORM_GATE_UP,
+        MODEL_TENSOR.NEXTN_ENORM_GATE_DOWN,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_HNORM_GATE_UP,
+        MODEL_TENSOR.NEXTN_HNORM_GATE_DOWN,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_UP,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_DOWN,
     ],
     MODEL_ARCH.PLAMO: [
         MODEL_TENSOR.TOKEN_EMBD,
