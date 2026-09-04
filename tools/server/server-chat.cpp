@@ -208,9 +208,9 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         ) {
                             throw std::invalid_argument("Output of tool call should be 'Input text' or 'Input image'");
                         }
-                        if(chatcmpl_output.at("type") == "input_text") {
+                        if (chatcmpl_output.at("type") == "input_text") {
                             chatcmpl_output["type"] = "text";
-                        } else if(chatcmpl_output.at("type") == "input_image") {
+                        } else if (chatcmpl_output.at("type") == "input_image") {
                             if (!chatcmpl_output.contains("image_url")) {
                                 throw std::invalid_argument("'image_url' is required");
                             }
