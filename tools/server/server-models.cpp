@@ -24,19 +24,12 @@
 #include <atomic>
 #include <chrono>
 #include <queue>
-#include <filesystem>
 #include <random>
 #include <sstream>
 #include <cstring>
 
 #ifndef _WIN32
 extern char **environ;
-#endif
-
-#if defined(__APPLE__) && defined(__MACH__)
-// macOS: use _NSGetExecutablePath to get the executable path
-#include <mach-o/dyld.h>
-#include <limits.h>
 #endif
 
 #define DEFAULT_STOP_TIMEOUT 10 // seconds
@@ -256,47 +249,6 @@ struct server_lru_sched {
 // delete). distinct from params.timeout_read/write which only applies to the generation proxy
 static constexpr int STREAM_LOOKUP_TIMEOUT_MS = 250;
 
-static std::filesystem::path get_server_exec_path() {
-#if defined(_WIN32)
-    wchar_t buf[32768] = { 0 };  // Large buffer to handle long paths
-    DWORD len = GetModuleFileNameW(nullptr, buf, _countof(buf));
-    if (len == 0 || len >= _countof(buf)) {
-        throw std::runtime_error("GetModuleFileNameW failed or path too long");
-    }
-    return std::filesystem::path(buf);
-#elif defined(__APPLE__) && defined(__MACH__)
-    char small_path[PATH_MAX];
-    uint32_t size = sizeof(small_path);
-
-    if (_NSGetExecutablePath(small_path, &size) == 0) {
-        // resolve any symlinks to get absolute path
-        try {
-            return std::filesystem::canonical(std::filesystem::path(small_path));
-        } catch (...) {
-            return std::filesystem::path(small_path);
-        }
-    } else {
-        // buffer was too small, allocate required size and call again
-        std::vector<char> buf(size);
-        if (_NSGetExecutablePath(buf.data(), &size) == 0) {
-            try {
-                return std::filesystem::canonical(std::filesystem::path(buf.data()));
-            } catch (...) {
-                return std::filesystem::path(buf.data());
-            }
-        }
-        throw std::runtime_error("_NSGetExecutablePath failed after buffer resize");
-    }
-#else
-    char path[FILENAME_MAX];
-    ssize_t count = readlink("/proc/self/exe", path, FILENAME_MAX);
-    if (count <= 0) {
-        throw std::runtime_error("failed to resolve /proc/self/exe");
-    }
-    return std::filesystem::path(std::string(path, count));
-#endif
-}
-
 static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
     preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
@@ -305,6 +257,8 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_MODELS_MAX");
     preset.unset_option("LLAMA_ARG_MODELS_PRESET");
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
+    preset.unset_option("LLAMA_ARG_CONNECT");
+    preset.unset_option("LLAMA_ARG_CONNECT_CODE");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_MMPROJ");
@@ -1875,7 +1829,7 @@ void server_models_routes::init_routes() {
         if (name.empty()) {
             // main instance
             auto res = std::make_unique<server_http_res>();
-            res_ok(res, {
+            json props = {
                 // TODO: add support for this on web UI
                 {"role",                 "router"},
                 {"max_instances",        params.models_max},
@@ -1891,7 +1845,11 @@ void server_models_routes::init_routes() {
                 {"ui_settings",          ui_settings},
                 {"build_info",           std::string(llama_build_info())},
                 {"cors_proxy_enabled",   params.ui_mcp_proxy},
-            });
+            };
+            if (!params.server_connect_code.empty()) {
+                props["connect_code"] = params.server_connect_code;
+            }
+            res_ok(res, props);
             return res;
         }
         return proxy_get(req);
