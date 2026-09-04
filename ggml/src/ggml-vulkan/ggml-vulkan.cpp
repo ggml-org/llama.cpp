@@ -895,6 +895,10 @@ struct vk_device_struct {
     bool device_fault {};
     PFN_vkGetDeviceFaultInfoEXT pfn_vkGetDeviceFaultInfoEXT {};
 
+    // set when the device is lost
+    // once set, graph_compute returns GGML_STATUS_FAILED until the backend is recreated
+    bool device_lost {};
+
     bool serialize_submissions {};
 
     const ggml_cgraph * diag_cgraph {};
@@ -16310,7 +16314,12 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
     // discard any unsubmitted command buffers
     ctx->compute_ctx.reset();
     // wait for any pending command buffers to finish
-    ggml_vk_synchronize(ctx);
+    // this runs from the backend destructor, so it must not throw
+    try {
+        ggml_vk_synchronize(ctx);
+    } catch (const vk::SystemError &) {
+        ctx->device->device_lost = true;
+    }
 
     ggml_vk_graph_cleanup(ctx);
 
@@ -16903,9 +16912,18 @@ static void ggml_backend_vk_synchronize(ggml_backend_t backend) {
     VK_LOG_DEBUG("ggml_backend_vk_synchronize()");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
-    ggml_vk_synchronize(ctx);
+    if (ctx->device->device_lost) {
+        return;
+    }
 
-    ggml_vk_graph_cleanup(ctx);
+    // cannot report an error from here, so just record the loss
+    try {
+        ggml_vk_synchronize(ctx);
+
+        ggml_vk_graph_cleanup(ctx);
+    } catch (const vk::DeviceLostError &) {
+        ctx->device->device_lost = true;
+    }
 }
 
 static bool ggml_vk_is_empty(ggml_tensor * node) {
@@ -17537,7 +17555,7 @@ static int32_t find_first_set(uint32_t x) {
     return ret;
 }
 
-static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
+static ggml_status ggml_backend_vk_graph_compute_impl(ggml_backend_t backend, ggml_cgraph * cgraph) {
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
@@ -18006,6 +18024,28 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     return GGML_STATUS_SUCCESS;
 
     UNUSED(backend);
+}
+
+static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
+    ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+
+    if (ctx->device->device_lost) {
+        GGML_LOG_ERROR("%s: device %s was lost by an earlier submission - recreate the backend to recover\n",
+                __func__, ctx->device->name.c_str());
+        return GGML_STATUS_FAILED;
+    }
+
+    try {
+        return ggml_backend_vk_graph_compute_impl(backend, cgraph);
+    } catch (const vk::DeviceLostError &) {
+        // a lost device invalidates every object created from it, so fail all later calls too
+        ctx->device->device_lost = true;
+        GGML_LOG_ERROR("%s: device %s was lost - recreate the backend to recover\n", __func__, ctx->device->name.c_str());
+        return GGML_STATUS_FAILED;
+    } catch (const vk::SystemError & e) {
+        GGML_LOG_ERROR("%s: Vulkan error on %s: %s\n", __func__, ctx->device->name.c_str(), e.what());
+        return GGML_STATUS_FAILED;
+    }
 }
 
 // Sort the graph for improved parallelism.
