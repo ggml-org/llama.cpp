@@ -2,7 +2,13 @@
 	import { quantBitDepth } from './download-options.utils';
 	import { Check, Copy, Plus, X } from '@lucide/svelte';
 	import * as Select from '$lib/components/ui/select';
-	import { DEFAULT_BASE_BIT_DEPTH, type ModelSidecar,SPEC_TYPE } from '$lib/constants';
+	import {
+		DEFAULT_BASE_BIT_DEPTH,
+		MODEL_ID,
+		type ModelSidecar,
+		SERVE_COMMAND,
+		SPEC_TYPE
+	} from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import type { QuantOption } from '$lib/types';
 	import { copyToClipboard } from '$lib/utils';
@@ -91,10 +97,20 @@
 
 	/** The llama serve command, composed from the inline picks. */
 	let command = $derived.by(() => {
-		const parts = ['llama', 'serve', '-hf', mainQuant ? `${modelId}:${mainQuant}` : modelId];
+		const parts = [
+			SERVE_COMMAND.BIN,
+			SERVE_COMMAND.SUBCOMMAND,
+			SERVE_COMMAND.MODEL_FLAG,
+			mainQuant ? `${modelId}${MODEL_ID.QUANTIZATION_SEPARATOR}${mainQuant}` : modelId
+		];
 
 		if (draftOption && draftQuant) {
-			parts.push('-hfd', `${modelId}:${draftQuant}`, '--spec-type', specType ?? '');
+			parts.push(
+				SERVE_COMMAND.DRAFT_FLAG,
+				`${modelId}${MODEL_ID.QUANTIZATION_SEPARATOR}${draftQuant}`,
+				SERVE_COMMAND.SPEC_TYPE_FLAG,
+				specType ?? ''
+			);
 		}
 
 		return parts.join(' ');
@@ -124,13 +140,15 @@
 	<div
 		class="flex min-w-0 flex-1 items-center gap-x-2 overflow-x-auto py-0.5 font-mono text-xs whitespace-nowrap text-foreground/90"
 	>
-		<span class="shrink-0">llama</span>
+		<span class="shrink-0">{SERVE_COMMAND.BIN}</span>
 
-		<span class="shrink-0">serve</span>
+		<span class="shrink-0">{SERVE_COMMAND.SUBCOMMAND}</span>
 
-		<span class="shrink-0">-hf</span>
+		<span class="shrink-0">{SERVE_COMMAND.MODEL_FLAG}</span>
 
-		<span class="shrink-0">{modelId}{mainQuant ? ':' : ''}</span>
+		<span class="shrink-0">
+			{modelId}{mainQuant ? MODEL_ID.QUANTIZATION_SEPARATOR : ''}
+		</span>
 
 		<!-- Base quant: always part of the command, the 4-bit file by default. -->
 		{#if baseOption}
@@ -172,9 +190,11 @@
 				 it only appears while hovering the segment, or directly on touch -->
 		{#if draftOption}
 			<span class="group/draft inline-flex shrink-0 items-center gap-x-2">
-				<span>-hfd</span>
+				<span>{SERVE_COMMAND.DRAFT_FLAG}</span>
 
-				<span class="shrink-0">{modelId}{draftQuant ? ':' : ''}</span>
+				<span class="shrink-0">
+					{modelId}{draftQuant ? MODEL_ID.QUANTIZATION_SEPARATOR : ''}
+				</span>
 
 				<Select.Root
 					onValueChange={(v) => v && (draftPick = v)}
@@ -199,7 +219,7 @@
 				</Select.Root>
 
 				{#if draftType}
-					<span>--spec-type</span>
+					<span>{SERVE_COMMAND.SPEC_TYPE_FLAG}</span>
 
 					<!-- the select only earns its chrome when there is a real choice to make -->
 					{#if specTypes.length > 1}

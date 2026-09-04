@@ -100,6 +100,28 @@ export const HF_SAFETENSORS_TAG = 'safetensors';
 
 // Pipeline tasks (logic use only - matching `pipeline_tag` values against tags)
 
+/**
+ * `pipeline_tag` values grouped by the input/output modality they imply, used
+ * to derive a discover row's modality icons. A tag in more than one group (e.g.
+ * `image-to-video`) lights up each modality it belongs to.
+ */
+export const HF_MODALITY_PIPELINE_TAGS: Readonly<
+	Record<'audio' | 'video' | 'vision', readonly string[]>
+> = {
+	audio: [
+		'audio-classification',
+		'audio-to-audio',
+		'automatic-speech-recognition',
+		'text-to-speech',
+		'voice-activity-detection'
+	],
+	video: ['text-to-video', 'image-to-video', 'video-to-video'],
+	vision: ['image-text-to-text', 'image-to-text', 'text-to-image', 'image-to-video']
+};
+
+/** Filename token marking an mmproj sidecar sibling (unlocks vision / audio). */
+export const HF_MMPROJ_FILENAME_TOKEN = 'mmproj';
+
 export const HF_TASK_TAGS: readonly string[] = [
 	'audio-classification',
 	'audio-to-audio',

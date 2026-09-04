@@ -1,5 +1,11 @@
 <script lang="ts">
 	import ModelsDiscoverDetailsDownloadOptionsQuantDownloadButton from './ModelsDiscoverDetailsDownloadOptionsQuantDownloadButton.svelte';
+	import {
+		BIT_DEPTH_LABEL_SUFFIX,
+		GIGABYTE_LABEL,
+		OTHER_BIT_DEPTH,
+		OTHER_BIT_DEPTH_LABEL
+	} from '$lib/constants';
 	import { SelectableFileKind } from '$lib/enums';
 	import type { DownloadEntryState, SelectableFile } from '$lib/types';
 	import { minMemoryTierGb } from '$lib/utils';
@@ -22,15 +28,17 @@
 
 <div class="grid grid-cols-[5rem_1fr] items-center gap-3 py-3">
 	<div class="pt-1 text-sm tabular-nums text-muted-foreground">
-		{#if bitDepth === 99}
-			Other
+		{#if bitDepth === OTHER_BIT_DEPTH}
+			{OTHER_BIT_DEPTH_LABEL}
 		{:else}
-			{bitDepth}-bit
+			{bitDepth}{BIT_DEPTH_LABEL_SUFFIX}
 		{/if}
 
 		{#if mainMemGb}
 			<span class="block text-[10px] whitespace-nowrap text-muted-foreground/60">
-				needs at least {mainMemGb}GB{draftMemGb ? ` + ${draftMemGb}GB` : ''}+ memory
+				needs at least {mainMemGb}{GIGABYTE_LABEL}{draftMemGb
+					? ` + ${draftMemGb}${GIGABYTE_LABEL}`
+					: ''}+ memory
 			</span>
 		{/if}
 	</div>
