@@ -32,6 +32,22 @@ export type {
 	ApiStreamSession
 } from './api';
 
+// HuggingFace types
+export type {
+	HfCatalogBuild,
+	HfCatalogEntry,
+	HfCatalogSize,
+	HfModelApiResponse,
+	HfModelCardData,
+	HfModelDetails,
+	HfModelDetailInfo,
+	HfModelGguf,
+	HfModelInfo,
+	HfModelSearchParams,
+	HfModelSibling,
+	HfModelSiblingRef
+} from './huggingface';
+
 // Chat types
 export type {
 	AttachmentMenuItem,
