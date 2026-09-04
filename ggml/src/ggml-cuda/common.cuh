@@ -873,6 +873,11 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
 }
 
 static __device__ __forceinline__ float ggml_cuda_f8_e4m3_to_fp32(uint8_t x) {
+#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
+    __nv_fp8_e4m3 xf;
+    xf.__x = x;
+    return static_cast<float>(xf);
+#else
     const uint8_t magnitude = x & 0x7F;
     if (magnitude == 0x7F) {
         return NAN;
@@ -887,15 +892,22 @@ static __device__ __forceinline__ float ggml_cuda_f8_e4m3_to_fp32(uint8_t x) {
         value = ldexpf(1.0f + (float) man / 8.0f, exp - 7);
     }
     return x & 0x80 ? -value : value;
+#endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
 }
 
+#if !defined(FP8_AVAILABLE) || defined(GGML_USE_HIP)
 static __device__ __forceinline__ int ggml_cuda_round_to_nearest_even(float x) {
     const int value = (int) floorf(x);
     const float fraction = x - value;
     return fraction > 0.5f || (fraction == 0.5f && (value & 1)) ? value + 1 : value;
 }
+#endif // !defined(FP8_AVAILABLE) || defined(GGML_USE_HIP)
 
 static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_f8_e4m3(float x) {
+#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
+    // TODO: Check how incoming NaNs are treated (i.e. is sign-bit preserved)? 
+    return __nv_cvt_float_to_fp8(x, __NV_SATFINITE, __NV_E4M3);
+#else
     const uint8_t sign = signbit(x) ? 0x80 : 0;
     x = fabsf(x);
 
@@ -924,6 +936,7 @@ static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_f8_e4m3(float x) {
         return sign | 0x7E;
     }
     return sign | (uint8_t) (encoded_exp << 3) | (uint8_t) encoded_man;
+#endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
 }
 
 static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_ue4m3(float x) {
