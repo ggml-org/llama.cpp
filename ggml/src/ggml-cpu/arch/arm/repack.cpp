@@ -1552,7 +1552,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_DOTPROD)
     switch(svcntb() * 8){
         case 128:{
-            constexpr int    col_pairs = ncols_interleaved / 2;
             const svuint8_t  m4b       = svdup_n_u8(0x0f);
             const svuint8_t  mask_lo   = svdup_n_u8(0x03);
             const svuint8_t  mask_hi   = svdup_n_u8(0x30);
@@ -1565,8 +1564,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
             svfloat32_t  acc_f32_0;
             svfloat32_t  acc_f32_1;
             const block_q8_K * GGML_RESTRICT q8_ptr = (const block_q8_K *) vy;
-
-            int _cnt = 0;
 
             for (int x = 0; x < nc / ncols_interleaved; x++) {
                 const block_q6_Kx8 * GGML_RESTRICT q6_ptr = (const block_q6_Kx8 *) vx + (x * nb);
@@ -1821,8 +1818,8 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                                 }
                             }
 
-                            svint32_t sum_l = svsplice_s32(svwhilelt_b32(0, 2), sum_l_0, sum_l_1);
-                            svint32_t sum_h = svsplice_s32(svwhilelt_b32(0, 2), sum_h_0, sum_h_1);
+                            svint32_t sum_l = svsplice_s32(pg2, sum_l_0, sum_l_1);
+                            svint32_t sum_h = svsplice_s32(pg2, sum_h_0, sum_h_1);
 
                             acc_0 = svmla_s32_m(pg32_4, acc_0, sum_l, scale_vec_l);
                             acc_0 = svmla_s32_m(pg32_4, acc_0, sum_h, scale_vec_h);
@@ -1957,8 +1954,8 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                                 }
                             }
 
-                            sum_l = svsplice_s32(svwhilelt_b32(0, 2), sum_l_0, sum_l_1);
-                            sum_h = svsplice_s32(svwhilelt_b32(0, 2), sum_h_0, sum_h_1);
+                            sum_l = svsplice_s32(pg2, sum_l_0, sum_l_1);
+                            sum_h = svsplice_s32(pg2, sum_h_0, sum_h_1);
 
                             acc_1 = svmla_s32_m(pg32_4, acc_1, sum_l, scale_vec_l);
                             acc_1 = svmla_s32_m(pg32_4, acc_1, sum_h, scale_vec_h);
@@ -1982,21 +1979,16 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
             return;
         }
         case 256:{
-            constexpr int    col_pairs = ncols_interleaved / 2;
             const svuint8_t  m4b       = svdup_n_u8(0x0f);
             const svuint8_t  mask_lo   = svdup_n_u8(0x03);
             const svuint8_t  mask_hi   = svdup_n_u8(0x30);
             svint32_t zeros = svdup_s32(0);
             svfloat32_t zeros_fp32 = svdup_f32(0.0f);
             svfloat16_t fp16_zero = svdup_n_f16((__fp16)0.0);
-            
-            svbool_t pg32_2 = svwhilelt_b32(0, 2);
             svbool_t pg32_4 = svwhilelt_b32(0, 4);
             svbool_t pg32_8 = svptrue_b32();
-            svbool_t pg16_4 = svwhilelt_b16(0, 4);
             svbool_t pg16_8 = svwhilelt_b16(0, 8);
             svbool_t pg16_16 = svwhilelt_b16(0, 16);
-            svbool_t pg8_16 = svwhilelt_b8(0, 16);
             svbool_t pg8_32 = svptrue_b8();
             
             // 1x8 tile corresponding to one q8_K row = 2 x 4 for NEON
@@ -2013,7 +2005,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                     svfloat32_t sb_scale = svmul_f32_x(pg32_8, q6_d, q8_d);
                 
                     svint32_t  acc_01 = zeros;
-                    svint32_t  acc_23 = zeros;
 
                     // Load all 16 scales once and widen to int16 (Q6_K has 16 scales per block)
                     // Reused for bias and dequantization later
@@ -2230,12 +2221,11 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                     }   // for half
 
                     // Bias correction;
-                    acc_01 = svsub_s32_m(pg32_8, acc_01, bias_all);                                
-                    acc_f32_0 = svadd_f32_m(
-                        pg32_8,
-                        acc_f32_0,
-                        svmul_f32_m(pg32_8, svcvt_f32_s32_x(pg32_8, acc_01), sb_scale)
-                    );
+                    acc_01 = svsub_s32_m(pg32_8, acc_01, bias_all);
+                    acc_f32_0 = svmla_f32_m(pg32_8,
+                                    acc_f32_0,
+                                    svcvt_f32_s32_x(pg32_8, acc_01),
+                                    sb_scale);
                 } // for b
 
                 svst1_f32(pg32_8, s + x * ncols_interleaved, acc_f32_0);
