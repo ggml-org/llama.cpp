@@ -136,7 +136,7 @@ export { ConversationTransferService } from './conversation-transfer.service';
  *
  * **Server Mode Behavior:**
  * - **MODEL mode**: Only `list()` is relevant — single model always loaded
- * - **ROUTER mode**: Full lifecycle — `list()`, `listRouter()`, `load()`, `unload()`
+ * - **ROUTER mode**: Full lifecycle — `list()`, `load()`, `unload()`
  *
  * **Endpoints:**
  * - `GET /v1/models` — OpenAI-compatible model list (both modes)
