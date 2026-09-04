@@ -972,6 +972,11 @@ void GgmlOvDecoder::compute_model_inputs() {
             if (m_model_weights.find(src_name) != m_model_weights.end()) {
                 continue;
             }
+            // A view over a weight is served by the base tensor's Constant, never by a Parameter.
+            if (src->view_src != nullptr &&
+                m_model_weights.find(get_tensor_ov_name(m_cgraph, src->view_src)) != m_model_weights.end()) {
+                continue;
+            }
 
             bool is_intermediate_node = false;
             for (const auto & node_info : m_node_info_list) {
@@ -1107,19 +1112,19 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
                 continue;
             }
 
-            std::string src_name = get_tensor_ov_name(cgraph, src);
-            if (is_rope_freqs_weight(src, node)) {
+            // A view over a weight is served by the base tensor's Constant.
+            ggml_tensor * base = src->view_src ? src->view_src : src;
+            std::string src_name = get_tensor_ov_name(cgraph, base);
+            if (is_rope_freqs_weight(base, node)) {
                 src_name = "rope_freqs.weight";
             }
-            if (!src->view_src) {
-                ggml_backend_buffer * buffer = src->buffer;
-                if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(src->type) ||
-                    is_mul_mat_id_expert_weight(node, i)) {
-                    if (model_weights.find(src_name) == model_weights.end()) {
-                        auto weight_node = create_weight_node(src, naive);
-                        weight_node->set_friendly_name(src_name);
-                        model_weights[src_name] = weight_node;
-                    }
+            ggml_backend_buffer * buffer = base->buffer;
+            if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(base->type) ||
+                is_mul_mat_id_expert_weight(node, i)) {
+                if (model_weights.find(src_name) == model_weights.end()) {
+                    auto weight_node = create_weight_node(base, naive);
+                    weight_node->set_friendly_name(src_name);
+                    model_weights[src_name] = weight_node;
                 }
             }
         }
@@ -1148,15 +1153,14 @@ std::set<std::string> GgmlOvDecoder::collect_weight_names(ggml_cgraph * cgraph) 
             if (src == nullptr) {
                 continue;
             }
-            std::string src_name(src->name);
-            if (is_rope_freqs_weight(src, node)) {
+            const ggml_tensor * base = src->view_src ? src->view_src : src;
+            std::string src_name(base->name);
+            if (is_rope_freqs_weight(base, node)) {
                 src_name = "rope_freqs.weight";
             }
-            if (!src->view_src) {
-                ggml_backend_buffer * buffer = src->buffer;
-                if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(src->type)) {
-                    names.insert(src_name);
-                }
+            ggml_backend_buffer * buffer = base->buffer;
+            if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(base->type)) {
+                names.insert(src_name);
             }
         }
     }
