@@ -174,12 +174,6 @@ export interface ApiModelDetails {
 	};
 }
 
-export interface ApiModelListResponse {
-	object: string;
-	data: ApiModelDataEntry[];
-	models?: ApiModelDetails[];
-}
-
 export interface ApiLlamaCppServerProps {
 	default_generation_settings: {
 		id: number;
@@ -448,79 +442,27 @@ export interface ApiProcessingState {
 }
 
 /**
- * Router model metadata - extended from ApiModelDataEntry with additional router-specific fields
- * @deprecated Use ApiModelDataEntry instead - the /models endpoint returns this structure directly
+ * Response from POST /models/load
  */
-export interface ApiRouterModelMeta {
-	/** Model identifier (e.g., "ggml-org/Qwen2.5-Omni-7B-GGUF:latest") */
-	name: string;
-	/** Path to model file or manifest */
-	path: string;
-	/** Optional path to multimodal projector */
-	path_mmproj?: string;
-	/** Whether model is in HuggingFace cache */
-	in_cache: boolean;
-	/** Port where model instance is running (0 if not loaded) */
-	port?: number;
-	/** Current status of the model */
-	status: ApiModelStatus;
-	/** Error message if status is FAILED */
-	error?: string;
-}
-
-/**
- * Request to load a model
- */
-export interface ApiRouterModelsLoadRequest {
-	model: string;
-}
-
-/**
- * Response from loading a model
- */
-export interface ApiRouterModelsLoadResponse {
+export interface ApiModelsLoadResponse {
 	success: boolean;
 	error?: string;
 }
 
 /**
- * Request to check model status
+ * Response with list of all models from /v1/models and /models endpoints
+ * (same structure regardless of server mode)
  */
-export interface ApiRouterModelsStatusRequest {
-	model: string;
-}
-
-/**
- * Response with model status
- */
-export interface ApiRouterModelsStatusResponse {
-	model: string;
-	status: ModelStatus;
-	port?: number;
-	error?: string;
-}
-
-/**
- * Response with list of all models from /models endpoint
- * Note: This is the same as ApiModelListResponse - the endpoint returns the same structure
- * regardless of server mode (MODEL or ROUTER)
- */
-export interface ApiRouterModelsListResponse {
+export interface ApiModelsListResponse {
 	object: string;
 	data: ApiModelDataEntry[];
+	models?: ApiModelDetails[];
 }
 
 /**
- * Request to unload a model
+ * Response from POST /models/unload
  */
-export interface ApiRouterModelsUnloadRequest {
-	model: string;
-}
-
-/**
- * Response from unloading a model
- */
-export interface ApiRouterModelsUnloadResponse {
+export interface ApiModelsUnloadResponse {
 	success: boolean;
 	error?: string;
 }
