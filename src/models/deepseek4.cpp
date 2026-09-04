@@ -68,7 +68,7 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     hparams.set_swa_pattern(0);
     // tokens of an image span attend bidirectionally to the whole span, the window only applies to older tokens
     // ref: get_window_topk_idxs_visible in the reference impl
-    hparams.swa_full_non_causal = true;
+    hparams.non_causal_type = LLAMA_NON_CAUSAL_TYPE_SWA_FULL;
     for (uint32_t il = hparams.n_layer(); il < hparams.n_layer_all; ++il) {
         hparams.is_swa_impl[il] = true;
     }
