@@ -1,11 +1,14 @@
 <script lang="ts">
+	import { ModelsDiscoverDetailsDownloadOptions } from './ModelsDiscoverDetailsDownloadOptions';
 	import ModelsDiscoverDetailsHeader from './ModelsDiscoverDetailsHeader.svelte';
 	import ModelsDiscoverDetailsReadme from './ModelsDiscoverDetailsReadme.svelte';
 	import ModelsDiscoverDetailsSkeleton from './ModelsDiscoverDetailsSkeleton.svelte';
+	import { OTHER_BIT_DEPTH } from '$lib/constants';
 	import { ModelAuxSidecar } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
-	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types';
+	import type { HfModelDetailInfo, HfModelSibling, ModelBitDepthRow } from '$lib/types';
 	import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
+	import { SvelteMap } from 'svelte/reactivity';
 
 	interface Props {
 		/** Full HuggingFace model id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */
@@ -42,6 +45,29 @@
 	let hasVision = $derived(hasMmproj || details?.pipeline_tag === 'image-text-to-text');
 	let hasTools = $derived(detectToolUseSupport(gguf?.chat_template ?? ''));
 	let hasReasoning = $derived(detectThinkingSupport(gguf?.chat_template ?? ''));
+
+	let bitDepthRows = $derived.by<ModelBitDepthRow[]>(() => {
+		const rows = new SvelteMap<number, HfModelSibling[]>();
+
+		for (const file of files) {
+			const meta = HuggingFaceService.extractQuantMeta(file.path);
+
+			// mmproj sidecars are already conveyed by the Vision capability badge;
+			// imatrix ships as a normal chip with its own badge.
+			if (meta?.sidecar === ModelAuxSidecar.MMPROJ) continue;
+
+			const depth = meta?.quant ? HuggingFaceService.getBitDepth(meta.quant) : null;
+			const bucket = depth ?? OTHER_BIT_DEPTH;
+			const list = rows.get(bucket) ?? [];
+
+			list.push(file);
+			rows.set(bucket, list);
+		}
+
+		return Array.from(rows.entries())
+			.map(([bitDepth, rowFiles]) => ({ bitDepth, files: rowFiles }))
+			.sort((a, b) => a.bitDepth - b.bitDepth);
+	});
 </script>
 
 {#if loading}
@@ -62,6 +88,8 @@
 			{licenseTag}
 			{modelId}
 		/>
+
+		<ModelsDiscoverDetailsDownloadOptions {bitDepthRows} {modelId} />
 
 		<ModelsDiscoverDetailsReadme {readme} />
 	</div>

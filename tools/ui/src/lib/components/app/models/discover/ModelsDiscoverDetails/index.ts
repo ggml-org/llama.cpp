@@ -60,3 +60,5 @@ export { default as ModelsDiscoverDetailsMetadataItem } from './ModelsDiscoverDe
  * Shows the model's chat template in a scrollable dialog with a copy button.
  */
 export { default as ModelsDiscoverChatTemplateDialog } from './ModelsDiscoverChatTemplateDialog.svelte';
+
+export * from './ModelsDiscoverDetailsDownloadOptions';
