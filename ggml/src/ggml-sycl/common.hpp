@@ -399,6 +399,9 @@ struct ggml_backend_sycl_context {
     }
     dnnl::memory get_scratchpad_mem(const dnnl::memory::desc & scratchpad_md,
                                     const dnnl::engine & eng, const queue_ptr q) {
+        if (scratchpad_md.get_size() == 0) {
+            return dnnl::memory(scratchpad_md, eng, nullptr);
+        }
         ggml_sycl_pool_alloc<uint8_t> * pool;
         auto it = scratchpad_map.find(q);
         if (it == scratchpad_map.end()) {
