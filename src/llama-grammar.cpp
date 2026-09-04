@@ -1060,8 +1060,7 @@ void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr) {
     grammar->stacks = std::move(stacks_new);
 }
 
-// Public 3-arg wrapper — signature unchanged for test compatibility.
-// Creates a local memo cache (not shared across calls) and delegates to the impl.
+// Signature kept for test compatibility; creates a per-call cache and delegates to impl.
 llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
         const llama_grammar_rules      & rules,
         const llama_grammar_stack      & stack,
@@ -1105,16 +1104,13 @@ static llama_grammar_candidates llama_grammar_reject_candidates_for_stack_impl(
                 rejects.push_back(tok);
             }
         }
-        // Store result here so TOKEN/TOKEN_NOT branches are cached — placing the
-        // store after early returns avoids the koboldcpp bug where an empty vector
-        // was left in the cache when the early return fired before writing.
+        // Store before returning so early returns don't leave an empty entry in the cache.
         if (candidates.size() <= MEMO_CANDIDATES_MAX) {
             memo_cache[stack][candidates] = rejects;
         }
         return rejects;
     }
 
-    // Cache lookup — after the two early returns, before next_candidates construction.
     if (candidates.size() <= MEMO_CANDIDATES_MAX) {
         auto stack_it = memo_cache.find(stack);
         if (stack_it != memo_cache.end()) {
@@ -1158,7 +1154,6 @@ static llama_grammar_candidates llama_grammar_reject_candidates_for_stack_impl(
         rejects.push_back({ tok.index, tok.code_points - 1, tok.partial_utf8, tok.id });
     }
 
-    // Store in cache before returning.
     if (candidates.size() <= MEMO_CANDIDATES_MAX) {
         memo_cache[stack][candidates] = rejects;
     }
