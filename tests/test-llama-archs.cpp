@@ -341,6 +341,21 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   std::vector<float>({0.0f, 4.0f}));
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>({0.0f, 5.0f}));
     }
+    if (arch == LLM_ARCH_INKLING) {
+        // Read unconditionally by llama_model_inkling::load_arch_hparams, which
+        // then GGML_ASSERTs shortconv_kernel > 1, d_rel > 0, both rel extents > 0
+        // and logit_scale_denom != 0, so none of these can be left out.
+        ms.add_kv(LLM_KV_INKLING_D_REL,               uint32_t(16));
+        ms.add_kv(LLM_KV_INKLING_REL_EXTENT,          uint32_t(8));
+        ms.add_kv(LLM_KV_INKLING_REL_EXTENT_SWA,      uint32_t(4));
+        ms.add_kv(LLM_KV_INKLING_SHORTCONV_KERNEL,    uint32_t(3));
+        ms.add_kv(LLM_KV_INKLING_DENSE_BLOCK_COUNT,   uint32_t(1));
+        ms.add_kv(LLM_KV_INKLING_LOGIT_SCALE_DENOM,   16.0f);
+        ms.add_kv(LLM_KV_INKLING_LOG_SCALING_N_FLOOR, uint32_t(n_ctx));
+        ms.add_kv(LLM_KV_INKLING_LOG_SCALING_ALPHA,   0.0f);
+        ms.add_kv(LLM_KV_INKLING_UNPADDED_VOCAB_SIZE, n_vocab);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,        1.0f);
+    }
     ms.add_kv(LLM_KV_WKV_HEAD_SIZE,             n_embd/n_head);
     ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,         uint32_t(3));
     ms.add_kv(LLM_KV_RESIDUAL_SCALE,            3.5565588200778455f);
@@ -446,6 +461,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_INKLING:
         case LLM_ARCH_QWEN4EXP:
         case LLM_ARCH_PHIMOE:
         case LLM_ARCH_DBRX:

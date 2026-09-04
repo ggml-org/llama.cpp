@@ -8478,10 +8478,11 @@ template<enum ggml_sort_order order>
 struct cmp_argsort {
     const float * data;
     bool operator()(int32_t a, int32_t b) const {
+        // ties must resolve to the lower id (MoE routers); std::sort is unstable
         if constexpr (order == GGML_SORT_ORDER_ASC) {
-            return data[a] < data[b];
+            return data[a] < data[b] || (data[a] == data[b] && a < b);
         } else {
-            return data[a] > data[b];
+            return data[a] > data[b] || (data[a] == data[b] && a < b);
         }
     }
 };
@@ -8550,7 +8551,8 @@ void ggml_compute_forward_argsort(
 struct cmp_top_k {
     const float * data;
     bool operator()(int32_t a, int32_t b) const {
-        return data[a] > data[b];
+        // ties must resolve to the lower id so the selected set matches the CUDA backend
+        return data[a] > data[b] || (data[a] == data[b] && a < b);
     }
 };
 
@@ -8611,6 +8613,30 @@ void ggml_compute_forward_top_k(
     }
 }
 
+static inline float ggml_flash_attn_ext_banded_load(
+        const ggml_tensor * rel,
+        int64_t iq1,
+        int64_t iq2,
+        int64_t iq3,
+        int64_t rel_idx) {
+    const char * ptr = (const char *) rel->data +
+        (size_t) rel_idx * rel->nb[0] +
+        (size_t) iq2    * rel->nb[1] +
+        (size_t) iq1    * rel->nb[2] +
+        (size_t) (iq3 % rel->ne[3]) * rel->nb[3];
+
+    switch (rel->type) {
+        case GGML_TYPE_F32:
+            return *(const float *) ptr;
+        case GGML_TYPE_F16:
+            return GGML_CPU_FP16_TO_FP32(*(const ggml_fp16_t *) ptr);
+        case GGML_TYPE_BF16:
+            return GGML_BF16_TO_FP32(*(const ggml_bf16_t *) ptr);
+        default:
+            GGML_ABORT("banded flash attention: unsupported rel_logits type");
+    }
+}
+
 static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const ggml_compute_params * params,
         ggml_tensor * dst,
@@ -8624,6 +8650,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
     const ggml_tensor * v     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
     const ggml_tensor * sinks = dst->src[4];
+    const ggml_tensor * rel   = dst->src[5];
 
     GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
     GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
@@ -8690,6 +8717,9 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
     ggml_vec_dot_t    const kq_vec_dot     = ggml_get_type_traits_cpu(k->type)->vec_dot;
     ggml_to_float_t   const v_to_float     = ggml_get_type_traits(v->type)->to_float;
 
+    // the banded op saturates an unnormalized FP16 VKQ accumulator, keep it in FP32
+    const bool vkq_f16 = v->type == GGML_TYPE_F16 && rel == nullptr;
+
     GGML_ASSERT((                            q_to_vec_dot) && "fattn: unsupported K-type");
     GGML_ASSERT((v->type == GGML_TYPE_F32 || v_to_float  ) && "fattn: unsupported V-type");
 
@@ -8712,7 +8742,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
         ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
 
-        if (v->type == GGML_TYPE_F16) {
+        if (vkq_f16) {
             memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
         } else {
             memset(VKQ32, 0, DV*sizeof(float));
@@ -8752,6 +8782,14 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
                 s = logit_softcap*tanhf(s);
             }
 
+            if (rel) {
+                // the offset aligns a short decode Q block to the tail of K (FA4 seqlen_k - seqlen_q convention)
+                const int64_t rel_dist = iq1 + (nek1 - neq1) - ic;
+                if (rel_dist >= 0 && rel_dist < rel->ne[0]) {
+                    s += ggml_flash_attn_ext_banded_load(rel, iq1, iq2, iq3, rel_dist);
+                }
+            }
+
             s += mv; // apply mask
 
             const float Mold = M;
@@ -8761,7 +8799,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
             const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
 
-            if (v->type == GGML_TYPE_F16) {
+            if (vkq_f16) {
                 if (s > M) {
                     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
                     M = s;
@@ -8802,7 +8840,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
             S = S*ms + vs; // scale and increment sum with partial sum
         }
 
-        if (v->type == GGML_TYPE_F16) {
+        if (vkq_f16) {
             for (int64_t d = 0; d < DV; ++d) {
                 VKQ32[d] = GGML_CPU_FP16_TO_FP32(VKQ16[d]);
             }
@@ -9216,6 +9254,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     const ggml_tensor * q     = dst->src[0];
     const ggml_tensor * k     = dst->src[1];
     const ggml_tensor * v     = dst->src[2];
+    const ggml_tensor * rel   = dst->src[5];
 
     GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
     GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
@@ -9315,7 +9354,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         const int64_t dr = (nr + nchunk - 1) / nchunk;
 
         static constexpr int64_t Q_TILE_SZ  = ggml_fa_tile_config::Q;
-        bool use_tiled = !use_ref &&
+        bool use_tiled = !use_ref && rel == nullptr &&
                                (q->type == GGML_TYPE_F32 &&
                                 kv_is_f32_or_f16 &&
                                 k->type == v->type &&

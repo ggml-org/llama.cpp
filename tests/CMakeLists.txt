@@ -307,6 +307,14 @@ if (GGML_METAL AND NOT GGML_METAL_EMBED_LIBRARY)
     set_tests_properties(test-backend-ops-metallib-tensor PROPERTIES ENVIRONMENT GGML_METAL_TENSOR_ENABLE=1)
 endif()
 
+add_executable(test-flash-attn-bias test-flash-attn-bias.cpp)
+target_link_libraries(test-flash-attn-bias PRIVATE ggml)
+add_test(NAME test-flash-attn-bias COMMAND test-flash-attn-bias)
+
+add_executable(test-flash-attn-generic-hash test-flash-attn-generic-hash.cpp)
+target_link_libraries(test-flash-attn-generic-hash PRIVATE ggml)
+add_test(NAME test-flash-attn-generic-hash COMMAND test-flash-attn-generic-hash)
+
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
