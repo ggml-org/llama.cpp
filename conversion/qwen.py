@@ -470,7 +470,7 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
             n = shape[dim]
             idx = torch.arange(n).reshape(num_k_heads, num_v_per_k, head_dim)
             idx = idx.permute(1, 0, 2).contiguous().reshape(n)
-            lora_A, lora_B = tensor.get_lora_A_B()
+            lora_A, lora_B = tensor.get_lora_A_B()  # ty: ignore[call-non-callable]
             if dim == len(shape) - 1:
                 return type(tensor)(lora_A[:, idx], lora_B)
             elif dim == 0:
