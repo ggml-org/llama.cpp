@@ -7,6 +7,7 @@ import ast
 import logging
 import contextlib
 import json
+import math
 import os
 import re
 import sys
@@ -310,6 +311,26 @@ class ModelBase:
             scale_vals = np.array(scales, dtype=np.float32)
             logger.info(f"  + {scale_name} (per-expert scale, shape [{len(scales)}])")
             self.gguf_writer.add_tensor(scale_name, scale_vals)
+
+    def _prepare_kv_cache_scales(self):
+        for name in list(self.model_tensors.keys()):
+            if not name.endswith((".k_scale", ".v_scale")):
+                continue
+
+            new_name = self.tensor_map.get_name(key=name, try_suffixes=(".k_scale", ".v_scale"))
+            if new_name is None:
+                continue
+
+            scale = LazyTorchTensor.to_eager(self.model_tensors.pop(name)())
+            if scale.dtype != torch.float32 or scale.numel() != 1:
+                raise ValueError(f"KV cache scale {name!r} must be a scalar FP32 tensor")
+
+            value = float(scale.item())
+            if not math.isfinite(value) or value == 0.0:
+                raise ValueError(f"KV cache scale {name!r} must be finite and nonzero")
+
+            logger.info(f"  + {new_name} (KV cache scale, shape [1])")
+            self.gguf_writer.add_tensor(new_name, scale.flatten().numpy())
 
     def dequant_model(self):
         # If all quantized tensors were already handled (e.g. pure NVFP4), skip
@@ -967,6 +988,8 @@ class ModelBase:
 
         self._is_nvfp4 = quant_algo in ("NVFP4", "W4A16_NVFP4")
         self._is_mxfp4 = quant_method == "mxfp4"
+
+        self._prepare_kv_cache_scales()
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed

@@ -3696,6 +3696,33 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    const bool fp8_cache = params.type_k == GGML_TYPE_F8_E4M3 || params.type_v == GGML_TYPE_F8_E4M3;
+    if (fp8_cache && (model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4)) {
+        LLAMA_LOG_ERROR("%s: FP8 cache is not supported for MLA models\n", __func__);
+        return nullptr;
+    }
+
+    if (fp8_cache) {
+        for (uint32_t il = 0; il < model->hparams.n_layer_all; ++il) {
+            if (!model->hparams.has_kv(il)) {
+                continue;
+            }
+
+            for (ggml_tensor * scale : { model->layers[il].k_cache_scale, model->layers[il].v_cache_scale }) {
+                if (!scale || !scale->data) {
+                    continue;
+                }
+
+                float value;
+                ggml_backend_tensor_get(scale, &value, 0, sizeof(value));
+                if (!std::isfinite(value) || value == 0.0f) {
+                    LLAMA_LOG_ERROR("%s: FP8 cache scale '%s' must be finite and nonzero\n", __func__, ggml_get_name(scale));
+                    return nullptr;
+                }
+            }
+        }
+    }
+
     if (ggml_is_quantized(params.type_v) && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
         if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
             LLAMA_LOG_INFO("%s: enabling flash_attn since it is required for quantized V cache\n", __func__);
