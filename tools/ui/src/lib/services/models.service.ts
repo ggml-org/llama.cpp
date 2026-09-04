@@ -30,23 +30,6 @@ export class ModelsService {
 	private static readonly SSE_RECONNECT_MS = 1000;
 
 	/**
-	 * True when a router entry id is a sidecar-only entry, e.g. `org/model:Q4_0-mtp`
-	 * or `org/model:mmproj`. Such entries mark a downloaded sidecar file, not a
-	 * loadable model, so the selector skips them.
-	 */
-	static isSidecarEntry(modelId: string): boolean {
-		const idx = modelId.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
-
-		if (idx === MODEL_ID.NOT_FOUND) return false;
-
-		const tag = modelId.slice(idx + 1).toLowerCase();
-		const dash = tag.lastIndexOf(MODEL_ID.SEGMENT_SEPARATOR);
-		const token = dash === -1 ? tag : tag.slice(dash + 1);
-
-		return SIDECAR_TOKENS.includes(token);
-	}
-
-	/**
 	 * Build the `<repo>:<tag>` string expected by POST /models from a parsed
 	 * filename quant + optional sidecar type. Used by the model download
 	 * dialog so callers don't have to know about the tag conventions.
@@ -122,6 +105,16 @@ export class ModelsService {
 	}
 
 	/**
+	 * Check if a model is currently loading.
+	 *
+	 * @param model - Model data entry from the API response
+	 * @returns True if the model status is LOADING
+	 */
+	static isModelLoading(model: ApiModelDataEntry): boolean {
+		return model.status.value === ServerModelStatus.LOADING;
+	}
+
+	/**
 	 *
 	 *
 	 * Load/Unload
@@ -130,13 +123,20 @@ export class ModelsService {
 	 */
 
 	/**
-	 * Check if a model is currently loading.
-	 *
-	 * @param model - Model data entry from the API response
-	 * @returns True if the model status is LOADING
+	 * True when a router entry id is a sidecar-only entry, e.g. `org/model:Q4_0-mtp`
+	 * or `org/model:mmproj`. Such entries mark a downloaded sidecar file, not a
+	 * loadable model, so the selector skips them.
 	 */
-	static isModelLoading(model: ApiModelDataEntry): boolean {
-		return model.status.value === ServerModelStatus.LOADING;
+	static isSidecarEntry(modelId: string): boolean {
+		const idx = modelId.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
+
+		if (idx === MODEL_ID.NOT_FOUND) return false;
+
+		const tag = modelId.slice(idx + 1).toLowerCase();
+		const dash = tag.lastIndexOf(MODEL_ID.SEGMENT_SEPARATOR);
+		const token = dash === -1 ? tag : tag.slice(dash + 1);
+
+		return SIDECAR_TOKENS.includes(token);
 	}
 
 	/**

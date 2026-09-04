@@ -38,6 +38,7 @@ export function useModelParamsFallback(opts: UseModelParamsFallbackOptions) {
 
 		return normalized.includes(MODEL_ID.ORG_SEPARATOR) ? normalized : null;
 	});
+
 	let fetchedParams = $state<number | null>(null);
 
 	$effect(() => {

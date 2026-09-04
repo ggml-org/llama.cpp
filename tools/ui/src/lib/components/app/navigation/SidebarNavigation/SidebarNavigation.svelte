@@ -391,6 +391,7 @@
 				bind:searchQuery
 				class="px-2"
 				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
+				onDiscoverModelsClick={() => (modelsHubOpen = true)}
 				onNewChat={() => {
 					if (deviceStore.isMobile) {
 						scheduleMobileCollapse();
@@ -404,7 +405,6 @@
 					isSearchModeActive = false;
 					searchQuery = '';
 				}}
-				onDiscoverModelsClick={() => (modelsHubOpen = true)}
 				onSettingsClick={() => (settingsDialogOpen = true)}
 			/>
 
