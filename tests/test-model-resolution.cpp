@@ -283,6 +283,20 @@ static const plan_case plan_cases[] = {
     {"spark tag sidecar", spark, "test/repo:BF16", "", true, false,
      "", {},
      "", "", "", "", "dspark-model-BF16.gguf"},
+
+    // a `<quant>-<sidecar>` tag resolves that sidecar alone, without a primary
+    {"hole quant-sidecar tag", hole, "test/repo:Q4_0-mtp", "", false, false,
+     "", {},
+     "", "mtp-model-Q4_0.gguf", "", "", ""},
+
+    {"spark quant-sidecar tag", spark, "test/repo:BF16-dspark", "", false, false,
+     "", {},
+     "", "", "", "", "dspark-model-BF16.gguf"},
+
+    // a bare sidecar tag resolves the sidecar at any quant
+    {"hole bare sidecar tag", hole, "test/repo:mtp", "", false, false,
+     "", {},
+     "", "mtp-model-Q4_0.gguf", "", "", ""},
 };
 
 static void check_plan(const plan_case & c) {
