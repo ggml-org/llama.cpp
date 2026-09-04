@@ -1757,7 +1757,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
 static constexpr __host__ __device__ bool ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(
         const int DKQ, const int DV, const int ncols1, const int ncols2) {
-    return (DKQ == 512 && DV == 512 && ncols1 == 1 && ncols2 == 8) ||
+    return (DKQ == 256 && DV == 256 && ncols1 == 1 && ncols2 == 8) ||
+           (DKQ == 512 && DV == 512 && ncols1 == 1 && ncols2 == 8) ||
            (DKQ == 576 && DV == 512 && ncols1 == 1 && ncols2 == 16);
 }
 

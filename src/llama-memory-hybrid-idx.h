@@ -83,9 +83,10 @@ public:
     //   bias      F32 [n_kv, n_tokens/ns, ns] -inf where invisible, large where always visible
     // blk_bias asks for the bias per block instead: [n_blocks, n_tokens/ns, ns]
     // the caller then adds the attention mask, the only part of the bias that varies within a block
+    // cell_pos carries the position test as values: int32 max where the attention mask drops a cell
     void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
-                       ggml_tensor * bias, const llama_ubatch * ubatch, uint32_t ratio,
-                       bool blk_bias) const;
+                       ggml_tensor * bias, ggml_tensor * cell_pos, const llama_ubatch * ubatch,
+                       uint32_t ratio, bool blk_bias) const;
 
 private:
     // forget seq_id (all of it if seq_id < 0) in every cache at once, so a failed restore cannot leave the caches out of step
@@ -142,8 +143,8 @@ public:
     uint32_t get_n_stream() const;
 
     void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
-                       ggml_tensor * bias, const llama_ubatch * ubatch, uint32_t ratio,
-                       bool blk_bias) const;
+                       ggml_tensor * bias, ggml_tensor * cell_pos, const llama_ubatch * ubatch,
+                       uint32_t ratio, bool blk_bias) const;
 
 private:
     const llama_memory_hybrid_idx * mem = nullptr;

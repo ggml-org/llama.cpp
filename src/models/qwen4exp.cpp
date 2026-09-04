@@ -472,13 +472,14 @@ ggml_tensor * llama_model_qwen4exp::graph::build_norm_gated(
 // one mean-pooled indexer key scores each block; set_input resolves the cache layout
 class llama_model_qwen4exp::llm_graph_input_qsa : public llm_graph_input_i {
 public:
-    llm_graph_input_qsa(const llama_memory_hybrid_idx_context * mctx, uint32_t ratio, bool blk_bias) :
-        mctx(mctx), ratio(ratio), blk_bias(blk_bias) {}
+    llm_graph_input_qsa(const llama_memory_hybrid_idx_context * mctx, uint32_t ratio,
+            bool blk_bias, bool dev_causal) :
+        mctx(mctx), ratio(ratio), blk_bias(blk_bias), dev_causal(dev_causal) {}
     virtual ~llm_graph_input_qsa() = default;
 
     void set_input(const llama_ubatch * ubatch) override {
         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
-        mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio, blk_bias);
+        mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, cell_pos, ubatch, ratio, blk_bias);
     }
 
     bool can_reuse(const llm_graph_params & params) override {
@@ -505,6 +506,13 @@ public:
         res &= bias->ne[0]      == (blk_bias ? n_blocks : n_kv);
         res &= bias->ne[1]      == params.ubatch.n_tokens/n_stream;
 
+        // the mask is rebuilt from positions only when the plain causal test covers it
+        if (dev_causal) {
+            res &= params.ubatch.n_seqs_unq <= 1;
+            res &= cell_pos->ne[0]  == n_kv;
+            res &= cell_pos->ne[1]  == n_stream;
+        }
+
         return res;
     }
 
@@ -514,21 +522,32 @@ public:
     ggml_tensor * blk_cells = nullptr;   // I32 [ratio*n_blocks, n_stream]
     ggml_tensor * blk_pos   = nullptr;   // I32 [4*n_blocks*n_stream]
     ggml_tensor * bias      = nullptr;   // F32 [n_blocks or n_kv, n_tokens/n_stream, n_stream]
+    ggml_tensor * cell_pos  = nullptr;   // I32 [n_kv, n_stream]
 
     const llama_memory_hybrid_idx_context * mctx;
     const uint32_t ratio;
 
     // the per-cell half of the bias is the attention mask, so only the per-block half is uploaded
     const bool blk_bias;
+
+    // the mask is rebuilt on device from cell_pos instead of copying the host mask
+    const bool dev_causal;
 };
 
-ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
+// shared by both QSA paths: the per-ratio input set, the indexer keys pooled per block,
+// and the rope'd indexer query. returns the pooled keys [idx_dim, n_blocks, n_stream]
+// blk_bias tells whether the attention mask carries the per-cell half of the bias
+ggml_tensor * llama_model_qwen4exp::graph::build_qsa_indexer(
         const llama_memory_hybrid_idx_context * mctx_hyb,
+        llm_graph_input_qsa *&                  inp,
+        bool &                                  blk_bias,
+        bool &                                  dev_causal,
         ggml_tensor *                           cur,
         ggml_tensor *                           inp_pos,
         ggml_tensor *                           kq_mask,
         int *                                   sections,
-        int                                     il) {
+        int                                     il,
+        ggml_tensor **                          q_out) {
     const llama_kv_cache_context * mctx_idx = mctx_hyb->get_idx();
 
     const int64_t idx_dim  = hparams.indexer_head_size;
@@ -549,29 +568,37 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
     // the rest is the visible/not test the attention mask already carries, so upload the per-block half only: 1/ratio of the cells
     // alibi writes distances instead of a mask and non-causal keeps future cells, so both opt out
     // the mask also holds an mrope rule for the query's own position, but only 2d image positions can differ there
-    const bool blk_bias = kq_mask != nullptr &&
+    blk_bias = kq_mask != nullptr &&
         kq_mask->ne[0] == n_kv && kq_mask->ne[1] == n_tps && kq_mask->ne[3] == n_stream &&
         cparams.causal_attn && !hparams.use_alibi;
 
+    // the per-cell half is the plain position test, so the mask itself can stay on the host.
+    // one sequence at a time: cells of other sequences carry the int32 max sentinel instead of
+    // a sequence test. this arch is text-only, so the extra position rows are always zero and
+    // the mask's 2d rule at equal positions never fires; a vision encoder would need a revisit
+    dev_causal = blk_bias && ubatch.n_seqs_unq <= 1;
+
     // nothing above depends on the layer, so the layers sharing a ratio share one input set
-    llm_graph_input_qsa * inp = nullptr;
+    inp = nullptr;
 
     const auto it = qsa_inps.find((uint32_t) r);
     if (it != qsa_inps.end()) {
         inp = it->second;
     } else {
-        auto qsa = std::make_unique<llm_graph_input_qsa>(mctx_hyb, (uint32_t) r, blk_bias);
+        auto qsa = std::make_unique<llm_graph_input_qsa>(mctx_hyb, (uint32_t) r, blk_bias, dev_causal);
 
         qsa->k_idxs    = mctx_idx->build_input_k_idxs(ctx0, ubatch);
         qsa->cell_blk  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv, n_stream);
         qsa->blk_cells = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, r*n_blocks, n_stream);
         qsa->blk_pos   = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4*n_blocks*n_stream);
         qsa->bias      = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, blk_bias ? n_blocks : n_kv, n_tps, n_stream);
+        qsa->cell_pos  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv, n_stream);
 
         ggml_set_input(qsa->cell_blk);
         ggml_set_input(qsa->blk_cells);
         ggml_set_input(qsa->blk_pos);
         ggml_set_input(qsa->bias);
+        ggml_set_input(qsa->cell_pos);
 
         inp = qsa.get();
         res->add_input(std::move(qsa));
@@ -624,10 +651,37 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
             ext_factor, attn_factor, beta_fast, beta_slow);
     cb(q, "indexer_q", il);
 
+    *q_out = q;
+    return pooled;
+}
+
+// the per-block scores [n_blocks, n_tps, n_stream] for every token at once, with the
+// per-block bias added. the gathered path scores one token chunk at a time instead,
+// so this full-size form is only built when the scores themselves are the compact form
+ggml_tensor * llama_model_qwen4exp::graph::build_qsa_score(
+        const llama_memory_hybrid_idx_context * mctx_hyb,
+        llm_graph_input_qsa *&                  inp,
+        bool &                                  blk_bias,
+        ggml_tensor *                           cur,
+        ggml_tensor *                           inp_pos,
+        ggml_tensor *                           kq_mask,
+        int *                                   sections,
+        int                                     il) {
+    ggml_tensor * q      = nullptr;
+    bool          on_dev = false;
+    ggml_tensor * pooled = build_qsa_indexer(mctx_hyb, inp, blk_bias, on_dev, cur, inp_pos,
+            kq_mask, sections, il, &q);
+
+    const int64_t n_idx_h  = hparams.indexer_n_head;
+    const int64_t n_blocks = (mctx_hyb->get_idx()->get_n_kv() + hparams.dsv4_compress_ratios[il] - 1)
+                                                                                    / hparams.dsv4_compress_ratios[il];
+    const int64_t n_stream = mctx_hyb->get_n_stream();
+    const int64_t n_tps    = n_tokens/n_stream;
+
     // rectify each head dot product before the sum, as in the DeepSeek lightning indexer
     // mul_mat matches ne[2], so the queries of stream s only meet the blocks of stream s
     ggml_tensor * score = ggml_mul_mat(ctx0, pooled,
-            ggml_reshape_3d(ctx0, q, idx_dim, n_idx_h*n_tps, n_stream));
+            ggml_reshape_3d(ctx0, q, hparams.indexer_head_size, n_idx_h*n_tps, n_stream));
     score = ggml_reshape_4d(ctx0, score, n_blocks, n_idx_h, n_tps, n_stream);
     score = ggml_relu(ctx0, score);
 
@@ -646,6 +700,27 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
     if (blk_bias) {
         score = ggml_add(ctx0, score, inp->bias);
     }
+
+    return score;
+}
+
+ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
+        const llama_memory_hybrid_idx_context * mctx_hyb,
+        ggml_tensor *                           cur,
+        ggml_tensor *                           inp_pos,
+        ggml_tensor *                           kq_mask,
+        int *                                   sections,
+        int                                     il) {
+    const int64_t r    = hparams.dsv4_compress_ratios[il];
+    const int64_t n_kv = mctx_hyb->get_idx()->get_n_kv();
+
+    const int64_t n_stream = mctx_hyb->get_n_stream();
+    const int64_t n_tps    = n_tokens/n_stream;
+
+    llm_graph_input_qsa * inp = nullptr;
+    bool blk_bias = false;
+
+    ggml_tensor * score = build_qsa_score(mctx_hyb, inp, blk_bias, cur, inp_pos, kq_mask, sections, il);
 
     // every token of a block gets the block score; the budget is whole blocks, so top-k cuts on a block boundary
     ggml_tensor * expanded = ggml_get_rows(ctx0,
@@ -758,6 +833,225 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
     return cur;
 }
 
+// Sparse attention over the cells that top_k names, one token chunk at a time, so no
+// [n_kv, n_tokens] score or mask is ever materialized. Each chunk unmasks its selected
+// cells in a chunk-sized copy of the causal mask and flash attention runs over the whole
+// cache; the CUDA kernel compacts that mask into per-row indices and visits only those
+// cells. Scratch scales with width*n_chunk instead of n_kv*n_tokens, which at long
+// context is the bulk of the compute buffer. needs flash attention: the sparse kernel
+// is the MMA one, so the cache and the mask must be f16
+ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa_chunked(
+        llm_graph_input_attn_kv *               inp,
+        const llama_memory_hybrid_idx_context * mctx_hyb,
+        ggml_tensor *                           cur,
+        ggml_tensor *                           q_cur,
+        ggml_tensor *                           k_cur,
+        ggml_tensor *                           v_cur,
+        ggml_tensor *                           inp_pos,
+        int *                                   sections,
+        float                                   kq_scale,
+        int                                     il) {
+    GGML_ASSERT(cparams.flash_attn);
+    GGML_ASSERT(mctx_hyb->get_n_stream() == 1);
+
+    const auto * mctx_cur = inp->mctx;
+
+    const int64_t r    = hparams.dsv4_compress_ratios[il];
+    const int64_t n_kv = mctx_hyb->get_idx()->get_n_kv();
+
+    // the qsa scratch peak is one chunk's score expansion and mask, so this trades graph
+    // size against compute buffer. the reserve probe runs at the full cache, so the buffers
+    // are sized for the worst case: cap a chunk's [n_kv, n_chunk] f32 tensors at a few dozen
+    // MiB there and let shorter caches take bigger chunks within the same budget
+    const int64_t n_chunk = std::min<int64_t>(256,
+            std::max<int64_t>(64, 24*1024*1024/(n_kv*4)));
+
+    // rotate q/k/v before they reach a quantized cache, as the dense path does. the indexer
+    // has already scored with its own query, so the scores are unaffected.
+    if (inp->self_k_rot) {
+        q_cur = llama_mul_mat_hadamard(ctx0, q_cur, inp->self_k_rot);
+        k_cur = llama_mul_mat_hadamard(ctx0, k_cur, inp->self_k_rot);
+    }
+
+    if (inp->self_v_rot) {
+        v_cur = llama_mul_mat_hadamard(ctx0, v_cur, inp->self_v_rot);
+    }
+
+    // these nodes are added to the graph together so that they are not reordered
+    // by doing so, the number of splits in the graph is reduced
+    // expand k later to enable rope fusion which directly writes into k-v cache
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, v_cur);
+    ggml_build_forward_expand(gf, k_cur);
+
+    // store to kv cache before the gathers below read it back
+    {
+        const auto & k_idxs = inp->get_k_idxs();
+        const auto & v_idxs = inp->get_v_idxs();
+
+        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
+        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+    }
+
+    llm_graph_input_qsa * inp_qsa = nullptr;
+    bool blk_bias   = false;
+    bool dev_causal = false;
+
+    ggml_tensor * q_idx = nullptr;
+    ggml_tensor * pooled = build_qsa_indexer(mctx_hyb, inp_qsa, blk_bias, dev_causal, cur, inp_pos,
+            inp->get_kq_mask(), sections, il, &q_idx);
+
+    const int64_t idx_dim = hparams.indexer_head_size;
+    const int64_t n_idx_h = hparams.indexer_n_head;
+    const int64_t n_blk   = (n_kv + r - 1)/r;
+
+    // one stream, so the pooled keys flatten to a plain matrix for the chunked mul_mat
+    pooled = ggml_reshape_2d(ctx0, pooled, idx_dim, n_blk);
+
+    // the reference returns indexer_top_k + compress_ratio - 1: whole blocks plus the tail
+    const int64_t width = std::min<int64_t>(n_kv, (int64_t) hparams.indexer_top_k + r - 1);
+
+    // the cache stays in place; the attention kernel reads only the cells the mask leaves
+    ggml_tensor * k_all = mctx_cur->get_k(ctx0, il);
+    ggml_tensor * v_all = mctx_cur->get_v(ctx0, il);
+
+    ggml_tensor * kq_mask = inp->get_kq_mask();
+
+    // set_rows places each chunk's output at its own token columns; every column is written
+    ggml_tensor * out = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, q_cur->ne[0]*q_cur->ne[1], n_tokens);
+
+    ggml_tensor * ids = ggml_cast(ctx0, ggml_arange(ctx0, 0.0f, (float) n_tokens, 1.0f), GGML_TYPE_I32);
+
+    // the cell positions follow the cache, not the chunk, so cast them once for all chunks
+    ggml_tensor * pos_kv = nullptr;
+
+    if (dev_causal) {
+        pos_kv = ggml_cast(ctx0, ggml_view_1d(ctx0, inp_qsa->cell_pos, n_kv, 0), GGML_TYPE_F32);
+        pos_kv = ggml_reshape_2d(ctx0, pos_kv, n_kv, 1);
+    }
+
+    // one buffer backs the mask of every full chunk, and one the zero rows: the fill and
+    // the set_rows re-run per chunk, but the allocator only sees a single live tensor, so
+    // the scratch no longer grows by one mask per chunk
+    ggml_tensor * mask_base = ggml_new_tensor_4d(ctx0, GGML_TYPE_F16, n_kv, n_chunk, 1, 1);
+    ggml_tensor * zeros = ggml_fill_inplace(ctx0,
+            ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, width, n_chunk, 1), 0.0f);
+    ggml_build_forward_expand(gf, zeros);
+
+    for (int64_t t0 = 0; t0 < n_tokens; t0 += n_chunk) {
+        const int64_t n_c = std::min(n_chunk, n_tokens - t0);
+
+        // score this chunk against every block: [n_blk, n_idx_h, n_c], then sum the heads.
+        // the full-size score would be [n_blk, n_tokens], which is the scratch we are avoiding
+        // the chunk's queries are strided across heads, so pull them together first
+        ggml_tensor * qi_c = ggml_cont(ctx0, ggml_view_3d(ctx0, q_idx, idx_dim, n_idx_h, n_c,
+                q_idx->nb[1], q_idx->nb[2], t0*q_idx->nb[2]));
+        ggml_tensor * score_c = ggml_mul_mat(ctx0, pooled,
+                ggml_reshape_2d(ctx0, qi_c, idx_dim, n_idx_h*n_c));
+        score_c = ggml_reshape_3d(ctx0, score_c, n_blk, n_idx_h, n_c);
+        score_c = ggml_relu_inplace(ctx0, score_c);
+
+        // sum the heads in one pass: [n_idx_h, n_c, n_blk] -> [1, n_c, n_blk], token-major
+        // so the cell expansion below reads contiguous rows
+        ggml_tensor * summed = ggml_sum_rows(ctx0,
+                ggml_cont(ctx0, ggml_permute(ctx0, score_c, 2, 0, 1, 3)));
+        summed = ggml_reshape_2d(ctx0, summed, n_c, n_blk);
+
+        if (blk_bias) {
+            // one value per block, so it is cheaper to bias here than after the cells are
+            // expanded. the bias is block-major, so the token-major sum needs a transpose
+            summed = ggml_add(ctx0, summed, ggml_cont(ctx0, ggml_permute(ctx0,
+                            ggml_view_2d(ctx0, inp_qsa->bias, n_blk, n_c,
+                                inp_qsa->bias->nb[1], t0*inp_qsa->bias->nb[1]), 1, 0, 2, 3)));
+        }
+
+        // expand the block scores for this chunk only: [n_kv, n_c]
+        ggml_tensor * expanded = ggml_cont(ctx0, ggml_permute(ctx0,
+                ggml_get_rows(ctx0, summed, inp_qsa->cell_blk), 1, 0, 2, 3));
+
+        // this chunk's slice of the causal mask, shared by the score bias and the re-mask.
+        // on the device path it is rebuilt from cell positions instead: visible cells clamp
+        // to zero and every other cell saturates, which the f16 cast turns into -inf. empty
+        // and foreign cells carry an int32 max sentinel and land at -inf too
+        ggml_tensor * mask_c = nullptr;
+        ggml_tensor * causal = nullptr;
+
+        if (dev_causal) {
+            // ggml broadcasts by whole-axis repeat, so the query positions are materialized
+            // over the cells and the cell positions subtract as a column
+            ggml_tensor * pos_t = ggml_cast(ctx0, ggml_view_1d(ctx0, inp_pos, n_c,
+                        t0*ggml_element_size(inp_pos)), GGML_TYPE_F32);
+            pos_t = ggml_repeat(ctx0, ggml_reshape_2d(ctx0, pos_t, 1, n_c),
+                    ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, n_c));
+
+            // the raw difference stays only a few points below zero on future cells, so it
+            // is scaled first: those cells must saturate, not pass as mildly penalized
+            causal = ggml_clamp_inplace(ctx0,
+                    ggml_scale_inplace(ctx0, ggml_sub(ctx0, pos_t, pos_kv), 1e9f), -1e9f, 0.0f);
+        } else {
+            mask_c = ggml_view_4d(ctx0, kq_mask, n_kv, n_c, 1, 1,
+                    kq_mask->nb[1], kq_mask->nb[2], kq_mask->nb[3], t0*kq_mask->nb[1]);
+        }
+
+        if (blk_bias) {
+            // flash attention keeps the mask in f16; the scores are f32
+            expanded = ggml_add(ctx0, expanded, dev_causal ? causal :
+                        ggml_cast(ctx0, mask_c, GGML_TYPE_F32));
+        } else {
+            expanded = ggml_add(ctx0, expanded, ggml_view_3d(ctx0, inp_qsa->bias, n_kv, n_c, 1,
+                        inp_qsa->bias->nb[1], inp_qsa->bias->nb[2], t0*inp_qsa->bias->nb[1]));
+        }
+
+        // the cells each query of the chunk may attend to: [width, n_c, 1, 1]
+        ggml_tensor * top_k = ggml_top_k(ctx0, expanded, width);
+
+        // -inf everywhere but the selected cells: [n_kv, n_c, 1, 1] -> [1, n_kv, n_c, 1]
+        // flash attention wants the mask in f16 either way. the fill must see a contiguous
+        // tensor, so the partial tail chunk still gets a tensor of its own size
+        ggml_tensor * mask_f = n_c == n_chunk ? mask_base :
+            ggml_new_tensor_4d(ctx0, GGML_TYPE_F16, n_kv, n_c, 1, 1);
+        ggml_tensor * mask_top_k = ggml_fill_inplace(ctx0, mask_f, -INFINITY);
+        mask_top_k = ggml_view_4d(ctx0, mask_top_k, 1, mask_top_k->ne[0], n_c,
+                mask_top_k->ne[3], mask_top_k->nb[0], mask_top_k->nb[1], mask_top_k->nb[2], 0);
+
+        // unmask the selected cells, then put the causal values back on top
+        ggml_tensor * zeros_c = n_c == n_chunk ? zeros :
+            ggml_fill_inplace(ctx0,
+                    ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, width, n_c, 1), 0.0f);
+
+        mask_top_k = ggml_set_rows(ctx0, mask_top_k, zeros_c, top_k);
+
+        // restore the mask shape: [1, n_kv, n_c, 1] -> [n_kv, n_c, 1, 1]
+        mask_top_k = ggml_view_4d(ctx0, mask_top_k, mask_top_k->ne[1], mask_top_k->ne[2], 1,
+                mask_top_k->ne[3], mask_top_k->nb[2], mask_top_k->nb[3], mask_top_k->nb[3], 0);
+
+        // the causal values go back on top, dropping any cell selected past the window
+        mask_top_k = ggml_add(ctx0, mask_top_k, dev_causal ?
+                    ggml_cast(ctx0, causal, GGML_TYPE_F16) : mask_c);
+
+        ggml_tensor * q_c = ggml_view_3d(ctx0, q_cur, q_cur->ne[0], q_cur->ne[1], n_c,
+                q_cur->nb[1], q_cur->nb[2], t0*q_cur->nb[2]);
+
+        // n_kv_max bounds how many cells a row may select, which turns on the kernel's
+        // mask-compacting sparse path once the cache is long enough to make it pay
+        ggml_tensor * out_c = build_attn_mha(q_c, k_all, v_all, nullptr,
+                mask_top_k, nullptr, nullptr, width, kq_scale, il);
+
+        ggml_tensor * idx = ggml_view_1d(ctx0, ids, n_c, t0*ggml_element_size(ids));
+
+        out = ggml_set_rows(ctx0, out, out_c, idx);
+    }
+
+    cb(out, "kqv_out", il);
+
+    // the rotation is its own inverse, so undo it on the value side of the output
+    if (inp->self_v_rot) {
+        out = llama_mul_mat_hadamard(ctx0, out, inp->self_v_rot);
+    }
+
+    return out;
+}
+
 ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
         llm_graph_input_attn_kv * inp,
         const llama_memory_hybrid_idx_context * mctx_hyb,
@@ -771,7 +1065,12 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     // indexer reads the same block input as q/k/v; no cache or no ratio means dense
     const bool qsa = mctx_hyb->get_idx() != nullptr && hparams.dsv4_compress_ratios[il] > 0;
 
-    ggml_tensor * top_k = qsa ? build_qsa_top_k(mctx_hyb, cur, inp_pos, inp->get_kq_mask(), sections, il) : nullptr;
+    // the chunked path keeps the qsa scratch at width*n_chunk instead of n_kv*n_tokens;
+    // it needs flash attention for the sparse kernel and one stream for the graph
+    const bool qsa_chunk = qsa && cparams.flash_attn && mctx_hyb->get_n_stream() == 1;
+
+    ggml_tensor * top_k = qsa_chunk ? nullptr :
+        qsa ? build_qsa_top_k(mctx_hyb, cur, inp_pos, inp->get_kq_mask(), sections, il) : nullptr;
 
     // Qwen3Next uses a single Q projection that outputs query + gate
     ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s); // [ (n_embd_head * 2) * n_head, n_tokens ]
@@ -823,7 +1122,9 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
 
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
-    if (top_k) {
+    if (qsa_chunk) {
+        cur = build_attn_qsa_chunked(inp, mctx_hyb, cur, Qcur, Kcur, Vcur, inp_pos, sections, kq_scale, il);
+    } else if (top_k) {
         cur = build_attn_qsa(inp, Qcur, Kcur, Vcur, top_k, kq_scale, il);
     } else {
         cur = build_attn(inp,

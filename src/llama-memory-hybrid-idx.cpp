@@ -271,6 +271,7 @@ void llama_memory_hybrid_idx::set_input_qsa(
         ggml_tensor * blk_cells,
         ggml_tensor * blk_pos,
         ggml_tensor * bias,
+        ggml_tensor * cell_pos,
         const llama_ubatch * ubatch,
         uint32_t ratio,
         bool blk_bias) const {
@@ -292,6 +293,7 @@ void llama_memory_hybrid_idx::set_input_qsa(
     int32_t * dst_blk_cells = (int32_t *) blk_cells->data;
     int32_t * dst_blk_pos   = (int32_t *) blk_pos->data;
     float   * dst_bias      = (float   *) bias->data;
+    int32_t * dst_cell_pos  = cell_pos ? (int32_t *) cell_pos->data : nullptr;
 
     // a block is keyed on (sequence set, index bucket): a unified cache counts every sequence
     // from zero, so the bucket alone would pool two sequences into one block
@@ -324,6 +326,7 @@ void llama_memory_hybrid_idx::set_input_qsa(
 
         int32_t * cur_cell_blk  = dst_cell_blk  + s*n_kv;
         int32_t * cur_blk_cells = dst_blk_cells + s*(r*n_blocks);
+        int32_t * cur_cell_pos  = dst_cell_pos ? dst_cell_pos + s*n_kv : nullptr;
 
         std::fill(cur_blk_cells, cur_blk_cells + r*n_blocks, 0);
 
@@ -505,6 +508,13 @@ void llama_memory_hybrid_idx::set_input_qsa(
             }
 
             cur_cell_blk[j] = blk_of[j] < 0 ? dead_bid : blk_of[j];
+
+            if (cur_cell_pos) {
+                // the position test as values: cells the attention mask would drop, so empty
+                // or foreign ones, sit at int32 max and stay invisible under any query position
+                cur_cell_pos[j] = !cells.is_empty(j) && cells.seq_has(j, seq_of_stream) ?
+                    cells.pos_get(j) : INT32_MAX;
+            }
         }
 
         for (int64_t ii = 0; ii < n_tps; ++ii) {
@@ -670,10 +680,11 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
         ggml_tensor * blk_cells,
         ggml_tensor * blk_pos,
         ggml_tensor * bias,
+        ggml_tensor * cell_pos,
         const llama_ubatch * ubatch,
         uint32_t ratio,
         bool blk_bias) const {
     GGML_ASSERT(mem != nullptr);
 
-    mem->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio, blk_bias);
+    mem->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, cell_pos, ubatch, ratio, blk_bias);
 }

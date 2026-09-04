@@ -221,6 +221,17 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
         }
     }
 
+    // sparse attention engages through one fixed tile shape per head dim, so check for it
+    // before the GQA dispatch, whose ncols2 choice varies with mask and cache alignment
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if constexpr (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, 1, 8)) {
+        if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ctx, dst)) {
+            ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 1, 8>(ctx, dst);
+            return;
+        }
+    }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+
     if (use_gqa_opt && gqa_ratio > 4) {
         ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
         return;
