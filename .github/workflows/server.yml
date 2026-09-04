@@ -83,8 +83,16 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: server-ubuntu-24.04-arm
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: server-ubuntu-24.04-arm
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build
         id: cmake_build
@@ -92,6 +100,18 @@ jobs:
           cmake -B build \
             -DGGML_SCHED_NO_REALLOC=ON
           cmake --build build --config Release -j $(nproc) --target llama-server
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: server-ubuntu-24.04-arm
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
       - name: Python setup
         id: setup_python
@@ -127,16 +147,6 @@ jobs:
           cd tools/server/tests
           export LLAMA_ARG_BACKEND_SAMPLING=1
           SLOW_TESTS=1 ./tests.sh
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        env:
-          GH_TOKEN: ${{ github.token }}
-        with:
-          key: server-ubuntu-24.04-arm
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
 
   windows:
     runs-on: windows-2025
