@@ -3307,3 +3307,40 @@ ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, siz
     const ggml_backend_meta_context * backend_ctx = (const ggml_backend_meta_context *) meta_backend->context;
     return backend_ctx->backend_configs[index].backend;
 }
+
+bool ggml_backend_meta_get_mirrored_tensor(
+        ggml_backend_t meta_backend, const ggml_tensor * meta_tensor, size_t index,
+        ggml_backend_t * simple_backend, const ggml_tensor ** simple_tensor) {
+    if (simple_backend == nullptr || simple_tensor == nullptr) {
+        return false;
+    }
+    *simple_backend = nullptr;
+    *simple_tensor  = nullptr;
+
+    if (!ggml_backend_is_meta(meta_backend) || meta_tensor == nullptr ||
+            !ggml_backend_buffer_is_meta(meta_tensor->buffer) ||
+            index >= ggml_backend_meta_n_backends(meta_backend)) {
+        return false;
+    }
+
+    const ggml_backend_meta_split_state split_state =
+            ggml_backend_meta_get_split_state(meta_tensor, /*assume_sync =*/ false);
+    if (split_state.axis != GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+        return false;
+    }
+
+    const ggml_tensor * resolved = ggml_backend_meta_buffer_simple_tensor(meta_tensor, index);
+    if (resolved == nullptr) {
+        const ggml_backend_meta_context * backend_ctx =
+                (const ggml_backend_meta_context *) meta_backend->context;
+        const auto & compute_tensors = backend_ctx->stc_compute[backend_ctx->stc_index].simple_tensors;
+        const auto it = compute_tensors.find(meta_tensor);
+        if (it != compute_tensors.end() && index < it->second.size()) {
+            resolved = it->second[index];
+        }
+    }
+
+    *simple_backend = ggml_backend_meta_simple_backend(meta_backend, index);
+    *simple_tensor  = resolved;
+    return *simple_backend != nullptr && *simple_tensor != nullptr;
+}

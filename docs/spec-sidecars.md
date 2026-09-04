@@ -236,10 +236,15 @@ never be read by a later draft. Set
   With a single HIP target ubatch on the matching device, the host passes
   borrowed target device pointers and attaches the sidecar to the target HIP
   stream; the target context defers those host output copies until a host
-  getter is requested. A borrowed graph tensor cannot survive a later ubatch,
-  so multi-ubatch logical decodes materialize each ubatch in stream order before
-  its graph storage is reused. Otherwise the sidecar uses the synchronized
-  host-copy path.
+  getter is requested. Tensor-parallel `Meta()` outputs are exposed only when
+  their split state is mirrored; split or partial tensors fail closed to host
+  materialization. Compute-arena shard lookup remains tied to the active Meta
+  graph plan so a cached descriptor cannot outlive its graph storage. A
+  borrowed graph tensor cannot survive a later ubatch, so multi-ubatch logical
+  decodes materialize each ubatch in stream order before its graph storage is
+  reused. Otherwise the sidecar uses the synchronized host-copy path.
+  `LLAMA_SPEC_HIP_DFLASH_DEVICE_INPUT=0` is a diagnostic rollback to force the
+  synchronized DFlash host-input path.
 - The ABI exposes sequence-scoped `state_size`, `get_state`, `set_state`,
   `reset_state`, `truncate_state`, `commit_state`, and `rebase_state` for both
   sidecars. Snapshots contain only a position cursor plus an epoch; the large
@@ -251,9 +256,12 @@ never be read by a later draft. Set
   context; growth recaptures the per-sequence graph once, and
   reset releases grown storage.
 - Qwen3.8-27B sidecar KV capacity follows the effective per-sequence target
-  context and is allocated on demand. `LLAMA_SPEC_HIP_MAX_POS=N` may impose a lower position
-  cap to reduce VRAM use; it cannot raise capacity above the target context and
-  does not change the fixed F16 sidecar KV datatype.
+  context and is allocated on demand. Before each dense-MTP draft, capacity is
+  reserved through `n_past + n_draft`, including speculative lookahead across
+  16K/32K geometric allocation boundaries. `LLAMA_SPEC_HIP_MAX_POS=N` may
+  impose a lower position cap to reduce VRAM use; it cannot raise capacity
+  above the target context and does not change the fixed F16 sidecar KV
+  datatype.
 - Prompt and ordinary target rows are implicitly committed; target
   verification stages rows and acceptance commits only the accepted prefix.
   Checkpoint rollback discards pending rows and restores the cursor, slot reset

@@ -50,6 +50,88 @@ static ggml_backend_meta_split_state split_state_callback(const ggml_tensor * te
     return state;
 }
 
+static bool test_compute_mirrored_view(ggml_backend_t backend, size_t n_devs) {
+    const ggml_init_params params = {
+        /*.mem_size   =*/ 16*ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr ctx(ggml_init(params));
+    if (!ctx) {
+        std::fprintf(stderr, "failed to initialize compute-view context\n");
+        return false;
+    }
+
+    ggml_tensor * input = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 8);
+    ggml_set_name(input, "compute-view-input");
+    ggml_set_input(input);
+    ggml_tensor * output = ggml_scale(ctx.get(), input, 2.0f);
+    ggml_set_name(output, "compute-view-output");
+    ggml_set_output(output);
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 16, false);
+    ggml_build_forward_expand(graph, output);
+
+    ggml_backend_ptr cpu_backend(
+            ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    if (!cpu_backend) {
+        std::fprintf(stderr, "failed to initialize compute-view CPU fallback\n");
+        return false;
+    }
+    ggml_backend_t sched_backends[] = { backend, cpu_backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(
+            sched_backends, nullptr, 2, GGML_DEFAULT_GRAPH_SIZE, false, true));
+    if (!sched) {
+        std::fprintf(stderr, "failed to initialize compute-view scheduler\n");
+        return false;
+    }
+    ggml_backend_sched_set_tensor_backend(sched.get(), input, backend);
+    ggml_backend_sched_set_tensor_backend(sched.get(), output, backend);
+    if (!ggml_backend_sched_reserve(sched.get(), graph)) {
+        std::fprintf(stderr, "failed to reserve compute-view graph\n");
+        return false;
+    }
+    ggml_backend_sched_set_tensor_backend(sched.get(), input, backend);
+    ggml_backend_sched_set_tensor_backend(sched.get(), output, backend);
+    if (!ggml_backend_sched_alloc_graph(sched.get(), graph)) {
+        std::fprintf(stderr, "failed to allocate compute-view graph\n");
+        return false;
+    }
+
+    const float input_values[8] = { 1, 2, 3, 4, -1, -2, -3, -4 };
+    const float expected[8] = { 2, 4, 6, 8, -2, -4, -6, -8 };
+    ggml_backend_tensor_set(input, input_values, 0, sizeof(input_values));
+    if (ggml_backend_sched_graph_compute(sched.get(), graph) != GGML_STATUS_SUCCESS) {
+        std::fprintf(stderr, "compute-view graph execution failed\n");
+        return false;
+    }
+    ggml_backend_sched_synchronize(sched.get());
+
+    if (ggml_backend_sched_get_tensor_backend(sched.get(), output) != backend) {
+        std::fprintf(stderr, "compute-view output did not remain on meta backend\n");
+        return false;
+    }
+    for (size_t i = 0; i < n_devs; ++i) {
+        ggml_backend_t simple_backend = nullptr;
+        const ggml_tensor * simple_tensor = nullptr;
+        if (!ggml_backend_meta_get_mirrored_tensor(
+                    backend, output, i, &simple_backend, &simple_tensor) ||
+                simple_backend == nullptr || simple_tensor == nullptr ||
+                simple_tensor->data == nullptr) {
+            std::fprintf(stderr, "failed to resolve compute-view physical tensor %zu\n", i);
+            return false;
+        }
+        float actual[8] = {};
+        ggml_backend_tensor_get(simple_tensor, actual, 0, sizeof(actual));
+        if (std::memcmp(actual, expected, sizeof(expected)) != 0) {
+            std::fprintf(stderr, "compute-view physical tensor %zu mismatch\n", i);
+            return false;
+        }
+    }
+
+    std::puts("compute-arena mirrored physical views passed");
+    return true;
+}
+
 static bool test_deep_meta_graph(ggml_backend_t backend) {
     static constexpr size_t depth = 2048;
     const ggml_init_params params = {
@@ -229,6 +311,36 @@ int main() {
         }
     }
 
+    for (size_t i = 0; i < simple_devs.size(); ++i) {
+        ggml_backend_t simple_backend = nullptr;
+        const ggml_tensor * simple_tensor = nullptr;
+        if (!ggml_backend_meta_get_mirrored_tensor(
+                    backend.get(), mirror, i, &simple_backend, &simple_tensor) ||
+                simple_backend == nullptr || simple_tensor == nullptr ||
+                simple_tensor->data == nullptr) {
+            std::fprintf(stderr, "failed to resolve mirrored physical tensor %zu\n", i);
+            return 1;
+        }
+        std::vector<float> simple_actual(mirrored.size(), 0.0f);
+        ggml_backend_tensor_get(simple_tensor, simple_actual.data(), 0, nbytes);
+        if (simple_actual != mirrored) {
+            std::fprintf(stderr, "mirrored physical tensor %zu mismatch\n", i);
+            return 1;
+        }
+    }
+    ggml_backend_t rejected_backend = nullptr;
+    const ggml_tensor * rejected_tensor = nullptr;
+    if (ggml_backend_meta_get_mirrored_tensor(
+                backend.get(), root, 0, &rejected_backend, &rejected_tensor) ||
+            ggml_backend_meta_get_mirrored_tensor(
+                backend.get(), partial, 0, &rejected_backend, &rejected_tensor) ||
+            ggml_backend_meta_get_mirrored_tensor(
+                backend.get(), mirror, simple_devs.size(),
+                &rejected_backend, &rejected_tensor)) {
+        std::fprintf(stderr, "non-mirrored or out-of-range physical tensor was exposed\n");
+        return 1;
+    }
+
     const size_t axis3_nbytes = ggml_nbytes(axis3);
     std::vector<float> axis3_expected(axis3_nbytes / sizeof(float));
     for (size_t i = 0; i < axis3_expected.size(); ++i) {
@@ -313,7 +425,8 @@ int main() {
         return 1;
     }
 
-    if (!test_deep_meta_graph(backend.get())) {
+    if (!test_compute_mirrored_view(backend.get(), simple_devs.size()) ||
+            !test_deep_meta_graph(backend.get())) {
         return 1;
     }
 

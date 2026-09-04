@@ -950,16 +950,38 @@ static int spec_dflash_chunk_impl(int32_t seq_id, const int32_t * poss,
         int n_layers, int layer_width, bool device_features, int n) {
     DSeqState * q = get_seq(seq_id);
     if (!S.ok || q == nullptr || n < 0 ||
-            (n > 0 && (!poss || (device_features ? layer_features_device == nullptr : feats == nullptr)))) return -1;
+            (n > 0 && (!poss || (device_features ? layer_features_device == nullptr : feats == nullptr)))) {
+        fprintf(stderr, "[dflash-sidecar] chunk rejected: invalid arguments seq=%d n=%d device_features=%d\n",
+                seq_id, n, device_features ? 1 : 0);
+        return -1;
+    }
     if (n == 0) return 0;
     DFlashDeviceGuard device_guard(S.device);
-    if (!device_guard.valid) return -1;
-    if (n > S.max_pos - q->state_pos_max || q->pending_pos_max != q->state_pos_max ||
-            ensure_seq_storage(*q, q->state_pos_max + n) != 0 || ensure_pending_storage(*q, n) != 0) return -1;
-    if (device_features && (n_layers != DF_LAYERS || layer_width != DF_EMBD / DF_LAYERS)) return -1;
+    if (!device_guard.valid) {
+        fprintf(stderr, "[dflash-sidecar] chunk rejected: cannot bind device %d\n", S.device);
+        return -1;
+    }
+    if (n > S.max_pos - q->state_pos_max || q->pending_pos_max != q->state_pos_max) {
+        fprintf(stderr, "[dflash-sidecar] chunk rejected: sequence bounds seq=%d n=%d state=%d pending=%d max=%d\n",
+                seq_id, n, q->state_pos_max, q->pending_pos_max, S.max_pos);
+        return -1;
+    }
+    if (ensure_seq_storage(*q, q->state_pos_max + n) != 0 || ensure_pending_storage(*q, n) != 0) {
+        fprintf(stderr, "[dflash-sidecar] chunk rejected: storage growth seq=%d n=%d state=%d\n",
+                seq_id, n, q->state_pos_max);
+        return -1;
+    }
+    if (device_features && (n_layers != DF_LAYERS || layer_width != DF_EMBD)) {
+        fprintf(stderr, "[dflash-sidecar] chunk rejected: feature shape layers=%d/%d width=%d/%d\n",
+                n_layers, DF_LAYERS, layer_width, DF_EMBD);
+        return -1;
+    }
     if (device_features) {
         for (int il = 0; il < DF_LAYERS; ++il) {
-            if (layer_features_device[il] == nullptr) return -1;
+            if (layer_features_device[il] == nullptr) {
+                fprintf(stderr, "[dflash-sidecar] chunk rejected: null device layer %d\n", il);
+                return -1;
+            }
         }
     }
     for (int r = 0; r < n; ++r) {

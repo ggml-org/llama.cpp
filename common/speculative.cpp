@@ -1111,6 +1111,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     common_spec_sidecar_dflash sidecar;
     bool sidecar_target_only = false; // runtime failure or unsupported sampling mode
+    int sidecar_input_mode_logged = -1; // 0 = host staging, 1 = direct device handoff
     common_speculative_dflash_controller_config controller_config;
 
     common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
@@ -1387,12 +1388,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             const std::vector<int32_t> & i_batch_end) {
         auto * ctx_tgt = this->params.ctx_tgt;
         std::vector<llama_device_view> layers(target_layer_ids_n);
-        bool direct = false;
+        bool direct = true;
         void * stream = nullptr;
         int32_t device = -1;
-#if defined(GGML_USE_HIP)
-        direct = true;
-#endif
         for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
             const bool is_nextn = target_layer_ids[k] == n_layer_tgt;
             const bool has_device_layer = is_nextn
@@ -1411,8 +1409,21 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 break;
             }
         }
+        const char * device_input_env = std::getenv("LLAMA_SPEC_HIP_DFLASH_DEVICE_INPUT");
+        if (device_input_env != nullptr && std::strcmp(device_input_env, "0") == 0) {
+            direct = false;
+        }
         if (direct && !sidecar.attach_target_stream(stream, device)) {
             direct = false;
+        }
+        const int input_mode = direct ? 1 : 0;
+        if (input_mode != sidecar_input_mode_logged) {
+            if (direct) {
+                SPC_INF("DFlash sidecar target handoff: direct device rows on device %d\n", device);
+            } else {
+                SPC_INF("%s", "DFlash sidecar target handoff: host staging\n");
+            }
+            sidecar_input_mode_logged = input_mode;
         }
 
         std::vector<bool> contiguous(n_seq, true);
@@ -2109,6 +2120,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<std::vector<int32_t>> sidecar_deferred_pos;
     std::vector<const float *> verify_h_device;
     std::vector<size_t> verify_h_device_stride;
+    int sidecar_input_mode_logged = -1; // 0 = host staging, 1 = direct device handoff
 
     llama_batch batch = {};
 
@@ -2368,15 +2380,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             bool defer_catchup) {
         auto * ctx_tgt = this->params.ctx_tgt;
         llama_device_view device_view;
-        bool have_device_view = false;
+        const bool have_device_view = llama_get_embeddings_nextn_device(ctx_tgt, &device_view);
         bool direct = false;
-        int32_t target_device = -1;
-#if defined(GGML_USE_HIP)
-        have_device_view = llama_get_embeddings_nextn_device(ctx_tgt, &device_view);
-        if (have_device_view) {
-            target_device = device_view.device;
-        }
-#endif
+        const int32_t target_device = have_device_view ? device_view.device : -1;
 
         if (sidecar_load_pending) {
             std::string error;
@@ -2393,19 +2399,24 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
             sidecar_load_pending = false;
             llama_set_embeddings_nextn_device_preferred(ctx_tgt, true);
-            SPC_INF("MTP sidecar active: %s (bound device=%d)\n",
+            SPC_INF("MTP sidecar active: %s (initial target device=%d; -1 means current-device fallback)\n",
                     sidecar_paths.library.c_str(), target_device);
         }
 
-#if defined(GGML_USE_HIP)
         const bool view_shape_ok = have_device_view &&
                 device_view.row_stride == (size_t) n_embd * sizeof(float) &&
                 device_view.n_rows >= (uint32_t) batch_in.n_tokens;
         direct = view_shape_ok && sidecar.attach_target_stream(device_view.stream, device_view.device);
-#endif
-        if (std::getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr) {
-            SPC_DBG("MTP catch-up input mode: %s (target device=%d)\n",
-                    direct ? "DIRECT D2D" : "HOST FALLBACK", target_device);
+        const int input_mode = direct ? 1 : 0;
+        if (input_mode != sidecar_input_mode_logged) {
+            if (direct) {
+                SPC_INF("MTP sidecar target handoff: direct device rows on device %d\n",
+                        target_device);
+            } else {
+                SPC_INF("MTP sidecar target handoff: host staging (device view=%d, target device=%d)\n",
+                        have_device_view ? 1 : 0, target_device);
+            }
+            sidecar_input_mode_logged = input_mode;
         }
 
         // If any sequence is interleaved, direct rows cannot be represented by
