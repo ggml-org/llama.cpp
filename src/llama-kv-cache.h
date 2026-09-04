@@ -118,8 +118,34 @@ public:
 
     ~llama_kv_cache() = default;
 
-    //
-    // llama_memory_i
+    // enable streaming eviction (sink + recent window); must be called before use
+    void set_eviction(uint32_t sink, uint32_t recent) {
+        n_kv_sink   = sink;
+        n_kv_recent = recent;
+    }
+
+    // streaming eviction telemetry (counters/timers, always available)
+    struct llama_kv_cache_evict_stats {
+        uint64_t n_cells_recycled   = 0; // cells recycled by eviction
+        uint64_t n_mask_cells       = 0; // cells dropped by the sink/recent mask
+        uint64_t n_victim_select    = 0; // victim recycling selection runs
+        uint64_t n_victim_failed    = 0; // selection runs with too few candidates
+        uint64_t t_victim_select_us = 0; // total victim selection time, us
+        uint64_t t_mask_us          = 0; // total host-side KQ mask time, us
+
+        uint64_t cells_recycled()    const { return n_cells_recycled;   }
+        uint64_t masked_cells()      const { return n_mask_cells;       }
+        uint64_t victim_selections() const { return n_victim_select;    }
+        uint64_t victim_failures()   const { return n_victim_failed;    }
+        uint64_t victim_select_us()  const { return t_victim_select_us; }
+        uint64_t mask_us()           const { return t_mask_us;          }
+    };
+
+    // current eviction telemetry snapshot (all zero when eviction is disabled)
+    llama_kv_cache_evict_stats get_evict_stats() const {
+        return evict_stats;
+    }
+
     //
 
     llama_memory_context_ptr init_batch(
@@ -269,6 +295,16 @@ private:
 
     // SWA
     const uint32_t n_swa = 0;
+
+    // streaming eviction: attention-sink + recent window (0 = disabled)
+    uint32_t n_kv_sink   = 0;
+    uint32_t n_kv_recent = 0;
+
+    // streaming eviction telemetry (updated from const find_slot/mask paths)
+    mutable llama_kv_cache_evict_stats evict_stats;
+    mutable uint32_t evict_log_cnt = 0; // periodic telemetry summary
+
+    void update_evict_stats(const llama_seq_id seq_id, uint32_t need, uint32_t n_recycle, int64_t t_start) const;
 
     // env: LLAMA_ATTN_ROT_DISABLE
     bool attn_rot_k = false;

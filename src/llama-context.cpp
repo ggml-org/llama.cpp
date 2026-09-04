@@ -80,6 +80,87 @@ static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
+// resolve the streaming-eviction configuration; zeroes out sink/recent when the
+// model cannot support eviction and returns the reason (nullptr if it stays on)
+static const char * setup_kv_eviction(llama_cparams & cparams, const llama_context_params & params, const llama_hparams & hparams) {
+    if (cparams.n_kv_sink == 0) {
+        return nullptr;
+    }
+
+    const char * evict_disable_reason = nullptr;
+
+    // MTP: n_kv_recent >= 64 is a conservative, unproven bound; the real
+    // speculative rollback depth is not verified against the recent window
+    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && cparams.n_kv_recent < 64) {
+        LLAMA_LOG_WARN("%s: kv eviction under MTP requires n_kv_recent >= 64 (got %u); disabling\n",
+                __func__, cparams.n_kv_recent);
+        evict_disable_reason = "MTP: n_kv_recent < 64";
+        cparams.n_kv_sink   = 0;
+        cparams.n_kv_recent = 0;
+    }
+
+    // the hybrid sliding-window cache (hybrid_iswa) does not support eviction yet
+    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+        LLAMA_LOG_WARN("%s: kv eviction unsupported for sliding-window hybrid caches; disabling\n", __func__);
+        if (evict_disable_reason == nullptr) {
+            evict_disable_reason = "SWA: unsupported sliding-window hybrid cache";
+        }
+        cparams.n_kv_sink   = 0;
+        cparams.n_kv_recent = 0;
+    }
+
+    return evict_disable_reason;
+}
+
+// eviction invariants once n_ubatch and n_ctx_seq are known
+static void validate_kv_eviction(const llama_cparams & cparams) {
+    if (cparams.n_kv_sink == 0) {
+        return;
+    }
+    const uint64_t sink_recent = (uint64_t) cparams.n_kv_sink + cparams.n_kv_recent;
+
+    // positions are signed llama_pos, so the window plus a full ubatch must fit
+    if (sink_recent + cparams.n_ubatch > (uint64_t) std::numeric_limits<llama_pos>::max()) {
+        throw std::runtime_error("n_kv_sink + n_kv_recent + n_ubatch exceeds llama_pos domain");
+    }
+    // a single sequence must be able to hold its full sink + recent window
+    if (sink_recent > cparams.n_ctx_seq) {
+        throw std::runtime_error("n_kv_sink + n_kv_recent must be <= n_ctx_seq");
+    }
+}
+
+static const char * swa_type_name(const llama_swa_type swa_type) {
+    switch (swa_type) {
+        case LLAMA_SWA_TYPE_NONE:      return "NONE";
+        case LLAMA_SWA_TYPE_STANDARD:  return "STANDARD";
+        case LLAMA_SWA_TYPE_CHUNKED:   return "CHUNKED";
+        case LLAMA_SWA_TYPE_SYMMETRIC: return "SYMMETRIC";
+        default:                       return "UNKNOWN";
+    }
+}
+
+// log the effective eviction configuration (sink/recent may have been zeroed)
+static void log_kv_eviction_config(const llama_cparams & cparams, const llama_hparams & hparams, const char * evict_disable_reason) {
+    if (cparams.n_kv_sink == 0 && evict_disable_reason == nullptr) {
+        return;
+    }
+    if (evict_disable_reason != nullptr) {
+        LLAMA_LOG_WARN("%s: kv eviction requested but disabled (%s): effective sink = 0, recent = 0\n",
+                __func__, evict_disable_reason);
+    }
+    const char * ctx_type_str = cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP ? "MTP" : "DEFAULT";
+    LLAMA_LOG_INFO("%s: kv eviction: sink = %u, recent = %u, attn_kv = %u, n_ctx_seq = %u, n_ubatch = %u, n_seq_max = %u, swa_type = %s, ctx_type = %s\n",
+            __func__,
+            cparams.n_kv_sink,
+            cparams.n_kv_recent,
+            llama_model_attn_cache_evict_size(cparams),
+            cparams.n_ctx_seq,
+            cparams.n_ubatch,
+            cparams.n_seq_max,
+            swa_type_name(hparams.swa_type),
+            ctx_type_str);
+}
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -107,6 +188,14 @@ llama_context::llama_context(
                         __func__, cparams.n_rs_seq);
         cparams.n_rs_seq = 0;
     }
+
+    cparams.n_kv_sink   = params.n_kv_sink;
+    cparams.n_kv_recent = params.n_kv_recent;
+    if ((cparams.n_kv_sink == 0) != (cparams.n_kv_recent == 0)) {
+        throw std::runtime_error("n_kv_sink and n_kv_recent must both be zero (disabled) or both non-zero");
+    }
+
+    const char * evict_disable_reason = setup_kv_eviction(cparams, params, hparams);
 
     cparams.n_threads               = params.n_threads;
     cparams.n_threads_batch         = params.n_threads_batch;
@@ -303,6 +392,10 @@ llama_context::llama_context(
         }
     }
 
+    // eviction invariants and effective-config telemetry (n_ubatch/n_ctx_seq are final here)
+    validate_kv_eviction(cparams);
+    log_kv_eviction_config(cparams, model.hparams, evict_disable_reason);
+
     LLAMA_LOG_INFO("%s: n_seq_max             = %u\n",   __func__, cparams.n_seq_max);
     LLAMA_LOG_INFO("%s: n_ctx                 = %u\n",   __func__, cparams.n_ctx);
     LLAMA_LOG_INFO("%s: n_ctx_seq             = %u\n",   __func__, cparams.n_ctx_seq);
@@ -314,6 +407,8 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
+    LLAMA_LOG_INFO("%s: n_kv_sink             = %u\n",   __func__, cparams.n_kv_sink);
+    LLAMA_LOG_INFO("%s: n_kv_recent           = %u\n",   __func__, cparams.n_kv_recent);
     LLAMA_LOG_INFO("%s: n_outputs_max         = %u\n",   __func__, cparams.n_outputs_max);
     LLAMA_LOG_INFO("%s: n_outputs_max_per_seq = %u\n",   __func__, cparams.n_outputs_max_per_seq);
 
@@ -3619,6 +3714,8 @@ llama_context_params llama_context_default_params() {
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,
         /*.n_rs_seq                    =*/ 0,
+        /*.n_kv_sink                  =*/ 0,
+        /*.n_kv_recent                =*/ 0,
         /*.n_outputs_max               =*/ 0,
         /*.n_outputs_max_per_seq       =*/ 1,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default

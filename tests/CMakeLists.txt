@@ -229,6 +229,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback-nemotron-h PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
+
     llama_test(
         test-recurrent-state-rollback
         NAME test-recurrent-state-rollback-dsv4
@@ -246,6 +247,10 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         ARGS --models "${MODEL_DIR}"
     )
     set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
+
+    # StreamingLLM-style KV cache eviction (--kv-evict-sink / --kv-evict-window)
+    # generates its own in-memory models; no fixtures required
+    llama_build_and_test(test-kv-evict.cpp LABEL "model")
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)

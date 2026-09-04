@@ -1697,6 +1697,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
+        {"--kv-evict-sink"}, "N",
+        "streaming eviction: number of attention-sink tokens kept in KV (0 = disabled)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("kv-evict-sink must be non-negative");
+            }
+            params.n_kv_sink = value;
+        }
+    ).set_env("LLAMA_ARG_KV_EVICT_SINK").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BENCH}));
+    add_opt(common_arg(
+        {"--kv-evict-window"}, "N",
+        "streaming eviction: number of recent-window tokens kept in KV (0 = disabled)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("kv-evict-window must be non-negative");
+            }
+            params.n_kv_recent = value;
+        }
+    ).set_env("LLAMA_ARG_KV_EVICT_WINDOW").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BENCH}));
+    add_opt(common_arg(
         {"-ctxcp", "--ctx-checkpoints", "--swa-checkpoints"}, "N",
         string_format("max number of context checkpoints to create per slot (default: %d)"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)", params.n_ctx_checkpoints),
