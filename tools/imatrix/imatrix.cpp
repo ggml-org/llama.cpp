@@ -831,7 +831,10 @@ struct mtp_feed {
     }
 
     // batch_tgt rows are laid out seq-major: row = seq*batch_size + k
-    bool decode(llama_context * ctx_tgt, const llama_batch & batch_tgt, int32_t n_seq_batch, int32_t batch_size, bool logits) {
+    // No logits are requested: the head shares output.weight with the trunk, and the trunk
+    // pass already collects it. With them, the head's hidden states would be summed into
+    // that entry and its counts doubled.
+    bool decode(llama_context * ctx_tgt, const llama_batch & batch_tgt, int32_t n_seq_batch, int32_t batch_size) {
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
         const float * h_tgt = llama_get_embeddings_nextn(ctx_tgt);
@@ -845,7 +848,7 @@ struct mtp_feed {
                 const float * h_prev = k == 0 ? h_last.data() + (size_t) seq * n_embd : h_tgt + (size_t) (r - 1) * n_embd;
                 std::memcpy(batch.embd + (size_t) r * n_embd, h_prev, row_bytes);
 
-                common_batch_add(batch, batch_tgt.token[r], batch_tgt.pos[r], { batch_tgt.seq_id[r][0] }, logits);
+                common_batch_add(batch, batch_tgt.token[r], batch_tgt.pos[r], { batch_tgt.seq_id[r][0] }, false);
             }
 
             std::memcpy(h_last.data() + (size_t) seq * n_embd, h_tgt + (size_t) (seq*batch_size + batch_size - 1) * n_embd, row_bytes);
@@ -979,7 +982,7 @@ static bool compute_imatrix(llama_context * ctx, llama_context * ctx_mtp, const 
             }
 
             // the head's LM matmul runs only over the requested outputs; all other block weights see every token
-            if (ctx_mtp && !mtp.decode(ctx, batch, n_seq_batch, batch_size, params.process_output)) {
+            if (ctx_mtp && !mtp.decode(ctx, batch, n_seq_batch, batch_size)) {
                 LOG_ERR("%s : failed to eval the MTP head\n", __func__);
                 llama_batch_free(batch);
                 return false;
