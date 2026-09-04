@@ -103,6 +103,7 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
     file(GLOB   GGML_SOURCES_CUDA "*.cu")
+    set(GGML_CUDA_CUTLASS_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/mmq-cutlass.cu")
     file(GLOB   SRCS "template-instances/fattn-tile*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
     file(GLOB   SRCS "template-instances/fattn-mma*.cu")
@@ -122,6 +123,27 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-q4_0-q4_0.cu
             template-instances/fattn-vec-instance-q8_0-q8_0.cu
             template-instances/fattn-vec-instance-bf16-bf16.cu)
+    endif()
+
+    if (GGML_CUDA_CUTLASS)
+        if (CUDAToolkit_VERSION VERSION_LESS "12.9")
+            message(FATAL_ERROR "GGML_CUDA_CUTLASS requires CUDA 12.9 or newer")
+        endif()
+
+        include(FetchContent)
+        FetchContent_Declare(
+            CUTLASS
+            GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
+            GIT_TAG        v4.7.0
+            SOURCE_SUBDIR  source-only
+        )
+        FetchContent_MakeAvailable(CUTLASS)
+
+        if (COMMAND license_add_file)
+            license_add_file("CUTLASS" "${cutlass_SOURCE_DIR}/LICENSE.txt")
+        endif()
+
+        list(REMOVE_ITEM GGML_SOURCES_CUDA "${GGML_CUDA_CUTLASS_SOURCE}")
     endif()
 
     ggml_add_backend_library(ggml-cuda
@@ -180,6 +202,29 @@ if (CUDAToolkit_FOUND)
         # No VMM requested, no need to link directly with the cuda driver lib (libcuda.so)
     else()
         target_link_libraries(ggml-cuda PRIVATE CUDA::cuda_driver)
+    endif()
+
+    if (GGML_CUDA_CUTLASS)
+        add_library(ggml-cuda-cutlass OBJECT "${GGML_CUDA_CUTLASS_SOURCE}")
+        set_target_properties(ggml-cuda-cutlass PROPERTIES
+            CUDA_ARCHITECTURES OFF
+            POSITION_INDEPENDENT_CODE ON)
+        target_link_libraries(ggml-cuda-cutlass PRIVATE ggml-base)
+        target_include_directories(ggml-cuda-cutlass PRIVATE
+            ..
+            "${cutlass_SOURCE_DIR}/include"
+            "${cutlass_SOURCE_DIR}/tools/util/include")
+        target_compile_definitions(ggml-cuda-cutlass PRIVATE GGML_CUDA_CUTLASS)
+        target_compile_options(ggml-cuda-cutlass PRIVATE
+            "$<$<COMPILE_LANGUAGE:CUDA>:--generate-code=arch=compute_120f,code=sm_120f>"
+            "$<$<COMPILE_LANGUAGE:CUDA>:--generate-code=arch=compute_121f,code=sm_121f>"
+            "$<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>")
+        if (BUILD_SHARED_LIBS)
+            target_compile_definitions(ggml-cuda-cutlass PRIVATE GGML_BACKEND_BUILD GGML_BACKEND_SHARED)
+        endif()
+        target_sources(ggml-cuda PRIVATE $<TARGET_OBJECTS:ggml-cuda-cutlass>)
+
+        target_compile_definitions(ggml-cuda PRIVATE GGML_CUDA_CUTLASS)
     endif()
 
     if (GGML_CUDA_NCCL)
@@ -263,7 +308,13 @@ if (CUDAToolkit_FOUND)
         list(APPEND CUDA_FLAGS -Xcompiler ${CUDA_CXX_FLAGS_JOINED})
     endif()
 
-    target_compile_options(ggml-cuda PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:${CUDA_FLAGS}>")
+    set(GGML_CUDA_COMPILE_TARGETS ggml-cuda)
+    if (TARGET ggml-cuda-cutlass)
+        list(APPEND GGML_CUDA_COMPILE_TARGETS ggml-cuda-cutlass)
+    endif()
+    foreach(GGML_CUDA_COMPILE_TARGET IN LISTS GGML_CUDA_COMPILE_TARGETS)
+        target_compile_options(${GGML_CUDA_COMPILE_TARGET} PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:${CUDA_FLAGS}>")
+    endforeach()
 else()
     message(FATAL_ERROR "CUDA Toolkit not found")
 endif()
