@@ -1,8 +1,19 @@
 # MTP head calibration: A/B test design
 
-Status: run 2026-09-04, results below. `MTP_imatrix_AB_test.sh` reproduces the whole thing: imatrix, five quantizations, trunk hash proof, agreement runs, summary table. Every step skips when its output exists. Needs the `--process-mtp` patch in `tools/imatrix/imatrix.cpp` (commit 8de9abba1 plus the ubatch cap for the head context).
+Status: done 2026-09-04. `MTP_imatrix_AB_test.sh` reproduces everything: imatrix with the head, one quantization per variant, trunk hash proof, teacher-forced agreement, paired tests, summary table. Each variant is built, hashed, scored and deleted in turn, so the disk holds one 21 GB file at a time. Needs `--process-mtp` in `tools/imatrix/imatrix.cpp` (commit 8de9abba1 plus the ubatch cap for the head context) and `examples/mtp-agree`.
 
-Done on 2026-09-04: `kld-base/qwen3.8-27b-imatrix-cal-mtp.gguf` (calibration_datav3.txt only, 129 chunks, head included) and the quant from it now lives as `qwen3.8-27b-q6_k-gateup-q5_k.gguf` (the served file). That file is variant B on the calibration corpus and `qwen3.8-27b-q6_k-gateup-q5_k-imat-cal.gguf` is its A, up to the 120-vs-129 chunk drift in the trunk; the steps below still describe the 1000-chunk corpus.
+## Findings
+
+Eleven heads on one hash-proven identical trunk, scored teacher-forced on 151k held-out pile tokens, paired over 148 chunks. Full tables in Results and Ladder below.
+
+- **The head's whole budget is half a percent of drafts.** Plain Q4_0 agrees with the trunk on 0.7183 of positions, bf16 on 0.7239. Nothing done to the head can move decode speed by more than about two percent.
+- **The imatrix helps the head, a little, and it is free.** +0.0017 on Q4_0, +0.0014 on Q4_K, both paired-significant. One flag on an imatrix run made anyway; not worth a separate run.
+- **Q4_K is the free win.** Same 240 MB as Q4_0, +0.0034 with the imatrix, +0.0020 without. Format is worth as much as calibration at 4.5 bits, and the two add.
+- **Q6_K is the bf16 head** for 110 MB more than Q4_0, 0.0006 short, at the edge of what the test resolves. Q5_K, Q5_1 and Q6_K are one flat step from 5.5 bits up; Q8_0 was not scored because nothing above Q6_K can be told apart.
+- **Below 4.5 bits the loss is steep.** IQ3_S costs three times the Q4_0 penalty for 55 MB; IQ2_XS collapses.
+- **The pick:** Q4_K with the imatrix if VRAM is tight, Q6_K if it is not.
+- **Imatrix corpus size does not matter for the trunk either.** 61k tokens, 1.1M tokens and unsloth's 10M land within one sigma of KLD on the same recipe. An imatrix at all is worth a fifth of the KLD; after that the column statistics are already converged.
+- **A live greedy A/B is not a measurement.** Outputs diverge between heads within a few hundred characters because the verify batch shape changes CUDA logits. Teacher-forced agreement is the instrument.
 
 ## Question
 
@@ -93,7 +104,7 @@ C uses `blk\.64\.=bf16`, D uses `iq3_s`, E uses `iq2_xs`. A uses the B type file
 ```
 IMX=kld-base/qwen3.8-27b-imatrix-cal-mtp.gguf
 SRC=qwen3.8-27b-bf16.gguf
-OUT=qwen3.8-27b-q6_k-gateup-q5_k
+OUT=kld-base/ggufs/qwen3.8-27b-q6_k-gateup-q5_k   # scratch GGUFs go on the kld-base volume
 
 llama-quantize --imatrix $IMX --pure --tensor-type-file tmp/quant-types-mtp-B.txt --exclude-weights blk.64. $SRC $OUT-mtpA.gguf Q6_K
 llama-quantize --imatrix $IMX --pure --tensor-type-file tmp/quant-types-mtp-B.txt                            $SRC $OUT-mtpB.gguf Q6_K
@@ -102,7 +113,7 @@ llama-quantize --imatrix $IMX --pure --tensor-type-file tmp/quant-types-mtp-D.tx
 llama-quantize --imatrix $IMX --pure --tensor-type-file tmp/quant-types-mtp-E.txt                            $SRC $OUT-mtpE.gguf Q6_K
 ```
 
-Five files at about 20 GB each. Quantize is I/O bound here, so run them one after another.
+About 20 GB each. The script builds, hashes and measures one variant at a time and then deletes its file (`KEEP_GGUF=1` keeps it), so the disk holds one variant, not the ladder. The per-tensor hashes and the measurement stay under `tmp/`. Quantize is I/O bound and two at once exhaust host memory, so never run them in parallel.
 
 ## Step 3: prove the trunk is identical
 
@@ -182,6 +193,50 @@ Read against the decision rule:
 - `-c 5120` chunks mean the head sees at most 5119 tokens of context per row during calibration, the same limit the trunk imatrix has.
 - The KV cache types of the draft context apply to block 64's attention. A lossy V cache lowers acceptance for every variant alike and shrinks the headroom the imatrix can show. Measure with 16-bit draft K and V; bring the quantized draft cache back once the head type is settled.
 - Serve greedy. At temperature 1.0 a draft counts as accepted only when it equals the sampled token, which adds the trunk's entropy as noise on top of the head's precision.
+
+## Ladder: how low the head can go, and how high it needs to be
+
+Binary search over bits per weight on the same trunk and text, three cuts after the first five variants. Every rung is quantized with the imatrix except A.
+
+| head | bits/weight | head size | agreement | vs Q4_0, paired t | vs bf16, paired t |
+| --- | --- | --- | --- | --- | --- |
+| IQ2_XS (E) | 2.3 | 125 MB | 0.6330 | -0.0853, -65.7 | |
+| IQ3_S (D) | 3.4 | 185 MB | 0.7018 | -0.0165, -24.4 | |
+| Q4_0 (A) | 4.5 | 240 MB | 0.7183 | | -0.0056, -10.7 |
+| Q4_0 + imatrix (B) | 4.5 | 240 MB | 0.7200 | +0.0017, +3.5 | |
+| Q4_K, no imatrix | 4.5 | 240 MB | 0.7203 | +0.0020, +3.6 | -0.0036 |
+| Q4_K | 4.5 | 240 MB | 0.7216 | +0.0034, +5.8 | -0.0023, -4.7 |
+| Q4_1 | 5.0 | 265 MB | 0.7213 | +0.0030, +5.1 | -0.0026, -5.7 |
+| Q5_K | 5.5 | 290 MB | 0.7228 | +0.0046, +8.9 | -0.0011, -3.0 |
+| Q5_1 | 6.0 | 320 MB | 0.7232 | +0.0049, +9.8 | -0.0008, -2.2 |
+| Q6_K | 6.6 | 350 MB | 0.7233 | +0.0050, +10.2 | -0.0006, -2.3 |
+| BF16 (C) | 16 | 850 MB | 0.7239 | +0.0056, +10.7 | |
+
+Q8_0 was not scored: Q6_K already sits within 0.001 of bf16, so nothing above it can be told apart by this test. Q5_0 was quantized and not scored; Q5_K covers that size.
+
+Q4_1 and Q5_1 were added afterwards because the offset formats are said to gain the most from an imatrix. Each lands on its k-quant neighbour within noise (Q4_1 vs Q4_K -0.0003, t -0.9; Q5_1 vs Q5_K +0.0003, t +1.0; Q5_1 vs Q6_K -0.0002, t -0.5) at a higher bit cost, so the offset buys nothing the super-block does not.
+
+- **Q6_K is the bf16 head.** 0.0006 short over 151k positions, at the edge of what the test resolves, for 110 MB more than Q4_0.
+- **Q4_K is the free win.** Same 240 MB as Q4_0 and twice the gain of the imatrix on Q4_0. It closes 60 percent of the gap to bf16 at no VRAM cost. Without the head's imatrix entries it still beats plain Q4_0 (+0.0020, t 3.6) and matches calibrated Q4_0 (B), so the format change alone is worth as much as the calibration; the two together add up (uncalibrated vs calibrated Q4_K: -0.0014, t -2.6).
+- **Below 4.5 bits the loss is steep.** The head is small enough that the bits it saves are not worth a measurable share of drafts.
+
+Reading the ladder as a curve: the loss from bf16 roughly doubles per bit removed below 6 bits, then explodes below 4. That is the same shape the trunk shows in the quantsweep, with the head about ten times less sensitive per bit because verification forgives it.
+
+## Side result: imatrix corpus size does not matter here
+
+Same production recipe, same bf16 source, only the imatrix differs. KLD against the bf16 base on the standard text:
+
+| imatrix | tokens | chunk | output entry | Mean KLD | Same top p |
+| --- | --- | --- | --- | --- | --- |
+| none | | | | 0.004724 ± 0.000099 | 96.83 |
+| calibration_datav3 | 61k | 5120 | no | 0.003761 ± 0.000060 | 97.16 |
+| calibration_datav3 + 4 MB pile | 1.1M | 5120 | no | 0.003787 ± 0.000085 | 97.21 |
+| calibration_datav3, with head and output | 61k | 5120 | yes | 0.003711 ± 0.000052 | 97.18 |
+| unsloth's (`imatrix_unsloth.gguf` from their Qwen3.8-27B-GGUF repo) | 10M | 8192 | no | 0.003750 ± 0.000056 | 97.19 |
+
+Having an imatrix at all removes a fifth of the KLD. After that, 18x and 160x more text, and a 60 percent longer chunk, all land within one sigma of the 61k-token file. The unsloth build is `kld-base/ggufs/qwen3.8-27b-q6_k-gateup-q5_k-imat-unsloth.gguf`; the imatrix files are the only variable, so this is a clean test of corpus size and chunk length, not of recipes.
+
+For the record, the heads in unsloth's own GGUFs are present and take the file's tier by the default type rules (Q6_K with attn_k and attn_v at Q8_0 in UD-Q6_K, Q4_0 with eh_proj at Q8_0 in Q4_0), and their imatrix has no block 64 and no output entries, so those heads are quantized like variant A.
 
 ## Reproducing the calibration
 
