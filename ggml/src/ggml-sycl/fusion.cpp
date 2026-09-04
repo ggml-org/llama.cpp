@@ -1,4 +1,5 @@
 #include "fusion.hpp"
+#include "binbcast.hpp"
 
 #include <algorithm>
 
@@ -94,9 +95,14 @@ bool ggml_sycl_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializ
         return false;
     }
 
-    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
+    if ((ops.size() == 2 || ops.size() == 3) && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
+        if (ops.size() == 3 && ops.begin()[2] != GGML_OP_ADD) {
+            return false;
+        }
+
         const ggml_tensor * rms_norm = cgraph->nodes[node_idx];
         const ggml_tensor * mul      = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * add      = ops.size() == 3 ? cgraph->nodes[node_idx + 2] : nullptr;
 
         GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
         GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
@@ -119,6 +125,43 @@ bool ggml_sycl_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializ
         }
 
         if (!ggml_is_contiguous_rows(mul->src[0]) || !ggml_is_contiguous_rows(mul->src[1])) {
+            return false;
+        }
+
+        if (add != nullptr) {
+            if (add->src[0]->type != GGML_TYPE_F32 ||
+                add->src[1]->type != GGML_TYPE_F32 ||
+                add->type != GGML_TYPE_F32) {
+                return false;
+            }
+
+            // the fused kernel indexes the residual as add[col] and does not broadcast it
+            const ggml_tensor * add_w = (add->src[0] == mul) ? add->src[1] : add->src[0];
+            if (!ggml_are_same_shape(add_w, add)) {
+                return false;
+            }
+
+            if (!ggml_is_contiguous(add->src[0]) || !ggml_is_contiguous_rows(add->src[1])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_ADD && ops.begin()[1] == GGML_OP_ADD) {
+        const ggml_tensor * add0 = cgraph->nodes[node_idx];
+        const ggml_tensor * add1 = cgraph->nodes[node_idx + 1];
+        // ggml_can_fuse already guarantees add1 consumes add0 and that add0 has a single use.
+        // Keep the CUDA association: the running sum is src0 of the next ADD so the fused
+        // float fold matches two sequential add() launches.
+        if (add1->src[0] != add0) {
+            return false;
+        }
+
+        const ggml_tensor * c = add1->src[1];
+        if (!ggml_sycl_add_kernel_supports(add0->src[0]->type, add0->src[1]->type, add0->type) ||
+            !ggml_sycl_add_kernel_supports(add0->type, c->type, add1->type)) {
             return false;
         }
 
