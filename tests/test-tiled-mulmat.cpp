@@ -47,9 +47,19 @@ static void fill_tensor(struct ggml_tensor * t, const float * src, int64_t rows,
         return;
     }
     void * q = malloc(ggml_nbytes(t));
-    ggml_quantize_chunk(qtype, src, q, 0, rows, cols, NULL);
+    // some iq types (iq2_xxs, iq2_xs, iq1_s) steer their code choice with an imatrix; the
+    // quantized bytes are shared by the reference and tiled paths, so a dummy imatrix is enough
+    const float * imatrix = NULL;
+    float * im = NULL;
+    if (ggml_quantize_requires_imatrix(qtype)) {
+        im = (float *) malloc(rows * cols * sizeof(float));
+        for (int64_t i = 0; i < rows * cols; i++) im[i] = 1.0f;
+        imatrix = im;
+    }
+    ggml_quantize_chunk(qtype, src, q, 0, rows, cols, imatrix);
     ggml_backend_tensor_set(t, q, 0, ggml_nbytes(t));
     free(q);
+    free(im);
 }
 
 // The CPU-specific control API is resolved through the backend registry: with
@@ -221,6 +231,100 @@ static void test_matmul_highdim(ggml_backend_t backend, int64_t M, int64_t N, in
 
     ggml_free(ctx);
     free(src1_ref); free(src0_ref); free(dst_std); free(dst_tiled);
+}
+
+// MUL_MAT_ID (MoE) check, std (vec_dot) is trusted as the reference
+//
+// src0 (as, quant): [K, R, n_experts]   ne0 = K (reduction), ne1 = R rows per expert, ne2 = experts
+// src1 (b, F32)   : [K, b_slots, batch]  ne0 = K (reduction), ne1 = b_slots (b rows, broadcast over k columns)
+// ids             : [k, batch]           expert picked per (slot, batch row); k % b_slots == 0
+// dst = ggml_mul_mat_id(as, b, ids) : [R, k, batch]; column (id, t) = GEMV of src1 row (id % b_slots + t*b_slots)
+// against expert ids[t*k+id]. b_slots = 1 is the common MoE case (all top-k experts see one input row).
+static void test_mul_mat_id(ggml_backend_t backend, int64_t K, int64_t R, int64_t n_experts,
+                            int64_t k, int64_t b_slots, int64_t batch, ggml_type quant_type,
+                            bool src1_strided = false) {
+    srand(0xBEEF);
+
+    const int64_t n_as  = K * R * n_experts;
+    const int64_t n_b   = K * b_slots * batch;
+    const int64_t n_dst = R * k * batch;
+
+    float * as_ref  = gen_rand_f32(n_as);
+    float * b_ref   = gen_rand_f32(n_b);
+    int32_t * ids   = (int32_t *) malloc(k * batch * sizeof(int32_t));
+    float * dst_ref = (float *) malloc(n_dst * sizeof(float));
+    float * dst_tiled = (float *) malloc(n_dst * sizeof(float));
+
+    struct ggml_init_params ip = { 1024*1024*1024, nullptr, true };
+    struct ggml_context * ctx = ggml_init(ip);
+
+    int64_t ne_as[4]  = { K, R, n_experts, 1 };
+    int64_t ne_b[4]   = { K, b_slots, batch, 1 };
+    int64_t ne_ids[4] = { k, batch, 1, 1 };
+    struct ggml_tensor * src0  = ggml_new_tensor(ctx, quant_type,  4, ne_as);
+    struct ggml_tensor * ids_t = ggml_new_tensor(ctx, GGML_TYPE_I32, 4, ne_ids);
+    struct ggml_tensor * src1;
+    struct ggml_tensor * src1_base = NULL;
+    if (src1_strided) {
+        // strided view: nb[1] = 4 bytes, the repack path reads src1 through strides into wdata
+        src1_base = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, b_slots * batch);
+        src1 = ggml_view_3d(ctx, src1_base, K, b_slots, batch, 4, (size_t) b_slots * K * 4, 0);
+    } else {
+        src1 = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_b);
+    }
+
+    struct ggml_cgraph * gf  = ggml_new_graph(ctx);
+    struct ggml_tensor * dst = ggml_mul_mat_id(ctx, src0, src1, ids_t);
+    ggml_build_forward_expand(gf, dst);
+
+    ggml_backend_alloc_ctx_tensors(ctx, backend);
+
+    // deterministic balanced routing: each expert gets ~ k*batch/n_experts rows
+    for (int64_t t = 0; t < batch; t++) {
+        for (int64_t e = 0; e < k; e++) {
+            ids[t * k + e] = (int32_t) ((t * k + e) % n_experts);
+        }
+    }
+
+    fill_tensor(src1, b_ref, b_slots * batch, K, GGML_TYPE_F32);
+    fill_tensor(src0, as_ref, R * n_experts, K, quant_type);
+    ggml_backend_tensor_set(ids_t, ids, 0, ggml_nbytes(ids_t));
+
+    cpu_set_use_ref(backend, true);
+    ggml_backend_graph_compute(backend, gf);
+    ggml_backend_tensor_get(dst, dst_ref, 0, ggml_nbytes(dst));
+    cpu_set_use_ref(backend, false);
+    ggml_backend_graph_compute(backend, gf);
+    ggml_backend_tensor_get(dst, dst_tiled, 0, ggml_nbytes(dst));
+
+    // same quantized inputs, so a large difference is a bug in the tiled path
+    float max_err, rms_err;
+    compare_f32(dst_ref, dst_tiled, n_dst, &max_err, &rms_err);
+    float tol = 1e-3f;
+
+    printf("TEST mul_mat_id %lldx%lldx%lld * %lldx%lldx%lld ids[%lld,%lld] (%s%s): %s (max_err: %f, rms: %f, tolerance: %f)\n",
+           (long long)K, (long long)R, (long long)n_experts,
+           (long long)K, (long long)b_slots, (long long)batch,
+           (long long)k, (long long)batch,
+           ggml_type_name(quant_type), src1_strided ? ", strided-b" : "",
+           (max_err <= tol) ? "PASS" : "FAIL", max_err, rms_err, tol);
+
+    if (max_err > tol) {
+        int64_t shown = 0;
+        for (int64_t i = 0; i < n_dst && shown < 8; ++i) {
+            float err = fabsf(dst_ref[i] - dst_tiled[i]);
+            if (err > tol) {
+                printf("  tiled vs std: i=%lld (row=%lld slot=%lld batch=%lld) std=%f tiled=%f err=%f\n",
+                       (long long)i, (long long)(i % R), (long long)((i / R) % k), (long long)(i / (R * k)),
+                       dst_ref[i], dst_tiled[i], err);
+                ++shown;
+            }
+        }
+        ++n_failed;
+    }
+
+    ggml_free(ctx);
+    free(as_ref); free(b_ref); free(ids); free(dst_ref); free(dst_tiled);
 }
 
 static double time_graph_compute(ggml_backend_t backend, struct ggml_cgraph * gf) {
@@ -486,6 +590,110 @@ static void print_ab_table(int64_t M, int64_t N, int64_t K, const bench_row_ab *
     }
 }
 
+struct bench_row_mmid {
+    const char * name;
+    double time_std, time_iqp, time_tiled;
+    float max_err_iqp, rmse_iqp;
+    float max_err_tiled, rmse_tiled;
+};
+
+// MUL_MAT_ID (MoE) three-way bench: std (use_ref) vs iqp panel (GGML_CPU_MM_PATH=iqp) vs
+// tiled kernel (default; TILED_MM_FORCE is set in main so ragged experts take it too).
+// Column (id, t) = GEMV of src1 row (id % b_slots + t * b_slots) against expert ids[t*k+id];
+// cne1 = k * batch / n_experts rows per expert on average
+static bench_row_mmid bench_mul_mat_id(ggml_backend_t backend, int64_t K, int64_t R, int64_t n_experts,
+                                       int64_t k, int64_t b_slots, int64_t batch, ggml_type quant_type) {
+    bench_row_mmid row;
+    row.name = ggml_type_name(quant_type);
+    row.time_std = row.time_iqp = row.time_tiled = 0.0;
+    row.max_err_iqp = row.rmse_iqp = row.max_err_tiled = row.rmse_tiled = 0.0f;
+
+    struct ggml_init_params ip = { 1024*1024*1024, nullptr, true };
+    struct ggml_context * ctx = ggml_init(ip);
+
+    int64_t ne_as[4]  = { K, R, n_experts, 1 };
+    int64_t ne_b[4]   = { K, b_slots, batch, 1 };
+    int64_t ne_ids[4] = { k, batch, 1, 1 };
+    struct ggml_tensor * src1  = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_b);
+    struct ggml_tensor * src0  = ggml_new_tensor(ctx, quant_type,  4, ne_as);
+    struct ggml_tensor * ids_t = ggml_new_tensor(ctx, GGML_TYPE_I32, 4, ne_ids);
+
+    struct ggml_cgraph * gf = ggml_new_graph(ctx);
+    struct ggml_tensor * dst = ggml_mul_mat_id(ctx, src0, src1, ids_t);
+    ggml_build_forward_expand(gf, dst);
+
+    ggml_backend_alloc_ctx_tensors(ctx, backend);
+
+    // deterministic balanced routing: each expert gets ~ k*batch/n_experts rows
+    int32_t * ids = (int32_t *) malloc(k * batch * sizeof(int32_t));
+    for (int64_t t = 0; t < batch; t++) {
+        for (int64_t e = 0; e < k; e++) {
+            ids[t * k + e] = (int32_t) ((t * k + e) % n_experts);
+        }
+    }
+    srand(0xBEEF);
+    float * b_data  = gen_rand_f32(K * b_slots * batch);
+    float * as_data = gen_rand_f32(K * R * n_experts);
+    fill_tensor(src1, b_data, b_slots * batch, K, GGML_TYPE_F32);
+    fill_tensor(src0, as_data, R * n_experts, K, quant_type);
+    ggml_backend_tensor_set(ids_t, ids, 0, ggml_nbytes(ids_t));
+    free(b_data); free(as_data);
+
+    const size_t flush_size = 256 * 1024 * 1024;
+    void * flush_buf = malloc(flush_size);
+    const int n_reps = 5;
+    cpu_set_use_ref(backend, true);
+    row.time_std = time_graph_compute_best(backend, gf, n_reps, flush_buf, flush_size);
+    cpu_set_use_ref(backend, false);
+    setenv("GGML_CPU_MM_PATH", "iqp", 1);
+    row.time_iqp = time_graph_compute_best(backend, gf, n_reps, flush_buf, flush_size);
+    unsetenv("GGML_CPU_MM_PATH");
+    row.time_tiled = time_graph_compute_best(backend, gf, n_reps, flush_buf, flush_size);
+    free(flush_buf);
+
+    // errors vs the standard output (all paths use the same quantized weights)
+    float * out_std   = (float *) malloc(R * k * batch * sizeof(float));
+    float * out_iqp   = (float *) malloc(R * k * batch * sizeof(float));
+    float * out_tiled = (float *) malloc(R * k * batch * sizeof(float));
+    cpu_set_use_ref(backend, true);
+    ggml_backend_graph_compute(backend, gf);
+    ggml_backend_tensor_get(dst, out_std, 0, ggml_nbytes(dst));
+    cpu_set_use_ref(backend, false);
+    setenv("GGML_CPU_MM_PATH", "iqp", 1);
+    ggml_backend_graph_compute(backend, gf);
+    ggml_backend_tensor_get(dst, out_iqp, 0, ggml_nbytes(dst));
+    compare_f32(out_std, out_iqp, R * k * batch, &row.max_err_iqp, &row.rmse_iqp);
+    unsetenv("GGML_CPU_MM_PATH");
+    ggml_backend_graph_compute(backend, gf);
+    ggml_backend_tensor_get(dst, out_tiled, 0, ggml_nbytes(dst));
+    compare_f32(out_std, out_tiled, R * k * batch, &row.max_err_tiled, &row.rmse_tiled);
+    free(out_std); free(out_iqp); free(out_tiled); free(ids);
+
+    ggml_free(ctx);
+    return row;
+}
+
+static void print_mmid_table(int64_t K, int64_t R, int64_t n_experts, int64_t k,
+                             int64_t b_slots, int64_t batch, const bench_row_mmid * rows, size_t n_types) {
+    const double flops = 2.0 * (double) K * R * k * batch;
+
+    printf("\nBENCH mmid %lldx%lldx%lld k=%lld b_slots=%lld batch=%lld (cne1=%lld, std vs iqp vs tiled), min of 5 timings, 8 threads\n",
+           (long long)K, (long long)R, (long long)n_experts, (long long)k,
+           (long long)b_slots, (long long)batch, (long long)(k * batch / n_experts));
+    printf("%-8s %10s %12s %12s %11s %11s %11s %17s %17s %17s %17s\n",
+           "type", "std TF", "iqp TF", "tiled TF", "iqp/std", "tiled/iqp", "tiled/std",
+           "max_err(iqp)", "rmse(iqp)", "max_err(tiled)", "rmse(tiled)");
+    for (size_t i = 0; i < n_types; ++i) {
+        const bench_row_mmid * r = &rows[i];
+        printf("%-8s %10.3f %12.3f %12.3f %11.2f %11.2f %11.2f %17.5e %17.5e %17.5e %17.5e\n",
+               r->name,
+               flops / (r->time_std * 1e12),
+               flops / (r->time_iqp * 1e12), flops / (r->time_tiled * 1e12),
+               r->time_std / r->time_iqp, r->time_iqp / r->time_tiled, r->time_std / r->time_tiled,
+               r->max_err_iqp, r->rmse_iqp, r->max_err_tiled, r->rmse_tiled);
+    }
+}
+
 int main() {
     // Enable tiled MM, also force tiled MM even when unprofitable for benchmarks
 #if defined(_MSC_VER)
@@ -509,6 +717,13 @@ int main() {
     test_matmul(backend, 512, 1024, 512, GGML_TYPE_Q3_K);
     test_matmul(backend, 512, 1024, 512, GGML_TYPE_Q2_K);
     test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ4_XS);
+    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ2_XXS);
+    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ2_XS);
+    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ2_S);
+    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ3_XXS);
+    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ3_S);
+    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ1_S);
+    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ1_M);
 
     // ragged edges, both subblock lengths (Q5_K = 32, Q6_K = 16)
     test_matmul(backend, 256, 1024, 8192, GGML_TYPE_Q6_K);   // long K, int32 accumulation
@@ -559,6 +774,40 @@ int main() {
     test_matmul(backend, 513, 1024, 513, GGML_TYPE_Q6_K);
     test_matmul(backend, 17, 512, 257, GGML_TYPE_Q6_K);
 
+    // MUL_MAT_ID (MoE): K = reduction (tiled gate needs K % 256 == 0), R = output rows per expert,
+    // k = top-k slots, b_slots = b rows (1 = broadcast MoE, k = i11-diverse gather), cne1 = k*batch/E
+    test_mul_mat_id(backend,  256,  256,   2, 8, 1,  64, GGML_TYPE_Q4_K);  // single block, cne1 = 256
+    test_mul_mat_id(backend,  512,  300,   4, 2, 1, 150, GGML_TYPE_Q4_K);  // ragged R, broadcast, cne1 = 75
+    test_mul_mat_id(backend,  512,  256,   4, 2, 2, 150, GGML_TYPE_Q5_K);  // i11-diverse gather, HAS_MIN
+    test_mul_mat_id(backend,  512,  300,   4, 2, 1, 150, GGML_TYPE_IQ2_XXS); // iq type, imatrix quant
+    test_mul_mat_id(backend,  512,  256,   4, 2, 1, 100, GGML_TYPE_Q6_K);  // ragged cne1 = 50
+    test_mul_mat_id(backend,  768,  256,   4, 2, 1, 150, GGML_TYPE_Q3_K);  // K = 3 slabs
+    test_mul_mat_id(backend, 1024, 2048, 128, 8, 1, 2048, GGML_TYPE_Q4_K); // large, cne1 = 128
+    test_mul_mat_id(backend,  512,  256,  32, 2, 1,   8, GGML_TYPE_Q4_K);  // tiny cne1 (~0.5), forced only
+
+    // cne1 > 256: the k-outer ring sweeps multiple 256-row windows per expert (the multi-window path)
+    test_mul_mat_id(backend,  256,  256,   8, 8, 1,  512, GGML_TYPE_Q4_K);  // cne1 = 512, two full windows
+    test_mul_mat_id(backend,  512,  256,   8, 8, 1,  300, GGML_TYPE_Q4_K);  // cne1 = 300, 2nd window ragged (44 rows)
+    test_mul_mat_id(backend,  256,   64,   8, 8, 1,  257, GGML_TYPE_Q4_K);  // cne1 = 257, 1-row tail window, R = 1 group
+    test_mul_mat_id(backend,  512,  128,   8, 8, 1,  511, GGML_TYPE_Q4_K);  // cne1 = 511, 15-row ragged tail
+    test_mul_mat_id(backend,  768,  300,   8, 8, 1,  300, GGML_TYPE_Q4_K);  // 3 K slabs x 2 windows, ragged R and cne1
+    test_mul_mat_id(backend,  768,  300,   8, 2, 2,  300, GGML_TYPE_Q5_K);  // cne1 = 600, 3 slabs, 3 windows (last ragged), i11-diverse, HAS_MIN
+
+    // cne1 = 255: one short of a full ring, last ring row zero-padded by the unpack
+    test_mul_mat_id(backend,  512,  256,   4, 4, 1,  255, GGML_TYPE_Q4_K);
+
+    // long K: 8 slabs per ring row
+    test_mul_mat_id(backend, 2048,  300,   8, 2, 1,  400, GGML_TYPE_Q4_K);  // cne1 = 100
+
+    // R group edges: 64 = TILED_MMID_GROUP (ceil div, ragged group tail, single-group early return)
+    test_mul_mat_id(backend,  512,   64,   4, 2, 1,  128, GGML_TYPE_Q4_K);  // ngroups = 1, most threads idle
+    test_mul_mat_id(backend,  512,   65,   4, 2, 1,  128, GGML_TYPE_Q4_K);  // ceil-div boundary, 1-row tail group
+    test_mul_mat_id(backend,  512,   63,   4, 2, 1,  128, GGML_TYPE_Q4_K);  // ragged group tail
+    test_mul_mat_id(backend,  512,    1,   4, 1, 1,  256, GGML_TYPE_Q4_K);  // R = 1 row, cne1 = 256
+
+    // strided (non-contiguous) F32 src1: nb[1] = 4 bytes, the repack reads through strides
+    test_mul_mat_id(backend,  512,  256,   8, 8, 1,  128, GGML_TYPE_Q4_K, true);  // cne1 = 128
+
     // higher-dim (ne[2], ne[3] > 1)
     // equal-batch and broadcast shapes (src1_2=2*src0_2, src1_3=2*src0_3)
     test_matmul_highdim(backend, 1024, 1024, 1024, 2, 1, 2, 1, GGML_TYPE_Q4_K); // 3D, tiled
@@ -578,10 +827,11 @@ int main() {
     const ggml_type shared_types[] = { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS };
     const size_t n_shared_types = sizeof(shared_types) / sizeof(shared_types[0]);
     struct { int64_t M, N, K; } shapes[] = {
-        { 8192, 8192, 8192 },
+        //{ 8192, 8192, 8192 },
         { 4096, 4096, 4096 },
         { 4096, 4096,   64 },
         { 4096, 4096,   32 },
+        { 4096, 4096,   24 },
         { 4096, 4096,   16 },
         { 4096, 4096,   8 },
         { 4096, 4096,   1 },
@@ -602,6 +852,28 @@ int main() {
             ab_rows[i] = bench_tiled_iqp(backend, shapes[s].M, shapes[s].N, shapes[s].K, shared_types[i]);
         }
         print_ab_table(shapes[s].M, shapes[s].N, shapes[s].K, ab_rows, n_shared_types);
+    }
+
+    // MUL_MAT_ID (MoE) three-way bench; K must be a multiple of 256 (tile / panel slab).
+    // Types are restricted to the iqp set: for any other type the iqp column silently
+    // falls back to std and the comparison is meaningless
+    struct { int64_t K, R, E, k, b_slots, batch; } mmid_shapes[] = {
+        {  512,  512,  8,   2, 1,  128 },  // cne1 = 32, the tile batch floor
+        { 1024, 1024, 16,   8, 1,   64 },  // cne1 = 32
+        { 1024, 1024, 16,   8, 1,  256 },  // cne1 = 128
+        { 1024, 2048, 32,   8, 1,  512 },  // cne1 = 128, wide experts
+        { 2048, 1024, 16,   8, 1, 1024 },  // cne1 = 512, long dot
+    };
+    const ggml_type mmid_types[] = { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS };
+    const size_t n_mmid_types = sizeof(mmid_types) / sizeof(mmid_types[0]);
+    for (size_t s = 0; s < sizeof(mmid_shapes) / sizeof(mmid_shapes[0]); ++s) {
+        bench_row_mmid rows[n_mmid_types];
+        for (size_t i = 0; i < n_mmid_types; ++i) {
+            rows[i] = bench_mul_mat_id(backend, mmid_shapes[s].K, mmid_shapes[s].R, mmid_shapes[s].E,
+                                       mmid_shapes[s].k, mmid_shapes[s].b_slots, mmid_shapes[s].batch, mmid_types[i]);
+        }
+        print_mmid_table(mmid_shapes[s].K, mmid_shapes[s].R, mmid_shapes[s].E, mmid_shapes[s].k,
+                         mmid_shapes[s].b_slots, mmid_shapes[s].batch, rows, n_mmid_types);
     }
 
     ggml_backend_free(backend);

@@ -5,6 +5,7 @@
 // Currently only optimized for x86, new architectures should implement:
 // tiled_run_microtile:  16x16 microkernel
 // bit unpacking routines: tiled_unpk_nib4, tiled_unpk_2bit, tiled_unpk_or
+// LUT value expansion routines: tiled_lut8, tiled_unpk_sign8, tiled_unpk_tern8
 #include "ggml-quants.h"
 #include "ggml.h"
 #include "ggml-cpu-impl.h" // ggml_compute_params; no-op for the consumers, which include it first
@@ -83,6 +84,49 @@ inline void tiled_unpk_or(uint8_t * dst, const uint8_t * src) {
 }
 #endif
 
+// LUT value expansion for the LUT-based formats (iq4_xs, iq grids): the bit unpackers
+// above give the indices, these expand 8/16 of them to widened codes in one pass
+// 16-entry byte LUT: dst[j] = lut[src[j]] (16 bytes)
+inline void tiled_lut8(const uint8_t * lut, const uint8_t * src, uint8_t * dst) {
+#if defined(__AVX2__)
+    _mm_storeu_si128((__m128i *) dst, _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *) lut),
+                                                       _mm_loadu_si128((const __m128i *) src)));
+#else
+    for (int j = 0; j < 16; j++) { dst[j] = lut[src[j]]; }
+#endif
+}
+// 8 grid values with a per-lane sign flip: bit j of sign selects -src[j], else src[j];
+// result is (v + 128) or (128 - v) mod 256, safe for v < 128
+// sign is expanded to per-lane byte masks (0xFF / 0x00) so the AND is a per-lane select;
+// ksign_spread maps a nibble n to a word whose byte j is 0xFF if bit j of n
+static const uint32_t ksign_spread[16] = {
+    0x00000000, 0x000000FF, 0x0000FF00, 0x0000FFFF,
+    0x00FF0000, 0x00FF00FF, 0x00FFFF00, 0x00FFFFFF,
+    0xFF000000, 0xFF0000FF, 0xFF00FF00, 0xFF00FFFF,
+    0xFFFF0000, 0xFFFF00FF, 0xFFFFFF00, 0xFFFFFFFF,
+};
+inline void tiled_unpk_sign8(const uint8_t * src, uint8_t sign, uint8_t * dst) {
+#if defined(__AVX2__)
+    const __m128i mask = _mm_setr_epi32(ksign_spread[sign & 15], ksign_spread[(sign >> 4) & 15], 0, 0);
+    const __m128i v = _mm_loadl_epi64((const __m128i *) src);
+    const __m128i m = _mm_and_si128(v, mask);
+    _mm_storel_epi64((__m128i *) dst,
+                     _mm_sub_epi8(_mm_add_epi8(v, _mm_set1_epi8((int8_t) 128)), _mm_add_epi8(m, m)));
+#else
+    for (int j = 0; j < 8; j++) { dst[j] = (sign & (1 << j)) ? (uint8_t) (128 - src[j]) : (uint8_t) (128 + src[j]); }
+#endif
+}
+// 8 ternary grid bytes (0 = 0, 1 = +1, 0xFF = -1): dst[j] = 128 + delta + 8 * (int8_t) src[j]
+inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
+#if defined(__AVX2__)
+    const __m128i v = _mm_cvtepi8_epi16(_mm_loadl_epi64((const __m128i *) src));
+    const __m128i p = _mm_add_epi16(_mm_slli_epi16(v, 3), _mm_set1_epi16(128 + (int) delta));
+    _mm_storel_epi64((__m128i *) dst, _mm_packus_epi16(p, _mm_setzero_si128()));
+#else
+    for (int j = 0; j < 8; j++) { dst[j] = (uint8_t) (128 + (int) delta + 8 * (int8_t) src[j]); }
+#endif
+}
+
 
 // Accumulate one 16x16 microtile (src0 rows [i0, i0+16), src1 cols [j0, j0+16))
 // over the full 256-K slab held in the tiles into a j-major float buffer
@@ -127,6 +171,12 @@ void tiled_prepare_src1_interleave(const struct ggml_compute_params * params,
                                    const struct ggml_tensor * src1,
                                    enum ggml_type vec_dot_type,
                                    int64_t ne10, int64_t nr1, int ith, int nth);
+
+// MUL_MAT_ID: the same [k/4-in-slab][row][4] scatter, but from a contiguous set of gathered
+// q8_K rows (the expert rows) into a caller-provided region of k1_pad x nr1_pad bytes
+void tiled_interleave_src1_q8_K(const block_q8_K * rows, int64_t row_stride,
+                                int64_t r_start, int64_t r_end,
+                                int64_t n_k, int64_t nr1, int64_t nr1_pad, int8_t * qv);
 
 #endif
 

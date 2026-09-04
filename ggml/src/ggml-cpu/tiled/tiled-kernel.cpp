@@ -402,9 +402,10 @@ void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & s
 // explicit instantiations for the in-use formats (q4_K and q5_K share the constants)
 template void tiled_run_microtile<32, true, 0>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                int i0, int j0, float * buf, int buf_stride);
-// iq4_xs: LUT-expanded codes, BIAS = 128
-
+// iq4_xs and the other iq types: LUT-expanded codes, BIAS = 128
 template void tiled_run_microtile<32, false, 128>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
+                                                  int i0, int j0, float * buf, int buf_stride);
+template void tiled_run_microtile<16, false, 128>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                   int i0, int j0, float * buf, int buf_stride);
 template void tiled_run_microtile<16, false, 32>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                  int i0, int j0, float * buf, int buf_stride);
@@ -460,7 +461,7 @@ static_assert(sizeof(block_q8_K) == 292 && offsetof(block_q8_K, qs) == 4,
 // The dpbusd kernel reads the src1 codes in [k/4][row][4], computing 16
 // partial dots.  This code scatters the src1 codes into the region so the
 // tile columns become contiguous loads instead of scattered reads.
-static void tiled_interleave_src1_q8_K(const block_q8_K * rows, int64_t row_stride,
+void tiled_interleave_src1_q8_K(const block_q8_K * rows, int64_t row_stride,
                                        int64_t r_start, int64_t r_end,
                                        int64_t n_k, int64_t nr1, int64_t nr1_pad, int8_t * qv) {
 
