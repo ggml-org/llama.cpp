@@ -240,9 +240,15 @@ void common_ngram_map_draft(common_ngram_map & map,
         GGML_ABORT("%s: cur_len exceeds UINT32_MAX: %zu", __func__, cur_len);
     }
 
-    if (map.idx_last_check > cur_len) {
-        // Should not happen because of common_ngram_map_begin().
-        GGML_ABORT("%s: map.idx_last_check > cur_len: %zu > %zu", __func__, map.idx_last_check, cur_len);
+    if (map.idx_last_check > cur_len || map.size_last_begin > cur_len) {
+        // In-generation context shift can shrink/rebase the server prompt
+        // without starting a new request. Reconcile the map here rather than
+        // aborting; every resulting proposal is still fully target-verified.
+        // begin() clears per-call policy, so preserve the already-selected
+        // K4V limit across this internal lifecycle repair.
+        const uint16_t draft_limit = map.draft_limit;
+        common_ngram_map_begin(map, inp);
+        map.draft_limit = draft_limit;
     }
     map.idx_last_check = cur_len;
 

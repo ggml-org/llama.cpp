@@ -55,6 +55,19 @@ static void test_ngram_map_fixed_width() {
     common_ngram_map_draft(complex, prompt, 2, complex_draft);
     require(complex_draft.size() == 3, "complex map honors fixed sidecar cap");
 
+    common_ngram_map shifted(2, 6, true, 1);
+    common_ngram_map_begin(shifted, prompt);
+    llama_tokens shifted_draft;
+    common_ngram_map_draft(shifted, prompt, 2, shifted_draft);
+    const llama_tokens shorter(prompt.begin(), prompt.begin() + 12);
+    shifted.draft_limit = 3;
+    shifted_draft.clear();
+    common_ngram_map_draft(shifted, shorter, 3, shifted_draft);
+    require(shifted.idx_last_check == shorter.size() &&
+            shifted.size_last_begin == shorter.size() &&
+            shifted.draft_limit == 3,
+            "K4V reconciles context shrink without losing the selected cap");
+
     common_ngram_map short_value(2, 1, true, 1);
     common_ngram_map_begin(short_value, prompt);
     short_value.draft_limit = 6;

@@ -235,3 +235,11 @@ inline int32_t server_spec_gfx1030_neural_k4v_cycle_cap(
     }
     return -1;
 }
+
+// A checkpoint replay may prepend one already-committed target replacement to
+// the accepted span. Model/sidecar state consumes the full committed count;
+// ngram adaptation and proposal statistics consume only true draft tokens.
+inline uint16_t server_spec_accepted_draft_count(
+        uint16_t n_committed, bool is_replay) {
+    return n_committed - (is_replay && n_committed > 0 ? 1 : 0);
+}

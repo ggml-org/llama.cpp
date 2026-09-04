@@ -310,7 +310,11 @@ struct common_speculative_impl {
 
     virtual void draft(common_speculative_draft_params_vec & dparams) = 0;
 
-    virtual void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) = 0;
+    // n_committed advances model/sidecar state and may include a replayed
+    // target replacement. n_accepted_draft is the true proposal acceptance
+    // count used by proposal adaptation and statistics.
+    virtual void accept(llama_seq_id seq_id, uint16_t n_committed,
+            uint16_t n_accepted_draft, bool is_other) = 0;
 
     // (optional) serialize/restore per-seq internal state (e.g. eagle3's deferred boundary).
     // Sidecar implementations serialize only a small logical cursor; their
@@ -537,7 +541,8 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         }
     }
 
-    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
+    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_committed*/,
+            uint16_t /*n_accepted_draft*/, bool /*is_other*/) override {
         // noop
     }
 };
@@ -567,7 +572,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 //                                       rebased by accept() to first-non-accepted pos.
 //   verify_g          [N × n_embd_dec] snapshot of process()'s encoder output;
 //   verify_pos_first  llama_pos         consumed by accept() to recover the right
-//   verify_g_rows     int32_t           pending_g_last row for any n_accepted value.
+//   verify_g_rows     int32_t           pending_g_last row for any n_committed value.
 //
 // Performance is overall good but there is waste in verify cycle:
 //   process() runs encoder + decoder on the *full* verify batch including rows for
@@ -576,7 +581,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 // TODO: Not sure if we need optimization for this waste?
 // If so we may need hybrid stash:
 //      in verify mode, have process() only stash features and let draft() seed run
-//      encoder+decoder on n_accepted+1 rows).
+//      encoder+decoder on n_committed+1 rows).
 struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     common_params_speculative_draft params;
     llama_batch batch;
@@ -999,7 +1004,8 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         }
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
+    void accept(llama_seq_id seq_id, uint16_t n_committed,
+            uint16_t /*n_accepted_draft*/, bool /*is_other*/) override {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
         }
@@ -1009,7 +1015,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             return;
         }
 
-        const int32_t i_g = std::min<int32_t>(n_accepted, n_rows - 1);
+        const int32_t i_g = std::min<int32_t>(n_committed, n_rows - 1);
         pending_pos_last[seq_id] = verify_pos_first[seq_id] + i_g;
         std::memcpy(pending_g_last[seq_id].data(),
                     verify_g[seq_id].data() + (size_t) i_g * n_embd_dec,
@@ -2095,11 +2101,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         return true;
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
+    void accept(llama_seq_id seq_id, uint16_t n_committed,
+            uint16_t /*n_accepted_draft*/, bool /*is_other*/) override {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq || verify_pos_first[seq_id] < 0 || verify_rows[seq_id] <= 0) {
             return;
         }
-        const int32_t n_commit = std::min<int32_t>((int32_t) n_accepted + 1, verify_rows[seq_id]);
+        const int32_t n_commit = std::min<int32_t>((int32_t) n_committed + 1, verify_rows[seq_id]);
         commit_state(seq_id, verify_pos_first[seq_id] + n_commit);
     }
 };
@@ -3157,7 +3164,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         return true;
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
+    void accept(llama_seq_id seq_id, uint16_t n_committed,
+            uint16_t /*n_accepted_draft*/, bool /*is_other*/) override {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
         }
@@ -3171,7 +3179,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             if (!flush_sidecar_deferred_catchup()) {
                 return;
             }
-            const int32_t n_commit = std::min<int32_t>((int32_t) n_accepted + 1, n_rows);
+            const int32_t n_commit = std::min<int32_t>((int32_t) n_committed + 1, n_rows);
             commit_state(seq_id, verify_pos_first[seq_id] + n_commit);
         }
 
@@ -3196,7 +3204,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
         }
 
-        const int32_t i_h = std::min<int32_t>(n_accepted, n_rows - 1);
+        const int32_t i_h = std::min<int32_t>(n_committed, n_rows - 1);
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
         if (verify_h_device[seq_id] == nullptr) {
             std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
@@ -3249,7 +3257,8 @@ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
         }
     }
 
-    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
+    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_committed*/,
+            uint16_t /*n_accepted_draft*/, bool /*is_other*/) override {
     }
 };
 
@@ -3309,12 +3318,13 @@ struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
         }
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
+    void accept(llama_seq_id seq_id, uint16_t /*n_committed*/,
+            uint16_t n_accepted_draft, bool is_other) override {
         if (seq_id < 0 || seq_id >= (llama_seq_id) config.size()) {
             return;
         }
         if (!is_other) {
-            common_ngram_map_accept(config[seq_id], n_accepted);
+            common_ngram_map_accept(config[seq_id], n_accepted_draft);
         }
     }
 };
@@ -3474,7 +3484,8 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
         }
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
+    void accept(llama_seq_id seq_id, uint16_t /*n_committed*/,
+            uint16_t n_accepted_draft, bool is_other) override {
         if (is_other) {
             return;
         }
@@ -3483,7 +3494,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
 
         // compute acceptance fraction if we have a recorded draft length
         if (sinfo.n_draft_last > 0) {
-            const double f_acc = (double)n_accepted / (double)sinfo.n_draft_last;
+            const double f_acc = (double) n_accepted_draft / (double) sinfo.n_draft_last;
             if (f_acc < 0.25) {
                 sinfo.n_low++;
                 if (sinfo.n_low >= 5) {
@@ -3640,7 +3651,8 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
         }
     }
 
-    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
+    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_committed*/,
+            uint16_t /*n_accepted_draft*/, bool /*is_other*/) override {
     }
 };
 
@@ -4542,6 +4554,15 @@ void common_speculative_draft(common_speculative * spec) {
     }
 
     for (auto & impl : spec->impls) {
+        // Proposal distributions belong to the implementation currently being
+        // tried. A deterministic ngram result must never inherit neural q rows
+        // from an earlier implementation or cycle.
+        for (auto & dp : dparams) {
+            if (dp.drafting && dp.result != nullptr && dp.result->empty() &&
+                    dp.dists != nullptr) {
+                dp.dists->clear();
+            }
+        }
         {
             common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
             impl->draft(dparams);
@@ -4561,16 +4582,23 @@ void common_speculative_draft(common_speculative * spec) {
 
             // a new draft has been sampled
             if (dp.drafting && !result.empty()) {
-                dp.drafting = false;
-
-                if (dp.n_max > 0) {
-                    if (!result.empty() && (int) result.size() > dp.n_max) {
-                        SPC_DBG("truncating draft to %d tokens\n", dp.n_max);
-                        result.resize(dp.n_max);
+                if (dp.n_max > 0 && (int) result.size() > dp.n_max) {
+                    SPC_DBG("truncating draft to %d tokens\n", dp.n_max);
+                    result.resize((size_t) dp.n_max);
+                }
+                if (dp.dists != nullptr && !dp.dists->empty()) {
+                    if (dp.dists->size() > result.size()) {
+                        dp.dists->resize(result.size());
+                    } else if (dp.dists->size() != result.size()) {
+                        SPC_WRN("discarding proposals with incomplete distributions from %s\n",
+                                common_speculative_type_to_str(impl->type).c_str());
+                        result.clear();
+                        dp.dists->clear();
                     }
                 }
 
                 if (!result.empty()) {
+                    dp.drafting = false;
                     SPC_DBG("called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n",
                             common_speculative_type_to_str(impl.get()->type).c_str(), dp.prompt->size(),
                             impl.get()->n_call_draft, result.size());
@@ -4604,37 +4632,42 @@ void common_speculative_draft(common_speculative * spec) {
 }
 
 void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, uint16_t n_accepted) {
+    common_speculative_accept(spec, seq_id, n_accepted, n_accepted);
+}
+
+void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id,
+        uint16_t n_committed, uint16_t n_accepted_draft) {
     common_speculative_impl * impl = spec->impl_last[seq_id];
 
     if (impl == nullptr) {
-        GGML_ASSERT(n_accepted == 0);
+        GGML_ASSERT(n_committed == 0);
         return;
     }
 
     {
         common_time_meas tm(impl->t_accept_us, !impl->gen_perf);
 
-        if (impl->n_acc_tokens_per_pos.size() < n_accepted) {
-            impl->n_acc_tokens_per_pos.resize(n_accepted, 0);
+        if (impl->n_acc_tokens_per_pos.size() < n_accepted_draft) {
+            impl->n_acc_tokens_per_pos.resize(n_accepted_draft, 0);
         }
 
-        for (size_t i = 0; i < n_accepted; ++i) {
+        for (size_t i = 0; i < n_accepted_draft; ++i) {
             impl->n_acc_tokens_per_pos[i]++;
         }
 
-        if (n_accepted > 0) {
+        if (n_accepted_draft > 0) {
             impl->n_acc_drafts++;
-            impl->n_acc_tokens += n_accepted;
+            impl->n_acc_tokens += n_accepted_draft;
         }
 
-        impl->accept(seq_id, n_accepted, false);
+        impl->accept(seq_id, n_committed, n_accepted_draft, false);
         impl->n_call_accept++;
     }
 
     // accept with the rest of the implementations, using is_other == true
     for (auto & impl_other : spec->impls) {
         if (impl_other.get() != impl) {
-            impl_other->accept(seq_id, n_accepted, true);
+            impl_other->accept(seq_id, n_committed, n_accepted_draft, true);
         }
     }
 }

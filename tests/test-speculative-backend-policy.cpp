@@ -222,5 +222,10 @@ int main() {
     require(server_spec_gfx1030_neural_k4v_cycle_cap(extended_stack) == -1,
             "unqualified extended stack is unchanged");
 
+    require(server_spec_accepted_draft_count(4, false) == 4 &&
+            server_spec_accepted_draft_count(4, true) == 3 &&
+            server_spec_accepted_draft_count(0, true) == 0,
+            "checkpoint replay is excluded only from true draft acceptance");
+
     return 0;
 }

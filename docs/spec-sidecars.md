@@ -270,7 +270,13 @@ never be read by a later draft. Set
   state.
 - N-gram and other speculative implementations may remain stacked with MTP
   or DFlash. A sidecar stages/commits target rows even when another
-  implementation wins, so it can take over on a later round.
+  implementation wins, so it can take over on a later round. Proposal
+  distributions are implementation-owned: deterministic n-gram cycles cannot
+  inherit neural q rows, and a partial distribution discards that proposal
+  instead of silently changing verification semantics. After context shrink,
+  K4V rebuilds its map while preserving the selected per-cycle cap. Checkpoint
+  replay advances model/sidecar state with every committed row but excludes the
+  replayed target replacement from n-gram adaptation and acceptance statistics.
 - Prompt-cache and external slot-file restore do not persist the sidecar's
   device KV contents. If a restored target state does not receive a complete
   contiguous sidecar prefill, the sidecar rejects the gap and the host uses

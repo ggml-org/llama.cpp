@@ -4590,7 +4590,11 @@ private:
                     SLT_INF(slot, "accepted %2zu/%2zu draft tokens\n", accepted.size() - 1, n_draft);
                 }
 
-                common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
+                const uint16_t n_committed = (uint16_t) (accepted.size() - 1);
+                const uint16_t n_accepted_draft =
+                        server_spec_accepted_draft_count(n_committed, slot.spec_is_replay);
+                common_speculative_accept(
+                        spec.get(), slot.id, n_committed, n_accepted_draft);
 
                 slot.spec_draft = std::move(accepted);
                 slot.spec_dists.clear();

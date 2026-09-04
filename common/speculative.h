@@ -110,8 +110,12 @@ bool common_speculative_process(common_speculative * spec, const llama_batch & b
 // generate drafts for the sequences specified with `common_speculative_get_draft_params`
 void common_speculative_draft(common_speculative * spec);
 
-// informs the speculative context that n_accepted tokens were accepted by the target model
+// Inform the speculative context that verified tokens were accepted by the
+// target model. The four-argument form separates committed replay context from
+// the true accepted-draft count used by proposal adaptation and statistics.
 void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t n_accepted);
+void common_speculative_accept(common_speculative * spec, llama_seq_id,
+                               uint16_t n_committed, uint16_t n_accepted_draft);
 
 // (optional) checkpoint and lifecycle state. State is keyed by implementation;
 // sidecars store only a small cursor/epoch while keeping device KV resident.
