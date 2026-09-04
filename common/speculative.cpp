@@ -16,6 +16,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <map>
 #include <cinttypes>
@@ -2040,9 +2041,6 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
 
     uint16_t n_draft;
 
-    bool save_dynamic;
-    bool save_static;
-
     struct seq_info {
         size_t cache_size = 0; // number of tokens in n-gram cache
 
@@ -2058,14 +2056,10 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
             uint32_t n_seq,
             uint16_t n_draft,
             const std::string & path_static,
-            const std::string & path_dynamic,
-            bool save_dynamic,
-            bool save_static)
+            const std::string & path_dynamic)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, n_seq, n_draft)
         , params(params.ngram_cache)
         , n_draft(n_draft)
-        , save_dynamic(save_dynamic)
-        , save_static(save_static)
     {
         SPC_TRC("%s", "adding speculative implementation 'ngram-cache'\n");
         SPC_TRC("- n_draft=%d, cache_static=%s, cache_dynamic=%s\n",
@@ -2082,7 +2076,7 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
                 for (auto & sinfo : sinfos) {
                     sinfo.ngram_cache_static = ngram_cache_static;
                 }
-            } catch (...) {
+            } catch (std::ifstream::failure const &) {
                 SPC_ERR("failed to open static lookup cache: %s", path_static.c_str());
                 GGML_ABORT("Couldn't read static lookup cache");
             }
@@ -2095,11 +2089,23 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
                 for (auto & sinfo : sinfos) {
                     sinfo.ngram_cache_dynamic = ngram_cache_dynamic;
                 }
-            } catch (...) {
-                SPC_ERR("failed to open dynamic lookup cache: %s", path_dynamic.c_str());
-                GGML_ABORT("Couldn't read dynamic lookup cache");
+            } catch (std::ifstream::failure const &) {
+                // missing file is created on destruction
             }
         }
+    }
+
+    ~common_speculative_impl_ngram_cache() override {
+        if (params.lookup_cache_dynamic.empty() || sinfos.empty()) {
+            return;
+        }
+
+        auto & dynamic_cache = sinfos.front().ngram_cache_dynamic;
+        for (auto & sinfo : sinfos) {
+            common_ngram_cache_merge(dynamic_cache, sinfo.ngram_cache_context);
+        }
+
+        common_ngram_cache_save(dynamic_cache, params.lookup_cache_dynamic);
     }
 
     void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
@@ -2197,20 +2203,14 @@ static common_ngram_map get_common_ngram_map(
     return common_ngram_map(size_key, size_value, key_only, min_hits);
 }
 
-static common_speculative_impl_ngram_cache create_state_ngram_cache(
+static std::unique_ptr<common_speculative_impl_ngram_cache> create_state_ngram_cache(
         const common_speculative_config & config,
         uint32_t n_seq,
         const std::string & path_static,
         const std::string & path_dynamic) {
     uint16_t n_draft = 8; // TODO get from config?
 
-    // TODO bool param in common/common.h to set save_static/save_dynamic?
-    bool save_static = false;
-    bool save_dynamic = false;
-
-    common_speculative_impl_ngram_cache state(config.params, n_seq, n_draft, path_static, path_dynamic, save_static, save_dynamic);
-
-    return state;
+    return std::make_unique<common_speculative_impl_ngram_cache>(config.params, n_seq, n_draft, path_static, path_dynamic);
 }
 
 std::string common_speculative_type_name_str(const std::vector<common_speculative_type> & types) {
@@ -2696,7 +2696,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                         config, n_seq,
                         params.ngram_cache.lookup_cache_static,
                         params.ngram_cache.lookup_cache_dynamic);
-                impls.push_back(std::make_unique<common_speculative_impl_ngram_cache>(state));
+                impls.push_back(std::move(state));
                 break;
             }
             default:
