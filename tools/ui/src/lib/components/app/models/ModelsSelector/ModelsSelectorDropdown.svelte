@@ -12,7 +12,11 @@
 	import type { ModelItem } from '$lib/components/app/navigation/utils';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MODEL_SELECTOR_ICON, SETTINGS_KEYS } from '$lib/constants';
+	import {
+		DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR,
+		MODEL_SELECTOR_ICON,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useModelParamsFallback } from '$lib/hooks/use-model-params-fallback.svelte';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
@@ -56,7 +60,7 @@
 					if (!isOpen) return;
 
 					document
-						.querySelector<HTMLElement>('[data-slot="dropdown-menu-content"] input')
+						.querySelector<HTMLElement>(DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR)
 						?.focus({ preventScroll: true });
 				});
 			}
