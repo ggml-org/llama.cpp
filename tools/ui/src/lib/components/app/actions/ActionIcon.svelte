@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { Button, type ButtonVariant, type ButtonSize } from '$lib/components/ui/button';
+	import { Button, type ButtonSize, type ButtonVariant } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import type { Component } from 'svelte';
 	import { TooltipSide } from '$lib/enums';
+	import type { Component } from 'svelte';
 
 	interface Props {
 		ariaLabel?: string;
@@ -20,18 +20,18 @@
 	}
 
 	let {
-		icon,
-		tooltip,
-		variant = 'ghost',
-		href = '',
-		size = 'sm',
+		ariaLabel,
 		class: className = '',
 		disabled = false,
+		href = '',
+		icon,
 		iconSize = 'h-3 w-3',
-		tooltipSide = TooltipSide.TOP,
-		stopPropagationOnClick = false,
 		onclick,
-		ariaLabel
+		size = 'sm',
+		stopPropagationOnClick = false,
+		tooltip,
+		tooltipSide = TooltipSide.TOP,
+		variant = 'ghost'
 	}: Props = $props();
 
 	let innerWidth = $state(0);
@@ -41,17 +41,17 @@
 {#snippet button(props = {})}
 	<Button
 		{...props}
-		{href}
-		{variant}
-		{size}
+		aria-label={ariaLabel || tooltip}
+		class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
 		{disabled}
+		{href}
 		onclick={(e: MouseEvent) => {
 			if (stopPropagationOnClick) e.stopPropagation();
 
 			onclick?.(e);
 		}}
-		class="h-6 w-6 p-0 {className} flex hover:bg-transparent data-[state=open]:bg-transparent!"
-		aria-label={ariaLabel || tooltip}
+		{size}
+		{variant}
 	>
 		{#if icon}
 			{@const IconComponent = icon}

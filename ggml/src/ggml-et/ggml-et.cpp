@@ -1061,9 +1061,11 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 const bool zero_view_offset = op->src[0]->view_src == nullptr || op->src[0]->view_offs == 0;
                 const bool has_sections = ggml_get_op_params_i32(op, 11) > 0 || ggml_get_op_params_i32(op, 12) > 0 ||
                                           ggml_get_op_params_i32(op, 13) > 0;
+                // FIXME: support ggml_rope_set_offset
+                const bool zero_rot_offset  = ggml_get_op_params_i32(op, 15) == 0;
 
                 supported =
-                    zero_view_offset && ndims <= 512 &&
+                    zero_view_offset && zero_rot_offset && ndims <= 512 &&
                     (is_normal || (is_neox && ndims % 16 == 0) || (is_imrope && ndims % 16 == 0 && has_sections));
             } else {
                 supported = false;
@@ -1208,7 +1210,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 // Check GLU variant - support SWIGLU, SWIGLU_OAI, GEGLU, GEGLU_ERF, GEGLU_QUICK, REGLU
                 ggml_glu_op glu_type          = ggml_get_glu_op(op);
                 const bool  supported_variant = glu_type == GGML_GLU_OP_SWIGLU || glu_type == GGML_GLU_OP_SWIGLU_OAI ||
-                                                glu_type == GGML_GLU_OP_GEGLU || glu_type == GGML_GLU_OP_GEGLU_ERF ||
+                                                glu_type == GGML_GLU_OP_SWIGLU_CLAMP || glu_type == GGML_GLU_OP_GEGLU ||
+                                                glu_type == GGML_GLU_OP_GEGLU_ERF ||
                                                 glu_type == GGML_GLU_OP_GEGLU_QUICK || glu_type == GGML_GLU_OP_REGLU;
 
                 if (op->src[1]) {
@@ -1646,6 +1649,7 @@ static void ggml_backend_et_device_get_props(ggml_backend_dev_t dev, struct ggml
         /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
+        /* .mmap_support          = */ true,
     };
 }
 

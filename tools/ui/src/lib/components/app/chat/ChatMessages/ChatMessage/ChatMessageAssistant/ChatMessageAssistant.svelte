@@ -1,91 +1,65 @@
 <script lang="ts">
 	import {
-		ChatMessageAgenticContent,
 		ChatMessageActionIcons,
+		ChatMessageAgenticContent,
 		ChatMessageAssistantModel,
 		ChatMessageAssistantProcessingInfo,
 		ChatMessageAssistantRawOutput,
 		ChatMessageAssistantStatistics,
 		ChatMessageEditForm
 	} from '$lib/components/app';
-	import { getMessageEditContext } from '$lib/contexts';
-	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import { modelLoadProgressText } from '$lib/utils';
+	import { getChatMessageEditContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
-
+	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
+	import { chatStore, modelsStore, serverStore, settingsStore } from '$lib/stores';
+	import { modelLoadProgressText } from '$lib/utils';
 	import { hasAgenticContent } from '$lib/utils';
 
 	interface Props {
 		class?: string;
-		deletionInfo: {
-			totalCount: number;
-			userMessages: number;
-			assistantMessages: number;
-			messageTypes: string[];
-		} | null;
 		isLastAssistantMessage?: boolean;
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
-		onCopy: () => void;
-		onConfirmDelete: () => void;
 		onContinue?: () => void;
-		onDelete: () => void;
-		onEdit?: () => void;
-		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
-		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerate: (modelOverride?: string) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
-		showDeleteDialog: boolean;
-		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
 	}
 
 	let {
 		class: className = '',
-		deletionInfo,
 		isLastAssistantMessage = false,
 		message,
-		toolMessages = [],
-		onConfirmDelete,
 		onContinue,
-		onCopy,
-		onDelete,
-		onEdit,
-		onForkConversation,
-		onNavigateToSibling,
 		onRegenerate,
-		onShowDeleteDialogChange,
-		showDeleteDialog,
-		siblingInfo = null,
-		textareaElement = $bindable()
+		textareaElement = $bindable(),
+		toolMessages = []
 	}: Props = $props();
 
 	// Get edit context
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 
 	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
 	const processingState = useProcessingState();
 
-	let currentConfig = $derived(config());
-	let isRouter = $derived(isRouterMode());
+	let currentConfig = $derived(settingsStore.config);
+	let isRouter = $derived(serverStore.isRouterMode);
 
 	let showRawOutput = $state(false);
 
 	let displayedModel = $derived(message.model ?? null);
 
-	let isCurrentlyLoading = $derived(isLoading());
-	let isStreaming = $derived(isChatStreaming());
+	let isCurrentlyLoading = $derived(chatStore.isLoading);
+	let isStreaming = $derived(chatStore.isStreaming());
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
 
-	// during a router auto-load the message has no model yet, so target the selected one
-	let loadTargetModel = $derived(message.model ?? modelsStore.selectedModelName);
+	// during a router auto-load the message has no model yet: target the model frozen in the
+	// persisted stream state (survives a reload), then fall back to the dropdown selection
+	let loadTargetModel = $derived(
+		message.model ?? chatStore.getResumeModel(message.convId) ?? modelsStore.selectedModelName
+	);
 	let modelLoadProgress = $derived(
-		isRouter && loadTargetModel ? modelsStore.getLoadProgress(loadTargetModel) : null
+		isRouter && loadTargetModel ? modelsStore.status.getLoadProgress(loadTargetModel) : null
 	);
 	let modelLoadingText = $derived(modelLoadProgressText(modelLoadProgress));
 
@@ -121,18 +95,21 @@
 
 		if (!userMessageEl) {
 			lastUserMessageHeight = 0;
+
 			return;
 		}
 
 		const updateHeight = () => {
 			const rect = userMessageEl.getBoundingClientRect();
 			const marginTop = Math.round(parseFloat(getComputedStyle(userMessageEl).marginTop));
+
 			lastUserMessageHeight = Math.round(rect.height + marginTop);
 		};
 
 		updateHeight();
 
 		const resizeObserver = new ResizeObserver(updateHeight);
+
 		resizeObserver.observe(userMessageEl);
 
 		return () => {
@@ -149,16 +126,16 @@
 
 <div
 	bind:this={assistantEl}
-	class="chat-message-assistant text-md group w-full leading-7.5 {className}"
+	style:--assistant-margin-top={assistantMarginTop > 0 ? `${assistantMarginTop}px` : undefined}
 	style:--last-user-message-height={lastUserMessageHeight > 0
 		? `${lastUserMessageHeight}px`
 		: undefined}
-	style:--assistant-margin-top={assistantMarginTop > 0 ? `${assistantMarginTop}px` : undefined}
-	role="group"
 	aria-label="Assistant message with actions"
+	class="chat-message-assistant text-md group w-full leading-7.5 {className}"
+	role="group"
 >
 	{#if showProcessingInfoTop}
-		<ChatMessageAssistantProcessingInfo {modelLoadingText} {processingState} position="top" />
+		<ChatMessageAssistantProcessingInfo {modelLoadingText} position="top" {processingState} />
 	{/if}
 
 	{#if editCtx.isEditing}
@@ -168,58 +145,48 @@
 			<ChatMessageAssistantRawOutput {message} {toolMessages} />
 		{:else}
 			<ChatMessageAgenticContent
+				{isLastAssistantMessage}
+				isStreaming={chatStore.isStreaming()}
 				{message}
 				{toolMessages}
-				isStreaming={isChatStreaming()}
-				{isLastAssistantMessage}
 			/>
 		{/if}
 	{/if}
 
 	{#if showProcessingInfoBottom}
-		<ChatMessageAssistantProcessingInfo {modelLoadingText} {processingState} position="bottom" />
+		<ChatMessageAssistantProcessingInfo {modelLoadingText} position="bottom" {processingState} />
 	{/if}
 
-	<div class="info my-6 grid gap-4 tabular-nums">
-		{#if displayedModel}
+	{#if displayedModel}
+		<div class="info my-6 grid gap-4 tabular-nums">
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				<ChatMessageAssistantModel
 					{displayedModel}
-					isLoading={isLoading()}
+					isLoading={chatStore.isLoading}
 					{isRouter}
 					{onRegenerate}
 				/>
 
 				<ChatMessageAssistantStatistics
+					isLoading={chatStore.isLoading}
 					{message}
-					isLoading={isLoading()}
 					{processingState}
 					showMessageStats={currentConfig.showMessageStats}
 				/>
 			</div>
-		{/if}
-	</div>
+		</div>
+	{/if}
 
 	{#if message.timestamp && !editCtx.isEditing}
 		<ChatMessageActionIcons
-			role={MessageRole.ASSISTANT}
-			justify="start"
 			actionsPosition="left"
-			{siblingInfo}
-			{showDeleteDialog}
-			{deletionInfo}
-			{onCopy}
-			{onEdit}
-			{onRegenerate}
+			justify="start"
 			onContinue={currentConfig.enableContinueGeneration ? onContinue : undefined}
-			{onForkConversation}
-			{onDelete}
-			{onConfirmDelete}
-			{onNavigateToSibling}
-			{onShowDeleteDialogChange}
-			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
-			rawOutputEnabled={showRawOutput}
 			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
+			{onRegenerate}
+			rawOutputEnabled={showRawOutput}
+			role={MessageRole.ASSISTANT}
+			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
 		/>
 	{/if}
 </div>
@@ -229,7 +196,7 @@
 		--assistant-min-height-offset: calc(
 			var(--last-user-message-height, 19rem) + var(--chat-form-height, 6rem) +
 				var(--chat-form-bottom-position, 0.5rem) + var(--chat-form-padding-top, 6rem) +
-				var(--assistant-margin-top, 3rem)
+				var(--assistant-margin-top, 3rem) + var(--chat-tabs-offset, 0px)
 		);
 		min-height: calc(100dvh - var(--assistant-min-height-offset));
 
@@ -237,7 +204,7 @@
 			--assistant-min-height-offset: calc(
 				var(--last-user-message-height, 18rem) + var(--chat-form-height, 6rem) +
 					var(--chat-form-bottom-position, 1rem) + var(--chat-form-padding-top, 6rem) +
-					var(--assistant-margin-top, 3rem)
+					var(--assistant-margin-top, 3rem) + var(--chat-tabs-offset, 0px)
 			);
 		}
 	}

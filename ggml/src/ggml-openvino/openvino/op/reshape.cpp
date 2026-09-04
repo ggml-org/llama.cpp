@@ -25,13 +25,12 @@ OutputVector translate_reshape(const NodeContext & context) {
     }
 
     int op_case = context.get_op_case();
-    FRONT_END_CHECK_IMPLEMENTED(
-        op_case == 1 || op_case == 2 || op_case == 3 || op_case == 4 || op_case == 5 || op_case == 6,
-        "Unsupported RESHAPE case");
 
     auto output_shape = context.get_output_shape().to_shape();
     std::shared_ptr<ov::Node> new_shape_node;
-    if (op_case == 1) {
+    if (op_case == 0) {
+        new_shape_node = ov::op::v0::Constant::create(ov::element::i64, {4}, context.get_output_shape().to_shape());
+    } else if (op_case == 1) {
         if (context.is_stateful()) {
             new_shape_node = ov::op::v0::Constant::create(
                 ov::element::i64, {3}, std::vector<int64_t>{-1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
@@ -76,9 +75,33 @@ OutputVector translate_reshape(const NodeContext & context) {
         //     ov::op::v0::Constant::create(ov::element::i64, {1}, {(int64_t) context.get_output_shape().to_shape()[3]});
         // auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
         // new_shape_node = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{one, one, token_len, emb_size}, 0);
-
     } else if (op_case == 6) {
-        new_shape_node = ov::op::v0::Constant::create(ov::element::i64, {4}, context.get_output_shape().to_shape());
+        // 14: [  6144,     1,     2,     1] RESHAPE              linear_attn_qkv_mixed-0
+        //     [  6144,     2,     1,     1]            0: MUL_MAT     node_13
+        // reshape to [1, n_slot_active_len, -1, 6144]
+        if (context.has_input("s_copy_active_slot_len")) {
+            auto n_slot_active_len = context.get_input("s_copy_active_slot_len");
+            auto emb_size = ov::op::v0::Constant::create(ov::element::i64, {1},
+                                                         {(int64_t) context.get_output_shape().to_shape()[3]});
+            auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+            auto neg_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
+            new_shape_node =
+                std::make_shared<ov::op::v0::Concat>(ov::OutputVector{one, n_slot_active_len, neg_one, emb_size}, 0);
+        } else {
+            new_shape_node = ov::op::v0::Constant::create(ov::element::i64, {4}, context.get_output_shape().to_shape());
+        }
+    } else if (op_case == 7) {
+        // 57: [  2048,     2,     1,     1] RESHAPE              linear_attn_out-0 (reshaped)
+        //     [  2048,     1,     2,     1]            0: MUL_MAT     linear_attn_out-0
+        std::vector<int64_t> shape_vec = {1, 1, -1, (int64_t) context.get_output_shape().to_shape()[3]};
+        new_shape_node = ov::op::v0::Constant::create(ov::element::i64, {4}, shape_vec);
+    } else if (op_case == 8) {
+        // 106: [   128,   128,    16,     2] RESHAPE              state_predelta-1
+        //      [ 262144,     2,     1,     1]            0: GET_ROWS    node_86
+        auto output_shape = context.get_output_shape().to_shape();
+        std::vector<int64_t> shape_vec = {-1, (int64_t) output_shape[1], (int64_t) output_shape[2],
+                                          (int64_t) output_shape[3]};
+        new_shape_node = ov::op::v0::Constant::create(ov::element::i64, {4}, shape_vec);
     }
     auto res = std::make_shared<ov::op::v1::Reshape>(context.get_input(0), new_shape_node, false);
     return rename_outputs_with_suffix({res}, context.get_name());

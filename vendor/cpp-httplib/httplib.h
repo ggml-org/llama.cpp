@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.50.1"
-#define CPPHTTPLIB_VERSION_NUM "0x003201"
+#define CPPHTTPLIB_VERSION "0.54.1"
+#define CPPHTTPLIB_VERSION_NUM "0x003601"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -134,8 +134,30 @@
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 8192
 #endif
 
+#ifndef CPPHTTPLIB_STATIC_FILE_COMPRESSION_MIN_LENGTH
+// 1400 rather than a round number: a body that already fits in one 1500-byte
+// MTU gains nothing from being made smaller.
+#define CPPHTTPLIB_STATIC_FILE_COMPRESSION_MIN_LENGTH 1400
+#endif
+
+#ifndef CPPHTTPLIB_STATIC_FILE_COMPRESSION_MAX_LENGTH
+#define CPPHTTPLIB_STATIC_FILE_COMPRESSION_MAX_LENGTH (4 * 1024 * 1024) // 4MB
+#endif
+
 #ifndef CPPHTTPLIB_RANGE_MAX_COUNT
 #define CPPHTTPLIB_RANGE_MAX_COUNT 1024
+#endif
+
+// std::regex_match's backtracking implementation (most acutely on libstdc++)
+// recurses roughly once per matched character for quantified patterns such
+// as "(.*)", so a long enough path can exhaust the calling thread's stack; on
+// a default ~8MB thread stack that has been observed to take on the order of
+// a couple thousand characters for a simple pattern. 256 leaves a wide safety
+// margin below that (well under the 8192-byte request URI limit) while still
+// fitting any realistic route segment; raise it if a route legitimately needs
+// longer paths. Regex routes are never applied to paths longer than this.
+#ifndef CPPHTTPLIB_REGEX_ROUTE_PATH_MAX_LENGTH
+#define CPPHTTPLIB_REGEX_ROUTE_PATH_MAX_LENGTH 256
 #endif
 
 #ifndef CPPHTTPLIB_TCP_NODELAY
@@ -182,7 +204,7 @@
 #endif
 
 #ifndef CPPHTTPLIB_LISTEN_BACKLOG
-#define CPPHTTPLIB_LISTEN_BACKLOG 5
+#define CPPHTTPLIB_LISTEN_BACKLOG 128
 #endif
 
 #ifndef CPPHTTPLIB_MAX_LINE_LENGTH
@@ -321,6 +343,7 @@ using socket_t = int;
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <list>
 #include <map>
 #include <memory>
@@ -333,9 +356,11 @@ using socket_t = int;
 #include <sys/stat.h>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 // On macOS with a TLS backend, enable Keychain root certificates by default
 // unless the user explicitly opts out. Not enabled on iOS/tvOS/watchOS since
@@ -420,18 +445,26 @@ using socket_t = int;
 #endif // CPPHTTPLIB_OPENSSL_SUPPORT
 
 #ifdef CPPHTTPLIB_MBEDTLS_SUPPORT
-#include <mbedtls/ctr_drbg.h>
-#include <mbedtls/entropy.h>
+// version.h defines MBEDTLS_VERSION_MAJOR (on 2.x/3.x/4.x alike); it is pulled
+// in with this first include group so the version gating below can use it.
 #include <mbedtls/error.h>
-#include <mbedtls/md5.h>
 #include <mbedtls/net_sockets.h>
 #include <mbedtls/oid.h>
 #include <mbedtls/pk.h>
+#include <mbedtls/ssl.h>
+#include <mbedtls/version.h>
+#include <mbedtls/x509_crt.h>
+#if MBEDTLS_VERSION_MAJOR >= 4
+// Mbed TLS 4.x moved hashing/RNG to PSA Crypto and removed these headers.
+#include <psa/crypto.h>
+#else
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/md5.h>
 #include <mbedtls/sha1.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/sha512.h>
-#include <mbedtls/ssl.h>
-#include <mbedtls/x509_crt.h>
+#endif
 #ifdef _WIN32
 #include <wincrypt.h>
 #ifdef _MSC_VER
@@ -444,7 +477,11 @@ using socket_t = int;
 #endif
 #endif
 
-// Mbed TLS 3.x API compatibility
+// Mbed TLS version API compatibility. Note: V4 implies V3 (both defined on
+// 4.x), so version-specific 3.x-only code must check V3 && !V4.
+#if MBEDTLS_VERSION_MAJOR >= 4
+#define CPPHTTPLIB_MBEDTLS_V4
+#endif
 #if MBEDTLS_VERSION_MAJOR >= 3
 #define CPPHTTPLIB_MBEDTLS_V3
 #endif
@@ -696,7 +733,7 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
     return {first, std::errc::invalid_argument};
   }
 
-  value = negative ? -result : result;
+  value = negative ? T(0) - result : result;
   return {p, std::errc{}};
 }
 
@@ -824,6 +861,15 @@ inline bool parse_url(const std::string &url, UrlComponents &uc) {
       }
 
       pos = close + 1;
+
+      // The IPv6 literal is the whole host, so ']' must be followed by a port,
+      // path, query or fragment delimiter (or the end of input). Otherwise the
+      // trailing bytes would be folded into the path while the connection
+      // still targets the bracketed address.
+      if (pos < url.size()) {
+        auto c = url[pos];
+        if (c != ':' && c != '/' && c != '?' && c != '#') { return false; }
+      }
     } else {
       auto end = url.find_first_of(":/?#", pos);
       if (end == std::string::npos) { end = url.size(); }
@@ -956,11 +1002,291 @@ enum StatusCode {
   NetworkAuthenticationRequired_511 = 511,
 };
 
-using Headers =
-    std::unordered_multimap<std::string, std::string, detail::case_ignore::hash,
-                            detail::case_ignore::equal_to>;
+namespace detail {
 
-using Params = std::multimap<std::string, std::string>;
+// A multimap that keeps its entries in the order they were inserted.
+//
+// HTTP needs that order in two places. RFC 9110 5.3 makes the order of header
+// fields sharing a field name significant and forbids a proxy from reordering
+// them, and a query string's parameters are meaningful in the order the caller
+// wrote them. Neither standard container expresses it: std::unordered_multimap
+// gives no ordering guarantee at all for equivalent keys (libstdc++ yields
+// reverse insertion order, libc++ insertion order), and std::multimap sorts by
+// key, which would drop control data such as Host behind whatever else the
+// message carries and alphabetise a query string.
+//
+// Entries are therefore kept in a flat vector, in order. Lookup is a linear
+// scan, which beats hashing for the handful of entries a message carries
+// (headers are capped at CPPHTTPLIB_HEADER_MAX_COUNT).
+//
+// KeyEqual compares keys; it is what makes Headers case-insensitive and
+// Params, whose parameter names are case-sensitive, not.
+template <typename Mapped, typename KeyEqual> class insertion_ordered_multimap {
+public:
+  using key_type = std::string;
+  using mapped_type = Mapped;
+  using value_type = std::pair<std::string, Mapped>;
+  using size_type = std::size_t;
+  using difference_type = std::ptrdiff_t;
+  using reference = value_type &;
+  using const_reference = const value_type &;
+
+private:
+  static size_type npos() { return static_cast<size_type>(-1); }
+
+  static bool keys_equal(const std::string &a, const std::string &b) {
+    return KeyEqual()(a, b);
+  }
+
+  // Iterating yields every entry in insertion order, but equal_range() and
+  // find() have to walk only the entries sharing one key, which are not
+  // adjacent. Both are the same iterator type: key_idx_ selects between the
+  // two traversals, and since equality compares only the position, an iterator
+  // restricted to one key still compares equal to end().
+  template <typename V> class iterator_t {
+  public:
+    using iterator_category = std::bidirectional_iterator_tag;
+    using value_type = insertion_ordered_multimap::value_type;
+    using difference_type = insertion_ordered_multimap::difference_type;
+    using pointer = V *;
+    using reference = V &;
+
+    iterator_t() : data_(nullptr), idx_(0), size_(0), key_idx_(npos()) {}
+
+    template <typename U,
+              typename std::enable_if<std::is_convertible<U *, V *>::value,
+                                      int>::type = 0>
+    iterator_t(const iterator_t<U> &rhs)
+        : data_(rhs.data_), idx_(rhs.idx_), size_(rhs.size_),
+          key_idx_(rhs.key_idx_) {}
+
+    reference operator*() const { return data_[idx_]; }
+    pointer operator->() const { return data_ + idx_; }
+
+    iterator_t &operator++() {
+      // Saturating, so that advancing past the last entry of a key (which
+      // get_multimap_value() does when asked for an out-of-range id) stays at
+      // end() instead of running off the container.
+      if (idx_ >= size_) { return *this; }
+      ++idx_;
+      if (key_idx_ != npos()) {
+        while (idx_ < size_ && !matches(idx_)) {
+          ++idx_;
+        }
+      }
+      return *this;
+    }
+
+    iterator_t operator++(int) {
+      auto tmp = *this;
+      ++*this;
+      return tmp;
+    }
+
+    iterator_t &operator--() {
+      if (idx_ == 0) { return *this; }
+      --idx_;
+      if (key_idx_ != npos()) {
+        while (idx_ > 0 && !matches(idx_)) {
+          --idx_;
+        }
+      }
+      return *this;
+    }
+
+    iterator_t operator--(int) {
+      auto tmp = *this;
+      --*this;
+      return tmp;
+    }
+
+    template <typename U> bool operator==(const iterator_t<U> &rhs) const {
+      return idx_ == rhs.idx_;
+    }
+
+    template <typename U> bool operator!=(const iterator_t<U> &rhs) const {
+      return idx_ != rhs.idx_;
+    }
+
+  private:
+    friend class insertion_ordered_multimap;
+    template <typename> friend class iterator_t;
+
+    iterator_t(V *data, size_type idx, size_type size, size_type key_idx)
+        : data_(data), idx_(idx), size_(size), key_idx_(key_idx) {}
+
+    bool matches(size_type i) const {
+      return keys_equal(data_[i].first, data_[key_idx_].first);
+    }
+
+    V *data_;
+    size_type idx_;
+    size_type size_;
+    size_type key_idx_;
+  };
+
+public:
+  using iterator = iterator_t<value_type>;
+  using const_iterator = iterator_t<const value_type>;
+
+  insertion_ordered_multimap() = default;
+  insertion_ordered_multimap(std::initializer_list<value_type> il)
+      : entries_(il) {}
+  template <typename InputIt>
+  insertion_ordered_multimap(InputIt first, InputIt last)
+      : entries_(first, last) {}
+
+  iterator begin() { return make_iter(0, npos()); }
+  iterator end() { return make_iter(entries_.size(), npos()); }
+  const_iterator begin() const { return make_citer(0, npos()); }
+  const_iterator end() const { return make_citer(entries_.size(), npos()); }
+  const_iterator cbegin() const { return begin(); }
+  const_iterator cend() const { return end(); }
+
+  bool empty() const { return entries_.empty(); }
+  size_type size() const { return entries_.size(); }
+  void clear() { entries_.clear(); }
+  void swap(insertion_ordered_multimap &rhs) { entries_.swap(rhs.entries_); }
+
+  iterator insert(const value_type &val) {
+    entries_.push_back(val);
+    return make_iter(entries_.size() - 1, npos());
+  }
+
+  iterator insert(value_type &&val) {
+    entries_.push_back(std::move(val));
+    return make_iter(entries_.size() - 1, npos());
+  }
+
+  template <typename... Args> iterator emplace(Args &&...args) {
+    entries_.emplace_back(std::forward<Args>(args)...);
+    return make_iter(entries_.size() - 1, npos());
+  }
+
+  // For entries that have to lead the message, such as the Host header field
+  // (RFC 9110 5.3 recommends sending control data first).
+  template <typename... Args> iterator emplace_front(Args &&...args) {
+    entries_.emplace(entries_.begin(), std::forward<Args>(args)...);
+    return make_iter(0, npos());
+  }
+
+  iterator find(const std::string &key) {
+    auto i = index_of(key);
+    return i == npos() ? end() : make_iter(i, i);
+  }
+
+  const_iterator find(const std::string &key) const {
+    auto i = index_of(key);
+    return i == npos() ? end() : make_citer(i, i);
+  }
+
+  size_type count(const std::string &key) const {
+    size_type n = 0;
+    for (const auto &entry : entries_) {
+      if (keys_equal(entry.first, key)) { n++; }
+    }
+    return n;
+  }
+
+  std::pair<iterator, iterator> equal_range(const std::string &key) {
+    auto i = index_of(key);
+    return i == npos() ? std::make_pair(end(), end())
+                       : std::make_pair(make_iter(i, i), end());
+  }
+
+  std::pair<const_iterator, const_iterator>
+  equal_range(const std::string &key) const {
+    auto i = index_of(key);
+    return i == npos() ? std::make_pair(end(), end())
+                       : std::make_pair(make_citer(i, i), end());
+  }
+
+  size_type erase(const std::string &key) {
+    auto before = entries_.size();
+    entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
+                                  [&](const value_type &entry) {
+                                    return keys_equal(entry.first, key);
+                                  }),
+                   entries_.end());
+    return before - entries_.size();
+  }
+
+  iterator erase(const_iterator pos) {
+    entries_.erase(entries_.begin() + static_cast<difference_type>(pos.idx_));
+    return make_iter(pos.idx_, npos());
+  }
+
+  // Erases what iterating [first, last) would actually visit, so erasing an
+  // equal_range() removes only the entries with that key, not everything
+  // positioned between them.
+  iterator erase(const_iterator first, const_iterator last) {
+    auto from = first.idx_;
+    auto to = last.idx_;
+    if (from >= to) { return make_iter(from, npos()); }
+
+    auto begin_it = entries_.begin();
+    auto from_it = begin_it + static_cast<difference_type>(from);
+    auto to_it = begin_it + static_cast<difference_type>(to);
+
+    if (first.key_idx_ == npos()) {
+      entries_.erase(from_it, to_it);
+    } else {
+      auto key = entries_[first.key_idx_].first;
+      auto keep = from_it;
+      for (auto it = from_it; it != to_it; ++it) {
+        if (!keys_equal(it->first, key)) {
+          if (keep != it) { *keep = std::move(*it); }
+          ++keep;
+        }
+      }
+      if (keep != to_it) {
+        keep = std::move(to_it, entries_.end(), keep);
+      } else {
+        keep = entries_.end();
+      }
+      entries_.erase(keep, entries_.end());
+    }
+    return make_iter(from, npos());
+  }
+
+  friend bool operator==(const insertion_ordered_multimap &lhs,
+                         const insertion_ordered_multimap &rhs) {
+    return lhs.entries_ == rhs.entries_;
+  }
+
+  friend bool operator!=(const insertion_ordered_multimap &lhs,
+                         const insertion_ordered_multimap &rhs) {
+    return !(lhs == rhs);
+  }
+
+private:
+  size_type index_of(const std::string &key) const {
+    for (size_type i = 0; i < entries_.size(); i++) {
+      if (keys_equal(entries_[i].first, key)) { return i; }
+    }
+    return npos();
+  }
+
+  iterator make_iter(size_type idx, size_type key_idx) {
+    return iterator(entries_.data(), idx, entries_.size(), key_idx);
+  }
+
+  const_iterator make_citer(size_type idx, size_type key_idx) const {
+    return const_iterator(entries_.data(), idx, entries_.size(), key_idx);
+  }
+
+  std::vector<value_type> entries_;
+};
+
+} // namespace detail
+
+using Headers =
+    detail::insertion_ordered_multimap<std::string,
+                                       detail::case_ignore::equal_to>;
+
+// Query parameter names are case-sensitive, unlike header field names.
+using Params =
+    detail::insertion_ordered_multimap<std::string, std::equal_to<std::string>>;
 using Match = std::smatch;
 
 using DownloadProgress = std::function<bool(size_t current, size_t total)>;
@@ -1067,9 +1393,16 @@ struct FormField {
   std::string content;
   Headers headers;
 };
-using FormFields = std::multimap<std::string, FormField>;
+// RFC 7578 5.2: a form processor "SHOULD send back results in order" and
+// "Intermediaries MUST NOT reorder the results", so a handler walking these
+// should see the parts as they were sent. A std::multimap sorts by field name
+// and loses that. Field names are case-sensitive, hence std::equal_to rather
+// than the case-insensitive predicate Headers uses.
+using FormFields =
+    detail::insertion_ordered_multimap<FormField, std::equal_to<std::string>>;
 
-using FormFiles = std::multimap<std::string, FormData>;
+using FormFiles =
+    detail::insertion_ordered_multimap<FormData, std::equal_to<std::string>>;
 
 struct MultipartFormData {
   FormFields fields; // Text fields from multipart
@@ -1106,9 +1439,16 @@ public:
   DataSink &operator=(DataSink &&) = delete;
 
   std::function<bool(const char *data, size_t data_len)> write;
-  std::function<bool()> is_writable;
-  std::function<void()> done;
-  std::function<void(const Headers &trailer)> done_with_trailer;
+
+  // Only `write` is mandatory. The rest are defaulted so that a provider
+  // calling one on a writer that does not set it gets sensible behaviour
+  // rather than std::bad_function_call thrown from a worker thread. Capturing
+  // `this` is safe: DataSink is neither copyable nor movable.
+  std::function<bool()> is_writable = []() { return true; };
+  std::function<void()> done = []() {};
+  std::function<void(const Headers &trailer)> done_with_trailer =
+      [this](const Headers & /*trailer*/) { done(); };
+
   std::ostream os;
 
 private:
@@ -1193,7 +1533,10 @@ make_file_body(const std::string &filepath) {
       auto to_read = (std::min)(sizeof(buf), length);
       f.read(buf, static_cast<std::streamsize>(to_read));
       auto n = static_cast<size_t>(f.gcount());
-      if (n == 0) { break; }
+      // The file is shorter than the size make_file_body() measured, which the
+      // caller has already committed to as Content-Length. The body cannot be
+      // completed, so fail as every other error here does.
+      if (n == 0) { return false; }
       if (!sink.write(buf, n)) { return false; }
       length -= n;
     }
@@ -1400,6 +1743,14 @@ struct Request {
 #endif
 };
 
+namespace detail {
+
+// Declared up here, away from the rest of the compression helpers, because
+// `Response` stores one.
+enum class EncodingType { None = 0, Gzip, Brotli, Zstd };
+
+} // namespace detail
+
 struct Response {
   std::string version;
   int status = -1;
@@ -1465,6 +1816,11 @@ struct Response {
   bool content_provider_success_ = false;
   std::string file_content_path_;
   std::string file_content_content_type_;
+
+  // Content coding chosen for a file-backed content provider, decided once
+  // where the file is opened so that the ETag and the body cannot disagree.
+  // `EncodingType::None` for every other kind of response.
+  detail::EncodingType file_content_encoding_ = detail::EncodingType::None;
 };
 
 enum class Error {
@@ -1502,6 +1858,9 @@ enum class Error {
   UnsupportedAddressFamily,
   HTTPParsing,
   InvalidRangeHeader,
+  UnsupportedContentEncoding,
+  WebSocketHandshake,
+  UserCallbackException,
 
   // For internal use only
   SSLPeerCouldBeClosed_,
@@ -1532,6 +1891,18 @@ public:
     (void)sec;
     (void)usec;
   }
+
+  // Bytes already pulled off the socket and sitting in this stream's own
+  // buffer. Exposing them lets a line reader scan for a terminator in one
+  // pass instead of asking for a byte at a time. A stream that does no
+  // buffering of its own reports none, and readers fall back to read().
+  virtual const char *buffered_data(size_t &size) const {
+    size = 0;
+    return nullptr;
+  }
+
+  // Discards `size` bytes previously returned by buffered_data().
+  virtual void consume_buffered(size_t size) { (void)size; }
 
   ssize_t write(const char *ptr);
   ssize_t write(const std::string &s);
@@ -1683,6 +2054,10 @@ private:
 
 int close_socket(socket_t sock) noexcept;
 
+bool is_accept_resource_error();
+
+bool is_accept_transient_error();
+
 ssize_t write_headers(Stream &strm, const Headers &headers);
 
 bool set_socket_opt_time(socket_t sock, int level, int optname, time_t sec,
@@ -1770,6 +2145,17 @@ public:
   Server &Delete(const std::string &pattern, HandlerWithContentReader handler);
   Server &Options(const std::string &pattern, Handler handler);
 
+  // Register a handler for an HTTP method outside the built-in set (e.g. the
+  // WebDAV methods from RFC 4918). Registering a method here is what makes the
+  // server accept it; an unregistered method is still rejected with 400.
+  // `method` must be a valid HTTP method token and must not be one of the
+  // built-in methods, which have their own registration functions above. A
+  // rejected registration makes is_valid() return false, so listen() fails.
+  Server &CustomRoute(const std::string &method, const std::string &pattern,
+                      Handler handler);
+  Server &CustomRoute(const std::string &method, const std::string &pattern,
+                      HandlerWithContentReader handler);
+
   Server &WebSocket(const std::string &pattern, WebSocketHandler handler);
   Server &WebSocket(const std::string &pattern, WebSocketHandler handler,
                     SubProtocolSelector sub_protocol_selector);
@@ -1837,6 +2223,10 @@ public:
 
   Server &set_payload_max_length(size_t length);
 
+  Server &set_static_file_compression(bool on);
+  Server &set_static_file_compression_min_length(size_t length);
+  Server &set_static_file_compression_max_length(size_t length);
+
   Server &set_websocket_ping_interval(time_t sec);
   template <class Rep, class Period>
   Server &set_websocket_ping_interval(
@@ -1865,6 +2255,35 @@ protected:
                        const std::function<void(Request &)> &setup_request,
                        bool *websocket_upgraded = nullptr);
 
+  // Runs the per-connection serving loop and stops an exception thrown by a
+  // user callback from escaping the worker thread.
+  //
+  // process_request() wraps only routing() in a try/catch. Content providers,
+  // the post-routing, error, logging and expect-100 handlers and WebSocket
+  // handlers all run outside it, and the task queue calls the job without a
+  // catch, so an exception from any of those would terminate the process.
+  //
+  // No 500 is possible here: by the time a content provider runs, the status
+  // line and headers are already on the wire. Report it through the error
+  // logger and drop the connection, which is what the peer observes either
+  // way. Other connections are unaffected.
+  template <typename Serve> bool serve_guarded(Serve &&serve) const {
+#ifdef CPPHTTPLIB_NO_EXCEPTIONS
+    return serve();
+#else
+    try {
+      return serve();
+    } catch (...) {
+      // The error logger is a user callback too, so it must not be able to
+      // throw the guard back open.
+      try {
+        output_error_log(Error::UserCallbackException, nullptr);
+      } catch (...) {}
+      return false;
+    }
+#endif
+  }
+
   std::atomic<socket_t> svr_sock_{INVALID_SOCKET};
 
   std::vector<std::string> trusted_proxies_;
@@ -1878,6 +2297,11 @@ protected:
   time_t idle_interval_sec_ = CPPHTTPLIB_IDLE_INTERVAL_SECOND;
   time_t idle_interval_usec_ = CPPHTTPLIB_IDLE_INTERVAL_USECOND;
   size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
+  bool static_file_compression_ = false;
+  size_t static_file_compression_min_length_ =
+      CPPHTTPLIB_STATIC_FILE_COMPRESSION_MIN_LENGTH;
+  size_t static_file_compression_max_length_ =
+      CPPHTTPLIB_STATIC_FILE_COMPRESSION_MAX_LENGTH;
   time_t websocket_ping_interval_sec_ =
       CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND;
   int websocket_max_missed_pongs_ = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS;
@@ -1889,8 +2313,20 @@ private:
       std::vector<std::pair<std::unique_ptr<detail::MatcherBase>,
                             HandlerWithContentReader>>;
 
+  // Both handler tables for one custom method live in a single entry, so that
+  // routing() needs only one map lookup per request to reach either of them.
+  struct CustomHandlerEntry {
+    Handlers handlers;
+    HandlersForContentReader handlers_for_content_reader;
+  };
+  using CustomHandlers = std::map<std::string, CustomHandlerEntry>;
+
   static std::unique_ptr<detail::MatcherBase>
   make_matcher(const std::string &pattern);
+
+  static const std::set<std::string> &builtin_methods();
+  CustomHandlerEntry *custom_entry_for_registration(const std::string &method);
+  const CustomHandlerEntry *find_custom_entry(const std::string &method) const;
 
   template <typename H>
   Server &add_handler(
@@ -1922,6 +2358,10 @@ private:
       const HandlersForContentReader &handlers) const;
 
   bool parse_request_line(const char *s, Request &req) const;
+  detail::EncodingType static_file_encoding(const Request &req,
+                                            const std::string &content_type,
+                                            size_t length) const;
+  bool apply_static_file_compression(const Request &req, Response &res) const;
   void apply_ranges(const Request &req, Response &res,
                     std::string &content_type, std::string &boundary) const;
   bool write_response(Stream &strm, bool close_connection, Request &req,
@@ -1955,6 +2395,10 @@ private:
   std::atomic<bool> is_running_{false};
   std::atomic<bool> is_decommissioned{false};
 
+  // Set when CustomRoute() refuses a registration. Written before listen(),
+  // read by is_valid() on the same thread, so it needs no synchronization.
+  bool has_invalid_registration_ = false;
+
   struct MountPointEntry {
     std::string mount_point;
     std::string base_dir;
@@ -1976,6 +2420,7 @@ private:
   Handlers delete_handlers_;
   HandlersForContentReader delete_handlers_for_content_reader_;
   Handlers options_handlers_;
+  CustomHandlers custom_handlers_;
 
   struct WebSocketHandlerEntry {
     std::unique_ptr<detail::MatcherBase> matcher;
@@ -2440,7 +2885,8 @@ protected:
   std::thread::id socket_requests_are_from_thread_ = std::thread::id();
   bool socket_should_be_closed_when_request_is_done_ = false;
 
-  // Hostname-IP map
+  // Hostname to connection target map. The value is an IP literal or another
+  // hostname; only the connection target changes, never the identity.
   std::map<std::string, std::string> addr_map_;
 
   // Default headers
@@ -2917,8 +3363,6 @@ private:
   // Used to keep custom CA configuration exclusive with system CA loading.
   bool ca_cert_store_set_ = false;
 
-  long verify_result_ = 0;
-
   std::function<SSLVerifierResponse(tls::session_t)> session_verifier_;
 
 #ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
@@ -2957,7 +3401,18 @@ inline size_t get_header_value_u64(const Headers &headers,
   std::advance(it, static_cast<ssize_t>(id));
   if (it != rng.second) {
     if (is_numeric(it->second)) {
-      return static_cast<size_t>(std::strtoull(it->second.data(), nullptr, 10));
+      // Parse at size_t width so an out-of-range Content-Length is reported
+      // rather than silently saturated/truncated (a value above 2^32 would
+      // otherwise wrap to a small framing length on 32-bit builds). Flag it
+      // and return SIZE_MAX so the existing oversized-value guards reject it.
+      size_t val = 0;
+      const auto &s = it->second;
+      auto r = from_chars(s.data(), s.data() + s.size(), val);
+      if (r.ec == std::errc::result_out_of_range) {
+        is_invalid_value = true;
+        return (std::numeric_limits<size_t>::max)();
+      }
+      return val;
     } else {
       is_invalid_value = true;
     }
@@ -3131,6 +3586,10 @@ private:
 std::string make_host_and_port_string(const std::string &host, int port,
                                       bool is_ssl);
 
+template <typename T>
+bool check_and_write_headers(Stream &strm, Headers &headers, T header_writer,
+                             Error &error);
+
 std::string trim_copy(const std::string &s);
 
 void divide(
@@ -3148,6 +3607,16 @@ void split(const char *b, const char *e, char d,
 
 void split(const char *b, const char *e, char d, size_t m,
            std::function<void(const char *, const char *)> fn);
+
+bool split_find(const char *b, const char *e, char d,
+                std::function<bool(const char *, const char *)> fn);
+
+bool has_header_token(const Headers &headers, const std::string &key,
+                      const std::string &token);
+
+std::string websocket_accept_key(const std::string &client_key);
+
+bool is_websocket_upgrade(const Request &req);
 
 bool process_client_socket(
     socket_t sock, time_t read_timeout_sec, time_t read_timeout_usec,
@@ -3169,6 +3638,9 @@ socket_t create_client_socket(const std::string &host, const std::string &ip,
 const char *get_header_value(const Headers &headers, const std::string &key,
                              const char *def, size_t id);
 
+std::string get_combined_header_value(const Headers &headers,
+                                      const std::string &key);
+
 std::string params_to_query_str(const Params &params);
 
 void parse_query_text(const char *data, std::size_t size, Params &params);
@@ -3183,11 +3655,13 @@ bool parse_range_header(const std::string &s, Ranges &ranges);
 bool parse_accept_header(const std::string &s,
                          std::vector<std::string> &content_types);
 
+void parse_disposition_params(const std::string &s, Params &params);
+
 ssize_t send_socket(socket_t sock, const void *ptr, size_t size, int flags);
 
 ssize_t read_socket(socket_t sock, void *ptr, size_t size, int flags);
 
-enum class EncodingType { None = 0, Gzip, Brotli, Zstd };
+EncodingType encoding_type(const Request &req, const std::string &content_type);
 
 EncodingType encoding_type(const Request &req, const Response &res);
 
@@ -3341,6 +3815,7 @@ public:
 
 private:
   void append(char c);
+  void append(const char *data, size_t size);
 
   Stream &strm_;
   char *fixed_buffer_;
@@ -3403,6 +3878,7 @@ bool is_obs_text(char c);
 bool is_field_vchar(char c);
 bool is_field_content(const std::string &s);
 bool is_field_value(const std::string &s);
+bool is_field_valid(const std::string &name, const std::string &value);
 
 } // namespace fields
 } // namespace detail
@@ -3422,8 +3898,11 @@ namespace impl {
 // setup callbacks (cast ctx_t to tls::impl::MbedTlsContext*).
 struct MbedTlsContext {
   mbedtls_ssl_config conf;
+#ifndef CPPHTTPLIB_MBEDTLS_V4
+  // Mbed TLS 4.x uses PSA Crypto's internal RNG; no explicit entropy/DRBG.
   mbedtls_entropy_context entropy;
   mbedtls_ctr_drbg_context ctr_drbg;
+#endif
   mbedtls_x509_crt ca_chain;
   mbedtls_x509_crt own_cert;
   mbedtls_pk_context own_key;
@@ -3868,6 +4347,50 @@ enum class CloseStatus : uint16_t {
 
 enum ReadResult : int { Fail = 0, Text = 1, Binary = 2 };
 
+// Result of WebSocketClient::connect(). Truthy only when the WebSocket
+// upgrade handshake fully succeeded. On failure error() identifies the
+// failing layer; status()/headers() expose the server's upgrade response
+// when one was received (status() is -1 otherwise).
+class Result {
+public:
+  Result() = default;
+  Result(Error err, int status, Headers &&headers)
+      : err_(err), status_(status), headers_(std::move(headers)) {}
+
+  explicit operator bool() const { return err_ == Error::Success; }
+  Error error() const { return err_; }
+
+  // Upgrade response info
+  int status() const { return status_; }
+  const Headers &headers() const { return headers_; }
+  std::string get_header_value(const std::string &key,
+                               const char *def = "") const {
+    return detail::get_header_value(headers_, key, def, 0);
+  }
+  bool has_header(const std::string &key) const {
+    return headers_.find(key) != headers_.end();
+  }
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+  Result(Error err, int status, Headers &&headers, int ssl_error,
+         uint64_t ssl_backend_error)
+      : err_(err), status_(status), headers_(std::move(headers)),
+        ssl_error_(ssl_error), ssl_backend_error_(ssl_backend_error) {}
+
+  int ssl_error() const { return ssl_error_; }
+  uint64_t ssl_backend_error() const { return ssl_backend_error_; }
+#endif
+
+private:
+  Error err_ = Error::Unknown; // a default-constructed Result is falsy
+  int status_ = -1;
+  Headers headers_;
+#ifdef CPPHTTPLIB_SSL_ENABLED
+  int ssl_error_ = 0;
+  uint64_t ssl_backend_error_ = 0;
+#endif
+};
+
 class WebSocket {
 public:
   WebSocket(const WebSocket &) = delete;
@@ -3918,6 +4441,11 @@ private:
   int unacked_pings_ = 0;
   std::atomic<bool> closed_{false};
   std::mutex write_mutex_;
+  // Owned by whichever thread is parsing frames off strm_. Only one thread
+  // may do so: read_websocket_frame() reads a payload until it has the whole
+  // declared length, so a second parser stealing bytes silently corrupts the
+  // message the first one is assembling.
+  std::mutex read_mutex_;
   std::thread ping_thread_;
   std::mutex ping_mutex_;
   std::condition_variable ping_cv_;
@@ -3934,7 +4462,7 @@ public:
 
   bool is_valid() const;
 
-  bool connect();
+  Result connect();
   ReadResult read(std::string &msg);
   bool send(const std::string &data);
   bool send(const char *data, size_t len);
@@ -3943,28 +4471,53 @@ public:
   bool is_open() const;
   const std::string &subprotocol() const;
   void set_read_timeout(time_t sec, time_t usec = 0);
+  template <class Rep, class Period>
+  void set_read_timeout(const std::chrono::duration<Rep, Period> &duration);
+
   void set_write_timeout(time_t sec, time_t usec = 0);
+  template <class Rep, class Period>
+  void set_write_timeout(const std::chrono::duration<Rep, Period> &duration);
+
   void set_websocket_ping_interval(time_t sec);
   void set_websocket_max_missed_pongs(int count);
   void set_tcp_nodelay(bool on);
   void set_address_family(int family);
   void set_ipv6_v6only(bool on);
   void set_socket_options(SocketOptions socket_options);
+
   void set_connection_timeout(time_t sec, time_t usec = 0);
+  template <class Rep, class Period>
+  void
+  set_connection_timeout(const std::chrono::duration<Rep, Period> &duration);
+
   void set_interface(const std::string &intf);
   void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
-  void set_ca_cert_path(const std::string &path);
+  struct PemMemory {
+    const char *cert_pem;
+    size_t cert_pem_len;
+    const char *key_pem;
+    size_t key_pem_len;
+    const char *private_key_password;
+  };
+  explicit WebSocketClient(const std::string &scheme_host_port_path,
+                           const PemMemory &pem, const Headers &headers = {});
+
+  void set_ca_cert_path(const std::string &ca_cert_file_path,
+                        const std::string &ca_cert_dir_path = std::string());
   void set_ca_cert_store(tls::ca_store_t store);
   void load_ca_cert_store(const char *ca_cert, std::size_t size);
   void enable_server_certificate_verification(bool enabled);
+  void enable_server_hostname_verification(bool enabled);
   void enable_system_ca(bool enabled);
 #endif
 
 private:
   void shutdown_and_close();
-  bool create_stream(std::unique_ptr<Stream> &strm);
+  bool create_stream(std::unique_ptr<Stream> &strm, Error &error,
+                     int &ssl_error, uint64_t &ssl_backend_error);
+  void prepare_default_headers(Request &req);
 
   std::string host_;
   int port_;
@@ -3989,7 +4542,8 @@ private:
   time_t connection_timeout_usec_ = CPPHTTPLIB_CONNECTION_TIMEOUT_USECOND;
   std::string interface_;
 
-  // Hostname-IP map
+  // Hostname to connection target map. The value is an IP literal or another
+  // hostname; only the connection target changes, never the identity.
   std::map<std::string, std::string> addr_map_;
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
@@ -3997,12 +4551,36 @@ private:
   tls::ctx_t tls_ctx_ = nullptr;
   tls::session_t tls_session_ = nullptr;
   std::string ca_cert_file_path_;
+  std::string ca_cert_dir_path_;
   bool custom_ca_loaded_ = false;
   bool certs_loaded_ = false;
   SystemCAMode system_ca_mode_ = SystemCAMode::Auto;
   bool server_certificate_verification_ = true;
+  bool server_hostname_verification_ = true;
 #endif
 };
+
+template <class Rep, class Period>
+inline void WebSocketClient::set_read_timeout(
+    const std::chrono::duration<Rep, Period> &duration) {
+  detail::duration_to_sec_and_usec(
+      duration, [&](time_t sec, time_t usec) { set_read_timeout(sec, usec); });
+}
+
+template <class Rep, class Period>
+inline void WebSocketClient::set_write_timeout(
+    const std::chrono::duration<Rep, Period> &duration) {
+  detail::duration_to_sec_and_usec(
+      duration, [&](time_t sec, time_t usec) { set_write_timeout(sec, usec); });
+}
+
+template <class Rep, class Period>
+inline void WebSocketClient::set_connection_timeout(
+    const std::chrono::duration<Rep, Period> &duration) {
+  detail::duration_to_sec_and_usec(duration, [&](time_t sec, time_t usec) {
+    set_connection_timeout(sec, usec);
+  });
+}
 
 namespace impl {
 

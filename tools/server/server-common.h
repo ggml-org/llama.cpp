@@ -5,15 +5,21 @@
 #include "llama.h"
 #include "chat.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
 
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
+#include "json.h"
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cinttypes>
+#include <functional>
+#include <mutex>
+#include <queue>
 #include <string>
 #include <vector>
-#include <cinttypes>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 #define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 #define SLT_TRC(slot, fmt, ...) LOG_TRC("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
@@ -36,9 +42,9 @@ static T json_value(const json & body, const std::string & key, const T & defaul
     // Fallback null to default value
     if (body.contains(key) && !body.at(key).is_null()) {
         try {
-            return body.at(key);
-        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const & err) {
-            LOG_WRN("Wrong type supplied for parameter '%s'. Expected '%s', using default value: %s\n", key.c_str(), json(default_value).type_name(), err.what());
+            return body.at(key).get<T>();
+        } catch (const common_json_error & err) {
+            LOG_WRN("Wrong type supplied for parameter '%s', using default value: %s\n", key.c_str(), err.what());
             return default_value;
         }
     } else {
@@ -189,16 +195,23 @@ public:
     // will create a copy of the chunk if it contains non-text data
     void push_back(const mtmd_input_chunk * chunk);
 
+    // same as push_back, but media chunks are stored as placeholders (no image/audio data)
+    // only use this if the chunk will never be encoded again (e.g. it is already in the KV cache)
+    void push_back_placeholder(const mtmd_input_chunk * chunk);
+
     // appends server tokens, updates the media map. copies media chunks.
     void push_back(server_tokens & tokens);
 
     // for compatibility with context shift and prompt truncation
     void insert(const llama_tokens & inp_tokens);
 
-    // for compatibility with speculative decoding, ctx shift, slot save/load
+    // for compatibility with speculative decoding, ctx shift
     const llama_tokens & get_tokens() const;
 
     llama_tokens get_text_tokens() const;
+
+    std::vector<char> serialize() const;
+    static server_tokens deserialize(const llama_tokens & packed, bool has_mtmd);
 
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);
@@ -206,9 +219,6 @@ public:
     size_t size() const { return tokens.size(); }
 
     bool empty() const { return tokens.empty(); }
-
-    // true if the sequence actually contains image/audio chunks.
-    bool has_media() const { return !map_idx_to_media.empty(); }
 
     void clear() {
         map_idx_to_media.clear();
@@ -224,7 +234,7 @@ public:
     // split the tokens into message spans, skipping over media chunks
     common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
 
-    // make sure all text tokens are within the vocab range
+    // check text token IDs and the mapping between media chunks and token ranges
     bool validate(const struct llama_context * ctx) const;
 
     server_tokens clone() const;
@@ -260,7 +270,12 @@ size_t validate_utf8(const std::string& text);
 
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
 // if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
-server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder = false);
+server_tokens process_mtmd_prompt(
+                                        mtmd_context * mctx,
+                                        const std::string & prompt,
+                                        const std::vector<raw_buffer> & files,
+                                        const mtmd_helper_init_opt & init_opt,
+                                        bool is_placeholder = false);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -280,7 +295,8 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         mtmd_context * mctx,
                                         const json & json_prompt,
                                         bool add_special,
-                                        bool parse_special);
+                                        bool parse_special,
+                                        const mtmd_helper_init_opt & init_opt);
 
 //
 // OAI utils
@@ -329,6 +345,160 @@ json format_response_rerank(
         int top_n);
 
 //
+// stats and metrics
+//
+
+// shared between server_slot and server_task_result_*
+struct server_slot_stats {
+    uint64_t n_prompt_cached    = 0;
+    uint64_t n_prompt_processed = 0;
+    uint64_t n_gen              = 0;
+
+    // speculative decoding stats
+    // note: the per-position breakdown lives in server_slot, it is not needed in a task result
+    uint64_t n_draft_tokens      = 0;
+    uint64_t n_draft_accepted    = 0;
+    uint64_t n_draft_verif_steps = 0;
+
+    // these are absolute timestamps (in us)
+    // note: must be signed - they are subtracted before the later ones are set
+    int64_t t_start       = 0;
+    int64_t t_prompt_last = 0;
+    int64_t t_gen_last    = 0;
+
+    // can only move one direction: start -> prompt -> gen
+    void update_prompt_start() {
+        GGML_ASSERT(t_start == 0);
+        t_start = ggml_time_us();
+    }
+    void set_prompt_last(int64_t t_us) {
+        GGML_ASSERT(t_start > 0);
+        t_prompt_last = t_us;
+    }
+    void update_prompt_last() {
+        set_prompt_last(ggml_time_us());
+    }
+    void update_gen_last() {
+        GGML_ASSERT(t_prompt_last > 0);
+        t_gen_last = ggml_time_us();
+    }
+
+    // these are time durations
+    int64_t t_elapsed_us() const {
+        return ggml_time_us() - t_start;
+    }
+    double t_prompt_ms() const {
+        if (t_prompt_last == 0) {
+            return 0.0; // the prompt is not processed yet
+        }
+        return (t_prompt_last - t_start) / 1000.0;
+    }
+    int64_t t_gen_us() const {
+        if (t_gen_last == 0) {
+            return 0; // the generation is not started yet
+        }
+        // clamp to 1 us, the first token can land in the same us as t_prompt_last
+        return std::max<int64_t>(1, t_gen_last - t_prompt_last);
+    }
+    double t_gen_ms() const {
+        return t_gen_us() / 1000.0;
+    }
+
+    // number of decode steps spent on generation
+    // the first token is free, it comes from the logits of the last prompt batch
+    uint64_t n_gen_steps() const {
+        return n_gen > 0 ? n_gen - 1 : 0;
+    }
+
+    // other derived metrics
+    // note: all of them return 0.0 if the divisor is not known yet
+    double t_prompt_per_token_ms() const {
+        return n_prompt_processed > 0 ? t_prompt_ms() / n_prompt_processed : 0.0;
+    }
+    double t_gen_per_token_ms() const {
+        return n_gen_steps() > 0 ? t_gen_ms() / n_gen_steps() : 0.0;
+    }
+    double n_prompt_tps() const {
+        const double t_ms = t_prompt_ms();
+        return t_ms > 0.0 ? 1e3 / t_ms * n_prompt_processed : 0.0;
+    }
+    double n_gen_tps() const {
+        const double t_ms = t_gen_ms();
+        return t_ms > 0.0 ? 1e3 / t_ms * n_gen_steps() : 0.0;
+    }
+
+    // false if the slot never started, i.e. the task result carries no stats
+    bool is_set() const {
+        return t_start > 0;
+    }
+
+    json to_json() const;
+};
+
+// shared between server_context_impl and server_task_result_*
+// unlike server_slot_stats, server_metrics is server-global and cumulative, not tied to a slot
+struct server_metrics {
+    int64_t t_start = 0;
+
+    struct bucket {
+        uint64_t count = 0; // number of tokens
+        uint64_t steps = 0; // number of decode steps,
+                            // this excludes first generated token (logits from prompt batch)
+        uint64_t time  = 0; // in microseconds
+
+        // the rate uses the decode steps, so that "free" tokens do not inflate it
+        double n_per_second() const {
+            return time > 0 ? (double) steps / (double) time * 1e6 : 0.0;
+        }
+
+        void add(uint64_t n, uint64_t n_steps, uint64_t t_us) {
+            count += n;
+            steps += n_steps;
+            time  += t_us;
+        }
+    };
+
+    // these are reset by reset_bucket(), only the rate is read from them
+    bucket prompt_bucket;
+    bucket predict_bucket;
+
+    // metrics below are cumulative since the server started
+    bucket prompt; // only processed tokens, cached ones are counted separately below
+    bucket predict;
+
+    // tokens reused from the cache need no decode, so they only have a count
+    uint64_t n_prompt_cached = 0;
+
+    uint64_t n_tokens_max = 0;
+
+    uint64_t n_decode     = 0;
+    uint64_t n_busy_slots = 0;
+
+    uint64_t n_draft_tokens      = 0; // Total draft tokens generated
+    uint64_t n_draft_accepted    = 0; // Draft tokens actually accepted
+    uint64_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
+    std::vector<uint64_t> n_accepted_per_pos; // Accepted tokens per draft position
+
+    void init() {
+        t_start = ggml_time_us();
+    }
+
+    void reset_bucket() {
+        prompt_bucket  = {};
+        predict_bucket = {};
+    }
+
+    void add_prompt(uint64_t n_tokens, uint64_t t_us) {
+        prompt       .add(n_tokens, n_tokens, t_us);
+        prompt_bucket.add(n_tokens, n_tokens, t_us);
+    }
+
+    void add_prompt_cached(uint64_t n_tokens) {
+        n_prompt_cached += n_tokens;
+    }
+};
+
+//
 // other utils
 //
 
@@ -375,4 +545,69 @@ server_tokens format_prompt_rerank(
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
-        const std::string & doc);
+        const std::string & doc,
+        const mtmd_helper_init_opt & init_opt);
+
+// simple implementation of a pipe
+// used for streaming data between threads
+template<typename T>
+struct server_pipe {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::queue<T> queue;
+    std::atomic<bool> writer_closed{false};
+    std::atomic<bool> reader_closed{false};
+
+    // 0 = unbounded (default)
+    // > 0, write() drops the oldest item once the queue is full
+    size_t max_size = 0;
+
+    void close_write() {
+        writer_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    void close_read() {
+        reader_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    // close_on_stop = true: should_stop means the reader is gone for good, so the writer is told the pipe is broken.
+    // close_on_stop = false: should_stop is a per-read deadline and further reads still come, so the pipe stays usable.
+    bool read(T & output, const std::function<bool()> & should_stop, bool close_on_stop = true) {
+        std::unique_lock<std::mutex> lk(mutex);
+        constexpr auto poll_interval = std::chrono::milliseconds(500);
+        while (true) {
+            if (!queue.empty()) {
+                output = std::move(queue.front());
+                queue.pop();
+                return true;
+            }
+            if (writer_closed.load()) {
+                return false; // clean EOF
+            }
+            if (should_stop && should_stop()) { // a null should_stop means "never stop"
+                if (close_on_stop) {
+                    close_read(); // signal broken pipe to writer
+                }
+                return false; // cancelled / deadline reached
+            }
+            cv.wait_for(lk, poll_interval);
+        }
+    }
+
+    bool write(T && data) {
+        std::lock_guard<std::mutex> lk(mutex);
+        if (reader_closed.load()) {
+            return false; // broken pipe
+        }
+        if (max_size > 0) {
+            while (queue.size() >= max_size) {
+                queue.pop(); // drop oldest to stay bounded
+            }
+        }
+        queue.push(std::move(data));
+        cv.notify_one();
+        return true;
+    }
+};

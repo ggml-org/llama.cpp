@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { ActionIcon, ChatMessageEditForm, ChatMessageUserBubble } from '$lib/components/app';
-	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { ArrowUp, Edit, Trash2 } from '@lucide/svelte';
-	import { useMessageEditContext } from '$lib/hooks/use-message-edit-context.svelte';
+	import { ActionIcon, ChatMessageEditForm, ChatMessageUserBubble } from '$lib/components/app';
+	import { useChatMessageEditContext } from '$lib/hooks/use-chat-message-edit-context.svelte';
 
 	interface Props {
 		class?: string;
@@ -17,12 +16,12 @@
 		class: className = '',
 		content,
 		extras = [],
-		onSendImmediately,
+		onDelete,
 		onEdit,
-		onDelete
+		onSendImmediately
 	}: Props = $props();
 
-	const editCtx = useMessageEditContext({
+	const editCtx = useChatMessageEditContext({
 		getContent: () => content,
 		getExtras: () => extras,
 		onSave: (content, extras) => onEdit(content, extras)
@@ -30,7 +29,6 @@
 </script>
 
 <div
-	use:fadeInView
 	aria-label="Pending user message"
 	class="group flex flex-col items-end gap-3 transition-opacity hover:opacity-80 md:gap-2 {className} sticky bottom-32"
 	role="group"
@@ -39,11 +37,11 @@
 		<ChatMessageEditForm />
 	{:else}
 		<ChatMessageUserBubble
-			{content}
 			attachments={extras}
-			textColorClass="text-muted-foreground"
 			cardBgClass="dark:bg-primary/8"
+			{content}
 			maxHeightStyle="overflow-wrap: anywhere; word-break: break-word;"
+			textColorClass="text-muted-foreground"
 		/>
 
 		<div class="max-w-[80%]">
@@ -52,9 +50,11 @@
 					<div
 						class="pointer-events-auto inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:opacity-100"
 					>
-						<ActionIcon icon={Edit} tooltip="Edit" onclick={editCtx.handleEdit} />
-						<ActionIcon icon={Trash2} tooltip="Delete" onclick={onDelete} />
-						<ActionIcon icon={ArrowUp} tooltip="Send immediately" onclick={onSendImmediately} />
+						<ActionIcon icon={Edit} onclick={editCtx.handleEdit} tooltip="Edit" />
+
+						<ActionIcon icon={Trash2} onclick={onDelete} tooltip="Delete" />
+
+						<ActionIcon icon={ArrowUp} onclick={onSendImmediately} tooltip="Send immediately" />
 					</div>
 				</div>
 			</div>

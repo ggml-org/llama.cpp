@@ -5,6 +5,8 @@ set(TARGET_NAME ggml-opencl)
 
 ggml_add_backend_library(${TARGET_NAME}
                          ggml-opencl.cpp
+                         cl-program-cache.cpp
+                         cl-program-cache.h
                          ../../include/ggml-opencl.h)
 target_link_libraries(${TARGET_NAME} PRIVATE ${OpenCL_LIBRARIES})
 target_include_directories(${TARGET_NAME} PRIVATE ${OpenCL_INCLUDE_DIRS})
@@ -61,6 +63,7 @@ endfunction()
 set(GGML_OPENCL_KERNELS
     add
     add_id
+    moe_add_id_glu
     argsort
     tri
     fill
@@ -82,6 +85,7 @@ set(GGML_OPENCL_KERNELS
     mul_mv_f16_f32_1row
     mul_mv_f16_f32_l4
     mul_mv_f16_f32
+    mul_mv_f16_f32_mrow
     mul_mv_f32_f32
     mul_mv_q1_0_f32
     mul_mv_q1_0_f32_flat
@@ -177,9 +181,14 @@ set(GGML_OPENCL_KERNELS
     gemv_noshuffle_q8_0_f32
     gemm_noshuffle_q8_0_f32
     gemv_noshuffle_q4_k_f32
+    gemv_noshuffle_q4_k_f32_o4
+    gemv_noshuffle_q4_k_f32_tiled
     gemm_noshuffle_q4_k_f32
     gemv_noshuffle_q6_k_f32
+    gemv_noshuffle_q6_k_f32_o4
+    gemv_noshuffle_q6_k_f32_tiled
     gemm_noshuffle_q6_k_f32
+    gemm_noshuffle_q6_k_f32_tiled
     gemv_noshuffle_q5_k_f32
     gemm_noshuffle_q5_k_f32
     mul
@@ -200,6 +209,7 @@ set(GGML_OPENCL_KERNELS
     sqr
     sqrt
     ssm_conv
+    ssm_scan
     gated_delta_net
     sub
     sum_rows

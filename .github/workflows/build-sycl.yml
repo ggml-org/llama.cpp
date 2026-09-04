@@ -75,7 +75,7 @@ jobs:
           sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: sycl-ubuntu-24-${{ matrix.build }}
           evict-old-files: 1d
@@ -95,6 +95,16 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_SYCL_F16=${{ matrix.fp16 }}
           time cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: sycl-ubuntu-24-${{ matrix.build }}
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
 
   windows-latest-sycl:
     runs-on: windows-2022
@@ -127,7 +137,7 @@ jobs:
           "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: sycl-windows-latest
           variant: ccache
@@ -139,3 +149,13 @@ jobs:
       - name: Build
         id: cmake_build
         run:  examples/sycl/win-build-sycl.bat
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: sycl-windows-latest
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

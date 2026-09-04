@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Eye, Mic, Video } from '@lucide/svelte';
+	import { MODALITY_ICONS, MODALITY_LABELS } from '$lib/constants';
 	import { ModelModality } from '$lib/enums';
 
 	interface Props {
@@ -7,30 +7,23 @@
 		class?: string;
 	}
 
-	let { modalities, class: className = '' }: Props = $props();
+	let { class: className = '', modalities }: Props = $props();
+
+	const shownModalities = [ModelModality.VISION, ModelModality.AUDIO, ModelModality.VIDEO] as const;
+
+	let visible = $derived(shownModalities.filter((modality) => modalities.includes(modality)));
 </script>
 
-{#each modalities as modality (modality)}
-	{#if modality === ModelModality.VISION || modality === ModelModality.AUDIO || modality === ModelModality.VIDEO}
-		<span
-			class={[
-				'inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs font-medium',
-				className
-			]}
-		>
-			{#if modality === ModelModality.VISION}
-				<Eye class="h-3 w-3" />
+{#each visible as modality (modality)}
+	{@const ModalityIcon = MODALITY_ICONS[modality]}
+	<span
+		class={[
+			'inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs font-medium',
+			className
+		]}
+	>
+		<ModalityIcon class="h-3 w-3" />
 
-				Vision (Image)
-			{:else if modality === ModelModality.VIDEO}
-				<Video class="h-3 w-3" />
-
-				Vision (Video)
-			{:else}
-				<Mic class="h-3 w-3" />
-
-				Audio
-			{/if}
-		</span>
-	{/if}
+		{MODALITY_LABELS[modality]}
+	</span>
 {/each}

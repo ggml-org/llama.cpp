@@ -1,3 +1,5 @@
+import type { SearchResult } from '$lib/types/search';
+
 /**
  * Parsers for MCP web-search tool responses shaped like:
  *
@@ -16,42 +18,28 @@
  * servers without hardcoding tool names.
  */
 
-export type SearchResult = {
-	title: string;
-	url: string;
-	published?: string;
-	author?: string;
-	highlights?: string;
-};
-
 const SEPARATOR_LINE_RE = /^\s*---\s*$/;
 const URL_SCHEME_RE = /^https?:\/\//i;
-
 // Match either Unix or Windows line endings so chunking/parsing handles
 // payloads written by either scheme without off-by-one mismatches.
 const LINE_BREAK_RE = /\r?\n/;
-
 // Sentinel the search-result wire format uses when a field is absent
 // (e.g. `Author: N/A`). Treated identically to a missing field so the
 // rendered card hides the row either way.
 const NOT_AVAILABLE_VALUE = 'N/A';
-
 // Section header that announces the start of the multi-line Highlights
 // block. Everything from that line onward (until the next `---`
 // separator or end of chunk) is captured verbatim as highlight text
 // instead of being re-scanned for `Title:`/`URL:`/... field lines.
 const HIGHLIGHTS_SECTION_HEADER = 'Highlights:';
-
 // Field name conventionally used by web-search tools (Exa etc.) as the
 // user-supplied query parameter. Extracted so future tool schemas that
 // adopt the same convention stay grep-compatible with this parser.
 const SEARCH_TOOL_QUERY_FIELD = 'query';
-
 // URL schemes the favicon helper will resolve to a hosted favicon. Any
 // other scheme (e.g. data:, blob:) intentionally returns null so the UI
 // can fall back to a generic globe icon.
 const RESOLVABLE_URL_PROTOCOLS: readonly string[] = ['https:', 'http:'];
-
 // Conventional favicon path served by virtually every web host.
 // Appended to the URL origin as a best-effort lookup target; ignore
 // 404s at render time.
@@ -62,10 +50,10 @@ const FAVICON_PATH = '/favicon.ico';
 // (and that callers read off `SearchResult`), so `FieldKey.TITLE` is a
 // drop-in for the literal `'title'`.
 enum FieldKey {
-	TITLE = 'title',
-	URL = 'url',
+	AUTHOR = 'author',
 	PUBLISHED = 'published',
-	AUTHOR = 'author'
+	TITLE = 'title',
+	URL = 'url'
 }
 const FIELD_PREFIXES: ReadonlyArray<{ key: FieldKey; prefix: string }> = [
 	{ key: FieldKey.TITLE, prefix: 'Title:' },
@@ -83,7 +71,9 @@ const FIELD_PREFIXES: ReadonlyArray<{ key: FieldKey; prefix: string }> = [
 function splitChunks(text: string): string[] {
 	const lines = text.split(LINE_BREAK_RE);
 	const chunks: string[] = [];
+
 	let buffer: string[] = [];
+
 	for (const line of lines) {
 		if (SEPARATOR_LINE_RE.test(line)) {
 			if (buffer.length > 0) {
@@ -94,7 +84,9 @@ function splitChunks(text: string): string[] {
 			buffer.push(line);
 		}
 	}
+
 	if (buffer.length > 0) chunks.push(buffer.join('\n'));
+
 	return chunks;
 }
 
@@ -106,36 +98,42 @@ function splitChunks(text: string): string[] {
  */
 function parseChunk(chunk: string): SearchResult | null {
 	const trimmed = chunk.trim();
+
 	if (!trimmed) return null;
 
 	const lines = chunk.split(LINE_BREAK_RE);
-
 	const fields: Record<FieldKey, string | undefined> = {
-		[FieldKey.TITLE]: undefined,
-		[FieldKey.URL]: undefined,
+		[FieldKey.AUTHOR]: undefined,
 		[FieldKey.PUBLISHED]: undefined,
-		[FieldKey.AUTHOR]: undefined
+		[FieldKey.TITLE]: undefined,
+		[FieldKey.URL]: undefined
 	};
 	const highlightLines: string[] = [];
+
 	let inHighlights = false;
 
 	for (const line of lines) {
 		if (!inHighlights && line.trim() === HIGHLIGHTS_SECTION_HEADER) {
 			inHighlights = true;
+
 			continue;
 		}
 
 		if (inHighlights) {
 			highlightLines.push(line);
+
 			continue;
 		}
 
 		for (const { key, prefix } of FIELD_PREFIXES) {
 			if (!line.startsWith(prefix)) continue;
+
 			const value = line.slice(prefix.length).trim();
+
 			if (value && value !== NOT_AVAILABLE_VALUE) {
 				fields[key] = value;
 			}
+
 			break;
 		}
 	}
@@ -144,52 +142,94 @@ function parseChunk(chunk: string): SearchResult | null {
 		return null;
 
 	const highlights = highlightLines.join('\n').trim();
-
 	const result: SearchResult = {
 		title: fields[FieldKey.TITLE],
 		url: fields[FieldKey.URL]
 	};
+
 	if (fields[FieldKey.PUBLISHED]) result.published = fields[FieldKey.PUBLISHED];
+
 	if (fields[FieldKey.AUTHOR]) result.author = fields[FieldKey.AUTHOR];
+
 	if (highlights) result.highlights = highlights;
+
 	return result;
 }
+
+/** Bounded cache for extractSearchResults results. */
+const SEARCH_RESULTS_CACHE_MAX_SIZE = 32;
+const searchResultsCache = new Map<string, SearchResult[]>();
 
 /**
  * Extract a SearchResult[] from a tool-result string. Returns `[]` when
  * the input does not match the expected shape — useful for branching
  * between dedicated search-results rendering and the generic tool-call
- * block.
+ * block. Memoized: called per render during streaming on unchanged
+ * tool result strings.
  */
 export function extractSearchResults(text: string | undefined | null): SearchResult[] {
 	if (!text) return [];
 
+	const cached = searchResultsCache.get(text);
+
+	if (cached) return cached;
+
 	const results: SearchResult[] = [];
+
 	for (const chunk of splitChunks(text)) {
 		const parsed = parseChunk(chunk);
+
 		if (parsed) results.push(parsed);
 	}
+
+	if (searchResultsCache.size >= SEARCH_RESULTS_CACHE_MAX_SIZE) {
+		searchResultsCache.delete(searchResultsCache.keys().next().value!);
+	}
+
+	searchResultsCache.set(text, results);
+
 	return results;
 }
+
+/** Bounded cache for extractSearchQuery results. */
+const SEARCH_QUERY_CACHE_MAX_SIZE = 32;
+const searchQueryCache = new Map<string, string>();
 
 /**
  * Best-effort extraction of the search query out of a tool call's JSON
  * argument blob. Currently looks for a `query` field (the convention
  * used by Exa and most web-search MCP servers); returns an empty string
- * if it cannot be located.
+ * if it cannot be located. Memoized: called per render during streaming
+ * on unchanged tool args strings.
  */
 export function extractSearchQuery(toolArgs: string | undefined | null): string {
 	if (!toolArgs) return '';
+
+	const cached = searchQueryCache.get(toolArgs);
+
+	if (cached !== undefined) return cached;
+
+	let result = '';
+
 	try {
 		const parsed: unknown = JSON.parse(toolArgs);
+
 		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
 			const candidate = (parsed as Record<string, unknown>)[SEARCH_TOOL_QUERY_FIELD];
-			if (typeof candidate === 'string') return candidate.trim();
+
+			if (typeof candidate === 'string') result = candidate.trim();
 		}
 	} catch {
-		return '';
+		result = '';
 	}
-	return '';
+
+	if (searchQueryCache.size >= SEARCH_QUERY_CACHE_MAX_SIZE) {
+		searchQueryCache.delete(searchQueryCache.keys().next().value!);
+	}
+
+	searchQueryCache.set(toolArgs, result);
+
+	return result;
 }
 
 /**
@@ -201,7 +241,9 @@ export function extractSearchQuery(toolArgs: string | undefined | null): string 
 export function faviconForUrl(url: string): string | null {
 	try {
 		const parsed = new URL(url);
+
 		if (!RESOLVABLE_URL_PROTOCOLS.includes(parsed.protocol)) return null;
+
 		return `${parsed.protocol}//${parsed.host}${FAVICON_PATH}`;
 	} catch {
 		return null;
@@ -225,5 +267,6 @@ export const SUPPORTED_WEB_SEARCH_TOOL_NAMES: readonly string[] = ['web_search_e
  */
 export function isWebSearchToolName(toolName: string | undefined | null): boolean {
 	if (!toolName) return false;
+
 	return SUPPORTED_WEB_SEARCH_TOOL_NAMES.includes(toolName);
 }

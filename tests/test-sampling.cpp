@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-extern struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const std::vector<std::vector<llama_token>>& seq_breakers);
+extern struct llama_sampler * llama_sampler_init_dry_testing(float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const std::vector<std::vector<llama_token>>& seq_breakers);
 
 static void dump(const llama_token_data_array * cur_p) {
     for (size_t i = 0; i < cur_p->size; i++) {
@@ -60,6 +60,35 @@ private:
 
     std::vector<llama_token_data> cur;
 };
+
+static llama_token sample_dist(llama_sampler * sampler, const std::vector<float> & logits) {
+    std::vector<llama_token_data> cur;
+    for (llama_token token_id = 0; token_id < (llama_token) logits.size(); ++token_id) {
+        cur.push_back({ token_id, logits[token_id], 0.0f });
+    }
+
+    llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+    llama_sampler_apply(sampler, &cur_p);
+    GGML_ASSERT(cur_p.selected >= 0);
+    GGML_ASSERT((size_t) cur_p.selected < cur_p.size);
+    return cur_p.data[cur_p.selected].id;
+}
+
+static void test_dist_singleton_rng() {
+    llama_sampler * singleton = llama_sampler_init_dist(4242);
+    llama_sampler * control   = llama_sampler_init_dist(4242);
+
+    sample_dist(singleton, { 0.0f });
+    sample_dist(control,   { 0.0f, 0.0f });
+
+    const std::vector<float> logits(256, 0.0f);
+    for (int i = 0; i < 4; ++i) {
+        GGML_ASSERT(sample_dist(singleton, logits) == sample_dist(control, logits));
+    }
+
+    llama_sampler_free(singleton);
+    llama_sampler_free(control);
+}
 
 static void test_temp(const std::vector<float> & probs, const std::vector<float> & probs_expected, float temp) {
     sampler_tester tester(probs, probs_expected);
@@ -144,7 +173,7 @@ static void test_penalties(
 
     sampler_tester tester(probs, probs_expected);
 
-    auto * sampler = llama_sampler_init_penalties(last_tokens.size(), repeat_penalty, alpha_frequency, alpha_presence);
+    auto * sampler = llama_sampler_init_penalties((int32_t) probs.size(), (int32_t) last_tokens.size(), repeat_penalty, alpha_frequency, alpha_presence);
 
     for (size_t i = 0; i < last_tokens.size(); i++) {
         llama_sampler_accept(sampler, last_tokens[i]);
@@ -168,7 +197,7 @@ static void test_dry(
 
     sampler_tester tester(probs, expected_probs);
 
-    auto * sampler = llama_sampler_init_dry_testing(1024, dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, seq_breakers);
+    auto * sampler = llama_sampler_init_dry_testing(dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, seq_breakers);
 
     for (size_t i = 0; i < last_tokens.size(); i++) {
         llama_sampler_accept(sampler, last_tokens[i]);
@@ -307,6 +336,8 @@ static void test_perf() {
 
 int main(void) {
     ggml_time_init();
+
+    test_dist_singleton_rng();
 
     test_temp({0.1f, 0.2f, 0.3f, 0.4f}, {0.1f, 0.2f, 0.3f, 0.4f}, 1.0f);
     test_temp({0.1f, 0.2f, 0.3f, 0.4f}, {0.0f, 0.0f, 0.0f, 1.0f}, 0.0f);

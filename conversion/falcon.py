@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("FalconForCausalLM", "RWForCausalLM")
+@ModelBase.example("tiiuae/falcon-7b")
 class FalconModel(TextModel):
     model_arch = gguf.MODEL_ARCH.FALCON
 

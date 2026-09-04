@@ -271,6 +271,19 @@ static const char * split_mode_str(llama_split_mode mode) {
     }
 }
 
+static const char * lazy_mode_str(llama_lazy_mode mode) {
+    switch (mode) {
+        case LLAMA_LAZY_MODE_OFF:
+            return "off";
+        case LLAMA_LAZY_MODE_AUTO:
+            return "auto";
+        case LLAMA_LAZY_MODE_ON:
+            return "on";
+        default:
+            GGML_ABORT("invalid lazy mode");
+    }
+}
+
 static std::string pair_str(const std::pair<int, int> & p) {
     static char buf[32];
     snprintf(buf, sizeof(buf), "%d,%d", p.first, p.second);
@@ -341,6 +354,7 @@ struct cmd_params {
     std::vector<int>                 n_cpu_moe;
     std::vector<llama_split_mode>    split_mode;
     std::vector<llama_load_mode>     load_mode;
+    std::vector<llama_lazy_mode>     lazy_mode;
     std::vector<int>                 main_gpu;
     std::vector<bool>                no_kv_offload;
     std::vector<llama_flash_attn_type> flash_attn;
@@ -384,7 +398,8 @@ static const cmd_params cmd_params_defaults = {
     /* n_gpu_layers         */ { -1 },
     /* n_cpu_moe            */ { 0 },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
-    /* load_mode            */ { LLAMA_LOAD_MODE_MMAP },
+    /* load_mode            */ { LLAMA_LOAD_MODE_AUTO },
+    /* lazy_mode            */ { LLAMA_LAZY_MODE_AUTO },
     /* main_gpu             */ { 0 },
     /* no_kv_offload        */ { false },
     /* flash_attn           */ { LLAMA_FLASH_ATTN_TYPE_AUTO },
@@ -429,45 +444,46 @@ static void print_usage(int /* argc */, char ** argv) {
     }
     printf("\n");
     printf("test parameters:\n");
-    printf("  -m, --model <filename>                      (default: %s)\n", join(cmd_params_defaults.model, ",").c_str());
-    printf("  -hf, -hfr, --hf-repo <user>/<model>[:quant] Hugging Face model repository; quant is optional, case-insensitive\n");
-    printf("                                              default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n");
-    printf("                                              example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M\n");
-    printf("                                              (default: unused)\n");
-    printf("  -hff, --hf-file <file>                      Hugging Face model file. If specified, it will override the quant in --hf-repo\n");
-    printf("                                              (default: unused)\n");
-    printf("  -hft, --hf-token <token>                    Hugging Face access token\n");
-    printf("                                              (default: value from HF_TOKEN environment variable)\n");
-    printf("  --offline                                   Offline mode: forces use of cache, prevents network access\n");
-    printf("                                              (default: disabled)\n");
-    printf("  -p, --n-prompt <n>                          (default: %s)\n", join(cmd_params_defaults.n_prompt, ",").c_str());
-    printf("  -n, --n-gen <n>                             (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
-    printf("  -pg <pp,tg>                                 (default: %s)\n", join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
-    printf("  -d, --n-depth <n>                           (default: %s)\n", join(cmd_params_defaults.n_depth, ",").c_str());
-    printf("  -b, --batch-size <n>                        (default: %s)\n", join(cmd_params_defaults.n_batch, ",").c_str());
-    printf("  -ub, --ubatch-size <n>                      (default: %s)\n", join(cmd_params_defaults.n_ubatch, ",").c_str());
-    printf("  -ctk, --cache-type-k <t>                    (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_k, ggml_type_name), ",").c_str());
-    printf("  -ctv, --cache-type-v <t>                    (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_v, ggml_type_name), ",").c_str());
-    printf("  -t, --threads <n>                           (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
-    printf("  -C, --cpu-mask <hex,hex>                    (default: %s)\n", join(cmd_params_defaults.cpu_mask, ",").c_str());
-    printf("  --cpu-strict <0|1>                          (default: %s)\n", join(cmd_params_defaults.cpu_strict, ",").c_str());
-    printf("  --poll <0...100>                            (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
-    printf("  -ngl, --n-gpu-layers <n>                    (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
-    printf("  -ncmoe, --n-cpu-moe <n>                     (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
-    printf("  -sm, --split-mode <none|layer|row|tensor>   (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
-    printf("  -mg, --main-gpu <i>                         (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
-    printf("  -nkvo, --no-kv-offload <0|1>                (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
-    printf("  -fa, --flash-attn <on|off|auto>             (default: %s)\n", join(transform_to_str(cmd_params_defaults.flash_attn, llama_flash_attn_type_name), ",").c_str());
-    printf("  -dev, --device <dev0/dev1/...>              (default: auto)\n");
-    printf("  -lm, --load-mode <none|mmap|mlock|dio>      (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
-    printf("  -mmp, --mmap <0|1>                          (DEPRECATED IN FAVOUR OF --load-mode)\n");
-    printf("  -dio, --direct-io <0|1>                     (DEPRECATED IN FAVOUR OF --load-mode)\n");
-    printf("  -embd, --embeddings <0|1>                   (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
-    printf("  -ts, --tensor-split <ts0/ts1/..>            (default: 0)\n");
+    printf("  -m, --model <filename>                            (default: %s)\n", join(cmd_params_defaults.model, ",").c_str());
+    printf("  -hf, -hfr, --hf-repo <user>/<model>[:quant]       Hugging Face model repository; quant is optional, case-insensitive\n");
+    printf("                                                    default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n");
+    printf("                                                    example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M\n");
+    printf("                                                    (default: unused)\n");
+    printf("  -hff, --hf-file <file>                            Hugging Face model file. If specified, it will override the quant in --hf-repo\n");
+    printf("                                                    (default: unused)\n");
+    printf("  -hft, --hf-token <token>                          Hugging Face access token\n");
+    printf("                                                    (default: value from HF_TOKEN environment variable)\n");
+    printf("  --offline                                         Offline mode: forces use of cache, prevents network access\n");
+    printf("                                                    (default: disabled)\n");
+    printf("  -p, --n-prompt <n>                                (default: %s)\n", join(cmd_params_defaults.n_prompt, ",").c_str());
+    printf("  -n, --n-gen <n>                                   (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
+    printf("  -pg <pp,tg>                                       (default: %s)\n", join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
+    printf("  -d, --n-depth <n>                                 (default: %s)\n", join(cmd_params_defaults.n_depth, ",").c_str());
+    printf("  -b, --batch-size <n>                              (default: %s)\n", join(cmd_params_defaults.n_batch, ",").c_str());
+    printf("  -ub, --ubatch-size <n>                            (default: %s)\n", join(cmd_params_defaults.n_ubatch, ",").c_str());
+    printf("  -ctk, --cache-type-k <t>                          (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_k, ggml_type_name), ",").c_str());
+    printf("  -ctv, --cache-type-v <t>                          (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_v, ggml_type_name), ",").c_str());
+    printf("  -t, --threads <n>                                 (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
+    printf("  -C, --cpu-mask <hex,hex>                          (default: %s)\n", join(cmd_params_defaults.cpu_mask, ",").c_str());
+    printf("  --cpu-strict <0|1>                                (default: %s)\n", join(cmd_params_defaults.cpu_strict, ",").c_str());
+    printf("  --poll <0...100>                                  (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
+    printf("  -ngl, --n-gpu-layers <n>                          (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
+    printf("  -ncmoe, --n-cpu-moe <n>                           (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
+    printf("  -sm, --split-mode <none|layer|row|tensor>         (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
+    printf("  -mg, --main-gpu <i>                               (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
+    printf("  -nkvo, --no-kv-offload <0|1>                      (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
+    printf("  -fa, --flash-attn <on|off|auto>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.flash_attn, llama_flash_attn_type_name), ",").c_str());
+    printf("  -dev, --device <dev0/dev1/...>                    (default: auto)\n");
+    printf("  -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio> (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
+    printf("  -lzm, --lazy-mode <on|auto|off>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.lazy_mode, lazy_mode_str), ",").c_str());
+    printf("  -mmp, --mmap <0|1>                                (DEPRECATED IN FAVOUR OF --load-mode)\n");
+    printf("  -dio, --direct-io <0|1>                           (DEPRECATED IN FAVOUR OF --load-mode)\n");
+    printf("  -embd, --embeddings <0|1>                         (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
+    printf("  -ts, --tensor-split <ts0/ts1/..>                  (default: 0)\n");
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
-    printf("                                              (default: disabled)\n");
-    printf("  -nopo, --no-op-offload <0|1>                (default: 0)\n");
-    printf("  --no-host <0|1>                             (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
+    printf("                                                    (default: disabled)\n");
+    printf("  -nopo, --no-op-offload <0|1>                      (default: 0)\n");
+    printf("  --no-host <0|1>                                   (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -670,22 +686,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
             } else if (arg == "--list-devices") {
-                std::vector<ggml_backend_dev_t> devices;
-                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                    auto * dev = ggml_backend_dev_get(i);
-                    if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-                        devices.push_back(dev);
-                    }
-                }
-                printf("Available devices:\n");
-                if (devices.empty()) {
-                    printf("  (none)\n");
-                }
-                for (auto * dev : devices) {
-                    size_t free, total;
-                    ggml_backend_dev_memory(dev, &free, &total);
-                    printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
-                }
+                common_print_available_devices();
                 exit(0);
             } else if (arg == "-t" || arg == "--threads") {
                 if (++i >= argc) {
@@ -779,12 +780,16 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 std::vector<llama_load_mode> modes;
                 for (const auto & m : p) {
                     llama_load_mode mode;
-                    if (m == "none") {
+                    if (m == "auto") {
+                        mode = LLAMA_LOAD_MODE_AUTO;
+                    } else if (m == "none") {
                         mode = LLAMA_LOAD_MODE_NONE;
                     } else if (m == "mmap") {
                         mode = LLAMA_LOAD_MODE_MMAP;
                     } else if (m == "mlock") {
                         mode = LLAMA_LOAD_MODE_MLOCK;
+                    } else if (m == "mmap+mlock") {
+                        mode = LLAMA_LOAD_MODE_MMAP_MLOCK;
                     } else if (m == "dio") {
                         mode = LLAMA_LOAD_MODE_DIRECT_IO;
                     } else {
@@ -797,6 +802,32 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
+            } else if (arg == "-lzm" || arg == "--lazy-mode") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+
+                std::vector<llama_lazy_mode> modes;
+                for (const auto & m : p) {
+                    llama_lazy_mode mode;
+                    if (m == "on") {
+                        mode = LLAMA_LAZY_MODE_ON;
+                    } else if (m == "auto") {
+                        mode = LLAMA_LAZY_MODE_AUTO;
+                    } else if (m == "off") {
+                        mode = LLAMA_LAZY_MODE_OFF;
+                    } else {
+                        invalid_param = true;
+                        break;
+                    }
+                    modes.push_back(mode);
+                }
+                if (invalid_param) {
+                    break;
+                }
+                params.lazy_mode.insert(params.lazy_mode.end(), modes.begin(), modes.end());
             } else if (arg == "-mg" || arg == "--main-gpu") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -857,7 +888,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     invalid_param = true;
                     break;
                 }
-                LOG_WRN("DEPRECATED: -mmp and --mmap are deprecated in favour of --load-mode. Please use --load-mode mmap instead.");
+                LOG_WRN("DEPRECATED: -mmp and --mmap are deprecated in favour of --load-mode. Please use --load-mode mmap instead.\n");
                 auto p = string_split<bool>(argv[i], split_delim);
 
                 std::vector<llama_load_mode> modes;
@@ -876,7 +907,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     invalid_param = true;
                     break;
                 }
-                LOG_WRN("DEPRECATED: -dio and --direct-io are deprecated in favour of --load-mode. Please use --load-mode dio instead.");
+                LOG_WRN("DEPRECATED: -dio and --direct-io are deprecated in favour of --load-mode. Please use --load-mode dio instead.\n");
                 auto p = string_split<bool>(argv[i], split_delim);
 
                 std::vector<llama_load_mode> modes;
@@ -1148,6 +1179,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.load_mode.empty()) {
         params.load_mode = cmd_params_defaults.load_mode;
     }
+    if (params.lazy_mode.empty()) {
+        params.lazy_mode = cmd_params_defaults.lazy_mode;
+    }
     if (params.main_gpu.empty()) {
         params.main_gpu = cmd_params_defaults.main_gpu;
     }
@@ -1214,6 +1248,7 @@ struct cmd_params_instance {
     int                n_cpu_moe;
     llama_split_mode   split_mode;
     llama_load_mode    load_mode;
+    llama_lazy_mode    lazy_mode;
     int                main_gpu;
     bool               no_kv_offload;
     llama_flash_attn_type flash_attn;
@@ -1235,6 +1270,7 @@ struct cmd_params_instance {
         }
         mparams.split_mode    = split_mode;
         mparams.load_mode     = load_mode;
+        mparams.lazy_mode     = lazy_mode;
         mparams.main_gpu      = main_gpu;
         mparams.tensor_split  = tensor_split.data();
         mparams.no_host       = no_host;
@@ -1265,7 +1301,7 @@ struct cmd_params_instance {
             merged.reserve(merged.size() + (size_t) n_cpu_moe + 1);
 
             for (int i = 0; i < n_cpu_moe; ++i) {
-                patterns.push_back(llm_ffn_exps_block_regex(i));
+                patterns.push_back(llm_ffn_block_regex(i, LLM_FFN_EXPS_REGEX));
                 merged.push_back({ patterns.back().c_str(),
                                 ggml_backend_cpu_buffer_type() });
             }
@@ -1282,7 +1318,8 @@ struct cmd_params_instance {
         return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu && tensor_split == other.tensor_split &&
-               load_mode == other.load_mode && devices == other.devices && no_host == other.no_host &&
+               load_mode == other.load_mode && lazy_mode == other.lazy_mode &&
+               devices == other.devices && no_host == other.no_host &&
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
@@ -1316,6 +1353,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & ncmoe : params.n_cpu_moe)
     for (const auto & sm : params.split_mode)
     for (const auto & lm : params.load_mode)
+    for (const auto & lzm : params.lazy_mode)
     for (const auto & mg : params.main_gpu)
     for (const auto & devs : params.devices)
     for (const auto & ts : params.tensor_split)
@@ -1355,6 +1393,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_cpu_moe             = */ ncmoe,
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
+                /* .lazy_mode             = */ lzm,
                 /* .main_gpu              = */ mg,
                 /* .no_kv_offload         = */ nkvo,
                 /* .flash_attn            = */ fa,
@@ -1391,6 +1430,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_cpu_moe             = */ ncmoe,
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
+                /* .lazy_mode             = */ lzm,
                 /* .main_gpu              = */ mg,
                 /* .no_kv_offload         = */ nkvo,
                 /* .flash_attn            = */ fa,
@@ -1427,6 +1467,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_cpu_moe             = */ ncmoe,
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
+                /* .lazy_mode             = */ lzm,
                 /* .main_gpu              = */ mg,
                 /* .no_kv_offload         = */ nkvo,
                 /* .flash_attn            = */ fa,
@@ -1468,6 +1509,7 @@ struct test {
     int                      n_cpu_moe;
     llama_split_mode         split_mode;
     llama_load_mode          load_mode;
+    llama_lazy_mode          lazy_mode;
     int                      main_gpu;
     bool                     no_kv_offload;
     llama_flash_attn_type    flash_attn;
@@ -1507,6 +1549,7 @@ struct test {
         n_cpu_moe      = inst.n_cpu_moe;
         split_mode     = inst.split_mode;
         load_mode      = inst.load_mode;
+        lazy_mode      = inst.lazy_mode;
         main_gpu       = inst.main_gpu;
         no_kv_offload  = inst.no_kv_offload;
         flash_attn     = inst.flash_attn;
@@ -1574,7 +1617,8 @@ struct test {
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
-            "tensor_buft_overrides",            "load_mode",     "embeddings",
+            "tensor_buft_overrides",            "load_mode",     "lazy_mode",
+            "embeddings",
             "no_op_offload",  "no_host",        "fit_target",    "fit_min_ctx",
             "n_prompt",       "n_gen",          "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
@@ -1599,7 +1643,7 @@ struct test {
         if (field == "avg_ts" || field == "stddev_ts") {
             return FLOAT;
         }
-        if (field == "load_mode") {
+        if (field == "load_mode" || field == "lazy_mode") {
             return STRING;
         }
         return STRING;
@@ -1669,6 +1713,7 @@ struct test {
                                             tensor_split_str,
                                             tensor_buft_overrides_str,
                                             llama_load_mode_name(load_mode),
+                                            lazy_mode_str(lazy_mode),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
                                             std::to_string(no_host),
@@ -1982,6 +2027,9 @@ struct markdown_printer : public printer {
         }
         if (params.load_mode.size() > 1 || params.load_mode != cmd_params_defaults.load_mode) {
             fields.emplace_back("load_mode");
+        }
+        if (params.lazy_mode.size() > 1 || params.lazy_mode != cmd_params_defaults.lazy_mode) {
+            fields.emplace_back("lazy_mode");
         }
         if (params.embeddings.size() > 1 || params.embeddings != cmd_params_defaults.embeddings) {
             fields.emplace_back("embeddings");
@@ -2305,6 +2353,7 @@ int llama_bench(int argc, char ** argv) {
                 fit_overrides.data(),
                 margins.data(),
                 inst.fit_min_ctx,
+                nullptr,
                 params.verbose ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
        }
 

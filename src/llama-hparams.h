@@ -3,11 +3,15 @@
 #include "llama.h"
 
 #include <array>
+#include <bitset>
 #include <cassert>
+#include <cmath>
 
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
-#define LLAMA_MAX_EXPERTS 512 // Qwen3 Next
+#define LLAMA_MAX_EXPERTS 1024 // Kimi K3
+#define LLAMA_MAX_PLE_NGRAM 8  // qwen4exp
+#define LLAMA_MAX_PLE_HEADS 64 // qwen4exp
 
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
@@ -47,13 +51,17 @@ struct llama_hparams {
     bool use_par_res;
     bool swin_norm;
     bool norm_before_residual = false;
+    bool norm_before_fc       = false;
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
     uint32_t n_layer_all;
     uint32_t n_layer_nextn = 0;
+
+    // granite-switch: index of the single-head "router" KV layer that encodes
+    // per-token adapter selection. -1 when the model has no such layer.
+    int32_t  router_layer = -1;
     uint32_t n_expert = 0;
-    uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
 
     // TODO: this needs to be reworked
@@ -83,10 +91,14 @@ struct llama_hparams {
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 
+    // per-layer expert feed-forward size
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_exp_arr;
+    // per-layer top-k expert routing count
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_expert_used_arr;
+
     uint32_t n_layer_dense_lead = 0;
     uint32_t n_lora_q           = 0;
     uint32_t n_lora_kv          = 0;
-    uint32_t n_ff_exp           = 0;
     uint32_t n_ff_shexp         = 0;
     uint32_t n_ff_chexp         = 0;
     uint32_t n_expert_shared    = 0;
@@ -94,6 +106,11 @@ struct llama_hparams {
     uint32_t n_expert_groups    = 0;
     uint32_t n_group_used       = 0;
     uint32_t n_group_experts    = 0;
+
+    // MLA + SWA (i.e. dots3note)
+    uint32_t n_lora_kv_swa           = 0;
+    uint32_t n_embd_head_k_mla_swa   = 0;
+    uint32_t n_embd_head_v_mla_swa   = 0;
 
     float    expert_group_scale   = 0.05f;
     float    expert_weights_scale = 0.0f;
@@ -138,10 +155,18 @@ struct llama_hparams {
 
     std::array<int, 4> rope_sections;
 
+    // Per-layer RoPE enable flags (1 = use RoPE, 0 = NoPE)
+    // by default, all layers use RoPE (controlled by rope_finetuned)
+    std::array<uint32_t, LLAMA_MAX_LAYERS> rope_pattern;
+
     // Sliding Window Attention (SWA)
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
+
+    // deepseek4 vision: when decoding non-causally (multimodal input), SWA is not applied between tokens of the current ubatch (the image span); older tokens are still window-clipped
+    // for other models (like gemma 3, gemma 4): SWA is always applied to match transformers implementation
+    bool swa_full_non_causal = false;
 
     // if is_swa_impl[il] == 1, then layer il is SWA
     // if is_swa_impl[il] == 0, then layer il is dense (i.e. non-SWA)
@@ -159,8 +184,19 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
 
+    // for MiniMax-Text-01 linear attention
+    uint32_t n_embd_head_la = 0;
+
     // for Kimi Linear KDA
     uint32_t n_embd_head_kda = 0;
+    bool     kda_safe_gate = false;
+
+    // kimi-k3
+    uint32_t n_expert_latent      = 0;      // routed_expert_hidden_size (0 = experts run at n_embd)
+    uint32_t attn_res_block_size  = 0;      // 0 = no cross-layer attention residuals
+    float    kda_gate_lower_bound = -INFINITY;
+    float    situ_beta            = 1.0f;
+    float    situ_linear_beta     = 0.0f;   // 0 = no linear-beta transform on the up branch
 
     bool ssm_dt_b_c_rms = false;
 
@@ -197,6 +233,12 @@ struct llama_hparams {
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
 
+    uint32_t dflash_block_size       = 0;
+    uint32_t dflash_conv_kernel_size = 0;
+    uint32_t dflash_conv_group_size  = 0;
+    uint32_t dflash_selector_rank    = 0;
+    uint32_t dflash_selector_top_k   = 0;
+
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
     uint32_t n_no_rope_layer_step    = 4;
@@ -226,6 +268,13 @@ struct llama_hparams {
     uint32_t indexer_n_head    = 0;
     uint32_t indexer_head_size = 0;
     uint32_t indexer_top_k     = 0;
+    // MSA
+    uint32_t indexer_block_size  = 0;
+    uint32_t indexer_local_blocks = 0;
+
+    // Indexer is "full" (1) or "shared" (0)
+    // Shared indexers reuse top-k from previous full layer
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_indexer_full_impl;
 
     // DeepSeek-V4
     uint32_t dsv4_o_group_count        = 0;
@@ -236,6 +285,30 @@ struct llama_hparams {
     float    dsv4_compress_rope_base   = 0.0f;
     float    dsv4_hc_eps               = 0.0f;
     std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios;
+
+    // 0 = full rank (DeepSeek-V4)
+    uint32_t hc_low_rank = 0;
+
+    uint32_t ple_ngram_size      = 0;
+    uint32_t ple_heads_per_ngram = 0;
+    uint32_t ple_conv_kernel     = 0;
+    uint32_t ple_n_heads         = 0;   // (ngram_size - 1) * heads_per_ngram
+    uint32_t ple_head_dim        = 0;
+    uint32_t ple_eos_token_id    = 0;
+    // the id the PLE hash stands in at image positions; 0 makes the loader fall back to EOS
+    uint32_t ple_image_token_id  = 0;
+    // the file lists PLE layer indices, so this is never a per-layer gguf array and can hold one bit per layer
+    std::bitset<LLAMA_MAX_LAYERS> is_ple_impl;
+    // the hash multipliers reach ~2e13 and have to stay 64-bit
+    std::array<uint64_t, LLAMA_MAX_PLE_NGRAM>  ple_layer_multipliers;
+    // head offsets and vocab sizes are token-space indices; the gather truncates them to int32 anyway
+    std::array<uint32_t, LLAMA_MAX_PLE_HEADS>  ple_head_offsets;
+    std::array<uint32_t, LLAMA_MAX_PLE_HEADS>  ple_head_vocab_sizes;
+
+    bool is_ple(uint32_t il) const;
+
+    // PLE conv history rows: (kernel - 1) * ngram_size; 0 without a PLE module
+    uint32_t ple_conv_state() const;
 
     // qwen3vl deepstack
     // When parsed from GGUF, this implies the first N layers consume the first
@@ -302,6 +375,8 @@ struct llama_hparams {
 
     bool is_swa(uint32_t il) const;
 
+    bool is_indexer_full(uint32_t il) const;
+
     void set_recr_pattern(uint32_t n_pattern, bool dense_first = false);
 
     // whether or not the given layer is recurrent (for hybrid models)
@@ -312,6 +387,13 @@ struct llama_hparams {
     uint32_t n_head_kv(uint32_t il = 0) const;
 
     uint32_t n_ff(uint32_t il = 0) const;
+
+    uint32_t n_ff_exp(uint32_t il = 0) const;
+
+    uint32_t n_expert_used(uint32_t il = 0) const;
+
+    // return the maximum n_expert_used across all layers
+    uint32_t n_expert_used_max() const;
 
     uint32_t n_gqa(uint32_t il = 0) const;
 
@@ -360,6 +442,8 @@ struct llama_hparams {
     uint32_t n_embd_head_v_mla() const;
 
     bool has_kv(uint32_t il) const;
+
+    bool has_rope(uint32_t il) const;
 
     // number of effective layers (excludes nextn layers)
     uint32_t n_layer() const;

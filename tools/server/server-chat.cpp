@@ -153,7 +153,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         prev_msg["content"] = json::array();
                     }
                     auto & prev_content = prev_msg["content"];
-                    prev_content.insert(prev_content.end(), chatcmpl_content.begin(), chatcmpl_content.end());
+                    prev_content.insert(chatcmpl_content);
                 } else {
                     item.erase("status");
                     item.erase("type");
@@ -281,6 +281,15 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (response_body.contains("max_output_tokens")) {
         chatcmpl_body.erase("max_output_tokens");
         chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
+    }
+
+    if (response_body.contains("reasoning")) {
+        // Only "effort" is handled so far
+        const json & reasoning = response_body.at("reasoning");
+        if (reasoning.contains("effort")) {
+            chatcmpl_body["reasoning_effort"] = reasoning.at("effort");
+        }
+        chatcmpl_body.erase("reasoning");
     }
 
     return chatcmpl_body;
