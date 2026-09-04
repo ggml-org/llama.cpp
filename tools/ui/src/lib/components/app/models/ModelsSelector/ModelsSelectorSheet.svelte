@@ -1,15 +1,17 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
-	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
+	import { ChevronDown, Lightbulb, Loader2, Package } from '@lucide/svelte';
 	import {
 		DialogModelInformation,
 		ModelId,
 		ModelsSelectorList,
+		ModelsSelectorReasoningPanel,
 		SearchInput
 	} from '$lib/components/app';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
+	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { modelsStore } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
 
@@ -43,6 +45,8 @@
 		},
 		useGlobalSelection: () => useGlobalSelection
 	});
+
+	const reasoning = useReasoningMenu();
 
 	export function open() {
 		ms.handleOpenChange(true);
@@ -109,6 +113,10 @@
 					/>
 				{/if}
 
+				{#if reasoning.isReasoningActive}
+					<Lightbulb class="h-3.5 w-3.5 shrink-0 text-amber-400" />
+				{/if}
+
 				{#if ms.updating || ms.isLoadingModel}
 					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 				{:else}
@@ -168,6 +176,12 @@
 								onSelect={ms.handleSelect}
 								sectionHeaderClass="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
 							/>
+						</div>
+
+						<!-- Reasoning effort panel, matching the desktop dropdown's sticky
+							 footer: collapsible, expands in place at the bottom of the sheet. -->
+						<div class="px-2 pb-1">
+							<ModelsSelectorReasoningPanel />
 						</div>
 					</div>
 				</Sheet.Content>
