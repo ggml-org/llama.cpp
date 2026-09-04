@@ -23,6 +23,11 @@
 
 	let { entry, file, onRequestCancel, onRequestDelete }: Props = $props();
 
+	// Sidecar kind (mtp, mmproj, ...) tag shown on every chip state; one source so
+	// the idle, in-flight and downloaded variants stay identical.
+	const SIDECAR_BADGE_CLASS =
+		'rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase';
+
 	/** Queue the download; a failed attempt leaves partial files, drop them first. */
 	async function startDownload() {
 		try {
@@ -68,9 +73,7 @@
 				type="button"
 			>
 				{#if meta?.sidecar}
-					<span
-						class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
-					>
+					<span class={SIDECAR_BADGE_CLASS}>
 						{meta.sidecar}
 					</span>
 				{/if}
@@ -122,9 +125,7 @@
 					type="button"
 				>
 					{#if meta?.sidecar}
-						<span
-							class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
-						>
+						<span class={SIDECAR_BADGE_CLASS}>
 							{meta.sidecar}
 						</span>
 					{/if}
@@ -219,9 +220,7 @@
 				{/if}
 
 				{#if meta?.sidecar}
-					<span
-						class="rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
-					>
+					<span class={SIDECAR_BADGE_CLASS}>
 						{meta.sidecar}
 					</span>
 				{/if}
