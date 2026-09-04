@@ -150,6 +150,7 @@ enum llm_type {
     LLM_TYPE_685B_A37B, // DeepSeek V3.2
     LLM_TYPE_744B_A40B, // GLM-5
     LLM_TYPE_2_8T_A50B, // Kimi-K3
+    LLM_TYPE_320B_A18B, // GLM-5.3-Flash
     LLM_TYPE_E2B,
     LLM_TYPE_E4B,
 };
@@ -556,6 +557,10 @@ struct llama_layer {
     struct ggml_tensor * indexer_proj     = nullptr;
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
+
+    // glm5-next k-pool indexer
+    struct ggml_tensor * indexer_kpool_gate = nullptr;
+    struct ggml_tensor * indexer_kpool_ape  = nullptr;
 
     // MSA
     struct ggml_tensor * index_q_proj = nullptr;

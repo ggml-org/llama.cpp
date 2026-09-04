@@ -100,6 +100,9 @@ struct llama_context {
     size_t  get_sampled_probs_count(int32_t idx);
 
     const llama_token * get_sampled_candidates_ith(int32_t idx);
+    bool set_mtp_dsa_index_share(bool enabled);
+    bool set_mtp_dsa_selection(const int32_t * data, size_t size);
+    const int32_t * get_mtp_dsa_selection(size_t * size);
     size_t get_sampled_candidates_count(int32_t idx);
 
     void attach_threadpool(
@@ -299,6 +302,12 @@ private:
     // populated only when cparams.embeddings_nextn is enabled and the model graph
     // sets llm_graph_result::t_h_nextn
     buffer_view<float> embd_nextn = {nullptr, 0};
+
+    std::vector<int32_t> mtp_dsa_sel_raw;
+    std::vector<float> mtp_dsa_sel_mask;
+    std::vector<llama_seq_id> mtp_dsa_sel_seq;
+    std::vector<int32_t> mtp_dsa_sel;
+    size_t mtp_dsa_sel_width = 0;
 
     // host buffers for output layer input embeddings, per layer
     // populated when cparams.output_layer_inp[il] is true

@@ -80,6 +80,8 @@ llama_memory_recurrent::llama_memory_recurrent(
             continue;
         }
 
+        has_state = true;
+
         const char * dev_name = "CPU";
 
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
@@ -190,16 +192,25 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
         if (tail_id >= 0) {
             auto & cell = cells[tail_id];
 
-            // partial rollback via per-token snapshot index (bounded by n_rs_seq)
+            // Partial removal at the end of the sequence.
             if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
+                // An empty recurrent cache tracks positions only, so this is trivially valid.
+                if (!has_state) {
+                    cell.pos = p0 - 1;
+                    return true;
+                }
+
+                // Partial rollback via the per token snapshot planes, bounded by n_rs_seq.
                 const llama_pos rollback = cell.pos - (p0 - 1);
-                // pending rollback is single-use
+                // A pending rollback is single use.
                 const bool pending = rs_idx[seq_id] != 0;
                 if (!pending && rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
                     set_rs_idx(seq_id, (uint32_t) rollback);
                     cell.pos = p0 - 1;
                     return true;
                 }
+                LLAMA_LOG_DEBUG("%s: refused partial removal: seq=%d p0=%d tail.pos=%d rollback=%d n_rs_seq=%u pending=%d\n",
+                        __func__, seq_id, p0, cell.pos, rollback, n_rs_seq, (int) pending);
                 return false;
             }
             // invalidate tails which will be cleared

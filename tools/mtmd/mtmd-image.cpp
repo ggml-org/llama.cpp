@@ -787,6 +787,75 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
 }
 
 //
+// mtmd_image_preprocessor_glm5v
+//
+
+// The canvas is ceil-aligned to patch_size*n_merge and fitted to the token budget.
+// Only rescaled to meet the budget and sits top-left, with black padding on the right and bottom
+mtmd_image_preproc_out mtmd_image_preprocessor_glm5v::preprocess(const clip_image_u8 & img) {
+    GGML_ASSERT(hparams.image_min_pixels > 0 && hparams.image_max_pixels > 0);
+
+    const int64_t factor  = hparams.patch_size * hparams.n_merge;
+    const int64_t min_px  = hparams.image_min_pixels; // single-frame pixel counts
+    const int64_t max_px  = hparams.image_max_pixels;
+    const int64_t height  = img.get_size().height;
+    const int64_t width   = img.get_size().width;
+
+    auto align = [factor](int64_t v) { return (v + factor - 1) / factor * factor; };
+
+    // aligned canvas within the budget
+    int64_t canvas_h = align(height);
+    int64_t canvas_w = align(width);
+
+    if (canvas_h * canvas_w < min_px) {
+        const double scale = std::sqrt((double) min_px / (double) (height * width));
+        canvas_h = align(std::max<int64_t>(1, (int64_t) std::ceil(height * scale)));
+        canvas_w = align(std::max<int64_t>(1, (int64_t) std::ceil(width  * scale)));
+    }
+
+    if (canvas_h * canvas_w > max_px) {
+        // largest content height whose aligned canvas fits the budget
+        int64_t lo = 1, hi = height;
+        int64_t best_h = factor, best_w = factor;
+        while (lo <= hi) {
+            const int64_t ch = (lo + hi) / 2;
+            const int64_t cw = std::max<int64_t>(1, width * ch / height);
+            const int64_t ah = align(ch);
+            const int64_t aw = align(cw);
+            if (ah * aw <= max_px) {
+                best_h = ah;
+                best_w = aw;
+                lo = ch + 1;
+            } else {
+                hi = ch - 1;
+            }
+        }
+        canvas_h = best_h;
+        canvas_w = best_w;
+    }
+
+    // Scaled to fit the canvas, and never upscaled, unless below the min budget
+    double scale = std::min((double) canvas_h / height, (double) canvas_w / width);
+    if (height * width >= min_px) {
+        scale = std::min(1.0, scale);
+    }
+    const int content_h = (int) std::max<int64_t>(1, std::min<int64_t>(canvas_h, (int64_t) std::floor(height * scale)));
+    const int content_w = (int) std::max<int64_t>(1, std::min<int64_t>(canvas_w, (int64_t) std::floor(width  * scale)));
+
+    clip_image_u8 content;
+    img_tool::resize(img, content, clip_image_size{content_w, content_h}, hparams.image_resize_algo, PAD_NONE);
+
+    clip_image_u8 canvas;
+    canvas.set_size(clip_image_size{(int) canvas_w, (int) canvas_h}, img.is_placeholder());
+    img_tool::fill(canvas, {0, 0, 0});
+    img_tool::composite(canvas, content, 0, 0);
+
+    mtmd_image_preproc_out output;
+    output.append(hparams, canvas, true);
+    return output;
+}
+
+//
 // mtmd_image_preprocessor_longest_edge
 //
 

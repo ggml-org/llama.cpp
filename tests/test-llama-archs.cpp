@@ -525,6 +525,9 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_GRANITE_SWITCH) {
         return false; // FIXME adapter fixture
     }
+    if (arch == LLM_ARCH_GLM5_NEXT) {
+        return false; // FIXME fixture for KDA + k-pool DSA + mhc hparams
+    }
     if (arch == LLM_ARCH_LLAMA_EMBED || arch == LLM_ARCH_GEMMA_EMBEDDING || arch == LLM_ARCH_T5ENCODER) {
         return false; // FIXME Embedding (?) models produce inconsistent results.
     }
