@@ -371,7 +371,14 @@ static __host__ int ggml_cuda_mmq_get_J_max(const ggml_type type, const bool fal
             return ret;
         }
     }
-    return ret;
+    // There is no valid J <= ne11, return the smallest valid J instead.
+    // This is used to calculate buffer padding, MMQ never reads further than one J-wide tile.
+    for (int J = 8; J <= 128; J += 8) {
+        if (ggml_cuda_mmq_get_config(type, J, fallback, cc).type != GGML_TYPE_COUNT) {
+            return J;
+        }
+    }
+    return 0;
 }
 
 static constexpr __device__ int ggml_cuda_mmq_get_rows_per_warp(ggml_type type, int J, bool fallback) {
