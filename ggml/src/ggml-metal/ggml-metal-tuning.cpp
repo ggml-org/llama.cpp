@@ -1697,7 +1697,7 @@ constexpr fa_vec_entry_t fa_vec_tuned_table[] = {
     { { GGML_METAL_DEVICE_M3, GGML_TYPE_Q5_1, 576, 512, 2, 4 }, { 1, 4 } },
     { { GGML_METAL_DEVICE_M3, GGML_TYPE_Q5_1, 576, 512, 3, 1 }, { 1, 4 } },
     { { GGML_METAL_DEVICE_M3, GGML_TYPE_Q5_1, 576, 512, 3, 3 }, { 1, 4 } },
-      { { GGML_METAL_DEVICE_M3, GGML_TYPE_Q8_0, 32, 32, -1, 1 }, { 4, 4 } },
+    { { GGML_METAL_DEVICE_M3, GGML_TYPE_Q8_0, 32, 32, -1, 1 }, { 4, 4 } },
     { { GGML_METAL_DEVICE_M3, GGML_TYPE_Q8_0, 32, 32, 1, 1 }, { 2, 4 } },
     { { GGML_METAL_DEVICE_M3, GGML_TYPE_Q8_0, 32, 32, 2, 1 }, { 2, 4 } },
     { { GGML_METAL_DEVICE_M3, GGML_TYPE_Q8_0, 32, 32, 3, 1 }, { 2, 4 } },
