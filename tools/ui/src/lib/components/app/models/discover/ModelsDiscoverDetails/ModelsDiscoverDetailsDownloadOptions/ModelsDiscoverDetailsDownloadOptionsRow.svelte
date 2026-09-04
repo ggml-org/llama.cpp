@@ -15,9 +15,13 @@
 		bitDepth: number;
 		/** Every GGUF of this bit depth, with download state attached. */
 		files: (SelectableFile & { state: DownloadEntryState })[];
+		/** Forwarded to each chip: ask the parent to confirm a cancel. */
+		onRequestCancel?: (repoWithTag: string) => void;
+		/** Forwarded to each chip: ask the parent to confirm a delete. */
+		onRequestDelete?: (repoWithTag: string) => void;
 	}
 
-	let { bitDepth, files }: Props = $props();
+	let { bitDepth, files, onRequestCancel, onRequestDelete }: Props = $props();
 
 	let mainFile = $derived(files.find((f) => f.kind === SelectableFileKind.MAIN) ?? null);
 	let draftFile = $derived(files.find((f) => f.kind === SelectableFileKind.DRAFT) ?? null);
@@ -45,7 +49,12 @@
 
 	<div class="flex flex-wrap justify-end gap-1.5">
 		{#each files as file (file.path)}
-			<ModelsDiscoverDetailsDownloadOptionsQuantDownloadButton entry={file.state} {file} />
+			<ModelsDiscoverDetailsDownloadOptionsQuantDownloadButton
+				entry={file.state}
+				{file}
+				{onRequestCancel}
+				{onRequestDelete}
+			/>
 		{/each}
 	</div>
 </div>

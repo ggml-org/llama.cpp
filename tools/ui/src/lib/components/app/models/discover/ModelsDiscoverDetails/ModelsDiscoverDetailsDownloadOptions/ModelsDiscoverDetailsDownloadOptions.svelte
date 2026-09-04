@@ -2,6 +2,7 @@
 	import { classify, labelFor } from './download-options.utils';
 	import ModelsDiscoverDetailsDownloadOptionsDownloadCommand from './ModelsDiscoverDetailsDownloadOptionsDownloadCommand.svelte';
 	import ModelsDiscoverDetailsDownloadOptionsRow from './ModelsDiscoverDetailsDownloadOptionsRow.svelte';
+	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';
 	import { SelectableFileKind } from '$lib/enums';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
@@ -21,6 +22,29 @@
 	}
 
 	let { bitDepthRows, getDownloadState, modelId }: Props = $props();
+
+	// Destructive chip actions (delete a downloaded model, cancel a download) are
+	// confirmed here rather than inside each chip: one pair of dialogs owned by
+	// the options panel, keyed by the repo+tag the user acted on.
+	let pending: { action: 'cancel' | 'delete'; repoWithTag: string } | null = $state(null);
+
+	function requestCancel(repoWithTag: string) {
+		pending = { action: 'cancel', repoWithTag };
+	}
+
+	function requestDelete(repoWithTag: string) {
+		pending = { action: 'delete', repoWithTag };
+	}
+
+	function closePending() {
+		pending = null;
+	}
+
+	function confirmPending() {
+		if (pending) void modelsStore.status.cancelDownload(pending.repoWithTag);
+
+		pending = null;
+	}
 
 	function stateFor(repoWithTag: string, filePath: string, isSidecar: boolean): DownloadEntryState {
 		if (getDownloadState) return getDownloadState(repoWithTag, filePath, isSidecar);
@@ -117,7 +141,12 @@
 			 lifecycle state; nothing here selects anything. -->
 		<div class="flex w-full flex-col divide-y divide-border/50 px-4 pb-1 dark:divide-border/35">
 			{#each rows as row (row.bitDepth)}
-				<ModelsDiscoverDetailsDownloadOptionsRow bitDepth={row.bitDepth} files={row.files} />
+				<ModelsDiscoverDetailsDownloadOptionsRow
+					bitDepth={row.bitDepth}
+					files={row.files}
+					onRequestCancel={requestCancel}
+					onRequestDelete={requestDelete}
+				/>
 			{/each}
 		</div>
 
@@ -126,4 +155,18 @@
 			<ModelsDiscoverDetailsDownloadOptionsDownloadCommand {draftOptions} {mainOptions} {modelId} />
 		</div>
 	</section>
+{/if}
+
+{#if pending}
+	<DialogConfirmation
+		confirmText={pending.action === 'delete' ? 'Delete' : 'Cancel download'}
+		description={pending.action === 'delete'
+			? `This permanently removes ${modelsStore.toDisplayName(pending.repoWithTag)} from disk. You can download it again later.`
+			: `This stops the download of ${modelsStore.toDisplayName(pending.repoWithTag)} and removes the partial files. Pause it instead to keep the progress.`}
+		onCancel={closePending}
+		onConfirm={confirmPending}
+		open
+		title={pending.action === 'delete' ? 'Delete model' : 'Cancel download'}
+		variant="destructive"
+	/>
 {/if}

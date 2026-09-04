@@ -2,7 +2,6 @@
 	import DownloadProgressBar from '../../DownloadProgressBar.svelte';
 	import { labelFor } from './download-options.utils';
 	import { Check, Download, Loader2, Pause, Play, RotateCw, X } from '@lucide/svelte';
-	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
@@ -13,13 +12,16 @@
 		file: HfModelSibling;
 		/** Download state of the file, from the parent's status feed. */
 		entry: DownloadEntryState;
+		/**
+		 * Ask the parent to confirm deleting a downloaded model. The chip owns no
+		 * dialog; the parent renders the single confirmation and acts on confirm.
+		 */
+		onRequestDelete?: (repoWithTag: string) => void;
+		/** Ask the parent to confirm cancelling an in-flight download. */
+		onRequestCancel?: (repoWithTag: string) => void;
 	}
 
-	let { entry, file }: Props = $props();
-
-	// delete / cancel confirmation state
-	let confirmDeleteOpen = $state(false);
-	let confirmCancelOpen = $state(false);
+	let { entry, file, onRequestCancel, onRequestDelete }: Props = $props();
 
 	/** Queue the download; a failed attempt leaves partial files, drop them first. */
 	async function startDownload() {
@@ -62,7 +64,7 @@
 				aria-label={tooltipText}
 				class="group relative inline-flex h-auto cursor-pointer items-center gap-1 rounded-md! border px-2 py-1 text-left font-mono text-xs shadow-xs transition-[background-color,border-color,transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97]
 					border-green-600/25 bg-green-500/5 hover:border-destructive/50 hover:bg-destructive/10 dark:border-green-500/30 dark:bg-green-500/10 dark:hover:border-destructive/50 dark:hover:bg-destructive/15"
-				onclick={() => (confirmDeleteOpen = true)}
+				onclick={() => onRequestDelete?.(entry.repoWithTag)}
 				type="button"
 			>
 				{#if meta?.sidecar}
@@ -98,20 +100,6 @@
 			<p>{tooltipText}</p>
 		</Tooltip.Content>
 	</Tooltip.Root>
-
-	<DialogConfirmation
-		confirmText="Delete"
-		description={`This permanently removes ${modelsStore.toDisplayName(entry.repoWithTag)} from disk. You can download it again later.`}
-		onCancel={() => (confirmDeleteOpen = false)}
-		onConfirm={() => {
-			confirmDeleteOpen = false;
-
-			void modelsStore.status.cancelDownload(entry.repoWithTag);
-		}}
-		open={confirmDeleteOpen}
-		title="Delete model"
-		variant="destructive"
-	/>
 {:else if entry.isDownloading || entry.isPaused}
 	<!-- in-flight / paused chips: the chip body pauses / resumes on click, the X
 	     inside the chip cancels (stops and discards the partial files). The X slot
@@ -188,7 +176,7 @@
 				<button
 					aria-label="Cancel downloading"
 					class="relative inline-flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center text-muted-foreground/70"
-					onclick={() => (confirmCancelOpen = true)}
+					onclick={() => onRequestCancel?.(entry.repoWithTag)}
 					type="button"
 				>
 					<X
@@ -261,18 +249,3 @@
 		</Tooltip.Content>
 	</Tooltip.Root>
 {/if}
-
-<DialogConfirmation
-	cancelText="Keep downloading"
-	confirmText="Cancel download"
-	description={`This stops the download of ${modelsStore.toDisplayName(entry.repoWithTag)} and removes the partial files. Pause it instead to keep the progress.`}
-	onCancel={() => (confirmCancelOpen = false)}
-	onConfirm={() => {
-		confirmCancelOpen = false;
-
-		void modelsStore.status.cancelDownload(entry.repoWithTag);
-	}}
-	open={confirmCancelOpen}
-	title="Cancel download"
-	variant="destructive"
-/>
