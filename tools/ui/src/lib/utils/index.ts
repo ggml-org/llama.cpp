@@ -105,7 +105,7 @@ export {
 } from './modality-file-validation';
 
 // Model name utilities
-export { normalizeModelName, isValidModelName } from './model-names';
+export { isValidModelName, normalizeModelName, orgOf } from './model-names';
 
 // Sidecar token utilities
 export { isAuxSidecar, isDraftSidecar, sidecarFromFileToken } from './sidecars';
