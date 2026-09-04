@@ -346,29 +346,17 @@ class common_schema_optimizer {
     // set when a $ref got replaced by the none its target became, the pass is then repeated
     bool changed_ = false;
 
-    // the target pairs an intersection is working through, to stop a recursive schema from recursing forever
+    // the target pairs being intersected further up, a recursive schema would otherwise never bottom out
     std::set<std::pair<const common_schema *, const common_schema *>> active_;
-
-    // whether a value matches a schema, unknown where the check would need a regex
-    enum match_t {
-        MATCH_NO,
-        MATCH_YES,
-        MATCH_UNKNOWN,
-    };
-
-    static match_t both(match_t a, match_t b) {
-        if (a == MATCH_NO || b == MATCH_NO) {
-            return MATCH_NO;
-        }
-        if (a == MATCH_UNKNOWN || b == MATCH_UNKNOWN) {
-            return MATCH_UNKNOWN;
-        }
-        return MATCH_YES;
-    }
 
     template <typename T>
     static const T & as(const common_schema & node) {
         return static_cast<const T &>(node);
+    }
+
+    template <typename T>
+    static T & as(common_schema & node) {
+        return static_cast<T &>(node);
     }
 
     static bool is(const common_schema & node, common_schema_kind kind) {
@@ -402,7 +390,6 @@ class common_schema_optimizer {
 
     static std::vector<common_schema_ptr> clone_all(const std::vector<common_schema_ptr> & nodes) {
         std::vector<common_schema_ptr> out;
-        out.reserve(nodes.size());
         for (const auto & node : nodes) {
             out.push_back(clone(*node));
         }
@@ -468,389 +455,28 @@ class common_schema_optimizer {
         return none();
     }
 
-    static bool equal_all(const std::vector<common_schema_ptr> & a, const std::vector<common_schema_ptr> & b) {
-        if (a.size() != b.size()) {
-            return false;
-        }
-        for (size_t i = 0; i < a.size(); i++) {
-            if (!equal(*a[i], *b[i])) {
-                return false;
-            }
-        }
-        return true;
+    static bool contains(const std::vector<common_json> & values, const common_json & value) {
+        return std::any_of(values.begin(), values.end(), [&](const common_json & v) { return v == value; });
     }
 
-    // structural equality, a $ref only equals the same $ref
-    static bool equal(const common_schema & a, const common_schema & b) {
-        if (a.kind() != b.kind()) {
-            return false;
+    // the values a const or enum accepts
+    static bool get_values(const common_schema & node, std::vector<common_json> & values) {
+        if (is(node, COMMON_SCHEMA_KIND_CONST)) {
+            values.push_back(as<common_schema_const>(node).value);
+            return true;
         }
-        switch (a.kind()) {
-            case COMMON_SCHEMA_KIND_ANY:
-            case COMMON_SCHEMA_KIND_NONE:
-            case COMMON_SCHEMA_KIND_NULL:
-            case COMMON_SCHEMA_KIND_BOOLEAN:
-            case COMMON_SCHEMA_KIND_NUMBER:
-                return true;
-            case COMMON_SCHEMA_KIND_REF:
-                return as<common_schema_ref>(a).ref == as<common_schema_ref>(b).ref;
-            case COMMON_SCHEMA_KIND_CONST:
-                return as<common_schema_const>(a).value == as<common_schema_const>(b).value;
-            case COMMON_SCHEMA_KIND_ENUM: {
-                const auto & va = as<common_schema_enum>(a).values;
-                const auto & vb = as<common_schema_enum>(b).values;
-                if (va.size() != vb.size()) {
-                    return false;
-                }
-                for (size_t i = 0; i < va.size(); i++) {
-                    if (va[i] != vb[i]) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-            case COMMON_SCHEMA_KIND_INTEGER: {
-                const auto & ia = as<common_schema_integer>(a);
-                const auto & ib = as<common_schema_integer>(b);
-                return ia.minimum == ib.minimum && ia.maximum == ib.maximum;
-            }
-            case COMMON_SCHEMA_KIND_STRING: {
-                const auto & sa = as<common_schema_string>(a);
-                const auto & sb = as<common_schema_string>(b);
-                return sa.pattern == sb.pattern && sa.format == sb.format && sa.min_length == sb.min_length && sa.max_length == sb.max_length;
-            }
-            case COMMON_SCHEMA_KIND_ANY_OF:
-                return equal_all(as<common_schema_any_of>(a).children, as<common_schema_any_of>(b).children);
-            case COMMON_SCHEMA_KIND_ALL_OF:
-                return equal_all(as<common_schema_all_of>(a).children, as<common_schema_all_of>(b).children);
-            case COMMON_SCHEMA_KIND_ARRAY: {
-                const auto & aa = as<common_schema_array>(a);
-                const auto & ab = as<common_schema_array>(b);
-                return aa.min_items == ab.min_items && aa.max_items == ab.max_items && equal(*aa.items, *ab.items);
-            }
-            case COMMON_SCHEMA_KIND_TUPLE:
-                return equal_all(as<common_schema_tuple>(a).items, as<common_schema_tuple>(b).items);
-            case COMMON_SCHEMA_KIND_OBJECT: {
-                const auto & oa = as<common_schema_object>(a);
-                const auto & ob = as<common_schema_object>(b);
-                if (oa.properties.size() != ob.properties.size()) {
-                    return false;
-                }
-                for (size_t i = 0; i < oa.properties.size(); i++) {
-                    const auto & pa = oa.properties[i];
-                    const auto & pb = ob.properties[i];
-                    if (pa.name != pb.name || pa.required != pb.required || !equal(*pa.schema, *pb.schema)) {
-                        return false;
-                    }
-                }
-                if (!oa.additional_properties || !ob.additional_properties) {
-                    return !oa.additional_properties && !ob.additional_properties;
-                }
-                return equal(*oa.additional_properties, *ob.additional_properties);
-            }
+        if (is(node, COMMON_SCHEMA_KIND_ENUM)) {
+            values = as<common_schema_enum>(node).values;
+            return true;
         }
         return false;
     }
-    static const common_schema_property * find_property(const common_schema_object & obj, const std::string & name) {
-        for (const auto & prop : obj.properties) {
-            if (prop.name == name) {
-                return &prop;
-            }
-        }
-        return nullptr;
-    }
 
-    // code points, the length the grammar's char rule counts
-    static int utf8_length(const std::string & s) {
-        int n = 0;
-        for (unsigned char c : s) {
-            if ((c & 0xC0) != 0x80) {
-                n++;
-            }
-        }
-        return n;
-    }
-
-    // Whether a value matches a schema, unknown where a pattern or format would have to be checked.
-    match_t satisfies(const common_json & value, const common_schema & schema) const {
-        const common_schema * node = resolve(schema);
-        if (!node) {
-            return MATCH_UNKNOWN;
-        }
-        switch (node->kind()) {
-            case COMMON_SCHEMA_KIND_ANY:
-                return MATCH_YES;
-            case COMMON_SCHEMA_KIND_NONE:
-            case COMMON_SCHEMA_KIND_REF:
-                return MATCH_NO;
-            case COMMON_SCHEMA_KIND_ANY_OF: {
-                match_t res = MATCH_NO;
-                for (const auto & child : as<common_schema_any_of>(*node).children) {
-                    match_t m = satisfies(value, *child);
-                    if (m == MATCH_YES) {
-                        return MATCH_YES;
-                    }
-                    if (m == MATCH_UNKNOWN) {
-                        res = MATCH_UNKNOWN;
-                    }
-                }
-                return res;
-            }
-            case COMMON_SCHEMA_KIND_ALL_OF: {
-                match_t res = MATCH_YES;
-                for (const auto & child : as<common_schema_all_of>(*node).children) {
-                    res = both(res, satisfies(value, *child));
-                    if (res == MATCH_NO) {
-                        return MATCH_NO;
-                    }
-                }
-                return res;
-            }
-            case COMMON_SCHEMA_KIND_CONST:
-                return value == as<common_schema_const>(*node).value ? MATCH_YES : MATCH_NO;
-            case COMMON_SCHEMA_KIND_ENUM:
-                for (const auto & v : as<common_schema_enum>(*node).values) {
-                    if (value == v) {
-                        return MATCH_YES;
-                    }
-                }
-                return MATCH_NO;
-            case COMMON_SCHEMA_KIND_NULL:
-                return value.is_null() ? MATCH_YES : MATCH_NO;
-            case COMMON_SCHEMA_KIND_BOOLEAN:
-                return value.is_boolean() ? MATCH_YES : MATCH_NO;
-            case COMMON_SCHEMA_KIND_NUMBER:
-                return value.is_number() ? MATCH_YES : MATCH_NO;
-            case COMMON_SCHEMA_KIND_INTEGER: {
-                if (!value.is_number_integer()) {
-                    return MATCH_NO;
-                }
-                const auto & i = as<common_schema_integer>(*node);
-                int64_t v = value.get<int64_t>();
-                return v >= i.minimum && v <= i.maximum ? MATCH_YES : MATCH_NO;
-            }
-            case COMMON_SCHEMA_KIND_STRING: {
-                if (!value.is_string()) {
-                    return MATCH_NO;
-                }
-                const auto & s = as<common_schema_string>(*node);
-                int len = utf8_length(value.get<std::string>());
-                if (len < s.min_length || (s.max_length >= 0 && len > s.max_length)) {
-                    return MATCH_NO;
-                }
-                return s.pattern.empty() && s.format == COMMON_SCHEMA_FORMAT_NONE ? MATCH_YES : MATCH_UNKNOWN;
-            }
-            case COMMON_SCHEMA_KIND_ARRAY: {
-                if (!value.is_array()) {
-                    return MATCH_NO;
-                }
-                const auto & arr = as<common_schema_array>(*node);
-                int n = (int) value.size();
-                if (n < arr.min_items || (arr.max_items >= 0 && n > arr.max_items)) {
-                    return MATCH_NO;
-                }
-                match_t res = MATCH_YES;
-                for (const auto & item : value) {
-                    res = both(res, satisfies(item, *arr.items));
-                    if (res == MATCH_NO) {
-                        return MATCH_NO;
-                    }
-                }
-                return res;
-            }
-            case COMMON_SCHEMA_KIND_TUPLE: {
-                const auto & tup = as<common_schema_tuple>(*node);
-                if (!value.is_array() || value.size() != tup.items.size()) {
-                    return MATCH_NO;
-                }
-                match_t res = MATCH_YES;
-                for (size_t i = 0; i < tup.items.size(); i++) {
-                    res = both(res, satisfies(value.at(i), *tup.items[i]));
-                    if (res == MATCH_NO) {
-                        return MATCH_NO;
-                    }
-                }
-                return res;
-            }
-            case COMMON_SCHEMA_KIND_OBJECT: {
-                if (!value.is_object()) {
-                    return MATCH_NO;
-                }
-                const auto & obj = as<common_schema_object>(*node);
-                match_t res = MATCH_YES;
-                for (const auto & prop : obj.properties) {
-                    if (value.contains(prop.name)) {
-                        res = both(res, satisfies(value.at(prop.name), *prop.schema));
-                    } else if (prop.required) {
-                        return MATCH_NO;
-                    }
-                    if (res == MATCH_NO) {
-                        return MATCH_NO;
-                    }
-                }
-                for (const auto & [key, val] : value.items()) {
-                    if (find_property(obj, key)) {
-                        continue;
-                    }
-                    if (!obj.additional_properties) {
-                        return MATCH_NO;
-                    }
-                    res = both(res, satisfies(val, *obj.additional_properties));
-                    if (res == MATCH_NO) {
-                        return MATCH_NO;
-                    }
-                }
-                return res;
-            }
-        }
-        return MATCH_UNKNOWN;
-    }
-
-    bool subsumes_all(const common_schema & a, const std::vector<common_schema_ptr> & items) const {
-        for (const auto & item : items) {
-            if (!subsumes(a, *item)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    // Whether a accepts every value b accepts. False when unsure, so a $ref only subsumes the same $ref.
-    bool subsumes(const common_schema & a, const common_schema & b) const {
-        if (is(a, COMMON_SCHEMA_KIND_ANY) || is(b, COMMON_SCHEMA_KIND_NONE) || equal(a, b)) {
-            return true;
-        }
-        if (is(a, COMMON_SCHEMA_KIND_REF) || is(b, COMMON_SCHEMA_KIND_REF)) {
-            return false;
-        }
-        if (is(b, COMMON_SCHEMA_KIND_ANY_OF)) {
-            return subsumes_all(a, as<common_schema_any_of>(b).children);
-        }
-        if (is(a, COMMON_SCHEMA_KIND_ANY_OF)) {
-            for (const auto & child : as<common_schema_any_of>(a).children) {
-                if (subsumes(*child, b)) {
-                    return true;
-                }
-            }
-            return false;
-        }
-        if (is(b, COMMON_SCHEMA_KIND_ALL_OF)) {
-            // b is within each of its children, so within a once one of them is
-            for (const auto & child : as<common_schema_all_of>(b).children) {
-                if (subsumes(a, *child)) {
-                    return true;
-                }
-            }
-            return false;
-        }
-        if (is(a, COMMON_SCHEMA_KIND_ALL_OF)) {
-            for (const auto & child : as<common_schema_all_of>(a).children) {
-                if (!subsumes(*child, b)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        if (is(b, COMMON_SCHEMA_KIND_CONST)) {
-            return satisfies(as<common_schema_const>(b).value, a) == MATCH_YES;
-        }
-        if (is(b, COMMON_SCHEMA_KIND_ENUM)) {
-            for (const auto & v : as<common_schema_enum>(b).values) {
-                if (satisfies(v, a) != MATCH_YES) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        if (is(a, COMMON_SCHEMA_KIND_ARRAY) && is(b, COMMON_SCHEMA_KIND_TUPLE)) {
-            const auto & arr = as<common_schema_array>(a);
-            const auto & tup = as<common_schema_tuple>(b);
-            int n = (int) tup.items.size();
-            return n >= arr.min_items && (arr.max_items < 0 || n <= arr.max_items) && subsumes_all(*arr.items, tup.items);
-        }
-        if (a.kind() != b.kind()) {
-            return is(a, COMMON_SCHEMA_KIND_NUMBER) && is(b, COMMON_SCHEMA_KIND_INTEGER);
-        }
-        switch (a.kind()) {
-            case COMMON_SCHEMA_KIND_INTEGER: {
-                const auto & ia = as<common_schema_integer>(a);
-                const auto & ib = as<common_schema_integer>(b);
-                return ia.minimum <= ib.minimum && ia.maximum >= ib.maximum;
-            }
-            case COMMON_SCHEMA_KIND_STRING: {
-                const auto & sa = as<common_schema_string>(a);
-                const auto & sb = as<common_schema_string>(b);
-                return (sa.pattern.empty() || sa.pattern == sb.pattern) &&
-                    (sa.format == COMMON_SCHEMA_FORMAT_NONE || sa.format == sb.format) &&
-                    sa.min_length <= sb.min_length &&
-                    (sa.max_length < 0 || (sb.max_length >= 0 && sa.max_length >= sb.max_length));
-            }
-            case COMMON_SCHEMA_KIND_ARRAY: {
-                const auto & aa = as<common_schema_array>(a);
-                const auto & ab = as<common_schema_array>(b);
-                return aa.min_items <= ab.min_items &&
-                    (aa.max_items < 0 || (ab.max_items >= 0 && aa.max_items >= ab.max_items)) &&
-                    subsumes(*aa.items, *ab.items);
-            }
-            case COMMON_SCHEMA_KIND_TUPLE: {
-                const auto & ta = as<common_schema_tuple>(a);
-                const auto & tb = as<common_schema_tuple>(b);
-                if (ta.items.size() != tb.items.size()) {
-                    return false;
-                }
-                for (size_t i = 0; i < ta.items.size(); i++) {
-                    if (!subsumes(*ta.items[i], *tb.items[i])) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-            case COMMON_SCHEMA_KIND_OBJECT: {
-                const auto & oa = as<common_schema_object>(a);
-                const auto & ob = as<common_schema_object>(b);
-                for (const auto & pb : ob.properties) {
-                    const auto * pa = find_property(oa, pb.name);
-                    if (pa) {
-                        if ((pa->required && !pb.required) || !subsumes(*pa->schema, *pb.schema)) {
-                            return false;
-                        }
-                    } else if (!oa.additional_properties || !subsumes(*oa.additional_properties, *pb.schema)) {
-                        return false;
-                    }
-                }
-                for (const auto & pa : oa.properties) {
-                    if (find_property(ob, pa.name)) {
-                        continue;
-                    }
-                    // b may leave it out, or fill it through its additionalProperties
-                    if (pa.required || (ob.additional_properties && !subsumes(*pa.schema, *ob.additional_properties))) {
-                        return false;
-                    }
-                }
-                if (ob.additional_properties) {
-                    return oa.additional_properties && subsumes(*oa.additional_properties, *ob.additional_properties);
-                }
-                return true;
-            }
-            default:
-                return false;
-        }
-    }
-    template <typename T>
-    static T & as(common_schema & node) {
-        return static_cast<T &>(node);
-    }
-
-    static void add_value(std::vector<common_json> & values, const common_json & value) {
-        for (const auto & v : values) {
-            if (v == value) {
-                return;
-            }
-        }
-        values.push_back(value);
-    }
-
+    // a const for one value, none for no value at all
     static common_schema_ptr make_values(std::vector<common_json> values) {
+        if (values.empty()) {
+            return none();
+        }
         if (values.size() == 1) {
             return std::make_unique<common_schema_const>(std::move(values[0]));
         }
@@ -859,19 +485,12 @@ class common_schema_optimizer {
         return node;
     }
 
-    // whether two ranges overlap or sit next to each other, so that their union is one range
-    static bool touching(const common_schema_integer & a, const common_schema_integer & b) {
-        if (a.minimum <= b.maximum && b.minimum <= a.maximum) {
-            return true;
-        }
-        return (b.maximum < INT64_MAX && a.minimum == b.maximum + 1) || (a.maximum < INT64_MAX && b.minimum == a.maximum + 1);
-    }
-
     // The union of rewritten alternatives.
-    common_schema_ptr make_any_of(std::vector<common_schema_ptr> children) {
+    static common_schema_ptr make_any_of(std::vector<common_schema_ptr> children) {
         std::vector<common_schema_ptr> flat;
         for (auto & child : children) {
             if (is(child, COMMON_SCHEMA_KIND_ANY_OF)) {
+                // a nested one is flat already
                 for (auto & c : as<common_schema_any_of>(*child).children) {
                     flat.push_back(std::move(c));
                 }
@@ -879,100 +498,23 @@ class common_schema_optimizer {
                 flat.push_back(std::move(child));
             }
         }
-
-        // consts and enums become one enum, in order of first appearance
-        std::vector<common_json>       values;
         std::vector<common_schema_ptr> out;
         for (auto & child : flat) {
-            if (is(child, COMMON_SCHEMA_KIND_NONE)) {
-                continue;
-            }
             if (is(child, COMMON_SCHEMA_KIND_ANY)) {
                 return std::make_unique<common_schema_any>();
             }
-            if (is(child, COMMON_SCHEMA_KIND_CONST)) {
-                add_value(values, as<common_schema_const>(*child).value);
-                continue;
-            }
-            if (is(child, COMMON_SCHEMA_KIND_ENUM)) {
-                for (const auto & v : as<common_schema_enum>(*child).values) {
-                    add_value(values, v);
-                }
-                continue;
-            }
-            out.push_back(std::move(child));
-        }
-
-        // an integer range that overlaps or touches an earlier one widens it instead
-        for (size_t i = 0; i < out.size();) {
-            bool merged = false;
-            if (is(out[i], COMMON_SCHEMA_KIND_INTEGER)) {
-                auto & b = as<common_schema_integer>(*out[i]);
-                for (size_t j = 0; j < i; j++) {
-                    if (!is(out[j], COMMON_SCHEMA_KIND_INTEGER)) {
-                        continue;
-                    }
-                    auto & a = as<common_schema_integer>(*out[j]);
-                    if (touching(a, b)) {
-                        a.minimum = std::min(a.minimum, b.minimum);
-                        a.maximum = std::max(a.maximum, b.maximum);
-                        merged    = true;
-                        break;
-                    }
-                }
-            }
-            if (merged) {
-                out.erase(out.begin() + i);
-                i = 0;  // the widened range may now touch one it did not before
-            } else {
-                i++;
+            if (!is(child, COMMON_SCHEMA_KIND_NONE)) {
+                out.push_back(std::move(child));
             }
         }
-
-        // a value another alternative already accepts is dropped
-        for (size_t i = 0; i < values.size();) {
-            bool covered = false;
-            for (const auto & child : out) {
-                if (satisfies(values[i], *child) == MATCH_YES) {
-                    covered = true;
-                    break;
-                }
-            }
-            if (covered) {
-                values.erase(values.begin() + i);
-            } else {
-                i++;
-            }
-        }
-        if (!values.empty()) {
-            out.push_back(make_values(std::move(values)));
-        }
-
-        // an alternative within another is dropped, of two within each other the first stays
-        std::vector<bool> dropped(out.size(), false);
-        for (size_t i = 0; i < out.size(); i++) {
-            for (size_t j = 0; j < out.size() && !dropped[i]; j++) {
-                if (j == i || dropped[j] || !subsumes(*out[j], *out[i])) {
-                    continue;
-                }
-                dropped[i] = j < i || !subsumes(*out[i], *out[j]);
-            }
-        }
-        std::vector<common_schema_ptr> kept;
-        for (size_t i = 0; i < out.size(); i++) {
-            if (!dropped[i]) {
-                kept.push_back(std::move(out[i]));
-            }
-        }
-
-        if (kept.empty()) {
+        if (out.empty()) {
             return none();
         }
-        if (kept.size() == 1) {
-            return std::move(kept[0]);
+        if (out.size() == 1) {
+            return std::move(out[0]);
         }
         auto node = std::make_unique<common_schema_any_of>();
-        node->children = std::move(kept);
+        node->children = std::move(out);
         return node;
     }
 
@@ -1039,7 +581,9 @@ class common_schema_optimizer {
             case COMMON_SCHEMA_KIND_ENUM: {
                 std::vector<common_json> values;
                 for (const auto & v : as<common_schema_enum>(*node).values) {
-                    add_value(values, v);
+                    if (!contains(values, v)) {
+                        values.push_back(v);
+                    }
                 }
                 return make_values(std::move(values));
             }
@@ -1082,6 +626,7 @@ class common_schema_optimizer {
         }
         return node;
     }
+
     static common_schema_ptr make_all_of(std::vector<common_schema_ptr> children) {
         if (children.size() == 1) {
             return std::move(children[0]);
@@ -1136,20 +681,13 @@ class common_schema_optimizer {
         return make_all_of(std::move(residual));
     }
 
-    common_schema_ptr intersect_tuple(const common_schema_array & arr, const common_schema_tuple & tup) {
-        int n = (int) tup.items.size();
-        if (n < arr.min_items || (arr.max_items >= 0 && n > arr.max_items)) {
-            return none();
-        }
-        auto node = std::make_unique<common_schema_tuple>();
-        for (const auto & item : tup.items) {
-            auto out = intersect(*arr.items, *item);
-            if (is(out, COMMON_SCHEMA_KIND_NONE)) {
-                return none();
+    static const common_schema_property * find_property(const common_schema_object & obj, const std::string & name) {
+        for (const auto & prop : obj.properties) {
+            if (prop.name == name) {
+                return &prop;
             }
-            node->items.push_back(std::move(out));
         }
-        return node;
+        return nullptr;
     }
 
     // Properties are merged the way json_schema_to_grammar() merges an allOf: a property the other
@@ -1196,10 +734,10 @@ class common_schema_optimizer {
         if (is(a, COMMON_SCHEMA_KIND_NONE) || is(b, COMMON_SCHEMA_KIND_NONE)) {
             return none();
         }
-        if (equal(a, b)) {
-            return clone(a);
-        }
         if (is(a, COMMON_SCHEMA_KIND_REF) || is(b, COMMON_SCHEMA_KIND_REF)) {
+            if (is(a, COMMON_SCHEMA_KIND_REF) && is(b, COMMON_SCHEMA_KIND_REF) && as<common_schema_ref>(a).ref == as<common_schema_ref>(b).ref) {
+                return clone(a);
+            }
             const common_schema * ta = resolve(a);
             const common_schema * tb = resolve(b);
             if (!ta || !tb) {
@@ -1241,28 +779,25 @@ class common_schema_optimizer {
             }
             return intersect_all(std::move(parts));
         }
-        if (is(a, COMMON_SCHEMA_KIND_CONST) || is(b, COMMON_SCHEMA_KIND_CONST)) {
-            const auto & c     = as<common_schema_const>(is(a, COMMON_SCHEMA_KIND_CONST) ? a : b);
-            const auto & other = is(a, COMMON_SCHEMA_KIND_CONST) ? b : a;
-            switch (satisfies(c.value, other)) {
-                case MATCH_YES: return clone(c);
-                case MATCH_NO:  return none();
-                default:        return irreducible(a, b);
-            }
-        }
-        if (is(a, COMMON_SCHEMA_KIND_ENUM) || is(b, COMMON_SCHEMA_KIND_ENUM)) {
-            const auto & e     = as<common_schema_enum>(is(a, COMMON_SCHEMA_KIND_ENUM) ? a : b);
-            const auto & other = is(a, COMMON_SCHEMA_KIND_ENUM) ? b : a;
-            std::vector<common_json> values;
-            for (const auto & v : e.values) {
-                switch (satisfies(v, other)) {
-                    case MATCH_YES: values.push_back(v); break;
-                    case MATCH_NO:  break;
-                    default:        return irreducible(a, b);
+
+        std::vector<common_json> va;
+        std::vector<common_json> vb;
+        bool values_a = get_values(a, va);
+        bool values_b = get_values(b, vb);
+        if (values_a && values_b) {
+            std::vector<common_json> common;
+            for (const auto & v : va) {
+                if (contains(vb, v)) {
+                    common.push_back(v);
                 }
             }
-            return values.empty() ? none() : make_values(std::move(values));
+            return make_values(std::move(common));
         }
+        if (values_a || values_b) {
+            // whether a value fits a schema is not checked
+            return irreducible(a, b);
+        }
+
         if (a.kind() != b.kind()) {
             if (is(a, COMMON_SCHEMA_KIND_NUMBER) && is(b, COMMON_SCHEMA_KIND_INTEGER)) {
                 return clone(b);
@@ -1270,11 +805,8 @@ class common_schema_optimizer {
             if (is(a, COMMON_SCHEMA_KIND_INTEGER) && is(b, COMMON_SCHEMA_KIND_NUMBER)) {
                 return clone(a);
             }
-            if (is(a, COMMON_SCHEMA_KIND_ARRAY) && is(b, COMMON_SCHEMA_KIND_TUPLE)) {
-                return intersect_tuple(as<common_schema_array>(a), as<common_schema_tuple>(b));
-            }
-            if (is(a, COMMON_SCHEMA_KIND_TUPLE) && is(b, COMMON_SCHEMA_KIND_ARRAY)) {
-                return intersect_tuple(as<common_schema_array>(b), as<common_schema_tuple>(a));
+            if ((is(a, COMMON_SCHEMA_KIND_ARRAY) && is(b, COMMON_SCHEMA_KIND_TUPLE)) || (is(a, COMMON_SCHEMA_KIND_TUPLE) && is(b, COMMON_SCHEMA_KIND_ARRAY))) {
+                return irreducible(a, b);
             }
             return none();
         }
@@ -1329,8 +861,8 @@ class common_schema_optimizer {
             case COMMON_SCHEMA_KIND_OBJECT:
                 return intersect_object(as<common_schema_object>(a), as<common_schema_object>(b));
             default:
-                // null, boolean and number have no fields, so unequal ones cannot be of the same kind
-                return none();
+                // null, boolean and number have no fields to differ in
+                return clone(a);
         }
     }
 

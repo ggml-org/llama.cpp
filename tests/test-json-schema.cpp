@@ -680,11 +680,6 @@ static void test_optimize_any_of(testing & t) {
         t.assert_equal("anyOf(string, null, boolean)", optimize(R"({"anyOf": [{"anyOf": [{"type": "string"}, {"type": "null"}]}, {"type": "boolean"}]})"));
     });
 
-    t.test("duplicates are dropped", [](testing & t) {
-        t.assert_equal("anyOf(string, null)", optimize(R"({"anyOf": [{"type": "string"}, {"type": "string"}, {"type": "null"}]})"));
-        t.assert_equal("anyOf(string, null)", optimize(R"({"type": ["string", "null", "string"]})"));
-    });
-
     t.test("one alternative left unwraps", [](testing & t) {
         t.assert_equal("null", optimize(R"({"oneOf": [{"type": "null"}]})"));
     });
@@ -693,48 +688,9 @@ static void test_optimize_any_of(testing & t) {
         t.assert_equal("any", optimize(R"({"anyOf": [{"type": "string"}, {}, {"type": "null"}]})"));
     });
 
-    t.test("consts and enums merge into one enum", [](testing & t) {
-        t.assert_equal("enum(\"a\", \"b\", \"c\")", optimize(R"({"anyOf": [{"const": "a"}, {"enum": ["b", "c"]}, {"const": "b"}]})"));
-        t.assert_equal("const(1)", optimize(R"({"anyOf": [{"const": 1}, {"const": 1}]})"));
-    });
-
-    t.test("a value another alternative accepts is dropped", [](testing & t) {
-        t.assert_equal("anyOf(integer, const(\"x\"))", optimize(R"({"anyOf": [{"type": "integer"}, {"const": 5}, {"const": "x"}]})"));
-        t.assert_equal("null", optimize(R"({"anyOf": [{"type": "null"}, {"const": null}]})"));
-    });
-
-    t.test("an alternative within another is dropped", [](testing & t) {
-        t.assert_equal("integer", optimize(R"({"anyOf": [{"type": "integer", "minimum": 1}, {"type": "integer"}]})"));
-        t.assert_equal("string", optimize(R"({"anyOf": [{"type": "string"}, {"type": "string", "minLength": 2}]})"));
-        t.assert_equal("number", optimize(R"({"anyOf": [{"type": "integer"}, {"type": "number"}]})"));
-        t.assert_equal("array(integer)", optimize(R"({"anyOf": [{"items": {"type": "integer"}}, {"prefixItems": [{"type": "integer", "minimum": 0}]}]})"));
-        t.assert_equal("object{a?: string, *: any}", optimize(R"({"anyOf": [{"properties": {"a": {"type": "string"}}, "additionalProperties": true}, {"properties": {"a": {"type": "string"}}, "required": ["a"]}]})"));
-    });
-
-    t.test("of two alternatives within each other the first stays", [](testing & t) {
-        t.assert_equal("object{a?: any, *: any}", optimize(R"({"anyOf": [{"properties": {"a": {}}, "additionalProperties": true}, {"type": "object"}]})"));
-    });
-
-    t.test("touching integer ranges merge", [](testing & t) {
-        t.assert_equal("anyOf(integer[1..10], integer[20..30])", optimize(R"({"anyOf": [
-            {"type": "integer", "minimum": 1, "maximum": 5},
-            {"type": "integer", "minimum": 20, "maximum": 30},
-            {"type": "integer", "minimum": 6, "maximum": 10}
-        ]})"));
-        t.assert_equal("integer", optimize(R"({"anyOf": [{"type": "integer", "minimum": 0}, {"type": "integer", "maximum": -1}]})"));
-        t.assert_equal("anyOf(integer[..3], integer[5..])", optimize(R"({"anyOf": [{"type": "integer", "maximum": 3}, {"type": "integer", "minimum": 5}]})"));
-    });
-
     t.test("an alternative that matches nothing is pruned", [](testing & t) {
         t.assert_equal("string", optimize(R"({"anyOf": [{"type": "integer", "minimum": 5, "maximum": 1}, {"type": "string"}]})"));
         t.assert_equal("none", optimize(R"({"anyOf": [{"type": "integer", "minimum": 5, "maximum": 1}]})"));
-    });
-
-    t.test("different objects stay apart", [](testing & t) {
-        t.assert_equal("anyOf(object{a: string}, object{b: string})", optimize(R"({"anyOf": [
-            {"properties": {"a": {"type": "string"}}, "required": ["a"]},
-            {"properties": {"b": {"type": "string"}}, "required": ["b"]}
-        ]})"));
     });
 }
 
@@ -789,22 +745,16 @@ static void test_optimize_all_of(testing & t) {
         t.assert_true("no refs", doc.refs.empty());
     });
 
-    t.test("enums intersect", [](testing & t) {
+    t.test("enums and consts intersect", [](testing & t) {
         t.assert_equal("const(\"b\")", optimize(R"({"type": "string", "allOf": [{"enum": ["a", "b"]}, {"enum": ["b", "c"]}]})"));
-        t.assert_equal("enum(1, 2)", optimize(R"({"allOf": [{"enum": [1, "x", 2]}, {"type": "integer"}]})"));
+        t.assert_equal("enum(1, 2)", optimize(R"({"allOf": [{"enum": [1, "x", 2]}, {"enum": [2, 1, 3]}]})"));
+        t.assert_equal("const(1)", optimize(R"({"allOf": [{"const": 1}, {"enum": [2, 1]}]})"));
         t.assert_equal("none", optimize(R"({"allOf": [{"enum": ["a"]}, {"enum": ["b"]}]})"));
+        t.assert_equal("none", optimize(R"({"allOf": [{"const": 5}, {"const": 6}]})"));
     });
 
-    t.test("const", [](testing & t) {
-        t.assert_equal("const(5)", optimize(R"({"allOf": [{"const": 5}, {"type": "integer", "minimum": 0}]})"));
-        t.assert_equal("none", optimize(R"({"allOf": [{"const": 5}, {"type": "string"}]})"));
-        t.assert_equal("const({\"a\":1})", optimize(R"({"allOf": [{"const": {"a": 1}}, {"properties": {"a": {"type": "integer"}}, "required": ["a"]}]})"));
-        t.assert_equal("none", optimize(R"({"allOf": [{"const": {"a": 1}}, {"properties": {"a": {"type": "integer"}, "b": {}}, "required": ["b"]}]})"));
-        t.assert_equal("const([1,2])", optimize(R"({"allOf": [{"const": [1, 2]}, {"items": {"type": "integer"}, "maxItems": 2}]})"));
-    });
-
-    t.test("a const against a pattern stays an allOf", [](testing & t) {
-        t.assert_equal("allOf(const(\"ab\"), string/^a/)", optimize(R"({"allOf": [{"const": "ab"}, {"pattern": "^a"}]})"));
+    t.test("a value against a type stays an allOf", [](testing & t) {
+        t.assert_equal("allOf(const(5), integer)", optimize(R"({"allOf": [{"const": 5}, {"type": "integer"}]})"));
     });
 
     t.test("integer bounds", [](testing & t) {
@@ -832,18 +782,15 @@ static void test_optimize_all_of(testing & t) {
         t.assert_equal("any", optimize(R"({"allOf": [{}, {}]})"));
     });
 
-    t.test("arrays", [](testing & t) {
+    t.test("arrays and tuples", [](testing & t) {
         t.assert_equal("array(integer[0..])[1..3]", optimize(R"({"allOf": [
             {"items": {"type": "integer"}, "minItems": 1},
             {"items": {"type": "integer", "minimum": 0}, "maxItems": 3}
         ]})"));
-        t.assert_equal("tuple(integer[1..], integer)", optimize(R"({"allOf": [
-            {"items": {"type": "integer"}},
-            {"prefixItems": [{"type": "integer", "minimum": 1}, {}]}
-        ]})"));
-        t.assert_equal("none", optimize(R"({"allOf": [{"items": {}, "maxItems": 1}, {"prefixItems": [{}, {}]}]})"));
-        t.assert_equal("none", optimize(R"({"allOf": [{"prefixItems": [{}]}, {"prefixItems": [{}, {}]}]})"));
         t.assert_equal("tuple()", optimize(R"({"allOf": [{"items": {"type": "string"}}, {"items": {"type": "integer"}}]})"));
+        t.assert_equal("tuple(integer[1..], null)", optimize(R"({"allOf": [{"prefixItems": [{"type": "integer"}, {}]}, {"prefixItems": [{"minimum": 1, "type": "integer"}, {"type": "null"}]}]})"));
+        t.assert_equal("none", optimize(R"({"allOf": [{"prefixItems": [{}]}, {"prefixItems": [{}, {}]}]})"));
+        t.assert_equal("allOf(array(integer), tuple(integer))", optimize(R"({"allOf": [{"items": {"type": "integer"}}, {"prefixItems": [{"type": "integer"}]}]})"));
     });
 
     t.test("distributes over anyOf", [](testing & t) {
@@ -927,7 +874,7 @@ static void test_optimize_prune(testing & t) {
     });
 
     t.test("what is already minimal is left alone", [](testing & t) {
-        auto schema = R"({
+        auto doc = parse(R"({
             "properties": {
                 "name": {"type": "string", "minLength": 1},
                 "tags": {"type": "array", "items": {"enum": ["a", "b"]}, "maxItems": 3},
@@ -935,8 +882,7 @@ static void test_optimize_prune(testing & t) {
             },
             "required": ["name"],
             "$defs": {"kind": {"properties": {"id": {"type": "integer", "minimum": 0}}, "required": ["id"]}}
-        })";
-        auto doc = parse(schema);
+        })");
         std::string before = dump(*doc.root);
         common_schema_optimize(doc);
         t.assert_equal("root", before, dump(*doc.root));
@@ -976,7 +922,7 @@ static void test_optimize_ref(testing & t) {
     t.test("reachable refs are kept and relinked", [](testing & t) {
         auto doc = parse(R"({
             "properties": {"a": {"$ref": "#/$defs/t"}, "b": {"$ref": "#/$defs/t"}, "c": {"$ref": "#/$defs/u"}},
-            "$defs": {"t": {"anyOf": [{"type": "string"}, {"type": "string"}]}, "u": {"type": "null"}, "unused": {"type": "boolean"}}
+            "$defs": {"t": {"anyOf": [{"type": "string"}]}, "u": {"type": "null"}, "unused": {"type": "boolean"}}
         })");
         common_schema_optimize(doc);
         t.assert_equal("root", "object{a?: ref(#/$defs/t), b?: ref(#/$defs/t), c?: ref(#/$defs/u)}", dump(*doc.root));
@@ -995,8 +941,8 @@ static void test_optimize_ref(testing & t) {
             "$defs": {
                 "node": {
                     "properties": {
-                        "value": {"anyOf": [{"type": "number"}, {"type": "integer"}]},
-                        "next": {"anyOf": [{"$ref": "#/$defs/node"}, {"type": "null"}, {"$ref": "#/$defs/node"}]}
+                        "value": {"type": "number"},
+                        "next": {"anyOf": [{"$ref": "#/$defs/node"}, {"type": "null"}]}
                     },
                     "required": ["value"]
                 }
@@ -1011,16 +957,11 @@ static void test_optimize_ref(testing & t) {
         t.assert_true("cycle", as<common_schema_ref>(t, next.children[0].get(), "next[0]").target == r.target);
     });
 
-    t.test("a ref intersected with any stays a ref", [](testing & t) {
-        auto doc = parse(R"({"allOf": [{}, {"$ref": "#/$defs/t"}], "$defs": {"t": {"type": "boolean"}}})");
+    t.test("a ref intersected with any or itself stays a ref", [](testing & t) {
+        auto doc = parse(R"({"allOf": [{}, {"$ref": "#/$defs/t"}, {"$ref": "#/$defs/t"}], "$defs": {"t": {"type": "boolean"}}})");
         common_schema_optimize(doc);
         t.assert_equal("root", "ref(#/$defs/t)", dump(*doc.root));
         t.assert_true("target", root<common_schema_ref>(t, doc).target == doc.refs.at("#/$defs/t").get());
-    });
-
-    t.test("the same ref twice is one", [](testing & t) {
-        t.assert_equal("ref(#/$defs/t)", optimize(R"({"allOf": [{"$ref": "#/$defs/t"}, {"$ref": "#/$defs/t"}], "$defs": {"t": {"type": "boolean"}}})"));
-        t.assert_equal("ref(#/$defs/t)", optimize(R"({"anyOf": [{"$ref": "#/$defs/t"}, {"$ref": "#/$defs/t"}], "$defs": {"t": {"type": "boolean"}}})"));
     });
 }
 

@@ -159,10 +159,8 @@ struct common_schema_document {
 // Throws std::runtime_error when the schema falls outside the supported subset.
 common_schema_document common_schema_parse(const common_json & schema);
 
-// Rewrites a document in place into an equivalent one with less redundancy:
-// - allOf becomes the intersection of its children, one node where the kinds allow it
-// - nested anyOf are flattened, duplicate and subsumed alternatives are dropped, consts and enums merge into one enum
-// - branches that can match nothing are pruned, up to a common_schema_none root when nothing is left
-// - $refs nothing reaches anymore are dropped from refs
-// An allOf survives only where the children cannot be combined, e.g. two different patterns.
+// Rewrites a document in place into an equivalent one with less redundancy: allOf becomes the intersection
+// of its children, nested anyOf are flattened, branches that can match nothing are pruned, up to a
+// common_schema_none root, and $refs nothing reaches anymore are dropped.
+// An allOf stays where the children cannot be combined, e.g. two different patterns or a const against a type.
 void common_schema_optimize(common_schema_document & doc);
