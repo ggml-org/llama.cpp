@@ -45,7 +45,7 @@
 			className
 		)}
 		data-slot="input"
-		style="backdrop-filter: blur(0.5rem);"
+		style="backdrop-filter: blur(1rem);"
 		{type}
 		{...restProps}
 	/>
