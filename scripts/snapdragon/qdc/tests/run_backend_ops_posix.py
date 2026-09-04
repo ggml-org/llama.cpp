@@ -14,7 +14,7 @@ import pytest
 from utils import (
     BIN_PATH,
     push_bundle_if_needed,
-    run_script,
+    run_snapdragon,
     write_qdc_log,
 )
 
@@ -31,11 +31,8 @@ def test_backend_ops_htp0(type_a):
     else:
         pattern = f"type_a={type_a}"
 
-    quoted_pattern = f'"{pattern}"' if type_a == "q4_0" else pattern
-    result = run_script(
-        "run-tool.sh",
-        extra_env={"HB": "0"},
-        extra_args=["test-backend-ops", "-b", "HTP0", "-o", "MUL_MAT", "-p", quoted_pattern],
+    result = run_snapdragon(
+        ["test-backend-ops", "-b", "HTP0", "-o", "MUL_MAT", "-p", pattern],
     )
     write_qdc_log(f"backend_ops_{type_a}.log", result.stdout or "")
     assert result.returncode == 0, (

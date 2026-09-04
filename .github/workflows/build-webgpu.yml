@@ -72,8 +72,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: webgpu-macos-latest
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
 
       - name: Dawn Dependency
         id: dawn-depends
@@ -88,6 +87,15 @@ jobs:
           mkdir dawn
           tar -xvf artifact.tar.gz -C dawn --strip-components=1
 
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: webgpu-macos-latest
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
       - name: Build
         id: cmake_build
         run: |
@@ -95,21 +103,23 @@ jobs:
           cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DGGML_WEBGPU=ON -DGGML_METAL=OFF -DGGML_BLAS=OFF
           time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: webgpu-macos-latest
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
       - name: Test
         id: cmake_test
         run: |
           cd build
           ctest -L main --verbose --timeout 900
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        env:
-          GH_TOKEN: ${{ github.token }}
-        with:
-          key: webgpu-macos-latest
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
 
   ubuntu:
     runs-on: ubuntu-24.04
@@ -123,8 +133,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: webgpu-ubuntu-24.04
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
 
       - name: Dependencies
         id: depends
@@ -148,6 +157,15 @@ jobs:
           mkdir dawn
           tar -xvf artifact.tar.gz -C dawn --strip-components=1
 
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: webgpu-ubuntu-24.04
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
       - name: Build
         id: cmake_build
         run: |
@@ -156,6 +174,18 @@ jobs:
             -DGGML_WEBGPU=ON
           time cmake --build build --config Release -j $(nproc)
 
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: webgpu-ubuntu-24.04
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
       - name: Test
         id: cmake_test
         run: |
@@ -163,13 +193,3 @@ jobs:
           # This is using llvmpipe and runs slower than other backends
           # test-backend-ops is too slow on llvmpipe, skip it
           ctest -L main -E test-backend-ops --verbose --timeout 900
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        env:
-          GH_TOKEN: ${{ github.token }}
-        with:
-          key: webgpu-ubuntu-24.04
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

@@ -636,7 +636,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const float32x4_t v_xyf = vec_float(v_xy);
 
         const float32x4_t v_d = vec_splats(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d));
-        const float32x4_t v_acc = vec_madd(v_xyf, v_d, v_acc);
+        const float32x4_t v_acc = vec_madd(v_xyf, v_d, vec_splats(0.0f));
 
         sumf += vec_hsum_f32x4(v_acc) + summs;
     }

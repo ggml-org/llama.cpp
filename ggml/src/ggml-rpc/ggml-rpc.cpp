@@ -835,7 +835,7 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
     // [TAG_ALLOC_SIZE_EXPAND]
     // ops that may require additional memory for fleeting data on certain backends
     // ref: https://github.com/ggml-org/llama.cpp/pull/15966
-    rpc_get |= ggml_backend_op_alloc_size_may_expand(tensor->op);
+    rpc_get |= ggml_op_alloc_size_may_expand(tensor->op);
 
     if (rpc_get) {
         ggml_backend_rpc_buffer_type_context * buft_ctx = (ggml_backend_rpc_buffer_type_context *)buft->context;

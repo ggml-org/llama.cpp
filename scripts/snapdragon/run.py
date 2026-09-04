@@ -146,7 +146,22 @@ def main():
             env_vars[env_name] = os.environ[env_name]
 
     # Resolve and filter devices (HTP vs OpenCL)
-    devices_val = args.devices if args.devices is not None else "HTP0"
+    device_in_cmd = None
+    for i, arg in enumerate(cmd_args):
+        if arg == "--device" and i + 1 < len(cmd_args):
+            device_in_cmd = cmd_args[i + 1]
+            break
+        elif arg.startswith("--device="):
+            device_in_cmd = arg.split("=", 1)[1]
+            break
+
+    if args.devices is not None:
+        devices_val = args.devices
+    elif device_in_cmd is not None:
+        devices_val = device_in_cmd
+    else:
+        devices_val = "HTP0"
+
     if devices_val.isdigit():
         hex_devices = devices_val
         cl_device = ""
@@ -154,7 +169,12 @@ def main():
         parts = [p.strip() for p in devices_val.split(",")]
         # Any device containing "htp" is Hexagon, rest is OpenCL
         hex_parts = [p for p in parts if "htp" in p.lower()]
-        cl_parts = [p for p in parts if "htp" not in p.lower()]
+        cl_parts = [
+            p for p in parts
+            if "htp" not in p.lower()
+            and p.lower() not in ("none", "cpu")
+            and not p.lower().startswith("gpuopencl")
+        ]
         hex_devices = ",".join(hex_parts)
         cl_device = ",".join(cl_parts)
 
@@ -316,10 +336,16 @@ def main():
     if basename in ("llama-cli", "llama-completion", "llama-server"):
         if "-ngl" not in cmd_args and "--n-gpu-layers" not in cmd_args:
             cmd_args += ["-ngl", "99"]
-        if "--ubatch-size" not in cmd_args and "-ub" not in cmd_args:
-            cmd_args += ["--ubatch-size", "1024"]
         if "-fa" not in cmd_args and "--flash-attn" not in cmd_args:
             cmd_args += ["-fa", "on"]
+
+    # Use ubatch-size 1024 for hexagon backend (HTP devices)
+    if hex_devices and basename in ("llama-cli", "llama-completion", "llama-server", "llama-bench"):
+        if "--ubatch-size" not in cmd_args and "-ub" not in cmd_args:
+            cmd_args += ["--ubatch-size", "1024"]
+    elif basename in ("llama-cli", "llama-completion", "llama-server"):
+        if "--ubatch-size" not in cmd_args and "-ub" not in cmd_args:
+            cmd_args += ["--ubatch-size", "1024"]
 
     if basename in ("llama-cli", "llama-completion", "llama-server", "llama-bench"):
         if "-t" not in cmd_args and "--threads" not in cmd_args:
