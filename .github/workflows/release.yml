@@ -389,7 +389,7 @@ jobs:
         with:
           key: release-ubuntu-${{ matrix.os }}-cuda-${{ matrix.label }}-${{ matrix.build }}
           evict-old-files: 1d
-          max-size: "2G"
+          max-size: "1G"
 
       - name: Build
         id: cmake_build
