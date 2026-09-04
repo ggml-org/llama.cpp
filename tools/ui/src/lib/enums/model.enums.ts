@@ -1,3 +1,4 @@
+// LLAMA-APP-REUSE: model modality / capability / sidecar enums
 export enum ModelModality {
 	AUDIO = 'AUDIO',
 	TEXT = 'TEXT',

@@ -4,6 +4,7 @@
  * URLs, parsing regexes and formatting units for the HuggingFaceService.
  * Reference: https://huggingface.co/docs/huggingface_hub/package_reference/hf_api
  */
+// LLAMA-APP-REUSE: HF Hub endpoints and filename conventions
 
 // API endpoints
 
@@ -166,6 +167,7 @@ export const TERABYTE = 1_000_000_000_000;
  * Matches a human size string (`177GB`, `1.2 TB`, `500MB`), capturing the
  * numeric value and its unit suffix. Used by `parseSizeBytes`.
  */
+// LLAMA-APP-REUSE: catalog size string parsing
 export const HF_SIZE_STRING_REGEX = /^\s*([\d.]+)\s*([a-z]+)\s*$/i;
 
 /**

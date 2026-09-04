@@ -29,6 +29,7 @@ const SIDECAR_TOKENS: readonly string[] = [
 export class ModelsService {
 	private static readonly SSE_RECONNECT_MS = 1000;
 
+	// LLAMA-APP-REUSE: repo:tag id builder
 	/**
 	 * Build the `<repo>:<tag>` string expected by POST /models from a parsed
 	 * filename quant + optional sidecar type. Used by the model download
@@ -167,6 +168,7 @@ export class ModelsService {
 		return apiPost<ApiModelsLoadResponse>(API_MODELS.LOAD, payload);
 	}
 
+	// LLAMA-APP-REUSE: model id parser
 	/**
 	 * Parse a model ID string into its structured components.
 	 *

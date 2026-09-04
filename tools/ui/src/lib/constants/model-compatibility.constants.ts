@@ -7,6 +7,7 @@
  * a file fits when weightBytes <= budget. Kept here so the estimation util and
  * any caller share one source.
  */
+// LLAMA-APP-REUSE: hardware compatibility budget (mirrors Model+Compatibility.swift)
 
 /** Bytes in one mebibyte (MiB), used to convert a file size to MB. */
 export const MIB_BYTES = 1_048_576;

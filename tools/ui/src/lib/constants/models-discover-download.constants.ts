@@ -14,6 +14,7 @@ import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
  * `--spec-type` value for each draft sidecar; aux sidecars (mmproj, imatrix)
  * carry none and stay empty.
  */
+// LLAMA-APP-REUSE: --spec-type value for each draft sidecar; aux sidecars stay empty
 export const SPEC_TYPE: Record<ModelSidecar, string> = {
 	[ModelAuxSidecar.IMATRIX]: '',
 	[ModelAuxSidecar.MMPROJ]: '',
