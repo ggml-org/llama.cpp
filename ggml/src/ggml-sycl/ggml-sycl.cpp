@@ -2445,6 +2445,9 @@ static void argsort_f32_i32_sycl(const float *x, int *dst, const int ncols,
     } else {
         GGML_ABORT("fatal error");
     }
+
+    // Ensure all kernels finish execution before proceeding further
+    stream->wait();
 }
 
 // Scan and block merge, shared by every launch shape below so a partitioned row uses the
