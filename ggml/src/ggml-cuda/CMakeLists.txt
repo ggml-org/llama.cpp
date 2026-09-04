@@ -121,7 +121,12 @@ if (CUDAToolkit_FOUND)
             template-instances/fattn-vec-instance-f16-f16.cu
             template-instances/fattn-vec-instance-q4_0-q4_0.cu
             template-instances/fattn-vec-instance-q8_0-q8_0.cu
-            template-instances/fattn-vec-instance-bf16-bf16.cu)
+            template-instances/fattn-vec-instance-bf16-bf16.cu
+            template-instances/fattn-vec-instance-f16-f8_e4m3.cu
+            template-instances/fattn-vec-instance-f8_e4m3-f16.cu
+            template-instances/fattn-vec-instance-bf16-f8_e4m3.cu
+            template-instances/fattn-vec-instance-f8_e4m3-bf16.cu
+            template-instances/fattn-vec-instance-f8_e4m3-f8_e4m3.cu)
     endif()
 
     ggml_add_backend_library(ggml-cuda
@@ -156,7 +161,7 @@ if (CUDAToolkit_FOUND)
     if (GGML_STATIC)
         if (WIN32)
             # As of 12.3.1 CUDA Toolkit for Windows does not offer a static cublas library
-            target_link_libraries(ggml-cuda PRIVATE CUDA::cudart_static CUDA::cublas)
+            target_link_libraries(ggml-cuda PRIVATE CUDA::cudart_static CUDA::cublas CUDA::cublasLt)
         else ()
             if (GGML_CUDA_CUB_3DOT2)
                 target_link_libraries(ggml-cuda PRIVATE  CCCL::CCCL)
@@ -171,7 +176,7 @@ if (CUDAToolkit_FOUND)
         if (GGML_CUDA_CUB_3DOT2)
             target_link_libraries(ggml-cuda PRIVATE  CCCL::CCCL)
         endif()
-        target_link_libraries(ggml-cuda PRIVATE CUDA::cudart CUDA::cublas)
+        target_link_libraries(ggml-cuda PRIVATE CUDA::cudart CUDA::cublas CUDA::cublasLt)
     endif()
 
     if (GGML_CUDA_NO_VMM)
