@@ -590,6 +590,16 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
+    // On Blackwell, small speculative-verification batches must follow the
+    // same arithmetic as ordinary one-token decoding.  The vector launcher
+    // uses a batch-invariant vector tile with independent query accumulators;
+    // unlike the MMA kernel selected for three or more queries, it remains
+    // bitwise invariant while sharing K/V loads in one CUDA graph node.
+    if (cc >= GGML_CUDA_CC_BLACKWELL && can_use_vector_kernel && Q->ne[1] <= 4 && Q->ne[3] == 1 &&
+            ggml_cuda_fa_sm120_invariant()) {
+        return BEST_FATTN_KERNEL_VEC;
+    }
+
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
         if (can_use_vector_kernel) {
