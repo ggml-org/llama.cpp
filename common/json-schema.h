@@ -13,6 +13,7 @@
 
 enum common_schema_kind {
     COMMON_SCHEMA_KIND_ANY,
+    COMMON_SCHEMA_KIND_NONE,
     COMMON_SCHEMA_KIND_REF,
     COMMON_SCHEMA_KIND_ANY_OF,
     COMMON_SCHEMA_KIND_ALL_OF,
@@ -47,6 +48,11 @@ using common_schema_ptr = std::unique_ptr<common_schema>;
 // {} or a schema with no recognized keywords: any JSON value
 struct common_schema_any : common_schema {
     common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_ANY; }
+};
+
+// Matches no value: what common_schema_optimize() leaves where an intersection turned out empty
+struct common_schema_none : common_schema {
+    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_NONE; }
 };
 
 // {"$ref": "#/..."}, only references into the same document are supported
@@ -152,3 +158,11 @@ struct common_schema_document {
 // Parses a JSON schema into a document.
 // Throws std::runtime_error when the schema falls outside the supported subset.
 common_schema_document common_schema_parse(const common_json & schema);
+
+// Rewrites a document in place into an equivalent one with less redundancy:
+// - allOf becomes the intersection of its children, one node where the kinds allow it
+// - nested anyOf are flattened, duplicate and subsumed alternatives are dropped, consts and enums merge into one enum
+// - branches that can match nothing are pruned, up to a common_schema_none root when nothing is left
+// - $refs nothing reaches anymore are dropped from refs
+// An allOf survives only where the children cannot be combined, e.g. two different patterns.
+void common_schema_optimize(common_schema_document & doc);
