@@ -20,8 +20,8 @@ export interface UseReasoningMenuReturn {
 /**
  * Shared reactive state and helpers for the reasoning effort menu.
  *
- * Used by both the desktop dropdown (`ChatFormActionAddReasoningSubmenu`)
- * and the mobile sheet (`ChatFormActionAddSheet`) to avoid duplicating the
+ * Used by the models dropdown footer (`ModelsSelectorReasoningPanel`) and the
+ * mobile sheet (`ChatFormActionAddSheet`) to avoid duplicating the
  * thinking-support derivation and the effort selection logic.
  */
 export function useReasoningMenu(): UseReasoningMenuReturn {
