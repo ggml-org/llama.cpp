@@ -213,6 +213,7 @@ constant short FC_mul_mv_nxpsg [[function_constant(FC_MUL_MV + 1)]];
 constant short FC_mul_mv_ne12  [[function_constant(FC_MUL_MV + 2)]];
 constant short FC_mul_mv_r2    [[function_constant(FC_MUL_MV + 3)]];
 constant short FC_mul_mv_r3    [[function_constant(FC_MUL_MV + 4)]];
+constant bool  FC_mul_mv_split [[function_constant(FC_MUL_MV + 5)]];
 
 template<typename block_q_type, short NR0, typename args_t>
 void mul_vec_q_n_f32_impl(
@@ -2092,8 +2093,8 @@ kernel void kernel_mul_mv_iq2_xs_f32(
     kernel_mul_mv_iq2_xs_f32_impl<N_R0_IQ2_XS, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
 }
 
-// SPLIT: for nb32 < 32 (nb32 divides 32), 32/nb32 threads share each chunk and each takes a slice of the rows
-template<int nr0, bool SPLIT, typename args_t>
+// FC_mul_mv_split: for nb32 < 32 (nb32 divides 32), 32/nb32 threads share each chunk and each takes a slice of the rows
+template<int nr0, typename args_t>
 void kernel_mul_mv_iq3_xxs_f32_impl(
         args_t args,
         device const char * src0,
@@ -2139,7 +2140,7 @@ void kernel_mul_mv_iq3_xxs_f32_impl(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    const short ntx  = SPLIT ? nb32 : 32;
+    const short ntx  = FC_mul_mv_split ? nb32 : 32;
     const short nrep = 32 / ntx;
 
     const short ix   = tiisg % ntx;
@@ -2198,6 +2199,23 @@ void kernel_mul_mv_iq3_xxs_f32_impl(
     }
 }
 
+template<typename args_t>
+void kernel_mul_mv_iq3_xxs_f32_disp(
+        args_t args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem,
+        uint3  tgpig,
+        ushort tiisg,
+        ushort sgitg) {
+    if (FC_mul_mv_split) {
+        kernel_mul_mv_iq3_xxs_f32_impl<N_R0_IQ3_XXS_SPLIT, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
+    } else {
+        kernel_mul_mv_iq3_xxs_f32_impl<N_R0_IQ3_XXS, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
+    }
+}
+
 [[host_name("kernel_mul_mv_iq3_xxs_f32")]]
 kernel void kernel_mul_mv_iq3_xxs_f32(
         constant ggml_metal_kargs_mul_mv & args,
@@ -2209,21 +2227,7 @@ kernel void kernel_mul_mv_iq3_xxs_f32(
         ushort tiisg[[thread_index_in_simdgroup]],
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
 
-    kernel_mul_mv_iq3_xxs_f32_impl<N_R0_IQ3_XXS, false, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
-}
-
-[[host_name("kernel_mul_mv_iq3_xxs_f32_split")]]
-kernel void kernel_mul_mv_iq3_xxs_f32_split(
-        constant ggml_metal_kargs_mul_mv & args,
-        device const char * src0,
-        device const char * src1,
-        device       char * dst,
-        threadgroup  char * shmem [[threadgroup(0)]],
-        uint3  tgpig[[threadgroup_position_in_grid]],
-        ushort tiisg[[thread_index_in_simdgroup]],
-        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
-
-    kernel_mul_mv_iq3_xxs_f32_impl<N_R0_IQ3_XXS_SPLIT, true, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
+    kernel_mul_mv_iq3_xxs_f32_disp<constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
 }
 
 template<int nr0, typename args_t>
@@ -3239,8 +3243,7 @@ template [[host_name("kernel_mul_mv_id_iq1_s_f32")]]   kernel kernel_mul_mv_id_t
 template [[host_name("kernel_mul_mv_id_iq1_m_f32")]]   kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq1_m_f32_impl  <N_R0_IQ1_M>>>;
 template [[host_name("kernel_mul_mv_id_iq2_xxs_f32")]] kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq2_xxs_f32_impl<N_R0_IQ2_XXS>>>;
 template [[host_name("kernel_mul_mv_id_iq2_xs_f32")]]  kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq2_xs_f32_impl <N_R0_IQ2_XS>>>;
-template [[host_name("kernel_mul_mv_id_iq3_xxs_f32")]] kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq3_xxs_f32_impl<N_R0_IQ3_XXS, false>>>;
-template [[host_name("kernel_mul_mv_id_iq3_xxs_f32_split")]] kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq3_xxs_f32_impl<N_R0_IQ3_XXS_SPLIT, true>>>;
+template [[host_name("kernel_mul_mv_id_iq3_xxs_f32")]] kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq3_xxs_f32_disp<ggml_metal_kargs_mul_mv>>>;
 template [[host_name("kernel_mul_mv_id_iq3_s_f32")]]   kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq3_s_f32_impl  <N_R0_IQ3_S>>>;
 template [[host_name("kernel_mul_mv_id_iq2_s_f32")]]   kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq2_s_f32_impl  <N_R0_IQ2_S>>>;
 template [[host_name("kernel_mul_mv_id_iq4_nl_f32")]]  kernel kernel_mul_mv_id_t kernel_mul_mv_id<mmv_fn<kernel_mul_mv_iq4_nl_f32_impl <N_R0_IQ4_NL>>>;
