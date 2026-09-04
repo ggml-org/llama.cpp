@@ -222,6 +222,7 @@ set(GGML_OPENCL_KERNELS
     exp
     expm1
     abs
+    unary_ext
     softplus
     pad
     repeat
