@@ -1265,7 +1265,11 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        mtp_init = common_speculative_init_from_params(params, model, ctx);
+        // the head is a single block: one chunk per ubatch keeps its compute buffers small
+        common_params params_mtp = params;
+        params_mtp.n_ubatch = std::min(params.n_ubatch, n_ctx);
+
+        mtp_init = common_speculative_init_from_params(params_mtp, model, ctx);
         ctx_mtp  = mtp_init->context();
 
         if (ctx_mtp == nullptr) {
