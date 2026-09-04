@@ -15,6 +15,11 @@
 #define FP8_AVAILABLE
 #endif // CUDART_VERSION >= 11080
 
+#if CUDART_VERSION >= 11070
+#define GGML_CUDA_USE_CUB
+#include <cub/cub.cuh>
+#endif // CUDART_VERSION >= 11070
+
 #if CUDART_VERSION >= 12080
 #include <cuda_fp4.h>
 #endif // CUDART_VERSION >= 12080
