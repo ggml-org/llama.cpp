@@ -1055,6 +1055,9 @@ class GGUFWriter:
     def add_hyper_connection_epsilon(self, value: float) -> None:
         self.add_float32(Keys.HyperConnection.EPSILON.format(arch=self.arch), value)
 
+    def add_hyper_connection_magnitude(self, value: float) -> None:
+        self.add_float32(Keys.HyperConnection.MAGNITUDE.format(arch=self.arch), value)
+
     def add_hyper_connection_low_rank(self, value: int) -> None:
         self.add_uint32(Keys.HyperConnection.LOW_RANK.format(arch=self.arch), value)
 

@@ -1981,6 +1981,69 @@ struct llama_model_hy_v3 : public llama_model_base {
 };
 
 
+struct llama_model_hy_v4 : public llama_model_base {
+    llama_model_hy_v4(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // iHC (independent Hyper-Connections): pre reduces the hc streams to one and returns the
+        // per-stream post gates, post writes the sublayer output back into the streams, head
+        // collapses the streams before the final norm.
+        ggml_tensor * build_hc_pre(
+                ggml_tensor * x,
+                ggml_tensor * hc_fn,
+                ggml_tensor * hc_scale,
+                ggml_tensor * hc_base,
+                ggml_tensor ** post,
+                int il) const;
+
+        ggml_tensor * build_hc_post(
+                ggml_tensor * x,
+                ggml_tensor * residual,
+                ggml_tensor * post,
+                int il) const;
+
+        ggml_tensor * build_hc_head(
+                ggml_tensor * x,
+                ggml_tensor * hc_fn,
+                ggml_tensor * hc_scale,
+                ggml_tensor * hc_base) const;
+
+        ggml_tensor * build_attention(
+                const llama_model & model,
+                llm_graph_input_attn_k * inp_attn,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                float kq_scale,
+                int il) const;
+
+        // DSA lightning indexer: top-k KV positions for this layer. Only "full" layers compute
+        // it, "shared" layers reuse the last preceding full layer result through last_top_k.
+        ggml_tensor * build_indexer_top_k(
+                const llama_model & model,
+                llm_graph_input_attn_k_dsa * inp_attn_dsa,
+                ggml_tensor * cur,
+                ggml_tensor * qr,
+                ggml_tensor * inp_pos,
+                int il) const;
+
+        ggml_tensor * build_attention_dsa(
+                const llama_model & model,
+                llm_graph_input_attn_k_dsa * inp_attn_dsa,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                ggml_tensor ** last_top_k,
+                float kq_scale,
+                int il) const;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_hunyuan_vl : public llama_model_base {
     llama_model_hunyuan_vl(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

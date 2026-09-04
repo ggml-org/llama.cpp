@@ -2317,7 +2317,8 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         (model.arch == LLM_ARCH_DFLASH && model.hparams.dsv4_hc_mult > 0) ||
         model.arch == LLM_ARCH_NANBEIGE ||
         model.arch == LLM_ARCH_MINIMAX_01 ||
-        model.arch == LLM_ARCH_MINIMAX_M3) {
+        model.arch == LLM_ARCH_MINIMAX_M3 ||
+        model.arch == LLM_ARCH_HY_V4) {
         res = std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_DFLASH && model.hparams.dflash_selector_rank > 0) {
         // DFlash2's convolutions and selector are shape work rather than matmuls,

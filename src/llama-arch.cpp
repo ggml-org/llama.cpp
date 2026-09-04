@@ -121,6 +121,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_HUNYUAN_DENSE,    "hunyuan-dense"    },
     { LLM_ARCH_HUNYUAN_VL,       "hunyuan_vl"       },
     { LLM_ARCH_HY_V3,            "hy_v3"            },
+    { LLM_ARCH_HY_V4,            "hy_v4"            },
     { LLM_ARCH_SMOLLM3,          "smollm3"          },
     { LLM_ARCH_OPENAI_MOE,       "gpt-oss"          },
     { LLM_ARCH_LFM2,             "lfm2"             },
@@ -294,6 +295,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_HYPER_CONNECTION_COUNT,                 "%s.hyper_connection.count"                 },
     { LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS,   "%s.hyper_connection.sinkhorn_iterations"   },
     { LLM_KV_HYPER_CONNECTION_EPSILON,               "%s.hyper_connection.epsilon"               },
+    { LLM_KV_HYPER_CONNECTION_MAGNITUDE,             "%s.hyper_connection.magnitude"             },
     { LLM_KV_HYPER_CONNECTION_LOW_RANK,              "%s.hyper_connection.low_rank"              },
 
     { LLM_KV_PLE_LAYERS,                             "%s.ple.layers"                             },
@@ -1130,6 +1132,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_OLMOE:
         case LLM_ARCH_DEEPSEEK2:
         case LLM_ARCH_DEEPSEEK32:
+        case LLM_ARCH_HY_V4:
         case LLM_ARCH_DOTS3NOTE:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_BITNET:

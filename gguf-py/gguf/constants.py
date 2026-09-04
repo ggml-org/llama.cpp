@@ -230,6 +230,8 @@ class Keys:
         COUNT                = "{arch}.hyper_connection.count"
         SINKHORN_ITERATIONS  = "{arch}.hyper_connection.sinkhorn_iterations"
         EPSILON              = "{arch}.hyper_connection.epsilon"
+        # scale of the post gate (DeepSeek-V4 hardcodes 2.0)
+        MAGNITUDE            = "{arch}.hyper_connection.magnitude"
         # absent means the mix projection is full rank (DeepSeek-V4 behaviour)
         LOW_RANK             = "{arch}.hyper_connection.low_rank"
 
@@ -592,6 +594,7 @@ class MODEL_ARCH(IntEnum):
     HUNYUAN_DENSE    = auto()
     HUNYUAN_VL       = auto()
     HY_V3            = auto()
+    HY_V4            = auto()
     SMOLLM3          = auto()
     GPT_OSS          = auto()
     LFM2             = auto()
@@ -1345,6 +1348,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.HUNYUAN_DENSE:    "hunyuan-dense",
     MODEL_ARCH.HUNYUAN_VL:       "hunyuan_vl",
     MODEL_ARCH.HY_V3:            "hy_v3",
+    MODEL_ARCH.HY_V4:            "hy_v4",
     MODEL_ARCH.SMOLLM3:          "smollm3",
     MODEL_ARCH.GPT_OSS:          "gpt-oss",
     MODEL_ARCH.LFM2:             "lfm2",
@@ -4739,6 +4743,48 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
+    MODEL_ARCH.HY_V4: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.HC_HEAD_FN,
+        MODEL_TENSOR.HC_HEAD_BASE,
+        MODEL_TENSOR.HC_HEAD_SCALE,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_SINKS,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.INDEXER_K_NORM,
+        MODEL_TENSOR.INDEXER_PROJ,
+        MODEL_TENSOR.INDEXER_ATTN_K,
+        MODEL_TENSOR.INDEXER_ATTN_Q_B,
+        MODEL_TENSOR.HC_ATTN_FN,
+        MODEL_TENSOR.HC_ATTN_BASE,
+        MODEL_TENSOR.HC_ATTN_SCALE,
+        MODEL_TENSOR.HC_FFN_FN,
+        MODEL_TENSOR.HC_FFN_BASE,
+        MODEL_TENSOR.HC_FFN_SCALE,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+    ],
     MODEL_ARCH.SMOLLM3: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -5435,6 +5481,10 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
     MODEL_ARCH.DEEPSEEK32: [
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+    ],
+    MODEL_ARCH.HY_V4: [
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
