@@ -40,6 +40,9 @@ export { mcpStore } from './mcp/index.svelte';
 // MODELS
 export { modelsStore } from './models/index.svelte';
 
+// MODELS DISCOVER (HuggingFace browse state for the discover dialog)
+export { modelsDiscoverStore } from './models-discover/index.svelte';
+
 // SERVER
 export { serverStore } from './server.svelte';
 
