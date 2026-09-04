@@ -2,8 +2,8 @@
 	import { classify, labelFor } from './download-options.utils';
 	import ModelsDiscoverDetailsDownloadOptionsDownloadCommand from './ModelsDiscoverDetailsDownloadOptionsDownloadCommand.svelte';
 	import ModelsDiscoverDetailsDownloadOptionsRow from './ModelsDiscoverDetailsDownloadOptionsRow.svelte';
-	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';
-	import { SelectableFileKind } from '$lib/enums';
+	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
+	import { DownloadConfirmAction, SelectableFileKind } from '$lib/enums';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { BitDepthRow, DownloadEntryState, QuantOption, SelectableFile } from '$lib/types';
@@ -24,26 +24,25 @@
 	let { bitDepthRows, getDownloadState, modelId }: Props = $props();
 
 	// Destructive chip actions (delete a downloaded model, cancel a download) are
-	// confirmed here rather than inside each chip: one pair of dialogs owned by
-	// the options panel, keyed by the repo+tag the user acted on.
-	let pending: { action: 'cancel' | 'delete'; repoWithTag: string } | null = $state(null);
+	// confirmed here rather than inside each chip: a single shared dialog owned by
+	// the options panel, keyed by the repo+tag the user acted on, so one dialog is
+	// mounted for the whole panel instead of one per chip.
+	// The acted-on target is kept after closing so the copy stays rendered through
+	// the dialog's close transition.
+	let pending: { action: DownloadConfirmAction; repoWithTag: string } = $state({
+		action: DownloadConfirmAction.CANCEL,
+		repoWithTag: ''
+	});
+	let confirmOpen = $state(false);
 
 	function requestCancel(repoWithTag: string) {
-		pending = { action: 'cancel', repoWithTag };
+		pending = { action: DownloadConfirmAction.CANCEL, repoWithTag };
+		confirmOpen = true;
 	}
 
 	function requestDelete(repoWithTag: string) {
-		pending = { action: 'delete', repoWithTag };
-	}
-
-	function closePending() {
-		pending = null;
-	}
-
-	function confirmPending() {
-		if (pending) void modelsStore.status.cancelDownload(pending.repoWithTag);
-
-		pending = null;
+		pending = { action: DownloadConfirmAction.DELETE, repoWithTag };
+		confirmOpen = true;
 	}
 
 	function stateFor(repoWithTag: string, filePath: string, isSidecar: boolean): DownloadEntryState {
@@ -157,16 +156,9 @@
 	</section>
 {/if}
 
-{#if pending}
-	<DialogConfirmation
-		confirmText={pending.action === 'delete' ? 'Delete' : 'Cancel download'}
-		description={pending.action === 'delete'
-			? `This permanently removes ${modelsStore.toDisplayName(pending.repoWithTag)} from disk. You can download it again later.`
-			: `This stops the download of ${modelsStore.toDisplayName(pending.repoWithTag)} and removes the partial files. Pause it instead to keep the progress.`}
-		onCancel={closePending}
-		onConfirm={confirmPending}
-		open
-		title={pending.action === 'delete' ? 'Delete model' : 'Cancel download'}
-		variant="destructive"
-	/>
-{/if}
+<DialogConfirmDownload
+	action={pending.action}
+	onClose={() => (confirmOpen = false)}
+	open={confirmOpen}
+	repoWithTag={pending.repoWithTag}
+/>

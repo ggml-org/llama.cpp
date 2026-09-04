@@ -77,7 +77,7 @@ export {
 	SelectableFileKind
 } from './model.enums';
 
-export { DownloadStopRequest } from './model.enums';
+export { DownloadConfirmAction, DownloadStopRequest } from './model.enums';
 
 export { ServerRole, ServerModelStatus, ServerModelsSseEventType } from './server.enums';
 

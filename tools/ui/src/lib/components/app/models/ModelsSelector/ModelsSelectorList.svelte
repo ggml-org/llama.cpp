@@ -1,7 +1,9 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
 	import { ModelsSelectorOption } from '$lib/components/app';
+	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/navigation/utils';
+	import { DownloadConfirmAction } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 
 	interface Props {
@@ -27,6 +29,17 @@
 
 	/** In-flight / paused downloads, tracked by the status feed. */
 	let downloadEntries = $derived(modelsStore.status.downloadEntries());
+
+	// Cancel is confirmed once for the whole list rather than per download row, so
+	// a single dialog instance is mounted however many downloads are in flight.
+	// The target is kept while the dialog closes so its copy stays rendered.
+	let pendingCancel = $state('');
+	let cancelOpen = $state(false);
+
+	function requestCancel(repoWithTag: string) {
+		pendingCancel = repoWithTag;
+		cancelOpen = true;
+	}
 </script>
 
 {#snippet defaultOption(item: ModelItem, _hideOrgName: boolean)}
@@ -60,7 +73,7 @@
 	<p class={sectionHeaderClass}>Download in progress</p>
 
 	{#each downloadEntries as entry (entry.repoWithTag)}
-		<ModelsSelectorDownloadItem {entry} />
+		<ModelsSelectorDownloadItem {entry} onRequestCancel={requestCancel} />
 	{/each}
 {/if}
 
@@ -81,3 +94,10 @@
 		{/each}
 	{/each}
 {/if}
+
+<DialogConfirmDownload
+	action={DownloadConfirmAction.CANCEL}
+	onClose={() => (cancelOpen = false)}
+	open={cancelOpen}
+	repoWithTag={pendingCancel}
+/>
