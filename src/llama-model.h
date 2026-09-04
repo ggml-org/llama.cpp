@@ -710,6 +710,7 @@ struct llama_model {
     struct llama_meta_device_get_split_state_userdata get_split_state_ud;
 
     int64_t t_load_us  = 0;
+    int64_t t_tensor_load_us = 0;
     int64_t t_start_us = 0;
 
     explicit llama_model(const llama_model_params & params);

@@ -185,6 +185,7 @@ struct llama_context {
     //
 
     llama_perf_context_data perf_get_data() const;
+    double perf_get_tensor_load_ms() const;
     void perf_reset();
 
     llama_memory_breakdown memory_breakdown() const;
@@ -381,6 +382,7 @@ private:
     // perf
     mutable int64_t t_start_us  = 0;
     mutable int64_t t_load_us   = 0;
+    mutable int64_t t_tensor_load_us = 0;
     mutable int64_t t_p_eval_us = 0;
     mutable int64_t t_eval_us   = 0;
 
