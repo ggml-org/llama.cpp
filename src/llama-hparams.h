@@ -392,6 +392,9 @@ struct llama_hparams {
 
     uint32_t n_expert_used(uint32_t il = 0) const;
 
+    // return the maximum n_expert_used across all layers
+    uint32_t n_expert_used_max() const;
+
     uint32_t n_gqa(uint32_t il = 0) const;
 
     uint32_t n_rot(uint32_t il = 0) const;

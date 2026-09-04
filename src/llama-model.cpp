@@ -1254,10 +1254,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     }
 
     // models may route a different number of experts per layer, so validate the maximum
-    uint32_t n_expert_used_max = 0;
-    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
-        n_expert_used_max = std::max(n_expert_used_max, hparams.n_expert_used(il));
-    }
+    uint32_t n_expert_used_max = hparams.n_expert_used_max();
 
     GGML_ASSERT(hparams.n_expert <= LLAMA_MAX_EXPERTS);
     GGML_ASSERT(n_expert_used_max <= hparams.n_expert);
@@ -1509,10 +1506,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         // TODO: move to a separate function
         const auto tn = LLM_TN(arch);
 
-        const int64_t n_expert      = hparams.n_expert;
-        const int64_t n_expert_used = hparams.n_expert_used();
+        const int64_t n_expert = hparams.n_expert;
 
-        if (n_expert > 0 && n_expert_used == 0) {
+        if (n_expert > 0 && hparams.n_expert_used_max() == 0) {
             throw std::runtime_error("model has expert layers but no expert layers are used");
         }
 
