@@ -1594,7 +1594,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     else {
         input_shape = ov::PartialShape{get_shape(input)};
     }
-    if (dynamic_dim_index != -1 && m_model_is_splitted) {
+    if (dynamic_dim_index != -1) {
         input_shape[3 - dynamic_dim_index] = -1;
     }
     if (op->op == GGML_OP_SOFT_MAX && op->src[1] != nullptr && op->src[1]->op == GGML_OP_NONE &&
