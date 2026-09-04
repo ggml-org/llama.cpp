@@ -1,0 +1,102 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform parameter
+{
+    uint k;
+    uint rows;
+} p;
+
+layout(binding = 0, std430) readonly buffer A { float data_a[]; };
+layout(binding = 1, std430) writeonly buffer D { uint data_d[]; };
+layout(binding = 2, std430) writeonly buffer S { float data_s[]; };
+
+shared float values[256];
+shared float maxima[64];
+
+void transform_group(const uint row, const uint group) {
+    const uint tid = gl_LocalInvocationID.x;
+    const uint base_offset = row * p.k + group * 256;
+
+    [[unroll]]
+    for (uint i = 0; i < 4; ++i) {
+        const uint index = tid + i * 64;
+        values[index] = data_a[base_offset + index] * (1.0 / 16.0);
+    }
+    barrier();
+
+    [[unroll]]
+    for (uint stride = 1; stride < 256; stride *= 4) {
+        const uint base = (tid / stride) * 4 * stride + tid % stride;
+        const uint i0 = base;
+        const uint i1 = i0 + stride;
+        const uint i2 = i1 + stride;
+        const uint i3 = i2 + stride;
+        const float a = values[i0];
+        const float b = values[i1];
+        const float c = values[i2];
+        const float d = values[i3];
+        values[i0] =  a + b + c - d;
+        values[i1] =  a + b - c + d;
+        values[i2] =  a - b + c + d;
+        values[i3] = -a + b + c + d;
+        barrier();
+    }
+}
+
+uint quantize_value(const float value, const float inv_scale) {
+    const int quantized = clamp(int(roundEven(value * inv_scale)), -127, 127);
+    return uint(quantized) & 0xffu;
+}
+
+void quantize_row(const uint row) {
+    const uint tid = gl_LocalInvocationID.x;
+    const uint groups = p.k / 256;
+    float local_max = 0.0;
+
+    for (uint group = 0; group < groups; ++group) {
+        transform_group(row, group);
+        [[unroll]]
+        for (uint i = 0; i < 4; ++i) {
+            local_max = max(local_max, abs(values[tid + i * 64]));
+        }
+        barrier();
+    }
+
+    maxima[tid] = local_max;
+    barrier();
+    [[unroll]]
+    for (uint stride = 32; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            maxima[tid] = max(maxima[tid], maxima[tid + stride]);
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        data_s[row] = maxima[0] / 127.0;
+    }
+    barrier();
+
+    const float row_scale = maxima[0] / 127.0;
+    const float inv_scale = row_scale == 0.0 ? 0.0 : 1.0 / row_scale;
+    for (uint group = 0; group < groups; ++group) {
+        transform_group(row, group);
+        const uint index = tid * 4;
+        const uint packed = quantize_value(values[index], inv_scale)
+                          | (quantize_value(values[index + 1], inv_scale) << 8)
+                          | (quantize_value(values[index + 2], inv_scale) << 16)
+                          | (quantize_value(values[index + 3], inv_scale) << 24);
+        data_d[(row * p.k + group * 256) / 4 + tid] = packed;
+        barrier();
+    }
+}
+
+void main() {
+    for (uint row = gl_WorkGroupID.x; row < p.rows; row += gl_NumWorkGroups.x) {
+        quantize_row(row);
+    }
+}
