@@ -1,8 +1,8 @@
 <script lang="ts">
+	import ModelCapabilityIcons from '../../ModelCapabilityIcons.svelte';
 	import ModelsDiscoverAvatar from '../ModelsDiscoverAvatar.svelte';
 	import ModelsDiscoverDetailsMetadata from './ModelsDiscoverDetailsMetadata.svelte';
-	import { Download, ExternalLink, Heart, Image, Lightbulb, Wrench } from '@lucide/svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { Download, ExternalLink, Heart } from '@lucide/svelte';
 	import { ICON_CLASS_SM } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
@@ -44,45 +44,13 @@
 				<div class="flex items-center gap-2">
 					<h1 class="truncate text-lg font-semibold">{details.id ?? modelId}</h1>
 
-					{#if hasVision || hasTools || hasReasoning}
-						<div class="flex shrink-0 items-center gap-2.5 text-muted-foreground">
-							{#if hasVision}
-								<Tooltip.Root>
-									<Tooltip.Trigger>
-										<Image class="h-4 w-4" />
-									</Tooltip.Trigger>
-
-									<Tooltip.Content>
-										<p>Vision</p>
-									</Tooltip.Content>
-								</Tooltip.Root>
-							{/if}
-
-							{#if hasTools}
-								<Tooltip.Root>
-									<Tooltip.Trigger>
-										<Wrench class="h-4 w-4" />
-									</Tooltip.Trigger>
-
-									<Tooltip.Content>
-										<p>Tool use</p>
-									</Tooltip.Content>
-								</Tooltip.Root>
-							{/if}
-
-							{#if hasReasoning}
-								<Tooltip.Root>
-									<Tooltip.Trigger>
-										<Lightbulb class="h-4 w-4" />
-									</Tooltip.Trigger>
-
-									<Tooltip.Content>
-										<p>Reasoning</p>
-									</Tooltip.Content>
-								</Tooltip.Root>
-							{/if}
-						</div>
-					{/if}
+					<ModelCapabilityIcons
+						gapClass="gap-2"
+						iconSize="h-4 w-4"
+						modalities={{ audio: false, video: false, vision: hasVision }}
+						supportsThinking={hasReasoning}
+						supportsToolUse={hasTools}
+					/>
 				</div>
 
 				{#if baseModels.length}
