@@ -5,7 +5,6 @@
 		HF_MMPROJ_FILENAME_TOKEN,
 		HF_MODALITY_PIPELINE_TAGS,
 		isAuxSidecar,
-		MODEL_ID,
 		type ModelSidecar
 	} from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
@@ -13,7 +12,7 @@
 	import type { ModelsDiscoverSizeRange } from '$lib/stores/models-discover/index.svelte';
 	import type { HfModelInfo } from '$lib/types/huggingface';
 	import type { ModelModalities } from '$lib/types/models';
-	import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
+	import { detectThinkingSupport, detectToolUseSupport, orgOf } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
@@ -26,16 +25,14 @@
 
 	let { active = false, model, onSelect, showBaseModelAvatar = false }: Props = $props();
 
-	let org = $derived(model.id.split(MODEL_ID.ORG_SEPARATOR)[0] ?? model.id);
+	let org = $derived(orgOf(model.id));
 
 	// Org whose avatar is shown: the base model's org when showBaseModelAvatar
 	// (e.g. the Qwen logo for ggml-org/Qwen3.8-27B-GGUF), else the repo's org.
 	let avatarOrg = $derived.by(() => {
 		if (!showBaseModelAvatar) return org;
 
-		const base = HuggingFaceService.getBaseModels(model)[0];
-
-		return base?.split('/')[0] || org;
+		return orgOf(HuggingFaceService.getBaseModels(model)[0]) || org;
 	});
 
 	let contextLength = $derived(model.gguf?.context_length);

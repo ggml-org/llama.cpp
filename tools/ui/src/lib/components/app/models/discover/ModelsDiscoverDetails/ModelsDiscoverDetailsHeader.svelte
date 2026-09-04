@@ -6,6 +6,7 @@
 	import { ICON_CLASS_SM } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
+	import { orgOf } from '$lib/utils';
 
 	interface Props {
 		modelId: string;
@@ -23,8 +24,8 @@
 
 	// Avatar shows the base model's org (e.g. the Qwen logo for a ggml-org GGUF)
 	// with the quant org as a corner badge when they differ.
-	let repoOrg = $derived(details.id?.split('/')[0] ?? modelId.split('/')[0] ?? modelId);
-	let baseOrg = $derived(baseModels[0]?.split('/')[0]);
+	let repoOrg = $derived(orgOf(details.id) || orgOf(modelId));
+	let baseOrg = $derived(orgOf(baseModels[0]));
 	let avatarOrg = $derived(baseOrg || repoOrg);
 	let quantOrg = $derived(baseOrg && baseOrg !== repoOrg ? repoOrg : undefined);
 </script>

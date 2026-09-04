@@ -12,12 +12,12 @@
 		RotateCw
 	} from '@lucide/svelte';
 	import { ActionIcon, ModelId } from '$lib/components/app';
-	import { HF_BASE_MODEL_TAG_REGEX, ICON_CLASS_DEFAULT, PATH_SEPARATOR } from '$lib/constants';
+	import { HF_BASE_MODEL_TAG_REGEX, ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
-	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
+	import { modelLoadFraction, modelLoadProgressText, orgOf } from '$lib/utils';
 
 	interface Props {
 		option: ModelOption;
@@ -77,7 +77,7 @@
 			?.match(HF_BASE_MODEL_TAG_REGEX)?.[1] ?? null
 	);
 	let fetchedBaseModelOrg = $state<string | null>(null);
-	let baseModelOrg = $derived(tagBaseModel?.split(PATH_SEPARATOR)[0] ?? fetchedBaseModelOrg);
+	let baseModelOrg = $derived(orgOf(tagBaseModel) || fetchedBaseModelOrg);
 
 	$effect(() => {
 		fetchedBaseModelOrg = null;
