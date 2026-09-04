@@ -2166,8 +2166,6 @@ static void llama_null_log_callback(enum ggml_log_level level, const char * text
         fprintf(stderr, "%s", text);
         return;
     }
-    (void) level;
-    (void) text;
     (void) user_data;
 }
 
