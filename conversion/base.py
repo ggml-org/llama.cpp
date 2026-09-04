@@ -313,7 +313,7 @@ class ModelBase:
 
     def dequant_model(self):
         # If all quantized tensors were already handled (e.g. pure NVFP4), skip
-        if self._is_nvfp4 and not any(k.endswith((".weight_scale", ".weight_scale_inv", ".input_scale", ".k_scale", ".v_scale")) for k in self.model_tensors):
+        if self._is_nvfp4 and not any(k.endswith((".weight_scale", ".weight_scale_inv", ".input_scale", ".activation_scale", "_activation_scale", ".k_scale", ".v_scale")) for k in self.model_tensors):
             return
 
         tensors_to_remove: list[str] = []
@@ -570,7 +570,7 @@ class ModelBase:
                         tensors_to_remove.append(name)
                         if is_fp8_weight:
                             self._fp8_dequantized.add(weight_name)
-                    if name.endswith((".input_scale", ".k_scale", ".v_scale")):
+                    if name.endswith((".input_scale", ".activation_scale", "_activation_scale", ".k_scale", ".v_scale")):
                         tensors_to_remove.append(name)
             elif quant_method is not None:
                 raise NotImplementedError(f"Quant method is not yet supported: {quant_method!r}")
@@ -587,6 +587,7 @@ class ModelBase:
             return
 
         scale_tensors: dict[str, list[tuple[int, float]] | np.ndarray] = {}
+        input_scale_tensors: dict[str, list[tuple[int, float]] | np.ndarray] = {}
         consumed: list[str] = []
 
         for scale_name in list(self.model_tensors.keys()):
@@ -609,6 +610,22 @@ class ModelBase:
             if scale.numel() != 1:
                 continue
 
+            weight_prefix = weight_name.removesuffix(".weight")
+            # Transformers fine-grained FP8 uses activation_scale while ModelOpt uses input_scale.
+            # Ref: https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/models/mistral3.py#L357-L361
+            input_scale_name = next((name for name in (
+                weight_prefix + ".input_scale",
+                weight_prefix + ".activation_scale",
+                weight_prefix + "_activation_scale",
+                weight_prefix + ".qscale_act",
+            ) if name in self.model_tensors), None)
+            input_scale = None
+            if input_scale_name is not None:
+                input_scale = LazyTorchTensor.to_eager(self.model_tensors[input_scale_name]()).float().flatten()
+                if input_scale.numel() != 1:
+                    raise ValueError(f"FP8 input scale {input_scale_name!r} must be a scalar")
+                consumed.append(input_scale_name)
+
             self._fp8_e4m3_preserved.add(weight_name)
             consumed.append(scale_name)
 
@@ -623,14 +640,21 @@ class ModelBase:
                 entries = scale_tensors.setdefault(target_name, [])
                 assert isinstance(entries, list)
                 cast(list[tuple[int, float]], entries).append((expert_id, float(scale[0])))
+                if input_scale is not None:
+                    target_name = new_name.replace(".weight", ".input_scale")
+                    entries = input_scale_tensors.setdefault(target_name, [])
+                    assert isinstance(entries, list)
+                    cast(list[tuple[int, float]], entries).append((expert_id, float(input_scale[0])))
             else:
                 new_name = self.map_tensor_name(weight_name)
                 scale_tensors[new_name.replace(".weight", ".scale")] = scale.numpy()
+                if input_scale is not None:
+                    input_scale_tensors[new_name.replace(".weight", ".input_scale")] = input_scale.numpy()
 
         for name in consumed:
             self.model_tensors.pop(name, None)
 
-        for name, values in scale_tensors.items():
+        for name, values in chain(scale_tensors.items(), input_scale_tensors.items()):
             if isinstance(values, list):
                 values.sort(key=lambda item: item[0])
                 scale = np.array([item[1] for item in values], dtype=np.float32)
