@@ -80,6 +80,24 @@ static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
+static const llm_fused_op_probe llm_fused_op_xc4_hc_pre_probe = {
+    /*.op               =*/ LLM_FUSED_OP_XC4_HC_PRE,
+    /*.name             =*/ "fused XingChen4 HC pre",
+    /*.n_tokens_per_seq =*/ 1,
+};
+
+static const llm_fused_op_probe llm_fused_op_xc4_hc_comb_probe = {
+    /*.op               =*/ LLM_FUSED_OP_XC4_HC_COMB,
+    /*.name             =*/ "fused XingChen4 HC comb",
+    /*.n_tokens_per_seq =*/ 1,
+};
+
+static const llm_fused_op_probe llm_fused_op_xc4_hc_post_probe = {
+    /*.op               =*/ LLM_FUSED_OP_XC4_HC_POST,
+    /*.name             =*/ "fused XingChen4 HC post",
+    /*.n_tokens_per_seq =*/ 1,
+};
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -240,6 +258,11 @@ llama_context::llama_context(
     cparams.fused_dsv4_hc_comb = true;
     cparams.fused_dsv4_hc_post = true;
     cparams.auto_fhc           = true;
+
+    cparams.fused_xc4_hc_pre  = true;
+    cparams.fused_xc4_hc_comb = true;
+    cparams.fused_xc4_hc_post = true;
+    cparams.auto_fxc4         = true;
 
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
@@ -576,6 +599,16 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         resolve(llm_fused_op_dsv4_hc_comb_probe, cparams.fused_dsv4_hc_comb);
         resolve(llm_fused_op_dsv4_hc_post_probe, cparams.fused_dsv4_hc_post);
         cparams.auto_fhc = false;
+    }
+
+    // XingChen4 HC fused ops share the same auto-disable machinery; gate them on
+    // a dedicated auto flag so probing can be resolved independently.
+    if (cparams.auto_fxc4) {
+        LLAMA_LOG_INFO("%s: resolving fused XingChen4 HC support:\n", func);
+        resolve(llm_fused_op_xc4_hc_pre_probe,  cparams.fused_xc4_hc_pre);
+        resolve(llm_fused_op_xc4_hc_comb_probe, cparams.fused_xc4_hc_comb);
+        resolve(llm_fused_op_xc4_hc_post_probe, cparams.fused_xc4_hc_post);
+        cparams.auto_fxc4 = false;
     }
 }
 
@@ -2314,6 +2347,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         model.arch == LLM_ARCH_QWEN35MOE ||
         model.arch == LLM_ARCH_QWEN4EXP ||
         model.arch == LLM_ARCH_DEEPSEEK4 ||
+        model.arch == LLM_ARCH_XINGCHEN4 ||
         (model.arch == LLM_ARCH_DFLASH && model.hparams.dsv4_hc_mult > 0) ||
         model.arch == LLM_ARCH_NANBEIGE ||
         model.arch == LLM_ARCH_MINIMAX_01 ||
