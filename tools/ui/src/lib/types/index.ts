@@ -14,7 +14,10 @@ export type {
 	ApiModelLoadStage,
 	ApiModelsSseProgress,
 	ApiModelsSseData,
+	ApiModelsSseDownloadProgressData,
 	ApiModelsSseEvent,
+	ApiModelsDownloadRequest,
+	ApiModelsDownloadResponse,
 	ApiModelDetails,
 	ApiLlamaCppServerProps,
 	ApiChatCompletionRequest,
@@ -102,6 +105,8 @@ export type {
 	ModelCapabilities,
 	ModelModalities,
 	ModelOption,
+	ModelDownloadFileProgress,
+	ModelDownloadProgress,
 	ModelLoadProgress,
 	ModalityCapabilities
 } from './models';
