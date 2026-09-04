@@ -36,7 +36,7 @@ void llama_model_hy_v4::load_arch_hparams(llama_model_loader & ml) {
 
     // routed-expert SwiGLU logits clamp (shared/dense experts are NOT clamped, so
     // swiglu_clamp_shexp is intentionally left at its 0 default)
-    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP, hparams.swiglu_clamp_exp, hparams.n_layer(), false);
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP, hparams.swiglu_clamp_exp, hparams.n_layer_all, false);
 
     ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT,     hparams.dsv4_hc_mult);
     ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,   hparams.dsv4_hc_eps);
