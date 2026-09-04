@@ -936,20 +936,27 @@ static void llama_grammar_advance_stack(
     }
 }
 
+static llama_grammar_candidates llama_grammar_reject_candidates_for_stack_impl(
+        const llama_grammar_rules      & rules,
+        const llama_grammar_stack      & stack,
+        const llama_grammar_candidates & candidates,
+        decltype(llama_grammar::memo_cache) & memo_cache);
+
 static llama_grammar_candidates llama_grammar_reject_candidates(
         const llama_grammar_rules      & rules,
         const llama_grammar_stacks     & stacks,
-        const llama_grammar_candidates & candidates) {
+        const llama_grammar_candidates & candidates,
+        decltype(llama_grammar::memo_cache) & memo_cache) {
     GGML_ASSERT(!stacks.empty()); // REVIEW
 
     if (candidates.empty()) {
         return {};
     }
 
-    auto rejects = llama_grammar_reject_candidates_for_stack(rules, stacks.front(), candidates);
+    auto rejects = llama_grammar_reject_candidates_for_stack_impl(rules, stacks.front(), candidates, memo_cache);
 
     for (size_t i = 1, size = stacks.size(); i < size; ++i) {
-        rejects = llama_grammar_reject_candidates_for_stack(rules, stacks[i], rejects);
+        rejects = llama_grammar_reject_candidates_for_stack_impl(rules, stacks[i], rejects, memo_cache);
     }
 
     return rejects;
@@ -1053,10 +1060,23 @@ void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr) {
     grammar->stacks = std::move(stacks_new);
 }
 
+// Public 3-arg wrapper — signature unchanged for test compatibility.
+// Creates a local memo cache (not shared across calls) and delegates to the impl.
 llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
         const llama_grammar_rules      & rules,
         const llama_grammar_stack      & stack,
         const llama_grammar_candidates & candidates) {
+    decltype(llama_grammar::memo_cache) local_memo;
+    return llama_grammar_reject_candidates_for_stack_impl(rules, stack, candidates, local_memo);
+}
+
+static constexpr size_t MEMO_CANDIDATES_MAX = 8;
+
+static llama_grammar_candidates llama_grammar_reject_candidates_for_stack_impl(
+        const llama_grammar_rules      & rules,
+        const llama_grammar_stack      & stack,
+        const llama_grammar_candidates & candidates,
+        decltype(llama_grammar::memo_cache) & memo_cache) {
 
     llama_grammar_candidates rejects;
     rejects.reserve(candidates.size());
@@ -1085,7 +1105,24 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
                 rejects.push_back(tok);
             }
         }
+        // Store result here so TOKEN/TOKEN_NOT branches are cached — placing the
+        // store after early returns avoids the koboldcpp bug where an empty vector
+        // was left in the cache when the early return fired before writing.
+        if (candidates.size() <= MEMO_CANDIDATES_MAX) {
+            memo_cache[stack][candidates] = rejects;
+        }
         return rejects;
+    }
+
+    // Cache lookup — after the two early returns, before next_candidates construction.
+    if (candidates.size() <= MEMO_CANDIDATES_MAX) {
+        auto stack_it = memo_cache.find(stack);
+        if (stack_it != memo_cache.end()) {
+            auto cand_it = stack_it->second.find(candidates);
+            if (cand_it != stack_it->second.end()) {
+                return cand_it->second;
+            }
+        }
     }
 
     llama_grammar_candidates next_candidates;
@@ -1116,9 +1153,14 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     llama_grammar_stacks next_stacks;
     llama_grammar_advance_stack(rules, stack_after, next_stacks);
 
-    auto next_rejects = llama_grammar_reject_candidates(rules, next_stacks, next_candidates);
+    auto next_rejects = llama_grammar_reject_candidates(rules, next_stacks, next_candidates, memo_cache);
     for (const auto & tok : next_rejects) {
         rejects.push_back({ tok.index, tok.code_points - 1, tok.partial_utf8, tok.id });
+    }
+
+    // Store in cache before returning.
+    if (candidates.size() <= MEMO_CANDIDATES_MAX) {
+        memo_cache[stack][candidates] = rejects;
     }
 
     return rejects;
@@ -1388,7 +1430,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         }
     }
 
-    const auto rejects = llama_grammar_reject_candidates(grammar.rules, grammar.stacks, candidates_grammar);
+    const auto rejects = llama_grammar_reject_candidates(grammar.rules, grammar.stacks, candidates_grammar, grammar.memo_cache);
     for (const auto & reject : rejects) {
         cur_p->data[reject.index].logit = -INFINITY;
     }

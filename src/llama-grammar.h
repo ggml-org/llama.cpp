@@ -2,9 +2,11 @@
 
 #include "llama.h"
 
+#include <functional>
 #include <map>
 #include <regex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct llama_vocab;
@@ -123,6 +125,65 @@ struct llama_grammar_trigger_pattern {
     size_t find(const std::string & input) const;
 };
 
+// Helpers for memoizing llama_grammar_reject_candidates_for_stack.
+// Keys use content-based equality — stack pointers are stable within a grammar
+// lifetime; candidate content is compared field-by-field (NOT memcmp, which
+// would include the code_points pointer value and padding bytes).
+struct llama_grammar_stack_hash {
+    size_t operator()(const llama_grammar_stack & stack) const noexcept {
+        size_t h = 0;
+        for (const auto * p : stack) {
+            h ^= std::hash<const void *>{}(p) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        }
+        return h;
+    }
+};
+
+struct llama_grammar_stack_eq {
+    bool operator()(const llama_grammar_stack & a, const llama_grammar_stack & b) const noexcept {
+        return a == b;
+    }
+};
+
+struct llama_grammar_candidates_hash {
+    size_t operator()(const llama_grammar_candidates & cands) const noexcept {
+        size_t h = cands.size();
+        for (const auto & c : cands) {
+            h ^= std::hash<size_t>{}(c.index)                 + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<llama_token>{}(c.id)               + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<uint32_t>{}(c.partial_utf8.value)  + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<int>{}(c.partial_utf8.n_remain)    + 0x9e3779b9 + (h << 6) + (h >> 2);
+            // hash the actual decoded code-point content, not the pointer
+            for (const uint32_t * cp = c.code_points; *cp != 0; ++cp) {
+                h ^= std::hash<uint32_t>{}(*cp) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            }
+        }
+        return h;
+    }
+};
+
+struct llama_grammar_candidates_eq {
+    bool operator()(const llama_grammar_candidates & a, const llama_grammar_candidates & b) const noexcept {
+        if (a.size() != b.size()) { return false; }
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (a[i].index != b[i].index || a[i].id != b[i].id ||
+                a[i].partial_utf8.value   != b[i].partial_utf8.value ||
+                a[i].partial_utf8.n_remain != b[i].partial_utf8.n_remain) {
+                return false;
+            }
+            // compare code-point content, not the pointer
+            const uint32_t * pa = a[i].code_points;
+            const uint32_t * pb = b[i].code_points;
+            while (*pa != 0 && *pb != 0) {
+                if (*pa != *pb) { return false; }
+                ++pa; ++pb;
+            }
+            if (*pa != *pb) { return false; }
+        }
+        return true;
+    }
+};
+
 struct llama_grammar {
     // maintain a list of llama_tokens and their positions in the trigger_buffer
     using token_pos = std::pair<llama_token, std::pair<size_t, size_t>>;
@@ -147,6 +208,15 @@ struct llama_grammar {
     std::vector<llama_grammar_trigger_pattern>
                              trigger_patterns;         // Regular expressions that trigger a lazy grammar. Must be a full match of the entire generated
                                                        // string, and the grammar will be given the string from the first match group onwards.
+
+    // Memoization cache for llama_grammar_reject_candidates_for_stack.
+    // Keyed on (stack, candidates) with content-based hash/equality.
+    // mutable because llama_grammar_apply_impl takes const llama_grammar &.
+    mutable std::unordered_map<
+        llama_grammar_stack,
+        std::unordered_map<llama_grammar_candidates, llama_grammar_candidates,
+                           llama_grammar_candidates_hash, llama_grammar_candidates_eq>,
+        llama_grammar_stack_hash, llama_grammar_stack_eq> memo_cache;
 
 };
 
