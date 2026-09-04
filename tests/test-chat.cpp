@@ -1453,6 +1453,8 @@ class peg_tester {
 
     const std::string & template_path() const { return template_path_; }
 
+    common_chat_templates * templates() const { return tmpls_.get(); }
+
     peg_test_builder test(const std::string & input);
 };
 
@@ -4331,6 +4333,81 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reconstruction()
             .run();
 
+        static const common_chat_tool terminal_tool{
+            "terminal", "Run or interact with a terminal command",
+            R"({"type":"object","properties":{"security_risk":{"type":"string"},"summary":{"type":"string"},"command":{"type":"string"},"is_input":{"type":"boolean"},"timeout":{"type":"integer"},"reset":{"type":"boolean"}},"required":["command","security_risk"]})",
+        };
+        static const common_chat_tool think_tool{
+            "think", "Record reasoning",
+            R"({"type":"object","properties":{"summary":{"type":"string"},"thought":{"type":"string"}},"required":["thought"]})",
+        };
+
+        // OpenAI tool arguments are object members, so required arguments
+        // may arrive in any order (models do not always adhere to the order
+        // provided); optional arguments follow in a trailing run.
+        tst.test(
+               "<tool_call>terminal"
+               "<arg_key>security_risk</arg_key><arg_value>LOW</arg_value>"
+               "<arg_key>command</arg_key><arg_value>C-c</arg_value>"
+               "<arg_key>is_input</arg_key><arg_value>true</arg_value>"
+               "</tool_call>")
+            .enable_thinking(false)
+            .tools({ terminal_tool, think_tool })
+            .expect_tool_calls({
+                { "terminal", R"({"security_risk":"LOW","command":"C-c","is_input":true})", {} },
+            })
+            .run();
+
+        // Flexible ordering must not weaken the schema's presence and
+        // uniqueness rules. permute() requires every required argument exactly
+        // once, so the grammar itself rejects a call that omits or duplicates a
+        // required argument -- no bespoke mapper-side "missing/duplicate
+        // argument" error, matching the generic JSON tool path.
+        common_chat_templates_inputs validation_inputs;
+        validation_inputs.messages = { message_user };
+        validation_inputs.tools = { terminal_tool, think_tool };
+        validation_inputs.enable_thinking = false;
+        auto validation_parser = make_peg_parser(tst.templates(), validation_inputs, detailed_debug);
+
+        // Omitting a required argument does not match the tool grammar.
+        try {
+            validation_parser.parse(
+                "<tool_call>terminal"
+                "<arg_key>command</arg_key><arg_value>pwd</arg_value>"
+                "</tool_call>", false);
+            throw std::runtime_error("Expected missing required tagged argument to be rejected by the grammar");
+        } catch (const std::exception & e) {
+            assert_contains(e.what(), "does not match the expected");
+        }
+
+        // Duplicating a required argument does not match either: permute()
+        // consumes each required argument exactly once and the surplus copy has
+        // no slot in the grammar.
+        try {
+            validation_parser.parse(
+                "<tool_call>think"
+                "<arg_key>thought</arg_key><arg_value>one</arg_value>"
+                "<arg_key>thought</arg_key><arg_value>two</arg_value>"
+                "</tool_call>", false);
+            throw std::runtime_error("Expected duplicate required tagged argument to be rejected by the grammar");
+        } catch (const std::exception & e) {
+            assert_contains(e.what(), "does not match the expected");
+        }
+
+        // Optional arguments are a trailing run: an optional argument before a
+        // required one does not match the grammar (ordering of required +
+        // optional is kept, as in the generic JSON tool path).
+        try {
+            validation_parser.parse(
+                "<tool_call>think"
+                "<arg_key>summary</arg_key><arg_value>Inspect the failure</arg_value>"
+                "<arg_key>thought</arg_key><arg_value>Check the process state.</arg_value>"
+                "</tool_call>", false);
+            throw std::runtime_error("Expected optional-before-required tagged argument to be rejected by the grammar");
+        } catch (const std::exception & e) {
+            assert_contains(e.what(), "does not match the expected");
+        }
+
         // Tool call with reasoning (forced-open mode)
         tst.test(
                "I'm\nthinking</think>"
@@ -4442,7 +4519,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 "Thinking.\n"
                 "</think>"
                 "<tool_call>get_weather"
-                "<arg_key>city</arg_key><arg_value>Tokyo</arg_value>"
+                "<arg_key>country</arg_key><arg_value>Japan</arg_value>"
                 "</tool_call>\n";
 
             bool got_runtime_error = false;
