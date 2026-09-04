@@ -5,7 +5,7 @@
 		ModelsDiscoverListSearch
 	} from '$lib/components/app/models/discover';
 	import { HuggingFaceService } from '$lib/services';
-	import { modelsHubStore } from '$lib/stores';
+	import { modelsDiscoverStore } from '$lib/stores';
 	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types';
 
 	let selectedId = $state<string | null>(null);
@@ -21,13 +21,13 @@
 
 	// Load the sidebar list on mount (the component is mounted when the dialog opens).
 	$effect(() => {
-		void modelsHubStore.fetch();
-		void modelsHubStore.search('');
+		void modelsDiscoverStore.fetch();
+		void modelsDiscoverStore.search('');
 	});
 
 	// Auto-select the first model.
 	$effect(() => {
-		const first = modelsHubStore.firstModel;
+		const first = modelsDiscoverStore.firstModel;
 
 		if (!selectedId && first) {
 			selectedId = first.id;
@@ -40,7 +40,7 @@
 		if (searchTimeout) clearTimeout(searchTimeout);
 
 		searchTimeout = setTimeout(() => {
-			void modelsHubStore.search(value);
+			void modelsDiscoverStore.search(value);
 		}, 300);
 	}
 
@@ -101,15 +101,15 @@
 	<!-- One list instance, so the rows keep their state across search round trips;
 		 skeleton rows replace them while the initial catalog or a query loads. -->
 	<div>
-		{#if modelsHubStore.error}
-			<p class="p-4 text-sm text-destructive">{modelsHubStore.error}</p>
-		{:else if !modelsHubStore.loading && !modelsHubStore.searching && modelsHubStore.models.length === 0}
+		{#if modelsDiscoverStore.error}
+			<p class="p-4 text-sm text-destructive">{modelsDiscoverStore.error}</p>
+		{:else if !modelsDiscoverStore.loading && !modelsDiscoverStore.searching && modelsDiscoverStore.models.length === 0}
 			<p class="p-4 text-sm text-muted-foreground">No models found</p>
 		{:else}
 			<ModelsDiscoverList
 				activeId={selectedId}
-				loading={modelsHubStore.loading || modelsHubStore.searching}
-				models={modelsHubStore.models}
+				loading={modelsDiscoverStore.loading || modelsDiscoverStore.searching}
+				models={modelsDiscoverStore.models}
 				onSelect={(id) => (selectedId = id)}
 				showBaseModelAvatar
 			/>

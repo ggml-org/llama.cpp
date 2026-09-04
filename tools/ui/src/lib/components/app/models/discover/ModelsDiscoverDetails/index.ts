@@ -2,7 +2,7 @@
  *
  * MODELS DISCOVER — DETAILS
  *
- * The right-hand detail pane of the hub: header (avatar, name, stats, metadata
+ * The right-hand detail pane of the discover view: header (avatar, name, stats, metadata
  * chips, capability badges), the download options area and the model-card README.
  *
  */

@@ -4,7 +4,7 @@
 	import DialogModelsDiscover from '$lib/components/app/dialogs/DialogModelsDiscover.svelte';
 	import DownloadProgressBar from '$lib/components/app/models/discover/DownloadProgressBar.svelte';
 	import ModelsDiscover from '$lib/components/app/models/discover/ModelsDiscover.svelte';
-	import { modelsHubStore } from '$lib/stores';
+	import { modelsDiscoverStore } from '$lib/stores';
 
 	const { Story } = defineMeta({
 		tags: ['autodocs'],
@@ -12,9 +12,9 @@
 	});
 
 	// Wire the hub store singleton with fixtures so the container renders data.
-	modelsHubStore.models = mockListModels;
-	modelsHubStore.loading = false;
-	modelsHubStore.error = null;
+	modelsDiscoverStore.models = mockListModels;
+	modelsDiscoverStore.loading = false;
+	modelsDiscoverStore.error = null;
 </script>
 
 <Story name="Progress bar">

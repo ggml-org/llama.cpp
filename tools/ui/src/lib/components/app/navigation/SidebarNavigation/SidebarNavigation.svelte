@@ -94,7 +94,7 @@
 
 	let renameDialogOpen = $state(false);
 	let settingsDialogOpen = $state(false);
-	let modelsHubOpen = $state(false);
+	let modelsDiscoverOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
@@ -391,7 +391,7 @@
 				bind:searchQuery
 				class="px-2"
 				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
-				onDiscoverModelsClick={() => (modelsHubOpen = true)}
+				onDiscoverModelsClick={() => (modelsDiscoverOpen = true)}
 				onNewChat={() => {
 					if (deviceStore.isMobile) {
 						scheduleMobileCollapse();
@@ -455,7 +455,7 @@
 
 <DialogSettingsChat bind:open={settingsDialogOpen} />
 
-<DialogModelsDiscover bind:open={modelsHubOpen} />
+<DialogModelsDiscover bind:open={modelsDiscoverOpen} />
 
 <style>
 	aside {

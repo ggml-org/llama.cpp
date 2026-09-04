@@ -2,7 +2,7 @@
 	import ModelsDiscoverChatTemplateDialog from './ModelsDiscoverChatTemplateDialog.svelte';
 	import ModelsDiscoverDetailsMetadataItem from './ModelsDiscoverDetailsMetadataItem.svelte';
 	import { MessageSquareCode } from '@lucide/svelte';
-	import { modelsHubStore } from '$lib/stores';
+	import { modelsDiscoverStore } from '$lib/stores';
 	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
 	import { formatParameters } from '$lib/utils';
 
@@ -18,7 +18,7 @@
 
 	// Catalog family description when curated, else the HF card description.
 	let description = $derived(
-		modelsHubStore.descriptionFor(modelId) ?? details.cardData?.description
+		modelsDiscoverStore.descriptionFor(modelId) ?? details.cardData?.description
 	);
 
 	let chatTemplateOpen = $state(false);

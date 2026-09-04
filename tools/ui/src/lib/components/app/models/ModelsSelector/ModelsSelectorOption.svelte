@@ -65,7 +65,7 @@
 	let loadTitle = $derived(modelLoadProgressText(loadProgress));
 	let modalities = $derived(option.modalities);
 	// Avatar: with showBaseModelAvatar the original base model's org is the main
-	// image and the repo (quantizer) org the corner badge, as in the models hub
+	// image and the repo (quantizer) org the corner badge, as in the discover
 	// list. Loaded models usually carry the `base_model` tag on the option; GGUF
 	// repos only known to HF are resolved lazily via the cached getBaseModel
 	// lookup.

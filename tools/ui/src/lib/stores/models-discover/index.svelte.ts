@@ -1,8 +1,8 @@
 /**
- * modelsHubStore - Model Hub browse state
+ * modelsDiscoverStore - Models Discover browse state
  *
- * Owns the HuggingFace GGUF model list shown in the hub sidebar
- * (DialogModelsDiscover). The hub has no "nothing selected" screen: it always opens
+ * Owns the HuggingFace GGUF model list shown in the discover sidebar
+ * (DialogModelsDiscover). The discover view has no "nothing selected" screen: it always opens
  * a model, so `firstModel` drives the initial selection. By default the list
  * shows a curated set of GGUF models in catalog order; search replaces the list
  * with matching models across all of HuggingFace. Both paths fetch the same
@@ -22,15 +22,15 @@ import type {
 import { SvelteMap } from 'svelte/reactivity';
 
 /** Min/max GGUF file size (bytes) across the quants of one repo. */
-export interface ModelsHubSizeRange {
+export interface ModelsDiscoverSizeRange {
 	max: number;
 	min: number;
 }
 
-class ModelsHubStore {
+class ModelsDiscoverStore {
 	error = $state<string | null>(null);
 	models = $state<HfModelInfo[]>([]);
-	/** First model in the list - the hub auto-opens this one. */
+	/** First model in the list - discover auto-opens this one. */
 	firstModel = $derived(this.models[0] ?? null);
 
 	loading = $state(false);
@@ -43,18 +43,18 @@ class ModelsHubStore {
 
 	private catalog: HfCatalogEntry[] = [];
 	/** Repo id -> size range, for catalog rows and lazily measured search rows. */
-	private catalogSizeRanges = new SvelteMap<string, ModelsHubSizeRange>();
+	private catalogSizeRanges = new SvelteMap<string, ModelsDiscoverSizeRange>();
 	private defaultModels: HfModelInfo[] = [];
 	private fetched = false;
 	private searchRequestId = 0;
 	/** In-flight `sizeRange()` lookups, keyed by repo id. */
-	private sizeRangePending = new Map<string, Promise<ModelsHubSizeRange | undefined>>();
+	private sizeRangePending = new Map<string, Promise<ModelsDiscoverSizeRange | undefined>>();
 
 	/**
 	 * Cached size range for a repo, without measuring: the synchronous part of
 	 * `sizeRange()`, for rendering a row before its measurement resolves.
 	 */
-	cachedSizeRangeFor(modelId: string): ModelsHubSizeRange | undefined {
+	cachedSizeRangeFor(modelId: string): ModelsDiscoverSizeRange | undefined {
 		return this.catalogSizeRanges.get(modelId);
 	}
 
@@ -164,7 +164,7 @@ class ModelsHubStore {
 	 * repo whose tree came back empty. Fetches the file tree once per repo and
 	 * caches it, so remounting a row (scrolling, searching back) is free.
 	 */
-	sizeRange(modelId: string): Promise<ModelsHubSizeRange | undefined> {
+	sizeRange(modelId: string): Promise<ModelsDiscoverSizeRange | undefined> {
 		const cached = this.catalogSizeRanges.get(modelId);
 
 		if (cached) return Promise.resolve(cached);
@@ -242,7 +242,7 @@ class ModelsHubStore {
 	 * model fits within the range. Falls back to the catalog `size` / `sizeBytes`
 	 * strings when the tree yielded nothing (partial fetch, sharded-only repo).
 	 */
-	private sizeRangeFor(build: HfCatalogBuild, tree: HfModelSibling[]): ModelsHubSizeRange {
+	private sizeRangeFor(build: HfCatalogBuild, tree: HfModelSibling[]): ModelsDiscoverSizeRange {
 		const quantSizes = this.quantSizesOf(tree);
 
 		if (quantSizes.length === 0) {
@@ -271,7 +271,7 @@ class ModelsHubStore {
 	 * Size range across the main-model quants of a file tree, draft sidecars
 	 * excluded (they only widen the range when a row advertises them).
 	 */
-	private sizeRangeOfMainQuants(tree: HfModelSibling[]): ModelsHubSizeRange | undefined {
+	private sizeRangeOfMainQuants(tree: HfModelSibling[]): ModelsDiscoverSizeRange | undefined {
 		const sizes = this.quantSizesOf(tree);
 
 		if (sizes.length === 0) return undefined;
@@ -280,4 +280,4 @@ class ModelsHubStore {
 	}
 }
 
-export const modelsHubStore = new ModelsHubStore();
+export const modelsDiscoverStore = new ModelsDiscoverStore();

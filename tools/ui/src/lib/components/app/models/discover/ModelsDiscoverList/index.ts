@@ -2,7 +2,7 @@
  *
  * MODELS DISCOVER — LIST
  *
- * The hub's sidebar column: a debounced search field above a navigable list of
+ * The discover sidebar column: a debounced search field above a navigable list of
  * HuggingFace GGUF models, with skeleton rows while loading.
  *
  */
@@ -10,8 +10,8 @@
 /**
  * **ModelsDiscoverList** - Sidebar model list
  *
- * Renders the hub's model list as a navigable column. Each row links to the
- * model's detail route and highlights the active one.
+ * Renders the discover model list as a navigable column. Each row links to the
+ * model's detail and highlights the active one.
  */
 export { default as ModelsDiscoverList } from './ModelsDiscoverList.svelte';
 
@@ -25,7 +25,7 @@ export { default as ModelsDiscoverListSearch } from './ModelsDiscoverListSearch.
 /**
  * **ModelsDiscoverListItem** - Single sidebar row
  *
- * One model entry in the sidebar list. Links to `/models-hub/[org]/[model]`.
+ * One model entry in the discover sidebar list, selectable via `onSelect`.
  */
 export { default as ModelsDiscoverListItem } from './ModelsDiscoverListItem.svelte';
 

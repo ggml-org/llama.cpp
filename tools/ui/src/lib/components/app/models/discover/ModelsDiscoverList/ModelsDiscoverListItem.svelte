@@ -9,8 +9,8 @@
 		type ModelSidecar
 	} from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
-	import { modelsHubStore } from '$lib/stores';
-	import type { ModelsHubSizeRange } from '$lib/stores/models-hub/index.svelte';
+	import { modelsDiscoverStore } from '$lib/stores';
+	import type { ModelsDiscoverSizeRange } from '$lib/stores/models-discover/index.svelte';
 	import type { HfModelInfo } from '$lib/types/huggingface';
 	import type { ModelModalities } from '$lib/types/models';
 	import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
@@ -79,17 +79,17 @@
 	// Min/max size across the repo's quants, draft sidecars included. The store
 	// has catalog rows covered already; any other row (a search hit) measures
 	// its repo once here and the result is cached per repo.
-	let measuredSize = $state<ModelsHubSizeRange | null>(null);
-	let sizeRange = $derived(modelsHubStore.cachedSizeRangeFor(model.id) ?? measuredSize);
+	let measuredSize = $state<ModelsDiscoverSizeRange | null>(null);
+	let sizeRange = $derived(modelsDiscoverStore.cachedSizeRangeFor(model.id) ?? measuredSize);
 
 	$effect(() => {
 		const id = model.id;
 
-		if (modelsHubStore.cachedSizeRangeFor(id)) return;
+		if (modelsDiscoverStore.cachedSizeRangeFor(id)) return;
 
 		let cancelled = false;
 
-		void modelsHubStore.sizeRange(id).then((range) => {
+		void modelsDiscoverStore.sizeRange(id).then((range) => {
 			if (!cancelled) measuredSize = range ?? null;
 		});
 
