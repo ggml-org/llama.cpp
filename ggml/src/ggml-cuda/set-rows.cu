@@ -168,7 +168,11 @@ static __global__ void k_set_rows(const src_t * src0_ptr,
     const src_t * src0_row = src0 + i01*s01 + i02*s02 + i03*s03;
     dst_t * dst_row_ptr    = dst + dst_row*s1 + i02*s2 + i03*s3;
 
-    dst_row_ptr[i00] = ggml_cuda_cast<dst_t>(src0_row[i00]);
+    if constexpr (std::is_same_v<dst_t, ggml_fp8_e4m3_t>) {
+        dst_row_ptr[i00].bits = ggml_cuda_fp32_to_f8_e4m3(src0_row[i00]);
+    } else {
+        dst_row_ptr[i00] = ggml_cuda_cast<dst_t>(src0_row[i00]);
+    }
 
     GGML_UNUSED(ne10);
     GGML_UNUSED(ne11);
@@ -250,6 +254,16 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
     } else if (dst->type == GGML_TYPE_BF16) {
         set_rows_cuda(
             src0_d, src1_d, (nv_bfloat16*)dst->data,
+            ne00, ne01, ne02, ne03,
+            ne10, ne11, ne12, ne13,
+            nb01, nb02, nb03,
+            nb10, nb11, nb12,
+            nb1, nb2, nb3,
+            stream
+        );
+    } else if (dst->type == GGML_TYPE_F8_E4M3) {
+        set_rows_cuda(
+            src0_d, src1_d, (ggml_fp8_e4m3_t *) dst->data,
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
             nb01, nb02, nb03,
