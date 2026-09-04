@@ -15,7 +15,6 @@
 #extension GL_KHR_shader_subgroup_vote : enable
 #extension GL_KHR_shader_subgroup_clustered : require
 #extension GL_KHR_shader_subgroup_ballot : require
-#extension GL_KHR_shader_subgroup_shuffle : enable
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_cooperative_matrix : enable
 
@@ -30,8 +29,6 @@ const uint32_t MatBr = 16;
 const uint32_t MatBc = 16;
 
 layout (constant_id = 16) const uint32_t TRANSPOSE_PV = 0;
-layout (constant_id = 17) const uint32_t WORK_PER_TILE = 0;
-const bool WPT_ENABLED = WORK_PER_TILE != 0;
 
 const uint32_t Q_HOIST_MAX_FRAGS = 8;
 
@@ -58,23 +55,21 @@ layout (binding = 1) readonly buffer K {FLOAT_TYPE data_k[];};
 layout (binding = 1) readonly buffer KV4 {FLOAT_TYPEV4 data_kv4[];};
 layout (binding = 2) readonly buffer V {FLOAT_TYPE data_v[];};
 layout (binding = 2) readonly buffer VV4 {FLOAT_TYPEV4 data_vv4[];};
-layout (binding = 2) readonly volatile buffer VV4_VOLATILE {FLOAT_TYPEV4 data_vv4_volatile[];};
 layout (binding = 3) readonly buffer M {float16_t data_m[];};
 
 shared float tmpsh[row_split];
 
 const uint32_t qstride = HSK_pad / 4 + 2;
-const uint32_t QF_LEN = Br * qstride;
-shared FLOAT_TYPEV4 Qf[WPT_ENABLED ? 1 : QF_LEN];
+shared FLOAT_TYPEV4 Qf[Br * qstride];
 
 const uint psh_stride = Br / 4 + 2;
-shared FLOAT_TYPEV4 Psh[(TRANSPOSE_PV != 0 || WPT_ENABLED) ? 1 : (Bc * psh_stride)];
+shared FLOAT_TYPEV4 Psh[(TRANSPOSE_PV != 0) ? 1 : (Bc * psh_stride)];
 
 const uint pt_stride = Bc + 8;
-shared FLOAT_TYPE PshT[(TRANSPOSE_PV != 0 || WPT_ENABLED) ? ((Br > MatBr ? Br : MatBr) * pt_stride) : 1];
+shared FLOAT_TYPE PshT[(TRANSPOSE_PV != 0) ? ((Br > MatBr ? Br : MatBr) * pt_stride) : 1];
 
 const uint32_t sfshstride = (HSK <= 128) ? (Bc / 4 + 7) : (Bc / 4 + 1);
-shared ACC_TYPEV4 sfsh[WPT_ENABLED ? 1 : (Br * sfshstride)];
+shared ACC_TYPEV4 sfsh[Br * sfshstride];
 
 float fa_clustered_max(float v, const uint32_t n) {
     if (n == 64) { return subgroupClusteredMax(v, 64); }
@@ -110,14 +105,10 @@ float fa_row_broadcast(float v, const uint32_t lane) {
 
 const uint32_t D_pad = HSK_pad > HSV_pad ? HSK_pad : HSV_pad;
 const uint32_t kvsh_stride = (SHMEM_STAGING != 0 ? D_pad : MatBr) / 4 + 2;
-const uint v_cols = WPT_ENABLED ? (HSV_pad / 4) : (MatBc / 4 * row_split);
+const uint v_cols = MatBc / 4 * row_split;
 const uint vsh_stride = v_cols;
 const uint32_t kvsh_len = (kvsh_stride >= vsh_stride) ? (Bc * kvsh_stride) : (Bc * vsh_stride);
-const uint32_t wpt_k_stride = HSK_pad / 4 + 2;
-const uint32_t wpt_k_len = Bc * wpt_k_stride;
-const uint32_t wpt_kv_len = (wpt_k_len >= kvsh_len) ? wpt_k_len : kvsh_len;
-const uint32_t wpt_union_len = (QF_LEN >= wpt_kv_len) ? QF_LEN : wpt_kv_len;
-shared FLOAT_TYPEV4 kvsh[(TRANSPOSE_PV != 0) ? 1 : (WPT_ENABLED ? wpt_union_len : kvsh_len)];
+shared FLOAT_TYPEV4 kvsh[(TRANSPOSE_PV != 0) ? 1 : kvsh_len];
 
 const uint32_t kvshT_stride = kvsh_stride * 4;
 const uint vt_rows   = MatBc * row_split;
@@ -128,7 +119,7 @@ shared FLOAT_TYPE kvshT[(TRANSPOSE_PV != 0) ? ((Bc * kvshT_stride >= vt_rows * v
 #define V_PERMUTED ((SHMEM_STAGING == 0) && (USE_DECODE_V || KV_bounds_check))
 
 const uint32_t osh_stride = row_split * MatBr / 4;
-shared O_TYPEV4 pvsh[(TRANSPOSE_PV != 0 || WPT_ENABLED) ? 1 : (MatBc * osh_stride)];
+shared O_TYPEV4 pvsh[(TRANSPOSE_PV != 0) ? 1 : (MatBc * osh_stride)];
 
 const uint32_t oshT_stride = row_split * MatBr;
 shared O_TYPE pvshT[(TRANSPOSE_PV != 0) ? (MatBc * oshT_stride) : 1];
@@ -136,193 +127,6 @@ shared O_TYPE pvshT[(TRANSPOSE_PV != 0) ? (MatBc * oshT_stride) : 1];
 const uint32_t num_hsv_tiles = (HSV + MatBc * row_split - 1) / (MatBc * row_split);
 
 shared ACC_TYPE slope[Br];
-
-void main_work_per_tile() {
-    const uint tid = gl_LocalInvocationIndex;
-    const uint lane = gl_SubgroupInvocationID;
-    const uint qbase = gl_SubgroupID * MatBr;
-    const uint KCHUNKS = Bc / MatBc;
-    const uint OTILES = HSV_pad / MatBc;
-    const uint VLOADS = (Bc * HSV_pad / 4 + WorkGroupSize - 1) / WorkGroupSize;
-
-    uint q_offset = gqa_iq1*p.nb01 + (iq2*p.nb02 + iq3*p.nb03) / 4;
-    [[unroll]] for (uint idx = 0; idx < Br * HSK / 4; idx += gl_WorkGroupSize.x) {
-        const uint d = (idx + tid) % (HSK / 4);
-        const uint r = (idx + tid) / (HSK / 4);
-        if (r < Br) {
-            FLOAT_TYPEV4 qv = FLOAT_TYPEV4(0.0);
-            if (i * Br + r < N) {
-                qv = FLOAT_TYPEV4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale);
-            }
-            kvsh[r * qstride + d] = qv;
-        }
-    }
-    barrier();
-
-    coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, MatBr, gl_MatrixUseB> QMats[HSK_pad / 16];
-    [[unroll]] for (uint d = 0; d < HSK_pad / 16; ++d) {
-        coopMatLoad(QMats[d], kvsh, qbase * qstride + d * 4, qstride,
-                    gl_CooperativeMatrixLayoutColumnMajor);
-    }
-    barrier();
-
-    coopmat<O_TYPE, gl_ScopeSubgroup, MatBr, MatBc, gl_MatrixUseAccumulator> OMats[OTILES];
-    [[unroll]] for (uint t = 0; t < OTILES; ++t) {
-        OMats[t] = coopmat<O_TYPE, gl_ScopeSubgroup, MatBr, MatBc, gl_MatrixUseAccumulator>(0);
-    }
-
-    const float NEG_FLT_MAX_OVER_2 = uintBitsToFloat(0xFEFFFFFF);
-    float Lf = 0.0;
-    float Mf = NEG_FLT_MAX_OVER_2;
-
-    const uint k_offset = (ik2*p.nb12 + ik3*p.nb13) / FaBlockBytesK;
-    const uint v_offset = (iv2*p.nb22 + iv3*p.nb23) / FaBlockBytesV;
-    const uint krow = tid / (MatBr / 4);
-    const uint kcv = tid % (MatBr / 4);
-
-    FLOAT_TYPEV4 KPrefetch[HSK_pad / 16];
-    if (start_j < end_j) {
-        [[unroll]] for (uint d = 0; d < HSK_pad / 16; ++d) {
-            FLOAT_TYPEV4 kv = FLOAT_TYPEV4(0.0);
-            if ((!KV_bounds_check || start_j * Bc + krow < KV) && d * 16 + kcv * 4 < HSK) {
-                kv = data_kv4[k_offset / 4 + (start_j * Bc + krow) * k_stride / 4 + d * 4 + kcv];
-            }
-            KPrefetch[d] = kv;
-        }
-    }
-
-    [[dont_unroll]]
-    for (uint j = start_j; j < end_j; ++j) {
-        coopmat<ACC_TYPE, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator> SMats[KCHUNKS];
-        [[unroll]] for (uint bc = 0; bc < KCHUNKS; ++bc) {
-            SMats[bc] = coopmat<ACC_TYPE, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator>(0);
-        }
-
-        coopmat<FLOAT_TYPE, gl_ScopeSubgroup, MatBc, 16, gl_MatrixUseA> KMat;
-        [[unroll]] for (uint d = 0; d < HSK_pad / 16; ++d) {
-            kvsh[krow * wpt_k_stride + d * 4 + kcv] = KPrefetch[d];
-        }
-        barrier();
-
-        [[unroll]] for (uint d = 0; d < HSK_pad / 16; ++d) {
-            [[unroll]] for (uint bc = 0; bc < KCHUNKS; ++bc) {
-                coopMatLoad(KMat, kvsh, bc * MatBc * wpt_k_stride + d * 4,
-                            wpt_k_stride, gl_CooperativeMatrixLayoutRowMajor);
-                SMats[bc] = coopMatMulAdd(KMat, QMats[d], SMats[bc]);
-            }
-        }
-
-        FLOAT_TYPEV4 VPrefetch[VLOADS];
-        [[unroll]] for (uint vi = 0; vi < VLOADS; ++vi) {
-            const uint idx = tid + vi * WorkGroupSize;
-            FLOAT_TYPEV4 vv = FLOAT_TYPEV4(0.0);
-            if (idx < Bc * HSV_pad / 4) {
-                const uint row = idx / (HSV_pad / 4);
-                const uint d = idx % (HSV_pad / 4);
-                if ((!KV_bounds_check || j * Bc + row < KV) && d * 4 < HSV) {
-                    const uint v_index = v_offset / 4 + (j * Bc + row) * v_stride / 4 + d;
-                    vv = data_vv4_volatile[v_index];
-                }
-            }
-            VPrefetch[vi] = vv;
-        }
-
-        float m = NEG_FLT_MAX_OVER_2;
-        [[unroll]] for (uint bc = 0; bc < KCHUNKS; ++bc) {
-            [[unroll]] for (uint e = 0; e < 8; ++e) {
-                const uint col = bc * MatBc + 2 * e + (lane >> 4);
-                const float x = (KV_bounds_check && j * Bc + col >= KV)
-                              ? NEG_FLT_MAX_OVER_2 : float(SMats[bc][e]);
-                m = max(m, x);
-            }
-        }
-        m = max(m, subgroupShuffleXor(m, 16)) + FATTN_KQ_MAX_OFFSET;
-
-        const float old_m = Mf;
-        Mf = max(m, old_m);
-        const float eMf = exp(old_m - Mf);
-        const bool rescale_output = !subgroupAll(eMf == 1.0);
-        float psum = 0.0;
-
-        if (rescale_output) {
-            [[unroll]] for (uint t = 0; t < OTILES; ++t) {
-                [[unroll]] for (uint e = 0; e < 8; ++e) {
-                    const uint row = 2 * e + (lane >> 4);
-                    OMats[t][e] *= O_TYPE(subgroupShuffle(eMf, row));
-                }
-            }
-        }
-
-        const uint qrow = lane & 15u;
-        [[unroll]] for (uint bc = 0; bc < KCHUNKS; ++bc) {
-            [[unroll]] for (uint e = 0; e < 8; ++e) {
-                const uint col = bc * MatBc + 2 * e + (lane >> 4);
-                FLOAT_TYPE pf = FLOAT_TYPE(0.0);
-                if (!KV_bounds_check || j * Bc + col < KV) {
-                    pf = FLOAT_TYPE(exp(float(SMats[bc][e]) - Mf));
-                }
-                psum += float(pf);
-                PshT[(qbase + qrow) * pt_stride + col] = pf;
-            }
-        }
-        Lf = Lf * eMf + psum + subgroupShuffleXor(psum, 16);
-
-        barrier();
-
-        [[unroll]] for (uint vi = 0; vi < VLOADS; ++vi) {
-            const uint idx = tid + vi * WorkGroupSize;
-            if (idx < Bc * HSV_pad / 4) {
-                const uint row = idx / (HSV_pad / 4);
-                const uint d = idx % (HSV_pad / 4);
-                kvsh[row * vsh_stride + d] = VPrefetch[vi];
-            }
-        }
-
-        barrier();
-
-        if (j + 1 < end_j) {
-            [[unroll]] for (uint d = 0; d < HSK_pad / 16; ++d) {
-                FLOAT_TYPEV4 kv = FLOAT_TYPEV4(0.0);
-                if ((!KV_bounds_check || (j + 1) * Bc + krow < KV) && d * 16 + kcv * 4 < HSK) {
-                    kv = data_kv4[k_offset / 4 + ((j + 1) * Bc + krow) * k_stride / 4 + d * 4 + kcv];
-                }
-                KPrefetch[d] = kv;
-            }
-        }
-
-        coopmat<FLOAT_TYPE, gl_ScopeSubgroup, MatBr, 16, gl_MatrixUseA> PMat;
-        coopmat<FLOAT_TYPE, gl_ScopeSubgroup, 16, MatBc, gl_MatrixUseB> VMat;
-        [[unroll]] for (uint bc = 0; bc < KCHUNKS; ++bc) {
-            coopMatLoad(PMat, PshT, qbase * pt_stride + bc * MatBc, pt_stride,
-                        gl_CooperativeMatrixLayoutRowMajor);
-            [[unroll]] for (uint t = 0; t < OTILES; ++t) {
-                coopMatLoad(VMat, kvsh, bc * MatBc * vsh_stride + t * (MatBc / 4),
-                            vsh_stride, gl_CooperativeMatrixLayoutRowMajor);
-                OMats[t] = coopMatMulAdd(PMat, VMat, OMats[t]);
-            }
-        }
-        barrier();
-    }
-
-    const float invL = Lf == 0.0 ? 0.0 : 1.0 / Lf;
-    const uint out_base = (iq3 * p.ne2 * p.ne1 * HSV) / 4;
-    [[unroll]] for (uint t = 0; t < OTILES; ++t) {
-        [[unroll]] for (uint e = 0; e < 8; ++e) {
-            const uint row = 2 * e + (lane >> 4);
-            const float oe = float(OMats[t][e]) * subgroupShuffle(invL, row);
-            const uint src = lane & ~3u;
-            const vec4 ov = vec4(subgroupShuffle(oe, src),
-                                 subgroupShuffle(oe, src + 1),
-                                 subgroupShuffle(oe, src + 2),
-                                 subgroupShuffle(oe, src + 3));
-            const uint global_row = i * Br + qbase + row;
-            if ((lane & 3u) == 0 && global_row < N) {
-                const uint d = t * (MatBc / 4) + (lane & 15u) / 4;
-                data_ov4[out_base + (iq2 * HSV + global_row * p.ne1 * HSV) / 4 + d] = D_TYPEV4(ov);
-            }
-        }
-    }
-}
 
 void main() {
 #ifdef NEEDS_INIT_IQ_SHMEM
@@ -332,11 +136,6 @@ void main() {
 #endif
 
     init_indices();
-
-    if (WPT_ENABLED) {
-        main_work_per_tile();
-        return;
-    }
 
     const uint32_t tid = gl_LocalInvocationIndex;
 
