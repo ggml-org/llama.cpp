@@ -9470,6 +9470,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 32, 1, 32)); // too small (N<64)
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 1024, 1, 1024)); // too big (N>512)
 
+    // q8_0 small-N cooperative-K GEMM, the shape a speculative or MTP verify batch emits.
+    // Every generated q8_0 case in this band is m=16, so a backend routing small-N q8_0 on
+    // an m predicate has no coverage. Shapes taken from a real 30B hybrid model, whose dense
+    // q8_0 tensors all have m % 256 != 0.
+    for (int n : {2, 3, 4, 5, 8}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 10304, n, 2688, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32,  2688, n, 4096, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32,  3712, n, 2688, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32,  2688, n, 3712, {1, 1}, {1, 1}));
+    }
+    // Boundary controls: m % 256 == 0, m % 4 != 0, and n past the small-N band.
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 4096, 4, 2688, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2690, 4, 2688, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2688, 9, 4096, {1, 1}, {1, 1}));
+
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F16,  900000,  3, 2592, {1, 1}, {1, 1}));
@@ -9482,6 +9497,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 1, 5120, {128, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 512, 5120, {128, 1}, {1, 1}));
 #endif
+
+    // Adreno trans-weight GEMM at real Qwen3.5-4B ssm_out (GatedDeltaNet output proj):
+    // q5_K, m=2560, K=4096, run by the chunked GDN path at N in {128,170} with ne12>1.
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q5_K, GGML_TYPE_F32, 2560, 128, 4096, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q5_K, GGML_TYPE_F32, 2560, 128, 4096, {1, 1}, {4, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q5_K, GGML_TYPE_F32, 2560, 170, 4096, {1, 1}, {3, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 2560, 128, 4096, {1, 1}, {4, 1}));
+    // q8_0 GDN ssm_out broadcast (Qwen3.5-9B-UD / Qwen3.6-35B): the q8_0 Adreno GEMM/GEMV
+    // must honor src1/dst view_offs so the per-slice broadcast iteration is correct.
+    // N=1 exercises the GEMV offsetd path; N>1 the GEMM path.
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2560,   1, 4096, {1, 1}, {4, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2560, 128, 4096, {1, 1}, {4, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2560, 170, 4096, {1, 1}, {3, 1}));
 
     for (ggml_type type_a : all_types) {
         for (int i = 1; i < 10; ++i) {
@@ -9517,6 +9545,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
+
+    // Quantized matmul at a row count that is a multiple of 64, over the small-batch
+    // band. The generic quant loop above uses m=16 for every type, so any backend that
+    // gates a wide-tile kernel on the row count being a multiple of 64 never sees one:
+    // ggml-opencl's dense int8/dp4a GEMMs dispatch on N > 8 && M % 64 == 0 && K % 32 == 0
+    // and are therefore untested for the K-quants, while n in 9..16 is exactly the batch
+    // size a speculative / multi-token-prediction verify runs at. Real weights are shaped
+    // this way (m is a multiple of 64 in every model these paths serve), so the shapes
+    // below are representative rather than synthetic.
+    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q5_0, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL,
+                             GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K}) {
+        for (int n : {9, 16, 32}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 512, n, 256, {1, 1}, {1, 1}));
+        }
+    }
 
     // m == 1, with n on both sides of MMVF_MAX_BATCH_SIZE (8): mmvf below, operand swap above
     for (int64_t n : {1, 7, 8, 9, 16, 128, 512}) {
@@ -9591,6 +9634,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Column-tile boundaries. Backends tile the N (batch) dimension of a quantized matmul and
+    // compute a whole tile whatever ne1 is, padding the unused columns. A batch one column past
+    // a tile boundary therefore costs a full extra tile, and -- more importantly here -- takes a
+    // DIFFERENT code path from the tile-aligned sizes the sweep above already covers.
+    //
+    // The n values used elsewhere in this file run 1..9, 16, 32, 45, 64, ... which steps straight
+    // over 17..31, so a backend can ship a tile serving that band with no coverage at all. These
+    // cases sit either side of the 16 / 24 / 32 boundaries that the common tilings use.
+    // m and k are large enough to reach the tiled (rather than GEMV) path on backends that
+    // dispatch on size.
+    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K}) {
+        for (int n : {15, 16, 17, 23, 24, 25, 31, 32, 33}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1024, n, 1024, {1, 1}, {1, 1}));
+        }
+    }
     // BF16 is absent from base_types: add the 3 standard non-contig permutations explicitly
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16,  1, 256, {2, 3}, {1, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16,  1, 256, {2, 3}, {1, 1}, {0, 1, 3, 2}));
@@ -9643,6 +9701,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 128, 45,  64, { 8,  1}, {4, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 1056, 1, 193, {1,  1}, {4, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 1056, 1, 67,  {1,  1}, {4, 1}, {0, 2, 1, 3}));
+    // gemma prefill KQV: f16 A (V, single head) x f32 B (probs, permuted/non-contiguous),
+    // large N and an 8:1 GQA broadcast. On Adreno this routes to the bespoke image KQV
+    // kernel, which reads B as a packed [D_B,N,K] buffer and so needs B packed first --
+    // exercise that path against the CPU reference (previously uncovered: the other
+    // permuted f16 cases have n < 32 and miss the KQV gate).
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 256, 256, 256, {1, 1}, {8, 1}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 256, 256, 512, {1, 1}, {8, 1}, {0, 2, 1, 3}));
+    // prefill KQ at batchable N: f16 K view and f32 Q view, BOTH permuted (the Adreno
+    // image KQ gate requires it), GQA 2:1 -- the exact Qwen3-0.6B shape. The KQ kernel
+    // reads the raw physical buffer of the permuted Q view; a dispatch that repacks B to
+    // logical order corrupts every KQ while all other permuted cases (n < 32) stay green.
+    // This is the regression case for that break (single-stream PPL 8.67 -> 26039).
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 512, 512, 128, {8, 1}, {2, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 16, 32, 32, { 1,  1}, {1, 1}, {0, 1, 2, 3}, 64, 3));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 64, 77, 77, {12,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 32, 4, 96, {3, 2}, {1, 1}, {0, 1, 2, 3}, 0, 1, true));
@@ -9662,6 +9733,28 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 64, 32,  80, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F16, 64, 32, 588, {1, 1}, {1, 1})); // 14*14*3, e.g. conv_2d im2col
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F16, 64, 32,  80, {4, 1}, {1, 1}));
+
+    // Small-N mul_mat, 2D-contiguous, no broadcast and no permutation: the shape a
+    // speculative verify batch and multi-slot decode emit. Every n in 2..8 case above
+    // carries a broadcast or a permutation, so a backend that routes contiguous small-N
+    // separately has no coverage for it.
+    for (int n : {2, 4, 8}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 128, n, 2816, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 128, n, 2048, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32,  32, n, 2880, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32,  40, n, 1024, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 512, n, 1024, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 513, n, 1024, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 128, 4, 1026, {1, 1}, {1, 1}));
+
+    // q4_0 x f32: per-layer projection shapes, the n boundary, and an lm_head-scale m.
+    for (int n : {2, 3, 4, 5}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 3840, n, 3840, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 8192, n, 2048, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 2048, n, 8192, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32768, 4, 2048, {1, 1}, {1, 1}));
 
 #if 0
     // test the mat-mat path for Metal
@@ -9695,6 +9788,40 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+    // Vocab-scale Q6_K GEMV (tied lm_head / token_embd) at decode. On the OpenCL Adreno
+    // backend these route through use_flat_gemv_for_large_m_q6_K; the narrow-hidden case
+    // (m=262144, k=1536) is the one the size escape newly sends to the flat GEMV, so it must
+    // stay correct against the CPU reference. k=1536 (gemma-4/gemma3n E2B) and k=2560 (E4B).
+    for (int64_t k : {1536, 2560}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 262144, 1, k, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 151936, 1, 1536, {1, 1}, {1, 1}));
+    // q4_K vocab-scale lm_head at decode (Qwen3-4B: m=151936, k=2560) — exercises the
+    // tiled q4_K lm_head GEMV where enabled (multi-superblock K).
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 151936, 1, 2560, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 151936, 1, 2048, {1, 1}, {1, 1}));
+    // q4_K noshuffle VARIANT kernels at real model shapes (none of the suite's existing
+    // shapes reach them): cok fires at n in [2..8] on >=512x512 weights; mc3 at n==3;
+    // splitk at n==1 with m<=2560 (X2E default / env-forced elsewhere).
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 2048, 4, 2560, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 2048, 8, 2560, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 2048, 3, 2560, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 2048, 1, 2560, {1, 1}, {1, 1}));
+    // flat q6_K large-m OOB bracket: m=151936 sentinels, m=262144 passes — bound the pattern
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 131072, 1, 1536, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 152064, 1, 1536, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32,  49152, 1, 1536, {1, 1}, {1, 1}));
+    // odd-(m/128) probes for the ne01 % 256 == 128 OOB family (151936/128 = 1187 is odd)
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32,  49280, 1, 1536, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 151936, 1,  256, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 151936, 1, 2560, {1, 1}, {1, 1}));
+    // minimal tiled-GEMV probes (fire with GGML_OPENCL_{Q4K,Q6K}_GEMV_TILED=1):
+    // k=256 = single superblock, k=512 = the smallest multi-superblock case
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  32768, 1,  256, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  32768, 1,  512, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32,  32768, 1,  256, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32,  32768, 1,  512, {1, 1}, {1, 1}));
 
     // sycl backend will limit task global_range < MAX_INT
     // test case for f16-type-convert-to-fp32 kernel with large k under fp32 compute dtype (occurs in stable-diffusion)
@@ -10290,7 +10417,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                     for (int nr2 : { 1, 4, 8, 12, 16, 20, 32 }) {
                                         if (nr2 ==  8 && hsk != 192) continue;
                                         if (nr2 == 12 && hsk != 128) continue;
-                                        if (nr2 == 16 && hsk != 192) continue;
+                                        // gqa=16 was only generated for hsk=192, leaving
+                                        // hsk=128 covered at gqa 1/4/12 but never 16. That is a
+                                        // real backend shape -- Nemotron-3.5-Lightning and
+                                        // Muse-Glimmer are both dk=128 with 32 heads / 2 KV heads
+                                        // -- and the OpenCL Adreno backend selects a dedicated
+                                        // kernel for exactly dk=128 + gqa=16, which no case here
+                                        // reached.
+                                        if (nr2 == 16 && hsk != 192 && hsk != 128) continue;
                                         if (nr2 == 20 && (nh != 1 || hsk != 576)) continue;
                                         if (nr2 == 32 && (nh != 1 || hsk != 320)) continue;
                                         //for (int kv : { 1, 17, 31, 33, 61, 113, 65, 127, 129, 130, 255, 260, 371, 380, 407, 512, 1024, }) {
@@ -10692,6 +10826,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32,  GGML_TYPE_Q4_0, {8192, 512, 2, 1}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_Q4_0, GGML_TYPE_F32,  {8192, 512, 2, 1}));
 
+    // one long row: every f32 copy case above has 256 or more rows, so a backend that maps
+    // work per row is never exercised at a low row count
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {524288, 1, 1, 1}));
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {524288, 1, 3, 1}));
+
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {768*1024, 256, 1, 1}, {-1,-1,-1,-1}, {1, 0, 2, 3}, {0, 0, 0, 0}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F16, GGML_TYPE_F16, {768*1024, 256, 1, 1}, {-1,-1,-1,-1}, {1, 0, 2, 3}, {0, 0, 0, 0}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F16, GGML_TYPE_F16, {768, 1024, 256, 1}, {-1,-1,-1,-1}, {1, 0, 2, 3}, {0, 0, 0, 0}));
@@ -10852,6 +10991,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                     test_cases.emplace_back(new test_flash_attn_ext(hs, hsv, 8, {nr, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, v_view));
                 }
             }
+        }
+    }
+
+    // NVIDIA-Nemotron-3.5-Lightning-30B-A3B and muse-glimmer-30B attention: 2 KV heads,
+    // gqa 16, dk = dv = 128. The loop above fixes nh at 8, so it reaches gqa 1/4/8 with a
+    // WIDE KV grid and never the narrow one -- yet it is the narrow grid that decides how
+    // this backend splits a gqa group across sub-groups, and two end-to-end harnesses
+    // disagree about that width by 8.6% while the suite says nothing at all.
+    // nb 1 is plain decode; nb 2..8 is the speculative verify batch, whose scaling in nb
+    // is the whole question for KV-sharing across query rows.
+    for (int kv : { 4096, 16384, }) {
+        for (int nb : { 1, 2, 4, 8, }) {
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {16, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
         }
     }
 
