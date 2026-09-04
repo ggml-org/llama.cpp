@@ -1,4 +1,7 @@
 export const API_MODELS = {
+	/** Download a model from HuggingFace (ROUTER mode, POST) or cancel/remove it (DELETE) */
+	DELETE: '/models',
+	DOWNLOAD: '/models',
 	LIST: '/v1/models',
 	LOAD: '/models/load',
 	SSE: '/models/sse',
