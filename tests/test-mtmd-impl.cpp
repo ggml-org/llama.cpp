@@ -1,9 +1,11 @@
 #include "testing.h"
 
+#include "clip-impl.h"
 #include "mtmd-image.h"
 #include "mtmd-internal.h"
 
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -135,6 +137,65 @@ MAKE_TEST(test_temporal_merge_grouping) {
         }
         t.assert_equal("remaining bitmap parts for " + name, groups.size(), n_bitmap_parts);
     }
+}
+
+//
+// projector registry
+//
+
+// Every projector the enum declares must have a name, and that name must map
+// back to it. Both halves matter, and neither needs a model file.
+//
+// A projector whose enum value survives a merge while its PROJECTOR_TYPE_NAMES
+// entry is lost still compiles, and every model using it then loads as
+// PROJECTOR_TYPE_UNKNOWN. Two projectors sharing a name compiles too, and
+// silently routes one model to the other's graph.
+MAKE_TEST(test_projector_registry) {
+    // Projectors that clip assigns to itself and never reads from a GGUF, so
+    // they are unnameable by construction rather than by omission. Keep this
+    // list at exactly the ones that are: an entry added here to quiet a
+    // failure is a projector no model can ever select.
+    const std::set<projector_type> internal_only = {
+        PROJECTOR_TYPE_MLP_NORM, // set from the tensor shapes, for Yi-type llava
+    };
+
+    std::map<std::string, projector_type> seen;
+
+    for (int i = 0; i < PROJECTOR_TYPE_UNKNOWN; i++) {
+        const projector_type ty = static_cast<projector_type>(i);
+
+        const auto it = PROJECTOR_TYPE_NAMES.find(ty);
+        if (it == PROJECTOR_TYPE_NAMES.end()) {
+            t.assert_equal("projector " + std::to_string(i) + " has a name",
+                           std::string(internal_only.count(ty) ? "internal-only" : "named"),
+                           std::string(internal_only.count(ty) ? "internal-only"
+                                                               : "missing from PROJECTOR_TYPE_NAMES"));
+            continue;
+        }
+        t.assert_equal("\"" + it->second + "\" is not an internal-only projector",
+                       std::string("selectable"),
+                       std::string(internal_only.count(ty) ? "named but listed internal-only"
+                                                           : "selectable"));
+
+        // The lookup every model load goes through, not the table read backwards.
+        t.assert_equal("\"" + it->second + "\" resolves to its own projector",
+                       std::to_string(static_cast<int>(ty)),
+                       std::to_string(static_cast<int>(clip_projector_type_from_string(it->second))));
+
+        const auto dup = seen.find(it->second);
+        t.assert_equal("\"" + it->second + "\" names exactly one projector",
+                       std::string("unique"),
+                       dup == seen.end() ? std::string("unique")
+                                         : std::string("also names projector "
+                                                       + std::to_string(static_cast<int>(dup->second))));
+        seen[it->second] = ty;
+    }
+
+    // An unknown string must not resolve to a real projector: clip reads this
+    // straight out of the GGUF, so anything else turns a typo into a wrong graph.
+    t.assert_equal("an unregistered name resolves to UNKNOWN",
+                   std::to_string(static_cast<int>(PROJECTOR_TYPE_UNKNOWN)),
+                   std::to_string(static_cast<int>(clip_projector_type_from_string("no-such-projector"))));
 }
 
 //
