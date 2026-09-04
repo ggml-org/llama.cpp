@@ -29,12 +29,8 @@
 			<Skeleton class="h-3.5 w-24" />
 		</div>
 
-		<!-- description + metadata chips -->
+		<!-- metadata chips -->
 		<div class="space-y-3">
-			<Skeleton class="h-4 w-full max-w-2xl" />
-
-			<Skeleton class="h-4 w-2/3 max-w-lg" />
-
 			<div class="flex flex-wrap items-center gap-1.5">
 				<Skeleton class="h-7 w-36 rounded-md" />
 
