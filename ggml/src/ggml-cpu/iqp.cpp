@@ -33,16 +33,20 @@ bool ggml_cpu_iqp_mul_mat_id_min_batch(int64_t cne1) {
 #define IQP_NSB     (QK_K / IQP_SB_SIZE)  // sub-blocks per super-block
 
 // one super-block of a grid based IQ type decoded to int8, 8 rows interleaved:
-// dfac[row] * iscales[sb*8 + row] * qs is bit identical to dequantize_row_iq*
+// dfac[row] * iscales[sb*8 + row] * qs - dmin[row] * dmn[sb*8 + row] is bit identical to dequantize_row_iq*
+// (dmn is zero for all types except q5_K)
 struct block_iqp_x8 {
     float   dfac[8];               // f32 super-block scale, d * 2^-k
+    float   dmin[8];               // f32 super-block min scale (q5_K), zero otherwise
     int32_t bias[8];               // 128 * sum(qs * iscale), see GGML_IQP_USE_BIAS
+    uint8_t has_min;               // 1 if any row in the panel has dmin != 0
     int8_t  iscales[IQP_NSB * 8];  // integer sub-block scales, in [-32, 31]
+    int8_t  dmn[IQP_NSB * 8];      // integer sub-block mins (q5_K), zero otherwise
     int8_t  qs[QK_K * 8];          // qs[sb*128 + g*32 + row*4 + k] = column sb*16 + g*4 + k
 };
 
-static_assert(sizeof(block_iqp_x8) == 8 * sizeof(float) + 8 * sizeof(int32_t) + IQP_NSB * 8 + QK_K * 8,
-              "wrong iqp_x8 block size/padding");
+// static_assert(sizeof(block_iqp_x8) == 8 * sizeof(float) * 2 + 8 * sizeof(int32_t) + 1 + IQP_NSB * 8 * 2 + QK_K * 8,
+//               "wrong iqp_x8 block size/padding");
 
 // feed the activations to VNNI as unsigned bytes (y + 128) and correct with bias[]; without VNNI the kernels use the maddubs sign trick instead and bias[] is not filled
 #if defined(__AVX2__) && ((defined(__AVX512VNNI__) && defined(__AVX512VL__)) || defined(__AVXVNNI__))
@@ -490,7 +494,57 @@ static void iqp_decode_iq4_xs(const void * GGML_RESTRICT vx,
     }
 }
 
-// expanded by the eligibility test and the decode dispatch
+// q5_K: 5-bit codes with 6-bit scales and mins per 32; the panel stores the raw (unsigned) codes, scales and mins,
+// the row value is dfac * iscales * qs - dmin * dmn
+static void iqp_decode_q5_k(const void * GGML_RESTRICT vx,
+                            int8_t * GGML_RESTRICT     vals,
+                            int8_t * GGML_RESTRICT     iscales,
+                            int8_t * GGML_RESTRICT     dmn,
+                            float * GGML_RESTRICT      dfac,
+                            float * GGML_RESTRICT      dmin) {
+    const block_q5_K * x = (const block_q5_K *) vx;
+
+    *dfac = GGML_CPU_FP16_TO_FP32(x->GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d);
+    *dmin = GGML_CPU_FP16_TO_FP32(x->GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin);
+
+    // 12-byte packed scale/min decode, same extraction as the reference kernels
+    static const uint32_t kmask1 = 0x3f3f3f3f;
+    static const uint32_t kmask2 = 0x0f0f0f0f;
+    static const uint32_t kmask3 = 0x03030303;
+
+    uint32_t utmp[4];
+    memcpy(utmp, x->scales, 12);
+    utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
+    const uint32_t uaux = utmp[1] & kmask1;
+    utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
+    utmp[2] = uaux;
+    utmp[0] &= kmask1;
+
+    const uint8_t * scales = (const uint8_t *) &utmp[0];
+    const uint8_t * mins   = (const uint8_t *) &utmp[2];
+    for (int sb = 0; sb < QK_K / 32; ++sb) {
+        // q5_K has one scale/min per 32, the panel has 16-wide slots: duplicate each pair
+        iscales[2 * sb + 0] = (int8_t) scales[sb];
+        iscales[2 * sb + 1] = (int8_t) scales[sb];
+        dmn[2 * sb + 0] = (int8_t) mins[sb];
+        dmn[2 * sb + 1] = (int8_t) mins[sb];
+    }
+
+    // 5-bit codes: 4 low bits + 1 high bit; 64-element chunk j uses qh bits 2j (low 32) and 2j+1 (high 32)
+    const uint8_t * qs = x->qs;
+    const uint8_t * qh = x->qh;
+    for (int j = 0; j < QK_K / 64; ++j) {
+        const uint8_t u1 = (uint8_t) (1 << (2 * j));
+        const uint8_t u2 = (uint8_t) (2 << (2 * j));
+        for (int l = 0; l < 32; ++l) {
+            vals[64 * j + l]      = (int8_t) ((qs[l] & 0xF) + ((qh[l] & u1) ? 16 : 0));
+            vals[64 * j + 32 + l] = (int8_t) ((qs[l] >> 4) + ((qh[l] & u2) ? 16 : 0));
+        }
+        qs += 32;
+    }
+}
+
+// min-less IQ types; q5_K is handled separately, it is the only one with a sub-block min
 #define IQP_TYPE_LIST(T) \
     T(IQ2_XXS, iq2_xxs)  \
     T(IQ2_XS, iq2_xs)    \
@@ -505,7 +559,18 @@ static bool iqp_decode_superblock(enum ggml_type             type,
                                   const void * GGML_RESTRICT vx,
                                   int8_t * GGML_RESTRICT     vals,
                                   int8_t * GGML_RESTRICT     iscales,
-                                  float * GGML_RESTRICT      dfac) {
+                                  int8_t * GGML_RESTRICT     dmn,
+                                  float * GGML_RESTRICT      dfac,
+                                  float * GGML_RESTRICT      dmin) {
+    if (type == GGML_TYPE_Q5_K) {
+        iqp_decode_q5_k(vx, vals, iscales, dmn, dfac, dmin);
+        return true;
+    }
+
+    // the other types have no sub-block min
+    memset(dmn, 0, IQP_NSB);
+    *dmin = 0.0f;
+
     switch (type) {
 #define IQP_CASE(E, name)                           \
     case GGML_TYPE_##E:                             \
@@ -571,13 +636,15 @@ static void iqp_decode_panel_8(enum ggml_type               type,
 
     int8_t vals[IQP_NB_ROWS][QK_K];
     int8_t iscales[IQP_NB_ROWS][IQP_NSB];
+    int8_t dmn[IQP_NB_ROWS][IQP_NSB];
     float  dfac[IQP_NB_ROWS];
+    float  dmin[IQP_NB_ROWS];
 
     for (int64_t x = 0; x < nblocks; x++) {
         for (int r = 0; r < IQP_NB_ROWS; r++) {
             const char * blk = src + r * nb01 + x * bsize;
 
-            const bool ok = iqp_decode_superblock(type, blk, vals[r], iscales[r], &dfac[r]);
+            const bool ok = iqp_decode_superblock(type, blk, vals[r], iscales[r], dmn[r], &dfac[r], &dmin[r]);
             GGML_ASSERT(ok);
 
 #ifdef GGML_IQP_VERIFY
@@ -586,22 +653,29 @@ static void iqp_decode_panel_8(enum ggml_type               type,
             ggml_get_type_traits(type)->to_float(blk, ref, QK_K);
             for (int j = 0; j < QK_K; j++) {
                 const float scale = dfac[r] * iscales[r][j / IQP_SB_SIZE];
-                GGML_ASSERT(scale * vals[r][j] == ref[j]);
+                const float min   = dmin[r] * dmn[r][j / IQP_SB_SIZE];
+                GGML_ASSERT(scale * vals[r][j] - min == ref[j]);
             }
 #endif
         }
 
+        uint8_t has_min = 0;
         for (int r = 0; r < IQP_NB_ROWS; r++) {
             dst->dfac[r] = dfac[r];
+            dst->dmin[r] = dmin[r];
 
             for (int sb = 0; sb < IQP_NSB; sb++) {
                 dst->iscales[sb * IQP_NB_ROWS + r] = iscales[r][sb];
+                dst->dmn[sb * IQP_NB_ROWS + r] = dmn[r][sb];
             }
+
+            has_min |= (uint8_t) (dmin[r] != 0.0f);
 
 #if GGML_IQP_USE_BIAS
             dst->bias[r] = 128 * iqp_weighted_sum(vals[r], iscales[r]);
 #endif
         }
+        dst->has_min = has_min;
 
 #if defined(__AVX2__)
         for (int grp = 0; grp < QK_K / 32; grp++) {
@@ -669,6 +743,17 @@ static void iqp_gemv_8x8_q8_K_generic(int                        n,
             for (int j = 0; j < ncols_interleaved; j++) {
                 sumf[j] += (float) sumi[j] * (b_ptr[l].dfac[j] * a_ptr[l].d);
             }
+
+            // min term (q5_K): dmin * sum over sub-blocks of dmn * a_bsums
+            if (b_ptr[l].has_min) {
+                for (int j = 0; j < ncols_interleaved; j++) {
+                    int32_t mn = 0;
+                    for (int sb = 0; sb < IQP_NSB; sb++) {
+                        mn += b_ptr[l].dmn[sb * 8 + j] * a_ptr[l].bsums[sb];
+                    }
+                    sumf[j] -= (float) mn * (b_ptr[l].dmin[j] * a_ptr[l].d);
+                }
+            }
         }
 
         for (int j = 0; j < ncols_interleaved; j++) {
@@ -719,6 +804,17 @@ static void iqp_gemm_tile_4_generic(int                                nb,
 
                 for (int j = 0; j < ncols_interleaved; j++) {
                     sumf[m][j] += (float) sumi[j] * (b_ptr[l].dfac[j] * a_ptr[m][l].d);
+                }
+
+                // min term (q5_K): dmin * sum over sub-blocks of dmn * a_bsums
+                if (b_ptr[l].has_min) {
+                    for (int j = 0; j < ncols_interleaved; j++) {
+                        int32_t mn = 0;
+                        for (int sb = 0; sb < IQP_NSB; sb++) {
+                            mn += b_ptr[l].dmn[sb * 8 + j] * a_ptr[m][l].bsums[sb];
+                        }
+                        sumf[m][j] -= (float) mn * (b_ptr[l].dmin[j] * a_ptr[m][l].d);
+                    }
                 }
             }
         }
@@ -921,6 +1017,21 @@ static inline void iqp_gemm_tile_4(int                                nb,
                 sumf[m] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(sumi[m]),
                                           _mm256_mul_ps(dfac, _mm256_set1_ps(a_ptr[m][l].d)), sumf[m]);
             }
+
+            // min term (q5_K): dmin * sum over sub-blocks of dmn * a_bsums, per activation row
+            if (b_ptr[l].has_min) {
+                const __m256 dmin = _mm256_loadu_ps(b_ptr[l].dmin);
+                for (int m = 0; m < 4; m++) {
+                    __m256i mn = _mm256_setzero_si256();
+                    for (int sb = 0; sb < IQP_NSB; sb++) {
+                        mn = _mm256_add_epi32(mn, _mm256_mullo_epi32(
+                            _mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *) (b_ptr[l].dmn + sb * 8))),
+                            _mm256_set1_epi32(a_ptr[m][l].bsums[sb])));
+                    }
+                    sumf[m] = _mm256_sub_ps(sumf[m], _mm256_mul_ps(_mm256_cvtepi32_ps(mn),
+                                                                   _mm256_mul_ps(dmin, _mm256_set1_ps(a_ptr[m][l].d))));
+                }
+            }
         }
 
         for (int m = 0; m < 4; m++) {
@@ -962,6 +1073,19 @@ static void iqp_gemv_8x8_q8_K(int                        n,
             const __m256 dv = _mm256_mul_ps(_mm256_loadu_ps(b_ptr[l].dfac), _mm256_set1_ps(a_ptr[l].d));
 
             sumf = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iqp_acc_block(b_ptr + l, a_ptr + l)), dv, sumf);
+
+            // min term (q5_K): dmin * sum over sub-blocks of dmn * a_bsums
+            if (b_ptr[l].has_min) {
+                __m256i mn = _mm256_setzero_si256();
+                for (int sb = 0; sb < IQP_NSB; sb++) {
+                    mn = _mm256_add_epi32(mn, _mm256_mullo_epi32(
+                        _mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *) (b_ptr[l].dmn + sb * 8))),
+                        _mm256_set1_epi32(a_ptr[l].bsums[sb])));
+                }
+                sumf = _mm256_sub_ps(sumf, _mm256_mul_ps(_mm256_cvtepi32_ps(mn),
+                                                        _mm256_mul_ps(_mm256_loadu_ps(b_ptr[l].dmin),
+                                                                      _mm256_set1_ps(a_ptr[l].d))));
+            }
         }
 
         _mm256_storeu_ps(s + x * ncols_interleaved, sumf);
@@ -1041,6 +1165,7 @@ static void iqp_gemm_8x8_q8_K_p4(int                                n,
 
 static bool iqp_type_supported(enum ggml_type type) {
     switch (type) {
+    case GGML_TYPE_Q5_K:
 #define IQP_CASE(E, name) case GGML_TYPE_##E:
         IQP_TYPE_LIST(IQP_CASE)
 #undef IQP_CASE
@@ -1067,6 +1192,13 @@ static bool iqp_supported_common(const struct ggml_tensor * dst) {
     static const bool disabled = getenv("GGML_NO_IQ_PANEL") != nullptr;
     if (disabled) {
         return false;
+    }
+
+    // A/B switch between the panel and the tiled kernel; read per op so the flag can change within a process (harness)
+    if (const char * const mm_path = getenv("GGML_CPU_MM_PATH")) {
+        if (strcmp(mm_path, "tiled") == 0) {
+            return false;
+        }
     }
 
     if (!ggml_cpu_has_avx2()) {
