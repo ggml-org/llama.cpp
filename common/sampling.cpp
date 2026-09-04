@@ -650,7 +650,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
         llama_sampler_apply(grmr, &single_token_data_array);
 
-        const bool is_valid = single_token_data_array.data[0].logit != -INFINITY;
+        const bool is_valid = single_token_data_array.size > 0;
         if (is_valid) {
             return id;
         }

@@ -1366,6 +1366,8 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         }
     }
 
+    std::vector<uint8_t> rejects_mask(cur_p->size, 0);
+
     std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> candidates_decoded;
     candidates_decoded.reserve(cur_p->size);
 
@@ -1378,10 +1380,10 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
 
         if (grammar.vocab->is_eog(id)) {
             if (!allow_eog) {
-                cur_p->data[i].logit = -INFINITY;
+                rejects_mask[i] = 1;
             }
         } else if (piece.empty() || piece[0] == 0) {
-            cur_p->data[i].logit = -INFINITY;
+            rejects_mask[i] = 1;
         } else {
             candidates_decoded.push_back(decode_utf8(piece, grammar.partial_utf8));
             candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second, id });
@@ -1390,8 +1392,18 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
 
     const auto rejects = llama_grammar_reject_candidates(grammar.rules, grammar.stacks, candidates_grammar);
     for (const auto & reject : rejects) {
-        cur_p->data[reject.index].logit = -INFINITY;
+        rejects_mask[reject.index] = 1;
     }
+
+    // Compact: remove rejected entries. std::remove_if is stable so a sorted
+    // array stays sorted after compaction; do NOT clear the sorted flag.
+    auto * first = cur_p->data;
+    auto * last  = first + cur_p->size;
+    last = std::remove_if(first, last,
+        [&](const llama_token_data & tk) {
+            return rejects_mask[static_cast<size_t>(&tk - first)] != 0;
+        });
+    cur_p->size = static_cast<size_t>(last - first);
 }
 
 void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token) {
