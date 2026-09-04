@@ -4741,7 +4741,7 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     }
 };
 
-static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
+static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, bool duplicated_id = false, bool popular_expert = false) {
     std::random_device rd;
     std::default_random_engine rng(rd());
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
@@ -4754,6 +4754,19 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
                     data[i] = i % n_mats;
                 }
                 std::shuffle(data.begin(), data.end(), rng);
+                if (duplicated_id && t->ne[0] > 3) {
+                    if (popular_expert) {
+                        for (int i = 0; i < t->ne[0]; i++) {
+                            data[i] = i % n_mats;
+                        }
+                        data[1] = 0;
+                        if (t->ne[0] > 32) {
+                            data[32] = 0;
+                        }
+                    } else if (r == 1) {
+                        data[2] = data[3];
+                    }
+                }
                 ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
             }
         } else {
@@ -4772,9 +4785,11 @@ struct test_mul_mat_id : public test_case {
     const int64_t m;
     const int64_t n;
     const int64_t k;
+    const bool duplicated_id;
+    const bool popular_expert;
 
     std::string vars() override {
-        return VARS_TO_STR8(type_a, type_b, n_mats, n_used, b, m, n, k);
+        return VARS_TO_STR10(type_a, type_b, n_mats, n_used, b, m, n, k, duplicated_id, popular_expert);
     }
 
     double max_nmse_err() override {
@@ -4796,9 +4811,9 @@ struct test_mul_mat_id : public test_case {
 
     test_mul_mat_id(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
-            int64_t m = 32, int64_t n = 32, int64_t k = 32)
+            int64_t m = 32, int64_t n = 32, int64_t k = 32, bool duplicated_id = false, bool popular_expert = false)
         : type_a(type_a), type_b(type_b), n_mats(n_mats), n_used(n_used), b(b),
-            m(m), n(n), k(k) {
+            m(m), n(n), k(k), duplicated_id(duplicated_id), popular_expert(popular_expert) {
             GGML_ASSERT(n_used <= n_mats);
         }
 
@@ -4824,7 +4839,7 @@ struct test_mul_mat_id : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        init_mul_mat_id_tensors(ctx, n_mats);
+        init_mul_mat_id_tensors(ctx, n_mats, duplicated_id, popular_expert);
     }
 };
 
@@ -9668,6 +9683,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                              GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M, GGML_TYPE_IQ4_XS}) {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 4, false, 16, 10, 256));
     }
+
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q8_0, GGML_TYPE_F32, 144, 6, true, 2048, 9, 4096, true));
+    // Quantized broadcast writes the inverse permutation.
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q8_0, GGML_TYPE_F32, 5, 5, true, 512, 17, 256, true));
+    // Every token uses expert 0 twice, exceeding the old one-use-per-token capacity.
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 6, 6, false, 32, 8192, 64, true, true));
+    // Ten routed experts cover a non-power-of-two count.
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 10, 10, false, 32, 32, 32, true, true));
+    // Five routed experts cover another non-power-of-two count.
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 5, 5, false, 32, 32, 32, true, true));
+    // Duplicates separated by 32 slots exercise flattened indexing.
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 33, 33, false, 32, 4, 32, true, true));
 
     for (ggml_type type_a : base_types) {
         for (ggml_type type_b : {GGML_TYPE_F32 /*, GGML_TYPE_F16 */}) {
