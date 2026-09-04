@@ -14,7 +14,10 @@ export type {
 	ApiModelLoadStage,
 	ApiModelsSseProgress,
 	ApiModelsSseData,
+	ApiModelsSseDownloadProgressData,
 	ApiModelsSseEvent,
+	ApiModelsDownloadRequest,
+	ApiModelsDownloadResponse,
 	ApiModelDetails,
 	ApiLlamaCppServerProps,
 	ApiChatCompletionRequest,
@@ -106,9 +109,19 @@ export type {
 	ModelCapabilities,
 	ModelModalities,
 	ModelOption,
+	ModelDownloadFileProgress,
+	ModelDownloadProgress,
 	ModelLoadProgress,
 	ModalityCapabilities
 } from './models';
+
+// Models discover types
+export type {
+	ModelBitDepthRow,
+	ModelDownloadEntryState,
+	ModelQuantOption,
+	ModelSelectableFile
+} from './models-discover';
 
 // Settings types
 export type {
