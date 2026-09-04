@@ -404,8 +404,9 @@ struct bench_row_ab {
 };
 
 // Second pass: iqp panel vs tiled kernel on the same tensors, routed by GGML_CPU_MM_PATH
-// (both gates read it per op); no repack. For a type/shape the iqp gate rejects (the K-quants,
-// K % 256 != 0, M < 8), the iqp column is the stock vec_dot path
+// (both gates read it per op); no repack. For a type/shape the iqp gate rejects (batch < 8,
+// output rows % 8 != 0, dot length % 256 != 0, unsupported type), the iqp column is the
+// stock vec_dot path
 static bench_row_ab bench_tiled_iqp(ggml_backend_t backend, int64_t M, int64_t N, int64_t K, ggml_type quant_type) {
     bench_row_ab row;
     row.name = ggml_type_name(quant_type);
@@ -582,7 +583,7 @@ int main() {
         { 4096, 4096,   64 },
         { 4096, 4096,   32 },
         { 4096, 4096,   16 },
-        //{ 4096, 4096,   8 },
+        { 4096, 4096,   8 },
         { 4096, 4096,   1 },
     };
     // for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); ++s) {
