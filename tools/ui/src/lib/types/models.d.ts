@@ -26,33 +26,24 @@ export interface ModelOption {
 	tags?: string[];
 }
 
-/**
- * Ephemeral UI-only load progress for one model instance.
- * Lives only while a load runs, driven by the /models/sse feed.
- * stage is absent until the feed reports its first stage.
- */
+/** UI-only load progress for one model, driven by the /models/sse feed. */
 export interface ModelLoadProgress {
 	stages: ApiModelLoadStage[];
 	current: ApiModelLoadStage;
 	value: number;
 }
-/**
- * Per-byte download progress for one in-flight model download, driven by the
- * /models/sse feed. Lives only while a download runs.
- */
+
+/** Per-file bytes of an in-flight download. */
 export interface ModelDownloadFileProgress {
-	/** Bytes downloaded for this file so far. */
 	done: number;
-	/** Total bytes of the file. */
 	total: number;
 }
 
+/** Progress of an in-flight download, summed across its files. */
 export interface ModelDownloadProgress {
-	/** Summed progress across all files of the download plan. */
 	downloadedBytes: number;
-	/** Summed plan size across all files. */
 	totalBytes: number;
-	/** Per-file progress keyed by file URL, as reported by the feed. */
+	/** Per-file progress keyed by file URL. */
 	files: Record<string, ModelDownloadFileProgress>;
 }
 
@@ -68,9 +59,7 @@ export interface ParsedModelId {
 	tags: string[];
 }
 
-/**
- * Modality capabilities for file validation
- */
+/** Modality capabilities for file validation. */
 export interface ModalityCapabilities {
 	hasVision: boolean;
 	hasAudio: boolean;

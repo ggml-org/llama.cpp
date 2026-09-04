@@ -46,9 +46,6 @@
 	let hasTools = $derived(detectToolUseSupport(gguf?.chat_template ?? ''));
 	let hasReasoning = $derived(detectThinkingSupport(gguf?.chat_template ?? ''));
 
-	// Draft sidecars (mtp, dflash, dspark, eagle3) present in the repo, e.g.
-	// speculative-decoding drafts. mmproj is excluded: it is vision.
-
 	let bitDepthRows = $derived.by<BitDepthRow[]>(() => {
 		const rows = new SvelteMap<number, HfModelSibling[]>();
 

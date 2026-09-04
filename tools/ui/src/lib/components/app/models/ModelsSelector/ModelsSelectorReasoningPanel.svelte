@@ -11,22 +11,17 @@
 	let expanded = $state(false);
 </script>
 
-<!-- Reasoning effort picker for the models dropdown footer. Unlike
-     ChatFormActionAddReasoningSubmenu, which opens a flyout submenu, this one
-     expands in place: pinned to the bottom of a scrolling menu, a flyout would
-     float over the very list it belongs to. -->
+<!-- Reasoning effort picker for the models dropdown footer; expands in place
+     (a flyout submenu would cover the list it belongs to). -->
 <Collapsible.Root class="min-w-0" onOpenChange={(open) => (expanded = open)} open={expanded}>
-	<!-- Rendered as a menu item so arrow keys, typeahead and Enter reach it, but
-	     through the `child` snippet to keep Collapsible.Trigger's native button.
-	     closeOnSelect keeps the menu open while the effort list is being used. -->
+	<!-- A menu item (for keyboard nav) rendering Collapsible.Trigger via `child`;
+	     closeOnSelect keeps the menu open while picking. -->
 	<DropdownMenu.Item
 		class="w-full min-w-0 cursor-pointer items-center gap-2 rounded-md text-left text-sm"
 		closeOnSelect={false}
 	>
 		{#snippet child({ props })}
-			<!-- No `class` here on purpose: a static attribute would override the
-			     spread props.class, and the button is the menu item itself (the `child`
-			     snippet replaces Item's own div), so all styling must come from above. -->
+			<!-- No `class` here: a static attribute would override the spread props.class. -->
 			<Collapsible.Trigger {...props}>
 				{#if reasoning.isReasoningActive}
 					<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
@@ -54,13 +49,9 @@
 	</DropdownMenu.Item>
 
 	<Collapsible.Content>
-		<!-- Collapsible.Content only toggles the `hidden` attribute, so gate on
-		     `expanded`: collapsed, the effort rows leave both the menu item order
-		     (bits-ui collects items by attribute) and the tab order. -->
+		<!-- Gate on `expanded` so collapsed rows leave the menu item and tab order. -->
 		{#if expanded}
-			<!-- Plain items, not a RadioGroup: the selected effort lives in the store,
-			     so the check mark derives from it and must not be duplicated as group
-			     state. -->
+			<!-- Plain items (not a RadioGroup): selection lives in the store. -->
 			<div class="mt-0.5 flex flex-col gap-0.5 pl-4">
 				{#each reasoning.levels as level (level.value)}
 					{@const tokenLabel = reasoning.tokenLabel(level)}
