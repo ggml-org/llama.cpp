@@ -79,24 +79,11 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
 
         // self_attention
         {
-            ggml_tensor * Qcur;
-            ggml_tensor * Kcur;
-            ggml_tensor * Vcur;
-            if (model.layers[il].wqkv) {
-                ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur);
-                cb(qkv, "wqkv", il);
-                const int64_t q_dim = n_embd_head * n_head;
-                const int64_t k_dim = n_embd_head * n_head_kv;
-                const int64_t v_dim = n_embd_head * n_head_kv;
-                const size_t  esize = ggml_element_size(qkv);
-                Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, q_dim, n_tokens, qkv->nb[1], 0));
-                Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, k_dim, n_tokens, qkv->nb[1], q_dim * esize));
-                Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, v_dim, n_tokens, qkv->nb[1], (q_dim + k_dim) * esize));
-            } else {
-                Qcur = build_lora_mm(model.layers[il].wq, cur);
-                Kcur = build_lora_mm(model.layers[il].wk, cur);
-                Vcur = build_lora_mm(model.layers[il].wv, cur);
-            }
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head,
+                    n_embd_head, n_head_kv,
+                    n_embd_head, n_head_kv,
+                    il, false);
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
