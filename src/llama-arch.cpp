@@ -84,6 +84,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GLM4,             "glm4"             },
     { LLM_ARCH_GLM4_MOE,         "glm4moe"          },
     { LLM_ARCH_GLM_DSA,          "glm-dsa"          },
+    { LLM_ARCH_GLM5NEXT,         "glm5next"         },
     { LLM_ARCH_BITNET,           "bitnet"           },
     { LLM_ARCH_T5,               "t5"               },
     { LLM_ARCH_T5ENCODER,        "t5encoder"        },
@@ -282,6 +283,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,           "%s.attention.indexer.key_length"           },
     { LLM_KV_ATTENTION_INDEXER_TOP_K,                "%s.attention.indexer.top_k"                },
     { LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,           "%s.attention.indexer.block_size"           },
+    { LLM_KV_ATTENTION_INDEXER_KPOOL,                "%s.attention.indexer.kpool"                },
     { LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,         "%s.attention.indexer.local_blocks"         },
     { LLM_KV_ATTENTION_INDEXER_TYPES,                "%s.attention.indexer.types"                },
     { LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,           "%s.attention.output_group_count"           },
@@ -1080,6 +1082,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_QWEN4EXP:
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_MINIMAX_01:
+        case LLM_ARCH_GLM5NEXT:
             return true;
         default:
             return false;
@@ -1144,6 +1147,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_BAILINGMOE3:
         case LLM_ARCH_KIMI_K3:
+        case LLM_ARCH_GLM5NEXT:
         case LLM_ARCH_QWEN3TTS:
         case LLM_ARCH_QWEN4EXP:   // TODO: fix test-llama-archs
             return false;

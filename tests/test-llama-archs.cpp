@@ -11,6 +11,9 @@
 #include "../src/llama-arch.h"
 #include "../src/llama-model-saver.h"
 
+// nextn/MTP accessors are still staging API
+#include "../src/llama-ext.h"
+
 #include <cinttypes>
 #include <cstddef>
 #include <cstdio>
@@ -68,6 +71,11 @@ static void usage(char ** argv) {
     printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
 }
 
+// DSA indexer geometry of the synthetic models, shared with test_dsa_kpool below.
+// index_topk/index_kpool = 2 whole pools are selected per query row.
+static const uint32_t DSA_INDEXER_TOP_K = 8;
+static const uint32_t DSA_INDEXER_KPOOL = 4;
+
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
     std::mt19937 gen(seed);
     std::uniform_int_distribution<> dis(0, n_vocab - 1);
@@ -79,7 +87,8 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
     return ret;
 }
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+// nextn appends one NextN/MTP block after the trunk, leaving the trunk itself unchanged
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const bool nextn = false) {
     gguf_context_ptr ret(gguf_init_empty());
     llama_model_saver ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -111,6 +120,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_embd = 160; // exercise per-head tensor split granularity with head size 80
     } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE) {
         n_head = 4;
+    } else if (arch == LLM_ARCH_GLM5NEXT) {
+        n_embd = 128;
+        n_head = 1;
+        n_ff   = 192;
+        // 4 layers gives 2 full-attention layers, so the DSA indexer cache is reused across layers
+        n_layer = 4;
     } else if (arch == LLM_ARCH_DEEPSEEK2
             || arch == LLM_ARCH_DEEPSEEK32
             || arch == LLM_ARCH_GLM_DSA
@@ -143,8 +158,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_CONTEXT_LENGTH,            n_ctx);
     ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
-    ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
+    ms.add_kv(LLM_KV_BLOCK_COUNT,               nextn ? n_layer + 1 : n_layer);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
+    if (nextn) {
+        ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, uint32_t(1));
+    }
 
     if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         std::vector<uint32_t> n_ff_per_layer;
@@ -213,6 +231,13 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             }
             ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
         }
+    } else if (arch == LLM_ARCH_GLM5NEXT) {
+        // mla_use_nope: qk_rope_head_dim == 0, no RoPE anywhere
+        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       uint32_t(512)); // kv_lora_rank + 0
+        ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,     uint32_t(512));
+        ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(0));
+        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   uint32_t(128)); // qk_nope_head_dim
+        ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, uint32_t(128)); // v_head_dim
     } else if (arch == LLM_ARCH_MINIMAX_M3) {
         // partial rotary: n_rot must not exceed the indexer key length (64)
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
@@ -286,20 +311,22 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
               arch == LLM_ARCH_QWEN4EXP ? n_embd_head : uint32_t(128));
 
-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        DSA_INDEXER_TOP_K);
+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   DSA_INDEXER_KPOOL);
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS, uint32_t(1));
     ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
 
-    if (arch == LLM_ARCH_DEEPSEEK4) {
-        ms.add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,         uint32_t(8));
-        ms.add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,           uint32_t(32));
-        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,            std::vector<uint32_t>({0, 0, 4, 128}));
-        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE,    160000.0f);
+    if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_GLM5NEXT) {
+        if (arch == LLM_ARCH_DEEPSEEK4) {
+            ms.add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,     uint32_t(8));
+            ms.add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,       uint32_t(32));
+            ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,        std::vector<uint32_t>({0, 0, 4, 128}));
+            ms.add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE, 160000.0f);
+            ms.add_kv(LLM_KV_HASH_LAYER_COUNT,                 uint32_t(0));
+        }
         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               uint32_t(4));
         ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(2));
         ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,             1.0e-6f);
-        ms.add_kv(LLM_KV_HASH_LAYER_COUNT,                      uint32_t(0));
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                      10.0f);
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,                  1.0f);
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,                   true);
@@ -371,10 +398,13 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
-        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
+        ggml_backend_sched_eval_callback cb_eval = nullptr, void * cb_eval_user_data = nullptr,
+        bool load_mtp = false, uint32_t n_seq_max = 1, bool kv_unified = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
+    model_params.load_mtp = load_mtp;
     std::vector<ggml_backend_dev_t> devs_copy = devs;
     devs_copy.push_back(nullptr);
     model_params.devices = devs_copy.data();
@@ -387,6 +417,10 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     if (!encode) {
         ctx_params.n_ubatch = 64;
     }
+    ctx_params.cb_eval           = cb_eval;
+    ctx_params.cb_eval_user_data = cb_eval_user_data;
+    ctx_params.n_seq_max         = n_seq_max;
+    ctx_params.kv_unified        = kv_unified;
 
     size_t tmp = seed;
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -458,6 +492,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_GLM_DSA:
+        case LLM_ARCH_GLM5NEXT:
         case LLM_ARCH_EXAONE_MOE:
         case LLM_ARCH_BAILINGMOE:
         case LLM_ARCH_BAILINGMOE2:
@@ -615,6 +650,421 @@ static int save_models(const llm_arch target_arch, const size_t seed, const int 
     }
     llama_log_set(ud.log_old.callback, ud.log_old.user_data);
     return 0;
+}
+
+//
+// GLM5NEXT DSA k-pool selection: no pool may be selected in part
+//
+// The reference indexer picks index_topk/index_kpool *whole* pools and expands each into its
+// index_kpool members. Running the top-k over individual cells instead is not equivalent: the
+// ReLU drives many distinct pool scores to exactly 0.0 and ggml_top_k is unordered among equal
+// keys, so a cell-level cut splits pools apart. Comparing selections against a reference does
+// not catch it - a cell-level implementation stays above the bf16-vs-bf16 Jaccard noise floor.
+//
+// What does catch it is counting *partially* selected pools, which needs no reference at all:
+// the count is 0 for a pooled implementation and large for a cell-level one. Both the diagnosis
+// and this metric are due to danielhanchen (llama.cpp PR #27754).
+//
+// A pool is partially selected for a query row when at least one of its index_kpool cells is
+// picked and at least one is not. The trailing incomplete pool is excluded by construction: for
+// query position q only the pools below tail_start = (q + 1)/r*r are complete, and the cells in
+// [tail_start, q] are the always_select_tail cells, which are never counted as pool members.
+//
+struct dsa_kpool_check {
+    int64_t r = 0; // index_kpool
+
+    int64_t n_tensor       = 0; // indexer_top_k tensors inspected
+    int64_t n_row          = 0; // query rows inspected
+    int64_t n_pool_whole   = 0; // pools selected in full
+    int64_t n_pool_partial = 0; // pools selected in part - must be 0
+    int64_t n_row_partial  = 0; // rows holding at least one partial pool
+    int64_t n_tail_missing = 0; // tail cells not selected - must be 0
+
+    std::vector<int32_t> buf;
+    std::vector<char>    sel;
+
+    // one query row: `sel` holds the cells picked for query position q
+    void count_row(const int32_t * row, int64_t width, int64_t q) {
+        const int64_t tail_start = (q + 1)/r*r;
+        const int64_t n_pool_vis = tail_start/r;
+
+        sel.assign(q + 1, 0);
+        for (int64_t j = 0; j < width; j++) {
+            const int32_t c = row[j];
+            if (c >= 0 && c <= q) {
+                sel[c] = 1; // cells past q are masked anyway and belong to no complete pool
+            }
+        }
+
+        // always_select_tail; doubles as a check that cell index == position holds here
+        for (int64_t c = tail_start; c <= q; c++) {
+            n_tail_missing += sel[c] == 0;
+        }
+
+        bool row_partial = false;
+        for (int64_t b = 0; b < n_pool_vis; b++) {
+            int64_t cnt = 0;
+            for (int64_t c = b*r; c < (b + 1)*r; c++) {
+                cnt += sel[c];
+            }
+            if (cnt == r) {
+                n_pool_whole++;
+            } else if (cnt > 0) {
+                n_pool_partial++;
+                row_partial = true;
+            }
+        }
+
+        n_row_partial += row_partial;
+        n_row++;
+    }
+};
+
+// the metric must not be able to read 0 by accident: a pool-aligned selection scores 0 partial
+// pools, the same selection with one cell moved across a pool boundary does not
+static void dsa_kpool_check_self_test() {
+    const std::vector<int32_t> aligned = { 0, 1, 2, 3, 8, 9, 10, 11 };
+    const std::vector<int32_t> split   = { 0, 1, 2, 4, 8, 9, 10, 11 };
+
+    dsa_kpool_check ok;
+    ok.r = 4;
+    ok.count_row(aligned.data(), aligned.size(), /*q =*/ 15);
+    GGML_ASSERT(ok.n_pool_whole == 2 && ok.n_pool_partial == 0 && ok.n_tail_missing == 0);
+
+    dsa_kpool_check bad;
+    bad.r = 4;
+    bad.count_row(split.data(), split.size(), /*q =*/ 15);
+    GGML_ASSERT(bad.n_pool_whole == 1 && bad.n_pool_partial == 2);
+}
+
+// exactly "indexer_top_k-<il>": views and backend copies inherit the name with a suffix and
+// would otherwise be counted a second time
+static bool is_indexer_top_k(const char * name) {
+    static const char * prefix = "indexer_top_k-";
+    const size_t n = strlen(prefix);
+    if (strncmp(name, prefix, n) != 0 || name[n] == '\0') {
+        return false;
+    }
+    for (const char * p = name + n; *p; p++) {
+        if (*p < '0' || *p > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
+// reads the selection out of every "indexer_top_k-<il>" node, I32 [n_top_k, n_batch, 1, n_stream]
+static bool dsa_kpool_eval_cb(struct ggml_tensor * t, bool ask, void * user_data) {
+    auto & st = *(dsa_kpool_check *) user_data;
+
+    if (ask) {
+        return is_indexer_top_k(t->name);
+    }
+
+    GGML_ASSERT(t->type == GGML_TYPE_I32);
+
+    const int64_t width = t->ne[0];
+    const int64_t n_tps = t->ne[1];
+    const int64_t ns    = t->ne[3];
+
+    st.buf.resize(ggml_nelements(t));
+    ggml_backend_tensor_get(t, st.buf.data(), 0, ggml_nbytes(t));
+
+    for (int64_t s = 0; s < ns; s++) {
+        for (int64_t i = 0; i < n_tps; i++) {
+            // one stream, one sequence, one ubatch over a fresh cache: cell index == position
+            st.count_row(st.buf.data() + (s*n_tps + i)*width, width, /*q =*/ i);
+        }
+    }
+
+    st.n_tensor++;
+    return true;
+}
+
+static int test_dsa_kpool(const size_t seed, const int verbosity) {
+    struct user_data_t {
+        struct {
+            ggml_log_callback callback;
+            void * user_data;
+        } log_old;
+
+        int verbosity;
+
+        user_data_t(int verbosity) : verbosity(verbosity) {
+            llama_log_get(&log_old.callback, &log_old.user_data);
+        }
+    };
+    user_data_t ud(verbosity);
+
+    llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
+        const user_data_t * ud = (const user_data_t *) user_data;
+        int verbosity = common_log_get_verbosity(level);
+        if (verbosity <= ud->verbosity) {
+            ud->log_old.callback(level, text, ud->log_old.user_data);
+        }
+    }, &ud);
+
+    dsa_kpool_check_self_test();
+
+    // one ubatch, and enough tokens that index_topk + index_kpool - 1 is a real cut:
+    // from q = 12 on, the selection can no longer be a union of whole pools by accident
+    const uint32_t n_tokens = 64;
+    const std::vector<llama_token> tokens = get_tokens(n_tokens, 128, seed);
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_GLM5NEXT, true);
+
+    std::vector<std::pair<std::vector<ggml_backend_dev_t>, std::string>> dev_configs;
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{dev}, ggml_backend_dev_description(dev));
+    }
+
+    bool all_ok = true;
+    common_log_flush(common_log_main());
+    printf("test_dsa_kpool: glm5next, index_topk=%u index_kpool=%u, %u tokens\n",
+        DSA_INDEXER_TOP_K, DSA_INDEXER_KPOOL, n_tokens);
+
+    for (const auto & dc : dev_configs) {
+        dsa_kpool_check st;
+        st.r = DSA_INDEXER_KPOOL;
+
+        auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.first,
+            LLAMA_SPLIT_MODE_LAYER, false, dsa_kpool_eval_cb, &st);
+
+        llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+        for (uint32_t pos = 0; pos < n_tokens; pos++) {
+            common_batch_add(batch, tokens[pos], pos, {0}, true);
+        }
+        batch.n_tokens = n_tokens;
+        const int32_t rc = llama_decode(model_and_ctx.second.get(), batch);
+        llama_batch_free(batch);
+        if (rc != 0) {
+            throw std::runtime_error("failed to decode batch");
+        }
+
+        // a silent miss (no indexer_top_k node, or the tail not selected) is a failure too
+        const bool ok = st.n_tensor > 0 && st.n_tail_missing == 0 && st.n_pool_partial == 0;
+        all_ok &= ok;
+
+        printf("test_dsa_kpool: %-32s rows %5" PRId64 ", whole pools %6" PRId64 ", "
+               "partial pools %6" PRId64 " in %4" PRId64 " rows, tail misses %4" PRId64 "  %s\n",
+            dc.second.c_str(), st.n_row, st.n_pool_whole, st.n_pool_partial, st.n_row_partial,
+            st.n_tail_missing, ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m");
+        fflush(stdout);
+    }
+
+    // Second pass: two sequences on a unified cache. This is what llama-server does by
+    // default - leaving --parallel unset selects auto slots, which set n_parallel = 4 and
+    // kv_unified = true. The single-stream pass above never exercises it.
+    // control: the same two sequences on SEPARATE streams. There cell index == position holds
+    // again per stream, so a metric artefact shows up here too while a real unified-cache
+    // pool-mixing bug does not.
+    // cfg 0/1: two sequences, separate then unified. cfg 2: unified cache but a SINGLE
+    // decoding sequence - there cell index == position still holds, so the metric stays valid
+    // and any degradation is the unified addressing itself rather than the cross-sequence mix.
+    for (int cfg = 0; cfg < 3; cfg++) {
+    const bool unified = cfg != 0;
+    const bool two_seq = cfg != 2;
+    printf("test_dsa_kpool: glm5next, %s, kv_unified=%s\n",
+        two_seq ? "2 seqs x 32 tokens" : "1 seq x 64 tokens", unified ? "true" : "false");
+
+    for (const auto & dc : dev_configs) {
+        dsa_kpool_check st;
+        st.r = DSA_INDEXER_KPOOL;
+
+        auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.first,
+            LLAMA_SPLIT_MODE_LAYER, false, dsa_kpool_eval_cb, &st, false, 2, unified);
+
+        const uint32_t n_half = two_seq ? n_tokens/2 : n_tokens;
+        llama_batch batch = llama_batch_init(n_tokens, 0, 2);
+        for (uint32_t pos = 0; pos < n_half; pos++) {
+            common_batch_add(batch, tokens[pos], pos, {0}, true);
+        }
+        if (two_seq) {
+            for (uint32_t pos = 0; pos < n_half; pos++) {
+                common_batch_add(batch, tokens[n_half + pos], pos, {1}, true);
+            }
+        }
+        batch.n_tokens = n_tokens;
+        const int32_t rc = llama_decode(model_and_ctx.second.get(), batch);
+        llama_batch_free(batch);
+        if (rc != 0) {
+            throw std::runtime_error("failed to decode batch");
+        }
+
+        printf("test_dsa_kpool: %-32s rows %5" PRId64 ", whole pools %6" PRId64 ", "
+               "partial pools %6" PRId64 " in %4" PRId64 " rows, tail misses %4" PRId64 "\n",
+            dc.second.c_str(), st.n_row, st.n_pool_whole, st.n_pool_partial, st.n_row_partial,
+            st.n_tail_missing);
+        fflush(stdout);
+    }
+    }
+
+    llama_log_set(ud.log_old.callback, ud.log_old.user_data);
+    return all_ok ? 0 : 1;
+}
+
+//
+// GLM5NEXT NextN/MTP draft head
+//
+// The trunk exports its post-norm hidden state as h_nextn, the draft head consumes it next
+// to a token id and emits logits. This is a smoke test: it runs the MTP loader flags, the
+// MTP memory branch and the graph, and checks that the logits are finite. It cannot check
+// the numbers - there is no MTP reference to compare against.
+//
+// It also saves the model to a GGUF and reloads it, twice: once with load_mtp so the draft
+// head has to find blk.<n_layer>.nextn.* by name in a real file, and once without, which is
+// the default path where the NextN block is skipped and only the trunk runs.
+//
+static int test_mtp(const size_t seed, const int verbosity) {
+    struct user_data_t {
+        struct {
+            ggml_log_callback callback;
+            void * user_data;
+        } log_old;
+
+        int verbosity;
+
+        user_data_t(int verbosity) : verbosity(verbosity) {
+            llama_log_get(&log_old.callback, &log_old.user_data);
+        }
+    };
+    user_data_t ud(verbosity);
+
+    llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
+        const user_data_t * ud = (const user_data_t *) user_data;
+        int verbosity = common_log_get_verbosity(level);
+        if (verbosity <= ud->verbosity) {
+            ud->log_old.callback(level, text, ud->log_old.user_data);
+        }
+    }, &ud);
+
+    const uint32_t n_tokens = 16;
+    const std::vector<llama_token> tokens = get_tokens(n_tokens, 128, seed);
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_GLM5NEXT, true, /*nextn =*/ true);
+
+    std::vector<std::pair<std::vector<ggml_backend_dev_t>, std::string>> dev_configs;
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{dev}, ggml_backend_dev_description(dev));
+    }
+
+    bool all_ok = true;
+    common_log_flush(common_log_main());
+    printf("test_mtp: glm5next, %u tokens\n", n_tokens);
+
+    // decode the trunk, hand its hidden state to the draft head, return the draft logits
+    auto run_mtp = [&](llama_model * model, llama_context * ctx_tgt) {
+        const uint32_t n_embd  = llama_model_n_embd(model);
+        const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.n_ctx           = 0;
+        ctx_params.n_threads       = 4;
+        ctx_params.n_threads_batch = 4;
+        ctx_params.n_ubatch        = 64;
+        ctx_params.ctx_type        = LLAMA_CONTEXT_TYPE_MTP;
+
+        llama_context_ptr ctx_dft(llama_init_from_model(model, ctx_params));
+        if (!ctx_dft) {
+            throw std::runtime_error("failed to create MTP context");
+        }
+
+        // unmasked, so the trunk keeps every row and narrows after the final norm
+        llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
+
+        llama_batch batch_tgt = llama_batch_init(n_tokens, 0, 1);
+        for (uint32_t pos = 0; pos < n_tokens; pos++) {
+            common_batch_add(batch_tgt, tokens[pos], pos, {0}, true);
+        }
+        const int32_t rc_tgt = llama_decode(ctx_tgt, batch_tgt);
+        llama_batch_free(batch_tgt);
+        if (rc_tgt != 0) {
+            throw std::runtime_error("failed to decode trunk batch");
+        }
+
+        const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, n_tokens - 1);
+        if (!h) {
+            throw std::runtime_error("trunk did not export h_nextn");
+        }
+
+        // the draft head reads a token id and a hidden state, so the batch needs both
+        llama_batch batch_dft = llama_batch_init(1, n_embd, 1);
+        batch_dft.token = (llama_token *) malloc(sizeof(llama_token));
+        common_batch_add(batch_dft, tokens[n_tokens - 1], n_tokens - 1, {0}, true);
+        memcpy(batch_dft.embd, h, n_embd*sizeof(float));
+
+        const int32_t rc_dft = llama_decode(ctx_dft.get(), batch_dft);
+        free(batch_dft.token);
+        batch_dft.token = nullptr;
+        llama_batch_free(batch_dft);
+        if (rc_dft != 0) {
+            throw std::runtime_error("failed to decode MTP batch");
+        }
+
+        const float * logits = llama_get_logits_ith(ctx_dft.get(), 0);
+        if (!logits) {
+            throw std::runtime_error("the MTP graph produced no logits");
+        }
+        return std::vector<float>(logits, logits + n_vocab);
+    };
+
+    for (const auto & dc : dev_configs) {
+        auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.first,
+            LLAMA_SPLIT_MODE_LAYER, false, nullptr, nullptr, /*load_mtp =*/ true);
+
+        const std::vector<float> logits = run_mtp(model_and_ctx.first.get(), model_and_ctx.second.get());
+
+        bool ok = true;
+        for (size_t i = 0; ok && i < logits.size(); i++) {
+            ok = std::isfinite(logits[i]);
+        }
+
+        // save the model, then reload it from the file so the NextN block has to be found
+        // by name rather than synthesized. Skipped where tmpfile() is unavailable.
+        std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
+        FILE * file = tmpfile();
+        if (file != nullptr && llama_model_saver_supports_arch(LLM_ARCH_GLM5NEXT)) {
+            llama_model_saver ms = llama_model_saver(model_and_ctx.first.get());
+            ms.add_kv_from_model();
+            ms.add_tensors_from_model();
+            ms.save(file);
+
+            rewind(file);
+            auto rt_mtp = get_model_and_ctx(nullptr, file, seed, dc.first,
+                LLAMA_SPLIT_MODE_LAYER, false, nullptr, nullptr, /*load_mtp =*/ true);
+            const std::vector<float> logits_rt = run_mtp(rt_mtp.first.get(), rt_mtp.second.get());
+
+            status_roundtrip = "\033[1;32mOK\033[0m";
+            GGML_ASSERT(logits_rt.size() == logits.size());
+            for (size_t i = 0; i < logits_rt.size(); i++) {
+                if (logits_rt[i] != logits[i]) {
+                    ok = false;
+                    status_roundtrip = "\033[1;31mFAIL\033[0m";
+                    break;
+                }
+            }
+
+            // note: reloading the same file without load_mtp is NOT tested here. The
+            // synthetic model materializes the optional NVFP4 sidecar scales for the
+            // NextN block, which a real GGUF does not carry, and TENSOR_SKIP leaves
+            // them unaccounted for. Same for the other NextN archs, so it is not
+            // specific to this graph.
+        }
+        if (file != nullptr) {
+            fclose(file);
+        }
+
+        all_ok &= ok;
+
+        printf("test_mtp: %-32s  draft %s, reload %s\n", dc.second.c_str(),
+            ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m", status_roundtrip.c_str());
+        fflush(stdout);
+    }
+
+    llama_log_set(ud.log_old.callback, ud.log_old.user_data);
+    return all_ok ? 0 : 1;
 }
 
 static int test_backends(const llm_arch target_arch, const size_t seed, const int verbosity) {
@@ -850,7 +1300,13 @@ int main(int argc, char ** argv) {
         if (!out.empty()) {
             return save_models(arch, seed, verbosity, out);
         }
-        return test_backends(arch, seed, verbosity);
+        int ret = 0;
+        if (arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_GLM5NEXT) {
+            ret |= test_dsa_kpool(seed, verbosity);
+            ret |= test_mtp(seed, verbosity);
+        }
+        ret |= test_backends(arch, seed, verbosity);
+        return ret;
     } catch (const std::exception & err) {
         fprintf(stderr, "encountered runtime error: %s\n", err.what());
         return -1;

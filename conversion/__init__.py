@@ -101,6 +101,8 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "GemmaForCausalLM": "gemma",
     "Glm4ForCausalLM": "glm",
     "Glm4MoeForCausalLM": "glm",
+    "Glm5NextForCausalLM": "glm5next",
+    "Glm5NextForConditionalGeneration": "glm5next",
     "Glm4MoeLiteForCausalLM": "glm",
     "Glm4vForConditionalGeneration": "glm",
     "Glm4vMoeForConditionalGeneration": "glm",
