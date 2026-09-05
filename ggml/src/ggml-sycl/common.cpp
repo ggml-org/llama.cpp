@@ -94,7 +94,7 @@ static bool ggml_sycl_use_level_zero_device_alloc(sycl::queue &q) {
 
 // Use Level Zero zeMemAllocDevice to avoid sycl::malloc_device triggering
 // DMA-buf/TTM system RAM staging in the xe kernel driver during multi-GPU inference.
-void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
+void * ggml_sycl_malloc_device(size_t size, sycl::queue &q, ggml_sycl_mem_type type) {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
     if (ggml_sycl_use_level_zero_device_alloc(q)) {
         void *ptr = nullptr;
@@ -117,16 +117,25 @@ void * ggml_sycl_malloc_device(size_t size, sycl::queue &q) {
 #endif
         ze_result_t r = zeMemAllocDevice(ze_ctx, &alloc_desc, size, 64, ze_dev, &ptr);
         if (r == ZE_RESULT_SUCCESS && ptr) {
+            ggml_sycl_memtrace_add(type, ptr, size);
             return ptr;
         }
+        ggml_sycl_memtrace_fail(type, size);
         return nullptr;
     }
 #endif
-    return sycl::malloc_device(size, q);
+    void * ptr = sycl::malloc_device(size, q);
+    if (ptr == nullptr) {
+        ggml_sycl_memtrace_fail(type, size);
+        return nullptr;
+    }
+    ggml_sycl_memtrace_add(type, ptr, size);
+    return ptr;
 }
 
 void ggml_sycl_free_device(void *ptr, sycl::queue &q) {
     if (!ptr) return;
+    ggml_sycl_memtrace_del(ptr);
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
     if (ggml_sycl_use_level_zero_device_alloc(q)) {
         auto ze_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(q.get_context());
