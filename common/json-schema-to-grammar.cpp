@@ -1,5 +1,7 @@
 #include "json-schema-to-grammar.h"
 #include "common.h"
+#include "trie.h"
+#include "unicode.h"
 
 #include <algorithm>
 #include <limits>
@@ -639,60 +641,40 @@ private:
             -> ["] ( [a] ([l] ([s] ([o] char+ | [^"o] char*) | [^"s] char*) | [n] ([d] char+ | [^"d] char*) | [^"ln] char*) | [^"a] char* )? ["]
     */
     std::string _not_strings(const std::vector<std::string> & strings) {
-
-        struct TrieNode {
-            std::map<char, TrieNode> children;
-            bool is_end_of_string;
-
-            TrieNode() : is_end_of_string(false) {}
-
-            void insert(const std::string & string) {
-                auto *node = this;
-                for (char c : string) {
-                    node = &node->children[c];
-                }
-                node->is_end_of_string = true;
-            }
-        };
-
-        TrieNode trie;
-        for (const auto & s : strings) {
-            trie.insert(s);
-        }
+        common_trie trie(strings);
 
         std::string char_rule = _add_primitive("char", PRIMITIVE_RULES.at("char"));
         std::ostringstream out;
         out << "[\"] ( ";
-        std::function<void(const TrieNode &)> visit = [&](const TrieNode & node) {
-            std::ostringstream rejects;
+        std::function<void(size_t)> visit = [&](size_t idx) {
+            const auto & node = trie.nodes[idx];
+            std::string rejects;
             auto first = true;
-            for (const auto & kv : node.children) {
-                rejects << kv.first;
+            for (const auto & [cpt, child] : node.children) {
+                std::string c = common_unicode_cpt_to_utf8(cpt);
+                rejects += c;
                 if (first) {
                     first = false;
                 } else {
                     out << " | ";
                 }
-                out << "[" << kv.first << "]";
-                if (!kv.second.children.empty()) {
+                out << "[" << c << "]";
+                if (!trie.nodes[child].children.empty()) {
                     out << " (";
-                    visit(kv.second);
+                    visit(child);
                     out << ")";
-                } else if (kv.second.is_end_of_string) {
+                } else {
                     out << " " << char_rule << "+";
                 }
             }
             if (!node.children.empty()) {
-                if (!first) {
-                    out << " | ";
-                }
-                out << "[^\"" << rejects.str() << "] " << char_rule << "*";
+                out << " | [^\"" << rejects << "] " << char_rule << "*";
             }
         };
-        visit(trie);
+        visit(0);
 
         out << " )";
-        if (!trie.is_end_of_string) {
+        if (trie.nodes[0].pattern < 0) {
             out << "?";
         }
         out << " [\"]";
