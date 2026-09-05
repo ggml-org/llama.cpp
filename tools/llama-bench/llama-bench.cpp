@@ -476,8 +476,6 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -dev, --device <dev0/dev1/...>                    (default: auto)\n");
     printf("  -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio> (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
     printf("  -lzm, --lazy-mode <on|auto|off>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.lazy_mode, lazy_mode_str), ",").c_str());
-    printf("  -mmp, --mmap <0|1>                                (DEPRECATED IN FAVOUR OF --load-mode)\n");
-    printf("  -dio, --direct-io <0|1>                           (DEPRECATED IN FAVOUR OF --load-mode)\n");
     printf("  -embd, --embeddings <0|1>                         (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>                  (default: 0)\n");
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
@@ -883,44 +881,6 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.flash_attn.insert(params.flash_attn.end(), types.begin(), types.end());
-            } else if (arg == "-mmp" || arg == "--mmap") {
-                if (++i >= argc) {
-                    invalid_param = true;
-                    break;
-                }
-                LOG_WRN("DEPRECATED: -mmp and --mmap are deprecated in favour of --load-mode. Please use --load-mode mmap instead.\n");
-                auto p = string_split<bool>(argv[i], split_delim);
-
-                std::vector<llama_load_mode> modes;
-                for (const auto & m : p) {
-                    llama_load_mode mode;
-                    if (m) {
-                        mode = LLAMA_LOAD_MODE_MMAP;
-                    } else {
-                        mode = LLAMA_LOAD_MODE_NONE;
-                    }
-                    modes.push_back(mode);
-                }
-                params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
-            } else if (arg == "-dio" || arg == "--direct-io") {
-                if (++i >= argc) {
-                    invalid_param = true;
-                    break;
-                }
-                LOG_WRN("DEPRECATED: -dio and --direct-io are deprecated in favour of --load-mode. Please use --load-mode dio instead.\n");
-                auto p = string_split<bool>(argv[i], split_delim);
-
-                std::vector<llama_load_mode> modes;
-                for (const auto & m : p) {
-                    llama_load_mode mode;
-                    if (m) {
-                        mode = LLAMA_LOAD_MODE_DIRECT_IO;
-                    } else {
-                        mode = LLAMA_LOAD_MODE_NONE;
-                    }
-                    modes.push_back(mode);
-                }
-                params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
             } else if (arg == "-embd" || arg == "--embeddings") {
                 if (++i >= argc) {
                     invalid_param = true;
