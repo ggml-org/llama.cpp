@@ -4584,7 +4584,8 @@ static json get_res_props(const server_context_meta & meta, const common_params 
     // note: do NOT use ctx_server here, otherwise it's not possible to use this during sleep
 
     task_params tparams;
-    tparams.sampling = params.sampling;
+    tparams.sampling    = params.sampling;
+    tparams.speculative = params.speculative;
     json default_generation_settings_for_props = json {
         { "params", tparams.to_json(true) },
         { "n_ctx",  meta.slot_n_ctx },
