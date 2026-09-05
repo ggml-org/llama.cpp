@@ -9,9 +9,11 @@
 #include <cstring>
 #include <cinttypes>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <regex>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 
 // result of parsing --tensor-type option
@@ -36,6 +38,16 @@ enum class tensor_category {
     FFN_DOWN,
     OUTPUT,
     OTHER
+};
+
+// one record per tensor with a forced shape substitution, pushed by tensor_type_fallback()
+// used by --no-fallback
+struct tensor_fallback_record {
+    std::string   name;
+    int64_t       ncols;            // t->ne[0], the dimension that does not divide the block size
+    int64_t       nelements;
+    ggml_type     requested_type;   // the type the quantization mixture selected
+    ggml_type     actual_type;      // the type it was substituted with
 };
 
 // max amount of tensor data kept in memory while quantizing a single tensor
@@ -178,6 +190,8 @@ struct quantize_state_impl {
     int i_ffn_up       = 0;
 
     int n_fallback    = 0;
+
+    std::vector<tensor_fallback_record> fallbacks;
 
     bool has_imatrix = false;
 
@@ -419,9 +433,59 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
             LLAMA_LOG_WARN("(WARNING: must use F16 due to unusual shape) ");
             return_type = GGML_TYPE_F16;
         }
+        qs.fallbacks.push_back({ t->name, ncols, ggml_nelements(t), target_type, return_type });
         LLAMA_LOG_WARN("-> falling back to %7s\n", ggml_type_name(return_type));
     }
     return return_type;
+}
+
+// summary of substitutions recorded in qs.fallbacks
+static std::string llama_quant_fallback_summary(const quantize_state_impl & qs, const llama_model_loader & ml, ggml_type default_type, size_t n_bytes_total) {
+    struct group { int n_tensors = 0; int64_t n_params = 0; };
+    std::map<std::tuple<int64_t, ggml_type, ggml_type>, group> groups;
+
+    int64_t n_params_sub  = 0;
+    size_t  n_bytes_sub   = 0;
+    double  n_bytes_added = 0.0;
+    for (const auto & r : qs.fallbacks) {
+        const size_t bytes_actual = (r.nelements / r.ncols) * ggml_row_size(r.actual_type, r.ncols);
+        n_params_sub  += r.nelements;
+        n_bytes_sub   += bytes_actual;
+        n_bytes_added += bytes_actual - (double) ggml_type_size(r.requested_type) * r.nelements / ggml_blck_size(r.requested_type);
+        group & g = groups[std::make_tuple(r.ncols, r.requested_type, r.actual_type)];
+        g.n_tensors += 1;
+        g.n_params  += r.nelements;
+    }
+
+    const double bpw_nominal = 8.0 * ggml_type_size(default_type) / ggml_blck_size(default_type);
+    const double bpw_recipe  = (n_bytes_total - n_bytes_added) * 8.0 / ml.n_elements;
+    const double bpw_actual  = n_bytes_total * 8.0 / ml.n_elements;
+
+    std::string s;
+    s += format("        - substituted: %d tensors, %.1f%% of params, %.1f%% of bytes\n",
+                qs.n_fallback, 100.0 * n_params_sub / ml.n_elements, 100.0 * n_bytes_sub / n_bytes_total);
+    s += format("        - nominal:     %s %.2f bpw -> %.2f bpw with substitutions (%+.1f%%)\n",
+                ggml_type_name(default_type), bpw_nominal, bpw_actual, 100.0 * (bpw_actual / bpw_nominal - 1.0));
+    s += format("        - recipe:      %.2f bpw without substitutions -> %.2f bpw with (%+.1f%%)\n",
+                bpw_recipe, bpw_actual, 100.0 * (bpw_actual / bpw_recipe - 1.0));
+
+    // largest groups first
+    std::vector<std::pair<std::tuple<int64_t, ggml_type, ggml_type>, group>> sorted(groups.begin(), groups.end());
+    std::sort(sorted.begin(), sorted.end(), [](const auto & a, const auto & b) {
+        return a.second.n_params > b.second.n_params;
+    });
+    constexpr size_t n_show = 8;
+    for (size_t i = 0; i < sorted.size() && i < n_show; ++i) {
+        const auto & [ncols, requested, actual] = sorted[i].first;
+        const int64_t qk = ggml_blck_size(requested);
+        s += format("        - ncols=%5" PRId64 " (%%%" PRId64 "=%3" PRId64 ")  %7s -> %-7s  %4d tensors  %5.1f%% of params\n",
+                    ncols, qk, ncols % qk, ggml_type_name(requested), ggml_type_name(actual),
+                    sorted[i].second.n_tensors, 100.0 * sorted[i].second.n_params / ml.n_elements);
+    }
+    if (sorted.size() > n_show) {
+        s += format("        - ... and %zu more groups\n", sorted.size() - n_show);
+    }
+    return s;
 }
 
 // internal standard logic for selecting the target tensor type based on tensor category, ftype, and model arch
@@ -1111,6 +1175,24 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
     }
 
+    if (params->no_fallback && qs.n_fallback > 0) {
+        // projected output size with the substitutions in place, same formula as --dry-run
+        size_t n_bytes_total = 0;
+        for (size_t i = 0; i < tensors.size(); ++i) {
+            const ggml_tensor * t = tensors[i]->tensor;
+            n_bytes_total += t->type != metadata[i].target_type
+                ? ggml_nrows(t) * ggml_row_size(metadata[i].target_type, t->ne[0])
+                : ggml_nbytes(t);
+        }
+        LLAMA_LOG_ERROR("\n============================================================================\n"
+                        " ERROR: %d of %d tensor(s) have shapes incompatible with their target types\n"
+                        "        and fallback quantization is disabled (see warnings above)\n"
+                        "%s"
+                        "============================================================================\n\n",
+                        qs.n_fallback, ml.n_tensors, llama_quant_fallback_summary(qs, ml, default_type, n_bytes_total).c_str());
+        throw std::runtime_error(format("%d tensor(s) would require fallback quantization", qs.n_fallback));
+    }
+
     // Set split info if needed
     if (n_split > 1) {
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
@@ -1353,8 +1435,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     }
 
     if (qs.n_fallback > 0) {
-        LLAMA_LOG_WARN("%s: WARNING: %d of %d tensor(s) required fallback quantization\n",
-                __func__, qs.n_fallback, ml.n_tensors);
+        LLAMA_LOG_WARN("%s: WARNING: %d of %d tensor(s) required fallback quantization\n%s",
+                __func__, qs.n_fallback, ml.n_tensors, llama_quant_fallback_summary(qs, ml, default_type, total_size_new).c_str());
     }
 }
 
@@ -1374,6 +1456,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.pure                        =*/ false,
         /*.keep_split                  =*/ false,
         /*.dry_run                     =*/ false,
+        /*.no_fallback                 =*/ false,
         /*.imatrix                     =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_type                 =*/ nullptr,
@@ -1463,6 +1546,7 @@ void llama_quant_compute_types(
     qs->n_fallback          = 0;
     qs->has_imatrix         = false;
     qs->has_tied_embeddings = true;
+    qs->fallbacks.clear();
 
     // build metadata from tensor names
     std::vector<tensor_metadata> metadata(n_tensors);
