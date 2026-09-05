@@ -273,7 +273,15 @@ static __device__ __forceinline__ int __vsubss4(const int a, const int b) {
 }
 
 static __device__ __forceinline__ int __vsub4(const int a, const int b) {
-    return __vsubss4(a, b);
+    // do some small modifications to a and b to make the subtraction not underflow
+    const unsigned int a_large = a | 0x80808080;
+    const unsigned int b_small = b & 0x7f7f7f7f;
+    const unsigned int result_low_7bits = a_large - b_small;
+
+    // if two ops share the same high bit, we should flip the high bit of the result
+    const unsigned int should_flip_high_1bit = (a ^ ~b) & 0x80808080;
+
+    return result_low_7bits ^ should_flip_high_1bit;
 }
 
 static __device__ __forceinline__ unsigned int __vcmpeq4(unsigned int a, unsigned int b) {
@@ -289,13 +297,13 @@ static __device__ __forceinline__ unsigned int __vcmpeq4(unsigned int a, unsigne
 }
 
 static __device__ __forceinline__ unsigned int __vcmpne4(unsigned int a, unsigned int b) {
-    const uint8x4_t& va = reinterpret_cast<const uint8x4_t&>(a);
-    const uint8x4_t& vb = reinterpret_cast<const uint8x4_t&>(b);
-    unsigned int c;
-    uint8x4_t& vc = reinterpret_cast<uint8x4_t&>(c);
-#pragma unroll
-    for (int i = 0; i < 4; ++i) {
-        vc[i] = va[i] == vb[i] ? 0x00 : 0xff;
-    }
-    return c;
+    const unsigned int x = a ^ b;
+
+    // any non-equal bit in a byte will set the high bit of that byte here
+    // the addition will not overflow in the byte as op1 and op2 are both less than 0x80
+    const unsigned int ne_low_7bits = ((x & 0x7f7f7f7f) + 0x7f7f7f7f) & 0x80808080;
+    const unsigned int ne_high_1bit = x & 0x80808080;
+    const unsigned int ne_any_bit = ne_low_7bits | ne_high_1bit;
+
+    return (ne_any_bit >> 7) * 0xff;
 }
