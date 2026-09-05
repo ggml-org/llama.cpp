@@ -345,6 +345,10 @@ private:
 
     bool sched_need_reserve = true;
 
+    // true for layers whose flash attention kernels do not support the KV cache type,
+    // in which case the KV cache is dequantized to F16 before the flash attention op
+    std::vector<bool> fa_kv_f16;
+
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
 
