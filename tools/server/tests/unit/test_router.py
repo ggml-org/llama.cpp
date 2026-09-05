@@ -118,6 +118,24 @@ def test_router_unload_model():
     _wait_for_model_status(model_id, {"unloaded"})
 
 
+def test_router_models_created_stable():
+    global server
+    server.start()
+    model_id = "ggml-org/tinygemma3-GGUF:Q8_0"
+
+    _load_model_and_wait(model_id)
+
+    res = server.make_request("GET", "/models")
+    assert res.status_code == 200
+    created = next(item["created"] for item in res.body["data"] if item["id"] == model_id)
+    assert isinstance(created, int)
+
+    # 'created' must be stable across requests, not regenerated per request
+    time.sleep(1.1)
+    res = server.make_request("GET", "/models")
+    assert next(item["created"] for item in res.body["data"] if item["id"] == model_id) == created
+
+
 def test_router_models_max_evicts_lru():
     global server
     server.models_max = 2

@@ -9,6 +9,7 @@
 
 #include <mutex>
 #include <condition_variable>
+#include <ctime>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -85,6 +86,7 @@ struct server_model_meta {
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
     bool hidden = false; // hidden from GET /models, but still accept if requested
+    std::time_t created = std::time(nullptr); // when the model was registered, for /v1/models
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
