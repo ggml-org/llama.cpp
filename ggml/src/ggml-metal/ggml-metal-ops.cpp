@@ -2378,6 +2378,12 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     const int16_t r2 = ne12/ne02;
     const int16_t r3 = ne13/ne03;
 
+    // find the break-even point where the matrix-matrix kernel becomes more efficient compared
+    // to the matrix-vector kernel
+    const int ne11_mm_min = 8;
+
+    const bool use_kq_mv_ext = ggml_metal_tuning::kq_mv_ext_enabled(props_dev->device_id);
+
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
     if (op->src[1]->type == GGML_TYPE_F32 && (ne00%128 == 0) &&
@@ -2405,7 +2411,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q6_K ||
            op->src[0]->type == GGML_TYPE_Q2_K ||
            op->src[0]->type == GGML_TYPE_Q3_K ||
-           false) && (ne11 >= 4 && ne11 <= 8)
+           false) && (ne11 >= 4 && ne11 <= 8) && use_kq_mv_ext
          )
         )
        ) {

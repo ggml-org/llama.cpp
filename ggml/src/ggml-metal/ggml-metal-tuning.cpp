@@ -3901,4 +3901,19 @@ fa_vec_cfg_t fa_vec_pick(enum ggml_metal_device_id device_id, int gpu_family, in
     return baseline;
 }
 
+// devices where K-quant mul_mv_ext is slower than the generic mat-vec path
+static const enum ggml_metal_device_id kq_mv_ext_disabled_table[] = {
+    GGML_METAL_DEVICE_M3_PRO,
+};
+
+bool kq_mv_ext_enabled(enum ggml_metal_device_id device_id) {
+    for (size_t i = 0; i < std::size(kq_mv_ext_disabled_table); ++i) {
+        if (kq_mv_ext_disabled_table[i] == device_id) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 }  // namespace ggml_metal_tuning
