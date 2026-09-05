@@ -74,7 +74,7 @@ static const char * level_str(enum ggml_log_level level) {
         case GGML_LOG_LEVEL_WARN:  return "warn";
         case GGML_LOG_LEVEL_ERROR: return "error";
         case GGML_LOG_LEVEL_CONT:  return "cont";
-        default:                   return "unknown";
+        default:                   return "none";
     }
 }
 
