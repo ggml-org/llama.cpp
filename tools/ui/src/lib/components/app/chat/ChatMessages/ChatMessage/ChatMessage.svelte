@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import {
 		ChatMessageAssistant,
+		ChatMessageCompaction,
 		ChatMessageMcpPrompt,
 		ChatMessageSynthetic,
 		ChatMessageSystem,
@@ -14,7 +15,7 @@
 		SYSTEM_MESSAGE_PLACEHOLDER
 	} from '$lib/constants';
 	import { setChatMessageActionsContext, setChatMessageEditContext } from '$lib/contexts';
-	import { AgenticSectionType, AttachmentType, MessageRole } from '$lib/enums';
+	import { AgenticSectionType, AttachmentType, MessageRole, MessageType } from '$lib/enums';
 	import { DatabaseService } from '$lib/services/database.service';
 	import { chatStore, conversationsStore, deviceStore } from '$lib/stores';
 	import type {
@@ -60,6 +61,7 @@
 	// Synthetic cwd-change messages render with the folder-row UI instead
 	// of a user bubble. The persisted flag is the single source of truth.
 	let isSynthetic = $derived(Boolean(message.isSynthetic));
+	let isCompaction = $derived(message.type === MessageType.COMPACTION);
 
 	let rawEditContent = $derived.by(() => {
 		if (message.role !== MessageRole.ASSISTANT) return undefined;
@@ -404,11 +406,13 @@
 	}
 </script>
 
-<div class:chat-message--synthetic={isSynthetic} class="chat-message">
+<div class:chat-message--synthetic={isSynthetic && !isCompaction} class="chat-message">
 	{#if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem bind:textareaElement class={className} {message} />
 	{:else if mcpPromptExtra}
 		<ChatMessageMcpPrompt class={className} mcpPrompt={mcpPromptExtra} {message} />
+	{:else if isCompaction}
+		<ChatMessageCompaction class={className} {message} />
 	{:else if isSynthetic}
 		<ChatMessageSynthetic class={className} {message} />
 	{:else if message.role === MessageRole.USER}

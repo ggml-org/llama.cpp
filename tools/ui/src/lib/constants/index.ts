@@ -20,6 +20,7 @@ export * from './tool-ui.constants';
 export * from './cache.constants';
 export * from './chat-form.constants';
 export * from './cli-flags.constants';
+export * from './compaction.constants';
 export * from './code-block.constants';
 export * from './context-keys.constants';
 export * from './control-actions.constants';
