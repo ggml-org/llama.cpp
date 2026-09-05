@@ -37,6 +37,18 @@ target_compile_definitions(${TARGET} PRIVATE
     CPPHTTPLIB_TCP_NODELAY=1
 )
 
+if (LLAMA_ZLIB)
+    find_package(ZLIB)
+    if (ZLIB_FOUND)
+        message(STATUS "ZLIB found: ${ZLIB_VERSION_STRING}")
+        # PUBLIC: the define changes httplib.h declarations, so all consumers must agree
+        target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_ZLIB_SUPPORT)
+        target_link_libraries(${TARGET} PUBLIC ZLIB::ZLIB)
+    else()
+        message(WARNING "ZLIB not found, HTTP gzip compression disabled")
+    endif()
+endif()
+
 set(OPENSSL_NO_ASM ON CACHE BOOL "Disable OpenSSL ASM code when building BoringSSL or LibreSSL")
 
 if (LLAMA_BUILD_BORINGSSL)

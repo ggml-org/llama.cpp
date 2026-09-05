@@ -2435,6 +2435,17 @@ server_http_proxy::server_http_proxy(
                 msg.content_type = value;
                 continue;
             }
+            if (lowered == "content-encoding") {
+                // strip codings the httplib client already decoded; unknown
+                // codings pass through undecoded and keep the header
+                bool decoded = false;
+#ifdef CPPHTTPLIB_ZLIB_SUPPORT
+                decoded |= to_lower_copy(string_strip(value)) == "gzip";
+#endif
+                if (decoded) {
+                    continue;
+                }
+            }
             msg.headers[key] = value;
         }
         return msg;
@@ -2477,10 +2488,12 @@ server_http_proxy::server_http_proxy(
     {
         req.method = method;
         req.path = path;
+        // explicit identity: with the header absent, the httplib client injects
+        // its own default and transparently decompresses the response
+        req.set_header("Accept-Encoding", "identity");
         for (const auto & [key, value] : headers) {
             const auto lowered = to_lower_copy(key);
             if (lowered == "accept-encoding") {
-                // disable Accept-Encoding to avoid compressed responses
                 continue;
             }
             if (lowered == "transfer-encoding") {

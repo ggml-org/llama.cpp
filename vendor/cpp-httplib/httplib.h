@@ -1817,10 +1817,12 @@ struct Response {
   std::string file_content_path_;
   std::string file_content_content_type_;
 
-  // Content coding chosen for a file-backed content provider, decided once
-  // where the file is opened so that the ETag and the body cannot disagree.
-  // `EncodingType::None` for every other kind of response.
-  detail::EncodingType file_content_encoding_ = detail::EncodingType::None;
+  // Content coding chosen for the response body, decided once so that the
+  // headers and the body cannot disagree: where the file is opened for a
+  // file-backed content provider (keeping the ETag honest), and in
+  // `apply_ranges()` for a chunked content provider. `EncodingType::None`
+  // for every other kind of response.
+  detail::EncodingType content_encoding_ = detail::EncodingType::None;
 };
 
 enum class Error {
