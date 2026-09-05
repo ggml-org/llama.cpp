@@ -1,0 +1,878 @@
+/**
+ * MigrationService - Unified data migration hook
+ *
+ * Centralizes all data migrations (localStorage, IndexedDB, legacy formats)
+ * into a single initialization point. Each migration copies data to the new
+ * format WITHOUT deleting the old, and state is tracked in localStorage so
+ * `runAllMigrations()` (called once at startup) never re-runs a completed
+ * migration. All migrations are non-destructive for downgrade compatibility.
+ */
+
+import {
+	CONFIG_LOCALSTORAGE_KEY,
+	DB_APP_NAME_DEPRECATED,
+	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
+	IDXDB_STORES,
+	IDXDB_TABLES,
+	LEGACY_AGENTIC_REGEX,
+	LEGACY_REASONING_TAGS,
+	NEW_TO_DEPRECATED_MAP,
+	SETTINGS_KEYS,
+	STORAGE_APP_NAME,
+	STORAGE_APP_NAME_DEPRECATED
+} from '$lib/constants';
+import { BooleanString, MessageRole } from '$lib/enums';
+import type { McpServerOverride } from '$lib/types/database';
+import Dexie from 'dexie';
+
+// Types
+
+interface Migration {
+	/** Unique identifier for this migration */
+	id: string;
+	/** Human-readable description */
+	description: string;
+	/** Run the migration forward (non-destructive - copies, doesn't delete) */
+	run(): Promise<void>;
+}
+
+interface MigrationState {
+	completed: string[];
+	failed: string[];
+	lastRun: string;
+}
+
+// Constants
+
+const MIGRATION_STATE_KEY = `${STORAGE_APP_NAME}.migration-state`;
+const MIGRATION_STATE_VERSION = 1;
+
+// State Management
+
+function getMigrationState(): MigrationState {
+	try {
+		const raw = localStorage.getItem(MIGRATION_STATE_KEY);
+
+		if (!raw) return { completed: [], failed: [], lastRun: '' };
+
+		const parsed = JSON.parse(raw);
+
+		if (parsed.version !== MIGRATION_STATE_VERSION) {
+			return { completed: [], failed: [], lastRun: '' };
+		}
+
+		return {
+			completed: parsed.completed ?? [],
+			failed: parsed.failed ?? [],
+			lastRun: parsed.lastRun ?? ''
+		};
+	} catch {
+		return { completed: [], failed: [], lastRun: '' };
+	}
+}
+
+function saveMigrationState(state: MigrationState): void {
+	localStorage.setItem(
+		MIGRATION_STATE_KEY,
+		JSON.stringify({
+			version: MIGRATION_STATE_VERSION,
+			...state,
+			lastRun: new Date().toISOString()
+		})
+	);
+}
+
+function isMigrationCompleted(id: string): boolean {
+	const state = getMigrationState();
+
+	return state.completed.includes(id);
+}
+
+function markMigrationCompleted(id: string): void {
+	const state = getMigrationState();
+
+	if (!state.completed.includes(id)) {
+		state.completed.push(id);
+	}
+
+	state.failed = state.failed.filter((f) => f !== id);
+	saveMigrationState(state);
+}
+
+function markMigrationFailed(id: string): void {
+	const state = getMigrationState();
+
+	if (!state.failed.includes(id)) {
+		state.failed.push(id);
+	}
+
+	saveMigrationState(state);
+}
+
+// Migration 1: LocalStorage Key Prefix (Non-Destructive)
+
+const LOCALSTORAGE_MIGRATION_ID = 'localstorage-prefix-v1';
+const localStorageMigration: Migration = {
+	description: 'Copy localStorage keys from LlamaCppWebui to LlamaUi prefix (non-destructive)',
+	id: LOCALSTORAGE_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		// Non-destructive: copy to new key, but KEEP the old key
+		for (const [newKey, deprecatedKey] of Object.entries(NEW_TO_DEPRECATED_MAP)) {
+			// Only migrate if new key doesn't already exist
+			const newValue = localStorage.getItem(newKey);
+
+			if (newValue !== null) {
+				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+					console.log(`[Migration] localStorage: ${newKey} already exists, skipping`);
+
+				continue;
+			}
+
+			const oldValue = localStorage.getItem(deprecatedKey);
+
+			if (oldValue !== null) {
+				localStorage.setItem(newKey, oldValue);
+
+				// Keep old key for downgrade compatibility - DO NOT DELETE
+				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+					console.log(
+						`[Migration] localStorage: copied ${deprecatedKey} → ${newKey} (preserved old)`
+					);
+				}
+			}
+		}
+	}
+};
+
+// Migration 2: IndexedDB Database Name (Non-Destructive)
+
+// eslint-disable-next-line padding-line-between-statements -- comment header separates this const group
+const IDXDB_MIGRATION_ID = 'idxdb-database-v1';
+const idxdbMigration: Migration = {
+	description: 'Copy IndexedDB from LlamacppWebui to LlamaUi database (non-destructive)',
+	id: IDXDB_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const oldDbNames = await Dexie.getDatabaseNames();
+
+		if (!oldDbNames.includes(DB_APP_NAME_DEPRECATED)) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] IndexedDB: no old database found, skipping');
+
+			return;
+		}
+
+		// Check if new database already has data
+		const newDb = new Dexie(STORAGE_APP_NAME);
+
+		newDb.version(1).stores(IDXDB_STORES);
+		const existingConvs = await newDb.table(IDXDB_TABLES.conversations).count();
+
+		if (existingConvs > 0) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] IndexedDB: new database already has data, skipping');
+
+			return;
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] IndexedDB: copying from', DB_APP_NAME_DEPRECATED);
+
+		const oldDb = new Dexie(DB_APP_NAME_DEPRECATED);
+
+		oldDb.version(1).stores(IDXDB_STORES);
+
+		const conversations = await oldDb.table(IDXDB_TABLES.conversations).toArray();
+		const messages = await oldDb.table(IDXDB_TABLES.messages).toArray();
+
+		if (conversations.length > 0) {
+			await newDb.table(IDXDB_TABLES.conversations).bulkAdd(conversations);
+
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log(`[Migration] IndexedDB: copied ${conversations.length} conversations`);
+		}
+
+		if (messages.length > 0) {
+			await newDb.table(IDXDB_TABLES.messages).bulkAdd(messages);
+
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log(`[Migration] IndexedDB: copied ${messages.length} messages`);
+		}
+
+		// Non-destructive: DO NOT delete old database - keep for downgrade compatibility
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] IndexedDB: preserved old database for downgrade compatibility');
+	}
+};
+
+// Migration 3: Legacy Message Format
+
+// eslint-disable-next-line padding-line-between-statements -- comment header separates this const group
+const LEGACY_MESSAGE_MIGRATION_ID = 'legacy-message-format-v2';
+
+interface ParsedTurn {
+	textBefore: string;
+	toolCalls: Array<{ name: string; args: string; result: string }>;
+}
+
+function parseLegacyToolCalls(content: string): ParsedTurn[] {
+	const turns: ParsedTurn[] = [];
+	const regex = new RegExp(LEGACY_AGENTIC_REGEX.COMPLETED_TOOL_CALL.source, 'g');
+
+	let lastIndex = 0;
+	let currentTurn: ParsedTurn = { textBefore: '', toolCalls: [] };
+	let match;
+
+	while ((match = regex.exec(content)) !== null) {
+		const textBefore = content.slice(lastIndex, match.index).trim();
+
+		if (textBefore && currentTurn.toolCalls.length > 0) {
+			turns.push(currentTurn);
+			currentTurn = { textBefore, toolCalls: [] };
+		} else if (textBefore && currentTurn.toolCalls.length === 0) {
+			currentTurn.textBefore = textBefore;
+		}
+
+		currentTurn.toolCalls.push({
+			args: match[2],
+			name: match[1],
+			result: match[3].replace(/^\n+|\n+$/g, '')
+		});
+
+		lastIndex = match.index + match[0].length;
+	}
+
+	const remainingText = content.slice(lastIndex).trim();
+
+	if (currentTurn.toolCalls.length > 0) {
+		turns.push(currentTurn);
+	}
+
+	if (remainingText) {
+		const cleanRemaining = remainingText
+			.replace(LEGACY_AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '')
+			.trim();
+
+		if (cleanRemaining) {
+			turns.push({ textBefore: cleanRemaining, toolCalls: [] });
+		}
+	}
+
+	if (turns.length === 0) {
+		turns.push({ textBefore: content.trim(), toolCalls: [] });
+	}
+
+	return turns;
+}
+
+function extractLegacyReasoning(content: string): { reasoning: string; cleanContent: string } {
+	let reasoning = '';
+	let cleanContent = content;
+
+	const re = new RegExp(LEGACY_AGENTIC_REGEX.REASONING_EXTRACT.source, 'g');
+
+	let match;
+
+	while ((match = re.exec(content)) !== null) {
+		reasoning += match[1];
+	}
+
+	cleanContent = cleanContent
+		.replace(new RegExp(LEGACY_AGENTIC_REGEX.REASONING_BLOCK.source, 'g'), '')
+		.replace(LEGACY_AGENTIC_REGEX.REASONING_OPEN, '');
+
+	return { cleanContent, reasoning };
+}
+
+function hasLegacyMarkers(content: string): boolean {
+	return LEGACY_AGENTIC_REGEX.HAS_LEGACY_MARKERS.test(content);
+}
+
+let DatabaseService: typeof import('./database.service').DatabaseService | null = null;
+
+async function getDatabaseService() {
+	if (!DatabaseService) {
+		const module = await import('./database.service');
+
+		DatabaseService = module.DatabaseService;
+	}
+
+	return DatabaseService;
+}
+
+const legacyMessageMigration: Migration = {
+	description: 'Migrate legacy marker-based messages to structured format',
+	id: LEGACY_MESSAGE_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const db = await getDatabaseService();
+		const conversations = await db.getAllConversations();
+
+		let migratedCount = 0;
+
+		for (const conv of conversations) {
+			const allMessages = await db.getConversationMessages(conv.id);
+
+			for (const message of allMessages) {
+				if (message.role !== MessageRole.ASSISTANT) {
+					if (message.content?.includes(LEGACY_REASONING_TAGS.START)) {
+						const { cleanContent, reasoning } = extractLegacyReasoning(message.content);
+
+						await db.updateMessage(message.id, {
+							content: cleanContent.trim(),
+							reasoningContent: reasoning || undefined
+						});
+						migratedCount++;
+					}
+
+					continue;
+				}
+
+				if (!hasLegacyMarkers(message.content ?? '')) continue;
+
+				const { cleanContent, reasoning } = extractLegacyReasoning(message.content);
+				const turns = parseLegacyToolCalls(cleanContent);
+
+				let existingToolCalls: Array<{
+					id: string;
+					function?: { name: string; arguments: string };
+				}> = [];
+
+				if (message.toolCalls) {
+					try {
+						existingToolCalls = JSON.parse(message.toolCalls);
+					} catch {
+						// Ignore
+					}
+				}
+
+				const firstTurn = turns[0];
+
+				if (!firstTurn) continue;
+
+				const firstTurnToolCalls = firstTurn.toolCalls.map((tc, i) => {
+					const existing =
+						existingToolCalls.find((e) => e.function?.name === tc.name) || existingToolCalls[i];
+
+					return {
+						function: { arguments: tc.args, name: tc.name },
+						id: existing?.id || `legacy_tool_${i}`,
+						type: 'function' as const
+					};
+				});
+
+				await db.updateMessage(message.id, {
+					content: firstTurn.textBefore,
+					reasoningContent: reasoning || undefined,
+					toolCalls: firstTurnToolCalls.length > 0 ? JSON.stringify(firstTurnToolCalls) : ''
+				});
+
+				let currentParentId = message.id;
+				let toolCallIdCounter = existingToolCalls.length;
+
+				for (let i = 0; i < firstTurn.toolCalls.length; i++) {
+					const tc = firstTurn.toolCalls[i];
+					const toolCallId = firstTurnToolCalls[i]?.id || `legacy_tool_${i}`;
+					const toolMsg = await db.createMessageBranch(
+						{
+							children: [],
+							content: tc.result,
+							convId: conv.id,
+							role: MessageRole.TOOL,
+							timestamp: message.timestamp + i + 1,
+							toolCallId,
+							toolCalls: '',
+							type: 'text'
+						},
+						currentParentId
+					);
+
+					currentParentId = toolMsg.id;
+				}
+
+				for (let turnIdx = 1; turnIdx < turns.length; turnIdx++) {
+					const turn = turns[turnIdx];
+					const turnToolCalls = turn.toolCalls.map((tc, i) => {
+						const idx = toolCallIdCounter + i;
+						const existing = existingToolCalls[idx];
+
+						return {
+							function: { arguments: tc.args, name: tc.name },
+							id: existing?.id || `legacy_tool_${idx}`,
+							type: 'function' as const
+						};
+					});
+
+					toolCallIdCounter += turn.toolCalls.length;
+
+					const assistantMsg = await db.createMessageBranch(
+						{
+							children: [],
+							content: turn.textBefore,
+							convId: conv.id,
+							model: message.model,
+							role: MessageRole.ASSISTANT,
+							timestamp: message.timestamp + turnIdx * 100,
+							toolCalls: turnToolCalls.length > 0 ? JSON.stringify(turnToolCalls) : '',
+							type: 'text'
+						},
+						currentParentId
+					);
+
+					currentParentId = assistantMsg.id;
+
+					for (let i = 0; i < turn.toolCalls.length; i++) {
+						const tc = turn.toolCalls[i];
+						const toolCallId = turnToolCalls[i]?.id || `legacy_tool_${toolCallIdCounter + i}`;
+						const toolMsg = await db.createMessageBranch(
+							{
+								children: [],
+								content: tc.result,
+								convId: conv.id,
+								role: MessageRole.TOOL,
+								timestamp: message.timestamp + turnIdx * 100 + i + 1,
+								toolCallId,
+								toolCalls: '',
+								type: 'text'
+							},
+							currentParentId
+						);
+
+						currentParentId = toolMsg.id;
+					}
+				}
+
+				if (message.children.length > 0 && currentParentId !== message.id) {
+					for (const childId of message.children) {
+						const child = allMessages.find((m) => m.id === childId);
+
+						if (!child) continue;
+
+						if (child.role !== MessageRole.TOOL) {
+							await db.updateMessage(childId, { parent: currentParentId });
+						}
+					}
+					await db.updateMessage(message.id, { children: [] });
+				}
+
+				migratedCount++;
+			}
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(`[Migration] Legacy messages: migrated ${migratedCount} messages`);
+	}
+};
+
+// Migration 4: Theme Key (Non-Destructive)
+
+// eslint-disable-next-line padding-line-between-statements -- comment header separates this const group
+const THEME_MIGRATION_ID = 'theme-key-v1';
+const themeMigration: Migration = {
+	description: 'Copy standalone theme key to config object (non-destructive)',
+	id: THEME_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const legacyTheme = localStorage.getItem('theme');
+
+		if (legacyTheme === null) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] Theme: no legacy theme key found, skipping');
+
+			return;
+		}
+
+		// Check if config already has theme
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+		const config = configRaw ? JSON.parse(configRaw) : {};
+
+		if (SETTINGS_KEYS.THEME in config) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] Theme: config already has theme, skipping');
+
+			return;
+		}
+
+		config[SETTINGS_KEYS.THEME] = legacyTheme;
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		// Non-destructive: DO NOT delete legacy theme key - keep for downgrade compatibility
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(`[Migration] Theme: copied standalone theme to config (preserved old key)`);
+	}
+};
+
+// Migration Registry & Runner
+
+// eslint-disable-next-line padding-line-between-statements -- comment header separates this const group
+const CUSTOM_JSON_MIGRATION_ID = 'custom-json-key-v1';
+const customJsonKeyMigration: Migration = {
+	description: 'Copy legacy custom config key to customJson (non-destructive)',
+	id: CUSTOM_JSON_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+
+		if (!('custom' in config)) return;
+
+		if (SETTINGS_KEYS.CUSTOM_JSON in config) return;
+
+		config[SETTINGS_KEYS.CUSTOM_JSON] = config.custom;
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		// Non-destructive: keep the legacy custom key for downgrade compatibility
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(`[Migration] Custom JSON: copied custom to customJson (preserved old key)`);
+	}
+};
+const MCP_DEFAULT_ENABLED_MIGRATION_ID = 'mcp-default-enabled-to-config-v1';
+const LEGACY_MCP_DEFAULT_ENABLED_KEY = `${STORAGE_APP_NAME}.mcpDefaultEnabled`;
+const DEPRECATED_LEGACY_MCP_DEFAULT_ENABLED_KEY = `${STORAGE_APP_NAME_DEPRECATED}.mcpDefaultEnabled`;
+const mcpDefaultEnabledMigration: Migration = {
+	description:
+		'Copy mcpDefaultEnabled localStorage key into settings config (preserves legacy keys)',
+	id: MCP_DEFAULT_ENABLED_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const raw =
+			localStorage.getItem(LEGACY_MCP_DEFAULT_ENABLED_KEY) ??
+			localStorage.getItem(DEPRECATED_LEGACY_MCP_DEFAULT_ENABLED_KEY);
+
+		// Legacy keys intentionally left in place so a downgrade keeps reading them.
+
+		if (raw === null) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] MCP default enabled: no legacy key found, skipping');
+
+			return;
+		}
+
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+		const config = configRaw ? JSON.parse(configRaw) : {};
+
+		// Don't overwrite an existing config entry — current data wins.
+		if (MCP_DEFAULT_OVERRIDES_LEGACY_KEY in config) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] MCP default enabled: config already has overrides, skipping');
+
+			return;
+		}
+
+		try {
+			const parsed = JSON.parse(raw);
+
+			if (!Array.isArray(parsed)) return;
+
+			const valid = parsed.every(
+				(o) =>
+					typeof o === 'object' &&
+					o !== null &&
+					typeof (o as Record<string, unknown>).serverId === 'string' &&
+					typeof (o as Record<string, unknown>).enabled === 'boolean'
+			);
+
+			if (!valid) return;
+		} catch {
+			return;
+		}
+
+		config[MCP_DEFAULT_OVERRIDES_LEGACY_KEY] = raw;
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] MCP default enabled: moved legacy key into config');
+	}
+};
+const CONFIG_TYPES_MIGRATION_ID = 'config-type-normalization-v1';
+const configTypesMigration: Migration = {
+	description: 'Coerce legacy string-encoded booleans in persisted config to real booleans',
+	id: CONFIG_TYPES_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+
+		let changed = false;
+
+		// Pre-schema configs persisted booleans as "true"/"false" strings; the strict server
+		// schema rejects them. No config string field holds exactly "true"/"false", so the
+		// match is unambiguous.
+		for (const key of Object.keys(config)) {
+			if (config[key] === BooleanString.TRUE) {
+				config[key] = true;
+				changed = true;
+			} else if (config[key] === BooleanString.FALSE) {
+				config[key] = false;
+				changed = true;
+			}
+		}
+
+		if (changed) {
+			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(`[Migration] Config types: coerced string booleans (changed=${changed})`);
+	}
+};
+const RENDER_KEYS_MIGRATION_ID = 'render-keys-unfold-v1';
+const LEGACY_RENDER_RAW_TEXT_KEY = 'renderContentAsRawText';
+const renderKeysMigration: Migration = {
+	description: 'Unfold the single raw text render toggle onto the per-surface render keys',
+	id: RENDER_KEYS_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+
+		if (!(LEGACY_RENDER_RAW_TEXT_KEY in config)) return;
+
+		// The toggle carried user content and thinking at once and cannot say which surface
+		// was chosen, so it only restores the user key and thinking keeps its own default.
+		if (!(SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN in config)) {
+			config[SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN] =
+				config[LEGACY_RENDER_RAW_TEXT_KEY] !== true;
+		}
+
+		// Dropped rather than preserved: the two render keys and the toggle describe the same
+		// surfaces, so leaving it behind would let a stale value fight the restored one.
+		delete config[LEGACY_RENDER_RAW_TEXT_KEY];
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] Render keys: unfolded the raw text toggle');
+	}
+};
+const MCP_DEFAULT_OVERRIDES_LEGACY_KEY = `${STORAGE_APP_NAME}.mcpDefaultServerOverrides`;
+const MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID = 'mcp-default-overrides-merge-v1';
+/**
+ * Folds `mcpDefaultServerOverrides` (the legacy "default for new chats" list,
+ * JSON-encoded as `[{ serverId, enabled }, ...]`) into `mcpServers[i].enabled`.
+ * The legacy override key is intentionally left in the config so a downgrade
+ * keeps reading it. Runs after `mcpDefaultEnabledMigration` so any legacy
+ * standalone overrides are already inside the config.
+ */
+const mcpDefaultOverridesMergeMigration: Migration = {
+	description:
+		'Merge mcpDefaultServerOverrides entries onto mcpServers[i].enabled (preserves legacy key)',
+	id: MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+		const raw = config[MCP_DEFAULT_OVERRIDES_LEGACY_KEY];
+
+		if (typeof raw !== 'string' || raw.length === 0) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] MCP default overrides merge: nothing to merge');
+
+			return;
+		}
+
+		let overrides: { serverId: string; enabled: boolean }[];
+
+		try {
+			const parsed = JSON.parse(raw);
+
+			if (!Array.isArray(parsed)) return;
+
+			overrides = parsed.filter(
+				(o) =>
+					typeof o === 'object' &&
+					o !== null &&
+					typeof (o as Record<string, unknown>).serverId === 'string' &&
+					typeof (o as Record<string, unknown>).enabled === 'boolean'
+			) as { serverId: string; enabled: boolean }[];
+		} catch {
+			return;
+		}
+
+		const serversRaw = config[SETTINGS_KEYS.MCP_SERVERS];
+
+		let servers: { id: string; enabled?: boolean }[];
+
+		try {
+			servers = typeof serversRaw === 'string' ? JSON.parse(serversRaw) : [];
+		} catch {
+			return;
+		}
+
+		if (!Array.isArray(servers)) servers = [];
+
+		let serversChanged = false;
+
+		const knownIds = new Set(servers.map((s) => s.id));
+
+		for (const override of overrides) {
+			if (!knownIds.has(override.serverId)) continue;
+
+			const index = servers.findIndex((s) => s.id === override.serverId);
+
+			if (index >= 0 && servers[index].enabled !== override.enabled) {
+				servers[index] = { ...servers[index], enabled: override.enabled };
+				serversChanged = true;
+			}
+		}
+
+		if (serversChanged) {
+			config[SETTINGS_KEYS.MCP_SERVERS] = JSON.stringify(servers);
+			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(
+				`[Migration] MCP default overrides merge: applied=${overrides.length} serversChanged=${serversChanged} (legacy key preserved)`
+			);
+	}
+};
+const MCP_SERVER_OVERRIDES_TO_TOOL_POLICY_MIGRATION_ID = 'mcp-server-overrides-to-tool-policy-v1';
+const mcpServerOverridesToToolPolicyMigration: Migration = {
+	description:
+		'Seed per-conversation disabled tool keys from the global defaults and legacy per-conversation MCP server overrides (legacy field preserved)',
+	id: MCP_SERVER_OVERRIDES_TO_TOOL_POLICY_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		// The global disabled set used to apply to every conversation; it is now
+		// the defaults seeded into newly created conversations, so existing rows
+		// are seeded with it to keep their behavior unchanged.
+		let defaults: string[] = [];
+
+		try {
+			const raw = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
+
+			if (raw) {
+				const parsed: unknown = JSON.parse(raw);
+
+				if (Array.isArray(parsed)) {
+					defaults = parsed.filter((k): k is string => typeof k === 'string');
+				}
+			}
+		} catch {
+			// fall through with empty defaults so legacy overrides still migrate
+		}
+
+		const db = await getDatabaseService();
+		const conversations = await db.getAllConversations();
+
+		let migratedCount = 0;
+
+		for (const conv of conversations) {
+			// re-run safety: a row that already has a policy is left alone
+			if (conv.disabledTools !== undefined) continue;
+
+			// A legacy per-conversation server disable becomes a server-scoped tool
+			// key (same format as toolsStore.getMcpServerToolsKey). Per-conversation
+			// enables are dropped: the global server flag governs now.
+			const serverGroupKeys = (conv.mcpServerOverrides ?? [])
+				.filter((o: McpServerOverride) => !o.enabled)
+				.map((o: McpServerOverride) => `mcp:${o.serverId}`);
+			const disabledTools = [...new Set([...defaults, ...serverGroupKeys])];
+
+			if (disabledTools.length === 0) continue;
+
+			await db.updateConversation(conv.id, { disabledTools });
+			migratedCount++;
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(
+				`[Migration] MCP server overrides -> tool policy: updated ${migratedCount} conversations`
+			);
+	}
+};
+const migrations: Migration[] = [
+	localStorageMigration,
+	idxdbMigration,
+	legacyMessageMigration,
+	themeMigration,
+	customJsonKeyMigration,
+	mcpDefaultEnabledMigration,
+	mcpDefaultOverridesMergeMigration,
+	configTypesMigration,
+	renderKeysMigration,
+	mcpServerOverridesToToolPolicyMigration
+];
+
+export const MigrationService = {
+	/**
+	 * Get all registered migrations
+	 */
+	getMigrations(): Migration[] {
+		return [...migrations];
+	},
+
+	/**
+	 * Get current migration state
+	 */
+	getState(): MigrationState {
+		return getMigrationState();
+	},
+
+	/**
+	 * Check if a specific migration has been completed
+	 */
+	isCompleted(id: string): boolean {
+		return isMigrationCompleted(id);
+	},
+
+	/**
+	 * Reset migration state (use with caution - migrations will run again)
+	 */
+	resetState(): void {
+		localStorage.removeItem(MIGRATION_STATE_KEY);
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] State reset - all migrations will run again');
+	},
+
+	/**
+	 * Run all pending migrations (non-destructive - preserves legacy data)
+	 * Should be called once at app initialization
+	 */
+	async runAllMigrations(): Promise<void> {
+		const state = getMigrationState();
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] Starting migration run, state:', state);
+
+		for (const migration of migrations) {
+			if (isMigrationCompleted(migration.id)) {
+				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+					console.log(`[Migration] ${migration.id}: already completed, skipping`);
+
+				continue;
+			}
+
+			try {
+				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+					console.log(`[Migration] ${migration.id}: running...`);
+
+				await migration.run();
+				markMigrationCompleted(migration.id);
+
+				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+					console.log(`[Migration] ${migration.id}: completed successfully`);
+			} catch (error) {
+				console.error(`[Migration] ${migration.id}: failed`, error);
+				markMigrationFailed(migration.id);
+			}
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] All migrations complete');
+	}
+};

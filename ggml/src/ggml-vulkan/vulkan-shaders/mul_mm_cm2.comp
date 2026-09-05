@@ -11,6 +11,9 @@
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_cooperative_matrix : enable
 #extension GL_NV_cooperative_matrix2 : enable
+#ifdef GGML_VULKAN_COOPMAT2_DECODE_VECTOR
+#extension GL_NV_cooperative_matrix_decode_vector : enable
+#endif
 #extension GL_EXT_buffer_reference : enable
 #extension GL_KHR_shader_subgroup_ballot : enable
 #extension GL_KHR_shader_subgroup_vote : enable
@@ -33,6 +36,7 @@ layout (constant_id = 3) const uint BK = 16;  // Assumed to be 32 if working wit
 layout (constant_id = 4) const bool enable_smaller_matrices = false;
 const uint BNover2 = enable_smaller_matrices ? (BN / 2) : BN;
 const uint BNover4 = enable_smaller_matrices ? (BN / 4) : BN;
+layout (constant_id = 5) const uint ALIGNED = 0;
 
 layout (push_constant) uniform parameter
 {
@@ -52,6 +56,8 @@ layout (push_constant) uniform parameter
     uint nei1;
     uint nbi1;
     uint ne11;
+    uint n_experts;
+    uint hoist_row_ids;
 #else
     uint base_work_group_z;
     uint num_batches;
@@ -60,21 +66,26 @@ layout (push_constant) uniform parameter
     uint ne12;
     uint broadcast2;
     uint broadcast3;
-#endif
     // N dimension for the B matrix can be >= p.N
     uint padded_N;
+#endif
 } p;
 
 
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
 layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
+#if defined(MUL_MAT_ID) && defined(GGML_VULKAN_COOPMAT2_DECODE_VECTOR)
+layout (binding = 1) readonly buffer B4 {B_TYPEV4 data_b_v4[];};
+#endif
 
 #if QUANT_K > 1
-#define DECODEFUNCA , dequantFuncA
-
 #include "dequant_funcs_cm2.glsl"
-
+#if defined(dequantFuncA_v) && defined(GGML_VULKAN_COOPMAT2_DECODE_VECTOR)
+#define DECODEFUNCA , dequantFuncA, dequantFuncA_v
+#else
+#define DECODEFUNCA , dequantFuncA
+#endif
 #else
 #define DECODEFUNCA
 #endif
@@ -103,7 +114,7 @@ layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufB {
 };
 
 uint _ne1;
-layout (constant_id = 5) const uint subgroup_size = 32;
+layout (constant_id = 6) const uint subgroup_size = 32;
 shared uvec4 ballots_sh[BLOCK_SIZE / subgroup_size];
 
 B_TYPE decodeFuncB(const in decodeBufB bl, const in uint blockCoords[2], const in uint coordInBlock[2])
@@ -111,10 +122,32 @@ B_TYPE decodeFuncB(const in decodeBufB bl, const in uint blockCoords[2], const i
     const uint row_i = blockCoords[0];
 
     const u16vec4 row_idx = row_ids[row_i];
-    B_TYPE ret = data_b[row_idx.y * p.batch_stride_b + row_idx.x * p.stride_b + blockCoords[1]];
+#if defined(GGML_VULKAN_COOPMAT2_DECODE_VECTOR)
+    // The decode-vector path gives B a K-dimension tensor-layout block size of BK.
+    const uint k = blockCoords[1] * BK + coordInBlock[1];
+#else
+    const uint k = blockCoords[1];
+#endif
+    B_TYPE ret = data_b[row_idx.y * p.batch_stride_b + row_idx.x * p.stride_b + k];
 
     return ret;
 }
+
+#if defined(GGML_VULKAN_COOPMAT2_DECODE_VECTOR)
+B_TYPEV4 decodeFuncB_v(const in decodeBufB bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const uint row_i = blockCoords[0];
+
+    const u16vec4 row_idx = row_ids[row_i];
+    const uint k = blockCoords[1] * BK + coordInBlock[1];
+    const uint base = row_idx.y * p.batch_stride_b + row_idx.x * p.stride_b + k;
+
+    return data_b_v4[base >> 2];
+}
+#define DECODEFUNCB , decodeFuncB, decodeFuncB_v
+#else
+#define DECODEFUNCB , decodeFuncB
+#endif
 
 D_TYPE perElemOpD(const in uint32_t r, const in uint32_t c, const in D_TYPE elem, const in uint32_t ir, const in uint32_t ic)
 {
@@ -194,6 +227,23 @@ void load_row_ids(uint expert_idx, bool nei0_is_pow2, uint ic) {
     }
     barrier();
 }
+
+void load_row_ids_hoisted(uint expert_idx, uint ic) {
+    _ne1 = uint(data_expert_count[expert_idx]);
+
+    const uint tile_begin = ic * BN;
+    const uint tile_count = tile_begin < _ne1 ? min(BN, _ne1 - tile_begin) : 0;
+    const uint expert_offset = uint(data_expert_count[p.n_experts + expert_idx]);
+    const uint row_ids_offset = 2 * p.n_experts + 1 + expert_offset + tile_begin;
+
+    for (uint i = gl_LocalInvocationIndex; i < tile_count; i += BLOCK_SIZE) {
+        const uint packed_row_id = uint(data_expert_count[row_ids_offset + i]);
+        const uint ii0 = packed_row_id & 0xffffu;
+        const uint ii1 = packed_row_id >> 16;
+        row_ids[i] = u16vec4(fastmod(ii0, p.ne11), ii1, ii0, 0);
+    }
+    barrier();
+}
 #endif
 
 void main() {
@@ -235,7 +285,9 @@ void main() {
     const uint ik = gl_WorkGroupID.x / blocks_m;
 
 #ifdef MUL_MAT_ID
-    if (bitCount(p.nei0) == 1) {
+    if (p.hoist_row_ids != 0) {
+        load_row_ids_hoisted(expert_idx, ic);
+    } else if (bitCount(p.nei0) == 1) {
         load_row_ids(expert_idx, true, ic);
     } else {
         load_row_ids(expert_idx, false, ic);
@@ -267,33 +319,45 @@ void main() {
 
     // Hint to the compiler that values are aligned (want 16B alignment).
     // Quants are always block-aligned, no alignment needed.
-#if ALIGNED
+    if (ALIGNED != 0) {
 #if QUANT_K == 1
-    stride_a &= ~7;
+        stride_a &= ~7;
 #endif
-    stride_b &= ~7;
-#endif
+        stride_b &= ~7;
+    }
 
     // Create layouts for both clamped and unclamped accesses
     tensorLayoutNV<2> tensorLayoutA = createTensorLayoutNV(2);
     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> tensorLayoutAClamp = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
     tensorLayoutNV<2> tensorLayoutB = createTensorLayoutNV(2);
+#ifndef MUL_MAT_ID
     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> tensorLayoutBClamp = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
+#endif
     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> tensorLayoutD = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
 
 #if QUANT_K > 1
     tensorLayoutA = setTensorLayoutBlockSizeNV(tensorLayoutA, 1, QUANT_K);
     tensorLayoutAClamp = setTensorLayoutBlockSizeNV(tensorLayoutAClamp, 1, QUANT_K);
 #endif
+#if defined(MUL_MAT_ID) && defined(GGML_VULKAN_COOPMAT2_DECODE_VECTOR)
+    tensorLayoutB = setTensorLayoutBlockSizeNV(tensorLayoutB, 1, BK);
+#endif
 
     // Use end_k rather than p.K as the dimension because that's what
     // we need to bound check against when using split_k.
-    // Bounds check B against padded_N, but bounds check D against N.
     tensorLayoutA = setTensorLayoutDimensionNV(tensorLayoutA, p.M, end_k);
+#ifdef MUL_MAT_ID
+    // MUL_MAT_ID pads each B row to stride_b so partial K tiles read zeros without clamping.
+    tensorLayoutB = setTensorLayoutDimensionNV(tensorLayoutB, BN, p.stride_b);
+#else
+    // Bounds check B against padded_N, but bounds check D against N.
     tensorLayoutB = setTensorLayoutDimensionNV(tensorLayoutB, p.padded_N, end_k);
+#endif
     tensorLayoutD = setTensorLayoutDimensionNV(tensorLayoutD, p.N, p.M);
     tensorLayoutAClamp = setTensorLayoutDimensionNV(tensorLayoutAClamp, p.M, end_k);
+#ifndef MUL_MAT_ID
     tensorLayoutBClamp = setTensorLayoutDimensionNV(tensorLayoutBClamp, p.padded_N, end_k);
+#endif
 
     tensorLayoutD = setTensorLayoutStrideNV(tensorLayoutD, p.stride_d, 1);
 
@@ -470,7 +534,9 @@ void main() {
 
         tensorLayoutB = setTensorLayoutStrideNV(tensorLayoutB, stride_b, 1);
 
+#ifndef MUL_MAT_ID
         tensorLayoutBClamp = setTensorLayoutStrideNV(tensorLayoutBClamp, stride_b, 1);
+#endif
 
         uint k_iters = (end_k - start_k + BK - 1) / BK;
 
@@ -497,7 +563,7 @@ void main() {
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover4, gl_MatrixUseB> mat_b;
 
                     coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
-                    coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover4, block_k, BK), tensorViewTranspose, decodeFuncB);
+                    coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover4, block_k, BK), tensorViewTranspose DECODEFUNCB);
 
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
                 } else {
@@ -505,7 +571,7 @@ void main() {
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover4, gl_MatrixUseB> mat_b;
 
                     coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutAClamp, ir * BM, BM, block_k, BK) DECODEFUNCA);
-                    coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover4, block_k, BK), tensorViewTranspose, decodeFuncB);
+                    coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover4, block_k, BK), tensorViewTranspose DECODEFUNCB);
 
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
                 }
@@ -541,7 +607,7 @@ void main() {
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover2, gl_MatrixUseB> mat_b;
 
                     coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
-                    coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover2, block_k, BK), tensorViewTranspose, decodeFuncB);
+                    coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover2, block_k, BK), tensorViewTranspose DECODEFUNCB);
 
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
                 } else {
@@ -549,7 +615,7 @@ void main() {
                     coopmat<MAT_TYPE, gl_ScopeWorkgroup, BK, BNover2, gl_MatrixUseB> mat_b;
 
                     coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutAClamp, ir * BM, BM, block_k, BK) DECODEFUNCA);
-                    coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover2, block_k, BK), tensorViewTranspose, decodeFuncB);
+                    coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BNover2, block_k, BK), tensorViewTranspose DECODEFUNCB);
 
                     sum = coopMatMulAdd(mat_a, mat_b, sum);
                 }
@@ -586,7 +652,7 @@ void main() {
 
                 coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutA, ir * BM, BM, block_k, BK) DECODEFUNCA);
 #ifdef MUL_MAT_ID
-                coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BN, block_k, BK), tensorViewTranspose, decodeFuncB);
+                coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BN, block_k, BK), tensorViewTranspose DECODEFUNCB);
 #else
                 coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutBClamp, ic * BN, BN, block_k, BK), tensorViewTranspose);
 #endif
@@ -598,7 +664,7 @@ void main() {
 
                 coopMatLoadTensorNV(mat_a, data_a, pos_a, sliceTensorLayoutNV(tensorLayoutAClamp, ir * BM, BM, block_k, BK) DECODEFUNCA);
 #ifdef MUL_MAT_ID
-                coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BN, block_k, BK), tensorViewTranspose, decodeFuncB);
+                coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutB, 0, BN, block_k, BK), tensorViewTranspose DECODEFUNCB);
 #else
                 coopMatLoadTensorNV(mat_b, data_b, pos_b, sliceTensorLayoutNV(tensorLayoutBClamp, ic * BN, BN, block_k, BK), tensorViewTranspose);
 #endif

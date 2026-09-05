@@ -195,8 +195,8 @@ static const struct ggml_backend_i ggml_backend_cpu_i = {
     /* .free                    = */ ggml_backend_cpu_free,
     /* .set_tensor_async        = */ NULL,
     /* .get_tensor_async        = */ NULL,
-    /* .get_tensor_2d_async     = */ NULL,
     /* .set_tensor_2d_async     = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ NULL,
     /* .synchronize             = */ NULL,
     /* .graph_plan_create       = */ ggml_backend_cpu_graph_plan_create,
@@ -397,6 +397,7 @@ static void ggml_backend_cpu_device_get_props(ggml_backend_dev_t dev, struct ggm
         /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ true,
         /* .events                = */ false,
+        /* .mmap_support          = */ true,
     };
 }
 
@@ -462,12 +463,17 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
             return max_bias == 0.0f;
         }
         case GGML_OP_IM2COL_BACK:
-            return src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32;
+            return src0->type == GGML_TYPE_F32 && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
         case GGML_OP_GET_ROWS_BACK:
             return src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16;
         case GGML_OP_OUT_PROD:
-            return (src0->type == GGML_TYPE_F32 || (ggml_is_quantized(src0->type) && src0->ne[2] == src1->ne[2] && src0->ne[3] == src1->ne[3])) &&
+            return (src0->type == GGML_TYPE_F32 ||
+                    ((src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && src0->ne[2] == src1->ne[2] && src0->ne[3] == src1->ne[3])) &&
                 src1->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+        case GGML_OP_CONV_2D:
+            return ggml_is_contiguous(op->src[0]);
+        case GGML_OP_SSM_SCAN:
+            return ggml_get_op_params_i32(op, 0) == 1 || op->src[3]->ne[0] == 1;
         default:
             return true;
     }
@@ -593,6 +599,9 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
         }
         if (ggml_cpu_has_sme()) {
             features.push_back({ "SME", "1" });
+        }
+        if (ggml_cpu_has_sme2()) {
+            features.push_back({ "SME2", "1" });
         }
         if (ggml_cpu_has_riscv_v()) {
             features.push_back({ "RISCV_V", "1" });

@@ -12,26 +12,33 @@
 
 ## Reporting a vulnerability
 
+> [!IMPORTANT]
+> The private security disclosure program is disabled until further notice. Please submit patches with fixes directly to the repo as public PRs. Emails will be ignored.
+
 If you have discovered a security vulnerability in this project that falls inside the [covered topics](#covered-topics), please report it privately. **Do not disclose it as a public issue.** This gives us time to work with you to fix the issue before public exposure, reducing the chance that the exploit will be used before a patch is released.
 
 Please disclose it as a private [security advisory](https://github.com/ggml-org/llama.cpp/security/advisories/new).
 
 A team of volunteers on a reasonable-effort basis maintains this project. As such, please give us at least 90 days to work on a fix before public exposure.
 
-> [!IMPORTANT]
-> For collaborators: if you are interested in helping out with reviewing private security disclosures, please see: https://github.com/ggml-org/llama.cpp/discussions/18080
+### AI-powered code scan
 
-## Requirements
+llama.cpp has an AI security scanner that scans the code periodically. The full prompts and tool set can be found in [ggml-org/security-scan-prompt](https://github.com/ggml-org/security-scan-prompt).
+
+We greatly appreciate reports that reflect genuine research effort, and we are happy to spend our time reviewing them. Findings that an autonomous AI agent can surface on its own add little on top of the scans we already run.
+
+### Requirements
 
 Before submitting your report, ensure you meet the following requirements:
 
 - You have read this policy and fully understand it.
+- You have searched for existing discussions of the issue. If it has already been reported, your report will likely be rejected as a duplicate.
 - AI is only permitted in an assistive capacity as stated in [AGENTS.md](AGENTS.md). We do not accept reports that are written exclusively by AI.
 - Your report must include a working Proof-of-Concept in the form of a script and/or attached files.
 
 Maintainers reserve the right to close the report if these requirements are not fulfilled.
 
-## Covered Topics
+### Covered Topics
 
 Only vulnerabilities that fall within these parts of the project are considered valid. For problems falling outside of this list, please report them as issues.
 
@@ -45,6 +52,8 @@ Only vulnerabilities that fall within these parts of the project are considered 
     - Bugs that can lead to Denial-of-Service attack
 
 Note that none of the topics under [Using llama.cpp securely](#using-llamacpp-securely) are considered vulnerabilities in LLaMA C++.
+
+Denial-of-Service (DoS) bugs are generally not treated as vulnerabilities. We don't reject them outright, but we look at them case-by-case and only accept those that are genuinely worth fixing.
 
 For vulnerabilities that fall within the `vendor` directory, please report them directly to the third-party project.
 
@@ -80,7 +89,7 @@ To protect sensitive data from potential leaks or unauthorized access, it is cru
 ### Untrusted environments or networks
 
 If you can't run your models in a secure and isolated environment or if it must be exposed to an untrusted network, make sure to take the following security precautions:
-* Do not use the RPC backend, [rpc-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) and [llama-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server) functionality (see https://github.com/ggml-org/llama.cpp/pull/13061).
+* Do not use the RPC backend, [ggml-rpc-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) and [llama-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server) functionality (see https://github.com/ggml-org/llama.cpp/pull/13061).
 * Confirm the hash of any downloaded artifact (e.g. pre-trained model weights) matches a known-good value.
 * Encrypt your data if sending it over the network.
 

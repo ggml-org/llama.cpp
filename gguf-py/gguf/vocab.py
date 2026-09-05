@@ -52,6 +52,8 @@ class SpecialVocab:
     add_special_token: dict[str, bool]
     special_token_ids: dict[str, int]
     chat_template: str | Sequence[Mapping[str, str]] | None
+    normalizer_lowercase: bool | None
+    normalizer_strip_accents: bool | None
 
     def __init__(
         self, path: str | os.PathLike[str], load_merges: bool = False,
@@ -64,6 +66,8 @@ class SpecialVocab:
         self.load_merges = load_merges
         self.merges = []
         self.chat_template = None
+        self.normalizer_lowercase = None
+        self.normalizer_strip_accents = None
         if special_token_types is not None:
             self.special_token_types = special_token_types
         else:
@@ -102,6 +106,14 @@ class SpecialVocab:
             if not quiet:
                 logger.info(f'Setting chat_template to {self.chat_template}')
             gw.add_chat_template(self.chat_template)
+        if self.normalizer_lowercase is not None:
+            if not quiet:
+                logger.info(f'Setting normalizer_lowercase to {self.normalizer_lowercase}')
+            gw.add_normalizer_lowercase(self.normalizer_lowercase)
+        if self.normalizer_strip_accents is not None:
+            if not quiet:
+                logger.info(f'Setting normalizer_strip_accents to {self.normalizer_strip_accents}')
+            gw.add_normalizer_strip_accents(self.normalizer_strip_accents)
 
     def _load(self, path: Path) -> None:
         self._try_load_from_tokenizer_json(path)
@@ -146,6 +158,28 @@ class SpecialVocab:
             return
         logger.warning(f'Special token type {typ}, id {tid} out of range, must be under {self.n_vocab} - skipping')
 
+    def _parse_normalizer(self, normalizer: dict) -> None:
+        # ref: https://huggingface.co/docs/tokenizers/api/normalizers
+        #
+        # Extracts normalizer flags from three possible formats:
+        # 1. Standalone:           {"type": "Lowercase"}
+        # 2. BertNormalizer attrs: {"type": "BertNormalizer", ...}
+        # 3. Nested in Sequence:   {"type": "Sequence", "normalizers": [...]}
+
+        normalizer_type = normalizer.get('type')
+        if normalizer_type == 'Lowercase':
+            self.normalizer_lowercase = True
+        elif normalizer_type == 'StripAccents':
+            self.normalizer_strip_accents = True
+        elif normalizer_type == 'BertNormalizer':
+            if 'lowercase' in normalizer:
+                self.normalizer_lowercase = normalizer['lowercase']
+            if 'strip_accents' in normalizer:
+                self.normalizer_strip_accents = normalizer['strip_accents']
+        elif normalizer_type == 'Sequence':
+            for norm in normalizer.get('normalizers', []):
+                self._parse_normalizer(norm)
+
     def _try_load_from_tokenizer_json(self, path: Path) -> bool:
         tokenizer = None
         tokenizer_file = path / 'tokenizer.json'
@@ -178,6 +212,9 @@ class SpecialVocab:
                         ]
                     else:
                         raise ValueError("Unknown tokenizer merges format")
+            # Parse normalizer configuration (e.g. Lowercase) into metadata
+            if normalizer := tokenizer.get('normalizer'):
+                self._parse_normalizer(normalizer)
             added_tokens = tokenizer.get('added_tokens', {})
         else:
             added_tokens = {}
@@ -219,6 +256,11 @@ class SpecialVocab:
                             if special_first := tmpl_single[0].get('SpecialToken', {}).get('id'):
                                 if not tokenizer_config:
                                     special_bos = special_first
+                                elif special_first not in (special_bos, special_cls):
+                                    if not special_bos:
+                                        tokenizer_config['bos_token'] = special_bos = special_first
+                                    if not special_cls:
+                                        tokenizer_config['cls_token'] = special_cls = special_first
                                 self.add_special_token['bos'] = True if special_first in (special_bos, special_cls) else False
                                 if special_first not in (special_bos, special_cls):
                                     logger.warning(f'Unknown leading special token {special_first!r} in TemplateProcessing<single>')

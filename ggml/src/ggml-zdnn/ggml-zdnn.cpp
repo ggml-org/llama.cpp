@@ -423,8 +423,8 @@ static ggml_backend_i ggml_backend_zdnn_i = {
     /* .free                   = */ ggml_backend_zdnn_free,
     /* .set_tensor_async       = */ NULL,
     /* .get_tensor_async       = */ NULL,
-    /* .get_tensor_2d_async    = */ NULL,
     /* .set_tensor_2d_async    = */ NULL,
+    /* .get_tensor_2d_async    = */ NULL,
     /* .cpy_tensor_async       = */ NULL,
     /* .synchronize            = */ NULL,
     /* .graph_plan_create      = */ NULL,
@@ -487,7 +487,8 @@ static void ggml_backend_zdnn_device_get_props(ggml_backend_dev_t dev, ggml_back
         /* .async                = */ false,
         /* .host_buffer          = */ false,
         /* .buffer_from_host_ptr = */ false,
-        /* .events               = */ false
+        /* .events               = */ false,
+        /* .mmap_support         = */ true,
     };
 }
 

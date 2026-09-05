@@ -8,12 +8,9 @@ iniconfig==2.1.0
 outcome==1.3.0.post0
 packaging==25.0
 pluggy==1.6.0
-Pygments==2.19.2
 PySocks==1.7.1
 pytest==8.4.2
-pytest-dependency==0.6.0
 selenium==4.36.0
-setuptools==80.9.0
 sniffio==1.3.1
 sortedcontainers==2.4.0
 tomli==2.3.0

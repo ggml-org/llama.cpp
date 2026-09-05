@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   python-check-requirements:
-    runs-on: ubuntu-slim
+    runs-on: [self-hosted, CPU, fast]
     name: check-requirements
     steps:
       - name: Check out source repository

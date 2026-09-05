@@ -443,23 +443,23 @@ Each returned parser is wrapped by `wrap_for_generation_prompt()`, which prepend
 |                                           | `wrap_for_generation_prompt()`, string helpers                                  |
 | `common/chat-peg-parser.h/cpp`            | `common_chat_peg_builder`, `common_chat_peg_mapper`, and helpers                |
 | `common/chat.cpp`                         | Entry point: `common_chat_templates_apply_jinja()`                              |
-| `tools/parser/debug-template-parser.cpp`  | Debug tool for template analysis                                                |
-| `tools/parser/template-analysis.cpp`      | Template analysis tool                                                          |
+| `tests/test-chat-auto-parser.cpp`         | Auto-parser unit tests; also a debug tool when given a template path            |
+| `tests/test-chat-analysis.cpp`            | Template differential analysis debug tool                                       |
 
 ## Testing & Debugging
 
 ### Debug Tools
 
-**Template Debugger**: `tools/parser/debug-template-parser.cpp`
+**Template Debugger**: `tests/test-chat-auto-parser.cpp`
 
-- Usage: `./bin/llama-debug-template-parser path/to/template.jinja`
+- Usage: `./bin/test-chat-auto-parser path/to/template.jinja` (without a path, it runs the automated tests)
 - Shows detected format, markers, generated parser, and GBNF grammar
 
-**Template Analysis**: `tools/parser/template-analysis.cpp`
+**Template Analysis**: `tests/test-chat-analysis.cpp`
 
-- Usage: `./bin/llama-template-analysis path/to/template.jinja`
+- Usage: `./bin/test-chat-analysis --template-file path/to/template.jinja` (without arguments, it runs on all templates from the test suite)
 
-**Debug Logging**: Enable with `LLAMA_LOG_VERBOSITY=2`
+**Debug Logging**: Enable with `LLAMA_ARG_LOG_VERBOSITY=2`
 
 - Shows detailed analysis steps, pattern extraction results, and generated parser structure
 
@@ -489,6 +489,7 @@ The following templates have active tests in `tests/test-chat.cpp`:
 | Qwen-QwQ-32B | Reasoning | Forced-open thinking |
 | NousResearch Hermes 2 Pro | JSON_NATIVE | `<tool_call>` wrapper |
 | IBM Granite 3.3 | JSON_NATIVE | `<think></think>` + `<response></response>` |
+| IBM Granite 4.0 | JSON_NATIVE | `<tool_call>` wrapper (same template used by 4.1) |
 | ByteDance Seed-OSS | TAG_WITH_TAGGED | Custom `<seed:think>` and `<seed:tool_call>` tags |
 | Qwen3-Coder | TAG_WITH_TAGGED | XML-style tool format |
 | DeepSeek V3.1 | JSON_NATIVE | Forced thinking mode |
@@ -518,7 +519,7 @@ The following templates have active tests in `tests/test-chat.cpp`:
 
 To support a new template format:
 
-1. **If it follows standard patterns** — The auto-parser should detect it automatically. Run `llama-debug-template-parser` to verify markers are correctly extracted.
+1. **If it follows standard patterns** — The auto-parser should detect it automatically. Run `test-chat-auto-parser <template_path>` to verify markers are correctly extracted.
 2. **If differential analysis extracts incorrect markers** — Add a workaround lambda to the `workarounds` vector in `common/chat-diff-analyzer.cpp`. Inspect the template source for a unique identifying substring.
 3. **If it needs fundamentally different handling** — Add a dedicated handler function in `chat.cpp` before the auto-parser block (as done for GPT-OSS, Functionary v3.2, and Ministral).
 

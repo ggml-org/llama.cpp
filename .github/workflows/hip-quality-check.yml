@@ -9,6 +9,8 @@ on:
       '.github/workflows/hip-quality-check.yml',
       '**/*.cu',
       '**/*.cuh',
+      'ggml/src/ggml-hip/CMakeLists.txt',
+      'ggml/src/ggml-cuda/vendors/hip.h',
       'scripts/hip/gcn-cdna-vgpr-check.py'
     ]
 
@@ -18,6 +20,8 @@ on:
       '.github/workflows/hip-quality-check.yml',
       '**/*.cu',
       '**/*.cuh',
+      'ggml/src/ggml-hip/CMakeLists.txt',
+      'ggml/src/ggml-cuda/vendors/hip.h',
       'scripts/hip/gcn-cdna-vgpr-check.py'
     ]
 
@@ -28,9 +32,9 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
   ubuntu-22-hip-quality-check:
@@ -45,14 +49,22 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev python3
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev python3 python3-venv python3-pip jq
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: ubuntu-22-hip-quality-check
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          key: hip-quality-check-ubuntu-22.04
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: hip-quality-check-ubuntu-22.04
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build with Werror
         id: cmake_build
@@ -80,3 +92,15 @@ jobs:
           cd build
           make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
           python3 ../scripts/hip/gcn-cdna-vgpr-check.py metrics.log
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: hip-quality-check-ubuntu-22.04
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true

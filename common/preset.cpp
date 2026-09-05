@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <regex>
 
 static std::string rm_leading_dashes(const std::string & str) {
     size_t pos = 0;
@@ -16,46 +17,21 @@ static std::string rm_leading_dashes(const std::string & str) {
     return str.substr(pos);
 }
 
-// only allow a subset of args for remote presets for security reasons
-// do not add more args unless absolutely necessary
-// args that output to files are strictly prohibited
-static std::set<std::string> get_remote_preset_whitelist(const std::map<std::string, common_arg> & key_to_opt) {
-    static const std::set<std::string> allowed_options = {
-        "model-url",
-        "hf-repo",
-        "hf-repo-draft",
-        "hf-repo-v", // vocoder
-        "hf-file-v", // vocoder
-        "mmproj-url",
-        "pooling",
-        "jinja",
-        "batch-size",
-        "ubatch-size",
-        "cache-reuse",
-        "chat-template-kwargs",
-        "mmap",
-        // note: sampling params are automatically allowed by default
-        // negated args will be added automatically if the positive arg is specified above
-    };
-
-    std::set<std::string> allowed_keys;
-
-    for (const auto & it : key_to_opt) {
-        const std::string & key = it.first;
-        const common_arg & opt = it.second;
-        if (allowed_options.find(key) != allowed_options.end() || opt.is_sparam) {
-            allowed_keys.insert(key);
-            // also add variant keys (args without leading dashes and env vars)
-            for (const auto & arg : opt.get_args()) {
-                allowed_keys.insert(rm_leading_dashes(arg));
-            }
-            for (const auto & env : opt.get_env()) {
-                allowed_keys.insert(env);
-            }
+static std::string canonical_tag(const std::string & tag) {
+    static const std::regex re_tag("[-.]([A-Z0-9_]+)$", std::regex::icase);
+    std::smatch m;
+    if (std::regex_search(tag, m, re_tag)) {
+        std::string canon = m[1].str();
+        for (char & c : canon) {
+            c = (char) std::toupper((unsigned char) c);
         }
+        return canon;
     }
-
-    return allowed_keys;
+    std::string upper = tag;
+    for (char & c : upper) {
+        c = (char) std::toupper((unsigned char) c);
+    }
+    return upper;
 }
 
 std::vector<std::string> common_preset::to_args(const std::string & bin_path) const {
@@ -163,8 +139,13 @@ void common_preset::merge(const common_preset & other) {
     }
 }
 
-void common_preset::apply_to_params(common_params & params) const {
+void common_preset::apply_to_params(common_params & params, const std::set<std::string> & handled_keys) const {
     for (const auto & [opt, val] : options) {
+        if (!handled_keys.empty()) {
+            if (!opt.env || handled_keys.find(opt.env) == handled_keys.end()) {
+                continue;
+            }
+        }
         // apply each option to params
         if (opt.handler_string) {
             opt.handler_string(params, val);
@@ -295,16 +276,10 @@ static std::string parse_bool_arg(const common_arg & arg, const std::string & ke
     return value;
 }
 
-common_preset_context::common_preset_context(llama_example ex, bool only_remote_allowed)
+common_preset_context::common_preset_context(llama_example ex)
         : ctx_params(common_params_parser_init(default_params, ex)) {
     common_params_add_preset_options(ctx_params.options);
     key_to_opt = get_map_key_opt(ctx_params);
-
-    // setup allowed keys if only_remote_allowed is true
-    if (only_remote_allowed) {
-        filter_allowed_keys = true;
-        allowed_keys = get_remote_preset_whitelist(key_to_opt);
-    }
 }
 
 common_presets common_preset_context::load_from_ini(const std::string & path, common_preset & global) const {
@@ -313,11 +288,18 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
 
     for (auto section : ini_data) {
         common_preset preset;
-        if (section.first.empty()) {
-            preset.name = COMMON_PRESET_DEFAULT_NAME;
-        } else {
-            preset.name = section.first;
+        std::string section_name = section.first.empty() ? std::string(COMMON_PRESET_DEFAULT_NAME) : section.first;
+        if (section_name != "*" && section_name != COMMON_PRESET_DEFAULT_NAME) {
+            auto colon_idx = section_name.rfind(':');
+            if (colon_idx != std::string::npos) {
+                std::string tag       = section_name.substr(colon_idx + 1);
+                std::string canon_tag = canonical_tag(tag);
+                if (canon_tag != tag) {
+                    section_name = section_name.substr(0, colon_idx + 1) + canon_tag;
+                }
+            }
         }
+        preset.name = section_name;
         LOG_DBG("loading preset: %s\n", preset.name.c_str());
         for (const auto & [key, value] : section.second) {
             if (key == "version") {
@@ -340,12 +322,18 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
                     preset.options[opt] = value;
                 }
                 LOG_DBG("accepted option: %s = %s\n", key.c_str(), preset.options[opt].c_str());
+            } else if (ignore_unknown_keys) {
+                LOG_WRN("ignoring option '%s' from %s: not supported by this program\n", key.c_str(), path.c_str());
             } else {
                 throw std::runtime_error(string_format(
                     "option '%s' not recognized in preset '%s'",
                     key.c_str(), preset.name.c_str()
                 ));
             }
+        }
+
+        if (preset.name == COMMON_PRESET_DEFAULT_NAME && preset.options.empty()) {
+            continue;
         }
 
         if (preset.name == "*") {
@@ -377,7 +365,24 @@ struct local_model {
     std::string name;
     std::string path;
     std::string path_mmproj;
+    std::string path_draft;
 };
+
+// TODO @ngxson: handle "eagle3-" when it's supported by common_speculative_types_from_gguf()
+static const char * draft_prefixes[] = { "mtp-", "dspark-", "dflash-" };
+
+static bool is_mmproj_file(const std::string & fname) {
+    return fname.find("mmproj") != std::string::npos;
+}
+
+static bool is_draft_file(const std::string & fname) {
+    for (const auto & prefix : draft_prefixes) {
+        if (fname.rfind(prefix, 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
 
 common_presets common_preset_context::load_from_models_dir(const std::string & models_dir) const {
     if (!std::filesystem::exists(models_dir) || !std::filesystem::is_directory(models_dir)) {
@@ -390,10 +395,15 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         common_file_info model_file;
         common_file_info first_shard_file;
         common_file_info mmproj_file;
+        common_file_info draft_file;
         for (const auto & file : files) {
             if (string_ends_with(file.name, ".gguf")) {
-                if (file.name.find("mmproj") != std::string::npos) {
+                if (is_mmproj_file(file.name)) {
                     mmproj_file = file;
+                } else if (is_draft_file(file.name)) {
+                    if (draft_file.path.empty()) {
+                        draft_file = file; // first sidecar found wins
+                    }
                 } else if (file.name.find("-00001-of-") != std::string::npos) {
                     first_shard_file = file;
                 } else {
@@ -405,7 +415,8 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         local_model model{
             /* name        */ name,
             /* path        */ first_shard_file.path.empty() ? model_file.path : first_shard_file.path,
-            /* path_mmproj */ mmproj_file.path // can be empty
+            /* path_mmproj */ mmproj_file.path, // can be empty
+            /* path_draft  */ draft_file.path   // can be empty
         };
         if (!model.path.empty()) {
             models.push_back(model);
@@ -417,13 +428,17 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         if (file.is_dir) {
             scan_subdir(file.path, file.name);
         } else if (string_ends_with(file.name, ".gguf")) {
+            if (is_mmproj_file(file.name) || is_draft_file(file.name)) {
+                continue; // companion file, cannot be loaded as a model on its own
+            }
             // single file model
             std::string name = file.name;
             string_replace_all(name, ".gguf", "");
             local_model model{
                 /* name        */ name,
                 /* path        */ file.path,
-                /* path_mmproj */ ""
+                /* path_mmproj */ "",
+                /* path_draft  */ ""
             };
             models.push_back(model);
         }
@@ -437,6 +452,9 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         preset.set_option(*this, "LLAMA_ARG_MODEL", model.path);
         if (!model.path_mmproj.empty()) {
             preset.set_option(*this, "LLAMA_ARG_MMPROJ", model.path_mmproj);
+        }
+        if (!model.path_draft.empty()) {
+            preset.set_option(*this, "LLAMA_ARG_SPEC_DRAFT_MODEL", model.path_draft);
         }
         out[preset.name] = preset;
     }

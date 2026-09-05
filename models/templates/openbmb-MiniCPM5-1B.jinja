@@ -1,0 +1,179 @@
+{{- bos_token }}{%- if tools %}
+    {%- set tool_definitions %}
+        {{- "# Tools\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+        {%- for tool in tools %}
+            {{- "\n" }}
+            {{- tool | tojson(ensure_ascii=False) }}
+        {%- endfor %}
+        {{- '\n</tools>\n\nTool usage guidelines:\n- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.\n- When calling a function, return an XML object within <function ... </function> using:\n<function name="function-name"><param name="param-name">param-value</param></function>\n- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param>' }}
+    {%- endset %}
+    
+    {{- '<|im_start|>system\n' }}
+    {%- if messages[0].role == 'system' %}
+        {%- if '<tool_def_sep>' in messages[0].content %}
+            {{- messages[0].content.replace('<tool_def_sep>', tool_definitions) }}
+        {%- else %}
+            {{- messages[0].content + '\n\n' + tool_definitions }}
+        {%- endif %}
+    {%- else %}
+        {{- tool_definitions.lstrip() }}
+    {%- endif %}
+    {{- '<|im_end|>\n' }}
+{%- else %}
+    {%- if messages[0].role == 'system' %}
+        {{- '<|im_start|>system\n' + messages[0].content + '<|im_end|>\n' }}
+    {%- endif %}
+{%- endif %}
+{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
+{%- for message in messages[::-1] %}
+    {%- set index = (messages|length - 1) - loop.index0 %}
+    {%- if ns.multi_step_tool and message.role == "user" and message.content is string and not(message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}
+        {%- set ns.multi_step_tool = false %}
+        {%- set ns.last_query_index = index %}
+    {%- endif %}
+{%- endfor %}
+{%- for message in messages %}
+    {%- if message.content is string %}
+        {%- set content = message.content %}
+    {%- else %}
+        {%- set content = '' %}
+    {%- endif %}
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
+        {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
+        {%- set reasoning_content = '' %}
+        {%- if message.reasoning_content is string %}
+            {%- set reasoning_content = message.reasoning_content %}
+        {%- else %}
+            {%- if '</think>' in content %}
+                {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
+                {%- set content = content.split('</think>')[-1].lstrip('\n') %}
+            {%- endif %}
+        {%- endif %}
+        
+        {%- if message.tool_calls %}
+            {%- set content_parts = content.split('<tool_sep>') %}
+            {%- set processed_content = content_parts[0] %}
+            {%- set tool_calls_count = message.tool_calls|length %}
+            {%- set tool_sep_count = content_parts|length - 1 %}
+            {%- set min_count = [tool_calls_count, tool_sep_count]|min %}
+            
+            {%- for i in range(1, content_parts|length) %}
+                {%- set tool_index = i - 1 %}
+                {%- if tool_index < tool_calls_count %}
+                    {%- set tool_call = message.tool_calls[tool_index] %}
+                    {%- if tool_call.function %}
+                        {%- set tool_call = tool_call.function %}
+                    {%- endif %}
+                    {%- set single_tool_xml %}
+                        {{- '<function name="' ~ tool_call.name ~ '">' }}
+                        {%- if tool_call.arguments %}
+                            {%- set args_dict = tool_call.arguments %}
+                            {%- for param_name, param_value in args_dict.items() %}
+                                {{- '<param name="' ~ param_name ~ '">' }}
+                                {%- if param_value is string and ('<' in param_value or '&' in param_value or '\n' in param_value) %}
+                                    {{- '<![CDATA[' + param_value + ']]>' }}
+                                {%- else %}
+                                    {{- param_value }}
+                                {%- endif %}
+                                {{- '</param>' }}
+                            {%- endfor %}
+                        {%- endif %}
+                        {{- '</function>' }}
+                    {%- endset %}
+                    {%- set processed_content = processed_content + single_tool_xml + content_parts[i] %}
+                {%- else %}
+                    {%- set processed_content = processed_content + content_parts[i] %}
+                {%- endif %}
+            {%- endfor %}
+            
+            {%- if tool_calls_count > tool_sep_count %}
+                {%- for remaining_index in range(tool_sep_count, tool_calls_count) %}
+                    {%- set tool_call = message.tool_calls[remaining_index] %}
+                    {%- if tool_call.function %}
+                        {%- set tool_call = tool_call.function %}
+                    {%- endif %}
+                    {%- set remaining_tool_xml %}
+                        {{- '<function name="' ~ tool_call.name ~ '">' }}
+                        {%- if tool_call.arguments %}
+                            {%- set args_dict = tool_call.arguments %}
+                            {%- for param_name, param_value in args_dict.items() %}
+                                {{- '<param name="' ~ param_name ~ '">' }}
+                                {%- if param_value is string and ('<' in param_value or '&' in param_value or '\n' in param_value) %}
+                                    {{- '<![CDATA[' + param_value + ']]>' }}
+                                {%- else %}
+                                    {{- param_value }}
+                                {%- endif %}
+                                {{- '</param>' }}
+                            {%- endfor %}
+                        {%- endif %}
+                        {{- '</function>' }}
+                    {%- endset %}
+                    {%- set processed_content = processed_content + remaining_tool_xml %}
+                {%- endfor %}
+            {%- endif %}
+            
+            {%- set content = processed_content %}
+        {%- endif %}
+        
+        {%- if loop.index0 > ns.last_query_index %}
+            {%- if reasoning_content %}
+                {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+            {%- else %}
+                {{- '<|im_start|>' + message.role + '\n' + content }}
+            {%- endif %}
+        {%- else %}
+            {{- '<|im_start|>' + message.role + '\n' + content }}
+        {%- endif %}
+        
+        {%- if message.tool_calls and not has_tool_sep %}
+            {%- for tool_call in message.tool_calls %}
+                {%- if (loop.first and content) or (not loop.first) %}
+                    {{- '\n' }}
+                {%- endif %}
+                {%- if tool_call.function %}
+                    {%- set tool_call = tool_call.function %}
+                {%- endif %}
+                {{- '<function name="' ~ tool_call.name ~ '">' }}
+                {%- if tool_call.arguments %}
+                    {%- set args_dict = tool_call.arguments %}
+                    {%- for param_name, param_value in args_dict.items() %}
+                        {{- '<param name="' ~ param_name ~ '">' }}
+                        {%- if param_value is string and ('<' in param_value or '&' in param_value or '\n' in param_value) %}
+                            {{- '<![CDATA[' + param_value + ']]>' }}
+                        {%- else %}
+                            {{- param_value }}
+                        {%- endif %}
+                        {{- '</param>' }}
+                    {%- endfor %}
+                {%- endif %}
+                {{- '</function>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == "tool" %}
+        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<|im_start|>user' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' }}
+        {%- if message.content is string %}
+            {{- content }}
+        {%- else %}
+            {{- message.content | tojson(ensure_ascii=False) }}
+        {%- endif %}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+    {%- if enable_thinking is defined %}
+        {%- if enable_thinking is false %}
+            {{- '<think>\n\n</think>\n\n' }}
+        {%- elif enable_thinking is true %}
+            {{- '<think>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endif %}

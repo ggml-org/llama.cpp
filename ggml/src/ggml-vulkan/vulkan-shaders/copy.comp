@@ -12,7 +12,9 @@ void main() {
         return;
     }
 
-#if defined(DATA_D_BF16)
+#if defined(DATA_A_BF16)
+    data_d[get_doffset() + dst_idx(idx)] = D_TYPE(bf16_to_fp32(uint32_t(data_a[get_aoffset() + src0_idx(idx)])));
+#elif defined(DATA_D_BF16)
     float f = float(data_a[get_aoffset() + src0_idx(idx)]);
     data_d[get_doffset() + dst_idx(idx)] = D_TYPE(fp32_to_bf16(f));
 #elif !defined(OPTIMIZATION_ERROR_WORKAROUND)

@@ -14,9 +14,11 @@
 #define GGML_SYCL_BACKEND_HPP
 
 #include "binbcast.hpp"
+#include "col2im-1d.hpp"
 #include "common.hpp"
 #include "concat.hpp"
 #include "conv.hpp"
+#include "conv3d.hpp"
 #include "convert.hpp"
 #include "count-equal.hpp"
 #include "cpy.hpp"
@@ -24,6 +26,7 @@
 #include "dmmv.hpp"
 #include "element_wise.hpp"
 #include "fattn.hpp"
+#include "fusion.hpp"
 #include "gated_delta_net.hpp"
 #include "gla.hpp"
 #include "im2col.hpp"
@@ -40,6 +43,7 @@
 #include "set_rows.hpp"
 #include "ssm_conv.hpp"
 #include "softmax.hpp"
+#include "topk-moe.hpp"
 #include "tsembd.hpp"
 #include "upscale.hpp"
 #include "wkv.hpp"

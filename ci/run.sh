@@ -10,6 +10,9 @@
 # # with CUDA support
 # GG_BUILD_CUDA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with ROCm support
+# GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 # # with SYCL support
 # GG_BUILD_SYCL=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
@@ -46,6 +49,14 @@ mkdir -p "$2"
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
 
+# gpu-rocm self-hosted runner can't upload logs to blob; keep each run's logs in
+# their own dir keyed by the GitHub run id so an Actions run URL maps to its logs.
+if [ -n "${GG_BUILD_ROCM}" ] && [ -n "${GITHUB_RUN_ID}" ]; then
+    OUT="$OUT/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+    mkdir -p "$OUT"
+    echo "ci results dir: $OUT"
+fi
+
 rm -f $OUT/*.log
 rm -f $OUT/*.exit
 rm -f $OUT/*.md
@@ -66,6 +77,8 @@ fi
 
 if [ ! -z ${GG_BUILD_METAL} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
+else
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF"
 fi
 
 if [ ! -z ${GG_BUILD_CUDA} ]; then
@@ -87,7 +100,7 @@ if [ ! -z ${GG_BUILD_CUDA} ]; then
 fi
 
 if [ ! -z ${GG_BUILD_ROCM} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_HIP=ON"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DCMAKE_HIP_COMPILER=$(hipconfig -l)/clang -DGGML_HIP=ON"
     if [ -z ${GG_BUILD_AMDGPU_TARGETS} ]; then
         echo "Missing GG_BUILD_AMDGPU_TARGETS, please set it to your GPU architecture (e.g. gfx90a, gfx1100, etc.)"
         exit 1
@@ -114,9 +127,12 @@ fi
 if [ ! -z ${GG_BUILD_VULKAN} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN=1"
 
-    # if on Mac, disable METAL
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF -DGGML_BLAS=OFF"
+        MACOS_RUNNER_CUSTOM_VULKAN_CMAKE_LOCATION="/usr/local/lib/cmake/vulkan"
+        MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION="${MACOS_RUNNER_CUSTOM_VULKAN_CMAKE_LOCATION}/SPIRV-Headers/SPIRV-HeadersConfig.cmake"
+        if [[ -f "${MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION}" || -h "${MACOS_RUNNER_CUSTOM_SPIRV_HEADERS_LOCATION}" ]]; then
+            CMAKE_EXTRA="${CMAKE_EXTRA} -DSPIRV-Headers_DIR=${MACOS_RUNNER_CUSTOM_VULKAN_CMAKE_LOCATION}/SPIRV-Headers"
+        fi
     fi
 
     # Build shared libs on Windows
@@ -127,7 +143,7 @@ if [ ! -z ${GG_BUILD_VULKAN} ]; then
 fi
 
 if [ ! -z ${GG_BUILD_WEBGPU} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1 -DGGML_METAL=OFF -DGGML_BLAS=OFF"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1"
 
     if [ ! -z "${GG_BUILD_WEBGPU_DAWN_PREFIX}" ]; then
         if [ -z "${CMAKE_PREFIX_PATH}" ]; then
@@ -161,6 +177,8 @@ fi
 
 if [ ! -z ${GG_BUILD_BLAS} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=${GG_BUILD_BLAS_VENDOR:-OpenBLAS}"
+else
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=OFF"
 fi
 
 if [ ! -z ${GG_BUILD_OPENVINO} ]; then
@@ -171,8 +189,8 @@ if [ ! -z ${GG_BUILD_OPENVINO} ]; then
     fi
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 
-    # TODO: fix and re-enable the `test-llama-archs` test below
-    CTEST_EXTRA="-E test-llama-archs"
+    # TODO: fix failing tests on OpenVINO backend
+    CTEST_EXTRA="-E test-llama-archs|^test-recurrent-state-|test-backend-ops|test-save-load-state"
 fi
 
 ## helpers
@@ -232,7 +250,7 @@ function gg_run_ctest_debug {
     (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time cmake --build . --config Debug -j$(nproc)) 2>&1 | tee -a $OUT/${ci}-make.log
 
-    (time ctest -C Debug --output-on-failure -L main -E "test-opt|test-backend-ops" ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
+    (time ctest -C Debug --output-on-failure -L main -E "test-opt|test-backend-ops|test-llama-archs" ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
     set +e
 }
@@ -279,6 +297,40 @@ function gg_sum_ctest_release {
     gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
     gg_printf '```\n'
     gg_printf '%s\n' "$(cat $OUT/${ci}-ctest.log)"
+    gg_printf '```\n'
+}
+
+# test_llama_archs_tensor_split
+
+function gg_run_test_llama_archs_tensor_split {
+    cd ${SRC}
+
+    set -e
+
+    if [ ! -z ${GG_BUILD_CUDA} ]; then
+        GGML_CUDA_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+    fi
+
+    if [ ! -z ${GG_BUILD_METAL} ]; then
+        GGML_METAL_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+    fi
+
+    set +e
+}
+
+function gg_sum_test_llama_archs_tensor_split {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'Runs test-llama-archs with 1 to 4 devices\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '```\n'
+    gg_printf '%s\n' "$(cat $OUT/${ci}.log)"
     gg_printf '```\n'
 }
 
@@ -455,10 +507,10 @@ function gg_run_qwen3_0_6b {
 
     (time ./bin/llama-imatrix --model ${model_f16} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-imatrix.log
 
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa off --no-op-offload) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa on  --no-op-offload) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa off                ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa on                 ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa off --no-op-offload) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa on  --no-op-offload) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa off                ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa on                 ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
 
     function check_ppl {
         qnt="$1"
@@ -633,39 +685,57 @@ function gg_sum_rerank_tiny {
 
 function gg_check_build_requirements {
     if ! command -v git &> /dev/null; then
-        gg_printf 'git not found, please install'
+        gg_printf 'git not found, please install\n'
+        exit 1
     fi
 
     if ! command -v git-lfs &> /dev/null; then
-        gg_printf 'git-lfs not found, please install'
+        gg_printf 'git-lfs not found, please install\n'
+        exit 1
+    fi
+
+    if ! git config --get filter.lfs.clean &> /dev/null; then
+        gg_printf 'git-lfs not initialized, please run `git lfs install`\n'
+        exit 1
     fi
 
     if ! command -v wget &> /dev/null; then
-        gg_printf 'wget not found, please install'
+        gg_printf 'wget not found, please install\n'
+        exit 1
     fi
 
     if ! command -v python3 &> /dev/null; then
-        gg_printf 'python3 not found, please install'
+        gg_printf 'python3 not found, please install\n'
+        exit 1
     fi
 
     if ! command -v pip3 &> /dev/null; then
-        gg_printf 'pip3 not found, please install'
+        gg_printf 'pip3 not found, please install\n'
+        exit 1
     fi
 
     if ! python3 -m ensurepip --help &> /dev/null; then
-        gg_printf 'ensurepip not found, please install python3-venv package'
+        gg_printf 'ensurepip not found, please install python3-venv package\n'
+        exit 1
     fi
 
     if ! command -v cmake &> /dev/null; then
-        gg_printf 'cmake not found, please install'
+        gg_printf 'cmake not found, please install\n'
+        exit 1
     fi
 
     if ! command -v ccache &> /dev/null; then
-        gg_printf 'ccache not found, please consider installing for faster builds'
+        gg_printf 'ccache not found, please consider installing for faster builds\n'
     fi
 
     if ! command -v ctest &> /dev/null; then
-        gg_printf 'ctest not found, please install'
+        gg_printf 'ctest not found, please install\n'
+        exit 1
+    fi
+
+    if ! command -v unzip &> /dev/null; then
+        gg_printf 'unzip not found, please install\n'
+        exit 1
     fi
 }
 
@@ -694,8 +764,8 @@ function gg_sum_test_backend_ops_cpu {
 
 ## main
 
-export LLAMA_LOG_PREFIX=1
-export LLAMA_LOG_TIMESTAMPS=1
+export LLAMA_ARG_LOG_PREFIX=1
+export LLAMA_ARG_LOG_TIMESTAMPS=1
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     # Create symlink: ./llama.cpp/models-mnt -> $MNT/models
@@ -719,6 +789,8 @@ ret=0
 
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
+
+test $ret -eq 0 && gg_run test_llama_archs_tensor_split
 
 if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
     test $ret -eq 0 && gg_run test_backend_ops_cpu

@@ -1,7 +1,7 @@
-find_package(OpenVINO REQUIRED)
+find_package(OpenVINO REQUIRED COMPONENTS Runtime Threading)
 find_package(OpenCL REQUIRED)
 
-include("${OpenVINO_DIR}/../3rdparty/tbb/lib/cmake/TBB/TBBConfig.cmake")
+message(STATUS "Found OpenVINO: ${OpenVINO_DIR} (found version \"${OpenVINO_VERSION}\")")
 
 file(GLOB_RECURSE GGML_HEADERS_OPENVINO "*.h" "*.hpp")
 file(GLOB_RECURSE GGML_SOURCES_OPENVINO "*.cpp")
@@ -11,7 +11,7 @@ ggml_add_backend_library(ggml-openvino
     ${GGML_HEADERS_OPENVINO}
 )
 
-target_link_libraries(ggml-openvino PRIVATE openvino::runtime TBB::tbb OpenCL::OpenCL)
+target_link_libraries(ggml-openvino PRIVATE openvino::runtime openvino::threading OpenCL::OpenCL)
 
 if (GGML_OPENVINO)
     if (CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")

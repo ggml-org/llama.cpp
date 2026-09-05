@@ -48,7 +48,11 @@ echo "org/repo: $org_repo"
 
 meta=$(curl -sSLf -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$org_repo/pulls/$PR")
 
-url_remote=$(echo "$meta" | jq -r '.head.repo.clone_url')
+if [[ $url_origin =~ ^git@ ]]; then
+    url_remote=$(echo "$meta" | jq -r '.head.repo.ssh_url')
+else
+    url_remote=$(echo "$meta" | jq -r '.head.repo.clone_url')
+fi
 head_ref=$(echo "$meta" | jq -r '.head.ref')
 
 echo "url:      $url_remote"
@@ -68,11 +72,19 @@ dir=$(basename $(pwd))
 git branch -D pr/$PR 2> /dev/null
 git worktree add -b pr/$PR ../$dir-pr-$PR pr/$PR/$head_ref 2> /dev/null
 
+og_path=$(pwd)
 wt_path=$(cd ../$dir-pr-$PR && pwd)
 
 echo "git worktree created in $wt_path"
 
 cd $wt_path
+
+# pi agent setup in the worktree
+if [[ -f "$og_path/.pi/SYSTEM.md" && ! -f ".pi/SYSTEM.md" ]]; then
+    mkdir -p .pi
+    ln -sfn "$og_path/.pi/SYSTEM.md" .pi/SYSTEM.md
+fi
+
 git branch --set-upstream-to=pr/$PR/$head_ref
 git pull   --ff-only || {
     echo "error: failed to pull pr/$PR"

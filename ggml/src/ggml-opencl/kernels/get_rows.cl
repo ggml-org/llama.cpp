@@ -82,21 +82,27 @@ kernel void kernel_get_rows_f32(
     src1 = (global int*)((global char*)src1 + offset1);
     dst = (global float*)((global char*)dst + offsetd);
 
-    int i10 = get_group_id(0);
-    int i11 = get_group_id(1);
-    int i12 = get_group_id(2);
+    int nchunks = get_num_groups(0) / ne10;
+    int g       = get_group_id(0);
+    int i10     = g / nchunks;
+    int chunk   = g - i10 * nchunks;
+    int i11     = get_group_id(1);
+    int i12     = get_group_id(2);
 
     int r = ((global int *) ((global char *) src1 + i12*nb12 + i11*nb11 + i10*nb10))[0];
 
     int i02 = i11;
     int i03 = i12;
 
-    for (int ind = get_local_id(0); ind < ne00; ind += get_local_size(0)) {
-        if (ind >= ne00) {
-            return;
-        }
-        ((global float *) ((global char *) dst + i12*nb3 + i11*nb2 + i10*nb1))[ind] =
-            ((global float *) ((global char *) src0 + r*nb01 + i02*nb02 + i03*nb03))[ind];
+    global float * dst_row = (global float *) ((global char *) dst  + i12*nb3 + i11*nb2 + i10*nb1);
+    global float * src_row = (global float *) ((global char *) src0 + r*nb01 + i02*nb02 + i03*nb03);
+
+    int span  = (ne00 + nchunks - 1) / nchunks;
+    int start = chunk * span;
+    int end   = min(start + span, ne00);
+
+    for (int ind = start + get_local_id(0); ind < end; ind += get_local_size(0)) {
+        dst_row[ind] = src_row[ind];
     }
 }
 

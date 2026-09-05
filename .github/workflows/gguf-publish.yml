@@ -29,10 +29,10 @@ jobs:
       uses: actions/setup-python@v6
       with:
         python-version: '3.11'
+        pip-install: poetry==2.4.0
     - name: Install dependencies
       run: |
         cd gguf-py
-        python -m pip install poetry==2.3.2
         poetry install
 
     - name: Build package

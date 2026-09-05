@@ -1,6 +1,51 @@
 #include "models.h"
 
-llm_build_plm::llm_build_plm(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+void llama_model_plm::load_arch_hparams(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+    ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK, hparams.n_lora_kv);
+
+    switch (hparams.n_layer()) {
+        case 32: type = LLM_TYPE_1_8B; break;
+        default: type = LLM_TYPE_UNKNOWN;
+    }
+}
+
+void llama_model_plm::load_arch_tensors(llama_model_loader &) {
+    LLAMA_LOAD_LOCALS;
+
+    const int64_t n_embd_head_qk_rope = hparams.n_rot();
+    const int64_t n_embd_head_qk_nope = hparams.n_embd_head_k() - hparams.n_rot();
+    const int64_t kv_lora_rank = hparams.n_lora_kv;
+
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+    // output
+    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+    // output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+    output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+
+    for (int i = 0; i < n_layer; ++i) {
+        auto & layer = layers[i];
+
+        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+        layer.wq        = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+        layer.wkv_a_mqa = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i), {n_embd, kv_lora_rank + (n_embd_head_qk_rope)}, 0);
+        layer.attn_kv_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_NORM, "weight", i), {kv_lora_rank}, 0);
+        layer.wkv_b     = create_tensor(tn(LLM_TENSOR_ATTN_KV_B,     "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)}, 0);
+        layer.wo        = create_tensor(tn(LLM_TENSOR_ATTN_OUT,      "weight", i), {              n_head * (                      n_embd_head_v), n_embd}, 0);
+
+        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+    }
+}
+
+std::unique_ptr<llm_graph_context> llama_model_plm::build_arch_graph(const llm_graph_params & params) const {
+    return std::make_unique<graph>(*this, params);
+}
+
+llama_model_plm::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const float kq_scale = 1.0f/sqrtf(float(hparams.n_embd_head_k()));
 
     const uint32_t n_embd_head_qk_rope = hparams.n_rot();
@@ -36,19 +81,9 @@ llm_build_plm::llm_build_plm(const llama_model & model, const llm_graph_params &
             q = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
             cb(q, "q", il);
 
-            // split into {n_head * n_embd_head_qk_nope, n_tokens}
-            ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k()),
-                    ggml_row_size(q->type, hparams.n_embd_head_k() * n_head),
-                    0);
-            cb(q_nope, "q_nope", il);
-
-            // and {n_head * n_embd_head_qk_rope, n_tokens}
-            ggml_tensor * q_pe = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k()),
-                    ggml_row_size(q->type, hparams.n_embd_head_k() * n_head),
-                    ggml_row_size(q->type, n_embd_head_qk_nope));
-            cb(q_pe, "q_pe", il);
+            // {n_embd_head_k, n_head, n_tokens}, RoPE is applied to the trailing dims only
+            q = ggml_reshape_3d(ctx0, q, hparams.n_embd_head_k(), n_head, n_tokens);
+            cb(q, "q", il);
 
             // {n_embd, kv_lora_rank + n_embd_head_qk_rope} * {n_embd, n_tokens} -> {kv_lora_rank + n_embd_head_qk_rope, n_tokens}
             ggml_tensor * kv_pe_compresseed = ggml_mul_mat(ctx0, model.layers[il].wkv_a_mqa, cur);
@@ -98,12 +133,13 @@ llm_build_plm::llm_build_plm(const llama_model & model, const llm_graph_params &
                     0);
             cb(v_states, "v_states", il);
 
-            q_pe = ggml_rope_ext(
-                    ctx0, q_pe, inp_pos, nullptr,
+            q = ggml_rope_ext(
+                    ctx0, q, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                     );
-            cb(q_pe, "q_pe", il);
+            q = ggml_rope_set_offset(q, n_embd_head_qk_nope);
+            cb(q, "q_rope", il);
 
             // shared RoPE key
             k_pe = ggml_rope_ext(
@@ -113,14 +149,15 @@ llm_build_plm::llm_build_plm(const llama_model & model, const llm_graph_params &
                     );
             cb(k_pe, "k_pe", il);
 
-            ggml_tensor * q_states = ggml_concat(ctx0, q_nope, q_pe, 0);
+            ggml_tensor * q_states = q;
             cb(q_states, "q_states", il);
 
-            ggml_tensor * k_states = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_pe, q_pe), 0);
+            ggml_tensor * k_states = ggml_concat(ctx0, k_nope,
+                    ggml_repeat_4d(ctx0, k_pe, n_embd_head_qk_rope, n_head, n_tokens, 1), 0);
             cb(k_states, "k_states", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL,
+                    model.layers[il].wo, NULL, model.layers[il].wo_s,
                     q_states, k_states, v_states, nullptr, nullptr, nullptr, kq_scale, il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
@@ -160,7 +197,7 @@ llm_build_plm::llm_build_plm(const llama_model & model, const llm_graph_params &
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur);
+    cur = build_lora_mm(model.output, cur, model.output_s);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

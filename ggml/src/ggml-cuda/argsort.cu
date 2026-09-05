@@ -4,6 +4,7 @@
 #    include <cub/cub.cuh>
 #    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 1)
 #        define STRIDED_ITERATOR_AVAILABLE
+#        include <cuda/iterator>
 #    endif
 using namespace cub;
 #endif  // GGML_CUDA_USE_CUB
@@ -27,6 +28,20 @@ static __global__ void init_offsets(int * offsets, const int ncols, const int nr
 #endif  // STRIDED_ITERATOR_AVAILABLE
 
 #ifdef GGML_CUDA_USE_CUB
+
+// returns the suggested maximum number of rows to process during one argsort_f32_i32_cuda_cub() call
+int argsort_f32_i32_cuda_cub_chunk_nrows(const size_t nb01, const int64_t nrows) {
+    // perform argsort in chunks up to approximately this size (currently 64MB)
+    // to avoid excessive temporary buffers memory usage
+    const int chunk_bytes = 1 << 26;
+
+    // calculate how many rows will fit in one chunk (must be at least one)
+    const int chunk_nrows = std::max((int) (chunk_bytes / nb01), 1);
+
+    // limit the resulting amount to total nrows
+    return std::min((int64_t) chunk_nrows, nrows);
+}
+
 void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
                               const float *    x,
                               int *            dst,
@@ -58,26 +73,48 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
 
     size_t temp_storage_bytes = 0;
 
+    bool is_capturing = false;
+#ifdef USE_CUDA_GRAPH
+    // Currently (confirmed for CCCL <= 3.2) DeviceSegmentedSort does not support stream capture, while DeviceSegmentedRadixSort does.
+    // See https://github.com/NVIDIA/cccl/issues/5661#issuecomment-3229037149
+    // TODO: constrain this to the CCCL versions that have this issue once it's resolved in a future CCCL release.
+    cudaStreamCaptureStatus capture_status;
+    CUDA_CHECK(cudaStreamIsCapturing(stream, &capture_status));
+    is_capturing = (capture_status != cudaStreamCaptureStatusNone);
+#endif  // USE_CUDA_GRAPH
+
     if (order == GGML_SORT_ORDER_ASC) {
         if (nrows == 1) {
             CUDA_CHECK(DeviceRadixSort::SortPairs(nullptr, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
-                                       temp_indices, dst,                                  // values (indices)
-                                       ncols, 0, sizeof(float) * 8, stream));
+                                                  temp_indices, dst,  // values (indices)
+                                                  ncols, 0, sizeof(float) * 8, stream));
+        } else if (is_capturing) {
+            CUDA_CHECK(DeviceSegmentedRadixSort::SortPairs(
+                nullptr, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
+                temp_indices, dst,                                  // values (indices)
+                ncols * nrows, nrows,                               // num items, num segments
+                offset_iterator, offset_iterator + 1, 0, sizeof(float) * 8, stream));
         } else {
-            CUDA_CHECK(DeviceSegmentedSort::SortPairs(nullptr, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
-                                           temp_indices, dst,                                  // values (indices)
-                                           ncols * nrows, nrows,  // num items, num segments
-                                           offset_iterator, offset_iterator + 1, stream));
+            CUDA_CHECK(DeviceSegmentedSort::SortPairs(nullptr, temp_storage_bytes, temp_keys,
+                                                      temp_keys,             // keys (in-place)
+                                                      temp_indices, dst,     // values (indices)
+                                                      ncols * nrows, nrows,  // num items, num segments
+                                                      offset_iterator, offset_iterator + 1, stream));
         }
     } else {
         if (nrows == 1) {
-            CUDA_CHECK(DeviceRadixSort::SortPairsDescending(nullptr, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
-                                                 temp_indices, dst,                                  // values (indices)
-                                                 ncols, 0, sizeof(float) * 8, stream));
+            CUDA_CHECK(DeviceRadixSort::SortPairsDescending(nullptr, temp_storage_bytes, temp_keys,
+                                                            temp_keys,          // keys (in-place)
+                                                            temp_indices, dst,  // values (indices)
+                                                            ncols, 0, sizeof(float) * 8, stream));
+        } else if (is_capturing) {
+            CUDA_CHECK(DeviceSegmentedRadixSort::SortPairsDescending(
+                nullptr, temp_storage_bytes, temp_keys, temp_keys, temp_indices, dst, ncols * nrows, nrows,
+                offset_iterator, offset_iterator + 1, 0, sizeof(float) * 8, stream));
         } else {
-            CUDA_CHECK(DeviceSegmentedSort::SortPairsDescending(nullptr, temp_storage_bytes, temp_keys, temp_keys, temp_indices,
-                                                     dst, ncols * nrows, nrows, offset_iterator, offset_iterator + 1,
-                                                     stream));
+            CUDA_CHECK(DeviceSegmentedSort::SortPairsDescending(nullptr, temp_storage_bytes, temp_keys, temp_keys,
+                                                                temp_indices, dst, ncols * nrows, nrows,
+                                                                offset_iterator, offset_iterator + 1, stream));
         }
     }
 
@@ -86,22 +123,33 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
 
     if (order == GGML_SORT_ORDER_ASC) {
         if (nrows == 1) {
-            CUDA_CHECK(DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
-                                       temp_indices, dst,  // values (indices)
-                                       ncols, 0, sizeof(float) * 8, stream));
+            CUDA_CHECK(DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, temp_keys,
+                                                  temp_keys,          // keys (in-place)
+                                                  temp_indices, dst,  // values (indices)
+                                                  ncols, 0, sizeof(float) * 8, stream));
+        } else if (is_capturing) {
+            CUDA_CHECK(DeviceSegmentedRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys,
+                                                           temp_indices, dst, ncols * nrows, nrows, offset_iterator,
+                                                           offset_iterator + 1, 0, sizeof(float) * 8, stream));
         } else {
-            CUDA_CHECK(DeviceSegmentedSort::SortPairs(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys, temp_indices, dst,
-                                           ncols * nrows, nrows, offset_iterator, offset_iterator + 1, stream));
+            CUDA_CHECK(DeviceSegmentedSort::SortPairs(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys,
+                                                      temp_indices, dst, ncols * nrows, nrows, offset_iterator,
+                                                      offset_iterator + 1, stream));
         }
     } else {
         if (nrows == 1) {
-            CUDA_CHECK(DeviceRadixSort::SortPairsDescending(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys,  // keys (in-place)
-                                                 temp_indices, dst,                                  // values (indices)
-                                                 ncols, 0, sizeof(float) * 8, stream));
+            CUDA_CHECK(DeviceRadixSort::SortPairsDescending(d_temp_storage, temp_storage_bytes, temp_keys,
+                                                            temp_keys,          // keys (in-place)
+                                                            temp_indices, dst,  // values (indices)
+                                                            ncols, 0, sizeof(float) * 8, stream));
+        } else if (is_capturing) {
+            CUDA_CHECK(DeviceSegmentedRadixSort::SortPairsDescending(
+                d_temp_storage, temp_storage_bytes, temp_keys, temp_keys, temp_indices, dst, ncols * nrows, nrows,
+                offset_iterator, offset_iterator + 1, 0, sizeof(float) * 8, stream));
         } else {
-            CUDA_CHECK(DeviceSegmentedSort::SortPairsDescending(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys,
-                                                     temp_indices, dst, ncols * nrows, nrows, offset_iterator,
-                                                     offset_iterator + 1, stream));
+            CUDA_CHECK(DeviceSegmentedSort::SortPairsDescending(d_temp_storage, temp_storage_bytes, temp_keys,
+                                                                temp_keys, temp_indices, dst, ncols * nrows, nrows,
+                                                                offset_iterator, offset_iterator + 1, stream));
         }
     }
 }
@@ -220,11 +268,23 @@ void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const size_t shared_mem     = ncols_pad * sizeof(int);
     const size_t max_shared_mem = ggml_cuda_info().devices[ggml_cuda_get_device()].smpb;
 
-    if (shared_mem > max_shared_mem || ncols > 1024) {
-        ggml_cuda_pool & pool = ctx.pool();
-        argsort_f32_i32_cuda_cub(pool, src0_d, (int *) dst_d, ncols, nrows, order, stream);
-    } else {
+    // early return if we can use bitonic argsort
+    if (shared_mem <= max_shared_mem && ncols <= 1024) {
         argsort_f32_i32_cuda_bitonic(src0_d, (int *) dst_d, ncols, nrows, order, stream);
+        return;
+    }
+
+    const int chunk_nrows = argsort_f32_i32_cuda_cub_chunk_nrows(src0->nb[1], nrows);
+
+    ggml_cuda_pool & pool = ctx.pool();
+
+    for (int64_t i = 0; i < nrows; i += chunk_nrows) {
+        int iter_nrows = std::min((int64_t) chunk_nrows, nrows - i);
+
+        argsort_f32_i32_cuda_cub(pool, src0_d, (int *) dst_d, ncols, iter_nrows, order, stream);
+
+        src0_d += ncols * iter_nrows;
+        dst_d  += ncols * iter_nrows;
     }
 #else
     argsort_f32_i32_cuda_bitonic(src0_d, (int *) dst_d, ncols, nrows, order, stream);

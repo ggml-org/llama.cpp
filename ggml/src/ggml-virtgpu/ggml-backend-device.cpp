@@ -1,5 +1,7 @@
 #include "ggml-remoting.h"
 
+#include <mutex>
+
 static const char * ggml_backend_remoting_device_get_name(ggml_backend_dev_t dev) {
     virtgpu * gpu = DEV_TO_GPU(dev);
 
@@ -63,7 +65,7 @@ static void ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, ggml_
 
     virtgpu * gpu = DEV_TO_GPU(dev);
     apir_device_get_props(gpu, &props->caps.async, &props->caps.host_buffer, &props->caps.buffer_from_host_ptr,
-                          &props->caps.events);
+                          &props->caps.events, &props->caps.mmap_support);
 
     props->caps.buffer_from_host_ptr = false;
     props->caps.async                = false;

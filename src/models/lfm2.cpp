@@ -1,10 +1,101 @@
 #include "models.h"
-
 #include "../llama-memory-hybrid-iswa.h"
 #include "../llama-memory-hybrid.h"
 
+#include <algorithm>
+
+void llama_model_lfm2::load_arch_hparams(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+        hparams.is_recr_impl[il] = hparams.n_head_kv(il) == 0;
+    }
+
+    hparams.n_layer_dense_lead = hparams.n_layer();
+
+    switch (hparams.n_ff()) {
+        case  2560: type = LLM_TYPE_230M; break;
+        case  4608: type = LLM_TYPE_350M; break;
+        case  6912: type = LLM_TYPE_700M; break;
+        case  8192: type = LLM_TYPE_1_2B; break;
+        case 10752: type = LLM_TYPE_2_6B; break;
+        default:    type = LLM_TYPE_UNKNOWN;
+    }
+
+    if (const auto is_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false); is_swa && hparams.n_swa > 0) {
+        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+        for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+            hparams.is_swa_impl[il] = !hparams.is_recr_impl[il];
+        }
+    }
+}
+
+void llama_model_lfm2::load_arch_tensors(llama_model_loader &) {
+    LLAMA_LOAD_LOCALS;
+
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM_LFM2, "weight"), {n_embd}, 0);
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,           "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+    if (output == NULL) {
+        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+    }
+
+    for (int i = 0; i < n_layer; ++i) {
+        auto & layer = layers[i];
+
+        const bool is_moe_layer = i >= static_cast<int>(hparams.n_layer_dense_lead);
+
+        // ffn/moe is same for transformer and conv layers
+        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+        if (is_moe_layer) {
+            GGML_ASSERT(n_expert && n_expert_used);
+            layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i),  {n_embd, n_expert}, 0);
+            layer.ffn_gate_exps   = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, hparams.n_ff_exp(), n_expert}, 0);
+            layer.ffn_down_exps   = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {hparams.n_ff_exp(),   n_embd, n_expert}, 0);
+            layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i),   {n_embd, hparams.n_ff_exp(), n_expert}, 0);
+            layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 0);
+        } else {  // dense
+            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+        }
+
+        // for operator_norm
+        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+        if (!hparams.is_recr(i)) {
+            layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+            layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+            GGML_ASSERT(n_embd_v_gqa == n_embd_k_gqa);
+
+            create_tensor_qkv(layer, i, n_embd, n_embd, hparams.n_embd_k_gqa(i), hparams.n_embd_v_gqa(i), 0);
+
+            layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+        } else {
+            layer.shortconv.conv     = create_tensor(tn(LLM_TENSOR_SHORTCONV_CONV,    "weight", i), {hparams.n_shortconv_l_cache, n_embd}, 0);
+            layer.shortconv.in_proj  = create_tensor(tn(LLM_TENSOR_SHORTCONV_INPROJ,  "weight", i), {n_embd, 3 * n_embd}, 0);
+            layer.shortconv.out_proj = create_tensor(tn(LLM_TENSOR_SHORTCONV_OUTPROJ, "weight", i), {n_embd, n_embd}, 0);
+        }
+    }
+
+    // for LFM2-ColBert-350M
+    dense_2_out_layers   = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.n_embd_out()}, TENSOR_NOT_REQUIRED);
+    dense_2_out_layers_b = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "bias"),   {hparams.n_embd_out()        }, TENSOR_NOT_REQUIRED);
+}
+
+std::unique_ptr<llm_graph_context> llama_model_lfm2::build_arch_graph(const llm_graph_params & params) const {
+    if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
+        return std::make_unique<graph<true>>(*this, params);
+    } else {
+        return std::make_unique<graph<false>>(*this, params);
+    }
+}
+
 template <bool iswa>
-llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_params & params) :
+llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
     using inp_hybrid_type = std::conditional_t<iswa, llm_graph_input_mem_hybrid_iswa,  llm_graph_input_mem_hybrid>;
     using inp_attn_type   = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa,     llm_graph_input_attn_kv>;
@@ -42,16 +133,8 @@ llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_
         const auto n_embd_head = hparams.n_embd_head_v();
         const auto n_head_kv   = hparams.n_head_kv(il);
 
-        auto * q = build_lora_mm(model.layers[il].wq, cur);
-        cb(q, "model.layers.{}.self_attn.q_proj", il);
-        auto * k = build_lora_mm(model.layers[il].wk, cur);
-        cb(k, "model.layers.{}.self_attn.k_proj", il);
-        auto * v = build_lora_mm(model.layers[il].wv, cur);
-        cb(v, "model.layers.{}.self_attn.v_proj", il);
-
-        q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head, n_tokens);
-        k = ggml_reshape_3d(ctx0, k, n_embd_head, n_head_kv, n_tokens);
-        v = ggml_reshape_3d(ctx0, v, n_embd_head, n_head_kv, n_tokens);
+        auto [q, k, v] = build_qkv(model.layers[il], cur,
+                n_embd_head, n_head, n_head_kv, il);
 
         // qk norm
         q = build_norm(q, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
@@ -66,7 +149,7 @@ llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_
                           attn_factor, beta_fast, beta_slow);
 
         cur = build_attn(inp_attn,
-                model.layers[il].wo, NULL,
+                model.layers[il].wo, NULL, model.layers[il].wo_s,
                 q, k, v, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
 
         cb(cur, "model.layers.{}.self_attn.out_proj", il);
@@ -110,18 +193,31 @@ llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_
         auto * conv_rs    = build_rs(inp_recr, conv_state, hparams.n_embd_r(), n_seqs);
         auto * conv       = ggml_reshape_3d(ctx0, conv_rs, d_conv, hparams.n_embd, n_seqs);
 
-        bx = ggml_concat(ctx0, conv, bx, 0);
+        // causal prepends the state, non-causal pads symmetrically for a centered window
+        if (hparams.causal_attn) {
+            bx = ggml_concat(ctx0, conv, bx, 0);
+        } else {
+            const int64_t pad = (hparams.n_shortconv_l_cache - 1) / 2;
+            auto * left = ggml_cont(ctx0,
+                ggml_view_3d(ctx0, conv, pad, hparams.n_embd, n_seqs, conv->nb[1], conv->nb[2], (d_conv - pad) * conv->nb[0]));
+            bx = ggml_pad_ext(ctx0, ggml_concat(ctx0, left, bx, 0), 0, pad, 0, 0, 0, 0, 0, 0);
+        }
         GGML_ASSERT(bx->ne[0] > conv->ne[0]);
 
-        // last d_conv columns is a new conv state
-        auto * new_conv = ggml_view_3d(ctx0, bx, conv->ne[0], bx->ne[1], bx->ne[2], bx->nb[1], bx->nb[2],
-                                       (bx->ne[0] - conv->ne[0]) * ggml_element_size(bx));
-        GGML_ASSERT(ggml_are_same_shape(conv, new_conv));
+        // write conv states: slot 0 = the final state, slot s = the state s tokens back (partial rollback)
+        const int64_t K         = hparams.causal_attn && cparams.n_rs_seq > 0 ? (int64_t) cparams.n_rs_seq + 1 : 1;
+        const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
+        const auto    mem_size  = mctx_cur->get_size();
+        const size_t  row_size  = ggml_row_size(conv_state->type, (int64_t) d_conv * n_embd);
 
-        // write new conv conv state
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, new_conv,
-                                               ggml_view_1d(ctx0, conv_state, ggml_nelements(new_conv),
-                                                            kv_head * d_conv * n_embd * ggml_element_size(new_conv))));
+        for (int64_t slot = 0; slot < n_written; ++slot) {
+            auto * conv_snap = ggml_view_3d(ctx0, bx, d_conv, bx->ne[1], bx->ne[2], bx->nb[1], bx->nb[2],
+                                            (bx->ne[0] - d_conv - slot) * ggml_element_size(bx));
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_snap,
+                                                   ggml_view_2d(ctx0, conv_state, (int64_t) d_conv * n_embd, n_seqs,
+                                                                conv_state->nb[1],
+                                                                ((size_t) slot * mem_size + kv_head) * row_size)));
+        }
 
         auto * conv_kernel = model.layers[il].shortconv.conv;
         auto * conv_out    = ggml_ssm_conv(ctx0, bx, conv_kernel);
@@ -153,14 +249,16 @@ llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = cur;
+
         const bool is_moe_layer = il >= static_cast<int>(hparams.n_layer_dense_lead);
 
         auto * prev_cur = cur;
         cur             = build_norm(cur, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "model.layers.{}.operator_norm", il);
 
-        cur = hparams.is_recurrent(il) ? build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
-                                         build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
+        cur = hparams.is_recr(il) ? build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
+                                    build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
@@ -186,14 +284,16 @@ llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur);
-    cb(cur, "result_output", -1);
+    if (!cparams.embeddings) {
+        cur = build_lora_mm(model.output, cur, model.output_s);
+        cb(cur, "result_output", -1);
 
-    res->t_logits = cur;
+        res->t_logits = cur;
+    }
 
     ggml_build_forward_expand(gf, cur);
 }
 
 // Explicit template instantiations
-template struct llm_build_lfm2<true>;
-template struct llm_build_lfm2<false>;
+template struct llama_model_lfm2::graph<true>;
+template struct llama_model_lfm2::graph<false>;

@@ -3,7 +3,6 @@
 #include "debug.h"
 #include "log.h"
 #include "llama.h"
-#include "llama-cpp.h"
 
 #include <clocale>
 #include <string>
@@ -38,7 +37,7 @@ static bool run(llama_context * ctx, const common_params & params) {
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
-    base_callback_data cb_data;
+    common_debug_cb_user_data cb_data;
 
     common_params params;
 
@@ -53,7 +52,7 @@ int main(int argc, char ** argv) {
 
     // pass the callback to the backend scheduler
     // it will be executed for each node during the graph computation
-    params.cb_eval = common_debug_cb_eval<false>;
+    params.cb_eval = common_debug_cb_eval;
     params.cb_eval_user_data = &cb_data;
     params.warmup = false;
 

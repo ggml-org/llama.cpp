@@ -1,9 +1,12 @@
-#include "ggml.h"
-#include "ggml-cpu.h"
 #include "llama.h"
+
+#include "build-info.h"
 #include "common.h"
 
 #include "../src/llama-model.h"
+
+#include "ggml.h"
+#include "ggml-cpu.h"
 
 #include <algorithm>
 #include <cassert>
@@ -298,7 +301,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    print_build_info();
+    llama_print_build_info(llama_version());
 
     // load the model
     fprintf(stderr, "Loading model\n");
@@ -309,7 +312,7 @@ int main(int argc, char ** argv) {
 
     {
         auto mparams = llama_model_default_params();
-        mparams.use_mlock  = false;
+        mparams.load_mode = LLAMA_LOAD_MODE_NONE;
 
         model = llama_model_load_from_file(params.model.c_str(), mparams);
 

@@ -1,10 +1,13 @@
 #include "ggml.h"
 #include "gguf.h"
 
+#include "build-info.h"
 #include "common.h"
+#include "fit.h"
 #include "log.h"
 #include "llama.h"
 #include "sampling.h"
+#include "speculative.h"
 #include "unicode.h"
 
 #include <algorithm>
@@ -52,6 +55,10 @@
 #include <pwd.h>
 #endif
 
+#if defined(_AIX)
+#include <sys/systemcfg.h>
+#endif
+
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
@@ -68,8 +75,17 @@ common_time_meas::~common_time_meas() {
 // CPU utils
 //
 
-int32_t cpu_get_num_physical_cores() {
-#ifdef __linux__
+int32_t common_cpu_get_num_physical_cores() {
+#if defined(_AIX)
+    int32_t logical_cpus = _system_configuration.ncpus;
+    int32_t smt_threads = _system_configuration.smt_threads;
+    if (smt_threads > 0) {
+        return static_cast<int32_t>(logical_cpus / smt_threads);
+    }
+    if (logical_cpus > 0) {
+        return static_cast<int32_t>(logical_cpus);
+    }
+#elif defined(__linux__)
     // enumerate the set of thread siblings, num entries is num cores
     std::unordered_set<std::string> siblings;
     for (uint32_t cpu=0; cpu < UINT32_MAX; ++cpu) {
@@ -183,11 +199,11 @@ static int cpu_count_math_cpus(int n_cpu) {
 /**
  * Returns number of CPUs on system that are useful for math.
  */
-int32_t cpu_get_num_math() {
+int32_t common_cpu_get_num_math() {
 #if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
     int n_cpu = sysconf(_SC_NPROCESSORS_ONLN);
     if (n_cpu < 1) {
-        return cpu_get_num_physical_cores();
+        return common_cpu_get_num_physical_cores();
     }
     if (is_hybrid_cpu()) {
         cpu_set_t affinity;
@@ -199,8 +215,16 @@ int32_t cpu_get_num_math() {
             }
         }
     }
+#elif defined(__powerpc64__) || defined(__powerpc__)
+    int32_t smt_factor = 1;
+    int phy_cpus = common_cpu_get_num_physical_cores();
+    int logical_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    if (phy_cpus > 0 && logical_cpus > phy_cpus) {
+        smt_factor = logical_cpus / phy_cpus;
+    }
+    return phy_cpus * std::min(smt_factor, 2);
 #endif
-    return cpu_get_num_physical_cores();
+    return common_cpu_get_num_physical_cores();
 }
 
 // Helper for setting process priority
@@ -222,7 +246,7 @@ bool set_process_priority(enum ggml_sched_priority prio) {
     }
 
     if (!SetPriorityClass(GetCurrentProcess(), p)) {
-        LOG_WRN("failed to set process priority class %d : (%d)\n", prio, (int) GetLastError());
+        COM_WRN("failed to set process priority class %d : (%d)\n", prio, (int) GetLastError());
         return false;
     }
 
@@ -248,7 +272,7 @@ bool set_process_priority(enum ggml_sched_priority prio) {
     }
 
     if (setpriority(PRIO_PROCESS, 0, p) != 0) {
-        LOG_WRN("failed to set process priority %d : %s (%d)\n", prio, strerror(errno), errno);
+        COM_WRN("failed to set process priority %d : %s (%d)\n", prio, strerror(errno), errno);
         return false;
     }
     return true;
@@ -261,7 +285,7 @@ bool set_process_priority(enum ggml_sched_priority prio) {
 //
 
 
-void postprocess_cpu_params(cpu_params& cpuparams, const cpu_params* role_model) {
+void postprocess_cpu_params(common_cpu_params & cpuparams, const common_cpu_params * role_model) {
     int32_t n_set = 0;
 
     if (cpuparams.n_threads < 0) {
@@ -269,7 +293,7 @@ void postprocess_cpu_params(cpu_params& cpuparams, const cpu_params* role_model)
         if (role_model != nullptr) {
             cpuparams = *role_model;
         } else {
-            cpuparams.n_threads = cpu_get_num_math();
+            cpuparams.n_threads = common_cpu_get_num_math();
         }
     }
 
@@ -281,14 +305,14 @@ void postprocess_cpu_params(cpu_params& cpuparams, const cpu_params* role_model)
 
     if (n_set && n_set < cpuparams.n_threads) {
         // Not enough set bits, may experience performance issues.
-        LOG_WRN("Not enough set bits in CPU mask (%d) to satisfy requested thread count: %d\n", n_set, cpuparams.n_threads);
+        COM_WRN("Not enough set bits in CPU mask (%d) to satisfy requested thread count: %d\n", n_set, cpuparams.n_threads);
     }
 }
 
 bool parse_cpu_range(const std::string & range, bool (&boolmask)[GGML_MAX_N_THREADS]) {
     size_t dash_loc = range.find('-');
     if (dash_loc == std::string::npos) {
-        LOG_ERR("Format of CPU range is invalid! Expected [<start>]-[<end>].\n");
+        COM_ERR("%s", "Format of CPU range is invalid! Expected [<start>]-[<end>].\n");
         return false;
     }
 
@@ -300,7 +324,7 @@ bool parse_cpu_range(const std::string & range, bool (&boolmask)[GGML_MAX_N_THRE
     } else {
         start_i = std::stoull(range.substr(0, dash_loc));
         if (start_i >= GGML_MAX_N_THREADS) {
-            LOG_ERR("Start index out of bounds!\n");
+            COM_ERR("%s", "Start index out of bounds!\n");
             return false;
         }
     }
@@ -310,7 +334,7 @@ bool parse_cpu_range(const std::string & range, bool (&boolmask)[GGML_MAX_N_THRE
     } else {
         end_i = std::stoull(range.substr(dash_loc + 1));
         if (end_i >= GGML_MAX_N_THREADS) {
-            LOG_ERR("End index out of bounds!\n");
+            COM_ERR("%s", "End index out of bounds!\n");
             return false;
         }
     }
@@ -330,7 +354,7 @@ bool parse_cpu_mask(const std::string & mask, bool (&boolmask)[GGML_MAX_N_THREAD
     }
 
     size_t num_digits = mask.length() - start_i;
-    if (num_digits > 128) num_digits = 128;
+    num_digits = std::min<size_t>(num_digits, 128);
 
     size_t end_i = num_digits + start_i;
 
@@ -345,7 +369,7 @@ bool parse_cpu_mask(const std::string & mask, bool (&boolmask)[GGML_MAX_N_THREAD
         } else if (c >= 'A' && c <= 'F') {
             id -= 'A' - 10;
         } else {
-            LOG_ERR("Invalid hex character '%c' at position %d\n", c, int32_t(i));
+            COM_ERR("Invalid hex character '%c' at position %d\n", c, int32_t(i));
             return false;
         }
 
@@ -364,15 +388,34 @@ void common_init() {
     SetConsoleCP(CP_UTF8);
 #endif
 
-    llama_log_set(common_log_default_callback, NULL);
+    common_log_set_prefix(common_log_main(), true);
+    common_log_set_timestamps(common_log_main(), true);
 
+    llama_log_set(common_log_default_callback, NULL);
+}
+
+void common_params_print_info(const common_params & params, bool print_devices) {
 #ifdef NDEBUG
     const char * build_type = "";
 #else
     const char * build_type = " (debug)";
 #endif
+    COM_TRC("%s: build %d (%s) with %s for %s%s\n", __func__, llama_build_number(), llama_commit(), llama_compiler(), llama_build_target(), build_type);
 
-    LOG_DBG("build: %d (%s) with %s for %s%s\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT, LLAMA_COMPILER, LLAMA_BUILD_TARGET, build_type);
+    const int verbosity = common_log_get_verbosity_thold();
+    COM_INF("%s: verbosity = %d (adjust with the `-lv N` CLI arg)\n", __func__, verbosity);
+
+    // device enumeration creates a primary context on CUDA backends, skip it when the caller does not own any device
+    if (print_devices && verbosity >= LOG_LEVEL_TRACE) {
+        COM_TRC("%s", "device_info:\n");
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            auto * dev = ggml_backend_dev_get(i);
+            size_t free, total;
+            ggml_backend_dev_memory(dev, &free, &total);
+            COM_TRC("  - %-8s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+        }
+    }
+    COM_TRC("%s\n", common_params_get_system_info(params).c_str());
 }
 
 std::string common_params_get_system_info(const common_params & params) {
@@ -422,6 +465,27 @@ std::string string_strip(const std::string & str) {
         end--;
     }
     return str.substr(start, end - start);
+}
+
+std::string string_lcs(std::string_view a, std::string_view b) {
+    if (a.empty() || b.empty()) return {};
+
+    std::vector<std::vector<size_t>> dp(a.size() + 1, std::vector<size_t>(b.size() + 1, 0));
+    size_t best_len = 0;
+    size_t best_end_a = 0;
+
+    for (size_t i = 1; i <= a.size(); ++i) {
+        for (size_t j = 1; j <= b.size(); ++j) {
+            if (a[i - 1] == b[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+                if (dp[i][j] > best_len) {
+                    best_len = dp[i][j];
+                    best_end_a = i;
+                }
+            }
+        }
+    }
+    return std::string(a.substr(best_end_a - best_len, best_len));
 }
 
 std::string string_get_sortable_timestamp() {
@@ -618,7 +682,7 @@ void string_process_escapes(std::string & input) {
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides) {
     const char * sep = strchr(data, '=');
     if (sep == nullptr || sep - data >= 128) {
-        LOG_ERR("%s: malformed KV override '%s'\n", __func__, data);
+        COM_ERR("%s: malformed KV override '%s'\n", __func__, data);
         return false;
     }
     llama_model_kv_override kvo;
@@ -641,20 +705,20 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
         } else if (std::strcmp(sep, "false") == 0) {
             kvo.val_bool = false;
         } else {
-            LOG_ERR("%s: invalid boolean value for KV override '%s'\n", __func__, data);
+            COM_ERR("%s: invalid boolean value for KV override '%s'\n", __func__, data);
             return false;
         }
     } else if (strncmp(sep, "str:", 4) == 0) {
         sep += 4;
         kvo.tag = LLAMA_KV_OVERRIDE_TYPE_STR;
         if (strlen(sep) > 127) {
-            LOG_ERR("%s: malformed KV override '%s', value cannot exceed 127 chars\n", __func__, data);
+            COM_ERR("%s: malformed KV override '%s', value cannot exceed 127 chars\n", __func__, data);
             return false;
         }
         strncpy(kvo.val_str, sep, 127);
         kvo.val_str[127] = '\0';
     } else {
-        LOG_ERR("%s: invalid type for KV override '%s'\n", __func__, data);
+        COM_ERR("%s: invalid type for KV override '%s'\n", __func__, data);
         return false;
     }
     overrides.emplace_back(std::move(kvo));
@@ -935,24 +999,42 @@ bool fs_is_directory(const std::string & path) {
     return std::filesystem::exists(dir) && std::filesystem::is_directory(dir);
 }
 
+std::string common_get_env(const std::string & name) {
+    const char * value = std::getenv(name.c_str());
+    return value == nullptr ? "" : value;
+}
+
+void common_set_env(const std::string & name, const std::string & value) {
+#if defined(_WIN32)
+    _putenv_s(name.c_str(), value.c_str());
+#else
+    if (value.empty()) {
+        unsetenv(name.c_str());
+    } else {
+        setenv(name.c_str(), value.c_str(), 1);
+    }
+#endif
+}
+
 std::string fs_get_cache_directory() {
     std::string cache_directory = "";
     auto ensure_trailing_slash = [](std::string p) {
         // Make sure to add trailing slash
-        if (p.back() != DIRECTORY_SEPARATOR) {
+        if (p.empty() || p.back() != DIRECTORY_SEPARATOR) {
             p += DIRECTORY_SEPARATOR;
         }
         return p;
     };
-    if (getenv("LLAMA_CACHE")) {
-        cache_directory = std::getenv("LLAMA_CACHE");
-    } else {
+    cache_directory = common_get_env("LLAMA_CACHE");
+    if (cache_directory.empty()) {
 #if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
         defined(__OpenBSD__) || defined(__NetBSD__)
-        if (std::getenv("XDG_CACHE_HOME")) {
-            cache_directory = std::getenv("XDG_CACHE_HOME");
-        } else if (std::getenv("HOME")) {
-            cache_directory = std::getenv("HOME") + std::string("/.cache/");
+        const std::string xdg_cache_home = common_get_env("XDG_CACHE_HOME");
+        const std::string home           = common_get_env("HOME");
+        if (!xdg_cache_home.empty()) {
+            cache_directory = xdg_cache_home;
+        } else if (!home.empty()) {
+            cache_directory = home + "/.cache/";
         } else {
 #if defined(__linux__)
             /* no $HOME is defined, fallback to getpwuid */
@@ -967,9 +1049,16 @@ std::string fs_get_cache_directory() {
 #endif /* defined(__linux__) */
         }
 #elif defined(__APPLE__)
-        cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
+        cache_directory = common_get_env("HOME");
+        if (cache_directory.empty()) {
+            throw std::runtime_error("Failed to find $HOME directory");
+        }
+        cache_directory += "/Library/Caches/";
 #elif defined(_WIN32)
-        cache_directory = std::getenv("LOCALAPPDATA");
+        cache_directory = common_get_env("LOCALAPPDATA");
+        if (cache_directory.empty()) {
+            throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
+        }
 #elif defined(__EMSCRIPTEN__)
         GGML_ABORT("not implemented on this platform");
 #else
@@ -979,6 +1068,51 @@ std::string fs_get_cache_directory() {
         cache_directory += "llama.cpp";
     }
     return ensure_trailing_slash(cache_directory);
+}
+
+std::string fs_get_config_directory() {
+    std::string config_directory = "";
+    auto ensure_trailing_slash = [](std::string p) {
+        if (p.empty() || p.back() != DIRECTORY_SEPARATOR) {
+            p += DIRECTORY_SEPARATOR;
+        }
+        return p;
+    };
+#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
+        defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
+    const std::string xdg_config_home = common_get_env("XDG_CONFIG_HOME");
+    const std::string home            = common_get_env("HOME");
+    if (!xdg_config_home.empty()) {
+        config_directory = xdg_config_home;
+    } else if (!home.empty()) {
+        config_directory = home + "/.config/";
+    } else {
+#if defined(__linux__)
+        /* no $HOME is defined, fallback to getpwuid */
+        struct passwd *pw = getpwuid(getuid());
+        if ((!pw) || (!pw->pw_dir)) {
+            throw std::runtime_error("Failed to find $HOME directory");
+        }
+
+        config_directory = std::string(pw->pw_dir) + std::string("/.config/");
+#else
+        throw std::runtime_error("Failed to find $HOME directory");
+#endif
+    }
+#elif defined(_WIN32)
+    config_directory = common_get_env("APPDATA");
+    if (config_directory.empty()) {
+        throw std::runtime_error("Failed to find %APPDATA% directory");
+    }
+#elif defined(__EMSCRIPTEN__)
+    // caller decides what to do when there is no config directory
+    throw std::runtime_error("not implemented on this platform");
+#else
+#  error Unknown architecture
+#endif
+    config_directory = ensure_trailing_slash(config_directory);
+    config_directory += "llama.cpp";
+    return ensure_trailing_slash(config_directory);
 }
 
 std::string fs_get_cache_file(const std::string & filename) {
@@ -1030,6 +1164,18 @@ std::vector<common_file_info> fs_list(const std::string & path, bool include_dir
     }
 
     return files;
+}
+
+std::ifstream fs_open_ifstream(const std::string & fname, std::ios_base::openmode mode) {
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, NULL, 0);
+    if (!wlen) { return std::ifstream(); }
+    std::vector<wchar_t> wfname(wlen);
+    (void)MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, wfname.data(), wlen);
+    return std::ifstream(wfname.data(), mode);
+#else
+    return std::ifstream(fname, mode);
+#endif
 }
 
 //
@@ -1106,7 +1252,7 @@ static void common_init_sampler_from_model(
         if (llama_model_meta_val_str(model, llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_SEQUENCE), buf, sizeof(buf)) > 0) {
             const std::vector<std::string> sampler_names = string_split<std::string>(std::string(buf), ';');
             if (!sampler_names.empty()) {
-                sparams.samplers = common_sampler_types_from_names(sampler_names, true);
+                sparams.samplers = common_sampler_types_from_names(sampler_names);
             }
         }
     }
@@ -1130,6 +1276,8 @@ struct common_init_result::impl {
 
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
 
+    common_threadpools threadpools;
+
     llama_model_ptr   model;
     llama_context_ptr context;
 
@@ -1139,19 +1287,43 @@ struct common_init_result::impl {
     std::vector<llama_sampler_seq_config> samplers_seq_config;
 };
 
-common_init_result::common_init_result(common_params & params) :
+common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
     if (params.fit_params) {
-        LOG_INF("%s: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on\n", __func__);
-        llama_params_fit(params.model.path.c_str(), &mparams, &cparams,
+        COM_TRC("%s", "fitting params to device memory ...\n");
+        COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");
+
+        // the draft context is created from the same base params and follows the main context, fit both together
+        const bool has_draft = params.speculative.has_dft();
+        const bool spec_mtp  = std::find(params.speculative.types.begin(), params.speculative.types.end(),
+            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+
+        common_params params_dft = common_base_params_to_speculative(params);
+
+        auto mparams_dft = common_model_params_to_llama(params_dft);
+        auto cparams_dft = common_context_params_to_llama(params_dft);
+        if (spec_mtp) {
+            cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+        }
+        cparams_dft.n_rs_seq = 0;
+
+        const common_fit_extra_model extra = {
+            /*.path_model   =*/ params_dft.model.path.c_str(),
+            /*.mparams      =*/ &mparams_dft,
+            /*.cparams      =*/ &cparams_dft,
+            /*.shares_model =*/ !has_draft, // an MTP context runs on the weights of the main model
+        };
+
+        common_fit_params(params.model.path.c_str(), &mparams, &cparams,
             params.tensor_split,
             params.tensor_buft_overrides.data(),
             params.fit_params_target.data(),
             params.fit_params_min_ctx,
-            params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+            has_draft || spec_mtp ? &extra : nullptr,
+            params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
@@ -1161,6 +1333,10 @@ common_init_result::common_init_result(common_params & params) :
 
     pimpl->model.reset(model);
 
+    if (model_only) {
+        return;
+    }
+
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     // load and optionally apply lora adapters
@@ -1168,8 +1344,7 @@ common_init_result::common_init_result(common_params & params) :
         llama_adapter_lora_ptr lora;
         lora.reset(llama_adapter_lora_init(model, la.path.c_str()));
         if (lora == nullptr) {
-            LOG_ERR("%s: failed to load lora adapter '%s'\n", __func__, la.path.c_str());
-            pimpl->model.reset(model);
+            COM_ERR("failed to load lora adapter '%s'\n", la.path.c_str());
             return;
         }
 
@@ -1187,14 +1362,14 @@ common_init_result::common_init_result(common_params & params) :
     common_init_sampler_from_model(model, params.sampling);
 
     if (params.sampling.ignore_eos && llama_vocab_eos(vocab) == LLAMA_TOKEN_NULL) {
-        LOG_WRN("%s: warning: vocab does not have an EOS token, ignoring --ignore-eos\n", __func__);
+        COM_WRN("%s", "vocab does not have an EOS token, ignoring --ignore-eos\n");
         params.sampling.ignore_eos = false;
     }
 
     // initialize once
     for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {
         if (llama_vocab_is_eog(vocab, i)) {
-            LOG_INF("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(vocab, i).c_str(), -INFINITY);
+            COM_TRC("added %s logit bias = %f\n", common_token_to_piece(vocab, i).c_str(), -INFINITY);
             params.sampling.logit_bias_eog.push_back({i, -INFINITY});
         }
     }
@@ -1205,16 +1380,6 @@ common_init_result::common_init_result(common_params & params) :
                 params.sampling.logit_bias.end(),
                 params.sampling.logit_bias_eog.begin(), params.sampling.logit_bias_eog.end());
     }
-
-    //if (params.sampling.penalty_last_n == -1) {
-    //    LOG_INF("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
-    //    params.sampling.penalty_last_n = llama_n_ctx(lctx);
-    //}
-
-    //if (params.sampling.dry_penalty_last_n == -1) {
-    //    LOG_INF("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
-    //    params.sampling.dry_penalty_last_n = llama_n_ctx(lctx);
-    //}
 
     // init the backend samplers as part of the context creation
     pimpl->samplers.resize(cparams.n_seq_max);
@@ -1232,11 +1397,15 @@ common_init_result::common_init_result(common_params & params) :
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
-        LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
+        COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
         return;
     }
 
     pimpl->context.reset(lctx);
+
+    set_process_priority(params.cpuparams.priority);
+
+    pimpl->threadpools.init(lctx, params);
 }
 
 llama_model * common_init_result::model() {
@@ -1264,25 +1433,29 @@ std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
     return pimpl->lora;
 }
 
-common_init_result_ptr common_init_from_params(common_params & params) {
-    common_init_result_ptr res(new common_init_result(params));
+common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
+    common_init_result_ptr res(new common_init_result(params, model_only));
 
     llama_model * model = res->model();
     if (model == NULL) {
-        LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
+        COM_ERR("failed to load model '%s'\n", params.model.path.c_str());
+        return res;
+    }
+
+    if (model_only) {
         return res;
     }
 
     llama_context * lctx = res->context();
     if (lctx == NULL) {
-        LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
+        COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
         return res;
     }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     if (params.ctx_shift && !llama_memory_can_shift(llama_get_memory(lctx))) {
-        LOG_WRN("%s: KV cache shifting is not supported for this context, disabling KV cache shifting\n", __func__);
+        COM_WRN("%s", "KV cache shifting is not supported for this context, disabling KV cache shifting\n");
         params.ctx_shift = false;
     }
 
@@ -1311,7 +1484,7 @@ common_init_result_ptr common_init_from_params(common_params & params) {
         bool ok = true;
 
         if (llama_vocab_bos(vocab) == LLAMA_TOKEN_NULL) {
-            LOG_WRN("%s: warning: vocab does not have a  BOS token, reranking will not work\n", __func__);
+            COM_WRN("%s", "vocab does not have a  BOS token, reranking will not work\n");
             ok = false;
         }
 
@@ -1320,10 +1493,10 @@ common_init_result_ptr common_init_from_params(common_params & params) {
         bool has_rerank_prompt = llama_model_chat_template(model, "rerank") != NULL;
 
         if (!has_eos && !has_sep && !has_rerank_prompt) {
-            LOG_WRN("%s: warning: vocab does not have an EOS token, SEP token, or rerank prompt. Reranking will not work\n", __func__);
+            COM_WRN("%s", "vocab does not have an EOS token, SEP token, or rerank prompt. Reranking will not work\n");
             ok = false;
         } else if (!has_eos) {
-            LOG_WRN("%s: warning: vocab does not have an EOS token, using SEP token as fallback\n", __func__);
+            COM_WRN("%s", "vocab does not have an EOS token, using SEP token as fallback\n");
         }
 
         if (!ok) {
@@ -1336,9 +1509,7 @@ common_init_result_ptr common_init_from_params(common_params & params) {
     }
 
     if (params.warmup) {
-        LOG_WRN("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
-
-        llama_set_warmup(lctx, true);
+        COM_TRC("%s", "warming up the model with an empty run - please wait ... (--no-warmup to disable)\n");
 
         std::vector<llama_token> tmp;
         llama_token bos = llama_vocab_bos(vocab);
@@ -1370,7 +1541,6 @@ common_init_result_ptr common_init_from_params(common_params & params) {
         llama_memory_clear(llama_get_memory(lctx), true);
         llama_synchronize(lctx);
         llama_perf_context_reset(lctx);
-        llama_set_warmup(lctx, false);
 
         // reset samplers to reset RNG state after warmup to the seeded state
         res->reset_samplers();
@@ -1381,19 +1551,118 @@ common_init_result_ptr common_init_from_params(common_params & params) {
 
 common_init_result::~common_init_result() = default;
 
-std::string get_model_endpoint() {
-    const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
-    // We still respect the use of environment-variable "HF_ENDPOINT" for backward-compatibility.
-    const char * hf_endpoint_env = getenv("HF_ENDPOINT");
-    const char * endpoint_env = model_endpoint_env ? model_endpoint_env : hf_endpoint_env;
-    std::string model_endpoint = "https://huggingface.co/";
-    if (endpoint_env) {
-        model_endpoint = endpoint_env;
-        if (model_endpoint.back() != '/') {
-            model_endpoint += '/';
-        }
+std::string common_get_model_endpoint() {
+    std::string endpoint = common_get_env("MODEL_ENDPOINT");
+    if (endpoint.empty()) {
+        // the HF_ENDPOINT variable is respected for backward compatibility
+        endpoint = common_get_env("HF_ENDPOINT");
     }
-    return model_endpoint;
+    if (endpoint.empty()) {
+        return "https://huggingface.co/";
+    }
+    if (endpoint.back() != '/') {
+        endpoint += '/';
+    }
+    return endpoint;
+}
+
+char * common_get_model_or_exit(int argc, char * argv[]) {
+    if (argc > 1) {
+        return argv[1];
+    }
+
+    char * path = getenv("LLAMACPP_TEST_MODELFILE");
+    if (!path || strlen(path) == 0) {
+        fprintf(stderr, "\033[33mWARNING: No model file provided. Skipping this test. Set LLAMACPP_TEST_MODELFILE=<gguf_model_path> to silence this warning and run this test.\n\033[0m");
+        exit(EXIT_SUCCESS);
+    }
+
+    return path;
+}
+
+common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
+    auto * mem = llama_get_memory(ctx);
+    if (mem == nullptr) {
+        return COMMON_CONTEXT_SEQ_RM_TYPE_NO;
+    }
+
+    common_context_seq_rm_type res = COMMON_CONTEXT_SEQ_RM_TYPE_PART;
+
+    llama_memory_clear(mem, true);
+
+    // eval 2 tokens to check if the context is compatible
+    std::vector<llama_token> tmp;
+    tmp.push_back(0);
+    tmp.push_back(0);
+
+    int ret = llama_decode(ctx, llama_batch_get_one(tmp.data(), tmp.size()));
+    if (ret != 0) {
+        COM_ERR("llama_decode() failed: %d\n", ret);
+        res = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
+        goto done;
+    }
+
+    if (llama_n_rs_seq(ctx) > 0) {
+        COM_TRC("%s", "the context supports bounded partial sequence removal\n");
+        res = COMMON_CONTEXT_SEQ_RM_TYPE_RS;
+        goto done;
+    }
+
+    // try to remove the last tokens
+    if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
+        COM_TRC("%s", "the context does not support partial sequence removal\n");
+        res = COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+        goto done;
+    }
+
+done:
+    llama_memory_clear(mem, true);
+    llama_synchronize(ctx);
+
+    return res;
+}
+
+static void common_context_seq_rm(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    auto * mem = llama_get_memory(ctx);
+    if (!llama_memory_seq_rm(mem, seq_id, p0, p1)) {
+        GGML_ABORT("%s", string_format("failed to remove sequence %d with p0=%d, p1=%d\n", seq_id, p0, p1).c_str());
+    }
+}
+
+static void common_context_seq_cp(llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    auto * mem = llama_get_memory(ctx);
+    llama_memory_seq_cp(mem, seq_id_src, seq_id_dst, p0, p1);
+}
+
+static void common_context_seq_add(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
+    auto * mem = llama_get_memory(ctx);
+    llama_memory_seq_add(mem, seq_id, p0, p1, delta);
+}
+
+void common_memory::init(llama_context * ctx_tgt, llama_context * ctx_dft) {
+    this->ctx_tgt = ctx_tgt;
+    this->ctx_dft = ctx_dft;
+}
+
+void common_memory::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const {
+    common_context_seq_rm(ctx_tgt, seq_id, p0, p1);
+    if (ctx_dft) {
+        common_context_seq_rm(ctx_dft, seq_id, p0, p1);
+    }
+}
+
+void common_memory::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) const {
+    common_context_seq_cp(ctx_tgt, seq_id_src, seq_id_dst, p0, p1);
+    if (ctx_dft) {
+        common_context_seq_cp(ctx_dft, seq_id_src, seq_id_dst, p0, p1);
+    }
+}
+
+void common_memory::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) const {
+    common_context_seq_add(ctx_tgt, seq_id, p0, p1, delta);
+    if (ctx_dft) {
+        common_context_seq_add(ctx_dft, seq_id, p0, p1, delta);
+    }
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
@@ -1418,10 +1687,9 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.n_gpu_layers    = params.n_gpu_layers;
     mparams.main_gpu        = params.main_gpu;
     mparams.split_mode      = params.split_mode;
+    mparams.load_mode       = params.load_mode;
+    mparams.lazy_mode = params.lazy_mode;
     mparams.tensor_split    = params.tensor_split;
-    mparams.use_mmap        = params.use_mmap;
-    mparams.use_direct_io   = params.use_direct_io;
-    mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
     mparams.use_extra_bufts = !params.no_extra_bufts;
     mparams.no_host         = params.no_host;
@@ -1443,6 +1711,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
+    mparams.load_mtp                    = std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
     return mparams;
 }
@@ -1452,6 +1721,9 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
+    cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
+    cparams.n_outputs_max     = std::max(params.n_outputs_max, 0);
+    cparams.n_outputs_max_per_seq = std::max(params.n_outputs_max_per_seq, 0);
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;
@@ -1483,7 +1755,11 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     return cparams;
 }
 
-struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_params & params) {
+//
+// Threadpool utils
+//
+
+struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const common_cpu_params & params) {
     struct ggml_threadpool_params tpp;
 
     ggml_threadpool_params_init(&tpp, params.n_threads); // setup the defaults
@@ -1497,6 +1773,58 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_p
     tpp.strict_cpu = params.strict_cpu;
 
     return tpp;
+}
+
+common_threadpools::~common_threadpools() {
+    if (!free_fn) {
+        return;
+    }
+    free_fn(threadpool);
+    free_fn(threadpool_batch);
+}
+
+void common_threadpools::init(llama_context * ctx, const common_params & params) {
+    GGML_ASSERT(!threadpool);
+    GGML_ASSERT(!threadpool_batch);
+
+    COM_INF("llama threadpool init, n_threads = %d\n", (int) params.cpuparams.n_threads);
+
+    auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (!cpu_dev) {
+        COM_WRN("%s", "no CPU backend found\n");
+        return;
+    }
+    auto * reg = ggml_backend_dev_backend_reg(cpu_dev);
+    auto * ggml_threadpool_new_fn = (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new");
+    free_fn = (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free");
+
+    struct ggml_threadpool_params tpp_batch =
+            ggml_threadpool_params_from_cpu_params(params.cpuparams_batch);
+    struct ggml_threadpool_params tpp =
+            ggml_threadpool_params_from_cpu_params(params.cpuparams);
+
+    // each pool needs to match the respective n_threads exactly
+    // see: https://github.com/ggml-org/llama.cpp/pull/27138#issuecomment-5332307332
+    if (!ggml_threadpool_params_match(&tpp, &tpp_batch)) {
+        threadpool_batch = ggml_threadpool_new_fn(&tpp_batch);
+        if (!threadpool_batch) {
+            COM_WRN("batch threadpool create failed : n_threads %d\n", tpp_batch.n_threads);
+            return;
+        }
+
+        // start the non-batch threadpool in the paused state
+        tpp.paused = true;
+    }
+
+    threadpool = ggml_threadpool_new_fn(&tpp);
+    if (!threadpool) {
+        COM_WRN("threadpool create failed : n_threads %d\n", tpp.n_threads);
+        free_fn(threadpool_batch);
+        threadpool_batch = nullptr;
+        return;
+    }
+
+    llama_attach_threadpool(ctx, threadpool, threadpool_batch);
 }
 
 //
@@ -1682,13 +2010,13 @@ static common_control_vector_data common_control_vector_load_one(const common_co
     };
     struct gguf_context * ctx_gguf = gguf_init_from_file(load_info.fname.c_str(), meta_gguf_params);
     if (!ctx_gguf) {
-        LOG_ERR("%s: failed to load control vector file from %s\n", __func__, load_info.fname.c_str());
+        COM_ERR("failed to load control vector file from %s\n", load_info.fname.c_str());
         return result;
     }
 
     int32_t n_tensors = gguf_get_n_tensors(ctx_gguf);
     if (n_tensors == 0) {
-        LOG_WRN("%s: no direction tensors found in %s\n", __func__, load_info.fname.c_str());
+        COM_WRN("no direction tensors found in %s\n", load_info.fname.c_str());
     }
 
     for (int i = 0; i < n_tensors; i++) {
@@ -1706,23 +2034,23 @@ static common_control_vector_data common_control_vector_load_one(const common_co
             }
         }
         if (layer_idx < 0) {
-            LOG_ERR("%s: invalid/unparsable direction tensor layer index in %s\n", __func__, load_info.fname.c_str());
+            COM_ERR("invalid/unparsable direction tensor layer index in %s\n", load_info.fname.c_str());
             result.n_embd = -1;
             break;
         } else if (layer_idx == 0) {
-            LOG_ERR("%s: invalid (zero) direction tensor layer index in %s\n", __func__, load_info.fname.c_str());
+            COM_ERR("invalid (zero) direction tensor layer index in %s\n", load_info.fname.c_str());
             result.n_embd = -1;
             break;
         }
 
         struct ggml_tensor * tensor = ggml_get_tensor(ctx, name.c_str());
         if (tensor->type != GGML_TYPE_F32) {
-            LOG_ERR("%s: invalid (non-F32) direction tensor type in %s\n", __func__, load_info.fname.c_str());
+            COM_ERR("invalid (non-F32) direction tensor type in %s\n", load_info.fname.c_str());
             result.n_embd = -1;
             break;
         }
         if (ggml_n_dims(tensor) != 1) {
-            LOG_ERR("%s: invalid (non-1D) direction tensor shape in %s\n", __func__, load_info.fname.c_str());
+            COM_ERR("invalid (non-1D) direction tensor shape in %s\n", load_info.fname.c_str());
             result.n_embd = -1;
             break;
         }
@@ -1730,7 +2058,7 @@ static common_control_vector_data common_control_vector_load_one(const common_co
         if (result.n_embd == -1) {
             result.n_embd = ggml_nelements(tensor);
         } else if (ggml_nelements(tensor) != result.n_embd) {
-            LOG_ERR("%s: direction tensor in %s does not match previous dimensions\n", __func__, load_info.fname.c_str());
+            COM_ERR("direction tensor in %s does not match previous dimensions\n", load_info.fname.c_str());
             result.n_embd = -1;
             break;
         }
@@ -1747,7 +2075,7 @@ static common_control_vector_data common_control_vector_load_one(const common_co
     }
 
     if (result.n_embd == -1) {
-        LOG_WRN("%s: skipping %s due to invalid direction tensors\n", __func__, load_info.fname.c_str());
+        COM_WRN("skipping %s due to invalid direction tensors\n", load_info.fname.c_str());
         result.data.clear();
     }
 
@@ -1768,7 +2096,7 @@ common_control_vector_data common_control_vector_load(const std::vector<common_c
             break;
         }
         if (result.n_embd != -1 && result.n_embd != cur.n_embd) {
-            LOG_ERR("%s: control vectors in %s does not match previous dimensions\n", __func__, info.fname.c_str());
+            COM_ERR("control vectors in %s does not match previous dimensions\n", info.fname.c_str());
             result.n_embd = -1;
             break;
         }
@@ -1784,7 +2112,7 @@ common_control_vector_data common_control_vector_load(const std::vector<common_c
     }
 
     if (result.n_embd == -1) {
-        LOG_ERR("%s: no valid control vector files passed\n", __func__);
+        COM_ERR("%s", "no valid control vector files passed\n");
         result.data.clear();
     }
 
@@ -1873,52 +2201,162 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
 
 bool common_prompt_batch_decode(
               struct llama_context * ctx,
-    const std::vector<llama_token> & tokens,
+    const std::vector<llama_token> & all_tokens,
+                               int   n_new,
                                int & n_past,
                                int   n_batch,
                   std::string_view   state_path,
                               bool   save_state) {
-    const int n_eval = tokens.size();
-    if (n_eval == 0) {
+    if (n_new == 0) {
         return true;
     }
+    const int offset = all_tokens.size() - n_new;
 
-    if (save_state && n_eval > 1) {
-        const int n_tokens_before_last = n_eval - 1;
+    if (save_state && n_new > 1) {
+        const int n_tokens_before_last = n_new - 1;
 
-        GGML_ASSERT(n_eval <= n_batch);
+        GGML_ASSERT(n_new <= n_batch);
 
         // Decode all but the last token so we can save the memory state before decoding the last token.
         // This is done so we can restore the session state later and replay the last token.
         // Memory implementations in recurrent/hybrid models don't support removing tokens from their
         // memory, so we can't just remove the last token from the memory and replay the last token which
         // is the reason for this logic.
-        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(tokens.data()), n_tokens_before_last))) {
-            LOG_ERR("%s : failed to eval\n", __func__);
+        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_tokens_before_last))) {
+            COM_ERR("%s", "failed to eval\n");
             return false;
         }
         n_past += n_tokens_before_last;
 
-        llama_state_save_file(ctx, state_path.data(), tokens.data(), n_tokens_before_last);
-        LOG_INF("saved session before last token to %s, n_tokens = %d\n", state_path.data(), n_tokens_before_last);
+        llama_state_save_file(ctx, state_path.data(), all_tokens.data(), all_tokens.size());
+        COM_INF("saved session before last token to %s, n_new = %zu\n", state_path.data(), all_tokens.size());
 
-        llama_token last_token = tokens.back();
+        llama_token last_token = all_tokens.back();
         llama_batch batch = llama_batch_get_one(&last_token, 1);
         int32_t pos = n_past;
         batch.pos = &pos;
 
         if (llama_decode(ctx, batch)) {
-            LOG_ERR("%s : failed to eval last token\n", __func__);
+            COM_ERR("%s", "failed to eval last token\n");
             return false;
         }
         n_past++;
     } else {
-        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(tokens.data()), n_eval))) {
-            LOG_ERR("%s : failed to eval\n", __func__);
+        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_new))) {
+            COM_ERR("%s", "failed to eval\n");
             return false;
         }
-        n_past += n_eval;
+        n_past += n_new;
     }
 
     return true;
+}
+
+size_t common_prompt_checkpoint::size() const {
+    return data_tgt.size() + data_dft.size() + data_spec.size();
+}
+
+bool common_prompt_checkpoint::empty() const {
+    return data_tgt.empty();
+}
+
+void common_prompt_checkpoint::clear() {
+    n_tokens = 0;
+
+    pos_min = 0;
+    pos_max = 0;
+
+    data_tgt.clear();
+    data_dft.clear();
+    data_spec.clear();
+}
+
+void common_prompt_checkpoint::update_pos(
+        int64_t n_tokens,
+        llama_pos pos_min,
+        llama_pos pos_max) {
+    this->n_tokens = n_tokens;
+    this->pos_min  = pos_min;
+    this->pos_max  = pos_max;
+}
+
+void common_prompt_checkpoint::update_tgt(
+        llama_context * ctx,
+        llama_seq_id seq_id,
+        llama_state_seq_flags flags) {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    const size_t ckpt_size = llama_state_seq_get_size_ext(ctx, seq_id, flags);
+
+    data_tgt.resize(ckpt_size);
+
+    const size_t n = llama_state_seq_get_data_ext(ctx, data_tgt.data(), ckpt_size, seq_id, flags);
+    if (n != ckpt_size) {
+        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", ckpt_size, n);
+    }
+}
+
+void common_prompt_checkpoint::update_dft(
+        llama_context * ctx,
+        llama_seq_id seq_id,
+        llama_state_seq_flags flags) {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    const size_t ckpt_size = llama_state_seq_get_size_ext(ctx, seq_id, flags);
+
+    data_dft.resize(ckpt_size);
+
+    const size_t n = llama_state_seq_get_data_ext(ctx, data_dft.data(), ckpt_size, seq_id, flags);
+    if (n != ckpt_size) {
+        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", ckpt_size, n);
+    }
+}
+
+void common_prompt_checkpoint::load_tgt(
+        llama_context * ctx,
+        llama_seq_id seq_id,
+        llama_state_seq_flags flags) const {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    if (data_tgt.empty()) {
+        return;
+    }
+
+    const size_t n = llama_state_seq_set_data_ext(ctx, data_tgt.data(), data_tgt.size(), seq_id, flags);
+    if (n != data_tgt.size()) {
+        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", data_tgt.size(), n);
+    }
+}
+
+void common_prompt_checkpoint::load_dft(
+        llama_context * ctx,
+        llama_seq_id seq_id,
+        llama_state_seq_flags flags) const {
+    if (ctx == nullptr) {
+        return;
+    }
+
+    if (data_dft.empty()) {
+        return;
+    }
+
+    const size_t n = llama_state_seq_set_data_ext(ctx, data_dft.data(), data_dft.size(), seq_id, flags);
+    if (n != data_dft.size()) {
+        GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", data_dft.size(), n);
+    }
+}
+
+void common_prompt_checkpoint::clear_tgt() {
+    data_tgt.clear();
+}
+
+void common_prompt_checkpoint::clear_dft() {
+    data_dft.clear();
+    data_spec.clear();
 }

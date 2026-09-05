@@ -7,8 +7,6 @@ struct Params {
     offset_src0: u32,
     offset_src1: u32,
     offset_dst: u32,
-    offset_merged_src0: u32,
-    offset_merged_src1: u32,
 
     stride_src0_0: u32,
     stride_src0_1: u32,
@@ -132,10 +130,13 @@ fn update(dst_i: u32, src0_i: u32, src1_i: u32) {
 }
 
 @compute @workgroup_size(WG_SIZE)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x < params.ne) {
-        let src0_i = params.offset_src0 + params.offset_merged_src0 + src0_index(gid.x);
-        let src1_i = params.offset_src1 + params.offset_merged_src1 + src1_index(gid.x);
-        update(params.offset_dst + gid.x, src0_i, src1_i);
+fn main(@builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(num_workgroups)       num_wg:  vec3<u32>) {
+    let threads_per_group = u32(WG_SIZE);
+    let i = gid.x + (num_wg.x * threads_per_group) * gid.y;
+    if (i < params.ne) {
+        let src0_i = params.offset_src0 + src0_index(i);
+        let src1_i = params.offset_src1 + src1_index(i);
+        update(params.offset_dst + i, src0_i, src1_i);
     }
 }

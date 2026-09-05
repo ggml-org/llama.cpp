@@ -429,13 +429,20 @@ extern "C" {
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
-        GGML_TYPE_COUNT   = 42,
+        GGML_TYPE_Q2_0    = 42,
+        GGML_TYPE_COUNT   = 43,
     };
 
     // precision
     enum ggml_prec {
         GGML_PREC_DEFAULT =  0, // stored as ggml_tensor.op_params, 0 by default
         GGML_PREC_F32     = 10,
+    };
+
+    // op hint
+    enum ggml_op_hint {
+        GGML_HINT_NONE             = 0,
+        GGML_HINT_SRC0_IS_HADAMARD = 1,
     };
 
     // model file types
@@ -467,6 +474,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_MXFP4   = 25, // except 1d tensors
         GGML_FTYPE_MOSTLY_NVFP4   = 26, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q1_0    = 27, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q2_0    = 28, // except 1d tensors
     };
 
     // available tensor operations:
@@ -529,6 +537,7 @@ extern "C" {
         GGML_OP_IM2COL,
         GGML_OP_IM2COL_BACK,
         GGML_OP_IM2COL_3D,
+        GGML_OP_COL2IM_1D,
         GGML_OP_CONV_2D,
         GGML_OP_CONV_3D,
         GGML_OP_CONV_2D_DW,
@@ -561,6 +570,10 @@ extern "C" {
         GGML_OP_RWKV_WKV7,
         GGML_OP_SOLVE_TRI,
         GGML_OP_GATED_DELTA_NET,
+        GGML_OP_LIGHTNING_INDEXER,
+        GGML_OP_DSV4_HC_COMB,
+        GGML_OP_DSV4_HC_PRE,
+        GGML_OP_DSV4_HC_POST,
 
         GGML_OP_UNARY,
 
@@ -614,6 +627,7 @@ extern "C" {
         GGML_GLU_OP_SWIGLU_OAI,
         GGML_GLU_OP_GEGLU_ERF,
         GGML_GLU_OP_GEGLU_QUICK,
+        GGML_GLU_OP_SWIGLU_CLAMP,
 
         GGML_GLU_OP_COUNT,
     };
@@ -769,6 +783,10 @@ extern "C" {
     GGML_API bool ggml_is_contiguous_0(const struct ggml_tensor * tensor); // same as ggml_is_contiguous()
     GGML_API bool ggml_is_contiguous_1(const struct ggml_tensor * tensor); // contiguous for dims >= 1
     GGML_API bool ggml_is_contiguous_2(const struct ggml_tensor * tensor); // contiguous for dims >= 2
+
+    GGML_API bool ggml_is_contiguous_to_1(const struct ggml_tensor * tensor); // contiguous for dims < 1
+    GGML_API bool ggml_is_contiguous_to_2(const struct ggml_tensor * tensor); // contiguous for dims < 2
+    GGML_API bool ggml_is_contiguous_to_3(const struct ggml_tensor * tensor); // contiguous for dims < 3
 
     // returns whether the tensor elements are allocated as one contiguous block of memory (no gaps, but permutation ok)
     GGML_API bool ggml_is_contiguously_allocated(const struct ggml_tensor * tensor);
@@ -1183,8 +1201,8 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
-    // a - x
-    // b - dy
+    // a - dy
+    // b - x
     GGML_API struct ggml_tensor * ggml_silu_back(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1350,6 +1368,12 @@ extern "C" {
             float                 alpha,
             float                 limit);
 
+    GGML_API struct ggml_tensor * ggml_swiglu_clamp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            float                 limit);
+
     // normalize along rows
     GGML_API struct ggml_tensor * ggml_norm(
             struct ggml_context * ctx,
@@ -1418,6 +1442,11 @@ extern "C" {
     GGML_API void ggml_mul_mat_set_prec(
             struct ggml_tensor * a,
             enum ggml_prec       prec);
+
+    // change the hint of a matrix multiplication
+    GGML_API void ggml_mul_mat_set_hint(
+            struct ggml_tensor * a,
+            enum ggml_op_hint    hint);
 
     // indirect matrix multiplication
     GGML_API struct ggml_tensor * ggml_mul_mat_id(
@@ -1702,6 +1731,19 @@ extern "C" {
             struct ggml_tensor  * a,
             int                   n_past);
 
+    GGML_API struct ggml_tensor * ggml_clamp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 min,
+            float                 max);
+
+    // in-place, returns view(a)
+    GGML_API struct ggml_tensor * ggml_clamp_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 min,
+            float                 max);
+
     GGML_API struct ggml_tensor * ggml_soft_max(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1773,8 +1815,32 @@ extern "C" {
             int                   n_dims,
             int                   mode);
 
-    // custom RoPE
+    // RoPE operations with extended options
+    // a is the input tensor to apply RoPE to, shape [n_embd, n_head, n_token]
+    // b is an int32 vector with size n_token
     // c is freq factors (e.g. phi3-128k), (optional)
+    // mode can be GGML_ROPE_TYPE_NORMAL or NEOX; for MROPE and VISION mode, use ggml_rope_multi
+    //
+    // pseudo-code for computing theta:
+    //   for i in [0, n_dims/2):
+    //     theta[i] = b[i] * powf(freq_base, -2.0 * i / n_dims);
+    //     theta[i] = theta[i] / c[i];  # if c is provided, divide theta by c
+    //     theta[i] = rope_yarn(theta[i], ...);  # note: theta = theta * freq_scale is applied here
+    //
+    // other params are used by YaRN RoPE scaling, these default values will disable YaRN:
+    //   freq_scale  = 1.0f
+    //   ext_factor  = 0.0f
+    //   attn_factor = 1.0f
+    //   beta_fast   = 0.0f
+    //   beta_slow   = 0.0f
+    //
+    // example:
+    //   (marking: c = cos, s = sin, 0 = unrotated)
+    //   given a single head with size = 8 --> [00000000]
+    //   GGML_ROPE_TYPE_NORMAL  n_dims = 4 --> [cscs0000]
+    //   GGML_ROPE_TYPE_NORMAL  n_dims = 8 --> [cscscscs]
+    //   GGML_ROPE_TYPE_NEOX    n_dims = 4 --> [ccss0000]
+    //   GGML_ROPE_TYPE_NEOX    n_dims = 8 --> [ccccssss]
     GGML_API struct ggml_tensor * ggml_rope_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1790,6 +1856,36 @@ extern "C" {
             float                 beta_fast,
             float                 beta_slow);
 
+    // multi-dimensional RoPE, for Qwen-VL and similar vision models
+    // mode can be either VISION, MROPE, IMROPE, cannot be combined with NORMAL or NEOX
+    // sections specify how many dimensions to rotate in each section:
+    //   section length is equivalent to number of cos/sin pairs, NOT the number of dims
+    //   (i.e. sum of 4 sections are expected to be n_dims/2)
+    //   last sections can be 0, means ignored
+    // all other options are identical to ggml_rope_ext
+    //
+    // important note:
+    //   - NEOX ordering is automatically applied and cannot be disabled for MROPE and VISION
+    //     if you need normal ordering, there are 2 methods:
+    //     (1) split the tensor manually using ggml_view
+    //     (2) permute the weight upon conversion
+    //   - for VISION, n_dims must be head_size/2
+    //
+    // example M-RoPE:
+    //  given sections = [t=4, y=2, x=2, 0]
+    //  given a single head with size = 18 --> [000000000000000000]
+    //  GGML_ROPE_TYPE_MROPE   n_dims = 16 --> [ttttyyxxttttyyxx00] (cos/sin are applied in NEOX ordering)
+    //  GGML_ROPE_TYPE_IMROPE  n_dims = 16 --> [ttyxttyxttyxttyx00] (interleaved M-RoPE, still NEOX ordering)
+    //  note: the theta for each dim is computed the same way as ggml_rope_ext, no matter the section
+    //        in other words, idx used for theta: [0123456789... until n_dims/2], not reset for each section
+    //
+    // example vision RoPE:
+    //  given sections = [y=4, x=4, 0, 0] (last 2 sections are ignored)
+    //  given a single head with size = 8 --> [00000000]
+    //  GGML_ROPE_TYPE_VISION  n_dims = 4 --> [yyyyxxxx]
+    //  other values of n_dims are untested and is undefined behavior
+    //  note: unlike MROPE, the theta for each dim is computed differently for each section
+    //        in other words, idx used for theta: [0123] for y section, then [0123] for x section
     GGML_API struct ggml_tensor * ggml_rope_multi(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1905,14 +2001,14 @@ extern "C" {
             float                 beta_fast,
             float                 beta_slow);
 
-
-    // clamp
-    // in-place, returns view(a)
-    GGML_API struct ggml_tensor * ggml_clamp(
-            struct ggml_context * ctx,
+    // set the offset dims for RoPE
+    // a must be GGML_OP_ROPE or GGML_OP_ROPE_BACK
+    // vision RoPE is not supported
+    // example: (marking: x = rotated, 0 = unrotated)
+    //     n_embd = 10, n_dims = 4, offset = 2 --> [00xxxx0000]
+    GGML_API struct ggml_tensor * ggml_rope_set_offset(
             struct ggml_tensor  * a,
-            float                 min,
-            float                 max);
+            int                   n_offs);
 
     // im2col
     // converts data into a format that effectively results in a convolution when combined with matrix multiplication
@@ -1941,6 +2037,16 @@ extern "C" {
         int                   d0, // dilation dimension 0
         int                   d1, // dilation dimension 1
         bool                  is_2D);
+
+    // col2im_1d: scatter-add GEMM columns back to 1D signal
+    // a: [K*OC, T_in]  (columns from matmul, K = a->ne[0]/OC)
+    // result: [T_out, OC]  where T_out = (T_in - 1)*s0 + K - 2*p0
+    GGML_API struct ggml_tensor * ggml_col2im_1d(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,   // columns [K*OC, T_in]
+        int                   s0,  // stride
+        int                   oc,  // output channels
+        int                   p0); // padding to crop from both sides
 
     GGML_API struct ggml_tensor * ggml_conv_1d(
             struct ggml_context * ctx,
@@ -2347,6 +2453,12 @@ extern "C" {
     GGML_API enum ggml_prec ggml_flash_attn_ext_get_prec(
             const struct ggml_tensor * a);
 
+    // Use finite mask entries as a sparse K/V set. Set 0 to disable.
+    // n_kv_max must bound the number of finite entries in every mask row.
+    GGML_API void ggml_flash_attn_ext_set_n_kv_max(
+            struct ggml_tensor * a,
+            int32_t              n_kv_max);
+
     GGML_API void ggml_flash_attn_ext_add_sinks(
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
@@ -2373,7 +2485,8 @@ extern "C" {
             struct ggml_tensor  * A,
             struct ggml_tensor  * B,
             struct ggml_tensor  * C,
-            struct ggml_tensor  * ids);
+            struct ggml_tensor  * ids,
+            int64_t               K);
 
     // partition into non-overlapping windows with padding if needed
     // example:
@@ -2476,6 +2589,17 @@ extern "C" {
 
     // TODO: add ggml_gated_delta_net_set_bcast() to be able to configure Q, K broadcast type: tiled vs interleaved [TAG_GGML_GDN_BCAST]
     // ref: https://github.com/ggml-org/llama.cpp/pull/19468#discussion_r2786394306
+    //
+    // tensor shapes (S_k == S_v, H_v % H_k == 0):
+    //   q, k  : [S_k, H_k, n_tokens, n_seqs]
+    //   v     : [S_v, H_v, n_tokens, n_seqs]
+    //   g     : [1, H_v, n_tokens, n_seqs] (scalar gate) or [S_v, H_v, n_tokens, n_seqs] (KDA)
+    //   beta  : [1, H_v, n_tokens, n_seqs]
+    //   state : [S_v, S_v, H_v, n_seqs] -- initial recurrent state s0
+    //
+    // the output packs the attention scores [S_v, H_v, n_tokens, n_seqs] followed by K state
+    // snapshots, most-recent first (slot 0 = final state, slot s = state s tokens back). K == 1
+    // keeps only the final state; when n_tokens < K only slots 0..n_tokens-1 are written.
     GGML_API struct ggml_tensor * ggml_gated_delta_net(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
@@ -2483,7 +2607,65 @@ extern "C" {
             struct ggml_tensor  * v,
             struct ggml_tensor  * g,
             struct ggml_tensor  * beta,
-            struct ggml_tensor  * state);
+            struct ggml_tensor  * state,
+            int64_t               K);
+
+    // DSA lightning indexer
+    //
+    // q:       [n_embd_idx, n_head_idx, n_batch, ne3 ]
+    // k:       [n_embd_idx, 1,          n_kv,    ne3 ]
+    // weights: [n_head_idx, n_batch,    1,       ne3 ] !! prescaled !!
+    // mask:    [n_kv,       n_batch,    1,       ne33] !! f16 !!
+    // res:     [n_kv,       n_batch,    1,       ne3 ]
+    //
+    // broadcast:
+    //   ne3 % ne33 == 0
+    //
+    GGML_API struct ggml_tensor * ggml_lightning_indexer(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * weights,
+        struct ggml_tensor  * mask);
+
+    // DeepSeek V4 hyper-connections (ref. https://arxiv.org/pdf/2512.24880)
+    // In short these operations are replacements for the original residual connection (x = transformer(x) + x)
+    // using a richer representation through streams.
+    //
+    // hc_comb: mixes [(2 + hc)*hc, n_tokens], scale [3], base [(2 + hc)*hc]
+    //          -> [dst_hc, src_hc, n_tokens]
+    // logits[dst, src, t] = mixes[2*hc + dst + hc*src, t]*scale[2]
+    //                         + base[2*hc + dst + hc*src]
+    // Softmax over dst, add eps, normalize over src, then repeat normalization
+    // over dst followed by src for iterations 1 through n_iter - 1.
+    GGML_API struct ggml_tensor * ggml_dsv4_hc_comb(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mixes,
+            struct ggml_tensor  * scale,
+            struct ggml_tensor  * base,
+            float                 eps,
+            int32_t               n_iter);
+
+    // hc_pre: x [n_embd, hc, n_tokens], weights [hc, n_tokens] -> [n_embd, n_tokens]
+    //   result[i, t] = sum_h x[i, h, t]*weights[h, t]
+    //
+    GGML_API struct ggml_tensor * ggml_dsv4_hc_pre(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * weights);
+
+    // hc_post: x [n_embd, n_tokens], residual [n_embd, hc, n_tokens],
+    //          post [hc, n_tokens], comb [dst_hc, src_hc, n_tokens]
+    //          -> [n_embd, hc, n_tokens]
+    //   result[i, dst, t] = x[i, t]*post[dst, t]
+    //                       + sum_src residual[i, src, t]*comb[dst, src, t]
+    //
+    GGML_API struct ggml_tensor * ggml_dsv4_hc_post(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * residual,
+            struct ggml_tensor  * post,
+            struct ggml_tensor  * comb);
 
     // custom operators
 
@@ -2630,6 +2812,12 @@ extern "C" {
             int                   idx);
 
     GGML_API void ggml_build_forward_expand(
+            struct ggml_cgraph * cgraph,
+            struct ggml_tensor * tensor);
+
+    // add the tensor and its parents to the graph without marking them for compute
+    // the flag is set later, when the tensor is reached from a node that computes
+    GGML_API void ggml_build_forward_order(
             struct ggml_cgraph * cgraph,
             struct ggml_tensor * tensor);
 

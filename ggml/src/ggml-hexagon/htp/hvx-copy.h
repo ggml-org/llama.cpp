@@ -7,7 +7,8 @@
 
 #include "hvx-base.h"
 
-#define hvx_splat_loop_body(dst_type, vec_store)                 \
+#define hvx_splat_pragma(x) _Pragma(#x)
+#define hvx_splat_loop_body(dst_type, vec_store, unroll_cnt)     \
     do {                                                         \
         dst_type * restrict vdst = (dst_type *) dst;             \
                                                                  \
@@ -16,7 +17,7 @@
                                                                  \
         uint32_t i = 0;                                          \
                                                                  \
-        _Pragma("unroll(4)")                                     \
+        hvx_splat_pragma(unroll(unroll_cnt))                     \
         for (; i < nvec; i++) {                                  \
             vdst[i] = src;                                       \
         }                                                        \
@@ -25,29 +26,45 @@
         }                                                        \
     } while(0)
 
-static inline void hvx_splat_a(uint8_t * restrict dst, HVX_Vector src, uint32_t n, uint32_t elem_size) {
+static inline void hvx_splat_a(void * restrict dst, HVX_Vector src, uint32_t n, uint32_t elem_size) {
     assert((unsigned long) dst % 128 == 0);
-    hvx_splat_loop_body(HVX_Vector, hvx_vec_store_a);
+    hvx_splat_loop_body(HVX_Vector, hvx_vec_store_a, 4);
 }
 
-static inline void hvx_splat_u(uint8_t * restrict dst, HVX_Vector src, uint32_t n, uint32_t elem_size) {
-    hvx_splat_loop_body(HVX_UVector, hvx_vec_store_u);
+static inline void hvx_splat_u(void * restrict dst, HVX_Vector src, uint32_t n, uint32_t elem_size) {
+    hvx_splat_loop_body(HVX_UVector, hvx_vec_store_u, 4);
 }
 
-static inline void hvx_splat_f32_a(uint8_t * restrict dst, float v, uint32_t n) {
+static inline void hvx_splat_f32_a(void * restrict dst, float v, uint32_t n) {
     hvx_splat_a(dst,  hvx_vec_splat_f32(v), n, sizeof(float));
 }
 
-static inline void hvx_splat_f32_u(uint8_t * restrict dst, float v, uint32_t n) {
+static inline void hvx_splat_f32_u(void * restrict dst, float v, uint32_t n) {
     hvx_splat_u(dst,  hvx_vec_splat_f32(v), n, sizeof(float));
 }
 
-static inline void hvx_splat_f16_a(uint8_t * restrict dst, _Float16 v, uint32_t n) {
+static inline void hvx_splat_f16_a(void * restrict dst, _Float16 v, uint32_t n) {
     hvx_splat_u(dst,  hvx_vec_splat_f16(v), n, sizeof(__fp16));
 }
 
-static inline void hvx_splat_f16_u(uint8_t * restrict dst, _Float16 v, uint32_t n) {
+static inline void hvx_splat_f16_u(void * restrict dst, _Float16 v, uint32_t n) {
     hvx_splat_u(dst,  hvx_vec_splat_f16(v), n, sizeof(__fp16));
+}
+
+static inline void hvx_splat_u16_a(void * restrict dst, uint16_t v, uint32_t n) {
+    hvx_splat_a(dst,  Q6_Vh_vsplat_R(v), n, sizeof(uint16_t));
+}
+
+static inline void hvx_splat_u16_u(void * restrict dst, uint16_t v, uint32_t n) {
+    hvx_splat_u(dst,  Q6_Vh_vsplat_R(v), n, sizeof(uint16_t));
+}
+
+static inline void hvx_splat_u8_a(void * restrict dst, uint8_t v, uint32_t n) {
+    hvx_splat_a(dst,  Q6_Vb_vsplat_R(v), n, 1);
+}
+
+static inline void hvx_splat_u8_u(void * restrict dst, uint8_t v, uint32_t n) {
+    hvx_splat_u(dst,  Q6_Vb_vsplat_R(v), n, 1);
 }
 
 #define hvx_copy_loop_body(dst_type, src_type, vec_store)            \
