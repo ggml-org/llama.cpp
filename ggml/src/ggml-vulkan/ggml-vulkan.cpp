@@ -568,10 +568,11 @@ struct vk_fa_pipeline_state {
     uint32_t limit_occupancy_shmem;
     ggml_type k_type;
     ggml_type v_type;
+    uint32_t transpose_pv;
 
     bool operator<(const vk_fa_pipeline_state &b) const {
-        return std::tie(HSK, HSV, Br, Bc, D_split, row_split, shmem_staging, path, workgroup_size, subgroup_size, aligned, f32acc, flags, limit_occupancy_shmem, k_type, v_type) <
-               std::tie(b.HSK, b.HSV, b.Br, b.Bc, b.D_split, b.row_split, b.shmem_staging, b.path, b.workgroup_size, b.subgroup_size, b.aligned, b.f32acc, b.flags, b.limit_occupancy_shmem, b.k_type, b.v_type);
+        return std::tie(HSK, HSV, Br, Bc, D_split, row_split, shmem_staging, path, workgroup_size, subgroup_size, aligned, f32acc, flags, limit_occupancy_shmem, k_type, v_type, transpose_pv) <
+               std::tie(b.HSK, b.HSV, b.Br, b.Bc, b.D_split, b.row_split, b.shmem_staging, b.path, b.workgroup_size, b.subgroup_size, b.aligned, b.f32acc, b.flags, b.limit_occupancy_shmem, b.k_type, b.v_type, b.transpose_pv);
     }
 };
 
@@ -3772,6 +3773,7 @@ struct vk_fa_tuning_params {
     bool shmem_staging;
     bool disable_subgroups;
     uint32_t limit_occupancy_shmem;
+    uint32_t transpose_pv;
 
     void print() const {
         std::cerr << "path=" << path << " workgroup_size=" << workgroup_size << " subgroup_size=" << subgroup_size <<
@@ -3887,6 +3889,14 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
 
     result.shmem_staging = (device->vendor_id == VK_VENDOR_ID_NVIDIA && hsk < 256 && hsv < 256) ? 1 : 0;
 
+    const bool llpc_amd = device->vendor_id == VK_VENDOR_ID_AMD &&
+                          (device->driver_id == vk::DriverId::eAmdProprietary ||
+                           device->driver_id == vk::DriverId::eAmdOpenSource);
+    result.transpose_pv = (llpc_amd &&
+                           device->architecture != AMD_GCN &&
+                           device->architecture != AMD_RDNA1 &&
+                           device->architecture != AMD_RDNA2) ? 1 : 0;
+
     return result;
 }
 
@@ -3974,7 +3984,7 @@ static vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const
 
     const uint32_t subgroup_size = params.disable_subgroups ? 0 : params.subgroup_size;
 
-    return vk_fa_pipeline_state{hsk, hsv, params.block_rows, params.block_cols, params.d_split, params.row_split, params.shmem_staging, params.path, params.workgroup_size, subgroup_size, aligned, f32acc, flags, params.limit_occupancy_shmem, k_type, v_type};
+    return vk_fa_pipeline_state{hsk, hsv, params.block_rows, params.block_cols, params.d_split, params.row_split, params.shmem_staging, params.path, params.workgroup_size, subgroup_size, aligned, f32acc, flags, params.limit_occupancy_shmem, k_type, v_type, params.transpose_pv};
 }
 
 // Bytes per buffer block for the FaBlockBytesK/V spec constants. F32 is fed as
@@ -4004,6 +4014,7 @@ static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& s
         /*13 FaTypeV         */ static_cast<uint32_t>(state.v_type),
         /*14 FaBlockBytesK   */ fa_block_bytes(state.k_type),
         /*15 FaBlockBytesV   */ fa_block_bytes(state.v_type),
+        /*16 TRANSPOSE_PV    */ state.transpose_pv,
     };
 }
 
