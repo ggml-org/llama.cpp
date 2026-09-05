@@ -2480,6 +2480,8 @@ common_params common_base_params_to_speculative(const common_params & params) {
 
     result.cache_type_k  = params_spec.cache_type_k;
     result.cache_type_v  = params_spec.cache_type_v;
+    // do not inherit --no-kv-offload: re-uploading the draft cache on every draft step is slow
+    result.no_kv_offload = false;
     result.n_outputs_max = params.n_parallel;
     result.n_outputs_max_per_seq = 1;
 
