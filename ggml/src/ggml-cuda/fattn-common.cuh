@@ -969,10 +969,6 @@ static __global__ void flash_attn_combine_results(
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
-// launch_fattn can either split the KV dimension of each output tile across all SMs (stream-k, needs a fixup kernel
-//     afterwards) or let each block work on whole output tiles (no fixup, but the last wave of tiles can leave SMs idle).
-// Whole tiles are only used if the architecture allows it, there are at least min_tile_waves full waves of output tiles,
-//     and the SM utilization across all tile waves is at least min_tile_efficiency percent.
 struct fattn_stream_k_thresholds {
     bool whole_tiles_allowed;
     int  min_tile_waves;
