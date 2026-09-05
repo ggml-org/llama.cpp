@@ -1,12 +1,17 @@
 <script lang="ts">
 	import '$lib/styles/katex-custom.scss';
 	import {
+		extractFilenameFromText,
 		getCodeInfoFromTarget,
 		getHastNodeId,
 		getMdastNodeHash,
-		isAppendMode
+		isAppendMode,
+		isValidCodeblockFilename
 	} from './markdown-utils';
-	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
+	import {
+		rehypeEnhanceCodeBlocks,
+		remarkPreserveCodeMeta
+	} from './plugins/rehype/enhance-code-blocks';
 	import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
 	import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
 	import { rehypeEnhanceSvgBlocks } from './plugins/rehype/enhance-svg-blocks';
@@ -25,7 +30,9 @@
 		DialogMermaidPreview
 	} from '$lib/components/app';
 	import {
+		CODE_BLOCK,
 		CODE_BLOCK_CLASS,
+		CODE_BLOCK_TYPE_TO_EXTENSION_MAP,
 		DIAGRAM_VIEW_MODE_ATTR,
 		DIAGRAM_VIEW_RENDERED,
 		DIAGRAM_VIEW_SOURCE,
@@ -158,6 +165,7 @@
 		proc = proc
 			.use(remarkBreaks) // Convert line breaks to <br>
 			.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
+			.use(remarkPreserveCodeMeta) // Preserve code block meta string for filename extraction
 			.use(remarkRehype); // Convert Markdown AST to rehype
 
 		if (!disableMath) {
@@ -189,11 +197,22 @@
 	function cleanupEventListeners() {
 		if (!containerRef) return;
 
-		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>('.copy-code-btn');
-		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>('.preview-code-btn');
+		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>(
+			`.${CODE_BLOCK_CLASS.COPY_BTN}`
+		);
+		const downloadButtons = containerRef.querySelectorAll<HTMLButtonElement>(
+			`.${CODE_BLOCK_CLASS.DOWNLOAD_BTN}`
+		);
+		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>(
+			`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`
+		);
 
 		for (const button of copyButtons) {
 			button.removeEventListener('click', handleCopyClick);
+		}
+
+		for (const button of downloadButtons) {
+			button.removeEventListener('click', handleDownloadClick);
 		}
 
 		for (const button of previewButtons) {
@@ -235,9 +254,6 @@
 
 	/**
 	 * Transforms a single MDAST node to HTML string with caching.
-
-	/**
-	 * Transforms a single MDAST node to HTML string with caching.
 	 * Runs the full remark/rehype plugin pipeline (GFM, math, syntax highlighting, etc.)
 	 * on an isolated single-node tree, then stringifies the resulting HAST to HTML.
 	 * Results are cached by node position hash for streaming performance.
@@ -265,6 +281,100 @@
 		transformCache.set(hash, html);
 
 		return { hash, html };
+	}
+
+	/**
+	 * Handles click events on download buttons within code blocks.
+	 * Extensively parses DOM elements for extracting the file name from the llm generated text or md.
+	 * @param event - The click event from the download button
+	 */
+	function handleDownloadClick(event: Event) {
+		event.preventDefault();
+		event.stopPropagation();
+
+		const target = event.currentTarget as HTMLButtonElement | null;
+
+		if (!target) return;
+
+		const info = getCodeInfoFromTarget(target);
+
+		if (!info) return;
+
+		const wrapper = target.closest(`.${CODE_BLOCK_CLASS.WRAPPER}`);
+
+		// Determine extension from code block language name
+		let extension: string | null = null;
+
+		if (info.language != CODE_BLOCK.DEFAULT_LANGUAGE) {
+			extension = CODE_BLOCK_TYPE_TO_EXTENSION_MAP[info.language.toLowerCase()] || null;
+
+			// take language itself as extension if not found
+			if (
+				!extension &&
+				info.language.length <= CODE_BLOCK.FILE_NAME_MAX_EXT_LENGTH &&
+				CODE_BLOCK.FILE_EXT_VALID_CHAR_REGEX.test(info.language)
+			) {
+				extension = `.${info.language.toLowerCase()}`;
+			}
+		}
+
+		// Extract filename
+
+		// Priority 1: From data-filename attribute (extracted from code block info string)
+		let filename: string | null = null;
+
+		filename = wrapper?.getAttribute(MARKDOWN_DATA_ATTRS.FILE_NAME) || null;
+
+		if (filename) {
+			// strip virtual directory paths (e.g. app/src/main.js -> main.js)
+			const parts = filename.split(/[/\\]/);
+
+			filename = parts[parts.length - 1].trim();
+
+			if (!isValidCodeblockFilename(filename))
+				// skip if invalid name, don't try to sanitize
+				filename = null;
+		}
+
+		// Priority 2: Scan preceding text for potential filenames
+		if (!filename && wrapper) {
+			// Get position of code block within raw MD data
+			const rawPos = parseInt(wrapper.getAttribute(MARKDOWN_DATA_ATTRS.CODE_RAW_POS) ?? '');
+
+			if (!isNaN(rawPos)) {
+				filename = extractFilenameFromText(content, rawPos, extension);
+			}
+		}
+
+		// Default filename fallback with timestamp
+		if (!filename) {
+			const now = new Date();
+			const y = now.getFullYear();
+			const m = String(now.getMonth() + 1).padStart(2, '0');
+			const d = String(now.getDate()).padStart(2, '0');
+			const hh = String(now.getHours()).padStart(2, '0');
+			const mm = String(now.getMinutes()).padStart(2, '0');
+			const ss = String(now.getSeconds()).padStart(2, '0');
+			const ts = `${y}${m}${d}_${hh}${mm}${ss}`;
+
+			extension =
+				extension || CODE_BLOCK_TYPE_TO_EXTENSION_MAP[CODE_BLOCK.DEFAULT_LANGUAGE] || '.txt';
+			filename = `${CODE_BLOCK.DOWNLOAD_NAME_DEFAULT_PREFIX}${ts}${extension}`;
+		}
+
+		const blob = new Blob([info.rawCode], { type: 'text/plain' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+
+		a.href = url;
+		a.download = filename;
+		a.style.display = 'none';
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+
+		// Delay revocation for iOS Safari
+		setTimeout(() => URL.revokeObjectURL(url), 1000);
 	}
 
 	/**
@@ -478,11 +588,24 @@
 	function setupCodeBlockActions() {
 		if (!containerRef) return;
 
-		const wrappers = containerRef.querySelectorAll<HTMLElement>('.code-block-wrapper');
+		const wrappers = containerRef.querySelectorAll<HTMLElement>(`.${CODE_BLOCK_CLASS.WRAPPER}`);
 
 		for (const wrapper of wrappers) {
-			const copyButton = wrapper.querySelector<HTMLButtonElement>('.copy-code-btn');
-			const previewButton = wrapper.querySelector<HTMLButtonElement>('.preview-code-btn');
+			const copyButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.COPY_BTN}`);
+			const downloadButton = wrapper.querySelector<HTMLButtonElement>(
+				`.${CODE_BLOCK_CLASS.DOWNLOAD_BTN}`
+			);
+			const previewButton = wrapper.querySelector<HTMLButtonElement>(
+				`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`
+			);
+
+			if (
+				downloadButton &&
+				downloadButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
+			) {
+				downloadButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
+				downloadButton.addEventListener('click', handleDownloadClick);
+			}
 
 			if (
 				copyButton &&
@@ -546,8 +669,8 @@
 		}
 
 		// Check if clicking on copy or preview button in mermaid block
-		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .copy-code-btn`);
-		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .preview-code-btn`);
+		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.COPY_BTN}`);
+		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 		if (copyBtn || previewBtn) {
 			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
@@ -590,8 +713,8 @@
 		}
 
 		// Check if clicking on copy or preview button in svg block
-		const svgCopyBtn = target.closest(`.${SVG.WRAPPER_CLASS} .copy-code-btn`);
-		const svgPreviewBtn = target.closest(`.${SVG.WRAPPER_CLASS} .preview-code-btn`);
+		const svgCopyBtn = target.closest(`.${SVG.WRAPPER_CLASS} .${CODE_BLOCK_CLASS.COPY_BTN}`);
+		const svgPreviewBtn = target.closest(`.${SVG.WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 		if (svgCopyBtn || svgPreviewBtn) {
 			const wrapper = target.closest(`.${SVG.WRAPPER_CLASS}`);

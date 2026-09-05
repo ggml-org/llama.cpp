@@ -8,6 +8,7 @@ import {
 	CODE_ICON_SVG,
 	COPY_ICON_SVG,
 	DIAGRAM_SOURCE_CLASS,
+	DOWNLOAD_ICON_SVG,
 	PREVIEW_ICON_SVG,
 	TOGGLE_SOURCE_BTN_CLASS
 } from '$lib/constants';
@@ -60,6 +61,13 @@ export function createButton(
  */
 export function createCopyButton(id: string, idAttribute: string, title: string = 'Copy'): Element {
 	return createButton(CODE_BLOCK_CLASS.COPY_BTN, title, COPY_ICON_SVG, id, idAttribute);
+}
+
+/**
+ * Creates a download button element.
+ */
+export function createDownloadButton(id: string, idAttribute: string, title: string): Element {
+	return createButton(CODE_BLOCK_CLASS.DOWNLOAD_BTN, title, DOWNLOAD_ICON_SVG, id, idAttribute);
 }
 
 /**
