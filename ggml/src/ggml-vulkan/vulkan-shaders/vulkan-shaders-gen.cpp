@@ -74,6 +74,7 @@ const std::vector<std::string> type_names = {
     "nvfp4",
     "tq2_0",
     "bf16",
+    "f8_e4m3",
 };
 
 enum MatMulIdType {
@@ -595,6 +596,11 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         std::string data_a_key = "DATA_A_" + to_uppercase(tname);
         // For aligned matmul loads
         std::string load_vec_a = (coopmat2 || tname == "f32" || tname == "f16" || tname == "bf16") ? load_vec : load_vec_quant;
+        // f8_e4m3 is a 1-byte scalar float: load 4 bytes at a time (u8vec4) for the aligned path,
+        // except coopmat2 which decodes per-element via dequantFunc (needs uint8_t A_TYPE, LOAD_VEC_A=1).
+        if (tname == "f8_e4m3") {
+            load_vec_a = coopmat2 ? "1" : "4";
+        }
 
         const std::map<std::string, std::string> float_type_dict = {
             {"FLOAT_TYPE",   FLOAT_TYPE(1, tname)},
@@ -894,6 +900,8 @@ void process_shaders() {
     string_to_spv("repeat_i16", "repeat.comp", {{"A_TYPE", "int16_t"}, {"D_TYPE", "int16_t"}});
 
     string_to_spv("scale_f32", "scale.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
+
+    string_to_spv("mul_mat_scale_f32", "mul_mat_scale.comp", {});
 
     string_to_spv("pad_f32", "pad.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
     string_to_spv("pad_reflect_1d_f32", "pad_reflect_1d.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});

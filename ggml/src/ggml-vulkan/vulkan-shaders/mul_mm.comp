@@ -53,6 +53,8 @@ layout (binding = 0) readonly buffer A_SCALAR {float data_a_scalar[];};
 layout (binding = 0) readonly buffer A_SCALAR {float16_t data_a_scalar[];};
 #elif defined(DATA_A_BF16)
 layout (binding = 0) readonly buffer A_SCALAR {uint16_t data_a_scalar[];};
+#elif defined(DATA_A_F8_E4M3)
+layout (binding = 0) readonly buffer A_SCALAR {uint8_t data_a_scalar[];};
 #endif
 #if defined(A_TYPE_PACKED16)
 layout (binding = 0) readonly buffer A_PACKED16 {A_TYPE_PACKED16 data_a_packed16[];};
@@ -197,7 +199,7 @@ void main() {
     const uint warp_r = warp_i % (BM / WM);
     const uint warp_c = warp_i / (BM / WM);
 
-#if defined(DATA_A_F32) || defined(DATA_A_F16) || defined(DATA_A_BF16)
+#if defined(DATA_A_F32) || defined(DATA_A_F16) || defined(DATA_A_BF16) || defined(DATA_A_F8_E4M3)
     const uint LOAD_VEC_A_EFF = (ALIGNED != 0) ? LOAD_VEC_A : 1;
     const uint LOAD_VEC_BATCH_A = (ALIGNED != 0) ? 1 : 2;
 #else

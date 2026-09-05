@@ -1385,6 +1385,17 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 }
 #endif
 
+#if defined(DATA_A_F8_E4M3)
+layout(buffer_reference, std430, buffer_reference_align = 1) buffer decodeBufF8_E4M3 {
+   uint8_t block;
+};
+
+float16_t dequantFuncF8_E4M3(const in decodeBufF8_E4M3 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    return float16_t(e4m3_to_fp32(bl.block));
+}
+#endif
+
 #if defined(DATA_A_Q1_0)
 #define dequantFuncA dequantFuncQ1_0
 #define dequantFuncA_v dequantFuncQ1_0_v
@@ -1463,4 +1474,6 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #define dequantFuncA_v dequantFuncNVFP4_v
 #elif defined(DATA_A_F32)
 #define dequantFuncA dequantFuncF32
+#elif defined(DATA_A_F8_E4M3)
+#define dequantFuncA dequantFuncF8_E4M3
 #endif

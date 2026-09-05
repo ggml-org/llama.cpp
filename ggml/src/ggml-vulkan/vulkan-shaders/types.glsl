@@ -12,6 +12,10 @@
 #extension GL_EXT_float_e4m3 : require
 #endif
 
+#if defined(DATA_A_F8_E4M3)
+#extension GL_EXT_shader_8bit_storage : require
+#endif
+
 #if defined(DATA_A_F32)
 #define QUANT_K 1
 #define QUANT_R 1
@@ -49,6 +53,18 @@
 #error unsupported
 #else
 #define A_TYPE uint16_t
+#endif
+#define A_TYPE_PACKED32 uint32_t
+#endif
+
+#if defined(DATA_A_F8_E4M3)
+#define QUANT_K 1
+#define QUANT_R 1
+
+#if LOAD_VEC_A == 4
+#define A_TYPE u8vec4
+#else
+#define A_TYPE uint8_t
 #endif
 #define A_TYPE_PACKED32 uint32_t
 #endif
@@ -1882,6 +1898,31 @@ float bf16_to_fp32(uint32_t u)
 {
     return uintBitsToFloat(u << 16);
 }
+
+// OCP E4M3: 1 sign, 4 exponent (bias 7), 3 mantissa. No infinities; S.1111.111 is NaN.
+float e4m3_to_fp32(uint x) {
+    const uint s = (x >> 7) & 1u;
+    const uint e = (x >> 3) & 0xFu;
+    const uint m = x & 0x7u;
+    float val;
+    if (e == 0u) {
+        val = float(m) * (1.0 / 512.0); // 2^-6 * m/8
+    } else {
+        val = uintBitsToFloat(((e + 120u) << 23) | (m << 20));
+    }
+    return s == 1u ? -val : val;
+}
+
+#if defined(DATA_A_F8_E4M3)
+float e4m3_to_fp32(uint8_t x) {
+    return e4m3_to_fp32(uint(x));
+}
+
+vec4 e4m3_to_fp32(u8vec4 x) {
+    return vec4(e4m3_to_fp32(uint(x.x)), e4m3_to_fp32(uint(x.y)),
+                e4m3_to_fp32(uint(x.z)), e4m3_to_fp32(uint(x.w)));
+}
+#endif
 
 vec4 bf16_to_fp32(uvec4 u)
 {

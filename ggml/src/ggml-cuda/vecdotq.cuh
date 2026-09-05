@@ -360,6 +360,25 @@ static __device__ __forceinline__ float vec_dot_nvfp4_q8_1(
 
     return sum;
 }
+
+#define VDR_F8_E4M3_Q8_1_MMVQ 1
+
+static __device__ __forceinline__ float vec_dot_f8_e4m3_q8_1(
+        const void * __restrict__ vbq,
+        const block_q8_1 * __restrict__ bq8_1,
+        const int32_t & kbx,
+        const int32_t & iqs) {
+    const ggml_fp8_e4m3_t * bq8 = (const ggml_fp8_e4m3_t *) vbq + kbx;
+    const int8_t * q8 = bq8_1->qs + 4*iqs;
+
+    float sum = 0.0f;
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        sum += ggml_cuda_f8_e4m3_to_fp32(bq8[4*iqs + i].bits) * q8[i];
+    }
+    return __low2float(bq8_1->ds) * sum;
+}
+
 #define VDR_Q2_K_Q8_1_MMVQ 1
 #define VDR_Q2_K_Q8_1_MMQ  4
 

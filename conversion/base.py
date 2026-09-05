@@ -607,7 +607,10 @@ class ModelBase:
                 continue
 
             scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]()).float().flatten()
-            if scale.numel() != 1:
+
+            expert_match = re.search(r"\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$", weight_name)
+            # accept per-tensor (scalar) or per-output-channel scales
+            if scale.numel() != 1 and scale.numel() != weight.shape[0]:
                 continue
 
             weight_prefix = weight_name.removesuffix(".weight")
@@ -629,7 +632,6 @@ class ModelBase:
             self._fp8_e4m3_preserved.add(weight_name)
             consumed.append(scale_name)
 
-            expert_match = re.search(r"\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$", weight_name)
             if expert_match:
                 bid = int(expert_match.group(1))
                 expert_id = int(expert_match.group(2))
@@ -639,7 +641,7 @@ class ModelBase:
                 target_name = new_name.replace(".weight", ".scale")
                 entries = scale_tensors.setdefault(target_name, [])
                 assert isinstance(entries, list)
-                cast(list[tuple[int, float]], entries).append((expert_id, float(scale[0])))
+                cast(list, entries).append((expert_id, scale.numpy().astype(np.float32)))
                 if input_scale is not None:
                     target_name = new_name.replace(".weight", ".input_scale")
                     entries = input_scale_tensors.setdefault(target_name, [])
@@ -657,11 +659,15 @@ class ModelBase:
         for name, values in chain(scale_tensors.items(), input_scale_tensors.items()):
             if isinstance(values, list):
                 values.sort(key=lambda item: item[0])
-                scale = np.array([item[1] for item in values], dtype=np.float32)
+                arrays = [np.asarray(item[1], dtype=np.float32).reshape(-1) for item in values]
+                if all(a.size == 1 for a in arrays):
+                    scale = np.array([a[0] for a in arrays], dtype=np.float32)
+                else:
+                    scale = np.stack(arrays, axis=0)
             else:
                 scale = values.astype(np.float32)
             if not np.allclose(scale, 1.0, atol=1e-6):
-                logger.info(f"  + {name} (FP8 scale, shape [{scale.size}])")
+                logger.info(f"  + {name} (FP8 scale, shape {list(scale.shape)})")
                 self.gguf_writer.add_tensor(name, scale)
 
     @classmethod
