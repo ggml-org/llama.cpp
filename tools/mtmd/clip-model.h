@@ -93,6 +93,13 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
+
+    std::pair<float, float> swiglu_clamp_gate = {0.0f, 0.0f};
+    std::pair<float, float> swiglu_clamp_up   = {0.0f, 0.0f};
+
+    bool has_swiglu_clamp() const {
+        return swiglu_clamp_gate.second > 0.0f || swiglu_clamp_up.second > 0.0f;
+    }
     int32_t n_expert_used = 0;
     std::vector<int32_t> feature_layers;
     int32_t attn_window_size = 0;

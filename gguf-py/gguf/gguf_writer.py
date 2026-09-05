@@ -824,6 +824,15 @@ class GGUFWriter:
         key = Keys.Attention.Indexer.TYPES.format(arch=self.arch)
         self.add_array(key, value)
 
+    def add_indexer_kpool(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.KPOOL.format(arch=self.arch), value)
+
+    def add_indexer_kpool_select_tail(self, value: bool) -> None:
+        self.add_bool(Keys.Attention.Indexer.KPOOL_SELECT_TAIL.format(arch=self.arch), value)
+
+    def add_indexer_index_share_mtp(self, value: bool) -> None:
+        self.add_bool(Keys.Attention.Indexer.INDEX_SHARE_MTP.format(arch=self.arch), value)
+
     def add_max_alibi_bias(self, bias: float) -> None:
         self.add_float32(Keys.Attention.MAX_ALIBI_BIAS.format(arch=self.arch), bias)
 
@@ -1386,6 +1395,9 @@ class GGUFWriter:
 
     def add_vision_image_std(self, values: Sequence[float]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_STD, values)
+
+    def add_vision_swiglu_clamp(self, value: float) -> None:
+        self.add_float32(Keys.ClipVision.SWIGLU_CLAMP, value)
 
     def add_vision_spatial_merge_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SPATIAL_MERGE_SIZE, value)
