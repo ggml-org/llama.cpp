@@ -131,7 +131,6 @@ llama_kv_cache::llama_kv_cache(
 
     bool lazy_quant =
         lazy_requested &&
-        model.arch != LLM_ARCH_GEMMA4 &&
         type_k == GGML_TYPE_Q8_0 &&
         type_v == GGML_TYPE_Q8_0 &&
         !v_trans &&

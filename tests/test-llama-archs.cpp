@@ -11,6 +11,7 @@
 #include "../src/llama-arch.h"
 #include "../src/llama-model-saver.h"
 #include "../src/llama-context.h"
+#include "../src/llama-kv-cache-iswa.h"
 #include "../src/llama-io.h"
 #include "../src/llama-impl.h"
 
@@ -1106,6 +1107,12 @@ static void test_kv_rotation(ggml_backend_dev_t dev) {
 
 static void test_lazy_kv(llm_arch arch, size_t seed, float stdev, ggml_backend_dev_t dev) {
     auto gguf = get_gguf_ctx(arch, false);
+    if (arch == LLM_ARCH_GEMMA4) {
+        const bool pattern[] = {true, true, false, true, false};
+        gguf_set_arr_data(gguf.get(), "gemma4.attention.sliding_window_pattern", GGUF_TYPE_BOOL, pattern, 5);
+        gguf_set_val_u32(gguf.get(), "gemma4.attention.shared_kv_layers", 2);
+        gguf_set_val_u32(gguf.get(), "gemma4.attention.sliding_window", 1024);
+    }
 
     auto mp = llama_model_default_params();
     ggml_backend_dev_t devices[] = {dev, nullptr};
@@ -1241,6 +1248,29 @@ static void test_lazy_kv(llm_arch arch, size_t seed, float stdev, ggml_backend_d
     decode(ctx.get(), 0, 1);
     check_type(GGML_TYPE_Q8_0);
 
+    if (arch == LLM_ARCH_GEMMA4) {
+        // SWA fills first; full attention must remain F16 until it also fills.
+        ctx = make_context(4096, false, 1);
+        auto * mem = dynamic_cast<llama_kv_cache_iswa *>(ctx->get_memory());
+        GGML_ASSERT(mem && mem->get_base()->get_size() > mem->get_swa()->get_size());
+        decode(ctx.get(), 0, 512);
+        GGML_ASSERT(mem->get_swa()->get_has_lazy_quant());
+        decode(ctx.get(), 512, 1);
+        GGML_ASSERT(!mem->get_swa()->get_has_lazy_quant());
+        GGML_ASSERT(mem->get_base()->get_has_lazy_quant());
+        GGML_ASSERT(llama_memory_seq_rm(ctx->get_memory(), 0, 1, -1));
+        const auto partial = save(ctx.get(), LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+        // A partial restore changes SWA layout while the aggregate lazy flag stays true.
+        ctx = make_context(4096, false, 1);
+        decode(ctx.get(), 0, 1);
+        restore(ctx.get(), partial, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        decode(ctx.get(), 1, 1);
+        GGML_ASSERT(attention_types.size() == 5);
+        for (size_t il = 0; il < attention_types.size(); ++il) {
+            GGML_ASSERT(attention_types[il] == (il == 2 || il == 4 ? GGML_TYPE_F16 : GGML_TYPE_Q8_0));
+        }
+    }
     LOG_INF("%s: %s passed\n", __func__, llm_arch_name(arch));
 }
 
@@ -1345,7 +1375,7 @@ int main(int argc, char ** argv) {
             common_set_env("LLAMA_KV_CACHE_LAZY_QUANT", "1");
             auto * dev = target_backend ? ggml_backend_dev_by_name(target_backend) : nullptr;
             test_kv_rotation(dev);
-            for (auto test_arch : {LLM_ARCH_LLAMA}) {
+            for (auto test_arch : {LLM_ARCH_LLAMA, LLM_ARCH_GEMMA4}) {
                 if (arch_matches(arch_filter, test_arch)) {
                     test_lazy_kv(test_arch, seed, stdev, dev);
                 }
