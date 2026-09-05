@@ -3338,6 +3338,9 @@ static common_chat_params common_chat_params_init_muse_glimmer(const common_chat
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
 
+    data.thinking_start_tag = " to=self<|message|>";
+    data.thinking_end_tags  = { "<|eom|>" };
+
     data.preserved_tokens = {
         "<|start|>", "<|message|>", "<|eom|>", "<|eot|>",
         // ATEM tool-call markup emitted on " to=<tool>" turns.
