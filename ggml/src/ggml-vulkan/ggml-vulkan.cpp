@@ -6930,12 +6930,20 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
         }
 
-        if (!vk11_features.storageBuffer16BitAccess) {
+        // OPTIPLEX-HASWELL: hasvk exposes no 16-bit storage feature bits
+        // (storageBuffer16BitAccess = false, shaderFloat16 = false).
+        // Only hard-require 16-bit storage when fp16 will actually be used;
+        // otherwise continue with the existing fp32 fallback path.
+        const bool has_16bit_storage = vk11_features.storageBuffer16BitAccess ||
+                                       vk11_features.uniformAndStorageBuffer16BitAccess;
+        if (!has_16bit_storage && device->fp16) {
             std::cerr << "ggml_vulkan: device " << GGML_VK_NAME << idx << " does not support 16-bit storage." << std::endl;
             throw std::runtime_error("Unsupported device");
         }
 
-        device_extensions.push_back("VK_KHR_16bit_storage");
+        if (device->fp16) {
+            device_extensions.push_back("VK_KHR_16bit_storage");
+        }
 
 #ifdef GGML_VULKAN_VALIDATE
         device_extensions.push_back("VK_KHR_shader_non_semantic_info");
