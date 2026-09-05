@@ -1,0 +1,432 @@
+// Qwen attention preparation for raw GGUF quantized projections.
+//
+// Decode contractions consume a shared Q8_1 x4 activation row. Producing that
+// row directly from the residual stream removes the materialized F32 attention
+// RMSNorm tensor and avoids rereading it solely for quantization. The fused
+// producer preserves GGML's physical Q8_1 x4 contract:
+//
+//   struct block_q8_1_x4 {
+//     f16 ds[4][2];
+//     i32 qs[4][8];
+//   };
+//
+// One 256-workitem workgroup owns one token. It first reduces the complete
+// hidden row to one reciprocal RMS scale, then visits 1024-element stripes.
+// Every workitem packs one four-value word per stripe; adjacent eight-lane
+// cohorts reduce the maximum and quantized sum for one logical Q8_1 block.
+// Scratch is fixed at 1152 bytes regardless of hidden size.
+amdgpu.target<gfx11-generic> @qwen3_moe_attention_prepare_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+
+config.decl @qwen3_moe.model.rms_epsilon : f32
+
+// Shared Q8_1 x4 packer used by the standalone differential path.
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+
+// Materializes the ordinary Qwen RMSNorm boundary. This remains useful for
+// prefill schedules that reuse one normalized row across many output tiles;
+// decode uses the fused Q8_1 producer below.
+kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_rmsnorm_f32(%token_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %hidden_size0 = config.get @qwen3_moe.model.hidden_size : index
+  %epsilon = config.get @qwen3_moe.model.rms_epsilon : f32
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %token0 = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %scratch_bytes = index.constant 1024 : offset
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %valid_token = index.cmp ult, %token0, %token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %token, %launch_token_count = index.assume %safe_token0, %token_count [lt(%safe_token0, %token_count)] : index, index
+  %hidden_size_i32 = index.cast %hidden_size : index to i32
+  %hidden_size_f32 = scalar.sitofp %hidden_size_i32 : i32 to f32
+  %input_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input, %weight, %output : buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  %thread_sum = scf.for %channel = [%workitem to %hidden_size step %c256](%running_sum = %c0_f32 : f32) -> (f32) {
+    %value = view.load %input_view[%token, %channel] : view<[%launch_token_count]x[%hidden_size]xf32> -> f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+    %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square : f32
+    scf.yield %next_sum : f32
+  }
+  %subgroup_sum = kernel.subgroup.reduce<addf> %thread_sum : f32
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_view = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
+  %is_subgroup_leader = index.cmp eq, %lane, %c0 : index
+  scf.if %is_subgroup_leader {
+    view.store %subgroup_sum, %scratch_view[%subgroup] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %is_reduction_subgroup = index.cmp eq, %subgroup, %c0 : index
+  %is_reduction_lane = index.cmp ult, %lane, %c8 : index
+  %loads_subgroup_sum = scalar.andi %is_reduction_subgroup, %is_reduction_lane : i1
+  %subgroup_partial = scf.if %loads_subgroup_sum -> (f32) {
+    %value = view.load %scratch_view[%lane] : view<256xf32> -> f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %row_sum = kernel.subgroup.reduce<addf> %subgroup_partial : f32
+  %writes_scale = scalar.andi %is_reduction_subgroup, %is_subgroup_leader : i1
+  scf.if %writes_scale {
+    %mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %row_sum, %hidden_size_f32 : f32
+    %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+    %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
+    view.store %scale, %scratch_view[%c0] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %scale = view.load %scratch_view[%c0] : view<256xf32> -> f32
+  scf.if %valid_token {
+    scf.for %channel = [%workitem to %hidden_size step %c256] {
+      %value = view.load %input_view[%token, %channel] : view<[%launch_token_count]x[%hidden_size]xf32> -> f32
+      %learned_weight = view.load %weight_view[%channel] : view<[%hidden_size]xf32> -> f32
+      %normalized = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %scale : f32
+      %result = scalar.mulf<reassoc|nnan|ninf|nsz> %normalized, %learned_weight : f32
+      view.store %result, %output_view[%token, %channel] : f32, view<[%launch_token_count]x[%hidden_size]xf32>
+    }
+  }
+  kernel.return
+}
+
+// Shared RMSNorm and GGML Q8_1 x4 row producer. The caller owns launch geometry
+// and supplies the logical token whose complete hidden row this workgroup owns.
+// The attention export discards the ordinary F32 row, while feed-forward
+// publishes it for the router without rereading and requantizing the normalized
+// values.
+func.template<qwen3_moe.rmsnorm_quantize_q8_1_x4.body> device @qwen3_moe_rmsnorm_quantize_q8_1_x4_body(%publish_normalized: i1, %reduction_subgroup_count0: index, %token_count: index, %token0: index, %input: buffer, %weight: buffer, %normalized_output: buffer, %q8_output: buffer) {
+  %hidden_size0 = config.get @qwen3_moe.model.hidden_size : index
+  %epsilon = config.get @qwen3_moe.model.rms_epsilon : f32
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %reduction_subgroup_count = index.assume %reduction_subgroup_count0 [range(%reduction_subgroup_count0, 1, 8)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %workitem = kernel.workitem.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c1024 = index.constant 1024 : index
+  %group_bytes = index.constant 144 : offset
+  %payload_byte_add = index.constant 16 : offset
+  %scratch_d_byte_add = index.constant 1024 : offset
+  %scratch_bytes = index.constant 1152 : offset
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c1_f32 = scalar.constant 1.0 : f32
+  %c127 = scalar.constant 127.0 : f32
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %safe_token0 = scf.select %valid_token, %token0, %c0 : index
+  %token, %launch_token_count = index.assume %safe_token0, %bounded_token_count [lt(%safe_token0, %bounded_token_count)] : index, index
+  %hidden_size_i32 = index.cast %hidden_size : index to i32
+  %hidden_size_f32 = scalar.sitofp %hidden_size_i32 : i32 to f32
+  %physical_group_count = index.div %hidden_size, %c128 : index
+  %row_bytes = index.scale %physical_group_count, %group_bytes : index, offset -> offset
+  %token_output_byte_base = index.scale %token, %row_bytes : index, offset -> offset
+  %input_noalias, %weight_noalias, %q8_output_noalias = buffer.assume.noalias %input, %weight, %q8_output : buffer, buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  %weight_view = buffer.view %weight_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
+  %normalized_output_view = buffer.view %normalized_output[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<256xf32>
+  %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<32xf32>
+  // Reduce the complete row before any block-local quantization.
+  %thread_sum = scf.for %channel = [%workitem to %hidden_size step %c256](%running_sum = %c0_f32 : f32) -> (f32) {
+    %value = view.load %input_view[%token, %channel] : view<[%launch_token_count]x[%hidden_size]xf32> -> f32
+    %square = scalar.mulf<reassoc|nnan|ninf|nsz> %value, %value : f32
+    %next_sum = scalar.addf<reassoc|nnan|ninf|nsz> %running_sum, %square : f32
+    scf.yield %next_sum : f32
+  }
+  %subgroup_sum = kernel.subgroup.reduce<addf> %thread_sum : f32
+  %is_subgroup_leader = index.cmp eq, %lane, %c0 : index
+  scf.if %is_subgroup_leader {
+    view.store %subgroup_sum, %scratch_values[%subgroup] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %is_reduction_subgroup = index.cmp eq, %subgroup, %c0 : index
+  %is_reduction_lane = index.cmp ult, %lane, %reduction_subgroup_count : index
+  %loads_subgroup_sum = scalar.andi %is_reduction_subgroup, %is_reduction_lane : i1
+  %subgroup_partial = scf.if %loads_subgroup_sum -> (f32) {
+    %value = view.load %scratch_values[%lane] : view<256xf32> -> f32
+    scf.yield %value : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %row_sum = kernel.subgroup.reduce<addf> %subgroup_partial : f32
+  %writes_scale = scalar.andi %is_reduction_subgroup, %is_subgroup_leader : i1
+  scf.if %writes_scale {
+    %mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %row_sum, %hidden_size_f32 : f32
+    %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+    %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
+    view.store %scale, %scratch_values[%c0] : f32, view<256xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %row_scale = view.load %scratch_values[%c0] : view<256xf32> -> f32
+  %row_scale_vector = vector.splat %row_scale : vector<4xf32>
+  %publishes_normalized = scalar.andi %publish_normalized, %valid_token : i1
+  // Reuse one scratch frame for each 1024-element stripe. Hidden sizes need
+  // only be divisible by 128; inactive workitems in the final stripe carry
+  // zeros and never publish.
+  scf.for %stripe_base = [%c0 to %hidden_size step %c1024] {
+    %word_element_add = index.mul %workitem, %c4 : index
+    %channel = index.add %stripe_base, %word_element_add : index
+    %valid_word = index.cmp ult, %channel, %hidden_size : index
+    %mask = vector.mask.range [%channel to %hidden_size step %c1] : index -> vector<4xi1>
+    %input_values = vector.load.mask %input_view[%token, %channel], %mask, %c0_f32x4 : view<[%launch_token_count]x[%hidden_size]xf32>, vector<4xi1>, vector<4xf32>
+    %learned_weights = vector.load.mask %weight_view[%channel], %mask, %c0_f32x4 : view<[%hidden_size]xf32>, vector<4xi1>, vector<4xf32>
+    %normalized0 = vector.mulf %input_values, %row_scale_vector : vector<4xf32>
+    %normalized = vector.mulf %normalized0, %learned_weights : vector<4xf32>
+    scf.if %publishes_normalized {
+      vector.store.mask %normalized, %normalized_output_view[%token, %channel], %mask : vector<4xf32>, view<[%launch_token_count]x[%hidden_size]xf32>, vector<4xi1>
+    }
+    %absolute_values = vector.absf %normalized : vector<4xf32>
+    %thread_max = vector.reduce<maxnumf> %absolute_values, %c0_f32 : vector<4xf32>, f32
+    view.store %thread_max, %scratch_values[%workitem] : f32, view<256xf32>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %word_in_block = index.rem %workitem, %c8 : index
+    %block_in_stripe = index.div %workitem, %c8 : index
+    %is_block_leader = index.cmp eq, %word_in_block, %c0 : index
+    %writes_block_d = scalar.andi %valid_word, %is_block_leader : i1
+    scf.if %writes_block_d {
+      %cohort_base = index.mul %block_in_stripe, %c8 : index
+      %cohort_maxima = vector.load %scratch_values[%cohort_base] : view<256xf32> -> vector<8xf32>
+      %amax = vector.reduce<maxnumf> %cohort_maxima, %c0_f32 : vector<8xf32>, f32
+      %d = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %amax, %c127 : f32
+      view.store %d, %scratch_d[%block_in_stripe] : f32, view<32xf32>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %d = scf.if %valid_word -> (f32) {
+      %block_d = view.load %scratch_d[%block_in_stripe] : view<32xf32> -> f32
+      scf.yield %block_d : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    %d_nonzero = scalar.cmpf one, %d, %c0_f32 : f32
+    %d_inverse = scf.if %d_nonzero -> (f32) {
+      %inverse = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %c1_f32, %d : f32
+      scf.yield %inverse : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    %d_inverse_vector = vector.splat %d_inverse : vector<4xf32>
+    %scaled_values = vector.mulf %normalized, %d_inverse_vector : vector<4xf32>
+    %rounded_values = vector.roundf %scaled_values : vector<4xf32>
+    %quantized_values = vector.fptosi %rounded_values : vector<4xf32> to vector<4xi8>
+    %packed_word = vector.bitcast %quantized_values : vector<4xi8> to vector<1xi32>
+    %publishes_q8_word = scalar.andi %valid_word, %valid_token : i1
+    scf.if %publishes_q8_word {
+      %q8_block = index.div %channel, %c32 : index
+      %physical_group = index.div %q8_block, %c4 : index
+      %block_in_group = index.rem %q8_block, %c4 : index
+      %group_byte_add = index.scale %physical_group, %group_bytes : index, offset -> offset
+      %group_byte_offset = index.add %token_output_byte_base, %group_byte_add : offset
+      %payload_byte_offset = index.add %group_byte_offset, %payload_byte_add : offset
+      %group_ds = buffer.view %q8_output_noalias[%group_byte_offset] : buffer -> view<8xf16>
+      %group_qs = buffer.view %q8_output_noalias[%payload_byte_offset] : buffer -> view<32xi32>
+      %block_word_base = index.mul %block_in_group, %c8 : index
+      %packed_word_index0 = index.add %block_word_base, %word_in_block : index
+      %packed_word_index = index.assume %packed_word_index0 [range(%packed_word_index0, 0, 31)] : index
+      vector.store %packed_word, %group_qs[%packed_word_index] : vector<1xi32>, view<32xi32>
+    }
+    %thread_quantized_sum = vector.reduce<addf> %rounded_values, %c0_f32 : vector<4xf32>, f32
+    view.store %thread_quantized_sum, %scratch_values[%workitem] : f32, view<256xf32>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %publishes_block_ds = scalar.andi %writes_block_d, %valid_token : i1
+    scf.if %publishes_block_ds {
+      %cohort_base = index.mul %block_in_stripe, %c8 : index
+      %cohort_sums = vector.load %scratch_values[%cohort_base] : view<256xf32> -> vector<8xf32>
+      %quantized_sum = vector.reduce<addf> %cohort_sums, %c0_f32 : vector<8xf32>, f32
+      %s = scalar.mulf<reassoc|nnan|ninf|nsz> %quantized_sum, %d : f32
+      %q8_block = index.div %channel, %c32 : index
+      %physical_group = index.div %q8_block, %c4 : index
+      %block_in_group = index.rem %q8_block, %c4 : index
+      %group_byte_add = index.scale %physical_group, %group_bytes : index, offset -> offset
+      %group_byte_offset = index.add %token_output_byte_base, %group_byte_add : offset
+      %group_ds = buffer.view %q8_output_noalias[%group_byte_offset] : buffer -> view<8xf16>
+      %d_f16 = scalar.fptrunc %d : f32 to f16
+      %s_f16 = scalar.fptrunc %s : f32 to f16
+      %ds_index = index.mul %block_in_group, %c2 : index
+      %s_index = index.add %ds_index, %c1 : index
+      view.store %d_f16, %group_ds[%ds_index] : f16, view<8xf16>
+      view.store %s_f16, %group_ds[%s_index] : f16, view<8xf16>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  }
+  func.return
+}
+
+// Fuses attention RMSNorm directly into the Q8_1 x4 row consumed by decode
+// projections. The output has hidden_size / 128 physical groups of 144 bytes.
+kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4(%token_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer) where [range(%token_count, 1, 2048)] {
+  %publish_normalized = scalar.constant false : i1
+  %reduction_subgroup_count = index.constant 8 : index
+  %token = kernel.workgroup.id<x> : index
+  %input_noalias, %weight_noalias, %output_noalias = buffer.assume.noalias %input, %weight, %output : buffer, buffer, buffer
+  func.apply<qwen3_moe.rmsnorm_quantize_q8_1_x4.body>(%publish_normalized, %reduction_subgroup_count, %token_count, %token, %input_noalias, %weight_noalias, %output_noalias, %output_noalias) : (i1, index, index, index, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Publishes both the ordinary F32 RMSNorm row required by routing and the Q8_1
+// x4 row consumed by direct decode contractions.
+kernel.def target(@qwen3_moe_attention_prepare_gfx11_wave32) @qwen3_moe_rmsnorm_f32_quantize_q8_1_x4(%token_count: index) {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%token_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %weight: buffer, %normalized_output: buffer, %q8_output: buffer) where [range(%token_count, 1, 2048)] {
+  %publish_normalized = scalar.constant true : i1
+  %reduction_subgroup_count = index.constant 8 : index
+  %token = kernel.workgroup.id<x> : index
+  %input_noalias, %weight_noalias, %normalized_output_noalias, %q8_output_noalias = buffer.assume.noalias %input, %weight, %normalized_output, %q8_output : buffer, buffer, buffer, buffer
+  func.apply<qwen3_moe.rmsnorm_quantize_q8_1_x4.body>(%publish_normalized, %reduction_subgroup_count, %token_count, %token, %input_noalias, %weight_noalias, %normalized_output_noalias, %q8_output_noalias) : (i1, index, index, index, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// A uniform residual makes RMSNorm equal to the learned weight up to the
+// configured epsilon. The nonuniform weights cross two physical Q8_1 groups,
+// exercise signed values, and compare every packed metadata and payload byte
+// against the ordinary RMSNorm-plus-packer path.
+check.case public @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_differential_case {
+  %token_count = check.literal value(1) : index
+  %hidden_size = check.literal value(256) : index
+  %input = check.generate.fill value(2.0) : tensor<256xf32>
+  %weight = check.generate.iota offset(-1.0) step(0.0078125) : tensor<256xf32>
+  %normalized = check.generate.fill value(0.0) : tensor<256xf32>
+  %expected = check.generate.fill value(0) : tensor<288xi8>
+  %actual = check.generate.fill value(1) : tensor<288xi8>
+  %dual_normalized = check.generate.fill value(1.0) : tensor<256xf32>
+  %dual_q8 = check.generate.fill value(1) : tensor<288xi8>
+  kernel.launch @qwen3_moe_rmsnorm_f32[%token_count](%token_count, %input, %weight, %normalized) : [index](index, tensor<256xf32>, tensor<256xf32>, tensor<256xf32>)
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %normalized, %expected) : [index, index](index, index, tensor<256xf32>, tensor<288xi8>)
+  kernel.launch @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4[%token_count](%token_count, %input, %weight, %actual) : [index](index, tensor<256xf32>, tensor<256xf32>, tensor<288xi8>)
+  kernel.launch @qwen3_moe_rmsnorm_f32_quantize_q8_1_x4[%token_count](%token_count, %input, %weight, %dual_normalized, %dual_q8) : [index](index, tensor<256xf32>, tensor<256xf32>, tensor<256xf32>, tensor<288xi8>)
+  check.expect.equal actual(%actual) expected(%expected) : tensor<288xi8>
+  check.expect.close actual(%dual_normalized) expected(%normalized) atol(0.0) rtol(0.0) nan(same) : tensor<256xf32>
+  check.expect.equal actual(%dual_q8) expected(%expected) : tensor<288xi8>
+  check.return
+}
+
+// Fourteen distinct production-width rows cross two complete 1024-element
+// scratch stripes. Comparing every packed byte with the unfused path locks
+// both stripe reuse and row-byte addressing across independent workgroups.
+check.case public @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_multistripe_case {
+  %token_count = check.literal value(14) : index
+  %hidden_size = check.literal value(2048) : index
+  %input_seed = check.param.seed base(0x514d4f4550524550) count(1) : i64
+  %input = check.generate.random.uniform seed(%input_seed) range(-1.0 to 1.0) : tensor<14x2048xf32>
+  %weight = check.generate.iota offset(-1.0) step(0.0009765625) : tensor<2048xf32>
+  %normalized = check.generate.fill value(0.0) : tensor<14x2048xf32>
+  %expected = check.generate.fill value(0) : tensor<14x2304xi8>
+  %actual = check.generate.fill value(1) : tensor<14x2304xi8>
+  %dual_normalized = check.generate.fill value(1.0) : tensor<14x2048xf32>
+  %dual_q8 = check.generate.fill value(1) : tensor<14x2304xi8>
+  kernel.launch @qwen3_moe_rmsnorm_f32[%token_count](%token_count, %input, %weight, %normalized) : [index](index, tensor<14x2048xf32>, tensor<2048xf32>, tensor<14x2048xf32>)
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %normalized, %expected) : [index, index](index, index, tensor<14x2048xf32>, tensor<14x2304xi8>)
+  kernel.launch @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4[%token_count](%token_count, %input, %weight, %actual) : [index](index, tensor<14x2048xf32>, tensor<2048xf32>, tensor<14x2304xi8>)
+  kernel.launch @qwen3_moe_rmsnorm_f32_quantize_q8_1_x4[%token_count](%token_count, %input, %weight, %dual_normalized, %dual_q8) : [index](index, tensor<14x2048xf32>, tensor<2048xf32>, tensor<14x2048xf32>, tensor<14x2304xi8>)
+  check.expect.equal actual(%actual) expected(%expected) : tensor<14x2304xi8>
+  check.expect.close actual(%dual_normalized) expected(%normalized) atol(0.0) rtol(0.0) nan(same) : tensor<14x2048xf32>
+  check.expect.equal actual(%dual_q8) expected(%expected) : tensor<14x2304xi8>
+  check.return
+}
+
+check.case public @qwen3_moe_attention_rmsnorm_f32_benchmark_case {
+  %token_count = check.param.choice values([1, 8, 32, 128, 512]) name("token_count") : index
+  %input = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
+  %weight = check.generate.fill value(1.0) : tensor<2048xf32>
+  %output = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
+  %expected = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
+  kernel.launch @qwen3_moe_rmsnorm_f32[%token_count](%token_count, %input, %weight, %output) : [index](index, tensor<[%token_count]x2048xf32>, tensor<2048xf32>, tensor<[%token_count]x2048xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.return
+}
+
+check.case public @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_benchmark_case {
+  %token_count = check.param.choice values([1, 8, 32, 128, 512]) name("token_count") : index
+  %input = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
+  %weight = check.generate.fill value(1.0) : tensor<2048xf32>
+  %output = check.generate.fill value(1) : tensor<[%token_count]x2304xi8>
+  %expected = check.generate.fill value(0) : tensor<[%token_count]x2304xi8>
+  kernel.launch @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4[%token_count](%token_count, %input, %weight, %output) : [index](index, tensor<[%token_count]x2048xf32>, tensor<2048xf32>, tensor<[%token_count]x2304xi8>)
+  check.expect.equal actual(%output) expected(%expected) : tensor<[%token_count]x2304xi8>
+  check.return
+}
+
+check.case public @qwen3_moe_rmsnorm_f32_quantize_q8_1_x4_benchmark_case {
+  %token_count = check.param.choice values([1, 8, 32, 128, 512]) name("token_count") : index
+  %input = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
+  %weight = check.generate.fill value(1.0) : tensor<2048xf32>
+  %normalized_output = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
+  %q8_output = check.generate.fill value(1) : tensor<[%token_count]x2304xi8>
+  %expected_normalized = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
+  %expected_q8 = check.generate.fill value(0) : tensor<[%token_count]x2304xi8>
+  kernel.launch @qwen3_moe_rmsnorm_f32_quantize_q8_1_x4[%token_count](%token_count, %input, %weight, %normalized_output, %q8_output) : [index](index, tensor<[%token_count]x2048xf32>, tensor<2048xf32>, tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2304xi8>)
+  check.expect.close actual(%normalized_output) expected(%expected_normalized) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x2048xf32>
+  check.expect.equal actual(%q8_output) expected(%expected_q8) : tensor<[%token_count]x2304xi8>
+  check.return
+}
+
+check.case public @qwen3_moe_attention_rmsnorm_then_quantize_q8_1_x4_benchmark_case {
+  %token_count = check.param.choice values([1, 8, 32, 128, 512]) name("token_count") : index
+  %hidden_size = check.literal value(2048) : index
+  %input = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
+  %weight = check.generate.fill value(1.0) : tensor<2048xf32>
+  %normalized = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
+  %output = check.generate.fill value(1) : tensor<[%token_count]x2304xi8>
+  %expected = check.generate.fill value(0) : tensor<[%token_count]x2304xi8>
+  kernel.launch @qwen3_moe_rmsnorm_f32[%token_count](%token_count, %input, %weight, %normalized) : [index](index, tensor<[%token_count]x2048xf32>, tensor<2048xf32>, tensor<[%token_count]x2048xf32>)
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %normalized, %output) : [index, index](index, index, tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2304xi8>)
+  check.expect.equal actual(%output) expected(%expected) : tensor<[%token_count]x2304xi8>
+  check.return
+}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_differential_case> @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_differential
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_f32_benchmark_case> @qwen3_moe_attention_rmsnorm_f32_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_f32_benchmark_case> @qwen3_moe_attention_rmsnorm_f32_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_f32_benchmark_case> @qwen3_moe_attention_rmsnorm_f32_prefill_128 {token_count = 128}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_f32_benchmark_case> @qwen3_moe_attention_rmsnorm_f32_prefill_512 {token_count = 512}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_benchmark_case> @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_rmsnorm_f32_quantize_q8_1_x4_benchmark_case> @qwen3_moe_rmsnorm_f32_quantize_q8_1_x4_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_benchmark_case> @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_benchmark_case> @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_prefill_128 {token_count = 128}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_benchmark_case> @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4_prefill_512 {token_count = 512}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_then_quantize_q8_1_x4_benchmark_case> @qwen3_moe_attention_rmsnorm_then_quantize_q8_1_x4_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_then_quantize_q8_1_x4_benchmark_case> @qwen3_moe_attention_rmsnorm_then_quantize_q8_1_x4_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_then_quantize_q8_1_x4_benchmark_case> @qwen3_moe_attention_rmsnorm_then_quantize_q8_1_x4_prefill_128 {token_count = 128}
+
+check.benchmark<@qwen3_moe_attention_rmsnorm_then_quantize_q8_1_x4_benchmark_case> @qwen3_moe_attention_rmsnorm_then_quantize_q8_1_x4_prefill_512 {token_count = 512}
