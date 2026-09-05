@@ -5,6 +5,8 @@
 #include "fattn-vec.cuh"
 #include "fattn.cuh"
 
+#include <unordered_set>
+
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 __launch_bounds__(256, 1)
 static __global__ void flash_attn_mask_to_sparse_indices(
@@ -574,11 +576,25 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
 #ifndef GGML_CUDA_FA_ALL_QUANTS
     if (K->type != V->type) {
+        static std::unordered_set<int> warned_kvtypes;
+        if (warned_kvtypes.insert((int(K->type) << 8) | int(V->type)).second) {
+            GGML_LOG_WARN("%s: mixed K (%s) and V (%s) cache types are not supported by the compiled FlashAttention kernels; "
+                "the op will run on the CPU backend with a large performance penalty. "
+                "Rebuild with -DGGML_CUDA_FA_ALL_QUANTS=ON or use matching K/V types from the compiled set (f16, q4_0, q8_0, bf16).\n",
+                __func__, ggml_type_name(K->type), ggml_type_name(V->type));
+        }
         return BEST_FATTN_KERNEL_NONE;
     }
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
     if (!ggml_cuda_fattn_kv_type_supported(K->type) || !ggml_cuda_fattn_kv_type_supported(V->type)) {
+        static std::unordered_set<int> warned_kvtypes;
+        if (warned_kvtypes.insert((int(K->type) << 8) | int(V->type)).second) {
+            GGML_LOG_WARN("%s: %s K cache / %s V cache is not supported by the compiled FlashAttention kernels; "
+                "the op will run on the CPU backend with a large performance penalty (e.g. ~8x slower prompt processing). "
+                "Rebuild with -DGGML_CUDA_FA_ALL_QUANTS=ON or use f16/q4_0/q8_0/bf16 cache types.\n",
+                __func__, ggml_type_name(K->type), ggml_type_name(V->type));
+        }
         return BEST_FATTN_KERNEL_NONE;
     }
 
