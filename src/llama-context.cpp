@@ -579,6 +579,38 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
     }
 }
 
+void llama_context::sched_release() {
+    if (!sched) {
+        return;
+    }
+
+    // Hand the compute buffers back. The scheduler owns them through its
+    // graph allocator, so freeing it is the only way to release the
+    // per-ubatch scratch - on a large context that is gigabytes (here:
+    // ~2.4 GiB of FlashAttention F16 scratch plus ~0.6 GiB of activations at
+    // n_ctx = 150k, n_ubatch = 1024), and it sits idle between requests.
+    //
+    // Nothing is lost: sched_reserve() runs at the top of both encode() and
+    // decode(), so the next call rebuilds the scheduler from the same
+    // worst-case graph. The caller only pays the reserve, not a reload.
+    synchronize();
+
+    const size_t n_bufs = backend_ptrs.size();
+    size_t released = 0;
+    for (size_t i = 0; i < n_bufs; i++) {
+        released += ggml_backend_sched_get_buffer_size(sched.get(), backend_ptrs[i]);
+    }
+
+    gf_res_prev.reset();
+    gf_res_reserve.reset();
+    sched.reset();
+
+    sched_need_reserve = true;
+
+    LLAMA_LOG_INFO("%s: released %.2f MiB of compute buffers\n",
+            __func__, released / (1024.0 * 1024.0));
+}
+
 void llama_context::sched_reserve() {
     if (!sched_need_reserve) {
         return;
@@ -3845,6 +3877,10 @@ void llama_set_warmup(llama_context * ctx, bool warmup) {
 
 void llama_synchronize(llama_context * ctx) {
     ctx->synchronize();
+}
+
+void llama_sched_release(llama_context * ctx) {
+    ctx->sched_release();
 }
 
 float * llama_get_logits(llama_context * ctx) {

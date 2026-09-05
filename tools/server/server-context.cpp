@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <random>
 #include <utility>
+#include <functional>
 #include <fstream>
 
 // fix problem with std::min and std::max
@@ -734,12 +735,23 @@ struct server_slot {
     }
 };
 
+// Lets the caller lend the LLM's compute buffers to the vision encoder for the
+// duration of one encode. acquire() releases those buffers and returns a
+// GPU-resident mmproj context, or nullptr to encode on the host as before;
+// release() gives the context - and with it the VRAM - straight back.
+// See llama_sched_release() and mtmd_batch_set_ctx().
+struct mtmd_vram_swap {
+    std::function<mtmd_context *()>     acquire;
+    std::function<void(mtmd_context *)> release;
+};
+
 // returns 0 on success
 // caller need to update prompt.tokens after a successful call to keep track of the processing progress
 // note: this is not a member of server_slot because we want to run it inside yield_to_queue
 //       slot is passed as const to avoid accidental modification of the slot state
 //       some pointers are allowed to be used, they are not used by to_json()
-static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx, size_t & n_tokens_out) {
+static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx, size_t & n_tokens_out,
+        const mtmd_vram_swap * swap) {
     GGML_ASSERT(slot.mctx);
     const auto & mctx = slot.mctx;
     const auto & input_tokens = slot.task->tokens;
@@ -793,9 +805,37 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
         return res;
     }
 
+
     // otherwise, the batch is either uninitialized or is used up
     // we need to create & encode a new batch
-    mbatch.reset(mtmd_batch_init(mctx));
+    //
+    // If the caller offered a swap, encode on a GPU-resident projector: its
+    // memory comes from the LLM's per-ubatch scratch, which is idle until the
+    // decode below. Guard it so an error path cannot leak the borrowed VRAM.
+    struct borrowed_ctx {
+        const mtmd_vram_swap * swap = nullptr;
+        mtmd_context *         ctx  = nullptr;
+
+        void give_back() {
+            if (ctx != nullptr) {
+                swap->release(ctx);
+                ctx = nullptr;
+            }
+        }
+
+        ~borrowed_ctx() { give_back(); }
+    } gpu;
+
+    mtmd_context * enc_ctx = mctx;
+    if (swap != nullptr && swap->acquire && swap->release) {
+        gpu.swap = swap;
+        gpu.ctx  = swap->acquire();
+        if (gpu.ctx != nullptr) {
+            enc_ctx = gpu.ctx;
+        }
+    }
+
+    mbatch.reset(mtmd_batch_init(enc_ctx));
     res = mtmd_batch_add_chunk(mbatch.get(), chunk.get());
     GGML_ASSERT(res == 0); // we should never have an empty batch
 
@@ -818,6 +858,18 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
     SLT_TRC(slot, "encoding mtmd batch from idx = %zu, n_chunks = %d\n", idx, n_added);
 
     res = mtmd_batch_encode(mbatch.get());
+
+    if (gpu.ctx != nullptr) {
+        // The result is host memory owned by the batch, so the borrowed
+        // context is only needed for the embedding width from here on.
+        // Re-point the batch at the persistent projector and return the VRAM
+        // now: try_decode() below re-reserves the compute buffers, and the two
+        // must not be resident at the same time. Unconditional, so a failed
+        // encode cannot leave the batch pointing at a freed context.
+        mtmd_batch_set_ctx(mbatch.get(), mctx);
+        gpu.give_back();
+    }
+
     if (res != 0) {
         SLT_ERR(slot, "failed to encode mtmd batch for chunk idx = %zu, res = %d\n", idx, res);
         return -1;
@@ -843,6 +895,63 @@ public:
     // note: video_params.ffmpeg_bin_dir points into params_base, which outlives this struct
     mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
     const llama_vocab * vocab = nullptr;
+
+    // Hooks for --mmproj-vram-swap. The projector is kept on the host, where it
+    // costs only RAM; for the duration of one encode we hand the LLM's
+    // per-ubatch compute buffers back (idle at that moment, and gigabytes at a
+    // large context) and load a GPU-resident projector into that space. No
+    // weights move between devices: the transient context reads the same mmproj
+    // file, which is in the page cache after the first request.
+    mtmd_vram_swap mmproj_vram_swap_hooks() {
+        mtmd_vram_swap swap;
+
+        swap.acquire = [this]() -> mtmd_context * {
+            if (params_base.mmproj.path.empty() || params_base.mmproj_use_gpu) {
+                return nullptr; // nothing to swap, or already resident
+            }
+
+            const int64_t t_start = ggml_time_us();
+
+            llama_sched_release(ctx_tgt);
+            if (ctx_dft) {
+                llama_sched_release(ctx_dft);
+            }
+
+            mtmd_context_params mp = mtmd_context_params_default();
+            mp.use_gpu          = true;
+            mp.device           = params_base.mmproj_device;
+            mp.print_timings    = false;
+            mp.warmup           = false; // one-shot: a warmup encode would double the cost
+            mp.n_threads        = params_base.cpuparams.n_threads;
+            mp.flash_attn_type  = params_base.flash_attn_type;
+            mp.image_min_tokens = params_base.image_min_tokens;
+            mp.image_max_tokens = params_base.image_max_tokens;
+            mp.batch_max_tokens = params_base.mtmd_batch_max_tokens;
+            mp.media_marker     = get_media_marker();
+
+            mtmd_context * gpu = mtmd_init_from_file(params_base.mmproj.path.c_str(), model_tgt, mp);
+            if (gpu == nullptr) {
+                // The compute buffers are already gone, which costs nothing:
+                // the next decode re-reserves them. Fall back to the host
+                // projector for this request.
+                SRV_WRN("%s", "mmproj vram swap: could not place the projector on the GPU, encoding on the host\n");
+                return nullptr;
+            }
+
+            SRV_INF("mmproj vram swap: projector on GPU after %.0f ms\n",
+                    (ggml_time_us() - t_start) / 1000.0);
+            return gpu;
+        };
+
+        swap.release = [](mtmd_context * gpu) {
+            const int64_t t_start = ggml_time_us();
+            mtmd_free(gpu);
+            SRV_DBG("mmproj vram swap: projector released after %.0f ms\n",
+                    (ggml_time_us() - t_start) / 1000.0);
+        };
+
+        return swap;
+    }
 
     server_queue    queue_tasks;
     server_response queue_results;
@@ -1180,6 +1289,16 @@ private:
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
             }
+
+            if (params_base.mmproj_vram_swap && params_base.mmproj_use_gpu) {
+                params_base.mmproj_vram_swap = false;
+                SRV_WRN("%s\n", "--mmproj-vram-swap is redundant when the projector is offloaded, it will be disabled");
+            }
+        }
+
+        if (!has_mmproj && params_base.mmproj_vram_swap) {
+            params_base.mmproj_vram_swap = false;
+            SRV_WRN("%s\n", "--mmproj-vram-swap needs a projector, it will be disabled");
         }
 
         if (!llama_memory_can_shift(llama_get_memory(ctx_tgt))) {
@@ -3477,7 +3596,9 @@ private:
                         size_t n_tokens_out = 0;
                         int32_t res = 0;
                         queue_tasks.yield_to_queue([&]() {
-                            res = process_mtmd_chunk(slot, slot.mbatch, cur_token_idx, n_tokens_out);
+                            const mtmd_vram_swap swap = mmproj_vram_swap_hooks();
+                            res = process_mtmd_chunk(slot, slot.mbatch, cur_token_idx, n_tokens_out,
+                                    params_base.mmproj_vram_swap ? &swap : nullptr);
                         });
 
                         if (res != 0) {

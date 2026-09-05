@@ -350,6 +350,15 @@ MTMD_API int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk
 MTMD_API int32_t mtmd_batch_encode(mtmd_batch * batch);
 MTMD_API float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk);
 
+// Re-point an already-encoded batch at a different context of the same mmproj
+// model. mtmd_batch_encode() leaves its result in host memory owned by the
+// batch, so the context that produced it is only needed for the embedding
+// width afterwards; re-pointing lets that context be freed while the batch
+// stays usable. Intended for handing GPU memory back between an encode and
+// the decode that consumes it - see llama_sched_release().
+// Both contexts must come from the same mmproj file.
+MTMD_API void mtmd_batch_set_ctx(mtmd_batch * batch, mtmd_context * ctx);
+
 
 // Set callback for all future logging events.
 // If this is not called, or NULL is supplied, everything is output on stderr.
