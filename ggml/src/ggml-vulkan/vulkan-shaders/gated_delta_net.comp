@@ -32,6 +32,7 @@ layout(push_constant) uniform Parameters {
     uint neq1, rq3;
     float scale;
     uint K;
+    uint state_out_off; // sentinel: 0=non-fused, N+1=fused (cache elem offset N)
 };
 
 layout(binding = 0) readonly  buffer QBuf     { FLOAT_TYPE data_q[];     };
@@ -41,6 +42,7 @@ layout(binding = 3) readonly  buffer GBuf     { FLOAT_TYPE data_g[];     };
 layout(binding = 4) readonly  buffer BetaBuf  { FLOAT_TYPE data_beta[];  };
 layout(binding = 5) readonly  buffer StateBuf { FLOAT_TYPE data_state[]; };
 layout(binding = 6)           buffer DstBuf   { FLOAT_TYPE data_dst[];   };
+layout(binding = 7)           buffer CacheBuf { FLOAT_TYPE data_cache[]; };
 
 #if !USE_SUBGROUP_ADD && !USE_SUBGROUP_CLUSTERED
 shared FLOAT_TYPE temp[SUBGROUP_SIZE];
@@ -173,9 +175,16 @@ void main() {
         if (K > 1u) {
             const int target_slot = int(n_tokens) - 1 - int(t);
             if (target_slot >= 0 && target_slot < int(K)) {
-                const uint slot_base = s_off + uint(target_slot) * state_size_per_snap + state_out_base;
-                [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-                    data_dst[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+                if (state_out_off > 0u) {
+                    const uint slot_base = (state_out_off - 1u) + uint(target_slot) * state_size_per_snap + state_out_base;
+                    [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                        data_cache[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+                    }
+                } else {
+                    const uint slot_base = s_off + uint(target_slot) * state_size_per_snap + state_out_base;
+                    [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                        data_dst[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+                    }
                 }
             }
         }
@@ -183,7 +192,11 @@ void main() {
 
     if (K == 1u) {
         [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-            data_dst[s_off + state_out_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+            if (state_out_off > 0u) {
+                data_cache[(state_out_off - 1u) + state_out_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+            } else {
+                data_dst[s_off + state_out_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+            }
         }
     }
 }
