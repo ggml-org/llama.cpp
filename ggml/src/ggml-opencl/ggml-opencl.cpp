@@ -5811,6 +5811,13 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
         case FA_VARIANT_F32_F16_SPLIT: {
             cl_kernel k;
             CL_CHECK((k = clCreateKernel(prog, "flash_attn_f32_f16", &err), err));
+            // Dispatched with WG = bm * n_split. Leaving the map empty makes
+            // use_split_kernel false, falling back to the un-split BM-tile kernel.
+            const size_t need_wg = (size_t) (cfg->bm * cfg->n_split);
+            if (!ggml_opencl_fa_kernel_fits_wg(backend_ctx, k, need_wg, "flash_attn_f32_f16 (split)", dk, dv)) {
+                CL_CHECK(clReleaseKernel(k));
+                break;
+            }
             backend_ctx->fa.f32_f16_split[{dk, dv}]               = k;
             backend_ctx->fa.f32_f16_split_wg_size[{dk, dv}]       = cfg->bm * cfg->n_split;
             backend_ctx->fa.f32_f16_split_nkv_threshold[{dk, dv}] = cfg->nkv_split_threshold;
@@ -5825,6 +5832,13 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
             auto & split_wg     = is_q8 ? backend_ctx->fa.f32_q8_0_split_wg_size        : backend_ctx->fa.f32_q4_0_split_wg_size;
             auto & split_bm     = is_q8 ? backend_ctx->fa.f32_q8_0_split_bm             : backend_ctx->fa.f32_q4_0_split_bm;
             auto & split_thresh = is_q8 ? backend_ctx->fa.f32_q8_0_split_nkv_threshold  : backend_ctx->fa.f32_q4_0_split_nkv_threshold;
+            // Same WG = bm * n_split as the mixed split kernel above.
+            const size_t need_wg = (size_t) (cfg->bm * cfg->n_split);
+            if (!ggml_opencl_fa_kernel_fits_wg(backend_ctx, k, need_wg,
+                                               is_q8 ? "flash_attn_f32_q8_0 (split)" : "flash_attn_f32_q4_0 (split)", dk, dv)) {
+                CL_CHECK(clReleaseKernel(k));
+                break;
+            }
             split[{dk, dv}]        = k;
             split_wg[{dk, dv}]     = cfg->bm * cfg->n_split;
             split_bm[{dk, dv}]     = cfg->bm;
