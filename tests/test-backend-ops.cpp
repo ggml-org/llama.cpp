@@ -56,7 +56,8 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
     std::vector<float> data(nels);
     {
         // parallel initialization
-        static const size_t n_threads = N_THREADS;
+        // note: increasing the threads here actually hurts performance for many envionments (macs, dgx spark, etc.)
+        static const size_t n_threads = 1;
 
         auto init_thread = [&](size_t start, size_t end) {
             thread_local std::default_random_engine gen(std::random_device{}());
