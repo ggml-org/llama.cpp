@@ -170,7 +170,9 @@ void llama_memory_hybrid::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p
 }
 
 llama_pos llama_memory_hybrid::seq_pos_min(llama_seq_id seq_id) const {
-    // the min of the total cache is the max of the two caches' min values
+    // the min of the total cache is the max of the two caches' min values.
+    // the recurrent state is valid only at its latest position, so the combined min must
+    // not report positions that the recurrent state cannot serve
     return std::max(mem_attn->seq_pos_min(seq_id), mem_recr->seq_pos_min(seq_id));
 }
 
