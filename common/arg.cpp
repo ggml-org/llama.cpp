@@ -2665,6 +2665,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_VIDEO_FPS"));
     add_opt(common_arg(
+        {"--video-max-tokens"}, "N",
+        "maximum number of tokens each video can take (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.video_max_tokens = std::stof(value);
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_VIDEO_MAX_TOKENS"));
+    add_opt(common_arg(
         {"--video-timestamp-interval"}, "N",
         string_format("interval in milliseconds between text timestamps (default: %" PRId64 ")", params.video_timestamp_interval_ms),
         [](common_params & params, int value) {
