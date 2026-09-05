@@ -567,6 +567,58 @@ task_params eval_llama_cmpl_schema(
 }
 
 //
+// TTS schema
+//
+
+std::vector<std::unique_ptr<field>> make_tts_schema(server_task & task) {
+    std::vector<std::unique_ptr<field>> fields;
+    auto add = [&](field * f) {
+        fields.emplace_back(f);
+    };
+
+    add((new field_num("top_k", task.tts_inp.data.top_k))
+        ->set_limits(0, INT32_MAX)
+        ->set_desc("Top-k for the acoustic code predictor, 0 to use the model default"));
+
+    add((new field_num("top_p", task.tts_inp.data.top_p))
+        ->set_limits(0.0f, 1.0f)
+        ->set_desc("Top-p for the acoustic code predictor, 0.0 to use the model default"));
+
+    add((new field_num("seed", task.tts_inp.data.seed))
+        ->set_desc("RNG seed for the backbone sampler and the codec/vocoder (-1 = random)"));
+
+    add((new field_num("n_predict", task.params.n_predict))
+        ->set_hard_limits(-1, INT32_MAX)
+        ->add_alias("max_tokens")
+        ->set_desc("Max number of audio frames to generate"));
+
+    add((new field_num("repeat_penalty", task.params.sampling.penalty_repeat))
+        ->set_desc("Repetition penalty applied to the backbone sampler over the whole generation"));
+
+    add((new field_bool("stream", task.params.stream))
+        ->set_desc("Stream the audio as it becomes available instead of waiting for the full generation"));
+
+    return fields;
+}
+
+void eval_tts_schema(const common_params & params_base, server_task & task, const json & data) {
+    // baseline defaults, individual requests can override them
+    // TODO @ngxson : change the default values based on model
+    task.params.sampling = params_base.sampling;
+    task.params.sampling.penalty_repeat = 1.05f;
+    task.params.n_predict = -1;
+    task.tts_inp.data.top_k = 0;
+    task.tts_inp.data.top_p = 0.0f;
+    task.tts_inp.data.seed  = params_base.sampling.seed;
+
+    field_eval_context ctx(task.params);
+
+    for (const auto & f : make_tts_schema(task)) {
+        f->eval(ctx, data);
+    }
+}
+
+//
 // eval() implementations
 //
 
