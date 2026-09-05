@@ -413,12 +413,14 @@ def test_router_dedup_cache_models():
     global server
 
     preset_path = os.path.join(TMP_DIR, "test_dedup.ini")
-    cache_id = "ggml-org/test-model-stories260K:F32"
+    main_cache_id = "ggml-org/test-model-stories260K:F32"
+    draft_cache_id = "ggml-org/test-model-stories260K-infill:F32"
 
     with open(preset_path, "w") as f:
         f.write(
             "[model-dedup]\n"
             "hf-repo = ggml-org/test-model-stories260K\n"
+            "spec-draft-hf = ggml-org/test-model-stories260K-infill\n"
             "dedup-cache-models = 1\n"
         )
 
@@ -428,12 +430,13 @@ def test_router_dedup_cache_models():
     try:
         ids = _get_model_ids(is_reload=False)
         assert "model-dedup" in ids
-        assert cache_id not in ids, "cache model should be hidden by dedup"
+        assert main_cache_id not in ids, "main cache model should be hidden by dedup"
+        assert draft_cache_id not in ids, "draft cache model should be hidden by dedup"
         # other cache models are unaffected
         assert "ggml-org/tinygemma3-GGUF:Q8_0" in ids
 
         # the hidden model is only hidden from the listing, it can still be used
-        res = server.make_request("POST", "/tokenize", data={"model": cache_id, "content": "hello"})
+        res = server.make_request("POST", "/tokenize", data={"model": main_cache_id, "content": "hello"})
         assert res.status_code == 200
 
         # disabling the flag brings the cache entry back on reload
@@ -441,9 +444,11 @@ def test_router_dedup_cache_models():
             f.write(
                 "[model-dedup]\n"
                 "hf-repo = ggml-org/test-model-stories260K\n"
+                "spec-draft-hf = ggml-org/test-model-stories260K-infill\n"
             )
         ids = _get_model_ids(is_reload=True)
-        assert cache_id in ids
+        assert main_cache_id in ids
+        assert draft_cache_id in ids
 
         # the flag also works from the global section
         with open(preset_path, "w") as f:
@@ -453,10 +458,12 @@ def test_router_dedup_cache_models():
                 "\n"
                 "[model-dedup]\n"
                 "hf-repo = ggml-org/test-model-stories260K\n"
+                "spec-draft-hf = ggml-org/test-model-stories260K-infill\n"
             )
         ids = _get_model_ids(is_reload=True)
         assert "model-dedup" in ids
-        assert cache_id not in ids, "cache model should be hidden by global dedup"
+        assert main_cache_id not in ids, "main cache model should be hidden by global dedup"
+        assert draft_cache_id not in ids, "draft cache model should be hidden by global dedup"
     finally:
         os.remove(preset_path)
 
