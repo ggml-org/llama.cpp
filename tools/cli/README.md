@@ -144,7 +144,7 @@
 
 | Argument | Explanation |
 | -------- | ----------- |
-| `--server-base URL` | connect to this server instead of starting a new one, example: 'http://localhost:8080' (default: none) |
+| `--server-base URL` | connect to this server instead of starting a new one, example: 'http://localhost:8080' (default: none)<br/>(env: LLAMA_ARG_SERVER_BASE) |
 | `--verbose-prompt` | print a verbose prompt before generation (default: false) |
 | `--display-prompt, --no-display-prompt` | whether to print prompt at generation (default: true) |
 | `-co, --color [on\|off\|auto]` | Colorize output to distinguish prompt and user input from generations ('on', 'off', or 'auto', default: 'auto')<br/>'auto' enables colors when output is to a terminal |
