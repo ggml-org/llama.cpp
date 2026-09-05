@@ -10,6 +10,8 @@
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
 #include "../src/llama-model-saver.h"
+#include "../src/llama-context.h"
+#include "../src/llama-kv-cache-iswa.h"
 
 #include <cinttypes>
 #include <cstddef>
@@ -65,7 +67,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
+    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [--lazy-kv] [--device name] [-v N] [-h/--help]\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
@@ -807,6 +809,135 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
     return all_ok ? 0 : 1;
 }
 
+static void test_lazy_kv(llm_arch arch, size_t seed, ggml_backend_dev_t dev) {
+    auto gguf = get_gguf_ctx(arch, false);
+    if (arch == LLM_ARCH_GEMMA4) {
+        const bool pattern[] = {true, true, false, true, false};
+        gguf_set_arr_data(gguf.get(), "gemma4.attention.sliding_window_pattern", GGUF_TYPE_BOOL, pattern, 5);
+        gguf_set_val_u32(gguf.get(), "gemma4.attention.shared_kv_layers", 2);
+        gguf_set_val_u32(gguf.get(), "gemma4.attention.sliding_window", 1024);
+    }
+
+    auto mp = llama_model_default_params();
+    ggml_backend_dev_t devices[] = {dev, nullptr};
+    mp.devices = dev ? devices : nullptr;
+    mp.n_gpu_layers = dev ? 999 : 0;
+    llama_model_ptr model(llama_model_init_from_user(gguf.get(), set_tensor_data, &seed, mp));
+    GGML_ASSERT(model);
+
+    std::vector<ggml_type> attention_types;
+    auto make_context = [&](uint32_t n_ctx = 512, bool swa_full = true, uint32_t n_seq_max = 2) {
+        auto p = llama_context_default_params();
+        p.n_ctx = n_ctx;
+        p.n_batch = 512;
+        p.n_ubatch = 128;
+        p.n_seq_max = n_seq_max;
+        p.kv_unified = true;
+        p.swa_full = swa_full;
+        p.n_threads = p.n_threads_batch = 2;
+        p.type_k = p.type_v = GGML_TYPE_Q8_0;
+        p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        p.cb_eval = [](ggml_tensor * t, bool ask, void * data) {
+            if (ask && t->op == GGML_OP_FLASH_ATTN_EXT) {
+                static_cast<std::vector<ggml_type> *>(data)->push_back(t->src[1]->type);
+            }
+            return false;
+        };
+        p.cb_eval_user_data = &attention_types;
+        llama_context_ptr ctx(llama_init_from_model(model.get(), p));
+        GGML_ASSERT(ctx);
+        return ctx;
+    };
+    auto decode = [&](llama_context * ctx, int start, int count, llama_seq_id seq = 0) {
+        attention_types.clear();
+        auto b = llama_batch_init(count, 0, 1);
+        for (int i = 0; i < count; ++i) {
+            common_batch_add(b, 1 + (start + i)%100, start + i, {seq}, i == count - 1);
+        }
+        const int rc = llama_decode(ctx, b);
+        llama_batch_free(b);
+        GGML_ASSERT(rc == 0);
+        llama_synchronize(ctx);
+        GGML_ASSERT(!attention_types.empty());
+    };
+    auto save = [](llama_context * ctx, llama_state_seq_flags flags = 0) {
+        std::vector<uint8_t> data(llama_state_seq_get_size_ext(ctx, 0, flags));
+        GGML_ASSERT(llama_state_seq_get_data_ext(ctx, data.data(), data.size(), 0, flags) == data.size());
+        return data;
+    };
+    auto restore = [](llama_context * ctx, const std::vector<uint8_t> & data, llama_state_seq_flags flags = 0) {
+        GGML_ASSERT(llama_state_seq_set_data_ext(ctx, data.data(), data.size(), 0, flags) == data.size());
+    };
+    auto check_type = [&](ggml_type type) {
+        for (auto actual : attention_types) {
+            GGML_ASSERT(actual == type);
+        }
+    };
+
+    // Pre-transition snapshots must restore into the expanded cache on both IO paths.
+    auto ctx = make_context();
+    GGML_ASSERT(ctx->get_memory()->get_has_lazy_quant());
+    decode(ctx.get(), 0, 8);
+    decode(ctx.get(), 0, 8, 1);
+    decode(ctx.get(), 8, 8);
+    check_type(GGML_TYPE_F16);
+    const auto f16_host = save(ctx.get());
+    const auto f16_device = save(ctx.get(), LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+    std::vector<uint8_t> f16_full(llama_state_get_size(ctx.get()));
+    GGML_ASSERT(llama_state_get_data(ctx.get(), f16_full.data(), f16_full.size()) == f16_full.size());
+    decode(ctx.get(), 16, 241);
+    GGML_ASSERT(!ctx->get_memory()->get_has_lazy_quant());
+    check_type(GGML_TYPE_Q8_0);
+    GGML_ASSERT(llama_memory_seq_rm(ctx->get_memory(), 0, 16, -1));
+    const auto q8_host = save(ctx.get());
+    for (bool device : {false, true}) {
+        restore(ctx.get(), device ? f16_device : f16_host, device ? LLAMA_STATE_SEQ_FLAGS_ON_DEVICE : 0);
+        GGML_ASSERT(save(ctx.get()) == q8_host);
+    }
+    GGML_ASSERT(llama_state_set_data(ctx.get(), f16_full.data(), f16_full.size()) == f16_full.size());
+    GGML_ASSERT(save(ctx.get()) == q8_host);
+
+    // The snapshot fits the final cache, but not the free space in the F16 cache.
+    ctx = make_context();
+    decode(ctx.get(), 0, 250, 1);
+    restore(ctx.get(), q8_host);
+    GGML_ASSERT(llama_memory_seq_pos_max(ctx->get_memory(), 1) == 249);
+    GGML_ASSERT(save(ctx.get()) == q8_host);
+
+    // A truncated restore must invalidate the graph even when the read throws.
+    ctx = make_context();
+    decode(ctx.get(), 0, 1);
+    GGML_ASSERT(llama_state_seq_set_data(ctx.get(), q8_host.data(), q8_host.size() - 1, 0) == 0);
+    GGML_ASSERT(!ctx->get_memory()->get_has_lazy_quant());
+    decode(ctx.get(), 0, 1);
+    check_type(GGML_TYPE_Q8_0);
+
+    if (arch == LLM_ARCH_GEMMA4) {
+        // SWA fills first; full attention must remain F16 until it also fills.
+        ctx = make_context(4096, false, 1);
+        auto * mem = dynamic_cast<llama_kv_cache_iswa *>(ctx->get_memory());
+        GGML_ASSERT(mem && mem->get_base()->get_size() > mem->get_swa()->get_size());
+        decode(ctx.get(), 0, 512);
+        GGML_ASSERT(mem->get_swa()->get_has_lazy_quant());
+        decode(ctx.get(), 512, 1);
+        GGML_ASSERT(!mem->get_swa()->get_has_lazy_quant());
+        GGML_ASSERT(mem->get_base()->get_has_lazy_quant());
+        GGML_ASSERT(llama_memory_seq_rm(ctx->get_memory(), 0, 1, -1));
+        const auto partial = save(ctx.get(), LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+
+        // A partial restore changes SWA layout while the aggregate lazy flag stays true.
+        ctx = make_context(4096, false, 1);
+        decode(ctx.get(), 0, 1);
+        restore(ctx.get(), partial, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        decode(ctx.get(), 1, 1);
+        GGML_ASSERT(attention_types.size() == 5);
+        for (size_t il = 0; il < attention_types.size(); ++il) {
+            GGML_ASSERT(attention_types[il] == (il == 2 || il == 4 ? GGML_TYPE_F16 : GGML_TYPE_Q8_0));
+        }
+    }
+    LOG_INF("%s: %s passed\n", __func__, llm_arch_name(arch));
+}
+
 int main(int argc, char ** argv) {
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
@@ -817,10 +948,24 @@ int main(int argc, char ** argv) {
     llm_arch arch = LLM_ARCH_UNKNOWN;
     size_t seed = rd();
     std::string out;
+    bool lazy_kv = false;
+    std::string device;
 
     int verbosity = LOG_LEVEL_ERROR;
 
     for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--lazy-kv") == 0) {
+            lazy_kv = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--device") == 0) {
+            if (++i == argc) {
+                usage(argv);
+                return 1;
+            }
+            device = argv[i];
+            continue;
+        }
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv);
             return 0;
@@ -866,6 +1011,20 @@ int main(int argc, char ** argv) {
     printf("%s: using seed %zu\n", __func__, seed);
 
     try {
+        if (lazy_kv) {
+            common_set_env("LLAMA_KV_CACHE_LAZY_QUANT", "1");
+            ggml_backend_load_all();
+            auto * dev = device.empty() ? nullptr : ggml_backend_dev_by_name(device.c_str());
+            if (!device.empty() && !dev) {
+                throw std::runtime_error("unknown device: " + device);
+            }
+            for (auto test_arch : {LLM_ARCH_LLAMA, LLM_ARCH_GEMMA4}) {
+                if (arch == LLM_ARCH_UNKNOWN || arch == test_arch) {
+                    test_lazy_kv(test_arch, seed, dev);
+                }
+            }
+            return 0;
+        }
         if (!out.empty()) {
             return save_models(arch, seed, verbosity, out);
         }
