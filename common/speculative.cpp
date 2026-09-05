@@ -1357,6 +1357,15 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<int>                i_last;
     std::vector<std::vector<float>> chain_h;
 
+    // reset the sequence's draft KV if it does not continue at the given position
+    // (catch-up batches that cannot be processed, e.g. vision, leave it behind)
+    void reset_kv_if_out_of_sync(llama_seq_id seq_id, llama_pos pos) {
+        auto * mem_dft = llama_get_memory(params.ctx_dft);
+        if (llama_memory_seq_pos_max(mem_dft, seq_id) != pos - 1) {
+            llama_memory_seq_rm(mem_dft, seq_id, 0, -1);
+        }
+    }
+
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
         , params(params.draft)
@@ -1542,6 +1551,16 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             auto * mem_dft = llama_get_memory(ctx_dft);
 
+            // the draft KV is kept in sync with the target by catch-up decodes, but
+            // batches that cannot be caught up (e.g. vision embeddings) leave it
+            // behind - reset any sequence whose cache does not continue at the
+            // batch start position, so the decode below does not hit stale cells
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                if (i_batch_beg[seq_id] >= 0) {
+                    reset_kv_if_out_of_sync(seq_id, batch_in.pos[i_batch_beg[seq_id]]);
+                }
+            }
+
             bool ok = true;
             for (int head = 0; head < n_mtp_layers; ++head) {
                 if (chain_heads) {
@@ -1626,6 +1645,15 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         }
 
         int i = 0;
+
+        // if the draft KV is not at the position where drafting starts (e.g. a
+        // vision batch was skipped by process()), reset the sequence's cache so
+        // the first draft decode does not hit stale cells
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (dparams[seq_id].drafting && !is_mem_shared) {
+                reset_kv_if_out_of_sync(seq_id, dparams[seq_id].n_past);
+            }
+        }
 
         while (n_drafting > 0) {
             // each step decodes under a different head, i.e. a different decoder layer, and
