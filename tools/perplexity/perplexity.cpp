@@ -1722,18 +1722,34 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
     }
 
     int n_vocab;
-    int n_chunk;
+    int n_chunk_file;
     in.read((char *)&n_vocab, sizeof(n_vocab));
-    in.read((char *)&n_chunk, sizeof(n_chunk));
+    in.read((char *)&n_chunk_file, sizeof(n_chunk_file));
     if (in.fail()) {
         LOG_ERR("%s: failed reading n_vocab, n_chunk from %s\n", __func__, params.logits_file.c_str());
         return;
     }
+
     if (n_vocab != llama_vocab_n_tokens(vocab)) {
         LOG_ERR("%s: inconsistent vocabulary (%d vs %d)\n", __func__, n_vocab, llama_vocab_n_tokens(vocab));
     }
 
-    std::vector<llama_token> tokens(size_t(n_ctx) * n_chunk);
+    if (params.n_chunks > n_chunk_file) {
+        LOG_ERR(
+            "%s: requested %d chunks with --chunks, but %s contains only %d chunks\n",
+            __func__,
+            params.n_chunks,
+            params.logits_file.c_str(),
+            n_chunk_file);
+        return;
+    }
+
+
+    const int n_chunk =
+        params.n_chunks < 0 ? n_chunk_file : params.n_chunks;
+
+    // Read all tokens to advance the stream to the log-probability data.
+    std::vector<llama_token> tokens(size_t(n_ctx) * n_chunk_file);
     if (in.read((char *)tokens.data(), tokens.size()*sizeof(tokens[0])).fail()) {
         LOG_ERR("%s: failed reading evaluation tokens from %s\n", __func__, params.logits_file.c_str());
         return;
