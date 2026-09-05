@@ -359,12 +359,15 @@ struct server_slot {
     // not in server_slot_stats to avoid copying to every task result
     std::vector<uint64_t> n_accepted_per_pos;
 
-    std::function<void(int /* id_slot */)>   callback_on_release;
-    std::function<void(const server_slot &)> callback_on_reset; // called before reset()
+    std::function<void(int /* id_slot */)> callback_on_release;
+    std::function<void(server_slot &)>      callback_on_reset; // called before reset()
 
     // this is for printing timings with slot progress, not part of metrics
     int64_t t_print_last = 0;
     int32_t n_gen_last = 0;
+
+    uint64_t metrics_n_gen    = 0;
+    uint64_t metrics_t_gen_us = 0;
 
     void reset() {
         SLT_DBG(*this, "%s", "\n");
@@ -394,6 +397,8 @@ struct server_slot {
         // note: callback_on_reset() must have run before this, see release()
         stats = {};
         n_accepted_per_pos.clear();
+        metrics_n_gen    = 0;
+        metrics_t_gen_us = 0;
 
         n_predict_max = -1;
 
@@ -1303,7 +1308,7 @@ private:
                 queue_tasks.pop_deferred_task(id_slot);
             };
 
-            slot.callback_on_reset = [this](const server_slot & slot) {
+            slot.callback_on_reset = [this](server_slot & slot) {
                 // flush the generated token stats before reset()
                 if (slot.stats.n_gen > 0) {
                     metrics_on_prediction(slot);
@@ -3856,6 +3861,7 @@ private:
             }
 
             slot.stats.update_gen_last();
+            metrics_update_prediction(slot);
 
             completion_token_output result;
             result.tok          = id;
@@ -3991,6 +3997,7 @@ private:
                 // TODO: set result.probs
 
                 slot.stats.n_gen += 1;
+                metrics_update_prediction(slot);
 
                 if (!process_token(result, slot)) {
                     slot.print_timings();
@@ -4110,13 +4117,22 @@ private:
         metrics_flush_prompt();
     }
 
-    void metrics_on_prediction(const server_slot & slot) {
-        const uint64_t t_us    = slot.stats.t_gen_us();
-        const uint64_t n       = slot.stats.n_gen;
-        const uint64_t n_steps = slot.stats.n_gen_steps();
+    void metrics_update_prediction(server_slot & slot) {
+        const uint64_t t_us        = slot.stats.t_gen_us();
+        const uint64_t n           = slot.stats.n_gen;
+        const uint64_t n_steps     = slot.stats.n_gen_steps();
+        const uint64_t n_steps_old = slot.metrics_n_gen > 0 ? slot.metrics_n_gen - 1 : 0;
 
-        metrics.predict       .add(n, n_steps, t_us);
-        metrics.predict_bucket.add(n, n_steps, t_us);
+        metrics.predict_bucket.add(n - slot.metrics_n_gen, n_steps - n_steps_old, t_us - slot.metrics_t_gen_us);
+
+        slot.metrics_n_gen    = n;
+        slot.metrics_t_gen_us = t_us;
+    }
+
+    void metrics_on_prediction(server_slot & slot) {
+        metrics_update_prediction(slot);
+
+        metrics.predict.add(slot.stats.n_gen, slot.stats.n_gen_steps(), slot.stats.t_gen_us());
 
         metrics.n_draft_tokens      += slot.stats.n_draft_tokens;
         metrics.n_draft_accepted    += slot.stats.n_draft_accepted;
