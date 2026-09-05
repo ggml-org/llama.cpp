@@ -316,6 +316,14 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED test-download-model)
 
+# Test speculative decoding API
+llama_build_and_test(test-speculative.cpp LABEL "model" ARGS "${MODEL_DEST}")
+set_tests_properties(test-speculative PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+# Test state save/load functionality
+llama_build_and_test(test-save-load-state.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-download-model)
+
 if (APPLE)
     llama_build(test-rset-release.cpp)
 endif()
