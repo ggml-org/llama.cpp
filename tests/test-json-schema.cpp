@@ -292,6 +292,12 @@ static void test_array(testing & t) {
         const auto & a = root<common_schema_array>(t, doc);
         as<common_schema_string>(t, a.items.get(), "items");
     });
+
+    t.test("prefixItems given as a schema is items", [](testing & t) {
+        auto doc = parse(R"({"prefixItems": {"type": "string"}})");
+        const auto & a = root<common_schema_array>(t, doc);
+        as<common_schema_string>(t, a.items.get(), "items");
+    });
 }
 
 static void test_tuple(testing & t) {
@@ -610,6 +616,32 @@ static void test_ref(testing & t) {
         t.assert_true("target", r.target == doc.refs.at("#/$defs/t").get());
         as<common_schema_null>(t, r.target, "target");
     });
+
+    t.test("a schema parsed into a document reuses its refs", [](testing & t) {
+        auto doc  = parse(R"({"properties": {"a": {"$ref": "#/$defs/t"}}, "$defs": {"t": {"type": "boolean"}}})");
+        auto node = common_schema_parse(common_json::parse(R"({"items": {"$ref": "#/$defs/t"}})"), doc);
+        const auto & a = as<common_schema_array>(t, node.get(), "node");
+        const auto & r = as<common_schema_ref>(t, a.items.get(), "items");
+        t.assert_true("shared target", r.target == doc.refs.at("#/$defs/t").get());
+        t.assert_equal("refs", (size_t) 1, doc.refs.size());
+    });
+
+    t.test("a schema parsed into a document adds its refs", [](testing & t) {
+        common_schema_document doc;
+        auto node = common_schema_parse(common_json::parse(R"({"$ref": "#/$defs/t", "$defs": {"t": {"type": "null"}}})"), doc);
+        as<common_schema_null>(t, as<common_schema_ref>(t, node.get(), "node").target, "target");
+        t.assert_equal("refs", (size_t) 1, doc.refs.size());
+    });
+
+    t.test("a rejected schema leaves the document unchanged", [](testing & t) {
+        common_schema_document doc;
+        try {
+            common_schema_parse(common_json::parse(R"({"allOf": [{"$ref": "#/$defs/t"}, {"type": "x"}], "$defs": {"t": {"type": "null"}}})"), doc);
+            t.assert_true("rejected", false);
+        } catch (const std::runtime_error &) {
+            t.assert_true("no refs", doc.refs.empty());
+        }
+    });
 }
 
 static void test_errors(testing & t) {
@@ -663,7 +695,6 @@ static void test_errors(testing & t) {
     t.test("array", [](testing & t) {
         assert_error(t, R"({"type": "array", "maxItems": 1.5})", "#: maxItems must be a non-negative integer");
         assert_error(t, R"({"type": "array", "items": {"type": "x"}})", "#/items: unrecognized type x");
-        assert_error(t, R"({"prefixItems": {}})", "#: prefixItems must be an array");
         assert_error(t, R"({"prefixItems": [{"type": "x"}]})", "#/prefixItems/0: unrecognized type x");
     });
 

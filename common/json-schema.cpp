@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -11,8 +12,11 @@
 #include <vector>
 
 class common_schema_parser {
-    const common_json &    root_;
-    common_schema_document doc_;
+    const common_json &      root_;
+    common_schema_document & doc_;
+
+    // the targets parsed here, moved into doc_ once the whole schema parsed
+    std::map<std::string, common_schema_ptr> refs_;
 
     // ref nodes get their target once every $ref is parsed, a cycle would otherwise need it too early
     std::vector<common_schema_ref *> pending_;
@@ -103,10 +107,10 @@ class common_schema_parser {
         if (ref.compare(0, 2, "#/") != 0) {
             fail(path, "unsupported $ref " + ref + ", only references into the same document are supported");
         }
-        if (doc_.refs.find(ref) == doc_.refs.end()) {
+        if (doc_.refs.find(ref) == doc_.refs.end() && refs_.find(ref) == refs_.end()) {
             // reserve the key first, so that a cycle back to this $ref stops here
-            doc_.refs[ref] = nullptr;
-            doc_.refs[ref] = parse_schema(resolve_ref(ref, path), ref);
+            refs_[ref] = nullptr;
+            refs_[ref] = parse_schema(resolve_ref(ref, path), ref);
         }
         auto node = std::make_unique<common_schema_ref>(ref);
         pending_.push_back(node.get());
@@ -173,7 +177,7 @@ class common_schema_parser {
     common_schema_ptr parse_array(const common_json & schema, const std::string & path) {
         auto node = std::make_unique<common_schema_array>();
         if (schema.contains("items") || schema.contains("prefixItems")) {
-            // "items" given as an array is the older spelling of "prefixItems", and wins when both are present
+            // "items" wins when both are present; as in the converter, a schema instead of an array is the item schema
             const std::string key = schema.contains("items") ? "items" : "prefixItems";
             const common_json & items = schema.at(key);
             if (items.is_array()) {
@@ -183,9 +187,6 @@ class common_schema_parser {
                     tuple->items.push_back(parse_schema(item, path + "/" + key + "/" + std::to_string(i++)));
                 }
                 return tuple;
-            }
-            if (key == "prefixItems") {
-                fail(path, "prefixItems must be an array");
             }
             node->items = parse_schema(items, path + "/" + key);
         } else {
@@ -325,19 +326,28 @@ class common_schema_parser {
     }
 
   public:
-    explicit common_schema_parser(const common_json & root) : root_(root) {}
+    common_schema_parser(const common_json & root, common_schema_document & doc) : root_(root), doc_(doc) {}
 
-    common_schema_document parse() {
-        doc_.root = parse_schema(root_, "#");
-        for (auto * node : pending_) {
-            node->target = doc_.refs.at(node->ref).get();
+    common_schema_ptr parse() {
+        auto node = parse_schema(root_, "#");
+        for (auto & entry : refs_) {
+            doc_.refs[entry.first] = std::move(entry.second);
         }
-        return std::move(doc_);
+        for (auto * ref : pending_) {
+            ref->target = doc_.refs.at(ref->ref).get();
+        }
+        return node;
     }
 };
 
 common_schema_document common_schema_parse(const common_json & schema) {
-    return common_schema_parser(schema).parse();
+    common_schema_document doc;
+    doc.root = common_schema_parser(schema, doc).parse();
+    return doc;
+}
+
+common_schema_ptr common_schema_parse(const common_json & schema, common_schema_document & doc) {
+    return common_schema_parser(schema, doc).parse();
 }
 
 class common_schema_optimizer {

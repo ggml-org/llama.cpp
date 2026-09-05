@@ -1188,7 +1188,10 @@ json oaicompat_chat_params_parse(
         std::string response_type = json_value(response_format, "type", std::string());
         if (response_type == "json_object") {
             if (response_format.contains("schema") || json_schema.empty()) {
-                json_schema = json_value(response_format, "schema", json::object());
+                // any object without a schema, {} would be any value
+                json any_object = json::object();
+                any_object["type"] = "object";
+                json_schema = json_value(response_format, "schema", any_object);
             }
         } else if (response_type == "json_schema") {
             auto schema_wrapper = json_value(response_format, "json_schema", json::object());

@@ -1,37 +1,35 @@
 #pragma once
 
+#include "json-schema.h"
 #include "json.h"
 
 #include <functional>
-#include <memory>
 #include <string>
 
-std::string json_schema_to_grammar(const common_json & schema,
-                                   bool force_gbnf = false);
+// The JSON overload goes through common_schema_parse() first: JSON -> common_schema -> GBNF
+std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf = false);
+std::string json_schema_to_grammar(const common_schema_document & schema);
 
-class common_schema_converter;
+// Whether a value matching the schema may be a string, through any branch of it.
+// Some models emit raw string values rather than JSON-encoded strings for string parameters.
+bool common_schema_resolves_to_string(const common_schema & schema);
 
-// Probes a JSON schema to extract information about its structure and type constraints.
+// Probes the sub-schemas of one JSON schema, e.g. the parameters of a tool
 class common_schema_info {
-    std::unique_ptr<common_schema_converter> impl_;
+    common_schema_document doc_;
 
   public:
-    common_schema_info();
-    ~common_schema_info();
+    // Parses the schema, so that the $refs of its sub-schemas resolve
+    void resolve_refs(const common_json & schema);
 
-    common_schema_info(const common_schema_info &) = delete;
-    common_schema_info & operator=(const common_schema_info &) = delete;
-    common_schema_info(common_schema_info &&) noexcept;
-    common_schema_info & operator=(common_schema_info &&) noexcept;
-
-    void resolve_refs(common_json & schema);
+    // common_schema_resolves_to_string() for a sub-schema of a schema given to resolve_refs(), false when it does not parse
     bool resolves_to_string(const common_json & schema);
 };
 
 struct common_grammar_builder {
     std::function<std::string(const std::string &, const std::string &)> add_rule;
     std::function<std::string(const std::string &, const common_json &)> add_schema;
-    std::function<void(common_json &)> resolve_refs;
+    std::function<void(const common_json &)> resolve_refs;
 };
 
 struct common_grammar_options {

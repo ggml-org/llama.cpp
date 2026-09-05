@@ -159,6 +159,11 @@ struct common_schema_document {
 // Throws std::runtime_error when the schema falls outside the supported subset.
 common_schema_document common_schema_parse(const common_json & schema);
 
+// Parses a schema that belongs to a document parsed earlier, e.g. one property of it.
+// A $ref it cannot resolve on its own is looked up in doc.refs, the targets it resolves itself are added there.
+// doc is unchanged when the schema is rejected.
+common_schema_ptr common_schema_parse(const common_json & schema, common_schema_document & doc);
+
 // Rewrites a document in place into an equivalent one with less redundancy: allOf becomes the intersection
 // of its children, nested anyOf are flattened, branches that can match nothing are pruned, up to a
 // common_schema_none root, and $refs nothing reaches anymore are dropped.
