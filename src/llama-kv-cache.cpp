@@ -2189,6 +2189,9 @@ const slot_info_vec_t *   sinfos_in) {
             if (seq_id == -1) {
                 clear(true);
             } else {
+                // zero the K/V data of the failed restore attempt - the attention can still read the data of free cells
+                clear_cells_data(strm, sinfo);
+
                 seq_rm(seq_id, -1, -1);
             }
             throw std::runtime_error("failed to restore kv cache");
@@ -2659,6 +2662,76 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
     }
 
     return true;
+}
+
+// the cleared ranges mirror the write pattern of state_read_data() - keep both in sync
+void llama_kv_cache::clear_cells_data(uint32_t strm, const slot_info & sinfo) {
+    if (sinfo.empty() || sinfo.size() == 0) {
+        return;
+    }
+
+    const auto & cells = v_cells[strm];
+
+    const uint32_t cell_count = sinfo.size();
+
+    const bool is_contiguous = sinfo.is_contiguous();
+
+    for (const auto & layer : layers) {
+        const uint32_t il = layer.il;
+
+        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
+
+        auto * k = layer.k_stream[strm];
+
+        const size_t k_size_row = ggml_row_size(k->type, n_embd_k_gqa);
+
+        if (is_contiguous) {
+            llama_clear_tensor_data(k, sinfo.head() * k_size_row, cell_count * k_size_row);
+        } else {
+            for (uint32_t i = 0; i < cell_count; ++i) {
+                llama_clear_tensor_data(k, sinfo.idxs[0][i] * k_size_row, k_size_row);
+            }
+        }
+    }
+
+    for (const auto & layer : layers) {
+        const uint32_t il = layer.il;
+
+        const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
+
+        auto * v = layer.v_stream[strm];
+        if (!v) {
+            continue;
+        }
+
+        if (!v_trans) {
+            const size_t v_size_row = ggml_row_size(v->type, n_embd_v_gqa);
+
+            if (is_contiguous) {
+                llama_clear_tensor_data(v, sinfo.head() * v_size_row, cell_count * v_size_row);
+            } else {
+                for (uint32_t i = 0; i < cell_count; ++i) {
+                    llama_clear_tensor_data(v, sinfo.idxs[0][i] * v_size_row, v_size_row);
+                }
+            }
+        } else {
+            const size_t v_size_el = ggml_type_size(v->type);
+
+            if (is_contiguous) {
+                const uint32_t h = sinfo.head();
+
+                for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+                    llama_clear_tensor_data(v, (h + j * cells.size()) * v_size_el, cell_count * v_size_el);
+                }
+            } else {
+                for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+                    for (uint32_t i = 0; i < cell_count; ++i) {
+                        llama_clear_tensor_data(v, (sinfo.idxs[0][i] + j * cells.size()) * v_size_el, v_size_el);
+                    }
+                }
+            }
+        }
+    }
 }
 
 //
