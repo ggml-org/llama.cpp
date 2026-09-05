@@ -1,4 +1,7 @@
+import os
 import pytest
+import re
+import tempfile
 import time
 from utils import *
 
@@ -125,3 +128,34 @@ def test_server_sleep_metrics_buckets():
     assert res.status_code == 200
     assert is_sleeping(server) == False
     assert get_metric(fetch_metrics(server), "predicted_tokens_seconds") == 0
+
+
+def test_server_sleep_mmproj_memory_target():
+    global server
+    server = ServerPreset.tinygemma3()
+    server.sleep_idle_seconds = 1
+    server.debug = True
+    fd, server.log_path = tempfile.mkstemp(suffix='.log')
+    os.close(fd)
+    server.start()
+
+    wait_for_sleep(server)
+
+    # wake up and let the model reload
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 1,
+        "prompt": "Hello",
+    })
+    assert res.status_code == 200
+
+    with open(server.log_path) as f:
+        log = f.read()
+
+    # the fitting step reports the free memory target it was given, once per device
+    targets = [int(x) for x in re.findall(
+        r"(?:will leave \d+ >= |cannot meet free memory target of |free vs\. target of\s+)(\d+)", log)]
+
+    assert len(targets) >= 2 and len(targets) % 2 == 0, f"expected one fit report per load, got {targets}"
+    # the mmproj margin must not accumulate onto the target across a resume
+    half = len(targets) // 2
+    assert targets[:half] == targets[half:], f"free memory target changed across resume: {targets}"
