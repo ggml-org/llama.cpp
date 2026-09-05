@@ -221,6 +221,46 @@ static void test_top_n_sigma(const std::vector<float> & probs, const std::vector
     tester.check();
 }
 
+static void test_synthid(
+    const std::vector<float> & probs, const std::vector<llama_token> & last_tokens, const std::vector<float> & probs_expected
+) {
+    GGML_ASSERT(probs.size() == probs_expected.size());
+
+    // values generated with SynthIDTextWatermarkLogitsProcessor from HF transformers
+    const std::vector<int64_t> keys = { 654, 400, 836 };
+    const std::vector<uint8_t> sampling_table = { 1, 0, 0, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1 };
+
+    auto * sampler = llama_sampler_init_synthid(keys.data(), keys.size(), sampling_table.data(), sampling_table.size(), 3, 4);
+
+    for (size_t i = 0; i < last_tokens.size(); i++) {
+        llama_sampler_accept(sampler, last_tokens[i]);
+    }
+
+    {
+        sampler_tester tester(probs, probs_expected);
+
+        DUMP(&tester.cur_p);
+        llama_sampler_apply(sampler, &tester.cur_p);
+        tester.apply(llama_sampler_init_dist(0));
+        DUMP(&tester.cur_p);
+
+        tester.check();
+    }
+
+    // same context again -> the watermark is not applied
+    {
+        sampler_tester tester(probs, probs);
+
+        llama_sampler_apply(sampler, &tester.cur_p);
+        tester.apply(llama_sampler_init_dist(0));
+        DUMP(&tester.cur_p);
+
+        tester.check();
+    }
+
+    llama_sampler_free(sampler);
+}
+
 static void test_sampler_queue(const size_t n_vocab, const std::string & samplers_sequence, const int top_k, const float top_p, const float min_p
 ) {
     sampler_tester tester(n_vocab);
@@ -394,6 +434,8 @@ int main(void) {
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.0f, 0.0f, 0.428571f, 0.571429f}, 1.00f);
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.1f, 0.2f, 0.3f, 0.4f}, 0.00f); // top_n_sigma == 0 now represents a no-op rather than greedy decoding as of PR#13345
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.1f, 0.2f, 0.3f, 0.4f}, 3.00f);
+
+    test_synthid({0.05f, 0.1f, 0.15f, 0.2f, 0.25f, 0.25f}, {3, 5}, {0.049753f, 0.008964f, 0.029852f, 0.294519f, 0.368149f, 0.248764f});
 
     test_sampler_queue(10000, "k", 10000, 1.0f, 1.0f);
     test_sampler_queue(10000, "k",     1, 1.0f, 1.0f);

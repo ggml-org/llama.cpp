@@ -2160,6 +2160,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sampling());
     add_opt(common_arg(
+        {"--synthid-keys"}, "KEYS",
+        "comma-separated list of secret SynthID watermarking keys, must match the keys used by the detector, compatible with HF transformers SynthIDTextWatermarkingConfig (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.synthid_keys.clear();
+            for (const auto & key : string_split<std::string>(value, ',')) {
+                params.sampling.synthid_keys.push_back(std::stoll(key));
+            }
+            if (params.sampling.synthid_keys.empty()) {
+                throw std::runtime_error("error: --synthid-keys requires at least one key");
+            }
+        }
+    ).set_sampling().set_env("LLAMA_ARG_SYNTHID_KEYS"));
+    add_opt(common_arg(
         {"--dry-sequence-breaker"}, "STRING",
         string_format("add sequence breaker for DRY sampling, clearing out default breakers (%s) in the process; use \"none\" to not use any sequence breakers\n",
             params.sampling.dry_sequence_breakers.empty() ? "none" :
