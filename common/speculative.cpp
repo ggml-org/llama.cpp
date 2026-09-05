@@ -1096,7 +1096,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         // read and dequantize one selector tensor, validating its shape against the loader
         // expectation; returns the row count (ne[0]) so the first table can fix the rank
-        auto load_i8 = [&](const char * name, std::vector<float> & dst, int64_t ne0_expect, int64_t ne1_expect) -> int64_t {
+        auto load_selector_tensor = [&](const char * name, std::vector<float> & dst, int64_t ne0_expect, int64_t ne1_expect) -> int64_t {
             const int64_t id = gguf_find_tensor(gguf_ctx.get(), name);
             if (id < 0) {
                 throw std::runtime_error(std::string("DFlash2 selector tensor '") + name + "' is missing from the draft GGUF");
@@ -1139,9 +1139,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         };
 
         // the successor table fixes the rank; the other two tables are checked against it
-        const int64_t rank = load_i8("selector_successor.weight",   sel_next,   -1,        n_vocab);
-        load_i8("selector_predecessor.weight", sel_prev,   rank,      n_vocab);
-        load_i8("selector_hidden.weight",      sel_hidden, n_embd_dec, rank);
+        const int64_t rank = load_selector_tensor("selector_successor.weight",   sel_next,   -1,        n_vocab);
+        load_selector_tensor("selector_predecessor.weight", sel_prev,   rank,      n_vocab);
+        load_selector_tensor("selector_hidden.weight",      sel_hidden, n_embd_dec, rank);
 
         selector_rank = (int32_t) rank;
         GGML_ASSERT((size_t) selector_rank * n_vocab == sel_next.size());

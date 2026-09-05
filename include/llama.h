@@ -348,9 +348,9 @@ extern "C" {
         bool no_alloc;        // only load metadata and simulate memory allocations
         bool load_mtp;        // whether to load MTP layers
         bool output_replicated; // replicate the output projection (lm_head) in full on every device
-                               // (tensor parallelism). Set by the common code when a DSpark draft
-                               // consumes the lm_head output in-graph; do not set it manually, it
-                               // multiplies the lm_head VRAM per device
+                               // (tensor parallelism). Set internally when a draft model consumes
+                               // the lm_head output in-graph (e.g. DSpark); do not set it manually,
+                               // it multiplies the lm_head VRAM per device
     };
 
     struct llama_sampler_seq_config {
