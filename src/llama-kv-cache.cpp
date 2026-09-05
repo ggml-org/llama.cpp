@@ -441,6 +441,7 @@ llama_kv_cache::llama_kv_cache(
 }
 
 void llama_kv_cache::clear(bool data) {
+    lazy_quant_pending = false;
     for (uint32_t s = 0; s < n_stream; ++s) {
         v_cells[s].reset();
         v_heads[s] = 0;
@@ -894,6 +895,7 @@ bool llama_kv_cache::try_lazy_quantize(llama_context * lctx) {
 
     lazy_quant = false;
     lazy_quant_converted = true;
+    lazy_quant_pending = false;
 
     LLAMA_LOG_INFO("%s: converted %u populated f16 cells to q8_0 and expanded %u cells to %u in %.2f ms\n",
             __func__, n_rows, kv_size_f16, kv_size_target, (ggml_time_us() - t_start)/1000.0);
@@ -905,7 +907,12 @@ bool llama_kv_cache::get_has_lazy_quant() const {
     return lazy_quant;
 }
 
+bool llama_kv_cache::get_needs_lazy_quant() const {
+    return lazy_quant && lazy_quant_pending;
+}
+
 llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
+    lazy_quant_pending = false;
     llama_kv_cache::slot_info_vec_t res;
 
     struct state_t {
@@ -965,6 +972,7 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
     }
 
     if (!success) {
+        lazy_quant_pending = lazy_quant;
         return {};
     }
 

@@ -135,6 +135,8 @@ public:
 
     bool get_has_lazy_quant() const override;
 
+    bool get_needs_lazy_quant() const;
+
     bool get_can_shift() const override;
 
     void clear(bool data) override;
@@ -280,6 +282,7 @@ private:
     uint32_t kv_size_target = 0;
     bool lazy_quant = false;
     bool lazy_quant_converted = false;
+    bool lazy_quant_pending = false;
 
     // SWA
     const uint32_t n_swa = 0;

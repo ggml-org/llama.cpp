@@ -168,6 +168,10 @@ bool llama_kv_cache_dsa::get_has_lazy_quant() const {
     return kv_mla->get_has_lazy_quant() || kv_lid->get_has_lazy_quant();
 }
 
+bool llama_kv_cache_dsa::get_needs_lazy_quant() const {
+    return kv_mla->get_needs_lazy_quant() || kv_lid->get_needs_lazy_quant();
+}
+
 bool llama_kv_cache_dsa::get_can_shift() const {
     return kv_mla->get_can_shift() &&
            kv_lid->get_can_shift() &&

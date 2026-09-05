@@ -1740,7 +1740,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
     sched_reserve();
 
     bool did_optimize = false;
-    bool did_lazy_quantize = false;
 
     // handle any pending shifts/copies
     memory_update(false);
@@ -1775,17 +1774,13 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         }
                     }
 
-                    if (!did_lazy_quantize) {
-                        did_lazy_quantize = true;
+                    if (memory->try_lazy_quantize(this)) {
+                        sched_need_reserve = true;
+                        sched_reserve();
 
-                        if (memory->try_lazy_quantize(this)) {
-                            sched_need_reserve = true;
-                            sched_reserve();
+                        LLAMA_LOG_DEBUG("%s: retrying batch size %d after lazy KV cache quantization\n", __func__, balloc->get_n_tokens());
 
-                            LLAMA_LOG_DEBUG("%s: retrying batch size %d after lazy KV cache quantization\n", __func__, balloc->get_n_tokens());
-
-                            continue;
-                        }
+                        continue;
                     }
 
                     LLAMA_LOG_WARN("%s: failed to find a memory slot for batch of size %d\n", __func__, balloc->get_n_tokens());

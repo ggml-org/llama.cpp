@@ -228,8 +228,8 @@ llama_memory_context_ptr llama_kv_cache_dsa_iswa::init_update(llama_context * lc
 }
 
 bool llama_kv_cache_dsa_iswa::try_lazy_quantize(llama_context * lctx) {
-    const bool dsa = kv_dsa->try_lazy_quantize(lctx);
-    const bool swa = kv_swa->try_lazy_quantize(lctx);
+    const bool dsa = (!lctx || kv_dsa->get_needs_lazy_quant()) && kv_dsa->try_lazy_quantize(lctx);
+    const bool swa = (!lctx || kv_swa->get_needs_lazy_quant()) && kv_swa->try_lazy_quantize(lctx);
 
     return dsa || swa;
 }
