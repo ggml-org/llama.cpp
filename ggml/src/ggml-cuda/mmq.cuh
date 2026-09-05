@@ -371,7 +371,14 @@ static __host__ int ggml_cuda_mmq_get_J_max(const ggml_type type, const bool fal
             return ret;
         }
     }
-    return ret;
+    // There is no valid J <= ne11, return the smallest valid J instead.
+    // This is used to calculate buffer padding, MMQ never reads further than one J-wide tile.
+    for (int J = 8; J <= 128; J += 8) {
+        if (ggml_cuda_mmq_get_config(type, J, fallback, cc).type != GGML_TYPE_COUNT) {
+            return J;
+        }
+    }
+    return 0;
 }
 
 static constexpr __device__ int ggml_cuda_mmq_get_rows_per_warp(ggml_type type, int J, bool fallback) {
@@ -899,6 +906,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
     constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
 
+    // Rows past tile_y_max_j are unused, the y buffer can end inside the tile, do not read them.
+    const int tile_y_max_l = (tile_y_max_j + 1)*MMQ_TILE_Y_K;
+
     for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
         load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
         {
@@ -907,7 +917,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             for (int l0 = 0; l0 < J * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
                 int l = l0 + threadIdx.y*warp_size + threadIdx.x;
 
-                tile_y[l] = by0[l];
+                tile_y[l] = l < tile_y_max_l ? by0[l] : 0;
             }
         }
 
@@ -923,7 +933,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             for (int l0 = 0; l0 < J * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
                 int l = l0 + threadIdx.y*warp_size + threadIdx.x;
 
-                tile_y[l] = by0[l];
+                tile_y[l] = l < tile_y_max_l ? by0[l] : 0;
             }
         }
 
@@ -1028,7 +1038,9 @@ static __global__ void mul_mat_q(
                     break;
                 }
 
-                ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
+                // The ids buffer only has col_diff valid entries for this expert, do not read past them.
+                const int jj = jt*J + j;
+                ids_dst_shared[j] = jj < col_diff ? ids_dst[col_low + jj] : 0;
             }
             __syncthreads();
         }
@@ -1122,7 +1134,9 @@ static __global__ void mul_mat_q(
                     break;
                 }
 
-                ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
+                // The ids buffer only has col_diff valid entries for this expert, do not read past them.
+                const int jj = jt*J + j;
+                ids_dst_shared[j] = jj < col_diff ? ids_dst[col_low + jj] : 0;
             }
             __syncthreads();
         }
@@ -1344,7 +1358,9 @@ static __global__ void mul_mat_q_stream_k_fixup(
     const int col_diff = col_high - col_low;
 
     for (int j = threadIdx.y*warp_size + threadIdx.x; j < J; j += nwarps*warp_size) {
-        ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
+        // The ids buffer only has col_diff valid entries for this expert, do not read past them.
+        const int jj = jt*J + j;
+        ids_dst_shared[j] = jj < col_diff ? ids_dst[col_low + jj] : 0;
     }
     __syncthreads();
 
