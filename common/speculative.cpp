@@ -926,8 +926,16 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     llama_token mask_token_id = 0;
 
     bool    is_dflash2     = false;
+    bool    is_dflash2_cpu = false;  // ranks the lm_head output on the host when it is split (tensor parallelism)
     bool    is_mrope       = false;
     int32_t selector_top_k = 0;
+    int32_t selector_rank  = 0;
+
+    // DFlash2 CPU-side selector: the lm_head output may be split across devices, so the
+    // candidate lattice is built on the host from the gathered logits
+    std::vector<float> sel_next;     // [selector_rank, n_vocab]
+    std::vector<float> sel_prev;     // [selector_rank, n_vocab]
+    std::vector<float> sel_hidden;   // [n_embd_dec, selector_rank]
 
     // draft-dspark: the draft carries a Markov head and uses an anchor-first block layout
     const bool is_dspark;
@@ -979,7 +987,15 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         selector_top_k = llama_model_dflash_selector_top_k(model_dft);
         is_dflash2     = selector_top_k > 0;
+        // under tensor parallelism the lm_head is split and the in-graph selector cannot run
+        is_dflash2_cpu = is_dflash2 && llama_model_get_split_mode(model_dft) == LLAMA_SPLIT_MODE_TENSOR;
         mask_token_id = llama_vocab_mask(llama_model_get_vocab(model_dft));
+
+        if (is_dflash2_cpu) {
+            // the candidate lattice is built on the CPU, so the raw lm_head output must be
+            // available after the decode; the hidden states ride the nextn output
+            load_dflash2_selector();
+        }
 
         if (is_dspark && this->params.p_min > 0.0f) {
             char buf[16] = {};
@@ -1047,9 +1063,154 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k], true);
         }
 
-        // DFlash2 reads its selector lattice from h_nextn and never consumes raw logits.
+        // DFlash2 reads its selector data from h_nextn for every block position (the decoder
+        // hidden states on the CPU path, the packed lattice in-graph), so the output stays
+        // dense; DFlash1/DSpark carry only their output rows there
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ !is_dflash2);
         llama_set_causal_attn(ctx_dft, causal_attn); // DFlash needs non-causal attention unless the model says otherwise
+    }
+
+    // read the DFlash2 selector weights straight from the draft GGUF file (tensor-parallel
+    // mode only: the lm_head is split, so the in-graph build_dflash2_selector() in
+    // src/models/dflash.cpp cannot run and these tables are not loaded into device memory);
+    // keep the candidate math in sync with that in-graph implementation
+    void load_dflash2_selector() {
+        struct gguf_init_params gguf_params = {
+            /* .no_alloc = */ true,
+            /* .ctx      = */ nullptr,
+        };
+
+        gguf_context_ptr gguf_ctx(gguf_init_from_file(params.mparams.path.c_str(), gguf_params));
+        if (!gguf_ctx) {
+            throw std::runtime_error("failed to open the draft GGUF for the DFlash2 selector");
+        }
+
+        // RAII: close the file even when a load step below throws
+        struct file_closer {
+            void operator()(FILE * file) const {
+                fclose(file);
+            }
+        };
+        std::unique_ptr<FILE, file_closer> file(ggml_fopen(params.mparams.path.c_str(), "rb"));
+        if (!file) {
+            throw std::runtime_error("failed to open the draft GGUF for the DFlash2 selector");
+        }
+
+        const int64_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(params.ctx_dft)));
+
+        // read and dequantize one selector tensor, validating its shape against the loader
+        // expectation; returns the row count (ne[0]) so the first table can fix the rank
+        auto load_selector_tensor = [&](const char * name, std::vector<float> & dst, int64_t ne0_expect, int64_t ne1_expect) -> int64_t {
+            const int64_t id = gguf_find_tensor(gguf_ctx.get(), name);
+            if (id < 0) {
+                throw std::runtime_error(std::string("DFlash2 selector tensor '") + name + "' is missing from the draft GGUF");
+            }
+
+            const int64_t * ne = gguf_get_tensor_ne(gguf_ctx.get(), id);
+            if ((ne0_expect > 0 && ne[0] != ne0_expect) || ne[1] != ne1_expect) {
+                throw std::runtime_error(std::string("DFlash2 selector tensor '") + name +
+                        "' has an unexpected shape in the draft GGUF");
+            }
+
+            const enum ggml_type t = gguf_get_tensor_type(gguf_ctx.get(), id);
+            const struct ggml_type_traits * tt = ggml_get_type_traits(t);
+            if (tt == nullptr || tt->to_float == nullptr) {
+                throw std::runtime_error(std::string("DFlash2 selector tensor '") + name + "' uses an unsupported type");
+            }
+
+            const size_t size = gguf_get_tensor_size(gguf_ctx.get(), id);
+            std::vector<uint8_t> raw(size);
+
+            const int64_t offset = gguf_get_data_offset(gguf_ctx.get()) + gguf_get_tensor_offset(gguf_ctx.get(), id);
+#ifdef _WIN32
+            const int rc = _fseeki64(file.get(), offset, SEEK_SET);
+#else
+            const int rc = fseeko(file.get(), (off_t) offset, SEEK_SET);
+#endif
+            if (rc != 0) {
+                throw std::runtime_error(std::string("failed to seek to the DFlash2 selector tensor '") + name + "'");
+            }
+            if (fread(raw.data(), 1, size, file.get()) != size) {
+                throw std::runtime_error(std::string("failed to read the DFlash2 selector tensor '") + name + "'");
+            }
+
+            // dequantize with the same conversion the GPU get_rows uses
+            const size_t n_elts = size / tt->type_size * tt->blck_size;
+            dst.resize(n_elts);
+            tt->to_float(raw.data(), dst.data(), (int64_t) n_elts);
+
+            return ne[0];
+        };
+
+        // the successor table fixes the rank; the other two tables are checked against it
+        const int64_t rank = load_selector_tensor("selector_successor.weight",   sel_next,   -1,        n_vocab);
+        load_selector_tensor("selector_predecessor.weight", sel_prev,   rank,      n_vocab);
+        load_selector_tensor("selector_hidden.weight",      sel_hidden, n_embd_dec, rank);
+
+        selector_rank = (int32_t) rank;
+        GGML_ASSERT((size_t) selector_rank * n_vocab == sel_next.size());
+        GGML_ASSERT((size_t) selector_rank * n_vocab == sel_prev.size());
+        GGML_ASSERT((size_t) n_embd_dec * selector_rank == sel_hidden.size());
+    }
+
+    // DFlash2 CPU-side selector: rank the (possibly split) lm_head output once per batch and
+    // return the per-position top-k candidate ids, unary scores and the selector gate.
+    // In-graph counterpart: build_dflash2_selector() in src/models/dflash.cpp (runs when the
+    // lm_head is not split); keep the candidate math in sync.
+    void build_dflash2_selector_cpu(std::vector<int32_t> & cand, std::vector<float> & unary, std::vector<float> & gate) {
+        auto & ctx_dft = params.ctx_dft;
+
+        const int64_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx_dft)));
+        const int32_t n_tokens = batch.n_tokens;
+        const int32_t top_k    = selector_top_k;
+        const int32_t rank     = selector_rank;
+
+        cand.resize((size_t) n_tokens * top_k);
+        unary.resize((size_t) n_tokens * top_k);
+        gate.resize((size_t) n_tokens * rank);
+
+        const float * embd_all = llama_get_embeddings_nextn(ctx_dft);
+        GGML_ASSERT(embd_all && "DFlash2 CPU selector requires the decoder hidden states");
+        for (int32_t i = 0; i < n_tokens; ++i) {
+            const float * logits = llama_get_logits_ith(ctx_dft, i);
+            const float * embd   = embd_all + (size_t) i * n_embd_dec;
+            GGML_ASSERT(logits && "DFlash2 CPU selector requires the lm_head output");
+
+            int32_t * ci = cand.data()  + (size_t) i * top_k;
+            float   * ui = unary.data() + (size_t) i * top_k;
+
+            // top-k scan keeping the largest values in descending order
+            std::vector<int32_t> ids(top_k, 0);
+            std::vector<float>   vals(top_k, -INFINITY);
+            for (int64_t t = 0; t < n_vocab; ++t) {
+                const float v = logits[t];
+                if (v <= vals[top_k - 1]) {
+                    continue;
+                }
+                int32_t pos = top_k - 1;
+                while (pos > 0 && v > vals[pos - 1]) {
+                    vals[pos] = vals[pos - 1];
+                    ids[pos]  = ids[pos - 1];
+                    pos--;
+                }
+                vals[pos] = v;
+                ids[pos]  = (int32_t) t;
+            }
+            for (int32_t k = 0; k < top_k; ++k) {
+                ci[k] = ids[k];
+                ui[k] = vals[k];
+            }
+
+            // gate = selector_hidden^T x hidden_state
+            float * gi = gate.data() + (size_t) i * rank;
+            for (int32_t k = 0; k < rank; ++k) {
+                float s = 0.0f;
+                for (int32_t d = 0; d < n_embd_dec; ++d) {
+                    s += sel_hidden[(size_t) k * n_embd_dec + d] * embd[d];
+                }
+                gi[k] = s;
+            }
+        }
     }
 
     ~common_speculative_impl_draft_dflash() override {
@@ -1199,7 +1360,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             i_block_beg[seq_id] = batch.n_tokens;
             n_block    [seq_id] = n_block_tokens;
             for (int32_t i = 0; i < n_block_tokens; ++i) {
-                common_batch_add(batch, i == 0 ? dp.id_last : mask_token_id, n + i, { seq_id }, !is_dflash2);
+                // the CPU-side DFlash2 selector needs the gathered lm_head output for every block
+                // position; the in-graph selector consumes it inside the graph instead
+                common_batch_add(batch, i == 0 ? dp.id_last : mask_token_id, n + i, { seq_id }, !is_dflash2 || is_dflash2_cpu);
             }
         }
 
@@ -1212,6 +1375,14 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         if (ret != 0) {
             LOG_WRN("%s: llama_decode returned %d\n", __func__, ret);
             return;
+        }
+
+        // DFlash2 ranks the (possibly split) lm_head output on the CPU once for the whole batch
+        std::vector<int32_t> cand;
+        std::vector<float>   unary;
+        std::vector<float>   gate;
+        if (is_dflash2_cpu) {
+            build_dflash2_selector_cpu(cand, unary, gate);
         }
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
@@ -1228,27 +1399,71 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             auto & result = *dp.result;
 
             if (is_dflash2) {
-                const float * lattice = llama_get_embeddings_nextn(ctx_dft);
-                GGML_ASSERT(lattice && "DFlash2 selector produced no lattice");
+                if (is_dflash2_cpu) {
+                    // block walk over the CPU-computed candidates: the transition scores for the
+                    // current predecessor are evaluated on the fly
+                    int32_t predecessor = 0;
+                    for (int32_t i = 1; i < n_block_tokens; ++i) {
+                        const int32_t pos = beg + i;
 
-                int32_t predecessor = 0;
-                for (int32_t i = 1; i < n_block_tokens; ++i) {
-                    const float * row = lattice + (size_t) (beg + i) * n_embd_dec;
-                    const float * scores = row + selector_top_k + (size_t) predecessor * selector_top_k;
+                        const int32_t * ci = cand.data()  + (size_t) pos * selector_top_k;
+                        const float   * ui = unary.data() + (size_t) pos * selector_top_k;
+                        const float   * gi = gate.data()  + (size_t) pos * selector_rank;
 
-                    predecessor = (int32_t) std::distance(scores,
-                            std::max_element(scores, scores + selector_top_k));
-                    if (params.p_min > 0.0f) {
-                        // softmax(scores) at the argmax, i.e. 1 / sum(exp(s_k - s_max))
-                        float sum = 0.0f;
-                        for (int32_t k = 0; k < selector_top_k; ++k) {
-                            sum += std::exp(scores[k] - scores[predecessor]);
+                        // the predecessor candidate id: the anchor for block position 1, else the
+                        // previously chosen candidate
+                        const int32_t pred_id = i == 1
+                            ? batch.token[beg]
+                            : cand[(size_t) (pos - 1) * selector_top_k + predecessor];
+
+                        std::vector<float> scores(selector_top_k);
+                        for (int32_t j = 0; j < selector_top_k; ++j) {
+                            float s = ui[j];
+                            const int32_t cj = ci[j];
+                            for (int32_t k = 0; k < selector_rank; ++k) {
+                                s += sel_next[(size_t) cj * selector_rank + k] * sel_prev[(size_t) pred_id * selector_rank + k] * gi[k];
+                            }
+                            scores[j] = s;
                         }
-                        if (1.0f / sum < params.p_min) {
-                            break;
+
+                        predecessor = (int32_t) std::distance(scores.begin(),
+                                std::max_element(scores.begin(), scores.end()));
+                        if (params.p_min > 0.0f) {
+                            // softmax(scores) at the argmax, i.e. 1 / sum(exp(s_k - s_max))
+                            float sum = 0.0f;
+                            for (int32_t k = 0; k < selector_top_k; ++k) {
+                                sum += std::exp(scores[k] - scores[predecessor]);
+                            }
+                            if (1.0f / sum < params.p_min) {
+                                break;
+                            }
                         }
+                        result.push_back((llama_token) ci[predecessor]);
                     }
-                    result.push_back((llama_token) row[predecessor]);
+                } else {
+                    // block walk over the lattice packed by the in-graph selector
+                    const float * lattice = llama_get_embeddings_nextn(ctx_dft);
+                    GGML_ASSERT(lattice && "DFlash2 selector produced no lattice");
+
+                    int32_t predecessor = 0;
+                    for (int32_t i = 1; i < n_block_tokens; ++i) {
+                        const float * row = lattice + (size_t) (beg + i) * n_embd_dec;
+                        const float * scores = row + selector_top_k + (size_t) predecessor * selector_top_k;
+
+                        predecessor = (int32_t) std::distance(scores,
+                                std::max_element(scores, scores + selector_top_k));
+                        if (params.p_min > 0.0f) {
+                            // softmax(scores) at the argmax, i.e. 1 / sum(exp(s_k - s_max))
+                            float sum = 0.0f;
+                            for (int32_t k = 0; k < selector_top_k; ++k) {
+                                sum += std::exp(scores[k] - scores[predecessor]);
+                            }
+                            if (1.0f / sum < params.p_min) {
+                                break;
+                            }
+                        }
+                        result.push_back((llama_token) row[predecessor]);
+                    }
                 }
 
                 if (result.size() < (size_t) params.n_min) {
@@ -2486,12 +2701,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
     // dflash/dspark decode the whole noise block in a single pass and sample every block position on the backend
     // TODO: refactor such properties to be announced by the speculative types
     //       something like `struct common_speculative_type_props common_speculative_type_get_props(...);`
-    const bool has_block_draft = std::any_of(
-        params.speculative.types.begin(), params.speculative.types.end(),
-        [](common_speculative_type t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
-        });
-    if (has_block_draft) {
+    if (common_speculative_is_block_draft(params.speculative.types)) {
         // per-seq output positions: DFlash decodes anchor + n_max masks (n_max + 1); DSpark n_max -> +1 covers both
         const int32_t per_seq = std::max(1, params_spec.n_max + 1);
         result.n_outputs_max = params.n_parallel * per_seq;
@@ -2536,6 +2746,17 @@ common_speculative_init_result::common_speculative_init_result(
     //       the extra memory for small models is likely negligible?
     cparams.n_rs_seq  = 0;
     cparams.ctx_other = ctx_tgt;
+
+    // DFlash2/DSpark rank the full target vocabulary (in-graph or on the CPU after the
+    // decode), so the reserved lm_head output grows with the draft ubatch; see
+    // common_speculative_block_draft_n_ubatch for the cap rationale
+    if (common_speculative_is_block_draft(params.speculative.types)) {
+        const uint32_t n_ubatch_dft = common_speculative_block_draft_n_ubatch(params.n_parallel, params.speculative.draft.n_max);
+        if (cparams.n_ubatch > n_ubatch_dft) {
+            LOG_INF("%s: capping draft context ubatch from %u to %u (block draft)\n", __func__, cparams.n_ubatch, n_ubatch_dft);
+            cparams.n_ubatch = n_ubatch_dft;
+        }
+    }
 
     std::string model_path;
     if (has_draft) {

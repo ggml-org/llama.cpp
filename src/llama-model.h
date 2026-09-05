@@ -678,6 +678,8 @@ struct llama_model {
     struct ggml_tensor * dspark_conf_proj   = nullptr;
     struct ggml_tensor * dspark_conf_proj_b = nullptr;
 
+    // DFlash2 selector: the tables feed either the in-graph selector (no tensor parallelism)
+    // or the CPU-side selector that reads them straight from the GGUF file (tensor parallelism)
     struct ggml_tensor * dflash_selector_prev   = nullptr;
     struct ggml_tensor * dflash_selector_next   = nullptr;
     struct ggml_tensor * dflash_selector_hidden = nullptr;
