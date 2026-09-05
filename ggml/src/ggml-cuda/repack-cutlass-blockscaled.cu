@@ -162,8 +162,15 @@ static bool cutlass_size_mul(size_t a, size_t b, size_t & result) {
 bool ggml_cuda_cutlass_get_weight_layout(
         const ggml_tensor * tensor, ggml_cuda_cutlass_weight_layout & layout) {
     layout = {};
+    if (tensor != nullptr && tensor->view_src != nullptr) {
+        const ggml_tensor * src = tensor->view_src;
+        return tensor->view_offs == 0 && tensor->type == src->type &&
+            ggml_are_same_shape(tensor, src) && ggml_are_same_stride(tensor, src) &&
+            ggml_cuda_repack_is_cutlass_blockscaled(src) &&
+            ggml_cuda_cutlass_get_weight_layout(src, layout);
+    }
     if (tensor == nullptr || (tensor->type != GGML_TYPE_MXFP4 && tensor->type != GGML_TYPE_NVFP4) ||
-        tensor->view_src != nullptr || !ggml_is_contiguous(tensor) || tensor->ne[0] <= 0 || tensor->ne[1] <= 0 ||
+        !ggml_is_contiguous(tensor) || tensor->ne[0] <= 0 || tensor->ne[1] <= 0 ||
         tensor->ne[2] != 1 || tensor->ne[3] != 1 || tensor->ne[0] > INT_MAX - 127 ||
         tensor->ne[1] > INT_MAX - 127) {
         return false;
@@ -223,6 +230,7 @@ bool ggml_cuda_cutlass_weight_from_tensor(
         !ggml_cuda_cutlass_get_weight_layout(tensor, layout)) {
         return false;
     }
+    GGML_ASSERT(static_cast<const ggml_cuda_repack_metadata *>(tensor->extra)->packed && "weight upload incomplete");
     weight = {
         (const char *) tensor->data,
         (const uint8_t *) tensor->data + layout.offset_scales,
@@ -250,8 +258,8 @@ bool ggml_cuda_cutlass_pack_weight(
 
     uint8_t * scales = (uint8_t *) tensor->data + layout.offset_scales;
     uint8_t * scales_linear = (uint8_t *) tensor->data + layout.offset_scales_linear;
-    CUDA_CHECK(cudaMemsetAsync(scales, 0, layout.size_scales, stream));
-    CUDA_CHECK(cudaMemsetAsync(scales_linear, 0, layout.size_scales_linear, stream));
+    CUDA_CHECK(cudaMemsetAsync((char *) tensor->data + layout.size_values, 0,
+        layout.size_allocation - layout.size_values, stream));
     constexpr int threads = 256;
     const int64_t n = (int64_t) layout.rows * layout.scale_blocks_padded;
     const int64_t grid_64 = (n + threads - 1) / threads;

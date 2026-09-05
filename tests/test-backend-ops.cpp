@@ -4772,6 +4772,185 @@ struct test_cutlass_mul_mat : public test_repacked_mul_mat {
     }
 };
 
+struct test_repacked_upload : public test_cutlass_mul_mat {
+    const bool async;
+    const bool reverse;
+    ggml_backend_t backend = nullptr;
+    bool data_ok = true;
+
+    test_repacked_upload(ggml_type type, int64_t n, bool async, bool reverse) :
+        test_cutlass_mul_mat(type, 260, n, 576), async(async), reverse(reverse) {
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_REPACK_UPLOAD";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR6(type, m, n, k, async, reverse);
+    }
+
+    double err(const float * a, const float * b, size_t n) override {
+        return data_ok ? test_cutlass_mul_mat::err(a, b, n) : 1.0;
+    }
+
+    ggml_backend_buffer_type_t weight_buffer_type(ggml_backend_t backend) override {
+        this->backend = backend;
+        auto buft = test_repacked_weight_buffer_type(backend);
+        if (async && buft != nullptr) {
+            auto dev = ggml_backend_get_device(backend);
+            ggml_backend_dev_props props;
+            ggml_backend_dev_get_props(dev, &props);
+            auto supports_async_upload = (ggml_backend_dev_supports_async_upload_t)
+                ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(dev), "ggml_backend_dev_supports_async_upload");
+            if (!props.caps.async || !props.caps.events || !props.caps.host_buffer ||
+                !supports_async_upload || !supports_async_upload(dev, buft)) {
+                return nullptr;
+            }
+        }
+        return buft;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        ggml_tensor * out = test_cutlass_mul_mat::build_graph(ctx, ctx_weights);
+        ggml_tensor * weight = ggml_get_tensor(ctx_weights, "weight_repacked");
+        ggml_tensor * alias = ggml_view_tensor(ctx_weights, weight);
+        ggml_set_name(alias, "weight_alias");
+        ggml_tensor * copy = ::ggml_new_tensor_2d(ctx_weights, type, k, m);
+        ggml_set_name(copy, "weight_copy");
+        out->src[1]->src[0] = alias;
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        if (ggml_get_tensor(ctx, "weight_native") != nullptr) {
+            data_ok = true;
+            test_cutlass_mul_mat::initialize_tensors(ctx);
+            return;
+        }
+
+        ggml_tensor * weight = ggml_get_tensor(ctx, "weight_repacked");
+        ggml_tensor * alias = ggml_get_tensor(ctx, "weight_alias");
+        ggml_tensor * copy = ggml_get_tensor(ctx, "weight_copy");
+        GGML_ASSERT(weight != nullptr && alias != nullptr && copy != nullptr);
+        const size_t size = weight_data.size();
+        auto dev = ggml_backend_get_device(backend);
+        ggml_backend_ptr upload(async ? ggml_backend_dev_init(dev, nullptr) : nullptr);
+        ggml_backend_buffer_ptr host(async ? ggml_backend_buft_alloc_buffer(ggml_backend_dev_host_buffer_type(dev), size) : nullptr);
+        ggml_backend_event_ptr event(async ? ggml_backend_event_new(dev) : nullptr);
+        GGML_ASSERT(!async || (upload && host && event));
+        const uint8_t * data = weight_data.data();
+        if (async) {
+            void * ptr = ggml_backend_buffer_get_base(host.get());
+            memcpy(ptr, data, size);
+            data = static_cast<const uint8_t *>(ptr);
+        }
+        auto write = [&](ggml_tensor * dst, size_t begin, size_t end) {
+            if (async) {
+                ggml_backend_tensor_set_async(upload.get(), dst, data + begin, begin, end - begin);
+            } else {
+                ggml_backend_tensor_set(dst, data + begin, begin, end - begin);
+            }
+        };
+        auto check = [&](const ggml_tensor * src, size_t offset, const uint8_t * expected, size_t count) {
+            std::vector<uint8_t> actual(count);
+            ggml_backend_tensor_get(src, actual.data(), offset, count);
+            data_ok &= std::equal(actual.begin(), actual.end(), expected);
+        };
+
+        const std::array<size_t, 6> edges = {0, 1, ggml_type_size(type) + 3, size / 2 + 7, size - 1, size};
+        write(weight, size, size);
+        for (size_t i = 0; i < edges.size() - 1; ++i) {
+            const size_t j = reverse ? edges.size() - 2 - i : i;
+            write(i % 2 == 0 ? weight : alias, edges[j], edges[j + 1]);
+            if (i == 2) {
+                write(alias, edges[2] - 1, edges[3] + 1);
+            }
+            if (i == 0) {
+                write(alias, edges[j], edges[j + 1]);
+                check(alias, edges[j], data + edges[j], edges[j + 1] - edges[j]);
+                ggml_backend_tensor_copy(weight, copy);
+            } else {
+                write(copy, edges[j], edges[j + 1]);
+            }
+        }
+        if (async) {
+            ggml_backend_event_record(event.get(), upload.get());
+            ggml_backend_event_wait(backend, event.get());
+        }
+        // Compute before any host-side wait for the final upload.
+        GGML_ASSERT(ggml_backend_graph_compute(backend, gf) == GGML_STATUS_SUCCESS);
+        check(weight, 0, data, size);
+        check(alias, 0, data, size);
+        check(copy, 0, data, size);
+
+        std::vector<uint8_t> expected = weight_data;
+        expected[1] ^= 1;
+        ggml_backend_tensor_set(alias, expected.data() + 1, 1, 1);
+        check(weight, 0, expected.data(), size);
+        ggml_backend_tensor_memset(weight, 0, 3, 9);
+        std::fill(expected.begin() + 3, expected.begin() + 12, 0);
+        check(alias, 0, expected.data(), size);
+        write(weight, 0, size);
+
+        const size_t row_size = ggml_row_size(type, k);
+        constexpr size_t width = 7;
+        constexpr size_t pitch = 13;
+        constexpr size_t rows = 3;
+        std::vector<uint8_t> patch(rows * pitch, 0x55);
+        expected = weight_data;
+        for (size_t i = 0; i < rows; ++i) {
+            for (size_t j = 0; j < width; ++j) {
+                patch[i * pitch + j] = data[i * row_size + j + 1] ^ 1;
+                expected[i * row_size + j + 1] = patch[i * pitch + j];
+            }
+        }
+        std::vector<uint8_t> result(rows * pitch, 0x55);
+        if (async) {
+            ggml_backend_tensor_set_2d_async(upload.get(), alias, patch.data(), 1, width, rows, row_size, pitch);
+            ggml_backend_tensor_get_2d_async(upload.get(), weight, result.data(), 1, width, rows, row_size, pitch);
+            ggml_backend_synchronize(upload.get());
+        } else {
+            ggml_backend_tensor_set_2d(alias, patch.data(), 1, width, rows, row_size, pitch);
+            ggml_backend_tensor_get_2d(weight, result.data(), 1, width, rows, row_size, pitch);
+        }
+        data_ok &= result == patch;
+        check(weight, 0, expected.data(), size);
+
+        ggml_backend_buffer_clear(weight->buffer, 0);
+        expected.assign(size, 0);
+        check(alias, 0, expected.data(), size);
+        check(copy, 0, expected.data(), size);
+        ggml_backend_buffer_reset(weight->buffer);
+        for (ggml_tensor * t : {weight, alias, copy}) {
+            GGML_ASSERT(ggml_backend_buffer_init_tensor(weight->buffer, t) == GGML_STATUS_SUCCESS);
+        }
+        if (async) {
+            ggml_backend_tensor_set_2d_async(upload.get(), copy, data, 0, row_size, m, row_size, row_size);
+        } else {
+            ggml_backend_tensor_set_2d(copy, data, 0, row_size, m, row_size, row_size);
+        }
+        check(copy, 0, data, size);
+        write(weight, 0, size);
+        ggml_backend_tensor_copy(weight, copy);
+        check(copy, 0, data, size);
+
+        if (async) {
+            ggml_init_params params = {ggml_tensor_overhead(), nullptr, true};
+            ggml_context_ptr partial_ctx(ggml_init(params));
+            GGML_ASSERT(partial_ctx);
+            ggml_tensor * partial = ::ggml_new_tensor_2d(partial_ctx.get(), type, k, m);
+            ggml_backend_buffer_ptr partial_buf(ggml_backend_alloc_ctx_tensors_from_buft(
+                partial_ctx.get(), ggml_backend_buffer_get_type(weight->buffer)));
+            GGML_ASSERT(partial_buf);
+            write(partial, 1, size - 1);
+            partial_buf.reset();
+            ggml_backend_synchronize(upload.get());
+        }
+    }
+};
+
 struct test_repacked_mul_mat_vec_fusion : public test_case {
     const ggml_type type;
     const ggml_glu_op glu_op;
@@ -10466,6 +10645,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_repacked_mul_mat(type, 257, 8, 576));
         test_cases.emplace_back(new test_repacked_mul_mat(type, 260, 256, 576));
         test_cases.emplace_back(new test_cutlass_mul_mat(type, 260, 256, 576));
+        for (int64_t n : {1, 256}) {
+            for (bool async : {false, true}) {
+                for (bool reverse : {false, true}) {
+                    test_cases.emplace_back(new test_repacked_upload(type, n, async, reverse));
+                }
+            }
+        }
         for (ggml_glu_op glu_op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
             test_cases.emplace_back(new test_repacked_mul_mat_vec_fusion(type, glu_op, false, false));
             test_cases.emplace_back(new test_repacked_mul_mat_vec_fusion(type, glu_op, true, false));

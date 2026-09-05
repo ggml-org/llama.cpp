@@ -45,6 +45,7 @@ enum ggml_cuda_repack_type {
 
 struct ggml_cuda_repack_metadata {
     ggml_cuda_repack_type type;
+    bool packed = false;
 };
 
 bool ggml_cuda_cutlass_get_weight_layout(

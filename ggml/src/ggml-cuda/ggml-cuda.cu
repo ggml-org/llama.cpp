@@ -725,10 +725,42 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
 // cuda buffer
 
+#ifdef GGML_CUDA_CUTLASS
+struct ggml_cuda_repacked_tensor : ggml_cuda_repack_metadata {
+    ggml_tensor tensor;
+    std::vector<std::pair<size_t, size_t>> ranges;
+
+    explicit ggml_cuda_repacked_tensor(const ggml_tensor & tensor) :
+        ggml_cuda_repack_metadata{GGML_CUDA_REPACK_TYPE_CUTLASS_BLOCKSCALED}, tensor(tensor) {
+    }
+
+    bool add_range(size_t begin, size_t end) {
+        auto first = ranges.begin();
+        while (first != ranges.end() && first->second < begin) {
+            ++first;
+        }
+        auto last = first;
+        while (last != ranges.end() && last->first <= end) {
+            begin = std::min(begin, last->first);
+            end   = std::max(end, last->second);
+            ++last;
+        }
+        ranges.insert(ranges.erase(first, last), {begin, end});
+        return ranges.size() == 1 && ranges.front().first == 0 && ranges.front().second == ggml_nbytes(&tensor);
+    }
+};
+#endif
+
 struct ggml_backend_cuda_buffer_context {
     int device;
     void * dev_ptr = nullptr;
     std::string name;
+
+#ifdef GGML_CUDA_CUTLASS
+    std::vector<std::unique_ptr<ggml_cuda_repacked_tensor>> repacked_tensors;
+    cudaEvent_t repack_event = nullptr;
+    bool repack_async_alloc = false;
+#endif
 
     ggml_backend_cuda_buffer_context(int device, void * dev_ptr) :
         device(device), dev_ptr(dev_ptr),
@@ -736,6 +768,13 @@ struct ggml_backend_cuda_buffer_context {
     }
 
     ~ggml_backend_cuda_buffer_context() {
+#ifdef GGML_CUDA_CUTLASS
+        if (repack_event != nullptr) {
+            ggml_cuda_set_device(device);
+            CUDA_CHECK(cudaEventSynchronize(repack_event));
+            CUDA_CHECK(cudaEventDestroy(repack_event));
+        }
+#endif
         CUDA_CHECK(cudaFree(dev_ptr));
     }
 };
@@ -981,10 +1020,6 @@ ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
 
 #ifdef GGML_CUDA_CUTLASS
 
-static ggml_cuda_repack_metadata ggml_cuda_cutlass_blockscaled_metadata = {
-    GGML_CUDA_REPACK_TYPE_CUTLASS_BLOCKSCALED,
-};
-
 static const char * ggml_backend_cuda_repacked_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
     ggml_backend_cuda_buffer_type_context * ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
     return ctx->name.c_str();
@@ -1008,9 +1043,58 @@ static ggml_status ggml_backend_cuda_repacked_buffer_init_tensor(
     if (!ggml_cuda_cutlass_get_weight_layout(tensor, layout)) {
         GGML_ABORT("invalid tensor %s for CUDA repacked buffer", tensor->name);
     }
-    tensor->extra = &ggml_cuda_cutlass_blockscaled_metadata;
-    GGML_UNUSED(buffer);
+    auto * ctx = static_cast<ggml_backend_cuda_buffer_context *>(buffer->context);
+    auto state = std::make_unique<ggml_cuda_repacked_tensor>(*tensor);
+    state->tensor.extra = static_cast<ggml_cuda_repack_metadata *>(state.get());
+    state->tensor.buffer = buffer;
+    ctx->repacked_tensors.push_back(std::move(state));
+    tensor->extra = ctx->repacked_tensors.back()->tensor.extra;
     return GGML_STATUS_SUCCESS;
+}
+
+static ggml_cuda_repacked_tensor & ggml_cuda_repacked_tensor_state(const ggml_tensor * tensor) {
+    GGML_ASSERT(ggml_cuda_repack_is_cutlass_blockscaled(tensor));
+    return *static_cast<ggml_cuda_repacked_tensor *>(static_cast<ggml_cuda_repack_metadata *>(tensor->extra));
+}
+
+static ggml_backend_cuda_buffer_context * ggml_cuda_repacked_buffer_wait(
+        ggml_backend_buffer_t buffer, cudaStream_t stream) {
+    auto * ctx = static_cast<ggml_backend_cuda_buffer_context *>(buffer->context);
+    ggml_cuda_set_device(ctx->device);
+    if (ctx->repack_event == nullptr) {
+        CUDA_CHECK(cudaEventCreateWithFlags(&ctx->repack_event, cudaEventDisableTiming));
+    } else {
+        CUDA_CHECK(cudaStreamWaitEvent(stream, ctx->repack_event, 0));
+    }
+    return ctx;
+}
+
+static void * ggml_cuda_repacked_buffer_alloc(ggml_backend_cuda_buffer_context * ctx, size_t size, cudaStream_t stream) {
+    void * ptr = nullptr;
+    if (ctx->repack_async_alloc) {
+        CUDA_CHECK(cudaMallocAsync(&ptr, size, stream));
+    } else {
+        CUDA_CHECK(cudaMalloc(&ptr, size));
+    }
+    return ptr;
+}
+
+static void ggml_cuda_repacked_buffer_free(ggml_backend_cuda_buffer_context * ctx, void * ptr, cudaStream_t stream) {
+    if (ctx->repack_async_alloc) {
+        CUDA_CHECK(cudaFreeAsync(ptr, stream));
+    } else {
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        CUDA_CHECK(cudaFree(ptr));
+    }
+}
+
+static void ggml_cuda_repacked_check_range(const ggml_tensor * tensor, size_t offset, size_t size,
+        size_t n_copies, size_t stride_tensor, size_t stride_data) {
+    const size_t tensor_size = ggml_nbytes(tensor);
+    GGML_ASSERT(offset <= tensor_size && size <= tensor_size - offset);
+    GGML_ASSERT(n_copies <= 1 || stride_tensor == 0 ||
+        n_copies - 1 <= (tensor_size - offset - size) / stride_tensor);
+    GGML_ASSERT(n_copies <= 1 || stride_data == 0 || n_copies - 1 <= (SIZE_MAX - size) / stride_data);
 }
 
 static void ggml_backend_cuda_repacked_buffer_update_tensor(
@@ -1020,29 +1104,49 @@ static void ggml_backend_cuda_repacked_buffer_update_tensor(
         uint8_t value,
         size_t offset,
         size_t size,
-        cudaStream_t stream) {
+        cudaStream_t stream, size_t n_copies = 1, size_t stride_tensor = 0, size_t stride_data = 0) {
+    ggml_cuda_repacked_check_range(tensor, offset, size, n_copies, stride_tensor, stride_data);
     const size_t tensor_size = ggml_nbytes(tensor);
-    GGML_ASSERT(offset <= tensor_size && size <= tensor_size - offset);
-    if (size == 0) {
+    if (size == 0 || n_copies == 0) {
         return;
     }
 
-    ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
-    ggml_cuda_set_device(ctx->device);
-
-    void * canonical = nullptr;
-    CUDA_CHECK(cudaMalloc(&canonical, tensor_size));
-    if (offset != 0 || size != tensor_size) {
+    auto & state = ggml_cuda_repacked_tensor_state(tensor);
+    const bool full = offset == 0 &&
+        ((n_copies == 1 && size == tensor_size) ||
+         (stride_tensor == size && tensor_size % size == 0 && n_copies == tensor_size / size));
+    bool complete = state.packed || full;
+    if (!complete) {
+        for (size_t i = 0; i < n_copies; ++i) {
+            complete = state.add_range(offset + i * stride_tensor, offset + i * stride_tensor + size);
+        }
+    }
+    auto * ctx = ggml_cuda_repacked_buffer_wait(buffer, stream);
+    // Full uploads go straight to scratch; incomplete uploads stay in canonical layout.
+    void * canonical = state.packed || full ? ggml_cuda_repacked_buffer_alloc(ctx, tensor_size, stream) : tensor->data;
+    if (state.packed && !full) {
         GGML_ASSERT(ggml_cuda_cutlass_unpack_weight(tensor, canonical, stream));
     }
-    if (data != nullptr) {
+    if (n_copies > 1) {
+        GGML_ASSERT(data != nullptr && stride_tensor >= size && stride_data >= size);
+        CUDA_CHECK(cudaMemcpy2DAsync((char *) canonical + offset, stride_tensor, data, stride_data,
+            size, n_copies, cudaMemcpyHostToDevice, stream));
+    } else if (data != nullptr) {
         CUDA_CHECK(cudaMemcpyAsync((char *) canonical + offset, data, size, cudaMemcpyHostToDevice, stream));
     } else {
         CUDA_CHECK(cudaMemsetAsync((char *) canonical + offset, value, size, stream));
     }
-    GGML_ASSERT(ggml_cuda_cutlass_pack_weight(tensor, canonical, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    CUDA_CHECK(cudaFree(canonical));
+    if (complete) {
+        if (canonical == tensor->data) {
+            canonical = ggml_cuda_repacked_buffer_alloc(ctx, tensor_size, stream);
+            CUDA_CHECK(cudaMemcpyAsync(canonical, tensor->data, tensor_size, cudaMemcpyDeviceToDevice, stream));
+        }
+        GGML_ASSERT(ggml_cuda_cutlass_pack_weight(tensor, canonical, stream));
+        ggml_cuda_repacked_buffer_free(ctx, canonical, stream);
+        state.packed = true;
+        state.ranges.clear();
+    }
+    CUDA_CHECK(cudaEventRecord(ctx->repack_event, stream));
 }
 
 static void ggml_backend_cuda_repacked_buffer_read_tensor(
@@ -1051,21 +1155,29 @@ static void ggml_backend_cuda_repacked_buffer_read_tensor(
         void * data,
         size_t offset,
         size_t size,
-        cudaStream_t stream) {
-    GGML_ASSERT(offset <= ggml_nbytes(tensor) && size <= ggml_nbytes(tensor) - offset);
-    if (size == 0) {
+        cudaStream_t stream, size_t n_copies = 1, size_t stride_tensor = 0, size_t stride_data = 0) {
+    ggml_cuda_repacked_check_range(tensor, offset, size, n_copies, stride_tensor, stride_data);
+    if (size == 0 || n_copies == 0) {
         return;
     }
 
-    ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
-    ggml_cuda_set_device(ctx->device);
-
-    void * canonical = nullptr;
-    CUDA_CHECK(cudaMalloc(&canonical, ggml_nbytes(tensor)));
-    GGML_ASSERT(ggml_cuda_cutlass_unpack_weight(tensor, canonical, stream));
-    CUDA_CHECK(cudaMemcpyAsync(data, (const char *) canonical + offset, size, cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    CUDA_CHECK(cudaFree(canonical));
+    auto * ctx = ggml_cuda_repacked_buffer_wait(buffer, stream);
+    const auto & state = ggml_cuda_repacked_tensor_state(tensor);
+    void * canonical = state.packed ? ggml_cuda_repacked_buffer_alloc(ctx, ggml_nbytes(tensor), stream) : tensor->data;
+    if (state.packed) {
+        GGML_ASSERT(ggml_cuda_cutlass_unpack_weight(tensor, canonical, stream));
+    }
+    if (n_copies > 1) {
+        GGML_ASSERT(stride_tensor >= size && stride_data >= size);
+        CUDA_CHECK(cudaMemcpy2DAsync(data, stride_data, (const char *) canonical + offset, stride_tensor,
+            size, n_copies, cudaMemcpyDeviceToHost, stream));
+    } else {
+        CUDA_CHECK(cudaMemcpyAsync(data, (const char *) canonical + offset, size, cudaMemcpyDeviceToHost, stream));
+    }
+    if (state.packed) {
+        ggml_cuda_repacked_buffer_free(ctx, canonical, stream);
+    }
+    CUDA_CHECK(cudaEventRecord(ctx->repack_event, stream));
 }
 
 static void ggml_backend_cuda_repacked_buffer_memset_tensor(
@@ -1076,6 +1188,7 @@ static void ggml_backend_cuda_repacked_buffer_memset_tensor(
         size_t size) {
     ggml_backend_cuda_repacked_buffer_update_tensor(
         buffer, tensor, nullptr, value, offset, size, cudaStreamPerThread);
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
 static void ggml_backend_cuda_repacked_buffer_set_tensor(
@@ -1087,6 +1200,7 @@ static void ggml_backend_cuda_repacked_buffer_set_tensor(
     GGML_ASSERT(data != nullptr);
     ggml_backend_cuda_repacked_buffer_update_tensor(
         buffer, tensor, data, 0, offset, size, cudaStreamPerThread);
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
 static void ggml_backend_cuda_repacked_buffer_get_tensor(
@@ -1097,14 +1211,28 @@ static void ggml_backend_cuda_repacked_buffer_get_tensor(
         size_t size) {
     ggml_backend_cuda_repacked_buffer_read_tensor(
         buffer, tensor, data, offset, size, cudaStreamPerThread);
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+}
+
+static void ggml_backend_cuda_repacked_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, ggml_tensor * tensor,
+        const void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
+    GGML_ASSERT(data != nullptr);
+    ggml_backend_cuda_repacked_buffer_update_tensor(
+        buffer, tensor, data, 0, offset, size, cudaStreamPerThread, n_copies, stride_tensor, stride_data);
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+}
+
+static void ggml_backend_cuda_repacked_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, const ggml_tensor * tensor,
+        void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
+    ggml_backend_cuda_repacked_buffer_read_tensor(
+        buffer, tensor, data, offset, size, cudaStreamPerThread, n_copies, stride_tensor, stride_data);
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
 static bool ggml_backend_cuda_repacked_buffer_cpy_tensor(
         ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
-    if (!ggml_backend_buft_is_cuda_repacked(ggml_backend_buffer_get_type(src->buffer)) ||
-        !ggml_backend_buft_is_cuda_repacked(ggml_backend_buffer_get_type(dst->buffer)) ||
-        src->type != dst->type || !ggml_are_same_shape(src, dst) ||
-        src->extra != dst->extra) {
+    if (!ggml_cuda_repack_is_cutlass_blockscaled(src) || !ggml_cuda_repack_is_cutlass_blockscaled(dst) ||
+        src->type != dst->type || !ggml_are_same_shape(src, dst) || !ggml_are_same_stride(src, dst)) {
         return false;
     }
 
@@ -1116,23 +1244,73 @@ static bool ggml_backend_cuda_repacked_buffer_cpy_tensor(
 
     ggml_backend_cuda_buffer_context * src_ctx = (ggml_backend_cuda_buffer_context *) src->buffer->context;
     ggml_backend_cuda_buffer_context * dst_ctx = (ggml_backend_cuda_buffer_context *) dst->buffer->context;
+    const auto & src_state = ggml_cuda_repacked_tensor_state(src);
+    auto & dst_state = ggml_cuda_repacked_tensor_state(dst);
+    if (&src_state == &dst_state) {
+        return true;
+    }
+    auto ranges = src_state.ranges;
     ggml_cuda_set_device(src_ctx->device);
+    if (src_ctx->repack_event != nullptr) {
+        CUDA_CHECK(cudaStreamWaitEvent(cudaStreamPerThread, src_ctx->repack_event, 0));
+    }
+    if (dst_ctx->repack_event != nullptr) {
+        CUDA_CHECK(cudaStreamWaitEvent(cudaStreamPerThread, dst_ctx->repack_event, 0));
+    }
     const int src_physical = ggml_cuda_get_physical_device(src_ctx->device);
     const int dst_physical = ggml_cuda_get_physical_device(dst_ctx->device);
-    if (src_physical == dst_physical) {
-        CUDA_CHECK(cudaMemcpyAsync(
-            dst->data, src->data, layout.size_allocation, cudaMemcpyDeviceToDevice, cudaStreamPerThread));
-    } else {
 #ifdef GGML_CUDA_NO_PEER_COPY
+    if (src_physical != dst_physical) {
         return false;
-#else
-        CUDA_CHECK(cudaMemcpyPeerAsync(
-            dst->data, dst_physical, src->data, src_physical, layout.size_allocation, cudaStreamPerThread));
+    }
 #endif
+    auto copy_range = [&](size_t offset, size_t size) {
+        void * dst_data = (char *) dst->data + offset;
+        const void * src_data = (const char *) src->data + offset;
+        if (src_physical == dst_physical) {
+            CUDA_CHECK(cudaMemcpyAsync(dst_data, src_data, size, cudaMemcpyDeviceToDevice, cudaStreamPerThread));
+        } else {
+#ifndef GGML_CUDA_NO_PEER_COPY
+            CUDA_CHECK(cudaMemcpyPeerAsync(dst_data, dst_physical, src_data, src_physical, size, cudaStreamPerThread));
+#else
+            GGML_ABORT("peer copy disabled");
+#endif
+        }
+    };
+    if (src_state.packed) {
+        copy_range(0, layout.size_allocation);
+    } else {
+        for (const auto & range : ranges) {
+            copy_range(range.first, range.second - range.first);
+        }
     }
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+    dst_state.packed = src_state.packed;
+    dst_state.ranges.swap(ranges);
     GGML_UNUSED(buffer);
     return true;
+}
+
+static void ggml_backend_cuda_repacked_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
+    auto * ctx = ggml_cuda_repacked_buffer_wait(buffer, cudaStreamPerThread);
+    CUDA_CHECK(cudaMemsetAsync(ctx->dev_ptr, value, buffer->size, cudaStreamPerThread));
+    for (auto & state : ctx->repacked_tensors) {
+        state->packed = false;
+        state->ranges.clear();
+        ggml_backend_cuda_repacked_buffer_update_tensor(
+            buffer, &state->tensor, nullptr, value, 0, ggml_nbytes(&state->tensor), cudaStreamPerThread);
+    }
+    CUDA_CHECK(cudaEventRecord(ctx->repack_event, cudaStreamPerThread));
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+}
+
+static void ggml_backend_cuda_repacked_buffer_reset(ggml_backend_buffer_t buffer) {
+    auto * ctx = static_cast<ggml_backend_cuda_buffer_context *>(buffer->context);
+    if (ctx->repack_event != nullptr) {
+        ggml_cuda_set_device(ctx->device);
+        CUDA_CHECK(cudaEventSynchronize(ctx->repack_event));
+    }
+    ctx->repacked_tensors.clear();
 }
 
 static const ggml_backend_buffer_i ggml_backend_cuda_repacked_buffer_interface = {
@@ -1142,11 +1320,11 @@ static const ggml_backend_buffer_i ggml_backend_cuda_repacked_buffer_interface =
     /* .memset_tensor   = */ ggml_backend_cuda_repacked_buffer_memset_tensor,
     /* .set_tensor      = */ ggml_backend_cuda_repacked_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_cuda_repacked_buffer_get_tensor,
-    /* .set_tensor_2d   = */ nullptr,
-    /* .get_tensor_2d   = */ nullptr,
+    /* .set_tensor_2d   = */ ggml_backend_cuda_repacked_buffer_set_tensor_2d,
+    /* .get_tensor_2d   = */ ggml_backend_cuda_repacked_buffer_get_tensor_2d,
     /* .cpy_tensor      = */ ggml_backend_cuda_repacked_buffer_cpy_tensor,
-    /* .clear           = */ ggml_backend_cuda_buffer_clear,
-    /* .reset           = */ nullptr,
+    /* .clear           = */ ggml_backend_cuda_repacked_buffer_clear,
+    /* .reset           = */ ggml_backend_cuda_repacked_buffer_reset,
 };
 
 static ggml_backend_buffer_t ggml_backend_cuda_repacked_buffer_type_alloc_buffer(
@@ -1158,6 +1336,12 @@ static ggml_backend_buffer_t ggml_backend_cuda_repacked_buffer_type_alloc_buffer
     }
     buffer->buft  = buft;
     buffer->iface = ggml_backend_cuda_repacked_buffer_interface;
+    if (size > 0) {
+        auto * buffer_ctx = static_cast<ggml_backend_cuda_buffer_context *>(buffer->context);
+        int supported = 0;
+        CUDA_CHECK(cudaDeviceGetAttribute(&supported, cudaDevAttrMemoryPoolsSupported, ggml_cuda_get_physical_device(ctx->device)));
+        buffer_ctx->repack_async_alloc = supported != 0;
+    }
     return buffer;
 }
 
@@ -2740,6 +2924,8 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
 
 #ifdef GGML_CUDA_CUTLASS
     if (ggml_backend_buft_is_cuda_repacked(buf->buft)) {
+        GGML_ASSERT(buf->buft->device == backend->device);
+        GGML_ASSERT(data != nullptr);
         ggml_backend_cuda_repacked_buffer_update_tensor(
             buf, tensor, data, 0, offset, size, cuda_ctx->stream());
         return;
@@ -2757,6 +2943,7 @@ static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggm
 
 #ifdef GGML_CUDA_CUTLASS
     if (ggml_backend_buft_is_cuda_repacked(buf->buft)) {
+        GGML_ASSERT(buf->buft->device == backend->device);
         ggml_backend_cuda_repacked_buffer_read_tensor(
             buf, tensor, data, offset, size, cuda_ctx->stream());
         return;
@@ -2773,6 +2960,16 @@ static void ggml_backend_cuda_set_tensor_2d_async(ggml_backend_t backend, struct
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
+#ifdef GGML_CUDA_CUTLASS
+    if (ggml_backend_buft_is_cuda_repacked(buf->buft)) {
+        GGML_ASSERT(buf->buft->device == backend->device);
+        GGML_ASSERT(data != nullptr);
+        ggml_backend_cuda_repacked_buffer_update_tensor(
+            buf, tensor, data, 0, offset, size, cuda_ctx->stream(), n_copies, stride_tensor, stride_data);
+        return;
+    }
+#endif
+
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
     CUDA_CHECK(cudaMemcpy2DAsync(
@@ -2783,6 +2980,15 @@ static void ggml_backend_cuda_get_tensor_2d_async(ggml_backend_t backend, const 
         size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+
+#ifdef GGML_CUDA_CUTLASS
+    if (ggml_backend_buft_is_cuda_repacked(buf->buft)) {
+        GGML_ASSERT(buf->buft->device == backend->device);
+        ggml_backend_cuda_repacked_buffer_read_tensor(
+            buf, tensor, data, offset, size, cuda_ctx->stream(), n_copies, stride_tensor, stride_data);
+        return;
+    }
+#endif
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
@@ -5191,7 +5397,14 @@ static bool ggml_cuda_repacked_buffer_enabled(int device) {
 
 static bool ggml_backend_cuda_repacked_supports_op(
         ggml_backend_cuda_device_context * dev_ctx, const ggml_tensor * op) {
-    if (!ggml_cuda_repacked_buffer_enabled(dev_ctx->device) || op->op != GGML_OP_MUL_MAT) {
+    if (!ggml_cuda_repacked_buffer_enabled(dev_ctx->device)) {
+        return false;
+    }
+    if (op->op == GGML_OP_VIEW) {
+        ggml_cuda_cutlass_weight_layout layout;
+        return op->view_src != nullptr && ggml_cuda_cutlass_get_weight_layout(op, layout);
+    }
+    if (op->op != GGML_OP_MUL_MAT) {
         return false;
     }
 
@@ -5829,6 +6042,18 @@ static ggml_backend_buffer_type_t * ggml_backend_cuda_device_get_extra_bufts(ggm
     return bufts;
 }
 
+#ifdef GGML_CUDA_CUTLASS
+static bool ggml_backend_cuda_device_supports_async_upload(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
+    if (buft == nullptr || buft->device != dev || !ggml_backend_buft_is_cuda_repacked(buft)) {
+        return false;
+    }
+    auto * ctx = static_cast<ggml_backend_cuda_device_context *>(dev->context);
+    int supported = 0;
+    CUDA_CHECK(cudaDeviceGetAttribute(&supported, cudaDevAttrMemoryPoolsSupported, ggml_cuda_get_physical_device(ctx->device)));
+    return supported != 0;
+}
+#endif
+
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
@@ -5852,6 +6077,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     if (strcmp(name, "ggml_backend_dev_get_extra_bufts") == 0) {
         return (void *)ggml_backend_cuda_device_get_extra_bufts;
     }
+#ifdef GGML_CUDA_CUTLASS
+    if (strcmp(name, "ggml_backend_dev_supports_async_upload") == 0) {
+        return (void *) ggml_backend_cuda_device_supports_async_upload;
+    }
+#endif
     return nullptr;
 }
 

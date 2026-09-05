@@ -210,8 +210,8 @@ if (CUDAToolkit_FOUND)
             CUDA_ARCHITECTURES OFF
             POSITION_INDEPENDENT_CODE ON)
         target_link_libraries(ggml-cuda-cutlass PRIVATE ggml-base)
-        target_include_directories(ggml-cuda-cutlass PRIVATE
-            ..
+        target_include_directories(ggml-cuda-cutlass PRIVATE ..)
+        target_include_directories(ggml-cuda-cutlass SYSTEM PRIVATE
             "${cutlass_SOURCE_DIR}/include"
             "${cutlass_SOURCE_DIR}/tools/util/include")
         target_compile_definitions(ggml-cuda-cutlass PRIVATE GGML_CUDA_CUTLASS)
