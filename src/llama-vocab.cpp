@@ -3063,7 +3063,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         // model name to lowercase
         std::transform(model_name.begin(), model_name.end(), model_name.begin(),
             [] (const std::string::value_type x) {
-                return std::tolower(x);
+                return std::tolower(static_cast<unsigned char>(x));
             }
         );
 
@@ -3260,7 +3260,7 @@ void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer
                         int64_t left_reminder_length = match - raw_text_base_offset;
 
                         if (data.attr & LLAMA_TOKEN_ATTR_LSTRIP) {
-                            while (left_reminder_length > 0 && isspace(raw_text[left_reminder_offset + left_reminder_length - 1])) {
+                            while (left_reminder_length > 0 && std::isspace(static_cast<unsigned char>(raw_text[left_reminder_offset + left_reminder_length - 1]))) {
                                 left_reminder_length--;
                             }
                         }
@@ -3285,7 +3285,7 @@ void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer
                         int64_t right_reminder_length = raw_text_base_length - ((match - raw_text_base_offset) + text.length());
 
                         if (data.attr & LLAMA_TOKEN_ATTR_RSTRIP) {
-                            while (right_reminder_length > 0 && isspace(raw_text[right_reminder_offset])) {
+                            while (right_reminder_length > 0 && std::isspace(static_cast<unsigned char>(raw_text[right_reminder_offset]))) {
                                 right_reminder_offset++;
                                 right_reminder_length--;
                             }
