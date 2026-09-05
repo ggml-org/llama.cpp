@@ -3,6 +3,7 @@
 #include "json.h"
 
 #include <cstdint>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <string>
@@ -169,3 +170,37 @@ common_schema_ptr common_schema_parse(const common_json & schema, common_schema_
 // common_schema_none root, and $refs nothing reaches anymore are dropped.
 // An allOf stays where the children cannot be combined, e.g. two different patterns or a const against a type.
 void common_schema_optimize(common_schema_document & doc);
+
+// A set of the kinds of value a schema may match: only the value kinds NULL to OBJECT occur, a tuple counts as an array
+class common_schema_kinds {
+    uint32_t mask_ = 0;
+
+  public:
+    common_schema_kinds() = default;
+    common_schema_kinds(std::initializer_list<common_schema_kind> kinds) {
+        for (auto kind : kinds) {
+            add(kind);
+        }
+    }
+
+    static common_schema_kinds all() {
+        return { COMMON_SCHEMA_KIND_NULL,   COMMON_SCHEMA_KIND_BOOLEAN, COMMON_SCHEMA_KIND_NUMBER, COMMON_SCHEMA_KIND_INTEGER,
+                 COMMON_SCHEMA_KIND_STRING, COMMON_SCHEMA_KIND_ARRAY,   COMMON_SCHEMA_KIND_OBJECT };
+    }
+
+    void add(common_schema_kind kind) { mask_ |= 1u << kind; }
+
+    bool has(common_schema_kind kind) const { return (mask_ & (1u << kind)) != 0; }
+    bool is_only(common_schema_kind kind) const { return mask_ == (1u << kind); }
+    bool empty() const { return mask_ == 0; }
+
+    common_schema_kinds & operator|=(const common_schema_kinds & other) { mask_ |= other.mask_; return *this; }
+    common_schema_kinds & operator&=(const common_schema_kinds & other) { mask_ &= other.mask_; return *this; }
+
+    bool operator==(const common_schema_kinds & other) const { return mask_ == other.mask_; }
+    bool operator!=(const common_schema_kinds & other) const { return mask_ != other.mask_; }
+};
+
+// The kinds of value matching the schema: the union over anyOf, the intersection over allOf, every kind for an any.
+// A number schema accepts integers too, so it resolves to both.
+common_schema_kinds common_schema_resolve_kinds(const common_schema & schema);

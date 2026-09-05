@@ -1583,8 +1583,49 @@ static void test_resolves_to_string() {
     fprintf(stderr, "All resolves_to_string tests passed!\n");
 }
 
+static void test_resolve_kinds() {
+    fprintf(stderr, "#\n# Testing resolve_kinds\n#\n");
+
+    auto test = [](const std::string & name, const std::string & schema_str, const common_schema_kinds & expected) {
+        fprintf(stderr, "- %s\n", name.c_str());
+        common_schema_info info;
+        auto schema = common_json::parse(schema_str);
+        info.resolve_refs(schema);
+        if (info.resolve_kinds(schema) != expected) {
+            fprintf(stderr, "#\n# Test '%s' failed.\n#\n", name.c_str());
+            fprintf(stderr, "Schema: %s\n", schema_str.c_str());
+            assert(false);
+        }
+    };
+
+    test("type string", R"({"type": "string"})", { COMMON_SCHEMA_KIND_STRING });
+    test("type integer", R"({"type": "integer"})", { COMMON_SCHEMA_KIND_INTEGER });
+    test("type number accepts integers", R"({"type": "number"})", { COMMON_SCHEMA_KIND_NUMBER, COMMON_SCHEMA_KIND_INTEGER });
+    test("nullable string", R"({"type": ["string", "null"]})", { COMMON_SCHEMA_KIND_STRING, COMMON_SCHEMA_KIND_NULL });
+    test("unconstrained", R"({"description": "anything"})", common_schema_kinds::all());
+    test("minLength alone", R"({"minLength": 1})", common_schema_kinds::all());
+    test("properties implies object", R"({"properties": {"a": {"type": "string"}}})", { COMMON_SCHEMA_KIND_OBJECT });
+    test("items implies array", R"({"items": {"type": "string"}})", { COMMON_SCHEMA_KIND_ARRAY });
+    test("prefixItems is an array", R"({"prefixItems": [{"type": "string"}]})", { COMMON_SCHEMA_KIND_ARRAY });
+    test("const number", R"({"const": 1.5})", { COMMON_SCHEMA_KIND_NUMBER });
+    test("enum mixed", R"({"enum": [1, "a", null]})", { COMMON_SCHEMA_KIND_INTEGER, COMMON_SCHEMA_KIND_STRING, COMMON_SCHEMA_KIND_NULL });
+    test("anyOf union", R"({"anyOf": [{"type": "string"}, {"type": "integer"}]})", { COMMON_SCHEMA_KIND_STRING, COMMON_SCHEMA_KIND_INTEGER });
+    test("allOf intersection", R"({"allOf": [{"type": ["string", "number"]}, {"type": ["number", "object"]}]})", { COMMON_SCHEMA_KIND_NUMBER, COMMON_SCHEMA_KIND_INTEGER });
+    test("allOf with unconstrained", R"({"allOf": [{"type": "string"}, {"description": "x"}]})", { COMMON_SCHEMA_KIND_STRING });
+    test("allOf disjoint", R"({"allOf": [{"type": "string"}, {"type": "integer"}]})", {});
+    test("$ref to union",
+        R"({"$ref": "#/$defs/u", "$defs": {"u": {"anyOf": [{"type": "boolean"}, {"type": "array"}]}}})",
+        { COMMON_SCHEMA_KIND_BOOLEAN, COMMON_SCHEMA_KIND_ARRAY });
+    test("recursive $ref",
+        R"({"$ref": "#/$defs/n", "$defs": {"n": {"anyOf": [{"$ref": "#/$defs/n"}, {"type": "string"}]}}})",
+        { COMMON_SCHEMA_KIND_STRING });
+
+    fprintf(stderr, "All resolve_kinds tests passed!\n");
+}
+
 int main() {
     test_resolves_to_string();
+    test_resolve_kinds();
 
     test_all("JSON schema conversion", [](const TestCase & tc) {
         try {

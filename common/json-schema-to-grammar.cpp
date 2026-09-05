@@ -1079,6 +1079,14 @@ bool common_schema_info::resolves_to_string(const common_json & schema) {
     }
 }
 
+common_schema_kinds common_schema_info::resolve_kinds(const common_json & schema) {
+    try {
+        return common_schema_resolve_kinds(*common_schema_parse(schema, doc_));
+    } catch (const std::runtime_error &) {
+        return {};
+    }
+}
+
 std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) {
 #ifdef LLAMA_USE_LLGUIDANCE
     if (!force_gbnf) {

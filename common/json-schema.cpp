@@ -945,3 +945,84 @@ class common_schema_optimizer {
 void common_schema_optimize(common_schema_document & doc) {
     common_schema_optimizer(doc).run();
 }
+
+static common_schema_kind kind_of(const common_json & value) {
+    if (value.is_null()) {
+        return COMMON_SCHEMA_KIND_NULL;
+    }
+    if (value.is_boolean()) {
+        return COMMON_SCHEMA_KIND_BOOLEAN;
+    }
+    if (value.is_number_integer()) {
+        return COMMON_SCHEMA_KIND_INTEGER;
+    }
+    if (value.is_number()) {
+        return COMMON_SCHEMA_KIND_NUMBER;
+    }
+    if (value.is_string()) {
+        return COMMON_SCHEMA_KIND_STRING;
+    }
+    if (value.is_array()) {
+        return COMMON_SCHEMA_KIND_ARRAY;
+    }
+    return COMMON_SCHEMA_KIND_OBJECT;
+}
+
+static common_schema_kinds resolve_kinds(const common_schema & s, std::unordered_set<const common_schema *> & visited) {
+    switch (s.kind()) {
+        case COMMON_SCHEMA_KIND_ANY:
+            return common_schema_kinds::all();
+        case COMMON_SCHEMA_KIND_NONE:
+            return {};
+        case COMMON_SCHEMA_KIND_NUMBER:
+            return { COMMON_SCHEMA_KIND_NUMBER, COMMON_SCHEMA_KIND_INTEGER };
+        case COMMON_SCHEMA_KIND_TUPLE:
+            return { COMMON_SCHEMA_KIND_ARRAY };
+        case COMMON_SCHEMA_KIND_NULL:
+        case COMMON_SCHEMA_KIND_BOOLEAN:
+        case COMMON_SCHEMA_KIND_INTEGER:
+        case COMMON_SCHEMA_KIND_STRING:
+        case COMMON_SCHEMA_KIND_ARRAY:
+        case COMMON_SCHEMA_KIND_OBJECT:
+            return { s.kind() };
+        case COMMON_SCHEMA_KIND_CONST:
+            return { kind_of(static_cast<const common_schema_const &>(s).value) };
+        case COMMON_SCHEMA_KIND_ENUM: {
+            common_schema_kinds kinds;
+            for (const auto & value : static_cast<const common_schema_enum &>(s).values) {
+                kinds.add(kind_of(value));
+            }
+            return kinds;
+        }
+        case COMMON_SCHEMA_KIND_REF: {
+            const auto * target = static_cast<const common_schema_ref &>(s).target;
+            if (!target || !visited.insert(target).second) {
+                // a cycle contributes no kind, to be safe
+                return {};
+            }
+            auto kinds = resolve_kinds(*target, visited);
+            visited.erase(target);
+            return kinds;
+        }
+        case COMMON_SCHEMA_KIND_ANY_OF: {
+            common_schema_kinds kinds;
+            for (const auto & child : static_cast<const common_schema_any_of &>(s).children) {
+                kinds |= resolve_kinds(*child, visited);
+            }
+            return kinds;
+        }
+        case COMMON_SCHEMA_KIND_ALL_OF: {
+            auto kinds = common_schema_kinds::all();
+            for (const auto & child : static_cast<const common_schema_all_of &>(s).children) {
+                kinds &= resolve_kinds(*child, visited);
+            }
+            return kinds;
+        }
+    }
+    return {};
+}
+
+common_schema_kinds common_schema_resolve_kinds(const common_schema & schema) {
+    std::unordered_set<const common_schema *> visited;
+    return resolve_kinds(schema, visited);
+}

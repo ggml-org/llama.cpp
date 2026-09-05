@@ -24,6 +24,9 @@ class common_schema_info {
 
     // common_schema_resolves_to_string() for a sub-schema of a schema given to resolve_refs(), false when it does not parse
     bool resolves_to_string(const common_json & schema);
+
+    // common_schema_resolve_kinds() for a sub-schema of a schema given to resolve_refs(), empty when it does not parse
+    common_schema_kinds resolve_kinds(const common_json & schema);
 };
 
 struct common_grammar_builder {
