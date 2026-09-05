@@ -665,6 +665,7 @@ static inline bool ggml_node_has_n_uses(const struct ggml_cgraph * cgraph, int n
 // - all nodes except the last have only one use and are not views/outputs (see ggml_node_has_N_uses).
 // - all nodes except the last are a src of the following node.
 // - all nodes are the same shape.
+//
 // TODO: Consider allowing GGML_OP_NONE nodes in between
 static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const int * node_idxs, const enum ggml_op * ops, int num_ops) {
     for (int i = 0; i < num_ops; ++i) {
@@ -679,11 +680,15 @@ static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const in
         if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             return false;
         }
-        if (i < num_ops - 1 && !ggml_node_has_n_uses(cgraph, node_idxs[i], 1)) {
+
+        const bool is_last = i == num_ops - 1;
+
+        if (!is_last && !ggml_node_has_n_uses(cgraph, node_idxs[i], 1)) {
             return false;
         }
         if (i > 0) {
             struct ggml_tensor * prev = cgraph->nodes[node_idxs[i - 1]];
+
             if (node->src[0] != prev && node->src[1] != prev) {
                 return false;
             }
