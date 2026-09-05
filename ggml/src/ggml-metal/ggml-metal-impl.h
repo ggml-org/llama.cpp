@@ -112,6 +112,8 @@
 #define OP_FLASH_ATTN_EXT_NQPSG 8
 #define OP_FLASH_ATTN_EXT_NCPSG 64
 
+#define OP_FLASH_ATTN_EXT_SMEM_MAX 32768 // threadgroup memory limit on all Apple GPU families
+
 #define OP_FLASH_ATTN_EXT_VEC_NQPSG 1
 #define OP_FLASH_ATTN_EXT_VEC_NCPSG 32
 
