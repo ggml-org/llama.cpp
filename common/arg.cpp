@@ -1482,7 +1482,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.server_base = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_CLI}));
+    ).set_examples({LLAMA_EXAMPLE_CLI})).set_env("LLAMA_ARG_SERVER_BASE");
     add_opt(common_arg(
         {"--verbose-prompt"},
         string_format("print a verbose prompt before generation (default: %s)", params.verbose_prompt ? "true" : "false"),
