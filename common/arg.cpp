@@ -1769,6 +1769,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
+        {"--prefetch-experts-slots"}, "N",
+        "MoE expert H2D staging slots (default 0 = off; N>=2 enables full-tensor prefetch with 1-deep lookahead for host-resident/ncmoe-offloaded expert weights during prefill; recommended 3; capped at 4). GPU memory cost = N x max_expert_tensor.",
+        [](common_params & params, const std::string & value) {
+            params.prefetch_experts_slots = std::stoi(value);
+        }
+    ));
+    add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
         [](common_params & params, const std::string & value) {
