@@ -150,6 +150,16 @@ llama_context::llama_context(
         }
 
         cparams.ctx_other = params.ctx_other;
+
+        auto * ctx_other = cparams.ctx_other;
+        if (ctx_other->memory && ctx_other->memory->get_has_lazy_quant()) {
+            LLAMA_LOG_WARN("%s: converting target KV cache to q8_0 before sharing it with the assistant\n", __func__);
+            ctx_other->synchronize();
+            ctx_other->memory_update(false);
+            ctx_other->sched_need_reserve = true;
+            ctx_other->memory->try_lazy_quantize(nullptr);
+            ctx_other->sched_reserve();
+        }
     }
 
     if (model.arch == LLM_ARCH_EAGLE3 || model.arch == LLM_ARCH_DFLASH) {

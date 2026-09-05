@@ -128,13 +128,11 @@ llama_kv_cache::llama_kv_cache(
 
     const char * LLAMA_KV_CACHE_LAZY_QUANT = getenv("LLAMA_KV_CACHE_LAZY_QUANT");
     const bool lazy_requested = LLAMA_KV_CACHE_LAZY_QUANT ? atoi(LLAMA_KV_CACHE_LAZY_QUANT) != 0 : false;
-    const bool may_share_cache = model.arch == LLM_ARCH_GEMMA4;
 
     lazy_quant =
         lazy_requested &&
         type_k == GGML_TYPE_Q8_0 &&
         type_v == GGML_TYPE_Q8_0 &&
-        !may_share_cache &&
         !v_trans &&
         n_stream == 1 &&
         other == nullptr &&
