@@ -554,21 +554,29 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
     return render_message_to_json(msgs, c);
 }
 
-json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools) {
+json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools, bool skip_deferred) {
     if (tools.empty()) {
         return json();
     }
 
     auto result = json::array();
     for (const auto & tool : tools) {
-        result.push_back({
+        if (skip_deferred && tool.defer_loading) {
+            continue;
+        }
+        json entry{
             { "type",     "function" },
             { "function", {
                 { "name", tool.name },
                 { "description", tool.description },
                 { "parameters", json::parse(tool.parameters) },
             }},
-        });
+        };
+        // Only emitted when set, so output for ordinary tools is unchanged.
+        if (tool.defer_loading) {
+            entry["function"]["defer_loading"] = true;
+        }
+        result.push_back(std::move(entry));
     }
     return result;
 }
@@ -594,12 +602,30 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
                 }
 
                 const auto & function = tool.at("function");
+                // Accept the flag on the tool object or inside "function" -
+                // clients differ on where they put it.
+                const bool defer = tool.value("defer_loading", false) ||
+                                   function.value("defer_loading", false);
                 result.push_back({
                     /* .name = */ function.at("name"),
                     /* .description = */ function.value("description", ""),
                     /* .parameters = */ function.value("parameters", json::object()).dump(),
+                    /* .defer_loading = */ defer,
                 });
             }
+        }
+        // Every template renders its tool section conditionally on a non-empty
+        // tool list, so deferring all of them would produce a prompt that never
+        // mentions tools while the grammar still expects calls.
+        bool any_rendered = false;
+        for (const auto & tool : result) {
+            if (!tool.defer_loading) {
+                any_rendered = true;
+                break;
+            }
+        }
+        if (!result.empty() && !any_rendered) {
+            throw std::invalid_argument("All tools have defer_loading set; at least one must be rendered");
         }
     } catch (const std::exception & e) {
         throw std::runtime_error("Failed to parse tools: " + std::string(e.what()) + "; tools = " + tools.dump(2));
@@ -945,8 +971,11 @@ static std::string common_chat_template_direct_apply_impl(
         {"eos_token", tmpl.eos_token()},
         {"enable_thinking", inputs.enable_thinking},
     };
-    if (tools_override.has_value() || !inputs.tools.empty()) {
-        inp["tools"] = tools_override.has_value() ? *tools_override : inputs.tools;
+    // Deferred tools are declared to the grammar but not rendered, so the
+    // prompt shows `tools_visible` while `tools` stays complete.
+    const json & render_tools = inputs.tools_visible.is_array() ? inputs.tools_visible : inputs.tools;
+    if (tools_override.has_value() || !render_tools.empty()) {
+        inp["tools"] = tools_override.has_value() ? *tools_override : render_tools;
     }
     if (inputs.extra_context.is_object()) {
         // TODO: do we need to merge, or replacing is fine?
@@ -3607,7 +3636,8 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
 static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                             const struct common_chat_templates_inputs & inputs) {
     autoparser::generation_params params;
-    params.tools = common_chat_tools_to_json_oaicompat(inputs.tools);
+    params.tools         = common_chat_tools_to_json_oaicompat(inputs.tools);
+    params.tools_visible = common_chat_tools_to_json_oaicompat(inputs.tools, /* skip_deferred = */ true);
     const auto & tmpl =
         params.tools.is_array() && tmpls->template_tool_use ? *tmpls->template_tool_use : *tmpls->template_default;
     const auto & src             = tmpl.source();

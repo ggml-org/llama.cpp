@@ -217,6 +217,12 @@ struct common_chat_tool {
     std::string name;
     std::string description;
     std::string parameters;
+    // When true, the tool is still declared to the grammar (so the model can
+    // call it) but is omitted from the rendered prompt. Lets a client keep a
+    // large tool set available without paying for every schema in context,
+    // and - because the declared set never changes mid-conversation - without
+    // invalidating the prompt cache when a tool is revealed.
+    bool defer_loading = false;
 };
 
 enum common_chat_tool_choice {
@@ -358,7 +364,10 @@ common_chat_continuation common_chat_continuation_parse(const common_json & valu
 // DEPRECATED: only used in tests
 common_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
 
-common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
+// skip_deferred omits tools flagged defer_loading - used for the rendered
+// prompt, never for the grammar.
+common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools,
+                                               bool skip_deferred = false);
 
 // get template caps, useful for reporting to server /props endpoint
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);

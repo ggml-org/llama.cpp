@@ -1788,6 +1788,97 @@ static void test_tools_oaicompat_json_conversion() {
                   common_chat_tools_to_json_oaicompat({ special_function_tool }).dump(2));
 }
 
+static void test_tool_defer_loading() {
+    LOG_DBG("%s\n", __func__);
+
+    common_chat_tool deferred_tool = python_tool;
+    deferred_tool.defer_loading    = true;
+
+    // 1. the flag survives the oaicompat round trip (paired with a visible tool,
+    //    since an all-deferred set is rejected - see case 5)
+    {
+        auto oai  = common_chat_tools_to_json_oaicompat({ special_function_tool, deferred_tool });
+        auto back = common_chat_tools_parse_oaicompat(oai);
+        assert_equals((size_t) 2, back.size());
+        assert_equals(false, back[0].defer_loading);
+        assert_equals(true, back[1].defer_loading);
+    }
+
+    // 2. clients may put the flag on the tool object instead of inside "function"
+    {
+        json tools = json::array({
+            json{
+                { "type", "function" },
+                { "defer_loading", true },
+                { "function", { { "name", "special_function" }, { "description", "" },
+                                { "parameters", json::object() } } },
+            },
+            json{
+                { "type", "function" },
+                { "function", { { "name", "get_time" }, { "description", "" },
+                                { "parameters", json::object() } } },
+            },
+        });
+        auto parsed = common_chat_tools_parse_oaicompat(tools);
+        assert_equals((size_t) 2, parsed.size());
+        assert_equals(true, parsed[0].defer_loading);
+        assert_equals(false, parsed[1].defer_loading);
+    }
+
+    // 3. skip_deferred omits it; the default keeps it (the grammar needs it)
+    {
+        std::vector<common_chat_tool> tools{ special_function_tool, deferred_tool };
+        assert_equals((size_t) 2, common_chat_tools_to_json_oaicompat(tools).size());
+        auto visible = common_chat_tools_to_json_oaicompat(tools, /* skip_deferred = */ true);
+        assert_equals((size_t) 1, visible.size());
+        assert_equals(std::string("special_function"),
+                      visible[0].at("function").at("name").get<std::string>());
+    }
+
+    // 4. the whole point: a deferred tool is absent from the rendered prompt but
+    //    still present in the grammar, so it stays callable while costing no
+    //    context - and revealing it later does not change the declared set.
+    {
+        auto tmpls = read_templates("models/templates/NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja");
+
+        common_chat_templates_inputs inputs;
+        inputs.messages = { simple_assist_msg("", ""), };
+        inputs.messages[0].role    = "user";
+        inputs.messages[0].content = "hey";
+        inputs.tools               = { special_function_tool, deferred_tool };
+        inputs.tool_choice         = COMMON_CHAT_TOOL_CHOICE_AUTO;
+
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+        if (params.prompt.find("special_function") == std::string::npos) {
+            throw std::runtime_error("visible tool missing from the prompt");
+        }
+        if (params.prompt.find(python_tool.name) != std::string::npos) {
+            throw std::runtime_error("deferred tool leaked into the prompt");
+        }
+        if (params.grammar.find(python_tool.name) == std::string::npos) {
+            throw std::runtime_error("deferred tool missing from the grammar - it would not be callable");
+        }
+    }
+
+    // 5. deferring everything would render a prompt that never mentions tools
+    //    while the grammar still expects calls - reject it instead.
+    {
+        common_chat_tool other = special_function_tool;
+        other.defer_loading    = true;
+        bool threw             = false;
+        try {
+            common_chat_tools_parse_oaicompat(
+                common_chat_tools_to_json_oaicompat({ deferred_tool, other }));
+        } catch (const std::exception &) {
+            threw = true;
+        }
+        if (!threw) {
+            throw std::runtime_error("expected an error when every tool sets defer_loading");
+        }
+    }
+}
+
 static void test_convert_responses_to_chatcmpl() {
     LOG_DBG("%s\n", __func__);
 
@@ -7230,6 +7321,7 @@ int main(int argc, char ** argv) {
         test_msgs_oaicompat_json_conversion();
         test_msg_token_delimiters_split();
         test_tools_oaicompat_json_conversion();
+        test_tool_defer_loading();
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();
         test_deepseek_v4_thinking_retention();
