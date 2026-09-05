@@ -275,6 +275,16 @@ static void common_params_fit_impl(
             dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
         }
     }
+
+    // if the caller set a non-zero context but it is below the fit minimum (n_ctx_min),
+    // measure at n_ctx_min instead so that the fit accounts for the memory of that many tokens.
+    if (!n_ctx_auto && cparams->n_ctx < n_ctx_min_total) {
+        LOG_TRC("%s: measured context %" PRIu32 " is below fit minimum %" PRIu32 ", re-measuring at minimum\n",
+            __func__, cparams->n_ctx, n_ctx_min_total);
+        cparams->n_ctx = n_ctx_min_total;
+        dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+    }
+
     add_extra_memory(dmds_full);
 
     const size_t nd = devs.size(); // number of devices
