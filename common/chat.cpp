@@ -1269,7 +1269,13 @@ static common_chat_params common_chat_params_init_qwen3_coder(const common_chat_
 
                     auto arg_value = schema_info.resolves_to_string(param_schema) ?
                         arg_string :
-                        p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", param_schema)) + arg_close;
+                        // Non-string args (array<object>, object, number, bool): capture raw text up to the
+                        // closing tag and normalize to JSON at extraction time (normalize_container_value).
+                        // Constraining this branch with p.schema(p.json(), ...) emits per-field length
+                        // repetitions (e.g. char{0,2000}) that trips the GBNF "sane defaults" guard
+                        // (llama-grammar.cpp MAX_REPETITION_THRESHOLD) and aborts matching on nested
+                        // array<object> values inside <parameter> tags (#21771); raw capture sidesteps both.
+                        p.ac(p.tool_arg_json_value(p.until("\n</parameter>\n")) + arg_close, "\n</parameter>\n");
 
                     auto arg_rule = p.rule(rule_name, p.tool_arg(arg_open + arg_value));
 
