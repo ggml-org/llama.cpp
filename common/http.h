@@ -1,5 +1,7 @@
 #pragma once
 
+#include "log.h"
+
 #include <cpp-httplib/httplib.h>
 
 struct common_http_url {
@@ -111,8 +113,9 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
             if (!proxy.user.empty()) {
                 cli.set_proxy_basic_auth(proxy.user, proxy.password);
             }
-        } catch (...) {
-            // ignore malformed proxy URL — don't break existing callers
+        } catch (const std::exception & e) {
+            // fall back to a direct connection, the URL itself is not logged as it can carry credentials
+            LOG_WRN("%s: ignoring malformed proxy URL from the environment: %s\n", __func__, e.what());
         }
     }
 
