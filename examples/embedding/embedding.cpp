@@ -6,6 +6,8 @@
 #include <clocale>
 #include <ctime>
 #include <algorithm>
+#include <sstream>
+#include <unordered_set>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -27,10 +29,12 @@ static std::vector<std::string> split_lines(const std::string & s, const std::st
     return lines;
 }
 
-static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & tokens, llama_seq_id seq_id) {
+static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & tokens, llama_seq_id seq_id,
+                          const std::unordered_set<int32_t> & output_ids = {}) {
     size_t n_tokens = tokens.size();
     for (size_t i = 0; i < n_tokens; i++) {
-        common_batch_add(batch, tokens[i], i, { seq_id }, true);
+        bool is_output = output_ids.empty() || output_ids.count(tokens[i]) > 0;
+        common_batch_add(batch, tokens[i], i, { seq_id }, is_output);
     }
 }
 
@@ -46,6 +50,7 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
         LOG_ERR("%s : failed to process\n", __func__);
     }
 
+    int out_idx = 0; // compact sequential index into the output buffer for pooling=none
     for (int i = 0; i < batch.n_tokens; i++) {
         if (!batch.logits[i]) {
             continue;
@@ -57,7 +62,8 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
         if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
             // try to get token embeddings
             embd = llama_get_embeddings_ith(ctx, i);
-            embd_pos = i;
+            // use compact position: only output tokens are stored, in encounter order
+            embd_pos = out_idx++;
             GGML_ASSERT(embd != NULL && "failed to get token embeddings");
         } else {
             // try to get sequence embeddings - supported only when pooling_type is not NONE
@@ -96,6 +102,30 @@ static void print_raw_embeddings(const float * emb,
 
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
+
+    // Parse --output-token-ids before common_params_parse (unknown flag would error otherwise).
+    // When set, only tokens whose ID is in the set are marked as output; the result is a compact
+    // embedding array containing only those token positions (in encounter order).
+    std::unordered_set<int32_t> output_token_ids;
+    {
+        std::vector<char*> argv2;
+        argv2.push_back(argv[0]);
+        for (int i = 1; i < argc; i++) {
+            if (std::string(argv[i]) == "--output-token-ids" && i + 1 < argc) {
+                std::stringstream ss(argv[++i]);
+                std::string tok;
+                while (std::getline(ss, tok, ',')) {
+                    if (!tok.empty()) {
+                        output_token_ids.insert(std::stoi(tok));
+                    }
+                }
+            } else {
+                argv2.push_back(argv[i]);
+            }
+        }
+        argc = (int)argv2.size();
+        std::copy(argv2.begin(), argv2.end(), argv);
+    }
 
     common_params params;
 
@@ -248,7 +278,13 @@ int main(int argc, char ** argv) {
     int n_embd_count = 0;
     if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
         for (int k = 0; k < n_prompts; k++) {
-            n_embd_count += inputs[k].size();
+            if (output_token_ids.empty()) {
+                n_embd_count += inputs[k].size();
+            } else {
+                for (auto t : inputs[k]) {
+                    if (output_token_ids.count(t)) n_embd_count++;
+                }
+            }
         }
     } else {
         n_embd_count = n_prompts;
@@ -272,13 +308,20 @@ int main(int argc, char ** argv) {
         if (batch.n_tokens + n_toks > n_batch || s >= n_seq_max) {
             float * out = emb + e * n_embd_out;
             batch_decode(ctx, batch, out, s, n_embd_out, params.embd_normalize);
-            e += pooling_type == LLAMA_POOLING_TYPE_NONE ? batch.n_tokens : s;
+            if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
+                // count only the output-marked tokens (compact buffer)
+                int n_out = 0;
+                for (int j = 0; j < batch.n_tokens; j++) n_out += batch.logits[j] != 0;
+                e += n_out;
+            } else {
+                e += s;
+            }
             s = 0;
             common_batch_clear(batch);
         }
 
         // add to batch
-        batch_add_seq(batch, inp, s);
+        batch_add_seq(batch, inp, s, output_token_ids);
         s += 1;
     }
 
