@@ -66,6 +66,12 @@ struct mtmd_input_chunk;
 struct mtmd_input_chunks;
 struct mtmd_batch;
 
+struct mtmd_speech_probability {
+    float value;
+    const int32_t * eos_token_ids;
+    size_t n_eos_token_ids;
+};
+
 struct mtmd_input_text {
     const char * text;
     size_t text_len;
@@ -148,6 +154,9 @@ MTMD_API bool mtmd_support_vision(const mtmd_context * ctx);
 
 // whether the current model supports audio input
 MTMD_API bool mtmd_support_audio(const mtmd_context * ctx);
+
+// Whether audio encoding produces a speech probability for first-token sampling.
+MTMD_API bool mtmd_support_speech_probability(const mtmd_context * ctx);
 
 // get audio sample rate in Hz, for example 16000 for Whisper
 // return -1 if audio is not supported
@@ -349,6 +358,10 @@ MTMD_API int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk
 // returns 1 on generic error
 MTMD_API int32_t mtmd_batch_encode(mtmd_batch * batch);
 MTMD_API float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk);
+MTMD_API bool mtmd_batch_get_output_speech_probability(
+    mtmd_batch * batch,
+    const mtmd_input_chunk * chunk,
+    struct mtmd_speech_probability * output);
 
 
 // Set callback for all future logging events.
