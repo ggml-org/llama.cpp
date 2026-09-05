@@ -110,11 +110,11 @@ shared float buf_b_d[BN * BK_STEP];
 shared float buf_b_s[BN * BK_STEP];
 #endif
 
-#if defined(DATA_A_IQ4_NL) || defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
+#if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS) || defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
 shared int8_t cm1_kvalues[16];
 #endif
 
-#if defined(DATA_A_QUANT_K) || defined(DATA_A_NVFP4)
+#if defined(DATA_A_QUANT_K) || defined(DATA_A_IQ4_XS) || defined(DATA_A_NVFP4)
 #define LOAD_VEC_A 8
 #else
 #define LOAD_VEC_A (4 * QUANT_R)
@@ -149,7 +149,7 @@ ACC_TYPE cm1_accumulate(ACC_TYPE prev, int acc_e, float scale_a, float nbias_a, 
 #include "mul_mmq_cm1_funcs.glsl"
 
 void main() {
-#if defined(DATA_A_IQ4_NL)
+#if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
     if (gl_LocalInvocationIndex < 16u) {
         cm1_kvalues[gl_LocalInvocationIndex] = kvalues_iq4nl_const[gl_LocalInvocationIndex];
     }
@@ -184,7 +184,11 @@ void main() {
 #else
     // L2-friendly workgroup scheduling
     const uint blocks_n = (p.N + BN - 1) / BN;
+#if defined(DATA_A_IQ4_XS)
+    const uint a_panel_bytes = (BM * p.K) / 2 + (BM * p.K) / 32;
+#else
     const uint a_panel_bytes = BM * p.K + (BM * p.K) / 16;
+#endif
     const uint group_m = clamp(GROUP_A_BUDGET / max(a_panel_bytes, 1u), 1u, min(blocks_m, 32u));
     const uint tiles_per_group = group_m * blocks_n;
     const uint lin = gl_WorkGroupID.y * blocks_m + (gl_WorkGroupID.x % blocks_m);
