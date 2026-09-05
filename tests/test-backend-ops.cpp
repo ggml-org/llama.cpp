@@ -1227,6 +1227,11 @@ struct test_case {
         }
     }
 
+    // re-draw data-dependent inputs between timed perf iterations
+    virtual void reinit_perf_iter(ggml_context * ctx) {
+        GGML_UNUSED(ctx);
+    }
+
     virtual size_t op_size(ggml_tensor * t) {
         size_t size = ggml_nbytes(t);
         // add source tensors
@@ -1661,6 +1666,9 @@ struct test_case {
             total_time_us += end_time - start_time;
             total_mem += mem;
             total_runs += n_runs;
+
+            // re-draw any data-dependent inputs (expert ids) outside the timed region
+            reinit_perf_iter(ctx.get());
         } while (total_time_us < 1000*1000); // run for at least 1 second
 
         // Create test result
@@ -4878,25 +4886,31 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     }
 };
 
-static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
+static void init_mul_mat_id_ids(ggml_context * ctx, int n_mats) {
     std::random_device rd;
     std::default_random_engine rng(rd());
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-        if (t->type == GGML_TYPE_I32) {
-            if (ggml_is_view_op(t->op)) { continue; }
-            // ids
-            for (int64_t r = 0; r < ggml_nrows(t); r++) {
-                std::vector<int32_t> data(t->ne[0]);
-                for (int i = 0; i < t->ne[0]; i++) {
-                    data[i] = i % n_mats;
-                }
-                std::shuffle(data.begin(), data.end(), rng);
-                ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+        if (t->type != GGML_TYPE_I32 || ggml_is_view_op(t->op)) {
+            continue;
+        }
+        for (int64_t r = 0; r < ggml_nrows(t); r++) {
+            std::vector<int32_t> data(t->ne[0]);
+            for (int i = 0; i < t->ne[0]; i++) {
+                data[i] = i % n_mats;
             }
-        } else {
+            std::shuffle(data.begin(), data.end(), rng);
+            ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+        }
+    }
+}
+
+static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->type != GGML_TYPE_I32) {
             init_tensor_uniform(t);
         }
     }
+    init_mul_mat_id_ids(ctx, n_mats);
 }
 
 // GGML_OP_MUL_MAT_ID
@@ -4962,6 +4976,10 @@ struct test_mul_mat_id : public test_case {
 
     void initialize_tensors(ggml_context * ctx) override {
         init_mul_mat_id_tensors(ctx, n_mats);
+    }
+
+    void reinit_perf_iter(ggml_context * ctx) override {
+        init_mul_mat_id_ids(ctx, n_mats);
     }
 };
 

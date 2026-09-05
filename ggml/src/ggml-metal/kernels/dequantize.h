@@ -502,6 +502,12 @@ void dequantize_q6_K(device const block_q6_K *xb, short il, thread type4x4 & reg
     }
 }
 
+// ksigns_iq2xs[k] == k | (parity(k) << 7)
+static inline uint32_t iq_ksigns(uint32_t k) {
+    k &= 127;
+    return k | ((popcount(k) & 1) << 7);
+}
+
 template <typename type4x4>
 void dequantize_iq2_xxs(device const block_iq2_xxs * xb, short il, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256 => index of block of 32 is il/2
@@ -515,15 +521,17 @@ void dequantize_iq2_xxs(device const block_iq2_xxs * xb, short il, thread type4x
     const uint32_t aux32_s = q2[2] | (q2[3] << 16);
     thread const uint8_t * aux8 = (thread const uint8_t *)&aux32_g;
     const float dl = d * (0.5f + (aux32_s >> 28)) * 0.25f;
-    constant uint8_t * grid = (constant uint8_t *)(iq2xxs_grid + aux8[2*il+0]);
-    uint8_t signs = ksigns_iq2xs[(aux32_s >> 14*il) & 127];
-    for (int i = 0; i < 8; ++i) {
-        reg[i/4][i%4] = dl * grid[i] * (signs & kmask_iq2xs[i] ? -1.f : 1.f);
+    constant uint32_t * grid = (constant uint32_t *)(iq2xxs_grid + aux8[2*il+0]);
+    uint32_t g0 = grid[0], g1 = grid[1];
+    uint32_t signs = iq_ksigns(aux32_s >> 14*il);
+    FOR_UNROLL (short i = 0; i < 8; ++i) {
+        reg[i/4][i%4] = dl * ((i < 4 ? g0 >> 8*i : g1 >> 8*(i-4)) & 0xFF) * (signs & (1u << i) ? -1.f : 1.f);
     }
-    grid = (constant uint8_t *)(iq2xxs_grid + aux8[2*il+1]);
-    signs = ksigns_iq2xs[(aux32_s >> (14*il+7)) & 127];
-    for (int i = 0; i < 8; ++i) {
-        reg[2+i/4][i%4] = dl * grid[i] * (signs & kmask_iq2xs[i] ? -1.f : 1.f);
+    grid = (constant uint32_t *)(iq2xxs_grid + aux8[2*il+1]);
+    g0 = grid[0], g1 = grid[1];
+    signs = iq_ksigns(aux32_s >> (14*il+7));
+    FOR_UNROLL (short i = 0; i < 8; ++i) {
+        reg[2+i/4][i%4] = dl * ((i < 4 ? g0 >> 8*i : g1 >> 8*(i-4)) & 0xFF) * (signs & (1u << i) ? -1.f : 1.f);
     }
 }
 
@@ -536,15 +544,17 @@ void dequantize_iq2_xs(device const block_iq2_xs * xb, short il, thread type4x4 
     // il = 0 or 1. il = 0 processes the first 16 quants in a block of 32, il = 1 the second 16
     device const uint16_t * q2 = xb->qs + 4*ib32;
     const float dl = d * (0.5f + ((xb->scales[ib32] >> 4*il) & 0xf)) * 0.25f;
-    constant uint8_t * grid = (constant uint8_t *)(iq2xs_grid + (q2[2*il+0] & 511));
-    uint8_t signs = ksigns_iq2xs[q2[2*il+0] >> 9];
-    for (int i = 0; i < 8; ++i) {
-        reg[i/4][i%4] = dl * grid[i] * (signs & kmask_iq2xs[i] ? -1.f : 1.f);
+    constant uint32_t * grid = (constant uint32_t *)(iq2xs_grid + (q2[2*il+0] & 511));
+    uint32_t g0 = grid[0], g1 = grid[1];
+    uint32_t signs = iq_ksigns(q2[2*il+0] >> 9);
+    FOR_UNROLL (short i = 0; i < 8; ++i) {
+        reg[i/4][i%4] = dl * ((i < 4 ? g0 >> 8*i : g1 >> 8*(i-4)) & 0xFF) * (signs & (1u << i) ? -1.f : 1.f);
     }
-    grid = (constant uint8_t *)(iq2xs_grid + (q2[2*il+1] & 511));
-    signs = ksigns_iq2xs[q2[2*il+1] >> 9];
-    for (int i = 0; i < 8; ++i) {
-        reg[2+i/4][i%4] = dl * grid[i] * (signs & kmask_iq2xs[i] ? -1.f : 1.f);
+    grid = (constant uint32_t *)(iq2xs_grid + (q2[2*il+1] & 511));
+    g0 = grid[0], g1 = grid[1];
+    signs = iq_ksigns(q2[2*il+1] >> 9);
+    FOR_UNROLL (short i = 0; i < 8; ++i) {
+        reg[2+i/4][i%4] = dl * ((i < 4 ? g0 >> 8*i : g1 >> 8*(i-4)) & 0xFF) * (signs & (1u << i) ? -1.f : 1.f);
     }
 }
 
@@ -559,19 +569,19 @@ void dequantize_iq3_xxs(device const block_iq3_xxs * xb, short il, thread type4x
     device const uint16_t * gas = (device const uint16_t *)(xb->qs + QK_K/4) + 2*ib32;
     const uint32_t aux32 = gas[0] | (gas[1] << 16);
     const float dl = d * (0.5f + (aux32 >> 28)) * 0.5f;
-    constant uint8_t * grid1 = (constant uint8_t *)(iq3xxs_grid + q3[4*il+0]);
-    constant uint8_t * grid2 = (constant uint8_t *)(iq3xxs_grid + q3[4*il+1]);
-    uint8_t signs = ksigns_iq2xs[(aux32 >> 14*il) & 127];
-    for (int i = 0; i < 4; ++i) {
-        reg[0][i] = dl * grid1[i] * (signs & kmask_iq2xs[i+0] ? -1.f : 1.f);
-        reg[1][i] = dl * grid2[i] * (signs & kmask_iq2xs[i+4] ? -1.f : 1.f);
+    uint32_t g1 = iq3xxs_grid[q3[4*il+0]];
+    uint32_t g2 = iq3xxs_grid[q3[4*il+1]];
+    uint32_t signs = iq_ksigns(aux32 >> 14*il);
+    FOR_UNROLL (short i = 0; i < 4; ++i) {
+        reg[0][i] = dl * ((g1 >> 8*i) & 0xFF) * (signs & (1u << (i+0)) ? -1.f : 1.f);
+        reg[1][i] = dl * ((g2 >> 8*i) & 0xFF) * (signs & (1u << (i+4)) ? -1.f : 1.f);
     }
-    grid1 = (constant uint8_t *)(iq3xxs_grid + q3[4*il+2]);
-    grid2 = (constant uint8_t *)(iq3xxs_grid + q3[4*il+3]);
-    signs = ksigns_iq2xs[(aux32 >> (14*il+7)) & 127];
-    for (int i = 0; i < 4; ++i) {
-        reg[2][i] = dl * grid1[i] * (signs & kmask_iq2xs[i+0] ? -1.f : 1.f);
-        reg[3][i] = dl * grid2[i] * (signs & kmask_iq2xs[i+4] ? -1.f : 1.f);
+    g1 = iq3xxs_grid[q3[4*il+2]];
+    g2 = iq3xxs_grid[q3[4*il+3]];
+    signs = iq_ksigns(aux32 >> (14*il+7));
+    FOR_UNROLL (short i = 0; i < 4; ++i) {
+        reg[2][i] = dl * ((g1 >> 8*i) & 0xFF) * (signs & (1u << (i+0)) ? -1.f : 1.f);
+        reg[3][i] = dl * ((g2 >> 8*i) & 0xFF) * (signs & (1u << (i+4)) ? -1.f : 1.f);
     }
 }
 
@@ -586,17 +596,19 @@ void dequantize_iq3_s(device const block_iq3_s * xb, short il, thread type4x4 & 
     device const uint8_t * signs = xb->signs + 4*ib32 + 2*il;
     const uint8_t qh = xb->qh[ib32] >> 4*il;
     const float dl = d * (1 + 2*((xb->scales[ib32/2] >> 4*(ib32%2)) & 0xf));
-    constant uint8_t * grid1 = (constant uint8_t *)(iq3s_grid + (qs[4*il+0] | ((qh << 8) & 256)));
-    constant uint8_t * grid2 = (constant uint8_t *)(iq3s_grid + (qs[4*il+1] | ((qh << 7) & 256)));
-    for (int i = 0; i < 4; ++i) {
-        reg[0][i] = dl * grid1[i] * select(1, -1, signs[0] & kmask_iq2xs[i+0]);
-        reg[1][i] = dl * grid2[i] * select(1, -1, signs[0] & kmask_iq2xs[i+4]);
+    uint32_t g1 = iq3s_grid[qs[4*il+0] | ((qh << 8) & 256)];
+    uint32_t g2 = iq3s_grid[qs[4*il+1] | ((qh << 7) & 256)];
+    const uint32_t s0 = signs[0];
+    const uint32_t s1 = signs[1];
+    FOR_UNROLL (short i = 0; i < 4; ++i) {
+        reg[0][i] = dl * ((g1 >> 8*i) & 0xFF) * select(1, -1, (int) (s0 & (1u << (i+0))));
+        reg[1][i] = dl * ((g2 >> 8*i) & 0xFF) * select(1, -1, (int) (s0 & (1u << (i+4))));
     }
-    grid1 = (constant uint8_t *)(iq3s_grid + (qs[4*il+2] | ((qh << 6) & 256)));
-    grid2 = (constant uint8_t *)(iq3s_grid + (qs[4*il+3] | ((qh << 5) & 256)));
-    for (int i = 0; i < 4; ++i) {
-        reg[2][i] = dl * grid1[i] * select(1, -1, signs[1] & kmask_iq2xs[i+0]);
-        reg[3][i] = dl * grid2[i] * select(1, -1, signs[1] & kmask_iq2xs[i+4]);
+    g1 = iq3s_grid[qs[4*il+2] | ((qh << 6) & 256)];
+    g2 = iq3s_grid[qs[4*il+3] | ((qh << 5) & 256)];
+    FOR_UNROLL (short i = 0; i < 4; ++i) {
+        reg[2][i] = dl * ((g1 >> 8*i) & 0xFF) * select(1, -1, (int) (s1 & (1u << (i+0))));
+        reg[3][i] = dl * ((g2 >> 8*i) & 0xFF) * select(1, -1, (int) (s1 & (1u << (i+4))));
     }
 }
 
@@ -611,11 +623,15 @@ void dequantize_iq2_s(device const block_iq2_s * xb, short il, thread type4x4 & 
     device const uint8_t * signs = qs + QK_K/8;
     const uint8_t qh = xb->qh[ib32] >> 4*il;
     const float dl = d * (0.5f + ((xb->scales[ib32] >> 4*il) & 0xf)) * 0.25f;
-    constant uint8_t * grid1 = (constant uint8_t *)(iq2s_grid + (qs[0] | ((qh << 8) & 0x300)));
-    constant uint8_t * grid2 = (constant uint8_t *)(iq2s_grid + (qs[1] | ((qh << 6) & 0x300)));
-    for (int i = 0; i < 8; ++i) {
-        reg[i/4+0][i%4] = dl * grid1[i] * select(1, -1, signs[0] & kmask_iq2xs[i]);
-        reg[i/4+2][i%4] = dl * grid2[i] * select(1, -1, signs[1] & kmask_iq2xs[i]);
+    constant uint32_t * grid1 = (constant uint32_t *)(iq2s_grid + (qs[0] | ((qh << 8) & 0x300)));
+    constant uint32_t * grid2 = (constant uint32_t *)(iq2s_grid + (qs[1] | ((qh << 6) & 0x300)));
+    const uint32_t a0 = grid1[0], a1 = grid1[1];
+    const uint32_t b0 = grid2[0], b1 = grid2[1];
+    const uint32_t s0 = signs[0];
+    const uint32_t s1 = signs[1];
+    FOR_UNROLL (short i = 0; i < 8; ++i) {
+        reg[i/4+0][i%4] = dl * ((i < 4 ? a0 >> 8*i : a1 >> 8*(i-4)) & 0xFF) * select(1, -1, (int) (s0 & (1u << i)));
+        reg[i/4+2][i%4] = dl * ((i < 4 ? b0 >> 8*i : b1 >> 8*(i-4)) & 0xFF) * select(1, -1, (int) (s1 & (1u << i)));
     }
 }
 
