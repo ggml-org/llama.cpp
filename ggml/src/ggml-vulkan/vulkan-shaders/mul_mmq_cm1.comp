@@ -1,0 +1,506 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : enable
+
+#if defined(MUL_MAT_ID_USE_SUBGROUPS)
+#extension GL_KHR_shader_subgroup_ballot : enable
+#endif
+
+#ifdef MUL_MAT_ID
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#endif
+
+#include "types.glsl"
+
+#if defined(DATA_A_Q3_K) || defined(DATA_A_Q6_K) || defined(DATA_A_NVFP4)
+#define KSCALES 2
+#else
+#define KSCALES 1
+#endif
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
+#if defined(A_TYPE_PACKED16)
+layout (binding = 0) readonly buffer A_PACKED16 {A_TYPE_PACKED16 data_a_packed16[];};
+#endif
+#if defined(A_TYPE_PACKED32)
+layout (binding = 0) readonly buffer A_PACKED32 {A_TYPE_PACKED32 data_a_packed32[];};
+#endif
+layout (binding = 1) readonly buffer B {block_q8_1_x4_packed128 data_b[];};
+layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
+
+#ifdef MUL_MAT_ID
+layout (binding = 3) readonly buffer IDS {int data_ids[];};
+layout (binding = 4) readonly buffer Counts {int data_expert_count[];};
+#endif
+
+layout (push_constant) uniform parameter
+{
+    uint M;
+    uint N;
+    uint K;
+    uint stride_a;
+    uint stride_b;
+    uint stride_d;
+
+    uint batch_stride_a;
+    uint batch_stride_b;
+    uint batch_stride_d;
+
+#ifdef MUL_MAT_ID
+    uint nei0;
+    uint nei1;
+    uint nbi1;
+    uint ne11;
+    uint n_experts;
+    uint hoist_row_ids;
+#else
+    uint base_work_group_z;
+    uint num_batches;
+    uint k_split;
+    uint ne02;
+    uint ne12;
+    uint broadcast2;
+    uint broadcast3;
+#endif
+} p;
+
+layout (constant_id = 0) const uint BLOCK_SIZE = 256;
+layout (constant_id = 1) const uint BM = 128;
+layout (constant_id = 2) const uint BN = 128;
+// layout (constant_id = 3) const uint BK = 32;
+layout (constant_id = 4) const uint WM = 64;
+layout (constant_id = 5) const uint WN = 32;
+layout (constant_id = 7) const uint TM = 16;
+layout (constant_id = 8) const uint TN = 16;
+layout (constant_id = 9) const uint TK = 16;
+layout (constant_id = 10) const uint WARP = 32;
+layout (constant_id = 11) const uint DEVICE_ARCH = 0; // vk_device_architecture (ggml-vulkan.cpp)
+#define VK_ARCH_AMD_RDNA4 5u
+
+#define BK 32
+#ifdef MUL_MAT_ID
+#define BK_STEP 2
+#else
+#define BK_STEP 4
+#endif
+#define GROUP_A_BUDGET (16u * 1024u * 1024u)
+
+const uint QPITCH = BK_STEP * (BK / 4) + 4;
+
+shared uint32_t buf_a_qs[BM * QPITCH];
+#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
+shared vec2 buf_a_dm[BM * BK_STEP];   // .x = d, .y = m
+#else
+shared float buf_a_d[BM * BK_STEP * KSCALES];
+#endif
+
+shared uint32_t buf_b_qs[BN * QPITCH];
+shared float buf_b_d[BN * BK_STEP];
+
+#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
+shared float buf_b_s[BN * BK_STEP];
+#endif
+
+#if defined(DATA_A_IQ4_NL) || defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
+shared int8_t cm1_kvalues[16];
+#endif
+
+#if defined(DATA_A_QUANT_K) || defined(DATA_A_NVFP4)
+#define LOAD_VEC_A 8
+#else
+#define LOAD_VEC_A (4 * QUANT_R)
+#endif
+#define LOAD_VEC_B 16
+
+const uint CM_ELEMS = (TM * TN) / WARP;
+#define ACC_BIAS_BITS 0x4B400000
+#define ACC_BIAS_F    12582912.0f
+const bool USE_MAGIC_BIAS = WARP != 32;
+
+// Accumulator row for element e: RDNA4 blocked, RDNA3/3.5 interleaved.
+uint cm_elem_row(uint e) {
+    const uint row_half = gl_SubgroupInvocationID / TN;
+    return (DEVICE_ARCH == VK_ARCH_AMD_RDNA4) ? (e + row_half * CM_ELEMS) : (row_half + 2u * e);
+}
+
+// min_term = asymmetric-quant min*b_sum correction (0 for symmetric types).
+ACC_TYPE cm1_accumulate(ACC_TYPE prev, int acc_e, float scale_a, float nbias_a, float scale_b, float min_term) {
+    if (USE_MAGIC_BIAS) {
+        const float t = fma(intBitsToFloat(acc_e), scale_a, nbias_a);
+        return ACC_TYPE(fma(t, scale_b, float(prev) + min_term));
+    }
+    return prev + ACC_TYPE(fma(float(acc_e) * scale_a, scale_b, min_term));
+}
+
+#ifdef MUL_MAT_ID
+#define NUM_WARPS (BLOCK_SIZE / WARP)
+#include "mul_mm_id_funcs.glsl"
+#endif
+
+#include "mul_mmq_cm1_funcs.glsl"
+
+void main() {
+#if defined(DATA_A_IQ4_NL)
+    if (gl_LocalInvocationIndex < 16u) {
+        cm1_kvalues[gl_LocalInvocationIndex] = kvalues_iq4nl_const[gl_LocalInvocationIndex];
+    }
+    barrier();
+#elif defined(DATA_A_MXFP4)
+    if (gl_LocalInvocationIndex < 16u) {
+        cm1_kvalues[gl_LocalInvocationIndex] = kvalues_mxfp4_const[gl_LocalInvocationIndex];
+    }
+    barrier();
+#elif defined(DATA_A_NVFP4)
+    if (gl_LocalInvocationIndex < 16u) {
+        cm1_kvalues[gl_LocalInvocationIndex] = kvalues_mxfp4_const[gl_LocalInvocationIndex];
+    }
+#if !defined(USE_OCP_FP4)
+    for (uint i = gl_LocalInvocationIndex; i < 128u; i += BLOCK_SIZE) {
+        ue4m3_fp32_lut[i] = ue4m3_to_fp32_build(i);
+    }
+#endif
+    barrier();
+#endif
+
+    const uint blocks_m = (p.M + BM - 1) / BM;
+    const uint ik = gl_WorkGroupID.x / blocks_m;
+
+#ifdef MUL_MAT_ID
+    const uint ic = gl_WorkGroupID.y;
+    const uint ir = gl_WorkGroupID.x % blocks_m;
+    const uint expert_idx = gl_WorkGroupID.z;
+    if (ic * BN >= data_expert_count[expert_idx]) {
+        return;
+    }
+#else
+    // L2-friendly workgroup scheduling
+    const uint blocks_n = (p.N + BN - 1) / BN;
+    const uint a_panel_bytes = BM * p.K + (BM * p.K) / 16;
+    const uint group_m = clamp(GROUP_A_BUDGET / max(a_panel_bytes, 1u), 1u, min(blocks_m, 32u));
+    const uint tiles_per_group = group_m * blocks_n;
+    const uint lin = gl_WorkGroupID.y * blocks_m + (gl_WorkGroupID.x % blocks_m);
+    const uint group_id = lin / tiles_per_group;
+    const uint first_m = group_id * group_m;
+    const uint gsize = min(blocks_m - first_m, group_m);
+    const uint in_group = lin - group_id * tiles_per_group;
+    const uint ir = first_m + in_group % gsize;
+    const uint ic = in_group / gsize;
+#endif
+
+#ifndef MUL_MAT_ID
+    const uint batch_idx = gl_WorkGroupID.z + p.base_work_group_z;
+
+    const uint i13 = batch_idx / p.ne12;
+    const uint i12 = batch_idx % p.ne12;
+
+    const uint i03 = i13 / p.broadcast3;
+    const uint i02 = i12 / p.broadcast2;
+
+    const uint batch_idx_a = i03 * p.ne02 + i02;
+#endif
+
+    const uint warp_i = gl_SubgroupID;
+
+    const uint cms_per_row = WM / TM;
+    const uint cms_per_col = WN / TN;
+
+    const uint warp_r = warp_i % (BM / WM);
+    const uint warp_c = warp_i / (BM / WM);
+
+    const uint elem_col0 = gl_SubgroupInvocationID % TN;
+
+    const uint loadr_a = gl_LocalInvocationID.x % (BK / LOAD_VEC_A);
+    const uint loadc_a = gl_LocalInvocationID.x / (BK / LOAD_VEC_A);
+    const uint loadr_b = gl_LocalInvocationID.x % (BK / LOAD_VEC_B);
+    const uint loadc_b = gl_LocalInvocationID.x / (BK / LOAD_VEC_B);
+
+    const uint loadstride_a = BLOCK_SIZE * LOAD_VEC_A / BK;
+    const uint loadstride_b = BLOCK_SIZE * LOAD_VEC_B / BK;
+
+#ifdef MUL_MAT_ID
+    if (p.hoist_row_ids != 0) {
+        load_row_ids_hoisted(expert_idx, ic);
+    } else {
+#ifdef MUL_MAT_ID_USE_SUBGROUPS
+        if (bitCount(p.nei0) == 1) {
+            load_row_ids(expert_idx, true, ic);
+        } else {
+            load_row_ids(expert_idx, false, ic);
+        }
+#else
+        _ne1 = 0;
+        for (uint ii1 = 0; ii1 < p.nei1 && _ne1 < (ic + 1) * BN; ii1++) {
+            for (uint ii0 = 0; ii0 < p.nei0 && _ne1 < (ic + 1) * BN; ii0++) {
+                if (data_ids[ii1*p.nbi1 + ii0] == expert_idx) {
+                    if (_ne1 >= ic * BN) {
+                        row_ids[_ne1 - ic * BN] = u16vec2(ii0, ii1);
+                    }
+                    _ne1++;
+                }
+            }
+        }
+
+        barrier();
+#endif
+    }
+
+    if (ic * BN >= _ne1) return;
+#endif
+
+#ifdef MUL_MAT_ID
+    const uint start_k = 0;
+    const uint end_k = p.K;
+#else
+    const uint start_k = ik * p.k_split;
+    const uint end_k = min(p.K, (ik + 1) * p.k_split);
+#endif
+
+    uint pos_a_ib =
+#ifdef MUL_MAT_ID
+        expert_idx * (p.batch_stride_a / BK) +
+#else
+        batch_idx_a * (p.batch_stride_a / BK) +
+#endif
+        (ir * BM * p.stride_a + start_k) / BK;
+#ifdef MUL_MAT_ID
+    uint pos_b_ib = 0;
+#else
+    uint pos_b_ib = (batch_idx * p.batch_stride_b + ic * BN * p.stride_b + start_k) / BK;
+#endif
+
+    ACC_TYPE sums[cms_per_row * cms_per_col * CM_ELEMS];
+    [[unroll]] for (uint i = 0; i < cms_per_row * cms_per_col * CM_ELEMS; i++) {
+        sums[i] = ACC_TYPE(0.0);
+    }
+
+    // Double-buffering: prefetch registers
+    const uint A_LOADS = (BM + loadstride_a - 1) / loadstride_a;
+    const uint B_LOADS = (BN + loadstride_b - 1) / loadstride_b;
+
+    block_a_prefetch pre_a[A_LOADS * BK_STEP];
+    block_b_prefetch pre_b[B_LOADS * BK_STEP];
+
+    if (start_k < end_k) {
+        PREFETCH_BLOCK(start_k)
+    }
+
+    const uint a_row0 = warp_r * WM;
+    const uint b_col0 = warp_c * WN;
+#ifdef MUL_MAT_ID
+    const bool active_col_tile = ic * BN + b_col0 < _ne1;
+#else
+    const bool active_col_tile = ic * BN + b_col0 < p.N;
+#endif
+
+    barrier();
+
+    for (uint block = start_k; block < end_k; block += BK * BK_STEP) {
+        STORE_BLOCK_TO_LDS(block)
+
+        barrier();
+
+        pos_a_ib += BK_STEP;
+        pos_b_ib += BK_STEP;
+
+        const uint next_block = block + BK * BK_STEP;
+        if (next_block < end_k) {
+            PREFETCH_BLOCK(next_block)
+        }
+
+        if (active_col_tile) {
+        [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {
+            const uint K_SUB = BK / TK;
+
+#if KSCALES == 2
+            [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+                    coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a;
+                    coopMatLoad(cache_a, buf_a_qs, (a_row0 + r * TM) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutRowMajor);
+
+                    float scale_a[CM_ELEMS];
+                    float nbias_a[CM_ELEMS];
+                    [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                        scale_a[e] = buf_a_d[(ks * KSCALES + h) * BM + a_row0 + r * TM + cm_elem_row(e)];
+                        if (USE_MAGIC_BIAS) {
+                            nbias_a[e] = -ACC_BIAS_F * scale_a[e];
+                        }
+                    }
+
+                    [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+                        coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b;
+                        coopMatLoad(cache_b, buf_b_qs, (b_col0 + c * TN) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutColumnMajor);
+
+                        const float scale_b_v = buf_b_d[ks * BN + b_col0 + c * TN + elem_col0];
+
+                        coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> acc =
+                            coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(
+                                USE_MAGIC_BIAS ? ACC_BIAS_BITS : 0);
+                        acc = coopMatMulAdd(cache_a, cache_b, acc);
+
+                        const uint tile_idx = r * cms_per_col + c;
+                        [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                            sums[tile_idx * CM_ELEMS + e] = cm1_accumulate(
+                                sums[tile_idx * CM_ELEMS + e], int(acc[e]),
+                                scale_a[e], nbias_a[e], scale_b_v, 0.0);
+                        }
+                    }
+                }
+            }
+#elif defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
+            // Preload all A/B fragments up front (ILP).
+            coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[cms_per_row * K_SUB];
+            coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b[cms_per_col * K_SUB];
+
+            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+                [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                    coopMatLoad(cache_a[r * K_SUB + h], buf_a_qs, (a_row0 + r * TM) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutRowMajor);
+                }
+            }
+            [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+                [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                    coopMatLoad(cache_b[c * K_SUB + h], buf_b_qs, (b_col0 + c * TN) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutColumnMajor);
+                }
+            }
+
+            float scale_b[cms_per_col];
+            float bs[cms_per_col];
+            [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+                scale_b[c] = buf_b_d[ks * BN + b_col0 + c * TN + elem_col0];
+                bs[c] = float(buf_b_s[ks * BN + b_col0 + c * TN + elem_col0]);
+            }
+
+            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+                float scale_a[CM_ELEMS];
+                float nbias_a[CM_ELEMS];
+                float ma[CM_ELEMS];
+                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                    vec2 dm = buf_a_dm[ks * BM + a_row0 + r * TM + cm_elem_row(e)];
+                    scale_a[e] = dm.x;
+                    if (USE_MAGIC_BIAS) {
+                        nbias_a[e] = -ACC_BIAS_F * scale_a[e];
+                    }
+                    ma[e] = dm.y;
+                }
+
+                [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+                    coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> acc =
+                        coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(
+                            USE_MAGIC_BIAS ? ACC_BIAS_BITS : 0);
+
+                    [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                        acc = coopMatMulAdd(cache_a[r * K_SUB + h], cache_b[c * K_SUB + h], acc);
+                    }
+
+                    const uint tile_idx = r * cms_per_col + c;
+                    [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                        sums[tile_idx * CM_ELEMS + e] = cm1_accumulate(
+                            sums[tile_idx * CM_ELEMS + e], int(acc[e]),
+                            scale_a[e], nbias_a[e], scale_b[c], ma[e] * bs[c]);
+                    }
+                }
+            }
+#else
+            // Preload all A/B fragments up front (ILP).
+            coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[cms_per_row * K_SUB];
+            coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b[cms_per_col * K_SUB];
+
+            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+                [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                    coopMatLoad(cache_a[r * K_SUB + h], buf_a_qs, (a_row0 + r * TM) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutRowMajor);
+                }
+            }
+            [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+                [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                    coopMatLoad(cache_b[c * K_SUB + h], buf_b_qs, (b_col0 + c * TN) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutColumnMajor);
+                }
+            }
+
+            float scale_b[cms_per_col];
+            [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+                scale_b[c] = buf_b_d[ks * BN + b_col0 + c * TN + elem_col0];
+            }
+
+            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+                float scale_a[CM_ELEMS];
+                float nbias_a[CM_ELEMS];
+                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                    scale_a[e] = buf_a_d[ks * BM + a_row0 + r * TM + cm_elem_row(e)];
+                    if (USE_MAGIC_BIAS) {
+                        nbias_a[e] = -ACC_BIAS_F * scale_a[e];
+                    }
+                }
+
+                [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+                    coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> acc =
+                        coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(
+                            USE_MAGIC_BIAS ? ACC_BIAS_BITS : 0);
+
+                    [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                        acc = coopMatMulAdd(cache_a[r * K_SUB + h], cache_b[c * K_SUB + h], acc);
+                    }
+
+                    const uint tile_idx = r * cms_per_col + c;
+                    [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                        sums[tile_idx * CM_ELEMS + e] = cm1_accumulate(
+                            sums[tile_idx * CM_ELEMS + e], int(acc[e]),
+                            scale_a[e], nbias_a[e], scale_b[c], 0.0);
+                    }
+                }
+            }
+#endif // KSCALES
+        }
+        }
+
+        barrier();
+    }
+
+#undef PREFETCH_BLOCK
+#undef STORE_BLOCK_TO_LDS
+#undef B_IB_CALC
+
+    const uint dr = ir * BM + a_row0;
+    const uint dc = ic * BN + b_col0;
+
+#ifdef MUL_MAT_ID
+    [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+        [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+            const uint tile_idx = r * cms_per_col + c;
+            [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                const uint col_i = dc + c * TN + elem_col0;
+                if (col_i >= _ne1) continue;
+
+                const uint row_g = dr + r * TM + cm_elem_row(e);
+                if (row_g >= p.M) continue;
+
+                const u16vec2 row_idx = row_ids[col_i - ic * BN];
+                const uint store_offset = row_idx.y * p.batch_stride_d + row_idx.x * p.stride_d + row_g;
+                data_d[store_offset] = D_TYPE(sums[tile_idx * CM_ELEMS + e]);
+            }
+        }
+    }
+#else
+    const uint offsets = batch_idx * p.batch_stride_d + ik * p.batch_stride_d * p.num_batches;
+
+    [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+        [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+            const uint tile_idx = r * cms_per_col + c;
+            [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                const uint row_g = dr + r * TM + cm_elem_row(e);
+                const uint col_g = dc + c * TN + elem_col0;
+                if (row_g < p.M && col_g < p.N) {
+                    data_d[offsets + col_g * p.stride_d + row_g] = D_TYPE(sums[tile_idx * CM_ELEMS + e]);
+                }
+            }
+        }
+    }
+#endif // MUL_MAT_ID
+}
