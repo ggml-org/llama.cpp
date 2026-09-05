@@ -111,6 +111,7 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
         id<MTLCommandQueue> queue = ggml_metal_device_get_queue(dev);
         if (queue == nil) {
             GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
+            free(res);
             return NULL;
         }
 
