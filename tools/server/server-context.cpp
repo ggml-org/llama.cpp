@@ -256,6 +256,7 @@ struct server_slot {
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
     bool spec_is_replay = false;
+    bool                     spec_skip_draft_once = false;
     std::mt19937 spec_synth_rng;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
@@ -370,6 +371,7 @@ struct server_slot {
         SLT_DBG(*this, "%s", "\n");
 
         spec_is_replay = false;
+        spec_skip_draft_once = false;
 
         last_nl_pos    = 0;
         generated_text = "";
@@ -2985,6 +2987,11 @@ private:
                 const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
                 const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
+                if (slot.spec_skip_draft_once) {
+                    slot.spec_skip_draft_once = false;
+                    return;
+                }
+
                 const int n_draft_max = slot.get_n_draft_max();
 
                 if (n_draft_max > 0) {
@@ -3905,6 +3912,17 @@ private:
 
                 GGML_ASSERT(accepted.size() >= 1);
 
+                bool accepted_eog = false;
+                if (!slot.spec_is_replay) {
+                    for (size_t i = 0; i + 1 < accepted.size(); ++i) {
+                        if (llama_vocab_is_eog(vocab, accepted[i])) {
+                            accepted.resize(i + 1);
+                            accepted_eog = true;
+                            break;
+                        }
+                    }
+                }
+
                 const uint32_t n_rollback = slot.spec_draft.size() + 1 - accepted.size();
 
                 const bool use_ckpt_tgt =
@@ -3919,7 +3937,18 @@ private:
                         }
 
                         // partial acceptance is not supported by the context -> truncate the draft and restore the state
-                        slot.spec_is_replay = true;
+                        slot.spec_is_replay = !accepted_eog;
+                        if (accepted_eog) {
+                            accepted.pop_back();
+                            slot.spec_skip_draft_once = accepted.empty();
+                            if (slot.spec_skip_draft_once) {
+                                common_speculative_accept(spec.get(), slot.id, 0);
+                                slot.stats.n_draft_verif_steps += 1;
+                                if (slot.n_accepted_per_pos.empty()) {
+                                    slot.n_accepted_per_pos.resize(common_speculative_n_max(spec.get()), 0);
+                                }
+                            }
+                        }
                         slot.spec_draft = std::move(accepted);
 
                         const auto & ckpt = slot.spec_ckpt;
