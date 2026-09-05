@@ -507,7 +507,11 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
                 GGML_LOG_DEBUG(GGML_CUDA_NAME " pool[%d]: retry succeeded\n", device);
             }
         }
-        CUDA_CHECK(err);
+        if (err != cudaSuccess) {
+            // out of VRAM: fail gracefully (return nullptr) instead of aborting the
+            // process, so the caller can propagate GGML_STATUS_ALLOC_FAILED
+            return nullptr;
+        }
         *actual_size = look_ahead_size;
         pool_size += look_ahead_size;
 #ifdef DEBUG_CUDA_MALLOC
@@ -588,7 +592,11 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
             prop.location.id = physical_device;
             CUmemGenericAllocationHandle handle;
-            CU_CHECK(cuMemCreate(&handle, reserve_size, &prop, 0));
+            if (cuMemCreate(&handle, reserve_size, &prop, 0) != CUDA_SUCCESS) {
+                // out of VRAM: fail gracefully (return nullptr) instead of aborting the
+                // process, so the caller can propagate GGML_STATUS_ALLOC_FAILED
+                return nullptr;
+            }
 
             // reserve virtual address space (if not already reserved)
             if (pool_addr == 0) {
@@ -4466,7 +4474,24 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
         CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
     }
 
-    ggml_cuda_graph_evaluate_and_capture(cuda_ctx, cgraph, use_cuda_graph, cuda_graph_update_required, graph_key);
+    try {
+        ggml_cuda_graph_evaluate_and_capture(cuda_ctx, cgraph, use_cuda_graph, cuda_graph_update_required, graph_key);
+    } catch (const ggml_cuda_pool_alloc_failure &) {
+        // the pool ran out of VRAM: unwind any in-flight capture and report the failure
+        // instead of aborting the whole process
+        cudaStream_t stream = cuda_ctx->stream();
+        cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+        cudaStreamIsCapturing(stream, &capture_status);
+        if (capture_status != cudaStreamCaptureStatusNone) {
+            cudaGraph_t captured_graph = nullptr;
+            cudaError_t err = cudaStreamEndCapture(stream, &captured_graph);
+            if (err == cudaSuccess && captured_graph != nullptr) {
+                cudaGraphDestroy(captured_graph);
+            }
+        }
+        GGML_LOG_ERROR("%s: CUDA pool allocation failed (out of VRAM), failing graph compute\n", __func__);
+        return GGML_STATUS_ALLOC_FAILED;
+    }
 
     return GGML_STATUS_SUCCESS;
 }
