@@ -2049,6 +2049,37 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d(ggml_met
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d_mm(ggml_metal_library_t lib, const ggml_tensor * op) {
+    assert(op->op == GGML_OP_CONV_2D);
+
+    GGML_ASSERT(ggml_is_contiguous(op->src[0]));
+    GGML_ASSERT(op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
+    GGML_ASSERT(op->type         == GGML_TYPE_F32);
+
+    char base[256];
+    char name[256];
+
+    const int nr0 = op->src[0]->ne[3] <= 32 ? 32 : 64;
+    const int nr1 = 2048/nr0;
+
+    snprintf(base, 256, "kernel_conv_2d_mm_%s_%s_%dx%d", ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type), nr0, nr1);
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    res.nr0 = nr0;
+    res.nr1 = nr1;
+    res.nsg = 4;
+
+    res.smem = nr0*nr1*sizeof(float);
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d_dw(ggml_metal_library_t lib, const ggml_tensor * op, bool tiled) {
     assert(op->op == GGML_OP_CONV_2D_DW);
 
