@@ -216,3 +216,6 @@ export type { ReasoningEffortLevel } from './reasoning';
 
 // Splash
 export type { SplashDimensions } from './splash';
+
+// Server registry
+export type { StoredServer, StoredTunnelServer } from './server-registry';
