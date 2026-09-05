@@ -376,6 +376,18 @@ static __global__ void flash_attn_ext_vec(
             }
 #endif // V_DOT2_F32_F16_AVAILABLE
         }
+
+#ifndef GGML_USE_HIP
+        // Close the loop-carried read->write cycle on the shared KQ scores. The __syncwarp()
+        // above orders this iteration's KQ stores (KQ[j*nthreads + tid] = ...) against its KQ
+        // loads, but nothing orders those loads against the NEXT iteration's stores to the same
+        // slots: with independent thread scheduling (Volta+) a lane can advance through the loop
+        // back-edge and overwrite a KQ slot while a sibling lane is still reading it for the V
+        // accumulation (a warp-local WAR reported by compute-sanitizer racecheck). A warp barrier
+        // suffices because each warp only reads its own 32-score segment; __syncwarp() is
+        // unavailable under HIP (wavefronts execute in lockstep), matching the #ifndef above.
+        __syncwarp();
+#endif // GGML_USE_HIP
     }
 
     if (sinks && blockIdx.y == 0) {
