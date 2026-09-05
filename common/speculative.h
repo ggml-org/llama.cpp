@@ -3,6 +3,8 @@
 #include "llama.h"
 #include "common.h"
 
+#include <algorithm>
+
 struct common_speculative;
 
 // comma separated list the provided types
@@ -17,8 +19,9 @@ std::vector<enum common_speculative_type> common_speculative_types_from_names(co
 // infer the spec types from the GGUF metadata of a draft model; empty if unknown
 std::vector<enum common_speculative_type> common_speculative_types_from_gguf(const std::string & path);
 
-// returns true when the draft's in-graph logits consumer (DSpark markov head) requires the
-// lm_head replicated on every device under tensor parallelism
+// returns true when the target lm_head must be replicated on every device under tensor
+// parallelism: a DSpark draft with no lm_head of its own consumes the target lm_head output
+// in-graph (markov head argmax over the full vocabulary)
 bool common_speculative_draft_replicated_lm_head(const std::string & path);
 
 // convert string to type
@@ -49,6 +52,13 @@ struct common_speculative_output_limits {
 // return the output limits needed for speculative decoding
 common_speculative_output_limits common_speculative_get_output_limits(
         int32_t n_batch, int32_t n_parallel, int32_t n_draft);
+
+// max draft-context ubatch for block drafts (DFlash/DSpark): their largest decode batch is
+// one noise block per sequence (n_max + 1 tokens), but the target-feature prefill (encoder +
+// KV injection) is chunked by the same ubatch, so keep a floor to avoid launch-bound chunks
+inline uint32_t common_speculative_block_draft_n_ubatch(uint32_t n_parallel, int32_t n_max) {
+    return std::max<uint32_t>(n_parallel * (uint32_t) std::max(1, n_max + 1), 64);
+}
 
 common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq);
 

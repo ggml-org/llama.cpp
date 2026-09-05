@@ -1063,12 +1063,13 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k], true);
         }
 
-        // DFlash2 reads its selector lattice from h_nextn and never consumes raw logits.
+        // DFlash2's CPU selector reads the decoder hidden states of every block position from
+        // h_nextn, so the output stays dense; DFlash1/DSpark carry only their output rows there
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ !is_dflash2);
         llama_set_causal_attn(ctx_dft, causal_attn); // DFlash needs non-causal attention unless the model says otherwise
     }
 
-    // read the DFlash2 selector weights straight from the draft GGUF file (they are i8)
+    // read the DFlash2 selector weights straight from the draft GGUF file
     void load_dflash2_selector() {
         struct gguf_init_params gguf_params = {
             /* .no_alloc = */ true,
@@ -1076,45 +1077,73 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         };
 
         gguf_context_ptr gguf_ctx(gguf_init_from_file(params.mparams.path.c_str(), gguf_params));
-        GGML_ASSERT(gguf_ctx && "failed to open the draft GGUF for the DFlash2 selector");
+        if (!gguf_ctx) {
+            throw std::runtime_error("failed to open the draft GGUF for the DFlash2 selector");
+        }
 
-        FILE * file = ggml_fopen(params.mparams.path.c_str(), "rb");
-        GGML_ASSERT(file && "failed to open the draft GGUF for the DFlash2 selector");
+        // RAII: close the file even when a load step below throws
+        struct file_closer {
+            void operator()(FILE * file) const {
+                fclose(file);
+            }
+        };
+        std::unique_ptr<FILE, file_closer> file(ggml_fopen(params.mparams.path.c_str(), "rb"));
+        if (!file) {
+            throw std::runtime_error("failed to open the draft GGUF for the DFlash2 selector");
+        }
 
         const int64_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(params.ctx_dft)));
 
-        auto load_i8 = [&](const char * name, std::vector<float> & dst) {
+        // read and dequantize one selector tensor, validating its shape against the loader
+        // expectation; returns the row count (ne[0]) so the first table can fix the rank
+        auto load_i8 = [&](const char * name, std::vector<float> & dst, int64_t ne0_expect, int64_t ne1_expect) -> int64_t {
             const int64_t id = gguf_find_tensor(gguf_ctx.get(), name);
-            GGML_ASSERT(id >= 0 && "DFlash2 selector tensor missing");
+            if (id < 0) {
+                throw std::runtime_error(std::string("DFlash2 selector tensor '") + name + "' is missing from the draft GGUF");
+            }
+
+            const int64_t * ne = gguf_get_tensor_ne(gguf_ctx.get(), id);
+            if ((ne0_expect > 0 && ne[0] != ne0_expect) || ne[1] != ne1_expect) {
+                throw std::runtime_error(std::string("DFlash2 selector tensor '") + name +
+                        "' has an unexpected shape in the draft GGUF");
+            }
+
             const enum ggml_type t = gguf_get_tensor_type(gguf_ctx.get(), id);
             const struct ggml_type_traits * tt = ggml_get_type_traits(t);
-            GGML_ASSERT(tt && tt->to_float && "unsupported DFlash2 selector tensor type");
+            if (tt == nullptr || tt->to_float == nullptr) {
+                throw std::runtime_error(std::string("DFlash2 selector tensor '") + name + "' uses an unsupported type");
+            }
 
             const size_t size = gguf_get_tensor_size(gguf_ctx.get(), id);
             std::vector<uint8_t> raw(size);
 
             const int64_t offset = gguf_get_data_offset(gguf_ctx.get()) + gguf_get_tensor_offset(gguf_ctx.get(), id);
 #ifdef _WIN32
-            const int rc = _fseeki64(file, offset, SEEK_SET);
+            const int rc = _fseeki64(file.get(), offset, SEEK_SET);
 #else
-            const int rc = fseeko(file, (off_t) offset, SEEK_SET);
+            const int rc = fseeko(file.get(), (off_t) offset, SEEK_SET);
 #endif
-            GGML_ASSERT(rc == 0 && "failed to seek to the DFlash2 selector tensor");
-            GGML_ASSERT(fread(raw.data(), 1, size, file) == size && "failed to read the DFlash2 selector tensor");
+            if (rc != 0) {
+                throw std::runtime_error(std::string("failed to seek to the DFlash2 selector tensor '") + name + "'");
+            }
+            if (fread(raw.data(), 1, size, file.get()) != size) {
+                throw std::runtime_error(std::string("failed to read the DFlash2 selector tensor '") + name + "'");
+            }
 
             // dequantize with the same conversion the GPU get_rows uses
             const size_t n_elts = size / tt->type_size * tt->blck_size;
             dst.resize(n_elts);
             tt->to_float(raw.data(), dst.data(), (int64_t) n_elts);
+
+            return ne[0];
         };
 
-        load_i8("selector_successor.weight",  sel_next);
-        load_i8("selector_predecessor.weight", sel_prev);
-        load_i8("selector_hidden.weight",      sel_hidden);
+        // the successor table fixes the rank; the other two tables are checked against it
+        const int64_t rank = load_i8("selector_successor.weight",   sel_next,   -1,        n_vocab);
+        load_i8("selector_predecessor.weight", sel_prev,   rank,      n_vocab);
+        load_i8("selector_hidden.weight",      sel_hidden, n_embd_dec, rank);
 
-        fclose(file);
-
-        selector_rank = (int32_t) (sel_next.size() / n_vocab);
+        selector_rank = (int32_t) rank;
         GGML_ASSERT((size_t) selector_rank * n_vocab == sel_next.size());
         GGML_ASSERT((size_t) selector_rank * n_vocab == sel_prev.size());
         GGML_ASSERT((size_t) n_embd_dec * selector_rank == sel_hidden.size());
@@ -2519,9 +2548,11 @@ bool common_speculative_draft_replicated_lm_head(const std::string & path) {
         return false;
     }
 
-    // DSpark's markov head reads the lm_head output in-graph; DFlash2 ranks the
-    // vocabulary on the CPU instead and can use a split lm_head
-    return gguf_find_tensor(gguf_ctx.get(), "markov_w1.weight") >= 0;
+    // the target lm_head is replicated only when a DSpark draft consumes its output in-graph
+    // (the markov head argmax) and ships no lm_head of its own to run the head on; DFlash2
+    // ranks the vocabulary on the CPU instead and can use a split lm_head
+    return gguf_find_tensor(gguf_ctx.get(), "markov_w1.weight") >= 0 &&
+           gguf_find_tensor(gguf_ctx.get(), "output.weight") < 0;
 }
 
 static uint32_t common_get_enabled_speculative_configs(const std::vector<common_speculative_type> & configs) {
@@ -2743,19 +2774,16 @@ common_speculative_init_result::common_speculative_init_result(
     cparams.n_rs_seq  = 0;
     cparams.ctx_other = ctx_tgt;
 
-    // DFlash2/DSpark rank the full target vocabulary (in-graph or on the CPU after the decode),
-    // so the lm_head output for every block position grows with n_ubatch * n_vocab.
-    // Their largest decode batch is one noise block per sequence (n_max + 1 tokens), but the
-    // target-feature prefill (encoder + KV injection) is chunked by the same ubatch, so keep a
-    // floor: anything below ~64 tokens per chunk is launch-bound and degrades prompt processing.
+    // DFlash2/DSpark rank the full target vocabulary (in-graph or on the CPU after the
+    // decode), so the reserved lm_head output grows with the draft ubatch; see
+    // common_speculative_block_draft_n_ubatch for the cap rationale
     const bool has_block_draft = std::any_of(
         params.speculative.types.begin(), params.speculative.types.end(),
         [](common_speculative_type t) {
             return t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
         });
     if (has_block_draft) {
-        const uint32_t n_ubatch_dft = std::max<uint32_t>(
-            params.n_parallel * (uint32_t) std::max(1, params.speculative.draft.n_max + 1), 64);
+        const uint32_t n_ubatch_dft = common_speculative_block_draft_n_ubatch(params.n_parallel, params.speculative.draft.n_max);
         if (cparams.n_ubatch > n_ubatch_dft) {
             LOG_INF("%s: capping draft context ubatch from %u to %u (block draft)\n", __func__, cparams.n_ubatch, n_ubatch_dft);
             cparams.n_ubatch = n_ubatch_dft;

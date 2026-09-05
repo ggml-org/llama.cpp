@@ -141,8 +141,8 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
         // the successor/predecessor tables are consumed by the CPU-side selector straight
         // from the GGUF file, so they are not loaded into device memory
-        dflash_selector_prev   = create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_PREV,   "weight"), { rank, n_vocab }, TENSOR_SKIP);
-        dflash_selector_next   = create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_NEXT,   "weight"), { rank, n_vocab }, TENSOR_SKIP);
+        create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_PREV,   "weight"), { rank, n_vocab }, TENSOR_SKIP);
+        create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_NEXT,   "weight"), { rank, n_vocab }, TENSOR_SKIP);
         dflash_selector_hidden = create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_HIDDEN, "weight"), { n_embd, rank }, 0);
 
         LLAMA_LOG_INFO("%s: DFlash2 conv kernel = %u, group = %u, selector rank = %u, top-k = %u\n", __func__,
@@ -150,9 +150,11 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
                 hparams.dflash_selector_rank, hparams.dflash_selector_top_k);
     }
 
-    // a draft with its own lm_head keeps it replicated under tensor parallelism, so the
-    // in-graph DSpark markov head sees the full vocabulary
-    if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR && (selector_meta || markov_meta)) {
+    // The DSpark markov head ranks its lm_head output in-graph (argmax over the full
+    // vocabulary) and the reduced-vocab d2t scatter consumes the lm_head rows on a full
+    // vocab-sized tensor, so a draft lm_head stays replicated in full on every device under
+    // tensor parallelism; plain DFlash2 ranks on the CPU instead and keeps the lm_head split.
+    if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR && (markov_meta || d2t_meta)) {
         output_replicated = true;
     }
 
