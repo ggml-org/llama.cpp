@@ -1356,7 +1356,14 @@ private:
             }
             SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
 
-            prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+            const bool limit_tokens_per_entry = params_base.prompt_cache_max_tokens >= 0;
+            const size_t prompt_cache_max_tokens = params_base.prompt_cache_max_tokens == 0
+                ? static_cast<size_t>(n_ctx_slot())
+                : params_base.prompt_cache_max_tokens > 0
+                    ? static_cast<size_t>(params_base.prompt_cache_max_tokens)
+                    : static_cast<size_t>(n_ctx);
+            prompt_cache = std::make_unique<server_prompt_cache>(
+                params_base.cache_ram_mib, prompt_cache_max_tokens, limit_tokens_per_entry);
         } else {
             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }

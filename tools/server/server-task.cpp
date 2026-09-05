@@ -1709,6 +1709,12 @@ size_t server_prompt_cache::n_tokens() const {
 }
 
 server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
+    if (limit_tokens_per_entry && limit_tokens > 0 && prompt.tokens.size() > limit_tokens) {
+        SRV_WRN(" - prompt cache entry has %zu tokens, exceeding per-entry limit of %zu tokens, skipping\n",
+                prompt.tokens.size(), limit_tokens);
+        return nullptr;
+    }
+
     // first check if the current state is contained fully in the cache
     for (auto it = states.begin(); it != states.end(); ++it) {
         const int cur_lcp_len = it->prompt.tokens.get_common_prefix(prompt.tokens);
@@ -1882,7 +1888,7 @@ void server_prompt_cache::update() {
     // dynamically increase the token limit if it can fit in the memory limit
     const size_t limit_tokens_cur = limit_size > 0 ? std::max<size_t>(limit_tokens, limit_size/size_per_token) : limit_tokens;
 
-    if (limit_tokens > 0) {
+    if (!limit_tokens_per_entry && limit_tokens > 0) {
         while (!states.empty() && n_tokens() > limit_tokens_cur) {
             SRV_WRN(" - cache token limit (%zu, est: %zu) reached, removing oldest entry (size = %.3f MiB)\n",
                     limit_tokens, limit_tokens_cur, states.front().size() / (1024.0 * 1024.0));

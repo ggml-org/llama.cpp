@@ -1723,6 +1723,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"-kvcpc", "--kv-cache-prompt-context"}, "N",
+        "maximum context length of an individual prompt-cache entry (-1 = legacy aggregate limit, 0 = effective slot context, >0 = per-entry limit)",
+        [](common_params & params, int value) {
+            if (value < -1) {
+                throw std::invalid_argument("kv-cache-prompt-context must be -1 or non-negative");
+            }
+            params.prompt_cache_max_tokens = value;
+        }
+    ).set_env("LLAMA_ARG_KV_CACHE_PROMPT_CONTEXT").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-kvu", "--kv-unified"},
         {"-no-kvu", "--no-kv-unified"},
         "use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)",
