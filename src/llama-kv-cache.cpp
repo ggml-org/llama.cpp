@@ -893,6 +893,7 @@ bool llama_kv_cache::try_lazy_quantize(llama_context * lctx) {
     }
 
     lazy_quant = false;
+    lazy_quant_converted = true;
 
     LLAMA_LOG_INFO("%s: converted %u populated f16 cells to q8_0 and expanded %u cells to %u in %.2f ms\n",
             __func__, n_rows, kv_size_f16, kv_size_target, (ggml_time_us() - t_start)/1000.0);
@@ -2570,6 +2571,10 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
             for (uint32_t i = 0; i < cell_count; ++i) {
                 const uint32_t idx = sinfo.idxs[0][i];
 
+                if (lazy_quant && idx >= cells.size()) {
+                    try_lazy_quantize(nullptr);
+                }
+
                 if (idx >= cells.size() || !cells.is_empty(idx)) {
                     LLAMA_LOG_ERROR("%s: cell %u of the mirrored slot layout is not free\n", __func__, idx);
                     return false;
@@ -2577,6 +2582,9 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
             }
         } else {
             sinfo = find_slot(ubatch, false);
+            if (sinfo.empty() && try_lazy_quantize(nullptr)) {
+                sinfo = find_slot(ubatch, false);
+            }
             if (sinfo.empty()) {
                 LLAMA_LOG_ERROR("%s: failed to find %d available cells in kv cache\n", __func__,  cell_count);
                 return false;
@@ -2725,7 +2733,8 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
         }
 
         const int32_t k_type_i = (int32_t) k->type;
-        if (k_type_i != k_type_i_ref) {
+        const bool quantize = lazy_quant_converted && k_type_i_ref == GGML_TYPE_F16;
+        if (k_type_i != k_type_i_ref && !quantize) {
             LLAMA_LOG_ERROR("%s: mismatched key type (%d != %d, layer %d)\n", __func__, k_type_i, k_type_i_ref, il);
             return false;
         }
@@ -2733,14 +2742,14 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
         // Read row size of key
         uint64_t k_size_row_ref;
         io.read(&k_size_row_ref, sizeof(k_size_row_ref));
-        const size_t k_size_row = ggml_row_size(k->type, n_embd_k_gqa);
+        const size_t k_size_row = ggml_row_size(quantize ? GGML_TYPE_F16 : k->type, n_embd_k_gqa);
         if (k_size_row != k_size_row_ref) {
             LLAMA_LOG_ERROR("%s: mismatched key row size (%zu != %zu, layer %d)\n", __func__, k_size_row, (size_t) k_size_row_ref, il);
             return false;
         }
 
         for (const auto & r : runs) {
-            io.read_tensor(k, (size_t) r.from * k_size_row, (size_t) (r.to - r.from) * k_size_row);
+            io.read_tensor(k, (size_t) r.from * k_size_row, (size_t) (r.to - r.from) * k_size_row, quantize);
         }
     }
 
@@ -2759,7 +2768,8 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
             int32_t v_type_i_ref;
             io.read(&v_type_i_ref, sizeof(v_type_i_ref));
             const int32_t v_type_i = (int32_t) v->type;
-            if (v_type_i != v_type_i_ref) {
+            const bool quantize = lazy_quant_converted && v_type_i_ref == GGML_TYPE_F16;
+            if (v_type_i != v_type_i_ref && !quantize) {
                 LLAMA_LOG_ERROR("%s: mismatched value type (%d != %d, layer %d)\n", __func__, v_type_i, v_type_i_ref, il);
                 return false;
             }
@@ -2767,14 +2777,14 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
             // Read row size of value
             uint64_t v_size_row_ref;
             io.read(&v_size_row_ref, sizeof(v_size_row_ref));
-            const size_t v_size_row = ggml_row_size(v->type, n_embd_v_gqa);
+            const size_t v_size_row = ggml_row_size(quantize ? GGML_TYPE_F16 : v->type, n_embd_v_gqa);
             if (v_size_row != v_size_row_ref) {
                 LLAMA_LOG_ERROR("%s: mismatched value row size (%zu != %zu, layer %d)\n", __func__, v_size_row, (size_t) v_size_row_ref, il);
                 return false;
             }
 
             for (const auto & r : runs) {
-                io.read_tensor(v, (size_t) r.from * v_size_row, (size_t) (r.to - r.from) * v_size_row);
+                io.read_tensor(v, (size_t) r.from * v_size_row, (size_t) (r.to - r.from) * v_size_row, quantize);
             }
         }
     } else {

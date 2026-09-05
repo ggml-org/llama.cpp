@@ -279,6 +279,7 @@ private:
 
     uint32_t kv_size_target = 0;
     bool lazy_quant = false;
+    bool lazy_quant_converted = false;
 
     // SWA
     const uint32_t n_swa = 0;

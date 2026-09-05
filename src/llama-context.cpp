@@ -2642,6 +2642,32 @@ private:
     std::vector<write_info> winfos;
 };
 
+static void llama_io_tensor_set(ggml_tensor * tensor, const uint8_t * data, size_t offset, size_t size, bool quantize) {
+    if (!quantize) {
+        ggml_backend_tensor_set(tensor, data, offset, size);
+        return;
+    }
+
+    GGML_ASSERT(tensor->type == GGML_TYPE_Q8_0);
+    const size_t n_per_row = tensor->ne[0];
+    const size_t src_row_size = ggml_row_size(GGML_TYPE_F16, n_per_row);
+    const size_t dst_row_size = ggml_row_size(tensor->type, n_per_row);
+    GGML_ASSERT(offset % src_row_size == 0 && size % src_row_size == 0);
+
+    const size_t chunk_rows = std::min<size_t>(256, size/src_row_size);
+    std::vector<ggml_fp16_t> data_f16(chunk_rows*n_per_row);
+    std::vector<float>       data_f32(chunk_rows*n_per_row);
+    std::vector<uint8_t>     data_q8(chunk_rows*dst_row_size);
+
+    for (size_t pos = 0; pos < size; pos += chunk_rows*src_row_size) {
+        const size_t n_rows = std::min(chunk_rows, (size - pos)/src_row_size);
+        memcpy(data_f16.data(), data + pos, n_rows*src_row_size);
+        ggml_fp16_to_fp32_row(data_f16.data(), data_f32.data(), n_rows*n_per_row);
+        const size_t nbytes = ggml_quantize_chunk(GGML_TYPE_Q8_0, data_f32.data(), data_q8.data(), 0, n_rows, n_per_row, nullptr);
+        ggml_backend_tensor_set(tensor, data_q8.data(), (offset + pos)/src_row_size*dst_row_size, nbytes);
+    }
+}
+
 class llama_io_read_host : public llama_io_read_i {
 public:
     llama_io_read_host(const uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
@@ -2649,7 +2675,7 @@ public:
     ~llama_io_read_host() {
         // flush the reads
         for (const auto & rinfo : rinfos) {
-            ggml_backend_tensor_set(rinfo.tensor, rinfo.ptr, rinfo.offset, rinfo.size);
+            llama_io_tensor_set(rinfo.tensor, rinfo.ptr, rinfo.offset, rinfo.size, rinfo.quantize);
         }
     }
 
@@ -2663,13 +2689,13 @@ public:
         buf_size -= size;
     }
 
-    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
+    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size, bool quantize) override {
         if (size > buf_size) {
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
 
         // save for later during destruction
-        rinfos.push_back({tensor, ptr, size, offset});
+        rinfos.push_back({tensor, ptr, size, offset, quantize});
 
         ptr += size;
         size_read += size;
@@ -2690,6 +2716,7 @@ private:
         const uint8_t * ptr;
         size_t size;
         size_t offset;
+        bool quantize;
     };
     std::vector<read_info> rinfos;
 };
@@ -2728,10 +2755,10 @@ public:
         size_read += size;
     }
 
-    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
+    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size, bool quantize) override {
         temp_buffer.resize(size);
         read(temp_buffer.data(), size);
-        ggml_backend_tensor_set(tensor, temp_buffer.data(), offset, size);
+        llama_io_tensor_set(tensor, temp_buffer.data(), offset, size, quantize);
     }
 
     size_t n_bytes() override {
@@ -2882,6 +2909,38 @@ public:
     }
 
     ~llama_io_read_device() {
+        if (std::any_of(rinfos.begin(), rinfos.end(), [](const read_info & rinfo) { return rinfo.quantize; })) {
+            // Conversion uses the saved byte stream, independent of save/restore fragmentation.
+            std::map<ggml_backend_buffer_type_t, std::pair<size_t, size_t>> cursors;
+            std::vector<uint8_t> data;
+            for (const auto & rinfo : rinfos) {
+                const auto buft = ggml_backend_buffer_get_type(rinfo.tensor->buffer);
+                const auto & tensors = mbufs.at(buft).cpy;
+                auto & cursor = cursors[buft];
+                const size_t row_size = ggml_row_size(rinfo.quantize ? GGML_TYPE_F16 : rinfo.tensor->type, rinfo.tensor->ne[0]);
+                for (size_t pos = 0; pos < rinfo.size;) {
+                    const size_t size = std::min(rinfo.size - pos, 256*row_size);
+                    data.resize(size);
+                    for (size_t copied = 0; copied < size;) {
+                        GGML_ASSERT(cursor.first < tensors.size());
+                        const auto * src = tensors[cursor.first];
+                        const size_t n = std::min(size - copied, ggml_nbytes(src) - cursor.second);
+                        ggml_backend_tensor_get(src, data.data() + copied, cursor.second, n);
+                        copied += n;
+                        cursor.second += n;
+                        if (cursor.second == ggml_nbytes(src)) {
+                            ++cursor.first;
+                            cursor.second = 0;
+                        }
+                    }
+                    llama_io_tensor_set(rinfo.tensor, data.data(), rinfo.offset + pos, size, rinfo.quantize);
+                    pos += size;
+                }
+            }
+            GGML_ASSERT(buf_size == 0);
+            return;
+        }
+
         llama_memory_buffers mbufs_new;
 
         for (const auto & rinfo : rinfos) {
@@ -3021,9 +3080,9 @@ public:
         buf_size -= size;
     }
 
-    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
+    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size, bool quantize) override {
         // save for later during destruction
-        rinfos.push_back({tensor, ptr, size, offset});
+        rinfos.push_back({tensor, ptr, size, offset, quantize});
     }
 
     size_t n_bytes() override {
@@ -3040,6 +3099,7 @@ private:
         const uint8_t * ptr;
         size_t size;
         size_t offset;
+        bool quantize;
     };
     std::vector<read_info> rinfos;
 
@@ -3323,9 +3383,9 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
     if (memory) {
         LLAMA_LOG_DEBUG("%s: - reading memory module\n", __func__);
 
-        const bool had_lazy_quant = memory->get_has_lazy_quant();
+        // A partial or failed restore can change only part of the cache layout.
+        sched_need_reserve = sched_need_reserve || memory->get_has_lazy_quant();
         memory->state_read(io);
-        sched_need_reserve = sched_need_reserve || (had_lazy_quant && !memory->get_has_lazy_quant());
     }
 
     return io.n_bytes();
@@ -3341,9 +3401,8 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     if (memory) {
-        const bool had_lazy_quant = memory->get_has_lazy_quant();
+        sched_need_reserve = sched_need_reserve || memory->get_has_lazy_quant();
         memory->state_read(io, seq_id, flags);
-        sched_need_reserve = sched_need_reserve || (had_lazy_quant && !memory->get_has_lazy_quant());
     }
 
     return io.n_bytes();
