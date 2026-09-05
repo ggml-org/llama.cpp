@@ -218,6 +218,7 @@ struct ggml_cuda_mmq_config {
 #include "mmq-config-ampere.cuh"
 #include "mmq-config-blackwell.cuh"
 
+#include "mmq-config-gcn.cuh"
 #include "mmq-config-cdna.cuh"
 #include "mmq-config-rdna2.cuh"
 #include "mmq-config-rdna3.cuh"
@@ -228,6 +229,9 @@ struct ggml_cuda_mmq_config {
 
 static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type type, const int J, const bool fallback, const int cc) {
     if (GGML_CUDA_CC_IS_AMD(cc)) {
+        if (GGML_CUDA_CC_IS_GCN(cc)) {
+            return ggml_cuda_mmq_get_config_gcn(type, J, fallback);
+        }
         if (GGML_CUDA_CC_IS_CDNA(cc)) {
             return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
         }
@@ -256,7 +260,9 @@ static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type ty
 
 static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_type type, int J, bool fallback) {
 #ifdef GGML_USE_HIP
-#ifdef CDNA
+#ifdef GCN
+    return ggml_cuda_mmq_get_config_gcn(type, J, fallback);
+#elif defined(CDNA)
     return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
 #elif defined(RDNA4)
     return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
