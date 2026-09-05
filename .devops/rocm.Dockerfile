@@ -1,8 +1,8 @@
 ARG UBUNTU_VERSION=26.04
 
 # This needs to generally match the container host's environment.
-ARG ROCM_VERSION=7.14.0
-ARG AMDGPU_VERSION=7.14.0
+ARG ROCM_VERSION=10.0.0
+ARG AMDGPU_VERSION=10.0.0
 
 # Target the ROCm build image
 ARG BASE_ROCM_DEV_CONTAINER=docker.io/rocm/dev-ubuntu-${UBUNTU_VERSION}:${ROCM_VERSION}-full
@@ -30,10 +30,10 @@ FROM ${BASE_ROCM_DEV_CONTAINER} AS build
 
 # Unless otherwise specified, we make a fat build.
 # This is mostly tied to rocBLAS supported archs.
-# check https://rocm.docs.amd.com/en/docs-7.14.0/install/rocm.html
-# check https://rocm.docs.amd.com/en/docs-7.14.0/reference/gpu-specs.html
+# check https://rocm.docs.amd.com/en/docs-10.0.0/install/rocm.html
+# check https://rocm.docs.amd.com/en/docs-10.0.0/reference/gpu-specs.html
 
-# ROCm 7.14.0 has an optimized library package for more architectures than the
+# ROCm >=7.14.0 has an optimized library package for more architectures than the
 # ones built here - see docs/docker.md for the full list. Building all of them
 # exceeds the CI time budget, so the remaining targets are left to local builds:
 # --build-arg ROCM_DOCKER_ARCH=gfx1012

@@ -109,7 +109,7 @@ docker run --gpus all -v /path/to/models:/models local/llama.cpp:server-cuda -m 
 
 ## Docker With ROCm
 
-The ROCm images are built from `rocm/dev-ubuntu-26.04:7.14.0-full` and contain the ROCm 7.14.0 user-space runtime.
+The ROCm images are built from `rocm/dev-ubuntu-26.04:10.0.0-full` and contain the ROCm 10.0.0 user-space runtime.
 
 The `amdgpu` kernel module and the GPU firmware are **not** part of the image — they always come from the host, and they have to be recent enough for the ROCm version running inside the container. Either:
 
@@ -130,7 +130,7 @@ Note that the group IDs have to be passed numerically: the images do not define 
 
 ### Supported GPU architectures
 
-ROCm 7.14.0 ships an optimized library package for every architecture below, and llama.cpp can be built for any of them. The prebuilt images cover a subset, because compiling a fat binary for the full list exceeds the CI time budget. Everything else is still a supported target — build it locally, see [Building Docker locally](#building-docker-locally-1).
+ROCm >=7.14.0 ships an optimized library package for every architecture below, and llama.cpp can be built for any of them. The prebuilt images cover a subset, because compiling a fat binary for the full list exceeds the CI time budget. Everything else is still a supported target — build it locally, see [Building Docker locally](#building-docker-locally-1).
 
 The "Prebuilt" column says whether a target is included in the published images. Parentheses group SKU variants that share a target, so `RX 6700(XT)` covers both the RX 6700 and the RX 6700 XT.
 
@@ -161,7 +161,7 @@ The "Prebuilt" column says whether a target is included in the published images.
 | RDNA 4 (Navi 4X — consumer & pro) | `gfx1200` | yes | Radeon RX 9060(XT/M/S), RX 9050 |
 | | `gfx1201` | yes | Radeon RX 9070(XT/GRE/S/M XT), RX 9080M, Radeon AI PRO R9700 |
 
-ROCm 7.14.0 has optimized libraries for every target above, so `HSA_OVERRIDE_GFX_VERSION` is only needed when the image itself has no code for your GPU:
+ROCm >=7.14.0 has optimized libraries for every target above, so `HSA_OVERRIDE_GFX_VERSION` is only needed when the image itself has no code for your GPU:
 
 - prebuilt image, `yes` row — leave the override unset;
 - prebuilt image, `no` row — set the override, or better, build locally for your target;
@@ -171,8 +171,8 @@ Spoofing another architecture costs performance and can give incorrect results, 
 
 This is a wider set than AMD's official support matrix, which is worth keeping in mind:
 
-- RDNA 1 (`gfx1010`, `gfx1011`, `gfx1012`) is not officially supported at all. ROCm 7.14.0 ships packages for it and it does work in practice — an RX 5500M (`gfx1012`) handles Qwen 3.5 4B fine, for instance — but expect it to be validated rather than tuned.
-- For RDNA 2, only `gfx1030` is officially supported. The notable change in 7.14.0 is that the rest of the generation (`gfx1031` through `gfx1036`) now has its own packages too, so those cards no longer need `HSA_OVERRIDE_GFX_VERSION=10.3.0` to masquerade as `gfx1030` — provided llama.cpp was built for the target. None of `gfx1031` through `gfx1036` are in the prebuilt images, so there the override is still required; a local build for the real target avoids it and is the faster option.
+- RDNA 1 (`gfx1010`, `gfx1011`, `gfx1012`) is not officially supported at all. ROCm >=7.14.0 ships packages for it and it does work in practice — an RX 5500M (`gfx1012`) handles Qwen 3.5 4B fine, for instance — but expect it to be validated rather than tuned.
+- For RDNA 2, only `gfx1030` is officially supported. The notable change in >=7.14.0 is that the rest of the generation (`gfx1031` through `gfx1036`) now has its own packages too, so those cards no longer need `HSA_OVERRIDE_GFX_VERSION=10.3.0` to masquerade as `gfx1030` — provided llama.cpp was built for the target. None of `gfx1031` through `gfx1036` are in the prebuilt images, so there the override is still required; a local build for the real target avoids it and is the faster option.
 
 Treat everything outside the official matrix as working but less optimized than RDNA 3 and newer, where AMD puts most of the tuning effort.
 
