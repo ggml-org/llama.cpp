@@ -69,17 +69,65 @@ struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer) {
         /*.base      = */ base,
         /*.alignment = */ align,
         /*.offset    = */ aligned_offset(base, 0, align),
+        /*.limit     = */ 0,
+        /*.bounded   = */ false,
     };
     return talloc;
 }
 
+// Initialize a borrowed range without changing the output allocator on invalid input.
+bool ggml_tallocr_new_range(
+        struct ggml_tallocr * talloc, ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    if (talloc == NULL || buffer == NULL || size == 0 ||
+            ggml_backend_buffer_is_multi_buffer(buffer) || ggml_backend_buffer_is_meta(buffer)) {
+        return false;
+    }
+
+    const size_t buffer_size = ggml_backend_buffer_get_size(buffer);
+    if (offset > buffer_size || size > buffer_size - offset) {
+        return false;
+    }
+
+    void * base = ggml_backend_buffer_get_base(buffer);
+    const uintptr_t address = (uintptr_t) base;
+    const size_t alignment = ggml_backend_buffer_get_alignment(buffer);
+    if (base == NULL || alignment == 0 || (alignment & (alignment - 1)) != 0 ||
+            offset > UINTPTR_MAX - address || size > UINTPTR_MAX - address - offset) {
+        return false;
+    }
+
+    const size_t padding = (alignment - (address + offset) % alignment) % alignment;
+    if (padding >= size) {
+        return false;
+    }
+
+    *talloc = (struct ggml_tallocr) {
+        /*.buffer    = */ buffer,
+        /*.base      = */ base,
+        /*.alignment = */ alignment,
+        /*.offset    = */ offset + padding,
+        /*.limit     = */ offset + size,
+        /*.bounded   = */ true,
+    };
+    return true;
+}
+
+// Place a tensor sequentially, returning capacity errors only for bounded allocators.
 enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor) {
     size_t size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);
-    size = GGML_PAD(size, talloc->alignment);
+    const size_t limit = talloc->bounded ? talloc->limit : ggml_backend_buffer_get_size(talloc->buffer);
+    const size_t available = talloc->offset <= limit ? limit - talloc->offset : 0;
+    const bool overflow = size > SIZE_MAX - (talloc->alignment - 1);
+    if (!overflow) {
+        size = GGML_PAD(size, talloc->alignment);
+    }
 
-    if (talloc->offset + size > ggml_backend_buffer_get_size(talloc->buffer)) {
+    if (overflow || talloc->offset > limit || size > available) {
+        if (talloc->bounded) {
+            return GGML_STATUS_ALLOC_FAILED;
+        }
         GGML_LOG_ERROR("%s: not enough space in the buffer to allocate %s (needed %zu, available %zu)\n",
-                __func__, tensor->name, size, ggml_backend_buffer_get_size(talloc->buffer) - talloc->offset);
+                __func__, tensor->name, size, available);
         GGML_ABORT("not enough space in the buffer");
     }
 
