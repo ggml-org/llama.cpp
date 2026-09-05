@@ -501,7 +501,12 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
 
         const int64_t K = (int64_t) cparams.n_rs_seq + 1;
 
-        for (int64_t t = 1; t <= K; ++t) {
+        // only the snapshot slots reachable by a rollback inside this batch are
+        // useful: rollback <= n_seq_tokens - 1, so slots beyond the batch repeat
+        // the pre-batch state and would only waste kernel launches per round
+        const int64_t t_min = std::max<int64_t>(1, K - ubatch.n_seq_tokens + 1);
+
+        for (int64_t t = t_min; t <= K; ++t) {
             const int64_t s_idx  = std::max<int64_t>(0, conv_input->ne[0] - conv_states->ne[0] - K + t);
             const int64_t s_slot = K - t;
 
