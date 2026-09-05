@@ -30,7 +30,9 @@ LLAMA_BENCH_DB_FIELDS = [
     "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
     "load_mode",    "embeddings",   "no_op_offload",  "n_prompt",   "n_gen",        "n_depth",
     "test_time",    "avg_ns",       "stddev_ns",      "avg_ts",     "stddev_ts",    "n_cpu_moe",
-    "fit_target",   "fit_min_ctx"
+    "fit_target",   "fit_min_ctx",
+    "spec_prefill_model", "spec_prefill_n_gpu_layers", "spec_prefill_percentage",
+    "spec_prefill_chunk_size", "spec_prefill_lookahead", "spec_prefill_pool_kernel"
 ]
 
 LLAMA_BENCH_DB_TYPES = [
@@ -38,9 +40,11 @@ LLAMA_BENCH_DB_TYPES = [
     "TEXT",    "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER",
     "TEXT",    "INTEGER", "INTEGER", "TEXT",    "TEXT",    "INTEGER",
     "TEXT",    "INTEGER", "INTEGER", "INTEGER", "TEXT",    "TEXT",
-    "TEXT", "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER",
+    "TEXT",    "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER",
     "TEXT",    "INTEGER", "INTEGER", "REAL",    "REAL",    "INTEGER",
-    "INTEGER", "INTEGER"
+    "INTEGER", "INTEGER",
+    "TEXT",    "INTEGER", "REAL",
+    "INTEGER", "INTEGER", "INTEGER"
 ]
 
 # All test-backend-ops SQL fields
@@ -64,7 +68,9 @@ LLAMA_BENCH_KEY_PROPERTIES = [
     "cpu_info", "gpu_info", "backends", "n_gpu_layers", "n_cpu_moe", "tensor_buft_overrides", "model_filename", "model_type",
     "n_batch", "n_ubatch", "embeddings", "cpu_mask", "cpu_strict", "poll", "n_threads", "type_k", "type_v",
     "load_mode", "no_kv_offload", "split_mode", "main_gpu", "tensor_split", "flash_attn", "n_prompt", "n_gen", "n_depth",
-    "fit_target", "fit_min_ctx"
+    "fit_target", "fit_min_ctx",
+    "spec_prefill_model", "spec_prefill_n_gpu_layers", "spec_prefill_percentage",
+    "spec_prefill_chunk_size", "spec_prefill_lookahead", "spec_prefill_pool_kernel"
 ]
 
 # Properties by which to differentiate results per commit for test-backend-ops:
@@ -84,6 +90,8 @@ LLAMA_BENCH_PRETTY_NAMES = {
     "cpu_mask": "CPU mask", "cpu_strict": "CPU strict", "poll": "Poll", "n_threads": "Threads", "type_k": "K type", "type_v": "V type",
     "load_mode": "Load mode", "no_kv_offload": "NKVO", "split_mode": "Split mode", "main_gpu": "Main GPU", "tensor_split": "Tensor split",
     "flash_attn": "FlashAttention",
+    "spec_prefill_model": "Draft Model", "spec_prefill_n_gpu_layers": "Draft ngl", "spec_prefill_percentage": "SPF %",
+    "spec_prefill_chunk_size": "SPF chunk", "spec_prefill_lookahead": "SPF lookahead", "spec_prefill_pool_kernel": "SPF pool",
 }
 
 # Header names for the table (test-backend-ops):

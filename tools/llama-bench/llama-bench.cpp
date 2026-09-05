@@ -27,6 +27,8 @@
 #include "ggml.h"
 #include "llama.h"
 #include "log.h"
+#include "sampling.h"
+#include "speculative-prefill.h"
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -332,12 +334,34 @@ static std::vector<int> parse_int_range(const std::string & s, bool allow_negati
     return result;
 }
 
+static std::vector<float> parse_float_list(const std::string & s) {
+    auto p = string_split<std::string>(s, ',');
+    std::vector<float> result;
+    for (const auto & item : p) {
+        float val = std::stof(item);
+        if (val <= 0.0f || val > 1.0f) {
+            throw std::invalid_argument("speculative prefill percentage must be between 0.0 (exclusive) and 1.0 (inclusive)");
+        }
+        result.push_back(val);
+    }
+    return result;
+}
+
 struct cmd_params {
     std::vector<std::string>         model;
     std::vector<std::string>         hf_repo;
     std::vector<std::string>         hf_file;
     std::string                      hf_token;
     bool                             offline;
+    std::vector<std::string>         spec_prefill_model;
+    std::vector<std::string>         spec_prefill_hf_repo;
+    std::vector<std::string>         spec_prefill_hf_file;
+    std::vector<int>                 spec_prefill_n_ctx;
+    std::vector<int>                 spec_prefill_n_gpu_layers;
+    std::vector<float>               spec_prefill_percentage;
+    std::vector<int>                 spec_prefill_chunk_size;
+    std::vector<int>                 spec_prefill_lookahead;
+    std::vector<int>                 spec_prefill_pool_kernel;
     std::vector<int>                 n_prompt;
     std::vector<int>                 n_gen;
     std::vector<std::pair<int, int>> n_pg;
@@ -378,48 +402,57 @@ struct cmd_params {
 };
 
 static const cmd_params cmd_params_defaults = {
-    /* model                */ { "models/7B/ggml-model-q4_0.gguf" },
-    /* hf_repo              */ {},
-    /* hf_file              */ {},
-    /* hf_token             */ "",
-    /* offline              */ false,
-    /* n_prompt             */ { 512 },
-    /* n_gen                */ { 128 },
-    /* n_pg                 */ {},
-    /* n_depth              */ { 0 },
-    /* n_batch              */ { 2048 },
-    /* n_ubatch             */ { 512 },
-    /* type_k               */ { GGML_TYPE_F16 },
-    /* type_v               */ { GGML_TYPE_F16 },
-    /* n_threads            */ { common_cpu_get_num_math() },
-    /* cpu_mask             */ { "0x0" },
-    /* cpu_strict           */ { false },
-    /* poll                 */ { 50 },
-    /* n_gpu_layers         */ { -1 },
-    /* n_cpu_moe            */ { 0 },
-    /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
-    /* load_mode            */ { LLAMA_LOAD_MODE_AUTO },
-    /* lazy_mode            */ { LLAMA_LAZY_MODE_AUTO },
-    /* main_gpu             */ { 0 },
-    /* no_kv_offload        */ { false },
-    /* flash_attn           */ { LLAMA_FLASH_ATTN_TYPE_AUTO },
-    /* devices              */ { {} },
-    /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
-    /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
-    /* embeddings           */ { false },
-    /* no_op_offload        */ { false },
-    /* no_host              */ { false },
-    /* fit_params_target    */ { 0 },
-    /* fit_params_min_ctx   */ { 0 },
-    /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
-    /* reps                 */ 5,
-    /* prio                 */ GGML_SCHED_PRIO_NORMAL,
-    /* delay                */ 0,
-    /* verbose              */ false,
-    /* progress             */ false,
-    /* no_warmup            */ false,
-    /* output_format        */ MARKDOWN,
-    /* output_format_stderr */ NONE,
+    /* model                     */ { "models/7B/ggml-model-q4_0.gguf" },
+    /* hf_repo                   */ {},
+    /* hf_file                   */ {},
+    /* hf_token                  */ "",
+    /* offline                   */ false,
+    /* spec_prefill_model        */ {},
+    /* spec_prefill_hf_repo      */ {},
+    /* spec_prefill_hf_file      */ {},
+    /* spec_prefill_n_ctx        */ { 0 },
+    /* spec_prefill_n_gpu_layers */ { -1 },
+    /* spec_prefill_percentage   */ { 0.30f },
+    /* spec_prefill_chunk_size   */ { 32 },
+    /* spec_prefill_lookahead    */ { 8 },
+    /* spec_prefill_pool_kernel  */ { 13 },
+    /* n_prompt                  */ { 512 },
+    /* n_gen                     */ { 128 },
+    /* n_pg                      */ {},
+    /* n_depth                   */ { 0 },
+    /* n_batch                   */ { 2048 },
+    /* n_ubatch                  */ { 512 },
+    /* type_k                    */ { GGML_TYPE_F16 },
+    /* type_v                    */ { GGML_TYPE_F16 },
+    /* n_threads                 */ { common_cpu_get_num_math() },
+    /* cpu_mask                  */ { "0x0" },
+    /* cpu_strict                */ { false },
+    /* poll                      */ { 50 },
+    /* n_gpu_layers              */ { -1 },
+    /* n_cpu_moe                 */ { 0 },
+    /* split_mode                */ { LLAMA_SPLIT_MODE_LAYER },
+    /* load_mode                 */ { LLAMA_LOAD_MODE_AUTO },
+    /* lazy_mode                 */ { LLAMA_LAZY_MODE_AUTO },
+    /* main_gpu                  */ { 0 },
+    /* no_kv_offload             */ { false },
+    /* flash_attn                */ { LLAMA_FLASH_ATTN_TYPE_AUTO },
+    /* devices                   */ { {} },
+    /* tensor_split              */ { std::vector<float>(llama_max_devices(), 0.0f) },
+    /* tensor_buft_overrides     */ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
+    /* embeddings                */ { false },
+    /* no_op_offload             */ { false },
+    /* no_host                   */ { false },
+    /* fit_params_target         */ { 0 },
+    /* fit_params_min_ctx        */ { 0 },
+    /* numa                      */ GGML_NUMA_STRATEGY_DISABLED,
+    /* reps                      */ 5,
+    /* prio                      */ GGML_SCHED_PRIO_NORMAL,
+    /* delay                     */ 0,
+    /* verbose                   */ false,
+    /* progress                  */ false,
+    /* no_warmup                 */ false,
+    /* output_format             */ MARKDOWN,
+    /* output_format_stderr      */ NONE,
 };
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -455,6 +488,24 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("                                                    (default: value from HF_TOKEN environment variable)\n");
     printf("  --offline                                         Offline mode: forces use of cache, prevents network access\n");
     printf("                                                    (default: disabled)\n");
+    printf("  -spf, --spec-prefill, --speculative-prefill <0|1|on|off>\n");
+    printf("                                                    enable speculative prefill (default: disabled)\n");
+    printf("  -mpd, --spec-prefill-model, --spec-prefill-draft-model <filename>\n");
+    printf("                                                    draft model for speculative prefill (default: unused)\n");
+    printf("  -hfpd, --spec-prefill-hf, --spec-prefill-draft-hf <user>/<model>[:quant]\n");
+    printf("                                                    Hugging Face draft model repo for speculative prefill (default: unused)\n");
+    printf("  -hffpd, --spec-prefill-hf-file <file>             Hugging Face draft model file for speculative prefill (default: unused)\n");
+    printf("  -cpd, --spec-prefill-ctx, --spec-prefill-draft-ctx <n>\n");
+    printf("                                                    draft context size for speculative prefill (default: %s)\n", join(cmd_params_defaults.spec_prefill_n_ctx, ",").c_str());
+    printf("  -nglpd, --spec-prefill-ngl, --spec-prefill-draft-ngl <n>\n");
+    printf("                                                    GPU layers for speculative prefill draft model (default: %s)\n", join(cmd_params_defaults.spec_prefill_n_gpu_layers, ",").c_str());
+    printf("  -spfp, --spec-prefill-p, --spec-prefill-percentage <p>\n");
+    printf("                                                    token retention percentage for speculative prefill (default: %.2f)\n", cmd_params_defaults.spec_prefill_percentage[0]);
+    printf("  -spfcs, --spec-prefill-chunk, --spec-prefill-chunk-size <n>\n");
+    printf("                                                    chunk size for speculative prefill (default: %s)\n", join(cmd_params_defaults.spec_prefill_chunk_size, ",").c_str());
+    printf("  -spflah, --spec-prefill-lookahead, --spec-prefill-lah <n>\n");
+    printf("                                                    lookahead steps for speculative prefill (default: %s)\n", join(cmd_params_defaults.spec_prefill_lookahead, ",").c_str());
+    printf("  -spfpool, --spec-prefill-pool-kernel <n>          attention pooling kernel size for speculative prefill (default: %s)\n", join(cmd_params_defaults.spec_prefill_pool_kernel, ",").c_str());
     printf("  -p, --n-prompt <n>                                (default: %s)\n", join(cmd_params_defaults.n_prompt, ",").c_str());
     printf("  -n, --n-gen <n>                                   (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
     printf("  -pg <pp,tg>                                       (default: %s)\n", join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
@@ -581,6 +632,90 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.hf_token = argv[i];
             } else if (arg == "--offline") {
                 params.offline = true;
+            } else if (arg == "-mpd" || arg == "--spec-prefill-model" || arg == "--spec-prefill-draft-model" ||
+                       arg == "--speculative-prefill-model" || arg == "--speculative-prefill-draft-model") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.spec_prefill_model.insert(params.spec_prefill_model.end(), p.begin(), p.end());
+            } else if (arg == "-hfpd" || arg == "--spec-prefill-hf" || arg == "--spec-prefill-draft-hf" ||
+                       arg == "--speculative-prefill-hf" || arg == "--speculative-prefill-draft-hf") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.spec_prefill_hf_repo.insert(params.spec_prefill_hf_repo.end(), p.begin(), p.end());
+            } else if (arg == "-hffpd" || arg == "--spec-prefill-hf-file" || arg == "--spec-prefill-draft-hf-file") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.spec_prefill_hf_file.insert(params.spec_prefill_hf_file.end(), p.begin(), p.end());
+            } else if (arg == "-cpd" || arg == "--spec-prefill-ctx" || arg == "--spec-prefill-draft-ctx" ||
+                       arg == "--spec-prefill-ctx-size" || arg == "--spec-prefill-max-ctx" ||
+                       arg == "--speculative-prefill-ctx" || arg == "--speculative-prefill-max-ctx") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.spec_prefill_n_ctx.insert(params.spec_prefill_n_ctx.end(), p.begin(), p.end());
+            } else if (arg == "-nglpd" || arg == "--spec-prefill-ngl" || arg == "--spec-prefill-draft-ngl" ||
+                       arg == "--speculative-prefill-ngl" || arg == "--speculative-prefill-draft-ngl") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i], /*allow_negative=*/true);
+                params.spec_prefill_n_gpu_layers.insert(params.spec_prefill_n_gpu_layers.end(), p.begin(), p.end());
+            } else if (arg == "-spfp" || arg == "--spec-prefill-p" || arg == "--spec-prefill-percentage") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_float_list(argv[i]);
+                params.spec_prefill_percentage.insert(params.spec_prefill_percentage.end(), p.begin(), p.end());
+            } else if (arg == "-spfcs" || arg == "--spec-prefill-chunk" || arg == "--spec-prefill-chunk-size") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.spec_prefill_chunk_size.insert(params.spec_prefill_chunk_size.end(), p.begin(), p.end());
+            } else if (arg == "-spflah" || arg == "--spec-prefill-lookahead" || arg == "--spec-prefill-lah") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.spec_prefill_lookahead.insert(params.spec_prefill_lookahead.end(), p.begin(), p.end());
+            } else if (arg == "-spfpool" || arg == "--spec-prefill-pool-kernel") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.spec_prefill_pool_kernel.insert(params.spec_prefill_pool_kernel.end(), p.begin(), p.end());
+            } else if (arg == "-spf" || arg == "--spec-prefill" || arg == "--speculative-prefill") {
+                if (i + 1 < argc && argv[i + 1][0] != '-') {
+                    i++;
+                    auto p = string_split<std::string>(argv[i], split_delim);
+                    for (const auto & item : p) {
+                        if (item == "0" || item == "off" || item == "false" || item == "none" || item == "disable" || item == "disabled") {
+                            params.spec_prefill_model.push_back("");
+                        } else if (item == "1" || item == "on" || item == "true" || item == "enable" || item == "enabled" || item == "self") {
+                            params.spec_prefill_model.push_back("self");
+                        } else {
+                            params.spec_prefill_model.push_back(item);
+                        }
+                    }
+                } else {
+                    params.spec_prefill_model.push_back("self");
+                }
             } else if (arg == "-p" || arg == "--n-prompt") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1139,9 +1274,55 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
         }
     }
 
+    if (!params.spec_prefill_hf_repo.empty()) {
+        for (size_t i = 0; i < params.spec_prefill_hf_repo.size(); i++) {
+            common_params p;
+            p.hf_token      = params.hf_token;
+            p.offline       = params.offline;
+            p.model.hf_repo = params.spec_prefill_hf_repo[i];
+            if (!params.spec_prefill_hf_file.empty() && !params.spec_prefill_hf_file[i].empty()) {
+                p.model.hf_file = params.spec_prefill_hf_file[i];
+            }
+
+            // only the text model file is needed
+            common_models_handler models_handler = common_models_handler_init(p, LLAMA_EXAMPLE_BENCH);
+            common_models_handler_apply(models_handler, p);
+            if (p.model.path.empty()) {
+                fprintf(stderr, "error: failed to download speculative prefill draft model from HuggingFace\n");
+                exit(1);
+            }
+
+            params.spec_prefill_model.push_back(p.model.path);
+        }
+    }
+
     // set defaults
     if (params.model.empty()) {
         params.model = cmd_params_defaults.model;
+    }
+    if (params.spec_prefill_model.empty()) {
+        params.spec_prefill_model = { "" };
+    }
+    if (params.spec_prefill_hf_file.empty()) {
+        params.spec_prefill_hf_file = cmd_params_defaults.spec_prefill_hf_file;
+    }
+    if (params.spec_prefill_n_ctx.empty()) {
+        params.spec_prefill_n_ctx = cmd_params_defaults.spec_prefill_n_ctx;
+    }
+    if (params.spec_prefill_n_gpu_layers.empty()) {
+        params.spec_prefill_n_gpu_layers = cmd_params_defaults.spec_prefill_n_gpu_layers;
+    }
+    if (params.spec_prefill_percentage.empty()) {
+        params.spec_prefill_percentage = cmd_params_defaults.spec_prefill_percentage;
+    }
+    if (params.spec_prefill_chunk_size.empty()) {
+        params.spec_prefill_chunk_size = cmd_params_defaults.spec_prefill_chunk_size;
+    }
+    if (params.spec_prefill_lookahead.empty()) {
+        params.spec_prefill_lookahead = cmd_params_defaults.spec_prefill_lookahead;
+    }
+    if (params.spec_prefill_pool_kernel.empty()) {
+        params.spec_prefill_pool_kernel = cmd_params_defaults.spec_prefill_pool_kernel;
     }
     if (params.n_prompt.empty()) {
         params.n_prompt = cmd_params_defaults.n_prompt;
@@ -1233,6 +1414,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
 
 struct cmd_params_instance {
     std::string        model;
+    std::string        spec_prefill_model;
+    int                spec_prefill_n_ctx;
+    int                spec_prefill_n_gpu_layers;
+    float              spec_prefill_percentage;
+    int                spec_prefill_chunk_size;
+    int                spec_prefill_lookahead;
+    int                spec_prefill_pool_kernel;
     int                n_prompt;
     int                n_gen;
     int                n_depth;
@@ -1347,6 +1535,13 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     // this ordering minimizes the number of times that each model needs to be reloaded
     // clang-format off
     for (const auto & m : params.model)
+    for (const auto & mpd : params.spec_prefill_model)
+    for (const auto & spfc : (mpd.empty() || mpd == "none" ? std::vector<int>{0} : params.spec_prefill_n_ctx))
+    for (const auto & nglpd : (mpd.empty() || mpd == "none" ? std::vector<int>{-1} : params.spec_prefill_n_gpu_layers))
+    for (const auto & spfp : (mpd.empty() || mpd == "none" ? std::vector<float>{0.30f} : params.spec_prefill_percentage))
+    for (const auto & spfcs : (mpd.empty() || mpd == "none" ? std::vector<int>{32} : params.spec_prefill_chunk_size))
+    for (const auto & spflah : (mpd.empty() || mpd == "none" ? std::vector<int>{8} : params.spec_prefill_lookahead))
+    for (const auto & spfpool : (mpd.empty() || mpd == "none" ? std::vector<int>{13} : params.spec_prefill_pool_kernel))
     for (const auto & fpt : params.fit_params_target)
     for (const auto & fpc : params.fit_params_min_ctx)
     for (const auto & nl : params.n_gpu_layers)
@@ -1377,34 +1572,41 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 continue;
             }
             cmd_params_instance instance = {
-                /* .model                 = */ m,
-                /* .n_prompt              = */ n_prompt,
-                /* .n_gen                 = */ 0,
-                /* .n_depth               = */ nd,
-                /* .n_batch               = */ nb,
-                /* .n_ubatch              = */ nub,
-                /* .type_k                = */ tk,
-                /* .type_v                = */ tv,
-                /* .n_threads             = */ nt,
-                /* .cpu_mask              = */ cm,
-                /* .cpu_strict            = */ cs,
-                /* .poll                  = */ pl,
-                /* .n_gpu_layers          = */ nl,
-                /* .n_cpu_moe             = */ ncmoe,
-                /* .split_mode            = */ sm,
-                /* .load_mode             = */ lm,
-                /* .lazy_mode             = */ lzm,
-                /* .main_gpu              = */ mg,
-                /* .no_kv_offload         = */ nkvo,
-                /* .flash_attn            = */ fa,
-                /* .devices               = */ devs,
-                /* .tensor_split          = */ ts,
-                /* .tensor_buft_overrides = */ ot,
-                /* .embeddings            = */ embd,
-                /* .no_op_offload         = */ nopo,
-                /* .no_host               = */ noh,
-                /* .fit_target            = */ fpt,
-                /* .fit_min_ctx           = */ fpc,
+                /* .model                     = */ m,
+                /* .spec_prefill_model        = */ mpd,
+                /* .spec_prefill_n_ctx        = */ spfc,
+                /* .spec_prefill_n_gpu_layers = */ nglpd,
+                /* .spec_prefill_percentage   = */ spfp,
+                /* .spec_prefill_chunk_size   = */ spfcs,
+                /* .spec_prefill_lookahead    = */ spflah,
+                /* .spec_prefill_pool_kernel  = */ spfpool,
+                /* .n_prompt                  = */ n_prompt,
+                /* .n_gen                     = */ 0,
+                /* .n_depth                   = */ nd,
+                /* .n_batch                   = */ nb,
+                /* .n_ubatch                  = */ nub,
+                /* .type_k                    = */ tk,
+                /* .type_v                    = */ tv,
+                /* .n_threads                 = */ nt,
+                /* .cpu_mask                  = */ cm,
+                /* .cpu_strict                = */ cs,
+                /* .poll                      = */ pl,
+                /* .n_gpu_layers              = */ nl,
+                /* .n_cpu_moe                 = */ ncmoe,
+                /* .split_mode                = */ sm,
+                /* .load_mode                 = */ lm,
+                /* .lazy_mode                 = */ lzm,
+                /* .main_gpu                  = */ mg,
+                /* .no_kv_offload             = */ nkvo,
+                /* .flash_attn                = */ fa,
+                /* .devices                   = */ devs,
+                /* .tensor_split              = */ ts,
+                /* .tensor_buft_overrides     = */ ot,
+                /* .embeddings                = */ embd,
+                /* .no_op_offload             = */ nopo,
+                /* .no_host                   = */ noh,
+                /* .fit_target                = */ fpt,
+                /* .fit_min_ctx               = */ fpc,
             };
             instances.push_back(instance);
         }
@@ -1414,34 +1616,41 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 continue;
             }
             cmd_params_instance instance = {
-                /* .model                 = */ m,
-                /* .n_prompt              = */ 0,
-                /* .n_gen                 = */ n_gen,
-                /* .n_depth               = */ nd,
-                /* .n_batch               = */ nb,
-                /* .n_ubatch              = */ nub,
-                /* .type_k                = */ tk,
-                /* .type_v                = */ tv,
-                /* .n_threads             = */ nt,
-                /* .cpu_mask              = */ cm,
-                /* .cpu_strict            = */ cs,
-                /* .poll                  = */ pl,
-                /* .n_gpu_layers          = */ nl,
-                /* .n_cpu_moe             = */ ncmoe,
-                /* .split_mode            = */ sm,
-                /* .load_mode             = */ lm,
-                /* .lazy_mode             = */ lzm,
-                /* .main_gpu              = */ mg,
-                /* .no_kv_offload         = */ nkvo,
-                /* .flash_attn            = */ fa,
-                /* .devices               = */ devs,
-                /* .tensor_split          = */ ts,
-                /* .tensor_buft_overrides = */ ot,
-                /* .embeddings            = */ embd,
-                /* .no_op_offload         = */ nopo,
-                /* .no_host               = */ noh,
-                /* .fit_target            = */ fpt,
-                /* .fit_min_ctx           = */ fpc,
+                /* .model                     = */ m,
+                /* .spec_prefill_model        = */ mpd,
+                /* .spec_prefill_n_ctx        = */ spfc,
+                /* .spec_prefill_n_gpu_layers = */ nglpd,
+                /* .spec_prefill_percentage   = */ spfp,
+                /* .spec_prefill_chunk_size   = */ spfcs,
+                /* .spec_prefill_lookahead    = */ spflah,
+                /* .spec_prefill_pool_kernel  = */ spfpool,
+                /* .n_prompt                  = */ 0,
+                /* .n_gen                     = */ n_gen,
+                /* .n_depth                   = */ nd,
+                /* .n_batch                   = */ nb,
+                /* .n_ubatch                  = */ nub,
+                /* .type_k                    = */ tk,
+                /* .type_v                    = */ tv,
+                /* .n_threads                 = */ nt,
+                /* .cpu_mask                  = */ cm,
+                /* .cpu_strict                = */ cs,
+                /* .poll                      = */ pl,
+                /* .n_gpu_layers              = */ nl,
+                /* .n_cpu_moe                 = */ ncmoe,
+                /* .split_mode                = */ sm,
+                /* .load_mode                 = */ lm,
+                /* .lazy_mode                 = */ lzm,
+                /* .main_gpu                  = */ mg,
+                /* .no_kv_offload             = */ nkvo,
+                /* .flash_attn                = */ fa,
+                /* .devices                   = */ devs,
+                /* .tensor_split              = */ ts,
+                /* .tensor_buft_overrides     = */ ot,
+                /* .embeddings                = */ embd,
+                /* .no_op_offload             = */ nopo,
+                /* .no_host                   = */ noh,
+                /* .fit_target                = */ fpt,
+                /* .fit_min_ctx               = */ fpc,
             };
             instances.push_back(instance);
         }
@@ -1451,34 +1660,41 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 continue;
             }
             cmd_params_instance instance = {
-                /* .model                 = */ m,
-                /* .n_prompt              = */ n_pg.first,
-                /* .n_gen                 = */ n_pg.second,
-                /* .n_depth               = */ nd,
-                /* .n_batch               = */ nb,
-                /* .n_ubatch              = */ nub,
-                /* .type_k                = */ tk,
-                /* .type_v                = */ tv,
-                /* .n_threads             = */ nt,
-                /* .cpu_mask              = */ cm,
-                /* .cpu_strict            = */ cs,
-                /* .poll                  = */ pl,
-                /* .n_gpu_layers          = */ nl,
-                /* .n_cpu_moe             = */ ncmoe,
-                /* .split_mode            = */ sm,
-                /* .load_mode             = */ lm,
-                /* .lazy_mode             = */ lzm,
-                /* .main_gpu              = */ mg,
-                /* .no_kv_offload         = */ nkvo,
-                /* .flash_attn            = */ fa,
-                /* .devices               = */ devs,
-                /* .tensor_split          = */ ts,
-                /* .tensor_buft_overrides = */ ot,
-                /* .embeddings            = */ embd,
-                /* .no_op_offload         = */ nopo,
-                /* .no_host               = */ noh,
-                /* .fit_target            = */ fpt,
-                /* .fit_min_ctx           = */ fpc,
+                /* .model                     = */ m,
+                /* .spec_prefill_model        = */ mpd,
+                /* .spec_prefill_n_ctx        = */ spfc,
+                /* .spec_prefill_n_gpu_layers = */ nglpd,
+                /* .spec_prefill_percentage   = */ spfp,
+                /* .spec_prefill_chunk_size   = */ spfcs,
+                /* .spec_prefill_lookahead    = */ spflah,
+                /* .spec_prefill_pool_kernel  = */ spfpool,
+                /* .n_prompt                  = */ n_pg.first,
+                /* .n_gen                     = */ n_pg.second,
+                /* .n_depth                   = */ nd,
+                /* .n_batch                   = */ nb,
+                /* .n_ubatch                  = */ nub,
+                /* .type_k                    = */ tk,
+                /* .type_v                    = */ tv,
+                /* .n_threads                 = */ nt,
+                /* .cpu_mask                  = */ cm,
+                /* .cpu_strict                = */ cs,
+                /* .poll                      = */ pl,
+                /* .n_gpu_layers              = */ nl,
+                /* .n_cpu_moe                 = */ ncmoe,
+                /* .split_mode                = */ sm,
+                /* .load_mode                 = */ lm,
+                /* .lazy_mode                 = */ lzm,
+                /* .main_gpu                  = */ mg,
+                /* .no_kv_offload             = */ nkvo,
+                /* .flash_attn                = */ fa,
+                /* .devices                   = */ devs,
+                /* .tensor_split              = */ ts,
+                /* .tensor_buft_overrides     = */ ot,
+                /* .embeddings                = */ embd,
+                /* .no_op_offload             = */ nopo,
+                /* .no_host                   = */ noh,
+                /* .fit_target                = */ fpt,
+                /* .fit_min_ctx               = */ fpc,
             };
             instances.push_back(instance);
         }
@@ -1521,6 +1737,12 @@ struct test {
     bool                     no_host;
     size_t                   fit_target;
     uint32_t                 fit_min_ctx;
+    std::string              spec_prefill_model;
+    int                      spec_prefill_n_gpu_layers;
+    float                    spec_prefill_percentage;
+    int                      spec_prefill_chunk_size;
+    int                      spec_prefill_lookahead;
+    int                      spec_prefill_pool_kernel;
     int                      n_prompt;
     int                      n_gen;
     int                      n_depth;
@@ -1555,12 +1777,18 @@ struct test {
         flash_attn     = inst.flash_attn;
         devices        = inst.devices;
         tensor_split   = inst.tensor_split;
-        tensor_buft_overrides = inst.tensor_buft_overrides;
-        embeddings     = inst.embeddings;
-        no_op_offload  = inst.no_op_offload;
-        no_host        = inst.no_host;
-        fit_target     = inst.fit_target;
-        fit_min_ctx    = inst.fit_min_ctx;
+        tensor_buft_overrides     = inst.tensor_buft_overrides;
+        embeddings                = inst.embeddings;
+        no_op_offload             = inst.no_op_offload;
+        no_host                   = inst.no_host;
+        fit_target                = inst.fit_target;
+        fit_min_ctx               = inst.fit_min_ctx;
+        spec_prefill_model        = inst.spec_prefill_model;
+        spec_prefill_n_gpu_layers = inst.spec_prefill_n_gpu_layers;
+        spec_prefill_percentage   = inst.spec_prefill_percentage;
+        spec_prefill_chunk_size   = inst.spec_prefill_chunk_size;
+        spec_prefill_lookahead    = inst.spec_prefill_lookahead;
+        spec_prefill_pool_kernel  = inst.spec_prefill_pool_kernel;
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
         n_depth        = inst.n_depth;
@@ -1620,6 +1848,8 @@ struct test {
             "tensor_buft_overrides",            "load_mode",     "lazy_mode",
             "embeddings",
             "no_op_offload",  "no_host",        "fit_target",    "fit_min_ctx",
+            "spec_prefill_model", "spec_prefill_n_gpu_layers", "spec_prefill_percentage",
+            "spec_prefill_chunk_size", "spec_prefill_lookahead", "spec_prefill_pool_kernel",
             "n_prompt",       "n_gen",          "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
         };
@@ -1633,17 +1863,19 @@ struct test {
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
             field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe" ||
-            field == "fit_target" || field == "fit_min_ctx" || field == "flash_attn") {
+            field == "fit_target" || field == "fit_min_ctx" || field == "flash_attn" ||
+            field == "spec_prefill_n_gpu_layers" || field == "spec_prefill_chunk_size" ||
+            field == "spec_prefill_lookahead" || field == "spec_prefill_pool_kernel") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" ||
             field == "embeddings" || field == "no_host") {
             return BOOL;
         }
-        if (field == "avg_ts" || field == "stddev_ts") {
+        if (field == "avg_ts" || field == "stddev_ts" || field == "spec_prefill_percentage") {
             return FLOAT;
         }
-        if (field == "load_mode" || field == "lazy_mode") {
+        if (field == "load_mode" || field == "lazy_mode" || field == "spec_prefill_model") {
             return STRING;
         }
         return STRING;
@@ -1719,6 +1951,12 @@ struct test {
                                             std::to_string(no_host),
                                             std::to_string(fit_target),
                                             std::to_string(fit_min_ctx),
+                                            spec_prefill_model,
+                                            std::to_string(spec_prefill_n_gpu_layers),
+                                            std::to_string(spec_prefill_percentage),
+                                            std::to_string(spec_prefill_chunk_size),
+                                            std::to_string(spec_prefill_lookahead),
+                                            std::to_string(spec_prefill_pool_kernel),
                                             std::to_string(n_prompt),
                                             std::to_string(n_gen),
                                             std::to_string(n_depth),
@@ -1910,6 +2148,16 @@ struct markdown_printer : public printer {
         if (field == "no_host") {
             return 4;
         }
+        if (field == "spec_prefill_model") {
+            return -20;
+        }
+        if (field == "spec_prefill_n_gpu_layers" || field == "spec_prefill_chunk_size" ||
+            field == "spec_prefill_lookahead" || field == "spec_prefill_pool_kernel") {
+            return 5;
+        }
+        if (field == "spec_prefill_percentage") {
+            return 6;
+        }
 
         int width = std::max((int) field.length(), 10);
 
@@ -1961,6 +2209,24 @@ struct markdown_printer : public printer {
         }
         if (field == "fit_min_ctx") {
             return "fitc";
+        }
+        if (field == "spec_prefill_model") {
+            return "draft_model";
+        }
+        if (field == "spec_prefill_n_gpu_layers") {
+            return "nglpd";
+        }
+        if (field == "spec_prefill_percentage") {
+            return "spf_p";
+        }
+        if (field == "spec_prefill_chunk_size") {
+            return "spf_chunk";
+        }
+        if (field == "spec_prefill_lookahead") {
+            return "spf_lah";
+        }
+        if (field == "spec_prefill_pool_kernel") {
+            return "spf_pool";
         }
         return field;
     }
@@ -2046,6 +2312,31 @@ struct markdown_printer : public printer {
         if (params.fit_params_min_ctx.size() > 1 || params.fit_params_min_ctx != cmd_params_defaults.fit_params_min_ctx) {
             fields.emplace_back("fit_min_ctx");
         }
+        bool has_any_spec_prefill = false;
+        for (const auto & mpd : params.spec_prefill_model) {
+            if (!mpd.empty() && mpd != "none") {
+                has_any_spec_prefill = true;
+                break;
+            }
+        }
+        if (has_any_spec_prefill) {
+            fields.emplace_back("spec_prefill_model");
+            if (params.spec_prefill_n_gpu_layers.size() > 1 || params.spec_prefill_n_gpu_layers != cmd_params_defaults.spec_prefill_n_gpu_layers) {
+                fields.emplace_back("spec_prefill_n_gpu_layers");
+            }
+            if (params.spec_prefill_percentage.size() > 1 || params.spec_prefill_percentage != cmd_params_defaults.spec_prefill_percentage) {
+                fields.emplace_back("spec_prefill_percentage");
+            }
+            if (params.spec_prefill_chunk_size.size() > 1 || params.spec_prefill_chunk_size != cmd_params_defaults.spec_prefill_chunk_size) {
+                fields.emplace_back("spec_prefill_chunk_size");
+            }
+            if (params.spec_prefill_lookahead.size() > 1 || params.spec_prefill_lookahead != cmd_params_defaults.spec_prefill_lookahead) {
+                fields.emplace_back("spec_prefill_lookahead");
+            }
+            if (params.spec_prefill_pool_kernel.size() > 1 || params.spec_prefill_pool_kernel != cmd_params_defaults.spec_prefill_pool_kernel) {
+                fields.emplace_back("spec_prefill_pool_kernel");
+            }
+        }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
 
@@ -2100,6 +2391,22 @@ struct markdown_printer : public printer {
                     snprintf(buf + len, sizeof(buf) - len, " @ d%d", t.n_depth);
                 }
                 value = buf;
+            } else if (field == "spec_prefill_model") {
+                value = t.spec_prefill_model.empty() || t.spec_prefill_model == "none" ? "-" : t.spec_prefill_model;
+            } else if (field == "spec_prefill_percentage") {
+                if (t.spec_prefill_model.empty() || t.spec_prefill_model == "none") {
+                    value = "-";
+                } else {
+                    snprintf(buf, sizeof(buf), "%.2f", (double) t.spec_prefill_percentage);
+                    value = buf;
+                }
+            } else if (field == "spec_prefill_n_gpu_layers" || field == "spec_prefill_chunk_size" ||
+                       field == "spec_prefill_lookahead" || field == "spec_prefill_pool_kernel") {
+                if (t.spec_prefill_model.empty() || t.spec_prefill_model == "none") {
+                    value = "-";
+                } else if (vmap.find(field) != vmap.end()) {
+                    value = vmap.at(field);
+                }
             } else if (field == "t/s") {
                 snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_ts(), t.stdev_ts());
                 value = buf;
@@ -2196,6 +2503,80 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     }
 
     llama_synchronize(ctx);
+    return true;
+}
+
+static bool test_speculative_prefill_prompt(
+    llama_context * ctx_tgt,
+    llama_context * ctx_dft,
+    common_sampler * smpl_dft,
+    const common_params_speculative_prefill & spf_params,
+    int n_prompt,
+    int n_batch_tgt,
+    int n_threads) {
+
+    llama_set_n_threads(ctx_tgt, n_threads, n_threads);
+    llama_set_n_threads(ctx_dft, n_threads, n_threads);
+
+    const llama_model * model_tgt = llama_get_model(ctx_tgt);
+    const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
+    const int32_t       n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
+
+    if (llama_model_is_recurrent(model_tgt)) {
+        fprintf(stderr, "%s: speculative prefill is not supported for recurrent models, skipping instance\n", __func__);
+        return false;
+    }
+
+    const llama_model * model_dft = llama_get_model(ctx_dft);
+    const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
+    const int32_t       n_vocab_dft = llama_vocab_n_tokens(vocab_dft);
+
+    const int32_t n_vocab_min = std::min(n_vocab_tgt, n_vocab_dft);
+    const int32_t vocab_diff  = n_vocab_tgt > n_vocab_dft ? n_vocab_tgt - n_vocab_dft : n_vocab_dft - n_vocab_tgt;
+    if (vocab_diff > 128) {
+        fprintf(stderr, "%s: vocab size difference %d exceeds 128, skipping instance\n", __func__, vocab_diff);
+        return false;
+    }
+
+    std::vector<llama_token> prompt_tokens(n_prompt);
+    prompt_tokens[0] = llama_vocab_get_add_bos(vocab_tgt) ? llama_vocab_bos(vocab_tgt) : (std::rand() % n_vocab_min);
+    for (int i = 1; i < n_prompt; i++) {
+        prompt_tokens[i] = std::rand() % n_vocab_min;
+    }
+
+    llama_seq_id seq_id = 0;
+
+    common_speculative_prefill_result spec_res = common_speculative_prefill_execute(
+        ctx_dft,
+        smpl_dft,
+        prompt_tokens,
+        seq_id,
+        spf_params);
+
+    const int32_t n_kept_total = (int32_t) spec_res.kept_indices.size();
+    llama_batch batch_tgt = llama_batch_init(std::max(1, std::min(n_kept_total, n_batch_tgt)), 0, 1);
+
+    for (int32_t i = 0; i < n_kept_total; i += n_batch_tgt) {
+        const int32_t n_eval = std::min(n_kept_total - i, n_batch_tgt);
+        common_batch_clear(batch_tgt);
+
+        for (int32_t j = 0; j < n_eval; ++j) {
+            const int32_t k = i + j;
+            const int32_t orig_idx = spec_res.kept_indices[k];
+            const bool is_last = (k == n_kept_total - 1);
+            common_batch_add(batch_tgt, prompt_tokens[orig_idx], (llama_pos) k, { seq_id }, is_last);
+        }
+
+        const int ret = llama_decode(ctx_tgt, batch_tgt);
+        if (ret != 0) {
+            fprintf(stderr, "%s: failed to decode sparse prompt on target model, ret = %d\n", __func__, ret);
+            llama_batch_free(batch_tgt);
+            return false;
+        }
+    }
+    llama_batch_free(batch_tgt);
+
+    llama_synchronize(ctx_tgt);
     return true;
 }
 
@@ -2306,8 +2687,10 @@ int llama_bench(int argc, char ** argv) {
 
     std::vector<cmd_params_instance> params_instances = get_cmd_params_instances(params);
 
-    llama_model *               lmodel    = nullptr;
-    const cmd_params_instance * prev_inst = nullptr;
+    llama_model *               lmodel        = nullptr;
+    const cmd_params_instance * prev_inst     = nullptr;
+    llama_model *               lmodel_dft    = nullptr;
+    const cmd_params_instance * prev_inst_dft = nullptr;
 
     // store the llama_context state at the previous depth that we performed a test
     // ref: https://github.com/ggml-org/llama.cpp/pull/16944#issuecomment-3478151721
@@ -2366,21 +2749,128 @@ int llama_bench(int argc, char ** argv) {
             lmodel = llama_model_load_from_file(inst.model.c_str(), mparams);
             if (lmodel == NULL) {
                 fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
+                if (lmodel_dft) {
+                    llama_model_free(lmodel_dft);
+                }
                 return 1;
             }
             prev_inst = &inst;
         }
 
+        bool has_spec_prefill = !inst.spec_prefill_model.empty() && inst.spec_prefill_model != "none";
+        std::string dft_model_path = inst.spec_prefill_model == "self" ? inst.model : inst.spec_prefill_model;
+
+        if (has_spec_prefill) {
+            bool dft_model_changed = !lmodel_dft || !prev_inst_dft ||
+                                     prev_inst_dft->spec_prefill_model != inst.spec_prefill_model ||
+                                     prev_inst_dft->spec_prefill_n_gpu_layers != inst.spec_prefill_n_gpu_layers ||
+                                     prev_inst_dft->split_mode != inst.split_mode ||
+                                     prev_inst_dft->load_mode != inst.load_mode ||
+                                     prev_inst_dft->main_gpu != inst.main_gpu ||
+                                     prev_inst_dft->devices != inst.devices ||
+                                     prev_inst_dft->no_host != inst.no_host;
+
+            if (dft_model_changed) {
+                if (lmodel_dft) {
+                    llama_model_free(lmodel_dft);
+                }
+
+                llama_model_params dft_mparams = llama_model_default_params();
+                dft_mparams.n_gpu_layers = inst.spec_prefill_n_gpu_layers;
+                if (!inst.devices.empty()) {
+                    dft_mparams.devices = const_cast<ggml_backend_dev_t *>(inst.devices.data());
+                }
+                dft_mparams.split_mode   = inst.split_mode;
+                dft_mparams.load_mode    = inst.load_mode;
+                dft_mparams.main_gpu     = inst.main_gpu;
+                dft_mparams.tensor_split = inst.tensor_split.data();
+                dft_mparams.no_host      = inst.no_host;
+
+                lmodel_dft = llama_model_load_from_file(dft_model_path.c_str(), dft_mparams);
+                if (lmodel_dft == NULL) {
+                    fprintf(stderr, "%s: error: failed to load speculative prefill draft model '%s'\n", __func__, dft_model_path.c_str());
+                    llama_model_free(lmodel);
+                    return 1;
+                }
+                prev_inst_dft = &inst;
+            }
+        } else {
+            if (lmodel_dft) {
+                llama_model_free(lmodel_dft);
+                lmodel_dft = nullptr;
+                prev_inst_dft = nullptr;
+            }
+        }
+
+        if (has_spec_prefill) {
+            const llama_vocab * vocab_tgt = llama_model_get_vocab(lmodel);
+            const llama_vocab * vocab_dft = llama_model_get_vocab(lmodel_dft);
+            const int n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
+            const int n_vocab_dft = llama_vocab_n_tokens(vocab_dft);
+            const int vocab_diff  = n_vocab_tgt > n_vocab_dft ? n_vocab_tgt - n_vocab_dft : n_vocab_dft - n_vocab_tgt;
+            if (vocab_diff > 128) {
+                fprintf(stderr, "%s: vocab size difference %d exceeds 128, skipping instance\n", __func__, vocab_diff);
+                continue;
+            }
+        }
+
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
+            if (lmodel_dft) {
+                llama_model_free(lmodel_dft);
+            }
             llama_model_free(lmodel);
             return 1;
+        }
+
+        llama_context * ctx_dft = nullptr;
+        common_sampler_ptr smpl_dft;
+        common_params_speculative_prefill spf_params;
+
+        if (has_spec_prefill) {
+            llama_context_params dft_cparams = llama_context_default_params();
+            const uint32_t needed_dft_ctx = (uint32_t) (inst.n_prompt + inst.spec_prefill_lookahead + 16);
+            dft_cparams.n_ctx           = inst.spec_prefill_n_ctx > 0 ? inst.spec_prefill_n_ctx : std::min(needed_dft_ctx, (uint32_t) llama_model_n_ctx_train(lmodel_dft));
+            dft_cparams.n_batch         = inst.n_batch;
+            dft_cparams.n_ubatch        = inst.n_ubatch;
+            dft_cparams.type_k          = inst.type_k;
+            dft_cparams.type_v          = inst.type_v;
+            dft_cparams.offload_kqv     = !inst.no_kv_offload;
+            dft_cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+            dft_cparams.embeddings      = false;
+            dft_cparams.op_offload      = !inst.no_op_offload;
+            dft_cparams.no_perf         = true;
+
+            ctx_dft = llama_init_from_model(lmodel_dft, dft_cparams);
+            if (ctx_dft == NULL) {
+                fprintf(stderr, "%s: error: failed to create draft context with model '%s'\n", __func__, dft_model_path.c_str());
+                llama_free(ctx);
+                llama_model_free(lmodel_dft);
+                llama_model_free(lmodel);
+                return 1;
+            }
+
+            common_params_sampling sparams_dft;
+            sparams_dft.temp = 0.0f;
+            smpl_dft.reset(common_sampler_init(lmodel_dft, sparams_dft));
+
+            spf_params.enabled          = true;
+            spf_params.n_ctx            = inst.spec_prefill_n_ctx;
+            spf_params.percentage       = inst.spec_prefill_percentage;
+            spf_params.chunk_size       = inst.spec_prefill_chunk_size;
+            spf_params.look_ahead_cnt   = inst.spec_prefill_lookahead;
+            spf_params.pool_kernel_size = inst.spec_prefill_pool_kernel;
+            spf_params.keep_bos         = true;
+            spf_params.keep_last        = true;
         }
 
         test t(inst, lmodel, ctx);
 
         llama_memory_clear(llama_get_memory(ctx), false);
+        if (ctx_dft) {
+            llama_memory_clear(llama_get_memory(ctx_dft), false);
+        }
 
         // cool off before the test
         if (params.delay) {
@@ -2390,7 +2880,9 @@ int llama_bench(int argc, char ** argv) {
         struct ggml_threadpool_params tpp = ggml_threadpool_params_default(t.n_threads);
         if (!parse_cpu_mask(t.cpu_mask, tpp.cpumask)) {
             fprintf(stderr, "%s: failed to parse cpu-mask: %s\n", __func__, t.cpu_mask.c_str());
+            if (ctx_dft) llama_free(ctx_dft);
             llama_free(ctx);
+            if (lmodel_dft) llama_model_free(lmodel_dft);
             llama_model_free(lmodel);
             exit(1);
         }
@@ -2401,12 +2893,17 @@ int llama_bench(int argc, char ** argv) {
         struct ggml_threadpool * threadpool = ggml_threadpool_new_fn(&tpp);
         if (!threadpool) {
             fprintf(stderr, "%s: threadpool create failed : n_threads %d\n", __func__, tpp.n_threads);
+            if (ctx_dft) llama_free(ctx_dft);
             llama_free(ctx);
+            if (lmodel_dft) llama_model_free(lmodel_dft);
             llama_model_free(lmodel);
             exit(1);
         }
 
         llama_attach_threadpool(ctx, threadpool, NULL);
+        if (ctx_dft) {
+            llama_attach_threadpool(ctx_dft, threadpool, NULL);
+        }
 
         // warmup run
         if (!params.no_warmup) {
@@ -2414,11 +2911,14 @@ int llama_bench(int argc, char ** argv) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
                 }
-                //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = has_spec_prefill
+                    ? test_speculative_prefill_prompt(ctx, ctx_dft, smpl_dft.get(), spf_params, t.n_prompt, t.n_batch, t.n_threads)
+                    : test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
+                    if (ctx_dft) llama_free(ctx_dft);
                     llama_free(ctx);
+                    if (lmodel_dft) llama_model_free(lmodel_dft);
                     llama_model_free(lmodel);
                     exit(1);
                 }
@@ -2430,7 +2930,9 @@ int llama_bench(int argc, char ** argv) {
                 bool res = test_gen(ctx, 1, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
+                    if (ctx_dft) llama_free(ctx_dft);
                     llama_free(ctx);
+                    if (lmodel_dft) llama_model_free(lmodel_dft);
                     llama_model_free(lmodel);
                     exit(1);
                 }
@@ -2439,6 +2941,10 @@ int llama_bench(int argc, char ** argv) {
 
         for (int i = 0; i < params.reps; i++) {
             llama_memory_clear(llama_get_memory(ctx), false);
+            if (ctx_dft) {
+                llama_memory_clear(llama_get_memory(ctx_dft), false);
+                common_sampler_reset(smpl_dft.get());
+            }
 
             if (t.n_depth > 0) {
                 bool is_cached = t.n_depth == cstate.depth;
@@ -2460,7 +2966,9 @@ int llama_bench(int argc, char ** argv) {
                     bool res = test_prompt(ctx, t.n_depth, t.n_batch, t.n_threads);
                     if (!res) {
                         fprintf(stderr, "%s: error: failed to run depth\n", __func__);
+                        if (ctx_dft) llama_free(ctx_dft);
                         llama_free(ctx);
+                        if (lmodel_dft) llama_model_free(lmodel_dft);
                         llama_model_free(lmodel);
                         exit(1);
                     }
@@ -2484,10 +2992,14 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: prompt run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = has_spec_prefill
+                    ? test_speculative_prefill_prompt(ctx, ctx_dft, smpl_dft.get(), spf_params, t.n_prompt, t.n_batch, t.n_threads)
+                    : test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
+                    if (ctx_dft) llama_free(ctx_dft);
                     llama_free(ctx);
+                    if (lmodel_dft) llama_model_free(lmodel_dft);
                     llama_model_free(lmodel);
                     exit(1);
                 }
@@ -2500,7 +3012,9 @@ int llama_bench(int argc, char ** argv) {
                 bool res = test_gen(ctx, t.n_gen, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen\n", __func__);
+                    if (ctx_dft) llama_free(ctx_dft);
                     llama_free(ctx);
+                    if (lmodel_dft) llama_model_free(lmodel_dft);
                     llama_model_free(lmodel);
                     exit(1);
                 }
@@ -2522,11 +3036,17 @@ int llama_bench(int argc, char ** argv) {
 
         llama_perf_context_print(ctx);
 
+        if (ctx_dft) {
+            llama_free(ctx_dft);
+        }
         llama_free(ctx);
 
         ggml_threadpool_free_fn(threadpool);
     }
 
+    if (lmodel_dft) {
+        llama_model_free(lmodel_dft);
+    }
     llama_model_free(lmodel);
 
     if (p) {
