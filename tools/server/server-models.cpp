@@ -559,25 +559,25 @@ void server_models::load_models() {
     std::set<std::string> hidden_models;
     {
         std::set<std::string> preset_paths;
+        auto add_hf_path = [&preset_paths](const common_preset & preset, const char * repo_key, const char * file_key) {
+            std::string hf_repo;
+            if (!preset.get_option(repo_key, hf_repo) || hf_repo.empty()) {
+                return;
+            }
+            std::string hf_file;
+            preset.get_option(file_key, hf_file);
+            std::string path = common_download_resolve_path(hf_repo, hf_file);
+            if (!path.empty()) {
+                preset_paths.insert(path);
+            }
+        };
         for (const auto & [name, preset] : custom_presets) {
             std::string val;
             if (!preset.get_option(COMMON_ARG_PRESET_DEDUP_CACHE_MODELS, val) || !common_arg_utils::is_truthy(val)) {
                 continue;
             }
-            auto add_hf_path = [&](const char * repo_key, const char * file_key) {
-                std::string hf_repo;
-                if (!preset.get_option(repo_key, hf_repo) || hf_repo.empty()) {
-                    return;
-                }
-                std::string hf_file;
-                preset.get_option(file_key, hf_file);
-                std::string path = common_download_resolve_path(hf_repo, hf_file);
-                if (!path.empty()) {
-                    preset_paths.insert(path);
-                }
-            };
-            add_hf_path("LLAMA_ARG_HF_REPO", "LLAMA_ARG_HF_FILE");
-            add_hf_path("LLAMA_ARG_SPEC_DRAFT_HF_REPO", "LLAMA_ARG_SPEC_DRAFT_MODEL");
+            add_hf_path(preset, "LLAMA_ARG_HF_REPO", "LLAMA_ARG_HF_FILE");
+            add_hf_path(preset, "LLAMA_ARG_SPEC_DRAFT_HF_REPO", "LLAMA_ARG_SPEC_DRAFT_MODEL");
         }
         if (!preset_paths.empty()) {
             for (const auto & [name, preset] : cached_models) {
