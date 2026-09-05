@@ -627,10 +627,47 @@ class _Qwen35MRopeMixin:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
 
-@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
+@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", "Qwen3_5TextModel")
 @ModelBase.example("Qwen/Qwen3.5-9B")
 class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
+
+    def __init__(self, dir_model, *args, **kwargs):
+        # Inner TextModel does not own mtp.*. Set no_mtp before mixin bumps block_count.
+        hparams = kwargs.get("hparams")
+        arch = ((hparams or {}).get("architectures") or [None])[0]
+        if arch is None and (config_file := dir_model / "config.json").is_file():
+            with open(config_file, encoding="utf-8") as f:
+                arch = (json.load(f).get("architectures") or [None])[0]
+        if arch == "Qwen3_5TextModel":
+            self.no_mtp = True
+        super().__init__(dir_model, *args, **kwargs)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if self.hf_arch == "Qwen3_5TextModel":
+            self._try_set_pooling_type()
+            self._try_set_pooling_from_embedding_config()
+
+    def _try_set_pooling_from_embedding_config(self):
+        key = gguf.Keys.LLM.POOLING_TYPE.format(arch=gguf.MODEL_ARCH_NAMES[self.model_arch])
+        if key in self.gguf_writer.kv_data[0]:
+            return
+        embedding_config_path = self.dir_model / "embedding_config.json"
+        if not embedding_config_path.is_file():
+            return
+        with open(embedding_config_path, encoding="utf-8") as f:
+            embedding_config = json.load(f)
+        pooling = embedding_config.get("pooling")
+        if pooling == "last_token":
+            self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+        elif pooling is not None:
+            raise NotImplementedError(f"unsupported embedding_config.json pooling {pooling!r}")
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if self.hf_arch == "Qwen3_5TextModel":
+            name = f"model.{name}"
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
