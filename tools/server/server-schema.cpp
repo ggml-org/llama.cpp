@@ -384,6 +384,28 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_hard_limits(-1, INT32_MAX)
         ->set_desc("Number of tokens in the reasoning budget (-1 = disabled)"));
 
+    // fractional reasoning budgets (issue #27571)
+    add((new field_str("reasoning_budget"))
+        ->set_desc("Fractional reasoning budget relative to the total prompt length: \"F\", \"F+K\" or \"F-K\" with F in [0,1] (e.g. \"0.5\", \"0.25+4000\"). Only applies while reasoning_budget_tokens is -1")
+        ->set_handler([&](field_eval_context & ctx, const json & data) {
+            int32_t fixed = -1;
+            common_reasoning_budget_expr expr;
+            if (!common_reasoning_budget_parse(data.at("reasoning_budget").get<std::string>(), fixed, expr) || !expr.is_set()) {
+                throw std::invalid_argument("expected a fraction expression like \"0.5\" or \"0.25+4000\"");
+            }
+            ctx.params.sampling.reasoning_budget_expr = expr;
+        }));
+    add((new field_str("reasoning_budget_current"))
+        ->set_desc("Like reasoning_budget, but relative to the newest input message length")
+        ->set_handler([&](field_eval_context & ctx, const json & data) {
+            int32_t fixed = -1;
+            common_reasoning_budget_expr expr;
+            if (!common_reasoning_budget_parse(data.at("reasoning_budget_current").get<std::string>(), fixed, expr) || !expr.is_set()) {
+                throw std::invalid_argument("expected a fraction expression like \"0.3\" or \"0.3+4000\"");
+            }
+            ctx.params.sampling.reasoning_budget_expr_current = expr;
+        }));
+
     add((new field_str("reasoning_budget_start_tag"))
         ->set_desc("Token string marking the start of the reasoning budget section")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
@@ -551,6 +573,32 @@ task_params eval_llama_cmpl_schema(
         // if "reasoning_format" is not provided, its handler will not be called, we will need to handle it here
         auto reasoning_format = params.chat_parser_params.reasoning_format;
         params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
+    }
+
+    // measure reference lengths for fractional reasoning budgets (issue #27571)
+    if (params.sampling.reasoning_budget_tokens < 0 &&
+            (params.sampling.reasoning_budget_expr.is_set() || params.sampling.reasoning_budget_expr_current.is_set())) {
+        GGML_ASSERT(vocab != nullptr);
+        const auto n_full = common_tokenize(vocab, json_value(data, "prompt", std::string()), false, true).size();
+        params.sampling.reasoning_budget_ref_conversation = (int32_t) n_full;
+
+        // newest-input reference: measure the last message content directly.
+        // (a prefix-diff of re-templated prompts overcounts when past assistant
+        // turns carry reasoning text that the final prompt strips out)
+        if (params.sampling.reasoning_budget_expr_current.is_set()) {
+            int32_t n_cur = 0;
+            if (data.contains("messages") && data.at("messages").is_array() && !data.at("messages").empty()
+                    && data.at("messages").back().contains("content")) {
+                const auto & msg_content = data.at("messages").back().at("content");
+                if (msg_content.is_string()) {
+                    n_cur = (int32_t) common_tokenize(vocab, msg_content.get<std::string>(), false, true).size();
+                }
+            }
+            params.sampling.reasoning_budget_ref_current = n_cur;
+            SRV_DBG("fractional budget refs: conversation=%d current=%d\n",
+                    params.sampling.reasoning_budget_ref_conversation,
+                    params.sampling.reasoning_budget_ref_current);
+        }
     }
 
     // debugging
