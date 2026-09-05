@@ -331,10 +331,11 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
             ggml_tensor * state = build_rs(inp_rs, ssm_states_all, hparams.n_embd_s(), n_seqs);
             state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head, n_seqs);
 
+
             const float eps_norm = hparams.f_norm_rms_eps;
 
-            Qcur = ggml_l2_norm(ctx0, Qcur, eps_norm);
-            Kcur = ggml_l2_norm(ctx0, Kcur, eps_norm);
+            Qcur = build_gdn_l2_norm(ctx0, Qcur, eps_norm);
+            Kcur = build_gdn_l2_norm(ctx0, Kcur, eps_norm);
 
             // Choose between build_delta_net_chunking and build_delta_net_recurrent based on n_tokens
             auto attn_out = build_delta_net(Qcur, Kcur, Vcur, g1, beta, state, il);
