@@ -676,6 +676,7 @@ struct ggml_backend_opencl_context {
     // scratch copy of the router weights to avoid dst aliasing
     ggml_cl_buffer prealloc_moe_combine_w;
     ggml_cl_buffer prealloc_splitk_partial;  // [ksplit * M] partials for split-K GEMV
+    ggml_cl_buffer prealloc_fused_qkv;
 
     // pool of persistent image1d_buffer views over kv-cache layers, keyed by
     // (parent buffer, offset within parent)
@@ -855,6 +856,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_adreno_xmem_prepack_weight_f16;
     cl_kernel kernel_gemm_xmem_f16_f32_os8;
     cl_kernel kernel_adreno_xmem_store_dst_f32;
+    cl_kernel kernel_fused_qknorm_rope_f32 = nullptr;
     cl_kernel kernel_mul_mm_f16_f32_kqv;
     cl_kernel kernel_mul_mm_f16_f32_kq;
     cl_kernel kernel_mul_mat_q4_0_f32, kernel_mul_mat_q4_0_f32_v;
@@ -2457,6 +2459,25 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             clCreateKernel(program, "adreno_xmem_attn_pv_gemm", &err), err));
         CL_CHECK(clReleaseProgram(program));
         xmem_attn.compiled = true;
+        GGML_LOG_CONT(".");
+    }
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+    // fused_qknorm_rope
+    if (backend_ctx->gpu_family == GPU_FAMILY::ADRENO) {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "fused_qknorm_rope.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("fused_qknorm_rope.cl");
+#endif
+        cl_program program = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_fused_qknorm_rope_f32 =
+            clCreateKernel(program, "kernel_fused_qknorm_rope_f32", &err), err));
+        CL_CHECK(clReleaseProgram(program));
         GGML_LOG_CONT(".");
     }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
@@ -8062,6 +8083,158 @@ static void ggml_opencl_op_rms_norm_mul_add_fused(ggml_backend_t backend, ggml_t
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
+struct ggml_opencl_qkv_preprocess {
+    const ggml_tensor * src[2][3] = {};
+    const ggml_tensor * weight[2][2] = {};
+    const ggml_tensor * pe = nullptr;
+    const ggml_tensor * attn = nullptr;
+    float eps[2][2] = {};
+    float scale[2] = {1.0f, 1.0f};
+    int n_streams = 1;
+    std::vector<int> nodes;
+};
+
+static void ggml_opencl_op_qkv_preprocess(ggml_backend_t backend, const ggml_opencl_qkv_preprocess & match);
+
+static const ggml_tensor * ggml_opencl_match_qkv_rope(const ggml_tensor * out, const ggml_tensor * & pe,
+                                                       std::vector<const ggml_tensor *> & nodes) {
+    if (out->op != GGML_OP_RESHAPE || out->src[0]->op != GGML_OP_ADD || out->ne[0] % 2 != 0) { return nullptr; }
+    const auto * add = out->src[0];
+    const int64_t d = out->ne[0], l = out->ne[1], heads = out->ne[2] * out->ne[3];
+    const int64_t rotated_shape[] = {2, d / 2, l, heads}, pe_shape[] = {2, 2, d / 2, l};
+    const int32_t split_axes[] = {3, 0, 1, 2}, head_axes[] = {0, 2, 1, 3};
+    if (memcmp(add->ne, rotated_shape, sizeof(rotated_shape)) != 0) { return nullptr; }
+    nodes.insert(nodes.end(), {out, add});
+    const ggml_tensor * packed = nullptr, * coeffs = nullptr;
+    for (int b = 0; b < 2; ++b) {
+        const auto * t = add->src[b];
+        const ggml_tensor * x[4];
+        int j = 0;
+        for (ggml_op op : {GGML_OP_MUL, GGML_OP_REPEAT, GGML_OP_RESHAPE, GGML_OP_VIEW}) {
+            if (!t || t->op != op) { return nullptr; }
+            x[j++] = t;
+            nodes.push_back(t);
+            t = t->src[0];
+        }
+        const auto * p = x[0]->src[1];
+        if (!t || (packed && packed != t) || p->op != GGML_OP_VIEW ||
+            (coeffs && coeffs != p->src[0])) { return nullptr; }
+        packed = t;
+        coeffs = p->src[0];
+        nodes.push_back(p);
+        if (x[2]->ne[0] != 1 || !ggml_is_contiguous(x[3]) || !ggml_is_contiguous(p) || p->ne[3] != 1 ||
+            ggml_nelements(x[3]) * 2 != ggml_nelements(packed) || ggml_nelements(p) * 2 != ggml_nelements(coeffs) ||
+            x[3]->view_offs != b * ggml_nbytes(packed) / 2 || p->view_offs != b * ggml_nbytes(coeffs) / 2) { return nullptr; }
+    }
+    const ggml_tensor * x[5];
+    const auto * t = packed;
+    int j = 0;
+    for (ggml_op op : {GGML_OP_CONT, GGML_OP_PERMUTE, GGML_OP_RESHAPE, GGML_OP_CONT, GGML_OP_PERMUTE}) {
+        if (!t || t->op != op) { return nullptr; }
+        x[j++] = t;
+        nodes.push_back(t);
+        t = t->src[0];
+    }
+    if (!t || t->type != GGML_TYPE_F32 || t->ne[0] != d || t->ne[2] != l || t->ne[1] * t->ne[3] != heads ||
+        !ggml_are_same_shape(x[2], add) || memcmp(x[1]->op_params, split_axes, sizeof(split_axes)) != 0 ||
+        memcmp(x[4]->op_params, head_axes, sizeof(head_axes)) != 0) { return nullptr; }
+    if (coeffs->op != GGML_OP_CONT || coeffs->src[0]->op != GGML_OP_PERMUTE ||
+        memcmp(coeffs->src[0]->op_params, split_axes, sizeof(split_axes)) != 0) { return nullptr; }
+    const auto * p = coeffs->src[0]->src[0];
+    if (p->type != GGML_TYPE_F32 || !ggml_is_contiguous(p) || (pe && pe != p) ||
+        memcmp(p->ne, pe_shape, sizeof(pe_shape)) != 0) { return nullptr; }
+    pe = p;
+    nodes.push_back(coeffs);
+    return t;
+}
+
+static bool ggml_opencl_can_fuse_qkv(const ggml_backend_opencl_context * backend_ctx, const ggml_cgraph * graph, int first, ggml_opencl_qkv_preprocess & m) {
+    auto * begin = graph->nodes + first, * end = graph->nodes + graph->n_nodes;
+    auto * last = std::find_if(begin, end, [](const ggml_tensor * t) { return t->op == GGML_OP_FLASH_ATTN_EXT; });
+    if (last == end) { return false; }
+    const auto * attn = *last;
+    std::vector<const ggml_tensor *> nodes = {attn}, inputs;
+    const ggml_tensor * input[3];
+    const int32_t head_axes[] = {0, 2, 1, 3};
+    for (int j = 0; j < 3; ++j) {
+        const auto * t = attn->src[j];
+        if (t->type != (j == 0 ? GGML_TYPE_F32 : GGML_TYPE_F16) || !ggml_is_contiguous(t) ||
+            (j > 0 && !ggml_are_same_shape(t, attn->src[0]))) { return false; }
+        if (j > 0) {
+            if (t->op != GGML_OP_CPY || t->src[1] != t) { return false; }
+            nodes.push_back(t);
+            t = t->src[0];
+            if (t->op == GGML_OP_SCALE) {
+                if (ggml_get_op_params_f32(t, 1) != 0.0f) { return false; }
+                m.scale[j - 1] = ggml_get_op_params_f32(t, 0);
+                nodes.push_back(t);
+                t = t->src[0];
+            }
+        }
+        if (j < 2) {
+            input[j] = ggml_opencl_match_qkv_rope(t, m.pe, nodes);
+            if (!input[j]) { return false; }
+        } else {
+            for (ggml_op op : {GGML_OP_RESHAPE, GGML_OP_CONT, GGML_OP_PERMUTE}) {
+                if (t->op != op) { return false; }
+                if (op != GGML_OP_PERMUTE || t->src[0]->op == GGML_OP_CONCAT) { nodes.push_back(t); }
+                if (op == GGML_OP_PERMUTE && memcmp(t->op_params, head_axes, sizeof(head_axes)) != 0) { return false; }
+                t = t->src[0];
+            }
+            input[j] = t;
+        }
+    }
+    m.n_streams = input[0]->op == GGML_OP_CONCAT ? 2 : 1;
+    inputs.push_back(m.pe);
+    for (int j = 0; j < 3; ++j) {
+        if (!ggml_are_same_shape(input[0], input[j])) { return false; }
+        if (m.n_streams == 2) {
+            if (input[j]->op != GGML_OP_CONCAT || input[j]->op_params[0] != 2) { return false; }
+            nodes.push_back(input[j]);
+        }
+    }
+    for (int s = 0; s < m.n_streams; ++s) {
+        const auto * v = m.n_streams == 2 ? input[2]->src[s] : input[2];
+        if (v->type != GGML_TYPE_F32 || !v->view_src || !ggml_is_contiguous_rows(v)) { return false; }
+        m.src[s][2] = v;
+        inputs.push_back(v);
+        for (int j = 0; j < 2; ++j) {
+            const auto * mul = m.n_streams == 2 ? input[j]->src[s] : input[j];
+            const auto * norm = mul->src[0];
+            const auto * weight = mul->src[1];
+            auto * ni = std::find(begin, last + 1, norm);
+            if (ni >= last || ni[1] != mul || !ggml_opencl_can_fuse(backend_ctx, graph, ni - graph->nodes, {GGML_OP_RMS_NORM, GGML_OP_MUL}) ||
+                !ggml_is_vector(weight) || weight->ne[0] != norm->ne[0]) { return false; }
+            const auto * src = norm->src[0];
+            if (!ggml_are_same_layout(src, v) || src->view_src != v->view_src) { return false; }
+            m.src[s][j] = src;
+            m.weight[s][j] = weight;
+            m.eps[s][j] = ggml_get_op_params_f32(norm, 0);
+            nodes.insert(nodes.end(), {norm, mul});
+            inputs.insert(inputs.end(), {src, weight});
+        }
+    }
+    std::vector<ggml_op> ops;
+    for (auto * it = begin; it <= last; ++it) {
+        const auto * t = *it;
+        if (std::find(nodes.begin(), nodes.end(), t) != nodes.end()) {
+            m.nodes.push_back(it - graph->nodes);
+            ops.push_back(t->op);
+        } else if (!ggml_op_is_empty(t->op)) {
+            for (const auto * src : inputs) {
+                auto * producer = std::find(begin, last + 1, src);
+                if ((producer < it || producer == last + 1) && ggml_cl_tensors_overlap(t, src)) { return false; }
+            }
+        }
+    }
+    const int output = last - graph->nodes;
+    if (m.nodes.empty() || m.nodes.front() != first ||
+        !std::all_of(nodes.begin(), nodes.end(), [&](const ggml_tensor * t) { return std::find(begin, last + 1, t) != last + 1; }) ||
+        !ggml_can_fuse_subgraph_ext(graph, m.nodes.data(), m.nodes.size(), ops.data(), &output, 1)) { return false; }
+    m.attn = attn;
+    return true;
+}
+
 static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
@@ -8079,6 +8252,25 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
 
         if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             continue;
+        }
+
+        if (!backend_ctx->disable_fusion && backend_ctx->kernel_fused_qknorm_rope_f32 &&
+            node->op == GGML_OP_RMS_NORM && node->src[0]->op == GGML_OP_VIEW) {
+            ggml_opencl_qkv_preprocess qkv;
+            if (ggml_opencl_can_fuse_qkv(backend_ctx, cgraph, i, qkv)) {
+                int first = i;
+                for (int idx : qkv.nodes) {
+                    if (first < idx) {
+                        auto inputs = ggml_graph_view(cgraph, first, idx);
+                        const auto status = ggml_backend_opencl_graph_compute(backend, &inputs);
+                        if (status != GGML_STATUS_SUCCESS) { return status; }
+                    }
+                    first = idx + 1;
+                }
+                ggml_opencl_op_qkv_preprocess(backend, qkv);
+                i = qkv.nodes.back();
+                continue;
+            }
         }
 
         if (!backend_ctx->disable_fusion && ggml_opencl_can_fuse(backend_ctx, cgraph, i, { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD })) {
@@ -14400,6 +14592,75 @@ static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, c
     CL_CHECK(clSetKernelArg(kernel, 12, sizeof(float)*nth/sgs,  NULL));
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+}
+
+static void ggml_opencl_op_qkv_preprocess(ggml_backend_t backend, const ggml_opencl_qkv_preprocess & m) {
+    auto * ctx = (ggml_backend_opencl_context *) backend->context;
+    cl_kernel kernel = ctx->kernel_fused_qknorm_rope_f32;
+    size_t bytes = 0;
+    for (int j = 0; j < 3; ++j) { bytes += GGML_PAD(ggml_nbytes(m.attn->src[j]), 128); }
+    ctx->prealloc_fused_qkv.allocate(ctx->context, bytes);
+
+    ggml_tensor attn = *m.attn;
+    ggml_tensor qkv[3];
+    ggml_tensor_extra_cl extra[3] = {};
+    size_t offset = 0;
+    for (int j = 0; j < 3; ++j) {
+        qkv[j] = *m.attn->src[j];
+        extra[j].data_device = ctx->prealloc_fused_qkv.buffer;
+        extra[j].offset = offset;
+        extra[j].actual_size = ctx->prealloc_fused_qkv.size;
+        qkv[j].extra = &extra[j];
+        qkv[j].view_src = nullptr;
+        qkv[j].view_offs = 0;
+        attn.src[j] = &qkv[j];
+        offset += GGML_PAD(ggml_nbytes(&qkv[j]), 128);
+    }
+
+    int token_offset = 0;
+    for (int s = 0; s < m.n_streams; ++s) {
+        const auto & src = m.src[s];
+        int arg = 0;
+        auto tensor_arg = [&](const ggml_tensor * t) {
+            auto * extra = (ggml_tensor_extra_cl *) t->extra;
+            const cl_ulong offset = extra->offset + t->view_offs;
+            CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_mem), &extra->data_device));
+            CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &offset));
+        };
+        auto * extra = (ggml_tensor_extra_cl *) src[0]->extra;
+        CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_mem), &extra->data_device));
+        cl_ulong4 offsets = {};
+        cl_ulong4 strides = {};
+        for (int j = 0; j < 3; ++j) {
+            auto * e = (ggml_tensor_extra_cl *) src[j]->extra;
+            GGML_ASSERT(e->data_device == extra->data_device);
+            offsets.s[j] = e->offset + src[j]->view_offs;
+        }
+        for (int j = 0; j < 4; ++j) { strides.s[j] = src[0]->nb[j]; }
+        CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(offsets), &offsets));
+        CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(strides), &strides));
+        tensor_arg(m.weight[s][0]);
+        tensor_arg(m.weight[s][1]);
+        tensor_arg(m.pe);
+        const cl_ulong pe_stride = m.pe->nb[3];
+        CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(pe_stride), &pe_stride));
+        for (const auto & dst : qkv) { tensor_arg(&dst); }
+        const int dims[] = {(int) src[0]->ne[0], (int) src[0]->ne[1],
+                            (int) src[0]->ne[2], (int) qkv[0].ne[1], token_offset};
+        for (const int & dim : dims) {
+            CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(dim), &dim));
+        }
+        const float params[] = {m.eps[s][0], m.eps[s][1], m.scale[0], m.scale[1]};
+        for (const float & value : params) {
+            CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(value), &value));
+        }
+        size_t gws[] = {(size_t) dims[1] * 64, (size_t) dims[2] * (size_t) src[0]->ne[3]};
+        size_t lws[] = {64, 1};
+        ctx->enqueue_ndrange_kernel(kernel, 2, gws, lws, m.attn->src[0]);
+        token_offset += dims[2];
+    }
+    const bool ok = ggml_cl_compute_forward(backend, &attn);
+    GGML_ASSERT(ok);
 }
 
 static void ggml_opencl_op_rms_norm_fused(ggml_backend_t backend, ggml_tensor * rms_norm_tensor, ggml_tensor * mul_tensor) {

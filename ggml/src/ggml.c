@@ -7710,7 +7710,7 @@ bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
         }
 
         int subgraph_uses = 0;
-        for (int j = i + 1; j < count; ++j) {
+        for (int j = i; j < count; ++j) {
             const struct ggml_tensor * other_node = cgraph->nodes[node_idxs[j]];
             for (int src_idx = 0; src_idx < GGML_MAX_SRC; src_idx++) {
                 if (other_node->src[src_idx] == node) {
