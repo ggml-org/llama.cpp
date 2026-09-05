@@ -210,7 +210,7 @@ struct llama_grammar {
     // mutable because apply_impl takes const llama_grammar &.
     mutable std::unordered_map<
         llama_grammar_stack,
-        std::unordered_map<llama_grammar_candidates, llama_grammar_candidates,
+        std::unordered_map<llama_grammar_candidates, std::vector<size_t>,
                            llama_grammar_candidates_hash, llama_grammar_candidates_eq>,
         llama_grammar_stack_hash, llama_grammar_stack_eq> memo_cache;
 

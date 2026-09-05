@@ -1106,7 +1106,10 @@ static llama_grammar_candidates llama_grammar_reject_candidates_for_stack_impl(
         }
         // Store before returning so early returns don't leave an empty entry in the cache.
         if (candidates.size() <= MEMO_CANDIDATES_MAX) {
-            memo_cache[stack][candidates] = rejects;
+            std::vector<size_t> indices;
+            indices.reserve(rejects.size());
+            for (const auto & r : rejects) { indices.push_back(r.index); }
+            memo_cache[stack][candidates] = std::move(indices);
         }
         return rejects;
     }
@@ -1116,7 +1119,14 @@ static llama_grammar_candidates llama_grammar_reject_candidates_for_stack_impl(
         if (stack_it != memo_cache.end()) {
             auto cand_it = stack_it->second.find(candidates);
             if (cand_it != stack_it->second.end()) {
-                return cand_it->second;
+                llama_grammar_candidates result;
+                result.reserve(cand_it->second.size());
+                for (size_t idx : cand_it->second) {
+                    for (const auto & c : candidates) {
+                        if (c.index == idx) { result.push_back(c); break; }
+                    }
+                }
+                return result;
             }
         }
     }
@@ -1155,7 +1165,10 @@ static llama_grammar_candidates llama_grammar_reject_candidates_for_stack_impl(
     }
 
     if (candidates.size() <= MEMO_CANDIDATES_MAX) {
-        memo_cache[stack][candidates] = rejects;
+        std::vector<size_t> indices;
+        indices.reserve(rejects.size());
+        for (const auto & r : rejects) { indices.push_back(r.index); }
+        memo_cache[stack][candidates] = std::move(indices);
     }
 
     return rejects;
@@ -1241,6 +1254,7 @@ struct llama_grammar * llama_grammar_init_impl(
         /* .trigger_buffer_positions = */ {},
         /* .trigger_tokens = */           {},
         /* .trigger_patterns = */         {},
+        /* .memo_cache = */               {},
     };
 }
 
@@ -1347,6 +1361,7 @@ struct llama_grammar * llama_grammar_init_impl(
         /* .trigger_buffer_positions = */ {},
         std::move(vec_trigger_tokens),
         std::move(vec_trigger_patterns),
+        /* .memo_cache = */               {},
     };
 }
 
@@ -1370,6 +1385,7 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
         grammar.trigger_buffer_positions,
         grammar.trigger_tokens,
         grammar.trigger_patterns,
+        /* .memo_cache = */               {},
     };
 
     // redirect elements in stacks to point to new rules
@@ -1402,9 +1418,6 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
             break;
         }
     }
-
-    // cache keys hold raw pointers into candidates_decoded; clear before rebuilding
-    grammar.memo_cache.clear();
 
     std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> candidates_decoded;
     candidates_decoded.reserve(cur_p->size);
