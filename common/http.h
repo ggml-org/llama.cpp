@@ -67,6 +67,61 @@ static common_http_url common_http_parse_url(const std::string & url) {
     return parts;
 }
 
+// match a host against a NO_PROXY list: comma separated entries, "*" bypasses the proxy for every host,
+// an entry matches the host itself or any of its subdomains, a leading dot is optional, ports are ignored
+static bool common_http_proxy_bypass(const std::string & no_proxy, const std::string & host) {
+    auto lower = [](std::string s) {
+        for (auto & c : s) {
+            if (c >= 'A' && c <= 'Z') {
+                c += 'a' - 'A';
+            }
+        }
+        return s;
+    };
+
+    const std::string h = lower(host);
+
+    for (size_t pos = 0; pos < no_proxy.size(); ) {
+        size_t end = no_proxy.find(',', pos);
+        if (end == std::string::npos) {
+            end = no_proxy.size();
+        }
+
+        std::string entry = lower(no_proxy.substr(pos, end - pos));
+        pos = end + 1;
+
+        entry.erase(0, entry.find_first_not_of(" \t"));
+        auto last = entry.find_last_not_of(" \t");
+        if (last == std::string::npos) {
+            continue;
+        }
+        entry.erase(last + 1);
+
+        if (entry == "*") {
+            return true;
+        }
+
+        if (entry.front() == '.') {
+            entry.erase(0, 1);
+        }
+
+        if (entry.empty()) {
+            continue;
+        }
+
+        if (h == entry) {
+            return true;
+        }
+
+        if (h.size() > entry.size() && h[h.size() - entry.size() - 1] == '.' &&
+            h.compare(h.size() - entry.size(), entry.size(), entry) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static std::pair<httplib::Client, common_http_url> common_http_client(const std::string & url) {
     common_http_url parts = common_http_parse_url(url);
 
@@ -106,7 +161,7 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
         ? getenv_s("HTTPS_PROXY", "https_proxy")
         : getenv_s("HTTP_PROXY",  "http_proxy");
 
-    if (!proxy_url.empty()) {
+    if (!proxy_url.empty() && !common_http_proxy_bypass(getenv_s("NO_PROXY", "no_proxy"), parts.host)) {
         try {
             common_http_url proxy = common_http_parse_url(proxy_url);
             cli.set_proxy(proxy.host, proxy.port);
