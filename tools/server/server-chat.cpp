@@ -214,9 +214,9 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         {"tool_call_id", item.at("call_id")},
                     });
                 }
-            } else if (exists_and_is_array(item, "summary") &&
-                exists_and_is_string(item, "type") &&
-                item.at("type") == "reasoning") {
+            } else if (exists_and_is_string(item, "type") &&
+                item.at("type") == "reasoning" &&
+                (!item.contains("summary") || item.at("summary").is_array())) {
                 // #responses_create-input-input_item_list-item-reasoning
 
                 if (!exists_and_is_array(item, "content")) {
