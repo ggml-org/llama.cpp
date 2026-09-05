@@ -560,12 +560,6 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_DEEPSEEK2OCR) {
         return false;
     }
-    // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
-#ifdef GGML_USE_WEBGPU
-    if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP) {
-        return false;
-    }
-#endif // GGML_USE_WEBGPU
 
     // FIXME: jamba produces incorrect output (~0.55 NMSE vs CPU) on the HIP
     // backend on RDNA3.5 (gfx1151); the SSM kernels need investigation.
