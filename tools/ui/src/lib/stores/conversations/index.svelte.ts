@@ -88,7 +88,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		}
 
 		if (this.activeConversation?.id === id) {
-			this.activeConversation = { ...this.activeConversation, ...updates };
+			// field-wise, not object replacement: effects that track the active
+			// conversation identity would otherwise refire on every rename or pin
+			const target = this.activeConversation as unknown as Record<string, unknown>;
+
+			for (const [key, value] of Object.entries(updates)) {
+				if (target[key] !== value) target[key] = value;
+			}
 		}
 	}
 
@@ -202,11 +208,8 @@ class ConversationsStore implements ConversationsPreferencesHost {
 			const updates = await DatabaseService.bulkToggleConversationPins(convIds);
 			const activeId = this.activeConversation?.id;
 
-			if (activeId && updates.has(activeId)) {
-				this.activeConversation = {
-					...this.activeConversation!,
-					pinned: updates.get(activeId)!
-				};
+			if (this.activeConversation && activeId && updates.has(activeId)) {
+				this.activeConversation.pinned = updates.get(activeId)!;
 			}
 
 			for (let i = 0; i < this.conversations.length; i++) {
@@ -558,7 +561,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		const currentLeafNodeId = findLeafNode(allMessages, siblingId);
 
 		await DatabaseService.updateCurrentNode(this.activeConversation.id, currentLeafNodeId);
-		this.activeConversation = { ...this.activeConversation, currNode: currentLeafNodeId };
+		this.activeConversation.currNode = currentLeafNodeId;
 		await this.refreshActiveMessages();
 
 		if (rootMessage && this.activeMessages.length > 0) {
@@ -694,7 +697,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		}
 
 		if (this.activeConversation?.id === targetId) {
-			this.activeConversation = { ...this.activeConversation, lastModified: now };
+			this.activeConversation.lastModified = now;
 		}
 
 		DatabaseService.updateConversation(targetId, { lastModified: now }).catch((error) =>
@@ -710,7 +713,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		if (!this.activeConversation) return;
 
 		await DatabaseService.updateCurrentNode(this.activeConversation.id, nodeId);
-		this.activeConversation = { ...this.activeConversation, currNode: nodeId };
+		this.activeConversation.currNode = nodeId;
 	}
 
 	/**
