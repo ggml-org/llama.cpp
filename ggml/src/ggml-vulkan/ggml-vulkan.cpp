@@ -386,7 +386,28 @@ class vk_perf_logger;
 static void ggml_vk_destroy_buffer(vk_buffer& buf);
 static void ggml_vk_synchronize(ggml_backend_vk_context * ctx);
 
-static constexpr uint32_t mul_mat_vec_max_cols = 8;
+static constexpr uint32_t mul_mat_vec_max_cols = 16;
+
+// Runtime override for the mul_mat_vec dispatch crossover: GGML_VK_MMV_MAX_COLS.
+// Default 8 preserves the historical dispatch behavior exactly; values are
+// clamped to [1, mul_mat_vec_max_cols]. Pipelines exist for every column count
+// up to the compile-time max, so one binary can A/B the crossover without
+// rebuild noise. Mirrors GGML_CUDA_MMVQ_MAX, the CUDA backend's runtime knob
+// for the same mmv->matmul decode crossover.
+static uint32_t ggml_vk_mmv_max_cols() {
+    static const uint32_t val = []() -> uint32_t {
+        const char * env = getenv("GGML_VK_MMV_MAX_COLS");
+        int v = 8;
+        if (env != nullptr) {
+            v = atoi(env);
+            if (v < 1) v = 1;
+            if (v > (int) mul_mat_vec_max_cols) v = (int) mul_mat_vec_max_cols;
+        }
+        return (uint32_t) v;
+    }();
+    return val;
+}
+
 static constexpr uint32_t p021_max_gqa_ratio = 8;
 
 enum vk_device_architecture {
@@ -2317,7 +2338,7 @@ class vk_perf_logger {
             const uint64_t k     = node->src[1]->ne[0];
             const uint64_t batch = node->ne[2] * node->ne[3];
             std::string    name  = ggml_op_name(node->op);
-            if ((node->op == GGML_OP_MUL_MAT && n <= mul_mat_vec_max_cols) ||
+            if ((node->op == GGML_OP_MUL_MAT && n <= ggml_vk_mmv_max_cols()) ||
                 (node->op == GGML_OP_MUL_MAT_ID && node->src[2]->ne[1] == 1)) {
                 name += "_VEC";
             }
@@ -10175,7 +10196,7 @@ static void ggml_vk_mul_mat(ggml_backend_vk_context * ctx, vk_context& subctx, c
         ggml_vk_mul_mat_vec_nc_f16_f32(ctx, subctx, cgraph, node_idx);
     // mul_mat_vec supports batching ne12*ne13 when ne11==1, or treating ne11 as the batch size (up to four)
     // when ne12 and ne13 are one.
-    } else if ((dst->ne[1] == 1 || (dst->ne[1] <= mul_mat_vec_max_cols && src1->ne[2] * src1->ne[3] == 1)) &&
+    } else if ((dst->ne[1] == 1 || (dst->ne[1] <= ggml_vk_mmv_max_cols() && src1->ne[2] * src1->ne[3] == 1)) &&
                (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 || ggml_is_quantized(src0->type))) {
         ggml_vk_mul_mat_vec_q_f16(ctx, subctx, cgraph, node_idx);
     } else {
