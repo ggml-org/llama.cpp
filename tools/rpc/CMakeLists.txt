@@ -15,6 +15,18 @@ if (LLAMA_BUILD_TESTS AND UNIX AND NOT GGML_BACKEND_DL)
     set_property(TEST test-rpc-multi-server PROPERTY LABELS main)
 endif()
 
+if (LLAMA_BUILD_TESTS AND UNIX)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if (Python3_Interpreter_FOUND)
+        add_test(
+            NAME test-rpc-invalid-graph-node
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/test-rpc-invalid-graph-node.py
+                $<TARGET_FILE:${TARGET}>)
+        set_property(TEST test-rpc-invalid-graph-node PROPERTY LABELS main)
+    endif()
+endif()
+
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
 endif()
