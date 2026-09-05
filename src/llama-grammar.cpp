@@ -936,20 +936,27 @@ static void llama_grammar_advance_stack(
     }
 }
 
+static llama_grammar_candidates llama_grammar_reject_candidates_for_stack_impl(
+        const llama_grammar_rules      & rules,
+        const llama_grammar_stack      & stack,
+        const llama_grammar_candidates & candidates,
+        decltype(llama_grammar::memo_cache) & memo_cache);
+
 static llama_grammar_candidates llama_grammar_reject_candidates(
         const llama_grammar_rules      & rules,
         const llama_grammar_stacks     & stacks,
-        const llama_grammar_candidates & candidates) {
+        const llama_grammar_candidates & candidates,
+        decltype(llama_grammar::memo_cache) & memo_cache) {
     GGML_ASSERT(!stacks.empty()); // REVIEW
 
     if (candidates.empty()) {
         return {};
     }
 
-    auto rejects = llama_grammar_reject_candidates_for_stack(rules, stacks.front(), candidates);
+    auto rejects = llama_grammar_reject_candidates_for_stack_impl(rules, stacks.front(), candidates, memo_cache);
 
     for (size_t i = 1, size = stacks.size(); i < size; ++i) {
-        rejects = llama_grammar_reject_candidates_for_stack(rules, stacks[i], rejects);
+        rejects = llama_grammar_reject_candidates_for_stack_impl(rules, stacks[i], rejects, memo_cache);
     }
 
     return rejects;
@@ -1053,10 +1060,22 @@ void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr) {
     grammar->stacks = std::move(stacks_new);
 }
 
+// Signature kept for test compatibility; creates a per-call cache and delegates to impl.
 llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
         const llama_grammar_rules      & rules,
         const llama_grammar_stack      & stack,
         const llama_grammar_candidates & candidates) {
+    decltype(llama_grammar::memo_cache) local_memo;
+    return llama_grammar_reject_candidates_for_stack_impl(rules, stack, candidates, local_memo);
+}
+
+static constexpr size_t MEMO_CANDIDATES_MAX = 8;
+
+static llama_grammar_candidates llama_grammar_reject_candidates_for_stack_impl(
+        const llama_grammar_rules      & rules,
+        const llama_grammar_stack      & stack,
+        const llama_grammar_candidates & candidates,
+        decltype(llama_grammar::memo_cache) & memo_cache) {
 
     llama_grammar_candidates rejects;
     rejects.reserve(candidates.size());
@@ -1085,7 +1104,31 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
                 rejects.push_back(tok);
             }
         }
+        // Store before returning so early returns don't leave an empty entry in the cache.
+        if (candidates.size() <= MEMO_CANDIDATES_MAX) {
+            std::vector<size_t> indices;
+            indices.reserve(rejects.size());
+            for (const auto & r : rejects) { indices.push_back(r.index); }
+            memo_cache[stack][candidates] = std::move(indices);
+        }
         return rejects;
+    }
+
+    if (candidates.size() <= MEMO_CANDIDATES_MAX) {
+        auto stack_it = memo_cache.find(stack);
+        if (stack_it != memo_cache.end()) {
+            auto cand_it = stack_it->second.find(candidates);
+            if (cand_it != stack_it->second.end()) {
+                llama_grammar_candidates result;
+                result.reserve(cand_it->second.size());
+                for (size_t idx : cand_it->second) {
+                    for (const auto & c : candidates) {
+                        if (c.index == idx) { result.push_back(c); break; }
+                    }
+                }
+                return result;
+            }
+        }
     }
 
     llama_grammar_candidates next_candidates;
@@ -1116,9 +1159,16 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     llama_grammar_stacks next_stacks;
     llama_grammar_advance_stack(rules, stack_after, next_stacks);
 
-    auto next_rejects = llama_grammar_reject_candidates(rules, next_stacks, next_candidates);
+    auto next_rejects = llama_grammar_reject_candidates(rules, next_stacks, next_candidates, memo_cache);
     for (const auto & tok : next_rejects) {
         rejects.push_back({ tok.index, tok.code_points - 1, tok.partial_utf8, tok.id });
+    }
+
+    if (candidates.size() <= MEMO_CANDIDATES_MAX) {
+        std::vector<size_t> indices;
+        indices.reserve(rejects.size());
+        for (const auto & r : rejects) { indices.push_back(r.index); }
+        memo_cache[stack][candidates] = std::move(indices);
     }
 
     return rejects;
@@ -1204,6 +1254,7 @@ struct llama_grammar * llama_grammar_init_impl(
         /* .trigger_buffer_positions = */ {},
         /* .trigger_tokens = */           {},
         /* .trigger_patterns = */         {},
+        /* .memo_cache = */               {},
     };
 }
 
@@ -1310,6 +1361,7 @@ struct llama_grammar * llama_grammar_init_impl(
         /* .trigger_buffer_positions = */ {},
         std::move(vec_trigger_tokens),
         std::move(vec_trigger_patterns),
+        /* .memo_cache = */               {},
     };
 }
 
@@ -1333,6 +1385,7 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
         grammar.trigger_buffer_positions,
         grammar.trigger_tokens,
         grammar.trigger_patterns,
+        /* .memo_cache = */               {},
     };
 
     // redirect elements in stacks to point to new rules
@@ -1388,7 +1441,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         }
     }
 
-    const auto rejects = llama_grammar_reject_candidates(grammar.rules, grammar.stacks, candidates_grammar);
+    const auto rejects = llama_grammar_reject_candidates(grammar.rules, grammar.stacks, candidates_grammar, grammar.memo_cache);
     for (const auto & reject : rejects) {
         cur_p->data[reject.index].logit = -INFINITY;
     }
