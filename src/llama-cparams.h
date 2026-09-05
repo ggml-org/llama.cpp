@@ -63,5 +63,5 @@ struct llama_cparams {
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
 
-    llama_context * ctx_other;
+    const llama_context * ctx_other;
 };
