@@ -7875,6 +7875,33 @@ struct test_fill : public test_case {
     }
 };
 
+// GGML_OP_SLEEP (for scheduler testing only)
+struct test_sleep : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+    const int32_t                us;
+
+    std::string vars() override { return VARS_TO_STR3(type, ne, us); }
+
+    // the op is a plain copy, any deviation at all is a bug
+    double max_nmse_err() override { return 0.0; }
+
+    test_sleep(int32_t us = 100, ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 10, 4, 3 })
+        : type(type), ne(ne), us(us) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_sleep(ctx, a, us);
+
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_SOLVE_TRI
 struct test_solve_tri : public test_case {
     const ggml_type              type;
@@ -10313,6 +10340,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_fill(2.0f, GGML_TYPE_F32, { 303, 207, 11, 3 }));
     test_cases.emplace_back(new test_fill(-152.0f, GGML_TYPE_F32, { 800, 600, 4, 4 }));
     test_cases.emplace_back(new test_fill(3.5f, GGML_TYPE_F32, { 2048, 512, 2, 2 }));
+
+    test_cases.emplace_back(new test_sleep(0));
+    test_cases.emplace_back(new test_sleep(10, GGML_TYPE_F16, { 128, 4, 2, 2 }));
+    test_cases.emplace_back(new test_sleep(10, GGML_TYPE_F32, { 128, 4, 2, 2 }));
 
     test_cases.emplace_back(new test_diag());
     test_cases.emplace_back(new test_diag(GGML_TYPE_F32, { 79, 1, 19, 13 }));
