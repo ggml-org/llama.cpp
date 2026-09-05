@@ -48,6 +48,13 @@ struct common_speculative_output_limits {
 common_speculative_output_limits common_speculative_get_output_limits(
         int32_t n_batch, int32_t n_parallel, int32_t n_draft);
 
+// true when any enabled type is a block draft (DFlash/DSpark)
+inline bool common_speculative_is_block_draft(const std::vector<common_speculative_type> & types) {
+    return std::any_of(types.begin(), types.end(), [](common_speculative_type t) {
+        return t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
+    });
+}
+
 // max draft-context ubatch for block drafts (DFlash/DSpark): their largest decode batch is
 // one noise block per sequence (n_max + 1 tokens), but the target-feature prefill (encoder +
 // KV injection) is chunked by the same ubatch, so keep a floor to avoid launch-bound chunks

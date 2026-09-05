@@ -2741,12 +2741,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
     // dflash/dspark decode the whole noise block in a single pass and sample every block position on the backend
     // TODO: refactor such properties to be announced by the speculative types
     //       something like `struct common_speculative_type_props common_speculative_type_get_props(...);`
-    const bool has_block_draft = std::any_of(
-        params.speculative.types.begin(), params.speculative.types.end(),
-        [](common_speculative_type t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
-        });
-    if (has_block_draft) {
+    if (common_speculative_is_block_draft(params.speculative.types)) {
         // per-seq output positions: DFlash decodes anchor + n_max masks (n_max + 1); DSpark n_max -> +1 covers both
         const int32_t per_seq = std::max(1, params_spec.n_max + 1);
         result.n_outputs_max = params.n_parallel * per_seq;
@@ -2795,12 +2790,7 @@ common_speculative_init_result::common_speculative_init_result(
     // DFlash2/DSpark rank the full target vocabulary (in-graph or on the CPU after the
     // decode), so the reserved lm_head output grows with the draft ubatch; see
     // common_speculative_block_draft_n_ubatch for the cap rationale
-    const bool has_block_draft = std::any_of(
-        params.speculative.types.begin(), params.speculative.types.end(),
-        [](common_speculative_type t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
-        });
-    if (has_block_draft) {
+    if (common_speculative_is_block_draft(params.speculative.types)) {
         const uint32_t n_ubatch_dft = common_speculative_block_draft_n_ubatch(params.n_parallel, params.speculative.draft.n_max);
         if (cparams.n_ubatch > n_ubatch_dft) {
             LOG_INF("%s: capping draft context ubatch from %u to %u (block draft)\n", __func__, cparams.n_ubatch, n_ubatch_dft);
