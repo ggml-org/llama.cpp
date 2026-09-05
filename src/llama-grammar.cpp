@@ -1403,6 +1403,9 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         }
     }
 
+    // cache keys hold raw pointers into candidates_decoded; clear before rebuilding
+    grammar.memo_cache.clear();
+
     std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> candidates_decoded;
     candidates_decoded.reserve(cur_p->size);
 
