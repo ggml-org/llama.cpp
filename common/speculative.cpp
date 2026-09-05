@@ -1078,6 +1078,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         gguf_context_ptr gguf_ctx(gguf_init_from_file(params.mparams.path.c_str(), gguf_params));
         GGML_ASSERT(gguf_ctx && "failed to open the draft GGUF for the DFlash2 selector");
 
+        FILE * file = ggml_fopen(params.mparams.path.c_str(), "rb");
+        GGML_ASSERT(file && "failed to open the draft GGUF for the DFlash2 selector");
+
         const int64_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(params.ctx_dft)));
 
         auto load_i8 = [&](const char * name, std::vector<float> & dst) {
@@ -1090,15 +1093,14 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             const size_t size = gguf_get_tensor_size(gguf_ctx.get(), id);
             std::vector<uint8_t> raw(size);
 
-            std::unique_ptr<FILE, decltype(&fclose)> f(ggml_fopen(params.mparams.path.c_str(), "rb"), fclose);
-            GGML_ASSERT(f && "failed to open the draft GGUF for the DFlash2 selector");
+            const int64_t offset = gguf_get_data_offset(gguf_ctx.get()) + gguf_get_tensor_offset(gguf_ctx.get(), id);
 #ifdef _WIN32
-            const int rc = _fseeki64(f.get(), (int64_t) (gguf_get_data_offset(gguf_ctx.get()) + gguf_get_tensor_offset(gguf_ctx.get(), id)), SEEK_SET);
+            const int rc = _fseeki64(file, offset, SEEK_SET);
 #else
-            const int rc = fseeko(f.get(), (off_t) (gguf_get_data_offset(gguf_ctx.get()) + gguf_get_tensor_offset(gguf_ctx.get(), id)), SEEK_SET);
+            const int rc = fseeko(file, (off_t) offset, SEEK_SET);
 #endif
             GGML_ASSERT(rc == 0 && "failed to seek to the DFlash2 selector tensor");
-            GGML_ASSERT(fread(raw.data(), 1, size, f.get()) == size && "failed to read the DFlash2 selector tensor");
+            GGML_ASSERT(fread(raw.data(), 1, size, file) == size && "failed to read the DFlash2 selector tensor");
 
             // dequantize with the same conversion the GPU get_rows uses
             const size_t n_elts = size / tt->type_size * tt->blck_size;
@@ -1109,6 +1111,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         load_i8("selector_successor.weight",  sel_next);
         load_i8("selector_predecessor.weight", sel_prev);
         load_i8("selector_hidden.weight",      sel_hidden);
+
+        fclose(file);
 
         selector_rank = (int32_t) (sel_next.size() / n_vocab);
         GGML_ASSERT((size_t) selector_rank * n_vocab == sel_next.size());
