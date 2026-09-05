@@ -720,6 +720,7 @@ struct common_params {
     int8_t  imat_dat    =  0; // whether the legacy imatrix.dat format should be output (gguf <= 0 < dat)
 
     bool process_output  = false; // collect data for the output tensor
+    bool process_mtp     = false; // collect data for the MTP (NextN) head
     bool compute_ppl     = true;  // whether to compute perplexity
     bool show_statistics = false; // show imatrix statistics per tensor
     bool parse_special   = false; // whether to parse special tokens during imatrix tokenization
