@@ -6,6 +6,23 @@
 #include <cstdint>
 #include <type_traits>
 
+// block size in bytes; 0 compiles the prefetch out for that type
+template <ggml_type type> struct mmvq_pf { static constexpr int bytes = 0; };
+template <> struct mmvq_pf<GGML_TYPE_Q4_0>   { static constexpr int bytes = sizeof(block_q4_0);   };
+template <> struct mmvq_pf<GGML_TYPE_Q8_0>   { static constexpr int bytes = sizeof(block_q8_0);   };
+template <> struct mmvq_pf<GGML_TYPE_Q3_K>   { static constexpr int bytes = sizeof(block_q3_K);   };
+template <> struct mmvq_pf<GGML_TYPE_Q4_K>   { static constexpr int bytes = sizeof(block_q4_K);   };
+template <> struct mmvq_pf<GGML_TYPE_Q5_K>   { static constexpr int bytes = sizeof(block_q5_K);   };
+template <> struct mmvq_pf<GGML_TYPE_Q6_K>   { static constexpr int bytes = sizeof(block_q6_K);   };
+template <> struct mmvq_pf<GGML_TYPE_IQ4_XS> { static constexpr int bytes = sizeof(block_iq4_xs); };
+// Q2_K is left out: prefetching does not raise its L2 hit rate, so the requests only add pressure
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
+static __device__ __forceinline__ void mmvq_prefetch_l2(const void * p) {
+    asm volatile("prefetch.global.L2 [%0];" :: "l"(p));
+}
+#endif
+
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
 
 static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) {
@@ -298,9 +315,6 @@ bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
                 return ne11 <= 4;
             case GGML_TYPE_Q3_K:
                 return ne11 <= 6;
-            case GGML_TYPE_Q4_K:
-            case GGML_TYPE_Q5_K:
-                return ne11 <= 7;
             default:
                 return ne11 <= MMVQ_MAX_BATCH_SIZE;
         }
@@ -310,8 +324,9 @@ bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
             case GGML_TYPE_Q2_K:
             case GGML_TYPE_Q3_K:
             case GGML_TYPE_Q4_K:
-            case GGML_TYPE_Q5_K:
                 return ne11 <= 5;
+            case GGML_TYPE_Q5_K:
+                return ne11 <= 6;
             case GGML_TYPE_Q6_K:
                 return ne11 <= 7;
             default:
@@ -674,6 +689,27 @@ static __global__ void mul_mat_vec_q(
 
         // x block quant index when casting the quants to int
         const int kqs = vdr * (tid % (qi/vdr));
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
+        // start the next iterations' weight loads early. only pays where the kernel is
+        // latency-bound rather than bandwidth-bound, which on this part it is
+        if constexpr (mmvq_pf<type>::bytes > 0) {
+            constexpr int pf_dist = 2; // loop iterations, not blocks
+            const int kbx_pf = kbx + pf_dist*blocks_per_iter;
+            if (kbx_pf < blocks_per_row_x) {
+#pragma unroll
+                for (int i = 0; i < rows_per_cuda_block; ++i) {
+                    const size_t off = (size_t)(kbx_offset + i*stride_row_x + kbx_pf) * mmvq_pf<type>::bytes;
+                    mmvq_prefetch_l2((const char *) vx + off);
+                    if constexpr (has_fusion) {
+                        if (use_gate) {
+                            mmvq_prefetch_l2((const char *) vgate + off);
+                        }
+                    }
+                }
+            }
+        }
+#endif
 
 #pragma unroll
         for (int j = 0; j < ncols_dst; ++j) {
