@@ -204,12 +204,33 @@ struct ggml_webgpu_set_rows_shader_decisions {
 
 /** Set **/
 
+struct ggml_webgpu_back_pipeline_key {
+    int  op;
+    bool inplace;  // dst binding merged with src0
+    bool overlap;  // dst binding merged with src1
+
+    bool operator==(const ggml_webgpu_back_pipeline_key & other) const {
+        return op == other.op && inplace == other.inplace && overlap == other.overlap;
+    }
+};
+
+struct ggml_webgpu_back_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_back_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.op);
+        ggml_webgpu_hash_combine(seed, key.inplace);
+        ggml_webgpu_hash_combine(seed, key.overlap);
+        return seed;
+    }
+};
+
 struct ggml_webgpu_set_pipeline_key {
     ggml_type type;
     bool      inplace;
+    bool      acc;
 
     bool operator==(const ggml_webgpu_set_pipeline_key & other) const {
-        return type == other.type && inplace == other.inplace;
+        return type == other.type && inplace == other.inplace && acc == other.acc;
     }
 };
 
@@ -218,6 +239,7 @@ struct ggml_webgpu_set_pipeline_key_hash {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.type);
         ggml_webgpu_hash_combine(seed, key.inplace);
+        ggml_webgpu_hash_combine(seed, key.acc);
         return seed;
     }
 };
@@ -1119,9 +1141,10 @@ struct ggml_webgpu_rope_pipeline_key {
     ggml_type type;
     bool      inplace;
     bool      has_ff;
+    bool      backward;
 
     bool operator==(const ggml_webgpu_rope_pipeline_key & other) const {
-        return type == other.type && inplace == other.inplace && has_ff == other.has_ff;
+        return type == other.type && inplace == other.inplace && has_ff == other.has_ff && backward == other.backward;
     }
 };
 
@@ -1131,6 +1154,7 @@ struct ggml_webgpu_rope_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.type);
         ggml_webgpu_hash_combine(seed, key.inplace);
         ggml_webgpu_hash_combine(seed, key.has_ff);
+        ggml_webgpu_hash_combine(seed, key.backward);
         return seed;
     }
 };
@@ -1199,6 +1223,12 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> argsort_pipelines;        // key is order
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;  // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;         // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> opt_step_pipelines;       // key is op
+    std::unordered_map<int, webgpu_pipeline> out_prod_pipelines;       // key is fixed, no variants yet
+    std::unordered_map<ggml_webgpu_back_pipeline_key, webgpu_pipeline, ggml_webgpu_back_pipeline_key_hash>
+                                             back_pipelines;           // op/inplace/overlap
+    std::unordered_map<int, webgpu_pipeline> repeat_back_pipelines;    // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> get_rows_back_pipelines;  // key is fixed, no variants yet
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                            // op/inplace
 
@@ -1446,6 +1476,7 @@ class ggml_webgpu_shader_lib {
         ggml_webgpu_set_pipeline_key key = {};
         key.type                         = context.dst->type;
         key.inplace                      = ggml_webgpu_tensor_equal(context.src0, context.dst);
+        key.acc                          = context.dst->op == GGML_OP_ACC;
 
         auto it = set_pipelines.find(key);
         if (it != set_pipelines.end()) {
@@ -1471,6 +1502,11 @@ class ggml_webgpu_shader_lib {
         if (key.inplace) {
             defines.push_back("INPLACE");
             variant += "_inplace";
+        }
+
+        if (key.acc) {
+            defines.push_back("ACC");
+            variant += "_acc";
         }
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
@@ -1675,6 +1711,147 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         get_rows_pipelines[key]  = pipeline;
         return get_rows_pipelines[key];
+    }
+
+    webgpu_pipeline get_back_pipeline(const ggml_webgpu_shader_lib_context & context, bool inplace, bool overlap) {
+        ggml_webgpu_back_pipeline_key key = {};
+        key.op                            = context.dst->op;
+        key.inplace                       = inplace;
+        key.overlap                       = overlap && !inplace;
+
+        auto it = back_pipelines.find(key);
+        if (it != back_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant;
+        const char *             shader = nullptr;
+
+        switch (key.op) {
+            case GGML_OP_SILU_BACK:
+                shader  = wgsl_silu_back;
+                variant = "silu_back";
+                break;
+            case GGML_OP_SOFT_MAX_BACK:
+                shader  = wgsl_soft_max_back;
+                variant = "soft_max_back";
+                break;
+            case GGML_OP_RMS_NORM_BACK:
+                shader  = wgsl_rms_norm_back;
+                variant = "rms_norm_back";
+                break;
+            default:
+                GGML_ABORT("Unsupported op for back shader");
+        }
+
+        if (key.inplace) {
+            defines.push_back("INPLACE");
+            variant += "_inplace";
+        } else if (key.overlap) {
+            defines.push_back("OVERLAP");
+            variant += "_overlap";
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(shader, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_binary_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        decisions->inplace       = key.inplace;
+        decisions->overlap       = key.overlap;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        back_pipelines[key]      = pipeline;
+        return back_pipelines[key];
+    }
+
+    webgpu_pipeline get_repeat_back_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        auto it = repeat_back_pipelines.find(1);
+        if (it != repeat_back_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_repeat_back, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, "repeat_back");
+        pipeline.context         = decisions;
+        repeat_back_pipelines[1] = pipeline;
+        return repeat_back_pipelines[1];
+    }
+
+    webgpu_pipeline get_get_rows_back_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        auto it = get_rows_back_pipelines.find(1);
+        if (it != get_rows_back_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed             = preprocessor.preprocess(wgsl_get_rows_back, defines);
+        auto decisions             = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size         = context.max_wg_size;
+        webgpu_pipeline pipeline   = ggml_webgpu_create_pipeline(device, processed, "get_rows_back");
+        pipeline.context           = decisions;
+        get_rows_back_pipelines[1] = pipeline;
+        return get_rows_back_pipelines[1];
+    }
+
+    webgpu_pipeline get_out_prod_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        auto it = out_prod_pipelines.find(1);
+        if (it != out_prod_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_out_prod, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, "out_prod");
+        pipeline.context         = decisions;
+        out_prod_pipelines[1]    = pipeline;
+        return out_prod_pipelines[1];
+    }
+
+    webgpu_pipeline get_opt_step_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        const int key = context.dst->op;
+
+        auto it = opt_step_pipelines.find(key);
+        if (it != opt_step_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant;
+
+        switch (key) {
+            case GGML_OP_OPT_STEP_ADAMW:
+                defines.push_back("ADAMW");
+                variant = "opt_step_adamw";
+                break;
+            case GGML_OP_OPT_STEP_SGD:
+                variant = "opt_step_sgd";
+                break;
+            default:
+                GGML_ABORT("Unsupported op for opt_step shader");
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_opt_step, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        opt_step_pipelines[key]  = pipeline;
+        return opt_step_pipelines[key];
     }
 
     webgpu_pipeline get_scale_pipeline(const ggml_webgpu_shader_lib_context & context) {
@@ -3147,6 +3324,7 @@ class ggml_webgpu_shader_lib {
         key.type                          = context.dst->type;
         key.inplace                       = ggml_webgpu_tensor_equal(context.src0, context.dst);
         key.has_ff                        = (context.src2 != nullptr);
+        key.backward                      = context.dst->op == GGML_OP_ROPE_BACK;
 
         auto it = rope_pipelines.find(key);
         if (it != rope_pipelines.end()) {
@@ -3177,6 +3355,11 @@ class ggml_webgpu_shader_lib {
         if (key.has_ff) {
             defines.push_back("FF_FUNC");
             variant += "_ff";
+        }
+
+        if (key.backward) {
+            defines.push_back("BACKWARD");
+            variant += "_back";
         }
 
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
