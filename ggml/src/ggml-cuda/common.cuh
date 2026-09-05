@@ -1539,6 +1539,8 @@ struct ggml_cuda_mm_fusion_args_host {
     const ggml_tensor * gate_bias = nullptr;
     const ggml_tensor * x_scale = nullptr;
     const ggml_tensor * gate_scale = nullptr;
+    // Already-computed other half of a GLU pair, folded into this matmul's epilogue by MMQ.
+    const ggml_tensor * glu_up = nullptr;
     ggml_glu_op glu_op;
     float glu_limit = 0.0f;
 };

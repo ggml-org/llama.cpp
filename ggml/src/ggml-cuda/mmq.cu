@@ -83,7 +83,15 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
 }
 
 void ggml_cuda_mul_mat_q(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
+        const ggml_cuda_mm_fusion_args_host * fusion) {
+    // Requesting fusion where it was not compiled, or on the MUL_MAT_ID path below (which builds its
+    // mmq_args without glu_up), would drop the GLU without a diagnostic, so assert instead.
+    const ggml_tensor * glu_up = fusion ? fusion->glu_up : nullptr;
+    const ggml_glu_op   glu_op = fusion ? fusion->glu_op : GGML_GLU_OP_SWIGLU;
+    GGML_ASSERT(!glu_up || (!ids && ggml_cuda_mmq_can_fuse_glu(src0->type,
+                    ggml_cuda_info().devices[ggml_cuda_get_device()].cc)));
+    const float * glu_up_d = glu_up ? (const float *) glu_up->data : nullptr;
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
@@ -171,7 +179,7 @@ void ggml_cuda_mul_mat_q(
             ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
-            ne1};
+            ne1, glu_up_d, glu_op};
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
         return;
     }
