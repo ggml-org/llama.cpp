@@ -3210,8 +3210,13 @@ private:
 
                                 const auto n_cache_reuse = slot.task->params.n_cache_reuse;
 
+                                // the cache-reuse surgery below needs mid-range seq_rm in addition to seq_add:
+                                // recurrent/hybrid memories (types NO/FULL/RS) cannot represent a partial erase,
+                                // so the seq_rm would be a no-op and stale recurrent state would leak into the
+                                // new prompt positions - only pure attention contexts (type PART) qualify
                                 const bool can_cache_reuse =
                                     llama_memory_can_shift(llama_get_memory(ctx_tgt)) &&
+                                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART &&
                                     !slot.prompt.tokens.has_mtmd;
 
                                 if (!can_cache_reuse && n_cache_reuse > 0) {

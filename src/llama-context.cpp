@@ -1345,15 +1345,17 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
+    // the previous graph_compute_async may still be running on the GPU. synchronize before
+    // mutating any graph state: set_inputs overwrites input tensors (k_idxs/v_idxs/kq_mask/...)
+    // that the in-flight compute may still be reading, and sched_reset/alloc_graph remap the
+    // compute buffers under it. this is not limited to pipeline parallelism: on integrated
+    // GPUs the device reads graph inputs zero-copy from pinned host memory, so an
+    // unsynchronized overwrite scatters in-flight K/V writes to wrong cells and leaves stale
+    // K/V visible under the new mask (observed cross-request KV-cache contamination).
+    ggml_backend_sched_synchronize(sched.get());
+
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
-
-        // with pipeline parallelism, the previous graph_compute_async may still be running
-        // on the GPU. we must synchronize before set_inputs to avoid overwriting input tensors
-        // that the previous compute is still reading.
-        if (cparams.pipeline_parallel) {
-            ggml_backend_sched_synchronize(sched.get());
-        }
 
         n_reused++;
     } else {
