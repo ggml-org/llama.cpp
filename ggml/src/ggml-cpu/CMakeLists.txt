@@ -25,7 +25,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     endif()
 
     ggml_add_backend_library(${GGML_CPU_NAME})
-
+    target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_BACKEND_DL GGML_BACKEND_BUILD GGML_BACKEND_SHARED)
     list (APPEND GGML_CPU_SOURCES
         ggml-cpu/ggml-cpu.c
         ggml-cpu/ggml-cpu.cpp
