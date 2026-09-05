@@ -3847,7 +3847,7 @@ struct test_relu_sqr : public test_case {
     }
 };
 
-// GGML_OP_UNARY(SILU|SIGMOID|SOFTPLUS) + GGML_OP_MUL (fused operation).
+// GGML_OP_UNARY(GELU|SILU|SIGMOID|SOFTPLUS) + GGML_OP_MUL (fused operation).
 // `layout` and `tail` are used for fallback cases where fusion must be skipped
 struct test_unary_mul : public test_case {
     const ggml_unary_op op;
@@ -3869,7 +3869,9 @@ struct test_unary_mul : public test_case {
         // performs; relax the tolerance to match that drift
         switch (type) {
             case GGML_TYPE_F16: return 5e-5;
-            default:            return 1e-7;
+            // the shader evaluates gelu with an exp-based tanh identity while the CPU
+            // reference uses tanhf, which differs by ~1 ulp near |result| ~ 1
+            default:            return op == GGML_UNARY_OP_GELU ? 5e-7 : 1e-7;
         }
     }
 
@@ -3928,17 +3930,49 @@ struct test_unary_mul : public test_case {
         } else if (layout == "bcast") {
             a = ggml_new_tensor(ctx, type, 4, ne.data());
             b = ggml_new_tensor_4d(ctx, type, ne[0], 1, 1, 1);
+        } else if (layout == "rep_ne0") {
+            // non-1 repeat factor along dim 0: b tiles into the unary result
+            a = ggml_new_tensor(ctx, type, 4, ne.data());
+            std::array<int64_t, 4> ne_b = ne;
+            ne_b[0] /= 4;
+            b = ggml_new_tensor(ctx, type, 4, ne_b.data());
+        } else if (layout == "view_mid") {
+            // a VIEW node is created between the unary and its consuming MUL,
+            // like gemma4's per-layer embedding gating (gemma4.cpp)
+            a = ggml_new_tensor(ctx, type, 4, ne.data());
+            b = nullptr;
+        } else if (layout == "gate") {
+            // qwen shared-expert gating shape: the unary result is a small gate
+            // that repeats into the other operand (OP-on-B)
+            const std::array<int64_t, 4> ne_gate = { 1, ne[1], ne[2], ne[3] };
+            a = ggml_new_tensor(ctx, type, 4, ne_gate.data());
+            b = ggml_new_tensor(ctx, type, 4, ne.data());
         } else {
             GGML_ABORT("unknown layout %s", layout.c_str());
         }
-        ggml_set_name(a, "a");
-        ggml_set_name(b, "b");
+        if (a != nullptr) {
+            ggml_set_name(a, "a");
+        }
+        if (b != nullptr) {
+            ggml_set_name(b, "b");
+        }
 
         ggml_tensor * u = ggml_unary(ctx, a, op);
         ggml_set_name(u, "unary");
 
         // a broadcasting operand can only be the second one
-        const bool second = swap && layout != "bcast";
+        const bool second = layout == "gate" || (swap && layout != "bcast" && layout != "view_mid");
+        if (layout == "view_mid") {
+            // create the view operand only after the unary node, so it sits
+            // between UNARY and MUL in the graph (the fusion-blocking pattern)
+            std::array<int64_t, 4> ne_base = ne;
+            ne_base[0] *= 2;
+            ggml_tensor * base = ggml_new_tensor(ctx, type, 4, ne_base.data());
+            ggml_set_name(base, "base");
+            b = ggml_view_4d(ctx, base, ne[0], ne[1], ne[2], ne[3],
+                             base->nb[1], base->nb[2], base->nb[3], 0);
+            ggml_set_name(b, "b");
+        }
         ggml_tensor * out = second ? ggml_mul(ctx, b, u) : ggml_mul(ctx, u, b);
 
         if (tail == "reuse") {
@@ -8711,7 +8745,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // fused unary + mul (gated activations that are not expressed as GGML_OP_GLU)
-    for (ggml_unary_op op : { GGML_UNARY_OP_SILU, GGML_UNARY_OP_SIGMOID, GGML_UNARY_OP_SOFTPLUS }) {
+    for (ggml_unary_op op : { GGML_UNARY_OP_GELU, GGML_UNARY_OP_SILU, GGML_UNARY_OP_SIGMOID, GGML_UNARY_OP_SOFTPLUS }) {
         for (ggml_type type : { GGML_TYPE_F16, GGML_TYPE_F32 }) {
             for (bool swap : { false, true }) {
                 test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, swap));
@@ -8722,9 +8756,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, true, "pad_other"));
             test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, true, "halves"));
             test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "packed", "consumer"));
+            test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "bcast"));
+            test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "rep_ne0"));
+            // view node between unary and mul: fuses only when graph_optimize hoists the view
+            test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "view_mid"));
+            // OP applied to a broadcast B operand (qwen shared-expert gate shape)
+            test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "gate"));
             // must not fuse
             test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "strided_dim1"));
-            test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "bcast"));
             test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "packed", "reuse"));
         }
     }
