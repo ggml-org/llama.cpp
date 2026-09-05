@@ -125,6 +125,7 @@ export class HuggingFaceService {
 		Q8_0: 8
 	};
 
+	// LLAMA-APP-REUSE: shard-set collapsing
 	/**
 	 * Collapse split GGUF shard sets (`-00001-of-00015.gguf`, ...) to their first
 	 * shard, summing every shard's size so the kept entry reflects the whole
@@ -166,6 +167,7 @@ export class HuggingFaceService {
 
 	// GGUF Model Browsing
 
+	// LLAMA-APP-REUSE: quant + sidecar filename parser
 	/**
 	 * Extract the GGUF quantization token (e.g. `Q4_K_M`) and any sidecar type
 	 * (`mtp`, `dflash`, `mmproj`, ...) from a `.gguf` filename. The sidecar token
@@ -250,6 +252,7 @@ export class HuggingFaceService {
 		return { quant, shared, sidecar, sidecarForm };
 	}
 
+	// LLAMA-APP-REUSE: sibling filtering
 	/**
 	 * Filter raw siblings by file extension and sort by size descending.
 	 */
@@ -259,6 +262,7 @@ export class HuggingFaceService {
 			.sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
 	}
 
+	// LLAMA-APP-REUSE: compact download counts
 	/**
 	 * Format model downloads count with K/M/B suffix
 	 */
@@ -278,6 +282,7 @@ export class HuggingFaceService {
 		return downloads.toString();
 	}
 
+	// LLAMA-APP-REUSE: human-readable file sizes
 	/**
 	 * Format file size in bytes to human-readable string
 	 */
@@ -297,6 +302,7 @@ export class HuggingFaceService {
 		return `${bytes} ${BYTE_LABEL}`;
 	}
 
+	// LLAMA-APP-REUSE: compact like counts
 	/**
 	 * Format likes count with K suffix if applicable
 	 */
@@ -308,6 +314,7 @@ export class HuggingFaceService {
 		return likes.toString();
 	}
 
+	// LLAMA-APP-REUSE: relative timestamps
 	/**
 	 * Format timestamp to relative time
 	 */
@@ -335,6 +342,7 @@ export class HuggingFaceService {
 		return `${Math.floor(diffDays / DAYS_PER_YEAR)} ${YEARS_AGO_LABEL}`;
 	}
 
+	// LLAMA-APP-REUSE: min-max size ranges
 	/**
 	 * Format a min-max size range with a single shared unit and no spaces
 	 * around the dash, e.g. `19.0-28.6 GB`.
@@ -421,6 +429,7 @@ export class HuggingFaceService {
 		return Array.from(new Set([...fromCard, ...fromTags]));
 	}
 
+	// LLAMA-APP-REUSE: quant bit depths
 	/**
 	 * Look up the average bit-depth for a known GGUF quantization.
 	 * Returns `null` for unrecognized tokens.
@@ -603,6 +612,7 @@ export class HuggingFaceService {
 		};
 	}
 
+	// LLAMA-APP-REUSE: parameter-count parsing
 	/**
 	 * Best-effort parameter count parsed from a model id/name, e.g. `27B` from
 	 * `Qwen3.8-27B-GGUF` or `300M` from `embeddinggemma-300M-GGUF`. Returns null
@@ -634,6 +644,7 @@ export class HuggingFaceService {
 		return value * multiplier;
 	}
 
+	// LLAMA-APP-REUSE: tag parsing
 	/**
 	 * Parse model tags to extract useful information
 	 */

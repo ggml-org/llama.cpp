@@ -10,6 +10,7 @@
  *  2. Thinking-control Jinja2 conditionals  === template-native on/off logic
  *  3. Paired thinking-content tag pairs    === models that output special tags
  */
+// LLAMA-APP-REUSE: thinking-support detection from a chat template
 
 const THINKING_KWARG_VARS = ['enable_thinking', 'reasoning_effort', 'thinking_budget'];
 /**

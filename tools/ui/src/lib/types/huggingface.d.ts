@@ -4,6 +4,7 @@
  * Types for the HuggingFace REST API (/api/models)
  * Reference: https://huggingface.co/docs/huggingface_hub/package_reference/hf_api
  */
+// LLAMA-APP-REUSE: HF API response shapes
 
 // Search Options
 
@@ -207,6 +208,7 @@ export interface HfCatalogBuild {
 }
 
 /** A size variant (e.g. `GPT-OSS 20B`) within a catalog entry. */
+// LLAMA-APP-REUSE: llama.pages catalog.json shapes (same feed the app consumes)
 export interface HfCatalogSize {
 	name: string;
 	params: string;
