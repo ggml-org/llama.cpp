@@ -237,48 +237,76 @@
 	});
 </script>
 
-<div>
-	{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
-		<LazyChatMessage
-			{chatActions}
-			class="mx-auto mt-12 w-full max-w-3xl"
-			{isLastAssistantMessage}
-			{isLastUserMessage}
-			{message}
-			{nextAssistantMessage}
-			{siblingInfo}
-			{toolMessages}
-		/>
-	{/each}
-
-	{#if conversationsStore.activeConversation && agenticStore.getPendingSteeringMessageContent(conversationsStore.activeConversation!.id)}
-		{@const convId = conversationsStore.activeConversation!.id}
-		{@const pendingContent = agenticStore.getPendingSteeringMessageContent(convId)}
-
-		{#if pendingContent}
-			<ChatMessageUserPending
-				class="mx-auto mt-12 w-full max-w-[48rem]"
-				content={pendingContent}
-				extras={agenticStore.getPendingSteeringMessageExtras(convId)}
-				onDelete={() => agenticStore.clearSteeringMessage(convId)}
-				onEdit={(newContent, extras) =>
-					agenticStore.injectSteeringMessage(convId, newContent, extras)}
-				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+<!-- Re-created per conversation, so the CSS fade-in below plays on every
+     navigation into a chat route. -->
+{#key conversationsStore.activeConversation?.id ?? 'new'}
+	<div class="chat-messages">
+		{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
+			<LazyChatMessage
+				{chatActions}
+				class="mx-auto mt-12 w-full max-w-3xl"
+				{isLastAssistantMessage}
+				{isLastUserMessage}
+				{message}
+				{nextAssistantMessage}
+				{siblingInfo}
+				{toolMessages}
 			/>
-		{/if}
-	{:else if conversationsStore.activeConversation && chatStore.getPendingMessageContent(conversationsStore.activeConversation!.id)}
-		{@const convId = conversationsStore.activeConversation!.id}
-		{@const pendingContent = chatStore.getPendingMessageContent(convId)}
+		{/each}
 
-		{#if pendingContent}
-			<ChatMessageUserPending
-				class="mx-auto mt-12 w-full max-w-[48rem]"
-				content={pendingContent}
-				extras={chatStore.getPendingMessageExtras(convId)}
-				onDelete={() => chatStore.clearPendingMessage(convId)}
-				onEdit={(newContent, extras) => chatStore.injectPendingMessage(convId, newContent, extras)}
-				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-			/>
+		{#if conversationsStore.activeConversation && agenticStore.getPendingSteeringMessageContent(conversationsStore.activeConversation!.id)}
+			{@const convId = conversationsStore.activeConversation!.id}
+			{@const pendingContent = agenticStore.getPendingSteeringMessageContent(convId)}
+
+			{#if pendingContent}
+				<ChatMessageUserPending
+					class="mx-auto mt-12 w-full max-w-[48rem]"
+					content={pendingContent}
+					extras={agenticStore.getPendingSteeringMessageExtras(convId)}
+					onDelete={() => agenticStore.clearSteeringMessage(convId)}
+					onEdit={(newContent, extras) =>
+						agenticStore.injectSteeringMessage(convId, newContent, extras)}
+					onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+				/>
+			{/if}
+		{:else if conversationsStore.activeConversation && chatStore.getPendingMessageContent(conversationsStore.activeConversation!.id)}
+			{@const convId = conversationsStore.activeConversation!.id}
+			{@const pendingContent = chatStore.getPendingMessageContent(convId)}
+
+			{#if pendingContent}
+				<ChatMessageUserPending
+					class="mx-auto mt-12 w-full max-w-[48rem]"
+					content={pendingContent}
+					extras={chatStore.getPendingMessageExtras(convId)}
+					onDelete={() => chatStore.clearPendingMessage(convId)}
+					onEdit={(newContent, extras) =>
+						chatStore.injectPendingMessage(convId, newContent, extras)}
+					onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+				/>
+			{/if}
 		{/if}
-	{/if}
-</div>
+	</div>
+{/key}
+
+<style>
+	/* Compositor-friendly opacity fade; the keyed block re-creates the list per
+	 * conversation, so the animation plays on every navigation into a chat. */
+	.chat-messages {
+		animation: chat-messages-fade-in 150ms ease-out;
+	}
+
+	@keyframes chat-messages-fade-in {
+		from {
+			opacity: 0;
+		}
+		to {
+			opacity: 1;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.chat-messages {
+			animation: none;
+		}
+	}
+</style>
