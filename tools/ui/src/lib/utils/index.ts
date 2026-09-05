@@ -105,7 +105,7 @@ export {
 } from './modality-file-validation';
 
 // Model name utilities
-export { normalizeModelName, isValidModelName } from './model-names';
+export { isValidModelName, normalizeModelName, orgOf } from './model-names';
 
 // Portal utilities
 export { portalToBody } from './portal-to-body';
