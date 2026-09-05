@@ -2508,6 +2508,18 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
     return true;
 }
 
+static bool llama_kv_cache_read_conversion(int32_t src_type, uint32_t src_rot, ggml_tensor * dst, uint32_t dst_rot, llama_io_tensor_conversion & conversion) {
+    if (src_type == dst->type && src_rot == dst_rot) {
+        conversion = {};
+        return true;
+    }
+    if (src_type != GGML_TYPE_F16 || dst->type != GGML_TYPE_Q8_0 || (src_rot != 0 && src_rot != dst_rot)) {
+        return false;
+    }
+    conversion = { GGML_TYPE_F16, src_rot == dst_rot ? 0 : dst_rot };
+    return true;
+}
+
 bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo) {
     auto & cells = v_cells[strm];
 
@@ -2531,13 +2543,13 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
     uint32_t v_trans;
     uint32_t n_layer;
-    uint32_t n_rot_k_ref;
-    uint32_t n_rot_v_ref;
+    uint32_t n_rot_k;
+    uint32_t n_rot_v;
 
     io.read(&v_trans, sizeof(v_trans));
     io.read(&n_layer, sizeof(n_layer));
-    io.read(&n_rot_k_ref, sizeof(n_rot_k_ref));
-    io.read(&n_rot_v_ref, sizeof(n_rot_v_ref));
+    io.read(&n_rot_k, sizeof(n_rot_k));
+    io.read(&n_rot_v, sizeof(n_rot_v));
 
     if (n_layer != layers.size()) {
         LLAMA_LOG_ERROR("%s: mismatched layer count (%u instead of %u)\n", __func__, n_layer, (uint32_t) layers.size());
@@ -2554,16 +2566,6 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
         return false;
     }
 
-    if (n_rot_k_ref != n_rot_k) {
-        LLAMA_LOG_ERROR("%s: incompatible key rotation (%u instead of %u)\n", __func__, n_rot_k_ref, n_rot_k);
-        return false;
-    }
-
-    if (n_rot_v_ref != n_rot_v) {
-        LLAMA_LOG_ERROR("%s: incompatible value rotation (%u instead of %u)\n", __func__, n_rot_v_ref, n_rot_v);
-        return false;
-    }
-
     // For each layer, read the keys for each cell, one row is one cell, read as one contiguous block
     for (const auto & layer : layers) {
         const uint32_t il = layer.il;
@@ -2575,23 +2577,25 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
         // Read type of key
         int32_t k_type_i_ref;
         io.read(&k_type_i_ref, sizeof(k_type_i_ref));
+
         const int32_t k_type_i = (int32_t) k->type;
-        if (k_type_i != k_type_i_ref) {
-            LLAMA_LOG_ERROR("%s: mismatched key type (%d != %d, layer %d)\n", __func__, k_type_i, k_type_i_ref, il);
+        llama_io_tensor_conversion conversion;
+        if (!llama_kv_cache_read_conversion(k_type_i_ref, n_rot_k, k, this->n_rot_k, conversion)) {
+            LLAMA_LOG_ERROR("%s: incompatible key format (type %d, rotation %u -> type %d, rotation %u, layer %d)\n", __func__, k_type_i_ref, n_rot_k, k_type_i, this->n_rot_k, il);
             return false;
         }
 
         // Read row size of key
         uint64_t k_size_row_ref;
         io.read(&k_size_row_ref, sizeof(k_size_row_ref));
-        const size_t k_size_row = ggml_row_size(k->type, n_embd_k_gqa);
+        const size_t k_size_row = ggml_row_size((ggml_type) k_type_i_ref, n_embd_k_gqa);
         if (k_size_row != k_size_row_ref) {
             LLAMA_LOG_ERROR("%s: mismatched key row size (%zu != %zu, layer %d)\n", __func__, k_size_row, (size_t) k_size_row_ref, il);
             return false;
         }
 
         for (const auto & r : runs) {
-            io.read_tensor(k, (size_t) r.from * k_size_row, (size_t) (r.to - r.from) * k_size_row);
+            io.read_tensor(k, (size_t) r.from * k->nb[1], (size_t) (r.to - r.from) * k_size_row, conversion);
         }
     }
 
@@ -2610,22 +2614,23 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
             int32_t v_type_i_ref;
             io.read(&v_type_i_ref, sizeof(v_type_i_ref));
             const int32_t v_type_i = (int32_t) v->type;
-            if (v_type_i != v_type_i_ref) {
-                LLAMA_LOG_ERROR("%s: mismatched value type (%d != %d, layer %d)\n", __func__, v_type_i, v_type_i_ref, il);
+            llama_io_tensor_conversion conversion;
+            if (!llama_kv_cache_read_conversion(v_type_i_ref, n_rot_v, v, this->n_rot_v, conversion)) {
+                LLAMA_LOG_ERROR("%s: incompatible value format (type %d, rotation %u -> type %d, rotation %u, layer %d)\n", __func__, v_type_i_ref, n_rot_v, v_type_i, this->n_rot_v, il);
                 return false;
             }
 
             // Read row size of value
             uint64_t v_size_row_ref;
             io.read(&v_size_row_ref, sizeof(v_size_row_ref));
-            const size_t v_size_row = ggml_row_size(v->type, n_embd_v_gqa);
+            const size_t v_size_row = ggml_row_size((ggml_type) v_type_i_ref, n_embd_v_gqa);
             if (v_size_row != v_size_row_ref) {
                 LLAMA_LOG_ERROR("%s: mismatched value row size (%zu != %zu, layer %d)\n", __func__, v_size_row, (size_t) v_size_row_ref, il);
                 return false;
             }
 
             for (const auto & r : runs) {
-                io.read_tensor(v, (size_t) r.from * v_size_row, (size_t) (r.to - r.from) * v_size_row);
+                io.read_tensor(v, (size_t) r.from * v->nb[1], (size_t) (r.to - r.from) * v_size_row, conversion);
             }
         }
     } else {
@@ -2644,8 +2649,8 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
             int32_t v_type_i_ref;
             io.read(&v_type_i_ref, sizeof(v_type_i_ref));
             const int32_t v_type_i = (int32_t) v->type;
-            if (v_type_i != v_type_i_ref) {
-                LLAMA_LOG_ERROR("%s: mismatched value type (%d != %d, layer %d)\n", __func__, v_type_i, v_type_i_ref, il);
+            if (v_type_i != v_type_i_ref || n_rot_v != this->n_rot_v) {
+                LLAMA_LOG_ERROR("%s: incompatible value format (type %d, rotation %u -> type %d, rotation %u, layer %d)\n", __func__, v_type_i_ref, n_rot_v, v_type_i, this->n_rot_v, il);
                 return false;
             }
 
