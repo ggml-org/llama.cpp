@@ -55,7 +55,7 @@ llama-server -hf ggml-org/gemma-3-1b-it-GGUF
 ```
 
 > [!TIP]
-> If you're behind a corporate proxy, set the `HTTP_PROXY` and `HTTPS_PROXY` environment variables before running commands that download models (e.g. `export HTTPS_PROXY=http://proxy.example.com:8080`).
+> If you're behind a corporate proxy, set the `HTTP_PROXY` and `HTTPS_PROXY` environment variables before running commands that download models (e.g. `export HTTPS_PROXY=http://proxy.example.com:8080`). Hosts listed in `NO_PROXY` are contacted directly.
 
 ## Description
 
