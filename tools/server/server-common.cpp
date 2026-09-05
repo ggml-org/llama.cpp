@@ -280,7 +280,7 @@ public:
     template <typename T>
     void write(T value) {
         static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
-        const auto * ptr = reinterpret_cast<const char *>(&value);
+        const auto * ptr = reinterpret_cast<const uint8_t *>(&value);
         data.insert(data.end(), ptr, ptr + sizeof(value));
     }
 
@@ -291,7 +291,7 @@ public:
         if (values.empty()) {
             return;
         }
-        const auto * ptr = reinterpret_cast<const char *>(values.data());
+        const auto * ptr = reinterpret_cast<const uint8_t *>(values.data());
         data.insert(data.end(), ptr, ptr + values.size() * sizeof(T));
     }
 
@@ -307,18 +307,17 @@ public:
         write(chunk_data);
     }
 
-    std::vector<char> take() {
-        data.resize((data.size() + sizeof(llama_token) - 1) / sizeof(llama_token) * sizeof(llama_token), 0);
+    raw_buffer take() {
         return std::move(data);
     }
 
 private:
-    std::vector<char> data;
+    raw_buffer data;
 };
 
 class server_tokens_state_reader {
 public:
-    server_tokens_state_reader(const char * data, size_t size) : data(data), size(size) {}
+    server_tokens_state_reader(const uint8_t * data, size_t size) : data(data), size(size) {}
 
     template <typename T>
     T read() {
@@ -353,7 +352,7 @@ public:
     }
 
 private:
-    const char * data;
+    const uint8_t * data;
     size_t size;
     size_t pos = 0;
 };
@@ -550,7 +549,7 @@ const llama_tokens & server_tokens::get_tokens() const {
     return tokens;
 }
 
-std::vector<char> server_tokens::serialize() const {
+raw_buffer server_tokens::serialize() const {
     static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
 
     server_tokens_state_writer writer;
@@ -572,15 +571,27 @@ std::vector<char> server_tokens::serialize() const {
     return writer.take();
 }
 
-server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_mtmd) {
+server_tokens server_tokens::deserialize(const raw_buffer & packed, bool has_mtmd) {
     static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
 
-    if (packed.empty() || packed[0] != LLAMA_TOKEN_NULL) {
-        // plain token list, as written by older versions
-        return server_tokens(packed, has_mtmd);
+    llama_token marker = 0;
+    if (packed.size() >= sizeof(marker)) {
+        std::memcpy(&marker, packed.data(), sizeof(marker));
     }
 
-    server_tokens_state_reader reader(reinterpret_cast<const char *>(packed.data()), packed.size() * sizeof(llama_token));
+    if (packed.empty() || marker != LLAMA_TOKEN_NULL) {
+        // plain token list, as written by older versions
+        if (packed.size() % sizeof(llama_token) != 0) {
+            throw std::runtime_error("Invalid token data size in server tokens state");
+        }
+        llama_tokens tokens(packed.size() / sizeof(llama_token));
+        if (!packed.empty()) {
+            std::memcpy(tokens.data(), packed.data(), packed.size());
+        }
+        return server_tokens(tokens, has_mtmd);
+    }
+
+    server_tokens_state_reader reader(packed.data(), packed.size());
     reader.read<llama_token>(); // format marker
     if (reader.read<uint32_t>() != SERVER_TOKENS_STATE_VERSION) {
         throw std::runtime_error("Unsupported server tokens state version");

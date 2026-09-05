@@ -5,8 +5,10 @@
 
 #include <algorithm>
 #include <clocale>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -156,6 +158,164 @@ static bool test_seq_rm_isolated(
         return false;
     }
 
+    LOG("PASS\n");
+    return true;
+}
+
+static bool test_seq_file_data(
+        struct llama_model         * model,
+        const struct common_params & params,
+        const llama_tokens         & tokens) {
+    auto params_ctx = common_context_params_to_llama(params);
+    params_ctx.n_ctx      = 256;
+    params_ctx.n_seq_max  = 2;
+    params_ctx.kv_unified = true;
+
+    auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
+    if (!ctx) {
+        LOG_ERR("%s: failed to create context\n", __func__);
+        return false;
+    }
+
+    const size_t n_tokens = std::min<size_t>(tokens.size(), 32);
+    for (llama_seq_id seq_id = 0; seq_id < 2; ++seq_id) {
+        llama_batch_ptr batch(n_tokens, 0, 1);
+        for (size_t i = 0; i < n_tokens; ++i) {
+            common_batch_add(batch.get(), tokens[i], i, { seq_id }, false);
+        }
+        if (llama_decode(ctx.get(), batch.get())) {
+            LOG_ERR("%s: failed to decode prompt for sequence %d\n", __func__, seq_id);
+            return false;
+        }
+    }
+
+    const auto get_seq_state = [&](llama_seq_id seq_id, std::vector<uint8_t> & state) {
+        state.resize(llama_state_seq_get_size(ctx.get(), seq_id));
+        return !state.empty() && llama_state_seq_get_data(ctx.get(), state.data(), state.size(), seq_id) == state.size();
+    };
+
+    const std::string filepath = params.out_file + ".seq";
+    const std::vector<std::vector<uint8_t>> payloads = {
+        {},
+        { 1 },
+        { 1, 2, 3 },
+        { 1, 2, 3, 4 },
+        { 1, 2, 3, 4, 5 },
+    };
+
+    LOG("\n=== Sequence file data ===\n");
+
+    for (const auto & payload : payloads) {
+        if (llama_state_seq_save_file_data(ctx.get(), filepath.c_str(), 0, payload.data(), payload.size()) == 0) {
+            LOG_ERR("%s: failed to save %zu-byte payload\n", __func__, payload.size());
+            return false;
+        }
+
+        std::vector<uint8_t> state_before;
+        if (!get_seq_state(1, state_before)) {
+            LOG_ERR("%s: failed to get destination state\n", __func__);
+            return false;
+        }
+
+        size_t data_size = std::numeric_limits<size_t>::max();
+        if (llama_state_seq_load_file_data(ctx.get(), filepath.c_str(), 1, nullptr, 0, &data_size) == 0 || data_size != payload.size()) {
+            LOG_ERR("%s: failed to query %zu-byte payload\n", __func__, payload.size());
+            return false;
+        }
+
+        std::vector<uint8_t> state_after;
+        if (!get_seq_state(1, state_after) || state_before != state_after) {
+            LOG_ERR("%s: query modified the destination sequence\n", __func__);
+            return false;
+        }
+
+        std::vector<uint8_t> restored(std::max<size_t>(1, data_size));
+        if (data_size > 0) {
+            size_t ignored_size = 0;
+            if (llama_state_seq_load_file_data(ctx.get(), filepath.c_str(), 1, restored.data(), data_size - 1, &ignored_size) != 0) {
+                LOG_ERR("%s: load succeeded with insufficient capacity\n", __func__);
+                return false;
+            }
+            if (!get_seq_state(1, state_after) || state_before != state_after) {
+                LOG_ERR("%s: capacity failure modified the destination sequence\n", __func__);
+                return false;
+            }
+        }
+
+        size_t restored_size = 0;
+        if (llama_state_seq_load_file_data(ctx.get(), filepath.c_str(), 1, restored.data(), data_size, &restored_size) == 0 || restored_size != payload.size()) {
+            LOG_ERR("%s: failed to load %zu-byte payload\n", __func__, payload.size());
+            return false;
+        }
+        restored.resize(restored_size);
+        if (restored != payload) {
+            LOG_ERR("%s: restored payload differs from saved payload\n", __func__);
+            return false;
+        }
+    }
+
+    const std::vector<uint8_t> legacy_data = { 1, 2, 3, 4, 5, 0, 0, 0 };
+    llama_tokens legacy_tokens(legacy_data.size() / sizeof(llama_token));
+    std::memcpy(legacy_tokens.data(), legacy_data.data(), legacy_data.size());
+    if (llama_state_seq_save_file(ctx.get(), filepath.c_str(), 0, legacy_tokens.data(), legacy_tokens.size()) == 0) {
+        LOG_ERR("%s: failed to save legacy token payload\n", __func__);
+        return false;
+    }
+
+    llama_tokens legacy_tokens_restored(legacy_tokens.size());
+    size_t legacy_token_count = 0;
+    if (llama_state_seq_load_file(
+            ctx.get(), filepath.c_str(), 1, legacy_tokens_restored.data(), legacy_tokens_restored.size(), &legacy_token_count) == 0 ||
+            legacy_token_count != legacy_tokens.size() || legacy_tokens_restored != legacy_tokens) {
+        LOG_ERR("%s: failed to load legacy token payload\n", __func__);
+        return false;
+    }
+
+    size_t legacy_size = 0;
+    if (llama_state_seq_load_file_data(ctx.get(), filepath.c_str(), 1, nullptr, 0, &legacy_size) == 0 || legacy_size != legacy_data.size()) {
+        LOG_ERR("%s: failed to query legacy token payload\n", __func__);
+        return false;
+    }
+    std::vector<uint8_t> legacy_restored(legacy_size);
+    if (llama_state_seq_load_file_data(ctx.get(), filepath.c_str(), 1, legacy_restored.data(), legacy_restored.size(), &legacy_size) == 0 || legacy_restored != legacy_data) {
+        LOG_ERR("%s: failed to load legacy token payload as bytes\n", __func__);
+        return false;
+    }
+
+    const std::vector<uint8_t> payload = { 1, 2, 3 };
+    if (llama_state_seq_save_file_data(ctx.get(), filepath.c_str(), 0, payload.data(), payload.size()) == 0) {
+        LOG_ERR("%s: failed to save malformed-length fixture\n", __func__);
+        return false;
+    }
+
+    FILE * file = std::fopen(filepath.c_str(), "r+b");
+    const uint32_t malformed_size = std::numeric_limits<uint32_t>::max();
+    if (file == nullptr || std::fseek(file, sizeof(uint32_t) * 2, SEEK_SET) != 0 || std::fwrite(&malformed_size, sizeof(malformed_size), 1, file) != 1) {
+        if (file != nullptr) {
+            std::fclose(file);
+        }
+        LOG_ERR("%s: failed to create malformed-length fixture\n", __func__);
+        return false;
+    }
+    std::fclose(file);
+
+    std::vector<uint8_t> state_before;
+    if (!get_seq_state(1, state_before)) {
+        return false;
+    }
+    uint8_t data_out = 0;
+    size_t data_size = 0;
+    if (llama_state_seq_load_file_data(ctx.get(), filepath.c_str(), 1, &data_out, std::numeric_limits<size_t>::max(), &data_size) != 0) {
+        LOG_ERR("%s: malformed data size was accepted\n", __func__);
+        return false;
+    }
+    std::vector<uint8_t> state_after;
+    if (!get_seq_state(1, state_after) || state_before != state_after) {
+        LOG_ERR("%s: malformed data size modified the destination sequence\n", __func__);
+        return false;
+    }
+
+    std::remove(filepath.c_str());
     LOG("PASS\n");
     return true;
 }
@@ -510,7 +670,7 @@ static bool test_state_roundtrip(struct llama_model * model, const struct common
 
 // Run the full save/load test suite (tests 1-8) for a single model.
 // Returns true if all tests pass, false otherwise.
-static bool run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params) {
+static bool run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params, bool test_file_data) {
     struct common_params params = base_params;
     params.model.path = model_path;
 
@@ -557,6 +717,10 @@ static bool run_save_load_tests_for_model(const std::string & model_path, const 
 
     // Test 2: sequence removal isolation
     if (!test_seq_rm_isolated(model, params, tokens)) {
+        return false;
+    }
+
+    if (test_file_data && !test_seq_file_data(model, params, tokens)) {
         return false;
     }
 
@@ -675,7 +839,7 @@ int main(int argc, char ** argv) {
             LOG("\n================================================================\n");
             LOG_INF("%s: model %s\n", __func__, model_path.c_str());
 
-            if (run_save_load_tests_for_model(model_path, params)) {
+            if (run_save_load_tests_for_model(model_path, params, false)) {
                 n_pass++;
             } else {
                 n_fail++;
@@ -689,5 +853,5 @@ int main(int argc, char ** argv) {
     }
 
     // single-model mode
-    return run_save_load_tests_for_model(params.model.path, params) ? 0 : 1;
+    return run_save_load_tests_for_model(params.model.path, params, true) ? 0 : 1;
 }

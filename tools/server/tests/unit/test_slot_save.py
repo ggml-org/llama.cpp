@@ -4,8 +4,28 @@ import base64
 import requests
 import struct
 
-# sequence state file: magic(4) version(4) payload_size(4), then payload_size llama_token words
 STATE_FILE_HEADER_SIZE = 12
+STATE_FILE_VERSION_TOKENS = 3
+STATE_FILE_VERSION_DATA = 4
+
+
+def _rewrite_as_token_payload(path: str) -> int:
+    with open(path, "rb") as f:
+        data = bytearray(f.read())
+
+    version, payload_size = struct.unpack_from("=II", data, 4)
+    assert version == STATE_FILE_VERSION_DATA
+    payload_end = STATE_FILE_HEADER_SIZE + payload_size
+    payload = data[STATE_FILE_HEADER_SIZE:payload_end]
+    payload.extend(b"\x00" * (-len(payload) % 4))
+
+    data = data[:STATE_FILE_HEADER_SIZE] + payload + data[payload_end:]
+    struct.pack_into("=II", data, 4, STATE_FILE_VERSION_TOKENS, len(payload) // 4)
+
+    with open(path, "wb") as f:
+        f.write(data)
+
+    return len(data)
 
 server = ServerPreset.tinyllama2()
 
@@ -101,14 +121,15 @@ def test_slot_restore_legacy_token_list():
     # the payload written by this server starts with a packed header: LLAMA_TOKEN_NULL(4) version(4) n_tokens(4)
     packed_header_size = 12
 
-    payload_size = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE - 4)[0]
-    payload_end = STATE_FILE_HEADER_SIZE + payload_size * 4
+    version, payload_size = struct.unpack_from("=II", data, 4)
+    assert version == STATE_FILE_VERSION_DATA
+    payload_end = STATE_FILE_HEADER_SIZE + payload_size
     n_tokens = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE + 8)[0]
     assert n_tokens == 84
 
     tokens_start = STATE_FILE_HEADER_SIZE + packed_header_size
     data = data[:STATE_FILE_HEADER_SIZE] + data[tokens_start:tokens_start + n_tokens * 4] + data[payload_end:]
-    struct.pack_into("=I", data, STATE_FILE_HEADER_SIZE - 4, n_tokens)
+    struct.pack_into("=II", data, 4, STATE_FILE_VERSION_TOKENS, n_tokens)
 
     with open(path, "wb") as f:
         f.write(data)
@@ -255,6 +276,9 @@ def test_slot_save_restore_with_image(mmproj_server):
     assert n_saved > 0
     assert n_written > 0
 
+    path = os.path.join("tmp", "mm_slot_image.bin")
+    n_written_tokens = _rewrite_as_token_payload(path)
+
     res = server.make_request("POST", "/slots/1?action=erase")
     assert res.status_code == 200
 
@@ -263,7 +287,7 @@ def test_slot_save_restore_with_image(mmproj_server):
     })
     assert res.status_code == 200
     assert res.body["n_restored"] == n_saved
-    assert res.body["n_read"] == n_written
+    assert res.body["n_read"] == n_written_tokens
 
     # a different image must not reuse the restored image tokens; only the text prefix before the image is common
     res = server.make_request("POST", "/completions", data={
@@ -466,7 +490,7 @@ def test_slot_save_restore_image_payload_larger_than_context(mmproj_server):
     with open(path, "rb") as f:
         data = bytearray(f.read())
     payload_size = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE - 4)[0]
-    assert payload_size > n_ctx_slot  # the scenario under test: the payload does not fit in n_ctx
+    assert payload_size > n_ctx_slot * 4  # the scenario under test: the payload does not fit in n_ctx token storage
 
     # drop the image from the slot, then restore it from the file
     res = server.make_request("POST", "/completion", data={

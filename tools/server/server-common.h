@@ -210,8 +210,8 @@ public:
 
     llama_tokens get_text_tokens() const;
 
-    std::vector<char> serialize() const;
-    static server_tokens deserialize(const llama_tokens & packed, bool has_mtmd);
+    raw_buffer serialize() const;
+    static server_tokens deserialize(const raw_buffer & packed, bool has_mtmd);
 
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);
