@@ -1223,6 +1223,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
 
         ggml_backend_buffer_type_t buft = nullptr;
+        bool buft_overridden = false;
 
         // check overrides
         if (tensor_buft_overrides) {
@@ -1241,6 +1242,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                         }
                     } else {
                         buft = overrides->buft;
+                        buft_overridden = true;
                     }
 
                     LLAMA_LOG_DEBUG("tensor %s (%zu MiB %s) buffer type overridden to %s\n",
@@ -1259,9 +1261,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             }
         }
 
-        // avoid using a host buffer when using mmap
+        // avoid using a host buffer when using mmap, unless an override asks for it: the tensor is then copied into pinned memory
         auto * buft_dev = ggml_backend_buft_get_device(buft);
-        if (use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
+        if (use_mmap && !buft_overridden && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
             auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
             if (!cpu_dev) {
                 throw std::runtime_error("no CPU backend found");
@@ -1659,6 +1661,15 @@ bool llama_model_loader::load_all_data(
                 auto & mmap_used = mmaps_used[weight->idx];
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+            } else if (ggml_backend_buffer_is_host(cur->buffer)) {
+                // The destination is host memory (e.g. a pinned CUDA_Host buffer selected by -ot), so it can be
+                // filled directly from the file. Copying from the mapping instead would fault in every page one
+                // by one at queue depth 1 - and with --numa distribute the whole mapping carries POSIX_MADV_RANDOM,
+                // which disables readahead entirely. A plain read gets full readahead and is an order of magnitude
+                // faster. Non-host destinations keep the memcpy from the mapping below.
+                const auto & file = files.at(weight->idx);
+                file->seek(weight->offs, SEEK_SET);
+                file->read_raw(cur->data, n_size);
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }
