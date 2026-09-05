@@ -11,11 +11,13 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#include "../src/llama-ext.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mmproj-evict-draft.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -734,12 +736,36 @@ struct server_slot {
     }
 };
 
+// RAII guard for the --mmproj-evict-draft media window. enter() streams the given mmproj
+// modality's weights to GPU and evicts the draft; the destructor restores decode mode on every
+// path out of the encode (success, error, exception), so the draft is never left evicted if the
+// encode path throws. If enter fails it has already rolled back, so entered stays false.
+struct mmproj_media_guard {
+    server::mmproj_evict_draft_swap * swap;
+    enum mtmd_mmproj_modality mod;
+    bool entered = false;
+    mmproj_media_guard(server::mmproj_evict_draft_swap * s, enum mtmd_mmproj_modality m) : swap(s), mod(m) {}
+    bool enter() {
+        if (swap == nullptr) {
+            return true;
+        }
+        entered = swap->enter_mtmd(mod);
+        return entered;
+    }
+    ~mmproj_media_guard() {
+        if (entered) {
+            swap->exit_mtmd(mod);
+        }
+    }
+};
+
 // returns 0 on success
 // caller need to update prompt.tokens after a successful call to keep track of the processing progress
 // note: this is not a member of server_slot because we want to run it inside yield_to_queue
 //       slot is passed as const to avoid accidental modification of the slot state
 //       some pointers are allowed to be used, they are not used by to_json()
-static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx, size_t & n_tokens_out) {
+static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx, size_t & n_tokens_out,
+                              server::mmproj_evict_draft_swap * swap) {
     GGML_ASSERT(slot.mctx);
     const auto & mctx = slot.mctx;
     const auto & input_tokens = slot.task->tokens;
@@ -795,6 +821,20 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
 
     // otherwise, the batch is either uninitialized or is used up
     // we need to create & encode a new batch
+    // --mmproj-evict-draft: the encode needs the mmproj weights for this chunk's modality on the
+    // compute device; evict the draft's unique weights for this window. A batch is modality-
+    // homogeneous (can_batch_with rejects mixed types), so routing by the first chunk suffices.
+    // The guard restores decode mode on every exit path, so a throw in the encode setup below
+    // cannot leave the draft evicted.
+    const enum mtmd_mmproj_modality mod = (mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_AUDIO)
+                                          ? MTMD_MMPROJ_MOD_AUDIO
+                                          : MTMD_MMPROJ_MOD_VISION;
+    mmproj_media_guard media_guard(swap, mod);
+    if (!media_guard.enter()) {
+        SLT_ERR(slot, "mmproj_evict_draft: failed to enter %s media mode (id %d); aborting chunk\n",
+                server::mmproj_evict_draft_swap::mod_name(mod), slot.id);
+        return -1;
+    }
     mbatch.reset(mtmd_batch_init(mctx));
     res = mtmd_batch_add_chunk(mbatch.get(), chunk.get());
     GGML_ASSERT(res == 0); // we should never have an empty batch
@@ -844,6 +884,8 @@ public:
     mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
     const llama_vocab * vocab = nullptr;
 
+    server::mmproj_evict_draft_swap evict_swap; // --mmproj-evict-draft
+
     server_queue    queue_tasks;
     server_response queue_results;
 
@@ -887,6 +929,9 @@ private:
 
     llama_model   * model_dft = nullptr;
     llama_context * ctx_dft   = nullptr;
+    // --mmproj-evict-draft: total mmproj bytes from the -fit probe (weight-only in the evict case, where the
+    // probe skips warmup); used to warn when -fit underestimates the encode window's VRAM
+    size_t mmproj_fit_total = 0;
 
     common_speculative_init_result_ptr spec_init;
 
@@ -1055,6 +1100,10 @@ private:
             mparams.image_max_tokens = params_base.image_max_tokens;
             mparams.batch_max_tokens = params_base.mtmd_batch_max_tokens;
             mparams.media_marker     = get_media_marker();
+            // the -fit probe below measures the mmproj weight footprint; run it in weights_evict mode
+            // (when the feature will stream it) so -fit counts the mmproj against the host. The real
+            // load re-decides weights_evict from the arming state further below.
+            mparams.weights_evict    = params_base.mmproj_evict_draft && params_base.speculative.has_dft();
             // progress callback
             mparams.progress_callback           = load_progress_callback;
             mparams.progress_callback_user_data = &load_progress_mmproj;
@@ -1070,6 +1119,7 @@ private:
                 for (auto & [dev, size] : mmproj_mem) {
                     total += size;
                 }
+                mmproj_fit_total = total;
                 SRV_TRC("[mtmd] estimated worst-case memory usage of mmproj is %.2f MiB (took %.2f ms)\n", total / (1024.0 * 1024.0), t_elapsed / 1000.0);
                 GGML_ASSERT(!params_base.fit_params_target.empty());
                 for (auto & [dev, size] : mmproj_mem) {
@@ -1150,6 +1200,8 @@ private:
             load_progress_callback(1.0f, &load_progress_spec);
         }
 
+        bool dft_swap_prepared = false;
+
         if (has_mmproj) {
             if (callback_state) {
                 callback_state(SERVER_STATE_LOADING, {{"stage", "mmproj_model"}});
@@ -1159,6 +1211,17 @@ private:
                 mtmd_helper_log_set(common_log_default_callback, nullptr);
             }
 
+            if (params_base.mmproj_evict_draft) {
+                // arm the swap only if it can actually be: without a draft model, or when the draft has no
+                // swappable GPU weights (CPU-only draft, mmap'd on a backend without device buffers), the
+                // flag is a no-op and the mmproj weights stay on the compute device
+                if (params_base.speculative.has_dft() && model_dft != nullptr
+                    && (dft_swap_prepared = llama_model_weights_swap_prepare(model_dft))) {
+                    mparams.weights_evict = true;
+                } else {
+                    mparams.weights_evict = false; // swap disarmed; override the probe's flag-based value above
+                }
+            }
             mctx = mtmd_init_from_file(mmproj_path.c_str(), model_tgt, mparams);
             if (mctx == nullptr) {
                 SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
@@ -1179,6 +1242,36 @@ private:
             if (params_base.n_cache_reuse) {
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
+            }
+        }
+
+        if (params_base.mmproj_evict_draft) {
+            if (mctx == nullptr) {
+                SRV_WRN("%s\n", "--mmproj-evict-draft is set but no multimodal projector is loaded; ignoring the flag");
+            } else if (!params_base.speculative.has_dft() || ctx_dft == nullptr) {
+                SRV_WRN("%s\n", "--mmproj-evict-draft requires a draft model (--spec-draft-model); ignoring the flag");
+            } else if (!dft_swap_prepared || !evict_swap.init(mctx, model_dft, ctx_dft)) {
+                SRV_WRN("%s\n", "--mmproj-evict-draft: no swappable draft GPU weights; the swap is disabled (mmproj weights stay on the compute device)");
+            } else if (mtmd_has_gen_audio(mctx)) {
+                SRV_WRN("%s\n", "--mmproj-evict-draft: the mmproj carries a TTS generation pipeline; its weights stay on host RAM (TTS generation runs at host speed)");
+            }
+
+            // with -fit, the host-residency assumption can mislead -fit: when the swap is armed the mmproj may
+            // not fit in the VRAM freed by evicting the draft; when it is disarmed -fit counted the mmproj
+            // against the host but it loads on the compute device
+            if (params_base.fit_params) {
+                if (evict_swap.active()) {
+                    const size_t dft_swap_size = llama_model_weights_swap_size(model_dft);
+                    if (mmproj_fit_total > dft_swap_size) {
+                        SRV_WRN("--mmproj-evict-draft: mmproj weights (%.0f MiB; sum of all modalities) exceed the "
+                                 "evicted draft weights (%.0f MiB); with -fit the encode window can exceed the VRAM "
+                                 "ceiling (weights only; the compute buffer scales with image resolution)\n",
+                                 mmproj_fit_total / (1024.0 * 1024.0), dft_swap_size / (1024.0 * 1024.0));
+                    }
+                } else if (params_base.speculative.has_dft() && mmproj_fit_total > 0) {
+                    SRV_WRN("%s\n", "--mmproj-evict-draft: warning, -fit may under-estimate VRAM usage "
+                                    "(the swap is disabled, so the mmproj is on the compute device, not the host)");
+                }
             }
         }
 
@@ -3477,7 +3570,7 @@ private:
                         size_t n_tokens_out = 0;
                         int32_t res = 0;
                         queue_tasks.yield_to_queue([&]() {
-                            res = process_mtmd_chunk(slot, slot.mbatch, cur_token_idx, n_tokens_out);
+                            res = process_mtmd_chunk(slot, slot.mbatch, cur_token_idx, n_tokens_out, &evict_swap);
                         });
 
                         if (res != 0) {

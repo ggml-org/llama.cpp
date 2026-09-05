@@ -103,6 +103,7 @@ struct mtmd_context_params {
     const char * media_marker;
     enum llama_flash_attn_type flash_attn_type;
     bool warmup; // whether to run a warmup encode pass after initialization
+    bool weights_evict; // EXPERIMENTAL (--mmproj-evict-draft): keep mmproj weights in host RAM, stream to GPU per encode
 
     // limit number of image tokens, only for vision models with dynamic resolution
     int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
@@ -452,6 +453,22 @@ MTMD_API mtmd_input_chunks * mtmd_test_create_input_chunks(void);
 MTMD_API std::map<ggml_backend_dev_t, size_t> mtmd_get_memory_usage(
     const char * mmproj_fname,
     struct mtmd_context_params ctx_params);
+
+// EXPERIMENTAL (--mmproj-evict-draft): true if the mmproj also carries a TTS generation pipeline.
+// Its weights are never streamed to the GPU by the swap, so TTS generation runs on host weights.
+MTMD_API bool mtmd_has_gen_audio(mtmd_context * ctx);
+
+// EXPERIMENTAL (--mmproj-evict-draft): which mmproj weight set to stream. A single mmproj file may
+// hold several independent encoders (vision, audio) in separate clip contexts.
+enum mtmd_mmproj_modality {
+    MTMD_MMPROJ_MOD_VISION,
+    MTMD_MMPROJ_MOD_AUDIO,
+};
+
+// EXPERIMENTAL (--mmproj-evict-draft): stream a single modality's mmproj weights to the compute
+// device's buffer (on_gpu=true) or back to the host buffer (on_gpu=false). No-op (returns true)
+// if that modality's encoder is absent, or if the context was not created with weights_evict.
+MTMD_API bool mtmd_set_mmproj_modality_weights_gpu(mtmd_context * ctx, enum mtmd_mmproj_modality mod, bool on_gpu);
 #endif
 
 //

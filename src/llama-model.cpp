@@ -1158,6 +1158,22 @@ struct llama_model::impl {
     // contexts where the model tensors metadata is stored as well as the corresponding buffers:
     std::vector<std::pair<ggml_context_ptr, std::vector<ggml_backend_buffer_ptr>>> ctxs_bufs;
 
+    // --mmproj-evict-draft: runtime eviction/restore of the model's GPU weight buffers.
+    // Each part describes one evictable (non-host, non-mmap) weight buffer and the tensors it backs.
+    struct wswap_part {
+        size_t ctx_idx = 0;
+        size_t buf_idx = 0;
+        ggml_context * ctx = nullptr;
+        ggml_backend_buffer_type_t buft = nullptr;
+        ggml_backend_dev_t dev = nullptr;
+        size_t size = 0;
+        std::vector<std::pair<ggml_tensor *, ptrdiff_t>> tensors; // (tensor, offset) for base + view tensors
+        ggml_backend_buffer_ptr host; // valid only while the part is evicted
+        bool evicted = false;
+    };
+    std::vector<wswap_part> wswap;
+    bool wswap_prepared = false;
+
     buft_list_t cpu_buft_list;
     std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
 
@@ -1897,12 +1913,174 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() con
             ret[buft] += ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.get(), buft);
         } else {
             for (const auto & buf : bufs) {
-                // GGML_ASSERT(ggml_backend_buffer_get_base(buf.get()) != nullptr); // multi_buffer does not have a defined base
-                ret[ggml_backend_buffer_get_type(buf.get())] += ggml_backend_buffer_get_size(buf.get());
+                if (buf) { // temporarily null while evicted by --mmproj-evict-draft
+                    // GGML_ASSERT(ggml_backend_buffer_get_base(buf.get()) != nullptr); // multi_buffer does not have a defined base
+                    ret[ggml_backend_buffer_get_type(buf.get())] += ggml_backend_buffer_get_size(buf.get());
+                }
             }
         }
     }
     return ret;
+}
+
+// --mmproj-evict-draft ------------------------------------------------------------------------
+
+namespace {
+// re-point every tensor of ctx from one buffer to another, keeping each tensor's absolute
+// offset. Tensor offsets from the ggml allocator are multiples of GGML_MEM_ALIGN (the minimum
+// alignment ggml guarantees) and both buffer bases are aligned to at least GGML_MEM_ALIGN, so
+// to_base + off is a valid, aligned placement in a destination buffer of the same total size.
+// (Same offset-preserving repoint for the mmproj buffers: clip_repoint_ctx, tools/mtmd/clip.cpp)
+static void model_wswap_repoint(ggml_context * ctx, ggml_backend_buffer_t from, ggml_backend_buffer_t to) {
+    auto * from_base = reinterpret_cast<uint8_t *>(ggml_backend_buffer_get_base(from));
+    auto * to_base   = reinterpret_cast<uint8_t *>(ggml_backend_buffer_get_base(to));
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->buffer != from) {
+            continue;
+        }
+        if (t->data) {
+            const ptrdiff_t off = reinterpret_cast<uint8_t *>(t->data) - from_base;
+            t->data = to_base + off;
+        }
+        t->buffer = to;
+    }
+}
+} // namespace
+
+bool llama_model::weight_swap_prepare() {
+    if (pimpl->wswap_prepared) {
+        return true;
+    }
+    pimpl->wswap.clear();
+    auto & cb = pimpl->ctxs_bufs;
+    // Invariant: the collected buffers hold only this model's own weights. Tensors borrowed from a
+    // sibling model via ctx_other (e.g. a draft's tok_embd/output shared with the target) are never
+    // allocated into this model's buffers, so evict/restore cannot free or overwrite a buffer the
+    // other model still reads.
+    for (size_t i = 0; i < cb.size(); ++i) {
+        auto & [ctx_ptr, bufs] = cb[i];
+        for (size_t j = 0; j < bufs.size(); ++j) {
+            ggml_backend_buffer_t buf = bufs[j].get();
+            if (ggml_backend_buffer_is_host(buf)) {
+                continue; // CPU weights: nothing to move off the device
+            }
+            if (ggml_backend_buffer_get_base(buf) == nullptr) {
+                continue; // no host-visible base (dummy buffer, private device memory): nothing to copy
+            }
+            // buffers made from a host pointer (mmap/lazy weights on a backend that maps the file
+            // into device-accessible memory, e.g. Metal) own no device memory; their base is
+            // the host pointer, so the check above does not catch them. Evicting them would free
+            // nothing and restore would permanently re-home the weights into VRAM.
+            // Deliberately conservative: if any mapping exists and the device supports from-host-ptr
+            // buffers, ALL device buffers are skipped, including ones not host-backed. Worst case
+            // the swap disarms (or shrinks); it never corrupts.
+            if (!pimpl->mappings.empty()) {
+                ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(buf));
+                if (dev) {
+                    ggml_backend_dev_props props;
+                    ggml_backend_dev_get_props(dev, &props);
+                    if (props.caps.buffer_from_host_ptr) {
+                        continue;
+                    }
+                }
+            }
+            const size_t size = ggml_backend_buffer_get_size(buf);
+            if (size == 0) {
+                continue;
+            }
+            impl::wswap_part p;
+            p.ctx_idx = i;
+            p.buf_idx = j;
+            p.ctx     = ctx_ptr.get();
+            p.buft    = ggml_backend_buffer_get_type(buf);
+            p.dev     = ggml_backend_buft_get_device(p.buft);
+            p.size    = size;
+            auto * base = reinterpret_cast<uint8_t *>(ggml_backend_buffer_get_base(buf));
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx_ptr.get()); t != nullptr; t = ggml_get_next_tensor(ctx_ptr.get(), t)) {
+                if (t->buffer != buf || t->data == nullptr) {
+                    continue;
+                }
+                p.tensors.emplace_back(t, reinterpret_cast<uint8_t *>(t->data) - base);
+            }
+            if (p.tensors.empty()) {
+                continue;
+            }
+            pimpl->wswap.push_back(std::move(p));
+        }
+    }
+    pimpl->wswap_prepared = !pimpl->wswap.empty();
+    return pimpl->wswap_prepared;
+}
+
+bool llama_model::weight_swap_evict() {
+    if (!pimpl->wswap_prepared) {
+        return false;
+    }
+    for (auto & p : pimpl->wswap) {
+        if (p.evicted) {
+            continue;
+        }
+        auto & bufs = pimpl->ctxs_bufs[p.ctx_idx].second;
+        ggml_backend_buffer_t buf = bufs[p.buf_idx].get();
+
+        p.host.reset(ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), p.size));
+        if (p.host == nullptr) {
+            return false;
+        }
+        ggml_backend_buffer_set_usage(p.host.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        auto * host_base = reinterpret_cast<uint8_t *>(ggml_backend_buffer_get_base(p.host.get()));
+        for (auto & [t, off] : p.tensors) {
+            if (t->view_src == nullptr) {
+                ggml_backend_tensor_get(t, host_base + off, 0, ggml_nbytes(t)); // D2H
+            }
+        }
+        // the D2H copies above are host-blocking but do not order against the compute stream; the
+        // caller has drained the model's context before this, so no in-flight decode reads the buffer
+        model_wswap_repoint(p.ctx, buf, p.host.get()); // tensors now point at the host copy
+        bufs[p.buf_idx].reset();
+        p.evicted = true;
+    }
+    return true;
+}
+
+bool llama_model::weight_swap_restore() {
+    if (!pimpl->wswap_prepared) {
+        return false;
+    }
+    for (auto & p : pimpl->wswap) {
+        if (!p.evicted) {
+            continue;
+        }
+        auto & bufs = pimpl->ctxs_bufs[p.ctx_idx].second;
+        bufs[p.buf_idx].reset(ggml_backend_buft_alloc_buffer(p.buft, p.size));
+        if (bufs[p.buf_idx] == nullptr) {
+            return false;
+        }
+        ggml_backend_buffer_t buf = bufs[p.buf_idx].get();
+        ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        model_wswap_repoint(p.ctx, p.host.get(), buf); // tensors now point back at the device buffer
+        auto * host_base = reinterpret_cast<uint8_t *>(ggml_backend_buffer_get_base(p.host.get()));
+        for (auto & [t, off] : p.tensors) {
+            if (t->view_src == nullptr) {
+                ggml_backend_tensor_set(t, host_base + off, 0, ggml_nbytes(t)); // H2D
+            }
+        }
+        // the H2D copies above are host-blocking, so the host copy is fully read; release it
+        p.host.reset();
+        p.evicted = false;
+    }
+    return true;
+}
+
+size_t llama_model::weight_swap_size() const {
+    if (!pimpl->wswap_prepared) {
+        return 0;
+    }
+    size_t total = 0;
+    for (const auto & p : pimpl->wswap) {
+        total += p.size;
+    }
+    return total;
 }
 
 uint64_t llama_model::n_elements() const {
@@ -3184,6 +3362,22 @@ ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int 
         return nullptr;
     }
     return model->devices[i].dev;
+}
+
+bool llama_model_weights_swap_prepare(const struct llama_model * model) {
+    return const_cast<struct llama_model *>(model)->weight_swap_prepare();
+}
+
+bool llama_model_weights_swap_evict(const struct llama_model * model) {
+    return const_cast<struct llama_model *>(model)->weight_swap_evict();
+}
+
+bool llama_model_weights_swap_restore(const struct llama_model * model) {
+    return const_cast<struct llama_model *>(model)->weight_swap_restore();
+}
+
+size_t llama_model_weights_swap_size(const struct llama_model * model) {
+    return model->weight_swap_size();
 }
 
 //
