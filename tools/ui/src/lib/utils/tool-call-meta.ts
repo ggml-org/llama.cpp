@@ -16,8 +16,14 @@ export function tryParseToolResultObject(
 ): Record<string, unknown> | null {
 	if (!toolResultString) return null;
 
+	// Tool results are usually large plain text (file contents, stdout); only
+	// a JSON object root can carry fields, so skip the parse otherwise
+	const trimmed = toolResultString.trimStart();
+
+	if (trimmed[0] !== '{') return null;
+
 	try {
-		const parsed: unknown = JSON.parse(toolResultString);
+		const parsed: unknown = JSON.parse(trimmed);
 
 		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
 			return parsed as Record<string, unknown>;

@@ -38,14 +38,21 @@ export function parseRunJavascriptMeta(section: AgenticSection): RunJavascriptMe
 		// do we scan raw lines for the `Error:` prefix.
 		let parsedObject: Record<string, unknown> | null = null;
 
-		try {
-			const parsed: unknown = JSON.parse(toolResultString);
+		// Successful sandbox output is a JSON array, errors are objects; plain
+		// text (huge console logs) fails the parse below anyway, so only try
+		// when the blob starts with a JSON container
+		const trimmedResult = toolResultString.trimStart();
 
-			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-				parsedObject = parsed as Record<string, unknown>;
+		if (trimmedResult[0] === '{' || trimmedResult[0] === '[') {
+			try {
+				const parsed: unknown = JSON.parse(trimmedResult);
+
+				if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+					parsedObject = parsed as Record<string, unknown>;
+				}
+			} catch {
+				parsedObject = null;
 			}
-		} catch {
-			parsedObject = null;
 		}
 
 		if (typeof parsedObject?.error === 'string') {
