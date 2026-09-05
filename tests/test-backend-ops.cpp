@@ -4549,6 +4549,94 @@ struct test_gated_delta_net : public test_case {
     }
 };
 
+struct test_gated_delta_net_batch_invariance : public test_case {
+    const int64_t head_count;
+    const int64_t head_size;
+    const int64_t n_tokens;
+
+    test_gated_delta_net_batch_invariance(int64_t head_count, int64_t head_size, int64_t n_tokens)
+        : head_count(head_count), head_size(head_size), n_tokens(n_tokens) {}
+
+    std::string vars() override {
+        return VARS_TO_STR3(head_count, head_size, n_tokens);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * q     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens, 1);
+        ggml_tensor * k     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens, 1);
+        ggml_tensor * v     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens, 1);
+        ggml_tensor * g     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1,         head_count, n_tokens, 1);
+        ggml_tensor * beta  = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1,         head_count, n_tokens, 1);
+        ggml_tensor * state = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_size, head_size, head_count, 1);
+        ggml_set_name(q, "q");
+        ggml_set_name(k, "k");
+        ggml_set_name(v, "v");
+        ggml_set_name(g, "g");
+        ggml_set_name(beta, "beta");
+        ggml_set_name(state, "state");
+
+        q = ggml_l2_norm(ctx, q, 1e-6f);
+        k = ggml_l2_norm(ctx, k, 1e-6f);
+
+        ggml_tensor * batched = ggml_gated_delta_net(ctx, q, k, v, g, beta, state, 1);
+
+        ggml_tensor * serial_outputs = nullptr;
+        ggml_tensor * serial_state = state;
+        for (int64_t i = 0; i < n_tokens; ++i) {
+            auto token_view = [&](ggml_tensor * t) {
+                return ggml_view_4d(ctx, t, t->ne[0], t->ne[1], 1, 1,
+                        t->nb[1], t->nb[2], t->nb[3], i*t->nb[2]);
+            };
+
+            ggml_tensor * serial_step = ggml_gated_delta_net(ctx,
+                    token_view(q), token_view(k), token_view(v), token_view(g), token_view(beta), serial_state, 1);
+
+            ggml_tensor * serial_output = ggml_view_2d(ctx, serial_step,
+                    head_size*head_count, 1, serial_step->nb[1], 0);
+            serial_outputs = serial_outputs == nullptr ? serial_output : ggml_concat(ctx, serial_outputs, serial_output, 1);
+
+            const size_t state_offset = ggml_row_size(GGML_TYPE_F32, head_size*head_count);
+            serial_state = ggml_view_4d(ctx, serial_step,
+                    head_size, head_size, head_count, 1,
+                    ggml_row_size(GGML_TYPE_F32, head_size),
+                    ggml_row_size(GGML_TYPE_F32, head_size*head_size),
+                    ggml_row_size(GGML_TYPE_F32, head_size*head_size*head_count),
+                    state_offset);
+        }
+
+        ggml_tensor * serial_state_2d = ggml_reshape_2d(ctx, serial_state, head_size*head_count, head_size);
+        ggml_tensor * serial = ggml_concat(ctx, serial_outputs, serial_state_2d, 1);
+        ggml_tensor * out = ggml_concat(ctx, batched, serial, 1);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) { continue; }
+            if (strcmp(t->name, "g") == 0) {
+                init_tensor_uniform(t, -20.0f, -1e-4f);
+            } else if (strcmp(t->name, "beta") == 0) {
+                init_tensor_uniform(t, 0.0f, 1.0f);
+            } else if (strcmp(t->name, "v") == 0) {
+                init_tensor_uniform(t, -0.3f, 5.0f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+
+    double err(const float * backend, const float * /*cpu*/, size_t count) override {
+        GGML_ASSERT(count % 2 == 0);
+        return memcmp(backend, backend + count/2, count/2 * sizeof(float)) == 0 ? 0.0 : 1.0;
+    }
+
+    double max_err() override { return 0.0; }
+    double max_err(ggml_backend_t /*backend*/) override { return 0.0; }
+    bool run_whole_graph() override { return true; }
+    std::string op_desc(ggml_tensor * /*t*/) override { return "GATED_DELTA_NET_BATCH_INVARIANCE"; }
+};
+
 // GGML_OP_GATED_LINEAR_ATTN
 struct test_gla : public test_case {
     const ggml_type type;
@@ -10642,6 +10730,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // overflow: n_tokens > K — only the last K snapshots kept.
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 32,   8, 1, 1, false, false, /*K=*/3));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  16, 2, 1, false, false, /*K=*/4));
+
+    for (int64_t n_tokens : {1, 2, 3, 4, 5, 8}) {
+        test_cases.emplace_back(new test_gated_delta_net_batch_invariance(48, 128, n_tokens));
+    }
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging
