@@ -238,7 +238,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 ||
-            arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE) {
+            arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
+            // diffusion-gemma needs a mix: with every layer sliding, the non-SWA mask
+            // is built and used by nothing, so ggml-alloc never gives it a buffer and
+            // set_input dereferences a null one. A real model has both kinds of layer.
+            arch == LLM_ARCH_DIFFUSION_GEMMA) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
@@ -359,6 +363,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   std::vector<float>({0.0f, 4.0f}));
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>({0.0f, 5.0f}));
     }
+    if (arch == LLM_ARCH_DIFFUSION_GEMMA) {
+        // ISWA: the loader reads the SWA head lengths unconditionally, and they
+        // are separate keys from the non-SWA pair above.
+        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,   n_embd/n_head);
+        ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA, n_embd/n_head);
+        // canvas_length splits the forward at P = n_tokens - canvas_length and
+        // the loader rejects anything <= 0. Kept well under the 128 tokens the
+        // backend comparison decodes, so both halves of that split are exercised.
+        ms.add_kv(LLM_KV_DIFFUSION_CANVAS_LENGTH, uint32_t(16));
+    }
     ms.add_kv(LLM_KV_WKV_HEAD_SIZE,             n_embd/n_head);
     ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,         uint32_t(3));
     ms.add_kv(LLM_KV_RESIDUAL_SCALE,            3.5565588200778455f);
@@ -473,6 +487,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_DEEPSEEK2:
         case LLM_ARCH_DEEPSEEK32:
         case LLM_ARCH_DOTS3NOTE:
+        case LLM_ARCH_DIFFUSION_GEMMA:
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_GLM_DSA:
@@ -726,7 +741,10 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
             continue;
         }
 
-        const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
+        // diffusion-gemma belongs here for the same reason as the other diffusion
+        // decoders: it sets causal_attn = false, so the whole batch is one
+        // encoder pass and n_ubatch must not be capped below n_tokens.
+        const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1 || arch == LLM_ARCH_DIFFUSION_GEMMA;
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
                 continue;

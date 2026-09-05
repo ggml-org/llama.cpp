@@ -63,6 +63,7 @@ enum llm_arch {
     LLM_ARCH_GEMMA3N,
     LLM_ARCH_GEMMA4,
     LLM_ARCH_GEMMA4_ASSISTANT,
+    LLM_ARCH_DIFFUSION_GEMMA,
     LLM_ARCH_GEMMA_EMBEDDING,
     LLM_ARCH_STARCODER2,
     LLM_ARCH_MAMBA,
@@ -411,6 +412,8 @@ enum llm_kv {
 
     LLM_KV_SHORTCONV_L_CACHE,
 
+    LLM_KV_DIFFUSION_CANVAS_LENGTH,
+
     LLM_KV_XIELU_ALPHA_N,
     LLM_KV_XIELU_ALPHA_P,
     LLM_KV_XIELU_BETA,
@@ -486,6 +489,11 @@ enum llm_tensor {
     LLM_TENSOR_ATTN_K_NORM,
     LLM_TENSOR_LAYER_OUT_NORM,
     LLM_TENSOR_LAYER_OUT_SCALE,
+    LLM_TENSOR_ENC_LAYER_OUT_SCALE, // diffusion-gemma (encoder-mode per-layer scalar)
+    LLM_TENSOR_SC_PRE_NORM,         // diffusion-gemma self-conditioning
+    LLM_TENSOR_SC_GATE,             // diffusion-gemma self-conditioning
+    LLM_TENSOR_SC_UP,               // diffusion-gemma self-conditioning
+    LLM_TENSOR_SC_DOWN,             // diffusion-gemma self-conditioning
     LLM_TENSOR_POST_ATTN_NORM,
     LLM_TENSOR_POST_MLP_NORM,
     LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n

@@ -32,6 +32,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
         case LLM_ARCH_LAGUNA:
         case LLM_ARCH_GRANITE_SWA:
         case LLM_ARCH_DOTS3NOTE: // TODO: need to handle SWA pattern and MLA+SWA config
+        case LLM_ARCH_DIFFUSION_GEMMA: // same: a per-layer SWA pattern add_kv_from_model cannot write back
             return false;
         default:
             return true;
