@@ -8,9 +8,10 @@
 
 import { base } from '$app/paths';
 import { API_MODELS, MODEL_ID, type ModelSidecar, sidecarFromFileToken } from '$lib/constants';
-import { ServerModelStatus } from '$lib/enums';
+import { ModelAuxSidecar, ModelDraftSidecar, ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
 import {
+	apiDelete,
 	apiFetch,
 	apiPost,
 	extractSseDataPayload,
@@ -18,6 +19,12 @@ import {
 	splitSseRecords
 } from '$lib/utils';
 import { getAuthHeaders } from '$lib/utils/api-headers';
+
+/** Sidecar filename tokens, mirrored from the enums for entry-tag checks. */
+const SIDECAR_TOKENS: readonly string[] = [
+	...Object.values(ModelDraftSidecar),
+	...Object.values(ModelAuxSidecar)
+];
 
 export class ModelsService {
 	private static readonly SSE_RECONNECT_MS = 1000;
@@ -47,6 +54,46 @@ export class ModelsService {
 	}
 
 	/**
+	 * Cancel an in-flight download or remove a previously downloaded/failed
+	 * entry from the server's model cache (ROUTER mode only).
+	 *
+	 * Sends DELETE `/models?model=<hfRepoWithTag>`:
+	 * - while a download is running, the child subprocess is asked to exit
+	 *   and any partial `.tmp` files are removed;
+	 * - once the entry has finished downloading or has failed, the cached
+	 *   files are removed from disk.
+	 *
+	 * @param hfRepoWithTag - HuggingFace repo id in the same `<repo>:<tag>`
+	 *                        format returned by `buildDownloadTag`.
+	 * @returns Server acknowledgement containing the success flag
+	 */
+	static async cancelDownload(hfRepoWithTag: string): Promise<ApiModelsDownloadResponse> {
+		return apiDelete<ApiModelsDownloadResponse>(API_MODELS.DELETE, {
+			model: hfRepoWithTag
+		});
+	}
+
+	/**
+	 * Trigger a model download from HuggingFace (ROUTER mode only).
+	 *
+	 * Sends a POST request to `/models`. The response returns immediately; the
+	 * actual download runs in the background and tracks progress through
+	 * `/models/sse`. The server picks the file that matches the supplied tag
+	 * (when present) and additionally pulls mmproj / draft sidecar weights as
+	 * appropriate for the model.
+	 *
+	 * @param hfRepoWithTag - HuggingFace repo id, optionally suffixed with
+	 *                        `:<tag>` (e.g. `ggml-org/gemma-3-4b-it-GGUF:Q4_K_M`
+	 *                        or `:IQ1_M-mtp` for an embedded-draft GGUF).
+	 * @returns Server acknowledgement containing the success flag
+	 */
+	static async downloadModel(hfRepoWithTag: string): Promise<ApiModelsDownloadResponse> {
+		const payload: ApiModelsDownloadRequest = { model: hfRepoWithTag };
+
+		return apiPost<ApiModelsDownloadResponse>(API_MODELS.DOWNLOAD, payload);
+	}
+
+	/**
 	 * Check if a model is loaded based on its metadata.
 	 *
 	 * @param model - Model data entry from the API response
@@ -54,6 +101,16 @@ export class ModelsService {
 	 */
 	static isModelLoaded(model: ApiModelDataEntry): boolean {
 		return model.status.value === ServerModelStatus.LOADED;
+	}
+
+	/**
+	 * Check if a model is currently loading.
+	 *
+	 * @param model - Model data entry from the API response
+	 * @returns True if the model status is LOADING
+	 */
+	static isModelLoading(model: ApiModelDataEntry): boolean {
+		return model.status.value === ServerModelStatus.LOADING;
 	}
 
 	/**
@@ -65,13 +122,20 @@ export class ModelsService {
 	 */
 
 	/**
-	 * Check if a model is currently loading.
-	 *
-	 * @param model - Model data entry from the API response
-	 * @returns True if the model status is LOADING
+	 * True when a router entry id is a sidecar-only entry, e.g. `org/model:Q4_0-mtp`
+	 * or `org/model:mmproj`. Such entries mark a downloaded sidecar file, not a
+	 * loadable model, so the selector skips them.
 	 */
-	static isModelLoading(model: ApiModelDataEntry): boolean {
-		return model.status.value === ServerModelStatus.LOADING;
+	static isSidecarEntry(modelId: string): boolean {
+		const idx = modelId.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
+
+		if (idx === MODEL_ID.NOT_FOUND) return false;
+
+		const tag = modelId.slice(idx + 1).toLowerCase();
+		const dash = tag.lastIndexOf(MODEL_ID.SEGMENT_SEPARATOR);
+		const token = dash === -1 ? tag : tag.slice(dash + 1);
+
+		return SIDECAR_TOKENS.includes(token);
 	}
 
 	/**
