@@ -1017,13 +1017,14 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets) {
         return;
     }
 
-    // note: if you hit this assert, most likely you haven't deallocated all Metal resources before exiting
-    GGML_ASSERT([rsets->data count] == 0);
-
+    // Wait for the background heartbeat thread to stop.
     atomic_store_explicit(&rsets->d_stop, true, memory_order_relaxed);
-
     dispatch_group_wait(rsets->d_group, DISPATCH_TIME_FOREVER);
     dispatch_release(rsets->d_group);
+
+    // We _could_ end the residency of any extant residency sets here, but
+    // let's leave that to `ggml_metal_buffer_free`, the user is still in
+    // control of those buffers (and might free them later).
 
     [rsets->data release];
     [rsets->lock release];
