@@ -1,4 +1,5 @@
 #include "ggml-metal-common.h"
+#include "ggml-metal-fuse.h"
 
 #include "ggml.h"
 #include "ggml-impl.h"
@@ -390,11 +391,7 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
 }
 
 void ggml_graph_optimize(ggml_cgraph * gf) {
-    constexpr int MAX_FUSE = 16;
-
     const int n = gf->n_nodes;
-
-    enum ggml_op ops[MAX_FUSE];
 
     std::vector<node_info> nodes;
     nodes.reserve(gf->n_nodes);
@@ -402,47 +399,23 @@ void ggml_graph_optimize(ggml_cgraph * gf) {
     // fuse nodes:
     // we don't want to make reorders that break fusing, so we first pack all fusable tensors
     //   and perform the reorder over the fused nodes. after the reorder is done, we unfuse
+    //
+    // the fusable sequences are declared in the fusion table (ggml-metal-fuse.cpp), so the
+    // packing here is driven by the same patterns that the op encoders will later use
     for (int i = 0; i < n; i++) {
         node_info node = {
             /*.node =*/ gf->nodes[i],
             /*.fused =*/ {},
         };
 
-        // fuse only ops that start with these operations
-        // can be expanded when needed
-        if (node.op() == GGML_OP_ADD ||
-            node.op() == GGML_OP_NORM ||
-            node.op() == GGML_OP_RMS_NORM) {
-            ops[0] = node.op();
+        const int f = ggml_metal_fuse_max(gf, i);
 
-            int f = i + 1;
-            while (f < n && f < i + MAX_FUSE) {
-                // conservatively allow fusing only these ops
-                // can be expanded when needed
-                if (gf->nodes[f]->op != GGML_OP_ADD &&
-                    gf->nodes[f]->op != GGML_OP_MUL &&
-                    gf->nodes[f]->op != GGML_OP_NORM &&
-                    gf->nodes[f]->op != GGML_OP_RMS_NORM) {
-                    break;
-                }
-                ops[f - i] = gf->nodes[f]->op;
-                f++;
-            }
+        // add the fused tensors into the node info so we can unfuse them later
+        for (int k = 1; k < f; k++) {
+            ++i;
 
-            f -= i;
-            for (; f > 1; f--) {
-                if (ggml_can_fuse(gf, i, ops, f)) {
-                    break;
-                }
-            }
-
-            // add the fused tensors into the node info so we can unfuse them later
-            for (int k = 1; k < f; k++) {
-                ++i;
-
-                // the .dst() becomes the last fused tensor
-                node.add_fused(gf->nodes[i]);
-            }
+            // the .dst() becomes the last fused tensor
+            node.add_fused(gf->nodes[i]);
         }
 
         nodes.push_back(std::move(node));

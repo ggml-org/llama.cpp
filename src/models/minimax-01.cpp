@@ -229,6 +229,7 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
     ggml_set_input(inp->inp_k_decay);
     cb(inp->inp_k_decay, "k_decay_exp", -1);
 
+    // [TAG_RESERVE_DIAG_DECAY]
     inp->inp_diag_decay = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_seq_tokens, n_seq_tokens, n_head, n_seqs);
     ggml_set_input(inp->inp_diag_decay);
     cb(inp->inp_diag_decay, "diag_decay_exp", -1);

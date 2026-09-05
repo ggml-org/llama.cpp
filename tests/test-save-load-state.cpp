@@ -109,7 +109,7 @@ static bool test_seq_rm_isolated(
     for (llama_seq_id seq_id = 0; seq_id < 2; ++seq_id) {
         llama_batch_ptr batch(n_tokens, 0, 1);
         for (size_t i = 0; i < n_tokens; ++i) {
-            common_batch_add(batch.get(), tokens[i], i, { seq_id }, false);
+            common_batch_add(batch.get(), tokens[i], i, { seq_id }, i == n_tokens - 1);
         }
 
         if (llama_decode(ctx.get(), batch.get())) {
@@ -373,7 +373,7 @@ static bool test_seq_cp_scatter(struct llama_model * model, const struct common_
 
     auto decode_one = [&](llama_token tok, int pos, llama_seq_id seq) {
         llama_batch_ptr batch(1, 0, 1);
-        common_batch_add(batch.get(), tok, pos, { seq }, false);
+        common_batch_add(batch.get(), tok, pos, { seq }, true);
         return llama_decode(ctx.get(), batch.get()) == 0;
     };
 
