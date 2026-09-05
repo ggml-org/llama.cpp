@@ -1470,8 +1470,23 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         split_sum += splits[i];
         splits[i] = split_sum;
     }
-    for (size_t i = 0; i < n_devices(); ++i) {
-        splits[i] /= split_sum;
+
+    if (split_sum == 0.0f) {
+        // all devices report zero free memory (e.g. a Vulkan GPU that is already
+        // fully occupied by a previously loaded model, such as an MTP draft model
+        // loaded after the target). normalizing by zero would produce NaN split
+        // points and make std::upper_bound return the end iterator, causing an
+        // out-of-bounds access in devices.at(layer_gpu) below.
+        // fall back to an even split, mirroring the host-memory fallback above.
+        // fixes: https://github.com/ggml-org/llama.cpp/issues/27717
+        LLAMA_LOG_WARN("%s: all devices report zero free memory - falling back to an even layer split\n", __func__);
+        for (size_t i = 0; i < n_devices(); ++i) {
+            splits[i] = float(i + 1) / n_devices();
+        }
+    } else {
+        for (size_t i = 0; i < n_devices(); ++i) {
+            splits[i] /= split_sum;
+        }
     }
 
     const int i_gpu_start = std::max(n_layer_all + 1 - n_gpu_layers, 0);
