@@ -1414,7 +1414,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
 
-        is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
+        // ask the draft memory whether it actually shares the target's KV cells.
+        // llama_get_ctx_other(ctx_dft) == ctx_tgt holds for every MTP context, shared
+        // KV or not, so it mislabeled separate-KV MTP archs (e.g. qwen35) as shared
+        // and skipped both the catch-up decode and the per-step draft positions.
+        is_mem_shared = llama_memory_has_shared_cells(llama_get_memory(ctx_dft));
         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
 
         if (chain_heads) {
