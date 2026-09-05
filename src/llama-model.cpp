@@ -1661,7 +1661,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
         }
         // output scales
-        if (output && output->type == GGML_TYPE_NVFP4) {
+        if (output && (output->type == GGML_TYPE_NVFP4 || output->type == GGML_TYPE_F8_E4M3)) {
             // weight scale
             if (!output_s) {
                 output_s = create_tensor(tn(LLM_TENSOR_OUTPUT, "scale"), {1}, TENSOR_NOT_REQUIRED);
@@ -1674,11 +1674,11 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
     ml.done_getting_tensors();
 
-    // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
+    // Tied low-precision output is valid when no separate LM-head scale tensors are present.
     // If sidecar scales exist, the output weight must be an actual output tensor.
     GGML_ASSERT(!(output && tok_embd &&
             strcmp(output->name, tok_embd->name) == 0 &&
-            output->type == GGML_TYPE_NVFP4 &&
+            (output->type == GGML_TYPE_NVFP4 || output->type == GGML_TYPE_F8_E4M3) &&
             (output_s || output_in_s)));
     // populate tensors_by_name
     for (auto & [_, ctx_ptr] : ml.ctx_map) {
