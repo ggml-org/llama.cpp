@@ -462,6 +462,24 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         shape = list(tensor.shape)
         if dim < 0:
             dim += len(shape)
+
+        # LoRA tensors (W ≈ B @ A) cannot reshape their row dimension.
+        # Instead, build a permutation index and apply it to A (column
+        # reorder) or B (row reorder) directly.
+        if hasattr(tensor, 'get_lora_A_B'):
+            n = shape[dim]
+            idx = torch.arange(n).reshape(num_k_heads, num_v_per_k, head_dim)
+            idx = idx.permute(1, 0, 2).contiguous().reshape(n)
+            lora_A, lora_B = tensor.get_lora_A_B()  # ty: ignore[call-non-callable]
+            if dim == len(shape) - 1:
+                return type(tensor)(lora_A[:, idx], lora_B)
+            elif dim == 0:
+                return type(tensor)(lora_A, lora_B[idx])
+            else:
+                raise NotImplementedError(
+                    f"_reorder_v_heads on dim={dim} not supported for LoRA tensors"
+                )
+
         new_shape = shape[:dim] + [num_k_heads, num_v_per_k, head_dim] + shape[dim + 1:]
         tensor = tensor.reshape(*new_shape)
         perm = list(range(len(new_shape)))
