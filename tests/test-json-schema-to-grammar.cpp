@@ -1567,6 +1567,19 @@ int main() {
 
         run({
             SUCCESS,
+            "regexp with escaped slash",
+            R"""({
+                "type": "string",
+                "pattern": "^https:\\/\\/example\\.com\\/[a-z\\/]+$"
+            })""",
+            R"""(
+                root ::= "\"" ("https://example.com/" [a-z/]+) "\""
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
             "unanchored regexp",
             R"""({
                 "type": "string",
