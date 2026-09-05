@@ -2143,11 +2143,6 @@ size_t quantize_q4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, 
 static void quantize_row_q4_1_impl(const float * GGML_RESTRICT x, block_q4_1 * GGML_RESTRICT y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK4_1 == 32, "QK4_1 must be 32");
 
-    if (!quant_weights) {
-        quantize_row_q4_1_ref(x, y, n_per_row);
-        return;
-    }
-
     float weight[QK4_1];
     uint8_t L[QK4_1], Laux[QK4_1];
 
@@ -2158,8 +2153,8 @@ static void quantize_row_q4_1_impl(const float * GGML_RESTRICT x, block_q4_1 * G
     const int64_t nb = n_per_row/QK4_1;
     for (int ib = 0; ib < nb; ++ib) {
         const float * xb = x + QK4_1 * ib;
-        const float * qw = quant_weights + QK4_1 * ib;
-        for (int j = 0; j < QK4_1; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+        const float * qw = quant_weights ? quant_weights + QK4_1 * ib : NULL;
+        for (int j = 0; j < QK4_1; ++j) weight[j] = (qw ? qw[j] : 1.0f) * sqrtf(sigma2 + xb[j]*xb[j]);
         float min;
         float d = make_qkx3_quants(QK4_1, 15, xb, weight, L, &min, Laux, -0.9f, 0.05f, 36, false);
         y[ib].d = GGML_FP32_TO_FP16(d);
@@ -2171,10 +2166,6 @@ static void quantize_row_q4_1_impl(const float * GGML_RESTRICT x, block_q4_1 * G
 }
 
 size_t quantize_q4_1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    if (!quant_weights) {
-        quantize_row_q4_1_ref(src, dst, (int64_t)nrow*n_per_row);
-        return nrow * ggml_row_size(GGML_TYPE_Q4_1, n_per_row);
-    }
     size_t row_size = ggml_row_size(GGML_TYPE_Q4_1, n_per_row);
     char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrow; ++row) {
@@ -2242,11 +2233,6 @@ size_t quantize_q5_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, 
 static void quantize_row_q5_1_impl(const float * GGML_RESTRICT x, block_q5_1 * GGML_RESTRICT y, int64_t n_per_row, const float * quant_weights) {
     static_assert(QK5_1 == 32, "QK5_1 must be 32");
 
-    if (!quant_weights) {
-        quantize_row_q5_1_ref(x, y, n_per_row);
-        return;
-    }
-
     float weight[QK5_1];
     uint8_t L[QK5_1], Laux[QK5_1];
 
@@ -2257,8 +2243,8 @@ static void quantize_row_q5_1_impl(const float * GGML_RESTRICT x, block_q5_1 * G
     const int64_t nb = n_per_row/QK5_1;
     for (int ib = 0; ib < nb; ++ib) {
         const float * xb = x + QK5_1 * ib;
-        const float * qw = quant_weights + QK5_1 * ib;
-        for (int j = 0; j < QK5_1; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+        const float * qw = quant_weights ? quant_weights + QK5_1 * ib : NULL;
+        for (int j = 0; j < QK5_1; ++j) weight[j] = (qw ? qw[j] : 1.0f) * sqrtf(sigma2 + xb[j]*xb[j]);
         float min;
         float d = make_qkx3_quants(QK5_1, 31, xb, weight, L, &min, Laux, -0.9f, 0.05f, 36, false);
         y[ib].d = GGML_FP32_TO_FP16(d);
@@ -2278,10 +2264,6 @@ static void quantize_row_q5_1_impl(const float * GGML_RESTRICT x, block_q5_1 * G
 }
 
 size_t quantize_q5_1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    if (!quant_weights) {
-        quantize_row_q5_1_ref(src, dst, (int64_t)nrow*n_per_row);
-        return nrow * ggml_row_size(GGML_TYPE_Q5_1, n_per_row);
-    }
     size_t row_size = ggml_row_size(GGML_TYPE_Q5_1, n_per_row);
     char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrow; ++row) {
