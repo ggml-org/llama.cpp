@@ -53,6 +53,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	private initPromise: Promise<void> | null = null;
 
 	/**
+	 * Messages loadConversation just read, handed off once so the chat
+	 * screen can reuse them for sibling info instead of re-fetching the
+	 * whole conversation a second time.
+	 */
+	private lastLoadedMessages: { convId: string; messages: DatabaseMessage[] } | null = null;
+
+	/**
 	 * Memo of the last findMessageIndex() lookup. Streaming calls it once per
 	 * chunk for the same message, so a validated cache hit keeps that O(1)
 	 * instead of a linear scan of activeMessages on every token.
@@ -237,6 +244,17 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		this.activeMessages = [];
 		// reload defaults so new chats inherit persisted state
 		this.preferences.resetPending();
+	}
+
+	/** One-shot handoff of the messages the last loadConversation read. */
+	consumeLastLoadedMessages(convId: string): DatabaseMessage[] | null {
+		if (this.lastLoadedMessages?.convId !== convId) return null;
+
+		const messages = this.lastLoadedMessages.messages;
+
+		this.lastLoadedMessages = null;
+
+		return messages;
 	}
 
 	/**
@@ -512,22 +530,15 @@ class ConversationsStore implements ConversationsPreferencesHost {
 			// it doesn't belong to this conversation.
 			this.preferences.pendingCwd = null;
 
+			const allMessages = await DatabaseService.getConversationMessages(convId);
+
+			// set conversation and messages in one sync block so effects never see
+			// the new conversation with the previous conversation's messages
+			this.lastLoadedMessages = { convId, messages: allMessages };
 			this.activeConversation = conversation;
-
-			if (conversation.currNode) {
-				const allMessages = await DatabaseService.getConversationMessages(convId);
-				const filteredMessages = filterByLeafNodeId(
-					allMessages,
-					conversation.currNode,
-					false
-				) as DatabaseMessage[];
-
-				this.activeMessages = filteredMessages;
-			} else {
-				const messages = await DatabaseService.getConversationMessages(convId);
-
-				this.activeMessages = messages;
-			}
+			this.activeMessages = conversation.currNode
+				? (filterByLeafNodeId(allMessages, conversation.currNode, false) as DatabaseMessage[])
+				: allMessages;
 
 			return true;
 		} catch (error) {

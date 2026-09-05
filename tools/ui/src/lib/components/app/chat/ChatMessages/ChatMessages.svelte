@@ -97,9 +97,17 @@
 		const conversation = conversationsStore.activeConversation;
 
 		if (conversation) {
-			conversationsStore.getConversationMessages(conversation.id).then((messages) => {
-				allConversationMessages = messages;
-			});
+			// reuse the array loadConversation just read, when present; branch
+			// actions fall through to a fresh fetch
+			const preloaded = conversationsStore.consumeLastLoadedMessages(conversation.id);
+
+			if (preloaded) {
+				allConversationMessages = preloaded;
+			} else {
+				conversationsStore.getConversationMessages(conversation.id).then((messages) => {
+					allConversationMessages = messages;
+				});
+			}
 		} else {
 			allConversationMessages = [];
 		}
