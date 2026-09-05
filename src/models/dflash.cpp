@@ -139,10 +139,12 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
             throw std::runtime_error("DFlash2 hidden size is too small for the selector lattice");
         }
 
-        // the successor/predecessor tables are consumed by the CPU-side selector straight
-        // from the GGUF file, so they are not loaded into device memory
-        create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_PREV,   "weight"), { rank, n_vocab }, TENSOR_SKIP);
-        create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_NEXT,   "weight"), { rank, n_vocab }, TENSOR_SKIP);
+        // Under tensor parallelism the lm_head is split along the vocabulary, which the
+        // in-graph selector cannot consume, so DFlash2 ranks on the CPU and reads these tables
+        // straight from the GGUF file; otherwise the in-graph selector uses them in the model
+        const bool use_cpu_selector = params.split_mode == LLAMA_SPLIT_MODE_TENSOR;
+        dflash_selector_prev   = create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_PREV,   "weight"), { rank, n_vocab }, use_cpu_selector ? TENSOR_SKIP : 0);
+        dflash_selector_next   = create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_NEXT,   "weight"), { rank, n_vocab }, use_cpu_selector ? TENSOR_SKIP : 0);
         dflash_selector_hidden = create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_HIDDEN, "weight"), { n_embd, rank }, 0);
 
         LLAMA_LOG_INFO("%s: DFlash2 conv kernel = %u, group = %u, selector rank = %u, top-k = %u\n", __func__,
@@ -479,6 +481,102 @@ static ggml_tensor * build_dflash2_conv(
     return result;
 }
 
+// DFlash2 selector (no tensor parallelism): top-k candidates per block position plus the
+// pairwise transition scores, packed into the nextn output slot for the CPU-side walk.
+// Under tensor parallelism the lm_head is split, so the same candidate math runs on the host
+// via load_dflash2_selector()/build_dflash2_selector_cpu() in common/speculative.cpp;
+// keep the two implementations in sync.
+static void build_dflash2_selector(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens) {
+    ggml_context * ctx0 = g.ctx0;
+    auto         & res  = g.res;
+
+    const auto & hparams = g.hparams;
+    const int64_t n_tokens = g.n_tokens;
+    const int64_t n_embd   = g.n_embd;
+
+    const int64_t top_k    = hparams.dflash_selector_top_k;
+    const int64_t rank     = hparams.dflash_selector_rank;
+    const int64_t n_blocks = g.ubatch.n_seqs_unq;
+    GGML_ASSERT(n_blocks > 0 && n_tokens % n_blocks == 0);
+    GGML_ASSERT(res->t_logits->ne[1] == n_tokens);
+    if (!tokens) {
+        return;
+    }
+
+    const int64_t tokens_per_block = n_tokens / n_blocks;
+    const int64_t block_size = std::min<int64_t>(tokens_per_block, hparams.dflash_block_size);
+    const int64_t row_used   = top_k + top_k * top_k;
+
+    ggml_tensor * candidates  = ggml_top_k(ctx0, res->t_logits, top_k);
+    ggml_tensor * logits_rows = ggml_reshape_3d(ctx0, res->t_logits, 1, res->t_logits->ne[0], n_tokens);
+    ggml_tensor * unary       = ggml_reshape_2d(ctx0,
+            ggml_get_rows(ctx0, logits_rows, candidates), top_k, n_tokens);
+    ggml_tensor * gate        = g.build_lora_mm(model.dflash_selector_hidden, res->t_embd);
+
+    // Everything below indexes [.., tokens_per_block, n_blocks]: the block
+    // position varies fastest, sequences are the outer dimension.
+    ggml_tensor * cand_blk  = ggml_reshape_3d(ctx0, candidates, top_k, tokens_per_block, n_blocks);
+    ggml_tensor * unary_blk = ggml_reshape_3d(ctx0, unary,      top_k, tokens_per_block, n_blocks);
+    ggml_tensor * gate_blk  = ggml_reshape_3d(ctx0, gate,       rank,  tokens_per_block, n_blocks);
+
+    // a position's score reads only the candidate sets at pos-1 and pos, so a run
+    // of positions has no internal dependency and scores in one batched matmul
+    auto score_run = [&](int64_t beg_pos, int64_t n_pos, ggml_tensor * pred_ids) {
+        ggml_tensor * cand_run = ggml_cont(ctx0, ggml_view_3d(ctx0, cand_blk, top_k, n_pos, n_blocks,
+                    cand_blk->nb[1], cand_blk->nb[2], beg_pos * cand_blk->nb[1]));
+        ggml_tensor * unary_run = ggml_cont(ctx0, ggml_view_3d(ctx0, unary_blk, top_k, n_pos, n_blocks,
+                    unary_blk->nb[1], unary_blk->nb[2], beg_pos * unary_blk->nb[1]));
+        ggml_tensor * gate_run = ggml_cont(ctx0, ggml_view_3d(ctx0, gate_blk, rank, n_pos, n_blocks,
+                    gate_blk->nb[1], gate_blk->nb[2], beg_pos * gate_blk->nb[1]));
+
+        const int64_t n_pred = pred_ids->ne[0] / (n_pos * n_blocks);
+
+        ggml_tensor * successor = ggml_reshape_4d(ctx0,
+                ggml_get_rows(ctx0, model.dflash_selector_next, ggml_reshape_1d(ctx0, cand_run, top_k * n_pos * n_blocks)),
+                rank, top_k, n_pos, n_blocks);
+        ggml_tensor * predecessor = ggml_reshape_4d(ctx0,
+                ggml_get_rows(ctx0, model.dflash_selector_prev, pred_ids),
+                rank, n_pred, n_pos, n_blocks);
+
+        ggml_tensor * gate_bcast = ggml_reshape_4d(ctx0, gate_run, rank, 1, n_pos, n_blocks);
+        ggml_tensor * cond  = ggml_mul(ctx0, predecessor, ggml_repeat(ctx0, gate_bcast, predecessor));
+        ggml_tensor * score = ggml_mul_mat(ctx0, successor, cond);
+        if (n_pred == 1) {
+            score = ggml_repeat_4d(ctx0, score, top_k, top_k, n_pos, n_blocks);
+        }
+        ggml_tensor * unary_bcast = ggml_reshape_4d(ctx0, unary_run, top_k, 1, n_pos, n_blocks);
+        score = ggml_add(ctx0, score, ggml_repeat(ctx0, unary_bcast, score));
+
+        ggml_tensor * row = ggml_concat(ctx0,
+                ggml_cast(ctx0, cand_run, GGML_TYPE_F32),
+                ggml_reshape_3d(ctx0, score, top_k * top_k, n_pos, n_blocks), 0);
+        return ggml_pad(ctx0, row, n_embd - row_used, 0, 0, 0);
+    };
+
+    ggml_tensor * packed = ggml_fill(ctx0,
+            ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_embd, 1, n_blocks), 0.0f);
+
+    if (block_size > 1) {
+        // Position 1 alone: its predecessor is the anchor token, one id per
+        // sequence rather than a candidate set.
+        ggml_tensor * anchor_ids = ggml_cont_1d(ctx0,
+                ggml_view_2d(ctx0, tokens, 1, n_blocks, tokens_per_block * tokens->nb[0], 0), n_blocks);
+        packed = ggml_concat(ctx0, packed, score_run(1, 1, anchor_ids), 1);
+    }
+    if (block_size > 2) {
+        ggml_tensor * prev_ids = ggml_reshape_1d(ctx0,
+                ggml_cont(ctx0, ggml_view_3d(ctx0, cand_blk, top_k, block_size - 2, n_blocks,
+                        cand_blk->nb[1], cand_blk->nb[2], cand_blk->nb[1])),
+                top_k * (block_size - 2) * n_blocks);
+        packed = ggml_concat(ctx0, packed, score_run(2, block_size - 2, prev_ids), 1);
+    }
+
+    packed = ggml_reshape_2d(ctx0, packed, n_embd, block_size * n_blocks);
+    g.cb(packed, "dflash2_lattice", -1);
+    res->t_h_nextn = packed;
+    ggml_build_forward_expand(g.gf, packed);
+}
+
 // DFlash decoder, dual-mode by batch type:
 //   * embd batch  -> fused target features: project + inject K/V into the cache.
 //   * token batch -> noise-block diffusion: attend over [committed, MASK...] to generate draft tokens
@@ -679,10 +777,10 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     res->t_embd = cur;
 
-    // DFlash2's candidate lattice is built on the CPU by the speculative implementation from
-    // the lm_head output (which may be split across devices), so expose the decoder hidden
-    // states through the nextn slot that the implementation already reads
-    if (model.dflash_selector_hidden) {
+    // DFlash2 under tensor parallelism ranks on the CPU from the gathered lm_head output, so
+    // the decoder hidden states ride the nextn slot; without tensor parallelism the in-graph
+    // selector packs its lattice there instead (see below)
+    if (model.dflash_selector_hidden && model.split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
         res->t_h_nextn = cur;
     }
 
@@ -699,8 +797,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     cur = build_lora_mm(output, cur, output_s);
 
-    // DFlash2 feeds these logits to the CPU-side selector, so they need the target's
-    // output transforms; DFlash1 and DSpark read them through the sampler instead
+    // DFlash2 feeds these logits to its candidate selector (in-graph or on the CPU after
+    // gathering), so they need the target's output transforms; DFlash1 and DSpark read them
+    // through the sampler instead
     if (model.dflash_selector_hidden) {
         if (hparams.f_logit_scale != 0.0f) {
             cur = ggml_scale(ctx0, cur, hparams.f_logit_scale);
@@ -735,6 +834,11 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     // DSpark: bias the draft logits with the Markov head
     if (model.dspark_markov_w1) {
         build_dspark_markov_head(*this, model, inp_tokens);
+    }
+
+    // DFlash2 ranks its candidates in-graph when the lm_head is not split along the vocabulary
+    if (model.dflash_selector_hidden && model.split_mode() != LLAMA_SPLIT_MODE_TENSOR) {
+        build_dflash2_selector(*this, model, inp_tokens);
     }
 }
 
