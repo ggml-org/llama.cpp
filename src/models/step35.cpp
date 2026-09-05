@@ -216,9 +216,11 @@ llama_model_step35::graph::graph(const llama_model & model, const llm_graph_para
         {
             cur = build_norm(cur, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head_k, n_head_l,
+                    n_embd_head_k, n_head_kv_l,
+                    n_embd_head_v, n_head_kv_l,
+                    il, false);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -425,9 +427,11 @@ llama_model_step35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
     cb(cur, "mtp_attn_norm", il);
 
-    ggml_tensor * Qcur = build_lora_mm(layer.wq, cur, layer.wq_s);
-    ggml_tensor * Kcur = build_lora_mm(layer.wk, cur, layer.wk_s);
-    ggml_tensor * Vcur = build_lora_mm(layer.wv, cur, layer.wv_s);
+    auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur,
+            n_embd_head_k, n_head_l,
+            n_embd_head_k, n_head_kv_l,
+            n_embd_head_v, n_head_kv_l,
+            il, false);
     cb(Qcur, "mtp_Qcur", il);
     cb(Kcur, "mtp_Kcur", il);
     cb(Vcur, "mtp_Vcur", il);

@@ -40,9 +40,7 @@ void llama_model_deepseek2ocr::load_arch_tensors(llama_model_loader &) {
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
 
-        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd}, 0);
-        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", i), {n_embd, n_embd}, 0);
-        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", i), {n_embd, n_embd}, 0);
+        create_tensor_qkv(layer, i, n_embd, n_embd, n_embd, n_embd, 0);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
 
         // norm
