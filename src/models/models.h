@@ -856,6 +856,11 @@ struct llama_model_gemma3n : public llama_model_base {
 
 struct llama_model_gemma4 : public llama_model_base {
     llama_model_gemma4(const struct llama_model_params & params) : llama_model_base(params) {}
+
+    // --lazy-mode on-direct: pread() the lazy per-layer table rows
+    // host-side instead of faulting them in through the mmap; see gemma4.cpp
+    const llama_lazy_reader * ple_reader = nullptr;
+
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -2342,6 +2347,10 @@ struct llama_model_qwen4exp : public llama_model_base {
     llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
 
     class llm_graph_input_qsa;
+
+    // --lazy-mode on-direct: pread() the lazy PLE table rows
+    // host-side instead of faulting them in through the mmap; see qwen4exp.cpp
+    const llama_lazy_reader * ple_reader = nullptr;
 
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;

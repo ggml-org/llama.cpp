@@ -33,7 +33,7 @@ void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
+void llama_model_gemma4::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     const uint32_t n_embd_per_layer = hparams.n_embd_per_layer;
@@ -58,6 +58,8 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
         per_layer_tok_embd   = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),    {n_embd_per_layer * n_layer, n_vocab}, TENSOR_READ_LAZY);
         per_layer_model_proj = create_tensor(tn(LLM_TENSOR_PER_LAYER_MODEL_PROJ, "weight", 0), {n_embd, n_embd_per_layer * n_layer}, 0);
         per_layer_proj_norm  = create_tensor(tn(LLM_TENSOR_PER_LAYER_PROJ_NORM,  "weight", 0), {n_embd_per_layer}, 0);
+
+        ple_reader = load_lazy_reader(ml, tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").str().c_str(), per_layer_tok_embd);
     }
 
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
@@ -413,24 +415,65 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     ggml_build_forward_expand(gf, cur);
 }
 
+// --lazy-mode on-direct: stage the per-layer rows host-side instead of
+// letting ggml_get_rows demand-fault them in through the mmap. Row indices
+// are the token ids of the ubatch, known before the graph runs.
+class llm_graph_input_gemma4_ple : public llm_graph_input_i {
+public:
+    explicit llm_graph_input_gemma4_ple(const llama_lazy_reader * reader) : reader(reader) {}
+
+    void set_input(const llama_ubatch * ubatch) override {
+        if (!ubatch->token) {
+            return; // multimodal batches use the static row-0 path, no gather
+        }
+
+        staging.resize(ubatch->n_tokens * reader->head_dim * sizeof(float));
+        reader->gather(ubatch->token, ubatch->n_tokens, (float *) staging.data());
+        ggml_backend_tensor_set(data, staging.data(), 0, staging.size());
+    }
+
+    bool can_reuse(const llm_graph_params & params) override {
+        return (!params.ubatch.token) || (data && data->ne[1] == (int64_t) params.ubatch.n_tokens);
+    }
+
+    ggml_tensor * data = nullptr; // F32 [row_elems, n_tokens]
+
+private:
+    const llama_lazy_reader * reader;
+
+    // scratch, reused across set_input() calls
+    std::vector<uint8_t> staging;
+};
+
 // equivalent to get_per_layer_inputs() in python code
 // output shape: [n_embd_per_layer, n_layer, n_tokens]
 ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
-
     ggml_tensor * inp_per_layer;
     float tok_embd_scale = sqrtf((float) n_embd_per_layer);
     if (ubatch.token) {
-        inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
-        ggml_set_input(inp->tokens);
-        res->t_inp_tokens = inp->tokens;
+        if (static_cast<const llama_model_gemma4 &>(model).ple_reader) {
+            // --lazy-mode on-direct: the reader stages the per-layer rows
+            // host-side, so the table pages are never touched by the graph
+            auto inp = std::make_unique<llm_graph_input_gemma4_ple>(static_cast<const llama_model_gemma4 &>(model).ple_reader);
+            inp->data = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, model.per_layer_tok_embd->ne[0], ubatch.n_tokens);
+            ggml_set_input(inp->data);
+            ggml_tensor * data = inp->data;
+            res->add_input(std::move(inp));
 
-        inp_per_layer = ggml_get_rows  (ctx0, model.per_layer_tok_embd, inp->tokens);
-        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, n_tokens);
-        inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
+            inp_per_layer = ggml_reshape_3d(ctx0, data, n_embd_per_layer, n_layer, n_tokens);
+        } else {
+            auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+            inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
+            ggml_set_input(inp->tokens);
+            res->t_inp_tokens = inp->tokens;
+
+            inp_per_layer = ggml_get_rows(ctx0, model.per_layer_tok_embd, inp->tokens);
+            inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, n_tokens);
+
+            res->add_input(std::move(inp));
+        }
+        inp_per_layer = ggml_scale(ctx0, inp_per_layer, tok_embd_scale);
         cb(inp_per_layer, "inp_per_layer_selected", -1);
-
-        res->add_input(std::move(inp));
     } else {
         // Multimodal embedding path: use padding token (ID=0) embedding
         // TODO: verify if this is the correct behavior in transformers implementation

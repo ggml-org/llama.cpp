@@ -186,6 +186,10 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
 
         per_layer_tok_embd = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),
                                            { hparams.ple_head_dim, ple_rows }, TENSOR_READ_LAZY);
+
+        // --lazy-mode on-direct: read the gathered rows with explicit pread()s
+        // instead of faulting them in through the mmap
+        ple_reader = load_lazy_reader(ml, ple_name.c_str(), per_layer_tok_embd);
     }
 
     for (int il = 0; il < n_layer; ++il) {
@@ -1034,10 +1038,12 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override {
         mctx = static_cast<const llama_memory_hybrid_idx_context *>(params.mctx)->get_attn();
-        return rows->ne[0] == (int64_t) pmodel.hparams.ple_n_heads * params.ubatch.n_tokens;
+        const int64_t n = (int64_t) pmodel.hparams.ple_n_heads * params.ubatch.n_tokens;
+        return pmodel.ple_reader ? data->ne[1] == n : rows->ne[0] == n;
     }
 
     ggml_tensor * rows = nullptr;   // I32 [ple_n_heads * n_tokens]
+    ggml_tensor * data = nullptr;   // direct mode: staged rows [ple_head_dim, ple_n_heads * n_tokens]
 
     const llama_model_qwen4exp & pmodel;
 
@@ -1046,6 +1052,7 @@ public:
 
     // scratch, reused across set_input() calls
     std::vector<llama_token> prev;
+    std::vector<uint8_t> staging; // direct mode: host side of `data`
 };
 
 void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
@@ -1108,7 +1115,13 @@ void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
         }
     }
 
-    ggml_backend_tensor_set(rows, idx.data(), 0, idx.size()*ggml_element_size(rows));
+    if (pmodel.ple_reader) {
+        staging.resize(idx.size() * pmodel.ple_reader->head_dim * sizeof(float));
+        pmodel.ple_reader->gather(idx.data(), (int64_t) idx.size(), (float *) staging.data());
+        ggml_backend_tensor_set(data, staging.data(), 0, staging.size());
+    } else {
+        ggml_backend_tensor_set(rows, idx.data(), 0, idx.size()*ggml_element_size(rows));
+    }
 }
 
 // Read a conv history out of its own recurrent row and write the new tail back.
@@ -1175,14 +1188,31 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
     auto ple_inp = std::make_unique<llm_graph_input_ple>(
             static_cast<const llama_model_qwen4exp &>(model), mctx_hyb->get_attn());
 
-    ple_inp->rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_heads * n_tokens);
-    ggml_set_input(ple_inp->rows);
-    ggml_tensor * rows = ple_inp->rows;
-    res->add_input(std::move(ple_inp));
+    ggml_tensor * emb = nullptr;
 
-    // gather then flatten the heads: get_rows lays the head dimension out slowest, as the reference does
-    ggml_tensor * emb = ggml_get_rows(ctx0, model.per_layer_tok_embd, rows);
-    emb = ggml_reshape_2d(ctx0, emb, hparams.ple_head_dim * n_heads, n_tokens);
+    if (static_cast<const llama_model_qwen4exp &>(model).ple_reader) {
+        // direct-read mode: set_input() pre-gathers the rows host-side, so the
+        // staged tensor replaces ggml_get_rows and the table pages stay untouched.
+        // F32 matches the ggml_get_rows output type, so the downstream mul_mats
+        // take the same kernels as the baseline path
+        ple_inp->data = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32,
+                                           hparams.ple_head_dim, n_heads * n_tokens);
+        ggml_set_input(ple_inp->data);
+        ggml_tensor * data = ple_inp->data;
+        res->add_input(std::move(ple_inp));
+
+        // flatten the heads the same way ggml_get_rows would: slowest dimension
+        emb = ggml_reshape_2d(ctx0, data, hparams.ple_head_dim * n_heads, n_tokens);
+    } else {
+        ple_inp->rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_heads * n_tokens);
+        ggml_set_input(ple_inp->rows);
+        ggml_tensor * rows = ple_inp->rows;
+        res->add_input(std::move(ple_inp));
+
+        // gather then flatten the heads: get_rows lays the head dimension out slowest, as the reference does
+        emb = ggml_get_rows(ctx0, model.per_layer_tok_embd, rows);
+        emb = ggml_reshape_2d(ctx0, emb, hparams.ple_head_dim * n_heads, n_tokens);
+    }
     cb(emb, "ple_embd", -1);
 
     return emb;
