@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
+	import LazyChatMessage from './LazyChatMessage.svelte';
+	import { ChatMessageUserPending } from '$lib/components/app';
 	import { MessageRole } from '$lib/enums';
 	import { agenticStore, chatStore, conversationsStore, settingsStore } from '$lib/stores';
 	import type { ChatMessageActions } from '$lib/types';
@@ -238,7 +239,7 @@
 
 <div>
 	{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
-		<ChatMessage
+		<LazyChatMessage
 			{chatActions}
 			class="mx-auto mt-12 w-full max-w-3xl"
 			{isLastAssistantMessage}
