@@ -4427,7 +4427,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     break;
                 }
                 if (ggml_webgpu_tensor_binding_overlap(ctx->webgpu_global_ctx, src1, src2) &&
-                    src1->type != src2->type && !ggml_is_quantized(src1->type) && !ggml_is_quantized(src2->type)) {
+                    src1->type != src2->type && !(ggml_is_quantized(src1->type) && ggml_is_quantized(src2->type))) {
                     supports_op = false;
                     break;
                 }
