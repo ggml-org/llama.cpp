@@ -1125,6 +1125,13 @@ common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p,
 
 common_peg_parser common_peg_parser_builder::rule(const std::string & name, const common_peg_parser & p, bool trigger) {
     auto clean_name = rule_name(name);
+    if (arena_.has_rule(clean_name)) {
+        // rule_name() is lossy (runs of non [a-zA-Z0-9-] characters collapse
+        // to '-'), so distinct rule names can collide after sanitization
+        // (e.g. "my-param" and "my_param"). Registering would silently
+        // replace the existing rule, so fail loudly instead.
+        throw std::runtime_error("rule already exists: " + clean_name);
+    }
     auto rule_id = arena_.add_parser(common_peg_rule_parser{clean_name, p.id(), trigger});
     arena_.add_rule(clean_name, rule_id);
     return ref(clean_name);
