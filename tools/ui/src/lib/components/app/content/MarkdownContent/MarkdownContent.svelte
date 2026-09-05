@@ -7,7 +7,6 @@
 		getMdastNodeHash,
 		isAppendMode
 	} from './markdown-utils';
-	import { browser } from '$app/environment';
 	import {
 		ActionIconCopyToClipboard,
 		CodeBlockActions,
@@ -153,8 +152,6 @@
 	 * @param isDark - Whether to load the dark theme (true) or light theme (false)
 	 */
 	function loadHighlightTheme(isDark: boolean) {
-		if (!browser) return;
-
 		document
 			.querySelectorAll(`style[${UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW}]`)
 			.forEach((style) => style.remove());
