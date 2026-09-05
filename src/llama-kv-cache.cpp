@@ -1412,6 +1412,7 @@ ggml_tensor * llama_kv_cache::build_input_k_idxs(ggml_context * ctx, const llama
     ggml_tensor * k_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens);
 
     ggml_set_input(k_idxs);
+    ggml_set_name(k_idxs, "attn_inp_k_idxs");
 
     return k_idxs;
 }
@@ -1428,6 +1429,7 @@ ggml_tensor * llama_kv_cache::build_input_v_idxs(ggml_context * ctx, const llama
     }
 
     ggml_set_input(v_idxs);
+    ggml_set_name(v_idxs, "attn_inp_v_idxs");
 
     return v_idxs;
 }
@@ -1477,7 +1479,7 @@ void llama_kv_cache::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ub
     const uint32_t n_tokens = ubatch->n_tokens;
     GGML_ASSERT(n_tokens == (int64_t) sinfo.size()*sinfo.n_stream());
 
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    llama_host_write(dst);
     int64_t * data = (int64_t *) dst->data;
 
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
@@ -1493,7 +1495,7 @@ void llama_kv_cache::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ub
     const uint32_t n_tokens = ubatch->n_tokens;
     GGML_ASSERT(n_tokens == (int64_t) sinfo.size()*sinfo.n_stream());
 
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    llama_host_write(dst);
     int64_t * data = (int64_t *) dst->data;
 
     if (!v_trans) {
@@ -1523,7 +1525,7 @@ void llama_kv_cache::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ub
 }
 
 void llama_kv_cache::set_input_k_shift(ggml_tensor * dst) const {
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    llama_host_write(dst);
 
     int32_t * data = (int32_t *) dst->data;
 
@@ -1744,7 +1746,7 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
 void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
     const uint32_t n_tokens = ubatch->n_tokens;
 
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    llama_host_write(dst);
 
     const int64_t n_kv     = dst->ne[0];
     const int64_t n_stream = dst->ne[3]; // num streams in the current ubatch
@@ -1791,7 +1793,7 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
     GGML_ASSERT(n_stream == 1 && "TODO: support multiple streams");
     const auto & cells = v_cells[0];
 
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    llama_host_write(dst);
     GGML_ASSERT(!ubatch->equal_seqs()); // TODO: use ubatch->n_seqs instead of failing
 
     int32_t * data = (int32_t *) dst->data;
@@ -1811,7 +1813,7 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
 }
 
 void llama_kv_cache::set_input_k_rot(ggml_tensor * dst) const {
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    llama_host_write(dst);
 
     const auto n_rot = dst->ne[0];
     GGML_ASSERT(attn_rot_hadamard.count(dst->ne[0]));
@@ -1820,7 +1822,7 @@ void llama_kv_cache::set_input_k_rot(ggml_tensor * dst) const {
 }
 
 void llama_kv_cache::set_input_v_rot(ggml_tensor * dst) const {
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    llama_host_write(dst);
 
     const auto n_rot = dst->ne[0];
     GGML_ASSERT(attn_rot_hadamard.count(dst->ne[0]));
@@ -2009,6 +2011,7 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 
     inp->k_shift = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, (int64_t) get_size()*n_stream);
     ggml_set_input(inp->k_shift);
+    ggml_set_name(inp->k_shift, "inp_k_shift");
 
     inp->k_rot = build_input_k_rot(ctx);
 

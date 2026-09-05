@@ -2587,6 +2587,31 @@ static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
     return cgraph->nodes[0];
 }
 
+static ggml_cuda_graph::node_properties ggml_cuda_graph_node_props(const ggml_tensor * node) {
+    ggml_cuda_graph::node_properties prop = {};
+    memcpy(&prop.node, node, sizeof(ggml_tensor));
+
+    for (int j = 0; j < GGML_MAX_SRC; ++j) {
+        if (node->src[j]) {
+            prop.node_src_data_ptrs[j] = node->src[j]->data;
+            memcpy(prop.node_src_ne[j], node->src[j]->ne, sizeof(prop.node_src_ne[j]));
+            memcpy(prop.node_src_nb[j], node->src[j]->nb, sizeof(prop.node_src_nb[j]));
+        }
+    }
+
+    return prop;
+}
+
+static bool ggml_cuda_graph_verify_uid() {
+#ifndef NDEBUG
+    return true;
+#else
+    static const bool verify = getenv("GGML_CUDA_GRAPH_VERIFY_UID") != nullptr;
+    return verify;
+#endif
+}
+
+// see docs/development/backend-scheduler.md
 static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
     bool res = false;
 
@@ -2597,6 +2622,16 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
         cgraph->uid == graph->uid) {
         GGML_LOG_DEBUG("CUDA Graph id %zu reused\n", cgraph->uid);
         GGML_ASSERT((int)graph->node_props.size() == cgraph->n_nodes);
+        if (ggml_cuda_graph_verify_uid()) {
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                const ggml_cuda_graph::node_properties prop = ggml_cuda_graph_node_props(cgraph->nodes[i]);
+                if (memcmp(&graph->node_props[i], &prop, sizeof(prop)) != 0) {
+                    GGML_LOG_ERROR("%s: node %d (%s) changed while cgraph->uid stayed %llu\n",
+                            __func__, i, cgraph->nodes[i]->name, (unsigned long long) cgraph->uid);
+                    GGML_ABORT("CUDA graph uid reused after node properties changed - see [TAG_CUDA_GRAPH_UID]");
+                }
+            }
+        }
         return false;
     }
 
@@ -2609,16 +2644,7 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
     }
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        ggml_cuda_graph::node_properties prop = {};
-        memcpy(&prop.node, cgraph->nodes[i], sizeof(ggml_tensor));
-
-        for (int j = 0; j < GGML_MAX_SRC; ++j) {
-            if (cgraph->nodes[i]->src[j]) {
-                prop.node_src_data_ptrs[j] = cgraph->nodes[i]->src[j]->data;
-                memcpy(prop.node_src_ne[j], cgraph->nodes[i]->src[j]->ne, sizeof(prop.node_src_ne[j]));
-                memcpy(prop.node_src_nb[j], cgraph->nodes[i]->src[j]->nb, sizeof(prop.node_src_nb[j]));
-            }
-        }
+        const ggml_cuda_graph::node_properties prop = ggml_cuda_graph_node_props(cgraph->nodes[i]);
 
         if (res || memcmp(&graph->node_props[i], &prop, sizeof(prop)) != 0) {
             graph->node_props[i] = prop;

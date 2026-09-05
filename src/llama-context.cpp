@@ -1348,12 +1348,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
 
-        // with pipeline parallelism, the previous graph_compute_async may still be running
-        // on the GPU. we must synchronize before set_inputs to avoid overwriting input tensors
-        // that the previous compute is still reading.
-        if (cparams.pipeline_parallel) {
-            ggml_backend_sched_synchronize(sched.get());
-        }
+        ggml_backend_sched_prepare_inputs(sched.get());
 
         n_reused++;
     } else {
