@@ -3772,6 +3772,108 @@ class tinyBLAS_PPC {
 #endif
 } // namespace
 
+// Tiled TQ2_0 x Q8_K prefill kernel.
+//
+// ggml's own vec_dot for this pair (ggml_vec_dot_tq2_0_q8_K) re-unpacks a weight row's 2-bit
+// codes from scratch on EVERY (row, column) pair it is asked to compute -- fine at n=1
+// (decode), wasteful at prefill batch sizes where a row's bits are identical across all n
+// columns. This kernel unpacks each block once per row and sweeps it across every column.
+//
+// Activations arrive here token-major (B[token][block], ggml's native quantize_row_q8_K
+// layout) but the sweep-across-columns access pattern needs them block-major
+// (B[block][token]) to stay sequential -- transposing them first is a measured ~0.01-0.06 ms
+// against multi-millisecond GEMM times, so it is done unconditionally rather than optimized
+// away. Each thread transposes independently (no cross-thread synchronization needed) since
+// the cost is negligible even repeated once per thread.
+//
+// Thread partitioning is a static, non-overlapping split of output rows (matching ggml's own
+// dense mul_mat partitioning) -- no barriers needed since each thread's writes are disjoint.
+#if defined(__ARM_FEATURE_DOTPROD)
+typedef struct { int8x16_t v[16]; } tq2_0_unpacked_block_t;
+
+static inline void tq2_0_unpack_subchunk(const uint8_t *qs, int8x16_t *v) {
+    const uint8x16_t m3 = vdupq_n_u8(3);
+    uint8x16_t qx0 = vld1q_u8(qs);
+    uint8x16_t qx1 = vld1q_u8(qs + 16);
+    v[0] = vreinterpretq_s8_u8(vandq_u8(qx0, m3));
+    v[1] = vreinterpretq_s8_u8(vandq_u8(qx1, m3));
+    v[2] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(qx0, 2), m3));
+    v[3] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(qx1, 2), m3));
+    v[4] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(qx0, 4), m3));
+    v[5] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(qx1, 4), m3));
+    v[6] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(qx0, 6), m3));
+    v[7] = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(qx1, 6), m3));
+}
+
+static inline tq2_0_unpacked_block_t tq2_0_unpack_block(const block_tq2_0 *b) {
+    tq2_0_unpacked_block_t u;
+    tq2_0_unpack_subchunk(b->qs, u.v);
+    tq2_0_unpack_subchunk(b->qs + 32, u.v + 8);
+    return u;
+}
+
+// One (row, col) contribution from a pre-unpacked block -- bit-for-bit the same arithmetic and
+// accumulation order as ggml_vec_dot_tq2_0_q8_K's own per-block body (same SDOT pairing, same
+// bsums bias correction), just given a place to live so it can be reused across columns.
+static inline float tq2_0_block_dot(const tq2_0_unpacked_block_t *u, const block_tq2_0 *xb,
+                                    const block_q8_K *yb) {
+    int32x4_t sumi0 = vdupq_n_s32(0);
+    int32x4_t sumi1 = vdupq_n_s32(0);
+    for (int kk = 0; kk < 16; kk += 2) {
+        sumi0 = vdotq_s32(sumi0, u->v[kk], vld1q_s8(yb->qs + kk * 16));
+        sumi1 = vdotq_s32(sumi1, u->v[kk + 1], vld1q_s8(yb->qs + kk * 16 + 16));
+    }
+    const int16x8_t ysum0 = vld1q_s16(yb->bsums);
+    const int16x8_t ysum1 = vld1q_s16(yb->bsums + 8);
+    sumi0 = vaddq_s32(sumi0, sumi1);
+    sumi0 = vsubq_s32(sumi0, vpaddlq_s16(vaddq_s16(ysum0, ysum1)));
+    const float d = GGML_CPU_FP16_TO_FP32(xb->d) * yb->d;
+    return d * (float)vaddvq_s32(sumi0);
+}
+
+static bool llamafile_sgemm_tq2_0_q8_K(const struct ggml_compute_params *params,
+                                       int64_t m, int64_t n, int64_t nb,
+                                       const block_tq2_0 *A, int64_t lda,
+                                       const block_q8_K *B, int64_t ldb,
+                                       float *C, int64_t ldc) {
+    // n < 2 (decode) never reaches here: llamafile_sgemm's own caller-facing guard above
+    // already returns false for n < 2 on non-MMA builds, before the Atype switch runs.
+    block_q8_K *Ybm = (block_q8_K *)malloc((size_t)nb * n * sizeof(block_q8_K));
+    if (!Ybm) {
+        return false; // fall back to the existing per-pair path rather than fail the op
+    }
+    for (int64_t t = 0; t < n; ++t)
+        for (int64_t b = 0; b < nb; ++b)
+            Ybm[b * n + t] = B[t * ldb + b];
+
+    const int ith = params->ith, nth = params->nth;
+    const int64_t row_lo = (m * ith) / nth, row_hi = (m * (ith + 1)) / nth;
+
+    float *acc = (float *)malloc((size_t)n * sizeof(float));
+    if (!acc) {
+        free(Ybm);
+        return false;
+    }
+
+    for (int64_t row = row_lo; row < row_hi; ++row) {
+        const block_tq2_0 *wrow = A + row * lda;
+        memset(acc, 0, (size_t)n * sizeof(float));
+        for (int64_t b = 0; b < nb; ++b) {
+            tq2_0_unpacked_block_t u = tq2_0_unpack_block(&wrow[b]);
+            const block_q8_K *ycol = Ybm + b * n;
+            for (int64_t t = 0; t < n; ++t)
+                acc[t] += tq2_0_block_dot(&u, &wrow[b], &ycol[t]);
+        }
+        for (int64_t t = 0; t < n; ++t)
+            C[t * ldc + row] = acc[t];
+    }
+
+    free(acc);
+    free(Ybm);
+    return true;
+}
+#endif // __ARM_FEATURE_DOTPROD
+
 /**
  * Performs optimized matrix multiplication on CPU.
  *
@@ -4139,6 +4241,19 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
             params->ith, params->nth};
         tb.matmul(m, n);
         return true;
+#else
+        return false;
+#endif
+    }
+
+    case GGML_TYPE_TQ2_0: {
+        if (Btype != GGML_TYPE_Q8_K)
+            return false;
+#if defined(__ARM_FEATURE_DOTPROD)
+        return llamafile_sgemm_tq2_0_q8_K(params, m, n, k,
+                                          (const block_tq2_0 *)A, lda,
+                                          (const block_q8_K *)B, ldb,
+                                          (float *)C, ldc);
 #else
         return false;
 #endif

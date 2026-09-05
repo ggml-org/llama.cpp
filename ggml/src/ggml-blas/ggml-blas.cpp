@@ -423,6 +423,13 @@ static bool ggml_backend_blas_device_supports_op(ggml_backend_dev_t dev, const s
                 return false;
             }
 
+            // TQ2_0 now has a dedicated tiled CPU kernel (llamafile_sgemm) that keeps the
+            // ternary arithmetic and beats BLAS's dequantize-to-fp32 path; claiming it here
+            // would silently discard that kernel the way it always has.
+            if (src0->type == GGML_TYPE_TQ2_0) {
+                return false;
+            }
+
             return ggml_is_contiguous(src0) &&
                    ggml_is_contiguous(src1) &&
                    src1->type == GGML_TYPE_F32 &&

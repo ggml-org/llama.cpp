@@ -9599,6 +9599,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Prefill-batch coverage for TQ2_0's row-tiled llamafile_sgemm path: the generic sweep
+    // above only reaches n=8/9, too small to exercise a row's weights being reused across many
+    // columns. n=64 and n=512 cover a moderate and a prefill-representative batch, at k=768
+    // and k=3072 (3 and 12 TQ2_0 blocks per row) to cover more than one block-per-row.
+    for (int64_t n : { 64, 512 }) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ2_0, GGML_TYPE_F32, 256, n, 768,  { 1, 1 }, { 1, 1 }));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_TQ2_0, GGML_TYPE_F32, 256, n, 3072, { 1, 1 }, { 1, 1 }));
+    }
+
     // The SYCL backend picks between one and two output rows per subgroup by row count when there
     // are two destination columns (Q4_K_MMVQ_ROW_PAIR_MIN_NROWS in ggml-sycl/mmvq.cpp). Cover both
     // sides of that boundary, including an odd row count above it for the row-pair tail.
