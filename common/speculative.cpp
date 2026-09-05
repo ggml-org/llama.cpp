@@ -44,6 +44,15 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"ngram-cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
 };
 
+common_params_speculative common_speculative_default_config() {
+    common_params_speculative result;
+    result.types = { COMMON_SPECULATIVE_TYPE_NGRAM_MOD };
+    result.ngram_mod.n_match = 24;
+    result.ngram_mod.n_min   = 48;
+    result.ngram_mod.n_max   = 64;
+    return result;
+}
+
 static std::string common_speculative_get_devices_str(const std::vector<ggml_backend_dev_t> & devices) {
     std::string result;
     for (size_t i = 0; i < devices.size(); i++) {

@@ -355,7 +355,7 @@ static std::string get_default_local_path(const std::string & url) {
 }
 
 static bool spec_types_is_default(const common_params & params) {
-    return params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE};
+    return !params.speculative.spec_type_specified;
 }
 
 common_models_handler common_models_handler_init(const common_params & params, llama_example curr_ex) {
@@ -1401,8 +1401,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     } else if (ex == LLAMA_EXAMPLE_MTMD) {
         params.use_jinja = false;   // disable jinja by default
         params.sampling.temp = 0.2; // lower temp by default for better quality
-    } else if (ex == LLAMA_EXAMPLE_SERVER) {
-        params.n_parallel = -1;     // auto by default
+    } else if (ex == LLAMA_EXAMPLE_SERVER || ex == LLAMA_EXAMPLE_CLI) {
+        params.speculative = common_speculative_default_config();
+        if (ex == LLAMA_EXAMPLE_SERVER) {
+            params.n_parallel = -1; // auto by default
+        }
     } else if (ex == LLAMA_EXAMPLE_TOKENIZE) {
         params.parse_special = true; // parse special tokens by default, like the old tokenize tool
     } else if (ex == LLAMA_EXAMPLE_TTS) {
@@ -4262,9 +4265,48 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             const auto types_str = string_split<std::string>(value, ',');
             auto types = common_speculative_types_from_names(types_str);
-            params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
+
+            params.speculative.spec_type_specified = true;
+
+            if (types.size() == 1 && types.front() == COMMON_SPECULATIVE_TYPE_NONE) {
+                params.speculative.types = { COMMON_SPECULATIVE_TYPE_NONE };
+                return;
+            }
+
+            params.speculative.types.erase(
+                std::remove(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_NONE),
+                params.speculative.types.end());
+
+            for (const auto & type : types) {
+                if (std::find(params.speculative.types.begin(), params.speculative.types.end(), type) == params.speculative.types.end()) {
+                    params.speculative.types.push_back(type);
+                }
+            }
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
+    add_opt(common_arg(
+        {"--no-spec-type"}, common_speculative_all_types_str(),
+        string_format("comma-separated list of types of speculative decoding to remove\n"),
+        [](common_params & params, const std::string & value) {
+            const auto types_str = string_split<std::string>(value, ',');
+            auto types = common_speculative_types_from_names(types_str);
+
+            if (types.size() == 1 && types.front() == COMMON_SPECULATIVE_TYPE_NONE) {
+                params.speculative.spec_type_specified = true;
+                params.speculative.types = { COMMON_SPECULATIVE_TYPE_NONE };
+                return;
+            }
+
+            for (const auto & type : types) {
+                params.speculative.types.erase(
+                    std::remove(params.speculative.types.begin(), params.speculative.types.end(), type),
+                    params.speculative.types.end());
+            }
+            if (params.speculative.types.empty()) {
+                params.speculative.types = { COMMON_SPECULATIVE_TYPE_NONE };
+            }
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_NO_SPEC_TYPE"));
     add_opt(common_arg(
         {"--spec-ngram-mod-n-min"}, "N",
         string_format("minimum number of ngram tokens to use for ngram-based speculative decoding (default: %d)", params.speculative.ngram_mod.n_min),
@@ -4731,20 +4773,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
 
     add_opt(common_arg(
         {"--spec-default"},
-        string_format("enable default speculative decoding config"),
-        [](common_params & params) {
-            params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_NGRAM_MOD);
-            params.speculative.ngram_mod.n_match = 24;
-            params.speculative.ngram_mod.n_min = 48;
-            params.speculative.ngram_mod.n_max = 64;
-
-            // TODO: not sure if this is a good config - explore more settings and potentially enable it
-            //params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
-            //params.speculative.ngram_map_k4v.size_n = 8;
-            //params.speculative.ngram_map_k4v.size_m = 24;
-            //params.speculative.ngram_map_k4v.min_hits = 2;
+        string_format("DEPRECATED: default speculative decoding is enabled by default, use --no-spec-type to remove types"),
+        [](common_params &) {
+            LOG_WRN("DEPRECATED: --spec-default is no longer needed; default speculative decoding is enabled by default\n");
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
     return ctx_arg;
 }

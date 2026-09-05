@@ -226,10 +226,12 @@ Use exactly one of these options:
 ```
 --spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
                                         comma-separated list of types of speculative decoding to use
-                                        (default: none)
+                                        (default: server/CLI default config, none for other tools)
                                         (env: LLAMA_ARG_SPEC_TYPE)
---spec-default                          use default speculative decoding config
-                                        (enables ngram-mod)
+--no-spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+                                        comma-separated list of types of speculative decoding to remove
+                                        (env: LLAMA_ARG_NO_SPEC_TYPE)
+--spec-default                          DEPRECATED: default speculative decoding is enabled by default
 ```
 
 ### Draft Model Parameters
