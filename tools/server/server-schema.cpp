@@ -327,7 +327,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             ctx.params.chat_parser_params.is_continuation = continuation != COMMON_CHAT_CONTINUATION_NONE;
         }));
 
-    add((new field_bool("echo", params.chat_parser_params.echo))
+    add((new field_bool("echo", params.echo))
         ->set_desc("Whether to echo the input tokens in the output"));
 
     //
