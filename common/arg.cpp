@@ -1718,6 +1718,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"--slot-linger-ms"}, "N",
+        "maximum wait time after a slot is freed before a pre-existing queued request is assigned. "
+        "If a new request arrives inside this window, immediately assign it. Default 0 (disabled)",
+        [](common_params & params, int value) {
+            params.slot_linger_ms = value;
+        }
+    ).set_env("LLAMA_ARG_SLOT_LINGER_MS").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-kvu", "--kv-unified"},
         {"-no-kvu", "--no-kv-unified"},
         "use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)",
