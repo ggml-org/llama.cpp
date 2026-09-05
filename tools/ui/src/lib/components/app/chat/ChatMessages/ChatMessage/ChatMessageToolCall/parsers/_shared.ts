@@ -28,6 +28,42 @@ function parseFinalToolArgs(blob: string): Record<string, unknown> | null {
 	}
 }
 
+// Compiled per key on first use; the key set is tiny and fixed.
+const toolArgStringRegexes = new Map<string, RegExp>();
+
+/**
+ * Extract a string field from a JSON tool-args blob without parsing the
+ * whole document. write_file and edit_file args embed full file contents,
+ * yet the block title needs only the path; a targeted key match plus a
+ * JSON.parse of the captured string literal alone keeps title rendering
+ * O(path) instead of O(blob). Returns undefined when the key is missing
+ * or its value is not a string; callers fall back to the full parse.
+ */
+export function extractToolArgString(toolArgs: string, keys: string[]): string | undefined {
+	for (const key of keys) {
+		let pattern = toolArgStringRegexes.get(key);
+
+		if (!pattern) {
+			pattern = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`);
+			toolArgStringRegexes.set(key, pattern);
+		}
+
+		const match = pattern.exec(toolArgs);
+
+		if (!match) continue;
+
+		try {
+			const value: unknown = JSON.parse(`"${match[1]}"`);
+
+			if (typeof value === 'string') return value;
+		} catch {
+			// fall through to the next key; the full parse is the fallback
+		}
+	}
+
+	return undefined;
+}
+
 /**
  * Parse a section's toolArgs against an expected tool name. Returns
  * `null` when:
