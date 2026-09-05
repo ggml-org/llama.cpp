@@ -1470,8 +1470,20 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         split_sum += splits[i];
         splits[i] = split_sum;
     }
-    for (size_t i = 0; i < n_devices(); ++i) {
-        splits[i] /= split_sum;
+    if (split_sum <= 0.0f) {
+        // all devices reported zero free memory (e.g. Windows/WDDM after another model
+        // filled VRAM, common when loading a speculative draft model second).
+        // normalizing would produce NaN split points and send the upper_bound search in
+        // get_layer_buft_list past the end of `devices` -> out_of_range on devices.at().
+        // fall back to an even split instead.
+        LLAMA_LOG_WARN("%s: all devices report zero free memory, falling back to an even tensor split\n", __func__);
+        for (size_t i = 0; i < n_devices(); ++i) {
+            splits[i] = float(i + 1) / n_devices();
+        }
+    } else {
+        for (size_t i = 0; i < n_devices(); ++i) {
+            splits[i] /= split_sum;
+        }
     }
 
     const int i_gpu_start = std::max(n_layer_all + 1 - n_gpu_layers, 0);
