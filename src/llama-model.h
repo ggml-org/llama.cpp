@@ -640,6 +640,9 @@ struct llama_model {
     struct ggml_tensor * nextn_proj_pre  = nullptr;
     struct ggml_tensor * nextn_proj_post = nullptr;
 
+    // hrm-text initial low-cycle state
+    struct ggml_tensor * hrm_z_l_init = nullptr;
+
     // DeepSeek-V4
     struct ggml_tensor * hc_head_fn    = nullptr;
     struct ggml_tensor * hc_head_base  = nullptr;

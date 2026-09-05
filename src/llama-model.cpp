@@ -312,6 +312,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_minimax_m2(params);
         case LLM_ARCH_MINIMAX_M3:
             return new llama_model_minimax_m3(params);
+        case LLM_ARCH_HRM_TEXT:
+            return new llama_model_hrm_text(params);
         case LLM_ARCH_COGVLM:
             return new llama_model_cogvlm(params);
         case LLM_ARCH_PANGU_EMBED:
@@ -3001,6 +3003,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_STEP35:
         case LLM_ARCH_TALKIE:
         case LLM_ARCH_MELLUM:
+        case LLM_ARCH_HRM_TEXT:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_DFLASH:
