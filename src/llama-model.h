@@ -709,11 +709,6 @@ struct llama_model {
     // statically allocated context for assigning
     struct llama_meta_device_get_split_state_userdata get_split_state_ud;
 
-    // when set, the output projection (lm_head) is replicated in full on every device under
-    // tensor parallelism; set by the model loader for the in-graph DSpark markov head / d2t
-    // scatter, or by common code for the target model when a DSpark draft consumes its lm_head
-    bool output_replicated = false;
-
     int64_t t_load_us  = 0;
     int64_t t_start_us = 0;
 

@@ -152,14 +152,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
                 hparams.dflash_selector_rank, hparams.dflash_selector_top_k);
     }
 
-    // The DSpark markov head ranks its lm_head output in-graph (argmax over the full
-    // vocabulary) and the reduced-vocab d2t scatter consumes the lm_head rows on a full
-    // vocab-sized tensor, so a draft lm_head stays replicated in full on every device under
-    // tensor parallelism; plain DFlash2 ranks on the CPU instead and keeps the lm_head split.
-    if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR && (markov_meta || d2t_meta)) {
-        output_replicated = true;
-    }
-
     fc              = create_tensor(tn(LLM_TENSOR_FC,              "weight"), { n_embd_inp, n_embd }, 0);
     fc_s            = create_tensor(tn(LLM_TENSOR_FC,              "scale"),  { 1 }, TENSOR_NOT_REQUIRED);
     output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), { n_embd }, 0); // encoder hidden_norm (after fc)

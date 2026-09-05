@@ -1292,15 +1292,6 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
-    // DSpark's markov head reads the lm_head output in-graph (argmax over the full vocabulary),
-    // so it keeps the lm_head replicated on every device; DFlash2 ranks the vocabulary on the
-    // CPU instead and can use a split lm_head. The flag must be set before the model is loaded,
-    // since the tensor split state is fixed during load.
-    if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR && !params.speculative.draft.mparams.path.empty() &&
-            common_speculative_draft_replicated_lm_head(params.speculative.draft.mparams.path)) {
-        mparams.output_replicated = true;
-    }
-
     if (params.fit_params) {
         COM_TRC("%s", "fitting params to device memory ...\n");
         COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");

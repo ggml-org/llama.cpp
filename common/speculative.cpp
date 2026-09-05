@@ -2573,24 +2573,6 @@ std::vector<common_speculative_type> common_speculative_types_from_gguf(const st
     return { type };
 }
 
-bool common_speculative_draft_replicated_lm_head(const std::string & path) {
-    struct gguf_init_params gguf_params = {
-        /* .no_alloc = */ true,
-        /* .ctx      = */ nullptr,
-    };
-
-    gguf_context_ptr gguf_ctx(gguf_init_from_file(path.c_str(), gguf_params));
-    if (!gguf_ctx) {
-        return false;
-    }
-
-    // the target lm_head is replicated only when a DSpark draft consumes its output in-graph
-    // (the markov head argmax) and ships no lm_head of its own to run the head on; DFlash2
-    // ranks the vocabulary on the CPU instead and can use a split lm_head
-    return gguf_find_tensor(gguf_ctx.get(), "markov_w1.weight") >= 0 &&
-           gguf_find_tensor(gguf_ctx.get(), "output.weight") < 0;
-}
-
 static uint32_t common_get_enabled_speculative_configs(const std::vector<common_speculative_type> & configs) {
     uint32_t result = 0;
     for (size_t i = 0; i < configs.size(); i++) {
