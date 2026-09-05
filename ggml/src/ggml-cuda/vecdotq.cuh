@@ -7,21 +7,26 @@
 static __device__ __forceinline__ int get_int_b1(const void * x, const int & i32) {
     const uint8_t * x8 = (const uint8_t *) x;
 
-    int x32  = x8[4*i32 + 0] <<  0;
-    x32     |= x8[4*i32 + 1] <<  8;
-    x32     |= x8[4*i32 + 2] << 16;
-    x32     |= x8[4*i32 + 3] << 24;
+    uint32_t x32  = uint32_t(x8[4*i32 + 0]) <<  0;
+    x32          |= uint32_t(x8[4*i32 + 1]) <<  8;
+    x32          |= uint32_t(x8[4*i32 + 2]) << 16;
+    x32          |= uint32_t(x8[4*i32 + 3]) << 24;
 
-    return x32;
+    return static_cast<int>(x32);
 }
 
 static __device__ __forceinline__ int get_int_b2(const void * x, const int & i32) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 1000 && __CUDA_ARCH__ < GGML_CUDA_CC_RUBIN
+    // 2-byte loads produce incorrect IQ{1,2,3}_S MMQ/MMVQ results on Blackwell.
+    return get_int_b1(x, i32);
+#else
     const uint16_t * x16 = (const uint16_t *) x; // assume at least 2 byte alignment
 
-    int x32  = x16[2*i32 + 0] <<  0;
-    x32     |= x16[2*i32 + 1] << 16;
+    uint32_t x32  = uint32_t(x16[2*i32 + 0]) <<  0;
+    x32          |= uint32_t(x16[2*i32 + 1]) << 16;
 
-    return x32;
+    return static_cast<int>(x32);
+#endif
 }
 
 static __device__ __forceinline__ int get_int_b4(const void * x, const int & i32) {
