@@ -608,6 +608,21 @@ vec2 get_dm(uint ib, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_TQ1_0)
+float tq1_0_val(uint ib, uint e, uint a_offset) {
+    const uint bidx = tq1_0_byte_of(e);
+    const uint qbyte = uint(bidx < 48u ? data_a[a_offset + ib].qs[bidx]
+                                       : data_a[a_offset + ib].qh[bidx - 48u]);
+    return float(tq1_0_trit(qbyte, tq1_0_digit_of(e))) - 1.0;
+}
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    return vec2(tq1_0_val(ib, iqs, a_offset), tq1_0_val(ib, iqs + 1u, a_offset));
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].d), 0);
+}
+#endif
+
 #if defined(DATA_A_TQ2_0)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     // elem e -> byte qs[(e/128)*32 + e%32], bits 2*((e%128)/32); w = q - 1 (d applied via get_dm)
