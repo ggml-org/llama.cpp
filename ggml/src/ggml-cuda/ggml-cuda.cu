@@ -89,6 +89,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <system_error>
 #include <vector>
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -998,6 +999,39 @@ struct ggml_backend_cuda_comm_context {
 };
 
 #ifdef GGML_USE_NCCL
+static int64_t ggml_backend_cuda_comm_nccl_bf16_threshold(size_t n_backends) {
+    static const int64_t override_threshold = []() {
+        const char * env = getenv("GGML_CUDA_NCCL_BF16_THRESHOLD");
+        if (env == nullptr) {
+            return int64_t{-1};
+        }
+
+        const std::string value(env);
+        uint64_t threshold = 0;
+        const auto result = std::from_chars(value.data(), value.data() + value.size(), threshold);
+        if (result.ec != std::errc() || result.ptr != value.data() + value.size() ||
+            threshold > uint64_t{INT64_MAX}) {
+            GGML_LOG_WARN("invalid GGML_CUDA_NCCL_BF16_THRESHOLD='%s'; using the default heuristic\n", env);
+            return int64_t{-1};
+        }
+
+        GGML_LOG_INFO("using GGML_CUDA_NCCL_BF16_THRESHOLD=%" PRIu64 " elements\n", threshold);
+        return static_cast<int64_t>(threshold);
+    }();
+
+    if (override_threshold >= 0) {
+        return override_threshold;
+    }
+
+    if (n_backends <= 2) {
+        return 32768;
+    }
+    if (n_backends == 3) {
+        return 131072;
+    }
+    return 262144;
+}
+
 // AllReduce via NCCL. Reduces as FP32 for small tensors and BF16 for large
 // tensors (bandwidth-bound), then converts back to FP32.
 static bool ggml_backend_cuda_comm_allreduce_nccl(
@@ -1017,9 +1051,13 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
         GGML_ASSERT(ggml_is_contiguously_allocated(tensors[i]));
     }
 
-    // For small tensors, simply reduce them as FP32.
-    // The following heuristic for how "small" a tensor should be is based on RTX 4090s connected via 16x PCIe 4.0.
-    if ((n_backends <= 2 && ne < 32768) || (n_backends == 3 && ne < 131072) || (n_backends >= 4 && ne < 262144)) {
+    // For small tensors, simply reduce them as FP32. The default threshold is based on RTX 4090s
+    // connected via 16x PCIe 4.0 and can be overridden for other topologies without changing AUTO.
+    const int64_t bf16_threshold = ggml_backend_cuda_comm_nccl_bf16_threshold(n_backends);
+    const bool use_fp32 = ne < bf16_threshold;
+    GGML_LOG_DEBUG("%s: ranks=%zu elements=%" PRId64 " threshold=%" PRId64 " path=%s\n", __func__, n_backends,
+                   ne, bf16_threshold, use_fp32 ? "fp32" : "bf16");
+    if (use_fp32) {
         for (size_t i = 0; i < n_backends; ++i) {
             if ((tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
                 ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[i]->context;
