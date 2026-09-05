@@ -203,14 +203,16 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 } else {
                     json chatcmpl_outputs = item.at("output");
                     for (json & chatcmpl_output : chatcmpl_outputs) {
-                        if (!chatcmpl_output.contains("type") ||
-                            chatcmpl_output.at("type") != "input_text" && chatcmpl_output.at("type") != "input_image"
-                        ) {
+                        if (!chatcmpl_output.contains("type")) {
+                            throw std::invalid_argument("Output of tool call missing 'type' field");
+                        }
+                        const auto type = chatcmpl_output.at("type");
+                        if (type != "input_text" && type != "input_image") {
                             throw std::invalid_argument("Output of tool call should be 'Input text' or 'Input image'");
                         }
-                        if (chatcmpl_output.at("type") == "input_text") {
+                        if (type == "input_text") {
                             chatcmpl_output["type"] = "text";
-                        } else if (chatcmpl_output.at("type") == "input_image") {
+                        } else if (type == "input_image") {
                             if (!chatcmpl_output.contains("image_url")) {
                                 throw std::invalid_argument("'image_url' is required");
                             }
