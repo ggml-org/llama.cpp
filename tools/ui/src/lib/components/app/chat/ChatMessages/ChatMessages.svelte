@@ -51,8 +51,9 @@
 			newExtras?: DatabaseMessageExtra[]
 		) => {
 			onUserAction?.();
+			// in-place edit: the store already updated activeMessages and no
+			// branch is created, so sibling info stays valid without a refetch
 			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
-			refreshAllMessages();
 		},
 
 		editWithBranching: async (
@@ -72,7 +73,10 @@
 		) => {
 			onUserAction?.();
 			await chatStore.editAssistantMessage(message.id, newContent, shouldBranch);
-			refreshAllMessages();
+
+			// only a branch changes sibling info; an in-place edit already
+			// landed in activeMessages
+			if (shouldBranch) refreshAllMessages();
 		},
 
 		forkConversation: async (
