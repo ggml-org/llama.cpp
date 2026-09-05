@@ -306,13 +306,25 @@ template <> inline float32x4_t load(const float *p) {
     return vld1q_f32(p);
 }
 #if !defined(_MSC_VER)
-// FIXME: this should check for __ARM_FEATURE_FP16_VECTOR_ARITHMETIC
+#if defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
 template <> inline float16x8_t load(const ggml_fp16_t *p) {
     return vld1q_f16((const float16_t *)p);
 }
+#endif // __ARM_FEATURE_FP16_VECTOR_ARITHMETIC
+
+#if defined(__aarch64__) || defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
 template <> inline float32x4_t load(const ggml_fp16_t *p) {
     return vcvt_f32_f16(vld1_f16((const float16_t *)p));
 }
+#else
+template <> inline float32x4_t load(const ggml_fp16_t *p) {
+    float tmp[4];
+    for (int i = 0; i < 4; i++) {
+        tmp[i] = GGML_CPU_FP16_TO_FP32(p[i]);
+    }
+    return vld1q_f32(tmp);
+}
+#endif // __aarch64__ || __ARM_FEATURE_FP16_VECTOR_ARITHMETIC
 #endif // _MSC_VER
 #endif // __ARM_NEON
 
