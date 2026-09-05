@@ -3,6 +3,9 @@
 /** Line feed. */
 export const NEWLINE = '\n';
 
+/** Space. */
+export const SPACE = ' ';
+
 /** Horizontal tab. */
 export const TAB = '\t';
 

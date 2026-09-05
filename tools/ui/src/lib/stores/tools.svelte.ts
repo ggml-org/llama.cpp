@@ -11,10 +11,12 @@ import { browser } from '$app/environment';
 import {
 	buildBrowserInfoToolDefinition,
 	buildGetDatetimeToolDefinition,
+	buildMemoryToolDefinitions,
 	buildReadMediaToolDefinition,
 	DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	HOME_TILDE,
+	parseMemoryGroups,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
@@ -116,6 +118,12 @@ class ToolsStore {
 
 		if (settingsStore.config.jsSandboxEnabled) {
 			tools.push(buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled));
+		}
+
+		if (settingsStore.config.memoryEnabled) {
+			tools.push(
+				...buildMemoryToolDefinitions(parseMemoryGroups(String(settingsStore.config.memoryGroups)))
+			);
 		}
 
 		const readMedia = this.readMediaTool();
