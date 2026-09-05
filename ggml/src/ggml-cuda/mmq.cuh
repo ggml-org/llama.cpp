@@ -170,12 +170,13 @@ struct ggml_cuda_mmq_config {
     int                       J;           // SRAM tile width in src1->ne[1]/dst->ne[1] direction.
     ggml_cuda_mmq_sram_layout sram_layout; // SRAM tile length in src0->ne[0]/src1->ne[0] direction (physical 32 bit elements).
     int                       K_vram;      // VRAM tile length in src0->ne[0]/src1->ne[0] direction (logical elements).
+    bool                      use_typical_moe_ncols;
     bool                      stream_k;    // Whether or not to use stream-k decomposition.
     bool                      fallback;    // Whether a fallback for out-of-bounds check in src0->ne[1] direction is needed.
 
     constexpr __host__ __device__ ggml_cuda_mmq_config(
-            ggml_type type, int nthreads, int occupancy, int I, int J, ggml_cuda_mmq_sram_layout sram_layout, int K_vram, bool stream_k, bool fallback) :
-        type(type), nthreads(nthreads), occupancy(occupancy), I(I), J(J), sram_layout(sram_layout), K_vram(K_vram), stream_k(stream_k), fallback(fallback) {}
+            ggml_type type, int nthreads, int occupancy, int I, int J, ggml_cuda_mmq_sram_layout sram_layout, int K_vram, bool use_typical_moe_ncols, bool stream_k, bool fallback) :
+        type(type), nthreads(nthreads), occupancy(occupancy), I(I), J(J), sram_layout(sram_layout), K_vram(K_vram), use_typical_moe_ncols(use_typical_moe_ncols), stream_k(stream_k), fallback(fallback) {}
 
     constexpr __device__ int rows_per_warp() const {
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
@@ -210,7 +211,7 @@ struct ggml_cuda_mmq_config {
         static_assert((I_)        %  32 == 0,                             "bad I");                                                       \
         static_assert((J_)        %   8 == 0,                             "bad J");                                                       \
         static_assert((K_vram_)   % 256 == 0,                             "bad K_vram");                                                  \
-        return ggml_cuda_mmq_config((type_), (nthreads_), (occupancy_), (I_), (J_), (sram_layout_), (K_vram_), (stream_k_), (fallback_)); \
+        return ggml_cuda_mmq_config((type_), (nthreads_), (occupancy_), (I_), (J_), (sram_layout_), (K_vram_), use_typical_moe_ncols, (stream_k_), (fallback_)); \
     }                                                                                                                                     \
 
 #include "mmq-config-pascal-older.cuh"
@@ -1473,6 +1474,20 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
     const int    cc    = ggml_cuda_info().devices[id].cc;
     const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
 
+    int64_t ncols_picker = args.ncols_max;
+    if (args.expert_bounds != nullptr && args.nchannels_x > 0) {
+        const int J_max = ggml_cuda_mmq_get_J_max(type, fallback, cc, 128);
+        const ggml_cuda_mmq_config config_max = ggml_cuda_mmq_get_config(type, J_max, fallback, cc);
+        if (config_max.use_typical_moe_ncols) {
+            // Use the typical expert width only for tile selection.
+            // The launch grid still uses args.ncols_max.
+            const int64_t ncols_typical = (args.ncols_dst + args.nchannels_x - 1) / args.nchannels_x;
+            if (ncols_typical >= 1 && ncols_typical < J_max && ncols_typical < ncols_picker) {
+                ncols_picker = ncols_typical;
+            }
+        }
+    }
+
     int J_best        = 0;
     int ntiles_J_best = INT_MAX;
 
@@ -1486,7 +1501,7 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
             continue;
         }
 
-        const int ntiles_x = (args.ncols_max + config.J - 1) / config.J;
+        const int ntiles_x = (ncols_picker + config.J - 1) / config.J;
 
         if (ntiles_x < ntiles_J_best) {
             J_best = J;
