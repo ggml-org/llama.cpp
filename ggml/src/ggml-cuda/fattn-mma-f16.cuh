@@ -1552,11 +1552,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         float KQ_cms[nmeta];
         float KQ_crs;
 
+        const int jc_meta = threadIdx.y*cols_per_warp + (np*cols_per_warp < warp_size ? threadIdx.x % (np*cols_per_warp) : threadIdx.x);
+        float2 * const meta_ptr = ((float2 *) tile_Q) + jc_meta*(tile_stride/2) + nbatch_combine/2;
+
         if (threadIdx.y % np == 0) {
             // Combine the meta data for parallel warps via shared memory.
-
-            const int jc_meta = threadIdx.y*cols_per_warp + (np*cols_per_warp < warp_size ? threadIdx.x % (np*cols_per_warp) : threadIdx.x);
-            const float2 * const meta_ptr = ((float2 *) tile_Q) + jc_meta*(tile_stride/2) + nbatch_combine/2;
             float2 meta[nmeta];
 #pragma unroll
             for (int imeta = 0; imeta < nmeta; ++imeta) {
@@ -1596,9 +1596,6 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         __syncthreads();
 
         if (threadIdx.y % np == 0) {
-            const int jc_meta = threadIdx.y*cols_per_warp + (np*cols_per_warp < warp_size ? threadIdx.x % (np*cols_per_warp) : threadIdx.x);
-            float2 * const meta_ptr = ((float2 *) tile_Q) + jc_meta*(tile_stride/2) + nbatch_combine/2;
-
             // Write back combined meta data:
 #pragma unroll
             for (int imeta = 0; imeta < nmeta; ++imeta) {
