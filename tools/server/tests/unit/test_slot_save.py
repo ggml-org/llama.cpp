@@ -10,10 +10,10 @@ STATE_FILE_HEADER_SIZE = 12
 server = ServerPreset.tinyllama2()
 
 @pytest.fixture(autouse=True)
-def create_server():
+def create_server(tmp_path):
     global server
     server = ServerPreset.tinyllama2()
-    server.slot_save_path = "./tmp"
+    server.slot_save_path = str(tmp_path)
     server.temperature = 0.0
 
 
@@ -94,7 +94,7 @@ def test_slot_restore_legacy_token_list():
     assert res.body["n_saved"] == 84
 
     # rewrite the token payload into a plain token list, as written by servers that predate the packed server_tokens format
-    path = os.path.join("tmp", "slot_legacy.bin")
+    path = os.path.join(server.slot_save_path, "slot_legacy.bin")
     with open(path, "rb") as f:
         data = bytearray(f.read())
 
@@ -319,7 +319,6 @@ def test_slot_save_restore_with_two_images(mmproj_server):
         "prompt": prompt,
     })
     assert res.status_code == 200
-    content = res.body["content"]
     prompt_n_full = res.body["timings"]["prompt_n"]
     assert prompt_n_full > 64
 
@@ -345,6 +344,26 @@ def test_slot_save_restore_with_two_images(mmproj_server):
     assert res.status_code == 200
     assert res.body["timings"]["cache_n"] == prompt_n_full - 1
     assert res.body["timings"]["prompt_n"] == 1
+    content = res.body["content"]
+
+    res = server.make_request("POST", "/slots/1?action=restore", data={
+        "filename": "mm_slot_two_images.bin",
+    })
+    assert res.status_code == 200
+    assert res.body["n_restored"] == n_saved
+
+    res = server.make_request("POST", "/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "id_slot": 0,
+        "cache_prompt": True,
+        "prompt": prompt,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["cache_n"] == prompt_n_full - 1
+    assert res.body["timings"]["prompt_n"] == 1
+    content = res.body["content"]
+
     assert res.body["content"] == content
 
 
@@ -443,7 +462,7 @@ def test_slot_save_restore_image_payload_larger_than_context(mmproj_server):
     })
     assert res.status_code == 200
 
-    path = os.path.join("tmp", "mm_slot_large_payload.bin")
+    path = os.path.join(server.slot_save_path, "mm_slot_large_payload.bin")
     with open(path, "rb") as f:
         data = bytearray(f.read())
     payload_size = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE - 4)[0]

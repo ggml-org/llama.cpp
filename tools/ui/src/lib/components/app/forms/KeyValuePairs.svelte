@@ -113,9 +113,9 @@
 		{/if}
 
 		<button
-			type="button"
 			class="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
 			onclick={addPair}
+			type="button"
 		>
 			<Plus class="h-3 w-3" />
 			{addButtonLabel}
@@ -128,34 +128,34 @@
 				<div class="flex items-start gap-2">
 					<Input
 						bind:ref={keyInputRefs[index]}
-						type="text"
-						placeholder={keyPlaceholder}
-						value={pair.key}
-						maxlength={KEY_VALUE_PAIR_KEY_MAX_LENGTH}
-						oninput={(e) => updatePairKey(index, e.currentTarget.value)}
-						onblur={(e) => trimPairKey(index, e.currentTarget.value)}
 						class="flex-1"
+						maxlength={KEY_VALUE_PAIR_KEY_MAX_LENGTH}
+						onblur={(e) => trimPairKey(index, e.currentTarget.value)}
+						oninput={(e) => updatePairKey(index, e.currentTarget.value)}
+						placeholder={keyPlaceholder}
+						type="text"
+						value={pair.key}
 					/>
 
 					<textarea
 						use:autoResizeTextarea
-						placeholder={valuePlaceholder}
-						value={pair.value}
+						class="flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm leading-5 placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
 						maxlength={KEY_VALUE_PAIR_VALUE_MAX_LENGTH}
+						onblur={(e) => trimPairValue(index, e.currentTarget.value)}
 						oninput={(e) => {
 							updatePairValue(index, e.currentTarget.value);
 							autoResizeTextarea(e.currentTarget);
 						}}
-						onblur={(e) => trimPairValue(index, e.currentTarget.value)}
-						class="flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm leading-5 placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+						placeholder={valuePlaceholder}
 						rows="1"
+						value={pair.value}
 					></textarea>
 
 					<button
-						type="button"
+						aria-label="Remove item"
 						class="mt-1.5 shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
 						onclick={() => removePair(index)}
-						aria-label="Remove item"
+						type="button"
 					>
 						<Trash2 class="h-3.5 w-3.5" />
 					</button>

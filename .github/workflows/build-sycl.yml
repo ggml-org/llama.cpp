@@ -75,11 +75,19 @@ jobs:
           sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: sycl-ubuntu-24-${{ matrix.build }}
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: sycl-ubuntu-24-${{ matrix.build }}
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build
         id: cmake_build
@@ -95,6 +103,18 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_SYCL_F16=${{ matrix.fp16 }}
           time cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: sycl-ubuntu-24-${{ matrix.build }}
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
   windows-latest-sycl:
     runs-on: windows-2022
@@ -127,7 +147,7 @@ jobs:
           "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: sycl-windows-latest
           variant: ccache
@@ -139,3 +159,13 @@ jobs:
       - name: Build
         id: cmake_build
         run:  examples/sycl/win-build-sycl.bat
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: sycl-windows-latest
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

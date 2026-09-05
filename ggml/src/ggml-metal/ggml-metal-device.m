@@ -3,6 +3,7 @@
 #import "ggml-impl.h"
 #import "ggml-backend-impl.h"
 #import "ggml-metal-impl.h"
+#import "ggml-metal-common.h"
 
 #include <Foundation/Foundation.h>
 
@@ -25,6 +26,9 @@
 // overload of MTLGPUFamilyMetalX (not available in some environments)
 static const NSInteger MTLGPUFamilyMetal3_GGML = 5001;
 static const NSInteger MTLGPUFamilyMetal4_GGML = 5002;
+
+// MTLLanguageVersion4_0 is not present in older SDKs
+static const NSUInteger MTLLanguageVersion4_0_GGML = 4 << 16;
 
 #if !GGML_METAL_EMBED_LIBRARY
 // Here to assist with NSBundle Path Hack
@@ -95,8 +99,66 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
     return pipeline.pipeline->obj.maxTotalThreadsPerThreadgroup;
 }
 
+//
+// MTLLibrary collection (one library per op-source, compiled separately)
+//
+
+// Single source of truth for the per-kind metal libraries. The order here
+// defines the enum values and every per-kind table below, so adding a library
+// is a one-line change here (plus adding its source to CMakeLists.txt).
+//   X(suffix, name): name is both the kernels/<name>.metal basename and the
+//   ggml_metallib_<name>_{start,end} embed-symbol stem.
+#define GGML_METAL_LIBS \
+    X(FA,              fa)             \
+    X(MUL_MV,          mul_mv)         \
+    X(MUL_MM,          mul_mm)         \
+    X(QUANTIZE,        quantize)       \
+    X(SOFTMAX,         softmax)        \
+    X(NORM,            norm)           \
+    X(UNARY,           unary)          \
+    X(BINBCAST,        binbcast)       \
+    X(REDUCE,          reduce)         \
+    X(TRI,             tri)            \
+    X(SSM,             ssm)            \
+    X(WKV,             wkv)            \
+    X(GATED_DELTA_NET, gated_delta_net)\
+    X(SOLVE_TRI,       solve_tri)      \
+    X(ROPE,            rope)           \
+    X(CONV,            conv)           \
+    X(UPSCALE,         upscale)        \
+    X(ARGSORT,         argsort)        \
+    X(POOL,            pool)           \
+    X(MISC,            misc)
+
+enum ggml_metal_lib_kind {
+#define X(e, s) GGML_METAL_LIB_##e,
+    GGML_METAL_LIBS
+#undef X
+    GGML_METAL_LIB_COUNT,
+};
+
+static const char * const k_lib_names[GGML_METAL_LIB_COUNT] = {
+#define X(e, s) [GGML_METAL_LIB_##e] = #s,
+    GGML_METAL_LIBS
+#undef X
+};
+
 struct ggml_metal_library {
-    id<MTLLibrary> obj;
+    // Per-kind compiled libraries. When single_library is true, the whole library
+    // (e.g. a pre-compiled default.metallib or a from-source build) lives at
+    // objs[0] and the remaining slots are nil.
+    id<MTLLibrary> objs[GGML_METAL_LIB_COUNT];
+    bool single_library; // true: combined library at objs[0]; false: per-kind libs in objs[*]
+
+    // Routing table: kernel function name -> objs[] index, populated from each
+    // compiled library's -[MTLLibrary functionNames]. The actual compiled
+    // libraries are the single source of truth for which library owns a kernel,
+    // so adding kernels later requires no manual routing maintenance.
+    // nil in single_library mode (everything resolves to objs[0]).
+    NSMutableDictionary<NSString *, NSNumber *> * fn_to_lib;
+
+    // kernels from a second metallib, resolved ahead of the combined library
+    NSSet<NSString *> * override_fns;
 
     ggml_metal_device_t dev;
     ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
@@ -104,160 +166,422 @@ struct ggml_metal_library {
     NSLock * lock;
 };
 
-ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
-    id<MTLLibrary> library = nil;
-    id<MTLDevice> device = ggml_metal_device_get_obj(dev);
-
-    // load library
-    //
-    // - first check if the library is embedded
-    // - then check if the library is in the bundle
-    // - if not found, load the source and compile it
-    // - if that fails, return NULL
-    //
-    // TODO: move to a function
-    {
-        const int64_t t_start = ggml_time_us();
-
-        NSError * error = nil;
-        NSString * src = nil;
-
-#if GGML_METAL_EMBED_LIBRARY
-        GGML_LOG_INFO("%s: using embedded metal library\n", __func__);
-
-        extern const char ggml_metallib_start[];
-        extern const char ggml_metallib_end[];
-
-        src = [[NSString alloc] initWithBytes:ggml_metallib_start length:(ggml_metallib_end-ggml_metallib_start) encoding:NSUTF8StringEncoding];
-#else
-
-#ifdef SWIFT_PACKAGE
-        NSBundle * bundle = SWIFTPM_MODULE_BUNDLE;
-#else
-        NSBundle * bundle = [NSBundle bundleForClass:[GGMLMetalClass class]];
-#endif
-
-        NSString * path_lib = [bundle pathForResource:@"default" ofType:@"metallib"];
-        if (path_lib == nil) {
-            // Try to find the resource in the directory where the current binary located.
-            NSString * bin_cur = [[NSProcessInfo processInfo] arguments][0];
-            NSString * bin_dir = [bin_cur stringByDeletingLastPathComponent];
-
-            NSString * path_lib_default = [NSString pathWithComponents:@[bin_dir, @"default.metallib"]];
-            if ([[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
-                GGML_LOG_INFO("%s: found '%s'\n", __func__, [path_lib_default UTF8String]);
-
-                NSDictionary * atts = [[NSFileManager defaultManager] attributesOfItemAtPath:path_lib_default error:&error];
-                if (atts && atts[NSFileType] == NSFileTypeSymbolicLink) {
-                    // Optionally, if this is a symlink, try to resolve it.
-                    path_lib_default = [[NSFileManager defaultManager] destinationOfSymbolicLinkAtPath:path_lib_default error:&error];
-                    if (path_lib_default && [path_lib_default length] > 0 && ![[path_lib_default substringToIndex:1] isEqualToString:@"/"]) {
-                        // It is a relative path, adding the binary directory as directory prefix.
-                        path_lib_default = [NSString pathWithComponents:@[bin_dir, path_lib_default]];
-                    }
-                    if (!path_lib_default || ![[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
-                        // Link to the resource could not be resolved.
-                        path_lib_default = nil;
-                    } else {
-                        GGML_LOG_INFO("%s: symlink resolved '%s'\n", __func__, [path_lib_default UTF8String]);
-                    }
-                }
-            } else {
-                // The resource couldn't be found in the binary's directory.
-                path_lib_default = nil;
-            }
-
-            path_lib = path_lib_default;
-        }
-
-        if (path_lib != nil) {
-            // pre-compiled library found
-            NSURL * libURL = [NSURL fileURLWithPath:path_lib];
-            GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_lib UTF8String]);
-
-            library = [device newLibraryWithURL:libURL error:&error];
-            if (error) {
-                GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
-                return nil;
-            }
-        } else {
-            GGML_LOG_INFO("%s: default.metallib not found, loading from source\n", __func__);
-
-            NSString * path_source;
-            NSString * path_resource = [[NSProcessInfo processInfo].environment objectForKey:@"GGML_METAL_PATH_RESOURCES"];
-
-            GGML_LOG_INFO("%s: GGML_METAL_PATH_RESOURCES = %s\n", __func__, path_resource ? [path_resource UTF8String] : "nil");
-
-            if (path_resource) {
-                path_source = [path_resource stringByAppendingPathComponent:@"ggml-metal.metal"];
-            } else {
-                path_source = [bundle pathForResource:@"ggml-metal" ofType:@"metal"];
-            }
-
-            if (path_source == nil) {
-                GGML_LOG_WARN("%s: error: could not use bundle path to find ggml-metal.metal, falling back to trying cwd\n", __func__);
-                path_source = @"ggml-metal.metal";
-            }
-
-            GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_source UTF8String]);
-
-            src = [NSString stringWithContentsOfFile:path_source encoding:NSUTF8StringEncoding error:&error];
-            if (error) {
-                GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
-                return nil;
+// Build the fn_to_lib routing table by querying each compiled library's public
+// function names. Call once after all per-kind libraries have been compiled.
+static void ggml_metal_library_build_index(ggml_metal_library_t lib) {
+    @autoreleasepool {
+        NSMutableDictionary<NSString *, NSNumber *> * index = [[NSMutableDictionary alloc] init];
+        for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+            for (NSString * fname in [lib->objs[kind] functionNames]) {
+                index[fname] = @(kind);
             }
         }
-#endif
+        lib->fn_to_lib = index;
+    }
+}
 
-        if (!library) {
-            @autoreleasepool {
-                // dictionary of preprocessor macros
-                NSMutableDictionary * prep = [NSMutableDictionary dictionary];
+// note: defined below, after struct ggml_metal_device
+static void ggml_metal_device_disable_tensor(ggml_metal_device_t dev);
 
-                if (ggml_metal_device_get_props(dev)->has_bfloat) {
-                    [prep setObject:@"1" forKey:@"GGML_METAL_HAS_BF16"];
-                }
-
-                if (ggml_metal_device_get_props(dev)->has_tensor) {
-                    [prep setObject:@"1" forKey:@"GGML_METAL_HAS_TENSOR"];
-                }
-
-#if GGML_METAL_EMBED_LIBRARY
-                [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
-#endif
-
-                MTLCompileOptions * options = [MTLCompileOptions new];
-                options.preprocessorMacros = prep;
-
-                //[options setFastMathEnabled:false];
-
-                library = [device newLibraryWithSource:src options:options error:&error];
-                if (error) {
-                    GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
-                    return nil;
-                }
-
-#if !__has_feature(objc_arc)
-                [options release];
-#endif
-            }
-        }
-
-#if GGML_METAL_EMBED_LIBRARY
-        [src release];
-#endif // GGML_METAL_EMBED_LIBRARY
-
-        GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
+// the tensor API headers are exposed to the shader compiler only at Metal language version 4.0
+static void ggml_metal_compile_options_set_lang(MTLCompileOptions * options, bool has_tensor) {
+    if (!has_tensor) {
+        return;
     }
 
-    ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
+    options.languageVersion = (MTLLanguageVersion) MTLLanguageVersion4_0_GGML;
+}
 
-    res->obj       = library;
+// Parse a `#include "name"` line. Returns the quoted name in *include_name on
+// success. Whitespace-tolerant; ignores `#include <...>` (system headers).
+static bool ggml_metal_library_parse_quoted_include(NSString * line, NSString ** include_name) {
+    NSScanner * scanner = [NSScanner scannerWithString:line];
+    scanner.charactersToBeSkipped = [NSCharacterSet whitespaceCharacterSet];
+
+    if (![scanner scanString:@"#" intoString:NULL] ||
+        ![scanner scanString:@"include" intoString:NULL] ||
+        ![scanner scanString:@"\"" intoString:NULL]) {
+        return false;
+    }
+
+    NSString * name = nil;
+    if (![scanner scanUpToString:@"\"" intoString:&name]) {
+        return false;
+    }
+
+    if (include_name) {
+        *include_name = name;
+    }
+    return true;
+}
+
+// Recursively inline `#include "name"` directives. System includes (<...>),
+// `#if/#else/#endif`, and other preprocessor lines are passed through to the
+// Metal compiler unchanged. `#pragma once` is dropped since `seen` already
+// guards against double-inclusion.
+static bool ggml_metal_library_flatten_file(NSMutableString * dst, NSString * path,
+                                            NSArray<NSString *> * search_paths,
+                                            NSMutableSet<NSString *> * seen, NSError ** error) {
+    NSString * key = [path stringByStandardizingPath];
+    if ([seen containsObject:key]) {
+        return true;
+    }
+    [seen addObject:key];
+
+    NSString * src = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:error];
+    if (!src) {
+        return false;
+    }
+
+    NSFileManager * fm = [NSFileManager defaultManager];
+    for (NSString * line in [src componentsSeparatedByString:@"\n"]) {
+        NSString * trimmed = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([trimmed isEqualToString:@"#pragma once"]) {
+            continue;
+        }
+
+        NSString * include_name = nil;
+        if (ggml_metal_library_parse_quoted_include(line, &include_name)) {
+            NSString * resolved = nil;
+            for (NSString * dir in search_paths) {
+                NSString * candidate = [dir stringByAppendingPathComponent:include_name];
+                if ([fm isReadableFileAtPath:candidate]) {
+                    resolved = candidate;
+                    break;
+                }
+            }
+            if (!resolved) {
+                if (error) {
+                    NSString * msg = [NSString stringWithFormat:@"could not resolve include \"%@\" from '%@'", include_name, path];
+                    *error = [NSError errorWithDomain:@"ggml-metal-source-flatten" code:1
+                                             userInfo:@{NSLocalizedDescriptionKey: msg}];
+                }
+                return false;
+            }
+            if (!ggml_metal_library_flatten_file(dst, resolved, search_paths, seen, error)) {
+                return false;
+            }
+            continue;
+        }
+
+        [dst appendString:line];
+        [dst appendString:@"\n"];
+    }
+
+    return true;
+}
+
+static NSString * ggml_metal_library_flatten_source(NSString * path_source, NSError ** error) {
+    // Search paths cover both runtime layout (build/bin/kernels + build/bin)
+    // and source-tree layout (ggml/src/ggml-metal/kernels + ggml/src/ggml-metal + ggml/src).
+    NSString * path_kernels = [path_source stringByDeletingLastPathComponent];
+    NSString * path_base    = [path_kernels stringByDeletingLastPathComponent];
+    NSArray<NSString *> * search_paths = @[
+        path_kernels,
+        path_base,
+        [path_base stringByDeletingLastPathComponent],
+    ];
+
+    NSMutableString * src = [[NSMutableString alloc] init];
+    NSMutableSet<NSString *> * seen = [NSMutableSet set];
+
+    if (!ggml_metal_library_flatten_file(src, path_source, search_paths, seen, error)) {
+        [src release];
+        return nil;
+    }
+    return src;
+}
+
+// Compile all per-kind libraries in parallel. `source_for_kind` returns the MSL
+// source for a kind (the helper takes ownership and releases it), or nil with
+// *err set on failure. On success the objs[] slots are populated and the routing
+// index is built; on any failure every error is logged and false is returned
+// (the caller is responsible for freeing `res`).
+static bool ggml_metal_library_compile_all(
+        ggml_metal_library_t res,
+        id<MTLDevice> device,
+        NSDictionary * prep,
+        NSString * (^source_for_kind)(int kind, NSError ** err),
+        const char * origin) {
+    const int64_t t_start = ggml_time_us();
+
+    int64_t  * t_per_lib   = calloc(GGML_METAL_LIB_COUNT, sizeof(int64_t));
+    NSError ** err_per_lib = calloc(GGML_METAL_LIB_COUNT, sizeof(NSError *));
+    __block atomic_bool any_failure = false;
+
+    dispatch_group_t group = dispatch_group_create();
+    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        dispatch_group_async(group, queue, ^{
+
+            const int64_t t0 = ggml_time_us();
+
+            NSError * error = nil;
+
+            NSString * src = source_for_kind(kind, &error);
+            if (!src) {
+                err_per_lib[kind] = [error retain];
+                atomic_store(&any_failure, true);
+                return;
+            }
+
+            id<MTLLibrary> lib = nil;
+
+            @autoreleasepool {
+                MTLCompileOptions * options = [MTLCompileOptions new];
+                options.preprocessorMacros = prep;
+                ggml_metal_compile_options_set_lang(options, ggml_metal_device_get_props(res->dev)->has_tensor);
+
+                lib = [device newLibraryWithSource:src options:options error:&error];
+
+                [options release];
+
+                // retain the error before the autorelease pool drains it
+                if (!lib) {
+                    err_per_lib[kind] = [error retain];
+                }
+            }
+
+            [src release];
+
+            t_per_lib[kind] = ggml_time_us() - t0;
+
+            if (!lib) {
+                atomic_store(&any_failure, true);
+                return;
+            }
+
+            res->objs[kind] = lib;
+        });
+    }
+    dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+    dispatch_release(group);
+
+    const bool ok = !atomic_load(&any_failure);
+
+    if (ok) {
+        const int64_t t_total = ggml_time_us() - t_start;
+        int64_t t_max = 0;
+        for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+            GGML_LOG_DEBUG("%s: compiled '%s' library in %.3f sec\n",
+                           __func__, k_lib_names[kind], t_per_lib[kind] / 1e6);
+            if (t_per_lib[kind] > t_max) t_max = t_per_lib[kind];
+        }
+        GGML_LOG_INFO("%s: loaded %d libraries from %s in %.3f sec (max single = %.3f sec)\n",
+                      __func__, GGML_METAL_LIB_COUNT, origin, t_total / 1e6, t_max / 1e6);
+
+        ggml_metal_library_build_index(res);
+    } else {
+        for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+            if (err_per_lib[kind]) {
+                GGML_LOG_ERROR("%s: failed to build '%s' library: %s\n", __func__,
+                               k_lib_names[kind], [[err_per_lib[kind] description] UTF8String]);
+                [err_per_lib[kind] release];
+            }
+        }
+    }
+
+    free(err_per_lib);
+    free(t_per_lib);
+
+    return ok;
+}
+
+// look for <name>.metallib as a bundle resource, then next to the running binary
+static NSString * ggml_metal_find_metallib(NSBundle * bundle, NSString * name) {
+    NSError * error = nil;
+
+    NSString * path_lib = [bundle pathForResource:name ofType:@"metallib"];
+    if (path_lib == nil) {
+        // Try to find the resource in the directory where the current binary located.
+        NSString * bin_cur = [[NSProcessInfo processInfo] arguments][0];
+        NSString * bin_dir = [bin_cur stringByDeletingLastPathComponent];
+
+        NSString * path_lib_default = [NSString pathWithComponents:@[bin_dir, [name stringByAppendingPathExtension:@"metallib"]]];
+        if ([[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
+            GGML_LOG_INFO("%s: found '%s'\n", __func__, [path_lib_default UTF8String]);
+
+            NSDictionary * atts = [[NSFileManager defaultManager] attributesOfItemAtPath:path_lib_default error:&error];
+            if (atts && atts[NSFileType] == NSFileTypeSymbolicLink) {
+                // Optionally, if this is a symlink, try to resolve it.
+                path_lib_default = [[NSFileManager defaultManager] destinationOfSymbolicLinkAtPath:path_lib_default error:&error];
+                if (path_lib_default && [path_lib_default length] > 0 && ![[path_lib_default substringToIndex:1] isEqualToString:@"/"]) {
+                    // It is a relative path, adding the binary directory as directory prefix.
+                    path_lib_default = [NSString pathWithComponents:@[bin_dir, path_lib_default]];
+                }
+                if (!path_lib_default || ![[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
+                    // Link to the resource could not be resolved.
+                    path_lib_default = nil;
+                } else {
+                    GGML_LOG_INFO("%s: symlink resolved '%s'\n", __func__, [path_lib_default UTF8String]);
+                }
+            }
+        } else {
+            // The resource couldn't be found in the binary's directory.
+            path_lib_default = nil;
+        }
+
+        path_lib = path_lib_default;
+    }
+
+    return path_lib;
+}
+
+ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+    id<MTLDevice> device = ggml_metal_device_get_obj(dev);
+
+    ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
     res->dev       = dev;
     res->pipelines = ggml_metal_pipelines_init();
     res->lock      = [NSLock new];
 
+    // shared MTLCompileOptions preprocessor macros (matches the build-time defines)
+    NSMutableDictionary * prep = [NSMutableDictionary dictionary];
+    if (ggml_metal_device_get_props(dev)->has_bfloat) {
+        [prep setObject:@"1" forKey:@"GGML_METAL_HAS_BF16"];
+    }
+    if (ggml_metal_device_get_props(dev)->has_tensor) {
+        [prep setObject:@"1" forKey:@"GGML_METAL_HAS_TENSOR"];
+    }
+#if GGML_METAL_EMBED_LIBRARY
+    [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
+#endif
+
+#if GGML_METAL_EMBED_LIBRARY
+    GGML_LOG_INFO("%s: using embedded metal library\n", __func__);
+
+    // start/end symbols emitted by CMake (see CMakeLists.txt), one pair per kind
+#define X(e, s) extern const char ggml_metallib_##s##_start[]; extern const char ggml_metallib_##s##_end[];
+    GGML_METAL_LIBS
+#undef X
+
+    static const char * const lib_start[GGML_METAL_LIB_COUNT] = {
+#define X(e, s) [GGML_METAL_LIB_##e] = ggml_metallib_##s##_start,
+    GGML_METAL_LIBS
+#undef X
+    };
+    static const char * const lib_end[GGML_METAL_LIB_COUNT] = {
+#define X(e, s) [GGML_METAL_LIB_##e] = ggml_metallib_##s##_end,
+    GGML_METAL_LIBS
+#undef X
+    };
+
+    const bool ok = ggml_metal_library_compile_all(res, device, prep,
+        ^NSString * (int kind, NSError ** err) {
+            (void) err;
+            return [[NSString alloc] initWithBytes:lib_start[kind]
+                                            length:(lib_end[kind] - lib_start[kind])
+                                          encoding:NSUTF8StringEncoding];
+        }, "embedded data");
+
+    if (!ok) {
+        ggml_metal_library_free(res);
+        return NULL;
+    }
+
     return res;
+#else
+#ifdef SWIFT_PACKAGE
+    NSBundle * bundle = SWIFTPM_MODULE_BUNDLE;
+#else
+    NSBundle * bundle = [NSBundle bundleForClass:[GGMLMetalClass class]];
+#endif
+
+    const int64_t t_start = ggml_time_us();
+
+    NSError * error = nil;
+    NSString * path_lib = ggml_metal_find_metallib(bundle, @"default");
+
+    if (path_lib != nil) {
+        // pre-compiled library found: a single combined default.metallib
+        NSURL * libURL = [NSURL fileURLWithPath:path_lib];
+        GGML_LOG_INFO("%s: loading '%s'\n", __func__, [path_lib UTF8String]);
+
+        res->objs[0]        = [device newLibraryWithURL:libURL error:&error];
+        res->single_library = true;
+        if (!res->objs[0]) {
+            GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+            ggml_metal_library_free(res);
+            return NULL;
+        }
+
+        // the tensor API kernels are built into a separate metallib
+        if (ggml_metal_device_get_props(dev)->has_tensor) {
+            NSString * path_mm = ggml_metal_find_metallib(bundle, @"ggml-tensor");
+
+            id<MTLLibrary> lib_mm = nil;
+            if (path_mm != nil) {
+                lib_mm = [device newLibraryWithURL:[NSURL fileURLWithPath:path_mm] error:&error];
+                if (!lib_mm && error) {
+                    GGML_LOG_ERROR("%s: %s\n", __func__, [[error description] UTF8String]);
+                }
+            }
+
+            if (lib_mm) {
+                GGML_LOG_INFO("%s: loaded '%s'\n", __func__, [path_mm UTF8String]);
+
+                res->objs[GGML_METAL_LIB_MUL_MM] = [lib_mm retain];
+                res->override_fns                = [[NSSet setWithArray:[lib_mm functionNames]] retain];
+            } else {
+                GGML_LOG_INFO("%s: ggml-tensor.metallib not found - disabling the tensor API\n", __func__);
+
+                ggml_metal_device_disable_tensor(dev);
+            }
+        }
+
+        GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
+        return res;
+    }
+
+    // no pre-compiled metallib: fall back to compiling each kernel source separately
+    GGML_LOG_INFO("%s: default.metallib not found, loading kernel sources\n", __func__);
+
+    NSString * path_resource = [[NSProcessInfo processInfo].environment objectForKey:@"GGML_METAL_PATH_RESOURCES"];
+    if (path_resource) {
+        GGML_LOG_INFO("%s: GGML_METAL_PATH_RESOURCES = %s\n", __func__, [path_resource UTF8String]);
+    }
+
+    // resolve each kind's source path up front (file lookup/logging stays on the calling thread)
+    NSString ** path_per_kind = calloc(GGML_METAL_LIB_COUNT, sizeof(NSString *));
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        NSString * rel = [NSString stringWithFormat:@"kernels/%s.metal", k_lib_names[kind]];
+
+        NSString * path_source = nil;
+        if (path_resource) {
+            path_source = [path_resource stringByAppendingPathComponent:rel];
+        } else {
+            NSString * stem = [NSString stringWithFormat:@"kernels/%s", k_lib_names[kind]];
+            path_source = [bundle pathForResource:stem ofType:@"metal"];
+        }
+
+        if (path_source == nil || ![[NSFileManager defaultManager] isReadableFileAtPath:path_source]) {
+            GGML_LOG_WARN("%s: could not locate %s in bundle, falling back to cwd\n", __func__, [rel UTF8String]);
+            path_source = rel;
+        }
+
+        GGML_LOG_DEBUG("%s: loading '%s'\n", __func__, [path_source UTF8String]);
+
+        path_per_kind[kind] = [path_source retain];
+    }
+
+    const bool ok = ggml_metal_library_compile_all(res, device, prep,
+        ^NSString * (int kind, NSError ** err) {
+            return ggml_metal_library_flatten_source(path_per_kind[kind], err);
+        }, "source");
+
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        [path_per_kind[kind] release];
+    }
+    free(path_per_kind);
+
+    if (!ok) {
+        ggml_metal_library_free(res);
+        return NULL;
+    }
+
+    return res;
+#endif
 }
 
 ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev, const char * source, bool verbose) {
@@ -285,6 +609,7 @@ ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev
 
         MTLCompileOptions * options = [MTLCompileOptions new];
         options.preprocessorMacros = prep;
+        ggml_metal_compile_options_set_lang(options, ggml_metal_device_get_props(dev)->has_tensor);
 
         library = [device newLibraryWithSource:src options:options error:&error];
         if (error) {
@@ -319,10 +644,11 @@ ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev
         return NULL;
     }
 
-    res->obj       = library;
-    res->dev       = dev;
-    res->pipelines = ggml_metal_pipelines_init();
-    res->lock      = [NSLock new];
+    res->objs[0]        = library;
+    res->single_library = true;
+    res->dev            = dev;
+    res->pipelines      = ggml_metal_pipelines_init();
+    res->lock           = [NSLock new];
 
     return res;
 }
@@ -332,8 +658,18 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
         return;
     }
 
-    if (lib->obj) {
-        [lib->obj release];
+    for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+        if (lib->objs[kind]) {
+            [lib->objs[kind] release];
+        }
+    }
+
+    if (lib->fn_to_lib) {
+        [lib->fn_to_lib release];
+    }
+
+    if (lib->override_fns) {
+        [lib->override_fns release];
     }
 
     ggml_metal_pipelines_free(lib->pipelines);
@@ -394,11 +730,30 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
 
         GGML_LOG_DEBUG("%s: compiling pipeline: base = '%s', name = '%s'\n", __func__, base, name);
 
+        // route to the library that actually defines this kernel; fn_to_lib is
+        // built from -[MTLLibrary functionNames] so it's always in sync
+        int lib_idx = 0;
+        if (lib->override_fns && [lib->override_fns containsObject:base_func]) {
+            lib_idx = GGML_METAL_LIB_MUL_MM;
+        } else if (!lib->single_library) {
+            NSNumber * idx = lib->fn_to_lib[base_func];
+            if (!idx) {
+                [lib->lock unlock];
+
+                GGML_LOG_ERROR("%s: kernel not found in any metal library: base = '%s', name = '%s'\n", __func__, base, name);
+
+                return res;
+            }
+            lib_idx = [idx intValue];
+        }
+
+        id<MTLLibrary> mtl_lib = lib->objs[lib_idx];
+
         id<MTLFunction> mtl_function;
         if (!cv) {
-            mtl_function = [lib->obj newFunctionWithName:base_func];
+            mtl_function = [mtl_lib newFunctionWithName:base_func];
         } else {
-            mtl_function = [lib->obj newFunctionWithName:base_func constantValues:cv->obj error:&error];
+            mtl_function = [mtl_lib newFunctionWithName:base_func constantValues:cv->obj error:&error];
         }
         if (!mtl_function) {
             [lib->lock unlock];
@@ -483,7 +838,9 @@ void ggml_metal_encoder_free(ggml_metal_encoder_t encoder) {
 }
 
 void ggml_metal_encoder_debug_group_push(ggml_metal_encoder_t encoder, const char * name) {
-    [encoder->obj pushDebugGroup:[NSString stringWithCString:name encoding:NSUTF8StringEncoding]];
+    @autoreleasepool {
+        [encoder->obj pushDebugGroup:[NSString stringWithCString:name encoding:NSUTF8StringEncoding]];
+    }
 }
 
 void ggml_metal_encoder_debug_group_pop (ggml_metal_encoder_t encoder) {
@@ -491,6 +848,10 @@ void ggml_metal_encoder_debug_group_pop (ggml_metal_encoder_t encoder) {
 }
 
 void ggml_metal_encoder_set_pipeline(ggml_metal_encoder_t encoder, struct ggml_metal_pipeline_with_params pipeline) {
+    if (!pipeline.pipeline) {
+        GGML_ABORT("%s: nil Metal pipeline (missing kernel; see compile_pipeline log above)\n", __func__);
+    }
+
     [encoder->obj setComputePipelineState:pipeline.pipeline->obj];
 }
 
@@ -503,6 +864,9 @@ void ggml_metal_encoder_set_buffer(ggml_metal_encoder_t encoder, struct ggml_met
 }
 
 void ggml_metal_encoder_set_threadgroup_memory_size(ggml_metal_encoder_t encoder, size_t size, int idx) {
+    // ref: https://developer.apple.com/documentation/metal/mtlcomputecommandencoder/setthreadgroupmemorylength(_:index:)
+    GGML_ASSERT(size % 16 == 0);
+
     [encoder->obj setThreadgroupMemoryLength:size atIndex:idx];
 }
 
@@ -667,6 +1031,35 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets) {
     free(rsets);
 }
 
+static const struct {
+    const char *              name;
+    const char *              token;
+    enum ggml_metal_device_id id;
+} k_metal_devices[] = {
+#define DEV(name, id) { name, #id, id }
+    DEV("M1",       GGML_METAL_DEVICE_M1),
+    DEV("M1 Pro",   GGML_METAL_DEVICE_M1_PRO),
+    DEV("M1 Max",   GGML_METAL_DEVICE_M1_MAX),
+    DEV("M1 Ultra", GGML_METAL_DEVICE_M1_ULTRA),
+    DEV("M2",       GGML_METAL_DEVICE_M2),
+    DEV("M2 Pro",   GGML_METAL_DEVICE_M2_PRO),
+    DEV("M2 Max",   GGML_METAL_DEVICE_M2_MAX),
+    DEV("M2 Ultra", GGML_METAL_DEVICE_M2_ULTRA),
+    DEV("M3",       GGML_METAL_DEVICE_M3),
+    DEV("M3 Pro",   GGML_METAL_DEVICE_M3_PRO),
+    DEV("M3 Max",   GGML_METAL_DEVICE_M3_MAX),
+    DEV("M3 Ultra", GGML_METAL_DEVICE_M3_ULTRA),
+    DEV("M4",       GGML_METAL_DEVICE_M4),
+    DEV("M4 Pro",   GGML_METAL_DEVICE_M4_PRO),
+    DEV("M4 Max",   GGML_METAL_DEVICE_M4_MAX),
+    DEV("M5",       GGML_METAL_DEVICE_M5),
+    DEV("M5 Pro",   GGML_METAL_DEVICE_M5_PRO),
+    DEV("M5 Max",   GGML_METAL_DEVICE_M5_MAX),
+    DEV("M5 Ultra", GGML_METAL_DEVICE_M5_ULTRA),
+    DEV("A18 Pro",  GGML_METAL_DEVICE_A18_PRO),
+#undef DEV
+};
+
 static enum ggml_metal_device_id ggml_metal_device_id_parse(const char * name) {
     if (!name) {
         return GGML_METAL_DEVICE_GENERIC;
@@ -678,274 +1071,273 @@ static enum ggml_metal_device_id ggml_metal_device_id_parse(const char * name) {
     }
     const char * suffix = name + sizeof(prefix) - 1;
 
-    static const struct {
-        const char * name;
-        enum ggml_metal_device_id id;
-    } table[] = {
-        {"M1",       GGML_METAL_DEVICE_M1},
-        {"M1 Pro",   GGML_METAL_DEVICE_M1_PRO},
-        {"M1 Max",   GGML_METAL_DEVICE_M1_MAX},
-        {"M1 Ultra", GGML_METAL_DEVICE_M1_ULTRA},
-        {"M2",       GGML_METAL_DEVICE_M2},
-        {"M2 Pro",   GGML_METAL_DEVICE_M2_PRO},
-        {"M2 Max",   GGML_METAL_DEVICE_M2_MAX},
-        {"M2 Ultra", GGML_METAL_DEVICE_M2_ULTRA},
-        {"M3",       GGML_METAL_DEVICE_M3},
-        {"M3 Pro",   GGML_METAL_DEVICE_M3_PRO},
-        {"M3 Max",   GGML_METAL_DEVICE_M3_MAX},
-        {"M3 Ultra", GGML_METAL_DEVICE_M3_ULTRA},
-        {"M4",       GGML_METAL_DEVICE_M4},
-        {"M4 Pro",   GGML_METAL_DEVICE_M4_PRO},
-        {"M4 Max",   GGML_METAL_DEVICE_M4_MAX},
-        {"M5",       GGML_METAL_DEVICE_M5},
-        {"M5 Pro",   GGML_METAL_DEVICE_M5_PRO},
-        {"M5 Max",   GGML_METAL_DEVICE_M5_MAX},
-        {"M5 Ultra", GGML_METAL_DEVICE_M5_ULTRA},
-    };
-
-    for (size_t i = 0; i < sizeof(table)/sizeof(table[0]); ++i) {
-        if (strcmp(suffix, table[i].name) == 0) {
-            return table[i].id;
+    for (size_t i = 0; i < sizeof(k_metal_devices)/sizeof(k_metal_devices[0]); ++i) {
+        if (strcmp(suffix, k_metal_devices[i].name) == 0) {
+            return k_metal_devices[i].id;
         }
     }
     return GGML_METAL_DEVICE_GENERIC;
 }
 
-ggml_metal_device_t ggml_metal_device_init(int device) {
+const char * ggml_metal_device_id_token(enum ggml_metal_device_id id) {
+    for (size_t i = 0; i < sizeof(k_metal_devices)/sizeof(k_metal_devices[0]); ++i) {
+        if (k_metal_devices[i].id == id) {
+            return k_metal_devices[i].token;
+        }
+    }
+    return "GGML_METAL_DEVICE_GENERIC";
+}
+
+ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
     ggml_metal_device_t dev = calloc(1, sizeof(struct ggml_metal_device));
 
     assert(dev != NULL);
 
-    if (dev->mtl_device == nil) {
-        dev->mtl_device = MTLCreateSystemDefaultDevice();
+    @autoreleasepool {
+        if (dev->mtl_device == nil) {
+            dev->mtl_device = MTLCreateSystemDefaultDevice();
 
-        if (dev->mtl_device) {
-            dev->mtl_queue = [dev->mtl_device newCommandQueue];
-            if (dev->mtl_queue == nil) {
-                GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
-            }
+            if (dev->mtl_device) {
+                dev->mtl_queue = [dev->mtl_device newCommandQueue];
+                if (dev->mtl_queue == nil) {
+                    GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
+                }
 
-            dev->addr_virt = 0x000000400ULL;
+                dev->addr_virt = 0x000000400ULL;
 
-            dev->props.device = device;
-            dev->props.has_simdgroup_reduction  = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
-            dev->props.has_simdgroup_reduction |= [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
+                dev->props.device = device;
 
-            dev->props.has_simdgroup_mm = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
-            dev->props.has_unified_memory = dev->mtl_device.hasUnifiedMemory;
+                // the Metal backend uses the system default device as the single physical device;
+                // additional (virtual) devices are emulated on top of it via GGML_METAL_DEVICES
+                dev->props.device_phys = 0;
+                dev->props.device_virt = device;
 
-            dev->props.has_bfloat  = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
-            dev->props.has_bfloat |= [dev->mtl_device supportsFamily:MTLGPUFamilyApple6];
-            if (getenv("GGML_METAL_BF16_DISABLE") != NULL) {
-                dev->props.has_bfloat = false;
-            }
+                dev->props.has_simdgroup_reduction  = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
+                dev->props.has_simdgroup_reduction |= [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
 
-            dev->props.has_tensor = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal4_GGML];
-            if (getenv("GGML_METAL_TENSOR_DISABLE") != NULL) {
-                dev->props.has_tensor = false;
-            }
+                dev->props.has_simdgroup_mm = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
+                dev->props.has_unified_memory = dev->mtl_device.hasUnifiedMemory;
 
-            // note: disable the tensor API by default for old chips because with the current implementation it is not useful
-            // - M2 Ultra:   ~5% slower
-            // - M4, M4 Max: no significant difference
-            //
-            // TODO: try to update the tensor API kernels to at least match the simdgroup performance
-            if (getenv("GGML_METAL_TENSOR_ENABLE") == NULL &&
-                ![[dev->mtl_device name] containsString:@"M5"] &&
-                ![[dev->mtl_device name] containsString:@"M6"] &&
-                ![[dev->mtl_device name] containsString:@"A19"] &&
-                ![[dev->mtl_device name] containsString:@"A20"]) {
-                GGML_LOG_INFO("%s: tensor API disabled for pre-M5 and pre-A19 devices\n", __func__);
-                dev->props.has_tensor = false;
-            }
+                dev->props.has_bfloat  = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
+                dev->props.has_bfloat |= [dev->mtl_device supportsFamily:MTLGPUFamilyApple6];
+                if (getenv("GGML_METAL_BF16_DISABLE") != NULL) {
+                    dev->props.has_bfloat = false;
+                }
 
-            // double-check that the tensor API compiles
-            if (dev->props.has_tensor) {
-                const char * src_tensor_f16 = "\n"
-                    "#include <metal_stdlib> \n"
-                    "#include <metal_tensor> \n"
-                    "#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h> \n"
-                    " \n"
-                    "using namespace metal; \n"
-                    "using namespace mpp::tensor_ops; \n"
-                    " \n"
-                    "kernel void dummy_kernel( \n"
-                    "    tensor<device  half, dextents<int32_t, 2>> A [[buffer(0)]], \n"
-                    "    tensor<device  half, dextents<int32_t, 2>> B [[buffer(1)]], \n"
-                    "    device float * C [[buffer(2)]], \n"
-                    "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
-                    "{ \n"
-                    "    auto tA = A.slice(0, (int)tgid.y); \n"
-                    "    auto tB = B.slice((int)tgid.x, 0); \n"
-                    " \n"
-                    "    matmul2d< \n"
-                    "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
-                    "        execution_simdgroups<4>> mm; \n"
-                    " \n"
-                    "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
-                    " \n"
-                    "    auto sA = tA.slice(0, 0); \n"
-                    "    auto sB = tB.slice(0, 0); \n"
-                    "    mm.run(sB, sA, cT); \n"
-                    " \n"
-                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(16, 16)); \n"
-                    " \n"
-                    "    cT.store(tC); \n"
-                    "}";
-
-                GGML_LOG_INFO("%s: testing tensor API for f16 support\n", __func__);
-                ggml_metal_library_t lib = ggml_metal_library_init_from_source(dev, src_tensor_f16, false);
-                if (lib == NULL) {
-                    GGML_LOG_WARN("%s: - the tensor API is not supported in this environment - disabling\n", __func__);
+                dev->props.has_tensor = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal4_GGML];
+                if (getenv("GGML_METAL_TENSOR_DISABLE") != NULL) {
                     dev->props.has_tensor = false;
-                } else {
-                    struct ggml_metal_pipeline_with_params ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
-                    if (!ppl.pipeline) {
+                }
+
+                // note: disable the tensor API by default for old chips because with the current implementation it is not useful
+                // - M2 Ultra:   ~5% slower
+                // - M4, M4 Max: no significant difference
+                //
+                // TODO: try to update the tensor API kernels to at least match the simdgroup performance
+                if (getenv("GGML_METAL_TENSOR_ENABLE") == NULL &&
+                    ![[dev->mtl_device name] containsString:@"M5"] &&
+                    ![[dev->mtl_device name] containsString:@"M6"] &&
+                    ![[dev->mtl_device name] containsString:@"A19"] &&
+                    ![[dev->mtl_device name] containsString:@"A20"]) {
+                    GGML_LOG_INFO("%s: tensor API disabled for pre-M5 and pre-A19 devices\n", __func__);
+                    dev->props.has_tensor = false;
+                }
+
+                // double-check that the tensor API compiles
+                if (dev->props.has_tensor) {
+                    const char * src_tensor_f16 = "\n"
+                        "#include <metal_stdlib> \n"
+                        "#include <metal_tensor> \n"
+                        "#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h> \n"
+                        " \n"
+                        "using namespace metal; \n"
+                        "using namespace mpp::tensor_ops; \n"
+                        " \n"
+                        "kernel void dummy_kernel( \n"
+                        "    tensor<device  half, dextents<int32_t, 2>> A [[buffer(0)]], \n"
+                        "    tensor<device  half, dextents<int32_t, 2>> B [[buffer(1)]], \n"
+                        "    device float * C [[buffer(2)]], \n"
+                        "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
+                        "{ \n"
+                        "    auto tA = A.slice(0, (int)tgid.y); \n"
+                        "    auto tB = B.slice((int)tgid.x, 0); \n"
+                        " \n"
+                        "    matmul2d< \n"
+                        "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
+                        "        execution_simdgroups<4>> mm; \n"
+                        " \n"
+                        "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
+                        " \n"
+                        "    auto sA = tA.slice(0, 0); \n"
+                        "    auto sB = tB.slice(0, 0); \n"
+                        "    mm.run(sB, sA, cT); \n"
+                        " \n"
+                        "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(16, 16)); \n"
+                        " \n"
+                        "    cT.store(tC); \n"
+                        "}";
+
+                    GGML_LOG_INFO("%s: testing tensor API for f16 support\n", __func__);
+                    ggml_metal_library_t lib = ggml_metal_library_init_from_source(dev, src_tensor_f16, false);
+                    if (lib == NULL) {
                         GGML_LOG_WARN("%s: - the tensor API is not supported in this environment - disabling\n", __func__);
                         dev->props.has_tensor = false;
+                    } else {
+                        struct ggml_metal_pipeline_with_params ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
+                        if (!ppl.pipeline) {
+                            GGML_LOG_WARN("%s: - the tensor API is not supported in this environment - disabling\n", __func__);
+                            dev->props.has_tensor = false;
+                        }
+
+                        ggml_metal_library_free(lib);
                     }
-
-                    ggml_metal_library_free(lib);
                 }
-            }
 
-            // try to compile a dummy kernel to determine if the tensor API is supported for bfloat
-            if (dev->props.has_tensor && dev->props.has_bfloat) {
-                const char * src_tensor_bf16 = "\n"
-                    "#include <metal_stdlib> \n"
-                    "#include <metal_tensor> \n"
-                    "#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h> \n"
-                    " \n"
-                    "using namespace metal; \n"
-                    "using namespace mpp::tensor_ops; \n"
-                    " \n"
-                    "kernel void dummy_kernel( \n"
-                    "    tensor<device bfloat, dextents<int32_t, 2>> A [[buffer(0)]], \n"
-                    "    tensor<device bfloat, dextents<int32_t, 2>> B [[buffer(1)]], \n"
-                    "    device float * C [[buffer(2)]], \n"
-                    "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
-                    "{ \n"
-                    "    auto tA = A.slice(0, (int)tgid.y); \n"
-                    "    auto tB = B.slice((int)tgid.x, 0); \n"
-                    " \n"
-                    "    matmul2d< \n"
-                    "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
-                    "        execution_simdgroups<4>> mm; \n"
-                    " \n"
-                    "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
-                    " \n"
-                    "    auto sA = tA.slice(0, 0); \n"
-                    "    auto sB = tB.slice(0, 0); \n"
-                    "    mm.run(sB, sA, cT); \n"
-                    " \n"
-                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(16, 16)); \n"
-                    " \n"
-                    "    cT.store(tC); \n"
-                    "}";
+                // try to compile a dummy kernel to determine if the tensor API is supported for bfloat
+                if (dev->props.has_tensor && dev->props.has_bfloat) {
+                    const char * src_tensor_bf16 = "\n"
+                        "#include <metal_stdlib> \n"
+                        "#include <metal_tensor> \n"
+                        "#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h> \n"
+                        " \n"
+                        "using namespace metal; \n"
+                        "using namespace mpp::tensor_ops; \n"
+                        " \n"
+                        "kernel void dummy_kernel( \n"
+                        "    tensor<device bfloat, dextents<int32_t, 2>> A [[buffer(0)]], \n"
+                        "    tensor<device bfloat, dextents<int32_t, 2>> B [[buffer(1)]], \n"
+                        "    device float * C [[buffer(2)]], \n"
+                        "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
+                        "{ \n"
+                        "    auto tA = A.slice(0, (int)tgid.y); \n"
+                        "    auto tB = B.slice((int)tgid.x, 0); \n"
+                        " \n"
+                        "    matmul2d< \n"
+                        "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
+                        "        execution_simdgroups<4>> mm; \n"
+                        " \n"
+                        "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
+                        " \n"
+                        "    auto sA = tA.slice(0, 0); \n"
+                        "    auto sB = tB.slice(0, 0); \n"
+                        "    mm.run(sB, sA, cT); \n"
+                        " \n"
+                        "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(16, 16)); \n"
+                        " \n"
+                        "    cT.store(tC); \n"
+                        "}";
 
-                GGML_LOG_INFO("%s: testing tensor API for bfloat support\n", __func__);
-                ggml_metal_library_t lib = ggml_metal_library_init_from_source(dev, src_tensor_bf16, false);
-                if (lib == NULL) {
-                    GGML_LOG_WARN("%s: - the tensor API does not support bfloat - disabling bfloat support\n", __func__);
-                    dev->props.has_bfloat = false;
-                } else {
-                    struct ggml_metal_pipeline_with_params ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
-                    if (!ppl.pipeline) {
+                    GGML_LOG_INFO("%s: testing tensor API for bfloat support\n", __func__);
+                    ggml_metal_library_t lib = ggml_metal_library_init_from_source(dev, src_tensor_bf16, false);
+                    if (lib == NULL) {
                         GGML_LOG_WARN("%s: - the tensor API does not support bfloat - disabling bfloat support\n", __func__);
                         dev->props.has_bfloat = false;
+                    } else {
+                        struct ggml_metal_pipeline_with_params ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
+                        if (!ppl.pipeline) {
+                            GGML_LOG_WARN("%s: - the tensor API does not support bfloat - disabling bfloat support\n", __func__);
+                            dev->props.has_bfloat = false;
+                        }
+
+                        ggml_metal_library_free(lib);
                     }
-
-                    ggml_metal_library_free(lib);
                 }
-            }
 
-            dev->props.use_residency_sets = true;
+                dev->props.use_residency_sets = true;
 #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
-            dev->props.use_residency_sets = getenv("GGML_METAL_NO_RESIDENCY") == nil;
+                dev->props.use_residency_sets = getenv("GGML_METAL_NO_RESIDENCY") == nil;
 #endif
 
-            dev->props.use_shared_buffers = dev->props.has_unified_memory;
+                dev->props.use_shared_buffers = dev->props.has_unified_memory;
 #if TARGET_OS_OSX
-            // In case of eGPU, shared memory may be preferable.
-            dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
+                // In case of eGPU, shared memory may be preferable.
+                dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
 #endif
-            if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
-                dev->props.use_shared_buffers = false;
-            }
-            if (getenv("GGML_METAL_SHARED_BUFFERS_ENABLE") != NULL) {
-                dev->props.use_shared_buffers = true;
-            }
+                if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
+                    dev->props.use_shared_buffers = false;
+                }
+                if (getenv("GGML_METAL_SHARED_BUFFERS_ENABLE") != NULL) {
+                    dev->props.use_shared_buffers = true;
+                }
 
-            dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
+                dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
 
-            dev->props.device_id = ggml_metal_device_id_parse([[dev->mtl_device name] UTF8String]);
+                dev->props.device_id = ggml_metal_device_id_parse([[dev->mtl_device name] UTF8String]);
 
-            dev->props.op_offload_min_batch_size  = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
+                dev->props.op_offload_min_batch_size  = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 
-            dev->props.max_buffer_size            = dev->mtl_device.maxBufferLength;
-            dev->props.max_theadgroup_memory_size = dev->mtl_device.maxThreadgroupMemoryLength;
-            if (@available(macOS 10.12, iOS 16.0, *)) {
-                dev->props.max_working_set_size   = dev->mtl_device.recommendedMaxWorkingSetSize;
-            } else {
-                dev->props.max_working_set_size   = dev->mtl_device.maxBufferLength;
-            }
+                dev->props.max_buffer_size            = dev->mtl_device.maxBufferLength;
+                dev->props.max_theadgroup_memory_size = dev->mtl_device.maxThreadgroupMemoryLength;
+                if (@available(macOS 10.12, iOS 16.0, *)) {
+                    dev->props.max_working_set_size   = dev->mtl_device.recommendedMaxWorkingSetSize;
+                } else {
+                    dev->props.max_working_set_size   = dev->mtl_device.maxBufferLength;
+                }
 
-            snprintf(dev->props.name, sizeof(dev->props.name), "%s%d", "MTL", device);
-            snprintf(dev->props.desc, sizeof(dev->props.desc), "%s", [[dev->mtl_device name] UTF8String]);
+                snprintf(dev->props.name, sizeof(dev->props.name), "%s%d", "MTL", device);
+                const char * gpu_name = [[dev->mtl_device name] UTF8String];
+                if (n_devices > 1) {
+                    snprintf(dev->props.desc, sizeof(dev->props.desc), "%s (dev p%d/v%d)",
+                             gpu_name, dev->props.device_phys, dev->props.device_virt);
+                } else {
+                    snprintf(dev->props.desc, sizeof(dev->props.desc), "%s", gpu_name);
+                }
 
-            dev->library = ggml_metal_library_init(dev);
-            if (!dev->library) {
-                GGML_LOG_ERROR("%s: error: failed to create library\n", __func__);
-            }
+                dev->library = ggml_metal_library_init(dev);
+                if (!dev->library) {
+                    GGML_LOG_ERROR("%s: error: failed to create library\n", __func__);
+                }
 
-            if (dev->props.use_residency_sets) {
-                dev->rsets = ggml_metal_rsets_init(dev);
-            } else {
-                dev->rsets = nil;
-            }
+                if (dev->props.use_residency_sets) {
+                    dev->rsets = ggml_metal_rsets_init(dev);
+                } else {
+                    dev->rsets = nil;
+                }
 
-            // print MTL GPU family:
-            GGML_LOG_INFO("%s: GPU name:   %s (%s)\n", __func__, dev->props.name, dev->props.desc);
+                // print MTL GPU family:
+                GGML_LOG_INFO("%s: GPU name:   %s (%s)\n", __func__, dev->props.name, dev->props.desc);
 
-            // determine max supported GPU family
-            // https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
-            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
-            {
-                for (int i = MTLGPUFamilyApple1 + 20; i >= MTLGPUFamilyApple1; --i) {
-                    if ([dev->mtl_device supportsFamily:i]) {
-                        GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyApple%d  (%d)\n", __func__, i - (int) MTLGPUFamilyApple1 + 1, i);
-                        break;
+                // determine max supported GPU family
+                // https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
+                // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
+                {
+                    for (int i = MTLGPUFamilyApple1 + 20; i >= MTLGPUFamilyApple1; --i) {
+                        if ([dev->mtl_device supportsFamily:i]) {
+                            dev->props.gpu_family = i - (int) MTLGPUFamilyApple1 + 1;
+                            GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyApple%d  (%d)\n", __func__, dev->props.gpu_family, i);
+                            break;
+                        }
+                    }
+
+                    for (int i = MTLGPUFamilyCommon1 + 5; i >= MTLGPUFamilyCommon1; --i) {
+                        if ([dev->mtl_device supportsFamily:i]) {
+                            GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyCommon%d (%d)\n", __func__, i - (int) MTLGPUFamilyCommon1 + 1, i);
+                            break;
+                        }
+                    }
+
+                    for (int i = MTLGPUFamilyMetal3_GGML + 5; i >= MTLGPUFamilyMetal3_GGML; --i) {
+                        if ([dev->mtl_device supportsFamily:i]) {
+                            GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyMetal%d  (%d)\n", __func__, i - (int) MTLGPUFamilyMetal3_GGML + 3, i);
+                            break;
+                        }
                     }
                 }
 
-                for (int i = MTLGPUFamilyCommon1 + 5; i >= MTLGPUFamilyCommon1; --i) {
-                    if ([dev->mtl_device supportsFamily:i]) {
-                        GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyCommon%d (%d)\n", __func__, i - (int) MTLGPUFamilyCommon1 + 1, i);
-                        break;
-                    }
-                }
-
-                for (int i = MTLGPUFamilyMetal3_GGML + 5; i >= MTLGPUFamilyMetal3_GGML; --i) {
-                    if ([dev->mtl_device supportsFamily:i]) {
-                        GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyMetal%d  (%d)\n", __func__, i - (int) MTLGPUFamilyMetal3_GGML + 3, i);
-                        break;
-                    }
-                }
-            }
-
-            GGML_LOG_INFO("%s: simdgroup reduction   = %s\n", __func__, dev->props.has_simdgroup_reduction ? "true" : "false");
-            GGML_LOG_INFO("%s: simdgroup matrix mul. = %s\n", __func__, dev->props.has_simdgroup_mm        ? "true" : "false");
-            GGML_LOG_INFO("%s: has unified memory    = %s\n", __func__, dev->props.has_unified_memory      ? "true" : "false");
-            GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, dev->props.has_bfloat              ? "true" : "false");
-            GGML_LOG_INFO("%s: has tensor            = %s\n", __func__, dev->props.has_tensor              ? "true" : "false");
-            GGML_LOG_INFO("%s: use residency sets    = %s\n", __func__, dev->props.use_residency_sets      ? "true" : "false");
-            GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, dev->props.use_shared_buffers      ? "true" : "false");
+                GGML_LOG_INFO("%s: simdgroup reduction   = %s\n", __func__, dev->props.has_simdgroup_reduction ? "true" : "false");
+                GGML_LOG_INFO("%s: simdgroup matrix mul. = %s\n", __func__, dev->props.has_simdgroup_mm        ? "true" : "false");
+                GGML_LOG_INFO("%s: has unified memory    = %s\n", __func__, dev->props.has_unified_memory      ? "true" : "false");
+                GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, dev->props.has_bfloat              ? "true" : "false");
+                GGML_LOG_INFO("%s: has tensor            = %s\n", __func__, dev->props.has_tensor              ? "true" : "false");
+                GGML_LOG_INFO("%s: use residency sets    = %s\n", __func__, dev->props.use_residency_sets      ? "true" : "false");
+                GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, dev->props.use_shared_buffers      ? "true" : "false");
 
 #if TARGET_OS_OSX || (TARGET_OS_IOS && __clang_major__ >= 15)
-            if (@available(macOS 10.12, iOS 16.0, *)) {
-                GGML_LOG_INFO("%s: recommendedMaxWorkingSetSize  = %8.2f MB\n", __func__, dev->props.max_working_set_size / 1e6);
-            }
+                if (@available(macOS 10.12, iOS 16.0, *)) {
+                    GGML_LOG_INFO("%s: recommendedMaxWorkingSetSize  = %8.2f MB\n", __func__, dev->props.max_working_set_size / 1e6);
+                }
 #endif
+            }
         }
     }
 
@@ -955,19 +1347,21 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
 void ggml_metal_device_free(ggml_metal_device_t dev) {
     assert(dev != NULL);
 
-    ggml_metal_rsets_free(dev->rsets);
+    @autoreleasepool {
+        ggml_metal_rsets_free(dev->rsets);
 
-    ggml_metal_library_free(dev->library);
-    dev->library = NULL;
+        ggml_metal_library_free(dev->library);
+        dev->library = NULL;
 
-    if (dev->mtl_queue) {
-        [dev->mtl_queue release];
-        dev->mtl_queue = nil;
-    }
+        if (dev->mtl_queue) {
+            [dev->mtl_queue release];
+            dev->mtl_queue = nil;
+        }
 
-    if (dev->mtl_device) {
-        [dev->mtl_device release];
-        dev->mtl_device = nil;
+        if (dev->mtl_device) {
+            [dev->mtl_device release];
+            dev->mtl_device = nil;
+        }
     }
 
     free(dev);
@@ -1055,12 +1449,14 @@ ggml_metal_event_t ggml_metal_device_event_init(ggml_metal_device_t dev) {
 }
 
 void ggml_metal_device_event_free(ggml_metal_device_t dev, ggml_metal_event_t ev) {
-    id<MTLSharedEvent> event = ev->obj;
-    [event release];
+    @autoreleasepool {
+        id<MTLSharedEvent> event = ev->obj;
+        [event release];
 
-    free(ev);
+        free(ev);
 
-    GGML_UNUSED(dev);
+        GGML_UNUSED(dev);
+    }
 }
 
 void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_event_t ev) {
@@ -1075,12 +1471,38 @@ void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_eve
 
 void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t * total) {
     if (@available(macOS 10.12, iOS 16.0, *)) {
-        *total = dev->mtl_device.recommendedMaxWorkingSetSize;
-        *free  = *total - dev->mtl_device.currentAllocatedSize;
+        *total     = dev->mtl_device.recommendedMaxWorkingSetSize;
+        size_t cur = dev->mtl_device.currentAllocatedSize;
+        // it's possible to allocate more than `recommendedMaxWorkingSetSize`
+        *free      = *total > cur ? *total - cur : 0;
     } else {
         *free = 0;
         *total = 0;
     }
+}
+
+static bool ggml_metal_supports_mul_mat_op(
+        bool has_simdgroup_reduction,
+        const struct ggml_tensor * op,
+        bool src0_f16_has_mv,
+        bool mm_path) {
+    if (!has_simdgroup_reduction || op->src[0]->type == GGML_TYPE_NVFP4) {
+        return false;
+    }
+
+    if (op->src[1]->type != GGML_TYPE_F16) {
+        return true;
+    }
+
+    if (op->src[0]->type == GGML_TYPE_BF16) {
+        return false;
+    }
+
+    if (src0_f16_has_mv && op->src[0]->type == GGML_TYPE_F16) {
+        return true;
+    }
+
+    return mm_path;
 }
 
 bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_tensor * op) {
@@ -1154,6 +1576,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 case GGML_GLU_OP_SWIGLU_OAI:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
+                case GGML_GLU_OP_SWIGLU_CLAMP:
                     return ggml_is_contiguous_1(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
                default:
                     return false;
@@ -1181,6 +1604,12 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                         return true;
                     case GGML_TYPE_BF16:
                         return has_bfloat;
+                    case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q5_0:
+                    case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_Q8_0:
+                        return true;
                     default:
                         return false;
                 }
@@ -1386,9 +1815,15 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_GATED_DELTA_NET:
             return has_simdgroup_reduction && op->src[2]->ne[0] % 32 == 0;
         case GGML_OP_SOLVE_TRI:
+            return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:
+            return ggml_metal_supports_mul_mat_op(
+                    has_simdgroup_reduction, op, true,
+                    ggml_metal_op_mul_mat_use_mm(op, has_simdgroup_mm));
         case GGML_OP_MUL_MAT_ID:
-            return has_simdgroup_reduction && op->src[0]->type != GGML_TYPE_NVFP4;
+            return ggml_metal_supports_mul_mat_op(
+                    has_simdgroup_reduction, op, false,
+                    ggml_metal_op_mul_mat_id_use_mm(op, has_simdgroup_mm));
         case GGML_OP_SET:
         case GGML_OP_CPY:
         case GGML_OP_DUP:
@@ -1491,6 +1926,10 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
 
 const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_device_t dev) {
     return &dev->props;
+}
+
+static void ggml_metal_device_disable_tensor(ggml_metal_device_t dev) {
+    dev->props.has_tensor = false;
 }
 
 //
@@ -1794,13 +2233,15 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
 }
 
 void ggml_metal_buffer_free(ggml_metal_buffer_t buf) {
-    ggml_metal_device_rsets_rm(buf->dev, buf->rset);
+    @autoreleasepool {
+        ggml_metal_device_rsets_rm(buf->dev, buf->rset);
 
-    for (int i = 0; i < buf->n_buffers; i++) {
-        [buf->buffers[i].metal release];
+        for (int i = 0; i < buf->n_buffers; i++) {
+            [buf->buffers[i].metal release];
+        }
+
+        ggml_metal_buffer_rset_free(buf);
     }
-
-    ggml_metal_buffer_rset_free(buf);
 
     if (buf->is_shared && buf->owned) {
 #if TARGET_OS_OSX

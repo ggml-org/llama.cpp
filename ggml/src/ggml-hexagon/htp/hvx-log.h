@@ -62,4 +62,57 @@ static inline HVX_Vector hvx_vec_log_f32(HVX_Vector x) {
     return hvx_vec_add_f32_f32(term_e, res);
 }
 
+static inline void hvx_log_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+
+    HVX_Vector * restrict vdst = (HVX_Vector *) dst;
+    HVX_Vector * restrict vsrc = (HVX_Vector *) src;
+
+    const uint32_t elem_size = sizeof(float);
+    const uint32_t epv       = 128 / elem_size;
+    const uint32_t nvec      = n / epv;
+    const uint32_t nloe      = n % epv;
+
+    uint32_t i = 0;
+
+    _Pragma("unroll(4)")
+    for (; i < nvec; i++) {
+        vdst[i] = hvx_vec_log_f32(vsrc[i]);
+    }
+    if (nloe) {
+        HVX_Vector v = hvx_vec_log_f32(vsrc[i]);
+        hvx_vec_store_a((void *) &vdst[i], nloe * elem_size, v);
+    }
+}
+
+// Compute log(x) for f16 by promoting to f32, applying hvx_vec_log_f32, and narrowing back.
+static inline void hvx_log_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+
+    HVX_Vector * restrict vdst = (HVX_Vector *) dst;
+    HVX_Vector * restrict vsrc = (HVX_Vector *) src;
+
+    const uint32_t nvec = n / VLEN_FP16;
+    const uint32_t nloe = n % VLEN_FP16;
+
+    uint32_t i = 0;
+
+    _Pragma("unroll(4)")
+    for (; i < nvec; i++) {
+        HVX_VectorPair p = hvx_vec_f16_to_f32(vsrc[i]);
+        HVX_Vector r0 = hvx_vec_log_f32(Q6_V_lo_W(p));
+        HVX_Vector r1 = hvx_vec_log_f32(Q6_V_hi_W(p));
+        vdst[i] = hvx_vec_f32_to_f16(r0, r1);
+    }
+    if (nloe) {
+        HVX_VectorPair p = hvx_vec_f16_to_f32(vsrc[i]);
+        HVX_Vector r0 = hvx_vec_log_f32(Q6_V_lo_W(p));
+        HVX_Vector r1 = hvx_vec_log_f32(Q6_V_hi_W(p));
+        HVX_Vector v = hvx_vec_f32_to_f16(r0, r1);
+        hvx_vec_store_a((void *) &vdst[i], nloe * SIZEOF_FP16, v);
+    }
+}
+
 #endif /* HVX_LOG_H */

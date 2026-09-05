@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { isMobile } from '$lib/stores';
+	import { deviceStore } from '$lib/stores';
 	import { autoResizeTextarea } from '$lib/utils';
 	import { onMount } from 'svelte';
 
@@ -37,7 +37,7 @@
 	}
 
 	export function focus() {
-		if (isMobile.current) return;
+		if (deviceStore.isMobile) return;
 
 		textareaElement?.focus({ preventScroll: true });
 	}
@@ -69,14 +69,14 @@
 			'text-md min-h-12 w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0',
 			disabled && 'cursor-not-allowed'
 		]}
-		style="max-height: var(--max-message-height);"
 		{disabled}
-		onkeydown={onKeydown}
 		oninput={(event) => {
 			autoResizeTextarea(event.currentTarget);
 			onInput?.();
 		}}
+		onkeydown={onKeydown}
 		onpaste={onPaste}
 		{placeholder}
+		style="max-height: var(--max-message-height);"
 	></textarea>
 </div>

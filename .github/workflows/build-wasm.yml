@@ -54,11 +54,10 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: webgpu-ubuntu-24.04-arm-wasm
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
 
       - name: Install Emscripten
         run: |
@@ -76,6 +75,15 @@ jobs:
             "https://github.com/google/dawn/releases/download/${DAWN_TAG}/${EMDAWN_PKG}"
           unzip emdawn.zip
 
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: webgpu-ubuntu-24.04-arm-wasm
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
       - name: Build WASM WebGPU
         run: |
           source emsdk/emsdk_env.sh
@@ -88,3 +96,15 @@ jobs:
             -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
 
           time cmake --build build-wasm --config Release --target test-backend-ops -j $(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: webgpu-ubuntu-24.04-arm-wasm
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true

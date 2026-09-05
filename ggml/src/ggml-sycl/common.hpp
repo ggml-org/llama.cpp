@@ -18,6 +18,7 @@
 #include <iostream>
 #include <string>
 
+#include "base.hpp"
 #include "dpct/helper.hpp"
 #include "ggml.h"
 #include "ggml-impl.h"
@@ -26,6 +27,7 @@
 #include "type.hpp"
 #include "sycl_hw.hpp"
 #include "fattn-buffers.hpp"
+#include "memtrace.hpp"
 
 namespace syclexp = sycl::ext::oneapi::experimental;
 
@@ -67,22 +69,10 @@ extern int g_ggml_sycl_enable_flash_attention;
 extern int g_ggml_sycl_dev2dev_memcpy;
 extern int g_ggml_sycl_fa_onednn;
 extern int g_ggml_sycl_fa_onednn_max_kv;
+extern int g_ggml_sycl_enable_mkl_fa;
+extern int g_ggml_sycl_memtrace;
+extern int g_ggml_sycl_memtrace_step;
 
-
-#if defined(__clang__) && __has_builtin(__builtin_expect)
-// Hint the optimizer to pipeline the more likely following instruction in branches
-#    define LIKELY(expr)   __builtin_expect(expr, true)
-#    define UNLIKELY(expr) __builtin_expect(expr, false)
-#else
-#    define LIKELY(expr)   (expr)
-#    define UNLIKELY(expr) (expr)
-#endif
-
-#define GGML_SYCL_DEBUG(...)              \
-    do {                                  \
-        if (UNLIKELY(g_ggml_sycl_debug))  \
-            fprintf(stderr, __VA_ARGS__); \
-    } while (0)
 
 #define CHECK_TRY_ERROR(expr)                                            \
   [&]() {                                                                \
@@ -331,7 +321,8 @@ struct ggml_tensor_extra_gpu {
 };
 
 extern int g_ggml_sycl_use_level_zero_api;
-void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
+void * ggml_sycl_malloc_device(size_t size, sycl::queue &q,
+                               ggml_sycl_mem_type type = GGML_SYCL_MEM_DIRECT);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
