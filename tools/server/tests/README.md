@@ -65,6 +65,16 @@ cmake --build build -j --target llama-server && ./tools/server/tests/tests.sh
 
 To see all available arguments, please refer to [pytest documentation](https://docs.pytest.org/en/stable/how-to/usage.html)
 
+### MTP draft-limit regression
+
+Provide a GGUF containing embedded MTP weights to run the output-budget test:
+
+```shell
+LLAMACPP_TEST_MODELFILE=/path/to/model-with-mtp.gguf ./tests.sh unit/test_speculative.py -k mtp_output_budget -v
+```
+
+The test is skipped when no model path is provided. It checks that short output budgets do not cause excess drafts to be generated and then truncated, with one and two server slots.
+
 ### Debugging external llama-server
 It can sometimes be useful to run the server in a debugger when invesigating test
 failures. To do this, the environment variable `DEBUG_EXTERNAL=1` can be set
