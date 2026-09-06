@@ -2616,7 +2616,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         // note: "-mmdev" must sort after "--rpc" in the preset map, else RPC devices are not registered yet
         {"-mmdev", "--mmproj-device"}, "DEVICE",
-        "device to use for multimodal projector (none = don't offload, default: auto)\n"
+        "device to use for multimodal projector (none = don't offload, default: follows --device)\n"
         "use --list-devices to see a list of available devices",
         [](common_params & params, const std::string & value) {
             if (value == "none") {
@@ -4227,7 +4227,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING"));
     add_opt(common_arg(
         {"--spec-draft-device", "-devd", "--device-draft"}, "<dev1,dev2,..>",
-        "comma-separated list of devices to use for offloading the draft model (none = don't offload)\n"
+        "comma-separated list of devices to use for offloading the draft model (none = don't offload, default: follows --device)\n"
         "use --list-devices to see a list of available devices",
         [](common_params & params, const std::string & value) {
             params.speculative.draft.devices = parse_device_list(value);
