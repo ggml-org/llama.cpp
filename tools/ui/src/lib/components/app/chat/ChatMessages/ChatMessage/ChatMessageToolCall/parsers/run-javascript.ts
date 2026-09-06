@@ -6,6 +6,7 @@
 // are handled.
 
 import { parseToolArgs } from './_shared';
+import { JSON_ARRAY_OPEN, JSON_OBJECT_OPEN } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
 import type { AgenticSection } from '$lib/types';
 
@@ -43,7 +44,7 @@ export function parseRunJavascriptMeta(section: AgenticSection): RunJavascriptMe
 		// when the blob starts with a JSON container
 		const trimmedResult = toolResultString.trimStart();
 
-		if (trimmedResult[0] === '{' || trimmedResult[0] === '[') {
+		if (trimmedResult[0] === JSON_OBJECT_OPEN || trimmedResult[0] === JSON_ARRAY_OPEN) {
 			try {
 				const parsed: unknown = JSON.parse(trimmedResult);
 

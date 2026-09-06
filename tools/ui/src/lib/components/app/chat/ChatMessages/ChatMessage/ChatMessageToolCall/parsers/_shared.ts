@@ -4,6 +4,7 @@
 // args-present check, JSON parse) - keeping them here lets each parser
 // stay focused on its own format quirks.
 
+import { TOOL_ARG_STRING_FIELD_PATTERN_TEMPLATE } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
 import type { AgenticSection } from '$lib/types/agentic';
 import { parsePartialJsonArgs } from '$lib/utils/parse-partial-json-args';
@@ -39,12 +40,15 @@ const toolArgStringRegexes = new Map<string, RegExp>();
  * O(path) instead of O(blob). Returns undefined when the key is missing
  * or its value is not a string; callers fall back to the full parse.
  */
-export function extractToolArgString(toolArgs: string, keys: string[]): string | undefined {
+export function extractToolArgString(
+	toolArgs: string,
+	keys: readonly string[]
+): string | undefined {
 	for (const key of keys) {
 		let pattern = toolArgStringRegexes.get(key);
 
 		if (!pattern) {
-			pattern = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`);
+			pattern = new RegExp(TOOL_ARG_STRING_FIELD_PATTERN_TEMPLATE.replace('{key}', key));
 			toolArgStringRegexes.set(key, pattern);
 		}
 

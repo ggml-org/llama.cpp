@@ -10,11 +10,10 @@ import { parseReadFileMeta } from '$lib/components/app/chat/ChatMessages/ChatMes
 import { parseRunJavascriptMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/run-javascript';
 import {
 	parseWriteFileMeta,
-	parseWriteFileTitleMeta,
-	type WriteFileMeta
+	parseWriteFileTitleMeta
 } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/write-file';
 import { AgenticSectionType, BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/types';
+import type { AgenticSection, WriteFileMeta } from '$lib/types';
 import { abbreviateHome, formatCwdMessage, lastPathSegment, parseCwdMessage } from '$lib/utils';
 import { describe, expect, it } from 'vitest';
 

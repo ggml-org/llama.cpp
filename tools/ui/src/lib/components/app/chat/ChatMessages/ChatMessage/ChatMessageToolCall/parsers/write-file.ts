@@ -4,34 +4,10 @@
 // result blob.
 
 import { extractToolArgString, parseToolArgs } from './_shared';
-import { CODE_BLOCK, FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
+import { CODE_BLOCK, FILE_PATH_SEPARATOR_REGEX, TOOL_ARG_PATH_KEYS } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/types';
+import type { AgenticSection, WriteFileMeta, WriteFileTitleMeta } from '$lib/types';
 import { getFileTypeByExtension, tryParseToolResultObject } from '$lib/utils';
-
-export type WriteFileMeta = {
-	fileName: string;
-	filePath: string;
-	language: string;
-	content: string;
-	bytesWritten?: number;
-	resultMessage?: string;
-	errorMessage?: string;
-};
-
-/** Everything the block title and status pill show; the full meta (with
- *  the embedded file content) stays body-only so collapsed blocks never
- *  parse the content blob. */
-export type WriteFileTitleMeta = {
-	fileName: string;
-	filePath: string;
-	language: string;
-	bytesWritten?: number;
-	resultMessage?: string;
-	errorMessage?: string;
-};
-
-const PATH_KEYS = ['path', 'file_path', 'filePath'];
 
 export function parseWriteFileMeta(section: AgenticSection): WriteFileMeta | null {
 	const args = parseToolArgs(BuiltInTool.SERVER_WRITE_FILE, section, { partial: true });
@@ -75,7 +51,7 @@ export function parseWriteFileMeta(section: AgenticSection): WriteFileMeta | nul
 export function parseWriteFileTitleMeta(section: AgenticSection): WriteFileTitleMeta | null {
 	if (section.toolName !== BuiltInTool.SERVER_WRITE_FILE || !section.toolArgs) return null;
 
-	let rawPath: string | undefined = extractToolArgString(section.toolArgs, PATH_KEYS);
+	let rawPath: string | undefined = extractToolArgString(section.toolArgs, TOOL_ARG_PATH_KEYS);
 
 	if (!rawPath) {
 		const args = parseToolArgs(BuiltInTool.SERVER_WRITE_FILE, section, { partial: true });

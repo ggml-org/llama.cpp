@@ -4,6 +4,8 @@
 // Each tool needs to surface fields like `error`, `result`, `bytes`,
 // `edits_applied` without repeating the try/JSON.parse/object guard inline.
 
+import { JSON_OBJECT_OPEN } from '$lib/constants';
+
 /**
  * Parse a tool-result blob into a JSON object, or `null` if it isn't
  * one. Returns null for:
@@ -20,7 +22,7 @@ export function tryParseToolResultObject(
 	// a JSON object root can carry fields, so skip the parse otherwise
 	const trimmed = toolResultString.trimStart();
 
-	if (trimmed[0] !== '{') return null;
+	if (trimmed[0] !== JSON_OBJECT_OPEN) return null;
 
 	try {
 		const parsed: unknown = JSON.parse(trimmed);

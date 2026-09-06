@@ -4,37 +4,10 @@
 // `error` fields.
 
 import { extractToolArgString, parseToolArgs } from './_shared';
-import { FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
+import { FILE_PATH_SEPARATOR_REGEX, TOOL_ARG_PATH_KEYS } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/types';
+import type { AgenticSection, EditFileEdit, EditFileMeta, EditFileTitleMeta } from '$lib/types';
 import { tryParseToolResultObject } from '$lib/utils';
-
-export type EditFileEdit = {
-	oldText: string;
-	newText: string;
-};
-
-export type EditFileMeta = {
-	fileName: string;
-	filePath: string;
-	edits: EditFileEdit[];
-	resultMessage?: string;
-	editsApplied?: number;
-	errorMessage?: string;
-};
-
-/** Everything the block title and status pill show; the full meta (with
- *  the embedded edit strings) stays body-only so collapsed blocks never
- *  parse the args blob. */
-export type EditFileTitleMeta = {
-	fileName: string;
-	filePath: string;
-	resultMessage?: string;
-	editsApplied?: number;
-	errorMessage?: string;
-};
-
-const PATH_KEYS = ['path', 'file_path', 'filePath'];
 
 export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null {
 	const args = parseToolArgs(BuiltInTool.SERVER_EDIT_FILE, section, { partial: true });
@@ -102,7 +75,7 @@ export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null 
 export function parseEditFileTitleMeta(section: AgenticSection): EditFileTitleMeta | null {
 	if (section.toolName !== BuiltInTool.SERVER_EDIT_FILE || !section.toolArgs) return null;
 
-	let rawPath: string | undefined = extractToolArgString(section.toolArgs, PATH_KEYS);
+	let rawPath: string | undefined = extractToolArgString(section.toolArgs, TOOL_ARG_PATH_KEYS);
 
 	if (!rawPath) {
 		const args = parseToolArgs(BuiltInTool.SERVER_EDIT_FILE, section, { partial: true });
