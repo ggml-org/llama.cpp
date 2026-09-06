@@ -28,6 +28,14 @@ enum llama_swa_type {
     LLAMA_SWA_TYPE_SYMMETRIC = 3,
 };
 
+// how the non-causal mask should be constructed with llama_set_causal_attn(ctx, false)
+// (e.g. mtmd decoding image tokens)
+enum llama_non_causal_type {
+    LLAMA_NON_CAUSAL_TYPE_ALL      = 0, // all layers non-causal, SWA still applied (gemma 3, qwen-vl, ...)
+    LLAMA_NON_CAUSAL_TYPE_SWA_ONLY = 1, // SWA layers non-causal, dense layers stay causal (gemma 4)
+    LLAMA_NON_CAUSAL_TYPE_SWA_FULL = 2, // all layers non-causal, SWA not applied between tokens of the current ubatch (deepseek 4)
+};
+
 // forward declaration; full definition in llama-graph.h
 enum llm_ffn_op_type : int;
 
@@ -62,7 +70,6 @@ struct llama_hparams {
     // per-token adapter selection. -1 when the model has no such layer.
     int32_t  router_layer = -1;
     uint32_t n_expert = 0;
-    uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
 
     // TODO: this needs to be reworked
@@ -92,10 +99,14 @@ struct llama_hparams {
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 
+    // per-layer expert feed-forward size
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_exp_arr;
+    // per-layer top-k expert routing count
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_expert_used_arr;
+
     uint32_t n_layer_dense_lead = 0;
     uint32_t n_lora_q           = 0;
     uint32_t n_lora_kv          = 0;
-    uint32_t n_ff_exp           = 0;
     uint32_t n_ff_shexp         = 0;
     uint32_t n_ff_chexp         = 0;
     uint32_t n_expert_shared    = 0;
@@ -160,6 +171,10 @@ struct llama_hparams {
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
+
+    // see llama_non_causal_type
+    // note: for SWA_FULL, older tokens (outside the current ubatch) are still window-clipped
+    llama_non_causal_type non_causal_type = LLAMA_NON_CAUSAL_TYPE_ALL;
 
     // if is_swa_impl[il] == 1, then layer il is SWA
     // if is_swa_impl[il] == 0, then layer il is dense (i.e. non-SWA)
@@ -282,6 +297,9 @@ struct llama_hparams {
     // 0 = full rank (DeepSeek-V4)
     uint32_t hc_low_rank = 0;
 
+    // scale of the hyper-connection post gate (DeepSeek-V4 hardcodes 2.0)
+    float    hc_magnitude = 0.0f;
+
     uint32_t ple_ngram_size      = 0;
     uint32_t ple_heads_per_ngram = 0;
     uint32_t ple_conv_kernel     = 0;
@@ -380,6 +398,13 @@ struct llama_hparams {
     uint32_t n_head_kv(uint32_t il = 0) const;
 
     uint32_t n_ff(uint32_t il = 0) const;
+
+    uint32_t n_ff_exp(uint32_t il = 0) const;
+
+    uint32_t n_expert_used(uint32_t il = 0) const;
+
+    // return the maximum n_expert_used across all layers
+    uint32_t n_expert_used_max() const;
 
     uint32_t n_gqa(uint32_t il = 0) const;
 
