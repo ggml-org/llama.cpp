@@ -354,6 +354,7 @@ if (NOT LLAMA_USE_SYSTEM_GGML)
 
     # Needs non-public ggml{,-backend}-impl.h
     llama_build_and_test(test-alloc.cpp)
+    llama_build_and_test(test-backend-buffer.cpp)
 endif()
 
 llama_build(test-export-graph-ops.cpp)

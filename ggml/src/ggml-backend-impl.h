@@ -70,12 +70,15 @@ extern "C" {
         void         (*reset)        (ggml_backend_buffer_t buffer);
     };
 
+    struct ggml_backend_buffer_refcount;
+
     struct ggml_backend_buffer {
         struct ggml_backend_buffer_i  iface;
         ggml_backend_buffer_type_t    buft;
         void * context;
         size_t size;
         enum ggml_backend_buffer_usage usage;
+        struct ggml_backend_buffer_refcount * refcount;
     };
 
     GGML_API ggml_backend_buffer_t ggml_backend_buffer_init(

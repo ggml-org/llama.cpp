@@ -14,6 +14,7 @@
 #include "ggml-impl.h"
 
 #include <assert.h>
+#include <atomic>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -233,6 +234,10 @@ ggml_backend_dev_t ggml_backend_buft_get_device(ggml_backend_buffer_type_t buft)
 
 // backend buffer
 
+struct ggml_backend_buffer_refcount {
+    std::atomic<uint32_t> value { 1 };
+};
+
 ggml_backend_buffer_t ggml_backend_buffer_init(
                ggml_backend_buffer_type_t buft,
         struct ggml_backend_buffer_i      iface,
@@ -243,7 +248,8 @@ ggml_backend_buffer_t ggml_backend_buffer_init(
         /* .buft      = */ buft,
         /* .context   = */ context,
         /* .size      = */ size,
-        /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY
+        /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY,
+        /* .refcount  = */ new ggml_backend_buffer_refcount
     };
 
     return buffer;
@@ -253,14 +259,36 @@ const char * ggml_backend_buffer_name(ggml_backend_buffer_t buffer) {
     return ggml_backend_buft_name(ggml_backend_buffer_get_type(buffer));
 }
 
+// Add a reference while the caller already owns a live reference.
+ggml_backend_buffer_t ggml_backend_buffer_retain(ggml_backend_buffer_t buffer) {
+    if (buffer == NULL) {
+        return NULL;
+    }
+
+    uint32_t count = buffer->refcount->value.load(std::memory_order_relaxed);
+    do {
+        GGML_ASSERT(count > 0 && count < UINT32_MAX);
+    } while (!buffer->refcount->value.compare_exchange_weak(
+        count, count + 1, std::memory_order_relaxed, std::memory_order_relaxed));
+
+    return buffer;
+}
+
 void ggml_backend_buffer_free(ggml_backend_buffer_t buffer) {
     if (buffer == NULL) {
+        return;
+    }
+
+    const uint32_t count = buffer->refcount->value.fetch_sub(1, std::memory_order_acq_rel);
+    GGML_ASSERT(count > 0);
+    if (count != 1) {
         return;
     }
 
     if (buffer->iface.free_buffer != NULL) {
         buffer->iface.free_buffer(buffer);
     }
+    delete buffer->refcount;
     delete buffer;
 }
 

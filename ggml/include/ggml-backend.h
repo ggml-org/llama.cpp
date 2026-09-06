@@ -55,6 +55,9 @@ extern "C" {
     };
 
     GGML_API const char *                   ggml_backend_buffer_name          (ggml_backend_buffer_t buffer);
+    // Keep a buffer alive until a matching call to ggml_backend_buffer_free.
+    GGML_API ggml_backend_buffer_t           ggml_backend_buffer_retain        (ggml_backend_buffer_t buffer);
+    // Release a retained reference and destroy the buffer after the last release.
     GGML_API void                           ggml_backend_buffer_free          (ggml_backend_buffer_t buffer);
     GGML_API void *                         ggml_backend_buffer_get_base      (ggml_backend_buffer_t buffer);
     GGML_API size_t                         ggml_backend_buffer_get_size      (ggml_backend_buffer_t buffer);
