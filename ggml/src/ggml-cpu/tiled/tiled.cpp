@@ -745,7 +745,9 @@ static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_t
     }
 
     const int64_t nblocks = ne00 / TILED_TILE_K;
+#if defined(KERNEL_SRC1_UNPACK)
     const int64_t nrow_pad = (nrows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
+#endif
 
     // the ring holds this window's rows, so K is stepped in slabs from the ring base
     for (int64_t ib = 0; ib < ne00; ib += TILED_TILE_K) {
@@ -757,6 +759,7 @@ static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_t
         tiled_unpack_src1_q8_K(ring + kblk, nblocks, nrows, tiled_ws.src1,
                                (const int8_t *) qv, nrow_pad, 0, kblk);
 #else
+        UNUSED(qv);
         tiled_unpack_src1_q8_K(ring + kblk, nblocks, nrows, tiled_ws.src1, nullptr, 0, 0, kblk);
 #endif
         // 16x16 microtiles sweeping the window; the unpack routines zeropad the
@@ -793,7 +796,9 @@ static void ggml_compute_forward_mul_mat_id_tiled_one_expert(
     const int ith = params->ith;
     const int nth = params->nth;
 
+#if defined(KERNEL_SRC1_UNPACK)
     const int64_t nblocks = ne00 / TILED_TILE_K;
+#endif
 
     const enum ggml_type vec_dot_type = ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
 
