@@ -635,7 +635,17 @@ static void print_mmid_table(int64_t K, int64_t R, int64_t n_experts, int64_t k,
     }
 }
 
-int main() {
+int main(int argc, char ** argv) {
+    bool run_bench = false;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--bench") == 0) {
+            run_bench = true;
+        } else {
+            fprintf(stderr, "error: unknown argument: %s\n", argv[i]);
+            return 1;
+        }
+    }
+
     // Enable tiled MM, also force tiled MM even when unprofitable for benchmarks
 #if defined(_MSC_VER)
     _putenv("GGML_CPU_TILED_MM=1");
@@ -644,8 +654,8 @@ int main() {
     setenv("GGML_CPU_TILED_MM", "1", 1);
     setenv("GGML_CPU_TILED_MM_FORCE", "1", 1);
 #endif
-                                                                                                                                                     
-    ggml_backend_load_all();                                                
+
+    ggml_backend_load_all();
     ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
     if (!backend) {
         fprintf(stderr, "failed to initialize the CPU backend\n");
@@ -766,56 +776,55 @@ int main() {
     // n/a where no repack kernel exists for the type. TILED_MM_FORCE is set in main,
     // so the tiled column runs at every shape; the shapes vary K, the output rank
 
-    /* Benchmarks disabled unless actively uncommented so we don't waste CPU in CI for unrelated changes
-
-    const ggml_type bench_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
-                                      GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
-                                      GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
-    const size_t n_types = sizeof(bench_types) / sizeof(bench_types[0]);
-    struct { int64_t M, N, K; } shapes[] = {
-        //{ 8192, 8192, 8192 },
-        { 4096, 4096, 4096 },
-        { 4096, 4096,   64 },
-        { 4096, 4096,   32 },
-        { 4096, 4096,   24 },
-        { 4096, 4096,   16 },
-        { 4096, 4096,   8 },
-        { 4096, 4096,   1 },
-    };
-    for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); ++s) {
-        bench_row rows[n_types];
-        for (size_t i = 0; i < n_types; ++i) {
-            rows[i] = bench_three_way(backend, shapes[s].M, shapes[s].N, shapes[s].K, bench_types[i]);
+    if (run_bench) {
+        const ggml_type bench_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
+                                          GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
+                                          GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
+        const size_t n_types = sizeof(bench_types) / sizeof(bench_types[0]);
+        struct { int64_t M, N, K; } shapes[] = {
+            //{ 8192, 8192, 8192 },
+            { 4096, 4096, 4096 },
+            { 4096, 4096,   64 },
+            { 4096, 4096,   32 },
+            { 4096, 4096,   24 },
+            { 4096, 4096,   16 },
+            { 4096, 4096,   8 },
+            { 4096, 4096,   1 },
+        };
+        for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); ++s) {
+            bench_row rows[n_types];
+            for (size_t i = 0; i < n_types; ++i) {
+                rows[i] = bench_three_way(backend, shapes[s].M, shapes[s].N, shapes[s].K, bench_types[i]);
+            }
+            print_bench_table(shapes[s].M, shapes[s].N, shapes[s].K, rows, n_types);
         }
-        print_bench_table(shapes[s].M, shapes[s].N, shapes[s].K, rows, n_types);
-    }
 
-    // MUL_MAT_ID (MoE) three-way bench (std, repack, tiled); K must be a multiple of
-    // 256 (the tiled slab). Every type the tiled gate accepts; the repack column is
-    // n/a where no repack kernel exists for the type. cne1 = 1 is below the tiled min
-    // batch (32); TILED_MM_FORCE is set in main, so that row is the forced GEMV extreme
-    struct { int64_t K, R, E, k, b_slots, batch; } mmid_shapes[] = {
-        { 1024, 1024,  8,   8, 1,    1 },  // cne1 = 1, single-token decode, one routed row per expert
-        {  512,  512,  8,   2, 1,  128 },  // cne1 = 32, the tiled min batch
-        { 1024, 1024, 16,   8, 1,   64 },  // cne1 = 32
-        { 1024, 1024, 16,   8, 1,  256 },  // cne1 = 128
-        { 1024, 2048, 32,   8, 1,  512 },  // cne1 = 128, wide experts
-        { 2048, 1024, 16,   8, 1, 1024 },  // cne1 = 512, long dot
-    };
-    const ggml_type mmid_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
-                                     GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
-                                     GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
-    const size_t n_mmid_types = sizeof(mmid_types) / sizeof(mmid_types[0]);
-    for (size_t s = 0; s < sizeof(mmid_shapes) / sizeof(mmid_shapes[0]); ++s) {
-        bench_row_mmid rows[n_mmid_types];
-        for (size_t i = 0; i < n_mmid_types; ++i) {
-            rows[i] = bench_mul_mat_id(backend, mmid_shapes[s].K, mmid_shapes[s].R, mmid_shapes[s].E,
-                                       mmid_shapes[s].k, mmid_shapes[s].b_slots, mmid_shapes[s].batch, mmid_types[i]);
+        // MUL_MAT_ID (MoE) three-way bench (std, repack, tiled); K must be a multiple of
+        // 256 (the tiled slab). Every type the tiled gate accepts; the repack column is
+        // n/a where no repack kernel exists for the type. cne1 = 1 is below the tiled min
+        // batch (32); TILED_MM_FORCE is set in main, so that row is the forced GEMV extreme
+        struct { int64_t K, R, E, k, b_slots, batch; } mmid_shapes[] = {
+            { 1024, 1024,  8,   8, 1,    1 },  // cne1 = 1, single-token decode, one routed row per expert
+            {  512,  512,  8,   2, 1,  128 },  // cne1 = 32, the tiled min batch
+            { 1024, 1024, 16,   8, 1,   64 },  // cne1 = 32
+            { 1024, 1024, 16,   8, 1,  256 },  // cne1 = 128
+            { 1024, 2048, 32,   8, 1,  512 },  // cne1 = 128, wide experts
+            { 2048, 1024, 16,   8, 1, 1024 },  // cne1 = 512, long dot
+        };
+        const ggml_type mmid_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
+                                         GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
+                                         GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
+        const size_t n_mmid_types = sizeof(mmid_types) / sizeof(mmid_types[0]);
+        for (size_t s = 0; s < sizeof(mmid_shapes) / sizeof(mmid_shapes[0]); ++s) {
+            bench_row_mmid rows[n_mmid_types];
+            for (size_t i = 0; i < n_mmid_types; ++i) {
+                rows[i] = bench_mul_mat_id(backend, mmid_shapes[s].K, mmid_shapes[s].R, mmid_shapes[s].E,
+                                           mmid_shapes[s].k, mmid_shapes[s].b_slots, mmid_shapes[s].batch, mmid_types[i]);
+            }
+            print_mmid_table(mmid_shapes[s].K, mmid_shapes[s].R, mmid_shapes[s].E, mmid_shapes[s].k,
+                             mmid_shapes[s].b_slots, mmid_shapes[s].batch, rows, n_mmid_types);
         }
-        print_mmid_table(mmid_shapes[s].K, mmid_shapes[s].R, mmid_shapes[s].E, mmid_shapes[s].k,
-                         mmid_shapes[s].b_slots, mmid_shapes[s].batch, rows, n_mmid_types);
     }
-    */
 
     ggml_backend_free(backend);
     return n_failed ? 1 : 0;
