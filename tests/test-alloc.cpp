@@ -19,6 +19,8 @@ struct dummy_backend_context {
     size_t alignment       = 8;
 
     ggml_backend_buffer_i              buffer_interface;
+    ggml_backend_device                device;
+    ggml_backend                       backend;
     std::vector<ggml_backend_buffer_t> buffers;
 
     size_t allocated_total() const {
@@ -83,7 +85,27 @@ static void dummy_backend_buffer_get_tensor(ggml_backend_buffer_t, const ggml_te
 
 static void dummy_backend_buffer_clear(ggml_backend_buffer_t, uint8_t) {}
 
-// dummy_backend (not really a full backend, just provides what gallocr needs)
+// ggml_backend_device interface
+
+static enum ggml_backend_dev_type dummy_backend_device_get_type(ggml_backend_dev_t) {
+    return GGML_BACKEND_DEVICE_TYPE_CPU;
+}
+
+static bool dummy_backend_device_supports_op(ggml_backend_dev_t, const ggml_tensor *) {
+    return true;
+}
+
+static bool dummy_backend_device_supports_buft(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {
+    return device->context == buft->context;
+}
+
+// ggml_backend interface
+
+static const char * dummy_backend_get_name(ggml_backend_t) {
+    return "dummy_backend";
+}
+
+// dummy_backend
 
 struct dummy_backend {
     std::unique_ptr<dummy_backend_context> context;
@@ -104,6 +126,16 @@ static dummy_backend dummy_backend_init(size_t max_buffer_size, size_t alignment
     b.context->buffer_interface.get_tensor    = dummy_backend_buffer_get_tensor;
     b.context->buffer_interface.clear         = dummy_backend_buffer_clear;
 
+    b.context->device.context             = b.context.get();
+    b.context->device.iface.get_type      = dummy_backend_device_get_type;
+    b.context->device.iface.supports_op   = dummy_backend_device_supports_op;
+    b.context->device.iface.supports_buft = dummy_backend_device_supports_buft;
+
+    b.context->backend.context        = b.context.get();
+    b.context->backend.device         = &b.context->device;
+    b.context->backend.iface.get_name = dummy_backend_get_name;
+
+    b.buffer_type.device              = &b.context->device;
     b.buffer_type.context             = b.context.get();
     b.buffer_type.iface.get_name      = dummy_backend_buffer_type_get_name;
     b.buffer_type.iface.alloc_buffer  = dummy_backend_buffer_type_alloc_buffer;
@@ -583,6 +615,41 @@ static void test_reallocation() {
     }
 }
 
+static void test_backend_graph_optimize(ggml_backend_t, ggml_cgraph * graph, ggml_backend_graph_optimize_params * params) {
+    GGML_ASSERT(graph->n_nodes == 3);
+    params->add_alloc_dep(params->user_data, graph->nodes[0], graph->nodes[2]);
+}
+
+static bool graph_reuses_allocation(bool add_alloc_dep) {
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * x[4];
+    x[0] = make_input_with_size(ctx, 16);
+    x[1] = ggml_scale(ctx, x[0], 2.0f);
+    x[2] = ggml_scale(ctx, x[1], 2.0f);
+    x[3] = ggml_scale(ctx, x[2], 2.0f);
+
+    ggml_set_output(x[3]);
+    ggml_build_forward_expand(graph, x[3]);
+
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    if (add_alloc_dep) {
+        backend.context->backend.iface.graph_optimize = test_backend_graph_optimize;
+    }
+
+    ggml_backend_t             backend_ptr = &backend.context->backend;
+    ggml_backend_buffer_type_t buft        = &backend.buffer_type;
+    ggml_backend_sched_ptr     sched(ggml_backend_sched_new(&backend_ptr, &buft, 1, 8, false, true));
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched.get(), graph));
+
+    return x[1]->data == x[2]->data;
+}
+
+static void test_graph_optimize_alloc_dep() {
+    GGML_ASSERT(graph_reuses_allocation(false));
+    GGML_ASSERT(!graph_reuses_allocation(true));
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -604,5 +671,6 @@ int main() {
     run("test_multiple_buffer_types", test_multiple_buffer_types);
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
+    run("test_graph_optimize_alloc_dep", test_graph_optimize_alloc_dep);
     return 0;
 }

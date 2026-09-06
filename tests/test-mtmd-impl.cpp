@@ -80,7 +80,7 @@ MAKE_TEST(test_temporal_merge_grouping) {
     // spec chars:
     //   v = video frame, w = video frame of another size, a = audio, i = plain image, t = text
     auto make_parts = [&pool](const std::string & spec) {
-        std::vector<mtmd_input_part> parts;
+        std::vector<mtmd_internal_part> parts;
         for (char c : spec) {
             if (c == 't') {
                 parts.push_back({ "hello", nullptr });
