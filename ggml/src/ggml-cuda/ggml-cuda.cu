@@ -721,15 +721,18 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 struct ggml_backend_cuda_buffer_context {
     int device;
     void * dev_ptr = nullptr;
+    bool owns_data;
     std::string name;
 
-    ggml_backend_cuda_buffer_context(int device, void * dev_ptr) :
-        device(device), dev_ptr(dev_ptr),
+    ggml_backend_cuda_buffer_context(int device, void * dev_ptr, bool owns_data = true) :
+        device(device), dev_ptr(dev_ptr), owns_data(owns_data),
         name(GGML_CUDA_NAME + std::to_string(device)) {
     }
 
     ~ggml_backend_cuda_buffer_context() {
-        CUDA_CHECK(cudaFree(dev_ptr));
+        if (owns_data) {
+            CUDA_CHECK(cudaFree(dev_ptr));
+        }
     }
 };
 
@@ -745,6 +748,17 @@ static bool ggml_backend_buffer_is_cuda(ggml_backend_buffer_t buffer) {
 static void * ggml_backend_cuda_buffer_get_base(ggml_backend_buffer_t buffer) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
     return ctx->dev_ptr;
+}
+
+// Create a CUDA view context that does not free its parent-owned device pointer.
+static ggml_backend_buffer_t ggml_backend_cuda_buffer_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    auto * parent = (ggml_backend_cuda_buffer_context *) buffer->context;
+    auto * context = new ggml_backend_cuda_buffer_context(
+        parent->device, (char *) parent->dev_ptr + offset, false);
+    ggml_backend_buffer_t view = ggml_backend_buffer_init(buffer->buft, buffer->iface, context, size);
+    view->view_buffer = ggml_backend_cuda_buffer_view;
+    return view;
 }
 
 static enum ggml_status ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
@@ -892,7 +906,9 @@ static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffer(ggml_bac
 
     ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, dev_ptr);
 
-    return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
+    ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
+    buffer->view_buffer = ggml_backend_cuda_buffer_view;
+    return buffer;
 }
 
 static size_t ggml_backend_cuda_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {

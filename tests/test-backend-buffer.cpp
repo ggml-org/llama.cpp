@@ -200,11 +200,63 @@ static void test_buffer_view_validation() {
     GGML_ASSERT(ggml_backend_buffer_view(parent.get(), 3*alignment, 2*alignment) == nullptr);
     GGML_ASSERT(ggml_backend_buffer_view(parent.get(), 1, alignment) == nullptr);
 }
+
+// Verify accelerator views preserve device storage and isolate their byte range.
+static void test_accelerator_buffer_view() {
+    ggml_backend_load_all();
+    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr));
+    if (!backend) {
+        return;
+    }
+
+    auto * buft = ggml_backend_get_default_buffer_type(backend.get());
+    const size_t alignment = ggml_backend_buft_get_alignment(buft);
+    const size_t parent_size = 5*alignment;
+    ggml_backend_buffer_t parent = ggml_backend_buft_alloc_buffer(buft, parent_size);
+    GGML_ASSERT(parent != nullptr);
+    ggml_backend_buffer_clear(parent, 0xa5);
+    void * base = ggml_backend_buffer_get_base(parent);
+
+    ggml_backend_buffer_t middle = ggml_backend_buffer_view(parent, alignment, 3*alignment);
+    ggml_backend_buffer_t leaf = ggml_backend_buffer_view(middle, alignment, alignment);
+    GGML_ASSERT(middle != nullptr && leaf != nullptr);
+
+    ggml_init_params params = {
+        /*.mem_size   = */ 3*ggml_tensor_overhead(),
+        /*.mem_buffer = */ nullptr,
+        /*.no_alloc   = */ true,
+    };
+    ggml_context_ptr ctx(ggml_init(params));
+    auto * whole = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, parent_size/sizeof(float));
+    GGML_ASSERT(ggml_backend_tensor_alloc(parent, whole, base) == GGML_STATUS_SUCCESS);
+    auto * tensor = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, alignment/sizeof(float));
+    ggml_tallocr talloc{};
+    GGML_ASSERT(ggml_tallocr_new_range(&talloc, leaf, 0, alignment));
+    GGML_ASSERT(ggml_tallocr_alloc(&talloc, tensor) == GGML_STATUS_SUCCESS);
+
+    ggml_backend_buffer_free(parent);
+    ggml_backend_buffer_free(middle);
+    ggml_backend_buffer_clear(leaf, 0x3c);
+
+    std::vector<uint8_t> bytes(parent_size);
+    ggml_backend_tensor_get(whole, bytes.data(), 0, bytes.size());
+    for (size_t i = 0; i < parent_size; ++i) {
+        GGML_ASSERT(bytes[i] == (i >= 2*alignment && i < 3*alignment ? 0x3c : 0xa5));
+    }
+
+    std::vector<float> input(alignment/sizeof(float), 1.25f);
+    std::vector<float> output(input.size());
+    ggml_backend_tensor_set(tensor, input.data(), 0, alignment);
+    ggml_backend_tensor_get(tensor, output.data(), 0, alignment);
+    GGML_ASSERT(input == output);
+    ggml_backend_buffer_free(leaf);
+}
 int main() {
     test_retain_delays_free();
     test_retain_concurrent();
     test_cpu_buffer_view();
     test_cpu_buffer_nested_view();
     test_buffer_view_validation();
+    test_accelerator_buffer_view();
     return 0;
 }
