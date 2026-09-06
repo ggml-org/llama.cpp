@@ -5217,6 +5217,110 @@ struct test_dmmv_batch : public test_case {
     test_dmmv_batch(int64_t m=256, int64_t k=256) : m(m), k(k) {}
 };
 
+// holey-view DMMV strides vs naive hardcoded reference (backend-agnostic, Bug 5b)
+// view [k,2,nh] @tok2 into parent [k,ntok,nh] must match naive dot with parent cols 2..3.
+// naive is computed in-test with double accumulation, no backend needed as gold.
+struct test_dmmv_view_batch : public test_case {
+    const int64_t m;
+    const int64_t k;
+    const int64_t nh;
+    const int64_t ntok;
+
+    std::string vars() override { return VARS_TO_STR4(m,k,nh,ntok); }
+    ggml_tensor * build_graph(ggml_context * ctx) override { GGML_UNUSED(ctx); return nullptr; }
+
+    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
+        GGML_UNUSED(backend2); GGML_UNUSED(op_filter);
+        const std::string op_name = "DMMV_VIEW_BATCH";
+        const std::string op_params = vars();
+        const std::string backend_name = ggml_backend_name(backend1);
+
+        // host-side input data with per-(h,n) seeds (same for all backends)
+        std::vector<float> adata((size_t)k*(size_t)m*(size_t)nh);
+        {
+            std::mt19937 gen(401);
+            std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+            for (size_t i=0;i<adata.size();++i) adata[i]=dis(gen);
+        }
+        std::vector<float> bdata((size_t)k*(size_t)ntok*(size_t)nh);
+        for (int64_t h=0;h<nh;++h) for (int64_t nn=0;nn<ntok;++nn) {
+            std::mt19937 gen(402 + (uint32_t)h*16 + (uint32_t)nn);
+            std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+            for (int64_t kk=0;kk<k;++kk)
+                bdata[(size_t)kk + (size_t)nn*(size_t)k + (size_t)h*(size_t)k*(size_t)ntok] = dis(gen);
+        }
+        // naive expected view out [m,2,nh] for tokens 2..3 with double accumulation
+        std::vector<double> expected((size_t)m*2*(size_t)nh);
+        for (int64_t h=0;h<nh;++h) for (int64_t j=0;j<2;++j) for (int64_t r=0;r<m;++r) {
+            double s = 0;
+            for (int64_t kk=0;kk<k;++kk) {
+                // a is [k,m,nh] contiguous: a[kk,r,h] at kk + r*k + h*k*m
+                float av = adata[(size_t)kk + (size_t)r*(size_t)k + (size_t)h*(size_t)k*(size_t)m];
+                float bv = bdata[(size_t)kk + (size_t)(2+j)*(size_t)k + (size_t)h*(size_t)k*(size_t)ntok];
+                s += (double)av * (double)bv;
+            }
+            expected[(size_t)r + (size_t)j*(size_t)m + (size_t)h*(size_t)m*2] = s;
+        }
+
+        auto run_view = [&](ggml_backend_t backend, std::vector<float> & out) -> bool {
+            ggml_init_params prm = { ggml_tensor_overhead()*16 + ggml_graph_overhead() + 8*1024*1024, nullptr, true };
+            prm.no_alloc = true;
+            struct ggml_context * ctx = ggml_init(prm);
+            ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, k, m, nh, 1);
+            ggml_tensor * bpar = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, k, ntok, nh, 1);
+            ggml_set_name(a, "a");
+            ggml_set_name(bpar, "bpar");
+            size_t off = (size_t)2 * bpar->nb[1];
+            ggml_tensor * b = ggml_view_4d(ctx, bpar, k, 2, nh, 1, bpar->nb[1], bpar->nb[2], bpar->nb[3], off);
+            ggml_set_name(b, "bview");
+            ggml_tensor * o = ggml_mul_mat(ctx, a, b);
+            ggml_set_name(o, "out");
+            ggml_cgraph * gf = ggml_new_graph(ctx);
+            ggml_build_forward_expand(gf, o);
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+            if (!buf) { ggml_free(ctx); return false; }
+            ggml_backend_tensor_set(a, adata.data(), 0, adata.size()*sizeof(float));
+            ggml_backend_tensor_set(bpar, bdata.data(), 0, bdata.size()*sizeof(float));
+            int ret = ggml_backend_graph_compute(backend, gf);
+            if (ret != GGML_STATUS_SUCCESS) { ggml_backend_buffer_free(buf); ggml_free(ctx); return false; }
+            std::vector<uint8_t> buf2(ggml_nbytes(o));
+            ggml_backend_tensor_get(o, buf2.data(), 0, ggml_nbytes(o));
+            out.resize((size_t)m*2*(size_t)nh);
+            for (size_t i=0;i<out.size();++i) out[i]=((float*)buf2.data())[i];
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return true;
+        };
+
+        std::vector<float> out;
+        if (!run_view(backend1, out)) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "alloc/compute failed");
+            info.set_error("compare", "alloc/compute failed");
+            info.set_compare_failure();
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        // backend-agnostic: compare against naive hardcoded reference, epsilon 1e-4 for F32 order
+        double max_abs=0, rms=0; int diff=0;
+        size_t slice = out.size();
+        for (size_t i=0;i<slice;++i){
+            double d=fabs(double(out[i])-expected[i]);
+            max_abs=std::max(max_abs,d); rms+=d*d;
+            if(d>1e-4) diff++;
+        }
+        rms = sqrt(rms/slice);
+        test_status_t status = (max_abs<=1e-3) ? test_status_t::OK : test_status_t::FAIL;
+        test_operation_info info(op_name, op_params, backend_name, status, "");
+        if (status==test_status_t::FAIL){
+            char buf[256]; snprintf(buf,sizeof(buf),"holey-view vs naive broken diff %d/%zu max %.9f rms %.9f",diff,slice,max_abs,rms);
+            info.set_error("compare",buf); info.set_compare_failure();
+        }
+        if (output_printer) output_printer->print_operation(info);
+        return status;
+    }
+    test_dmmv_view_batch(int64_t m=256, int64_t k=256, int64_t nh=8, int64_t ntok=8) : m(m), k(k), nh(nh), ntok(ntok) {}
+};
+
 
 #define P 1.0f
 #define N -1.0f
@@ -10223,6 +10327,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // batch invariance for FA GQA masked: N=1 vs N=2 GQA 4 (Bug 1 control, small shapes pass)
     test_cases.emplace_back(new test_fa_batch(64, 64, 2, 128));
     test_cases.emplace_back(new test_fa_batch(128, 128, 2, 256));
+    // holey-view DMMV vs naive hardcoded reference, backend-agnostic (Bug 5b)
+    test_cases.emplace_back(new test_dmmv_view_batch(256, 256, 8, 8));
+    test_cases.emplace_back(new test_dmmv_view_batch(128, 64, 4, 8));
     // batch invariance control: Q8_0 small-k no MMVQ, N=1 vs N=2 (should pass)
     for (int64_t m : {256, 512}) {
         test_cases.emplace_back(new test_dmmv_batch(m, 256));
