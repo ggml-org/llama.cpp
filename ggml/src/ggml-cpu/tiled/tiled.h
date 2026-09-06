@@ -32,6 +32,7 @@ void ggml_compute_forward_mul_mat_id_tiled(const struct ggml_compute_params * pa
 // wdata reservation size for the MUL_MAT_ID tiled path, if any: per thread, a ring of
 // TILED_TILE_ROWS gathered q8_K rows plus the VNNI interleave region. 0 when disabled
 size_t ggml_tiled_mul_mat_id_extra_wdata_len(int64_t ne10, int64_t n_tasks);
+
 #ifdef __cplusplus
 }
 #endif
