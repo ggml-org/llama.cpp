@@ -182,7 +182,10 @@ static void tiled_run_microtile_vnni(const tiled_tile_src0 & src0, const tiled_t
 // one 8-lane i32 accumulator per column.
 // SUBBLK=16: two subblocks per 32B load. The 256-bit maddubs product
 // still gives 16 i16 lanes (0..7 = subblock sp, 8..15 = sp+1), but the
-// scale is applied per 128-bit half
+// scale is applied per 128-bit half.
+// With BIAS != 0 the q0 codes are biased (up to 241) and a maddubs i16 pair
+// overflows, so q0 is split into 4-bit halves and the dot is the sum of two
+// maddubs, each pair then <= 2*15*127
 template <int SUBBLK, bool HAS_MIN, int BIAS>
 static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                      int i0, int j0, float * buf, int buf_stride) {
@@ -215,17 +218,30 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                     q1g[t] = &src1.q[(j0 + g + t) * TILED_TILE_K];
                     acc[t] = _mm256_setzero_si256();
                 }
-                // one 32B a load and one 256-bit maddubs per (s, column)
+                // one 32B q0 load per (s); with biased codes (up to 241) the maddubs i16 pairs
+                // overflow, so for BIAS != 0 split q0 into 4-bit halves, each pair then <= 2*15*127
                 for (int s = 0; s < NB; s++) {
                     const __m256i q0_32 = _mm256_loadu_si256((const __m256i *) &q0[s * SUBBLK]);
                     const __m256i scales16 = _mm256_set1_epi16(scales_row[s]);
                     const __m256i bsums_v = _mm256_add_epi32(
                         _mm256_loadu_si256((const __m256i *) &src1.bsums[s * 2 * TILED_TILE_ROWS + j0 + g]),
                         _mm256_loadu_si256((const __m256i *) &src1.bsums[(s * 2 + 1) * TILED_TILE_ROWS + j0 + g]));
-                    for (int t = 0; t < GROUP; t++) {
-                        acc[t] = _mm256_add_epi32(acc[t],
-                            _mm256_madd_epi16(scales16, _mm256_maddubs_epi16(
-                                q0_32, _mm256_loadu_si256((const __m256i *) &q1g[t][s * SUBBLK]))));
+                    if constexpr (BIAS != 0) {
+                        const __m256i q0a = _mm256_and_si256(q0_32, _mm256_set1_epi8(0x0F));
+                        const __m256i q0b = _mm256_and_si256(_mm256_srli_epi16(q0_32, 4), _mm256_set1_epi8(0x0F)); // srli is per 16-bit lane, mask out the neighbor bleed
+                        const __m256i scales16b = _mm256_set1_epi16(16 * scales_row[s]);
+                        for (int t = 0; t < GROUP; t++) {
+                            const __m256i q1_32 = _mm256_loadu_si256((const __m256i *) &q1g[t][s * SUBBLK]);
+                            acc[t] = _mm256_add_epi32(acc[t], _mm256_add_epi32(
+                                _mm256_madd_epi16(scales16, _mm256_maddubs_epi16(q0a, q1_32)),
+                                _mm256_madd_epi16(scales16b, _mm256_maddubs_epi16(q0b, q1_32))));
+                        }
+                    } else {
+                        for (int t = 0; t < GROUP; t++) {
+                            acc[t] = _mm256_add_epi32(acc[t],
+                                _mm256_madd_epi16(scales16, _mm256_maddubs_epi16(
+                                    q0_32, _mm256_loadu_si256((const __m256i *) &q1g[t][s * SUBBLK]))));
+                        }
                     }
                     if constexpr (BIAS != 0) {
                         corr = _mm256_sub_epi32(corr, _mm256_mullo_epi32(bsums_v, _mm256_set1_epi32(BIAS * scales_row[s])));
@@ -266,10 +282,23 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                     const __m256i scalesv = _mm256_set_m128i(_mm_set1_epi16(scales_row[sp + 1]), _mm_set1_epi16(scales_row[sp]));
                     const __m256i bsums0_v = _mm256_loadu_si256((const __m256i *) &src1.bsums[sp * TILED_TILE_ROWS + j0 + g]);
                     const __m256i bsums1_v = _mm256_loadu_si256((const __m256i *) &src1.bsums[(sp + 1) * TILED_TILE_ROWS + j0 + g]);
-                    for (int t = 0; t < GROUP; t++) {
-                        acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(
-                            scalesv, _mm256_maddubs_epi16(
-                                q0_32, _mm256_loadu_si256((const __m256i *) &q1g[t][sp * SUBBLK]))));
+                    if constexpr (BIAS != 0) {
+                        // 4-bit split as in the SUBBLK = 32 path above
+                        const __m256i q0a = _mm256_and_si256(q0_32, _mm256_set1_epi8(0x0F));
+                        const __m256i q0b = _mm256_and_si256(_mm256_srli_epi16(q0_32, 4), _mm256_set1_epi8(0x0F)); // srli is per 16-bit lane, mask out the neighbor bleed
+                        const __m256i scalesvb = _mm256_set_m128i(_mm_set1_epi16(16 * scales_row[sp + 1]), _mm_set1_epi16(16 * scales_row[sp]));
+                        for (int t = 0; t < GROUP; t++) {
+                            const __m256i q1_32 = _mm256_loadu_si256((const __m256i *) &q1g[t][sp * SUBBLK]);
+                            acc[t] = _mm256_add_epi32(acc[t], _mm256_add_epi32(
+                                _mm256_madd_epi16(scalesv, _mm256_maddubs_epi16(q0a, q1_32)),
+                                _mm256_madd_epi16(scalesvb, _mm256_maddubs_epi16(q0b, q1_32))));
+                        }
+                    } else {
+                        for (int t = 0; t < GROUP; t++) {
+                            acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(
+                                scalesv, _mm256_maddubs_epi16(
+                                    q0_32, _mm256_loadu_si256((const __m256i *) &q1g[t][sp * SUBBLK]))));
+                        }
                     }
                     // per-subblock scales differ, so corr/s2 keep the bsums0/bsums1 split
                     if constexpr (BIAS != 0) {
@@ -341,10 +370,23 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
                     const __m128i a16 = _mm_loadu_si128((const __m128i *) &q0[s * SUBBLK + u * 16]);
                     bsums_v = _mm_add_epi32(bsums_v, _mm_loadu_si128(
                         (const __m128i *) &src1.bsums[(s * NS + u) * TILED_TILE_ROWS + j0 + g]));
-                    for (int t = 0; t < GROUP; t++) {
-                        acc[t] = _mm_add_epi32(acc[t], _mm_madd_epi16(scales16,
-                            _mm_maddubs_epi16(a16,
-                                _mm_loadu_si128((const __m128i *) &q1g[t][s * SUBBLK + u * 16]))));
+                    if constexpr (BIAS != 0) {
+                        // biased codes overflow the maddubs i16 pairs, split into 4-bit halves
+                        const __m128i a16a = _mm_and_si128(a16, _mm_set1_epi8(0x0F));
+                        const __m128i a16b = _mm_and_si128(_mm_srli_epi16(a16, 4), _mm_set1_epi8(0x0F)); // srli is per 16-bit lane, mask out the neighbor bleed
+                        const __m128i scales16b = _mm_set1_epi16(16 * scales_row[s]);
+                        for (int t = 0; t < GROUP; t++) {
+                            const __m128i q1_16 = _mm_loadu_si128((const __m128i *) &q1g[t][s * SUBBLK + u * 16]);
+                            acc[t] = _mm_add_epi32(acc[t], _mm_add_epi32(
+                                _mm_madd_epi16(scales16, _mm_maddubs_epi16(a16a, q1_16)),
+                                _mm_madd_epi16(scales16b, _mm_maddubs_epi16(a16b, q1_16))));
+                        }
+                    } else {
+                        for (int t = 0; t < GROUP; t++) {
+                            acc[t] = _mm_add_epi32(acc[t], _mm_madd_epi16(scales16,
+                                _mm_maddubs_epi16(a16,
+                                    _mm_loadu_si128((const __m128i *) &q1g[t][s * SUBBLK + u * 16]))));
+                        }
                     }
                 }
                 if constexpr (BIAS != 0) {
