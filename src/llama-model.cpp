@@ -798,6 +798,30 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         }
         const std::vector<std::pair<int64_t, uint32_t>> segments = get_split_segments(split_state.axis, tc.il);
         const std::vector<int64_t> granularity = get_split_granularity(blck_size, tc.il, segments);
+        // dither the choice of quantized split point across the layers sharing this tensor so the per-layer rounding errors
+        // cancel out class-wide; a one-sided floor to the block granularity would bias every tensor down by up to a full quantum
+        int64_t d_rank  = 0;
+        int64_t d_count = 1;
+        if (tensor_name.substr(0, 4) == "blk.") {
+            const std::string suffix = tensor_name.substr(tensor_name.find('.', 4) + 1);
+            for (uint32_t il2 = 0; il2 < hparams.n_layer_all; il2++) {
+                if (ud->model->get_tensor((std::string("blk.") + std::to_string(il2) + "." + suffix).c_str())) {
+                    d_count++;
+                    if (il2 < tc.il) {
+                        d_rank++;
+                    }
+                }
+            }
+        } else if (tensor_name.substr(0, 6) == "cache_") {
+            for (uint32_t il2 = 0; il2 < hparams.n_layer_all; il2++) {
+                if (hparams.is_recr(il2) == hparams.is_recr(tc.il) && hparams.is_swa(il2) == hparams.is_swa(tc.il)) {
+                    d_count++;
+                    if (il2 < tc.il) {
+                        d_rank++;
+                    }
+                }
+            }
+        }
         for (size_t is = 0; is < segments.size(); is++) {
             const int64_t  ne_s = segments[is].first;
             const uint32_t nr_s = segments[is].second;
@@ -805,10 +829,14 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             int64_t low = 0;
             size_t j = 0;
             for (; j < ud->n_devices - 1; j++) {
-                int64_t high = tensor_split_scan.back() == 0.0f ?
-                    ne_s * (j+1)/ud->n_devices : ne_s * tensor_split_scan[j]/tensor_split_scan.back();
-                if (high % g_s != 0) {
-                    high -= high % g_s;
+                const double  b    = tensor_split_scan.back() == 0.0f ?
+                                         (double) ne_s * (j + 1) / ud->n_devices :
+                                         (double) ne_s * tensor_split_scan[j] / tensor_split_scan.back();
+                const int64_t k0   = (int64_t) (b / g_s);
+                const int64_t cnt  = (int64_t) llround((b - k0 * g_s) * (double) d_count / g_s);
+                int64_t       high = (k0 + (d_rank < cnt ? 1 : 0)) * g_s;
+                if (high > ne_s) {
+                    high = ne_s;
                 }
                 split_state.ne[is*ud->n_devices + (j + tc.rotation) % ud->n_devices] = high - low;
                 low = high;
