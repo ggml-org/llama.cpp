@@ -803,18 +803,18 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         int64_t d_rank  = 0;
         int64_t d_count = 1;
         if (tensor_name.substr(0, 4) == "blk.") {
-            const std::string suffix = tensor_name.substr(tensor_name.find('.', 4) + 1);
-            for (uint32_t il2 = 0; il2 < hparams.n_layer_all; il2++) {
-                if (ud->model->get_tensor((std::string("blk.") + std::to_string(il2) + "." + suffix).c_str())) {
-                    d_count++;
-                    if (il2 < tc.il) {
-                        d_rank++;
-                    }
-                }
+            const std::string suffix    = tensor_name.substr(tensor_name.find('.', 4) + 1);
+            const auto        it_layers = ud->model->tensor_split_layers_by_suffix.find(suffix);
+            if (it_layers != ud->model->tensor_split_layers_by_suffix.end()) {
+                const std::vector<uint32_t> & layers = it_layers->second;
+                d_count                              = 1 + (int64_t) layers.size();
+                d_rank = (int64_t) (std::lower_bound(layers.begin(), layers.end(), tc.il) - layers.begin());
             }
         } else if (tensor_name.substr(0, 6) == "cache_") {
+            const bool tc_is_recr = hparams.is_recr(tc.il);
+            const bool tc_is_swa  = hparams.is_swa(tc.il);
             for (uint32_t il2 = 0; il2 < hparams.n_layer_all; il2++) {
-                if (hparams.is_recr(il2) == hparams.is_recr(tc.il) && hparams.is_swa(il2) == hparams.is_swa(tc.il)) {
+                if (hparams.is_recr(il2) == tc_is_recr && hparams.is_swa(il2) == tc_is_swa) {
                     d_count++;
                     if (il2 < tc.il) {
                         d_rank++;
@@ -1713,6 +1713,26 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
+    }
+
+    // build the per-suffix layer lists used to dither quantized tensor split points across layers (see llama_meta_device_get_split_state)
+    for (const auto & [name, _] : tensors_by_name) {
+        if (name.compare(0, 4, "blk.") != 0) {
+            continue;
+        }
+        const size_t dot = name.find('.', 4);
+        if (dot == std::string::npos || dot == 4) {
+            continue;
+        }
+        const uint32_t il = (uint32_t) std::stoull(name.substr(4, dot));
+        if (il >= hparams.n_layer_all) {
+            continue;
+        }
+        tensor_split_layers_by_suffix[name.substr(dot + 1)].push_back(il);
+    }
+    for (auto & [_, il_layers] : tensor_split_layers_by_suffix) {
+        std::sort(il_layers.begin(), il_layers.end());
+        il_layers.erase(std::unique(il_layers.begin(), il_layers.end()), il_layers.end());
     }
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
