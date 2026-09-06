@@ -8081,7 +8081,7 @@ struct test_fa_batch : public test_case {
             prm.no_alloc = true;
             struct ggml_context * ctx = ggml_init(prm);
             // GQA 4: Q 8 heads (nh*4), KV 2 heads (nh), no mask, F16 KV
-            test_flash_attn_ext helper(hsk, hsv, nh, {4,1}, kv, nb, false, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0,1,2,3}, false, false, 0);
+            test_flash_attn_ext helper(hsk, hsv, nh, {4,1}, kv, nb, true, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0,1,2,3}, false, false, 0);
             ggml_tensor * out_t = helper.build_graph(ctx);
             ggml_cgraph * gf = ggml_new_graph(ctx);
             ggml_build_forward_expand(gf, out_t);
@@ -8098,6 +8098,17 @@ struct test_fa_batch : public test_case {
                         std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
                         for (int64_t kk=0;kk<HSK;++kk)
                             data[(size_t)kk + (size_t)b*(size_t)HSK + (size_t)h*(size_t)HSK*(size_t)NB] = dis(gen);
+                    }
+                } else if (strcmp(tt->name, "m") == 0) {
+                    // mask [kv, nb]: per-column seeds so col0 matches, causal (0 allow, -inf block upper)
+                    int64_t KV = tt->ne[0], NB = tt->ne[1];
+                    for (int64_t b=0;b<NB;++b) {
+                        std::mt19937 gen(2000 + (uint32_t)b);
+                        std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+                        for (int64_t kk=0;kk<KV;++kk) {
+                            float v = dis(gen) > 0 ? 0.0f : -INFINITY;
+                            data[(size_t)kk + (size_t)b*(size_t)KV] = v;
+                        }
                     }
                 } else {
                     uint32_t h = 42;
@@ -10209,7 +10220,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int64_t nh : {4, 8}) {
         test_cases.emplace_back(new test_p021_batch(256, 128, nh));
     }
-    // batch invariance for FA GQA no-mask: N=1 vs N=2 GQA 4 (Bug 1 frizikk:13)
+    // batch invariance for FA GQA masked: N=1 vs N=2 GQA 4 (Bug 1 control, small shapes pass)
     test_cases.emplace_back(new test_fa_batch(64, 64, 2, 128));
     test_cases.emplace_back(new test_fa_batch(128, 128, 2, 256));
     // batch invariance control: Q8_0 small-k no MMVQ, N=1 vs N=2 (should pass)
