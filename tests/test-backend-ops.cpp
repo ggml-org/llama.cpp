@@ -4997,6 +4997,105 @@ struct test_rms_batch : public test_case {
     test_rms_batch(int64_t m=512, float eps=1e-6f) : m(m), eps(eps) {}
 };
 
+// batch invariance control: Q8_0 small-k (no MMVQ) N=1 vs N=2 both F32 DMMV, col0 must be bit-exact
+struct test_dmmv_batch : public test_case {
+    const int64_t m;
+    const int64_t k;
+    const ggml_type type_a = GGML_TYPE_Q8_0;
+
+    std::string vars() override { return VARS_TO_STR3(type_a, m,k); }
+    ggml_tensor * build_graph(ggml_context * ctx) override { GGML_UNUSED(ctx); return nullptr; }
+
+    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
+        GGML_UNUSED(backend2); GGML_UNUSED(op_filter);
+        const std::string op_name = "DMMV_BATCH";
+        const std::string op_params = vars();
+        const std::string backend_name = ggml_backend_name(backend1);
+
+        auto run_one = [&](ggml_backend_t backend, int64_t n, std::vector<float> & out) -> bool {
+            ggml_init_params prm = { ggml_tensor_overhead()*16 + ggml_graph_overhead() + 8*1024*1024, nullptr, true };
+            prm.no_alloc = true;
+            struct ggml_context * ctx = ggml_init(prm);
+            ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, k, m);
+            ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+            ggml_set_name(a, "a");
+            ggml_set_name(b, "b");
+            ggml_tensor * o = ggml_mul_mat(ctx, a, b);
+            ggml_set_name(o, "out");
+            ggml_cgraph * gf = ggml_new_graph(ctx);
+            ggml_build_forward_expand(gf, o);
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+            if (!buf) { ggml_free(ctx); return false; }
+            auto init_fixed = [&](ggml_tensor * tt, uint32_t seed) {
+                size_t nels = ggml_nelements(tt);
+                std::vector<float> data(nels);
+                std::mt19937 gen(seed);
+                std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+                for (size_t i=0;i<nels;++i) data[i]=dis(gen);
+                if (tt->type==GGML_TYPE_F32) ggml_backend_tensor_set(tt, data.data(), 0, nels*sizeof(float));
+                else {
+                    std::vector<uint8_t> dq(ggml_row_size(tt->type, nels));
+                    std::vector<float> im(tt->ne[0], 1.0f);
+                    float * imp = ggml_quantize_requires_imatrix(tt->type) ? im.data() : nullptr;
+                    ggml_quantize_chunk(tt->type, data.data(), dq.data(), 0, nels/ggml_blck_size(tt->type), ggml_blck_size(tt->type), imp);
+                    ggml_backend_tensor_set(tt, dq.data(), 0, dq.size());
+                }
+            };
+            init_fixed(a, 301);
+            init_fixed(b, 302);
+            int ret = ggml_backend_graph_compute(backend, gf);
+            if (ret != GGML_STATUS_SUCCESS) { ggml_backend_buffer_free(buf); ggml_free(ctx); return false; }
+            std::vector<uint8_t> buf2(ggml_nbytes(o));
+            ggml_backend_tensor_get(o, buf2.data(), 0, ggml_nbytes(o));
+            out.resize(m*n);
+            for (int64_t i=0;i<m*n;++i) out[i]=((float*)buf2.data())[i];
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return true;
+        };
+
+        std::vector<float> out_cpu1, out_cpu16, out_vk1, out_vk16;
+        // N=1 vs N=2 control (both small, same kernels)
+        ggml_backend_t cpu = ggml_backend_init_by_name("CPU", nullptr);
+        if (!cpu) cpu = backend1;
+        bool ok = true;
+        ok &= run_one(cpu, 1, out_cpu1);
+        ok &= run_one(cpu, 2, out_cpu16);
+        ok &= run_one(backend1, 1, out_vk1);
+        ok &= run_one(backend1, 2, out_vk16);
+        if (!ok) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "alloc/compute failed");
+            info.set_error("compare", "alloc/compute failed");
+            info.set_compare_failure();
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        // col0 is first m contiguous for 2D, same seed prefix so data matches
+        double cpu_max=0;
+        for (size_t i=0;i<(size_t)m;++i) cpu_max = std::max(cpu_max, fabs(double(out_cpu1[i])-double(out_cpu16[i])));
+        if (cpu_max != 0) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "CPU not invariant");
+            info.set_error("compare", "CPU not invariant");
+            info.set_compare_failure();
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        double max_abs=0, rms=0; int diff=0;
+        for (size_t i=0;i<(size_t)m;++i){ double d=fabs(double(out_vk1[i])-double(out_vk16[i])); max_abs=std::max(max_abs,d); rms+=d*d; if(d!=0) diff++; }
+        rms = sqrt(rms/m);
+        test_status_t status = (max_abs==0) ? test_status_t::OK : test_status_t::FAIL;
+        test_operation_info info(op_name, op_params, backend_name, status, "");
+        if (status==test_status_t::FAIL){
+            char buf[256]; snprintf(buf,sizeof(buf),"batch invariance broken diff %d/%lld max %.9f rms %.9f",diff,(long long)m,max_abs,rms);
+            info.set_error("compare",buf); info.set_compare_failure();
+        }
+        if (output_printer) output_printer->print_operation(info);
+        return status;
+    }
+    test_dmmv_batch(int64_t m=256, int64_t k=256) : m(m), k(k) {}
+};
+
+
 #define P 1.0f
 #define N -1.0f
 
@@ -7838,6 +7937,7 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
+
 // GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
@@ -9875,6 +9975,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int64_t m : {512, 1024, 2048, 5120}) {
         test_cases.emplace_back(new test_rms_batch(m, 1e-6f));
     }
+    // batch invariance control: Q8_0 small-k no MMVQ, N=1 vs N=2 (should pass)
+    for (int64_t m : {256, 512}) {
+        test_cases.emplace_back(new test_dmmv_batch(m, 256));
+    }
+
 
     // m == 1, with n on both sides of MMVF_MAX_BATCH_SIZE (8): mmvf below, operand swap above
     for (int64_t n : {1, 7, 8, 9, 16, 128, 512}) {
