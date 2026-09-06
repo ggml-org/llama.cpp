@@ -203,30 +203,49 @@ static ggml_cl_version get_opencl_platform_version(cl_platform_id platform) {
     return parse_cl_version(param_value);
 }
 
+// Returns OpenCL device's version. On an error returns ggml_cl_version with all zeroes.
+static ggml_cl_version get_opencl_device_version(cl_device_id device) {
+    size_t param_size;
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_VERSION, 0, nullptr, &param_size));
+    std::unique_ptr<char[]> param_storage(new char[param_size]);
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_VERSION, param_size, param_storage.get(), nullptr));
+
+    auto              param_value    = std::string_view(param_storage.get(), param_size);
+    const std::string version_prefix = "OpenCL ";  // Suffix: "XX.YY <platform-specific-info>"
+    if (param_value.find(version_prefix) != 0) {
+        return {};
+    }
+    param_value.remove_prefix(version_prefix.length());
+    return parse_cl_version(param_value);
+}
+
 // Return a version to use in OpenCL C compilation. On an error returns ggml_cl_version with all zeroes.
-static ggml_cl_version get_opencl_c_version(ggml_cl_version platform_version, cl_device_id device) {
+static ggml_cl_version get_opencl_c_version(ggml_cl_version device_version, cl_device_id device) {
     size_t param_size;
 
 #if CL_TARGET_OPENCL_VERSION >= 300
-    if (platform_version.major >= 3) {
-        CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_ALL_VERSIONS, 0, nullptr, &param_size));
-        if (!param_size) {
-            return {};
+    if (device_version.major >= 3) {
+        // CL_DEVICE_OPENCL_C_ALL_VERSIONS is an OpenCL 3.0 device query. Some drivers
+        // report an OpenCL 3.0 platform but only support OpenCL 2.x devices and return
+        // an error for this query, so fall back to CL_DEVICE_OPENCL_C_VERSION below.
+        cl_int err = clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_ALL_VERSIONS, 0, nullptr, &param_size);
+        if (err == CL_SUCCESS && param_size) {
+            std::unique_ptr<cl_name_version[]> versions(new cl_name_version[param_size]);
+            err = clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_ALL_VERSIONS, param_size, versions.get(), nullptr);
+            if (err == CL_SUCCESS) {
+                unsigned versions_count = param_size / sizeof(cl_name_version);
+
+                cl_version version_max = 0;
+                for (unsigned i = 0; i < versions_count; i++) {
+                    version_max = std::max<cl_version>(versions[i].version, version_max);
+                }
+
+                return { CL_VERSION_MAJOR(version_max), CL_VERSION_MINOR(version_max) };
+            }
         }
-
-        std::unique_ptr<cl_name_version[]> versions(new cl_name_version[param_size]);
-        CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_ALL_VERSIONS, param_size, versions.get(), nullptr));
-        unsigned versions_count = param_size / sizeof(cl_name_version);
-
-        cl_version version_max = 0;
-        for (unsigned i = 0; i < versions_count; i++) {
-            version_max = std::max<cl_version>(versions[i].version, version_max);
-        }
-
-        return { CL_VERSION_MAJOR(version_max), CL_VERSION_MINOR(version_max) };
     }
 #else
-    GGML_UNUSED(platform_version);
+    GGML_UNUSED(device_version);
 #endif  // CL_TARGET_OPENCL_VERSION >= 300
 
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_VERSION, 0, nullptr, &param_size));
@@ -6251,10 +6270,10 @@ static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev) {
         return false;
     }
 
-    ggml_cl_version platform_version = get_opencl_platform_version(dev_ctx->platform);
+    ggml_cl_version device_version = get_opencl_device_version(dev_ctx->device);
 
     // Check device OpenCL version, OpenCL 2.0 or above is required
-    ggml_cl_version opencl_c_version = get_opencl_c_version(platform_version, dev_ctx->device);
+    ggml_cl_version opencl_c_version = get_opencl_c_version(device_version, dev_ctx->device);
     if (opencl_c_version.major < 2) {
         GGML_LOG_WARN("ggml_opencl: OpenCL 2.0 or above is required\n");
         return false;
@@ -6341,7 +6360,8 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     cl_device_id device = backend_ctx->device;
 
     ggml_cl_version platform_version = get_opencl_platform_version(dev_ctx->platform);
-    ggml_cl_version opencl_c_version = get_opencl_c_version(platform_version, device);
+    ggml_cl_version device_version   = get_opencl_device_version(device);
+    ggml_cl_version opencl_c_version = get_opencl_c_version(device_version, device);
 
     backend_ctx->platform_version = platform_version;
     backend_ctx->opencl_c_version = opencl_c_version;
