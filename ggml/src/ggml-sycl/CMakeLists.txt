@@ -110,15 +110,19 @@ if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
     # Link against Level Zero loader for direct device memory allocation.
     # Avoids sycl::malloc_device triggering DMA-buf/TTM system RAM staging
     # in the xe kernel driver during multi-GPU inference.
-    find_path(LEVEL_ZERO_INCLUDE_DIR level_zero/ze_api.h HINTS ${ONEAPI_ROOT}/include ${LEVEL_ZERO_V1_SDK_PATH}/include)
+    find_path(LEVEL_ZERO_DEV_INCLUDE_DIR level_zero/ze_api.h HINTS ${ONEAPI_ROOT}/include ${LEVEL_ZERO_V1_SDK_PATH}/include)
     find_library(ZE_LOADER_LIB ze_loader HINTS ${ONEAPI_ROOT}/lib ${LEVEL_ZERO_V1_SDK_LIB_PATH} ENV LD_LIBRARY_PATH)
-    if(ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
+    if(ZE_LOADER_LIB AND LEVEL_ZERO_DEV_INCLUDE_DIR)
         target_link_libraries(ggml-sycl PRIVATE ${ZE_LOADER_LIB})
         target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
         message(STATUS "Level Zero loader found: ${ZE_LOADER_LIB}")
-        message(STATUS "Level Zero headers found: ${LEVEL_ZERO_INCLUDE_DIR}")
+        message(STATUS "Level Zero headers found: ${LEVEL_ZERO_DEV_INCLUDE_DIR}")
     else()
-        message(WARNING "Level Zero loader or headers not found, Level Zero support disabled")
+        message(FATAL_ERROR "Level Zero SDK/Development package not found! "
+                            "Please install the Level Zero SDK/development package or "
+                            "set -DGGML_SYCL_SUPPORT_LEVEL_ZERO_API=OFF in build command. "
+                            "Level Zero API is not mandatory for SYCL backend, "
+                            "but it is required by the special features for better performance on Intel GPUs.")
     endif()
 endif()
 
