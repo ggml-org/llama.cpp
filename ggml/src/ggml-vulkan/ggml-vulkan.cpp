@@ -9561,10 +9561,11 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         return false;
     }
 
-    // MMVQ is generally good for batches
-    if (n > 1) {
-        return true;
-    }
+    // The decision must not depend on the batch size: N=1 decode and N>1
+    // speculative verify of the same token have to take the same path,
+    // otherwise greedy output diverges from vanilla (Q8_1 MMVQ is not
+    // bit-exact with F32). Batches that are good for MMVQ stay good via
+    // the vendor/type/k checks below, for every N.
 
     // Quantization overhead is not worth it for small k
     switch (device->vendor_id) {
@@ -9626,6 +9627,7 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
     }
 
     GGML_UNUSED(m);
+    GGML_UNUSED(n);
 }
 
 static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx) {
@@ -9668,13 +9670,6 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
 
     const bool f16_f32_kernel = src1->type == GGML_TYPE_F32;
     bool quantize_y = ctx->device->integer_dot_product && src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1) && !y_non_contig && (ne11 * ne10) % 4 == 0 && ggml_vk_should_use_mmvq(ctx->device, ne01, ne11, ne10, src0->type);
-
-    // Keep DMMV on one representation for all batch sizes: the Q8_1 MMVQ path
-    // is not bit-exact with F32 across N and breaks greedy spec verify.
-    // Use GGML_VK_FORCE_MMVQ to get the old behavior back.
-    if (quantize_y && ctx->device->mmvq_mode != 1) {
-        quantize_y = false;
-    }
 
     vk_pipeline to_fp16_vk_0 = nullptr;
     vk_pipeline to_fp16_vk_1 = nullptr;

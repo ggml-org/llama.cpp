@@ -4742,8 +4742,32 @@ struct test_mul_mat : public test_case {
     }
 };
 
-// batch invariance for DMMV/MMVQ: Q8_0/Q4_K x F32 spec N=1 vs N=2 col0 must be bit-exact (Bug 6)
-// N=1 uses F32 DMMV while N>1 stages Q8_1 + integer-dot MMVQ, which disagrees (LINF 0.01-0.3)
+// Deterministic init so graphs built with the same seeds hold identical data.
+static void init_tensor_fixed_seed(ggml_tensor * tensor, uint32_t seed) {
+    const size_t nels = ggml_nelements(tensor);
+    std::vector<float> data(nels);
+    std::mt19937 gen(seed);
+    std::uniform_real_distribution<float> distribution(-1.0f, 1.0f);
+    for (size_t i = 0; i < nels; i++) {
+        data[i] = distribution(gen);
+    }
+
+    if (tensor->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_set(tensor, data.data(), 0, nels * sizeof(float));
+        return;
+    }
+
+    std::vector<uint8_t> dataq(ggml_row_size(tensor->type, nels));
+    std::vector<float> imatrix(tensor->ne[0], 1.0f);
+    const float * im = ggml_quantize_requires_imatrix(tensor->type) ? imatrix.data() : nullptr;
+    ggml_quantize_chunk(tensor->type, data.data(), dataq.data(),
+        0, nels / ggml_blck_size(tensor->type), ggml_blck_size(tensor->type), im);
+    ggml_backend_tensor_set(tensor, dataq.data(), 0, dataq.size());
+}
+
+// N=1 and N>1 decodes of the same token must agree bit-exactly in col0.
+// The comparison is ULP-0 by design: with a contiguous 2D layout col0 is the
+// first m outputs, and any representation change across N shows up here.
 struct test_mmvq_batch : public test_case {
     const ggml_type type_a;
     const ggml_type type_b;
@@ -4759,113 +4783,126 @@ struct test_mmvq_batch : public test_case {
         return "MMVQ_BATCH";
     }
 
-    double max_nmse_err() override { return 1e-7; }
-
+    // Small stand-in graph so the single-graph modes have something valid to
+    // work with; the actual check lives in eval and those modes skip this
+    // case via run_whole_graph().
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        GGML_UNUSED(ctx);
-        return nullptr;
+        ggml_tensor * a = ggml_new_tensor_2d(ctx, type_a, 256, 32);
+        ggml_tensor * b = ggml_new_tensor_2d(ctx, type_b, 256, 1);
+        ggml_set_name(a, "a");
+        ggml_set_name(b, "b");
+        return ggml_mul_mat(ctx, a, b);
     }
 
-    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
-        GGML_UNUSED(backend2);
-        GGML_UNUSED(op_filter);
-        const std::string op_name = "MMVQ_BATCH";
-        const std::string op_params = vars();
+    bool run_whole_graph() override { return true; }
+
+    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_names_filter, printer * output_printer) override {
+        if (op_names_filter && !matches_filter(nullptr, op_names_filter)) {
+            return test_status_t::SKIPPED;
+        }
+
         const std::string backend_name = ggml_backend_name(backend1);
 
-        auto run_one = [&](ggml_backend_t backend, int64_t n, uint32_t seed_a, uint32_t seed_b, std::vector<float> & out) -> bool {
+        ggml_init_params params = {
+            /* .mem_size = */ ggml_tensor_overhead()*8 + ggml_graph_overhead(),
+            /* .mem_base = */ NULL,
+            /* .no_alloc = */ true,
+        };
+        ggml_context_ptr probe(ggml_init(params));
+        ggml_tensor * pa = ggml_new_tensor_2d(probe.get(), type_a, k, m);
+        ggml_tensor * pb = ggml_new_tensor_2d(probe.get(), type_b, k, 1);
+        ggml_tensor * po = ggml_mul_mat(probe.get(), pa, pb);
+        for (ggml_tensor * t = ggml_get_first_tensor(probe.get()); t != NULL; t = ggml_get_next_tensor(probe.get(), t)) {
+            if (!ggml_backend_supports_op(backend1, t)) {
+                print_test_result_locked(output_printer, test_result(backend_name, "MMVQ_BATCH", vars(), "test", false, false, "not supported"));
+                return test_status_t::NOT_SUPPORTED;
+            }
+        }
+
+        auto run_one = [&](ggml_backend_t backend, int64_t n, std::vector<float> & out) -> bool {
             ggml_init_params p = { ggml_tensor_overhead()*16 + ggml_graph_overhead() + 32*1024*1024, nullptr, true };
             p.no_alloc = true;
-            struct ggml_context * ctx = ggml_init(p);
-            ggml_tensor * a = ggml_new_tensor_2d(ctx, type_a, k, m);
-            ggml_tensor * b = ggml_new_tensor_2d(ctx, type_b, k, n);
+            ggml_context_ptr ctx(ggml_init(p));
+            ggml_tensor * a = ggml_new_tensor_2d(ctx.get(), type_a, k, m);
+            ggml_tensor * b = ggml_new_tensor_2d(ctx.get(), type_b, k, n);
             ggml_set_name(a, "a");
             ggml_set_name(b, "b");
-            ggml_tensor * o = ggml_mul_mat(ctx, a, b);
+            ggml_tensor * o = ggml_mul_mat(ctx.get(), a, b);
             ggml_set_name(o, "out");
-            ggml_cgraph * gf = ggml_new_graph(ctx);
+            ggml_cgraph * gf = ggml_new_graph(ctx.get());
             ggml_build_forward_expand(gf, o);
-            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
-            if (!buf) { ggml_free(ctx); return false; }
-            auto init_fixed = [&](ggml_tensor * t, uint32_t seed) {
-                size_t nels = ggml_nelements(t);
-                std::vector<float> data(nels);
-                std::mt19937 gen(seed);
-                std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-                for (size_t i = 0; i < nels; ++i) data[i] = dis(gen);
-                if (t->type == GGML_TYPE_F32) {
-                    ggml_backend_tensor_set(t, data.data(), 0, nels*sizeof(float));
-                } else if (ggml_is_quantized(t->type) || t->type == GGML_TYPE_F16 || t->type == GGML_TYPE_BF16) {
-                    std::vector<uint8_t> dataq(ggml_row_size(t->type, nels));
-                    std::vector<float> im(t->ne[0], 1.0f);
-                    float * im_ptr = ggml_quantize_requires_imatrix(t->type) ? im.data() : nullptr;
-                    ggml_quantize_chunk(t->type, data.data(), dataq.data(), 0, nels/ggml_blck_size(t->type), ggml_blck_size(t->type), im_ptr);
-                    ggml_backend_tensor_set(t, dataq.data(), 0, dataq.size());
-                }
-            };
-            init_fixed(a, seed_a);
-            init_fixed(b, seed_b);
-            int ret = ggml_backend_graph_compute(backend, gf);
-            if (ret != GGML_STATUS_SUCCESS) { ggml_backend_buffer_free(buf); ggml_free(ctx); return false; }
-            std::vector<uint8_t> buf2(ggml_nbytes(o));
-            ggml_backend_tensor_get(o, buf2.data(), 0, ggml_nbytes(o));
-            const auto * tt = ggml_get_type_traits(o->type);
-            size_t bs = ggml_blck_size(o->type);
-            std::vector<float> vq(bs);
-            out.clear();
-            out.reserve(ggml_nelements(o));
-            for (int64_t i3 = 0; i3 < o->ne[3]; ++i3)
-            for (int64_t i2 = 0; i2 < o->ne[2]; ++i2)
-            for (int64_t i1 = 0; i1 < o->ne[1]; ++i1)
-            for (int64_t i0 = 0; i0 < o->ne[0]; i0 += bs) {
-                size_t i = i3*o->nb[3] + i2*o->nb[2] + i1*o->nb[1] + i0/bs*o->nb[0];
-                if (o->type == GGML_TYPE_F32) out.push_back(*(float*)&buf2[i]);
-                else if (o->type == GGML_TYPE_F16) out.push_back(ggml_fp16_to_fp32(*(ggml_fp16_t*)&buf2[i]));
-                else if (ggml_is_quantized(o->type)) { tt->to_float(&buf2[i], vq.data(), bs); out.insert(out.end(), vq.begin(), vq.end()); }
+            ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+            if (buf == NULL) {
+                return false;
             }
-            ggml_backend_buffer_free(buf);
-            ggml_free(ctx);
+            init_tensor_fixed_seed(a, 123);
+            init_tensor_fixed_seed(b, 42);
+            if (ggml_backend_graph_compute(backend, gf) != GGML_STATUS_SUCCESS) {
+                return false;
+            }
+            GGML_ASSERT(o->type == GGML_TYPE_F32);
+            std::vector<uint8_t> raw(ggml_nbytes(o));
+            ggml_backend_tensor_get(o, raw.data(), 0, ggml_nbytes(o));
+            out.resize(m*n);
+            for (int64_t i = 0; i < m*n; ++i) {
+                out[i] = ((float *) raw.data())[i];
+            }
             return true;
         };
 
-        std::vector<float> out_cpu1, out_cpu2, out_vk1, out_vk2;
-        ggml_backend_t cpu = ggml_backend_init_by_name("CPU", nullptr);
-        if (!cpu) cpu = backend1;
-        bool ok = true;
-        ok &= run_one(cpu, 1, 123, 42, out_cpu1);
-        ok &= run_one(cpu, 2, 123, 42, out_cpu2);
-        ok &= run_one(backend1, 1, 123, 42, out_vk1);
-        ok &= run_one(backend1, 2, 123, 42, out_vk2);
-        if (!ok) {
-            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "alloc/compute failed");
-            if (output_printer) output_printer->print_operation(info);
+        // Reference backend from the harness; fall back to an owned CPU backend.
+        ggml_backend_t cpu = backend2;
+        ggml_backend_ptr owned_cpu;
+        if (cpu == nullptr) {
+            owned_cpu.reset(ggml_backend_init_by_name("CPU", nullptr));
+            cpu = owned_cpu.get();
+        }
+        if (cpu == nullptr) {
+            return test_status_t::FAIL;
+        }
+
+        std::vector<float> out_cpu1, out_cpu2, out_dev1, out_dev2;
+        if (!run_one(cpu, 1, out_cpu1) || !run_one(cpu, 2, out_cpu2) ||
+            !run_one(backend1, 1, out_dev1) || !run_one(backend1, 2, out_dev2)) {
+            test_operation_info info("MMVQ_BATCH", vars(), backend_name, test_status_t::FAIL, "alloc/compute failed");
+            if (output_printer) {
+                output_printer->print_operation(info);
+            }
             return test_status_t::FAIL;
         }
         double cpu_max = 0;
-        for (size_t i = 0; i < (size_t)m; ++i) cpu_max = std::max(cpu_max, fabs(double(out_cpu1[i]) - double(out_cpu2[i])));
+        for (size_t i = 0; i < (size_t)m; ++i) {
+            cpu_max = std::max(cpu_max, fabs(double(out_cpu1[i]) - double(out_cpu2[i])));
+        }
         if (cpu_max != 0) {
-            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "CPU not invariant");
-            if (output_printer) output_printer->print_operation(info);
+            test_operation_info info("MMVQ_BATCH", vars(), backend_name, test_status_t::FAIL, "CPU not invariant");
+            if (output_printer) {
+                output_printer->print_operation(info);
+            }
             return test_status_t::FAIL;
         }
         double max_abs = 0, rms = 0;
         int diff = 0;
         for (size_t i = 0; i < (size_t)m; ++i) {
-            double d = fabs(double(out_vk1[i]) - double(out_vk2[i]));
+            const double d = fabs(double(out_dev1[i]) - double(out_dev2[i]));
             max_abs = std::max(max_abs, d);
             rms += d*d;
-            if (d != 0) diff++;
+            if (d != 0) {
+                diff++;
+            }
         }
         rms = sqrt(rms/m);
-        test_status_t status = (max_abs == 0) ? test_status_t::OK : test_status_t::FAIL;
-        test_operation_info info(op_name, op_params, backend_name, status, "");
+        const test_status_t status = (max_abs == 0) ? test_status_t::OK : test_status_t::FAIL;
+        test_operation_info info("MMVQ_BATCH", vars(), backend_name, status, "");
         if (status == test_status_t::FAIL) {
             char buf[256];
             snprintf(buf, sizeof(buf), "batch invariance broken diff %d/%lld max %.9f rms %.9f", diff, (long long)m, max_abs, rms);
             info.set_error("compare", buf);
             info.set_compare_failure();
         }
-        if (output_printer) output_printer->print_operation(info);
+        if (output_printer) {
+            output_printer->print_operation(info);
+        }
         return status;
     }
 
@@ -9741,8 +9778,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
 
-    // batch invariance for DMMV/MMVQ: Q8_0/Q4_K x F32 spec N=1 vs N=2 col0 must be bit-exact (Bug 6)
-    for (ggml_type t : {GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0}) {
+    // N=1 and N=2 decodes of the same token must agree bit-exactly in col0
+    for (ggml_type t : {GGML_TYPE_Q2_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0}) {
         test_cases.emplace_back(new test_mmvq_batch(t, GGML_TYPE_F32, 512, 2048));
         test_cases.emplace_back(new test_mmvq_batch(t, GGML_TYPE_F32, 256, 1024));
     }
