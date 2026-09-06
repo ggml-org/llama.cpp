@@ -207,33 +207,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     return true;
 }
 
-int main(int argc, char ** argv) {
-    std::setlocale(LC_NUMERIC, "C");
-
-    common_params params;
-    params.sampling.seed = 1234;
-    params.n_predict = 1;
-
-    common_init();
-
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
-        return 1;
-    }
-
-    ggml_backend_load_all();
-
-    common_init_result_ptr llama_init = common_init_from_params(params);
-    llama_model * model = llama_init->model();
-    if (model == nullptr) {
-        fprintf(stderr, "%s : failed to init model\n", __func__);
-        return 1;
-    }
-
-    if (!llama_model_is_recurrent(model) && !llama_model_is_hybrid(model)) {
-        fprintf(stderr, "%s : skipping for non-recurrent model\n", __func__);
-        return 0;
-    }
-
+static int test_rollback(const common_params & params, llama_model * model) {
     const llama_vocab * vocab   = llama_model_get_vocab(model);
     const int           n_vocab = llama_vocab_n_tokens(vocab);
 
@@ -395,6 +369,44 @@ int main(int argc, char ** argv) {
 
     if (!test_multi_seq_split_replay(params, model, n_vocab)) {
         return 1;
+    }
+
+    return 0;
+}
+
+int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
+    common_params params;
+    params.sampling.seed = 1234;
+    params.n_predict = 1;
+
+    common_init();
+
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    ggml_backend_load_all();
+
+    common_init_result_ptr llama_init = common_init_from_params(params);
+    llama_model * model = llama_init->model();
+    if (model == nullptr) {
+        fprintf(stderr, "%s : failed to init model\n", __func__);
+        return 1;
+    }
+
+    if (!llama_model_is_recurrent(model) && !llama_model_is_hybrid(model)) {
+        fprintf(stderr, "%s : skipping for non-recurrent model\n", __func__);
+        return 0;
+    }
+
+    for (const char * fill : { "0", "0x3e" }) {
+        common_set_env("LLAMA_RS_DEBUG_FILL", fill);
+        fprintf(stderr, "%s : testing with LLAMA_RS_DEBUG_FILL=%s\n", __func__, fill);
+        if (test_rollback(params, model) != 0) {
+            return 1;
+        }
     }
 
     return 0;

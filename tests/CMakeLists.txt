@@ -248,18 +248,6 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         FIXTURES_REQUIRED generate-models
     )
 
-    # nonzero cache fill exposes unwritten rollback snapshots.
-    llama_test(
-        test-recurrent-state-rollback
-        NAME test-recurrent-state-rollback-kimi-k3-fill
-        LABEL main
-        ARGS -m "${MODEL_DIR}/kimi-k3-moe.gguf"
-    )
-    set_tests_properties(test-recurrent-state-rollback-kimi-k3-fill PROPERTIES
-        FIXTURES_REQUIRED generate-models
-        ENVIRONMENT "LLAMA_RS_DEBUG_FILL=0x3e"
-    )
-
     # Test state save/load functionality across all architectures, using the generated dummy models
     llama_test(
         test-save-load-state
