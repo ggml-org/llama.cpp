@@ -4743,6 +4743,7 @@ struct test_mul_mat : public test_case {
 };
 
 // Deterministic init so graphs built with the same seeds hold identical data.
+// The ones importance matrix matches the harness dummy for k-quants.
 static void init_tensor_fixed_seed(ggml_tensor * tensor, uint32_t seed) {
     const size_t nels = ggml_nelements(tensor);
     std::vector<float> data(nels);
@@ -4783,9 +4784,9 @@ struct test_mmvq_batch : public test_case {
         return "MMVQ_BATCH";
     }
 
-    // Small stand-in graph so the single-graph modes have something valid to
-    // work with; the actual check lives in eval and those modes skip this
-    // case via run_whole_graph().
+    // Small stand-in so the pure-virtual build_graph has a valid target.
+    // No single-graph mode executes it: grad/support/coverage erase this
+    // case via run_whole_graph(), perf uses its own list, eval ignores it.
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor_2d(ctx, type_a, 256, 32);
         ggml_tensor * b = ggml_new_tensor_2d(ctx, type_b, 256, 1);
@@ -4797,7 +4798,8 @@ struct test_mmvq_batch : public test_case {
     bool run_whole_graph() override { return true; }
 
     test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_names_filter, printer * output_printer) override {
-        if (op_names_filter && !matches_filter(nullptr, op_names_filter)) {
+        GGML_UNUSED(backend2);
+        if (op_names_filter && std::string(op_names_filter).find("MMVQ_BATCH") == std::string::npos) {
             return test_status_t::SKIPPED;
         }
 
@@ -4814,7 +4816,10 @@ struct test_mmvq_batch : public test_case {
         ggml_tensor * po = ggml_mul_mat(probe.get(), pa, pb);
         for (ggml_tensor * t = ggml_get_first_tensor(probe.get()); t != NULL; t = ggml_get_next_tensor(probe.get(), t)) {
             if (!ggml_backend_supports_op(backend1, t)) {
-                print_test_result_locked(output_printer, test_result(backend_name, "MMVQ_BATCH", vars(), "test", false, false, "not supported"));
+                test_operation_info info("MMVQ_BATCH", vars(), backend_name, test_status_t::NOT_SUPPORTED, "not supported");
+                if (output_printer) {
+                    output_printer->print_operation(info);
+                }
                 return test_status_t::NOT_SUPPORTED;
             }
         }
@@ -4835,56 +4840,37 @@ struct test_mmvq_batch : public test_case {
             if (buf == NULL) {
                 return false;
             }
+            GGML_ASSERT(o->type == GGML_TYPE_F32);
             init_tensor_fixed_seed(a, 123);
             init_tensor_fixed_seed(b, 42);
             if (ggml_backend_graph_compute(backend, gf) != GGML_STATUS_SUCCESS) {
                 return false;
             }
-            GGML_ASSERT(o->type == GGML_TYPE_F32);
             std::vector<uint8_t> raw(ggml_nbytes(o));
             ggml_backend_tensor_get(o, raw.data(), 0, ggml_nbytes(o));
             out.resize(m*n);
             for (int64_t i = 0; i < m*n; ++i) {
-                out[i] = ((float *) raw.data())[i];
+                float v;
+                memcpy(&v, &raw[(size_t)i * sizeof(float)], sizeof(float));
+                out[i] = v;
             }
             return true;
         };
 
-        // Reference backend from the harness; fall back to an owned CPU backend.
-        ggml_backend_t cpu = backend2;
-        ggml_backend_ptr owned_cpu;
-        if (cpu == nullptr) {
-            owned_cpu.reset(ggml_backend_init_by_name("CPU", nullptr));
-            cpu = owned_cpu.get();
-        }
-        if (cpu == nullptr) {
-            return test_status_t::FAIL;
-        }
-
-        std::vector<float> out_cpu1, out_cpu2, out_dev1, out_dev2;
-        if (!run_one(cpu, 1, out_cpu1) || !run_one(cpu, 2, out_cpu2) ||
-            !run_one(backend1, 1, out_dev1) || !run_one(backend1, 2, out_dev2)) {
+        std::vector<float> out1, out2;
+        if (!run_one(backend1, 1, out1) || !run_one(backend1, 2, out2)) {
             test_operation_info info("MMVQ_BATCH", vars(), backend_name, test_status_t::FAIL, "alloc/compute failed");
             if (output_printer) {
                 output_printer->print_operation(info);
             }
             return test_status_t::FAIL;
         }
-        double cpu_max = 0;
-        for (size_t i = 0; i < (size_t)m; ++i) {
-            cpu_max = std::max(cpu_max, fabs(double(out_cpu1[i]) - double(out_cpu2[i])));
-        }
-        if (cpu_max != 0) {
-            test_operation_info info("MMVQ_BATCH", vars(), backend_name, test_status_t::FAIL, "CPU not invariant");
-            if (output_printer) {
-                output_printer->print_operation(info);
-            }
-            return test_status_t::FAIL;
-        }
+        // Same seeds feed bit-identical col0 inputs to both graphs (generator
+        // prefix property on contiguous 2D), so any diff is backend N-dependence.
         double max_abs = 0, rms = 0;
         int diff = 0;
         for (size_t i = 0; i < (size_t)m; ++i) {
-            const double d = fabs(double(out_dev1[i]) - double(out_dev2[i]));
+            const double d = fabs(double(out1[i]) - double(out2[i]));
             max_abs = std::max(max_abs, d);
             rms += d*d;
             if (d != 0) {

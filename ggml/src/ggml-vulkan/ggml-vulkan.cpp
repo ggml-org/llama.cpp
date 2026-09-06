@@ -9561,11 +9561,7 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         return false;
     }
 
-    // The decision must not depend on the batch size: N=1 decode and N>1
-    // speculative verify of the same token have to take the same path,
-    // otherwise greedy output diverges from vanilla (Q8_1 MMVQ is not
-    // bit-exact with F32). Batches that are good for MMVQ stay good via
-    // the vendor/type/k checks below, for every N.
+    // Batch size must not select precision: N=1 and N>1 take the same path.
 
     // Quantization overhead is not worth it for small k
     switch (device->vendor_id) {
