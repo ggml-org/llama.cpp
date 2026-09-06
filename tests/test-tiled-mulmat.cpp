@@ -385,9 +385,8 @@ struct bench_row {
     bool have_repack;
 };
 
-// One timed run of each path (standard ggml_mul_mat, repacked ggml_mul_mat, 
-// plus max error and RMSE vs the standard output. std and tiled are
-// The repack column is only available where a repack kernel exists for the type on our arch
+// One timed run of each path (std, repacked, tiled) plus max error and RMSE vs the std
+// output. The repack column is n/a where no repack kernel exists for the type
 static bench_row bench_three_way(ggml_backend_t backend, int64_t M, int64_t N, int64_t K, ggml_type quant_type) {
     bench_row row;
     row.name = ggml_type_name(quant_type);
@@ -500,104 +499,15 @@ static void print_bench_table(int64_t M, int64_t N, int64_t K, const bench_row *
     }
 }
 
-struct bench_row_ab {
-    const char * name;
-    double time_std, time_iqp, time_tiled;
-    float max_err_iqp, rmse_iqp;
-    float max_err_tiled, rmse_tiled;
-};
-
-// Second pass: iqp panel vs tiled kernel on the same tensors, routed by GGML_CPU_MM_PATH
-// (both gates read it per op); no repack. For a type/shape the iqp gate rejects (batch < 8,
-// output rows % 8 != 0, dot length % 256 != 0, unsupported type), the iqp column is the
-// stock vec_dot path
-static bench_row_ab bench_tiled_iqp(ggml_backend_t backend, int64_t M, int64_t N, int64_t K, ggml_type quant_type) {
-    bench_row_ab row;
-    row.name = ggml_type_name(quant_type);
-    row.time_std = row.time_iqp = row.time_tiled = 0.0;
-    row.max_err_iqp = row.rmse_iqp = row.max_err_tiled = row.rmse_tiled = 0.0f;
-
-    struct ggml_init_params ip = { 1024*1024*1024, nullptr, true };
-    struct ggml_context * ctx = ggml_init(ip);
-
-    struct ggml_tensor * src1 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, N, M);
-    struct ggml_tensor * src0 = ggml_new_tensor_2d(ctx, quant_type, N, K);
-
-    struct ggml_cgraph * gf = ggml_new_graph(ctx);
-    struct ggml_tensor * dst = ggml_mul_mat(ctx, src0, src1);
-    ggml_build_forward_expand(gf, dst);
-
-    ggml_backend_alloc_ctx_tensors(ctx, backend);
-
-    srand(0xBEEF);
-    float * src1_data = gen_rand_f32(M * N);
-    float * src0_data = gen_rand_f32(N * K);
-    fill_tensor(src1, src1_data, M, N, GGML_TYPE_F32);
-    fill_tensor(src0, src0_data, K, N, quant_type);
-    free(src1_data); free(src0_data);
-
-    const size_t flush_size = 256 * 1024 * 1024;
-    void * flush_buf = malloc(flush_size);
-    const int n_reps = 5;
-    cpu_set_use_ref(backend, true);
-    row.time_std   = time_graph_compute_best(backend, gf, n_reps, flush_buf, flush_size);
-    cpu_set_use_ref(backend, false);
-    setenv("GGML_CPU_MM_PATH", "iqp", 1);
-    row.time_iqp   = time_graph_compute_best(backend, gf, n_reps, flush_buf, flush_size);
-    setenv("GGML_CPU_MM_PATH", "tiled", 1);
-    row.time_tiled = time_graph_compute_best(backend, gf, n_reps, flush_buf, flush_size);
-    unsetenv("GGML_CPU_MM_PATH");
-    free(flush_buf);
-
-    float * out_std   = (float *) malloc(M * K * sizeof(float));
-    float * out_iqp   = (float *) malloc(M * K * sizeof(float));
-    float * out_tiled = (float *) malloc(M * K * sizeof(float));
-    cpu_set_use_ref(backend, true);
-    ggml_backend_graph_compute(backend, gf);
-    ggml_backend_tensor_get(dst, out_std, 0, ggml_nbytes(dst));
-    cpu_set_use_ref(backend, false);
-    setenv("GGML_CPU_MM_PATH", "iqp", 1);
-    ggml_backend_graph_compute(backend, gf);
-    ggml_backend_tensor_get(dst, out_iqp, 0, ggml_nbytes(dst));
-    compare_f32(out_std, out_iqp, M * K, &row.max_err_iqp, &row.rmse_iqp);
-    setenv("GGML_CPU_MM_PATH", "tiled", 1);
-    ggml_backend_graph_compute(backend, gf);
-    ggml_backend_tensor_get(dst, out_tiled, 0, ggml_nbytes(dst));
-    compare_f32(out_std, out_tiled, M * K, &row.max_err_tiled, &row.rmse_tiled);
-    unsetenv("GGML_CPU_MM_PATH");
-    free(out_std); free(out_iqp); free(out_tiled);
-
-    ggml_free(ctx);
-    return row;
-}
-
-static void print_ab_table(int64_t M, int64_t N, int64_t K, const bench_row_ab * rows, size_t n_types) {
-    const double flops = 2.0 * M * N * K;
-
-    printf("\nBENCH %lldx%lld * %lldx%lld (tiled vs iqp, GGML_CPU_MM_PATH), min of 5 timings, 8 threads\n",
-           (long long)M, (long long)N, (long long)N, (long long)K);
-    printf("%-8s %10s %12s %12s %11s %11s %11s %17s %17s %17s %17s\n",
-           "type", "std TF", "iqp TF", "tiled TF", "iqp/std", "tiled/iqp", "tiled/std",
-           "max_err(iqp)", "rmse(iqp)", "max_err(tiled)", "rmse(tiled)");
-    for (size_t i = 0; i < n_types; ++i) {
-        const bench_row_ab * r = &rows[i];
-        printf("%-8s %10.3f %12.3f %12.3f %11.2f %11.2f %11.2f %17.5e %17.5e %17.5e %17.5e\n",
-               r->name,
-               flops / (r->time_std * 1e12),
-               flops / (r->time_iqp * 1e12), flops / (r->time_tiled * 1e12),
-               r->time_std / r->time_iqp, r->time_iqp / r->time_tiled, r->time_std / r->time_tiled,
-               r->max_err_iqp, r->rmse_iqp, r->max_err_tiled, r->rmse_tiled);
-    }
-}
-
 struct bench_row_mmid {
     const char * name;
-    double time_std, time_iqp, time_tiled;
-    float max_err_iqp, rmse_iqp;
+    double time_std, time_repack, time_tiled;
+    float max_err_repack, rmse_repack;
     float max_err_tiled, rmse_tiled;
+    bool have_repack;
 };
 
-// MUL_MAT_ID (MoE) three-way bench: std (use_ref) vs iqp panel (GGML_CPU_MM_PATH=iqp) vs
+// MUL_MAT_ID (MoE) three-way bench: std (use_ref) vs repack (CPU_REPACK buffer) vs
 // tiled kernel (default; TILED_MM_FORCE is set in main so ragged experts take it too).
 // Column (id, t) = GEMV of src1 row (id % b_slots + t * b_slots) against expert ids[t*k+id];
 // cne1 = k * batch / n_experts rows per expert on average
@@ -605,8 +515,9 @@ static bench_row_mmid bench_mul_mat_id(ggml_backend_t backend, int64_t K, int64_
                                        int64_t k, int64_t b_slots, int64_t batch, ggml_type quant_type) {
     bench_row_mmid row;
     row.name = ggml_type_name(quant_type);
-    row.time_std = row.time_iqp = row.time_tiled = 0.0;
-    row.max_err_iqp = row.rmse_iqp = row.max_err_tiled = row.rmse_tiled = 0.0f;
+    row.time_std = row.time_repack = row.time_tiled = 0.0;
+    row.max_err_repack = row.rmse_repack = row.max_err_tiled = row.rmse_tiled = 0.0f;
+    row.have_repack = false;
 
     struct ggml_init_params ip = { 1024*1024*1024, nullptr, true };
     struct ggml_context * ctx = ggml_init(ip);
@@ -614,13 +525,29 @@ static bench_row_mmid bench_mul_mat_id(ggml_backend_t backend, int64_t K, int64_
     int64_t ne_as[4]  = { K, R, n_experts, 1 };
     int64_t ne_b[4]   = { K, b_slots, batch, 1 };
     int64_t ne_ids[4] = { k, batch, 1, 1 };
-    struct ggml_tensor * src1  = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_b);
-    struct ggml_tensor * src0  = ggml_new_tensor(ctx, quant_type,  4, ne_as);
-    struct ggml_tensor * ids_t = ggml_new_tensor(ctx, GGML_TYPE_I32, 4, ne_ids);
+    struct ggml_tensor * src1     = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_b);
+    struct ggml_tensor * src0_std = ggml_new_tensor(ctx, quant_type,  4, ne_as);
+    struct ggml_tensor * src0_rep = ggml_new_tensor(ctx, quant_type,  4, ne_as);
+    struct ggml_tensor * ids_t    = ggml_new_tensor(ctx, GGML_TYPE_I32, 4, ne_ids);
 
+    // std and tiled are the same op on the same tensors; one graph serves
+    // both timings (use_ref selects the stock path)
     struct ggml_cgraph * gf = ggml_new_graph(ctx);
-    struct ggml_tensor * dst = ggml_mul_mat_id(ctx, src0, src1, ids_t);
+    struct ggml_tensor * dst = ggml_mul_mat_id(ctx, src0_std, src1, ids_t);
     ggml_build_forward_expand(gf, dst);
+
+    struct ggml_cgraph * gf_repack = ggml_new_graph(ctx);
+    struct ggml_tensor * dst_repack  = ggml_mul_mat_id(ctx, src0_rep, src1, ids_t);
+    ggml_build_forward_expand(gf_repack, dst_repack);
+
+    ggml_backend_buffer_type_t repack_buft = get_cpu_repack_buft();
+    if (repack_buft && R % 8 == 0) {
+        ggml_backend_buffer_t buf_rep = ggml_backend_buft_alloc_buffer(repack_buft, ggml_nbytes(src0_rep));
+        src0_rep->buffer = buf_rep;
+        src0_rep->data   = ggml_backend_buffer_get_base(buf_rep);
+        ggml_backend_buffer_init_tensor(buf_rep, src0_rep);
+        row.have_repack = (src0_rep->extra != NULL);
+    }
 
     ggml_backend_alloc_ctx_tensors(ctx, backend);
 
@@ -635,7 +562,12 @@ static bench_row_mmid bench_mul_mat_id(ggml_backend_t backend, int64_t K, int64_
     float * b_data  = gen_rand_f32(K * b_slots * batch);
     float * as_data = gen_rand_f32(K * R * n_experts);
     fill_tensor(src1, b_data, b_slots * batch, K, GGML_TYPE_F32);
-    fill_tensor(src0, as_data, R * n_experts, K, quant_type);
+    fill_tensor(src0_std, as_data, R * n_experts, K, quant_type);
+    if (row.have_repack) {
+        // same f32 source, so both weight tensors hold identical quants; the
+        // repack buffer's set_tensor repacks them in-place
+        fill_tensor(src0_rep, as_data, R * n_experts, K, quant_type);
+    }
     ggml_backend_tensor_set(ids_t, ids, 0, ggml_nbytes(ids_t));
     free(b_data); free(as_data);
 
@@ -645,29 +577,29 @@ static bench_row_mmid bench_mul_mat_id(ggml_backend_t backend, int64_t K, int64_
     cpu_set_use_ref(backend, true);
     row.time_std = time_graph_compute_best(backend, gf, n_reps, flush_buf, flush_size);
     cpu_set_use_ref(backend, false);
-    setenv("GGML_CPU_MM_PATH", "iqp", 1);
-    row.time_iqp = time_graph_compute_best(backend, gf, n_reps, flush_buf, flush_size);
-    unsetenv("GGML_CPU_MM_PATH");
+    if (row.have_repack) {
+        row.time_repack = time_graph_compute_best(backend, gf_repack, n_reps, flush_buf, flush_size);
+    }
     row.time_tiled = time_graph_compute_best(backend, gf, n_reps, flush_buf, flush_size);
     free(flush_buf);
 
     // errors vs the standard output (all paths use the same quantized weights)
-    float * out_std   = (float *) malloc(R * k * batch * sizeof(float));
-    float * out_iqp   = (float *) malloc(R * k * batch * sizeof(float));
-    float * out_tiled = (float *) malloc(R * k * batch * sizeof(float));
+    float * out_std    = (float *) malloc(R * k * batch * sizeof(float));
+    float * out_tiled  = (float *) malloc(R * k * batch * sizeof(float));
+    float * out_repack = (float *) malloc(R * k * batch * sizeof(float));
     cpu_set_use_ref(backend, true);
     ggml_backend_graph_compute(backend, gf);
     ggml_backend_tensor_get(dst, out_std, 0, ggml_nbytes(dst));
     cpu_set_use_ref(backend, false);
-    setenv("GGML_CPU_MM_PATH", "iqp", 1);
-    ggml_backend_graph_compute(backend, gf);
-    ggml_backend_tensor_get(dst, out_iqp, 0, ggml_nbytes(dst));
-    compare_f32(out_std, out_iqp, R * k * batch, &row.max_err_iqp, &row.rmse_iqp);
-    unsetenv("GGML_CPU_MM_PATH");
     ggml_backend_graph_compute(backend, gf);
     ggml_backend_tensor_get(dst, out_tiled, 0, ggml_nbytes(dst));
+    if (row.have_repack) {
+        ggml_backend_graph_compute(backend, gf_repack);
+        ggml_backend_tensor_get(dst_repack, out_repack, 0, ggml_nbytes(dst_repack));
+        compare_f32(out_std, out_repack, R * k * batch, &row.max_err_repack, &row.rmse_repack);
+    }
     compare_f32(out_std, out_tiled, R * k * batch, &row.max_err_tiled, &row.rmse_tiled);
-    free(out_std); free(out_iqp); free(out_tiled); free(ids);
+    free(out_std); free(out_tiled); free(out_repack); free(ids);
 
     ggml_free(ctx);
     return row;
@@ -677,20 +609,29 @@ static void print_mmid_table(int64_t K, int64_t R, int64_t n_experts, int64_t k,
                              int64_t b_slots, int64_t batch, const bench_row_mmid * rows, size_t n_types) {
     const double flops = 2.0 * (double) K * R * k * batch;
 
-    printf("\nBENCH mmid %lldx%lldx%lld k=%lld b_slots=%lld batch=%lld (cne1=%lld, std vs iqp vs tiled), min of 5 timings, 8 threads\n",
+    printf("\nBENCH mmid %lldx%lldx%lld k=%lld b_slots=%lld batch=%lld (cne1=%lld), min of 5 timings, 8 threads\n",
            (long long)K, (long long)R, (long long)n_experts, (long long)k,
            (long long)b_slots, (long long)batch, (long long)(k * batch / n_experts));
-    printf("%-8s %10s %12s %12s %11s %11s %11s %17s %17s %17s %17s\n",
-           "type", "std TF", "iqp TF", "tiled TF", "iqp/std", "tiled/iqp", "tiled/std",
-           "max_err(iqp)", "rmse(iqp)", "max_err(tiled)", "rmse(tiled)");
+    printf("%-8s %10s %12s %12s %11s %11s %17s %17s %17s %17s\n",
+           "type", "std TF", "repack TF", "tiled TF", "repack/std", "tiled/std",
+           "max_err(repack)", "rmse(repack)", "max_err(tiled)", "rmse(tiled)");
     for (size_t i = 0; i < n_types; ++i) {
         const bench_row_mmid * r = &rows[i];
-        printf("%-8s %10.3f %12.3f %12.3f %11.2f %11.2f %11.2f %17.5e %17.5e %17.5e %17.5e\n",
-               r->name,
-               flops / (r->time_std * 1e12),
-               flops / (r->time_iqp * 1e12), flops / (r->time_tiled * 1e12),
-               r->time_std / r->time_iqp, r->time_iqp / r->time_tiled, r->time_std / r->time_tiled,
-               r->max_err_iqp, r->rmse_iqp, r->max_err_tiled, r->rmse_tiled);
+        if (r->have_repack) {
+            printf("%-8s %10.3f %12.3f %12.3f %11.2f %11.2f %17.5e %17.5e %17.5e %17.5e\n",
+                   r->name,
+                   flops / (r->time_std * 1e12),
+                   flops / (r->time_repack * 1e12), flops / (r->time_tiled * 1e12),
+                   r->time_std / r->time_repack, r->time_std / r->time_tiled,
+                   r->max_err_repack, r->rmse_repack, r->max_err_tiled, r->rmse_tiled);
+        } else {
+            printf("%-8s %10.3f %12s %12.3f %11s %11.2f %17s %17s %17.5e %17.5e\n",
+                   r->name,
+                   flops / (r->time_std * 1e12),
+                   "n/a", flops / (r->time_tiled * 1e12), "n/a",
+                   r->time_std / r->time_tiled,
+                   "n/a", "n/a", r->max_err_tiled, r->rmse_tiled);
+        }
     }
 }
 
@@ -731,8 +672,8 @@ int main() {
     test_matmul(backend, 16, 1024, 16, GGML_TYPE_Q5_K);
     test_matmul(backend, 18, 1024, 7, GGML_TYPE_Q5_K);       // ragged M tail, ragged K in first subblock
     test_matmul(backend, 8, 256, 8, GGML_TYPE_Q5_K);
-    test_matmul(backend, 18, 1024, 256, GGML_TYPE_Q5_K);   // K full tile, M%4 tail exercises the gemv min term under iqp
-    test_matmul(backend, 9, 256, 256, GGML_TYPE_Q5_K);        // TEMP: gemv tail (M%4 = 1) under iqp
+    test_matmul(backend, 18, 1024, 256, GGML_TYPE_Q5_K);
+    test_matmul(backend, 9, 256, 256, GGML_TYPE_Q5_K);
     test_matmul(backend, 8, 256, 8, GGML_TYPE_Q6_K);         // tiny M, single QK_K block
     test_matmul(backend, 256, 1024, 8192, GGML_TYPE_Q3_K);
     test_matmul(backend, 357, 1024, 137, GGML_TYPE_Q3_K);
@@ -819,13 +760,14 @@ int main() {
     test_matmul_highdim(backend, 1024, 1024, 1024, 2, 2, 2, 2, GGML_TYPE_Q3_K); // 4D, tiled, q3_K
     test_matmul_highdim(backend, 1024, 1024, 1024, 2, 2, 2, 2, GGML_TYPE_Q2_K); // 4D, tiled, q2_K
 
-    // benchmarks, one timing per quant type and shape; the first table compares
-    // standard, repack and tiled, the second A/Bs the iqp panel against the tiled
-    // kernel via GGML_CPU_MM_PATH; both report max error / RMSE vs the standard output
-    const ggml_type bench_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ4_XS };
+    // benchmarks: std, repack and tiled per quant type and shape, with max error /
+    // RMSE vs the std output. Every type the tiled gate accepts; the repack column is
+    // n/a where no repack kernel exists for the type. TILED_MM_FORCE is set in main,
+    // so the tiled column runs at every shape; the shapes vary K, the output rank
+    const ggml_type bench_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
+                                      GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
+                                      GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
     const size_t n_types = sizeof(bench_types) / sizeof(bench_types[0]);
-    const ggml_type shared_types[] = { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS };
-    const size_t n_shared_types = sizeof(shared_types) / sizeof(shared_types[0]);
     struct { int64_t M, N, K; } shapes[] = {
         //{ 8192, 8192, 8192 },
         { 4096, 4096, 4096 },
@@ -836,35 +778,29 @@ int main() {
         { 4096, 4096,   8 },
         { 4096, 4096,   1 },
     };
-    // for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); ++s) {
-    //     bench_row    rows[n_types];
-    //     bench_row_ab ab_rows[n_types];
-    //     for (size_t i = 0; i < n_types; ++i) {
-    //         rows[i] = bench_three_way(backend, shapes[s].M, shapes[s].N, shapes[s].K, bench_types[i]);
-    //     }
-    //     print_bench_table(shapes[s].M, shapes[s].N, shapes[s].K, rows, n_types);
-    // }    
     for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); ++s) {
-        //bench_row    rows[n_shared_types];
-        bench_row_ab ab_rows[n_shared_types];
-        
-        for (size_t i = 0; i < n_shared_types; ++i) {
-            ab_rows[i] = bench_tiled_iqp(backend, shapes[s].M, shapes[s].N, shapes[s].K, shared_types[i]);
+        bench_row rows[n_types];
+        for (size_t i = 0; i < n_types; ++i) {
+            rows[i] = bench_three_way(backend, shapes[s].M, shapes[s].N, shapes[s].K, bench_types[i]);
         }
-        print_ab_table(shapes[s].M, shapes[s].N, shapes[s].K, ab_rows, n_shared_types);
+        print_bench_table(shapes[s].M, shapes[s].N, shapes[s].K, rows, n_types);
     }
 
-    // MUL_MAT_ID (MoE) three-way bench; K must be a multiple of 256 (tile / panel slab).
-    // Types are restricted to the iqp set: for any other type the iqp column silently
-    // falls back to std and the comparison is meaningless
+    // MUL_MAT_ID (MoE) three-way bench (std, repack, tiled); K must be a multiple of
+    // 256 (the tiled slab). Every type the tiled gate accepts; the repack column is
+    // n/a where no repack kernel exists for the type. cne1 = 1 is below the tiled min
+    // batch (32); TILED_MM_FORCE is set in main, so that row is the forced GEMV extreme
     struct { int64_t K, R, E, k, b_slots, batch; } mmid_shapes[] = {
-        {  512,  512,  8,   2, 1,  128 },  // cne1 = 32, the tile batch floor
+        { 1024, 1024,  8,   8, 1,    1 },  // cne1 = 1, single-token decode, one routed row per expert
+        {  512,  512,  8,   2, 1,  128 },  // cne1 = 32, the tiled min batch
         { 1024, 1024, 16,   8, 1,   64 },  // cne1 = 32
         { 1024, 1024, 16,   8, 1,  256 },  // cne1 = 128
         { 1024, 2048, 32,   8, 1,  512 },  // cne1 = 128, wide experts
         { 2048, 1024, 16,   8, 1, 1024 },  // cne1 = 512, long dot
     };
-    const ggml_type mmid_types[] = { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS };
+    const ggml_type mmid_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
+                                     GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
+                                     GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
     const size_t n_mmid_types = sizeof(mmid_types) / sizeof(mmid_types[0]);
     for (size_t s = 0; s < sizeof(mmid_shapes) / sizeof(mmid_shapes[0]); ++s) {
         bench_row_mmid rows[n_mmid_types];

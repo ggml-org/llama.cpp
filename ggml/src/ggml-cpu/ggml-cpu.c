@@ -4,7 +4,6 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "traits.h"
-#include "iqp.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
 #include "quants.h"
@@ -1266,6 +1265,7 @@ void ggml_compute_forward_mul_mat(
         return;
     }
 
+    // If tiled is supported, it will execute the full op here and we return
     if (ggml_compute_forward_mul_mat_tiled(params, dst)) {
         return;
     }
@@ -1369,12 +1369,6 @@ UseGgmlGemm1:;
 
     ggml_barrier(params->threadpool);
 
-    // IQ panel gemm (see iqp.h) - must come after the barrier above, it consumes the q8_K rows
-    // of src1 from the work buffer
-    if (ggml_cpu_iqp_supports_mul_mat(dst) && !params->use_ref) {
-        ggml_compute_forward_mul_mat_iqp(params, dst);
-        return;
-    }
 
 #if GGML_USE_LLAMAFILE
     if (src1->type != vec_dot_type) {
@@ -1593,20 +1587,10 @@ static void ggml_compute_forward_mul_mat_id(
     char (*atomic_current_chunk)[CACHE_LINE_SIZE] = // [n_as]
         incr_ptr_aligned(&wdata_cur, CACHE_LINE_SIZE * n_as, CACHE_LINE_SIZE);
 
-    // IQ panel gemm (see iqp.h); per expert eligibility is decided below, but the work buffer is
-    // reserved for the whole node (ggml_graph_plan sizes it without params, use_ref only skips the dispatch)
-    const bool iqp = ggml_cpu_iqp_supports_mul_mat_id(dst) && !params->use_ref;
-
     // Tiled matmul (see tiled.h); per-thread staging ring and VNNI interleave region reserved in wdata.
-    // Tries before iqp so the GGML_CPU_MM_PATH A/B switch picks the panel or the tiles for the iq types
     const bool tiled = ggml_tiled_matmul_id_supported(dst) && !params->use_ref;
 
-    char * iqp_panels = NULL;
     char * tiled_scratch = NULL;
-
-    if (iqp) {
-        iqp_panels = incr_ptr_aligned(&wdata_cur, nth * ggml_cpu_iqp_scratch_size(dst), 64);
-    }
 
     if (tiled) {
         tiled_scratch = incr_ptr_aligned(&wdata_cur, nth * ggml_tiled_mul_mat_id_extra_wdata_len(ne10, 1), 64);
@@ -1689,12 +1673,6 @@ static void ggml_compute_forward_mul_mat_id(
             continue;
         }
 
-        if (iqp && ggml_cpu_iqp_mul_mat_id_min_batch(cne1)) {
-            ggml_compute_forward_mul_mat_id_iqp(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0),
-                                                iqp_panels);
-
-            continue;
-        }
 
         const char * src0_cur = (const char *) src0->data + cur_a * nb02;
         const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
@@ -2903,10 +2881,6 @@ struct ggml_cplan ggml_graph_plan(
                         if (node->src[1]->type != vec_dot_type) {
                             cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
                         }
-                        // the IQ panel path needs one scratch panel per thread past the q8_K rows
-                        if (ggml_cpu_iqp_supports_mul_mat(node)) {
-                            cur = GGML_PAD(cur, 64) + n_tasks * ggml_cpu_iqp_scratch_size(node);
-                        }
                         // Extra reservation for tiled mat_mul, if any (VNNI case).  0 if VNNI not enabled.
                         const int64_t r1 = node->src[1]->ne[1] * node->src[1]->ne[2] * node->src[1]->ne[3];
                         cur += ggml_tiled_extra_wdata_len(node->src[1]->ne[0], r1);
@@ -2932,10 +2906,6 @@ struct ggml_cplan ggml_graph_plan(
                         // the tiled path stages the routed rows per thread (see tiled.h); 0 when disabled
                         if (ggml_tiled_matmul_id_supported(node)) {
                             cur += n_tasks * ggml_tiled_mul_mat_id_extra_wdata_len(src1->ne[0], 1) + 64;
-                        }
-                        // the IQ panel path needs one scratch panel per thread on top of that
-                        if (ggml_cpu_iqp_supports_mul_mat_id(node)) {
-                            cur += n_tasks * ggml_cpu_iqp_scratch_size(node) + 64;
                         }
                     } break;
                 case GGML_OP_OUT_PROD:
