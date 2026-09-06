@@ -2,10 +2,11 @@
 
 #include "ggml.h"
 #include "ggml-cpu.h"
+#include "ggml-backend.h"
 
 #undef NDEBUG
 #include <assert.h>
-#include <math.h>
+#include <cmath>
 #include <stdio.h>
 #include <string>
 #include <vector>
@@ -200,6 +201,71 @@ static int test_vec_dot_q(bool verbose) {
     return num_failed;
 }
 
+static int test_fp8(bool verbose) {
+    int num_failed = 0;
+    ggml_backend_t backend = ggml_backend_cpu_init();
+    for (ggml_type type : {GGML_TYPE_F8_E4M3, GGML_TYPE_F8_E5M2}) {
+        ggml_init_params params = {16 * ggml_tensor_overhead() + ggml_graph_overhead() + 16384, nullptr, false};
+        ggml_context * ctx = ggml_init(params);
+        ggml_tensor * src = ggml_new_tensor_2d(ctx, type, 256, 1);
+        uint8_t * data = (uint8_t *) src->data;
+        float expected[256];
+        for (int i = 0; i < 256; ++i) {
+            data[i] = uint8_t(i);
+            if (type == GGML_TYPE_F8_E4M3) {
+                // Decode through F16 with an exponent bias adjustment.
+                const ggml_fp16_t bits = ((i & 0x80) << 8) | ((i & 0x7f) << 7);
+                expected[i] = (i & 0x7f) == 0x7f ? NAN : 256.0f * ggml_fp16_to_fp32(bits);
+            } else {
+                expected[i] = ggml_fp16_to_fp32(i << 8);
+            }
+        }
+
+        float decoded[256];
+        ggml_get_type_traits(type)->to_float(data, decoded, 256);
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        std::vector<ggml_tensor *> outputs;
+        for (ggml_type dst_type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
+            outputs.push_back(ggml_cast(ctx, src, dst_type));
+            ggml_build_forward_expand(graph, outputs.back());
+        }
+        assert(ggml_graph_compute_with_ctx(ctx, graph, 2) == GGML_STATUS_SUCCESS);
+
+        bool failed = ggml_type_size(type) != 1 || ggml_blck_size(type) != 1 || ggml_nbytes(src) != 256;
+        for (int i = 0; i < 256; ++i) {
+            failed |= ggml_validate_row_data(type, data + i, 1) != std::isfinite(expected[i]);
+            std::vector<float> actual = {decoded[i]};
+            for (ggml_tensor * out : outputs) {
+                if (out->type == GGML_TYPE_F32) {
+                    actual.push_back(((float *) out->data)[i]);
+                } else if (out->type == GGML_TYPE_F16) {
+                    actual.push_back(ggml_fp16_to_fp32(((ggml_fp16_t *) out->data)[i]));
+                } else {
+                    actual.push_back(ggml_bf16_to_fp32(((ggml_bf16_t *) out->data)[i]));
+                }
+            }
+            for (float value : actual) {
+                if (std::isnan(expected[i])) {
+                    failed |= !std::isnan(value);
+                } else {
+                    failed |= value != expected[i] || std::signbit(value) != std::signbit(expected[i]);
+                }
+            }
+        }
+
+        ggml_tensor * activation = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 256, 1);
+        failed |= ggml_backend_supports_op(backend, ggml_mul_mat(ctx, src, activation));
+        failed |= ggml_backend_supports_op(backend, ggml_cast(ctx, activation, type));
+        num_failed += failed;
+        if (failed || verbose) {
+            printf("%s decoding and casts: %s\n", ggml_type_name(type), RESULT_STR[failed]);
+        }
+        ggml_free(ctx);
+    }
+    ggml_backend_free(backend);
+    return num_failed;
+}
+
 int main(int argc, char * argv[]) {
     bool verbose = false;
 
@@ -219,6 +285,7 @@ int main(int argc, char * argv[]) {
 
     int num_failed = 0;
 
+    num_failed += test_fp8(verbose);
     num_failed += test_vec_dot_f32(verbose);
     num_failed += test_vec_dot_q(verbose);
 

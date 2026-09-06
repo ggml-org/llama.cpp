@@ -439,6 +439,13 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
         }
     }
 
+    const bool src0_fp8 = src0 && (src0->type == GGML_TYPE_F8_E4M3 || src0->type == GGML_TYPE_F8_E5M2);
+    const bool dst_fp8 = op->type == GGML_TYPE_F8_E4M3 || op->type == GGML_TYPE_F8_E5M2;
+    if (src0_fp8 || dst_fp8) {
+        return (op->op == GGML_OP_CPY || op->op == GGML_OP_DUP || op->op == GGML_OP_CONT) &&
+            (src0->type == op->type || (src0_fp8 && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16)));
+    }
+
     switch (op->op) {
         case GGML_OP_CPY:
         case GGML_OP_SET_ROWS:

@@ -2,6 +2,7 @@
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
+#include "ggml-quants.h"
 #include "binary-ops.h"
 #include "simd-gemm.h"
 #include "ggml.h"
@@ -11,6 +12,32 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+
+struct ggml_fp8_e4m3_cpu {
+    uint8_t value;
+};
+
+struct ggml_fp8_e5m2_cpu {
+    uint8_t value;
+};
+
+static float fp8_e4m3_to_f32(ggml_fp8_e4m3_cpu value) {
+    return ggml_fp8_e4m3_to_fp32(value.value);
+}
+
+static float fp8_e5m2_to_f32(ggml_fp8_e5m2_cpu value) {
+    return ggml_fp8_e5m2_to_fp32(value.value);
+}
+
+template<>
+struct type_conversion_table<ggml_fp8_e4m3_cpu> {
+    static constexpr float (*to_f32)(ggml_fp8_e4m3_cpu) = fp8_e4m3_to_f32;
+};
+
+template<>
+struct type_conversion_table<ggml_fp8_e5m2_cpu> {
+    static constexpr float (*to_f32)(ggml_fp8_e5m2_cpu) = fp8_e5m2_to_f32;
+};
 
 // ggml_compute_forward_dup
 
@@ -541,6 +568,20 @@ void ggml_compute_forward_dup(
                 else if (dst->type == GGML_TYPE_BF16) ggml_compute_forward_dup_flt<ggml_fp16_t, ggml_bf16_t>(params, dst);
                 else if (dst->type == GGML_TYPE_F32)  ggml_compute_forward_dup_flt<ggml_fp16_t, float      >(params, dst);
                 else ggml_compute_forward_dup_to_q<ggml_fp16_t>(params, dst);
+            } break;
+        case GGML_TYPE_F8_E4M3:
+            {
+                /**/ if (dst->type == GGML_TYPE_F16)  ggml_compute_forward_dup_flt<ggml_fp8_e4m3_cpu, ggml_fp16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_BF16) ggml_compute_forward_dup_flt<ggml_fp8_e4m3_cpu, ggml_bf16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_F32)  ggml_compute_forward_dup_flt<ggml_fp8_e4m3_cpu, float>(params, dst);
+                else GGML_ABORT("unsupported FP8 E4M3 conversion");
+            } break;
+        case GGML_TYPE_F8_E5M2:
+            {
+                /**/ if (dst->type == GGML_TYPE_F16)  ggml_compute_forward_dup_flt<ggml_fp8_e5m2_cpu, ggml_fp16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_BF16) ggml_compute_forward_dup_flt<ggml_fp8_e5m2_cpu, ggml_bf16_t>(params, dst);
+                else if (dst->type == GGML_TYPE_F32)  ggml_compute_forward_dup_flt<ggml_fp8_e5m2_cpu, float>(params, dst);
+                else GGML_ABORT("unsupported FP8 E5M2 conversion");
             } break;
         case GGML_TYPE_BF16:
             {
