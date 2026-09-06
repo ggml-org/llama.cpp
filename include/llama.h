@@ -1119,6 +1119,7 @@ extern "C" {
     LLAMA_API bool llama_vocab_get_add_bos(const struct llama_vocab * vocab);
     LLAMA_API bool llama_vocab_get_add_eos(const struct llama_vocab * vocab);
     LLAMA_API bool llama_vocab_get_add_sep(const struct llama_vocab * vocab);
+    LLAMA_API bool llama_vocab_get_clean_spaces(const struct llama_vocab * vocab);
 
     // model-specific suppress tokens (gguf key: tokenizer.ggml.suppress_tokens)
     LLAMA_API const llama_token * llama_vocab_get_suppress_tokens(const struct llama_vocab * vocab, int32_t * n_suppress_tokens);

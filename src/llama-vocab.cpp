@@ -4271,6 +4271,10 @@ bool llama_vocab_get_add_sep(const struct llama_vocab * vocab) {
     return vocab->get_add_sep();
 }
 
+bool llama_vocab_get_clean_spaces(const struct llama_vocab * vocab) {
+    return vocab->get_clean_spaces();
+}
+
 const llama_token * llama_vocab_get_suppress_tokens(const struct llama_vocab * vocab, int32_t * n_suppress_tokens) {
     const std::vector<llama_token> & tokens = vocab->get_suppress_tokens();
     if (n_suppress_tokens) {
