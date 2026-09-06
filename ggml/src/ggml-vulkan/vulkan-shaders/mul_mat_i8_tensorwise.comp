@@ -1,0 +1,58 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_EXT_integer_dot_product : require
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform parameter
+{
+    uint n;
+    uint rows;
+    uint k;
+    uint has_bias;
+    uint row_offset;
+} p;
+
+layout(binding = 0, std430) readonly buffer W { int data_w[]; };
+layout(binding = 1, std430) readonly buffer A { int data_a[]; };
+layout(binding = 2, std430) readonly buffer WS { float data_ws[]; };
+layout(binding = 3, std430) readonly buffer AS { float data_as[]; };
+layout(binding = 4, std430) readonly buffer B { float data_b[]; };
+layout(binding = 5, std430) writeonly buffer D { float data_d[]; };
+
+shared int weights[16 * 8];
+shared int activations[16 * 8];
+
+void main() {
+    const uint output_index = gl_WorkGroupID.x * 16 + gl_LocalInvocationID.x;
+    const uint row = p.row_offset + gl_WorkGroupID.y * 16 + gl_LocalInvocationID.y;
+    const uint lx = gl_LocalInvocationID.x;
+    const uint ly = gl_LocalInvocationID.y;
+    const uint k_packed = p.k / 4;
+    int sum = 0;
+
+    for (uint k_base = 0; k_base < k_packed; k_base += 8) {
+        if (ly < 8) {
+            weights[lx * 8 + ly] = output_index < p.n ? data_w[output_index * k_packed + k_base + ly] : 0;
+        }
+        if (lx < 8) {
+            activations[ly * 8 + lx] = row < p.rows ? data_a[row * k_packed + k_base + lx] : 0;
+        }
+        barrier();
+
+        [[unroll]]
+        for (uint i = 0; i < 8; ++i) {
+            sum += dotPacked4x8EXT(weights[lx * 8 + i], activations[ly * 8 + i]);
+        }
+        barrier();
+    }
+
+    if (output_index < p.n && row < p.rows) {
+        float value = float(sum) * data_as[row] * data_ws[output_index];
+        if (p.has_bias != 0) {
+            value += data_b[output_index];
+        }
+        data_d[row * p.n + output_index] = value;
+    }
+}

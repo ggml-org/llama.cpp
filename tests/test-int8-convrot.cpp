@@ -36,7 +36,13 @@ static float regular_hadamard_reference(const std::vector<float> & input, int ou
     return sum / std::sqrt((float) input.size());
 }
 
-int main() {
+int main(int argc, char ** argv) {
+    const bool use_vulkan = argc == 2 && std::strcmp(argv[1], "--vulkan") == 0;
+    if (argc > 2 || (argc == 2 && !use_vulkan)) {
+        std::fprintf(stderr, "usage: %s [--vulkan]\n", argv[0]);
+        return 1;
+    }
+
     ggml_init_params params = {
         1024 * 1024,
         nullptr,
@@ -62,17 +68,36 @@ int main() {
     ggml_tensor * fused_large_direct = ggml_mul_mat_i8_tensorwise(ctx, w_large, x_large, ws_large, b_large, 256);
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
-    ggml_build_forward_expand(graph, fused_large_direct);
+    if (!use_vulkan) {
+        ggml_build_forward_expand(graph, fused_large_direct);
+    }
     ggml_build_forward_expand(graph, fused256);
     ggml_build_forward_expand(graph, fused_large);
     ggml_build_forward_expand(graph, fused_large_no_bias);
 
-    ggml_backend_t backend = ggml_backend_cpu_init();
-    ggml_backend_cpu_set_n_threads(backend, 2);
+    ggml_backend_t backend = nullptr;
+    if (use_vulkan) {
+        const char * backend_name = "Vulkan";
+        ggml_backend_load_all();
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            ggml_backend_dev_t device = ggml_backend_dev_get(i);
+            if (ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_GPU && std::strstr(ggml_backend_dev_name(device), backend_name) != nullptr) {
+                backend = ggml_backend_dev_init(device, nullptr);
+                break;
+            }
+        }
+        if (backend == nullptr) {
+            std::fprintf(stderr, "%s backend not found\n", backend_name);
+            return 1;
+        }
+    } else {
+        backend = ggml_backend_cpu_init();
+        ggml_backend_cpu_set_n_threads(backend, 2);
+    }
     if (!ggml_backend_supports_op(backend, q_large) ||
         !ggml_backend_supports_op(backend, fused_large) ||
         !ggml_backend_supports_op(backend, fused_large_no_bias) ||
-        !ggml_backend_supports_op(backend, fused_large_direct)) {
+        (!use_vulkan && !ggml_backend_supports_op(backend, fused_large_direct))) {
         std::fprintf(stderr, "backend does not report packed INT8 convrot matmul support\n");
         return 1;
     }
@@ -158,7 +183,9 @@ int main() {
     ggml_backend_tensor_get(q_large, q_large_data.data(), 0, ggml_nbytes(q_large));
     ggml_backend_tensor_get(fused_large, fused_large_data.data(), 0, ggml_nbytes(fused_large));
     ggml_backend_tensor_get(fused_large_no_bias, fused_large_no_bias_data.data(), 0, ggml_nbytes(fused_large_no_bias));
-    ggml_backend_tensor_get(fused_large_direct, fused_large_direct_data.data(), 0, ggml_nbytes(fused_large_direct));
+    if (!use_vulkan) {
+        ggml_backend_tensor_get(fused_large_direct, fused_large_direct_data.data(), 0, ggml_nbytes(fused_large_direct));
+    }
     const int large_rows_padded = (large_rows + 3) & ~3;
     std::vector<float> large_activation_scales(large_rows);
     std::memcpy(large_activation_scales.data(), q_large_data.data() + large_k * large_rows_padded, large_rows * sizeof(float));
@@ -182,7 +209,7 @@ int main() {
                 std::fprintf(stderr, "large no-bias fused INT8 convrot mismatch at %zu: %.8f != %.8f\n", index, fused_large_no_bias_data[index], expected_no_bias);
                 return 1;
             }
-            if (!nearly_equal(fused_large_direct_data[index], expected)) {
+            if (!use_vulkan && !nearly_equal(fused_large_direct_data[index], expected)) {
                 std::fprintf(stderr, "large direct fused INT8 convrot mismatch at %zu: %.8f != %.8f\n", index, fused_large_direct_data[index], expected);
                 return 1;
             }
@@ -192,6 +219,6 @@ int main() {
     ggml_backend_buffer_free(buffer);
     ggml_backend_free(backend);
     ggml_free(ctx);
-    std::printf("INT8 convrot CPU test passed\n");
+    std::printf("INT8 convrot %s test passed\n", use_vulkan ? "Vulkan" : "CPU");
     return 0;
 }
