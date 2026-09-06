@@ -8,7 +8,8 @@ extern "C" {
 
 #define RPC_PROTO_MAJOR_VERSION    6
 #define RPC_PROTO_MINOR_VERSION    0
-#define RPC_PROTO_PATCH_VERSION    0
+// 6.0.1: RPC_CMD_GET_DEVICE_SUPPORTS_OP (optional; servers below 6.0.1 are assumed to support every op)
+#define RPC_PROTO_PATCH_VERSION    1
 
 #ifdef  __cplusplus
 static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");
