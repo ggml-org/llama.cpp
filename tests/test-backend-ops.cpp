@@ -8281,6 +8281,63 @@ struct test_fa_batch : public test_case {
     }
     test_fa_batch(int64_t hsk=64, int64_t hsv=64, int64_t nh=2, int64_t kv=128) : hsk(hsk), hsv(hsv), nh(nh), kv(kv) {}
 };
+// FA vs naive hardcoded reference, backend-agnostic, F32 no-GQA masked nb=2 (simplest FA vs naive)
+struct test_fa_naive : public test_case {
+    std::string vars() override { return "nogqa_nb2"; }
+    std::string op_desc(ggml_tensor * t) override { GGML_UNUSED(t); return "FA_NAIVE"; }
+    ggml_tensor * build_graph(ggml_context * ctx) override { GGML_UNUSED(ctx); return nullptr; }
+    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
+        GGML_UNUSED(backend2); GGML_UNUSED(op_filter);
+        const int64_t hsk=8, hsv=8, nh=1, kv=4, nb=2;
+        std::vector<float> qhost(hsk*nb*nh), khost(hsk*kv*nh), vhost(hsv*kv*nh), mhost(kv*nb);
+        for (size_t i=0;i<qhost.size();++i) qhost[i]=0.1f*((int)i%7)-0.3f;
+        for (size_t i=0;i<khost.size();++i) khost[i]=0.1f*((int)i%5)-0.2f;
+        for (size_t i=0;i<vhost.size();++i) vhost[i]=0.1f*((int)i%3)-0.1f;
+        for (int64_t b=0;b<nb;++b) for (int64_t k=0;k<kv;++k) mhost[k+b*kv]=(k%2==0)?0.0f:-INFINITY;
+        const double scale=1.0/sqrt((double)hsk);
+        std::vector<double> exp_out(hsv*nb*nh);
+        std::vector<double> scores(kv);
+        for (int64_t h=0;h<nh;++h) for (int64_t b=0;b<nb;++b){
+            double mx=-1e30;
+            for (int64_t k=0;k<kv;++k){
+                double mm=mhost[k+b*kv];
+                if(mm==-INFINITY){scores[k]=-1e30;continue;}
+                double dot=0;
+                for(int64_t d=0;d<hsk;++d) dot+=(double)qhost[d+b*hsk+h*hsk*nb]*(double)khost[d+k*hsk+h*hsk*kv];
+                scores[k]=dot*scale+mm; mx=std::max(mx,scores[k]);
+            }
+            double sum=0;
+            for(int64_t k=0;k<kv;++k){scores[k]=exp(scores[k]-mx);sum+=scores[k];}
+            for(int64_t d=0;d<hsv;++d){double o=0;for(int64_t k=0;k<kv;++k)o+=scores[k]*(double)vhost[d+k*hsv+h*hsv*kv];exp_out[d+b*hsv+h*hsv*nb]=o/sum;}
+        }
+        ggml_init_params prm={ggml_tensor_overhead()*128+ggml_graph_overhead()+8*1024*1024,nullptr,true};
+        prm.no_alloc=true;
+        struct ggml_context * ctx=ggml_init(prm);
+        test_flash_attn_ext helper(hsk,hsv,nh,{1,1},kv,nb,true,false,0,0,GGML_PREC_F32,GGML_TYPE_F32,GGML_TYPE_F32,{0,1,2,3},false,false,0);
+        ggml_tensor * out_t=helper.build_graph(ctx);
+        ggml_cgraph * gf=ggml_new_graph(ctx);
+        ggml_build_forward_expand(gf,out_t);
+        ggml_backend_buffer_t buf=ggml_backend_alloc_ctx_tensors(ctx,backend1);
+        if(!buf){ggml_free(ctx);return test_status_t::FAIL;}
+        for(ggml_tensor *tt=ggml_get_first_tensor(ctx);tt;tt=ggml_get_next_tensor(ctx,tt)){
+            if(!strcmp(tt->name,"q"))ggml_backend_tensor_set(tt,qhost.data(),0,qhost.size()*sizeof(float));
+            else if(!strcmp(tt->name,"k"))ggml_backend_tensor_set(tt,khost.data(),0,khost.size()*sizeof(float));
+            else if(!strcmp(tt->name,"v"))ggml_backend_tensor_set(tt,vhost.data(),0,vhost.size()*sizeof(float));
+            else if(!strcmp(tt->name,"m")){std::vector<ggml_fp16_t>d16(mhost.size());for(size_t i=0;i<mhost.size();++i)d16[i]=ggml_fp32_to_fp16(mhost[i]);ggml_backend_tensor_set(tt,d16.data(),0,d16.size()*sizeof(ggml_fp16_t));}
+        }
+        int ret=ggml_backend_graph_compute(backend1,gf);
+        if(ret!=GGML_STATUS_SUCCESS){ggml_backend_buffer_free(buf);ggml_free(ctx);return test_status_t::FAIL;}
+        std::vector<uint8_t> b2(ggml_nbytes(out_t));
+        ggml_backend_tensor_get(out_t,b2.data(),0,ggml_nbytes(out_t));
+        float *f=(float*)b2.data();
+        double mx=0;for(size_t i=0;i<exp_out.size();++i)mx=std::max(mx,fabs(double(f[i])-exp_out[i]));
+        ggml_backend_buffer_free(buf);ggml_free(ctx);
+        test_operation_info info("FA_NAIVE","nogqa_nb2",ggml_backend_name(backend1),mx<=1e-4?test_status_t::OK:test_status_t::FAIL,"");
+        if(mx>1e-4){char b[128];snprintf(b,sizeof(b),"max %.9f",mx);info.set_error("compare",b);info.set_compare_failure();}
+        if(output_printer)output_printer->print_operation(info);
+        return mx<=1e-4?test_status_t::OK:test_status_t::FAIL;
+    }
+};
 
 
 // GGML_OP_CROSS_ENTROPY_LOSS
@@ -10324,6 +10381,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int64_t nh : {4, 8}) {
         test_cases.emplace_back(new test_p021_batch(256, 128, nh));
     }
+    test_cases.emplace_back(new test_fa_naive());
     // batch invariance for FA GQA masked: N=1 vs N=2 GQA 4 (Bug 1 control, small shapes pass)
     test_cases.emplace_back(new test_fa_batch(64, 64, 2, 128));
     test_cases.emplace_back(new test_fa_batch(128, 128, 2, 256));
