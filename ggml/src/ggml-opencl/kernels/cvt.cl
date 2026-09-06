@@ -1110,6 +1110,78 @@ kernel void kernel_restore_block_q4_k_trans4_ns(
     }
 }
 
+//------------------------------------------------------------------------------
+// kernel_convert_block_q4_k_tiled_ns
+//
+// Tiled-wide layout for the long-vocab q4_K lm_head/embed GEMV (decode path).
+// Mirror of kernel_convert_block_q6_k_tiled_ns: recovers each weight's 4-bit
+// code in CANONICAL ggml element order (e in [0,256)) and re-packs into 32 uints
+// (8 codes/uint), stored TILED by 64 output rows so the matching GEMV
+// (gemv_noshuffle_q4_k_f32_tiled) coalesces every weight load. The 12-byte
+// packed scale block `s` and d/dm are stored per (row, K-block) tiled; the GEMV
+// re-derives the 8 (scale,min) pairs via get_scale_min_k4, exactly like the o4
+// kernel. Both ends owned here -> correct by construction vs the reference q4_K
+// dequant. Requires ne01 % 64 == 0 (gated host-side). Buffer sizes identical to
+// the trans4_ns layout.
+//
+//   q  uint4 granule g of (row r, K-block sb): idx = ((rt*ne00_blk+sb)*8 + g)*64 + rit
+//   s  (12 bytes) of (r, sb):                  idx = (rt*ne00_blk+sb)*64 + rit, *12
+//   d/dm (half)  of (r, sb):                   idx = (rt*ne00_blk+sb)*64 + rit
+//   where rt = r/64, rit = r%64.
+//------------------------------------------------------------------------------
+kernel void kernel_convert_block_q4_k_tiled_ns(
+    __global struct block_q4_K * src0,
+    __global uint  * dst_q,    // 32 uints / superblock (4-bit codes, 8 codes/uint)
+    __global half  * dst_d,    // 1 half  / superblock
+    __global half  * dst_dm,   // 1 half  / superblock
+    __global uchar * dst_s,    // K_SCALE_SIZE (12) bytes / superblock
+    uint ne00,
+    uint ne01
+) {
+    uint i00 = get_global_id(1);   // K-block index (superblock along ne00)
+    uint i01 = get_global_id(0);   // output row index (along ne01)
+    uint i02 = get_global_id(2);   // batch
+
+    uint ne00_blk = ne00 / QK_K;
+
+    uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
+    __global struct block_q4_K * b = src0 + src_blk_offset;
+
+    uint rt  = i01 / 64;
+    uint rit = i01 % 64;
+    uint tile_blk = (i02 * (ne01 / 64) + rt) * ne00_blk + i00;
+
+    // --- recover canonical 4-bit codes in e-order, pack 8 codes/uint ---
+    uint qw[32] = {0};
+    for (uint e = 0; e < 256; ++e) {
+        uint g    = e >> 6;           // group 0..3 (q advances 32 bytes/group)
+        uint within = e & 63u;
+        uint hlf  = within >> 5;      // 0 = low nibble, 1 = high nibble
+        uint l    = within & 31u;     // 0..31
+        uchar byte = b->q[g * 32u + l];
+        uint code = (hlf == 0u) ? (uint)(byte & 0x0F) : (uint)(byte >> 4);
+        qw[e >> 3] |= code << ((e & 7u) * 4u);
+    }
+
+    for (uint gr = 0; gr < 8; ++gr) {
+        uint base = (tile_blk * 8u + gr) * 64u + rit;   // uint4 index
+        dst_q[base * 4u + 0u] = qw[gr * 4u + 0u];
+        dst_q[base * 4u + 1u] = qw[gr * 4u + 1u];
+        dst_q[base * 4u + 2u] = qw[gr * 4u + 2u];
+        dst_q[base * 4u + 3u] = qw[gr * 4u + 3u];
+    }
+
+    // packed scales (12 bytes), tiled per (row, block)
+    __global uchar * s_dst = dst_s + (tile_blk * 64u + rit) * K_SCALE_SIZE;
+    #pragma unroll
+    for (int i = 0; i < K_SCALE_SIZE; ++i) {
+        s_dst[i] = b->s[i];
+    }
+
+    dst_d [tile_blk * 64u + rit] = b->d;
+    dst_dm[tile_blk * 64u + rit] = b->dm;
+}
+
 kernel void kernel_convert_block_q5_k_trans4_ns(
     __global struct block_q5_K * src0,
     __global uint  * dst_qs,
@@ -1492,6 +1564,105 @@ kernel void kernel_restore_block_mxfp4_trans(
 
     ((global uint4 *)(&(b->qs[0])))[0] = src_q[src_blk_offset];
     b->e = src_e[src_blk_offset];
+}
+
+//------------------------------------------------------------------------------
+// kernel_convert_block_q6_k_tiled_ns
+//
+// Tiled-wide layout for the long-vocab q6_K lm_head/embed GEMV (decode path).
+// Unlike *_trans4_ns (which mirrors the bit-interleave the legacy 2-output GEMV
+// consumes), this kernel is correct-by-construction against the CANONICAL ggml
+// q6_K dequant: it recovers each weight's 6-bit code in element order e in
+// [0,256), then re-packs low-4-bits into 32 uints (8 codes/uint) and high-2-bits
+// into 16 uints (16 codes/uint). The matching GEMV (gemv_noshuffle_q6_k_f32_tiled)
+// unpacks the same order, so both ends are owned here.
+//
+// Storage is TILED by 64 output rows so the GEMV's 64-thread tile coalesces:
+//   ql uint4 granule g of (row r, K-block sb): idx = ((rt*ne00_blk + sb)*8 + g)*64 + rit
+//   qh uint4 granule g:                         idx = ((rt*ne00_blk + sb)*4 + g)*64 + rit
+//   scales (char16) of (r, sb):                 idx = (rt*ne00_blk + sb)*64 + rit
+//   d (half) of (r, sb):                        idx = (rt*ne00_blk + sb)*64 + rit
+// where rt = r/64, rit = r%64. Requires ne01 % 64 == 0 (gated host-side).
+// Buffer sizes are byte-identical to the trans4_ns layout.
+//------------------------------------------------------------------------------
+kernel void kernel_convert_block_q6_k_tiled_ns(
+    __global struct block_q6_K * src0,
+    __global uint  * dst_ql,   // 32 uints / superblock (low 4 bits, 8 codes/uint)
+    __global uint  * dst_qh,   // 16 uints / superblock (high 2 bits, 16 codes/uint)
+    __global half  * dst_d,    // 1 half  / superblock
+    __global char  * dst_s,    // 16 chars/ superblock
+    uint ne00,
+    uint ne01
+) {
+    uint i00 = get_global_id(1);   // K-block index (superblock along ne00)
+    uint i01 = get_global_id(0);   // output row index (along ne01)
+    uint i02 = get_global_id(2);   // batch
+
+    uint ne00_blk = ne00 / QK_K;
+
+    // Source block: row-major over (i02, i01, i00).
+    uint src_blk_offset = i00 + i01 * ne00_blk + i02 * ne00_blk * ne01;
+    __global struct block_q6_K * b = src0 + src_blk_offset;
+
+    uint rt  = i01 / 64;
+    uint rit = i01 % 64;
+    uint tile_blk = (i02 * (ne01 / 64) + rt) * ne00_blk + i00;  // tile-major (row-tile, K-block)
+
+    // --- recover canonical 6-bit codes, pack into ql (4b) + qh (2b) in e-order ---
+    // 32 ql-uints (8 low-nibbles each) + 16 qh-uints (16 2-bit slots each).
+    uint qlw[32] = {0};
+    uint qhw[16] = {0};
+
+    for (uint e = 0; e < 256; ++e) {
+        uint n   = (e >= 128) ? 1u : 0u;       // which 128-half
+        uint within = e - n * 128u;
+        uint q   = within / 32u;               // quadrant 0..3
+        uint l   = within % 32u;               // 0..31
+
+        uint off_ql = n * 64u;                 // raw ql byte base for this half
+        uint off_qh = n * 32u;                 // raw qh byte base for this half
+
+        uchar low4;
+        uchar qlb0 = b->ql[off_ql + l];
+        uchar qlb1 = b->ql[off_ql + l + 32];
+        if (q == 0)      low4 = qlb0 & 0x0F;
+        else if (q == 1) low4 = qlb1 & 0x0F;
+        else if (q == 2) low4 = (qlb0 >> 4) & 0x0F;
+        else             low4 = (qlb1 >> 4) & 0x0F;
+
+        uchar hi2 = (b->qh[off_qh + l] >> (q * 2u)) & 0x03;
+
+        // pack low4 (e-order): uint e/8, nibble (e%8)
+        qlw[e >> 3] |= ((uint)low4) << ((e & 7u) * 4u);
+        // pack hi2 (e-order): uint e/16, 2-bit slot (e%16)
+        qhw[e >> 4] |= ((uint)hi2)  << ((e & 15u) * 2u);
+    }
+
+    // --- write tiled ---
+    for (uint g = 0; g < 8; ++g) {
+        uint base = (tile_blk * 8u + g) * 64u + rit;   // uint4 index
+        dst_ql[base * 4u + 0u] = qlw[g * 4u + 0u];
+        dst_ql[base * 4u + 1u] = qlw[g * 4u + 1u];
+        dst_ql[base * 4u + 2u] = qlw[g * 4u + 2u];
+        dst_ql[base * 4u + 3u] = qlw[g * 4u + 3u];
+    }
+    for (uint g = 0; g < 4; ++g) {
+        uint base = (tile_blk * 4u + g) * 64u + rit;   // uint4 index
+        dst_qh[base * 4u + 0u] = qhw[g * 4u + 0u];
+        dst_qh[base * 4u + 1u] = qhw[g * 4u + 1u];
+        dst_qh[base * 4u + 2u] = qhw[g * 4u + 2u];
+        dst_qh[base * 4u + 3u] = qhw[g * 4u + 3u];
+    }
+
+    // scales: 16 chars contiguous per (row, block), tiled
+    __global char * s_dst = dst_s + (tile_blk * 64u + rit) * 16u;
+    #pragma unroll
+    for (int i = 0; i < 16; ++i) {
+        s_dst[i] = b->scales[i];
+    }
+
+    // super-block scale
+    dst_d[tile_blk * 64u + rit] = b->d;
 }
 
 kernel void kernel_convert_block_mxfp4_trans4_ns(
