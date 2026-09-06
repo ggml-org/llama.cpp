@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -114,13 +115,23 @@ llama_memory_recurrent::llama_memory_recurrent(
         }
     }
 
+    // the rollback snapshot groups are only ever written by the model graph, so an architecture
+    // that fails to store them leaves the initial fill behind. With a zero fill that is
+    // indistinguishable from a correctly stored near-zero state, which is what the dummy models
+    // used by the tests produce - filling with a non-zero byte instead makes the gap observable.
+    const char * LLAMA_RS_DEBUG_FILL = getenv("LLAMA_RS_DEBUG_FILL");
+    const uint8_t rs_debug_fill = LLAMA_RS_DEBUG_FILL ? (uint8_t) strtoul(LLAMA_RS_DEBUG_FILL, nullptr, 0) : 0;
+    if (rs_debug_fill != 0) {
+        LLAMA_LOG_WARN("%s: filling the RS cache with 0x%02x instead of zeros (LLAMA_RS_DEBUG_FILL)\n", __func__, rs_debug_fill);
+    }
+
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
     for (auto & [buft, ctx] : ctx_map) {
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
         if (!buf) {
             throw std::runtime_error("failed to allocate buffer for rs cache");
         }
-        ggml_backend_buffer_clear(buf, 0);
+        ggml_backend_buffer_clear(buf, rs_debug_fill);
         LLAMA_LOG_INFO("%s: %10s RS buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }

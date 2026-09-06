@@ -238,6 +238,29 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback-dsv4 PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-kimi-k3
+        LABEL main
+        ARGS -m "${MODEL_DIR}/kimi-k3-moe.gguf"
+    )
+    set_tests_properties(test-recurrent-state-rollback-kimi-k3 PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
+
+    # Same coverage, but with the recurrent cache pre-filled with a non-zero byte. A rollback
+    # snapshot group that the graph never stores then reads back as garbage rather than as
+    # zeros, which on these dummy models is otherwise within the comparison tolerance.
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-kimi-k3-fill
+        LABEL main
+        ARGS -m "${MODEL_DIR}/kimi-k3-moe.gguf"
+    )
+    set_tests_properties(test-recurrent-state-rollback-kimi-k3-fill PROPERTIES
+        FIXTURES_REQUIRED generate-models
+        ENVIRONMENT "LLAMA_RS_DEBUG_FILL=0x3e"
+    )
 
     # Test state save/load functionality across all architectures, using the generated dummy models
     llama_test(
