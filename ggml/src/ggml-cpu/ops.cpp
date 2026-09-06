@@ -11987,6 +11987,122 @@ void ggml_compute_forward_opt_step_sgd(const ggml_compute_params * params, ggml_
     }
 }
 
+#define P 1.0f
+#define N -1.0f
+
+// constant Hadamard matrix via Paley I construction
+static constexpr float H12[12][12] = {
+    { P, P, P, P, P, P, P, P, P, P, P, P },
+    { P, N, P, N, P, P, P, N, N, N, P, N },
+    { P, N, N, P, N, P, P, P, N, N, N, P },
+    { P, P, N, N, P, N, P, P, P, N, N, N },
+    { P, N, P, N, N, P, N, P, P, P, N, N },
+    { P, N, N, P, N, N, P, N, P, P, P, N },
+    { P, N, N, N, P, N, N, P, N, P, P, P },
+    { P, P, N, N, N, P, N, N, P, N, P, P },
+    { P, P, P, N, N, N, P, N, N, P, N, P },
+    { P, P, P, P, N, N, N, P, N, N, P, N },
+    { P, N, P, P, P, N, N, N, P, N, N, P },
+    { P, P, N, P, P, P, N, N, N, P, N, N }
+};
+
+static constexpr float H20[20][20] = {
+    { P, P, P, P, P, P, P, P, P, P, P, P, P, P, P, P, P, P, P, P },
+    { P, N, P, N, N, P, P, P, P, N, P, N, P, N, N, N, N, P, P, N },
+    { P, N, N, P, N, N, P, P, P, P, N, P, N, P, N, N, N, N, P, P },
+    { P, P, N, N, P, N, N, P, P, P, P, N, P, N, P, N, N, N, N, P },
+    { P, P, P, N, N, P, N, N, P, P, P, P, N, P, N, P, N, N, N, N },
+    { P, N, P, P, N, N, P, N, N, P, P, P, P, N, P, N, P, N, N, N },
+    { P, N, N, P, P, N, N, P, N, N, P, P, P, P, N, P, N, P, N, N },
+    { P, N, N, N, P, P, N, N, P, N, N, P, P, P, P, N, P, N, P, N },
+    { P, N, N, N, N, P, P, N, N, P, N, N, P, P, P, P, N, P, N, P },
+    { P, P, N, N, N, N, P, P, N, N, P, N, N, P, P, P, P, N, P, N },
+    { P, N, P, N, N, N, N, P, P, N, N, P, N, N, P, P, P, P, N, P },
+    { P, P, N, P, N, N, N, N, P, P, N, N, P, N, N, P, P, P, P, N },
+    { P, N, P, N, P, N, N, N, N, P, P, N, N, P, N, N, P, P, P, P },
+    { P, P, N, P, N, P, N, N, N, N, P, P, N, N, P, N, N, P, P, P },
+    { P, P, P, N, P, N, P, N, N, N, N, P, P, N, N, P, N, N, P, P },
+    { P, P, P, P, N, P, N, P, N, N, N, N, P, P, N, N, P, N, N, P },
+    { P, P, P, P, P, N, P, N, P, N, N, N, N, P, P, N, N, P, N, N },
+    { P, N, P, P, P, P, N, P, N, P, N, N, N, N, P, P, N, N, P, N },
+    { P, N, N, P, P, P, P, N, P, N, P, N, N, N, N, P, P, N, N, P },
+    { P, P, N, N, P, P, P, P, N, P, N, P, N, N, N, N, P, P, N, N }
+};
+
+#undef P
+#undef N
+
+static void ggml_compute_fwht_kronecker(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
+    GGML_TENSOR_BINARY_OP_LOCALS;
+
+    const int64_t ith = params->ith;
+    const int64_t nth = params->nth;
+
+    const int64_t nr = ne11 * ne12 * ne13;
+    const float * src_data = (const float *) src1->data;
+    float * dst_data = (float *) dst->data;
+
+    const int64_t n = ne10;
+
+    int64_t factor = 0;
+    int64_t blocks_per_group = 0;
+
+    for (int64_t f : {12, 20}) {
+        if (n % f == 0) {
+            int64_t q = n / f;
+            if (q > 0 && (q & (q - 1)) == 0) {
+                factor = f;
+                blocks_per_group = q;
+                break;
+            }
+        }
+    }
+    GGML_ASSERT(factor == 12 || factor == 20);
+
+    const float scale = 1.0f / sqrtf(factor * (float) blocks_per_group);
+
+    const int64_t r0 = (nr * ith) / nth;
+    const int64_t r1 = (nr * (ith + 1)) / nth;
+
+    for (int64_t r = r0; r < r1; r++) {
+        const float * x = src_data + r * n;
+        float * result = dst_data + r * n;
+
+        for (int64_t p = 0; p < blocks_per_group; ++p) {
+            float z[20] = {0.0f};
+            for (int64_t i = 0; i < factor; i++) {
+                float sum = 0;
+                for (int64_t j = 0; j < factor; ++j) {
+                    sum += x[p * factor + j] * ((factor == 12) ? H12[j][i] : H20[j][i]);
+                }
+                z[i] = sum * scale;
+            }
+            for (int64_t i = 0; i < factor; ++i) {
+                result[p * factor + i] = z[i];
+            }
+        }
+
+        for (int64_t h = 1; h < blocks_per_group; h <<= 1) {
+            for (int64_t i = 0; i < blocks_per_group; i += (h << 1)) {
+                for (int64_t p = i; p < i + h; ++p) {
+                    float * lo = result + p * factor;
+                    float * hi = result + (p + h) * factor;
+                    for (int64_t k = 0; k < factor; ++k) {
+                        const float val = lo[k];
+                        const float val1 = hi[k];
+
+                        lo[k] = val + val1;
+                        hi[k] = val - val1;
+                    }
+                }
+            }
+        }
+    }
+}
+
 static void ggml_compute_forward_fwht_f32(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -12000,7 +12116,10 @@ static void ggml_compute_forward_fwht_f32(const ggml_compute_params * params, gg
     const int nth = params->nth;
 
     const int64_t n = ne10;
-    GGML_ASSERT((n & (n - 1)) == 0); // must be power of 2
+    if ((n & (n - 1)) != 0) {
+        ggml_compute_fwht_kronecker(params, dst);
+        return;
+    }
 
     const int64_t nr = ne11 * ne12 * ne13;
     const int64_t rows_per_thread = (nr + nth - 1) / nth;
