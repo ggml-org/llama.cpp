@@ -255,6 +255,17 @@ typedef struct {
 } block_q8_0;
 static_assert(sizeof(block_q8_0) == sizeof(ggml_half) + QK8_0, "wrong q8_0 block size/padding");
 
+// b-posit8 W8A8 (Anomly): exact 256-bit-quire accumulation, bit-identical across GPU/CPU/RISC-V.
+// The block scale is a POWER-OF-TWO EXPONENT (int8), applied as an exact bit-shift — deliberately
+// NOT a ggml_half float, because a float scale multiply is not bit-identical across hardware and
+// would destroy the reproducibility that is the entire point of this format.
+#define QK_BPOSIT8 32
+typedef struct {
+    int8_t  scale_exp;       // power-of-two block scale: value = bposit8_value(qs[i]) * 2^scale_exp
+    uint8_t qs[QK_BPOSIT8];  // b-posit8 codes
+} block_bposit8;
+static_assert(sizeof(block_bposit8) == 1 + QK_BPOSIT8, "wrong bposit8 block size/padding");
+
 #define QK8_1 32
 typedef struct {
     GGML_EXTENSION union {

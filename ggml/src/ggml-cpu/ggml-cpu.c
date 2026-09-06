@@ -279,6 +279,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
 #endif
     },
+    [GGML_TYPE_BPOSIT8] = { // b-posit8 W8A8 (Anomly): exact 256-bit quire dot, reproducible on any HW
+        .from_float               = quantize_row_bposit8,
+        .vec_dot                  = ggml_vec_dot_bposit8_bposit8,
+        .vec_dot_type             = GGML_TYPE_BPOSIT8,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_Q8_1] = {
         .from_float               = quantize_row_q8_1,
         .vec_dot_type             = GGML_TYPE_Q8_1,

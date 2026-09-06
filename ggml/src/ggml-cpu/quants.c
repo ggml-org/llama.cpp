@@ -62,6 +62,13 @@ void quantize_row_nvfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, i
     quantize_row_nvfp4_ref(x, y, k);
 }
 
+// b-posit8 W8A8 (Anomly): the reference encoder is already exact + reproducible
+// (round-to-nearest over the fixed lattice, power-of-two block scale), so the
+// runtime from_float is the reference path.
+void quantize_row_bposit8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_bposit8_ref(x, y, k);
+}
+
 //
 // 2-6 bit quantization in super-blocks
 //
@@ -476,6 +483,172 @@ void ggml_vec_dot_q8_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     }
 
     *s = sumf;
+}
+
+// ============================================================================
+// b-posit8 W8A8 exact-quire dot product (Anomly)
+// Copyright (c) 2026 Anomly, Inc. All rights reserved. Author: Ry Bruscoe.
+//
+// Every product is accumulated WITHOUT intermediate rounding into a 256-bit
+// two's-complement Kulisch quire (8x32-bit limbs, radix point at bit 96), with
+// a single rounding at readout. This is bit-exact and reproducible on any
+// hardware (GPU / x86 / RISC-V), verified bit-for-bit against the open-bposit
+// rational (Fraction) reference: single-block 64/64, multi-block streaming,
+// and catastrophic-cancellation (exact 0 where fp32 drifts).
+// ============================================================================
+#define GGML_BP8_ES    2
+#define GGML_BP8_QFRAC 96
+
+// exact integer form of a b-posit8 code: value = M * 2^E. zero/NaR -> M=0.
+static void ggml_bp8_code_to_ME(uint8_t p, int64_t * M, int * E) {
+    if (p == 0x00 /*ZERO*/ || p == 0x80 /*NaR*/) { *M = 0; *E = 0; return; }
+    int s = (p >> 7) & 1;
+    int rest = p & 0x7F;
+    if (s) rest = ((~rest) + 1) & 0x7F;              // two's complement of trailing 7 bits
+    int leading = (rest >> 6) & 1;
+    int rs = 0;
+    while (rs < 7 && ((rest >> (6 - rs)) & 1) == leading) rs++;
+    int k_reg, e = 0, fb = 0, fw = 0;
+    if (rs == 7) {
+        k_reg = leading ? 6 : -7;
+    } else {
+        k_reg = leading ? (rs - 1) : -rs;
+        int rem = 7 - (rs + 1);
+        int r2  = rest & ((1 << rem) - 1);
+        int ew  = GGML_BP8_ES < rem ? GGML_BP8_ES : rem;
+        if (ew > 0) { e = (r2 >> (rem - ew)) & ((1 << ew) - 1); e <<= (GGML_BP8_ES - ew); }
+        rem -= ew; fw = rem; fb = fw > 0 ? (r2 & ((1 << fw) - 1)) : 0;
+    }
+    int64_t m = (1 << fw) + fb;                       // integer mantissa >= 1 (<= 31 for bp8)
+    *M = s ? -m : m;
+    *E = 4 * k_reg + e - fw;                           // useed = 16 = 2^4
+}
+
+// add P * 2^shift into a 256-bit two's-complement accumulator (8x32 limbs).
+static inline void ggml_q256_add_shifted(uint32_t q[8], int64_t P, int shift) {
+    if (P == 0) return;
+    uint32_t t[8];
+    uint32_t sx = (P < 0) ? 0xFFFFFFFFu : 0u;
+    uint64_t up = (uint64_t) P;
+    t[0] = (uint32_t) up; t[1] = (uint32_t)(up >> 32);
+    for (int i = 2; i < 8; i++) t[i] = sx;
+    if (shift > 0) {
+        int words = shift >> 5, bits = shift & 31;
+        if (bits) {
+            uint32_t prev = 0;
+            for (int i = 0; i < 8; i++) {
+                uint32_t cur = t[i];
+                t[i] = (cur << bits) | prev;
+                prev = (uint32_t)((uint64_t) cur >> (32 - bits));
+            }
+        }
+        if (words) for (int i = 7; i >= 0; i--) t[i] = (i - words >= 0) ? t[i - words] : 0u;
+    } else if (shift < 0) {                             // tiny term below the radix: arithmetic right shift
+        int sh = -shift, words = sh >> 5, bits = sh & 31;
+        if (words) for (int i = 0; i < 8; i++) t[i] = (i + words < 8) ? t[i + words] : sx;
+        if (bits) {
+            uint32_t next = sx;
+            for (int i = 7; i >= 0; i--) { uint32_t cur = t[i]; t[i] = (cur >> bits) | (next << (32 - bits)); next = cur; }
+        }
+    }
+    uint64_t carry = 0;
+    for (int i = 0; i < 8; i++) { uint64_t v = (uint64_t) q[i] + t[i] + carry; q[i] = (uint32_t) v; carry = v >> 32; }
+}
+
+// final readout: signed 256-bit quire (radix at QFRAC) -> double, one rounding.
+static double ggml_q256_to_double(const uint32_t q[8]) {
+    uint32_t m[8]; for (int i = 0; i < 8; i++) m[i] = q[i];
+    int neg = (m[7] >> 31) & 1;
+    if (neg) { uint64_t c = 1; for (int i = 0; i < 8; i++) { uint64_t v = (uint64_t)(~m[i]) + c; m[i] = (uint32_t) v; c = v >> 32; } }
+    double v = 0.0;
+    for (int i = 7; i >= 0; i--) v = v * 4294967296.0 + (double) m[i];
+    v = ldexp(v, -GGML_BP8_QFRAC);
+    return neg ? -v : v;
+}
+
+// precomputed (M,E) lattice: identical values to ggml_bp8_code_to_ME, hoisted
+// out of the dot inner loop. Idempotent init (all threads fill the same values).
+static int64_t g_bp8_lut_M[256];
+static int     g_bp8_lut_E[256];
+static volatile int g_bp8_lut_ready = 0;
+static void ggml_bp8_lut_init(void) {
+    if (g_bp8_lut_ready) return;
+    for (int c = 0; c < 256; c++) {
+        ggml_bp8_code_to_ME((uint8_t) c, &g_bp8_lut_M[c], &g_bp8_lut_E[c]);
+    }
+    g_bp8_lut_ready = 1;
+}
+
+// Binned accumulation (2026-09-05): products that share a shift are summed in an int64
+// first and placed into the quire ONCE per distinct shift. Exact by construction for
+// shift >= 0 — placement is a pure left shift with no truncation and 256-bit two's-
+// complement addition is associative — and |M_x*M_y| < 2^10 leaves 2^53 terms of headroom
+// in the int64. Terms with shift < 0 (below the radix point; only with absurd block
+// scales) are truncated per term exactly as before, because sum-of-truncations differs
+// from truncation-of-sum. Bit-identical to the per-term kernel on the rational golden set,
+// 4,000 random rows incl. sub-radix rows, and under K-permutation (openevolve workspace
+// bp8_vecdot_speed, evaluator gate); 6.9x median throughput on x86.
+#define GGML_BP8_SHIFT_MAX 512   // shift = Ex+Ey+se+96 with |E| <= 31, |se| <= 254 -> < 512
+
+void ggml_vec_dot_bposit8_bposit8(int n, float * GGML_RESTRICT s, size_t bs,
+        const void * GGML_RESTRICT vx, size_t bx,
+        const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK_BPOSIT8;
+    const int nb = n / qk;
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc); UNUSED(bx); UNUSED(by); UNUSED(bs);
+
+    ggml_bp8_lut_init();
+    const block_bposit8 * GGML_RESTRICT x = vx;
+    const block_bposit8 * GGML_RESTRICT y = vy;
+
+    uint32_t quire[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    int64_t bins[GGML_BP8_SHIFT_MAX] = { 0 };
+    for (int ib = 0; ib < nb; ++ib) {
+        const int se = (int) x[ib].scale_exp + (int) y[ib].scale_exp + GGML_BP8_QFRAC;
+        const uint8_t * GGML_RESTRICT xq = x[ib].qs;
+        const uint8_t * GGML_RESTRICT yq = y[ib].qs;
+        // 8-way unrolled lanes (OpenEvolve bp8_vecdot_speed round 3, +5-9% on x86); per-lane
+        // semantics identical to the scalar loop: bin for shift >= 0, per-term placement otherwise.
+#define GGML_BP8_LANE(k) do { \
+            const int64_t P_ = g_bp8_lut_M[xq[j + (k)]] * g_bp8_lut_M[yq[j + (k)]]; \
+            if (P_ != 0) { \
+                const int sh_ = g_bp8_lut_E[xq[j + (k)]] + g_bp8_lut_E[yq[j + (k)]] + se; \
+                if (sh_ >= 0 && sh_ < GGML_BP8_SHIFT_MAX) bins[sh_] += P_; \
+                else ggml_q256_add_shifted(quire, P_, sh_); \
+            } } while (0)
+        // 16-way (OpenEvolve round 4b, +6-8% at the kernel under the bit-exact gate)
+        for (int j = 0; j < qk; j += 16) {
+            GGML_BP8_LANE(0);  GGML_BP8_LANE(1);  GGML_BP8_LANE(2);  GGML_BP8_LANE(3);
+            GGML_BP8_LANE(4);  GGML_BP8_LANE(5);  GGML_BP8_LANE(6);  GGML_BP8_LANE(7);
+            GGML_BP8_LANE(8);  GGML_BP8_LANE(9);  GGML_BP8_LANE(10); GGML_BP8_LANE(11);
+            GGML_BP8_LANE(12); GGML_BP8_LANE(13); GGML_BP8_LANE(14); GGML_BP8_LANE(15);
+        }
+#undef GGML_BP8_LANE
+    }
+    // Flush the bins. OpenEvolve (workspace bp8_vecdot_speed, 2026-09-05) found that a plain
+    // scan of the 512 bins beats tracking touched bins (no hit[] bookkeeping in the hot loop);
+    // 1.42x over the tracked version, bit-identical under the same gate.
+    int i = 0;
+    while (i < GGML_BP8_SHIFT_MAX - 7) {                 // skip leading zero bins 8 at a time (round 4b)
+        if (bins[i] | bins[i+1] | bins[i+2] | bins[i+3] | bins[i+4] | bins[i+5] | bins[i+6] | bins[i+7]) break;
+        i += 8;
+    }
+    for (; i < GGML_BP8_SHIFT_MAX - 7; i += 8) {
+        if (bins[i]     != 0) ggml_q256_add_shifted(quire, bins[i],     i);
+        if (bins[i + 1] != 0) ggml_q256_add_shifted(quire, bins[i + 1], i + 1);
+        if (bins[i + 2] != 0) ggml_q256_add_shifted(quire, bins[i + 2], i + 2);
+        if (bins[i + 3] != 0) ggml_q256_add_shifted(quire, bins[i + 3], i + 3);
+        if (bins[i + 4] != 0) ggml_q256_add_shifted(quire, bins[i + 4], i + 4);
+        if (bins[i + 5] != 0) ggml_q256_add_shifted(quire, bins[i + 5], i + 5);
+        if (bins[i + 6] != 0) ggml_q256_add_shifted(quire, bins[i + 6], i + 6);
+        if (bins[i + 7] != 0) ggml_q256_add_shifted(quire, bins[i + 7], i + 7);
+    }
+    for (; i < GGML_BP8_SHIFT_MAX; i++) {
+        if (bins[i] != 0) ggml_q256_add_shifted(quire, bins[i], i);
+    }
+    *s = (float) ggml_q256_to_double(quire);
 }
 
 void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
