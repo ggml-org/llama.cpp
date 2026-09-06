@@ -1,5 +1,18 @@
 cmake_minimum_required(VERSION 3.18)  # for CMAKE_CUDA_ARCHITECTURES
 
+# ARM64EC uses the x64 ABI, so it needs the x64 import libraries. The arm64 ones
+# hold native ARM64 symbols and cannot satisfy EC references at link time.
+# FindCUDAToolkit picks the library dir from the host arch, not the target, so
+# anchor its search at lib/x64 here. It derives everything else from CUDA_CUDART.
+string(TOLOWER "${CMAKE_GENERATOR_PLATFORM}" GGML_CUDA_PLATFORM_LWR)
+if (MSVC AND GGML_CUDA_PLATFORM_LWR STREQUAL "arm64ec")
+    find_library(CUDA_CUDART
+        NAMES cudart
+        HINTS ${CUDAToolkit_ROOT} ENV CUDA_PATH
+        PATH_SUFFIXES lib/x64
+    )
+endif()
+
 find_package(CUDAToolkit)
 
 if (CUDAToolkit_FOUND)
