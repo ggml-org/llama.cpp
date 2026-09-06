@@ -6,9 +6,7 @@
 #include "server-common.h"
 #include "server-http.h"
 
-#include <nlohmann/json_fwd.hpp>
-
-using json = nlohmann::ordered_json;
+#include "json.h"
 
 // Convert OpenAI Responses API format to OpenAI Chat Completions API format
 json server_chat_convert_responses_to_chatcmpl(const json & body);

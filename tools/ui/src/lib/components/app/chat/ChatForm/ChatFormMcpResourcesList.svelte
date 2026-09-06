@@ -1,9 +1,7 @@
 <script lang="ts">
-	import {
-		ChatAttachmentsListItemMcpResource,
-		HorizontalScrollCarousel
-	} from '$lib/components/app';
-	import { mcpResourceStore, mcpStore } from '$lib/stores';
+	import { ChatAttachmentsListItemMcpResource, ScrollCarousel } from '$lib/components/app';
+	import { ScrollCarouselVariant } from '$lib/enums';
+	import { mcpStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -12,8 +10,8 @@
 
 	let { class: className, onResourceClick }: Props = $props();
 
-	const attachments = $derived(mcpResourceStore.attachments);
-	const hasAttachments = $derived(mcpResourceStore.hasAttachments);
+	const attachments = $derived(mcpStore.resources.attachments);
+	const hasAttachments = $derived(mcpStore.resources.hasAttachments);
 
 	function handleRemove(attachmentId: string) {
 		mcpStore.removeResourceAttachment(attachmentId);
@@ -26,15 +24,15 @@
 
 {#if hasAttachments}
 	<div class={className}>
-		<HorizontalScrollCarousel gapSize="2">
+		<ScrollCarousel gapSize="2" variant={ScrollCarouselVariant.CENTER}>
 			{#each attachments as attachment, i (attachment.id)}
 				<ChatAttachmentsListItemMcpResource
-					class={i === 0 ? 'ml-3' : ''}
 					{attachment}
+					class={i === 0 ? 'ml-3' : ''}
 					onRemove={handleRemove}
 					onclick={() => handleResourceClick(attachment.resource.uri)}
 				/>
 			{/each}
-		</HorizontalScrollCarousel>
+		</ScrollCarousel>
 	</div>
 {/if}

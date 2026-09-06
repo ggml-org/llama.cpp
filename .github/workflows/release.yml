@@ -61,31 +61,8 @@ jobs:
             echo "should_release=false" >> $GITHUB_OUTPUT
           fi
 
-  get-version:
-    runs-on: ubuntu-slim
-    outputs:
-      ui_version: ${{ steps.version.outputs.ui_version }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - id: version
-        run: |
-          # Resolve UI version: BUILD_NUMBER from cmake/build-info.cmake > git hash + epoch > fallback
-          version=""
-          if grep -q "BUILD_NUMBER" cmake/build-info.cmake; then
-            build_number=$(grep "set(BUILD_NUMBER" cmake/build-info.cmake | grep -oP '\d+')
-            if [ -n "$build_number" ] && [ "$build_number" -gt 0 ]; then
-              version="b${build_number}"
-            fi
-          fi
-          if [ -z "$version" ]; then
-            version=$(git rev-parse --short HEAD)-$(date +%s)
-          fi
-          echo "ui_version=${version}" >> $GITHUB_OUTPUT
-
   macos-cpu:
-    needs: [check-release, get-version]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
@@ -119,15 +96,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-${{ matrix.arch }}
 
@@ -141,14 +117,8 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_BUILD_BORINGSSL=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-${{ matrix.os }}-${{ matrix.arch }}
 
       - name: Determine tag name
         id: tag
@@ -166,8 +136,13 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-macos-${{ matrix.build }}.tar.gz
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-${{ matrix.arch }}
+
   ubuntu-cpu:
-    needs: [check-release, get-version]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
@@ -191,12 +166,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: Dependencies
         id: depends
@@ -213,7 +187,7 @@ jobs:
 
       - name: ccache
         if: ${{ matrix.build != 's390x' }}
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-cpu
 
@@ -227,15 +201,8 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
-
-      - name: ccache-clear
-        if: ${{ matrix.build != 's390x' }}
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-${{ matrix.os }}-cpu
 
       - name: Determine tag name
         id: tag
@@ -253,8 +220,14 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
 
+      - name: ccache-clear
+        if: ${{ matrix.build != 's390x' }}
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-cpu
+
   ubuntu-vulkan:
-    needs: [check-release, get-version]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     strategy:
@@ -277,12 +250,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: Dependencies
         id: depends
@@ -300,7 +272,7 @@ jobs:
           fi
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-vulkan
 
@@ -314,14 +286,8 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-${{ matrix.os }}-vulkan
 
       - name: Determine tag name
         id: tag
@@ -339,8 +305,13 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-vulkan
+
   android-arm64:
-    needs: [check-release, get-version]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
@@ -358,12 +329,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -388,7 +358,7 @@ jobs:
       #   cache on:  https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78224189394
       #
       #- name: ccache
-      #  uses: ggml-org/ccache-action@v1.2.21
+      #  uses: ggml-org/ccache-action@v1.2.24
       #  with:
       #    key: release-android-arm64
 
@@ -407,7 +377,6 @@ jobs:
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_BORINGSSL=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -433,7 +402,7 @@ jobs:
           name: llama-bin-android-arm64.tar.gz
 
   ubuntu-24-openvino:
-    needs: [check-release, get-version]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
@@ -446,8 +415,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+      OPENVINO_VERSION_MAJOR: "2026.3.1"
+      OPENVINO_VERSION_FULL: "2026.3.1.22476.56d9685302d"
 
     steps:
       - name: Set OpenVINO version output
@@ -460,15 +429,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-ubuntu-24.04-openvino-release-no-preset-v1
 
@@ -508,14 +476,8 @@ jobs:
             -DGGML_OPENVINO=ON \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build/ReleaseOV --config Release --parallel
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-ubuntu-24.04-openvino-release-no-preset-v1
 
       - name: Determine tag name
         id: tag
@@ -551,8 +513,13 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
           name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-24.04-openvino-release-no-preset-v1
+
   windows-openvino:
-    needs: [check-release]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
@@ -562,8 +529,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+      OPENVINO_VERSION_MAJOR: "2026.3.1"
+      OPENVINO_VERSION_FULL: "2026.3.1.22476.56d9685302d"
 
     steps:
       - name: Set OpenVINO version output
@@ -577,15 +544,14 @@ jobs:
         with:
             fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2022-openvino
           variant: ccache
@@ -637,11 +603,6 @@ jobs:
 
           cmake --build build\ReleaseOV --config Release -- /m
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-windows-2022-openvino
-
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -680,8 +641,14 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
           name: llama-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-openvino
+
   windows-cpu:
-    needs: [check-release]
+    name: windows-cpu / ${{ matrix.arch }}
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2025-vs2026
@@ -701,19 +668,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: Install Ninja
         run: |
           choco install ninja
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
@@ -728,18 +694,13 @@ jobs:
             -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
             -DGGML_OPENMP=ON ^
+            -DGGML_OPENMP_FETCH=ON ^
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          Copy-Item "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Redist\MSVC\14.51.36231\debug_nonredist\${{ matrix.arch }}\Microsoft.VC145.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
@@ -748,6 +709,13 @@ jobs:
           path: llama-bin-win-cpu-${{ matrix.arch }}.zip
           name: llama-bin-win-cpu-${{ matrix.arch }}.zip
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
+
+  # note: builds only the ggml-hip backend - llama-server is injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
   windows-rocm:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
@@ -757,7 +725,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - ROCM_VERSION: "7.14.0"
+          - ROCM_VERSION: "10.0.0"
             gpu_targets: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
             build: x64
 
@@ -768,11 +736,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
+          max-size: "1G"
 
       # - name: Cache ROCm Installation
       #   id: cache-rocm
@@ -820,38 +793,28 @@ jobs:
 
       - name: Build
         run: |
-          mkdir build
-          cd build
-          cmake .. `
-            -G "Unix Makefiles" `
+          cmake -S . -B build `
+            -G "Ninja Multi-Config" `
             -DCMAKE_PREFIX_PATH="${env:HIP_PATH}" `
-            -DCMAKE_BUILD_TYPE=Release `
             -DGGML_BACKEND_DL=ON `
             -DGGML_NATIVE=OFF `
-            -DGGML_CPU=ON `
-            -DGGML_CPU_ALL_VARIANTS=ON `
+            -DGGML_CPU=OFF `
             -DGGML_HIP=ON `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang++.exe" `
             -DCMAKE_C_FLAGS="-Wno-error=incompatible-pointer-types" `
             -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DHIP_PATH="${env:HIP_PATH}" `
-            -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}"
-          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          cmake --build build --config Release --parallel ${env:NUMBER_OF_PROCESSORS} --target ggml-hip
 
       - name: Verify HIP backend was built
         run: |
-          $hipDll = Get-ChildItem -Path build\bin -Filter "ggml-hip*.dll" -ErrorAction SilentlyContinue
+          $hipDll = Get-ChildItem -Path build\bin\Release -Filter "ggml-hip*.dll" -ErrorAction SilentlyContinue
           if (-not $hipDll) {
             Write-Host "##[error]ggml-hip*.dll was NOT produced. The HIP backend silently failed to build."
-            Write-Host "Contents of build\bin:"
-            Get-ChildItem build\bin | Format-Table -AutoSize
+            Write-Host "Contents of build\bin\Release:"
+            Get-ChildItem build\bin\Release | Format-Table -AutoSize
             exit 1
           }
           Write-Host "HIP backend artifact found:"
@@ -866,10 +829,40 @@ jobs:
           $rocmVersionShort = ('${{ matrix.ROCM_VERSION }}'.Split('.')[0..1] -join '.')
           echo "ROCM_VERSION_SHORT=$rocmVersionShort" >> $env:GITHUB_ENV
 
+      - name: Bundle HIP runtime DLLs (amdhip64_7.dll, rocm_kpack.dll, amd_comgr.dll)
+        run: |
+          $ErrorActionPreference = "Stop"
+          # See issue https://github.com/ggml-org/llama.cpp/issues/26929.
+          # ggml-hip.dll loads amdhip64_7.dll at run time. The Adrenalin driver
+          # ships an amdhip64_7.dll in System32, which the loader searches before PATH,
+          # so a matching DLL from PATH cannot win. Copy amdhip64 next to the
+          # binaries (exe directory is searched before System32) so the correct
+          # runtime is used. rocm_kpack.dll is amdhip64_7's direct dependency, so
+          # copy the matching version too. amd_comgr is copied as well to keep it
+          # in sync with the bundled amdhip64, avoiding a version mismatch with a
+          # amd_comgr from System32.
+          # rocblas/hipblaslt kernels resolve fine via PATH and are not copied.
+          $binPath = (rocm-sdk path --bin).Trim()
+          if (-not $binPath) { throw "rocm-sdk path --bin returned empty" }
+          write-host "ROCm bin path: $binPath"
+
+          $patterns = @("amdhip64_7.dll", "rocm_kpack.dll", "amd_comgr.dll")
+          foreach ($pattern in $patterns) {
+            $files = Get-ChildItem -Path $binPath -Filter $pattern -ErrorAction SilentlyContinue
+            if (-not $files) { throw "no match for $pattern in $binPath" }
+            foreach ($f in $files) {
+              Copy-Item $f.FullName -Destination build\bin\Release -Force
+              write-host "  copied $($f.Name)"
+            }
+          }
+
       - name: Pack artifacts
         run: |
-          cp "LICENSE" "build\bin\"
-          7z a -snl llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip .\build\bin\*
+          7z a -snl llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip `
+            .\build\bin\Release\ggml-hip.dll `
+            .\build\bin\Release\amdhip64_7.dll `
+            .\build\bin\Release\rocm_kpack.dll `
+            .\build\bin\Release\amd_comgr.dll
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
@@ -877,6 +870,13 @@ jobs:
           path: llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip
           name: llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+
+  # note: builds only the backend library - llama-server (with the embedded UI)
+  #       is injected from the windows-cpu zip during the release "Merge artifacts" step
   windows:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
@@ -907,13 +907,6 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
       - name: Install Vulkan SDK
         id: get_vulkan
         if: ${{ matrix.backend == 'vulkan' }}
@@ -930,7 +923,7 @@ jobs:
 
       # TODO: these jobs need to use llvm toolchain in order to utilize the ccache
       #- name: ccache
-      #  uses: ggml-org/ccache-action@v1.2.21
+      #  uses: ggml-org/ccache-action@v1.2.24
       #  with:
       #    key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
 
@@ -976,6 +969,8 @@ jobs:
           path: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
+  # note: builds only the ggml-cuda backend - llama-server is injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
   windows-cuda:
     name: windows-cuda (${{ matrix.cuda }}, ${{ matrix.arch }})
     needs: [check-release]
@@ -1004,13 +999,6 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
       - name: Install Cuda Toolkit
         uses: ./.github/actions/windows-setup-cuda
         with:
@@ -1023,7 +1011,7 @@ jobs:
           choco install ninja
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
 
@@ -1041,11 +1029,6 @@ jobs:
             -DLLAMA_BUILD_BORINGSSL=ON ${{ matrix.defines }}
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% --target ggml-cuda
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
 
       - name: Pack artifacts
         id: pack_artifacts
@@ -1082,6 +1065,13 @@ jobs:
           path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
           name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
+
+  # note: builds only the ggml-sycl backend - llama-server is injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
   windows-sycl:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
@@ -1116,15 +1106,8 @@ jobs:
           Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
           "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
-
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2022-x64-sycl
 
@@ -1140,11 +1123,6 @@ jobs:
             -DGGML_CPU=OFF -DGGML_SYCL=ON ^
             -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --target ggml-sycl -j %NUMBER_OF_PROCESSORS%
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-windows-2022-x64-sycl
 
       - name: Build the release package
         id: pack_artifacts
@@ -1192,8 +1170,13 @@ jobs:
           path: llama-bin-win-sycl-x64.zip
           name: llama-bin-win-sycl-x64.zip
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-x64-sycl
+
   ubuntu-24-sycl:
-    needs: [check-release]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     strategy:
@@ -1235,15 +1218,14 @@ jobs:
           wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb
           sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-ubuntu-24.04-sycl-${{ matrix.build }}
 
@@ -1264,11 +1246,6 @@ jobs:
             -DGGML_SYCL_F16=${{ matrix.fp16 }}
           time cmake --build build --config Release -j $(nproc)
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-ubuntu-24.04-sycl-${{ matrix.build }}
-
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -1285,126 +1262,140 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
           name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
-#   ubuntu-22-rocm:
-#     needs: [check-release, get-version]
-#     if: ${{ needs.check-release.outputs.should_release == 'true' }}
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-24.04-sycl-${{ matrix.build }}
 
-#     runs-on: ubuntu-22.04
+  ubuntu-24-rocm:
+    needs: [check-release, ui-build]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-#     permissions:
-#       actions: write
+    runs-on: ubuntu-24.04
 
-#     strategy:
-#       matrix:
-#         include:
-#           - ROCM_VERSION: "7.14.0"
-#             gpu_targets: "gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
-#             build: 'x64'
+    permissions:
+      actions: write
 
-#     steps:
-#       - name: Clone
-#         id: checkout
-#         uses: actions/checkout@v6
-#         with:
-#           fetch-depth: 0
+    strategy:
+      matrix:
+        include:
+          - ROCM_VERSION: "10.0.0"
+            gpu_targets: "gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
+            build: 'x64'
 
-#       - name: Setup Node.js
-#         uses: actions/setup-node@v6
-#         with:
-#           node-version: "24"
-#           cache: "npm"
-#           cache-dependency-path: "tools/ui/package-lock.json"
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
-#       - name: Free up disk space
-#         uses: ggml-org/free-disk-space@v1.3.1
-#         with:
-#           tool-cache: true
+      - name: Download UI build
+        uses: actions/download-artifact@v7
+        with:
+          name: llama-ui.zip
+          path: tools/ui/dist
 
-#       # - name: ccache
-#       #   uses: ggml-org/ccache-action@v1.2.21
-#       #   with:
-#       #     key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+      - name: Free up disk space
+        uses: ggml-org/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
 
-#       - name: Dependencies
-#         id: depends
-#         run: |
-#           sudo apt install -y build-essential git cmake wget
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          key: release-ubuntu-24.04-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          evict-old-files: 1d
+          max-size: "1G"
 
-#       - name: Setup TheRock with Wheels
-#         id: therock_env
-#         run: |
-#           # Create Python virtual environment
-#           python3 -m venv .venv
-#           source .venv/bin/activate
+      - name: Tune ccache for reinstalled ROCm toolchain
+        run: |
+          # ROCm is pip-installed fresh each run, so the clang binary's mtime
+          # changes every time. With the default compiler_check=mtime that
+          # invalidates the cache; hash compiler contents instead so warm
+          # builds hit.
+          ccache --set-config=compiler_check=content
+          ccache --set-config=sloppiness=time_macros,include_file_mtime,include_file_ctime
 
-#           # Install ROCm wheels for build
-#           # libraries = HIP runtime and CMake configs needed for linking
-#           # devel = compilers, headers, static libs
-#           python -m pip install --upgrade pip
-#           python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "rocm[libraries,devel]==${{ matrix.ROCM_VERSION }}"
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt install -y build-essential git cmake wget
 
-#           # Get ROCm installation paths using the rocm-sdk CLI tool
-#           ROCM_PATH=$(rocm-sdk path --root)
-#           CMAKE_PATH=$(rocm-sdk path --cmake)
-#           BIN_PATH=$(rocm-sdk path --bin)
-#           echo "ROCM_PATH=$ROCM_PATH"
-#           echo "CMAKE_PATH=$CMAKE_PATH"
-#           echo "BIN_PATH=$BIN_PATH"
+      - name: Setup TheRock with Wheels
+        id: therock_env
+        run: |
+          # Create Python virtual environment
+          python3 -m venv .venv
+          source .venv/bin/activate
 
-#           # Set environment variables
-#           echo "ROCM_PATH=$ROCM_PATH" >> $GITHUB_ENV
-#           echo "CMAKE_PREFIX_PATH=$CMAKE_PATH" >> $GITHUB_ENV
-#           echo "HIP_PATH=$ROCM_PATH" >> $GITHUB_ENV
-#           echo "PATH=$BIN_PATH:${PATH}" >> $GITHUB_ENV
-#           echo "LD_LIBRARY_PATH=$ROCM_PATH/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+          # Install ROCm wheels for build
+          # libraries = HIP runtime and CMake configs needed for linking
+          # devel = compilers, headers, static libs
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel]==${{ matrix.ROCM_VERSION }}"
 
-#           # Keep venv activated for subsequent steps
-#           echo "$(pwd)/.venv/bin" >> $GITHUB_PATH
+          # Get ROCm installation paths using the rocm-sdk CLI tool
+          ROCM_PATH=$(rocm-sdk path --root)
+          CMAKE_PATH=$(rocm-sdk path --cmake)
+          BIN_PATH=$(rocm-sdk path --bin)
+          echo "ROCM_PATH=$ROCM_PATH"
+          echo "CMAKE_PATH=$CMAKE_PATH"
+          echo "BIN_PATH=$BIN_PATH"
 
-#       - name: Build with native CMake HIP support
-#         id: cmake_build
-#         run: |
-#           cmake -B build -S . \
-#             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
-#             -DCMAKE_BUILD_TYPE=Release \
-#             -DGGML_BACKEND_DL=ON \
-#             -DGGML_NATIVE=OFF \
-#             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
-#             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-#             -DGGML_CPU_ALL_VARIANTS=ON \
-#             -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
-#             -DGGML_HIP=ON \
-#             -DHIP_PLATFORM=amd \
-#             -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
-#             ${{ env.CMAKE_ARGS }}
-#           cmake --build build --config Release -j $(nproc)
+          # Set environment variables
+          echo "ROCM_PATH=$ROCM_PATH" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PATH" >> $GITHUB_ENV
+          echo "HIP_PATH=$ROCM_PATH" >> $GITHUB_ENV
+          echo "PATH=$BIN_PATH:${PATH}" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$ROCM_PATH/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
 
-#       # - name: ccache-clear
-#       #   uses: ./.github/actions/ccache-clear
-#       #   with:
-#       #     key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+          # Keep venv activated for subsequent steps
+          echo "$(pwd)/.venv/bin" >> $GITHUB_PATH
 
-#       - name: Determine tag name
-#         id: tag
-#         uses: ./.github/actions/get-tag-name
+      - name: Build with native CMake HIP support
+        id: cmake_build
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
+            -DGGML_HIP=ON \
+            -DHIP_PLATFORM=amd \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
 
-#       - name: Get ROCm short version
-#         run: echo "ROCM_VERSION_SHORT=$(echo '${{ matrix.ROCM_VERSION }}' | cut -d '.' -f 1,2)" >> $GITHUB_ENV
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
 
-#       - name: Pack artifacts
-#         id: pack_artifacts
-#         run: |
-#           cp LICENSE ./build/bin/
-#           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+      - name: Get ROCm short version
+        run: echo "ROCM_VERSION_SHORT=$(echo '${{ matrix.ROCM_VERSION }}' | cut -d '.' -f 1,2)" >> $GITHUB_ENV
 
-#       - name: Upload artifacts
-#         uses: actions/upload-artifact@v6
-#         with:
-#           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
-#           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
+          name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-24.04-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
 
   ios-xcode:
-    needs: [check-release, get-version]
+    needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     runs-on: macos-26
 
@@ -1432,8 +1423,7 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
       - name: xcodebuild for swift package
@@ -1556,11 +1546,9 @@ jobs:
 #          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
   ui-build:
-    needs: [check-release, get-version]
+    needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
-    with:
-      hf_ui_version: ${{ needs.get-version.outputs.ui_version }}
 
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -1569,22 +1557,23 @@ jobs:
     # https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
     permissions:
         contents: write # for creating release
+        id-token: write
+        attestations: write
 
     runs-on: ubuntu-slim
 
     needs:
-      - get-version
       - windows
       - windows-cpu
       - windows-cuda
-      #- windows-sycl
+      - windows-sycl
       - windows-rocm
       - windows-openvino
-      #- ubuntu-22-rocm
+      - ubuntu-24-rocm
       - ubuntu-cpu
       - ubuntu-vulkan
       - ubuntu-24-openvino
-      #- ubuntu-24-sycl
+      - ubuntu-24-sycl
       - android-arm64
       - macos-cpu
       - ios-xcode
@@ -1613,24 +1602,27 @@ jobs:
           path: ./artifact
           merge-multiple: true
 
-      - name: Move artifacts
+      - name: Merge artifacts
         id: move_artifacts
         run: |
           mkdir -p release
 
-          echo "Adding CPU backend files to existing zips..."
+          # the windows-cpu zip contains the full toolset (llama-server with the embedded
+          # UI, ggml-cpu) - inject it into the other windows zips so that every archive
+          # ships the same binaries, only with a different backend library on top
+          echo "Injecting windows-cpu binaries (llama-server + CPU backend) into the backend zips..."
           for arch in x64 arm64; do
             cpu_zip="artifact/llama-bin-win-cpu-${arch}.zip"
             temp_dir=$(mktemp -d)
-            echo "Extracting CPU backend for $arch..."
+            echo "Extracting windows-cpu-${arch} package..."
             unzip "$cpu_zip" -d "$temp_dir"
 
-            echo "Adding CPU files to $arch zips..."
+            echo "Merging into $arch zips..."
             for target_zip in artifact/llama-bin-win-*-${arch}.zip; do
               if [[ "$target_zip" == "$cpu_zip" ]]; then
                 continue
               fi
-              echo "Adding CPU backend to $(basename "$target_zip")"
+              echo "Injecting into $(basename "$target_zip")"
               realpath_target_zip=$(realpath "$target_zip")
               (cd "$temp_dir" && zip -r "$realpath_target_zip" .)
             done
@@ -1654,13 +1646,19 @@ jobs:
         id: download_ui
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: ./ui-dist
 
       - name: Package UI
         id: package_ui
         run: |
           tar -czvf release/llama-${{ steps.tag.outputs.name }}-ui.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./ui-dist .
+
+      - name: Attest release artifacts
+        id: attest
+        uses: actions/attest@v4
+        with:
+          subject-path: 'release/*'
 
       - name: Create and push git tag
         run: |
@@ -1679,6 +1677,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.tag.outputs.name }}
+          prerelease: true
           body: |
             <details open>
 
@@ -1688,6 +1687,9 @@ jobs:
 
             **Website:**
             - <https://llama.app>
+
+            **Attestations:**
+            - <${{ steps.attest.outputs.attestation-url }}>
 
             **macOS/iOS:**
             - [macOS Apple Silicon (arm64)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz)
@@ -1701,7 +1703,7 @@ jobs:
             - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
             - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
-            - Ubuntu x64 (ROCm 7.14)[DISABLED](https://github.com/ggml-org/llama.cpp/pull/26969)
+            - [Ubuntu x64 (ROCm 10.0)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-10.0-x64.tar.gz)
             - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
             - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)
             - [Ubuntu x64 (SYCL FP16)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp16-x64.tar.gz)
@@ -1719,7 +1721,7 @@ jobs:
             - [Windows x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-vulkan-x64.zip)
             - [Windows x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ needs.windows-openvino.outputs.openvino_version }}-x64.zip)
             - [Windows x64 (SYCL)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip)
-            - [Windows x64 (ROCm 7.14)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-rocm-7.14-x64.zip)
+            - [Windows x64 (ROCm 10.0)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-rocm-10.0-x64.zip)
 
             **openEuler:**
             - [DISABLED](https://github.com/ggml-org/llama.cpp/pull/23705)

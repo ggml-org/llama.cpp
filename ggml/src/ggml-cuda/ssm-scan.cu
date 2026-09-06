@@ -632,7 +632,6 @@ static void ssm_scan_ssd_f32_cuda(
     // Step 3: chunked SSD loop
     // Per chunk: pre_matmul (incl. M) + 4 cuBLAS (CB, Y, S@C, state update) + scale_state
     cublasHandle_t handle = ctx.cublas_handle();
-    CUBLAS_CHECK(cublasSetStream(handle, stream));
     const float alpha_one  = 1.0f;
     const float beta_zero  = 0.0f;
     const float beta_one   = 1.0f;

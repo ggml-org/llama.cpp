@@ -79,7 +79,14 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
 
     for (uint32_t i = 0; i < n; i++) {
         const struct htp_tensor * t = tensors[i];
-        if (!t) continue;
+        if (!t || (t->flags & (HTP_TENSOR_WEIGHT | HTP_TENSOR_FENCE))) {
+            continue;
+        }
+
+        if (t->size <= HEX_L2_FLUSH_IL_THRESHOLD) {
+            hex_l2flush((void *) (uintptr_t) t->data, t->size);
+            continue;
+        }
 
         uint32_t t_start = t->data;
         uint32_t t_end   = t_start + t->size;
@@ -242,7 +249,7 @@ void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * co
 
     for (uint32_t i = 0; i < n; i++) {
         const struct htp_tensor * t = tensors[i];
-        if (t && (t->flags & HTP_TENSOR_COMPUTE) && is_tensor_dirty(ctx, t)) {
+        if (t && !(t->flags & (HTP_TENSOR_WEIGHT | HTP_TENSOR_FENCE)) && is_tensor_dirty(ctx, t)) {
             dirty_tensors[n_dirty++] = t;
             total_dirty += t->size;
         }

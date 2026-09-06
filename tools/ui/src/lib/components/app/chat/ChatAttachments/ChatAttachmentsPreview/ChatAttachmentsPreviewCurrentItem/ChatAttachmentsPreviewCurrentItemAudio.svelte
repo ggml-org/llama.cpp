@@ -14,7 +14,7 @@
 		<Music class="mx-auto mb-4 h-16 w-16 text-white/50" />
 
 		{#if audioSrc}
-			<audio controls class="mb-4 w-full" src={audioSrc}>
+			<audio class="mb-4 w-full" controls src={audioSrc}>
 				Your browser does not support the audio element.
 			</audio>
 		{:else}

@@ -3,9 +3,9 @@ enable f16;
 enable subgroups;
 
 #define BYTE_HELPERS
-#include "common_decls.tmpl"
 #define FLASH_ATTN_VEC_SPLIT
 #include "flash_attn_decls.tmpl"
+#include "common_decls.tmpl"
 
 // Default values
 // The actual values are defined in shader-lib.

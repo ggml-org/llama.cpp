@@ -120,6 +120,12 @@ struct clip_graph {
             ffn_op_type type_op,
             int il) const;
 
+    ggml_tensor * build_moe_ffn(
+            ggml_tensor * cur,
+            const clip_layer & layer,
+            ffn_op_type type_op,
+            int il) const;
+
     ggml_tensor * build_attn(
             ggml_tensor * wo,
             ggml_tensor * wo_b,
@@ -131,9 +137,15 @@ struct clip_graph {
             int il,
             ggml_tensor * sinks = nullptr) const;
 
-    // implementation of the 2D RoPE without adding a new op in ggml
-    // this is not efficient (use double the memory), but works on all backends
-    // TODO: there was a more efficient which relies on ggml_view and ggml_rope_ext_inplace, but the rope inplace does not work well with non-contiguous tensors ; we should fix that and revert back to the original implementation in https://github.com/ggml-org/llama.cpp/pull/13065
+    // implementation of the 2D RoPE using two ggml_rope_ext calls
+    //
+    // unlike GGML_ROPE_TYPE_VISION which forces NEOX ordering, this rotates adjacent pairs (normal ordering)
+    //
+    // example:
+    //  given a single head with size = 8 --> [00000000]
+    //  dims [0, 4) rotate with pos_a, dims [4, 8) rotate with pos_b --> [aaaabbbb]
+    //  interleave_freq = false --> both halves use the same inv_freq set (like GGML_ROPE_TYPE_VISION)
+    //  interleave_freq = true  --> first half uses even inv_freq, second half uses odd inv_freq (used by pixtral)
     ggml_tensor * build_rope_2d(
         ggml_context * ctx0,
         ggml_tensor * cur,

@@ -102,7 +102,7 @@ jobs:
           ./tests.sh
 
   server-cuda:
-    runs-on: [self-hosted, llama-server, Linux, NVIDIA]
+    runs-on: "hf-jobs-t4-small:cuda13"
 
     steps:
       - name: Clone
@@ -112,11 +112,41 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake libssl-dev python3 python3-venv python3-pip
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: self-hosted-server-cuda
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
       - name: Build
         id: cmake_build
         run: |
-          cmake -B build -DGGML_CUDA=ON -DGGML_SCHED_NO_REALLOC=ON
+          cmake -B build -DGGML_CUDA=ON -DGGML_SCHED_NO_REALLOC=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
           cmake --build build --config Release -j $(nproc) --target llama-server
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: self-hosted-server-cuda
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
       - name: Python setup
         id: setup_python

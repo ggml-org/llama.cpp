@@ -1,3 +1,4 @@
+import { extractRootDomain } from './url';
 import {
 	AlertTriangle,
 	Code,
@@ -12,8 +13,10 @@ import {
 	CODE_FILE_EXTENSION_REGEX,
 	DEFAULT_RESOURCE_FILENAME,
 	DISPLAY_NAME_SEPARATOR_REGEX,
+	EXPECTED_THEMED_ICON_PAIR_COUNT,
 	FILE_EXTENSION_REGEX,
 	IMAGE_FILE_EXTENSION_REGEX,
+	MCP_ALLOWED_ICON_MIME_TYPES,
 	MCP_SERVER_ID_PREFIX,
 	MCP_SSE,
 	MIME_TYPE_PREFIXES,
@@ -24,8 +27,22 @@ import {
 	TEXT_FILE_EXTENSION_REGEX,
 	URI_PATTERNS
 } from '$lib/constants';
-import { MCPLogLevel, MCPTransportType, MimeTypeText, UrlProtocol } from '$lib/enums';
-import type { MCPResourceContent, MCPResourceInfo, MCPServerSettingsEntry } from '$lib/types';
+import {
+	ColorMode,
+	HealthCheckStatus,
+	MCPLogLevel,
+	MCPTransportType,
+	MimeTypeText,
+	UrlProtocol
+} from '$lib/enums';
+import type {
+	HealthCheckState,
+	MCPResourceContent,
+	MCPResourceIcon,
+	MCPResourceInfo,
+	MCPServerDisplayInfo,
+	MCPServerSettingsEntry
+} from '$lib/types';
 import type { MimeTypeUnion } from '$lib/types/common';
 import type { Component } from 'svelte';
 
@@ -315,4 +332,133 @@ export function downloadResourceContent(
 	a.click();
 	document.body.removeChild(a);
 	URL.revokeObjectURL(url);
+}
+
+/**
+ * Validates that an icon URI uses a safe scheme (https: or data:).
+ */
+function isValidMcpIconUri(src: string): boolean {
+	try {
+		if (src.startsWith(UrlProtocol.DATA)) return true;
+
+		const url = new URL(src);
+
+		return url.protocol === UrlProtocol.HTTPS;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Selects the best icon URL from an MCP icons array.
+ * Follows security guidelines from the MCP specification:
+ * - Only allows https: and data: URIs
+ * - Filters to supported MIME types
+ *
+ * Selection priority:
+ * 1. Icon matching the current color scheme (dark/light)
+ * 2. Universal icon (no theme specified); if exactly 2, assumes [0]=light, [1]=dark
+ * 3. First valid icon as last resort
+ */
+export function getMcpIconUrl(icons: MCPResourceIcon[] | undefined, isDark = false): string | null {
+	if (!icons?.length) return null;
+
+	const validIcons = icons.filter((icon) => {
+		if (!icon.src || !isValidMcpIconUri(icon.src)) return false;
+
+		if (icon.mimeType && !MCP_ALLOWED_ICON_MIME_TYPES.has(icon.mimeType)) return false;
+
+		return true;
+	});
+
+	if (validIcons.length === 0) return null;
+
+	const preferredTheme = isDark ? ColorMode.DARK : ColorMode.LIGHT;
+	// 1. Prefer icon explicitly matching the current color scheme
+	const themedIcon = validIcons.find((icon) => icon.theme === preferredTheme);
+
+	if (themedIcon) return themedIcon.src;
+
+	// 2. Handle universal icons (no theme specified)
+	const universalIcons = validIcons.filter((icon) => !icon.theme);
+
+	if (universalIcons.length === EXPECTED_THEMED_ICON_PAIR_COUNT) {
+		// Heuristic: two theme-less icons → assume [0] = light, [1] = dark
+		return universalIcons[isDark ? 1 : 0].src;
+	}
+
+	if (universalIcons.length > 0) {
+		return universalIcons[0].src;
+	}
+
+	// 3. Last resort: use opposite-theme icon
+	return validIcons[0].src;
+}
+
+/**
+ * Construct a fallback favicon URL from the MCP server URL.
+ * e.g. https://mcp.example.com/sse -> https://example.com/favicon.ico
+ */
+export function getMcpServerFaviconFallback(serverUrl: string): string | null {
+	try {
+		const url = new URL(serverUrl);
+		const rootDomain = extractRootDomain(url);
+
+		if (!rootDomain) return null;
+
+		const origin = `${url.protocol}//${rootDomain}`;
+		const candidates = ['favicon.ico', 'favicon.png'];
+
+		for (const path of candidates) {
+			const faviconUrl = `${origin}/${path}`;
+
+			if (isValidMcpIconUri(faviconUrl)) {
+				return faviconUrl;
+			}
+		}
+	} catch {
+		// Invalid URL, return null
+	}
+
+	return null;
+}
+
+/**
+ * Resolves the raw label for a server: user-defined display name first,
+ * then server-reported title or name when the health check succeeded,
+ * then the configured name (admin baseline or legacy data), then URL.
+ */
+function getMcpServerBaseLabel(
+	server: MCPServerDisplayInfo,
+	healthState?: HealthCheckState
+): string {
+	if (server.displayName) return server.displayName;
+
+	if (healthState?.status === HealthCheckStatus.SUCCESS)
+		return (
+			healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
+		);
+
+	return server.name || server.url;
+}
+
+/**
+ * Returns the display label for a server, suffixed with a positional
+ * counter when several configured servers resolve to the same base label
+ * (e.g. two endpoints of the same host reporting an identical name).
+ * Numbering follows config order, so it is stable across renders.
+ */
+export function getMcpServerLabel(
+	server: MCPServerDisplayInfo,
+	servers: MCPServerDisplayInfo[],
+	healthChecks: Record<string, HealthCheckState>
+): string {
+	const label = getMcpServerBaseLabel(server, healthChecks[server.id]);
+	const twins = servers.filter((s) => getMcpServerBaseLabel(s, healthChecks[s.id]) === label);
+
+	if (twins.length < 2) return label;
+
+	const position = twins.findIndex((s) => s.id === server.id);
+
+	return position < 0 ? label : `${label} (${position + 1})`;
 }

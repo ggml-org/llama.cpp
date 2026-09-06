@@ -34,34 +34,34 @@
 </script>
 
 {#if isSearchCall}
-	<ChatMessageToolCallBlockSearchResults {section} {open} {isStreaming} {onToggle} />
+	<ChatMessageToolCallBlockSearchResults {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.BROWSER_GET_DATETIME}
-	<ChatMessageToolCallBlockGetDatetime {section} {isStreaming} />
+	<ChatMessageToolCallBlockGetDatetime {isStreaming} {section} />
 {:else if section.toolName === BuiltInTool.SERVER_GET_INFO}
-	<ChatMessageToolCallBlockGetInfo {section} {isStreaming} />
+	<ChatMessageToolCallBlockGetInfo {isStreaming} {section} />
 {:else if section.toolName === BuiltInTool.SERVER_READ_FILE}
-	<ChatMessageToolCallBlockReadFile {section} {open} {isStreaming} {onToggle} />
+	<ChatMessageToolCallBlockReadFile {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.BROWSER_READ_MEDIA}
-	<ChatMessageToolCallBlockReadMedia {section} {open} {isStreaming} {onToggle} />
+	<ChatMessageToolCallBlockReadMedia {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.SERVER_EDIT_FILE}
-	<ChatMessageToolCallBlockEditFile {section} {open} {isStreaming} {onToggle} />
+	<ChatMessageToolCallBlockEditFile {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.SERVER_WRITE_FILE}
-	<ChatMessageToolCallBlockWriteFile {section} {open} {isStreaming} {onToggle} />
+	<ChatMessageToolCallBlockWriteFile {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.SERVER_EXEC_SHELL_COMMAND}
 	<ChatMessageToolCallBlockExecShellCommand
-		{section}
-		{open}
-		{isStreaming}
-		{isExecuting}
 		{attachments}
+		{isExecuting}
+		{isStreaming}
 		{onToggle}
+		{open}
+		{section}
 	/>
 {:else if section.toolName === BuiltInTool.SERVER_FILE_GLOB_SEARCH}
-	<ChatMessageToolCallBlockFileGlobSearch {section} {open} {isStreaming} {onToggle} />
+	<ChatMessageToolCallBlockFileGlobSearch {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.SERVER_GREP_SEARCH}
-	<ChatMessageToolCallBlockGrepSearch {section} {open} {isStreaming} {onToggle} />
+	<ChatMessageToolCallBlockGrepSearch {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.BROWSER_RUN_JAVASCRIPT}
-	<ChatMessageToolCallBlockRunJavascript {section} {open} {isStreaming} {onToggle} />
+	<ChatMessageToolCallBlockRunJavascript {isStreaming} {onToggle} {open} {section} />
 {:else}
-	<ChatMessageToolCallBlockDefault {section} {open} {isStreaming} {attachments} {onToggle} />
+	<ChatMessageToolCallBlockDefault {attachments} {isStreaming} {onToggle} {open} {section} />
 {/if}

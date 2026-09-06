@@ -25,13 +25,13 @@
 	can read it back without a custom binding API.
 -->
 <McpServerForm
-	url="https://example.test/mcp"
 	headers={headersState}
-	onUrlChange={() => {}}
+	id="mcp-server-form-test"
 	onHeadersChange={(value) => {
 		headersState = value;
 	}}
-	id="mcp-server-form-test"
+	onUrlChange={() => {}}
+	url="https://example.test/mcp"
 />
 
-<div data-testid="captured-headers" data-captured-headers={headersState} hidden></div>
+<div data-captured-headers={headersState} data-testid="captured-headers" hidden></div>

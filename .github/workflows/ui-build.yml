@@ -3,8 +3,8 @@ name: UI Build
 on:
   workflow_call:
     inputs:
-      hf_ui_version:
-        description: 'Version string for version.json (e.g. 12345)'
+      ui_version:
+        description: 'Version string embedded in build.json (e.g. b1234); defaults to b<commit-count>'
         required: false
         type: string
 
@@ -17,6 +17,17 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve UI version
+        id: version
+        run: |
+          version="${{ inputs.ui_version }}"
+          if [ -z "$version" ]; then
+            version="b$(git rev-list --count HEAD)"
+          fi
+          echo "ui_version=${version}" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -31,8 +42,7 @@ jobs:
 
       - name: Build application
         env:
-          HF_UI_VERSION: ${{ inputs.hf_ui_version || '' }}
-          LLAMA_BUILD_NUMBER: ${{ inputs.hf_ui_version || 'b0000' }}
+          LLAMA_BUILD_NUMBER: ${{ steps.version.outputs.ui_version }}
         run: npm run build
         working-directory: tools/ui
 
@@ -43,6 +53,6 @@ jobs:
       - name: Upload built UI
         uses: actions/upload-artifact@v6
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
           retention-days: 1

@@ -63,14 +63,16 @@ def test_router_chat_completion_stream(model: str, success: bool):
         assert content == ""
 
 
-def _get_model_ids(is_reload: bool) -> set[str]:
-    res = server.make_request("GET", "/models" + ("?reload=1" if is_reload else ""))
+def _get_model_ids(is_reload: bool, headers: dict | None = None) -> set[str]:
+    res = server.make_request(
+        "GET", "/models" + ("?reload=1" if is_reload else ""), headers=headers
+    )
     assert res.status_code == 200
     return {item["id"] for item in res.body.get("data", [])}
 
 
-def _get_model_status(model_id: str) -> str:
-    res = server.make_request("GET", "/models")
+def _get_model_status(model_id: str, headers: dict | None = None) -> str:
+    res = server.make_request("GET", "/models", headers=headers)
     assert res.status_code == 200
     for item in res.body.get("data", []):
         if item.get("id") == model_id or item.get("model") == model_id:
@@ -78,11 +80,11 @@ def _get_model_status(model_id: str) -> str:
     raise AssertionError(f"Model {model_id} not found in /models response")
 
 
-def _wait_for_model_status(model_id: str, desired: set[str], timeout: int = 60) -> str:
+def _wait_for_model_status(model_id: str, desired: set[str], timeout: int = 60, headers: dict | None = None) -> str:
     deadline = time.time() + timeout
     last_status = None
     while time.time() < deadline:
-        last_status = _get_model_status(model_id)
+        last_status = _get_model_status(model_id, headers=headers)
         if last_status in desired:
             return last_status
         time.sleep(0.01)
@@ -100,7 +102,7 @@ def _load_model_and_wait(
     assert load_res.status_code == 200
     assert isinstance(load_res.body, dict)
     assert load_res.body.get("success") is True
-    _wait_for_model_status(model_id, {"loaded"}, timeout=timeout)
+    _wait_for_model_status(model_id, {"loaded"}, timeout=timeout, headers=headers)
 
 
 def test_router_unload_model():
@@ -402,6 +404,59 @@ def test_router_reload_models():
         assert "model-reload-a" not in ids, "removed model should no longer appear"
         assert "model-reload-b" in ids, "unchanged model should still appear"
         assert "model-reload-c" in ids, "newly added model should appear"
+    finally:
+        os.remove(preset_path)
+
+
+def test_router_dedup_cache_models():
+    """dedup-cache-models hides the cache entry backing a preset from GET /models"""
+    global server
+
+    preset_path = os.path.join(TMP_DIR, "test_dedup.ini")
+    cache_id = "ggml-org/test-model-stories260K:F32"
+
+    with open(preset_path, "w") as f:
+        f.write(
+            "[model-dedup]\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+            "dedup-cache-models = 1\n"
+        )
+
+    server.models_preset = preset_path
+    server.start()
+
+    try:
+        ids = _get_model_ids(is_reload=False)
+        assert "model-dedup" in ids
+        assert cache_id not in ids, "cache model should be hidden by dedup"
+        # other cache models are unaffected
+        assert "ggml-org/tinygemma3-GGUF:Q8_0" in ids
+
+        # the hidden model is only hidden from the listing, it can still be used
+        res = server.make_request("POST", "/tokenize", data={"model": cache_id, "content": "hello"})
+        assert res.status_code == 200
+
+        # disabling the flag brings the cache entry back on reload
+        with open(preset_path, "w") as f:
+            f.write(
+                "[model-dedup]\n"
+                "hf-repo = ggml-org/test-model-stories260K\n"
+            )
+        ids = _get_model_ids(is_reload=True)
+        assert cache_id in ids
+
+        # the flag also works from the global section
+        with open(preset_path, "w") as f:
+            f.write(
+                "[*]\n"
+                "dedup-cache-models = 1\n"
+                "\n"
+                "[model-dedup]\n"
+                "hf-repo = ggml-org/test-model-stories260K\n"
+            )
+        ids = _get_model_ids(is_reload=True)
+        assert "model-dedup" in ids
+        assert cache_id not in ids, "cache model should be hidden by global dedup"
     finally:
         os.remove(preset_path)
 
