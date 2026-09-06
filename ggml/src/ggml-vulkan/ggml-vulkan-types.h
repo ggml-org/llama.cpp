@@ -267,6 +267,8 @@ struct vk_pipeline_struct {
     // linked list of pipelines for multiple compilation variants.
     // currently only used to compile a 64-bit indexing variant.
     vk_pipeline next;
+    // Variant with Stream-K enabled through a specialization constant.
+    vk_pipeline stream_k;
 };
 
 typedef std::weak_ptr<vk_pipeline_struct> vk_pipeline_ref;
@@ -793,6 +795,7 @@ struct vk_device_struct {
     matmul_tile_selector_t matmul_id_tile_selector;
 
     vk_pipeline pipeline_matmul_split_k_reduce;
+    vk_pipeline pipeline_matmul_stream_k_fixup;
     vk_pipeline pipeline_quantize_q8_1_x4;
 
     vk_pipeline pipeline_dequant[GGML_TYPE_COUNT];
@@ -1011,6 +1014,8 @@ struct vk_device_struct {
     ggml_backend_buffer_type buffer_type;
 
     bool disable_fusion;
+    bool disable_stream_k;
+    bool force_stream_k;
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
