@@ -1388,6 +1388,9 @@ static void test_gpu_borrowed_buffer_range() {
     const size_t size = 8*alignment;
     ggml_backend_buffer_ptr workspace(ggml_backend_buft_alloc_buffer(buft, offset + size + alignment));
     GGML_ASSERT(workspace);
+    ggml_backend_buffer_ptr view(ggml_backend_buffer_view(workspace.get(), offset, size));
+    ggml_backend_buffer_t graph_buffer = view ? view.get() : workspace.get();
+    const size_t graph_offset = view ? 0 : offset;
 
     auto [ctx, graph, ctx_ptr] = make_context();
     ggml_tensor * x[3];
@@ -1400,10 +1403,10 @@ static void test_gpu_borrowed_buffer_range() {
 
     ggml_gallocr_ptr galloc(ggml_gallocr_new(buft));
     GGML_ASSERT(ggml_gallocr_set_buffer_range(
-        galloc.get(), 0, workspace.get(), offset, size));
+        galloc.get(), 0, graph_buffer, graph_offset, size));
     GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
     GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
-    check_graph_in_buffer_range(graph, workspace.get(), offset, size);
+    check_graph_in_buffer_range(graph, graph_buffer, graph_offset, size);
 
     const float a[] = { 1.0f, 2.0f, 3.0f, 4.0f };
     const float b[] = { 5.0f, 6.0f, 7.0f, 8.0f };
@@ -1653,6 +1656,10 @@ static void test_tallocr_range_shared_workspace(ggml_backend_t target) {
     GGML_ASSERT(buffer);
     auto * bytes = static_cast<uint8_t *>(ggml_backend_buffer_get_base(buffer.get()));
     ggml_backend_buffer_clear(buffer.get(), 0xa5);
+    ggml_backend_buffer_ptr workspace_view(
+        ggml_backend_buffer_view(buffer.get(), workspace_offset, workspace_size));
+    ggml_backend_buffer_t graph_buffer = workspace_view ? workspace_view.get() : buffer.get();
+    const size_t graph_offset = workspace_view ? 0 : workspace_offset;
     auto [ctx, unused_graph, ctx_ptr] = make_context();
     auto * raw = ggml_new_tensor_1d(ctx, GGML_TYPE_I8, total_size);
     GGML_ASSERT(ggml_backend_tensor_alloc(buffer.get(), raw, bytes) == GGML_STATUS_SUCCESS);
@@ -1674,7 +1681,7 @@ static void test_tallocr_range_shared_workspace(ggml_backend_t target) {
     ggml_backend_sched_ptr sched(ggml_backend_sched_new(
         backends, nullptr, n_backends, GGML_DEFAULT_GRAPH_SIZE, false, true));
     GGML_ASSERT(ggml_backend_sched_set_buffer_range(
-        sched.get(), backend, buffer.get(), workspace_offset, workspace_size));
+        sched.get(), backend, graph_buffer, graph_offset, workspace_size));
     for (int step = 1; step <= 12; ++step) {
         ggml_backend_sched_reset(sched.get());
         auto [gctx, graph, gctx_ptr] = make_context();
@@ -1692,7 +1699,7 @@ static void test_tallocr_range_shared_workspace(ggml_backend_t target) {
         for (int i = 0; i < graph->n_nodes; ++i) {
             auto * tensor = graph->nodes[i];
             const size_t offset = static_cast<uint8_t *>(tensor->data) - bytes;
-            GGML_ASSERT(tensor->buffer == buffer.get() && offset >= workspace_offset);
+            GGML_ASSERT(tensor->buffer == graph_buffer && offset >= workspace_offset);
             GGML_ASSERT(offset + ggml_nbytes(tensor) <= workspace_offset + workspace_size);
         }
         ggml_backend_tensor_get(raw, snapshot.data(), 0, total_size);

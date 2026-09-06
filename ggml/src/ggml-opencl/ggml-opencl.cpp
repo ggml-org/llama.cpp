@@ -9362,17 +9362,19 @@ struct ggml_backend_opencl_buffer_context {
     // each tensor is allocated a separate buffer. When flattening is enabled
     // with small allocation, each tensor is backed by two cl_mem objects (for
     // quants and scales) packed into a backend_opencl_buffer.
-    ggml_backend_opencl_buffer_context(cl_mem buf)
-        : name("OpenCL") {
+    ggml_backend_opencl_buffer_context(cl_mem buf, size_t base_offset = 0, bool owns_storage = true)
+        : base_offset(base_offset), owns_storage(owns_storage), name("OpenCL") {
         buffer.push_back(buf);
     }
 
     ~ggml_backend_opencl_buffer_context() {
-        for (cl_mem buf : buffer) {
-            CL_CHECK(clReleaseMemObject(buf));
-        }
-        for (cl_mem im : img) {
-            CL_CHECK(clReleaseMemObject(im));
+        if (owns_storage) {
+            for (cl_mem buf : buffer) {
+                CL_CHECK(clReleaseMemObject(buf));
+            }
+            for (cl_mem im : img) {
+                CL_CHECK(clReleaseMemObject(im));
+            }
         }
 
         // Delete all extras to trigger their destructors
@@ -9749,6 +9751,8 @@ struct ggml_backend_opencl_buffer_context {
     // one for scales. They should be populated only when flattening and small
     // allocation are enabled.
     std::vector<cl_mem> img;
+    size_t base_offset;
+    bool owns_storage;
     std::string name;
 };
 
@@ -9759,7 +9763,22 @@ static void ggml_backend_opencl_buffer_free_buffer(ggml_backend_buffer_t buffer)
 
 static void * ggml_backend_opencl_buffer_get_base(ggml_backend_buffer_t buffer) {
     ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) buffer->buft->device->context;
-    return (void *) (uintptr_t) dev_ctx->backend_ctx->alignment;
+    ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
+    return (void *) (uintptr_t) (dev_ctx->backend_ctx->alignment + ctx->base_offset);
+}
+
+// Create an OpenCL view with independent tensor metadata over parent storage.
+static ggml_backend_buffer_t ggml_backend_opencl_buffer_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    auto * parent = (ggml_backend_opencl_buffer_context *) buffer->context;
+    if (parent->buffer.size() != 1) {
+        return nullptr;
+    }
+    auto * context = new ggml_backend_opencl_buffer_context(
+        parent->buffer[0], parent->base_offset + offset, false);
+    ggml_backend_buffer_t view = ggml_backend_buffer_init(buffer->buft, buffer->iface, context, size);
+    view->view_buffer = ggml_backend_opencl_buffer_view;
+    return view;
 }
 
 static enum ggml_status ggml_backend_opencl_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
@@ -9793,7 +9812,7 @@ static enum ggml_status ggml_backend_opencl_buffer_init_tensor(ggml_backend_buff
             size_t offset = (char *) tensor->data - (char *) ggml_backend_opencl_buffer_get_base(buffer);
 
             ggml_tensor_extra_cl * extra = ctx->ggml_opencl_alloc_temp_tensor_extra();
-            extra->offset = offset;
+            extra->offset = ctx->base_offset + offset;
             extra->data_device = ctx->buffer[0];
             extra->actual_size = ggml_nbytes(tensor);
 
@@ -12764,7 +12783,7 @@ static void ggml_backend_opencl_buffer_clear(ggml_backend_buffer_t buffer, uint8
 
     ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
     for (cl_mem buf : ctx->buffer) {
-        CL_CHECK(clEnqueueFillBuffer(queue, buf, &value, sizeof(value), 0, buffer->size, 0, NULL, NULL));
+        CL_CHECK(clEnqueueFillBuffer(queue, buf, &value, sizeof(value), ctx->base_offset, buffer->size, 0, NULL, NULL));
     }
     CL_CHECK(clFinish(queue));
 }
@@ -12856,7 +12875,9 @@ static ggml_backend_buffer_t ggml_backend_opencl_buffer_type_alloc_buffer(ggml_b
 
     ggml_backend_opencl_buffer_context * ctx = new ggml_backend_opencl_buffer_context(mem);
 
-    return ggml_backend_buffer_init(buffer_type, ggml_backend_opencl_buffer_interface, ctx, size);
+    ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buffer_type, ggml_backend_opencl_buffer_interface, ctx, size);
+    buffer->view_buffer = ggml_backend_opencl_buffer_view;
+    return buffer;
 }
 
 static size_t ggml_backend_opencl_buffer_type_get_alignment(ggml_backend_buffer_type_t buffer_type) {
