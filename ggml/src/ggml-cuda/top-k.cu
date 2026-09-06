@@ -10,10 +10,11 @@ using namespace cub;
 #    endif  // CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2
 #endif      // GGML_CUDA_USE_CUB
 
-// Exact radix top-k selection when CUB DeviceTopK is unavailable (CCCL < 3.2):
+// Exact radix top-k selection when CUB DeviceTopK is unavailable:
 // O(nrows) temp instead of the O(ncols*nrows) full-argsort fallback. Selects the same set.
-#if !defined(CUB_TOP_K_AVAILABLE)
-#define GGML_CUDA_TOP_K_RADIX
+// Set on CUDA without a new-enough CUB, or on HIP without CUB at all.
+#if !defined(CUB_TOP_K_AVAILABLE) || (!defined(GGML_CUDA_USE_CUB) && defined(GGML_USE_HIP))
+#define GGML_CUDA_USE_TOP_K_RADIX
 #endif
 
 #ifdef CUB_TOP_K_AVAILABLE
@@ -42,7 +43,7 @@ static void top_k_cub(ggml_cuda_pool & pool,
                          ncols, k, env));
 }
 
-#elif defined(GGML_CUDA_USE_CUB) && !defined(GGML_CUDA_TOP_K_RADIX)  // CUB_TOP_K_AVAILABLE
+#elif defined(GGML_CUDA_USE_CUB) && !defined(GGML_CUDA_USE_TOP_K_RADIX)  // CUB_TOP_K_AVAILABLE
 
 static int next_power_of_2(int x) {
     int n = 1;
@@ -54,7 +55,7 @@ static int next_power_of_2(int x) {
 
 #endif                            // CUB_TOP_K_AVAILABLE
 
-#if defined(GGML_CUDA_TOP_K_RADIX) || (!defined(GGML_CUDA_USE_CUB) && defined(GGML_USE_HIP))
+#if defined(GGML_CUDA_USE_TOP_K_RADIX)
 
 static __device__ __forceinline__ uint32_t top_k_float_to_ordered(float value) {
     const uint32_t bits = __float_as_uint(value);
@@ -238,7 +239,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     for (int i = 0; i < nrows; i++) {
         top_k_cub(pool, src0_d + i * ncols, dst_d + i * k, ncols, k, stream);
     }
-#elif defined(GGML_CUDA_TOP_K_RADIX)
+#elif defined(GGML_CUDA_USE_TOP_K_RADIX)
     // exact radix selection: ~nrows*blocks*256 ints of temp (MBs, not 100s of MBs)
     if (ncols > 1024) {
         top_k_radix_cuda(pool, src0_d, dst_d, (int) ncols, (int) nrows, (int) k, stream);
