@@ -249,7 +249,9 @@ ggml_backend_buffer_t ggml_backend_buffer_init(
         /* .context   = */ context,
         /* .size      = */ size,
         /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY,
-        /* .refcount  = */ new ggml_backend_buffer_refcount
+        /* .refcount  = */ new ggml_backend_buffer_refcount,
+        /* .view_buffer = */ nullptr,
+        /* .parent    = */ nullptr
     };
 
     return buffer;
@@ -284,12 +286,57 @@ void ggml_backend_buffer_free(ggml_backend_buffer_t buffer) {
     if (count != 1) {
         return;
     }
+    ggml_backend_buffer_t parent = buffer->parent;
 
     if (buffer->iface.free_buffer != NULL) {
         buffer->iface.free_buffer(buffer);
     }
     delete buffer->refcount;
     delete buffer;
+    ggml_backend_buffer_free(parent);
+}
+
+// Create a backend-defined sub-buffer and retain its parent storage.
+ggml_backend_buffer_t ggml_backend_buffer_view(ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    if (buffer == NULL || size == 0 || buffer->view_buffer == NULL) {
+        return NULL;
+    }
+
+    const size_t buffer_size = ggml_backend_buffer_get_size(buffer);
+    if (offset > buffer_size || size > buffer_size - offset) {
+        return NULL;
+    }
+
+    void * base = ggml_backend_buffer_get_base(buffer);
+    const uintptr_t address = (uintptr_t) base;
+    const size_t alignment = ggml_backend_buffer_get_alignment(buffer);
+    if (offset > UINTPTR_MAX - address || size > UINTPTR_MAX - address - offset ||
+            (address + offset) % alignment != 0) {
+        return NULL;
+    }
+
+    ggml_backend_buffer_t view = buffer->view_buffer(buffer, offset, size);
+    if (view == NULL) {
+        return NULL;
+    }
+
+    const bool valid =
+        view->parent == NULL &&
+        ggml_backend_buffer_get_type(view) == ggml_backend_buffer_get_type(buffer) &&
+        ggml_backend_buffer_get_size(view) == size &&
+        ggml_backend_buffer_get_base(view) == (char *) base + offset;
+    if (!valid) {
+        ggml_backend_buffer_free(view);
+        return NULL;
+    }
+
+    view->parent = ggml_backend_buffer_retain(buffer);
+    return view;
+}
+
+// Identify views whose reset and usage state are isolated from their parent.
+bool ggml_backend_buffer_is_view(ggml_backend_buffer_t buffer) {
+    return buffer != NULL && buffer->parent != NULL;
 }
 
 size_t ggml_backend_buffer_get_size(ggml_backend_buffer_t buffer) {
@@ -2567,6 +2614,16 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
     /* .reset           = */ NULL,
 };
 
+// Create a CPU view with independent buffer state over parent-owned bytes.
+static ggml_backend_buffer_t ggml_backend_cpu_buffer_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    void * data = (char *) ggml_backend_buffer_get_base(buffer) + offset;
+    ggml_backend_buffer_t view =
+        ggml_backend_buffer_init(buffer->buft, ggml_backend_cpu_buffer_from_ptr_i, data, size);
+    view->view_buffer = ggml_backend_cpu_buffer_view;
+    return view;
+}
+
 // CPU backend buffer type
 
 // this buffer type is defined here to make it available to all backends
@@ -2585,7 +2642,9 @@ static ggml_backend_buffer_t ggml_backend_cpu_buffer_type_alloc_buffer(ggml_back
         return NULL;
     }
 
-    return ggml_backend_buffer_init(buft, ggml_backend_cpu_buffer_i, data, size);
+    ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, ggml_backend_cpu_buffer_i, data, size);
+    buffer->view_buffer = ggml_backend_cpu_buffer_view;
+    return buffer;
 }
 
 static size_t ggml_backend_cpu_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
@@ -2646,5 +2705,7 @@ static ggml_backend_buffer_type_t ggml_backend_cpu_buffer_from_ptr_type(void) {
 
 ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) {
     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
-    return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
+    ggml_backend_buffer_t buffer = ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
+    buffer->view_buffer = ggml_backend_cpu_buffer_view;
+    return buffer;
 }

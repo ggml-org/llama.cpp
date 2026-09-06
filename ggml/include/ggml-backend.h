@@ -59,6 +59,10 @@ extern "C" {
     GGML_API ggml_backend_buffer_t           ggml_backend_buffer_retain        (ggml_backend_buffer_t buffer);
     // Release a retained reference and destroy the buffer after the last release.
     GGML_API void                           ggml_backend_buffer_free          (ggml_backend_buffer_t buffer);
+    // Create an independently classified buffer over a retained range of parent storage.
+    GGML_API ggml_backend_buffer_t           ggml_backend_buffer_view          (ggml_backend_buffer_t buffer, size_t offset, size_t size);
+    // Return true when the buffer retains parent storage.
+    GGML_API bool                            ggml_backend_buffer_is_view       (ggml_backend_buffer_t buffer);
     GGML_API void *                         ggml_backend_buffer_get_base      (ggml_backend_buffer_t buffer);
     GGML_API size_t                         ggml_backend_buffer_get_size      (ggml_backend_buffer_t buffer);
     GGML_API enum ggml_status               ggml_backend_buffer_init_tensor   (ggml_backend_buffer_t buffer, struct ggml_tensor * tensor);
