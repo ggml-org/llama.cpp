@@ -154,8 +154,58 @@ void ggml_cuda_op_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     }
 }
 
+template <typename T>
+static __global__ void abs_strided_kernel(const T * x, T * dst, const int64_t n,
+        const int64_t ne0, const int64_t ne1, const int64_t ne2,
+        const size_t s01, const size_t s02, const size_t s03,
+        const size_t s1, const size_t s2, const size_t s3) {
+    ggml_cuda_pdl_lc();
+    const int64_t i = int64_t(blockDim.x)*blockIdx.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+
+    const int64_t i0 = i % ne0;
+    const int64_t i1 = (i / ne0) % ne1;
+    const int64_t i2 = (i / (ne0*ne1)) % ne2;
+    const int64_t i3 = i / (ne0*ne1*ne2);
+
+    ggml_cuda_pdl_sync();
+    dst[i0 + i1*s1 + i2*s2 + i3*s3] = (T)op_abs((float)x[i0 + i1*s01 + i2*s02 + i3*s03]);
+}
+
+template <typename T>
+static void abs_strided_cuda(const ggml_tensor * src0, ggml_tensor * dst, cudaStream_t stream) {
+    const int64_t n = ggml_nelements(dst);
+    const int64_t num_blocks = (n + CUDA_NEG_BLOCK_SIZE - 1) / CUDA_NEG_BLOCK_SIZE;
+    const ggml_cuda_kernel_launch_params launch_params(num_blocks, CUDA_NEG_BLOCK_SIZE, 0, stream);
+    ggml_cuda_kernel_launch(abs_strided_kernel<T>, launch_params, (const T *)src0->data, (T *)dst->data, n,
+        src0->ne[0], src0->ne[1], src0->ne[2],
+        src0->nb[1]/sizeof(T), src0->nb[2]/sizeof(T), src0->nb[3]/sizeof(T),
+         dst->nb[1]/sizeof(T),  dst->nb[2]/sizeof(T),  dst->nb[3]/sizeof(T));
+}
+
 void ggml_cuda_op_abs(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_unary<op_abs>(ctx, dst);
+    const ggml_tensor * src0 = dst->src[0];
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
+        ggml_cuda_op_unary<op_abs>(ctx, dst);
+        return;
+    }
+
+    GGML_ASSERT(ggml_is_contiguous_rows(src0) && ggml_is_contiguous_rows(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->type == dst->type);
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            abs_strided_cuda<float>(src0, dst, ctx.stream());
+            break;
+        case GGML_TYPE_F16:
+            abs_strided_cuda<half>(src0, dst, ctx.stream());
+            break;
+        default:
+            GGML_ABORT("unsupported type");
+    }
 }
 
 void ggml_cuda_op_sgn(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
