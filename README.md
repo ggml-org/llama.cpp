@@ -1,9 +1,14 @@
-
-## Halo Box
+# halo-box/llama.cpp
 
 <img src="halo-box.png" alt="Halo Box" width="260">
 
-Community fork of llama.cpp.
+<b>llama.cpp, close to mainline, with more</b>
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+[upstream llama.cpp](https://github.com/ggml-org/llama.cpp) / [ggml](https://github.com/ggml-org/ggml) / [halo-box/strix-llama.cpp](https://github.com/halo-box/strix-llama.cpp)
+
+## Halo Box
 
 The goal is simple: more functionality, and the fastest llama.cpp around. And help the community with a single fast
 llama.cpp fork instead of many competing ones.
@@ -19,7 +24,65 @@ Use this repo if you want upstream behaviour plus extras. Use `strix-llama.cpp` 
 want every last token/s out of it. Everything here is merged into `strix-llama.cpp` regularly, so that repo is a
 superset of this one.
 
-Upstream behaviour is unchanged - this is a superset, not a rewrite. On top of it, this fork carries:
+## What this is
+
+A community fork of [`llama.cpp`](https://github.com/ggml-org/llama.cpp) that stays close to mainline. It tracks
+upstream `master`, merges it in regularly, and adds features and speedups on top without changing how upstream
+behaves. Upstream behaviour is unchanged - this is a superset, not a rewrite.
+
+It is also the staging fork for the pair: anything general enough for upstream is developed here, on `halo/*`
+branches, and submitted to `ggml-org/llama.cpp` from here under the upstream project's contribution and AI-usage
+rules. What stays here is either not yet ready to go up, or too niche for mainline. Work that only makes sense on
+AMD Strix Halo lives in [strix-llama.cpp](https://github.com/halo-box/strix-llama.cpp) instead.
+
+## Quick start
+
+Build from source. For example:
+
+**Vulkan** (works on any recent GPU; on AMD, RADV on Mesa is the easiest path)
+
+```sh
+cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j
+```
+
+**ROCm / HIP** (needs ROCm installed; set `GPU_TARGETS` to your GPU, `gfx1151` is Strix Halo)
+
+```sh
+HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
+    cmake -B build -DGGML_HIP=ON -DGPU_TARGETS=gfx1151 -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -j
+```
+
+Then:
+
+```sh
+# chat, pulling the model straight from Hugging Face
+./build/bin/llama-cli -hf ggml-org/Qwen3.5-0.8B-GGUF
+
+# OpenAI-compatible API server + web UI on http://localhost:8080
+./build/bin/llama-server -hf ggml-org/Qwen3.5-0.8B-GGUF
+```
+
+Full build documentation, including Windows and Docker, is in [docs/build.md](docs/build.md).
+
+## Running on Strix Halo
+
+**Give the iGPU enough memory.** The APU's memory is shared, and the GPU can only use what the firmware and kernel let
+it map. Two things control this: the UMA / dedicated-VRAM split in your BIOS, and the `amdgpu` GTT limit on Linux
+(`amdgpu.gttsize`, in MB, and `ttm.pages_limit`, in 4 KB pages, as kernel command-line parameters). Which of those you
+need depends on your kernel version - newer kernels size GTT more generously on their own. If a model that clearly
+fits in RAM fails to allocate, this is almost always why.
+
+**Measure things.** `GGML_VK_PERF_LOGGER=1` (any value) gives per-op timings on the Vulkan backend. `llama-bench`
+and `llama-perplexity` are the tools for before/after numbers, and performance PRs here are expected to carry them.
+
+Strix Halo specific notes and tuning (ROCm workarounds, Vulkan mat-vec chunking) are in the
+[strix-llama.cpp README](https://github.com/halo-box/strix-llama.cpp#running-on-strix-halo).
+
+## What differs from upstream
+
+Everything else is upstream `llama.cpp`. The additions currently carried here:
 
 | Change | Flag / switch | What it does |
 | --- | --- | --- |
@@ -31,81 +94,9 @@ Upstream behaviour is unchanged - this is a superset, not a rewrite. On top of i
 
 Run `--help`, or see [tools/server/README.md](tools/server/README.md), for the full options.
 
-Work lands on `halo/*` branches, and upstream is merged in regularly. Anything generally useful is sent upstream;
-what stays here is either not yet ready to go up, or too niche for mainline.
-
-The rest of this file is the unmodified upstream README.
-
----
-
-# llama.cpp
-
-![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
-
-<div align="center">
-
-<b>LLM inference in C/C++</b>
-
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp?filter=v*&color=brightgreen)](https://github.com/ggml-org/llama.cpp/releases?q=tag:v0)
-[![Nightly](https://img.shields.io/github/v/release/ggml-org/llama.cpp?label=nightly&filter=b*&color=orange)](https://github.com/ggml-org/llama.cpp/releases?q=b)
-[![Server](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/server.yml?label=Server)](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml)
-[![Docker](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/docker.yml?label=Docker)](https://github.com/ggml-org/llama.cpp/actions/workflows/docker.yml)
-[![Winget](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/winget.yml?label=Winget)](https://github.com/ggml-org/llama.cpp/actions/workflows/winget.yml)
-
-[ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md) / [maintainer PRs](https://github.com/ggml-org/llama.cpp/issues?q=is%3Apr%20is%3Aopen%20draft%3AFalse%20(author%3Argerganov%20OR%20author%3AKitaitiMakoto%20OR%20author%3Adanbev%20OR%20author%3Aaldehir%20OR%20author%3Amax-krasnyansky%20OR%20author%3ACISC%20OR%20author%3Aggerganov%20OR%20author%3Aam17an%20OR%20author%3Ajhen0409%20OR%20author%3Abartowski1182%20OR%20author%3Anikwen%20OR%20author%3Ahipudding%20OR%20author%3Aravi9%20OR%20author%3AServeurpersoCom%20OR%20author%3Apwilkin%20OR%20author%3Areeselevine%20OR%20author%3Angxson%20OR%20author%3Ajeffbolznv%20OR%20author%3Amarty1885%20OR%20author%3A0cc4m%20OR%20author%3ATitaniumtown%20OR%20author%3Aangt%20OR%20author%3AIMbackK%20OR%20author%3Aarthw%20OR%20author%3AJohannesGaessler%20OR%20author%3AORippler%20OR%20author%3Aruixiang63%20OR%20author%3Axctan%20OR%20author%3Aallozaur%20OR%20author%3Ayomaytk%20OR%20author%3Aaendk%20OR%20author%3Awine99%20OR%20author%3Agaugarg-nv%20OR%20author%3Ataronaeo%20OR%20author%3Aforforever73%20OR%20author%3Alhez%20OR%20author%3Anetrunnereve%20OR%20author%3Afairydreaming)%20sort%3Aupdated-desc) / [dev stats](https://github.com/ggml-org/llama.cpp-dev) / [lib llama API](https://github.com/ggml-org/llama.cpp/issues/9289) / [llama-server REST API](https://github.com/ggml-org/llama.cpp/issues/9291)
-
-</div>
-
-## Quick start
-
-A few options to get `llama.cpp` installed on your machine:
-
-- Visit https://llama.app and follow the instructions
-- Run with Docker - see our [Docker documentation](docs/docker.md)
-- Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
-- Build from source by cloning this repository - check out [our build guide](docs/build.md)
-
-Once installed:
-
-```sh
-# Download and run a model directly from Hugging Face
-llama cli -hf ggml-org/Qwen3.5-0.8B-GGUF
-
-# Launch OpenAI-compatible API server
-llama serve -hf ggml-org/Qwen3.5-0.8B-GGUF
-```
-
-<table align="center">
-    <tr>
-        <td align="center" width=50%>
-            <img width="1310" height="888" alt="VLM session with `llama cli`" src="https://github.com/user-attachments/assets/88726b48-1713-48aa-a525-95a02e78afc4" />
-            <i>VLM session with <b>llama cli</b></i>
-        </td>
-        <td align="center">
-            <img width="1392" height="958" alt="Built-in web UI against `llama serve` running Qwen 3.6" src="https://github.com/user-attachments/assets/b402f972-2e32-4def-8771-8d849f08cf2e" />
-            <i>Built-in web UI against <b>llama serve</b></i>
-        </td>
-    </tr>
-<table>
-
-## Description
-
-The main goal of `llama.cpp` is to enable LLM (and VLM) inference with minimal setup and state-of-the-art performance on
-a wide range of hardware - locally and in the cloud.
-
-- Plain C/C++ implementation without any dependencies
-- Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
-- AVX, AVX2, AVX512 and AMX support for x86 architectures
-- RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
-- 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
-- Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
-- Vulkan and SYCL backend support
-- CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
-
-The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-org/ggml) library.
-
 ## Supported backends
+
+All of upstream's, unmodified:
 
 | Backend | Target devices |
 | --- | --- |
@@ -127,6 +118,8 @@ The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-or
 | [WebGPU](docs/build.md#webgpu) | All |
 | [ZenDNN](docs/build.md#zendnn) | AMD CPU |
 
+Most of the work in this fork is measured on AMD Strix Halo (Vulkan and HIP), and CI runs the standard upstream matrix.
+
 ## Documentation
 
 #### Tools
@@ -140,25 +133,29 @@ The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-or
 
 - [How to build](docs/build.md)
 - [Running on Docker](docs/docker.md)
-- [Build on Android](docs/android.md)
 - [Multi-GPU usage](docs/multi-gpu.md)
 - [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
 - [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
-- [XCFramework](docs/xcframework.md)
 - [Completions](docs/completions.md)
 - [Models](docs/models.md)
-- [Release process](docs/release.md)
 
 ## Contributing
 
-- Contributors can open PRs
-- Collaborators will be invited based on contributions
-- Maintainers can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
-- Any help with managing issues, PRs and projects is very appreciated!
-- Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
+This is a small community project. A benchmark, a bug report, or a patch is exactly what it is for.
+
+- This repo follows the upstream contribution and AI-usage rules, because what lands here is meant to go upstream.
+  See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md); in short, understand every line you submit.
+- Performance claims need numbers against a baseline you built and ran yourself, on the same machine in the same
+  session.
+- If your change is Strix Halo specific, send it to [strix-llama.cpp](https://github.com/halo-box/strix-llama.cpp)
+  instead; that repo has its own, more permissive rules.
+- Work lands on `halo/*` branches, and upstream is merged in regularly.
 
 ## Acknowledgements
 
+This project is a fork and owes everything to the people who built what it forks:
+
+- [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) and [ggml](https://github.com/ggml-org/ggml) - Georgi Gerganov and the llama.cpp contributors - MIT license
 - [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
 - [nothings/stb](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
 - [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
