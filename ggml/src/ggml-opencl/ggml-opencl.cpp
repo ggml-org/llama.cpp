@@ -8304,8 +8304,10 @@ inline bool enable_adreno_trans_weight_q5_K(const ggml_backend_opencl_context *b
     const size_t elem_num = ggml_nelements(tensor);
     const size_t q_img_width = elem_num / 8;
     const size_t qh_img_width = elem_num / 16;
+    const bool shape_ok = tensor->ne[0] % 32 == 0 && tensor->ne[1] % 4 == 0 &&
+                          tensor->ne[2] == 1 && tensor->ne[3] == 1;
 
-    return q_img_width <= backend_ctx->image_max_buffer_size &&
+    return shape_ok && q_img_width <= backend_ctx->image_max_buffer_size &&
            qh_img_width <= backend_ctx->image_max_buffer_size;
 }
 
@@ -8328,6 +8330,10 @@ static inline bool flat_large_m_enabled() {
 }
 
 static inline bool use_flat_gemv_for_large_m_q4_K(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    if (tensor->ne[1] % 4 != 0 && tensor->ne[2] == 1 && tensor->ne[3] == 1) {
+        return true;
+    }
+
     if (!flat_large_m_enabled()) {
         return false;
     }
