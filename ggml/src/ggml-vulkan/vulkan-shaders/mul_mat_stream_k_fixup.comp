@@ -1,0 +1,86 @@
+#version 450
+
+#include "utils.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer S4 {vec4 data_s4[];};
+layout (binding = 1) buffer D4 {vec4 data_d4[];};
+
+layout (push_constant) uniform parameter {
+    uint M;
+    uint N;
+    uint BM;
+    uint BN;
+    uint k_units_per_tile;
+    uint blocks_m;
+    uint blocks_n;
+    uint work_units_per_group;
+    uint groups_with_extra_unit;
+    uint k_units_mp;
+    uint blocks_m_mp;
+    uint blocks_n_mp;
+    uint work_units_mp;
+    uint large_group_work_mp;
+    uint div_Ls0;
+    uint div_Ls1;
+} p;
+
+const uint RESOLVE_ROWS = 32;
+
+// A normal matmul workgroup accumulates one BM x BN output tile over the full K range.
+// Stream-K divides that accumulation into work units. Each work unit covers 256 consecutive K values and produces a BM x BN partial sum.
+// Work units are ordered [K unit, M tile, N tile, batch] and divided into one contiguous range per main workgroup.
+// A main workgroup writes its partial sum to D when it reaches the end of an output tile, or to scratch when its range stops within a tile.
+// Scratch has shape [BM, BN, stream_k_groups] and stores float partial sums.
+// Element [r, c, g] is workgroup g's contribution to local output element [r, c] in the last output tile of its range.
+// The output tile for each scratch slot is derived from the workgroup's range and is not stored in scratch.
+// Only the last output tile in a workgroup's range can stop early, so one scratch slot is enough.
+// Fixup workgroup (x, y) handles main workgroup x and rows 32*y through 32*y+31.
+// If main workgroup x starts within a tile and completes it, fixup adds the earlier groups' partial sums from scratch to D.
+
+// Find the main workgroup whose range contains work.
+// With q = work_units_per_group and r = groups_with_extra_unit, the first r workgroups get q + 1 units and all others get q.
+// group(work) = work / (q + 1) when work < r*(q + 1), otherwise r + (work - r*(q + 1))/q.
+uint group_for_work(uint work) {
+    const uint large_group_work = p.work_units_per_group + 1;
+    const uint large_work = large_group_work * p.groups_with_extra_unit;
+    if (work < large_work) {
+        return fastdiv(work, p.large_group_work_mp, fastdiv_L(p.div_Ls1, 1));
+    }
+    return p.groups_with_extra_unit + fastdiv(work - large_work, p.work_units_mp, fastdiv_L(p.div_Ls1, 0));
+}
+
+void main() {
+    const uint group_idx = gl_WorkGroupID.x;
+    const uint work_unit = group_idx * p.work_units_per_group + min(group_idx, p.groups_with_extra_unit);
+    const uint work_unit_end = work_unit + p.work_units_per_group + uint(group_idx < p.groups_with_extra_unit);
+
+    const uint tile_idx = fastdiv(work_unit, p.k_units_mp, fastdiv_L(p.div_Ls0, 0));
+    const uint tile_work = tile_idx * p.k_units_per_tile;
+    // Only a range that starts within a tile and completes it needs fixup.
+    if (work_unit == tile_work || work_unit_end < tile_work + p.k_units_per_tile) {
+        return;
+    }
+
+    const uint first_group = group_for_work(tile_work);
+    const uint outer_tile = fastdiv(tile_idx, p.blocks_m_mp, fastdiv_L(p.div_Ls0, 1));
+    const uint ir = tile_idx - outer_tile * p.blocks_m;
+    const uint batch_idx = fastdiv(outer_tile, p.blocks_n_mp, fastdiv_L(p.div_Ls0, 2));
+    const uint ic = outer_tile - batch_idx * p.blocks_n;
+    const uint row_base = gl_WorkGroupID.y * RESOLVE_ROWS;
+
+    for (uint stripe_elem = gl_LocalInvocationIndex * 4; stripe_elem < RESOLVE_ROWS * p.BN; stripe_elem += gl_WorkGroupSize.x * 4) {
+        const uint r = row_base + (stripe_elem & (RESOLVE_ROWS - 1));
+        const uint c = stripe_elem / RESOLVE_ROWS;
+        const uint elem_idx = c * p.BM + r;
+        const uint dst_idx = batch_idx * p.M * p.N + (ic * p.BN + c) * p.M + ir * p.BM + r;
+
+        // D contains the completing segment. Add the earlier segments from scratch.
+        vec4 result = data_d4[dst_idx / 4];
+        for (uint previous_group = first_group; previous_group < group_idx; ++previous_group) {
+            result += data_s4[(previous_group * p.BM * p.BN + elem_idx) / 4];
+        }
+        data_d4[dst_idx / 4] = result;
+    }
+}
