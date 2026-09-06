@@ -18,6 +18,30 @@ static bool ggml_is_power_of_2(int n) {
     return (n & (n - 1)) == 0;
 }
 
+// n_gpu_layers-based device assignment does not know about per-device tensor-size limits (e.g. Vulkan's
+// maxStorageBufferRange), so a KV-cache tensor that is too large for `dev` needs a fallback check here -
+// otherwise the scheduler later aborts the whole process on a pre-allocated tensor it cannot place.
+static bool llama_kv_cache_buft_supported(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft, ggml_type type, uint32_t ne0, uint32_t ne1, uint32_t ne2) {
+    ggml_init_params params = {
+        /*.mem_size   =*/ ggml_tensor_overhead(),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+
+    ggml_context_ptr ctx { ggml_init(params) };
+    if (!ctx) {
+        return false;
+    }
+
+    ggml_tensor * t = ggml_new_tensor_3d(ctx.get(), type, ne0, ne1, ne2);
+
+    t->buffer = ggml_backend_buft_alloc_buffer(buft, 0);
+    const bool supported = ggml_backend_dev_supports_op(dev, t);
+    ggml_backend_buffer_free(t->buffer);
+
+    return supported;
+}
+
 // orthonormal Walsh-Hadamard rotation matrix
 // note: res^2 == I
 static void ggml_gen_hadamard(ggml_tensor * tensor) {
@@ -209,15 +233,27 @@ llama_kv_cache::llama_kv_cache(
         const uint32_t n_embd_k_gqa =            hparams.n_embd_k_gqa(il);
         const uint32_t n_embd_v_gqa = !v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max();
 
+        const bool has_k = true;
+        const bool has_v = !is_mla;
+
         const char * dev_name = "CPU";
 
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
         if (offload) {
             auto * dev = model.dev_layer(il);
-            buft = ggml_backend_dev_buffer_type(dev);
+            auto * dev_buft = ggml_backend_dev_buffer_type(dev);
 
-            dev_name = ggml_backend_dev_name(dev);
+            const bool fits = (!has_k || llama_kv_cache_buft_supported(dev, dev_buft, type_k, n_embd_k_gqa, kv_size, n_stream)) &&
+                               (!has_v || llama_kv_cache_buft_supported(dev, dev_buft, type_v, n_embd_v_gqa, kv_size, n_stream));
+
+            if (fits) {
+                buft     = dev_buft;
+                dev_name = ggml_backend_dev_name(dev);
+            } else {
+                LLAMA_LOG_WARN("%s: layer %3d: KV cache tensor too large for %s, falling back to CPU\n",
+                        __func__, il, ggml_backend_dev_name(dev));
+            }
         }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
@@ -226,9 +262,6 @@ llama_kv_cache::llama_kv_cache(
         if (!ctx) {
             throw std::runtime_error("failed to create ggml context for kv cache");
         }
-
-        const bool has_k = true;
-        const bool has_v = !is_mla;
 
         ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
         ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;

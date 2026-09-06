@@ -17,6 +17,30 @@
 // llama_memory_recurrent
 //
 
+// n_gpu_layers-based device assignment does not know about per-device tensor-size limits (e.g. Vulkan's
+// maxStorageBufferRange), so a recurrent-state tensor that is too large for `dev` needs a fallback check
+// here - otherwise the scheduler later aborts the whole process on a pre-allocated tensor it cannot place.
+static bool llama_memory_recurrent_buft_supported(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft, ggml_type type, uint32_t ne0, uint32_t ne1) {
+    ggml_init_params params = {
+        /*.mem_size   =*/ ggml_tensor_overhead(),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+
+    ggml_context_ptr ctx { ggml_init(params) };
+    if (!ctx) {
+        return false;
+    }
+
+    ggml_tensor * t = ggml_new_tensor_2d(ctx.get(), type, ne0, ne1);
+
+    t->buffer = ggml_backend_buft_alloc_buffer(buft, 0);
+    const bool supported = ggml_backend_dev_supports_op(dev, t);
+    ggml_backend_buffer_free(t->buffer);
+
+    return supported;
+}
+
 llama_memory_recurrent::llama_memory_recurrent(
         const llama_model & model,
                 ggml_type   type_r,
@@ -80,15 +104,26 @@ llama_memory_recurrent::llama_memory_recurrent(
             continue;
         }
 
+        const uint32_t n_rows = mem_size * (1 + n_rs_seq);
+
         const char * dev_name = "CPU";
 
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
         if (offload) {
             auto * dev = model.dev_layer(i);
-            buft = ggml_backend_dev_buffer_type(dev);
+            auto * dev_buft = ggml_backend_dev_buffer_type(dev);
 
-            dev_name = ggml_backend_dev_name(dev);
+            const bool fits = llama_memory_recurrent_buft_supported(dev, dev_buft, type_r, hparams.n_embd_r(), n_rows) &&
+                               llama_memory_recurrent_buft_supported(dev, dev_buft, type_s, hparams.n_embd_s(), n_rows);
+
+            if (fits) {
+                buft     = dev_buft;
+                dev_name = ggml_backend_dev_name(dev);
+            } else {
+                LLAMA_LOG_WARN("%s: layer %3d: recurrent-state tensor too large for %s, falling back to CPU\n",
+                        __func__, i, ggml_backend_dev_name(dev));
+            }
         }
 
         LLAMA_LOG_DEBUG("%s, layer %3d: dev = %s\n", __func__, i, dev_name);
@@ -98,7 +133,6 @@ llama_memory_recurrent::llama_memory_recurrent(
             throw std::runtime_error("failed to create ggml context for rs cache");
         }
 
-        const uint32_t n_rows = mem_size * (1 + n_rs_seq);
         ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows);
         ggml_tensor * s = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), n_rows);
         ggml_format_name(r, "cache_r_l%d", i);
