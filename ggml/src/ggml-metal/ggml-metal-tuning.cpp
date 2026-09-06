@@ -3409,7 +3409,7 @@ constexpr fa_vec_entry_t fa_vec_tuned_table[] = {
     { { GGML_METAL_DEVICE_M5_MAX, GGML_TYPE_F16, 320, 256, -1, 1 }, { 2, 2 } },
     { { GGML_METAL_DEVICE_M5_MAX, GGML_TYPE_F16, 320, 256, 1, 2 }, { 1, 2 } },
     { { GGML_METAL_DEVICE_M5_MAX, GGML_TYPE_F16, 320, 256, 1, 4 }, { 1, 2 } },
-    { { GGML_METAL_DEVICE_M5_MAX, GGML_TYPE_F16, 512, 512, 2, 0 }, { 1, 4 } },
+    { { GGML_METAL_DEVICE_M5_MAX, GGML_TYPE_F16, 512, 512, -1, 0 }, { 1, 2 } },
     { { GGML_METAL_DEVICE_M5_MAX, GGML_TYPE_F16, 512, 512, 1, 1 }, { 2, 2 } },
     { { GGML_METAL_DEVICE_M5_MAX, GGML_TYPE_F16, 512, 512, 2, 3 }, { 4, 2 } },
     { { GGML_METAL_DEVICE_M5_MAX, GGML_TYPE_F16, 512, 512, 3, 3 }, { 2, 2 } },
