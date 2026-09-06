@@ -8284,12 +8284,13 @@ struct test_fa_batch : public test_case {
 // FA vs naive hardcoded reference, backend-agnostic, F32 no-GQA masked nb=2 (simplest FA vs naive)
 struct test_fa_naive : public test_case {
     const int64_t nb;
-    std::string vars() override { return "nogqa_nb" + std::to_string(nb); }
+    const int64_t kv;
+    std::string vars() override { return "nogqa_nb" + std::to_string(nb) + "_kv" + std::to_string(kv); }
     std::string op_desc(ggml_tensor * t) override { GGML_UNUSED(t); return "FA_NAIVE"; }
     ggml_tensor * build_graph(ggml_context * ctx) override { GGML_UNUSED(ctx); return nullptr; }
     test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
         GGML_UNUSED(backend2); GGML_UNUSED(op_filter);
-        const int64_t hsk=8, hsv=8, nh=1, kv=4;
+        const int64_t hsk=8, hsv=8, nh=1; const int64_t kv = this->kv;
         std::vector<float> qhost(hsk*nb*nh), khost(hsk*kv*nh), vhost(hsv*kv*nh), mhost(kv*nb);
         for (size_t i=0;i<qhost.size();++i) qhost[i]=0.1f*((int)i%7)-0.3f;
         for (size_t i=0;i<khost.size();++i) khost[i]=0.1f*((int)i%5)-0.2f;
@@ -8338,7 +8339,7 @@ struct test_fa_naive : public test_case {
         if(output_printer)output_printer->print_operation(info);
         return mx<=1e-4?test_status_t::OK:test_status_t::FAIL;
     }
-    test_fa_naive(int64_t n=2) : nb(n) {}
+    test_fa_naive(int64_t n=2, int64_t kv=4) : nb(n), kv(kv) {}
 };
 
 
@@ -10383,8 +10384,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int64_t nh : {4, 8}) {
         test_cases.emplace_back(new test_p021_batch(256, 128, nh));
     }
-    test_cases.emplace_back(new test_fa_naive(2));
-    test_cases.emplace_back(new test_fa_naive(8));
+    test_cases.emplace_back(new test_fa_naive(2, 4));
+    test_cases.emplace_back(new test_fa_naive(8, 4));
+    test_cases.emplace_back(new test_fa_naive(2, 512));
     // batch invariance for FA GQA masked: N=1 vs N=2 GQA 4 (Bug 1 control, small shapes pass)
     test_cases.emplace_back(new test_fa_batch(64, 64, 2, 128));
     test_cases.emplace_back(new test_fa_batch(128, 128, 2, 256));
