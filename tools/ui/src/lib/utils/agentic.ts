@@ -109,6 +109,89 @@ function deriveSingleTurnSections(
 	return sections;
 }
 
+interface TurnSectionsCacheEntry {
+	content: string | undefined;
+	extra: DatabaseMessageExtra[] | undefined;
+	reasoningContent: string | undefined;
+	toolCalls: string | undefined;
+	toolMessageContents: (string | undefined)[];
+	toolMessageExtras: (DatabaseMessageExtra[] | undefined)[];
+	toolMessages: DatabaseMessage[];
+	sections: AgenticSection[];
+}
+
+const turnSectionsCache = new WeakMap<DatabaseMessage, TurnSectionsCacheEntry>();
+
+function isTurnCacheValid(
+	entry: TurnSectionsCacheEntry,
+	message: DatabaseMessage,
+	toolMessages: DatabaseMessage[]
+): boolean {
+	if (
+		entry.content !== message.content ||
+		entry.reasoningContent !== message.reasoningContent ||
+		entry.toolCalls !== message.toolCalls ||
+		entry.extra !== message.extra
+	) {
+		return false;
+	}
+
+	if (entry.toolMessages.length !== toolMessages.length) return false;
+
+	for (let i = 0; i < toolMessages.length; i++) {
+		if (entry.toolMessages[i] !== toolMessages[i]) return false;
+
+		if (entry.toolMessageContents[i] !== toolMessages[i].content) return false;
+
+		if (entry.toolMessageExtras[i] !== toolMessages[i].extra) return false;
+	}
+
+	return true;
+}
+
+/**
+ * deriveSingleTurnSections with structural reuse for completed turns.
+ *
+ * deriveAgenticSections runs in a $derived invalidated per streamed chunk, but
+ * only the last turn actually changes. Messages mutate in place and are never
+ * replaced, so a WeakMap keyed by the turn's assistant message plus reference
+ * checks on every field deriveSingleTurnSections reads detects any change. A
+ * cache hit also returns the same section objects, keeping downstream props
+ * stable so tool blocks skip their per-chunk re-derive. The streaming turn
+ * recomputes uncached on every chunk.
+ */
+function deriveTurnSections(
+	message: DatabaseMessage,
+	toolMessages: DatabaseMessage[],
+	streamingToolCalls: ApiChatCompletionToolCall[],
+	isStreaming: boolean
+): AgenticSection[] {
+	if (isStreaming || streamingToolCalls.length > 0) {
+		return deriveSingleTurnSections(message, toolMessages, streamingToolCalls, isStreaming);
+	}
+
+	const cached = turnSectionsCache.get(message);
+
+	if (cached && isTurnCacheValid(cached, message, toolMessages)) {
+		return cached.sections;
+	}
+
+	const sections = deriveSingleTurnSections(message, toolMessages, [], false);
+
+	turnSectionsCache.set(message, {
+		content: message.content,
+		extra: message.extra,
+		reasoningContent: message.reasoningContent,
+		sections,
+		toolCalls: message.toolCalls,
+		toolMessageContents: toolMessages.map((tm) => tm.content),
+		toolMessageExtras: toolMessages.map((tm) => tm.extra),
+		toolMessages
+	});
+
+	return sections;
+}
+
 /**
  * Derives display sections from structured message data.
  *
@@ -132,13 +215,13 @@ export function deriveAgenticSections(
 	const hasAssistantContinuations = toolMessages.some((m) => m.role === MessageRole.ASSISTANT);
 
 	if (!hasAssistantContinuations) {
-		return deriveSingleTurnSections(message, toolMessages, streamingToolCalls, isStreaming);
+		return deriveTurnSections(message, toolMessages, streamingToolCalls, isStreaming);
 	}
 
 	const sections: AgenticSection[] = [];
 	const firstTurnToolMsgs = collectToolMessages(toolMessages, 0);
 
-	sections.push(...deriveSingleTurnSections(message, firstTurnToolMsgs));
+	sections.push(...deriveTurnSections(message, firstTurnToolMsgs, [], false));
 
 	let i = firstTurnToolMsgs.length;
 
@@ -150,7 +233,7 @@ export function deriveAgenticSections(
 			const isLastTurn = i + 1 + turnToolMsgs.length >= toolMessages.length;
 
 			sections.push(
-				...deriveSingleTurnSections(
+				...deriveTurnSections(
 					msg,
 					turnToolMsgs,
 					isLastTurn ? streamingToolCalls : [],

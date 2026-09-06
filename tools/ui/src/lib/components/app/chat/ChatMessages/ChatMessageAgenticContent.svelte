@@ -46,31 +46,24 @@
 		isLastAssistantMessage ? !!agenticStore.getLastError(message.convId) : false
 	);
 
-	let permissionDismissed = $state(false);
-
 	const pendingPermission = $derived(
 		isStreaming && isLastAssistantMessage
 			? agenticStore.getPendingPermissionRequest(message.convId)
 			: null
 	);
 
-	let prevPendingRef: typeof pendingPermission = null;
-	$effect(() => {
-		if (pendingPermission !== prevPendingRef) {
-			prevPendingRef = pendingPermission;
+	// dismissal applies to the request object, so the next request ( new
+	// identity ) shows the card again without any reset bookkeeping
+	let dismissedPermission: typeof pendingPermission = $state(null);
 
-			if (pendingPermission) {
-				permissionDismissed = false;
-			}
-		}
-	});
+	const visiblePermission = $derived(
+		pendingPermission && dismissedPermission !== pendingPermission ? pendingPermission : null
+	);
 
 	function handlePermission(decision: ToolPermissionDecision) {
-		permissionDismissed = true;
+		dismissedPermission = pendingPermission;
 		agenticStore.resolvePermission(message.convId, decision);
 	}
-
-	let continueDismissed = $state(false);
 
 	const pendingContinue = $derived(
 		isStreaming && isLastAssistantMessage
@@ -78,16 +71,18 @@
 			: false
 	);
 
-	let prevContinueRef = false;
-	$effect(() => {
-		if (pendingContinue !== prevContinueRef) {
-			prevContinueRef = pendingContinue;
+	let continueDismissed = $state(false);
 
-			if (pendingContinue) {
-				continueDismissed = false;
-			}
+	// the continue request is a plain boolean, so there is no identity to
+	// compare against; clear the dismissal whenever no request is pending so
+	// the next one starts from a clean state
+	$effect(() => {
+		if (!pendingContinue) {
+			continueDismissed = false;
 		}
 	});
+
+	const showContinue = $derived(Boolean(pendingContinue) && !continueDismissed);
 
 	function handleContinue(shouldContinue: boolean) {
 		continueDismissed = true;
@@ -238,15 +233,15 @@
 		{/each}
 	{/if}
 
-	{#if pendingPermission && !permissionDismissed}
+	{#if visiblePermission}
 		<ChatMessageActionCardPermissionRequest
 			onDecision={handlePermission}
-			serverLabel={pendingPermission.serverLabel}
-			toolName={pendingPermission.toolName}
+			serverLabel={visiblePermission.serverLabel}
+			toolName={visiblePermission.toolName}
 		/>
 	{/if}
 
-	{#if pendingContinue && !continueDismissed}
+	{#if showContinue}
 		<ChatMessageActionCardContinueRequest onDecision={handleContinue} />
 	{/if}
 </div>
