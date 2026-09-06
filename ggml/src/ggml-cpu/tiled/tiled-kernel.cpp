@@ -517,12 +517,12 @@ void tiled_interleave_src1_q8_K(const block_q8_K * rows, int64_t row_stride,
     // one masked 16-lane int32 gather + one 64B store per
     // (slab, k-group, 16-row) block; masked lanes (past nr1) gather zeros
     {
-        // row_off[r] = int32 index (in words) of rows[r].qs[0] (d is 4B, qs at +4);
-        // row_stride * TILED_Q8_K_WORDS stays in int32 for any realistic row count
+        // idx_row[r] = int32 index (in words) of rows[r].qs[0] (d is 4B, qs at +4);
+        // row_stride * TILED_Q8_K_WORDS stays in int32 for any realistic row count.
         const int32_t row_stride_w = (int32_t) row_stride * TILED_Q8_K_WORDS;
-        int32_t row_off[TILED_MICRO];
-        for (int r = 0; r < TILED_MICRO; r++) row_off[r] = r * row_stride_w + 1;
-        const __m512i idx_row = _mm512_loadu_si512((const __m512i *) row_off);
+        const __m512i rvec = _mm512_set_epi32(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
+        const __m512i idx_row = _mm512_add_epi32(_mm512_mullo_epi32(rvec, _mm512_set1_epi32(row_stride_w)),
+                                                 _mm512_set1_epi32(1));
         const int32_t * base = (const int32_t *) rows;
         for (int64_t r0 = r_start; r0 < r_end; r0 += TILED_MICRO) {
             // masked lanes (past nr1) gather into the zero register, so the

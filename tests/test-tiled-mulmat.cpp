@@ -107,7 +107,7 @@ static void test_matmul(ggml_backend_t backend, int64_t M, int64_t N, int64_t K,
     struct ggml_tensor * dst   = ggml_mul_mat(ctx, src0, src1);
     ggml_build_forward_expand(gf, dst);
 
-    ggml_backend_alloc_ctx_tensors(ctx, backend);
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
 
     fill_tensor(src1, src1_ref, M, N, GGML_TYPE_F32);
     fill_tensor(src0, src0_ref, K, N, quant_type);
@@ -143,6 +143,7 @@ static void test_matmul(ggml_backend_t backend, int64_t M, int64_t N, int64_t K,
         ++n_failed;
     }
 
+    ggml_backend_buffer_free(buf);
     ggml_free(ctx);
     free(src1_ref); free(src0_ref); free(dst_out); free(dst_tiled);
 }
@@ -179,7 +180,7 @@ static void test_matmul_highdim(ggml_backend_t backend, int64_t M, int64_t N, in
     struct ggml_tensor * dst   = ggml_mul_mat(ctx, src0, src1);
     ggml_build_forward_expand(gf, dst);
 
-    ggml_backend_alloc_ctx_tensors(ctx, backend);
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
 
     // the batch dims fold into the row count (rows are contiguous, ne0 fastest)
     fill_tensor(src1, src1_ref, M * src1_2 * src1_3, N, GGML_TYPE_F32);
@@ -229,6 +230,7 @@ static void test_matmul_highdim(ggml_backend_t backend, int64_t M, int64_t N, in
         ++n_failed;
     }
 
+    ggml_backend_buffer_free(buf);
     ggml_free(ctx);
     free(src1_ref); free(src0_ref); free(dst_std); free(dst_tiled);
 }
@@ -277,7 +279,7 @@ static void test_mul_mat_id(ggml_backend_t backend, int64_t K, int64_t R, int64_
     struct ggml_tensor * dst = ggml_mul_mat_id(ctx, src0, src1, ids_t);
     ggml_build_forward_expand(gf, dst);
 
-    ggml_backend_alloc_ctx_tensors(ctx, backend);
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
 
     // deterministic balanced routing: each expert gets ~ k*batch/n_experts rows
     for (int64_t t = 0; t < batch; t++) {
@@ -323,6 +325,7 @@ static void test_mul_mat_id(ggml_backend_t backend, int64_t K, int64_t R, int64_
         ++n_failed;
     }
 
+    ggml_backend_buffer_free(buf);
     ggml_free(ctx);
     free(as_ref); free(b_ref); free(ids); free(dst_ref); free(dst_tiled);
 }
@@ -412,15 +415,16 @@ static bench_row bench_three_way(ggml_backend_t backend, int64_t M, int64_t N, i
     ggml_build_forward_expand(gf_repack, dst_repack);
 
     ggml_backend_buffer_type_t repack_buft = get_cpu_repack_buft();
+    ggml_backend_buffer_t buf_rep = NULL;
     if (repack_buft && N % 8 == 0 && K % 8 == 0) {
-        ggml_backend_buffer_t buf_rep = ggml_backend_buft_alloc_buffer(repack_buft, ggml_nbytes(src0_rep));
+        buf_rep = ggml_backend_buft_alloc_buffer(repack_buft, ggml_nbytes(src0_rep));
         src0_rep->buffer = buf_rep;
         src0_rep->data   = ggml_backend_buffer_get_base(buf_rep);
         ggml_backend_buffer_init_tensor(buf_rep, src0_rep);
         row.have_repack = (src0_rep->extra != NULL);
     }
 
-    ggml_backend_alloc_ctx_tensors(ctx, backend);
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
 
     srand(0xBEEF);
     float * src1_data = gen_rand_f32(M * N);
@@ -467,6 +471,8 @@ static bench_row bench_three_way(ggml_backend_t backend, int64_t M, int64_t N, i
     compare_f32(out_std, out_tiled, M * K, &row.max_err_tiled, &row.rmse_tiled);
     free(out_std); free(out_tiled); free(out_repack);
 
+    ggml_backend_buffer_free(buf_rep);
+    ggml_backend_buffer_free(buf);
     ggml_free(ctx);
     return row;
 }
@@ -541,15 +547,16 @@ static bench_row_mmid bench_mul_mat_id(ggml_backend_t backend, int64_t K, int64_
     ggml_build_forward_expand(gf_repack, dst_repack);
 
     ggml_backend_buffer_type_t repack_buft = get_cpu_repack_buft();
+    ggml_backend_buffer_t buf_rep = NULL;
     if (repack_buft && R % 8 == 0) {
-        ggml_backend_buffer_t buf_rep = ggml_backend_buft_alloc_buffer(repack_buft, ggml_nbytes(src0_rep));
+        buf_rep = ggml_backend_buft_alloc_buffer(repack_buft, ggml_nbytes(src0_rep));
         src0_rep->buffer = buf_rep;
         src0_rep->data   = ggml_backend_buffer_get_base(buf_rep);
         ggml_backend_buffer_init_tensor(buf_rep, src0_rep);
         row.have_repack = (src0_rep->extra != NULL);
     }
 
-    ggml_backend_alloc_ctx_tensors(ctx, backend);
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
 
     // deterministic balanced routing: each expert gets ~ k*batch/n_experts rows
     int32_t * ids = (int32_t *) malloc(k * batch * sizeof(int32_t));
@@ -601,6 +608,8 @@ static bench_row_mmid bench_mul_mat_id(ggml_backend_t backend, int64_t K, int64_
     compare_f32(out_std, out_tiled, R * k * batch, &row.max_err_tiled, &row.rmse_tiled);
     free(out_std); free(out_tiled); free(out_repack); free(ids);
 
+    ggml_backend_buffer_free(buf_rep);
+    ggml_backend_buffer_free(buf);
     ggml_free(ctx);
     return row;
 }
