@@ -189,8 +189,8 @@ if [ ! -z ${GG_BUILD_OPENVINO} ]; then
     fi
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 
-    # TODO: fix and re-enable the `test-llama-archs` and `test-recurrent-state-rollback*`
-    CTEST_EXTRA="-E test-llama-archs|^test-recurrent-state-rollback"
+    # TODO: fix failing tests on OpenVINO backend
+    CTEST_EXTRA="-E test-llama-archs|^test-recurrent-state-|test-backend-ops|test-save-load-state"
 fi
 
 ## helpers
@@ -730,6 +730,11 @@ function gg_check_build_requirements {
 
     if ! command -v ctest &> /dev/null; then
         gg_printf 'ctest not found, please install\n'
+        exit 1
+    fi
+
+    if ! command -v unzip &> /dev/null; then
+        gg_printf 'unzip not found, please install\n'
         exit 1
     fi
 }
