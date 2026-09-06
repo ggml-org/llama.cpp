@@ -248,9 +248,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         FIXTURES_REQUIRED generate-models
     )
 
-    # Same coverage, but with the recurrent cache pre-filled with a non-zero byte. A rollback
-    # snapshot group that the graph never stores then reads back as garbage rather than as
-    # zeros, which on these dummy models is otherwise within the comparison tolerance.
+    # nonzero cache fill exposes unwritten rollback snapshots.
     llama_test(
         test-recurrent-state-rollback
         NAME test-recurrent-state-rollback-kimi-k3-fill

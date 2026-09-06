@@ -115,10 +115,7 @@ llama_memory_recurrent::llama_memory_recurrent(
         }
     }
 
-    // the rollback snapshot groups are only ever written by the model graph, so an architecture
-    // that fails to store them leaves the initial fill behind. With a zero fill that is
-    // indistinguishable from a correctly stored near-zero state, which is what the dummy models
-    // used by the tests produce - filling with a non-zero byte instead makes the gap observable.
+    // nonzero initialization exposes missing snapshot writes in dummy-model tests.
     const char * LLAMA_RS_DEBUG_FILL = getenv("LLAMA_RS_DEBUG_FILL");
     const uint8_t rs_debug_fill = LLAMA_RS_DEBUG_FILL ? (uint8_t) strtoul(LLAMA_RS_DEBUG_FILL, nullptr, 0) : 0;
     if (rs_debug_fill != 0) {

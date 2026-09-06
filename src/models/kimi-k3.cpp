@@ -374,11 +374,8 @@ static ggml_tensor * kimi_k3_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
     ggml_tensor * x_3d   = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
     ggml_tensor * conv_x = ggml_concat(ctx0, conv_state_x, ggml_transpose(ctx0, x_3d), 0);
 
-    // store the conv window into the recurrent cache. With bounded rollback (cparams.n_rs_seq > 0,
-    // K_rs = n_rs_seq + 1) the cache rows are widened to K_rs groups and group s must hold the window
-    // as of s tokens back - same scheme as llm_build_delta_net_base::build_conv_state, applied per
-    // Q/K/V third. K_rs == 1 is the original single store of the final window.
-    // [TAG_RECURRENT_ROLLBACK_SPLITS] relies on the last K_rs tokens of a seq sharing one ubatch.
+    // group s holds the conv window s tokens back.
+    // [TAG_RECURRENT_ROLLBACK_SPLITS]: the last K_rs tokens must share one ubatch.
     for (int64_t s = 0; s < K_rs; ++s) {
         const int64_t s_idx = std::max<int64_t>(0, n_seq_tokens - s);
         ggml_tensor * conv_x_s = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs,
@@ -410,7 +407,6 @@ ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
 
-    // bounded recurrent-state rollback (speculative decoding): K_rs snapshot groups per cache row
     const int64_t mem_size = mctx_cur->get_size();
     const int64_t K_rs     = (int64_t) cparams.n_rs_seq + 1;
 
@@ -460,10 +456,6 @@ ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
     Qcur = ggml_l2_norm(ctx0, Qcur, eps);
     Kcur = ggml_l2_norm(ctx0, Kcur, eps);
 
-    // build_recurrent_attn stores the new KDA state itself: at slot 0 when cparams.n_rs_seq == 0
-    // (identical to the previous explicit copy), or the last K_rs per-token snapshots via the fused
-    // ggml_gated_delta_net(..., K) when bounded rollback is enabled (g1 is the [S_v, H_v, ...] KDA gate
-    // shape the op documents).
     ggml_tensor * output = build_recurrent_attn(inp_rs, ssm_states_all, Qcur, Kcur, Vcur, g1, beta, state, il);
     output = ggml_cont(ctx0, output);
     cb(output, "kda_scan_out", il);
