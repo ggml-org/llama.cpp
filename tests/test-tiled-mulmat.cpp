@@ -764,6 +764,9 @@ int main() {
     // RMSE vs the std output. Every type the tiled gate accepts; the repack column is
     // n/a where no repack kernel exists for the type. TILED_MM_FORCE is set in main,
     // so the tiled column runs at every shape; the shapes vary K, the output rank
+
+    /* Benchmarks disabled unless actively uncommented so we don't waste CPU in CI for unrelated changes
+
     const ggml_type bench_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
                                       GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
                                       GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
@@ -811,6 +814,7 @@ int main() {
         print_mmid_table(mmid_shapes[s].K, mmid_shapes[s].R, mmid_shapes[s].E, mmid_shapes[s].k,
                          mmid_shapes[s].b_slots, mmid_shapes[s].batch, rows, n_mmid_types);
     }
+    */
 
     ggml_backend_free(backend);
     return n_failed ? 1 : 0;
