@@ -972,39 +972,6 @@ static __global__ void flash_attn_combine_results(
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
-struct fattn_stream_k_thresholds {
-    bool whole_tiles_allowed;
-    int  min_tile_waves;
-    int  min_tile_efficiency;
-};
-
-static fattn_stream_k_thresholds ggml_cuda_fattn_get_stream_k_thresholds(const int cc) {
-    //      whole_tiles_allowed, min_tile_waves, min_tile_efficiency
-    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc < GGML_CUDA_CC_ADA_LOVELACE) {
-        return {true,  0, 75};
-    }
-    // On AMD WMMA stream-k collapses to a single low-occupancy wave, whole tiles are faster once the GPU is filled twice.
-    if (amd_wmma_available(cc)) {
-        return {true,  2, 75};
-    }
-    // NVIDIA Ada Lovelace and newer, AMD MFMA, MooreThreads: always stream-k.
-    return {false, 0,  0};
-}
-
-static bool ggml_cuda_fattn_use_stream_k(const int cc, const int ntiles_dst, const int max_blocks) {
-    const fattn_stream_k_thresholds thresholds = ggml_cuda_fattn_get_stream_k_thresholds(cc);
-    if (!thresholds.whole_tiles_allowed) {
-        return true;
-    }
-
-    const int tiles_nwaves             = (ntiles_dst + max_blocks - 1) / max_blocks;
-    const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
-
-    const bool whole_tiles = ntiles_dst >= thresholds.min_tile_waves*max_blocks
-        && tiles_efficiency_percent >= thresholds.min_tile_efficiency;
-    return !whole_tiles;
-}
-
 template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
@@ -1166,8 +1133,21 @@ void launch_fattn(
 
     dim3 blocks_num;
     if (stream_k) {
+        auto should_use_stream_k = [](const int cc, const int ntiles_dst, const int max_blocks, const int DKQ) {
+            const int tiles_nwaves             = (ntiles_dst + max_blocks - 1) / max_blocks;
+            const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
+
+            if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_ADA_LOVELACE) {
+                return true;
+            }
+            if (amd_wmma_available(cc) && DKQ == 64) {
+                return true; // TODO better configuration
+            }
+            return tiles_efficiency_percent < 75;
+        };
+
         const int  max_blocks   = max_blocks_per_sm*nsm;
-        const bool use_stream_k = ggml_cuda_fattn_use_stream_k(cc, ntiles_dst, max_blocks);
+        const bool use_stream_k = should_use_stream_k(cc, ntiles_dst, max_blocks, Q->ne[0]);
 
         blocks_num.x = ntiles_dst;
         blocks_num.y = 1;
