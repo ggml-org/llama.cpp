@@ -116,7 +116,7 @@ if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
         target_link_libraries(ggml-sycl PRIVATE ${ZE_LOADER_LIB})
         target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
         message(STATUS "Level Zero loader found: ${ZE_LOADER_LIB}")
-        message(STATUS "Level Zero headers found: ${LEVEL_ZERO_DEV_INCLUDE_DIR}")
+        message(STATUS "Level Zero development headers found: ${LEVEL_ZERO_DEV_INCLUDE_DIR}")
     else()
         message(FATAL_ERROR "Level Zero SDK/Development package not found! "
                             "Please install the Level Zero SDK/development package or "
