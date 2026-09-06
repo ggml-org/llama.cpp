@@ -27,6 +27,9 @@
 static const NSInteger MTLGPUFamilyMetal3_GGML = 5001;
 static const NSInteger MTLGPUFamilyMetal4_GGML = 5002;
 
+// MTLLanguageVersion4_0 is not present in older SDKs
+static const NSUInteger MTLLanguageVersion4_0_GGML = 4 << 16;
+
 #if !GGML_METAL_EMBED_LIBRARY
 // Here to assist with NSBundle Path Hack
 @interface GGMLMetalClass : NSObject
@@ -154,6 +157,9 @@ struct ggml_metal_library {
     // nil in single_library mode (everything resolves to objs[0]).
     NSMutableDictionary<NSString *, NSNumber *> * fn_to_lib;
 
+    // kernels from a second metallib, resolved ahead of the combined library
+    NSSet<NSString *> * override_fns;
+
     ggml_metal_device_t dev;
     ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
 
@@ -172,6 +178,18 @@ static void ggml_metal_library_build_index(ggml_metal_library_t lib) {
         }
         lib->fn_to_lib = index;
     }
+}
+
+// note: defined below, after struct ggml_metal_device
+static void ggml_metal_device_disable_tensor(ggml_metal_device_t dev);
+
+// the tensor API headers are exposed to the shader compiler only at Metal language version 4.0
+static void ggml_metal_compile_options_set_lang(MTLCompileOptions * options, bool has_tensor) {
+    if (!has_tensor) {
+        return;
+    }
+
+    options.languageVersion = (MTLLanguageVersion) MTLLanguageVersion4_0_GGML;
 }
 
 // Parse a `#include "name"` line. Returns the quoted name in *include_name on
@@ -313,6 +331,7 @@ static bool ggml_metal_library_compile_all(
             @autoreleasepool {
                 MTLCompileOptions * options = [MTLCompileOptions new];
                 options.preprocessorMacros = prep;
+                ggml_metal_compile_options_set_lang(options, ggml_metal_device_get_props(res->dev)->has_tensor);
 
                 lib = [device newLibraryWithSource:src options:options error:&error];
 
@@ -367,6 +386,46 @@ static bool ggml_metal_library_compile_all(
     free(t_per_lib);
 
     return ok;
+}
+
+// look for <name>.metallib as a bundle resource, then next to the running binary
+static NSString * ggml_metal_find_metallib(NSBundle * bundle, NSString * name) {
+    NSError * error = nil;
+
+    NSString * path_lib = [bundle pathForResource:name ofType:@"metallib"];
+    if (path_lib == nil) {
+        // Try to find the resource in the directory where the current binary located.
+        NSString * bin_cur = [[NSProcessInfo processInfo] arguments][0];
+        NSString * bin_dir = [bin_cur stringByDeletingLastPathComponent];
+
+        NSString * path_lib_default = [NSString pathWithComponents:@[bin_dir, [name stringByAppendingPathExtension:@"metallib"]]];
+        if ([[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
+            GGML_LOG_INFO("%s: found '%s'\n", __func__, [path_lib_default UTF8String]);
+
+            NSDictionary * atts = [[NSFileManager defaultManager] attributesOfItemAtPath:path_lib_default error:&error];
+            if (atts && atts[NSFileType] == NSFileTypeSymbolicLink) {
+                // Optionally, if this is a symlink, try to resolve it.
+                path_lib_default = [[NSFileManager defaultManager] destinationOfSymbolicLinkAtPath:path_lib_default error:&error];
+                if (path_lib_default && [path_lib_default length] > 0 && ![[path_lib_default substringToIndex:1] isEqualToString:@"/"]) {
+                    // It is a relative path, adding the binary directory as directory prefix.
+                    path_lib_default = [NSString pathWithComponents:@[bin_dir, path_lib_default]];
+                }
+                if (!path_lib_default || ![[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
+                    // Link to the resource could not be resolved.
+                    path_lib_default = nil;
+                } else {
+                    GGML_LOG_INFO("%s: symlink resolved '%s'\n", __func__, [path_lib_default UTF8String]);
+                }
+            }
+        } else {
+            // The resource couldn't be found in the binary's directory.
+            path_lib_default = nil;
+        }
+
+        path_lib = path_lib_default;
+    }
+
+    return path_lib;
 }
 
 ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
@@ -432,38 +491,7 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     const int64_t t_start = ggml_time_us();
 
     NSError * error = nil;
-    NSString * path_lib = [bundle pathForResource:@"default" ofType:@"metallib"];
-    if (path_lib == nil) {
-        // Try to find the resource in the directory where the current binary located.
-        NSString * bin_cur = [[NSProcessInfo processInfo] arguments][0];
-        NSString * bin_dir = [bin_cur stringByDeletingLastPathComponent];
-
-        NSString * path_lib_default = [NSString pathWithComponents:@[bin_dir, @"default.metallib"]];
-        if ([[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
-            GGML_LOG_INFO("%s: found '%s'\n", __func__, [path_lib_default UTF8String]);
-
-            NSDictionary * atts = [[NSFileManager defaultManager] attributesOfItemAtPath:path_lib_default error:&error];
-            if (atts && atts[NSFileType] == NSFileTypeSymbolicLink) {
-                // Optionally, if this is a symlink, try to resolve it.
-                path_lib_default = [[NSFileManager defaultManager] destinationOfSymbolicLinkAtPath:path_lib_default error:&error];
-                if (path_lib_default && [path_lib_default length] > 0 && ![[path_lib_default substringToIndex:1] isEqualToString:@"/"]) {
-                    // It is a relative path, adding the binary directory as directory prefix.
-                    path_lib_default = [NSString pathWithComponents:@[bin_dir, path_lib_default]];
-                }
-                if (!path_lib_default || ![[NSFileManager defaultManager] isReadableFileAtPath:path_lib_default]) {
-                    // Link to the resource could not be resolved.
-                    path_lib_default = nil;
-                } else {
-                    GGML_LOG_INFO("%s: symlink resolved '%s'\n", __func__, [path_lib_default UTF8String]);
-                }
-            }
-        } else {
-            // The resource couldn't be found in the binary's directory.
-            path_lib_default = nil;
-        }
-
-        path_lib = path_lib_default;
-    }
+    NSString * path_lib = ggml_metal_find_metallib(bundle, @"default");
 
     if (path_lib != nil) {
         // pre-compiled library found: a single combined default.metallib
@@ -476,6 +504,30 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
             GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
             ggml_metal_library_free(res);
             return NULL;
+        }
+
+        // the tensor API kernels are built into a separate metallib
+        if (ggml_metal_device_get_props(dev)->has_tensor) {
+            NSString * path_mm = ggml_metal_find_metallib(bundle, @"ggml-tensor");
+
+            id<MTLLibrary> lib_mm = nil;
+            if (path_mm != nil) {
+                lib_mm = [device newLibraryWithURL:[NSURL fileURLWithPath:path_mm] error:&error];
+                if (!lib_mm && error) {
+                    GGML_LOG_ERROR("%s: %s\n", __func__, [[error description] UTF8String]);
+                }
+            }
+
+            if (lib_mm) {
+                GGML_LOG_INFO("%s: loaded '%s'\n", __func__, [path_mm UTF8String]);
+
+                res->objs[GGML_METAL_LIB_MUL_MM] = [lib_mm retain];
+                res->override_fns                = [[NSSet setWithArray:[lib_mm functionNames]] retain];
+            } else {
+                GGML_LOG_INFO("%s: ggml-tensor.metallib not found - disabling the tensor API\n", __func__);
+
+                ggml_metal_device_disable_tensor(dev);
+            }
         }
 
         GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
@@ -557,6 +609,7 @@ ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev
 
         MTLCompileOptions * options = [MTLCompileOptions new];
         options.preprocessorMacros = prep;
+        ggml_metal_compile_options_set_lang(options, ggml_metal_device_get_props(dev)->has_tensor);
 
         library = [device newLibraryWithSource:src options:options error:&error];
         if (error) {
@@ -613,6 +666,10 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
 
     if (lib->fn_to_lib) {
         [lib->fn_to_lib release];
+    }
+
+    if (lib->override_fns) {
+        [lib->override_fns release];
     }
 
     ggml_metal_pipelines_free(lib->pipelines);
@@ -676,7 +733,9 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
         // route to the library that actually defines this kernel; fn_to_lib is
         // built from -[MTLLibrary functionNames] so it's always in sync
         int lib_idx = 0;
-        if (!lib->single_library) {
+        if (lib->override_fns && [lib->override_fns containsObject:base_func]) {
+            lib_idx = GGML_METAL_LIB_MUL_MM;
+        } else if (!lib->single_library) {
             NSNumber * idx = lib->fn_to_lib[base_func];
             if (!idx) {
                 [lib->lock unlock];
@@ -997,6 +1056,7 @@ static const struct {
     DEV("M5 Pro",   GGML_METAL_DEVICE_M5_PRO),
     DEV("M5 Max",   GGML_METAL_DEVICE_M5_MAX),
     DEV("M5 Ultra", GGML_METAL_DEVICE_M5_ULTRA),
+    DEV("A18 Pro",  GGML_METAL_DEVICE_A18_PRO),
 #undef DEV
 };
 
@@ -1287,19 +1347,21 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
 void ggml_metal_device_free(ggml_metal_device_t dev) {
     assert(dev != NULL);
 
-    ggml_metal_rsets_free(dev->rsets);
+    @autoreleasepool {
+        ggml_metal_rsets_free(dev->rsets);
 
-    ggml_metal_library_free(dev->library);
-    dev->library = NULL;
+        ggml_metal_library_free(dev->library);
+        dev->library = NULL;
 
-    if (dev->mtl_queue) {
-        [dev->mtl_queue release];
-        dev->mtl_queue = nil;
-    }
+        if (dev->mtl_queue) {
+            [dev->mtl_queue release];
+            dev->mtl_queue = nil;
+        }
 
-    if (dev->mtl_device) {
-        [dev->mtl_device release];
-        dev->mtl_device = nil;
+        if (dev->mtl_device) {
+            [dev->mtl_device release];
+            dev->mtl_device = nil;
+        }
     }
 
     free(dev);
@@ -1387,12 +1449,14 @@ ggml_metal_event_t ggml_metal_device_event_init(ggml_metal_device_t dev) {
 }
 
 void ggml_metal_device_event_free(ggml_metal_device_t dev, ggml_metal_event_t ev) {
-    id<MTLSharedEvent> event = ev->obj;
-    [event release];
+    @autoreleasepool {
+        id<MTLSharedEvent> event = ev->obj;
+        [event release];
 
-    free(ev);
+        free(ev);
 
-    GGML_UNUSED(dev);
+        GGML_UNUSED(dev);
+    }
 }
 
 void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_event_t ev) {
@@ -1407,8 +1471,10 @@ void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_eve
 
 void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t * total) {
     if (@available(macOS 10.12, iOS 16.0, *)) {
-        *total = dev->mtl_device.recommendedMaxWorkingSetSize;
-        *free  = *total - dev->mtl_device.currentAllocatedSize;
+        *total     = dev->mtl_device.recommendedMaxWorkingSetSize;
+        size_t cur = dev->mtl_device.currentAllocatedSize;
+        // it's possible to allocate more than `recommendedMaxWorkingSetSize`
+        *free      = *total > cur ? *total - cur : 0;
     } else {
         *free = 0;
         *total = 0;
@@ -1538,6 +1604,12 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                         return true;
                     case GGML_TYPE_BF16:
                         return has_bfloat;
+                    case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q5_0:
+                    case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_Q8_0:
+                        return true;
                     default:
                         return false;
                 }
@@ -1856,6 +1928,10 @@ const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_de
     return &dev->props;
 }
 
+static void ggml_metal_device_disable_tensor(ggml_metal_device_t dev) {
+    dev->props.has_tensor = false;
+}
+
 //
 // device buffers
 //
@@ -2157,13 +2233,15 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
 }
 
 void ggml_metal_buffer_free(ggml_metal_buffer_t buf) {
-    ggml_metal_device_rsets_rm(buf->dev, buf->rset);
+    @autoreleasepool {
+        ggml_metal_device_rsets_rm(buf->dev, buf->rset);
 
-    for (int i = 0; i < buf->n_buffers; i++) {
-        [buf->buffers[i].metal release];
+        for (int i = 0; i < buf->n_buffers; i++) {
+            [buf->buffers[i].metal release];
+        }
+
+        ggml_metal_buffer_rset_free(buf);
     }
-
-    ggml_metal_buffer_rset_free(buf);
 
     if (buf->is_shared && buf->owned) {
 #if TARGET_OS_OSX

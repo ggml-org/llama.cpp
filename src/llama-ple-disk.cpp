@@ -77,9 +77,24 @@ struct llama_ple_disk::impl {
 
         direct = p.direct_io;
         if (direct) {
+            // only Linux has O_DIRECT; Darwin turns the page cache off per descriptor
+            // with F_NOCACHE after the open
+#if defined(O_DIRECT)
             fd = open(fname.c_str(), O_RDONLY | O_DIRECT | O_CLOEXEC);
+#else
+            fd = open(fname.c_str(), O_RDONLY | O_CLOEXEC);
+#if defined(F_NOCACHE)
+            if (fd >= 0 && fcntl(fd, F_NOCACHE, 1) < 0) {
+                LLAMA_LOG_WARN("%s: F_NOCACHE on %s failed (%s); reads go through the page cache\n",
+                               __func__, fname.c_str(), strerror(errno));
+                direct = false;
+            }
+#else
+            direct = false;
+#endif
+#endif
             if (fd < 0) {
-                LLAMA_LOG_WARN("%s: O_DIRECT open of %s failed (%s); falling back to buffered reads\n",
+                LLAMA_LOG_WARN("%s: direct open of %s failed (%s); falling back to buffered reads\n",
                                __func__, fname.c_str(), strerror(errno));
                 direct = false;
             }
