@@ -38,6 +38,14 @@ struct dummy_backend_context {
     }
 };
 
+struct dummy_backend_view_context {
+    dummy_backend_context * backend;
+    void * base;
+};
+
+static ggml_backend_buffer_t dummy_backend_buffer_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size);
+
 // ggml_backend_buffer_type interface
 
 static const char * dummy_backend_buffer_type_get_name(ggml_backend_buffer_type_t /*buft*/) {
@@ -48,6 +56,7 @@ static ggml_backend_buffer_t dummy_backend_buffer_type_alloc_buffer(ggml_backend
     dummy_backend_context * ctx    = (dummy_backend_context *) buft->context;
     ggml_backend_buffer_t & buffer = ctx->buffers.emplace_back();
     buffer                         = ggml_backend_buffer_init(buft, ctx->buffer_interface, ctx, size);
+    buffer->view_buffer            = dummy_backend_buffer_view;
     return buffer;
 }
 
@@ -140,6 +149,34 @@ static const char * dummy_backend_get_name(ggml_backend_t /*backend*/) {
 static void dummy_backend_buffer_reset(ggml_backend_buffer_t buffer) {
     dummy_backend_context * ctx = (dummy_backend_context *) buffer->context;
     ctx->reset_count++;
+}
+
+static void dummy_backend_view_free(ggml_backend_buffer_t buffer) {
+    delete (dummy_backend_view_context *) buffer->context;
+}
+
+static void * dummy_backend_view_get_base(ggml_backend_buffer_t buffer) {
+    return ((dummy_backend_view_context *) buffer->context)->base;
+}
+
+static void dummy_backend_view_reset(ggml_backend_buffer_t buffer) {
+    ((dummy_backend_view_context *) buffer->context)->backend->reset_count++;
+}
+
+static ggml_backend_buffer_t dummy_backend_buffer_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    auto * context = new dummy_backend_view_context {
+        (dummy_backend_context *) buffer->buft->context,
+        (uint8_t *) ggml_backend_buffer_get_base(buffer) + offset,
+    };
+    ggml_backend_buffer_i iface = buffer->iface;
+    iface.free_buffer = dummy_backend_view_free;
+    iface.get_base = dummy_backend_view_get_base;
+    iface.reset = buffer->iface.reset ? dummy_backend_view_reset : nullptr;
+
+    ggml_backend_buffer_t view = ggml_backend_buffer_init(buffer->buft, iface, context, size);
+    view->view_buffer = dummy_backend_buffer_view;
+    return view;
 }
 
 // dummy_backend
@@ -1213,6 +1250,66 @@ static void test_borrowed_buffer_range_validation() {
     GGML_ASSERT(reset_backend.context->reset_count == 0);
 }
 
+// Verify gallocr retains caller-supplied storage until its own lifetime ends.
+static void test_borrowed_buffer_range_retains_buffer() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_buffer_t workspace = ggml_backend_buft_alloc_buffer(&backend.buffer_type, 96);
+    GGML_ASSERT(workspace);
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 16);
+    x[1] = make_input_with_size(ctx, 16);
+    x[2] = ggml_add(ctx, x[0], x[1]);
+    assign_names(ctx);
+    ggml_set_output(x[2]);
+    ggml_build_forward_expand(graph, x[2]);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace, 24, 48));
+    ggml_backend_buffer_free(workspace);
+    GGML_ASSERT(backend.context->allocated_total() == 96);
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+
+    galloc.reset();
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+}
+
+// Verify gallocr can reset an isolated stateful view without resetting its parent.
+static void test_borrowed_buffer_view_reset() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX, 8, true);
+    ggml_backend_buffer_t parent = ggml_backend_buft_alloc_buffer(&backend.buffer_type, 96);
+    ggml_backend_buffer_t view = ggml_backend_buffer_view(parent, 24, 48);
+    GGML_ASSERT(parent && view && ggml_backend_buffer_is_view(view));
+
+    ggml_gallocr_ptr partial(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(!ggml_gallocr_set_buffer_range(partial.get(), 0, view, 8, 32));
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 16);
+    x[1] = make_input_with_size(ctx, 16);
+    x[2] = ggml_add(ctx, x[0], x[1]);
+    assign_names(ctx);
+    ggml_set_output(x[2]);
+    ggml_build_forward_expand(graph, x[2]);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 0, view, 0, 48));
+    ggml_backend_buffer_free(parent);
+    ggml_backend_buffer_free(view);
+    GGML_ASSERT(backend.context->allocated_total() == 96);
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+    GGML_ASSERT(backend.context->reset_count == 1);
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+    GGML_ASSERT(backend.context->reset_count == 2);
+
+    galloc.reset();
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+}
+
 // Verify that aliased allocator slots share one borrowed range and count its capacity only once.
 static void test_borrowed_buffer_range_shared_buffer_type() {
     dummy_backend backend = dummy_backend_init(SIZE_MAX);
@@ -1653,6 +1750,8 @@ int main() {
     run("test_borrowed_buffer_range", test_borrowed_buffer_range);
     run("test_borrowed_buffer_range_too_small", test_borrowed_buffer_range_too_small);
     run("test_borrowed_buffer_range_validation", test_borrowed_buffer_range_validation);
+    run("test_borrowed_buffer_range_retains_buffer", test_borrowed_buffer_range_retains_buffer);
+    run("test_borrowed_buffer_view_reset", test_borrowed_buffer_view_reset);
     run("test_borrowed_buffer_range_shared_buffer_type", test_borrowed_buffer_range_shared_buffer_type);
     run("test_borrowed_buffer_range_after_measure", test_borrowed_buffer_range_after_measure);
     run("test_gpu_borrowed_buffer_range", test_gpu_borrowed_buffer_range);

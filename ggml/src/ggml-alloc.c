@@ -457,18 +457,16 @@ static size_t ggml_dyn_tallocr_max_size(struct ggml_dyn_tallocr * alloc, int chu
 
 struct vbuffer {
     ggml_backend_buffer_t chunks[GGML_VBUFFER_MAX_CHUNKS];
-    bool owns_chunks;
+    bool reset_chunks;
 };
 
-// Free the wrapper and its owned backend buffers; leave borrowed storage alive.
+// Release each owned or retained chunk reference and free the wrapper.
 static void ggml_vbuffer_free(struct vbuffer * buf) {
     if (buf == NULL) {
         return;
     }
-    if (buf->owns_chunks) {
-        for (int i = 0; i < GGML_VBUFFER_MAX_CHUNKS; ++i) {
-            ggml_backend_buffer_free(buf->chunks[i]);
-        }
+    for (int i = 0; i < GGML_VBUFFER_MAX_CHUNKS; ++i) {
+        ggml_backend_buffer_free(buf->chunks[i]);
     }
     free(buf);
 }
@@ -491,7 +489,7 @@ static struct vbuffer * ggml_vbuffer_alloc(ggml_backend_buffer_type_t buft, cons
     if (buf == NULL) {
         return NULL;
     }
-    buf->owns_chunks = true;
+    buf->reset_chunks = true;
 
     for (int n = 0; n < talloc->n_chunks; n++) {
         size_t chunk_size = talloc->chunks[n]->max_size;
@@ -511,9 +509,9 @@ static void ggml_vbuffer_tensor_alloc(struct vbuffer * buf, struct ggml_tensor *
     ggml_backend_tensor_alloc(buf->chunks[buf_addr.chunk], tensor, addr);
 }
 
-// Reset tensor metadata in owned buffers without resetting a borrowed parent.
+// Reset tensor metadata in owned buffers or isolated borrowed views.
 static void ggml_vbuffer_reset(struct vbuffer * buf) {
-    if (buf->owns_chunks) {
+    if (buf->reset_chunks) {
         for (int i = 0; i < GGML_VBUFFER_MAX_CHUNKS && buf->chunks[i]; ++i) {
             ggml_backend_buffer_reset(buf->chunks[i]);
         }
@@ -615,7 +613,7 @@ ggml_gallocr_t ggml_gallocr_new(ggml_backend_buffer_type_t buft) {
     return ggml_gallocr_new_n(&buft, 1);
 }
 
-// Release graph allocation metadata and owned storage without freeing borrowed buffers.
+// Release graph allocation metadata and all owned or retained buffer references.
 void ggml_gallocr_free(ggml_gallocr_t galloc) {
     if (galloc == NULL) {
         return;
@@ -1252,13 +1250,17 @@ bool ggml_gallocr_set_buffer_range(
     if (buffer == NULL || size == 0 || galloc->buffers[buffer_id] != NULL) {
         return false;
     }
-    if (ggml_backend_buffer_get_type(buffer) != galloc->bufts[buffer_id] || buffer->iface.reset != NULL) {
+    if (ggml_backend_buffer_get_type(buffer) != galloc->bufts[buffer_id] ||
+            (buffer->iface.reset != NULL && !ggml_backend_buffer_is_view(buffer))) {
         return false;
     }
 
     void * base = ggml_backend_buffer_get_base(buffer);
     const size_t buffer_size = ggml_backend_buffer_get_size(buffer);
     if (base == NULL || offset > buffer_size || size > buffer_size - offset) {
+        return false;
+    }
+    if (buffer->iface.reset != NULL && (offset != 0 || size != buffer_size)) {
         return false;
     }
 
@@ -1278,7 +1280,8 @@ bool ggml_gallocr_set_buffer_range(
     if (vbuf == NULL) {
         return false;
     }
-    vbuf->chunks[0] = buffer;
+    vbuf->chunks[0] = ggml_backend_buffer_retain(buffer);
+    vbuf->reset_chunks = ggml_backend_buffer_is_view(buffer);
 
     for (int i = 0; i < galloc->n_buffers; i++) {
         if (galloc->buf_tallocs[i] == galloc->buf_tallocs[buffer_id]) {

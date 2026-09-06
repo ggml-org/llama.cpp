@@ -2255,7 +2255,7 @@ size_t ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backe
     return ggml_gallocr_get_buffer_size(sched->galloc, backend_index);
 }
 
-// Map a scheduler backend to its allocator slot and attach caller-owned graph workspace.
+// Map a scheduler backend to its allocator slot and retain graph workspace.
 bool ggml_backend_sched_set_buffer_range(
         ggml_backend_sched_t sched, ggml_backend_t backend, ggml_backend_buffer_t buffer, size_t offset, size_t size) {
     GGML_ASSERT(sched);
