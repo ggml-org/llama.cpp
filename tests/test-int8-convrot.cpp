@@ -36,7 +36,13 @@ static float regular_hadamard_reference(const std::vector<float> & input, int ou
     return sum / std::sqrt((float) input.size());
 }
 
-int main() {
+int main(int argc, char ** argv) {
+    const bool use_cuda   = argc == 2 && std::strcmp(argv[1], "--cuda") == 0;
+    if (argc > 2 || (argc == 2 && !use_cuda)) {
+        std::fprintf(stderr, "usage: %s [--cuda]\n", argv[0]);
+        return 1;
+    }
+
     ggml_init_params params = {
         1024 * 1024,
         nullptr,
@@ -67,8 +73,25 @@ int main() {
     ggml_build_forward_expand(graph, fused_large);
     ggml_build_forward_expand(graph, fused_large_no_bias);
 
-    ggml_backend_t backend = ggml_backend_cpu_init();
-    ggml_backend_cpu_set_n_threads(backend, 2);
+    ggml_backend_t backend = nullptr;
+    if (use_cuda) {
+        const char * backend_name = "CUDA";
+        ggml_backend_load_all();
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            ggml_backend_dev_t device = ggml_backend_dev_get(i);
+            if (ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_GPU && std::strstr(ggml_backend_dev_name(device), backend_name) != nullptr) {
+                backend = ggml_backend_dev_init(device, nullptr);
+                break;
+            }
+        }
+        if (backend == nullptr) {
+            std::fprintf(stderr, "%s backend not found\n", backend_name);
+            return 1;
+        }
+    } else {
+        backend = ggml_backend_cpu_init();
+        ggml_backend_cpu_set_n_threads(backend, 2);
+    }
     if (!ggml_backend_supports_op(backend, q_large) ||
         !ggml_backend_supports_op(backend, fused_large) ||
         !ggml_backend_supports_op(backend, fused_large_no_bias) ||
@@ -192,6 +215,6 @@ int main() {
     ggml_backend_buffer_free(buffer);
     ggml_backend_free(backend);
     ggml_free(ctx);
-    std::printf("INT8 convrot CPU test passed\n");
+    std::printf("INT8 convrot %s test passed\n", use_cuda ? "CUDA" : "CPU");
     return 0;
 }
