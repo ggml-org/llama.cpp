@@ -40,10 +40,18 @@ static common_http_url common_http_parse_url(const std::string & url) {
     }
 
     auto rest = url.substr(scheme_end + 3);
-    auto at_pos = rest.find('@');
+
+    // the authority ends at the first '/', '?' or '#', whichever comes first (RFC 3986)
+    auto auth_end = rest.find_first_of("/?#");
+
+    auto authority = rest.substr(0, auth_end);
+    auto path      = auth_end == std::string::npos ? std::string() : rest.substr(auth_end);
+
+    // userinfo, when present, is part of the authority, so '@' only counts before it ends
+    auto at_pos = authority.find('@');
 
     if (at_pos != std::string::npos) {
-        auto auth = rest.substr(0, at_pos);
+        auto auth = authority.substr(0, at_pos);
         auto colon_pos = auth.find(':');
         if (colon_pos != std::string::npos) {
             parts.user = auth.substr(0, colon_pos);
@@ -51,18 +59,14 @@ static common_http_url common_http_parse_url(const std::string & url) {
         } else {
             parts.user = auth;
         }
-        rest = rest.substr(at_pos + 1);
+        authority = authority.substr(at_pos + 1);
     }
 
-    auto slash_pos = rest.find('/');
+    parts.host = authority;
 
-    if (slash_pos != std::string::npos) {
-        parts.host = rest.substr(0, slash_pos);
-        parts.path = rest.substr(slash_pos);
-    } else {
-        parts.host = rest;
-        parts.path = "/";
-    }
+    // an absent path is "/", and a query or fragment that follows the authority directly
+    // hangs off "/" rather than being folded into the host
+    parts.path = (path.empty() || path.front() != '/') ? "/" + path : path;
 
     // split the authority into host and optional port, a bracketed IPv6 literal keeps its inner colons (RFC 3986)
     std::string port_str;

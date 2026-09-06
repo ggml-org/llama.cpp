@@ -293,6 +293,10 @@ llama_build_and_test(test-model-resolution.cpp)
 # the test serves its repos from an httplib server, and the library links it privately
 target_link_libraries(test-model-resolution PRIVATE cpp-httplib)
 
+llama_build_and_test(test-http-url.cpp)
+# common/http.h pulls in httplib, which the library links privately
+target_link_libraries(test-http-url PRIVATE cpp-httplib)
+
 if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
   llama_build_and_test(test-opt.cpp)
