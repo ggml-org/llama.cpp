@@ -37,6 +37,14 @@ typedef matrix<bfloat, 4, 4> bfloat4x4;
 typedef matrix<bfloat, 2, 4> bfloat2x4;
 #endif
 
+constexpr constant static float kvalues_iq2nl_f[4] = {
+    -127.f, -49.f, 9.f, 88.f
+};
+
+constexpr constant static float kvalues_iq3nl_f[8] = {
+    -127.f, -78.f, -45.f, -18.f, 3.f, 30.f, 62.f, 107.f
+};
+
 constexpr constant static float kvalues_iq4nl_f[16] = {
     -127.f, -104.f, -83.f, -65.f, -49.f, -35.f, -22.f, -10.f, 1.f, 13.f, 25.f, 38.f, 53.f, 69.f, 89.f, 113.f
 };
@@ -46,14 +54,13 @@ constexpr constant static float kvalues_mxfp4_f[16] = {
 };
 
 static inline int best_index_int8(int n, constant float * val, float x) {
-    if (x <= val[0]) return 0;
-    if (x >= val[n-1]) return n-1;
-    int ml = 0, mu = n-1;
-    while (mu-ml > 1) {
-        int mav = (ml+mu)/2;
-        if (x < val[mav]) mu = mav; else ml = mav;
+    const float x2 = x + x;
+    int idx = 0;
+    for (int step = n >> 1; step > 0; step >>= 1) {
+        const int j = idx + step;
+        idx = (x2 >= val[j-1] + val[j]) ? j : idx;
     }
-    return x - val[mu-1] < val[mu] - x ? mu-1 : mu;
+    return idx;
 }
 
 static inline float e8m0_to_fp32(uint8_t x) {
