@@ -644,7 +644,8 @@ int main() {
     setenv("GGML_CPU_TILED_MM", "1", 1);
     setenv("GGML_CPU_TILED_MM_FORCE", "1", 1);
 #endif
-
+                                                                                                                                                     
+    ggml_backend_load_all();                                                
     ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
     if (!backend) {
         fprintf(stderr, "failed to initialize the CPU backend\n");
