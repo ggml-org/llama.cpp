@@ -15,7 +15,7 @@ void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,     hparams.n_lora_kv);
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k_mla_impl, false);
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v_mla_impl, false);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,       hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,        hparams.expert_weights_norm, false);
@@ -36,11 +36,6 @@ void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
         // cancel the factor from the convert script
         hparams.rope_yarn_log_mul /= 0.1f;
     }
-
-    // NextN/MTP
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn == 0 ||
-        hparams.n_layer() + hparams.n_layer_nextn == hparams.n_layer_all);
 
     // (optional) temperature tuning - used by mistral-large
     ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE,  hparams.f_attn_temp_scale,       false);
@@ -84,7 +79,7 @@ void llama_model_deepseek2::load_arch_tensors(llama_model_loader & ml) {
     const int64_t q_lora_rank  = hparams.n_lora_q;
     const int64_t kv_lora_rank = hparams.n_lora_kv;
 
-    const int64_t n_ff_exp        = hparams.n_ff_exp;
+    const int64_t n_ff_exp        = hparams.n_ff_exp();
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 

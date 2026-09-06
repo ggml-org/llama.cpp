@@ -15,7 +15,6 @@ set(HF_BUCKET         "" CACHE STRING "Hugging Face bucket name")
 set(HF_VERSION        "" CACHE STRING "Version to download (empty = resolve from git)")
 set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/OFF)")
 set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
-set(LLAMA_UI_EMBED    "" CACHE STRING "Path to llama-ui-embed helper")
 set(LLAMA_UI_GZIP     "" CACHE STRING "Apply gzip compress to assets to save bandwidth")
 
 set(DIST_DIR     "${UI_BINARY_DIR}/dist")
@@ -24,6 +23,223 @@ set(WORK_DIR     "${UI_BINARY_DIR}/ui-src")
 set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
 set(UI_H         "${UI_BINARY_DIR}/ui.h")
+
+function(mime_from_ext name out_var)
+    string(FIND "${name}" "." ext REVERSE)
+    if(ext GREATER -1)
+        string(SUBSTRING "${name}" ${ext} -1 ext_full)
+        string(SUBSTRING "${ext_full}" 1 -1 ext_str)
+    else()
+        set(ext_str "")
+    endif()
+    if(ext_str STREQUAL "html")
+        set(m "text/html; charset=utf-8")
+    elseif(ext_str STREQUAL "css")
+        set(m "text/css")
+    elseif(ext_str STREQUAL "js")
+        set(m "application/javascript")
+    elseif(ext_str STREQUAL "json")
+        set(m "application/json")
+    elseif(ext_str STREQUAL "webmanifest")
+        set(m "application/manifest+json")
+    elseif(ext_str STREQUAL "svg")
+        set(m "image/svg+xml")
+    elseif(ext_str STREQUAL "png")
+        set(m "image/png")
+    elseif(ext_str STREQUAL "jpg" OR ext_str STREQUAL "jpeg")
+        set(m "image/jpeg")
+    elseif(ext_str STREQUAL "ico")
+        set(m "image/x-icon")
+    elseif(ext_str STREQUAL "woff")
+        set(m "font/woff")
+    elseif(ext_str STREQUAL "woff2")
+        set(m "font/woff2")
+    else()
+        set(m "application/octet-stream")
+    endif()
+    set(${out_var} "${m}" PARENT_SCOPE)
+endfunction()
+
+# Fail when a dist tree is present but is missing files the UI needs at
+# runtime; catches truncated/stale asset trees early with a useful message.
+function(ui_validate_assets files in_dir)
+    list(LENGTH files n_assets)
+    if(n_assets EQUAL 0)
+        return()
+    endif()
+
+    set(found_index FALSE)
+    set(found_manifest FALSE)
+    set(found_sw FALSE)
+    set(found_build_json FALSE)
+    set(found_version_json FALSE)
+    set(found_bundle_js FALSE)
+    set(found_bundle_css FALSE)
+    set(found_workbox_js FALSE)
+
+    foreach(f ${files})
+        get_filename_component(base "${f}" NAME)
+        if(base STREQUAL "index.html")
+            set(found_index TRUE)
+        elseif(base STREQUAL "manifest.webmanifest")
+            set(found_manifest TRUE)
+        elseif(base STREQUAL "sw.js")
+            set(found_sw TRUE)
+        elseif(base STREQUAL "build.json")
+            set(found_build_json TRUE)
+        elseif(base STREQUAL "version.json")
+            set(found_version_json TRUE)
+        elseif(base MATCHES "^bundle.*\\.js$")
+            set(found_bundle_js TRUE)
+        elseif(base MATCHES "^bundle.*\\.css$")
+            set(found_bundle_css TRUE)
+        elseif(base MATCHES "^workbox.*\\.js$")
+            set(found_workbox_js TRUE)
+        endif()
+    endforeach()
+
+    set(missing "")
+    if(NOT found_index)
+        list(APPEND missing "index.html")
+    endif()
+    if(NOT found_manifest)
+        list(APPEND missing "manifest.webmanifest")
+    endif()
+    if(NOT found_sw)
+        list(APPEND missing "sw.js")
+    endif()
+    if(NOT found_build_json)
+        list(APPEND missing "build.json")
+    endif()
+    if(NOT found_version_json)
+        list(APPEND missing "version.json")
+    endif()
+    if(NOT found_bundle_js)
+        list(APPEND missing "bundle[hash].js")
+    endif()
+    if(NOT found_bundle_css)
+        list(APPEND missing "bundle[hash].css")
+    endif()
+    if(NOT found_workbox_js)
+        list(APPEND missing "workbox[hash].js")
+    endif()
+
+    if(missing)
+        set(listing "")
+        foreach(f ${files})
+            string(APPEND listing "    ${f}\n")
+        endforeach()
+        set(missing_list "")
+        foreach(m ${missing})
+            string(APPEND missing_list "    ${m}\n")
+        endforeach()
+        message(FATAL_ERROR
+            "UI: current asset files:\n${listing}"
+            "UI: missing required asset(s):\n${missing_list}"
+            "UI: hint: try cleaning your build directory: ${in_dir}")
+    endif()
+endfunction()
+
+# Generate ui.cpp/ui.h embedding every file of ${dist_dir} (empty table when
+# it has no index.html). When LLAMA_UI_GZIP is enabled, assets are compressed
+# first and served pre-gzipped (llama_ui_use_gzip()).
+function(emit_files dist_dir)
+    set(embed_dir "${dist_dir}")
+    set(use_gzip FALSE)
+
+    if(EXISTS "${dist_dir}/index.html")
+        if(EXISTS "${dist_dir}/_gzip")
+            # a _gzip tree inside dist_dir can only be a leftover from an
+            # older version of this script that staged it there
+            file(REMOVE_RECURSE "${dist_dir}/_gzip")
+            message(STATUS "UI: removed stale gzip tree ${dist_dir}/_gzip")
+        endif()
+        if(LLAMA_UI_GZIP)
+            # Compress every asset into a parallel _gzip/ tree under the build
+            # directory (never write into the source or dist tree); the
+            # structure stays the same: /abc/def --> /_gzip/abc/def.
+            # FORMAT raw produces a bare gzip stream (no archive container)
+            # that can be served with Content-Encoding: gzip. SOURCE_DATE_EPOCH
+            # zeroes the header timestamp so identical inputs give identical
+            # bytes (and therefore stable ETags) on every machine.
+            if(NOT DEFINED ENV{SOURCE_DATE_EPOCH})
+                set(ENV{SOURCE_DATE_EPOCH} 0)
+            endif()
+            set(gzip_root "${UI_BINARY_DIR}/ui-gzip")
+            set(gzip_dir  "${gzip_root}/_gzip")
+            file(REMOVE_RECURSE "${gzip_root}")
+            file(GLOB_RECURSE all_files RELATIVE "${dist_dir}" "${dist_dir}/*")
+            list(FILTER all_files EXCLUDE REGEX "^_gzip/")
+            foreach(f ${all_files})
+                get_filename_component(asset_path "${dist_dir}/${f}" REALPATH)
+                get_filename_component(dst_dir "${gzip_dir}/${f}" DIRECTORY)
+                file(MAKE_DIRECTORY "${dst_dir}")
+                file(ARCHIVE_CREATE
+                    OUTPUT "${gzip_dir}/${f}"
+                    PATHS "${asset_path}"
+                    FORMAT raw
+                    COMPRESSION GZip
+                )
+            endforeach()
+            message(STATUS "UI: gzip compression applied (${gzip_dir})")
+            set(embed_dir "${gzip_dir}")
+            set(use_gzip TRUE)
+        endif()
+    endif()
+
+    set(assets "")
+    if(EXISTS "${embed_dir}/index.html")
+        file(GLOB_RECURSE assets RELATIVE "${embed_dir}" "${embed_dir}/*")
+        list(FILTER assets EXCLUDE REGEX "^_gzip/")
+        list(SORT assets)
+        ui_validate_assets("${assets}" "${embed_dir}")
+    endif()
+
+    list(LENGTH assets n_assets)
+
+    # Only the per-asset data arrays and table rows are built here; all
+    # static C++ lives in the ui.h.in / ui.cpp.in templates. configure_file
+    # rewrites an output only when its contents change, so the library is
+    # not recompiled needlessly. @ONLY keeps ${...} in the content literal;
+    # mime types come from a fixed list.
+    set(ASSET_ARRAYS "")
+    set(ASSET_TABLE "")
+    set(idx 0)
+
+    foreach(f IN LISTS assets)
+        file(READ "${embed_dir}/${f}" hex HEX)
+        if(hex STREQUAL "")
+            message(FATAL_ERROR "UI: empty file: ${embed_dir}/${f}")
+        endif()
+
+        string(REGEX REPLACE "(..)" "0x\\1," bytes "${hex}")
+        file(SHA256 "${embed_dir}/${f}" etag)
+        mime_from_ext("${f}" mime)
+
+        string(APPEND ASSET_ARRAYS
+            "static const unsigned char asset_${idx}[] = {${bytes}};\n")
+
+        string(APPEND ASSET_TABLE
+            "    { \"${f}\", asset_${idx}, sizeof(asset_${idx}), \"\\\"${etag}\\\"\", \"${mime}\" },\n")
+
+        math(EXPR idx "${idx} + 1")
+    endforeach()
+
+    set(LLAMA_UI_HAS_ASSETS 0)
+    if(n_assets GREATER 0)
+        set(LLAMA_UI_HAS_ASSETS 1)
+    endif()
+    set(N_ASSETS "${n_assets}")
+    set(USE_GZIP false)
+    if(use_gzip)
+        set(USE_GZIP true)
+    endif()
+
+    set(UI_TEMPLATE_DIR "${LLAMA_SOURCE_DIR}/tools/ui")
+    configure_file("${UI_TEMPLATE_DIR}/ui.h.in"   "${UI_H}"   @ONLY)
+    configure_file("${UI_TEMPLATE_DIR}/ui.cpp.in" "${UI_CPP}" @ONLY)
+    message(STATUS "UI: embedded ${n_assets} assets")
+endfunction()
 
 function(npm_build_should_skip out_var)
     set(${out_var} FALSE PARENT_SCOPE)
@@ -248,48 +464,6 @@ function(hf_download version out_var out_resolved)
         set(${out_resolved} "${resolved}" PARENT_SCOPE)
         return()
     endforeach()
-endfunction()
-
-function(emit_files dist_dir)
-    # If gzip is requested, compress every asset into a parallel _gzip/ tree
-    # the structure stays the same; for ex: /abc/def --> /_gzip/abc/def
-    # embed.cpp will check for _gzip and will pick it up
-    if(LLAMA_UI_GZIP AND EXISTS "${dist_dir}/index.html")
-        find_program(GZIP_EXECUTABLE gzip)
-        if(NOT GZIP_EXECUTABLE)
-            message(WARNING "UI: LLAMA_UI_GZIP requested but gzip not found, embedding uncompressed")
-        else()
-            set(gzip_dir "${dist_dir}/_gzip")
-            file(REMOVE_RECURSE "${gzip_dir}")
-            file(GLOB_RECURSE all_files RELATIVE "${dist_dir}" "${dist_dir}/*")
-            foreach(f ${all_files})
-                get_filename_component(dst_dir "${gzip_dir}/${f}" DIRECTORY)
-                file(MAKE_DIRECTORY "${dst_dir}")
-                execute_process(
-                    COMMAND "${GZIP_EXECUTABLE}" -c "${dist_dir}/${f}"
-                    OUTPUT_FILE "${gzip_dir}/${f}"
-                    RESULT_VARIABLE gz_rc
-                )
-                if(NOT gz_rc EQUAL 0)
-                    message(FATAL_ERROR "UI: gzip failed for ${f}")
-                endif()
-            endforeach()
-            message(STATUS "UI: gzip compression applied (${gzip_dir})")
-        endif()
-    endif()
-
-    set(args "${UI_CPP}" "${UI_H}")
-    if(EXISTS "${dist_dir}/index.html")
-        list(APPEND args "${dist_dir}")
-    endif()
-
-    execute_process(
-        COMMAND "${LLAMA_UI_EMBED}" ${args}
-        RESULT_VARIABLE rc
-    )
-    if(NOT rc EQUAL 0)
-        message(FATAL_ERROR "UI: llama-ui-embed failed (${rc})")
-    endif()
 endfunction()
 
 # ---------------------------------------------------------------------------

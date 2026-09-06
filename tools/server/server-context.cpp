@@ -1493,11 +1493,22 @@ private:
                 auto caps = common_chat_templates_get_caps(chat_params.tmpls.get());
                 auto it = params_base.default_template_kwargs.find("preserve_reasoning");
                 bool supported = caps.at("supports_preserve_reasoning");
-                bool enabled = it != params_base.default_template_kwargs.end();
+                bool specified = params_base.preserve_reasoning_specified;
+                // note: the kwarg is enabled by default if not specified explicitly, so check the value
+                bool enabled = it != params_base.default_template_kwargs.end() && it->second == "true";
+                if (supported) {
+                    SRV_TRC("preserve_reasoning kwarg: %s\n",
+                            it == params_base.default_template_kwargs.end() ? "unset (template default)" : it->second.c_str());
+                } else {
+                    SRV_TRC("%s", "preserve_reasoning kwarg: not supported by template\n");
+                }
+                if (supported && !specified) {
+                    SRV_WRN("%s", "chat template supports preserving reasoning, it is enabled by default (may use more tokens, disable via --no-reasoning-preserve)\n");
+                }
                 if (supported && !enabled) {
                     SRV_INF("%s", "chat template supports preserving reasoning, consider enabling it via --reasoning-preserve\n");
                 }
-                if (!supported && enabled) {
+                if (!supported && specified && enabled) {
                     SRV_WRN("%s", "chat template does NOT support preserving reasoning, --reasoning-preserve has no effect\n");
                 }
             }

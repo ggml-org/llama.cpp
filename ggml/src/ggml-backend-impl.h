@@ -34,6 +34,11 @@ extern "C" {
         void * context;
     };
 
+    // [TAG_ALLOC_SIZE_EXPAND]
+    // returns true for ops that may require additional memory for fleeting data on some backends,
+    // i.e. the backend buffer type's get_alloc_size may return more than ggml_nbytes for the output tensor
+    GGML_API bool ggml_op_alloc_size_may_expand(enum ggml_op op);
+
     //
     // Backend buffer
     //
@@ -103,6 +108,16 @@ extern "C" {
     // Backend (stream)
     //
 
+    // passed to graph_optimize so the backend can add allocation dependencies:
+    // if the backend executes parts of the graph out of order (e.g. on concurrent streams),
+    // it must keep the affected tensors allocated until a node where execution is known to have joined
+    struct ggml_backend_graph_optimize_params {
+        // keep `tensor` allocated at least until `until` (a node of the same graph) has been computed
+        // can be called multiple times for the same tensor: the longest lifetime applies
+        void (*add_alloc_dep)(void * user_data, struct ggml_tensor * tensor, struct ggml_tensor * until);
+        void * user_data;
+    };
+
     struct ggml_backend_i {
         const char * (*get_name)(ggml_backend_t backend);
 
@@ -137,7 +152,7 @@ extern "C" {
         void (*event_wait)  (ggml_backend_t backend, ggml_backend_event_t event);
 
         // (optional) sort/optimize the nodes in the graph
-        void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph);
+        void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph, struct ggml_backend_graph_optimize_params * params);
     };
 
     struct ggml_backend {

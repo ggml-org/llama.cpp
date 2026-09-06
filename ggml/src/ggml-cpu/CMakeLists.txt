@@ -31,6 +31,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/ggml-cpu.cpp
         ggml-cpu/repack.cpp
         ggml-cpu/repack.h
+        ggml-cpu/iqp.cpp
+        ggml-cpu/iqp.h
         ggml-cpu/hbm.cpp
         ggml-cpu/hbm.h
         ggml-cpu/quants.c
@@ -453,12 +455,16 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 ggml-cpu/spacemit/repack.h
                 ggml-cpu/spacemit/ime_env.cpp
                 ggml-cpu/spacemit/ime_env.h
-                ggml-cpu/spacemit/ime1_kernels.cpp
-                ggml-cpu/spacemit/ime2_kernels.cpp
                 ggml-cpu/spacemit/ime_kernels.h
                 ggml-cpu/spacemit/rvv_kernels.cpp
                 ggml-cpu/spacemit/rvv_kernels.h
             )
+            if ("RISCV64_SPACEMIT_IME1" IN_LIST RISCV64_SPACEMIT_IME_SPEC)
+                list(APPEND GGML_CPU_SOURCES ggml-cpu/spacemit/ime1_kernels.cpp)
+            endif()
+            if ("RISCV64_SPACEMIT_IME2" IN_LIST RISCV64_SPACEMIT_IME_SPEC)
+                list(APPEND GGML_CPU_SOURCES ggml-cpu/spacemit/ime2_kernels.cpp)
+            endif()
         endif()
         if(NOT GGML_CPU_ALL_VARIANTS)
             set(MARCH_STR "rv64gc")
