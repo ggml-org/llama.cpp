@@ -9561,8 +9561,6 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         return false;
     }
 
-    // Batch size must not select precision: N=1 and N>1 take the same path.
-
     // Quantization overhead is not worth it for small k
     switch (device->vendor_id) {
     case VK_VENDOR_ID_NVIDIA:
@@ -9622,6 +9620,7 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         return true;
     }
 
+    // m/n ignored: batch size must not select precision, N=1 and N>1 take the same path.
     GGML_UNUSED(m);
     GGML_UNUSED(n);
 }
