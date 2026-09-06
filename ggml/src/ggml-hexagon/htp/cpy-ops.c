@@ -297,7 +297,8 @@ int op_cpy(struct htp_ops_context * octx) {
 
     const bool sametype   = (src0->type == dst->type);
     const bool transposed = (nb00 > nb01) || (nb0 > nb1);
-    const bool sameshape  = !transposed && (ne00 == ne0 && ne01 == ne1 && ne02 == ne2 && ne03 == ne3);
+    const bool sameshape  = !transposed && nb00 == ct.src0_type_size && nb0 == ct.dst_type_size &&
+                           (ne00 == ne0 && ne01 == ne1 && ne02 == ne2 && ne03 == ne3);
 
     ct.src0_nrows_per_thread = (nr + n_threads - 1) / n_threads;
 

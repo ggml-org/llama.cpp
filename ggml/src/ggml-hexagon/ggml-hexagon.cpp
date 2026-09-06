@@ -1691,8 +1691,8 @@ struct ggml_hexagon_opbatch {
         if (it != b_map.end()) { return it->second; }
 
         // Add new buffer to the batch
-        int bi = n_bufs++;
         GGML_ASSERT(n_bufs < HTP_OP_MAX_BUFS);
+        int bi = n_bufs++;
 
         b_map.insert({sbuf->fd(), bi});
 
