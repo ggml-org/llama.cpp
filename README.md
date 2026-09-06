@@ -3,11 +3,10 @@
 
 <img src="halo-box.png" alt="Halo Box" width="260">
 
+Community fork of llama.cpp.
 
-Community fork of llama.cpp
-
-The goal is simple: more functionality, and the fastest llama.cpp around. And help the community with a single fast llama.cpp fork instead of 
-many competing ones.
+The goal is simple: more functionality, and the fastest llama.cpp around. And help the community with a single fast
+llama.cpp fork instead of many competing ones.
 
 Halo Box keeps two forks, and which one you want depends on your hardware:
 
@@ -17,22 +16,27 @@ Halo Box keeps two forks, and which one you want depends on your hardware:
 | [halo-box/strix-llama.cpp](https://github.com/halo-box/strix-llama.cpp) | Purely optimised for AMD Strix Halo machines (Ryzen AI Max+, RDNA 3.5 / gfx1151). Free to diverge from upstream wherever that buys speed. |
 
 Use this repo if you want upstream behaviour plus extras. Use `strix-llama.cpp` if you run a Strix Halo box and
-want every last token/s out of it.
+want every last token/s out of it. Everything here is merged into `strix-llama.cpp` regularly, so that repo is a
+superset of this one.
 
 Upstream behaviour is unchanged - this is a superset, not a rewrite. On top of it, this fork carries:
 
-- **Speculative prefill** (`--spec-prefill`) - a small draft model scores prompt tokens by attention importance so
-  the target model only prefills the ones that matter, cutting time-to-first-token on long prompts.
-- **N-gram table on disk** (`--ngram-on-disk`) - keeps a model's n-gram hash-embedding table (28.8 GB on
-  Qwen3.8-Flash-Next) off the memory budget entirely, reading only the rows each batch actually gathers.
-- **Adaptive speculation** speed up MTP and DFLASH by automatically adjusting the N-max
-- **Vulkan fixes and tuning for RDNA 3.5** - driver-gated coopmat LDS stride padding, UMA bulk readback gated on
-  host-cached mappings, IQ3_S mat-vec at batch sizes > 4, and a radix top-k kernel.
-- **A `hidden` server preset option** - keep a model loadable by name while omitting it from `GET /models` in the .ini file.
+| Change | Flag / switch | What it does |
+| --- | --- | --- |
+| Speculative prefill | `--spec-prefill` | A small draft model scores prompt tokens by attention importance so the target model only prefills the ones that matter, cutting time-to-first-token on long prompts |
+| N-gram table on disk | `--ngram-on-disk`, `--ngram-cache`, `--ngram-io-threads` | Keeps a model's n-gram hash-embedding table (28.8 GB on Qwen3.8-Flash-Next) off the memory budget entirely, reading only the rows each batch actually gathers |
+| Adaptive speculative draft length | `--spec-draft-adaptive` | Sizes each draft from a measured per-sequence acceptance EMA rather than always drafting `--spec-draft-n-max`; speeds up MTP and DFlash |
+| Vulkan fixes and tuning for RDNA 3.5 | | Driver-gated coopmat LDS stride padding, UMA bulk readback gated on host-cached mappings, IQ3_S mat-vec at batch sizes > 4, and a radix top-k kernel for large k |
+| Hidden server presets | `hidden` in the models `.ini` | Keep a model loadable by name while omitting it from `GET /models` |
+
+Run `--help`, or see [tools/server/README.md](tools/server/README.md), for the full options.
 
 Work lands on `halo/*` branches, and upstream is merged in regularly. Anything generally useful is sent upstream;
 what stays here is either not yet ready to go up, or too niche for mainline.
 
+The rest of this file is the unmodified upstream README.
+
+---
 
 # llama.cpp
 
