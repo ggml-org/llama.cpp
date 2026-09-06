@@ -273,7 +273,7 @@ uint32_t llama_kv_cache_msa_context::get_n_pos() const {
 }
 
 void llama_kv_cache_msa_context::set_input_cell_pos(ggml_tensor * dst, const llama_ubatch * ubatch, int32_t div) const {
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    llama_host_write(dst);
     GGML_ASSERT(dst->type == GGML_TYPE_I32);
     GGML_ASSERT(div > 0);
 
@@ -302,7 +302,7 @@ void llama_kv_cache_msa_context::set_input_cell_pos(ggml_tensor * dst, const lla
 }
 
 void llama_kv_cache_msa_context::set_input_pos_slot(ggml_tensor * dst, const llama_ubatch * ubatch) const {
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    llama_host_write(dst);
     GGML_ASSERT(dst->type == GGML_TYPE_I32 || dst->type == GGML_TYPE_F32);
 
     const int64_t n_tokens    = ubatch->n_tokens;
@@ -346,7 +346,7 @@ void llama_kv_cache_msa_context::set_input_pos_slot(ggml_tensor * dst, const lla
 }
 
 void llama_kv_cache_msa_context::set_input_pos_mask(ggml_tensor * dst, const llama_ubatch * ubatch) const {
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    llama_host_write(dst);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     const int64_t n_tokens = ubatch->n_tokens;
