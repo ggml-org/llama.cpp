@@ -24,7 +24,7 @@ runs:
 
         write-host "Installing ROCm wheels for multi-arch support"
         # Install ROCm wheels for multi-arch support (this may take several minutes)
-        python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "rocm[libraries,devel]==${{ inputs.version }}"
+        python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel]==${{ inputs.version }}"
 
         # Pre-expand the devel tree so it is included in the cache
         write-host "Initializing ROCm devel tree"
