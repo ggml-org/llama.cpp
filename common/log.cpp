@@ -1,5 +1,6 @@
 #include "common.h"
 #include "log.h"
+#include "json.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -66,6 +67,17 @@ static const char* g_col[] = {
     "",
 };
 
+static const char * level_str(enum ggml_log_level level) {
+    switch (level) {
+        case GGML_LOG_LEVEL_DEBUG: return "debug";
+        case GGML_LOG_LEVEL_INFO:  return "info";
+        case GGML_LOG_LEVEL_WARN:  return "warn";
+        case GGML_LOG_LEVEL_ERROR: return "error";
+        case GGML_LOG_LEVEL_CONT:  return "cont";
+        default:                   return "none";
+    }
+}
+
 struct common_log_entry {
     enum ggml_log_level level {GGML_LOG_LEVEL_INFO};
 
@@ -74,6 +86,7 @@ struct common_log_entry {
     int64_t timestamp { 0 };
     bool is_end       { false }; // signals the worker thread to stop
     bool prefix       { false };
+    bool jsonl        { false };
 
     common_log_entry(size_t size = 256) : msg(size) { }
 
@@ -88,9 +101,21 @@ struct common_log_entry {
 
             fcur = stdout;
 
-            if (level != GGML_LOG_LEVEL_NONE) {
+            if (level != GGML_LOG_LEVEL_NONE && !jsonl) {
                 fcur = stderr;
             }
+        }
+
+        if (jsonl) {
+            common_json obj = {
+                {"type",  "log"},
+                {"time",  timestamp},
+                {"level", level_str(level)},
+                {"msg",   msg.data()},
+            };
+            fprintf(fcur, "%s\n", obj.dump_safe().c_str());
+            fflush(fcur);
+            return;
         }
 
         if (level != GGML_LOG_LEVEL_NONE && level != GGML_LOG_LEVEL_CONT && prefix) {
@@ -131,6 +156,7 @@ struct common_log {
         file       = nullptr;
         prefix     = false;
         timestamps = false;
+        jsonl      = false;
         running    = false;
         t_start    = t_us();
 
@@ -158,6 +184,7 @@ private:
 
     bool prefix;
     bool timestamps;
+    bool jsonl;
     bool running;
 
     int64_t t_start;
@@ -246,6 +273,7 @@ public:
         entry.is_end    = false;
         entry.level     = level;
         entry.prefix    = prefix;
+        entry.jsonl     = jsonl;
         entry.timestamp = 0;
         if (timestamps) {
             entry.timestamp = t_us() - t_start;
@@ -360,6 +388,12 @@ public:
 
         this->timestamps = timestamps;
     }
+
+    void set_jsonl(bool jsonl) {
+        std::lock_guard<std::mutex> lock(mtx);
+
+        this->jsonl = jsonl;
+    }
 };
 
 //
@@ -431,6 +465,10 @@ void common_log_set_prefix(struct common_log * log, bool prefix) {
 
 void common_log_set_timestamps(struct common_log * log, bool timestamps) {
     log->set_timestamps(timestamps);
+}
+
+void common_log_set_jsonl(struct common_log * log, bool jsonl) {
+    log->set_jsonl(jsonl);
 }
 
 void common_log_flush(struct common_log * log) {
