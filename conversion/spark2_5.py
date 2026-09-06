@@ -10,6 +10,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("Spark2_5ForCausalLM")
+@ModelBase.example("XHToken/Spark-X2.5-1.7B")
 class Spark2_5Model(TextModel):
     model_arch = gguf.MODEL_ARCH.SPARK2_5
 
