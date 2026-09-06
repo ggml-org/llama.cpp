@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include <new>
+#include <mutex>
 
 #define UNUSED GGML_UNUSED
 
@@ -482,24 +483,22 @@ static void tiled_unpack_src1_q8_K(const block_q8_K * rows, int64_t row_stride, 
 // GGML_CPU_TILED_MM: master switch, on by default. If off, we fast return false and normal vec_dot mul_mat resumes
 static bool ggml_tiled_matmul_enabled(void) {
     static bool enabled = true;
-    static bool inited  = false;
-    if (!inited) {
+    static std::once_flag flag;
+    std::call_once(flag, []() {
         const char * env = getenv("GGML_CPU_TILED_MM");
         enabled = env == NULL || atoi(env) != 0;
-        inited = true;
-    }
+    });
     return enabled;
 }
 
 // GGML_CPU_TILED_MM_FORCE: test/bench only, take the tiled path even when unprofitable
 static bool ggml_tiled_matmul_forced(void) {
     static bool forced = false;
-    static bool inited  = false;
-    if (!inited) {
+    static std::once_flag flag;
+    std::call_once(flag, []() {
         const char * env = getenv("GGML_CPU_TILED_MM_FORCE");
         forced = env != NULL && atoi(env) == 1;
-        inited = true;
-    }
+    });
     return forced;
 }
 
