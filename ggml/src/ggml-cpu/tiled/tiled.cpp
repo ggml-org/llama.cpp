@@ -531,13 +531,6 @@ static bool ggml_tiled_matmul_srcs_supported(const struct ggml_tensor * src0,
     if (!ggml_tiled_matmul_enabled()) {
         return false;
     }
-    // A/B switch between the tiled kernel and the iqp panel; read per op so the flag can change within a process (harness)
-    if (const char * const mm_path = getenv("GGML_CPU_MM_PATH")) {
-        if (strcmp(mm_path, "iqp") == 0) {
-            return false;
-        }
-    }
-
 
     // hard constraints: the kernel is only correct/defined for these
 
@@ -625,12 +618,8 @@ static void tiled_store_window(const float * buf, int n_src0, int n_src1, int bu
 // thread-local scratch (contiguous rows, plus the [k/4][row][4] interleave on VNNI) so the
 // unpack and microtile are reused unchanged from mul_mat. Each thread stages the rows itself,
 // no cross-thread sync; staging is small vs the gemm.
-//
-// left for future work: share the staging across the expert's threads (one builder + barrier),
-// vectorize the row gather copy, tune TILED_MMID_MIN_BATCH (currently the mul_mat floor)
 
-// cne1 rows of src1 (one expert's share of the batch) is enough for the tiles to pay for
-// themselves; same order as the mul_mat batch floor
+// Unprofitable below 32
 #define TILED_MMID_MIN_BATCH 32
 
 // src0 rows per g group; finer than the TILED_TILE_K kernel tile so all threads stay busy at small ne01
@@ -657,7 +646,7 @@ bool ggml_tiled_matmul_id_supported(const struct ggml_tensor * dst) {
 }
 
 // like tiled_store_window, but the dst columns are not contiguous: col_ptrs[j] points at the
-// start of dst column j, whose rows are contiguous (dim 0, nb0 == 4 bytes)
+// start of dst column j, whose rows are contiguous (dim 0, nb0 == 4 bytes).
 static void tiled_store_window_scatter(const float * buf, int n_src0, int n_src1, int buf_stride,
                                        float * const * col_ptrs) {
     int ri = 0;
@@ -979,18 +968,8 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
     const int64_t nr1_pad = 0;
 #endif
 
-    if (!tiled_ws.src0) {
-        tiled_ws.src0 = new tiled_tile_src0();
-    }
-    if (!tiled_ws.src1) {
-        tiled_ws.src1 = new tiled_tile_src1();
-    }
-    if (!tiled_ws.acc) {
-        // Write buffer, stays in L2 and reduces TLB pressure until we copy/transpose out to main mem at the end.
-        tiled_ws.acc = static_cast<float *>(
-            ::operator new(sizeof(float) * (size_t) TILED_TILE_ROWS * TILED_TILE_ROWS,
-                           std::align_val_t(64)));
-    }
+    // Init threadlocal panels
+    init_ws();
 
     const int64_t src0_stride = nb01 / src0_bs;  // blocks between src0 rows
     const int64_t src1_stride = (src1->type == vec_dot_type ? src1->nb[1] : row_size) / src1_bs;
@@ -1043,8 +1022,6 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
                                        qv, nr1_pad, iir1, kblk);
 
                 // 16x16 microtiles sweeping the window
-                // Unpack routines zeropad our macrotiles outside the valid unpacked ranges, 
-                // so invalid vals are harmless for final dotproducts, don't need to special case them
                 for (int64_t ir0 = iir0; ir0 < iir0_end; ir0 += MICRO) {
                     for (int64_t ir1 = iir1; ir1 < iir1_end; ir1 += MICRO) {
                         tiled_run_microtile<SUBBLK, HAS_MIN, BIAS>(*tiled_ws.src0, *tiled_ws.src1,
