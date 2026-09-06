@@ -230,3 +230,108 @@ kernel void kernel_argsort_merge_f32_i32(
 
 template [[host_name("kernel_argsort_merge_f32_i32_asc")]]  kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_ASC>;
 template [[host_name("kernel_argsort_merge_f32_i32_desc")]] kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_DESC>;
+
+static inline uint ggml_top_k_f2ui(float x) {
+    uint y = as_type<uint>(x);
+    if ((y & 0x80000000u) != 0u) {
+        y ^= 0xFFFFFFFFu; // negative floats: flip all bits
+    } else {
+        y |= 0x80000000u; // positive floats: set the sign bit
+    }
+    return y;
+}
+
+kernel void kernel_top_k_f32_i32(
+        constant   ggml_metal_kargs_top_k & args,
+        device   const char * src0,
+        device      int32_t * dst,
+        threadgroup atomic_uint * histo     [[threadgroup(0)]],
+        threadgroup        uint * sh_bucket [[threadgroup(1)]],
+        threadgroup        uint * sh_above  [[threadgroup(2)]],
+        threadgroup atomic_uint * out_count [[threadgroup(3)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+
+    const uint ncols = args.ne00;
+    const uint top_k = args.top_k;
+    const uint i01   = tgpig[0];
+    const uint i02   = tgpig[1];
+    const uint i03   = tgpig[2];
+
+    device const float * src0_row = (device const float *) (src0 + args.nb01*i01 + args.nb02*i02 + args.nb03*i03);
+
+    device int32_t * dst_row = dst + top_k*(i01 + args.ne01*i02 + args.ne01*args.ne02*i03);
+
+    const uint tid = tpitg.x;
+    const uint ntg_x = ntg.x;
+
+    uint prefix  = 0;     // fixed high bits of the threshold key
+    uint desired = top_k; // count still needed from the candidate range
+
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        for (uint i = tid; i < 256; i += ntg_x) {
+            atomic_store_explicit(&histo[i], 0u, memory_order_relaxed);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        const uint hi_mask   = (shift + 8 >= 32) ? 0u : (0xFFFFFFFFu << uint(shift + 8));
+        const uint prefix_hi = prefix & hi_mask;
+
+        for (uint i = tid; i < ncols; i += ntg_x) {
+            const uint key = ggml_top_k_f2ui(src0_row[i]);
+            if ((key & hi_mask) == prefix_hi) {
+                atomic_fetch_add_explicit(&histo[(key >> uint(shift)) & 0xFFu], 1u, memory_order_relaxed);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // top-down scan for the bucket holding the k-th value
+        if (tid == 0) {
+            uint acc = 0;
+            uint b   = 0;
+            for (int bb = 255; bb >= 0; --bb) {
+                const uint c = atomic_load_explicit(&histo[bb], memory_order_relaxed);
+                if (acc + c >= desired) {
+                    b = uint(bb);
+                    break;
+                }
+                acc += c;
+            }
+            *sh_bucket = b;
+            *sh_above  = acc;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        prefix  |= *sh_bucket << uint(shift);
+        desired -= *sh_above;
+
+        // ensure every thread has consumed sh_bucket/sh_above before the next pass
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (tid == 0) {
+        atomic_store_explicit(out_count, 0u, memory_order_relaxed);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // emit everything above the threshold, then fill the rest from ties
+    const uint threshold = prefix;
+
+    for (uint i = tid; i < ncols; i += ntg_x) {
+        if (ggml_top_k_f2ui(src0_row[i]) > threshold) {
+            const uint pos = atomic_fetch_add_explicit(out_count, 1u, memory_order_relaxed);
+            dst_row[pos] = (int32_t) i;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint i = tid; i < ncols; i += ntg_x) {
+        if (ggml_top_k_f2ui(src0_row[i]) == threshold) {
+            const uint pos = atomic_fetch_add_explicit(out_count, 1u, memory_order_relaxed);
+            if (pos < top_k) {
+                dst_row[pos] = (int32_t) i;
+            }
+        }
+    }
+}
