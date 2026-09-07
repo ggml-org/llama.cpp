@@ -795,6 +795,30 @@ static common_chat_tool union_args_tool{
     })",
 };
 
+static common_chat_tool anyof_object_arg_tool{
+    /* .name = */ "set_location",
+    /* .description = */ "Tool with an anyOf string or object argument",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "location": {
+                "anyOf": [
+                    { "type": "string" },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "city": { "type": "string" },
+                            "country": { "type": "string" }
+                        },
+                        "required": ["city", "country"]
+                    }
+                ]
+            }
+        },
+        "required": ["location"]
+    })",
+};
+
 static common_chat_tool nullable_string_tool{
     /* .name = */ "set_nullable_str",
     /* .description = */ "Set a nullable string value",
@@ -3670,6 +3694,38 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         })
             .expect_tool_calls({
                 { "todo_list", "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // anyOf between a raw string and an object: structured JSON should not be stringified.
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_location>\n"
+               "<parameter=location>\n"
+               "{\"city\": \"Paris\", \"country\": \"France\"}\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ anyof_object_arg_tool })
+            .expect_tool_calls({
+                { "set_location", R"({"location": {"city": "Paris", "country": "France"}})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // The raw string alternative remains supported for the same anyOf schema.
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_location>\n"
+               "<parameter=location>\n"
+               "Paris, France\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ anyof_object_arg_tool })
+            .expect_tool_calls({
+                { "set_location", R"({"location": "Paris, France"})", {} },
             })
             .expect_reconstruction()
             .run();
