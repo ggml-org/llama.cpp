@@ -2,6 +2,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml.h"
 #include "ggml-impl.h"
+
 #include <assert.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -39,6 +40,7 @@ bool ggml_op_can_inplace(enum ggml_op op) {
         case GGML_OP_SILU_BACK:
         case GGML_OP_RMS_NORM:
         case GGML_OP_RMS_NORM_BACK:
+        case GGML_OP_CLAMP:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_MAX_BACK:
             return true;
@@ -149,7 +151,7 @@ static void ggml_dyn_tallocr_insert_block(struct tallocr_chunk * chunk, size_t o
 
 static void ggml_dyn_tallocr_remove_block(struct tallocr_chunk * chunk, int idx) {
     // shift all elements after idx by 1 to the left, overwriting the element at idx
-    for (int i = idx; i < chunk->n_free_blocks; i++) {
+    for (int i = idx; i < chunk->n_free_blocks - 1; i++) {
         chunk->free_blocks[i] = chunk->free_blocks[i+1];
     }
     chunk->n_free_blocks--;

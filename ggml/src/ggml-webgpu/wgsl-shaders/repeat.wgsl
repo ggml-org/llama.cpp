@@ -27,6 +27,9 @@ struct Params {
 #ifdef TYPE_I32
 #define DataType i32
 #endif
+#ifdef TYPE_F16
+#define DataType f16
+#endif
 #ifdef TYPE_I16
 // same size (16-bit) is sufficient for repeat
 #define DataType f16

@@ -152,14 +152,14 @@
 
 {%- set ns = namespace(prev_message_type=None, last_user_message=-1) -%}
 {%- set loop_messages = messages -%}
-{{ bos_token }}
+{{- bos_token -}}
 {#- Handle System/Tool Definitions Block -#}
 {%- if (enable_thinking is defined and enable_thinking) or tools or messages[0]['role'] in ['system', 'developer'] -%}
     {{- '<|turn>system\n' -}}
 
     {#- Inject Thinking token at the very top of the FIRST system turn -#}
     {%- if enable_thinking is defined and enable_thinking -%}
-        {{- '<|think|>' -}}
+        {{- '<|think|>\n' -}}
         {%- set ns.prev_message_type = 'think' -%}
     {%- endif -%}
 
@@ -255,13 +255,13 @@
                             {{- item['text'] | trim -}}
                         {%- endif -%}
                     {%- elif item['type'] == 'image' -%}
-                        {{- '\n\n<|image|>\n\n' -}}
+                        {{- '<|image|>' -}}
                         {%- set ns.prev_message_type = 'image' -%}
                     {%- elif item['type'] == 'audio' -%}
                         {{- '<|audio|>' -}}
                         {%- set ns.prev_message_type = 'audio' -%}
                     {%- elif item['type'] == 'video' -%}
-                        {{- '\n\n<|video|>\n\n' -}}
+                        {{- '<|video|>' -}}
                         {%- set ns.prev_message_type = 'video' -%}
                     {%- endif -%}
                 {%- endfor -%}

@@ -8,16 +8,15 @@ CatalogFile = libggml-htp.cat
 PnpLockDown = 1
 
 [DestinationDirs]
-Drivers_Dir = 6
+Drivers_Dir = 13
 
 [SourceDisksNames]
 1 = %DiskId%
 
 [SourceDisksFiles]
-libggml-htp-v68.so = 1
-libggml-htp-v69.so = 1
 libggml-htp-v73.so = 1
 libggml-htp-v75.so = 1
+libggml-htp-v79.so = 1
 libggml-htp-v81.so = 1
 
 [ControlFlags]
@@ -27,10 +26,9 @@ ExcludeFromSelect = *
 CopyFiles=Drivers_Dir
 
 [Drivers_Dir]
-libggml-htp-v68.so,,,0x10 ;COPYFLG_NO_OVERWRITE
-libggml-htp-v69.so,,,0x10 ;COPYFLG_NO_OVERWRITE
 libggml-htp-v73.so,,,0x10 ;COPYFLG_NO_OVERWRITE
 libggml-htp-v75.so,,,0x10 ;COPYFLG_NO_OVERWRITE
+libggml-htp-v79.so,,,0x10 ;COPYFLG_NO_OVERWRITE
 libggml-htp-v81.so,,,0x10 ;COPYFLG_NO_OVERWRITE
 
 [Strings]

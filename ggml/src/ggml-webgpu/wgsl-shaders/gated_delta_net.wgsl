@@ -39,6 +39,7 @@ struct Params {
 
     neq1: u32,
     rq3: u32,
+    K: u32,
     scale: f32,
 };
 
@@ -62,11 +63,14 @@ fn main(
     let iq3 = seq_id / params.rq3;
 
     let state_size = S_V * S_V;
-    let state_base = (seq_id * params.h + head_id) * state_size;
+    // input state holds s0 only [S_v, S_v, H, n_seqs]: per-seq stride is H*D.
+    let state_in_base = (seq_id * params.h + head_id) * state_size;
+    let state_out_base = (seq_id * params.h + head_id) * state_size;
+    let state_size_per_snap = state_size * params.h * params.n_seqs;
 
     var state: array<f32, S_V>;
     for (var i = 0u; i < S_V; i++) {
-        state[i] = src_state[state_base + col * S_V + i];
+        state[i] = src_state[state_in_base + col * S_V + i];
     }
 
     var attn_off = (seq_id * params.n_tokens * params.h + head_id) * S_V;
@@ -123,10 +127,23 @@ fn main(
         dst[attn_off + col] = attn_col * params.scale;
         attn_off += S_V * params.h;
 
+        if (params.K > 1u) {
+            // snapshot slot mapping: slot 0 = most recent state, slot s = s tokens back.
+            let target_slot = i32(params.n_tokens) - 1 - i32(t);
+            if (target_slot >= 0 && target_slot < i32(params.K)) {
+                let slot_base = params.s_off + u32(target_slot) * state_size_per_snap + state_out_base;
+                for (var i = 0u; i < S_V; i++) {
+                    dst[slot_base + col * S_V + i] = state[i];
+                }
+            }
+        }
+
         workgroupBarrier();
     }
 
-    for (var i = 0u; i < S_V; i++) {
-        dst[params.s_off + state_base + col * S_V + i] = state[i];
+    if (params.K == 1u) {
+        for (var i = 0u; i < S_V; i++) {
+            dst[params.s_off + state_out_base + col * S_V + i] = state[i];
+        }
     }
 }

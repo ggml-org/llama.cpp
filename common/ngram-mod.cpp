@@ -1,5 +1,7 @@
 #include "ngram-mod.h"
 
+#include <algorithm>
+
 //
 // common_ngram_mod
 //

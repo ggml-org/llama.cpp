@@ -15,7 +15,10 @@ static void print_usage(int, char ** argv) {
     LOG("\n");
 }
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_batched_bench(int argc, char ** argv);
+
+int llama_batched_bench(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
     common_params params;

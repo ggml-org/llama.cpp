@@ -1,0 +1,7 @@
+#version 460
+
+#extension GL_EXT_float_e2m1 : require
+
+void main()
+{
+}

@@ -1,0 +1,95 @@
+<script lang="ts" module>
+	import jpgAsset from './fixtures/assets/1.jpg?url';
+	import pdfAsset from './fixtures/assets/example.pdf?raw';
+	import svgAsset from './fixtures/assets/hf-logo.svg?url';
+	import { defineMeta } from '@storybook/addon-svelte-csf';
+	import ChatScreenForm from '$lib/components/app/chat/ChatScreen/ChatScreenForm.svelte';
+	import { expect } from 'storybook/test';
+
+	const { Story } = defineMeta({
+		component: ChatScreenForm,
+		parameters: {
+			layout: 'centered'
+		},
+		title: 'Components/ChatScreen/ChatScreenForm'
+	});
+
+	let fileAttachments = $state([
+		{
+			file: new File([''], '1.jpg', { type: 'image/jpeg' }),
+			id: '1',
+			name: '1.jpg',
+			preview: jpgAsset,
+			size: 44891,
+			type: 'image/jpeg'
+		},
+		{
+			file: new File([''], 'hf-logo.svg', { type: 'image/svg+xml' }),
+			id: '2',
+			name: 'hf-logo.svg',
+			preview: svgAsset,
+			size: 1234,
+			type: 'image/svg+xml'
+		},
+		{
+			file: new File([pdfAsset], 'example.pdf', { type: 'application/pdf' }),
+			id: '3',
+			name: 'example.pdf',
+			size: 351048,
+			type: 'application/pdf'
+		}
+	]);
+</script>
+
+<Story
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	name="Default"
+	play={async ({ canvas, userEvent }) => {
+		const textarea = await canvas.findByRole('textbox');
+		const submitButton = await canvas.findByRole('button', { name: 'Send' });
+
+		// Expect the input to be focused after the component is mounted
+		await expect(textarea).toHaveFocus();
+
+		// Expect the submit button to be disabled
+		await expect(submitButton).toBeDisabled();
+
+		const text = 'What is the meaning of life?';
+
+		await userEvent.clear(textarea);
+		await userEvent.type(textarea, text);
+
+		await expect(textarea).toHaveValue(text);
+
+		const fileInput = document.querySelector('input[type="file"]');
+
+		await expect(fileInput).not.toHaveAttribute('accept');
+	}}
+/>
+
+<Story args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', isLoading: true }} name="Loading" />
+
+<Story
+	args={{
+		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
+		uploadedFiles: fileAttachments
+	}}
+	name="FileAttachments"
+	play={async ({ canvas }) => {
+		const jpgAttachment = canvas.getByAltText('1.jpg');
+		const svgAttachment = canvas.getByAltText('hf-logo.svg');
+		const pdfFileExtension = canvas.getByText('PDF');
+		const pdfAttachment = canvas.getByText('example.pdf');
+		const pdfSize = canvas.getByText('342.82 KB');
+
+		await expect(jpgAttachment).toBeInTheDocument();
+		await expect(jpgAttachment).toHaveAttribute('src', jpgAsset);
+
+		await expect(svgAttachment).toBeInTheDocument();
+		await expect(svgAttachment).toHaveAttribute('src', svgAsset);
+
+		await expect(pdfFileExtension).toBeInTheDocument();
+		await expect(pdfAttachment).toBeInTheDocument();
+		await expect(pdfSize).toBeInTheDocument();
+	}}
+/>

@@ -1,0 +1,50 @@
+# note: place this as the last step of the job, so the new cache is saved by "Post ccache" right after the old one is cleared
+name: "ccache-clear"
+description: "Delete GitHub Actions caches matching a key prefix, oldest first"
+inputs:
+  key:
+    description: "Cache key prefix to match and delete"
+    required: true
+  older:
+    description: "Only delete caches created more than this long ago (e.g. 90m, 1h, 1d). By default all matching caches are deleted"
+    required: false
+    default: ""
+  min:
+    description: "Stop deleting if fewer than this many caches would remain (e.g. 1). By default there is no minimum"
+    required: false
+    default: "0"
+  dry-run:
+    description: "Only print the caches that would be deleted, without deleting them"
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install GitHub CLI if missing
+      shell: bash
+      run: |
+        # e.g. in container jobs, where it is not preinstalled
+        if ! command -v gh >/dev/null 2>&1; then
+          echo "GitHub CLI not found, installing..."
+          if ! command -v curl >/dev/null 2>&1; then
+            apt-get update >/dev/null 2>&1 || true
+            apt-get install -y curl >/dev/null 2>&1 || true
+          fi
+          mkdir -p -m 755 /etc/apt/keyrings
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+          apt-get update >/dev/null 2>&1 || true
+          apt-get install -y gh || { echo "Failed to install GitHub CLI (gh)" >&2; exit 1; }
+        fi
+        command -v gh >/dev/null 2>&1 || { echo "GitHub CLI (gh) is required but could not be installed" >&2; exit 1; }
+
+    - name: Clear caches
+      shell: bash
+      run: |
+        bash scripts/ccache-clear.sh \
+          --key "${{ inputs.key }}" \
+          --older "${{ inputs.older }}" \
+          --min "${{ inputs.min }}" \
+          ${{ inputs.dry-run == 'true' && '--dry-run' || '' }}

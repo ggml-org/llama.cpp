@@ -1,3 +1,18 @@
+# Snapdragon-based Windows devices
+
+## Tool Dependencies
+
+Native Windows 11 arm64 builds have the following tool dependencies:
+- MS Visual Studio 2026 (Community Edition or Pro)
+  - MSVC arm64 standard and runtime libraries
+  - UCRT and Driver Kit
+- LLVM core libraries and Clang compiler (winget)
+- CMake, Git, Python (winget)
+- Hexagon SDK Community Edition 6.6 or later (see below)
+- OpenCL SDK 2.3 or later (see below)
+
+Note: The rest of the **Windows** build process assumes that you're running natively in Powershell.
+
 ## Overview
 
 The document covers procedures for installing the latest GPU and NPU drivers, and OpenCL and Hexagon SDKs.
@@ -9,7 +24,18 @@ must be included in the .cat file digitally signed with a trusted certificate.
 This document covers details on how to generate personal certificate files (.pfx) and how to configure the system
 to allow for test signatures (aka test-signing).
 
-## Install the latest Adreno OpenCL SDK
+## Install Windows SDKs
+
+The recommended method is `setup-sdk.py`:
+
+```
+> python scripts\snapdragon\setup-sdk.py --list-sdk-releases
+> python scripts\snapdragon\setup-sdk.py --hexagon --opencl
+```
+
+It installs the selected SDKs under `C:\Qualcomm` and sets their corresponding environment variables for the current user. Start a new terminal after it completes; native Windows builds check all SDK paths before CMake runs.
+
+Select the SDKs to install with `--hexagon` and `--opencl`; use both to prepare a dual-backend build. To select a different available version, pass it to the SDK option, for example `--hexagon 6.4.0.2`. SDK versions install side by side, so you can switch versions without deleting an existing installation. Use `--force` to reinstall the selected SDKs. Use a new CMake build directory after each switch because CMake caches the SDK paths.
 
 Either use the trimmed down version (optimized for CI) from
 
@@ -28,15 +54,15 @@ c:\Qualcomm\OpenCL_SDK\2.3.2
 
 Either use the trimmed down version (optimized for CI) from
 
-    https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.4.0.2/hexagon-sdk-v6.4.0.2-arm64-wos.tar.xz
+    https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.6.0.0/hexagon-sdk-v6.6.0.0-arm64-wos.tar.xz
 
 Or download the complete official version from
 
-    https://softwarecenter.qualcomm.com/catalog/item/Hexagon_SDK?version=6.4.0.2
+    https://softwarecenter.qualcomm.com/catalog/item/Hexagon_SDK?version=6.6.0.0
 
 Unzip/untar the archive into
 ```
-c:\Qualcomm\Hexagon_SDK\6.4.0.2
+c:\Qualcomm\Hexagon_SDK\6.6.0.0
 ```
 
 ## Install the latest Adreno GPU driver
@@ -53,7 +79,8 @@ Download the driver from
 
     https://softwarecenter.qualcomm.com/catalog/item/Qualcomm_HND
 
-After the automated installation and reboot please make sure that the Hexagon NPU device shows up in the `Device Manager` (under `Neural Processors`).
+After the automated installation and reboot please make sure that the Hexagon NPU device shows up in the `Device Manager`
+(under `Neural Processors`).
 
 If the device is not available you can try installing all components (`qcnspmcdm8380`, `qcnspmcdm8380_ext`) manually.
 The components are extracted into
@@ -123,19 +150,19 @@ The overall Hexagon backend build procedure for Windows on Snapdragon is the sam
 However, additional settings are required for generating and signing HTP Ops libraries.
 ```
 > $env:OPENCL_SDK_ROOT="C:\Qualcomm\OpenCL_SDK\2.3.2"
-> $env:HEXAGON_SDK_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2"
-> $env:HEXAGON_TOOLS_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2\tools\HEXAGON_Tools\19.0.04"
+> $env:HEXAGON_SDK_ROOT="C:\Qualcomm\Hexagon_SDK\6.6.0.0"
+> $env:HEXAGON_TOOLS_ROOT="C:\Qualcomm\Hexagon_SDK\6.6.0.0\tools\HEXAGON_Tools\19.0.07"
 > $env:HEXAGON_HTP_CERT="c:\Users\MyUsers\Certs\ggml-htp-v1.pfx"
-> $env:WINDOWS_SDK_BIN="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\arm64"
+> $env:WINDOWS_SDK_BIN="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0"
 
 > cmake --preset arm64-windows-snapdragon-release -B build-wos
 ...
-> cmake --install build-wos --prefix pkg-snapdragon
+> cmake --install build-wos --prefix pkg-wos
 ```
 
 Once the build is complete HTP ops libraries will be installed like this
 ```
-> dir pkg-snapdragon/lib
+> dir pkg-wos/lib
 ...
 -a----         1/22/2026   6:01 PM         187656 libggml-htp-v73.so
 -a----         1/22/2026   6:01 PM         191752 libggml-htp-v75.so
@@ -147,8 +174,8 @@ Once the build is complete HTP ops libraries will be installed like this
 The .cat file, the signature and proper certificate installation can be verified with
 
 ```
-> signtool.exe verify /v /pa .\pkg-snapdragon\lib\libggml-htp.cat
-Verifying: .\pkg-snapdragon\lib\libggml-htp.cat
+> signtool.exe verify /v /pa .\pkg-wos\lib\libggml-htp.cat
+Verifying: .\pkg-wos\lib\libggml-htp.cat
 
 Signature Index: 0 (Primary Signature)
 Hash of file (sha256): 9820C664DA59D5EAE31DBB664127FCDAEF59CDC31502496BC567544EC2F401CF
@@ -156,6 +183,6 @@ Hash of file (sha256): 9820C664DA59D5EAE31DBB664127FCDAEF59CDC31502496BC567544EC
 Signing Certificate Chain:
         Issued to: GGML.HTP.v1
 ...
-Successfully verified: .\pkg-snapdragon\lib\libggml-htp.cat
+Successfully verified: .\pkg-wos\lib\libggml-htp.cat
 ...
 ```

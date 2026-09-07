@@ -24,6 +24,7 @@ llama_memory_hybrid::llama_memory_hybrid(
                  uint32_t   rs_size,
                             /* common */
                  uint32_t   n_seq_max,
+                 uint32_t   n_rs_seq,
                      bool   offload,
                      bool   unified,
                             /* layer filters */
@@ -32,6 +33,7 @@ llama_memory_hybrid::llama_memory_hybrid(
     hparams(model.hparams),
     mem_attn(new llama_kv_cache(
         model,
+        model.hparams,
         type_k,
         type_v,
         v_trans,
@@ -42,9 +44,11 @@ llama_memory_hybrid::llama_memory_hybrid(
         n_pad,
         n_swa,
         swa_type,
+        nullptr,
         filter_attn == nullptr ?
-            [&](int32_t il) { return !hparams.is_recurrent(il); }
+            [&](int32_t il) { return !hparams.is_recr(il); }
             : filter_attn,
+        nullptr,
         nullptr
     )),
     mem_recr(new llama_memory_recurrent(
@@ -54,8 +58,9 @@ llama_memory_hybrid::llama_memory_hybrid(
         offload,
         rs_size,
         n_seq_max,
+        n_rs_seq,
         filter_recr == nullptr ?
-            [&](int32_t il) { return hparams.is_recurrent(il); }
+            [&](int32_t il) { return hparams.is_recr(il); }
             : filter_recr
     )) {}
 
@@ -75,7 +80,13 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
             } else {
                 // Use non-sequential split when KV cache is unified (needed for hellaswag/winogrande/multiple-choice)
                 const bool unified = (mem_attn->get_n_stream() == 1);
-                ubatch = balloc.split_equal(n_ubatch, !unified);
+
+                // [TAG_RECURRENT_ROLLBACK_SPLITS]
+                // the trailing (1 + n_rs_seq) tokens of each seq must stay in the same ubatch
+                //   so that the rollback snapshots remain valid
+                const uint32_t n_rs_seq = mem_recr->n_rs_seq;
+
+                ubatch = balloc.split_equal(n_ubatch, !unified, n_rs_seq > 0 ? n_rs_seq + 1 : 0);
             }
 
             if (ubatch.n_tokens == 0) {

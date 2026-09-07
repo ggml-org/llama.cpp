@@ -3,7 +3,6 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_control_flow_attributes : require
 
-#include "rte.glsl"
 #include "types.glsl"
 
 layout (push_constant) uniform parameter
@@ -14,7 +13,7 @@ layout (push_constant) uniform parameter
     uint IW; uint IH;
     uint OW; uint OH;
     uint KW; uint KH;
-    uint pelements;
+    uint OH_batch;
     uint CHW;
     int s0; int s1;
     int p0; int p1;
@@ -35,82 +34,105 @@ layout (binding = 1) writeonly buffer D {D_TYPE data_d[];};
 layout (buffer_reference) buffer D_ptr {D_TYPE d;};
 #endif
 
-void im2col(const uint y, const uint z) {
-    const uint gidx = gl_GlobalInvocationID.x;
+void im2col(const uint ow, const uint z_idx) {
+    const uint oh = z_idx % p.OH;
+    const uint batch_idx = z_idx / p.OH;
 
-    const uint oh = y;
-    const uint batch = z / p.IC;
-    const uint ic = z % p.IC;
+    const uint gidx = gl_LocalInvocationID.x;
+    const uint src_batch = batch_idx * p.batch_offset;
+    const BDA_OFFSET_T dst_row = ((BDA_OFFSET_T(batch_idx) * p.OH + oh) * p.OW + ow) * p.CHW;
 
-    const uint src_base = ic * p.offset_delta + batch * p.batch_offset;
-    const BDA_OFFSET_T dst_base = ((BDA_OFFSET_T(batch) * p.OH + oh) * p.OW) * p.CHW + BDA_OFFSET_T(ic) * (p.KW * p.KH);
-    const int oh_s1 = int(oh) * p.s1;
-    const uint ksize = p.OW * p.KH;
+    const uint KHKW = p.KH * p.KW;
 
-    const uint base_linear_idx = gidx * NUM_ITER;
+    // Precompute base input coordinates
+    const int base_iw = int(ow * p.s0) - p.p0;
+    const int base_ih = int(oh * p.s1) - p.p1;
 
-    uint current_kx = base_linear_idx / ksize;
-    const uint rem = base_linear_idx - (current_kx * ksize);
-    uint current_ky = rem / p.OW;
-    uint current_ix = rem % p.OW;
+    // Precompute step deltas
+    const uint delta_ic  = BLOCK_SIZE / KHKW;
+    const uint delta_rem = BLOCK_SIZE % KHKW;
 
-    A_TYPE values[NUM_ITER];
-    BDA_OFFSET_T offset_dst[NUM_ITER];
-    [[unroll]] for (uint idx = 0; idx < NUM_ITER; ++idx) {
-        values[idx] = A_TYPE(0);
-    }
+    const uint delta_ky  = delta_rem / p.KW;
+    const uint delta_kx  = delta_rem % p.KW;
 
-    [[unroll]] for (uint idx = 0; idx < NUM_ITER; ++idx) {
+    const uint delta_ic_offset = delta_ic * p.offset_delta;
 
-        const uint linear_idx = base_linear_idx + idx;
+    // If using BDA mode, precompute the base pointer  and step size
+#if BDA
+    const BDA_STORAGE_T base_dst_addr = p.dst_addr + D_SIZE * dst_row;
+    const uint bda_step = D_SIZE * BLOCK_SIZE;
+#endif
 
-        if (linear_idx >= p.pelements) {
-            continue;
-        }
+    uint wg_x = gl_WorkGroupID.x;
+    do {
+        const uint wg_offset = wg_x * 512;
 
-        const uint iiw = current_ix * p.s0 + current_kx * p.d0 - p.p0;
-        const uint iih = oh_s1 + current_ky * p.d1 - p.p1;
+        uint chw_idx = wg_offset + gidx;
 
-        offset_dst[idx] = dst_base + BDA_OFFSET_T(current_ix) * p.CHW + current_ky * p.KW + current_kx;
+        uint ic  = chw_idx / KHKW;
+        uint rem = chw_idx % KHKW;
 
-        if ((iih < p.IH) && (iiw < p.IW)) {
-            values[idx] = data_a[src_base + iih * p.IW + iiw];
-        }
+        uint ky  = rem / p.KW;
+        uint kx  = rem % p.KW;
 
-        if (++current_ix == p.OW) {
-            current_ix = 0;
-            if (++current_ky == p.KH) {
-                current_ky = 0;
-                current_kx++;
+        uint ic_offset = src_batch + ic * p.offset_delta;
+
+        // Initialize running pointer/index for the destination buffer
+#if BDA
+        BDA_STORAGE_T current_dst_addr = base_dst_addr + D_SIZE * chw_idx;
+#else
+        uint current_dst_idx = dst_row + chw_idx;
+#endif
+
+        [[unroll]] for (uint i = 0; i < NUM_ITER; ++i) {
+            if (chw_idx >= p.CHW) {
+                return;
             }
-        }
-    }
 
-    [[unroll]] for (uint idx = 0; idx < NUM_ITER; ++idx) {
+            const int iiw = base_iw + int(kx * p.d0);
+            const int iih = base_ih + int(ky * p.d1);
 
-        const uint linear_idx = base_linear_idx + idx;
-
-        if (linear_idx >= p.pelements) {
-            continue;
-        }
+            A_TYPE val = A_TYPE(0);
+            if (uint(iih) < p.IH && uint(iiw) < p.IW) {
+                val = data_a[ic_offset + uint(iih) * p.IW + uint(iiw)];
+            }
 
 #if BDA
-        D_ptr dst_addr = D_ptr(p.dst_addr + D_SIZE * offset_dst[idx]);
-        dst_addr.d = D_TYPE(values[idx]);
+            D_ptr(current_dst_addr).d = D_TYPE(val);
+            current_dst_addr += bda_step;
 #else
-        data_d[offset_dst[idx]] = D_TYPE(values[idx]);
+            data_d[current_dst_idx] = D_TYPE(val);
+            current_dst_idx += BLOCK_SIZE;
 #endif
-    }
+
+            chw_idx   += BLOCK_SIZE;
+            ic_offset += delta_ic_offset;
+            kx        += delta_kx;
+            ky        += delta_ky;
+
+            // Handle X axis wrap
+            uint kx_wrap = uint(kx >= p.KW);
+            kx          -= kx_wrap * p.KW;
+            ky          += kx_wrap;
+
+            // Handle Y axis wrap
+            uint ky_wrap = uint(ky >= p.KH);
+            ky          -= ky_wrap * p.KH;
+            ic_offset   += ky_wrap * p.offset_delta;
+        }
+
+        wg_x += gl_NumWorkGroups.x;
+    } while (wg_x * 512 < p.CHW);
 }
 
 void main() {
-    uint y = gl_GlobalInvocationID.y;
-    while (y < p.OH) {
+    uint ow = gl_GlobalInvocationID.y;
+    while (ow < p.OW) {
         uint z = gl_GlobalInvocationID.z;
-        while (z < p.batch_IC) {
-            im2col(y, z);
+        while (z < p.OH_batch) {
+            im2col(ow, z);
             z += gl_NumWorkGroups.z;
         }
-        y += gl_NumWorkGroups.y;
+        ow += gl_NumWorkGroups.y;
     }
 }

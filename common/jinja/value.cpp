@@ -3,7 +3,7 @@
 #include "value.h"
 
 // for converting from JSON to jinja values
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <sstream>
 #include <string>
@@ -90,14 +90,14 @@ static T slice(const T & array, int64_t start, int64_t stop, int64_t step = 1) {
             stop_val = std::min(stop_val, len);
         }
     } else {
-        start_val = len - 1;
+        start_val = start;
         if (start_val < 0) {
-            start_val = std::max(len + start_val, (int64_t)-1);
+            start_val = std::max(len + start_val, (int64_t)0);
         } else {
             start_val = std::min(start_val, len - 1);
         }
 
-        stop_val = -1;
+        stop_val = stop;
         if (stop_val < -1) {
             stop_val = std::max(len + stop_val, (int64_t)-1);
         } else {
@@ -590,6 +590,10 @@ static bool string_endswith(const std::string & str, const std::string & suffix)
     return str.compare(str.length() - suffix.length(), suffix.length(), suffix) == 0;
 }
 
+[[noreturn]] static value string_join_not_implemented(const func_args &) {
+    throw not_implemented_exception("String join builtin not implemented");
+}
+
 const func_builtins & value_string_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
@@ -669,6 +673,9 @@ const func_builtins & value_string_t::get_builtins() const {
             std::string str = val_input->as_string().str();
             // FIXME: Support non-specified delimiter (split on consecutive (no leading or trailing) whitespace)
             std::string delim = (args.count() > 1) ? args.get_pos(1)->as_string().str() : " ";
+            if (delim.empty()) {
+                throw raised_exception("empty separator");
+            }
             int64_t maxsplit = (args.count() > 2) ? args.get_pos(2)->as_int() : -1;
             auto result = mk_val<value_array>();
             size_t pos = 0;
@@ -693,6 +700,9 @@ const func_builtins & value_string_t::get_builtins() const {
             std::string str = val_input->as_string().str();
             // FIXME: Support non-specified delimiter (split on consecutive (no leading or trailing) whitespace)
             std::string delim = (args.count() > 1) ? args.get_pos(1)->as_string().str() : " ";
+            if (delim.empty()) {
+                throw raised_exception("empty separator");
+            }
             int64_t maxsplit = (args.count() > 2) ? args.get_pos(2)->as_int() : -1;
             auto result = mk_val<value_array>();
             size_t pos = 0;
@@ -718,20 +728,72 @@ const func_builtins & value_string_t::get_builtins() const {
             if (count > 0) {
                 throw not_implemented_exception("String replace with count argument not implemented");
             }
-            size_t pos = 0;
-            while ((pos = str.find(old_str, pos)) != std::string::npos) {
-                str.replace(pos, old_str.length(), new_str);
-                pos += new_str.length();
+            if (old_str != new_str) {
+                size_t pos = 0;
+                if (old_str.empty()) {
+                    std::string new_res;
+                    new_res.reserve(str.length() + new_str.length() * (str.length() + 1));
+                    new_res += new_str;
+                    for (const char c : str) {
+                        new_res.push_back(c);
+                        new_res += new_str;
+                    }
+                    str = new_res;
+                } else {
+                    while ((pos = str.find(old_str, pos)) != std::string::npos) {
+                        str.replace(pos, old_str.length(), new_str);
+                        pos += new_str.length();
+                    }
+                }
             }
             auto res = mk_val<value_string>(str);
             res->val_str.mark_input_based_on(args.get_pos(0)->val_str);
             return res;
+        }},
+        {"format", [](const func_args & args) -> value {
+            value val_input = args.get_pos(0);
+            if (!is_val<value_string>(val_input)) {
+                throw raised_exception("format() first argument must be a string");
+            }
+            const jinja::string & fmt = val_input->as_string();
+            const bool fmt_is_input = fmt.all_parts_are_input();
+
+            const std::string str = fmt.str();
+            jinja::string result;
+            std::string literal;
+            auto flush_literal = [&]() {
+                if (!literal.empty()) {
+                    result.parts.push_back({fmt_is_input, literal});
+                    literal.clear();
+                }
+            };
+
+            size_t arg_idx = 1; // positional args follow the format string
+            for (size_t i = 0; i < str.size(); ++i) {
+                if (str[i] != '{') {
+                    literal += str[i];
+                    continue;
+                }
+                if (i + 1 >= str.size() || str[i + 1] != '}') {
+                    throw not_implemented_exception("format() only supports simple '{}' placeholders");
+                }
+                ++i;
+                flush_literal();
+                const jinja::string arg_str = args.get_pos(arg_idx++)->as_string();
+                result.parts.insert(result.parts.end(), arg_str.parts.begin(), arg_str.parts.end());
+            }
+            flush_literal();
+            return mk_val<value_string>(result);
         }},
         {"int", [](const func_args & args) -> value {
             value val_input   = args.get_pos(0);
             value val_default = args.get_kwarg_or_pos("default", 1);
             value val_base    = args.get_kwarg_or_pos("base",    2);
             const int base = val_base->is_undefined() ? 10 : val_base->as_int();
+            if (base != 0 && (base < 2 || base > 36)) {
+                // an out-of-range base makes std::stoi fail fast on the MSVC CRT instead of throwing
+                throw raised_exception("int() base must be 0 or between 2 and 36");
+            }
             if (is_val<value_string>(val_input) == false) {
                 throw raised_exception("int() first argument must be a string");
             }
@@ -851,9 +913,7 @@ const func_builtins & value_string_t::get_builtins() const {
             res->val_str.mark_input_based_on(val_input->as_string());
             return res;
         }},
-        {"join", [](const func_args &) -> value {
-            throw not_implemented_exception("String join builtin not implemented");
-        }},
+        {"join", string_join_not_implemented},
     };
     return builtins;
 }
@@ -884,6 +944,9 @@ const func_builtins & value_bool_t::get_builtins() const {
     return builtins;
 }
 
+[[noreturn]] static value array_unique_not_implemented(const func_args &) {
+    throw not_implemented_exception("Array unique builtin not implemented");
+}
 
 const func_builtins & value_array_t::get_builtins() const {
     static const func_builtins builtins = {
@@ -1084,13 +1147,58 @@ const func_builtins & value_array_t::get_builtins() const {
             std::reverse(arr.begin(), arr.end());
             return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
         }},
-        {"unique", [](const func_args &) -> value {
-            throw not_implemented_exception("Array unique builtin not implemented");
+        {"min", [](const func_args & args) -> value {
+            args.ensure_count(1, 4);
+            args.ensure_vals<value_array>();
+            value val_case    = args.get_kwarg_or_pos("case_sensitive", 1);
+            value attribute   = args.get_kwarg_or_pos("attribute",      2);
+            if (!attribute->is_undefined()) {
+                throw not_implemented_exception("min: attribute not implemented");
+            }
+            // FIXME: min is currently always case sensitive
+            (void) val_case;
+            const auto & arr = args.get_pos(0)->as_array();
+            if (arr.empty()) {
+                return mk_val<value_undefined>();
+            }
+            value result = arr[0];
+            for (size_t i = 1; i < arr.size(); ++i) {
+                if (value_compare(arr[i], result, value_compare_op::lt)) {
+                    result = arr[i];
+                }
+            }
+            return result;
         }},
+        {"max", [](const func_args & args) -> value {
+            args.ensure_count(1, 4);
+            args.ensure_vals<value_array>();
+            value val_case    = args.get_kwarg_or_pos("case_sensitive", 1);
+            value attribute   = args.get_kwarg_or_pos("attribute",      2);
+            if (!attribute->is_undefined()) {
+                throw not_implemented_exception("max: attribute not implemented");
+            }
+            // FIXME: max is currently always case sensitive
+            (void) val_case;
+            const auto & arr = args.get_pos(0)->as_array();
+            if (arr.empty()) {
+                return mk_val<value_undefined>();
+            }
+            value result = arr[0];
+            for (size_t i = 1; i < arr.size(); ++i) {
+                if (value_compare(arr[i], result, value_compare_op::gt)) {
+                    result = arr[i];
+                }
+            }
+            return result;
+        }},
+        {"unique", array_unique_not_implemented},
     };
     return builtins;
 }
 
+[[noreturn]] static value object_join_not_implemented(const func_args &) {
+    throw not_implemented_exception("object join not implemented");
+}
 
 const func_builtins & value_object_t::get_builtins() const {
     if (!has_builtins) {
@@ -1183,9 +1291,7 @@ const func_builtins & value_object_t::get_builtins() const {
             });
             return result;
         }},
-        {"join", [](const func_args &) -> value {
-            throw not_implemented_exception("object join not implemented");
-        }},
+        {"join", object_join_not_implemented},
     };
     return builtins;
 }
@@ -1249,7 +1355,7 @@ const func_builtins & value_undefined_t::get_builtins() const {
 //////////////////////////////////
 
 
-static value from_json(const nlohmann::ordered_json & j, bool mark_input) {
+static value from_json(const common_json & j, bool mark_input) {
     if (j.is_null()) {
         return mk_val<value_none>();
     } else if (j.is_boolean()) {
@@ -1346,7 +1452,7 @@ bool value_compare(const value & a, const value & b, value_compare_op op) {
 }
 
 template<>
-void global_from_json(context & ctx, const nlohmann::ordered_json & json_obj, bool mark_input) {
+void global_from_json(context & ctx, const common_json & json_obj, bool mark_input) {
     // printf("global_from_json: %s\n" , json_obj.dump(2).c_str());
     if (json_obj.is_null() || !json_obj.is_object()) {
         throw std::runtime_error("global_from_json: input JSON value must be an object");

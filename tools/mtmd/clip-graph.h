@@ -11,13 +11,25 @@
 
 #define DEFAULT_INTERPOLATION_MODE (GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ANTIALIAS)
 
+struct build_vit_opts {
+    ggml_tensor * attn_mask = nullptr;
+    // TODO @ngxson : merge attn_mask and attn_mask_layers into one call
+    std::vector<ggml_tensor *> attn_mask_layers; // one per layer
+
+    // hook at layer output embeddings
+    std::function<void(ggml_tensor * cur, int il)> callback_layer_out = nullptr;
+
+    // whether to skip the automatic post-layernorm (model.post_ln_w) applied at the end
+    bool skip_post_ln = false;
+};
+
 struct clip_graph {
     const clip_model & model;
     const clip_hparams & hparams;
     projector_type proj_type;
 
-    // we only support single image per batch
-    const clip_image_f32 & img;
+    const clip_image_f32 & img; // for backward compat
+    const clip_image_f32_batch * img_batch = nullptr;
 
     const int patch_size;
     const int n_patches_x;
@@ -25,6 +37,7 @@ struct clip_graph {
     const int n_patches;
     const int n_embd;
     const int n_head;
+    const int n_head_kv;
     const int d_head;
     const int n_layer;
     const int n_mmproj_embd;
@@ -32,11 +45,17 @@ struct clip_graph {
     float kq_scale; // TODO: maybe move this to hparams
     const clip_flash_attn_type flash_attn_type;
 
+    // TODO [QWEN_VIDEO]: improve this in the future
+    int n_batch = 1;
+
     ggml_context_ptr ctx0_ptr;
     ggml_context * ctx0;
     ggml_cgraph * gf;
 
     clip_graph(clip_ctx * ctx, const clip_image_f32 & img);
+
+    // build sub-graph, reuse buf from parent
+    clip_graph(const clip_graph & parent);
 
     virtual ~clip_graph() = default;
     virtual ggml_cgraph * build() = 0;
@@ -46,10 +65,20 @@ struct clip_graph {
     virtual ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const;
     // TODO: build_mm(w, b, x) to support bias
 
+    virtual bool support_batch() const {
+        return false;
+    }
+
     //
     // utility functions
     //
     void cb(ggml_tensor * cur0, const char * name, int il) const;
+
+    const clip_image_f32 & get_img(size_t idx) const {
+        GGML_ASSERT(img_batch);
+        GGML_ASSERT(idx < img_batch->entries.size());
+        return img_batch->entries[idx];
+    }
 
     // siglip2 naflex
     ggml_tensor * resize_position_embeddings(uint32_t interpolation_mode = DEFAULT_INTERPOLATION_MODE);
@@ -63,7 +92,8 @@ struct clip_graph {
                 norm_type norm_t,
                 ffn_op_type ffn_t,
                 ggml_tensor * learned_pos_embd,
-                std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos);
+                std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos,
+                const build_vit_opts & opts = {});
 
     // build the input after conv2d (inp_raw --> patches)
     // returns tensor with shape [n_embd, n_patches]
@@ -90,6 +120,12 @@ struct clip_graph {
             ffn_op_type type_op,
             int il) const;
 
+    ggml_tensor * build_moe_ffn(
+            ggml_tensor * cur,
+            const clip_layer & layer,
+            ffn_op_type type_op,
+            int il) const;
+
     ggml_tensor * build_attn(
             ggml_tensor * wo,
             ggml_tensor * wo_b,
@@ -98,11 +134,18 @@ struct clip_graph {
             ggml_tensor * v_cur,
             ggml_tensor * kq_mask,
             float kq_scale,
-            int il) const;
+            int il,
+            ggml_tensor * sinks = nullptr) const;
 
-    // implementation of the 2D RoPE without adding a new op in ggml
-    // this is not efficient (use double the memory), but works on all backends
-    // TODO: there was a more efficient which relies on ggml_view and ggml_rope_ext_inplace, but the rope inplace does not work well with non-contiguous tensors ; we should fix that and revert back to the original implementation in https://github.com/ggml-org/llama.cpp/pull/13065
+    // implementation of the 2D RoPE using two ggml_rope_ext calls
+    //
+    // unlike GGML_ROPE_TYPE_VISION which forces NEOX ordering, this rotates adjacent pairs (normal ordering)
+    //
+    // example:
+    //  given a single head with size = 8 --> [00000000]
+    //  dims [0, 4) rotate with pos_a, dims [4, 8) rotate with pos_b --> [aaaabbbb]
+    //  interleave_freq = false --> both halves use the same inv_freq set (like GGML_ROPE_TYPE_VISION)
+    //  interleave_freq = true  --> first half uses even inv_freq, second half uses odd inv_freq (used by pixtral)
     ggml_tensor * build_rope_2d(
         ggml_context * ctx0,
         ggml_tensor * cur,

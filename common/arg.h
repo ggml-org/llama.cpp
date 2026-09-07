@@ -1,16 +1,19 @@
 #pragma once
 
 #include "common.h"
+#include "download.h"
 
 #include <set>
 #include <map>
 #include <string>
 #include <vector>
 #include <cstring>
+#include <memory>
 
 // pseudo-env variable to identify preset-only arguments
-#define COMMON_ARG_PRESET_LOAD_ON_STARTUP "__PRESET_LOAD_ON_STARTUP"
-#define COMMON_ARG_PRESET_STOP_TIMEOUT    "__PRESET_STOP_TIMEOUT"
+#define COMMON_ARG_PRESET_LOAD_ON_STARTUP    "__PRESET_LOAD_ON_STARTUP"
+#define COMMON_ARG_PRESET_STOP_TIMEOUT       "__PRESET_STOP_TIMEOUT"
+#define COMMON_ARG_PRESET_DEDUP_CACHE_MODELS "__PRESET_DEDUP_CACHE_MODELS"
 
 //
 // CLI argument parsing
@@ -25,7 +28,8 @@ struct common_arg {
     const char * value_hint_2 = nullptr; // for second arg value
     const char * env          = nullptr;
     std::string help;
-    bool is_sparam = false; // is current arg a sampling param?
+    bool is_sampling = false; // is current arg a sampling param?
+    bool is_spec = false; // is current arg a speculative decoding param?
     bool is_preset_only = false; // is current arg preset-only (not treated as CLI arg)
     void (*handler_void)   (common_params & params) = nullptr;
     void (*handler_string) (common_params & params, const std::string &) = nullptr;
@@ -74,7 +78,8 @@ struct common_arg {
     common_arg & set_examples(std::initializer_list<enum llama_example> examples);
     common_arg & set_excludes(std::initializer_list<enum llama_example> excludes);
     common_arg & set_env(const char * env);
-    common_arg & set_sparam();
+    common_arg & set_sampling();
+    common_arg & set_spec();
     common_arg & set_preset_only();
     bool in_example(enum llama_example ex);
     bool is_exclude(enum llama_example ex);
@@ -119,6 +124,9 @@ struct common_params_context {
 // if one argument has invalid value, it will automatically display usage of the specific argument (and not the full usage message)
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
 
+// load all backends and print the list of available (non-CPU) devices to stdout
+void common_print_available_devices();
+
 // parse input arguments from CLI into a map
 bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<common_arg, std::string> & out_map);
 
@@ -126,6 +134,21 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
 // these arguments are not treated as command line arguments
 // see: https://github.com/ggml-org/llama.cpp/issues/18163
 void common_params_add_preset_options(std::vector<common_arg> & args);
+
+struct common_models_handler {
+    common_download_hf_plan plan;
+    common_download_hf_plan plan_spec;
+    common_download_opts opts;
+};
+
+// initialize downloading opts and hf_plan if needed, but does not download anything yet
+common_models_handler common_models_handler_init(const common_params & params, llama_example curr_ex);
+
+// check if the model is a preset repo (i.e. has a preset file)
+bool common_models_handler_is_preset_repo(const common_models_handler & handler);
+
+// download and update params with the downloaded model path
+void common_models_handler_apply(common_models_handler & handler, common_params & params, common_download_callback * callback = nullptr);
 
 // initialize argument parser context - used by test-arg-parser and preset
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);

@@ -630,10 +630,11 @@ std::optional<gguf_remote_model> gguf_fetch_model_meta(
         }
 
         for (int i = 2; i <= model.n_split; i++) {
-            char num_buf[6], total_buf[6];
-            snprintf(num_buf,   sizeof(num_buf),   "%05d", i);
-            snprintf(total_buf, sizeof(total_buf), "%05d", (int)model.n_split);
-            std::string shard_name = split_prefix + "-" + num_buf + "-of-" + total_buf + ".gguf";
+            char buf_num[32];
+            char buf_tot[32];
+            snprintf(buf_num, sizeof(buf_num), "%05d", i);
+            snprintf(buf_tot, sizeof(buf_tot), "%05d", (int)model.n_split);
+            std::string shard_name = split_prefix + "-" + buf_num + "-of-" + buf_tot + ".gguf";
 
             auto shard = fetch_or_cached(repo, shard_name, cdir, repo_part, verbose);
             if (!shard.has_value()) {
@@ -704,10 +705,11 @@ gguf_context_ptr gguf_fetch_gguf_ctx(
         }
 
         for (int i = 2; i <= model.n_split; i++) {
-            char num_buf[6], total_buf[6];
-            snprintf(num_buf,   sizeof(num_buf),   "%05d", i);
-            snprintf(total_buf, sizeof(total_buf), "%05d", (int)model.n_split);
-            std::string shard_name = split_prefix + "-" + num_buf + "-of-" + total_buf + ".gguf";
+            char buf_num[32];
+            char buf_tot[32];
+            snprintf(buf_num, sizeof(buf_num), "%05d", i);
+            snprintf(buf_tot, sizeof(buf_tot), "%05d", (int)model.n_split);
+            std::string shard_name = split_prefix + "-" + buf_num + "-of-" + buf_tot + ".gguf";
 
             auto shard = fetch_or_cached(repo, shard_name, cdir, repo_part, verbose);
             if (!shard.has_value()) {

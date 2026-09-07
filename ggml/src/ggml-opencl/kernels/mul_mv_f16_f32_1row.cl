@@ -64,8 +64,15 @@ kernel void kernel_mul_mat_f16_f32_1row(
     global half  * x = (global half  *) (src0 + offset_src0);
     global float * y = (global float *) (src1 + offset_src1);
 
+    // The vector path below casts the row pointers to half4/float4, which must be 8- and
+    // 16-byte aligned. A row address is r0*nb01 + ..., and a permuted or strided src leaves
+    // nb01/nb11 unconstrained -- an odd ne00, say, gives a row that is only 2-byte aligned.
+    // Take the vector path only when the rows this work-item touches are actually aligned;
+    // the scalar loop has no such requirement.
+    const bool row_aligned = (((ulong) x) & 7) == 0 && (((ulong) y) & 15) == 0;
+
     float sumf = 0;
-    if (ne00 < 128) {
+    if (ne00 < 128 || !row_aligned) {
         for (int i = get_sub_group_local_id(); i < ne00; i += get_max_sub_group_size()) {
             sumf += (float) x[i] * (float) y[i];
         }

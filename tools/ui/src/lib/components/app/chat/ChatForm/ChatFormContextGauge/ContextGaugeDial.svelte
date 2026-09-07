@@ -1,0 +1,43 @@
+<script lang="ts">
+	import { colorLevelTextClass } from './context-gauge';
+	import type { ColorLevel } from '$lib/enums';
+
+	interface Props {
+		percent: number | null;
+		level: ColorLevel;
+		size?: 'sm' | 'md';
+	}
+
+	let { level, percent, size = 'sm' }: Props = $props();
+
+	const RADIUS = 11;
+	const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+	const strokeLevelClass = $derived(colorLevelTextClass(level));
+	const dimensions = $derived(size === 'md' ? 'h-6 w-6' : 'h-5 w-5');
+	const strokeWidth = $derived(size === 'md' ? 4 : 3);
+</script>
+
+<svg class={dimensions} fill="none" viewBox="0 0 32 32">
+	<circle
+		cx="16"
+		cy="16"
+		r={RADIUS}
+		stroke="currentColor"
+		stroke-opacity="0.1"
+		stroke-width={strokeWidth}
+	/>
+
+	<circle
+		class="transition-colors duration-300 {strokeLevelClass}"
+		cx="16"
+		cy="16"
+		r={RADIUS}
+		stroke="currentColor"
+		stroke-dasharray={CIRCUMFERENCE}
+		stroke-dashoffset={percent !== null ? CIRCUMFERENCE * (1 - percent / 100) : CIRCUMFERENCE}
+		stroke-linecap="round"
+		stroke-width={strokeWidth}
+		transform="rotate(-90 16 16)"
+	/>
+</svg>

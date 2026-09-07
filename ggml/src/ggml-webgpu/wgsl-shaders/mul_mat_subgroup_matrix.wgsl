@@ -3,8 +3,17 @@ enable f16;
 enable subgroups;
 enable chromium_experimental_subgroup_matrix;
 
+#define DECLARE_BYTE_LOADERS_SRC0
+#ifdef SRC_OVERLAP
+#define SRC0 merged_src
+#define SRC1 merged_src
+#endif
 #include "common_decls.tmpl"
+
 #include "mul_mat_decls.tmpl"
+
+// TODO: this shader path does not work with some models like qwen2.5 on Metal devices, f16 accumulation causes NaNs.
+// See https://github.com/ggml-org/llama.cpp/issues/21602
 
 #ifdef VEC
 fn store_dst(shmem_idx: u32, dst_idx: u32) {
@@ -43,11 +52,17 @@ struct MulMatParams {
 };
 
 // SRC0_TYPE and SRC1_TYPE are defined in mul_mat_decls, which is included
+#ifdef SRC_OVERLAP
+@group(0) @binding(0) var<storage, read_write> merged_src: array<SRC0_TYPE>;
+#define DST_BINDING 1
+#else
 @group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>; // M rows, K columns
 @group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>; // K rows, N columns (transposed)
-@group(0) @binding(2) var<storage, read_write> dst: array<DST_TYPE>; // M rows, N columns (transposed)
+#define DST_BINDING 2
+#endif
 
-@group(0) @binding(3) var<uniform> params: MulMatParams;
+@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<DST_TYPE>; // M rows, N columns (transposed)
+@group(0) @binding(DST_BINDING + 1) var<uniform> params: MulMatParams;
 
 const WG_M_SG_TILE_SIZE = SUBGROUP_M * SUBGROUP_MATRIX_M * SUBGROUP_MATRIX_M_SIZE;
 const WG_N_SG_TILE_SIZE = SUBGROUP_N * SUBGROUP_MATRIX_N * SUBGROUP_MATRIX_N_SIZE;
@@ -193,4 +208,3 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         }
     }
 }
-

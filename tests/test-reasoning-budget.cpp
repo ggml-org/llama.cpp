@@ -20,8 +20,8 @@
 static void test_reasoning_budget(
     const char * test_name,
     const std::vector<llama_token> & sequence,
-    const std::vector<llama_token> & start_tokens,
-    const std::vector<llama_token> & end_tokens,
+    const std::vector<llama_tokens> & start_seqs,
+    const std::vector<llama_tokens> & end_seqs,
     const std::vector<llama_token> & forced_tokens,
     int32_t budget,
     common_reasoning_budget_state initial_state,
@@ -31,8 +31,12 @@ static void test_reasoning_budget(
     // Find the maximum token ID to ensure our vocab covers all tokens
     llama_token max_token = 0;
     for (auto t : sequence) max_token = std::max(max_token, t);
-    for (auto t : start_tokens) max_token = std::max(max_token, t);
-    for (auto t : end_tokens) max_token = std::max(max_token, t);
+    for (const auto & seq : start_seqs) {
+        for (auto t : seq) max_token = std::max(max_token, t);
+    }
+    for (const auto & seq : end_seqs) {
+        for (auto t : seq) max_token = std::max(max_token, t);
+    }
     for (auto t : forced_tokens) max_token = std::max(max_token, t);
 
     // Create a minimal sampler with mock vocabulary
@@ -40,8 +44,8 @@ static void test_reasoning_budget(
     // The UTF-8 boundary check will treat all tokens as complete (safe fallback)
     auto * sampler = common_reasoning_budget_init(
         nullptr,  // vocab - not used for basic state machine tests
-        start_tokens,
-        end_tokens,
+        start_seqs,
+        end_seqs,
         forced_tokens,
         budget,
         initial_state
@@ -124,6 +128,211 @@ static void test_reasoning_budget(
     (void)sequence;
 }
 
+static llama_token get_forced_token(struct llama_sampler * sampler, llama_token max_token) {
+    std::vector<llama_token_data> cur;
+    const size_t n_vocab = (size_t) max_token + 1;
+    for (size_t i = 0; i < n_vocab; i++) {
+        cur.emplace_back(llama_token_data{(llama_token) i, logf((float) (i + 1)), 0.0f});
+    }
+
+    llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+    llama_sampler_apply(sampler, &cur_p);
+
+    size_t finite_count = 0;
+    llama_token finite_token = LLAMA_TOKEN_NULL;
+    for (size_t i = 0; i < cur.size(); i++) {
+        if (std::isfinite(cur[i].logit)) {
+            finite_count++;
+            finite_token = cur[i].id;
+        }
+    }
+
+    GGML_ASSERT(finite_count == 1 && "sampler is not forcing exactly one token");
+    return finite_token;
+}
+
+static void test_reasoning_budget_clone_mid_counting() {
+    const std::vector<llama_token> start = {100};
+    const std::vector<llama_token> end = {101};
+    const std::vector<llama_token> forced = {102, 101};
+
+    auto * sampler = common_reasoning_budget_init(nullptr, {start}, {end}, forced, 2, REASONING_BUDGET_IDLE);
+
+    llama_sampler_accept(sampler, 100); // COUNTING, remaining=2
+    llama_sampler_accept(sampler, 50);  // COUNTING, remaining=1
+
+    auto * clone = llama_sampler_clone(sampler);
+    llama_sampler_accept(clone, 51); // should exhaust the cloned remaining budget
+
+    GGML_ASSERT(get_forced_token(clone, 102) == 102 && "cloned counting state lost remaining budget");
+
+    llama_sampler_free(clone);
+    llama_sampler_free(sampler);
+}
+
+static void test_reasoning_budget_clone_mid_forcing() {
+    const std::vector<llama_token> start = {100};
+    const std::vector<llama_token> end = {101};
+    const std::vector<llama_token> forced = {102, 101};
+
+    auto * sampler = common_reasoning_budget_init(nullptr, {start}, {end}, forced, 0, REASONING_BUDGET_FORCING);
+
+    GGML_ASSERT(get_forced_token(sampler, 102) == 102);
+    llama_sampler_accept(sampler, 102); // advance to the second forced token
+
+    auto * clone = llama_sampler_clone(sampler);
+
+    GGML_ASSERT(get_forced_token(clone, 102) == 101 && "cloned forcing state lost force position");
+
+    llama_sampler_free(clone);
+    llama_sampler_free(sampler);
+}
+
+static void test_reasoning_budget_force_manual() {
+    const std::vector<llama_token> start  = {100};
+    const std::vector<llama_token> end    = {101};
+    const std::vector<llama_token> forced = {102, 101};
+
+    // if COUNTING, force() succeeds and begins forcing the end sequence from the start
+    {
+        auto * sampler = common_reasoning_budget_init(nullptr, {start}, {end}, forced, 5, REASONING_BUDGET_IDLE);
+
+        llama_sampler_accept(sampler, 100); // COUNTING, remaining=5
+        llama_sampler_accept(sampler, 50);  // COUNTING, remaining=4
+        GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_COUNTING);
+
+        GGML_ASSERT(common_reasoning_budget_force(sampler) && "force() should succeed from COUNTING");
+        GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_FORCING);
+
+        // forces the configured sequence from force_pos=0, then transitions to DONE
+        GGML_ASSERT(get_forced_token(sampler, 102) == 102);
+        llama_sampler_accept(sampler, 102);
+        GGML_ASSERT(get_forced_token(sampler, 102) == 101);
+        llama_sampler_accept(sampler, 101);
+        GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
+
+        llama_sampler_free(sampler);
+    }
+
+    // if IDLE, force() is a no-op
+    {
+        auto * sampler = common_reasoning_budget_init(nullptr, {start}, {end}, forced, 5, REASONING_BUDGET_IDLE);
+
+        GGML_ASSERT(!common_reasoning_budget_force(sampler) && "force() must not transition from IDLE");
+        GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_IDLE);
+
+        llama_sampler_free(sampler);
+    }
+
+    // if DONE, force() is a no-op
+    {
+        auto * sampler = common_reasoning_budget_init(nullptr, {start}, {end}, forced, 5, REASONING_BUDGET_IDLE);
+
+        llama_sampler_accept(sampler, 100); // COUNTING
+        llama_sampler_accept(sampler, 101); // natural end -> DONE
+        GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
+
+        GGML_ASSERT(!common_reasoning_budget_force(sampler) && "force() must not transition from DONE");
+        GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
+
+        llama_sampler_free(sampler);
+    }
+
+    // if FORCING, force() is a no-op and must not rewind the force position
+    {
+        auto * sampler = common_reasoning_budget_init(nullptr, {start}, {end}, forced, 0, REASONING_BUDGET_FORCING);
+
+        GGML_ASSERT(get_forced_token(sampler, 102) == 102);
+        llama_sampler_accept(sampler, 102); // advance to the second forced token (force_pos=1)
+
+        GGML_ASSERT(!common_reasoning_budget_force(sampler) && "force() must not transition from FORCING");
+        GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_FORCING);
+        GGML_ASSERT(get_forced_token(sampler, 102) == 101 && "force() must not rewind the force position");
+
+        llama_sampler_free(sampler);
+    }
+
+    // a null sampler is safely ignored
+    GGML_ASSERT(!common_reasoning_budget_force(nullptr));
+
+    fprintf(stderr, "  Test 'manual force transition' passed\n");
+}
+
+static void test_reasoning_budget_end_match() {
+    const std::vector<llama_tokens> start = {{100}};
+    const std::vector<llama_tokens> end   = {{101}, {103, 104}};
+
+    // natural end records the sequence that matched; re-arming clears it
+    {
+        auto * sampler = common_reasoning_budget_init(nullptr, start, end, {102, 101}, 5, REASONING_BUDGET_IDLE);
+
+        GGML_ASSERT(common_reasoning_budget_get_end_match(sampler) == nullptr);
+
+        llama_sampler_accept(sampler, 100); // COUNTING
+        llama_sampler_accept(sampler, 50);
+        llama_sampler_accept(sampler, 103);
+        llama_sampler_accept(sampler, 104); // end matched via {103, 104}, DONE
+
+        const llama_tokens * matched = common_reasoning_budget_get_end_match(sampler);
+        GGML_ASSERT(matched != nullptr);
+        GGML_ASSERT(*matched == llama_tokens({103, 104}));
+
+        llama_sampler_accept(sampler, 100); // re-arm, COUNTING
+        GGML_ASSERT(common_reasoning_budget_get_end_match(sampler) == nullptr);
+
+        llama_sampler_free(sampler);
+    }
+
+    // overlapping end sequences: the longest one ending at the position wins
+    {
+        const std::vector<llama_tokens> end_overlap = {{104}, {103, 104}};
+
+        auto * sampler = common_reasoning_budget_init(nullptr, start, end_overlap, {102, 104}, 5, REASONING_BUDGET_IDLE);
+
+        llama_sampler_accept(sampler, 100); // COUNTING
+        llama_sampler_accept(sampler, 103);
+        llama_sampler_accept(sampler, 104); // both {104} and {103, 104} end here
+
+        const llama_tokens * matched = common_reasoning_budget_get_end_match(sampler);
+        GGML_ASSERT(matched != nullptr);
+        GGML_ASSERT(*matched == llama_tokens({103, 104}));
+
+        llama_sampler_free(sampler);
+    }
+
+    // forcing records the end sequence terminating forced_tokens
+    {
+        auto * sampler = common_reasoning_budget_init(nullptr, start, end, {102, 103, 104}, 0, REASONING_BUDGET_FORCING);
+
+        llama_sampler_accept(sampler, 102);
+        llama_sampler_accept(sampler, 103);
+        GGML_ASSERT(common_reasoning_budget_get_end_match(sampler) == nullptr);
+        llama_sampler_accept(sampler, 104); // forced sequence complete, DONE
+
+        const llama_tokens * matched = common_reasoning_budget_get_end_match(sampler);
+        GGML_ASSERT(matched != nullptr);
+        GGML_ASSERT(*matched == llama_tokens({103, 104}));
+
+        llama_sampler_free(sampler);
+    }
+
+    // forced_tokens not ending with a known end sequence records nothing
+    {
+        auto * sampler = common_reasoning_budget_init(nullptr, start, end, {102}, 0, REASONING_BUDGET_FORCING);
+
+        llama_sampler_accept(sampler, 102); // forced sequence complete, DONE
+        GGML_ASSERT(common_reasoning_budget_get_state(sampler) == REASONING_BUDGET_DONE);
+        GGML_ASSERT(common_reasoning_budget_get_end_match(sampler) == nullptr);
+
+        llama_sampler_free(sampler);
+    }
+
+    // a null sampler is safely ignored
+    GGML_ASSERT(common_reasoning_budget_get_end_match(nullptr) == nullptr);
+
+    fprintf(stderr, "  Test 'matched end sequence' passed\n");
+}
+
 // UTF-8 boundary detection unit test
 // Tests common_utf8_is_complete() from reasoning-budget.h
 static void test_utf8_boundary_detection() {
@@ -160,7 +369,7 @@ int main(void) {
         const std::vector<llama_token> forced = {102}; // forced token (not used in this test)
         const std::vector<llama_token> sequence = {100, 50, 51, 101, 52}; // start, two tokens, end, one more
 
-        test_reasoning_budget("natural end before budget exhausted", sequence, start, end, forced,
+        test_reasoning_budget("natural end before budget exhausted", sequence, {start}, {end}, forced,
             5,      // budget of 5 tokens
             REASONING_BUDGET_IDLE,
             SIZE_MAX, SIZE_MAX); // no forcing expected (natural end)
@@ -176,7 +385,7 @@ int main(void) {
         const std::vector<llama_token> forced = {102, 101}; // forced message + end
         const std::vector<llama_token> sequence = {100, 50, 51, 52, 53}; // start + 4 tokens (budget=2)
 
-        test_reasoning_budget("budget exhausted forcing", sequence, start, end, forced,
+        test_reasoning_budget("budget exhausted forcing", sequence, {start}, {end}, forced,
             2,      // budget of 2 tokens
             REASONING_BUDGET_IDLE,
             3,      // forcing starts at i=3 (accept at i=2 depletes budget, apply at i=3 forces)
@@ -191,7 +400,7 @@ int main(void) {
         const std::vector<llama_token> forced = {102, 101};
         const std::vector<llama_token> sequence = {100, 50, 51, 52}; // start token first, then 3 tokens
 
-        test_reasoning_budget("activate immediately budget=0", sequence, start, end, forced,
+        test_reasoning_budget("activate immediately budget=0", sequence, {start}, {end}, forced,
             0,      // budget of 0 tokens
             REASONING_BUDGET_COUNTING, // starts counting, promoted to FORCING since budget=0
             0,      // forcing starts at i=0 (initialized in FORCING, apply forces immediately)
@@ -205,7 +414,7 @@ int main(void) {
         const std::vector<llama_token> forced = {102};
         const std::vector<llama_token> sequence = {50, 51, 52, 53};
 
-        test_reasoning_budget("no start/end configured", sequence, start, end, forced,
+        test_reasoning_budget("no start/end configured", sequence, {start}, {end}, forced,
             2,      // budget
             REASONING_BUDGET_IDLE,
             SIZE_MAX, SIZE_MAX); // no forcing (no start/end configured)
@@ -220,14 +429,73 @@ int main(void) {
         const std::vector<llama_token> forced = {102, 101};
         const std::vector<llama_token> sequence = {50, 51, 52, 53};
 
-        test_reasoning_budget("activate immediately with budget", sequence, start, end, forced,
+        test_reasoning_budget("activate immediately with budget", sequence, {start}, {end}, forced,
             2,      // budget of 2 tokens
             REASONING_BUDGET_COUNTING,
             2,      // forcing starts at i=2 (after 2 accepts deplete budget, apply at i=2 forces)
             3);     // forcing continues through i=3
     }
 
-    printf("OK (5 tests passed)\n");
+    // Test 6: Multi-block thinking. First block ends naturally at i=2, second
+    // start tag at i=3 re-arms the budget, which then exhausts at i=5.
+    // Regression: before this fix, DONE absorbed all subsequent tokens and a
+    // second <think> block ran unbudgeted.
+    // Flow: i=0 accept(100)->COUNTING rem=2; i=1 accept(50)->rem=1;
+    //       i=2 accept(101)->end_matcher matches, DONE;
+    //       i=3 accept(100)->re-arm, COUNTING rem=2;
+    //       i=4 accept(60)->rem=1; i=5 accept(61)->rem=0->FORCING;
+    //       i=6 apply()->forces token[0]=102, accept(62)->force_pos=1, stay FORCING;
+    //       i=7 apply()->forces token[1]=101, accept(63)->force_pos=2->DONE.
+    {
+        const std::vector<llama_token> start = {100};
+        const std::vector<llama_token> end = {101};
+        const std::vector<llama_token> forced = {102, 101};
+        const std::vector<llama_token> sequence = {100, 50, 101, 100, 60, 61, 62, 63};
+
+        test_reasoning_budget("multi-block re-arms budget after DONE", sequence, {start}, {end}, forced,
+            2,      // budget of 2 tokens (per block)
+            REASONING_BUDGET_IDLE,
+            6,      // forcing starts at i=6 (after second block exhausts at i=5)
+            7);     // forcing continues through i=7
+    }
+
+    // Test 7: Multiple start sequences - the second sequence activates counting
+    // Flow: i=0 accept(110), i=1 accept(111)->COUNTING rem=2; i=2 accept(50)->rem=1;
+    //       i=3 accept(51)->rem=0->FORCING; i=4..5 apply() forces the end sequence
+    {
+        const std::vector<llama_tokens> start = {{100}, {110, 111}};
+        const std::vector<llama_tokens> end = {{101}};
+        const std::vector<llama_token> forced = {102, 101};
+        const std::vector<llama_token> sequence = {110, 111, 50, 51, 52, 53};
+
+        test_reasoning_budget("multiple start sequences", sequence, start, end, forced,
+            2,      // budget of 2 tokens
+            REASONING_BUDGET_IDLE,
+            4,      // forcing starts at i=4 (accept at i=3 depletes budget)
+            5);     // forcing continues through i=5
+    }
+
+    // Test 8: Multiple end sequences - natural end via the second sequence
+    // Flow: i=0 accept(100)->COUNTING rem=5; i=1 accept(50)->rem=4;
+    //       i=2 accept(103)->partial end, rem=3; i=3 accept(104)->end matched, DONE
+    {
+        const std::vector<llama_tokens> start = {{100}};
+        const std::vector<llama_tokens> end = {{101}, {103, 104}};
+        const std::vector<llama_token> forced = {102, 101};
+        const std::vector<llama_token> sequence = {100, 50, 103, 104, 52};
+
+        test_reasoning_budget("multiple end sequences", sequence, start, end, forced,
+            5,      // budget of 5 tokens
+            REASONING_BUDGET_IDLE,
+            SIZE_MAX, SIZE_MAX); // no forcing expected (natural end)
+    }
+
+    test_reasoning_budget_clone_mid_counting();
+    test_reasoning_budget_clone_mid_forcing();
+    test_reasoning_budget_force_manual();
+    test_reasoning_budget_end_match();
+
+    printf("OK (12 tests passed)\n");
 
     printf("Testing UTF-8 boundary detection... ");
     test_utf8_boundary_detection();
