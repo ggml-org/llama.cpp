@@ -3721,7 +3721,7 @@ struct clip_model_loader {
                             }
                         } catch (const std::exception & e) {
                             throw std::runtime_error(string_format(
-                                "%s: failed to select extra buffer types for CPU_REPACK (try --no-repack), %s\n",
+                                "%s: failed to select extra buffer types for CPU_REPACK, %s\n",
                                 __func__, e.what()));
                         }
                     }
