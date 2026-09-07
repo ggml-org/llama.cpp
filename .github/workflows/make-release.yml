@@ -19,6 +19,7 @@ env:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   make-release:
@@ -112,6 +113,29 @@ jobs:
               name: 'nightly-tag.txt',
               data: await fs.readFileSync('./nightly-tag.txt')
             });
+
+      - name: Re-tag container images with release version
+        if: ${{ github.event.inputs.dry_run == 'false' && steps.desc.outputs.nightly_tag != '' }}
+        env:
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          VERSION="${{ steps.checks.outputs.version }}"
+          NIGHTLY_TAG="${{ steps.desc.outputs.nightly_tag }}"
+          REPO_OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          IMAGE_REPO="ghcr.io/${REPO_OWNER}/${{ github.event.repository.name }}"
+
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+          VARIANTS=("" "-cuda" "-cuda13" "-vulkan" "-rocm" "-intel" "-musa" "-openvino")
+          TYPES=("full" "light" "server")
+          for type in "${TYPES[@]}"; do
+            for variant in "${VARIANTS[@]}"; do
+              src="${IMAGE_REPO}:${type}${variant}-${NIGHTLY_TAG}"
+              dst="${IMAGE_REPO}:${type}${variant}-${VERSION}"
+              echo "Tagging ${src} -> ${dst}"
+              docker buildx imagetools create --tag "${dst}" "${src}"
+            done
+          done
 
       - name: Dry run summary
         if: ${{ github.event.inputs.dry_run == 'true' }}
