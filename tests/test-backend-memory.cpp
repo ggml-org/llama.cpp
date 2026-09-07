@@ -6,6 +6,7 @@
 #include "ggml.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -13,6 +14,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <thread>
 #include <vector>
 
 using planner_ptr = std::unique_ptr<ggml_backend_memory_planner, decltype(&ggml_backend_memory_planner_free)>;
@@ -782,6 +784,132 @@ static void test_lease_validation() {
     GGML_ASSERT(!ggml_backend_memory_lease_get_region(nullptr, &region));
 }
 
+// Close the lease gate, drain existing users, and reopen after a transaction.
+static void test_arena_state_lifecycle() {
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(nullptr) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_INVALID);
+    GGML_ASSERT(!ggml_backend_memory_arena_quiesce(nullptr));
+    GGML_ASSERT(!ggml_backend_memory_arena_resume(nullptr));
+
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    arena_ptr arena(ggml_backend_memory_arena_new(&buft, 128), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_OPEN);
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 1, 32, 16, GGML_BACKEND_MEMORY_REGION_PERSISTENT, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+
+    lease_ptr lease(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+    GGML_ASSERT(lease);
+    GGML_ASSERT(ggml_backend_memory_arena_quiesce(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_DRAINING);
+    GGML_ASSERT(ggml_backend_memory_arena_acquire(arena.get(), 1) == nullptr);
+
+    GGML_ASSERT(ggml_backend_memory_arena_begin(
+        arena.get(), GGML_BACKEND_MEMORY_PLAN_PRESERVE_PERSISTENT));
+    GGML_ASSERT(!ggml_backend_memory_arena_resume(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_DRAINING);
+
+    GGML_ASSERT(ggml_backend_memory_arena_resume(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_OPEN);
+    lease_ptr concurrent(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+    GGML_ASSERT(concurrent);
+    concurrent.reset();
+    GGML_ASSERT(ggml_backend_memory_arena_quiesce(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_DRAINING);
+
+    lease.reset();
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT);
+    GGML_ASSERT(ggml_backend_memory_arena_quiesce(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_begin(
+        arena.get(), GGML_BACKEND_MEMORY_PLAN_PRESERVE_PERSISTENT));
+    GGML_ASSERT(!ggml_backend_memory_arena_resume(arena.get()));
+    ggml_backend_memory_arena_rollback(arena.get());
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT);
+    GGML_ASSERT(ggml_backend_memory_arena_resume(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_OPEN);
+    lease_ptr resumed(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+    GGML_ASSERT(resumed);
+}
+
+static bool wait_for_count(const std::atomic<size_t> & count, size_t expected) {
+    for (size_t i = 0; i < 1 << 20; ++i) {
+        if (count.load(std::memory_order_relaxed) >= expected) {
+            return true;
+        }
+        std::this_thread::yield();
+    }
+    return false;
+}
+
+// Serialize concurrent lease acquisition with closing the lease gate.
+static void test_arena_concurrent_lease_gate() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    arena_ptr arena(ggml_backend_memory_arena_new(&buft, 128), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 1, 32, 16, GGML_BACKEND_MEMORY_REGION_PERSISTENT, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+
+    std::atomic<bool> gate_closed {false};
+    std::atomic<bool> stop {false};
+    std::atomic<size_t> open_successes {0};
+    std::atomic<size_t> closed_attempts {0};
+    std::atomic<size_t> closed_successes {0};
+    std::vector<std::thread> workers;
+    for (size_t i = 0; i < 4; ++i) {
+        workers.emplace_back([&]() {
+            while (!stop.load(std::memory_order_relaxed)) {
+                const bool after_close = gate_closed.load(std::memory_order_acquire);
+                ggml_backend_memory_lease_t lease = ggml_backend_memory_arena_acquire(arena.get(), 1);
+                if (after_close) {
+                    closed_attempts.fetch_add(1, std::memory_order_relaxed);
+                    if (lease != nullptr) {
+                        closed_successes.fetch_add(1, std::memory_order_relaxed);
+                    }
+                } else if (lease != nullptr) {
+                    open_successes.fetch_add(1, std::memory_order_relaxed);
+                }
+                ggml_backend_memory_lease_free(lease);
+            }
+        });
+    }
+
+    GGML_ASSERT(wait_for_count(open_successes, 256));
+    for (size_t i = 0; i < 8; ++i) {
+        GGML_ASSERT(ggml_backend_memory_arena_begin(
+            arena.get(), GGML_BACKEND_MEMORY_PLAN_PRESERVE_PERSISTENT));
+        GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    }
+    GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 9);
+    GGML_ASSERT(ggml_backend_memory_arena_quiesce(arena.get()));
+    gate_closed.store(true, std::memory_order_release);
+    GGML_ASSERT(wait_for_count(closed_attempts, 256));
+    stop.store(true, std::memory_order_relaxed);
+    for (auto & worker : workers) {
+        worker.join();
+    }
+
+    GGML_ASSERT(open_successes.load(std::memory_order_relaxed) >= 256);
+    GGML_ASSERT(closed_successes.load(std::memory_order_relaxed) == 0);
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 0);
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT);
+}
+
 static void run(const char * name, void (*test)()) {
     std::printf("%s ", name);
     std::fflush(stdout);
@@ -808,5 +936,7 @@ int main() {
     run("test_lease_blocks_replacement", test_lease_blocks_replacement);
     run("test_persistent_lease_transition", test_persistent_lease_transition);
     run("test_lease_validation", test_lease_validation);
+    run("test_arena_state_lifecycle", test_arena_state_lifecycle);
+    run("test_arena_concurrent_lease_gate", test_arena_concurrent_lease_gate);
     return 0;
 }

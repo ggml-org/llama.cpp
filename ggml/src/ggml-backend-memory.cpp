@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <limits>
+#include <mutex>
 #include <new>
 #include <vector>
 
@@ -24,6 +25,8 @@ struct ggml_backend_memory_arena_view {
 
 struct ggml_backend_memory_arena {
     std::atomic<uint32_t> references {1};
+    std::mutex mutex;
+    bool accepting_leases = true;
     ggml_backend_buffer_t parent = nullptr;
     ggml_backend_memory_planner_t planner = nullptr;
     std::vector<ggml_backend_memory_arena_view> views;
@@ -105,6 +108,14 @@ static void free_arena_views(std::vector<ggml_backend_memory_arena_view> & views
         ggml_backend_buffer_free(view.buffer);
     }
     views.clear();
+}
+
+static size_t arena_lease_count_locked(const ggml_backend_memory_arena * arena) {
+    size_t count = 0;
+    for (const auto & view : arena->views) {
+        count += view.active_leases;
+    }
+    return count;
 }
 
 static bool insert_region(
@@ -415,7 +426,11 @@ void ggml_backend_memory_arena_free(ggml_backend_memory_arena_t arena) {
 
 bool ggml_backend_memory_arena_begin(
         ggml_backend_memory_arena_t arena, uint32_t flags) {
-    return arena != nullptr && ggml_backend_memory_planner_begin(arena->planner, flags);
+    if (arena == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    return ggml_backend_memory_planner_begin(arena->planner, flags);
 }
 
 bool ggml_backend_memory_arena_reserve(
@@ -425,8 +440,11 @@ bool ggml_backend_memory_arena_reserve(
         size_t alignment,
         uint32_t flags,
         struct ggml_backend_memory_region * region) {
-    return arena != nullptr && ggml_backend_memory_planner_reserve(
-        arena->planner, id, size, alignment, flags, region);
+    if (arena == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    return ggml_backend_memory_planner_reserve(arena->planner, id, size, alignment, flags, region);
 }
 
 bool ggml_backend_memory_arena_reserve_at(
@@ -437,12 +455,20 @@ bool ggml_backend_memory_arena_reserve_at(
         size_t alignment,
         uint32_t flags,
         struct ggml_backend_memory_region * region) {
-    return arena != nullptr && ggml_backend_memory_planner_reserve_at(
+    if (arena == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    return ggml_backend_memory_planner_reserve_at(
         arena->planner, id, offset, size, alignment, flags, region);
 }
 
 bool ggml_backend_memory_arena_commit(ggml_backend_memory_arena_t arena) {
-    if (arena == nullptr || !arena->planner->building) {
+    if (arena == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    if (!arena->planner->building) {
         return false;
     }
 
@@ -508,6 +534,7 @@ bool ggml_backend_memory_arena_commit(ggml_backend_memory_arena_t arena) {
 
 void ggml_backend_memory_arena_rollback(ggml_backend_memory_arena_t arena) {
     if (arena != nullptr) {
+        std::lock_guard<std::mutex> lock(arena->mutex);
         ggml_backend_memory_planner_rollback(arena->planner);
     }
 }
@@ -521,6 +548,7 @@ ggml_backend_buffer_t ggml_backend_memory_arena_get_buffer(
     if (arena == nullptr) {
         return nullptr;
     }
+    std::lock_guard<std::mutex> lock(arena->mutex);
     ggml_backend_memory_arena_view * view = find_arena_view(arena, id);
     return view != nullptr ? view->buffer : nullptr;
 }
@@ -529,7 +557,11 @@ bool ggml_backend_memory_arena_get_region(
         ggml_backend_memory_arena_t arena,
         uint64_t id,
         struct ggml_backend_memory_region * region) {
-    return arena != nullptr && ggml_backend_memory_planner_get_region(arena->planner, id, region);
+    if (arena == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    return ggml_backend_memory_planner_get_region(arena->planner, id, region);
 }
 
 size_t ggml_backend_memory_arena_capacity(ggml_backend_memory_arena_t arena) {
@@ -537,35 +569,87 @@ size_t ggml_backend_memory_arena_capacity(ggml_backend_memory_arena_t arena) {
 }
 
 size_t ggml_backend_memory_arena_region_count(ggml_backend_memory_arena_t arena) {
-    return arena != nullptr ? ggml_backend_memory_planner_region_count(arena->planner) : 0;
+    if (arena == nullptr) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    return ggml_backend_memory_planner_region_count(arena->planner);
 }
 
 size_t ggml_backend_memory_arena_used(ggml_backend_memory_arena_t arena) {
-    return arena != nullptr ? ggml_backend_memory_planner_used(arena->planner) : 0;
+    if (arena == nullptr) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    return ggml_backend_memory_planner_used(arena->planner);
 }
 
 size_t ggml_backend_memory_arena_high_water(ggml_backend_memory_arena_t arena) {
-    return arena != nullptr ? ggml_backend_memory_planner_high_water(arena->planner) : 0;
+    if (arena == nullptr) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    return ggml_backend_memory_planner_high_water(arena->planner);
 }
 
 uint64_t ggml_backend_memory_arena_generation(ggml_backend_memory_arena_t arena) {
-    return arena != nullptr ? ggml_backend_memory_planner_generation(arena->planner) : 0;
+    if (arena == nullptr) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    return ggml_backend_memory_planner_generation(arena->planner);
+}
+
+bool ggml_backend_memory_arena_quiesce(ggml_backend_memory_arena_t arena) {
+    if (arena == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    arena->accepting_leases = false;
+    return true;
+}
+
+bool ggml_backend_memory_arena_resume(ggml_backend_memory_arena_t arena) {
+    if (arena == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    if (arena->planner->building) {
+        return false;
+    }
+    arena->accepting_leases = true;
+    return true;
+}
+
+enum ggml_backend_memory_arena_state ggml_backend_memory_arena_get_state(
+        ggml_backend_memory_arena_t arena) {
+    if (arena == nullptr) {
+        return GGML_BACKEND_MEMORY_ARENA_STATE_INVALID;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    if (arena->accepting_leases) {
+        return GGML_BACKEND_MEMORY_ARENA_STATE_OPEN;
+    }
+    return arena_lease_count_locked(arena) != 0 ?
+        GGML_BACKEND_MEMORY_ARENA_STATE_DRAINING :
+        GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT;
 }
 
 size_t ggml_backend_memory_arena_lease_count(ggml_backend_memory_arena_t arena) {
     if (arena == nullptr) {
         return 0;
     }
-    size_t count = 0;
-    for (const auto & view : arena->views) {
-        count += view.active_leases;
-    }
-    return count;
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    return arena_lease_count_locked(arena);
 }
 
 ggml_backend_memory_lease_t ggml_backend_memory_arena_acquire(
         ggml_backend_memory_arena_t arena, uint64_t id) {
     if (arena == nullptr) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    if (!arena->accepting_leases) {
         return nullptr;
     }
     ggml_backend_memory_arena_view * view = find_arena_view(arena, id);
@@ -579,7 +663,7 @@ ggml_backend_memory_lease_t ggml_backend_memory_arena_acquire(
     lease->arena = ggml_backend_memory_arena_retain(arena);
     lease->buffer = ggml_backend_buffer_retain(view->buffer);
     lease->region = view->region;
-    lease->generation = ggml_backend_memory_arena_generation(arena);
+    lease->generation = ggml_backend_memory_planner_generation(arena->planner);
     view->active_leases++;
     return lease;
 }
@@ -609,9 +693,12 @@ void ggml_backend_memory_lease_free(ggml_backend_memory_lease_t lease) {
 
     ggml_backend_memory_arena_t arena = lease->arena;
     ggml_backend_buffer_t buffer = lease->buffer;
-    ggml_backend_memory_arena_view * view = find_arena_view(arena, lease->region.id);
-    GGML_ASSERT(view != nullptr && view->buffer == buffer && view->active_leases > 0);
-    view->active_leases--;
+    {
+        std::lock_guard<std::mutex> lock(arena->mutex);
+        ggml_backend_memory_arena_view * view = find_arena_view(arena, lease->region.id);
+        GGML_ASSERT(view != nullptr && view->buffer == buffer && view->active_leases > 0);
+        view->active_leases--;
+    }
     delete lease;
     ggml_backend_buffer_free(buffer);
     ggml_backend_memory_arena_free(arena);

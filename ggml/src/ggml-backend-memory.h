@@ -24,6 +24,14 @@ enum ggml_backend_memory_plan_flags {
     GGML_BACKEND_MEMORY_PLAN_PRESERVE_PERSISTENT = 1 << 0,
 };
 
+// Lease admission states. A lease must cover all backend work that uses its region.
+enum ggml_backend_memory_arena_state {
+    GGML_BACKEND_MEMORY_ARENA_STATE_INVALID   = 0,
+    GGML_BACKEND_MEMORY_ARENA_STATE_OPEN      = 1,
+    GGML_BACKEND_MEMORY_ARENA_STATE_DRAINING  = 2,
+    GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT = 3,
+};
+
 struct ggml_backend_memory_region {
     uint64_t id;
     size_t offset;
@@ -172,11 +180,23 @@ GGML_API size_t ggml_backend_memory_arena_high_water(
 GGML_API uint64_t ggml_backend_memory_arena_generation(
         ggml_backend_memory_arena_t arena);
 
+// Stop new leases while existing leases drain.
+GGML_API bool ggml_backend_memory_arena_quiesce(
+        ggml_backend_memory_arena_t arena);
+
+// Accept new leases after the staged layout is committed or rolled back.
+GGML_API bool ggml_backend_memory_arena_resume(
+        ggml_backend_memory_arena_t arena);
+
+// Return the current lease-gate state.
+GGML_API enum ggml_backend_memory_arena_state ggml_backend_memory_arena_get_state(
+        ggml_backend_memory_arena_t arena);
+
 // Return the number of live lease objects across all committed regions.
 GGML_API size_t ggml_backend_memory_arena_lease_count(
         ggml_backend_memory_arena_t arena);
 
-// Acquire a retained lease for one committed arena region.
+// Acquire a retained lease for one committed arena region while the gate is open.
 GGML_API ggml_backend_memory_lease_t ggml_backend_memory_arena_acquire(
         ggml_backend_memory_arena_t arena, uint64_t id);
 
