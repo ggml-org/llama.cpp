@@ -7229,8 +7229,9 @@ struct test_l2_norm_batch : public test_case {
         if (strided) {
             parent = ggml_new_tensor_4d(ctx, type, ne[0], ne[1] * n_norms, ne[2], ne[3]);  // qkv buffer
         }
+        const int     n = n_norms;
         ggml_tensor * norms[8];
-        for (int t = 0; t < n_norms; ++t) {
+        for (int t = 0; t < n; ++t) {
             ggml_tensor * src;
             if (strided) {
                 src = ggml_view_4d(ctx, parent, ne[0], ne[1], ne[2], ne[3], parent->nb[1], parent->nb[2],
@@ -7240,8 +7241,8 @@ struct test_l2_norm_batch : public test_case {
             }
             norms[t] = ggml_l2_norm(ctx, src, eps);
         }
-        ggml_tensor * out = norms[n_norms - 1];
-        for (int t = n_norms - 2; t >= 0; --t) {
+        ggml_tensor * out = norms[n - 1];
+        for (int t = n - 2; t >= 0; --t) {
             out = ggml_add(ctx, norms[t], out);
         }
         ggml_set_name(out, "out");
