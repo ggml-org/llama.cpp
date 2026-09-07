@@ -1207,6 +1207,13 @@ static bool clip_weight_buft_supported(ggml_tensor *              w,
     if (wops.used_via_view || wops.ops.empty()) {
         return false;
     }
+    // TODO: temporary fix, repack kernels assert on 4D batched activations but
+    // ggml_backend_dev_supports_op does not report it. Fix in the backend first.
+    for (ggml_tensor * op : wops.ops) {
+        if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_MUL_MAT_ID) && op->src[1] && op->src[1]->ne[3] > 1) {
+            return false;
+        }
+    }
     GGML_ASSERT(w->buffer == nullptr);
     ggml_backend_buffer_ptr buf{ ggml_backend_buft_alloc_buffer(buft, 0) };
     if (!buf) {
