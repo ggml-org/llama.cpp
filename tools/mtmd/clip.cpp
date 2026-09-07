@@ -3687,9 +3687,14 @@ struct clip_model_loader {
             // GEN_AUDIO graph variants depend on runtime parameters, skip converting weights to extra bufts
             const bool can_build_graph = model.modality == CLIP_MODALITY_VISION ||
                                          model.modality == CLIP_MODALITY_AUDIO;
+            // Deepseekocr merge image tiles into the batch dimension, so the dummy graph
+            // doesn't match the real ne[3] and repacked weights would hit an assertion
+            const bool supported_proj = model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR &&
+                                        model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR2;
+            const bool repack_supported = can_build_graph && supported_proj;
             if (dev) {
                 const bool is_cpu = ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
-                if (ctx_clip.use_extra_bufts && is_cpu && can_build_graph) {
+                if (ctx_clip.use_extra_bufts && is_cpu && repack_supported) {
                     ggml_backend_buffer_type_t * extra_bufts = clip_get_extra_bufts(dev);
                     if (extra_bufts && *extra_bufts) {
                         try {
@@ -3704,6 +3709,10 @@ struct clip_model_loader {
                                 const auto & wops = i.second;
                                 for (ggml_backend_buffer_type_t * it = extra_bufts; *it; ++it) {
                                     ggml_backend_buffer_type_t extra_buft = *it;
+                                    // Skips non-CPU_REPACK extra bufts like KleidiAI
+                                    if (strcmp(ggml_backend_buft_name(extra_buft), "CPU_REPACK") != 0) {
+                                        continue;
+                                    }
                                     if (clip_weight_buft_supported(w, wops, extra_buft, dev)) {
                                         extra_tensors[extra_buft].push_back(w);
                                         break;
