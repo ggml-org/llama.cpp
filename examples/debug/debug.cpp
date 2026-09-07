@@ -30,16 +30,25 @@ static float tensor_elem_to_f32(const uint8_t * data, ggml_type type,
     }
 }
 
-struct save_tensor_callback_data : base_callback_data {
-    std::string save_dir;
+struct save_tensor_callback_data {
+    std::vector<uint8_t>    data;
+    std::vector<std::regex> tensor_filters;
+    std::string             save_dir;
 
     save_tensor_callback_data() = default;
 
     save_tensor_callback_data(common_params & params,
                                const std::vector<std::string> & filter_patterns,
                                std::string dir)
-        : base_callback_data(params, filter_patterns), save_dir(std::move(dir)) {
-        // Override the callback set by base_callback_data
+        : save_dir(std::move(dir)) {
+        for (const auto & pattern : filter_patterns) {
+            try {
+                std::string anchored_pattern = "^" + pattern;
+                tensor_filters.emplace_back(anchored_pattern, std::regex::optimize);
+            } catch (const std::regex_error & e) {
+                throw std::runtime_error("Invalid regex pattern '" + pattern + "': " + e.what());
+            }
+        }
         params.cb_eval           = save_cb;
         params.cb_eval_user_data = this;
     }
@@ -344,7 +353,7 @@ int main(int argc, char ** argv) {
     llama_numa_init(params.numa);
 
     std::optional<save_tensor_callback_data> save_cb;
-    std::optional<base_callback_data>        base_cb;
+    std::optional<common_debug_cb_user_data> base_cb;
     if (!save_tensors_dir.empty()) {
         save_cb.emplace(params, params.tensor_filter, save_tensors_dir);
     } else if (!params.save_logits) {
