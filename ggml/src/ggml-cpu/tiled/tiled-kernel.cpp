@@ -456,128 +456,95 @@ template void tiled_run_microtile<16, false, 4>(const tiled_tile_src0 & src0, co
 template void tiled_run_microtile<16, true, 0>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                int i0, int j0, float * buf, int buf_stride);
 
-
-#if defined(KERNEL_SRC1_UNPACK)
-
-// Unpack routines for VNNI
-#if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-
-// Unpack one window/macrotile in a form the VNNI kernel can work with.
-// dpbusd reads the src1 codes in the [k/4][row][4] order (one 64B
-// vector per k-group x 16 rows). The region was interleaved up front by
-// tiled_interleave_src1_q8_K, so the tile column is 4 bytes per row, contiguous. 
-void tiled_unpack_src1_q8_K_kernel(int n_rows, tiled_tile_src1 * tile,
-                                   const int8_t * qv, int64_t nr1_pad, int64_t r_start, int64_t kblk) {
-    GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
-    const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
-    const int n_qv = TILED_TILE_K / 4;
-    GGML_ASSERT(qv);
-    const int n_copy = (int) MIN((int64_t) n_padded, nr1_pad - r_start);
-    // one k-group column per iteration: the window's dpbusd vectors, contiguous
-    for (int g = 0; g < n_qv; g++) {
-        memcpy(&tile->q[g * TILED_TILE_ROWS * 4],
-               qv + ((int64_t) (kblk * n_qv + g) * nr1_pad + r_start) * 4, (size_t) n_copy * 4);
-        memset(&tile->q[g * TILED_TILE_ROWS * 4 + (size_t) n_copy * 4], 0, (size_t) (n_padded - n_copy) * 4);
-    }
-}
-
-
-// where the custom-packed region sits in wdata: after the F32 to q8_K conversion when src1
-// is not already q8_K, else at the base (see the struct in tiled-kernel.h)
-tiled_interleave_geom tiled_get_interleave_geom(const struct ggml_compute_params * params,
-                                                const struct ggml_tensor * src1,
-                                                enum ggml_type vec_dot_type,
-                                                int64_t ne10, int64_t nr1) {
-    tiled_interleave_geom geom = { nullptr, 0, 0 };
-    geom.nr1_pad = (nr1 + 15) & ~15LL;
-    geom.bytes = ggml_tiled_extra_wdata_len(ne10, nr1);
-    const size_t off = (src1->type != vec_dot_type) ? ggml_row_size(vec_dot_type, ne10) * (size_t) nr1 : 0;
-    geom.qv = (int8_t *) ((char *) params->wdata + off);
-    return geom;
-}
-// block_q8_K in 4-byte words, for the int32 gather indices of the src1 code unpack
-static constexpr int TILED_Q8_K_WORDS = sizeof(block_q8_K) / 4;
+// block_q8_K in 4-byte words, for the int32 gather indices
 static_assert(sizeof(block_q8_K) == 292 && offsetof(block_q8_K, qs) == 4,
-              "block_q8_K layout changed, fix the src1 gather indices");
+              "block_q8_K layout changed, fix the src1 repack");
 
-// The dpbusd kernel reads the src1 codes in [k/4][row][4], computing 16
-// partial dots.  This code scatters the src1 codes into the region so the
-// tile columns become contiguous loads instead of scattered reads.
-void tiled_interleave_src1_q8_K(const block_q8_K * rows, int64_t row_stride,
-                                       int64_t r_start, int64_t r_end,
-                                       int64_t n_k, int64_t nr1, int64_t nr1_pad, int8_t * qv) {
+// VNNI: the dpbusd kernel reads src1 codes in [k/4][row][4] order (one 512-bit
+// load covers 16 rows x 4 k). Load one k-slab's codes as 16 rows of 64 int32s,
+// transpose in registers, store as 64 rows of 16 int32s into the tile.
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
+bool tiled_repack_src1_codes(const block_q8_K * rows, int64_t row_stride,
+                              int n_rows, tiled_tile_src1 * tile, int kblk) {
+    GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
 
-    //   qv[(s * TILED_TILE_K/4 + g) * nr1_pad + r] = qs[4*g + 0..3]
-    //     of the src1 block (global row r, slab s)
+    for (int r0 = 0; r0 < n_rows; r0 += TILED_MICRO) {
+        const int n = MIN(n_rows - r0, TILED_MICRO);
 
-    const int64_t n_slabs = n_k / TILED_TILE_K;
-    GGML_ASSERT(qv);
-    GGML_ASSERT(n_k % TILED_TILE_K == 0);
-    GGML_ASSERT((r_start & 15) == 0 && (r_end & 15) == 0 && r_end <= nr1_pad);
-    // one masked 16-lane int32 gather + one 64B store per
-    // (slab, k-group, 16-row) block; masked lanes (past nr1) gather zeros
-    {
-        // idx_row[r] = int32 index (in words) of rows[r].qs[0] (d is 4B, qs at +4);
-        // row_stride * TILED_Q8_K_WORDS stays in int32 for any realistic row count.
-        const int32_t row_stride_w = (int32_t) row_stride * TILED_Q8_K_WORDS;
-        const __m512i rvec = _mm512_set_epi32(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
-        const __m512i idx_row = _mm512_add_epi32(_mm512_mullo_epi32(rvec, _mm512_set1_epi32(row_stride_w)),
-                                                 _mm512_set1_epi32(1));
-        const int32_t * base = (const int32_t *) rows;
-        for (int64_t r0 = r_start; r0 < r_end; r0 += TILED_MICRO) {
-            // masked lanes (past nr1) gather into the zero register, so the
-            // 16-row pad tail of the region is zeroed here, no separate memset
-            const int64_t n = (nr1 > r0) ? nr1 - r0 : 0;
-            const __mmask16 k = (n >= TILED_MICRO) ? 0xffff : ((__mmask16) ((1u << n) - 1));
-            const int64_t rl = r0 - r_start; // rows points at global row r_start
-            for (int64_t s = 0; s < n_slabs; s++) {
-                // block (row rl, slab s) is rl*row_stride + s blocks from rows
-                const __m512i base_idx = _mm512_set1_epi32((int32_t) ((rl * row_stride + s) * TILED_Q8_K_WORDS));
-                int8_t * out = qv + s * TILED_TILE_K * nr1_pad + r0 * 4;
-                for (int g = 0; g < TILED_TILE_K / 4; g++) {
-                    const __m512i idx = _mm512_add_epi32(_mm512_add_epi32(idx_row, base_idx), _mm512_set1_epi32(g));
-                    const __m512i v = _mm512_mask_i32gather_epi32(_mm512_setzero_si512(), k, idx, base, 4);
-                    _mm512_storeu_si512((void *) (out + g * nr1_pad * 4), v);
+        // 4 chunks of 16 int32s (64 int32s total = 256 bytes = qs size)
+        for (int c = 0; c < 4; c++) {
+            __m512i v[16];
+            for (int r = 0; r < TILED_MICRO; r++) {
+                if (r < n) {
+                    v[r] = _mm512_loadu_si512((const void *) ((const int32_t *) rows[(r0 + r) * row_stride].qs + c * 16));
+                } else {
+                    v[r] = _mm512_setzero_si512();
                 }
             }
-        }
-        return;
-    }
-}
 
-void tiled_prepare_src1_interleave(
-        const struct ggml_compute_params * params,
-        const struct ggml_tensor * src1,
-        enum ggml_type vec_dot_type,
-        int64_t ne10,
-        int64_t nr1,
-        int ith,
-        int nth) {
-    const tiled_interleave_geom geom = tiled_get_interleave_geom(params, src1, vec_dot_type, ne10, nr1);
-    int8_t * qv = geom.qv;
-    const int64_t nr1_pad = geom.nr1_pad;
-    const int64_t k1_pad = geom.bytes / (size_t) nr1_pad; // region width in elements (bytes = k1_pad * nr1_pad)
-    const block_q8_K * src1_codes;
-    int64_t src1_stride;
-    if (src1->type != vec_dot_type) {
-        ggml_barrier(params->threadpool);
-        // wdata = [F32 to q8_K conversion][interleave region]; 
-        const size_t off = (size_t) ((const int8_t *) geom.qv - (const int8_t *) params->wdata);
-        GGML_ASSERT(params->wsize >= off + geom.bytes);
-        src1_codes = (const block_q8_K *) params->wdata;
-        src1_stride = ne10 / 256; // wdata rows are contiguous 256 blocks
-    } else {
-        GGML_ASSERT(params->wsize >= geom.bytes);
-        src1_codes = (const block_q8_K *) src1->data;
-        src1_stride = src1->nb[1] / sizeof(block_q8_K);
+            // 16x16 int32 transpose, 4 butterfly phases
+            // Phase 1: 1-element interleave, pairs (0,1), (2,3), ..., (14,15)
+            {
+                const __m512i idx_a = _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+                const __m512i idx_b = _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+                for (int i = 0; i < 16; i += 2) {
+                    __m512i a = v[i], b = v[i+1];
+                    v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
+                    v[i+1] = _mm512_permutex2var_epi32(a, idx_b, b);
+                }
+            }
+            // Phase 2: 2-element interleave, pairs (0,2), (1,3), (4,6), (5,7), ...
+            {
+                const __m512i idx_a = _mm512_setr_epi32(0, 1, 16, 17, 4, 5, 20, 21, 8, 9, 24, 25, 12, 13, 28, 29);
+                const __m512i idx_b = _mm512_setr_epi32(2, 3, 18, 19, 6, 7, 22, 23, 10, 11, 26, 27, 14, 15, 30, 31);
+                for (int i = 0; i < 16; i += 4) {
+                    __m512i a = v[i],   b = v[i+2];
+                    v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
+                    v[i+2] = _mm512_permutex2var_epi32(a, idx_b, b);
+                    a = v[i+1], b = v[i+3];
+                    v[i+1] = _mm512_permutex2var_epi32(a, idx_a, b);
+                    v[i+3] = _mm512_permutex2var_epi32(a, idx_b, b);
+                }
+            }
+            // Phase 3: 4-element interleave, pairs (0,4), (1,5), ..., (7,11), (8,12), ...
+            {
+                const __m512i idx_a = _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+                const __m512i idx_b = _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+                for (int i = 0; i < 16; i += 8) {
+                    for (int j = 0; j < 4; j++) {
+                        __m512i a = v[i+j], b = v[i+4+j];
+                        v[i+j]   = _mm512_permutex2var_epi32(a, idx_a, b);
+                        v[i+4+j] = _mm512_permutex2var_epi32(a, idx_b, b);
+                    }
+                }
+            }
+            // Phase 4: 8-element interleave, pairs (0,8), (1,9), ..., (7,15)
+            {
+                const __m512i idx_a = _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+                const __m512i idx_b = _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
+                for (int i = 0; i < 8; i++) {
+                    __m512i a = v[i], b = v[i+8];
+                    v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
+                    v[i+8] = _mm512_permutex2var_epi32(a, idx_b, b);
+                }
+            }
+
+            // store: v[g] holds 16 int32s for k-group (c*16+col_order[g]), rows r0..r0+15
+            // the butterfly produces columns in a fixed permuted order
+            static const int col_order[16] = {0, 8, 1, 9, 4, 12, 5, 13, 2, 10, 3, 11, 6, 14, 7, 15};
+            for (int g = 0; g < 16; g++) {
+                _mm512_storeu_si512((void *) (tile->q + ((c * 16 + col_order[g]) * TILED_TILE_ROWS + r0) * 4), v[g]);
+            }
+        }
     }
-    const int64_t n_groups = nr1_pad / 16;
-    const int64_t g0 = (int64_t) ith * n_groups / nth;
-    const int64_t g1 = (int64_t) (ith + 1) * n_groups / nth;
-    for (int64_t g = g0; g < g1; g++) {
-        tiled_interleave_src1_q8_K(src1_codes + g * 16 * src1_stride, src1_stride,
-                                   g * 16, (g + 1) * 16, k1_pad, nr1, nr1_pad, qv);
-    }
+    return true;
 }
-#endif // #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-#endif // #if defined(KERNEL_SRC1_UNPACK)
+#else
+bool tiled_repack_src1_codes(const block_q8_K * rows, int64_t row_stride,
+                              int n_rows, tiled_tile_src1 * tile, int kblk) {
+    (void)rows; (void)row_stride; (void)n_rows; (void)tile; (void)kblk;
+    return false;
+}
+#endif
+
+

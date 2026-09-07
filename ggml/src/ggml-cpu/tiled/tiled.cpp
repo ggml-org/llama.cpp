@@ -448,26 +448,20 @@ static void tiled_unpack_src0(const block_iq1_m * rows, int64_t row_stride, int 
 
 // unpack src1 tile from q8_K rows
 static void tiled_unpack_src1_q8_K(const block_q8_K * rows, int64_t row_stride, int n_rows, tiled_tile_src1 * tile,
-                                   const int8_t * qv, int64_t nr1_pad, int64_t r_start, int64_t kblk) {
+                                   int kblk) {
     GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
     const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
-#if defined(KERNEL_SRC1_UNPACK)
-    // Kernel-defined unpack for VNNI
-    tiled_unpack_src1_q8_K_kernel(n_rows, tile, qv, nr1_pad, r_start, kblk);
-#else
-    // Straight row copy for normal contiguous rows
-    UNUSED(qv);
-    UNUSED(nr1_pad);
-    UNUSED(r_start);
-    UNUSED(kblk);
-    for (int r = 0; r < n_padded; r++) {
-        if (r < n_rows) {
-            memcpy(&tile->q[r * TILED_TILE_K], rows[r * row_stride].qs, TILED_TILE_K);
-        } else {
-            memset(&tile->q[r * TILED_TILE_K], 0, TILED_TILE_K);
+    // codes: special repack or natural [row][k] copy
+    if (!tiled_repack_src1_codes(rows, row_stride, n_rows, tile, kblk)) {
+        for (int r = 0; r < n_padded; r++) {
+            if (r < n_rows) {
+                memcpy(&tile->q[r * TILED_TILE_K], rows[r * row_stride].qs, TILED_TILE_K);
+            } else {
+                memset(&tile->q[r * TILED_TILE_K], 0, TILED_TILE_K);
+            }
         }
     }
-#endif
+    // d and bsums (ISA-independent)
     for (int r = 0; r < n_padded; r++) {
         if (r < n_rows) {
             const block_q8_K & x = rows[r * row_stride];
@@ -504,13 +498,6 @@ static bool ggml_tiled_matmul_forced(void) {
 
 // Called by ggml-cpu.c to increase wdata in the case of VNNI, or other future kernels that need a second scratch space
 size_t ggml_tiled_extra_wdata_len(int64_t ne10, int64_t nr1) {
-#if defined(KERNEL_SRC1_UNPACK)
-    if (ggml_tiled_matmul_enabled()) {
-        const int64_t k1_pad = (ne10 + 255) & ~255LL; // the region holds whole slabs
-        const int64_t nr1_pad = (nr1 + 15) & ~15LL;
-        return (size_t) k1_pad * (size_t) nr1_pad;
-    }
-#endif
     UNUSED(ne10);
     UNUSED(nr1);
     return 0;
@@ -721,7 +708,7 @@ template <typename B, int SUBBLK, bool HAS_MIN, int BIAS>
 static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_tensor * src0,
                                    const char * src0_cur, int64_t r, int64_t k, int64_t nrows,
                                    const int32_t * expert_rows,
-                                   const block_q8_K * ring, int8_t * qv) {
+                                   const block_q8_K * ring) {
     const int64_t ne00 = src0->ne[0];
     const int64_t ne01 = src0->ne[1];
 
@@ -744,23 +731,12 @@ static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_t
     }
 
     const int64_t nblocks = ne00 / TILED_TILE_K;
-#if defined(KERNEL_SRC1_UNPACK)
-    const int64_t nrow_pad = (nrows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
-#endif
 
     // the ring holds this window's rows, so K is stepped in slabs from the ring base
     for (int64_t ib = 0; ib < ne00; ib += TILED_TILE_K) {
         const int kblk = (int) (ib / TILED_TILE_K);
         tiled_unpack_src0((const B *) (src0_cur + r * src0->nb[1] + kblk * src0_bs), src0_stride, n_src0, tiled_ws.src0);
-#if defined(KERNEL_SRC1_UNPACK)
-        // rows point at slab kblk of ring row 0 (advance by kblk blocks, not rows), so the
-        // scale/bsums loop reads block kblk of ring row r; the VNNI codes come from qv
-        tiled_unpack_src1_q8_K(ring + kblk, nblocks, nrows, tiled_ws.src1,
-                               (const int8_t *) qv, nrow_pad, 0, kblk);
-#else
-        UNUSED(qv);
-        tiled_unpack_src1_q8_K(ring + kblk, nblocks, nrows, tiled_ws.src1, nullptr, 0, 0, kblk);
-#endif
+        tiled_unpack_src1_q8_K(ring + kblk, nblocks, nrows, tiled_ws.src1, kblk);
         // 16x16 microtiles sweeping the window; the unpack routines zeropad the
         // macrotiles outside the valid ranges, so the ragged tails are harmless
         for (int64_t ir0 = r; ir0 < r_end; ir0 += TILED_MICRO) {
@@ -795,10 +771,6 @@ static void ggml_compute_forward_mul_mat_id_tiled_one_expert(
     const int ith = params->ith;
     const int nth = params->nth;
 
-#if defined(KERNEL_SRC1_UNPACK)
-    const int64_t nblocks = ne00 / TILED_TILE_K;
-#endif
-
     const enum ggml_type vec_dot_type = ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
 
     const size_t nbw1 = (src1->type == vec_dot_type) ? nb11 : ggml_row_size(vec_dot_type, ne10);
@@ -808,13 +780,9 @@ static void ggml_compute_forward_mul_mat_id_tiled_one_expert(
 
     init_ws();
 
-    // this thread's ring: TILED_TILE_ROWS gathered q8_K rows, plus the VNNI interleave region
+    // this thread's ring: TILED_TILE_ROWS gathered q8_K rows
     char * ring_c = scratch + (size_t) ith * ggml_tiled_mul_mat_id_extra_wdata_len(ne10, 1);
     block_q8_K * ring = (block_q8_K *) ring_c;
-    int8_t * qv = nullptr;
-#if defined(KERNEL_SRC1_UNPACK)
-    qv = (int8_t *) (ring_c + GGML_PAD((size_t) TILED_TILE_ROWS * nbw1, 64));
-#endif
 
     // groups of TILED_MMID_GROUP rows; rounded up, the window tail is clamped in the gemm
     const int64_t ngroups = (ne01 + TILED_MMID_GROUP - 1) / TILED_MMID_GROUP;
@@ -827,9 +795,8 @@ static void ggml_compute_forward_mul_mat_id_tiled_one_expert(
         return;
     }
 
-    // MUL_MAT_ID scatters the src1 rows per routed row, but the VNNI kernel reads them in the
-    // interleaved [kgroup][row][4B] layout: gather each k window of the routed rows into the
-    // ring, interleave it, then sweep the row windows
+    // MUL_MAT_ID scatters the src1 rows per routed row: gather each k window of the
+    // routed rows into the ring, then sweep the row windows
     for (int64_t k = 0; k < cne1; k += TILED_TILE_K) {
         const int64_t nrows = MIN(TILED_TILE_K, cne1 - k);
 
@@ -839,23 +806,16 @@ static void ggml_compute_forward_mul_mat_id_tiled_one_expert(
             memcpy((char *) ring + (size_t) i * nbw1, (const char *) wdata + (i11 + i12 * ne11) * nbw1, nbw1);
         }
 
-#if defined(KERNEL_SRC1_UNPACK)
-        const int64_t nrow_pad = (nrows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
-        // each ring row is nblocks q8_K blocks wide, so the row stride is nblocks blocks
-        tiled_interleave_src1_q8_K(ring, nblocks, 0, nrow_pad, ne10, nrows, nrow_pad, qv);
-#endif
-
         for (int64_t g = g0; g < g1; g++) {
             const int64_t r = g * TILED_MMID_GROUP;
 
-            tiled_mmid_gemm_window<B, SUBBLK, HAS_MIN, BIAS>(dst, src0, src0_cur, r, k, nrows, expert_rows, ring, qv);
+            tiled_mmid_gemm_window<B, SUBBLK, HAS_MIN, BIAS>(dst, src0, src0_cur, r, k, nrows, expert_rows, ring);
         }
     }
 }
 
 // wdata reservation for the mul_mat_id tiled path: per thread, a ring of
-// TILED_TILE_ROWS gathered q8_K rows of width ne10, and (VNNI builds only) the
-// local interleave region, k1_pad x TILED_TILE_K bytes. 0 when the master
+// TILED_TILE_ROWS gathered q8_K rows of width ne10. 0 when the master
 // switch is off. Must match the per-thread layout in the driver.
 size_t ggml_tiled_mul_mat_id_extra_wdata_len(int64_t ne10, int64_t n_tasks) {
     if (!ggml_tiled_matmul_enabled()) {
@@ -863,11 +823,6 @@ size_t ggml_tiled_mul_mat_id_extra_wdata_len(int64_t ne10, int64_t n_tasks) {
     }
     size_t per_thread = (size_t) TILED_TILE_ROWS * ggml_row_size(GGML_TYPE_Q8_K, ne10);
     per_thread = GGML_PAD(per_thread, 64);
-#if defined(KERNEL_SRC1_UNPACK)
-    const int64_t k1_pad = (ne10 + TILED_TILE_K - 1) & ~(TILED_TILE_K - 1); // the region holds whole slabs
-    per_thread += (size_t) k1_pad * TILED_TILE_K;
-    per_thread = GGML_PAD(per_thread, 64);
-#endif
     return per_thread * (size_t) n_tasks;
 }
 
@@ -962,16 +917,6 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
     assert(ne12 % ne02 == 0);
     assert(ne13 % ne03 == 0);
 
-    // info about the interleaved geometry in the case we have special unpacking for src1 (VNNI interleaving)
-#if defined(KERNEL_SRC1_UNPACK)
-    const tiled_interleave_geom geom = tiled_get_interleave_geom(params, src1, vec_dot_type, ne10, ne11 * ne12 * ne13);
-    const int8_t * qv = geom.qv;
-    const int64_t nr1_pad = geom.nr1_pad;
-#else
-    const int8_t * qv = nullptr;
-    const int64_t nr1_pad = 0;
-#endif
-
     // Init threadlocal panels
     init_ws();
 
@@ -1022,8 +967,7 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
                 // Unpack src0 and src1 into macrotiles
                 const int kblk = (int) (ib / TILE);
                 tiled_unpack_src0((const B *) (src0_row + iir0 * nb01 + kblk * src0_bs), src0_stride, n_src0, tiled_ws.src0);
-                tiled_unpack_src1_q8_K(src1_col + kblk, src1_stride, n_src1, tiled_ws.src1,
-                                       qv, nr1_pad, iir1, kblk);
+                tiled_unpack_src1_q8_K(src1_col + kblk, src1_stride, n_src1, tiled_ws.src1, kblk);
 
                 // 16x16 microtiles sweeping the window
                 for (int64_t ir0 = iir0; ir0 < iir0_end; ir0 += MICRO) {
@@ -1096,11 +1040,6 @@ static void ggml_compute_forward_mul_mat_tiled_driver(
             }
         }
     }
-
-    // interleave the whole tensor's src1 codes once (VNNI builds only)
-#if defined(KERNEL_SRC1_UNPACK)
-    tiled_prepare_src1_interleave(params, src1, vec_dot_type, ne10, ne11 * ne12 * ne13, ith, nth);
-#endif
 
     if (ith == 0) {
         // Every thread starts at ith, so the first unprocessed chunk is nth. This saves a bit of coordination right at the start.

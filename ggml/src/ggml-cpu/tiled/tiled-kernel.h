@@ -143,43 +143,11 @@ void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & s
                          int i0, int j0, float * buf, int buf_stride);
 
 
-// Defined when this arch's kernel reads the src1 tile codes in a non-natural order.
-// If set, driver will call kernel methods `tiled_prepare_src1_interleave` and 
-// `tiled_unpack_src1_q8_K_kernel` to prepare the tensor and macrotiles instead of doing a naive copy.
-#if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-#define KERNEL_SRC1_UNPACK 1
-#endif
-
-
-#if defined(KERNEL_SRC1_UNPACK)
-// the dpbusd kernel reads the src1 tile codes in the [k/4][row][4] order instead of standard row-major
-void tiled_unpack_src1_q8_K_kernel(int n_rows, tiled_tile_src1 * tile,
-                                   const int8_t * qv, int64_t nr1_pad, int64_t r_start, int64_t kblk);
-
-// geometry of an additional src1 scratch region in wdata
-struct tiled_interleave_geom {
-    int8_t       * qv;      // base of the [slab][k/4][row][4] code region (null when not built)
-    int64_t       nr1_pad;  // row count padded to 16 (0 then)
-    size_t        bytes;    // wdata reservation size for the region (0 then)
-};
-
-tiled_interleave_geom tiled_get_interleave_geom(const struct ggml_compute_params * params,
-                                                const struct ggml_tensor * src1,
-                                                enum ggml_type vec_dot_type,
-                                                int64_t ne10, int64_t nr1);
-
-// The q8 codes of the whole tensor are scattered into a flat [slab][k/4-in-slab][row][4] wdata region 
-// (rows padded to 16, zeroed tail) so the per (window, slab) unpack becomes a contiguous copy.
-void tiled_prepare_src1_interleave(const struct ggml_compute_params * params,
-                                   const struct ggml_tensor * src1,
-                                   enum ggml_type vec_dot_type,
-                                   int64_t ne10, int64_t nr1, int ith, int nth);
-
-// MUL_MAT_ID: the same [k/4-in-slab][row][4] scatter, but from a contiguous set of gathered
-// q8_K rows (the expert rows) into a caller-provided region of k1_pad x nr1_pad bytes
-void tiled_interleave_src1_q8_K(const block_q8_K * rows, int64_t row_stride,
-                                int64_t r_start, int64_t r_end,
-                                int64_t n_k, int64_t nr1, int64_t nr1_pad, int8_t * qv);
-
-#endif
+// Repack the src1 codes for one k-slab (256 elements) into the tile in the
+// layout the kernel needs. Returns true if a special layout was applied,
+// false if the caller should copy the codes in natural [row][k] order.
+// rows points to the kblk-th block of the first row; rows[r * row_stride]
+// is row r's kblk-th block.
+bool tiled_repack_src1_codes(const block_q8_K * rows, int64_t row_stride,
+                              int n_rows, tiled_tile_src1 * tile, int kblk);
 
