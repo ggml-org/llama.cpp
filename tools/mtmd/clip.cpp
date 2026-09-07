@@ -3761,15 +3761,7 @@ struct clip_model_loader {
                 ctx_clip.bufs.emplace_back(std::move(cur_buf));
             }
 
-            bool needs_alloc = false;
-            for (ggml_tensor * t = ggml_get_first_tensor(ctx_clip.ctx_data.get()); t;
-                               t = ggml_get_next_tensor(ctx_clip.ctx_data.get(), t)) {
-                if (!t->buffer && ggml_nbytes(t) > 0) {
-                    needs_alloc = true;
-                    break;
-                }
-            }
-            if (needs_alloc) {
+            if (ggml_backend_alloc_ctx_tensors_from_buft_size(ctx_clip.ctx_data.get(), buft) > 0) {
                 ggml_backend_buffer_ptr buf{ ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft) };
                 if (!buf) {
                     throw std::runtime_error(
