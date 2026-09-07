@@ -1173,14 +1173,15 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 // Both quantizations encode values as e2m1 (FP4) and produce one uint32 scale per
 // m16n8k64 MMA call; only the PTX kind (scale_vec::2X ue8m0 vs scale_vec::4X ue4m3)
 // and the per-type stride constant differ.
-template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_fp4_fp4_mma(
+// x tile rows of sram_stride ints: the quantized values followed by the packed block scales at x_sc_offset
+template <ggml_type type, int J, bool fallback, int sram_stride, int x_sc_offset>
+static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_fp4_fp4_mma_impl(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
 
     typedef tile<16, 8, int>   tile_A;
     typedef tile<8,  8, int>   tile_B;
     typedef tile<16, 8, float> tile_C;
 
-    constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp / tile_C::I;
     constexpr int nfrags        = MMQ_TILE_NE_K / tile_A::J;
@@ -1188,7 +1189,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     y += (threadIdx.y % ntx) * (tile_C::J * MMQ_TILE_Y_K);
 
     const int *      x_qs = (const int *) x;
-    const uint32_t * x_sc = (const uint32_t *) (x_qs + 2 * MMQ_TILE_NE_K);
+    const uint32_t * x_sc = (const uint32_t *) (x_qs + x_sc_offset);
     const int *      y_qs = (const int *) y + 4;
     const uint32_t * y_sc = (const uint32_t *) y;
 
@@ -1198,16 +1199,20 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int tidx_B = threadIdx.x / 4;
     const int i0     = (threadIdx.y / ntx) * rows_per_warp;
 
+    // the scale words of the nfrags fragments of a row are adjacent and 16 byte aligned, one vector load each
+    static_assert(nfrags == 4 && (sram_stride*4) % 16 == 0 && (MMQ_TILE_Y_K*4) % 16 == 0, "scale vector loads need 16 byte aligned rows");
+
     tile_A   A[ntx][nfrags];
     uint32_t scaleA[ntx][nfrags];
 
 #pragma unroll
     for (int n = 0; n < ntx; ++n) {
+        const uint4 sa = *(const uint4 *) (x_sc + (i0 + n * tile_A::I + tidx_A) * sram_stride + k00 / tile_A::J);
+        scaleA[n][0] = sa.x; scaleA[n][1] = sa.y; scaleA[n][2] = sa.z; scaleA[n][3] = sa.w;
 #pragma unroll
         for (int frag = 0; frag < nfrags; ++frag) {
             const int k0 = k00 + frag * tile_A::J;
             load_ldmatrix(A[n][frag], x_qs + (i0 + n * tile_A::I) * sram_stride + k0, sram_stride);
-            scaleA[n][frag] = x_sc[(i0 + n * tile_A::I + tidx_A) * sram_stride + k0 / tile_A::J];
         }
     }
 
@@ -1216,25 +1221,28 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         tile_B   B[nfrags];
         uint32_t scaleB[nfrags];
 
+        const uint4 sb = *(const uint4 *) (y_sc + (j0 + tidx_B) * MMQ_TILE_Y_K);
+        scaleB[0] = sb.x; scaleB[1] = sb.y; scaleB[2] = sb.z; scaleB[3] = sb.w;
 #pragma unroll
         for (int frag = 0; frag < nfrags; ++frag) {
             const int k0 = frag * tile_B::J;
             load_generic(B[frag], y_qs + j0 * MMQ_TILE_Y_K + k0, MMQ_TILE_Y_K);
-            scaleB[frag] = y_sc[(j0 + tidx_B) * MMQ_TILE_Y_K + frag];
         }
 
 #pragma unroll
         for (int n = 0; n < ntx; ++n) {
+            // accumulate in place, the sum layout matches tile_C
+            tile_C & C = *reinterpret_cast<tile_C *>(sum + (j0 / tile_C::J + n) * tile_C::ne);
 #pragma unroll
             for (int frag = 0; frag < nfrags; ++frag) {
-                tile_C C = {};
                 mma_block_scaled_fp4<type>(C, A[n][frag], B[frag], scaleA[n][frag], scaleB[frag]);
-#pragma unroll
-                for (int l = 0; l < tile_C::ne; ++l) {
-                    sum[(j0 / tile_C::J + n) * tile_C::ne + l] += C.x[l];
-                }
             }
         }
     }
 }
 
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_fp4_fp4_mma(
+        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
+    constexpr int sram_stride = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
+    ggml_cuda_mmq_vec_dot_fp4_fp4_mma_impl<type, J, fallback, sram_stride, 2*MMQ_TILE_NE_K>(x, y, sum, k00);
+}

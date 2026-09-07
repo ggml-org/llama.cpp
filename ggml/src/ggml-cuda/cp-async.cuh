@@ -1,3 +1,5 @@
+#pragma once
+
 // Simplified API for asynchronous data loading.
 
 #include "common.cuh"
@@ -41,6 +43,37 @@ static __device__ __forceinline__ void cp_async_cg_16(const unsigned int dst, co
 #else
     GGML_UNUSED(dst);
     GGML_UNUSED(src);
+    NO_DEVICE_CODE;
+#endif // CP_ASYNC_AVAILABLE
+}
+
+// 4 byte copy through L1 (ca == cache all) for sources that are only 4 byte aligned, e.g. the 36 byte NVFP4 blocks.
+static __device__ __forceinline__ void cp_async_ca_4(const unsigned int dst, const void * src) {
+#ifdef CP_ASYNC_AVAILABLE
+    asm volatile("cp.async.ca.shared.global [%0], [%1], 4;" : : "r"(dst), "l"(src));
+#else
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src);
+    NO_DEVICE_CODE;
+#endif // CP_ASYNC_AVAILABLE
+}
+
+// Groups the copies issued so far by this thread, see cp_async_wait_group.
+static __device__ __forceinline__ void cp_async_commit_group() {
+#ifdef CP_ASYNC_AVAILABLE
+    asm volatile("cp.async.commit_group;");
+#else
+    NO_DEVICE_CODE;
+#endif // CP_ASYNC_AVAILABLE
+}
+
+// Waits until at most N of this thread's copy groups are still pending. Like cp_async_wait_all this
+// does not synchronize between threads.
+template <int N>
+static __device__ __forceinline__ void cp_async_wait_group() {
+#ifdef CP_ASYNC_AVAILABLE
+    asm volatile("cp.async.wait_group %0;" : : "n"(N));
+#else
     NO_DEVICE_CODE;
 #endif // CP_ASYNC_AVAILABLE
 }

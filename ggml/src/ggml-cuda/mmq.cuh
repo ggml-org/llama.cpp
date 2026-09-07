@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.cuh"
+#include "cp-async.cuh"
 
 #include <climits>
 #include <cstdint>
@@ -9,6 +10,11 @@
 #define MMQ_ITER_K             256
 #define MMQ_ITER_K_FP4         512
 #define MMQ_NWARPS               8
+
+// NVFP4 on Blackwell processes its tile with a cp.async pipeline of MMQ_FP4_PIPE_STAGES stages of 256 values in K,
+// see mul_mat_q_process_tile_fp4_pipe. Each x stage row holds 32 words of values and 4 words of block scales.
+#define MMQ_FP4_PIPE_STAGES 2
+#define MMQ_FP4_PIPE_XS     36
 
 typedef void (*ggml_cuda_mmq_load_tiles_t)(const char * __restrict__ x, int * x_tile, const int kbx0, const int i_max, const int stride);
 typedef void (*ggml_cuda_mmq_vec_dot_t)(const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00);
@@ -865,6 +871,106 @@ static constexpr __device__ ggml_cuda_mmq_write_back_t ggml_cuda_mmq_get_write_b
 
 // ---------------------------------------------------------------------------------------------
 
+#if defined(BLACKWELL_MMA_AVAILABLE)
+// NVFP4 tile processing with a two stage cp.async pipeline: while the tensor cores work on one stage of
+// 256 values in K, the copies for the next stage are in flight. NVFP4 blocks are 36 bytes (4 scale bytes,
+// then 32 bytes of values), so the x tile is copied word by word into rows of MMQ_FP4_PIPE_XS ints:
+// the 32 words of values, then the 4 scale words. The y tile is the contiguous block_fp4_mmq layout.
+template <ggml_type type, int J, bool fallback, bool fixup>
+static __device__ __forceinline__ void mul_mat_q_process_tile_fp4_pipe(
+        const char * __restrict__ x, const int offset_x, const int * __restrict__ y,
+        const int * __restrict__ ids_dst, float * __restrict__ dst, float * __restrict__ tmp_fixup,
+        const float * __restrict__ y_scale,
+        const int stride_row_x, const int ncols_y, const int stride_col_dst,
+        const int tile_x_max_i, const int tile_y_max_j, const int kb0_start, const int kb0_stop) {
+    static_assert(type == GGML_TYPE_NVFP4, "pipelined tile processing is only implemented for NVFP4");
+
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int nthreads  = ggml_cuda_mmq_get_nthreads(type, J, fallback);
+    constexpr int nwarps    = nthreads / warp_size;
+    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback);
+    constexpr int XS        = MMQ_FP4_PIPE_XS;
+    constexpr int KB_STAGE  = 8*MMQ_TILE_NE_K / QK_NVFP4;       // blocks of 64 values per stage
+    constexpr int WPB       = sizeof(block_nvfp4) / sizeof(int); // words per block
+    constexpr int X_STAGE   = I*XS;                              // ints per x stage buffer
+    constexpr int Y_STAGE   = J*MMQ_TILE_Y_K;                    // ints per y stage buffer
+    constexpr int sz        = sizeof(block_q8_1_mmq) / sizeof(int);
+    static_assert(XS == MMQ_TILE_NE_K + KB_STAGE && XS % 8 == 4, "x stage rows: values, scales, ldmatrix friendly stride");
+    static_assert(sizeof(block_nvfp4) % sizeof(int) == 0, "NVFP4 blocks must be word aligned");
+    constexpr ggml_cuda_mmq_write_back_t write_back = ggml_cuda_mmq_get_write_back<type, J, fallback>();
+
+    extern __shared__ int data_mul_mat_q[];
+    int * stages = data_mul_mat_q + J; // [MMQ_FP4_PIPE_STAGES][X_STAGE + Y_STAGE], after the ids
+
+    const int tid = threadIdx.y*warp_size + threadIdx.x;
+
+    // x copy: the stage data of a row is KB_STAGE*WPB consecutive words, lane l copies word l and, for the words
+    // beyond the warp, word warp_size + l. Word q of a row lands in the scale area (word 0 of a block) or the
+    // value area (words 1..8 of a block); these per lane destinations are loop invariant.
+    constexpr int ROW_WORDS = KB_STAGE*WPB;
+    static_assert(ROW_WORDS > warp_size && ROW_WORDS <= 2*warp_size && I % nwarps == 0, "bad x row copy split");
+    auto x_dst_word = [](const int q) {
+        const int b = q / WPB;
+        const int w = q % WPB;
+        return w == 0 ? MMQ_TILE_NE_K + b : 8*b + (w - 1);
+    };
+    const int lane = threadIdx.x;
+    const int q1   = warp_size + lane;
+    const int d0   = x_dst_word(lane);
+    const int d1   = x_dst_word(q1 < ROW_WORDS ? q1 : 0);
+
+    // copy the stage starting at block kb0 into stage buffer s
+    auto issue = [&](const int kb0, const int s) {
+        int * xs = stages + s*(X_STAGE + Y_STAGE);
+        int * ys = xs + X_STAGE;
+#pragma unroll
+        for (int r = 0; r < I/nwarps; ++r) {
+            const int i     = threadIdx.y*(I/nwarps) + r;
+            const int i_src = fallback ? min(i, tile_x_max_i) : i;
+            const int * row = (const int *) ((const block_nvfp4 *) x + offset_x + i_src*stride_row_x + kb0);
+            cp_async_ca_4(ggml_cuda_cvta_generic_to_shared(xs + i*XS + d0), row + lane);
+            if (q1 < ROW_WORDS) {
+                cp_async_ca_4(ggml_cuda_cvta_generic_to_shared(xs + i*XS + d1), row + q1);
+            }
+        }
+        const int * by0 = y + ncols_y * (kb0*QK_NVFP4/QK_FP4_MMQ) * sz;
+        for (int l = 4*tid; l < Y_STAGE; l += 4*nthreads) {
+            cp_async_cg_16<0>(ggml_cuda_cvta_generic_to_shared(ys + l), by0 + l);
+        }
+        cp_async_commit_group();
+    };
+
+    float sum[J*I / (nwarps*warp_size)] = {0.0f};
+
+    // a partial last stage reads x past kb0_stop (finite values, padding or the next row) against zero padded y
+    const int n_stages = (kb0_stop - kb0_start + KB_STAGE - 1) / KB_STAGE;
+    if (n_stages > 0) {
+        issue(kb0_start, 0);
+    }
+    for (int s = 0; s < n_stages; ++s) {
+        // the buffer of stage s+1 was last read in iteration s-1, which ended with a barrier
+        if (s + 1 < n_stages) {
+            issue(kb0_start + (s + 1)*KB_STAGE, (s + 1) % MMQ_FP4_PIPE_STAGES);
+            cp_async_wait_group<1>();
+        } else {
+            cp_async_wait_group<0>();
+        }
+        __syncthreads();
+
+        const int * xs = stages + (s % MMQ_FP4_PIPE_STAGES)*(X_STAGE + Y_STAGE);
+        ggml_cuda_mmq_vec_dot_fp4_fp4_mma_impl<type, J, fallback, XS, MMQ_TILE_NE_K>(xs, xs + X_STAGE, sum, 0);
+
+        __syncthreads();
+    }
+
+    if (fixup) {
+        write_back(sum, ids_dst, tmp_fixup + blockIdx.x*(J*I), y_scale, I, I, J);
+    } else {
+        write_back(sum, ids_dst, dst, y_scale, stride_col_dst, tile_x_max_i, tile_y_max_j);
+    }
+}
+#endif // defined(BLACKWELL_MMA_AVAILABLE)
+
 template <ggml_type type, int J, bool fallback, bool fixup>
 static __device__ __forceinline__ void mul_mat_q_process_tile(
         const char * __restrict__ x, const int offset_x, const int * __restrict__ y,
@@ -872,6 +978,14 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         const float * __restrict__ y_scale,
         const int stride_row_x, const int ncols_y, const int stride_col_dst,
         const int tile_x_max_i, const int tile_y_max_j, const int kb0_start, const int kb0_stop) {
+#if defined(BLACKWELL_MMA_AVAILABLE)
+    if constexpr (type == GGML_TYPE_NVFP4) {
+        mul_mat_q_process_tile_fp4_pipe<type, J, fallback, fixup>(
+            x, offset_x, y, ids_dst, dst, tmp_fixup, y_scale, stride_row_x, ncols_y, stride_col_dst,
+            tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
+        return;
+    }
+#endif // defined(BLACKWELL_MMA_AVAILABLE)
 
     constexpr int              warp_size  = ggml_cuda_get_physical_warp_size();
     constexpr int              nwarps     = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
@@ -1380,6 +1494,9 @@ struct mmq_args {
 
 static size_t mmq_get_nbytes_shared(const ggml_cuda_mmq_config & config, const int cc) {
     const size_t nbs_ids = config.J*sizeof(int);
+    if (blackwell_mma_available(cc) && config.type == GGML_TYPE_NVFP4) {
+        return nbs_ids + MMQ_FP4_PIPE_STAGES*(config.I*MMQ_FP4_PIPE_XS + config.J*MMQ_TILE_Y_K)*sizeof(int);
+    }
     const size_t nbs_x = ggml_cuda_mmq_get_nbytes_shared_x(config, cc);
     const size_t nbs_y = config.J * (sizeof(block_q8_1_mmq));
     return nbs_ids + nbs_x + GGML_PAD(nbs_y, config.nthreads*sizeof(int));
