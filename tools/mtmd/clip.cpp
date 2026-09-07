@@ -3705,7 +3705,7 @@ struct clip_model_loader {
                                 const auto & wops = i.second;
                                 for (ggml_backend_buffer_type_t * it = extra_bufts; *it; ++it) {
                                     ggml_backend_buffer_type_t extra_buft = *it;
-                                    // Skips non-CPU_REPACK extra bufts like KleidiAI
+                                    // Only CPU_REPACK validated, KleidiAI showed numerical drift, others untested
                                     if (strcmp(ggml_backend_buft_name(extra_buft), "CPU_REPACK") != 0) {
                                         continue;
                                     }
@@ -3716,9 +3716,10 @@ struct clip_model_loader {
                                 }
                             }
                         } catch (const std::exception & e) {
-                            throw std::runtime_error(string_format(
-                                "%s: failed to select extra buffer types for CPU_REPACK, %s\n",
-                                __func__, e.what()));
+                            LOG_WRN(
+                                "%s: failed to select extra buffer types for CPU_REPACK, falling back to the default buffer type, %s\n",
+                                __func__, e.what());
+                            extra_tensors.clear();
                         }
                     }
                 }
