@@ -56,8 +56,9 @@ static llama_context * init_ctx(llama_model * model, llama_context_params cparam
         return ctx;
     }
 
-    // Populate a sequence so state_write visits the cache buffers.
-    if (!decode_one(ctx, 0, 0)) {
+    // Use a full ubatch so buffer discovery preserves prefill allocation sizes.
+    const uint32_t n_tokens = llama_n_ubatch(ctx);
+    if (!decode_tokens(ctx, std::vector<llama_token>(n_tokens, 0), n_tokens)) {
         llama_free(ctx);
         return nullptr;
     }
