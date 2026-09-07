@@ -376,6 +376,10 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
 
 #define FATTN_VEC_COMPILED(type_K, type_V) GGML_CUDA_FA_SEL_##type_K##_##type_V // undefined == 0
 
+#if !FATTN_VEC_COMPILED(f16, f16)
+#error "the f16-f16 FlashAttention vector kernel must always be compiled"
+#endif // !FATTN_VEC_COMPILED(f16, f16)
+
 #define FATTN_VEC_CASE(D, type_K_case, type_V_case)                                                                     \
     {                                                                                                                   \
         const bool type_K_okay = type_K == (type_K_case) || (type_K == GGML_TYPE_F32 && (type_K_case) == GGML_TYPE_F16); \
@@ -560,7 +564,7 @@ static bool ggml_cuda_flash_attn_ext_vec_impl(
 }
 
 // Whether the vector kernels were compiled for this combination of K/V types:
-static bool ggml_cuda_fattn_kv_types_supported(const ggml_type type_K, const ggml_type type_V) {
+static bool ggml_cuda_fattn_vec_kv_types_compiled(const ggml_type type_K, const ggml_type type_V) {
     return ggml_cuda_flash_attn_ext_vec_impl<true>(nullptr, nullptr, type_K, type_V, 0);
 }
 
@@ -569,7 +573,11 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
-    if (!ggml_cuda_flash_attn_ext_vec_impl<false>(&ctx, dst, K->type, V->type, Q->ne[0])) {
+    if (ggml_cuda_flash_attn_ext_vec_impl<false>(&ctx, dst, K->type, V->type, Q->ne[0])) {
+        return;
+    }
+
+    if (!ggml_cuda_flash_attn_ext_vec_impl<false>(&ctx, dst, GGML_TYPE_F16, GGML_TYPE_F16, Q->ne[0])) {
         GGML_ABORT("fatal error");
     }
 }
@@ -581,6 +589,23 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_VEC     = 100,
     BEST_FATTN_KERNEL_MMA_F16 = 400,
 };
+
+// K/V types for which there is a vector kernel template instance, other kernels convert these to f16:
+static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_F32:
+        case GGML_TYPE_F16:
+        case GGML_TYPE_BF16:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+            return true;
+        default:
+            return false;
+    }
+}
 
 static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
 #ifndef FLASH_ATTN_AVAILABLE
@@ -666,9 +691,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             return BEST_FATTN_KERNEL_NONE;
     }
 
-    if (!ggml_cuda_fattn_kv_types_supported(K->type, V->type)) {
+    if (!ggml_cuda_fattn_kv_type_supported(K->type) || !ggml_cuda_fattn_kv_type_supported(V->type)) {
         return BEST_FATTN_KERNEL_NONE;
     }
+
+    const bool kv_f16_fallback = !ggml_cuda_fattn_vec_kv_types_compiled(K->type, V->type);
+    const bool kv_quantized    = !kv_f16_fallback && (ggml_is_quantized(K->type) || ggml_is_quantized(V->type));
 
     if (mask && mask->ne[2] != 1) {
         return BEST_FATTN_KERNEL_NONE;
@@ -681,7 +709,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
         if (can_use_vector_kernel) {
-            if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
+            if (!kv_quantized) {
                 if (cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] == 1 && Q->ne[3] == 1 && !(gqa_ratio > 4 && K->ne[1] >= 8192)) {
                     return BEST_FATTN_KERNEL_VEC;
                 }
@@ -739,7 +767,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // If there are no tensor cores available, use the generic tile kernel:
     if (can_use_vector_kernel) {
-        if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
+        if (!kv_quantized) {
             if (Q->ne[1] == 1) {
                 if (!gqa_opt_applies) {
                     return BEST_FATTN_KERNEL_VEC;
@@ -774,10 +802,11 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
             need_f16_K = true;
             need_f16_V = true;
             break;
-        case BEST_FATTN_KERNEL_VEC:
-            need_f16_K = K->type == GGML_TYPE_F32;
-            need_f16_V = V->type == GGML_TYPE_F32;
-            break;
+        case BEST_FATTN_KERNEL_VEC: {
+            const bool f16_fallback = !ggml_cuda_fattn_vec_kv_types_compiled(K->type, V->type);
+            need_f16_K = K->type == GGML_TYPE_F32 || f16_fallback;
+            need_f16_V = V->type == GGML_TYPE_F32 || f16_fallback;
+        } break;
         case BEST_FATTN_KERNEL_NONE:
             break;
     }
@@ -790,6 +819,19 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
+
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+    if (!ggml_cuda_fattn_vec_kv_types_compiled(K->type, V->type)) {
+        static bool warned = false;
+        if (!warned) {
+            GGML_LOG_WARN("%s: FlashAttention kernels for K/V types %s-%s were not compiled, K and V are converted to f16 which is slower. "
+                "Add \"%s-%s\" to GGML_CUDA_FA_QUANTS in the build flags to compile them.\n",
+                __func__, ggml_type_name(K->type), ggml_type_name(V->type), ggml_type_name(K->type), ggml_type_name(V->type));
+            warned = true;
+        }
+    }
+
     switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");
