@@ -4323,13 +4323,21 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                             op->type == GGML_TYPE_Q4_0) &&
                            src0->type == GGML_TYPE_F32 && (src1->type == GGML_TYPE_I64 || src1->type == GGML_TYPE_I32));
             break;
-        case GGML_OP_GET_ROWS:
+        case GGML_OP_GET_ROWS: {
+            const size_t storage_alignment =
+                ctx->webgpu_global_ctx->capabilities.limits.minStorageBufferOffsetAlignment;
+            const size_t src_address_unit =
+                src0->type == GGML_TYPE_F32 && op->ne[0] % 4 == 0 ? 4 * sizeof(float) : ggml_type_size(src0->type);
+            if (ggml_webgpu_tensor_misalignment(src0, storage_alignment) % src_address_unit != 0) {
+                break;
+            }
             if (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_webgpu_supported_qtype(src0->type)) {
                 supports_op = (op->type == GGML_TYPE_F32);
             } else if (src0->type == GGML_TYPE_I32) {
                 supports_op = op->type == GGML_TYPE_I32;
             }
             break;
+        }
         case GGML_OP_MUL_MAT:
             {
                 switch (src1->type) {

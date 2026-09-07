@@ -130,4 +130,70 @@ static inline void hvx_scale_offset_f32(uint8_t * restrict dst, const uint8_t * 
     }
 }
 
+// Scale+offset computed by promoting f16 -> f32, then narrowing the result back to f16.
+#define hvx_scale_offset_f16_loop_body(dst_type, src_type, vec_store)                                                \
+    do {                                                                                                             \
+        dst_type * restrict vdst = (dst_type *) dst;                                                                 \
+        src_type * restrict vsrc = (src_type *) src;                                                                 \
+                                                                                                                     \
+        HVX_Vector vs = hvx_vec_splat_f32(scale);                                                                    \
+        HVX_Vector vo = hvx_vec_splat_f32(offset);                                                                   \
+                                                                                                                     \
+        const uint32_t nvec = n / VLEN_FP16;                                                                         \
+        const uint32_t nloe = n % VLEN_FP16;                                                                         \
+                                                                                                                     \
+        uint32_t i = 0;                                                                                              \
+                                                                                                                     \
+        _Pragma("unroll(4)")                                                                                         \
+        for (; i < nvec; ++i) {                                                                                      \
+            HVX_VectorPair p = hvx_vec_f16_to_f32(vsrc[i]);                                                          \
+            HVX_Vector r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(Q6_V_lo_W(p), vs), vo)); \
+            HVX_Vector r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(Q6_V_hi_W(p), vs), vo)); \
+            vdst[i] = hvx_vec_f32_to_f16(r0, r1);                                                                    \
+        }                                                                                                            \
+        if (nloe) {                                                                                                  \
+            HVX_VectorPair p = hvx_vec_f16_to_f32(vsrc[i]);                                                          \
+            HVX_Vector r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(Q6_V_lo_W(p), vs), vo)); \
+            HVX_Vector r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(Q6_V_hi_W(p), vs), vo)); \
+            HVX_Vector v = hvx_vec_f32_to_f16(r0, r1);                                                               \
+            vec_store((void *) &vdst[i], nloe * SIZEOF_FP16, v);                                                     \
+        }                                                                                                            \
+    } while(0)
+
+static inline void hvx_scale_offset_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale, const float offset) {
+    assert((size_t) dst % 128 == 0);
+    assert((size_t) src % 128 == 0);
+    hvx_scale_offset_f16_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+static inline void hvx_scale_offset_f16_au(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale, const float offset) {
+    assert((size_t) dst % 128 == 0);
+    hvx_scale_offset_f16_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a);
+}
+
+static inline void hvx_scale_offset_f16_ua(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale, const float offset) {
+    assert((size_t) src % 128 == 0);
+    hvx_scale_offset_f16_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u);
+}
+
+static inline void hvx_scale_offset_f16_uu(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale, const float offset) {
+    hvx_scale_offset_f16_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
+}
+
+static inline void hvx_scale_offset_f16(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale, const float offset) {
+    if (((size_t) dst & 127) == 0) {
+        if (((size_t) src & 127) == 0) {
+            hvx_scale_offset_f16_aa(dst, src, n, scale, offset);
+        } else {
+            hvx_scale_offset_f16_au(dst, src, n, scale, offset);
+        }
+    } else {
+        if (((size_t) src & 127) == 0) {
+            hvx_scale_offset_f16_ua(dst, src, n, scale, offset);
+        } else {
+            hvx_scale_offset_f16_uu(dst, src, n, scale, offset);
+        }
+    }
+}
+
 #endif // HVX_SCALE_H

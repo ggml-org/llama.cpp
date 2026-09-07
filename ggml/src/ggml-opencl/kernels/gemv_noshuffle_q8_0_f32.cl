@@ -118,6 +118,87 @@
     elem = (char)((bits8.s7 & 0xFF000000) >> 24); \
     total_sums += convert_int(elem) * scale * shared_y; \
 
+// ============================================================================
+// Split-K variant for small-M decode GEMVs.
+// ----------------------------------------------------------------------------
+// The base kernel below puts one output row per lane and splits K only across
+// the N_SIMDGROUP subgroups of a single workgroup, so M=512 yields M/64 = 8
+// workgroups -- half the compute units on a 16-CU X2 sit idle, and the kernel
+// measures ~48 GB/s against the ~122 GB/s the larger projections reach in the
+// same graph. Here each (kslice, subgroup) pair reduces a disjoint set of
+// K-blocks into partial[kslice * M + row]; kernel_gemv_splitk_reduce_f32 (in
+// gemv_noshuffle_q4_k_f32.cl) sums the slices. Same operand order within a
+// slice as the base kernel; only the cross-slice grouping differs.
+//
+// Placed BEFORE the base kernel deliberately: on A6X no kernel may be defined
+// after one that uses a subgroup builtin, or it silently miscompiles.
+// ============================================================================
+#ifdef ADRENO_GPU
+REQD_SUBGROUP_SIZE_64
+#endif
+__kernel void kernel_gemv_noshuffle_q8_0_f32_splitk(
+        __read_only  image1d_buffer_t src0_q,   // quantized A (weights)
+        global half  * src0_d,                  // A scales
+        __read_only  image1d_buffer_t src1,     // B (activations)
+        global float * partial,                 // [ksplit * M], slice-major
+        int ne00,                               // K
+        int ne01)                               // M
+{
+    uint groupId = get_local_id(1);
+    uint gid     = get_global_id(0);
+    ushort slid  = get_sub_group_local_id();
+    uint nsg     = get_local_size(1);
+    uint ksplit  = get_num_groups(1);
+    uint kslice  = get_group_id(1);
+
+    uint K = ne00;
+    uint M = ne01;
+
+    uint LINE_STRIDE_A  = M;
+    uint BLOCK_STRIDE_A = 8 * M;   // physical, independent of the K-split
+
+    __private uint8  regA;
+    __private half   regS;
+    __private float8 regB;
+    __private float  totalSum = (float)(0.0f);
+
+    #pragma unroll 1
+    for (uint k = kslice * nsg + groupId; k < (K / QK8_0); k += ksplit * nsg) {
+        regS = src0_d[gid + k * LINE_STRIDE_A];
+        if (slid < 4) {
+            regB.s0123 = read_imagef(src1, (slid * 2 + k * 8));
+            regB.s4567 = read_imagef(src1, (1 + slid * 2 + k * 8));
+        }
+        regA.s0 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
+        regA.s1 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
+        regA.s2 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
+        regA.s3 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
+        regA.s4 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
+        regA.s5 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
+        regA.s6 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
+        regA.s7 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
+
+        dequantizeBlockAccum_ns_sgbroadcast_1(totalSum, regA, convert_float(regS), regB);
+    }
+
+    // Intra-workgroup reduce across this K-slice's subgroups. Sized for
+    // nsg <= 8; the host never dispatches more.
+    __local float reduceLM[SIMDGROUP_WIDTH * 7];
+    if (groupId > 0) {
+        reduceLM[SIMDGROUP_WIDTH * (groupId - 1) + slid] = totalSum;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if (groupId == 0) {
+        for (uint i = 0; i < nsg - 1; ++i) {
+            totalSum += reduceLM[SIMDGROUP_WIDTH * i + slid];
+        }
+        // x-grid is padded to CEIL_DIV(M,wave)*wave; guard the tail rows.
+        if (gid < M) {
+            partial[kslice * M + gid] = totalSum;
+        }
+    }
+}
+
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif

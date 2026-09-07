@@ -247,6 +247,19 @@ f16vec4 dequantFuncQ8_0_v(const in decodeBufQ8_0 bl, const in uint blockCoords[2
     return f16vec4(vec4(qi) * vec4(float(d)));
 }
 
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ1_0 {
+   block_tq1_0 block;
+};
+
+float16_t dequantFuncTQ1_0(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const uint e = coordInBlock[1];
+    const uint bidx = tq1_0_byte_of(e);
+    const uint qbyte = uint(bidx < 48u ? bl.block.qs[bidx] : bl.block.qh[bidx - 48u]);
+    const uint xi = tq1_0_trit(qbyte, tq1_0_digit_of(e));
+    return bl.block.d * (float16_t(int(xi)) - float16_t(1.0));
+}
+
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ2_0 {
    block_tq2_0 block;
 };
@@ -1406,6 +1419,8 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #elif defined(DATA_A_Q8_0)
 #define dequantFuncA dequantFuncQ8_0
 #define dequantFuncA_v dequantFuncQ8_0_v
+#elif defined(DATA_A_TQ1_0)
+#define dequantFuncA dequantFuncTQ1_0
 #elif defined(DATA_A_TQ2_0)
 #define dequantFuncA dequantFuncTQ2_0
 #define dequantFuncA_v dequantFuncTQ2_0_v

@@ -91,6 +91,7 @@ void common_log_set_file      (struct common_log * log, const char * file); // n
 void common_log_set_colors    (struct common_log * log, log_colors colors); // not thread-safe
 void common_log_set_prefix    (struct common_log * log, bool prefix);       // whether to output prefix to each log
 void common_log_set_timestamps(struct common_log * log, bool timestamps);   // whether to output timestamps in the prefix
+void common_log_set_jsonl     (struct common_log * log, bool jsonl);        // print each log as a JSON object on one line, not thread-safe
 void common_log_flush         (struct common_log * log);                    // flush all pending log messages
 
 // helper macros for logging
