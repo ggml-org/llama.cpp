@@ -2,8 +2,10 @@
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
+#include "common.h"
 #include "gguf.h"
 #include "jinja/runtime.h"
+#include "json-schema-to-grammar.h"
 #include "log.h"
 #include "peg-parser.h"
 #include "testing.h"
@@ -98,6 +100,7 @@ static void test_normalize_quotes_with_embedded_quotes(testing & t);
 // TAG_WITH_TAGGED argument parsing tests
 static void test_tagged_args_with_embedded_quotes(testing & t);
 static void test_bailing_v3_tool_format(testing & t);
+static void test_tagged_array_object_param(testing & t);
 
 static void test_role_markers_all_templates(testing & t);
 
@@ -563,6 +566,7 @@ int main(int argc, char * argv[]) {
     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
     t.test("tagged_args_embedded_quotes", test_tagged_args_with_embedded_quotes);
     t.test("bailing_v3", test_bailing_v3_tool_format);
+    t.test("tagged_array_object_param", test_tagged_array_object_param);
     t.test("role_markers_all_templates", test_role_markers_all_templates);
 
     return t.summary();
@@ -2586,6 +2590,127 @@ static void test_bailing_v3_tool_format(testing & t) {
         "</tool_call>";
     common_peg_parse_context ctx(output, COMMON_PEG_PARSE_FLAG_LENIENT);
     t.assert_true("multi-argument tool call", parser.parse(ctx).success());
+}
+
+// Regression for #21771: a tool whose non-string parameter is an array<object>
+// (with a nested maxLength-bounded field) must (a) generate a GBNF grammar that
+// does NOT trip the MAX_REPETITION_THRESHOLD guard (the old p.schema(p.json(), ...)
+// constraint emitted char{0,N} repetitions) and (b) parse a tagged
+// <function=...><parameter=...> tool call, extracting the array<object> argument
+// as valid JSON.
+static void test_tagged_array_object_param(testing & t) {
+    common_chat_template tmpl = load_seed_oss_template(t);
+
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+
+    t.assert_equal("tool format tagged", tool_format::TAG_WITH_TAGGED, analysis.tools.format.mode);
+
+    // Non-string param declaring an array of objects; one nested field is
+    // bounded by a large maxLength so a schema-constrained emission would
+    // produce char{0,2000} and trip the grammar repetition guard.
+    json parameters_schema = json::object();
+    parameters_schema["type"] = "object";
+    parameters_schema["properties"] = json::object();
+    parameters_schema["properties"]["objective"] = json::object({
+        {"type", "string"}
+    });
+    parameters_schema["properties"]["relevantContext"] = json::object({
+        {"type", "array"},
+        {"items", json::object({
+            {"type", "object"},
+            {"properties", json::object({
+                {"kind", json::object({{"type", "string"}, {"enum", json::array({"file", "search", "command"})}})},
+                {"ref",   json::object({{"type", "string"}, {"maxLength", 2000}})},
+                {"summary", json::object({{"type", "string"}, {"maxLength", 500}})},
+            })},
+            {"required", json::array({"kind", "ref"})},
+        })}
+    });
+    parameters_schema["required"] = json::array({"objective", "relevantContext"});
+
+    generation_params inputs;
+    inputs.tools = json::array({
+        {
+            { "type", "function" },
+            { "function", {
+                { "name", "delegate_terminal_task" },
+                { "parameters", parameters_schema },
+            } },
+        },
+    });
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+
+    // Building the parser must not throw a GBNF "exceeds sane defaults" error.
+    auto parser = analysis.build_parser(inputs, "");
+
+    // Building the full tool grammar (required tool_choice, non-lazy) is where
+    // the old schema-constrained branch emitted char{0,2000} and tripped the
+    // MAX_REPETITION_THRESHOLD guard. It must compile cleanly here.
+    {
+        generation_params grammar_inputs = inputs;
+        grammar_inputs.tool_choice       = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        auto grammar_parser              = analysis.build_parser(grammar_inputs, "");
+        try {
+            const std::string grammar_str = build_grammar([&](const common_grammar_builder & builder) {
+                for (const auto & tool : grammar_inputs.tools) {
+                    if (!tool.contains("function")) { continue; }
+                    const auto & function = tool.at("function");
+                    auto schema = function.contains("parameters") ? function.at("parameters") : json::object();
+                    builder.resolve_refs(schema);
+                }
+                grammar_parser.build_grammar(builder, /* lazy */ false);
+            });
+            t.assert_true("grammar builds without exceeding repetition threshold", true);
+            // The old schema-constrained branch emitted a char{0,2000}
+            // repetition for the maxLength-bounded ref field; the raw-capture
+            // fix must not. Guard that a repeating char quantifier that would
+            // trip MAX_REPETITION_THRESHOLD is absent from the generated GBNF.
+            std::string needle = "char{0,2000}";
+            t.assert_true("grammar must not emit char{0,2000} repetition",
+                grammar_str.find(needle) == std::string::npos);
+        } catch (const std::exception & e) {
+            t.assert_true(std::string("grammar build should not throw: ") + e.what(), false);
+        }
+    }
+
+    const std::string output =
+        "<seed:tool_call>\n"
+        "<function=delegate_terminal_task>\n"
+        "<parameter=objective>Build the target.</parameter>\n"
+        "<parameter=relevantContext>[{\"kind\":\"search\",\"ref\":\"src/\",\"summary\":\"source\"}," 
+        "{\"kind\":\"command\",\"ref\":\"git status\",\"summary\":\"status\",\"extra\":{\"a\":[1,2,{\"b\":3}]}}]</parameter>\n"
+        "</function>\n"
+        "</seed:tool_call>";
+
+    common_peg_parse_context ctx(output, COMMON_PEG_PARSE_FLAG_LENIENT);
+    if (!t.assert_true("tagged array<object> tool call parses", parser.parse(ctx).success())) {
+        return;
+    }
+
+    auto result = parser.parse(ctx);
+    common_chat_msg msg;
+    auto mapper = common_chat_peg_mapper(msg);
+    mapper.from_ast(ctx.ast, result);
+
+    t.assert_equal("tool calls count", 1u, msg.tool_calls.size());
+    if (!msg.tool_calls.empty()) {
+        t.assert_equal("tool name", "delegate_terminal_task", msg.tool_calls[0].name);
+        try {
+            json parsed = json::parse(msg.tool_calls[0].arguments);
+            t.assert_true("arguments is valid JSON", true);
+            t.assert_equal("objective", "Build the target.", parsed.value("objective", ""));
+            auto ctxs = parsed.at("relevantContext");
+            t.assert_true("relevantContext is array", ctxs.is_array());
+            t.assert_equal("relevantContext length", 2, ctxs.size());
+            t.assert_equal("relevantContext[0].kind", "search", ctxs[0].value("kind", ""));
+            t.assert_equal("relevantContext[0].ref", "src/", ctxs[0].value("ref", ""));
+            t.assert_equal("relevantContext[1].kind", "command", ctxs[1].value("kind", ""));
+            t.assert_equal("relevantContext[1].ref", "git status", ctxs[1].value("ref", ""));
+        } catch (const std::exception & e) {
+            t.assert_true(std::string("arguments should be valid JSON: ") + e.what(), false);
+        }
+    }
 }
 
 // Test that reproduces the Seed-OSS template issue with embedded quotes
