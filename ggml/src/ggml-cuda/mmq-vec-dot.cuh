@@ -1173,8 +1173,10 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 // Both quantizations encode values as e2m1 (FP4) and produce one uint32 scale per
 // m16n8k64 MMA call; only the PTX kind (scale_vec::2X ue8m0 vs scale_vec::4X ue4m3)
 // and the per-type stride constant differ.
-// x tile rows of sram_stride ints: the quantized values followed by the packed block scales at x_sc_offset
-template <ggml_type type, int J, bool fallback, int sram_stride, int x_sc_offset>
+// x tile rows of sram_stride ints. x_raw == false: the quantized values followed by the packed block scales
+// at x_sc_offset (ldmatrix friendly). x_raw == true: the rows are the NVFP4 blocks as stored in memory, 9 words
+// per block (the scale word, then 8 value words), so the fragments are gathered with plain loads.
+template <ggml_type type, int J, bool fallback, int sram_stride, int x_sc_offset, bool x_raw = false>
 static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_fp4_fp4_mma_impl(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
 
@@ -1185,6 +1187,8 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_fp4_fp4_mma_impl(
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp / tile_C::I;
     constexpr int nfrags        = MMQ_TILE_NE_K / tile_A::J;
+    constexpr int wpb           = sizeof(block_nvfp4) / sizeof(int); // words per raw block
+    static_assert(!x_raw || type == GGML_TYPE_NVFP4, "raw x rows are only defined for NVFP4");
 
     y += (threadIdx.y % ntx) * (tile_C::J * MMQ_TILE_Y_K);
 
@@ -1207,12 +1211,27 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_fp4_fp4_mma_impl(
 
 #pragma unroll
     for (int n = 0; n < ntx; ++n) {
-        const uint4 sa = *(const uint4 *) (x_sc + (i0 + n * tile_A::I + tidx_A) * sram_stride + k00 / tile_A::J);
-        scaleA[n][0] = sa.x; scaleA[n][1] = sa.y; scaleA[n][2] = sa.z; scaleA[n][3] = sa.w;
+        if constexpr (x_raw) {
+            const int * row_sc = x_qs + (i0 + n * tile_A::I + tidx_A) * sram_stride + (k00 / tile_A::J) * wpb;
 #pragma unroll
-        for (int frag = 0; frag < nfrags; ++frag) {
-            const int k0 = k00 + frag * tile_A::J;
-            load_ldmatrix(A[n][frag], x_qs + (i0 + n * tile_A::I) * sram_stride + k0, sram_stride);
+            for (int frag = 0; frag < nfrags; ++frag) {
+                scaleA[n][frag] = row_sc[frag * wpb];
+                // value word w of block frag is raw word frag*wpb + 1 + w of the row. The registers follow the
+                // ldmatrix.x4 order used by load_ldmatrix: rows g and g+8 at word tig, then at word tig + 4.
+                const int * blk = x_qs + (i0 + n * tile_A::I + threadIdx.x / 4) * sram_stride + (k00 / tile_A::J + frag) * wpb + 1 + threadIdx.x % 4;
+                A[n][frag].x[0] = blk[0];
+                A[n][frag].x[1] = blk[8 * sram_stride];
+                A[n][frag].x[2] = blk[4];
+                A[n][frag].x[3] = blk[8 * sram_stride + 4];
+            }
+        } else {
+            const uint4 sa = *(const uint4 *) (x_sc + (i0 + n * tile_A::I + tidx_A) * sram_stride + k00 / tile_A::J);
+            scaleA[n][0] = sa.x; scaleA[n][1] = sa.y; scaleA[n][2] = sa.z; scaleA[n][3] = sa.w;
+#pragma unroll
+            for (int frag = 0; frag < nfrags; ++frag) {
+                const int k0 = k00 + frag * tile_A::J;
+                load_ldmatrix(A[n][frag], x_qs + (i0 + n * tile_A::I) * sram_stride + k0, sram_stride);
+            }
         }
     }
 
