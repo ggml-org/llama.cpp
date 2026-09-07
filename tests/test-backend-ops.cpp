@@ -7229,7 +7229,7 @@ struct test_l2_norm_batch : public test_case {
         if (strided) {
             parent = ggml_new_tensor_4d(ctx, type, ne[0], ne[1] * n_norms, ne[2], ne[3]);  // qkv buffer
         }
-        ggml_tensor * norms[8];
+        ggml_tensor * norms[8] = {};
         for (int t = 0; t < n_norms; ++t) {
             ggml_tensor * src;
             if (strided) {
