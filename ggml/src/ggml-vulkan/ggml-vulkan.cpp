@@ -1037,8 +1037,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_trunc[2];
     vk_pipeline pipeline_sgn[2];
 
-    // fused UNARY+MUL pipelines: [unary op][f16][norepeat][op_on_b]
-    // op indices are the ggml_vk_unary_mul_op_index() mapping (gelu, sigmoid, silu, softplus)
+    // fused UNARY+MUL pipelines: [op][f16][norepeat][op_on_b]
     vk_pipeline pipeline_unary_mul[4][2][2][2];
 
     vk_pipeline pipeline_add1_f16_f16;
@@ -5772,9 +5771,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     CREATE_UNARY(expm1)
 #undef CREATE_UNARY
 
-// spec constant list: {norepeat, op_on_b} - matches the trailing table dims.
-// The OP-on-B variants reuse the same SPIR-V as the base pipelines, selected via
-// specialization instead of separate shaders.
+// spec constants: {norepeat, op_on_b}
 #define CREATE_UNARY_MUL(name, idx) \
     for (int dt = 0; dt < 2; ++dt) { \
         const size_t len_ = dt ? name ## _mul_f16_len : name ## _mul_f32_len; \
@@ -12806,15 +12803,11 @@ static void ggml_vk_unary_mul(ggml_backend_vk_context * ctx, vk_context& subctx,
     const ggml_tensor * unary = cgraph->nodes[node_idx];
     ggml_tensor * mul = cgraph->nodes[node_idx + 1];
 
-    // OP-on-B: the unary result is the second MUL operand and tiles into the first
-    // (e.g. qwen shared-expert gating: ffn_shexp * sigmoid(gate)). The kernel then
-    // iterates over mul's extent, applying the OP to the fastmod-indexed B operand.
+    // unary on src1 that tiles into src0
     const bool op_on_b = mul->src[1] == unary &&
                          !ggml_are_same_shape(unary->src[0], mul->src[0]) &&
                          ggml_can_repeat(unary, mul->src[0]);
 
-    // kernel A is the operand whose extent drives the iteration; kernel B (fastmod
-    // indexed when shapes differ) carries the OP in op_on_b mode
     const ggml_tensor * src0 = op_on_b ? mul->src[0] : unary->src[0];
     const ggml_tensor * src1 = op_on_b ? unary->src[0] :
         ((mul->src[0] == unary) ? mul->src[1] : mul->src[0]);
@@ -16997,12 +16990,6 @@ static bool ggml_vk_is_empty(ggml_tensor * node) {
     return ggml_is_empty(node) || node->op == GGML_OP_NONE || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE;
 }
 
-// UNARY + MUL fusion: the unary op is one of gelu/sigmoid/silu/softplus and the MUL
-// consumes it. Either operand may be the unary result:
-//  - unary as src0: the other operand repeats against it, but cannot exceed its
-//    shape, since the kernel iterates over the unary extent.
-//  - unary as src1 (OP-on-B, e.g. sigmoid gates): the unary result must tile into
-//    mul->src[0], whose extent drives the iteration.
 static bool ggml_vk_can_fuse_unary_mul(const struct ggml_cgraph * cgraph, int unary_idx, int mul_idx) {
     const ggml_tensor * unary = cgraph->nodes[unary_idx];
     const ggml_tensor * mul = cgraph->nodes[mul_idx];
@@ -17026,20 +17013,16 @@ static bool ggml_vk_can_fuse_unary_mul(const struct ggml_cgraph * cgraph, int un
     if (!ggml_is_contiguous_1(other) || !ggml_is_contiguous_1(unary->src[0])) {
         return false;
     }
-    // the fused kernel indexes one operand with per-dim fastmod (generic_binary_head.glsl),
-    // which is exact iff that operand tiles into the iteration extent (the dst shape)
+    // fastmod needs src to tile into dst
     if (mul->src[0] == unary) {
         return ggml_can_repeat(other, unary);
     }
     return ggml_can_repeat(unary, mul->src[0]);
 }
 
-// like ggml_can_fuse({GGML_OP_UNARY, GGML_OP_MUL}), but without the generic
-// requirement that the two nodes share a shape: an OP-on-B unary result is a
-// gate that legally tiles into the MUL's shape (see ggml_vk_can_fuse_unary_mul).
 static bool ggml_vk_can_fuse_unary_mul_pair(const struct ggml_cgraph * cgraph, int node_idx) {
     const enum ggml_op ops[]    = { GGML_OP_UNARY, GGML_OP_MUL };
-    const int           outputs[] = { node_idx + 1 };   // absolute idx of the MUL result; the UNARY intermediate is elidable
+    const int           outputs[] = { node_idx + 1 };
     return ggml_can_fuse_subgraph(cgraph, node_idx, 2, ops, outputs, 1) &&
            ggml_vk_can_fuse_unary_mul(cgraph, node_idx, node_idx + 1);
 }
@@ -18203,8 +18186,7 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
 
     int first_unused = 0;
 
-    // true if every node in [lo, hi) is already scheduled or is a zero-compute
-    // (view-class) node; such gaps never stand in the way of pulling a node forward
+    // scheduled or zero-compute nodes in [lo, hi)
     auto const &empty_or_scheduled_between = [&](int lo, int hi) -> bool {
         for (int v = lo; v < hi; ++v) {
             if (!used[v] && !is_empty(graph->nodes[v])) {
