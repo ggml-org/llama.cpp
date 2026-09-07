@@ -2879,11 +2879,9 @@ struct ggml_cplan ggml_graph_plan(
                         const enum ggml_type vec_dot_type = type_traits_cpu[node->src[0]->type].vec_dot_type;
 
                         if (node->src[1]->type != vec_dot_type) {
-                            cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
+                            cur = GGML_PAD(ggml_row_size(vec_dot_type, ggml_nelements(node->src[1])), 64);
                         }
-                        // Extra reservation for tiled mat_mul, if any (VNNI case).  0 if VNNI not enabled.
-                        const int64_t r1 = node->src[1]->ne[1] * node->src[1]->ne[2] * node->src[1]->ne[3];
-                        cur += ggml_tiled_extra_wdata_len(node->src[1]->ne[0], r1);
+                        cur += 64 + n_tasks * ggml_tiled_ws_size(); // 64 for alignment
                     } break;
                 case GGML_OP_MUL_MAT_ID:
                     {
