@@ -65,8 +65,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: cpu-${{ matrix.os }}
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
 
       - name: Build Dependencies
         id: build_depends
@@ -91,6 +90,15 @@ jobs:
           python3 -m pip install --upgrade pip setuptools
           pip3 install ./gguf-py
 
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: cpu-${{ matrix.os }}
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
       - name: Build
         id: cmake_build
         run: |
@@ -99,6 +107,18 @@ jobs:
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_RPC=ON
           time cmake --build build --config Release -j $(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: cpu-${{ matrix.os }}
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
       - name: Test
         id: cmake_test
@@ -116,18 +136,6 @@ jobs:
           wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
           ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
           ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
-
-      # note: real deletion only on push to master (same condition as the ccache save),
-      #       dry-run otherwise (the token is read-only on PRs from forks)
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        env:
-          GH_TOKEN: ${{ github.token }}
-        with:
-          key: cpu-${{ matrix.os }}
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
 
   windows:
     name: windows / ${{ matrix.build }}

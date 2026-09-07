@@ -753,6 +753,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_MUL_MAT_ID:
             return op_matmul_id(octx);
 
+        case HTP_OP_MUL_MAT_ID_NX:
+            return op_matmul_id_nx(octx);
+
         case HTP_OP_MUL_MAT_NX:
             return op_matmul_nx(octx);
 
@@ -878,8 +881,8 @@ static inline void drop_mmap(struct htp_context *ctx, struct htp_mmap *m) {
     }
 }
 
-static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
-    if (b->base) return; // already mapped
+static inline bool mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
+    if (b->base) return true; // already mapped
 
     // find unused mapping
     for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
@@ -887,8 +890,8 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
         if (!m->size) {
             void *va = htp_mmap(b->fd, b->size);
             if (va == NULL) {
-                FARF(ERROR, "mmap failed : fd %u size %u", b->fd, (uint32_t) b->size);
-                abort(); // can't do much else at this point
+                FARF(HIGH, "mmap failed (will attempt defrag) : fd %u size %u", b->fd, (uint32_t) b->size);
+                return false;
             }
 
             m->base   = b->base = (uint64_t) va;
@@ -896,12 +899,12 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
             m->size   = b->size;
 
             FARF(ALWAYS, "mmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
-            return;
+            return true;
         }
     }
 
     FARF(ERROR, "mmap failed : exceeded mapping capacity limit of %u", HTP_MAX_MMAPS);
-    abort();
+    return false;
 }
 
 static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uint32_t n_bufs) {
@@ -934,11 +937,31 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
         }
     }
 
-    // Create missing mappings
+    // Create missing mappings (pass 1)
+    bool mmap_ok = true;
     for (uint32_t i=0; i < n_bufs; i++) {
         struct htp_buf_desc *b = bufs + i;
-        mmap_buf(ctx, b);
+        if (!mmap_buf(ctx, b)) {
+            mmap_ok = false;
+            break;
+        }
         FARF(HIGH, "prep-buf #%u : pass1 fd %u base %p size %u flags 0x%x", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
+    }
+
+    if (!mmap_ok) {
+        // Attempt clean defragmentation: drop all mappings and remap (pass 2)
+        FARF(HIGH, "prep-bufs : dropping all mappings to defragment address space");
+        for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) { drop_mmap(ctx, ctx->mmap + i); }
+
+        for (uint32_t i=0; i < n_bufs; i++) {
+            struct htp_buf_desc *b = bufs + i;
+            b->base = 0;
+            if (!mmap_buf(ctx, b)) {
+                FARF(ERROR, "prep-bufs : mmap failed after defragmentation (fd %u size %u)", b->fd, (uint32_t) b->size);
+                abort();
+            }
+            FARF(HIGH, "prep-buf #%u : pass2 fd %u base %p size %u flags 0x%x", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
+        }
     }
 }
 
@@ -981,7 +1004,7 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->src_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
         FARF(HIGH, "prep-src #%u: data %p size %u : %u:%u:%u:%u", op->src[i], (void*) src->data, src->size,
-            src->ne[0], src->ne[1], src->ne[3], src->ne[3]);
+            src->ne[0], src->ne[1], src->ne[2], src->ne[3]);
     }
 
     htp_tensor_flush_all(octx->ctx, octx->src, HTP_OP_MAX_INPUTS);
