@@ -318,7 +318,7 @@ struct lora_merge_ctx {
             auto nels = ggml_nelements(inp_base);
             const auto * qtype = ggml_get_type_traits(base->type);
             std::vector<uint8_t> dequant_buf(nels * sizeof(float));
-            qtype->to_float(read_buf.data(), (float *)dequant_buf.data(), nels);
+            qtype->to_float(read_buf.data(), (float *)dequant_buf.data(), nels, nullptr);
             ggml_backend_tensor_set(inp_base, dequant_buf.data(), 0, dequant_buf.size());
         } else {
             ggml_backend_tensor_set(inp_base, read_buf.data(), 0, ggml_nbytes(inp_base));

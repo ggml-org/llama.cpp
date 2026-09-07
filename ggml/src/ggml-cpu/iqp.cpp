@@ -583,7 +583,7 @@ static void iqp_decode_panel_8(enum ggml_type               type,
 #ifdef GGML_IQP_VERIFY
             // check that the panel reproduces the reference dequantization bit exactly
             float ref[QK_K];
-            ggml_get_type_traits(type)->to_float(blk, ref, QK_K);
+            ggml_get_type_traits(type)->to_float(blk, ref, QK_K, nullptr);
             for (int j = 0; j < QK_K; j++) {
                 const float scale = dfac[r] * iscales[r][j / IQP_SB_SIZE];
                 GGML_ASSERT(scale * vals[r][j] == ref[j]);
