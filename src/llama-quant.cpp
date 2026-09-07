@@ -789,11 +789,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_Q5_K,
         GGML_TYPE_Q6_K,
         GGML_TYPE_Q8_0,
-#ifdef GGML_USE_METAL
-        GGML_TYPE_F16
-#else
-        GGML_TYPE_BF16
-#endif
+        GGML_TYPE_F16,
+        GGML_TYPE_BF16,
     };
 
     constexpr double EPSILON = 1e-12;
@@ -2150,7 +2147,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         auto simplify_pareto = [&](std::vector<type_scores> & candidates) {
             std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
-                return a.bytes < b.bytes || (a.bytes == b.bytes && a.error < b.error);
+                return a.bytes < b.bytes || (a.bytes == b.bytes && (a.error < b.error || (a.error == b.error && a.type < b.type)));
             });
             candidates.erase(std::unique(candidates.begin(), candidates.end(),
                 [](const auto & a, const auto &b) { return a.bytes == b.bytes; }), candidates.end());
