@@ -1,15 +1,53 @@
 <script lang="ts">
 	import { Check, ChevronDown, ChevronRight, Info, Loader2, PencilRuler } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { CLI_FLAGS, ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 	import { mcpStore, toolsStore } from '$lib/stores';
 	import type { ToolGroup } from '$lib/types';
+	import { SvelteMap } from 'svelte/reactivity';
 
 	const toolsPanel = useToolsPanel();
+
+	// measured-px height transition for the tool groups (same technique as
+	// ModelsSelectorReasoningPanel): two plain lengths interpolate in every
+	// browser, no calc-size() support needed
+	const GROUP_TRANSITION_MS = 200;
+	const groupHeights = new SvelteMap<string, number>();
+	const groupEls = new Map<string, HTMLDivElement>();
+
+	function heightFor(group: ToolGroup): number {
+		return toolsPanel.expandedGroups.has(group.key) ? (groupHeights.get(group.key) ?? 0) : 0;
+	}
+
+	// the rows are plain buttons (not menu items), so they stay mounted always;
+	// visibility keeps collapsed rows out of the tab order
+	function groupElAction(el: HTMLElement, key: string) {
+		groupEls.set(key, el as HTMLDivElement);
+
+		return { destroy: () => groupEls.delete(key) };
+	}
+
+	$effect(() => {
+		for (const group of [...toolsPanel.categoryGroups, ...toolsPanel.mcpGroups]) {
+			const isExpanded = toolsPanel.expandedGroups.has(group.key);
+
+			if (isExpanded && !groupHeights.has(group.key)) {
+				// newly expanded: measure after the rows are laid out
+				requestAnimationFrame(() => {
+					const el = groupEls.get(group.key);
+
+					if (el && toolsPanel.expandedGroups.has(group.key)) {
+						groupHeights.set(group.key, el.scrollHeight);
+					}
+				});
+			} else if (!isExpanded && groupHeights.has(group.key)) {
+				groupHeights.delete(group.key);
+			}
+		}
+	});
 	const hasMcpServersAvailable = $derived(mcpStore.getServers().length > 0);
 </script>
 
@@ -81,13 +119,13 @@
 	{@const favicon = toolsPanel.getFavicon(group)}
 	{@const groupDisabled = toolsPanel.isGroupDisabled(group)}
 
-	<Collapsible.Root
-		onOpenChange={() => toolsPanel.toggleGroupExpanded(group.key)}
-		open={isExpanded}
-	>
+	<div>
 		<div class="flex items-center gap-1 {groupDisabled ? 'pointer-events-none opacity-50' : ''}">
-			<Collapsible.Trigger
+			<button
+				aria-expanded={isExpanded}
 				class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
+				onclick={() => toolsPanel.toggleGroupExpanded(group.key)}
+				type="button"
 			>
 				{#if isExpanded}
 					<ChevronDown class="h-3.5 w-3.5 shrink-0" />
@@ -113,7 +151,7 @@
 				<span class="ml-auto shrink-0 text-xs text-muted-foreground">
 					{toolsPanel.getEnabledToolCount(group)}/{group.tools.length}
 				</span>
-			</Collapsible.Trigger>
+			</button>
 
 			<Tooltip.Root>
 				<Tooltip.Trigger>
@@ -137,7 +175,13 @@
 			</Tooltip.Root>
 		</div>
 
-		<Collapsible.Content>
+		<div
+			use:groupElAction={group.key}
+			class="overflow-hidden"
+			style={`height: ${heightFor(group)}px; visibility: ${
+				isExpanded ? 'visible' : 'hidden'
+			}; transition: height ${GROUP_TRANSITION_MS}ms cubic-bezier(0.23, 1, 0.32, 1), visibility ${GROUP_TRANSITION_MS}ms;`}
+		>
 			<div class="ml-4 flex flex-col gap-0.5 border-l border-border/50 pl-2">
 				{#each group.tools as entry (entry.key)}
 					{@const enabled = toolsPanel.isToolEnabled(entry)}
@@ -165,6 +209,6 @@
 					</button>
 				{/each}
 			</div>
-		</Collapsible.Content>
-	</Collapsible.Root>
+		</div>
+	</div>
 {/snippet}
