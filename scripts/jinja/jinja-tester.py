@@ -396,7 +396,7 @@ class JinjaTester(QMainWindow):
                 ensure_ascii=ensure_ascii,
             )
         )
-        env.globals["strftime_now"]: Callable[[str], str] = lambda format: datetime.now().strftime(format)
+        env.globals["strftime_now"] = lambda format: datetime.now().strftime(format)  # ty: ignore[invalid-assignment, invalid-argument-type]
         env.globals["raise_exception"] = raise_exception  # ty: ignore[invalid-assignment]
         try:
             template = env.from_string(template_str)
