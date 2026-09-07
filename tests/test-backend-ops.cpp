@@ -9437,6 +9437,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // in-place tests
     test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {64, 5, 4, 3}, false, 1e-6f, true));
 
+    // Fused RMS norm + mul + add with grid.y above the CUDA limit.
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {1, 1, 65536, 1}, 1e-6f, false));
+
     for (float eps : { 0.0f, 1e-6f, 1e-4f, 1e-1f, 1.0f }) {
         for (uint32_t n : { 64, 1025 }) {
             test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false));
