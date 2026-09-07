@@ -118,11 +118,13 @@ if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
         message(STATUS "Level Zero loader found: ${ZE_LOADER_LIB}")
         message(STATUS "Level Zero development headers found: ${LEVEL_ZERO_DEV_INCLUDE_DIR}")
     else()
-        message(FATAL_ERROR "Level Zero SDK/Development package not found! "
-                            "Please install the Level Zero SDK/development package or "
-                            "set -DGGML_SYCL_SUPPORT_LEVEL_ZERO_API=OFF in build command. "
-                            "Level Zero API is not mandatory for SYCL backend, "
-                            "but it is required by the special features for better performance on Intel GPUs.")
+        message(WARNING "Level Zero loader or development headers not found, "
+                        "Level Zero API support disabled. "
+                        "Please install the Level Zero SDK/development package "
+                        "to support Level Zero API features. "
+                        "Level Zero API is not mandatory for SYCL backend, "
+                        "but it is required by the special features for better "
+                        "function & performance on Intel GPUs.")
     endif()
 endif()
 
