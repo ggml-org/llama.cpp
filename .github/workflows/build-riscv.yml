@@ -153,7 +153,6 @@ jobs:
             -DGGML_OPENMP=ON \
             -DLLAMA_BUILD_EXAMPLES=ON \
             -DLLAMA_BUILD_TOOLS=ON \
-            -DLLAMA_BUILD_TESTS=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
@@ -172,7 +171,6 @@ jobs:
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_EXAMPLES=ON \
             -DLLAMA_BUILD_TOOLS=ON \
-            -DLLAMA_BUILD_TESTS=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
