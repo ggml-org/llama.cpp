@@ -20,7 +20,6 @@ from PySide6.QtCore import Qt, QRect, QSize
 from jinja2 import TemplateSyntaxError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from datetime import datetime
-from typing import Callable
 
 
 def format_template_content(template_content):
