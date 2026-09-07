@@ -1,5 +1,10 @@
 #include "llama-model.h"
 
+#if defined(__linux__)
+#include <sys/mman.h>
+#include <sys/resource.h>
+#endif
+
 #include "llama-arch.h"
 #include "llama-ext.h"
 #include "llama-hparams.h"
@@ -1836,6 +1841,89 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             pimpl->mappings.emplace_back(std::move(mapping));
         }
     }
+
+    // experimental: pin the statistically hottest MoE expert slices with mlock()
+    //
+    // When system RAM is smaller than the routed-expert pool, page-cache LRU
+    // thrashes: each token streams n_expert_used slices per layer and evicts
+    // pages the next token needs. Pinning the hottest (layer, expert) slices
+    // makes them ineligible for eviction, so only cold experts stream from disk.
+    //
+    // Only pays off when routing is skewed. Measured counter-example:
+    // Qwen3.8-Flash-Next activates 98.6% of its 24576 (layer,expert) slots
+    // within ~1.3k tokens (hottest slot ~2.5x uniform), where no pinning policy
+    // can beat plain LRU. Measure first, e.g. with examples/moe-trace.
+    //
+    //   LLAMA_EXPERT_PIN_PROFILE  csv of "layer,expert[,count]", hottest first
+    //   LLAMA_EXPERT_PIN_MB       pin budget in MiB (default 8192)
+    //
+    // Requires RLIMIT_MEMLOCK >= budget (ulimit -l / LimitMEMLOCK=infinity).
+#if defined(__linux__)
+    if (const char * pin_profile = getenv("LLAMA_EXPERT_PIN_PROFILE")) {
+        const size_t budget = getenv("LLAMA_EXPERT_PIN_MB")
+            ? (size_t) atoll(getenv("LLAMA_EXPERT_PIN_MB")) * 1024ull * 1024ull
+            : 8192ull * 1024ull * 1024ull;
+
+        // best effort: raise the soft limit to the hard limit
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_MEMLOCK, &rl) == 0 && rl.rlim_cur < rl.rlim_max) {
+            rl.rlim_cur = rl.rlim_max;
+            setrlimit(RLIMIT_MEMLOCK, &rl);
+        }
+
+        FILE * pf = fopen(pin_profile, "r");
+        if (pf == nullptr) {
+            LLAMA_LOG_WARN("%s: expert-pin: cannot open profile '%s'\n", __func__, pin_profile);
+        } else {
+            size_t pinned = 0;
+            size_t failed = 0;
+            int n_slices  = 0;
+            bool done     = false;
+            char line[128];
+            while (!done && fgets(line, sizeof(line), pf)) {
+                int il = -1, ex = -1;
+                if (sscanf(line, "%d,%d", &il, &ex) != 2 ||
+                    il < 0 || il >= (int) layers.size() || ex < 0) {
+                    continue;
+                }
+                ggml_tensor * ts[3] = { layers[il].ffn_gate_exps,
+                                        layers[il].ffn_up_exps,
+                                        layers[il].ffn_down_exps };
+                for (ggml_tensor * t : ts) {
+                    if (t == nullptr || t->data == nullptr || t->ne[2] <= ex) {
+                        continue;
+                    }
+                    if (t->buffer != nullptr && !ggml_backend_buffer_is_host(t->buffer)) {
+                        continue; // slice lives on a device, nothing to pin
+                    }
+                    const size_t slice = t->nb[2]; // bytes of one expert
+                    if (pinned + slice > budget) {
+                        done = true;
+                        break;
+                    }
+                    if (mlock((char *) t->data + (size_t) ex * slice, slice) == 0) {
+                        pinned += slice;
+                        n_slices++;
+                    } else {
+                        if (failed++ == 0) {
+                            LLAMA_LOG_WARN("%s: expert-pin: mlock failed (%s) - check RLIMIT_MEMLOCK\n",
+                                           __func__, strerror(errno));
+                        }
+                        if (failed > 32) {
+                            done = true; // limit clearly too low, stop trying
+                            break;
+                        }
+                    }
+                }
+            }
+            fclose(pf);
+            LLAMA_LOG_INFO("%s: expert-pin: pinned %.2f GiB in %d slices (budget %.2f GiB, %zu failed)\n",
+                           __func__,
+                           pinned / (1024.0*1024.0*1024.0), n_slices,
+                           budget / (1024.0*1024.0*1024.0), failed);
+        }
+    }
+#endif // __linux__
 
     return true;
 }
