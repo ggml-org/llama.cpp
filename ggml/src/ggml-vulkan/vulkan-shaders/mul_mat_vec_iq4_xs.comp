@@ -74,19 +74,8 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
         }
     }
 
-    // small-K experiment: fully unroll the block loop so the compiler sees the whole row
-    const uint n_it = (num_blocks_per_row + blocks_per_wg - 1) / blocks_per_wg;
-    if (n_it <= 8) {
-        [[unroll]] for (uint k = 0; k < n_it; ++k) {
-            const uint i = ix + k * blocks_per_wg;
-            if (i < num_blocks_per_row) {
-                calc_superblock(a_offset, b_offset, itid, i, num_blocks_per_row, first_row, num_rows);
-            }
-        }
-    } else {
-        [[unroll]] for (uint i = ix; i < num_blocks_per_row; i += blocks_per_wg)
-            calc_superblock(a_offset, b_offset, itid, i, num_blocks_per_row, first_row, num_rows);
-    }
+    [[unroll]] for (uint i = ix; i < num_blocks_per_row; i += blocks_per_wg)
+        calc_superblock(a_offset, b_offset, itid, i, num_blocks_per_row, first_row, num_rows);
 
     reduce_result(temp, d_offset, first_row, num_rows, tid);
 }
