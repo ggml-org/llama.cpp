@@ -1171,7 +1171,7 @@ struct clip_weight_ops {
 
 static std::map<ggml_tensor *, clip_weight_ops> clip_collect_weight_ops(ggml_context * ctx_data, ggml_cgraph * gf) {
     std::map<ggml_tensor *, clip_weight_ops> w_ops_map;
-    std::unordered_set<ggml_tensor *>        weights;
+    std::unordered_set<ggml_tensor *> weights;
     for (ggml_tensor * t = ggml_get_first_tensor(ctx_data); t; t = ggml_get_next_tensor(ctx_data, t)) {
         weights.insert(t);
     }
@@ -1200,10 +1200,7 @@ static std::map<ggml_tensor *, clip_weight_ops> clip_collect_weight_ops(ggml_con
     return w_ops_map;
 }
 
-static bool clip_weight_buft_supported(ggml_tensor *              w,
-                                       const clip_weight_ops &    wops,
-                                       ggml_backend_buffer_type_t buft,
-                                       ggml_backend_dev_t         dev) {
+static bool clip_weight_buft_supported(ggml_tensor * w, const clip_weight_ops & wops, ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev) {
     if (wops.used_via_view || wops.ops.empty()) {
         return false;
     }
@@ -1215,7 +1212,7 @@ static bool clip_weight_buft_supported(ggml_tensor *              w,
         }
     }
     GGML_ASSERT(w->buffer == nullptr);
-    ggml_backend_buffer_ptr buf{ ggml_backend_buft_alloc_buffer(buft, 0) };
+    ggml_backend_buffer_ptr buf { ggml_backend_buft_alloc_buffer(buft, 0) };
     if (!buf) {
         return false;
     }
@@ -3699,13 +3696,12 @@ struct clip_model_loader {
                     if (extra_bufts && *extra_bufts) {
                         try {
                             // build a dummy graph to find the ops that consume each weight
-                            ctx_clip.buf_compute_meta.resize(ctx_clip.max_nodes * ggml_tensor_overhead() +
-                                                             ggml_graph_overhead());
-                            const auto    batch     = get_dummy_batch(ctx_clip, /* verbose */ false);
-                            ggml_cgraph * gf        = clip_get_graph_builder(&ctx_clip, batch)->build();
-                            const auto    w_ops_map = clip_collect_weight_ops(ctx_clip.ctx_data.get(), gf);
+                            ctx_clip.buf_compute_meta.resize(ctx_clip.max_nodes * ggml_tensor_overhead() + ggml_graph_overhead());
+                            const auto batch = get_dummy_batch(ctx_clip, /* verbose */ false);
+                            ggml_cgraph * gf = clip_get_graph_builder(&ctx_clip, batch)->build();
+                            const auto w_ops_map = clip_collect_weight_ops(ctx_clip.ctx_data.get(), gf);
                             for (const auto & i : w_ops_map) {
-                                const auto & w    = i.first;
+                                const auto & w = i.first;
                                 const auto & wops = i.second;
                                 for (ggml_backend_buffer_type_t * it = extra_bufts; *it; ++it) {
                                     ggml_backend_buffer_type_t extra_buft = *it;
@@ -3738,7 +3734,7 @@ struct clip_model_loader {
                     total += GGML_PAD(ggml_backend_buft_get_alloc_size(cur_buft, t), align);
                     total_nbytes += ggml_nbytes(t);
                 }
-                ggml_backend_buffer_ptr cur_buf{ ggml_backend_buft_alloc_buffer(cur_buft, total) };
+                ggml_backend_buffer_ptr cur_buf { ggml_backend_buft_alloc_buffer(cur_buft, total) };
                 if (!cur_buf) {
                     LOG_WRN("%s: failed to allocate %s buffer, using default buffer type\n", __func__,
                             ggml_backend_buft_name(cur_buft));
@@ -3760,7 +3756,7 @@ struct clip_model_loader {
             }
 
             if (ggml_backend_alloc_ctx_tensors_from_buft_size(ctx_clip.ctx_data.get(), buft) > 0) {
-                ggml_backend_buffer_ptr buf{ ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft) };
+                ggml_backend_buffer_ptr buf { ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft) };
                 if (!buf) {
                     throw std::runtime_error(
                         string_format("%s: unable to allocate %s buffer\n", __func__, ggml_backend_buft_name(buft)));
