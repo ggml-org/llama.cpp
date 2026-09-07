@@ -5,8 +5,8 @@
 extern "C" {
 #endif
 
-// Extra wdata reservation size required, if any (see VNNI impl)
-size_t ggml_tiled_extra_wdata_len(int64_t ne10, int64_t nr1);
+// per-thread workspace size (0 when tiled is disabled)
+size_t ggml_tiled_ws_size(void);
 
 // tiled K-quant matmul; returns true if the op was computed here, 
 // false to fall through to the stock path

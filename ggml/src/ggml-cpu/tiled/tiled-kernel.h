@@ -44,9 +44,14 @@ struct tiled_tile_src1 {
     float       d[TILED_TILE_ROWS];
 };
 
-// Ensure total size of both panels plus result window under 512kb for L2 cache fit
-static_assert(sizeof(tiled_tile_src0) + sizeof(tiled_tile_src1) + (sizeof(float) * 65536) < 512 * 1024,
-              "tiled tile memory budget exceeded");
+// per-thread workspace: all tiled state lives here, allocated in wdata (one slot per thread)
+struct tiled_ws {
+    tiled_tile_src0 src0;
+    tiled_tile_src1 src1;
+    alignas(64) float acc[TILED_TILE_ROWS * TILED_TILE_ROWS];
+};
+
+static_assert(sizeof(tiled_ws) <= 512 * 1024, "tiled workspace exceeds 512KB per-thread budget");
 
 // unpack primitives for reading quants, defined as inline here to keep arch-specific code in kernel.h/.cpp
 // If this section gets too hairy later, we can break up into separate includes.
