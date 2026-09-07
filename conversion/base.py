@@ -1844,7 +1844,7 @@ class TextModel(ModelBase):
             # ref: https://huggingface.co/lewtun/talkie-1930-13b-it-hf
             res = "talkie"
         if chkhsh == "36f3066e97b7f3994b379aaacde306c1444c6ae84e81a5ae3cd2b7ed3b8c42d4":
-            # ref: https://huggingface.co/openbmb/MiniCPM5-1B
+            # ref: https://huggingface.co/openbmb/MiniCPM5-1B and https://huggingface.co/openbmb/MiniCPM5-2B (identical tokenizer)
             res = "minicpm5"
         if chkhsh == "f241072145675bf8322086f115aebad05e9f869557a238bf2150a2a417d1bf60":
             # ref: https://huggingface.co/ibm-granite/granite-embedding-97m-multilingual-r2
