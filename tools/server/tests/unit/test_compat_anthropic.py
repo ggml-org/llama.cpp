@@ -701,6 +701,35 @@ def test_anthropic_top_k():
     assert res.body["type"] == "message"
 
 
+def test_anthropic_id_slot():
+    """Test that id_slot (llama.cpp specific) is honoured by the Anthropic endpoint"""
+    server.n_slots = 2
+    server.server_slots = True
+    server.start()
+
+    # on an idle server automatic selection picks the LAST slot (the LRU scan
+    # compares with <= and every slot starts with the same t_last_used), so
+    # pinning slot 0 is what shows whether id_slot survived the conversion
+    res = server.make_request("POST", "/v1/messages", data={
+        "model": "test",
+        "max_tokens": 8,
+        "id_slot": 0,
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    })
+
+    assert res.status_code == 200
+    assert res.body["type"] == "message"
+
+    slots_res = server.make_request("GET", "/slots")
+    assert slots_res.status_code == 200
+    slot_0 = next(slot for slot in slots_res.body if slot["id"] == 0)
+    slot_1 = next(slot for slot in slots_res.body if slot["id"] == 1)
+    assert slot_0["n_prompt_tokens"] > 0, "request should have been served by slot 0"
+    assert slot_1.get("n_prompt_tokens", 0) == 0, "slot 1 should not have served the request"
+
+
 # Error handling tests
 
 def test_anthropic_missing_messages():
