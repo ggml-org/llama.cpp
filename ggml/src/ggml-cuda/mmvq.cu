@@ -6,17 +6,29 @@
 #include <cstdint>
 #include <type_traits>
 
-// block size in bytes; 0 compiles the prefetch out for that type
-template <ggml_type type> struct mmvq_pf { static constexpr int bytes = 0; };
-template <> struct mmvq_pf<GGML_TYPE_Q4_0>   { static constexpr int bytes = sizeof(block_q4_0);   };
-template <> struct mmvq_pf<GGML_TYPE_Q8_0>   { static constexpr int bytes = sizeof(block_q8_0);   };
-template <> struct mmvq_pf<GGML_TYPE_Q3_K>   { static constexpr int bytes = sizeof(block_q3_K);   };
-template <> struct mmvq_pf<GGML_TYPE_Q4_K>   { static constexpr int bytes = sizeof(block_q4_K);   };
-template <> struct mmvq_pf<GGML_TYPE_Q5_K>   { static constexpr int bytes = sizeof(block_q5_K);   };
-template <> struct mmvq_pf<GGML_TYPE_Q6_K>   { static constexpr int bytes = sizeof(block_q6_K);   };
-template <> struct mmvq_pf<GGML_TYPE_IQ4_XS> { static constexpr int bytes = sizeof(block_iq4_xs); };
-// Q2_K is left out: prefetching does not raise its L2 hit rate, so the requests only add pressure
+// returns true only for those quants that benefit from prefetch and false otherwise
+static constexpr __host__ __device__ bool mmvq_should_prefetch(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+            return true;
+        default:
+            return false;
+    }
+}
 
+// only enabled on DGX Spark, where it is a gain on every type above. On the higher-bandwidth parts the kernel
+// has little exposed latency left to hide and the extra requests cost more than they save.
+// For perf data, see https://github.com/ggml-org/llama.cpp/pull/26705#issuecomment-5569335031
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
 static __device__ __forceinline__ void mmvq_prefetch_l2(const void * p) {
     asm volatile("prefetch.global.L2 [%0];" :: "l"(p));
@@ -679,15 +691,14 @@ static __global__ void mul_mat_vec_q(
         const int kqs = vdr * (tid % (qi/vdr));
 
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
-        // start the next iterations' weight loads early. only pays where the kernel is
-        // latency-bound rather than bandwidth-bound, which on this part it is
-        if constexpr (mmvq_pf<type>::bytes > 0) {
+        // start the next iterations' weight loads early
+        if constexpr (mmvq_should_prefetch(type)) {
             constexpr int pf_dist = 2; // loop iterations, not blocks
             const int kbx_pf = kbx + pf_dist*blocks_per_iter;
             if (kbx_pf < blocks_per_row_x) {
 #pragma unroll
                 for (int i = 0; i < rows_per_cuda_block; ++i) {
-                    const size_t off = (size_t)(kbx_offset + i*stride_row_x + kbx_pf) * mmvq_pf<type>::bytes;
+                    const size_t off = (size_t)(kbx_offset + i*stride_row_x + kbx_pf) * ggml_cuda_type_traits<type>::block_size;
                     mmvq_prefetch_l2((const char *) vx + off);
                     if constexpr (has_fusion) {
                         if (use_gate) {
