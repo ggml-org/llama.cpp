@@ -132,9 +132,10 @@ float16_t mmDecodeA(const in decodeBufA bl_in, const in uint blockCoords[2], con
     case GGML_TYPE_Q5_1:  return dequantFuncQ5_1 (decodeBufQ5_1 (bl_in), blockCoords, coordInBlock);
     case GGML_TYPE_Q8_0:  return dequantFuncQ8_0 (decodeBufQ8_0 (bl_in), blockCoords, coordInBlock);
     case GGML_TYPE_Q2_K:  return dequantFuncQ2_K (decodeBufQ2_K (bl_in), blockCoords, coordInBlock);
-    case GGML_TYPE_TQ2_0: return dequantFuncTQ2_0(decodeBufTQ2_0(bl_in), blockCoords, coordInBlock);
     case GGML_TYPE_Q3_K:  return dequantFuncQ3_K (decodeBufQ3_K (bl_in), blockCoords, coordInBlock);
     case GGML_TYPE_Q6_K:  return dequantFuncQ6_K (decodeBufQ6_K (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_TQ1_0: return dequantFuncTQ1_0(decodeBufTQ1_0(bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_TQ2_0: return dequantFuncTQ2_0(decodeBufTQ2_0(bl_in), blockCoords, coordInBlock);
     default:              return float16_t(0);
     }
 }
@@ -150,9 +151,10 @@ f16vec4 mmDecodeA_v(const in decodeBufA bl_in, const in uint blockCoords[2], con
     case GGML_TYPE_Q5_1:  return dequantFuncQ5_1_v (decodeBufQ5_1 (bl_in), blockCoords, coordInBlock);
     case GGML_TYPE_Q8_0:  return dequantFuncQ8_0_v (decodeBufQ8_0 (bl_in), blockCoords, coordInBlock);
     case GGML_TYPE_Q2_K:  return dequantFuncQ2_K_v (decodeBufQ2_K (bl_in), blockCoords, coordInBlock);
-    case GGML_TYPE_TQ2_0: return dequantFuncTQ2_0_v(decodeBufTQ2_0(bl_in), blockCoords, coordInBlock);
     case GGML_TYPE_Q3_K:  return dequantFuncQ3_K_v (decodeBufQ3_K (bl_in), blockCoords, coordInBlock);
     case GGML_TYPE_Q6_K:  return dequantFuncQ6_K_v (decodeBufQ6_K (bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_TQ1_0: return dequantFuncTQ1_0_v(decodeBufTQ1_0(bl_in), blockCoords, coordInBlock);
+    case GGML_TYPE_TQ2_0: return dequantFuncTQ2_0_v(decodeBufTQ2_0(bl_in), blockCoords, coordInBlock);
     default:              return f16vec4(0);
     }
 }

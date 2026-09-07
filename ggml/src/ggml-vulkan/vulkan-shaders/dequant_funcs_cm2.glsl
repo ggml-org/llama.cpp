@@ -260,6 +260,20 @@ float16_t dequantFuncTQ1_0(const in decodeBufTQ1_0 bl, const in uint blockCoords
     return bl.block.d * (float16_t(int(xi)) - float16_t(1.0));
 }
 
+f16vec4 dequantFuncTQ1_0_v(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const uint e = coordInBlock[1];
+    f16vec4 v;
+    [[unroll]] for (uint k = 0u; k < 4u; ++k) {
+        const uint ee = e + k;
+        const uint bidx = tq1_0_byte_of(ee);
+        const uint qbyte = uint(bidx < 48u ? bl.block.qs[bidx] : bl.block.qh[bidx - 48u]);
+        const uint xi = tq1_0_trit(qbyte, tq1_0_digit_of(ee));
+        v[k] = bl.block.d * (float16_t(int(xi)) - float16_t(1.0));
+    }
+    return v;
+}
+
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ2_0 {
    block_tq2_0 block;
 };

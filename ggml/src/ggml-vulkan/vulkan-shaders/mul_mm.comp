@@ -98,11 +98,12 @@ layout (binding = 0) readonly buffer A_PACKED32 {A_TYPE_PACKED32 data_a_packed32
 layout (binding = 0) readonly buffer BUF_Q1_0     { block_q1_0 data[];     } a_q1_0;
 layout (binding = 0) readonly buffer BUF_Q2_0     { block_q2_0 data[];     } a_q2_0;
 layout (binding = 0) readonly buffer BUF_Q2_K     { block_q2_K data[];     } a_q2_k;
-layout (binding = 0) readonly buffer BUF_TQ2_0    { block_tq2_0 data[];    } a_tq2_0;
 layout (binding = 0) readonly buffer BUF_Q3_K     { block_q3_K data[];     } a_q3_k;
 layout (binding = 0) readonly buffer BUF_Q4_K     { block_q4_K data[];     } a_q4_k;
 layout (binding = 0) readonly buffer BUF_Q5_K     { block_q5_K data[];     } a_q5_k;
 layout (binding = 0) readonly buffer BUF_Q6_K     { block_q6_K data[];     } a_q6_k;
+layout (binding = 0) readonly buffer BUF_TQ1_0    { block_tq1_0 data[];    } a_tq1_0;
+layout (binding = 0) readonly buffer BUF_TQ2_0    { block_tq2_0 data[];    } a_tq2_0;
 // Packed16 aliases
 layout (binding = 0) readonly buffer BUF_Q4_0_P16   { block_q4_0_packed16 data[];   } a_q4_0_p16;
 layout (binding = 0) readonly buffer BUF_Q5_0_P16   { block_q5_0_packed16 data[];   } a_q5_0_p16;
