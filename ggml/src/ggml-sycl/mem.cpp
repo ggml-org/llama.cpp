@@ -28,7 +28,7 @@ const char * mem_api_int2str(int mem_api) {
 * Depend on to call zesInit(0) before any other Level Zero API calls, otherwise the Level Zero API calls may fail.
 */
 bool query_free_memory_by_ze(sycl::device dev, size_t & free_bytes, size_t & total_bytes) {
-    GGML_SYCL_DEBUG("[%s] Querying free memory using Level Zero API.\n", __func__);
+    GGML_SYCL_DEBUG("[SYCL] call %s: Querying free memory using Level Zero API.\n", __func__);
 
     free_bytes  = 0;
     total_bytes = 0;
@@ -95,7 +95,7 @@ bool query_free_memory_by_ze(sycl::device dev, size_t & free_bytes, size_t & tot
 #endif
 
 bool get_memory_size_by_sycl_api(sycl::device dev, size_t & free_bytes, size_t & total_bytes) {
-    GGML_SYCL_DEBUG("[%s] Querying free memory using SYCL API.\n", __func__);
+    GGML_SYCL_DEBUG("[SYCL] call %s: Querying free memory using SYCL API.\n", __func__);
     total_bytes = dev.get_info<sycl::info::device::global_mem_size>();
 
 #if (defined(__SYCL_COMPILER_VERSION) && __SYCL_COMPILER_VERSION >= 20221105)
@@ -120,13 +120,11 @@ bool get_memory_size_by_sycl_api(sycl::device dev, size_t & free_bytes, size_t &
 }
 
 bool get_memory_size(sycl::device dev, size_t & free_bytes, size_t & total_bytes, MemoryAPIType api_type) {
-    const auto name       = dev.get_info<sycl::info::device::name>();
-    const auto vendor     = dev.get_info<sycl::info::device::vendor>();
-    const auto global_mem = dev.get_info<sycl::info::device::global_mem_size>();
 
-    GGML_SYCL_DEBUG("[%s]GPU Name:          %s\n", __func__, name.c_str());
-    GGML_SYCL_DEBUG("[%s]GPU Vendor:        %s\n", __func__, vendor.c_str());
-    GGML_SYCL_DEBUG("[%s]GPU Global Memory: %zu bytes\n", __func__, static_cast<size_t>(global_mem));
+    GGML_SYCL_DEBUG("[%s]GPU Name:          %s\n", __func__,
+        dev.get_info<sycl::info::device::name>().c_str());
+    GGML_SYCL_DEBUG("[%s]GPU Vendor:        %s\n", __func__,
+        dev.get_info<sycl::info::device::vendor>().c_str());
 
     if (api_type == MEMORY_API_TYPE_LEVEL_ZERO) {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
