@@ -385,6 +385,7 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_SINKS: (
             "model.layers.{bid}.self_attn.sinks", # openai-moe
             "model.layers.{bid}.self_attn.attention_sink_bias", # mimov2
+            "model.layers.{bid}.self_attn.learnable_sink_param", # hy-v4
         ),
 
         MODEL_TENSOR.ATTN_GATE: (
@@ -392,6 +393,7 @@ class TensorNameMap:
             "model.layers.{bid}.linear_attn.in_proj_z",  # qwen3.5
             "model.layers.{bid}.self_attn.g_proj",    # step3.5 head-wise attention gate
             "model.layers.{bid}.self_attn.output_gate",  # minimax-01
+            "model.layers.{bid}.self_attn.linear_gate",  # hy-v4
         ),
 
         # Feed-forward norm
@@ -1327,6 +1329,42 @@ class TensorNameMap:
 
         MODEL_TENSOR.INDEXER_Q_NORM: (
             "model.layers.{bid}.self_attn.index_q_norm", # MSA
+        ),
+
+        MODEL_TENSOR.HC_ATTN_FN: (
+            "model.layers.{bid}.hc_attn_layer.hc_pre.hc_fn", # hy-v4
+        ),
+
+        MODEL_TENSOR.HC_ATTN_BASE: (
+            "model.layers.{bid}.hc_attn_layer.hc_pre.hc_base", # hy-v4
+        ),
+
+        MODEL_TENSOR.HC_ATTN_SCALE: (
+            "model.layers.{bid}.hc_attn_layer.hc_pre.hc_scale", # hy-v4
+        ),
+
+        MODEL_TENSOR.HC_FFN_FN: (
+            "model.layers.{bid}.hc_mlp_layer.hc_pre.hc_fn", # hy-v4
+        ),
+
+        MODEL_TENSOR.HC_FFN_BASE: (
+            "model.layers.{bid}.hc_mlp_layer.hc_pre.hc_base", # hy-v4
+        ),
+
+        MODEL_TENSOR.HC_FFN_SCALE: (
+            "model.layers.{bid}.hc_mlp_layer.hc_pre.hc_scale", # hy-v4
+        ),
+
+        MODEL_TENSOR.HC_HEAD_FN: (
+            "model.hc_head.hc_head_fn",  # hy-v4
+        ),
+
+        MODEL_TENSOR.HC_HEAD_BASE: (
+            "model.hc_head.hc_head_base", # hy-v4
+        ),
+
+        MODEL_TENSOR.HC_HEAD_SCALE: (
+            "model.hc_head.hc_head_scale", # hy-v4
         ),
 
         ############################################################################
