@@ -1,15 +1,127 @@
 #include "../ggml/src/ggml-backend-memory.h"
+#include "../ggml/src/ggml-backend-impl.h"
 
+#include "ggml-cpp.h"
+#include "ggml-cpu.h"
 #include "ggml.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <memory>
+#include <new>
+#include <vector>
 
 using planner_ptr = std::unique_ptr<ggml_backend_memory_planner, decltype(&ggml_backend_memory_planner_free)>;
+using arena_ptr = std::unique_ptr<ggml_backend_memory_arena, decltype(&ggml_backend_memory_arena_free)>;
+
+struct test_buft_context {
+    size_t alignment = 16;
+    size_t alloc_count = 0;
+    size_t physical_free_count = 0;
+    size_t view_free_count = 0;
+    size_t view_attempts = 0;
+    size_t view_fail_after = SIZE_MAX;
+    bool fail_alloc = false;
+    bool support_views = true;
+};
+
+struct test_buffer_context {
+    test_buft_context * owner;
+    uint8_t * base;
+    bool owns_data;
+};
+
+static ggml_backend_buffer_t test_buffer_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size);
+
+static const char * test_buft_name(ggml_backend_buffer_type_t) {
+    return "memory_planner_test";
+}
+
+static void test_buffer_free(ggml_backend_buffer_t buffer) {
+    auto * context = static_cast<test_buffer_context *>(buffer->context);
+    if (context->owns_data) {
+        delete[] context->base;
+        context->owner->physical_free_count++;
+    } else {
+        context->owner->view_free_count++;
+    }
+    delete context;
+}
+
+static void * test_buffer_base(ggml_backend_buffer_t buffer) {
+    return static_cast<test_buffer_context *>(buffer->context)->base;
+}
+
+static void test_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
+    std::memset(test_buffer_base(buffer), value, buffer->size);
+}
+
+static ggml_backend_buffer_t test_buft_alloc(ggml_backend_buffer_type_t buft, size_t size) {
+    auto * owner = static_cast<test_buft_context *>(buft->context);
+    if (owner->fail_alloc || size == 0) {
+        return nullptr;
+    }
+    auto * data = new (std::nothrow) uint8_t[size];
+    auto * context = new (std::nothrow) test_buffer_context {owner, data, true};
+    if (data == nullptr || context == nullptr) {
+        delete[] data;
+        delete context;
+        return nullptr;
+    }
+
+    ggml_backend_buffer_i iface = {};
+    iface.free_buffer = test_buffer_free;
+    iface.get_base = test_buffer_base;
+    iface.clear = test_buffer_clear;
+    ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, iface, context, size);
+    buffer->view_buffer = owner->support_views ? test_buffer_view : nullptr;
+    owner->alloc_count++;
+    return buffer;
+}
+
+static size_t test_buft_alignment(ggml_backend_buffer_type_t buft) {
+    return static_cast<test_buft_context *>(buft->context)->alignment;
+}
+
+static bool test_buft_is_host(ggml_backend_buffer_type_t) {
+    return true;
+}
+
+static ggml_backend_buffer_type make_test_buft(test_buft_context * context) {
+    ggml_backend_buffer_type buft = {};
+    buft.context = context;
+    buft.iface.get_name = test_buft_name;
+    buft.iface.alloc_buffer = test_buft_alloc;
+    buft.iface.get_alignment = test_buft_alignment;
+    buft.iface.is_host = test_buft_is_host;
+    return buft;
+}
+
+static ggml_backend_buffer_t test_buffer_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    auto * parent = static_cast<test_buffer_context *>(buffer->context);
+    parent->owner->view_attempts++;
+    if (parent->owner->view_attempts > parent->owner->view_fail_after) {
+        return nullptr;
+    }
+    auto * context = new (std::nothrow) test_buffer_context {
+        parent->owner,
+        parent->base + offset,
+        false,
+    };
+    if (context == nullptr) {
+        return nullptr;
+    }
+    ggml_backend_buffer_t view = ggml_backend_buffer_init(buffer->buft, buffer->iface, context, size);
+    view->view_buffer = test_buffer_view;
+    return view;
+}
+
 
 static planner_ptr make_planner(size_t capacity, size_t alignment) {
     return planner_ptr(ggml_backend_memory_planner_new(capacity, alignment), ggml_backend_memory_planner_free);
@@ -268,6 +380,237 @@ static void test_mixed_request_properties() {
     GGML_ASSERT(ggml_backend_memory_planner_high_water(planner.get()) == previous_end);
 }
 
+
+// Verify an imported parent remains alive and views stay inside their regions.
+static void test_arena_imported_parent() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    ggml_backend_buffer_t parent = ggml_backend_buft_alloc_buffer(&buft, 128);
+    GGML_ASSERT(parent != nullptr);
+    ggml_backend_buffer_clear(parent, 0xa5);
+    auto * base = static_cast<uint8_t *>(ggml_backend_buffer_get_base(parent));
+
+    arena_ptr arena(ggml_backend_memory_arena_new_from_buffer(parent), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena && ggml_backend_memory_arena_parent(arena.get()) == parent);
+    ggml_backend_buffer_free(parent);
+    GGML_ASSERT(context.physical_free_count == 0);
+
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+        arena.get(), 10, 32, 32, 16, GGML_BACKEND_MEMORY_REGION_PERSISTENT, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_memory_arena_region_count(arena.get()) == 1);
+    ggml_backend_memory_region region = {};
+    GGML_ASSERT(ggml_backend_memory_arena_get_region(arena.get(), 10, &region));
+    GGML_ASSERT(region.offset == 32 && region.size == 32 &&
+                region.flags == GGML_BACKEND_MEMORY_REGION_PERSISTENT);
+
+    ggml_backend_buffer_t view = ggml_backend_memory_arena_get_buffer(arena.get(), 10);
+    GGML_ASSERT(view != nullptr && ggml_backend_buffer_get_base(view) == base + 32);
+    ggml_backend_buffer_clear(view, 0x3c);
+    for (size_t i = 0; i < 128; ++i) {
+        GGML_ASSERT(base[i] == (i >= 32 && i < 64 ? 0x3c : 0xa5));
+    }
+
+    arena.reset();
+    GGML_ASSERT(context.view_free_count == 1);
+    GGML_ASSERT(context.physical_free_count == 1);
+}
+
+// Verify an arena-owned parent and all materialized views are released once.
+static void test_arena_owned_parent() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    arena_ptr arena(ggml_backend_memory_arena_new(&buft, 128), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena && context.alloc_count == 1);
+    GGML_ASSERT(ggml_backend_memory_arena_capacity(arena.get()) == 128);
+
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 1, 16, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 2, 32, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_used(arena.get()) == 48);
+    GGML_ASSERT(ggml_backend_memory_arena_high_water(arena.get()) == 48);
+
+    arena.reset();
+    GGML_ASSERT(context.view_free_count == 2);
+    GGML_ASSERT(context.physical_free_count == 1);
+}
+
+// Reject allocation and unsupported-view backends without leaking the parent.
+static void test_arena_construction_failure() {
+    ggml_backend_memory_arena_free(nullptr);
+    ggml_backend_memory_arena_rollback(nullptr);
+    GGML_ASSERT(ggml_backend_memory_arena_new(nullptr, 128) == nullptr);
+    GGML_ASSERT(ggml_backend_memory_arena_new_from_buffer(nullptr) == nullptr);
+    GGML_ASSERT(!ggml_backend_memory_arena_begin(nullptr, GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(!ggml_backend_memory_arena_reserve(
+        nullptr, 1, 16, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(!ggml_backend_memory_arena_reserve_at(
+        nullptr, 1, 0, 16, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(!ggml_backend_memory_arena_commit(nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_parent(nullptr) == nullptr);
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(nullptr, 1) == nullptr);
+    GGML_ASSERT(ggml_backend_memory_arena_capacity(nullptr) == 0);
+    GGML_ASSERT(ggml_backend_memory_arena_region_count(nullptr) == 0);
+    GGML_ASSERT(ggml_backend_memory_arena_used(nullptr) == 0);
+    GGML_ASSERT(ggml_backend_memory_arena_high_water(nullptr) == 0);
+    GGML_ASSERT(ggml_backend_memory_arena_generation(nullptr) == 0);
+    ggml_backend_memory_region missing = {};
+    GGML_ASSERT(!ggml_backend_memory_arena_get_region(nullptr, 1, &missing));
+
+    test_buft_context allocation_failure;
+    allocation_failure.fail_alloc = true;
+    auto fail_buft = make_test_buft(&allocation_failure);
+    GGML_ASSERT(ggml_backend_memory_arena_new(&fail_buft, 128) == nullptr);
+    GGML_ASSERT(allocation_failure.alloc_count == 0 && allocation_failure.physical_free_count == 0);
+
+    test_buft_context unsupported;
+    unsupported.support_views = false;
+    auto unsupported_buft = make_test_buft(&unsupported);
+    GGML_ASSERT(ggml_backend_memory_arena_new(&unsupported_buft, 128) == nullptr);
+    GGML_ASSERT(unsupported.alloc_count == 1 && unsupported.physical_free_count == 1);
+}
+
+// Keep the committed layout unchanged when any staged view fails to materialize.
+static void test_arena_commit_atomicity() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    arena_ptr arena(ggml_backend_memory_arena_new(&buft, 128), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 9, 16, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    ggml_backend_buffer_t committed = ggml_backend_buffer_retain(
+        ggml_backend_memory_arena_get_buffer(arena.get(), 9));
+    GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 1);
+
+    context.view_fail_after = 2;
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 1, 32, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 2, 32, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(!ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(context.view_attempts == 3 && context.view_free_count == 1);
+    GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_memory_arena_region_count(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 9) == committed);
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 1) == nullptr);
+
+    context.view_fail_after = SIZE_MAX;
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 3, 64, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 2);
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 9) == nullptr);
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 3) != nullptr);
+
+    ggml_backend_buffer_free(committed);
+    arena.reset();
+    GGML_ASSERT(context.view_free_count == 3);
+    GGML_ASSERT(context.physical_free_count == 1);
+}
+
+// Preserve the logical buffer object for persistent regions across commits.
+static void test_arena_persistent_view_identity() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    arena_ptr arena(ggml_backend_memory_arena_new(&buft, 128), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+        arena.get(), 1, 32, 16, 16, GGML_BACKEND_MEMORY_REGION_PERSISTENT, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+        arena.get(), 2, 0, 16, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    ggml_backend_buffer_t persistent = ggml_backend_buffer_retain(
+        ggml_backend_memory_arena_get_buffer(arena.get(), 1));
+
+    GGML_ASSERT(ggml_backend_memory_arena_begin(
+        arena.get(), GGML_BACKEND_MEMORY_PLAN_PRESERVE_PERSISTENT));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 3, 16, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 1) == persistent);
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 2) == nullptr);
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 3) != nullptr);
+
+    ggml_backend_buffer_free(persistent);
+    arena.reset();
+    GGML_ASSERT(context.view_free_count == 3);
+    GGML_ASSERT(context.physical_free_count == 1);
+}
+
+// Exercise arena views and persistent identity on a real backend.
+static void test_arena_backend(ggml_backend_t backend) {
+    auto * buft = ggml_backend_get_default_buffer_type(backend);
+    const size_t alignment = ggml_backend_buft_get_alignment(buft);
+    const size_t parent_size = 5*alignment;
+    arena_ptr arena(ggml_backend_memory_arena_new(buft, parent_size), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+    ggml_backend_buffer_t parent = ggml_backend_memory_arena_parent(arena.get());
+    void * base = ggml_backend_buffer_get_base(parent);
+    ggml_backend_buffer_clear(parent, 0xa5);
+
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+        arena.get(), 1, alignment, 2*alignment, alignment,
+        GGML_BACKEND_MEMORY_REGION_PERSISTENT, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    ggml_backend_buffer_t view = ggml_backend_memory_arena_get_buffer(arena.get(), 1);
+    GGML_ASSERT(view && ggml_backend_buffer_get_base(view) == static_cast<uint8_t *>(base) + alignment);
+
+    ggml_init_params params = {
+        /*.mem_size   = */ 3*ggml_tensor_overhead(),
+        /*.mem_buffer = */ nullptr,
+        /*.no_alloc   = */ true,
+    };
+    ggml_context_ptr ctx(ggml_init(params));
+    auto * whole = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, parent_size/sizeof(float));
+    GGML_ASSERT(ggml_backend_tensor_alloc(parent, whole, base) == GGML_STATUS_SUCCESS);
+    auto * tensor = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 2*alignment/sizeof(float));
+    GGML_ASSERT(ggml_backend_tensor_alloc(
+        view, tensor, ggml_backend_buffer_get_base(view)) == GGML_STATUS_SUCCESS);
+
+    ggml_backend_buffer_clear(view, 0x3c);
+    std::vector<uint8_t> bytes(parent_size);
+    ggml_backend_tensor_get(whole, bytes.data(), 0, bytes.size());
+    for (size_t i = 0; i < parent_size; ++i) {
+        GGML_ASSERT(bytes[i] == (i >= alignment && i < 3*alignment ? 0x3c : 0xa5));
+    }
+
+    std::vector<float> input(2*alignment/sizeof(float), 1.25f);
+    std::vector<float> output(input.size());
+    ggml_backend_tensor_set(tensor, input.data(), 0, 2*alignment);
+    ggml_backend_tensor_get(tensor, output.data(), 0, 2*alignment);
+    GGML_ASSERT(input == output);
+
+    GGML_ASSERT(ggml_backend_memory_arena_begin(
+        arena.get(), GGML_BACKEND_MEMORY_PLAN_PRESERVE_PERSISTENT));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 1) == view);
+}
+
+static void test_arena_real_backends() {
+    ggml_backend_ptr cpu(ggml_backend_cpu_init());
+    GGML_ASSERT(cpu);
+    test_arena_backend(cpu.get());
+
+    ggml_backend_load_all();
+    ggml_backend_ptr gpu(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr));
+    if (gpu) {
+        test_arena_backend(gpu.get());
+    }
+}
+
 static void run(const char * name, void (*test)()) {
     std::printf("%s ", name);
     std::fflush(stdout);
@@ -282,5 +625,11 @@ int main() {
     run("test_persistent_transition", test_persistent_transition);
     run("test_boundaries_and_overflow", test_boundaries_and_overflow);
     run("test_mixed_request_properties", test_mixed_request_properties);
+    run("test_arena_imported_parent", test_arena_imported_parent);
+    run("test_arena_owned_parent", test_arena_owned_parent);
+    run("test_arena_construction_failure", test_arena_construction_failure);
+    run("test_arena_commit_atomicity", test_arena_commit_atomicity);
+    run("test_arena_persistent_view_identity", test_arena_persistent_view_identity);
+    run("test_arena_real_backends", test_arena_real_backends);
     return 0;
 }

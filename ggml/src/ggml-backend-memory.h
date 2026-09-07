@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ggml.h"
+#include "ggml-backend.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 typedef struct ggml_backend_memory_planner * ggml_backend_memory_planner_t;
+typedef struct ggml_backend_memory_arena * ggml_backend_memory_arena_t;
 
 enum ggml_backend_memory_region_flags {
     GGML_BACKEND_MEMORY_REGION_NONE       = 0,
@@ -98,6 +99,73 @@ GGML_API size_t ggml_backend_memory_planner_high_water(
 
 GGML_API uint64_t ggml_backend_memory_planner_generation(
         ggml_backend_memory_planner_t planner);
+
+// Allocate an arena parent buffer from a backend buffer type.
+GGML_API ggml_backend_memory_arena_t ggml_backend_memory_arena_new(
+        ggml_backend_buffer_type_t buft, size_t capacity);
+
+// Create an arena that retains an existing parent buffer.
+GGML_API ggml_backend_memory_arena_t ggml_backend_memory_arena_new_from_buffer(
+        ggml_backend_buffer_t buffer);
+
+// Release all arena views, the planner, and the retained parent.
+GGML_API void ggml_backend_memory_arena_free(
+        ggml_backend_memory_arena_t arena);
+
+GGML_API bool ggml_backend_memory_arena_begin(
+        ggml_backend_memory_arena_t arena, uint32_t flags);
+
+GGML_API bool ggml_backend_memory_arena_reserve(
+        ggml_backend_memory_arena_t arena,
+        uint64_t id,
+        size_t size,
+        size_t alignment,
+        uint32_t flags,
+        struct ggml_backend_memory_region * region);
+
+GGML_API bool ggml_backend_memory_arena_reserve_at(
+        ggml_backend_memory_arena_t arena,
+        uint64_t id,
+        size_t offset,
+        size_t size,
+        size_t alignment,
+        uint32_t flags,
+        struct ggml_backend_memory_region * region);
+
+// Materialize all staged regions as views before committing the layout.
+GGML_API bool ggml_backend_memory_arena_commit(
+        ggml_backend_memory_arena_t arena);
+
+GGML_API void ggml_backend_memory_arena_rollback(
+        ggml_backend_memory_arena_t arena);
+
+// Return a borrowed parent buffer valid for the arena lifetime.
+GGML_API ggml_backend_buffer_t ggml_backend_memory_arena_parent(
+        ggml_backend_memory_arena_t arena);
+
+// Return a borrowed region view valid until the next successful commit.
+GGML_API ggml_backend_buffer_t ggml_backend_memory_arena_get_buffer(
+        ggml_backend_memory_arena_t arena, uint64_t id);
+
+GGML_API bool ggml_backend_memory_arena_get_region(
+        ggml_backend_memory_arena_t arena,
+        uint64_t id,
+        struct ggml_backend_memory_region * region);
+
+GGML_API size_t ggml_backend_memory_arena_capacity(
+        ggml_backend_memory_arena_t arena);
+
+GGML_API size_t ggml_backend_memory_arena_region_count(
+        ggml_backend_memory_arena_t arena);
+
+GGML_API size_t ggml_backend_memory_arena_used(
+        ggml_backend_memory_arena_t arena);
+
+GGML_API size_t ggml_backend_memory_arena_high_water(
+        ggml_backend_memory_arena_t arena);
+
+GGML_API uint64_t ggml_backend_memory_arena_generation(
+        ggml_backend_memory_arena_t arena);
 
 #ifdef __cplusplus
 }
