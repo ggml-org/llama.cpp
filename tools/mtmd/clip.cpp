@@ -3689,7 +3689,7 @@ struct clip_model_loader {
                             // build a dummy graph to find the ops that consume each weight
                             ctx_clip.buf_compute_meta.resize(ctx_clip.max_nodes * ggml_tensor_overhead() +
                                                              ggml_graph_overhead());
-                            const auto    batch     = get_dummy_batch(ctx_clip);
+                            const auto    batch     = get_dummy_batch(ctx_clip, /* verbose */ false);
                             ggml_cgraph * gf        = clip_get_graph_builder(&ctx_clip, batch)->build();
                             const auto    w_ops_map = clip_collect_weight_ops(ctx_clip.ctx_data.get(), gf);
                             for (const auto & i : w_ops_map) {
@@ -3818,7 +3818,7 @@ struct clip_model_loader {
         std::vector<support_info_op> ops;
     };
 
-    static clip_image_f32_batch get_dummy_batch(clip_ctx & ctx_clip) {
+    static clip_image_f32_batch get_dummy_batch(clip_ctx & ctx_clip, bool verbose = true) {
         // create a fake batch
         const auto & hparams = ctx_clip.model.hparams;
         clip_image_f32_batch batch;
@@ -3826,7 +3826,9 @@ struct clip_model_loader {
         if (ctx_clip.model.modality == CLIP_MODALITY_VISION) {
             const int sz = hparams.warmup_image_size;
             img.set_size({sz, sz}, false, false);
-            LOG_INF("%s: warmup with image size = %d x %d\n", __func__, sz, sz);
+            if (verbose) {
+                LOG_INF("%s: warmup with image size = %d x %d\n", __func__, sz, sz);
+            }
         } else {
             // GEMMA4UA uses n_mel_bins as a raw-waveform frame size (640), not a mel-bin count,
             // so the [1, 256] bound only applies to FFT-based models.
@@ -3835,7 +3837,9 @@ struct clip_model_loader {
                 throw std::runtime_error(string_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
             }
             img.set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
-            LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
+            if (verbose) {
+                LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
+            }
         }
         batch.entries.push_back(img);
         return batch;
