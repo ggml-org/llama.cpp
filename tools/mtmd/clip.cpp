@@ -3767,7 +3767,7 @@ struct clip_model_loader {
                     GGML_ASSERT(cur && "tensor not found in ctx_data");
                     size_t num_bytes = ggml_nbytes(cur);
                     if (num_bytes == 0) {
-                        continue; // zero-sized tensors have no data and may have no buffer
+                        continue;
                     }
                     GGML_ASSERT(cur->buffer && "tensor not allocated");
                     auto it_off = tensor_offset.find(t->name);
