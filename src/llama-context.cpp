@@ -601,9 +601,9 @@ void llama_context::sched_reserve() {
 
     gf_res_prev.reset(new llm_graph_result(max_nodes));
     if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
-        gf_res_prev_mtp_catchup.reset(new llm_graph_result(max_nodes));
+        gf_res_prev_mtp_prefill.reset(new llm_graph_result(max_nodes));
     } else {
-        gf_res_prev_mtp_catchup.reset();
+        gf_res_prev_mtp_prefill.reset();
     }
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
     gf_res_prev_active = nullptr;
@@ -823,8 +823,8 @@ bool llama_context::memory_update(bool optimize) {
         // reset the previous graph results to make sure that they won't be reused
         // TODO: make mctx->apply() report if a graph reserve is needed, then reset graph results only if the memory module reset the scheduler
         gf_res_prev->reset();
-        if (gf_res_prev_mtp_catchup) {
-            gf_res_prev_mtp_catchup->reset();
+        if (gf_res_prev_mtp_prefill) {
+            gf_res_prev_mtp_prefill->reset();
         }
         gf_res_prev_active = nullptr;
 
@@ -1350,7 +1350,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     auto * res = gf_res_prev.get();
     // common_speculative_impl_draft_mtp::process() submits prefill and catch-up batches without outputs.
     if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && n_outputs == 0) {
-        res = gf_res_prev_mtp_catchup.get();
+        res = gf_res_prev_mtp_prefill.get();
     }
     auto * gf  = res->get_gf();
 
@@ -2443,8 +2443,8 @@ ggml_cgraph * llama_context::graph_reserve(
 
     // when the scheduler is reset, we cannot reuse old graphs, so we reset the previous graph results
     gf_res_prev->reset();
-    if (gf_res_prev_mtp_catchup) {
-        gf_res_prev_mtp_catchup->reset();
+    if (gf_res_prev_mtp_prefill) {
+        gf_res_prev_mtp_prefill->reset();
     }
     gf_res_prev_active = nullptr;
 
