@@ -6,6 +6,10 @@
 #include <cstdint>
 #include <type_traits>
 
+// only enabled on DGX Spark, where it is a gain on every type below. On the higher-bandwidth parts the kernel
+// has little exposed latency left to hide and the extra requests cost more than they save.
+// For perf data, see https://github.com/ggml-org/llama.cpp/pull/26705#issuecomment-5569335031
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
 // returns true only for those quants that benefit from prefetch and false otherwise
 static constexpr __host__ __device__ bool mmvq_should_prefetch(ggml_type type) {
     switch (type) {
@@ -26,10 +30,6 @@ static constexpr __host__ __device__ bool mmvq_should_prefetch(ggml_type type) {
     }
 }
 
-// only enabled on DGX Spark, where it is a gain on every type above. On the higher-bandwidth parts the kernel
-// has little exposed latency left to hide and the extra requests cost more than they save.
-// For perf data, see https://github.com/ggml-org/llama.cpp/pull/26705#issuecomment-5569335031
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
 static __device__ __forceinline__ void mmvq_prefetch_l2(const void * p) {
     asm volatile("prefetch.global.L2 [%0];" :: "l"(p));
 }
