@@ -145,16 +145,16 @@ struct server_lru_sched {
         return true;
     }
 
-    // ok means the model is up: drop the entry, the other waiters just watch its status now
+    // on failure the entry is back in line; on success it stays until its waiters leave,
+    // so the model coming up is never picked as a victim before they use it
     void claim_done(std::unique_lock<std::mutex> & lk, const std::string & model_id, bool ok) {
         check_lock(lk);
+        if (ok) {
+            return;
+        }
         for (auto it = queue.begin(); it != queue.end(); ++it) {
             if (it->model_id == model_id) {
-                if (ok) {
-                    queue.erase(it);
-                } else {
-                    it->loading = false;
-                }
+                it->loading = false;
                 return;
             }
         }
@@ -1220,6 +1220,8 @@ void server_models::update_status(const std::string & name, const update_status_
         if (!args.progress.is_null()) {
             meta.progress = args.progress;
         }
+        // a model that comes up idle or goes down changes the slot count for queued requests
+        sched->tick(lk);
     }
     // broadcast status change to SSE
     {
@@ -1445,9 +1447,6 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
                 lk.lock();
                 sched->claim_done(lk, name, ok);
                 sched->tick(lk);
-                if (ok) {
-                    queued = false; // entry is gone, the other waiters watch the status now
-                }
                 continue;
             }
 
@@ -1455,6 +1454,7 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
         }
     } catch (...) {
         leave_queue();
+        sched->tick(lk); // a slot freed for this waiter goes to the next one
         throw;
     }
     leave_queue();
