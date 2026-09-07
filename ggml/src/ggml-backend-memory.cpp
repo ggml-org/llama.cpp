@@ -2,6 +2,7 @@
 #include "ggml-backend-impl.h"
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <new>
 #include <vector>
@@ -18,12 +19,22 @@ struct ggml_backend_memory_planner {
 struct ggml_backend_memory_arena_view {
     ggml_backend_memory_region region;
     ggml_backend_buffer_t buffer;
+    size_t active_leases;
 };
 
 struct ggml_backend_memory_arena {
-    ggml_backend_buffer_t parent;
-    ggml_backend_memory_planner_t planner;
+    std::atomic<uint32_t> references {1};
+    ggml_backend_buffer_t parent = nullptr;
+    ggml_backend_memory_planner_t planner = nullptr;
     std::vector<ggml_backend_memory_arena_view> views;
+};
+
+struct ggml_backend_memory_lease {
+    std::atomic<uint32_t> references {1};
+    ggml_backend_memory_arena_t arena = nullptr;
+    ggml_backend_buffer_t buffer = nullptr;
+    ggml_backend_memory_region region = {};
+    uint64_t generation = 0;
 };
 
 static bool is_power_of_two(size_t value) {
@@ -77,6 +88,16 @@ static ggml_backend_memory_arena_view * find_arena_view(
             return view.region.id == id;
         });
     return found != arena->views.end() ? &*found : nullptr;
+}
+
+static const ggml_backend_memory_region * find_staged_region(
+        const ggml_backend_memory_planner * planner, uint64_t id) {
+    const auto found = std::find_if(
+        planner->staged.begin(), planner->staged.end(),
+        [id](const ggml_backend_memory_region & region) {
+            return region.id == id;
+        });
+    return found != planner->staged.end() ? &*found : nullptr;
 }
 
 static void free_arena_views(std::vector<ggml_backend_memory_arena_view> & views) {
@@ -355,20 +376,35 @@ ggml_backend_memory_arena_t ggml_backend_memory_arena_new_from_buffer(
         return nullptr;
     }
 
-    auto * arena = new (std::nothrow) ggml_backend_memory_arena {
-        ggml_backend_buffer_retain(buffer),
-        planner,
-        {},
-    };
+    auto * arena = new (std::nothrow) ggml_backend_memory_arena;
     if (arena == nullptr) {
         ggml_backend_memory_planner_free(planner);
         return nullptr;
     }
+    arena->parent = ggml_backend_buffer_retain(buffer);
+    arena->planner = planner;
+    return arena;
+}
+
+ggml_backend_memory_arena_t ggml_backend_memory_arena_retain(ggml_backend_memory_arena_t arena) {
+    if (arena == nullptr) {
+        return nullptr;
+    }
+    uint32_t count = arena->references.load(std::memory_order_relaxed);
+    do {
+        GGML_ASSERT(count > 0 && count < std::numeric_limits<uint32_t>::max());
+    } while (!arena->references.compare_exchange_weak(
+        count, count + 1, std::memory_order_relaxed, std::memory_order_relaxed));
     return arena;
 }
 
 void ggml_backend_memory_arena_free(ggml_backend_memory_arena_t arena) {
     if (arena == nullptr) {
+        return;
+    }
+    const uint32_t count = arena->references.fetch_sub(1, std::memory_order_acq_rel);
+    GGML_ASSERT(count > 0);
+    if (count != 1) {
         return;
     }
     free_arena_views(arena->views);
@@ -410,6 +446,18 @@ bool ggml_backend_memory_arena_commit(ggml_backend_memory_arena_t arena) {
         return false;
     }
 
+    for (const auto & view : arena->views) {
+        if (view.active_leases == 0) {
+            continue;
+        }
+        const ggml_backend_memory_region * staged = find_staged_region(arena->planner, view.region.id);
+        if (staged == nullptr || !(staged->flags & GGML_BACKEND_MEMORY_REGION_PERSISTENT) ||
+                !same_region(view.region, *staged)) {
+            ggml_backend_memory_planner_rollback(arena->planner);
+            return false;
+        }
+    }
+
     std::vector<ggml_backend_memory_arena_view> next_views;
     try {
         next_views.reserve(arena->planner->staged.size());
@@ -420,10 +468,12 @@ bool ggml_backend_memory_arena_commit(ggml_backend_memory_arena_t arena) {
 
     for (const auto & region : arena->planner->staged) {
         ggml_backend_buffer_t view = nullptr;
+        size_t active_leases = 0;
         if (region.flags & GGML_BACKEND_MEMORY_REGION_PERSISTENT) {
             ggml_backend_memory_arena_view * existing = find_arena_view(arena, region.id);
             if (existing != nullptr && same_region(existing->region, region)) {
                 view = ggml_backend_buffer_retain(existing->buffer);
+                active_leases = existing->active_leases;
             }
         }
         if (view == nullptr) {
@@ -436,7 +486,7 @@ bool ggml_backend_memory_arena_commit(ggml_backend_memory_arena_t arena) {
         }
 
         try {
-            next_views.push_back({region, view});
+            next_views.push_back({region, view, active_leases});
         } catch (const std::bad_alloc &) {
             ggml_backend_buffer_free(view);
             free_arena_views(next_views);
@@ -500,4 +550,87 @@ size_t ggml_backend_memory_arena_high_water(ggml_backend_memory_arena_t arena) {
 
 uint64_t ggml_backend_memory_arena_generation(ggml_backend_memory_arena_t arena) {
     return arena != nullptr ? ggml_backend_memory_planner_generation(arena->planner) : 0;
+}
+
+size_t ggml_backend_memory_arena_lease_count(ggml_backend_memory_arena_t arena) {
+    if (arena == nullptr) {
+        return 0;
+    }
+    size_t count = 0;
+    for (const auto & view : arena->views) {
+        count += view.active_leases;
+    }
+    return count;
+}
+
+ggml_backend_memory_lease_t ggml_backend_memory_arena_acquire(
+        ggml_backend_memory_arena_t arena, uint64_t id) {
+    if (arena == nullptr) {
+        return nullptr;
+    }
+    ggml_backend_memory_arena_view * view = find_arena_view(arena, id);
+    if (view == nullptr || view->active_leases == std::numeric_limits<size_t>::max()) {
+        return nullptr;
+    }
+    auto * lease = new (std::nothrow) ggml_backend_memory_lease;
+    if (lease == nullptr) {
+        return nullptr;
+    }
+    lease->arena = ggml_backend_memory_arena_retain(arena);
+    lease->buffer = ggml_backend_buffer_retain(view->buffer);
+    lease->region = view->region;
+    lease->generation = ggml_backend_memory_arena_generation(arena);
+    view->active_leases++;
+    return lease;
+}
+
+ggml_backend_memory_lease_t ggml_backend_memory_lease_retain(
+        ggml_backend_memory_lease_t lease) {
+    if (lease == nullptr) {
+        return nullptr;
+    }
+    uint32_t count = lease->references.load(std::memory_order_relaxed);
+    do {
+        GGML_ASSERT(count > 0 && count < std::numeric_limits<uint32_t>::max());
+    } while (!lease->references.compare_exchange_weak(
+        count, count + 1, std::memory_order_relaxed, std::memory_order_relaxed));
+    return lease;
+}
+
+void ggml_backend_memory_lease_free(ggml_backend_memory_lease_t lease) {
+    if (lease == nullptr) {
+        return;
+    }
+    const uint32_t count = lease->references.fetch_sub(1, std::memory_order_acq_rel);
+    GGML_ASSERT(count > 0);
+    if (count != 1) {
+        return;
+    }
+
+    ggml_backend_memory_arena_t arena = lease->arena;
+    ggml_backend_buffer_t buffer = lease->buffer;
+    ggml_backend_memory_arena_view * view = find_arena_view(arena, lease->region.id);
+    GGML_ASSERT(view != nullptr && view->buffer == buffer && view->active_leases > 0);
+    view->active_leases--;
+    delete lease;
+    ggml_backend_buffer_free(buffer);
+    ggml_backend_memory_arena_free(arena);
+}
+
+ggml_backend_buffer_t ggml_backend_memory_lease_buffer(ggml_backend_memory_lease_t lease) {
+    return lease != nullptr ? lease->buffer : nullptr;
+}
+
+bool ggml_backend_memory_lease_get_region(
+        ggml_backend_memory_lease_t lease,
+        struct ggml_backend_memory_region * region) {
+    if (lease == nullptr || region == nullptr) {
+        return false;
+    }
+    *region = lease->region;
+    return true;
+}
+
+uint64_t ggml_backend_memory_lease_generation(ggml_backend_memory_lease_t lease) {
+    return lease != nullptr ? lease->generation : 0;
 }

@@ -12,6 +12,7 @@ extern "C" {
 
 typedef struct ggml_backend_memory_planner * ggml_backend_memory_planner_t;
 typedef struct ggml_backend_memory_arena * ggml_backend_memory_arena_t;
+typedef struct ggml_backend_memory_lease * ggml_backend_memory_lease_t;
 
 enum ggml_backend_memory_region_flags {
     GGML_BACKEND_MEMORY_REGION_NONE       = 0,
@@ -108,7 +109,11 @@ GGML_API ggml_backend_memory_arena_t ggml_backend_memory_arena_new(
 GGML_API ggml_backend_memory_arena_t ggml_backend_memory_arena_new_from_buffer(
         ggml_backend_buffer_t buffer);
 
-// Release all arena views, the planner, and the retained parent.
+// Retain an arena while a lease or another owner uses it.
+GGML_API ggml_backend_memory_arena_t ggml_backend_memory_arena_retain(
+        ggml_backend_memory_arena_t arena);
+
+// Release an arena reference and destroy its storage after the final release.
 GGML_API void ggml_backend_memory_arena_free(
         ggml_backend_memory_arena_t arena);
 
@@ -166,6 +171,35 @@ GGML_API size_t ggml_backend_memory_arena_high_water(
 
 GGML_API uint64_t ggml_backend_memory_arena_generation(
         ggml_backend_memory_arena_t arena);
+
+// Return the number of live lease objects across all committed regions.
+GGML_API size_t ggml_backend_memory_arena_lease_count(
+        ggml_backend_memory_arena_t arena);
+
+// Acquire a retained lease for one committed arena region.
+GGML_API ggml_backend_memory_lease_t ggml_backend_memory_arena_acquire(
+        ggml_backend_memory_arena_t arena, uint64_t id);
+
+// Retain a lease handle without acquiring another region lease.
+GGML_API ggml_backend_memory_lease_t ggml_backend_memory_lease_retain(
+        ggml_backend_memory_lease_t lease);
+
+// Release a lease handle and end the region lease after the final release.
+GGML_API void ggml_backend_memory_lease_free(
+        ggml_backend_memory_lease_t lease);
+
+// Return a borrowed buffer valid for the lease lifetime.
+GGML_API ggml_backend_buffer_t ggml_backend_memory_lease_buffer(
+        ggml_backend_memory_lease_t lease);
+
+// Return the region metadata captured when the lease was acquired.
+GGML_API bool ggml_backend_memory_lease_get_region(
+        ggml_backend_memory_lease_t lease,
+        struct ggml_backend_memory_region * region);
+
+// Return the committed arena generation in which the lease was acquired.
+GGML_API uint64_t ggml_backend_memory_lease_generation(
+        ggml_backend_memory_lease_t lease);
 
 #ifdef __cplusplus
 }

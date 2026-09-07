@@ -17,6 +17,7 @@
 
 using planner_ptr = std::unique_ptr<ggml_backend_memory_planner, decltype(&ggml_backend_memory_planner_free)>;
 using arena_ptr = std::unique_ptr<ggml_backend_memory_arena, decltype(&ggml_backend_memory_arena_free)>;
+using lease_ptr = std::unique_ptr<ggml_backend_memory_lease, decltype(&ggml_backend_memory_lease_free)>;
 
 struct test_buft_context {
     size_t alignment = 16;
@@ -565,7 +566,9 @@ static void test_arena_backend(ggml_backend_t backend) {
         arena.get(), 1, alignment, 2*alignment, alignment,
         GGML_BACKEND_MEMORY_REGION_PERSISTENT, nullptr));
     GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
-    ggml_backend_buffer_t view = ggml_backend_memory_arena_get_buffer(arena.get(), 1);
+    lease_ptr lease(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+    GGML_ASSERT(lease && ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+    ggml_backend_buffer_t view = ggml_backend_memory_lease_buffer(lease.get());
     GGML_ASSERT(view && ggml_backend_buffer_get_base(view) == static_cast<uint8_t *>(base) + alignment);
 
     ggml_init_params params = {
@@ -597,6 +600,7 @@ static void test_arena_backend(ggml_backend_t backend) {
         arena.get(), GGML_BACKEND_MEMORY_PLAN_PRESERVE_PERSISTENT));
     GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
     GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 1) == view);
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
 }
 
 static void test_arena_real_backends() {
@@ -609,6 +613,173 @@ static void test_arena_real_backends() {
     if (gpu) {
         test_arena_backend(gpu.get());
     }
+}
+
+// Keep arena storage alive until its final retained reference is released.
+static void test_arena_reference_lifetime() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    arena_ptr arena(ggml_backend_memory_arena_new(&buft, 128), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+    ggml_backend_memory_arena_t retained = ggml_backend_memory_arena_retain(arena.get());
+    GGML_ASSERT(retained == arena.get());
+
+    ggml_backend_memory_arena_free(arena.release());
+    GGML_ASSERT(context.physical_free_count == 0);
+    arena_ptr last(retained, ggml_backend_memory_arena_free);
+    GGML_ASSERT(ggml_backend_memory_arena_begin(last.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        last.get(), 1, 32, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(last.get()));
+
+    last.reset();
+    GGML_ASSERT(context.view_free_count == 1 && context.physical_free_count == 1);
+}
+
+// Keep arena storage alive until the final reference to a lease is released.
+static void test_lease_lifetime() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    arena_ptr arena(ggml_backend_memory_arena_new(&buft, 128), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 1, 32, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+
+    ggml_backend_memory_lease_t lease = ggml_backend_memory_arena_acquire(arena.get(), 1);
+    GGML_ASSERT(lease != nullptr && ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_memory_lease_buffer(lease) ==
+                ggml_backend_memory_arena_get_buffer(arena.get(), 1));
+    GGML_ASSERT(ggml_backend_memory_lease_generation(lease) == 1);
+    ggml_backend_memory_region region = {};
+    GGML_ASSERT(ggml_backend_memory_lease_get_region(lease, &region));
+    GGML_ASSERT(region.id == 1 && region.offset == 0 && region.size == 32);
+
+    GGML_ASSERT(ggml_backend_memory_lease_retain(lease) == lease);
+    ggml_backend_memory_lease_free(lease);
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+
+    ggml_backend_buffer_t buffer = ggml_backend_memory_lease_buffer(lease);
+    ggml_backend_memory_arena_free(arena.release());
+    GGML_ASSERT(context.physical_free_count == 0);
+    ggml_backend_buffer_clear(buffer, 0x5a);
+    ggml_backend_memory_lease_free(lease);
+    GGML_ASSERT(context.view_free_count == 1 && context.physical_free_count == 1);
+}
+
+// Count separate lease objects while a retained lease handle counts once.
+static void test_multiple_leases() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    arena_ptr arena(ggml_backend_memory_arena_new(&buft, 128), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 1, 32, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+
+    lease_ptr first(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+    lease_ptr second(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+    GGML_ASSERT(first && second && first.get() != second.get());
+    GGML_ASSERT(ggml_backend_memory_arena_acquire(arena.get(), 2) == nullptr);
+    GGML_ASSERT(ggml_backend_memory_lease_buffer(first.get()) ==
+                ggml_backend_memory_lease_buffer(second.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 2);
+
+    GGML_ASSERT(ggml_backend_memory_lease_retain(first.get()) == first.get());
+    ggml_backend_memory_lease_free(first.get());
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 2);
+    first.reset();
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+    second.reset();
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 0);
+}
+
+// Reject replacement of an actively leased nonpersistent region.
+static void test_lease_blocks_replacement() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    arena_ptr arena(ggml_backend_memory_arena_new(&buft, 128), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 1, 32, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    lease_ptr lease(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+    GGML_ASSERT(lease);
+
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 2, 64, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(!ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 1) ==
+                ggml_backend_memory_lease_buffer(lease.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 2) == nullptr);
+
+    lease.reset();
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 0);
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 2, 64, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 2);
+}
+
+// Allow an unchanged persistent region to remain leased across generations.
+static void test_persistent_lease_transition() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    arena_ptr arena(ggml_backend_memory_arena_new(&buft, 128), ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+        arena.get(), 1, 32, 16, 16, GGML_BACKEND_MEMORY_REGION_PERSISTENT, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    lease_ptr lease(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+    GGML_ASSERT(lease && ggml_backend_memory_lease_generation(lease.get()) == 1);
+    ggml_backend_buffer_t buffer = ggml_backend_memory_lease_buffer(lease.get());
+
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+        arena.get(), 1, 48, 16, 16, GGML_BACKEND_MEMORY_REGION_PERSISTENT, nullptr));
+    GGML_ASSERT(!ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 1) == buffer);
+
+    context.view_fail_after = context.view_attempts;
+    GGML_ASSERT(ggml_backend_memory_arena_begin(
+        arena.get(), GGML_BACKEND_MEMORY_PLAN_PRESERVE_PERSISTENT));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 2, 16, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(!ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 1) == buffer);
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+
+    context.view_fail_after = SIZE_MAX;
+    GGML_ASSERT(ggml_backend_memory_arena_begin(
+        arena.get(), GGML_BACKEND_MEMORY_PLAN_PRESERVE_PERSISTENT));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 2, 16, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 2);
+    GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 1) == buffer);
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_memory_lease_generation(lease.get()) == 1);
+}
+
+static void test_lease_validation() {
+    GGML_ASSERT(ggml_backend_memory_arena_retain(nullptr) == nullptr);
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(nullptr) == 0);
+    GGML_ASSERT(ggml_backend_memory_arena_acquire(nullptr, 1) == nullptr);
+    GGML_ASSERT(ggml_backend_memory_lease_retain(nullptr) == nullptr);
+    ggml_backend_memory_lease_free(nullptr);
+    GGML_ASSERT(ggml_backend_memory_lease_buffer(nullptr) == nullptr);
+    GGML_ASSERT(ggml_backend_memory_lease_generation(nullptr) == 0);
+    ggml_backend_memory_region region = {};
+    GGML_ASSERT(!ggml_backend_memory_lease_get_region(nullptr, &region));
 }
 
 static void run(const char * name, void (*test)()) {
@@ -631,5 +802,11 @@ int main() {
     run("test_arena_commit_atomicity", test_arena_commit_atomicity);
     run("test_arena_persistent_view_identity", test_arena_persistent_view_identity);
     run("test_arena_real_backends", test_arena_real_backends);
+    run("test_arena_reference_lifetime", test_arena_reference_lifetime);
+    run("test_lease_lifetime", test_lease_lifetime);
+    run("test_multiple_leases", test_multiple_leases);
+    run("test_lease_blocks_replacement", test_lease_blocks_replacement);
+    run("test_persistent_lease_transition", test_persistent_lease_transition);
+    run("test_lease_validation", test_lease_validation);
     return 0;
 }
