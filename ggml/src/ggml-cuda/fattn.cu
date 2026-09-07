@@ -374,198 +374,81 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     }
 }
 
-#define FATTN_VEC_COMPILED(type_K, type_V) GGML_CUDA_FA_SEL_##type_K##_##type_V // undefined == 0
-
-#if !FATTN_VEC_COMPILED(f16, f16)
-#error "the f16-f16 FlashAttention vector kernel must always be compiled"
-#endif // !FATTN_VEC_COMPILED(f16, f16)
-
-#define FATTN_VEC_CASE(D, type_K_case, type_V_case)                                                                     \
-    {                                                                                                                   \
-        const bool type_K_okay = type_K == (type_K_case) || (type_K == GGML_TYPE_F32 && (type_K_case) == GGML_TYPE_F16); \
-        const bool type_V_okay = type_V == (type_V_case) || (type_V == GGML_TYPE_F32 && (type_V_case) == GGML_TYPE_F16); \
-        if (type_K_okay && type_V_okay && (check_only || head_size == (D))) {                                           \
-            if constexpr (!check_only) {                                                                                \
-                ggml_cuda_flash_attn_ext_vec_case<D, type_K_case, type_V_case>(*ctx, dst);                              \
-            }                                                                                                           \
-            return true;                                                                                                \
-        }                                                                                                               \
-    }                                                                                                                   \
+#define FATTN_VEC_CASE(D, type_K_case, type_V_case)                                                                                \
+    if constexpr (GGML_CUDA_FA_##type_K_case##_##type_V_case) {                                                                    \
+        const bool type_K_okay = type_K == GGML_TYPE_##type_K_case || (type_K == GGML_TYPE_F32 && GGML_TYPE_##type_K_case == GGML_TYPE_F16); \
+        const bool type_V_okay = type_V == GGML_TYPE_##type_V_case || (type_V == GGML_TYPE_F32 && GGML_TYPE_##type_V_case == GGML_TYPE_F16); \
+        if (head_size == (D) && type_K_okay && type_V_okay) {                                                                      \
+            return ggml_cuda_flash_attn_ext_vec_case<D, GGML_TYPE_##type_K_case, GGML_TYPE_##type_V_case>;                         \
+        }                                                                                                                          \
+    }                                                                                                                              \
 
 #define FATTN_VEC_CASES_ALL_D(type_K_case, type_V_case) \
     FATTN_VEC_CASE( 64, type_K_case, type_V_case)       \
     FATTN_VEC_CASE(128, type_K_case, type_V_case)       \
     FATTN_VEC_CASE(256, type_K_case, type_V_case)       \
 
-// Launches the vector kernel for the given K/V types and head size, returns false if there is no such kernel.
-template <bool check_only>
-static bool ggml_cuda_flash_attn_ext_vec_impl(
-        ggml_backend_cuda_context * ctx, ggml_tensor * dst,
-        const ggml_type type_K, const ggml_type type_V, const int64_t head_size) {
-    GGML_UNUSED(ctx);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(head_size);
+typedef void (* fattn_vec_case_t)(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
-#if FATTN_VEC_COMPILED(f16, f16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_F16)
-#endif // FATTN_VEC_COMPILED(f16, f16)
-#if FATTN_VEC_COMPILED(q4_0, f16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_F16)
-#endif // FATTN_VEC_COMPILED(q4_0, f16)
-#if FATTN_VEC_COMPILED(q4_1, f16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_F16)
-#endif // FATTN_VEC_COMPILED(q4_1, f16)
-#if FATTN_VEC_COMPILED(q5_0, f16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_F16)
-#endif // FATTN_VEC_COMPILED(q5_0, f16)
-#if FATTN_VEC_COMPILED(q5_1, f16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_F16)
-#endif // FATTN_VEC_COMPILED(q5_1, f16)
-#if FATTN_VEC_COMPILED(q8_0, f16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_F16)
-#endif // FATTN_VEC_COMPILED(q8_0, f16)
-#if FATTN_VEC_COMPILED(bf16, f16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_F16)
-#endif // FATTN_VEC_COMPILED(bf16, f16)
+// Vector kernel for the given head size and K/V types, nullptr if its template instance was not compiled:
+static fattn_vec_case_t ggml_cuda_get_fattn_vec_case(const int64_t head_size, const ggml_type type_K, const ggml_type type_V) {
+    FATTN_VEC_CASES_ALL_D(F16,  F16)
+    FATTN_VEC_CASES_ALL_D(Q4_0, F16)
+    FATTN_VEC_CASES_ALL_D(Q4_1, F16)
+    FATTN_VEC_CASES_ALL_D(Q5_0, F16)
+    FATTN_VEC_CASES_ALL_D(Q5_1, F16)
+    FATTN_VEC_CASES_ALL_D(Q8_0, F16)
+    FATTN_VEC_CASES_ALL_D(BF16, F16)
 
-#if FATTN_VEC_COMPILED(f16, q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q4_0)
-#endif // FATTN_VEC_COMPILED(f16, q4_0)
-#if FATTN_VEC_COMPILED(q4_0, q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
-#endif // FATTN_VEC_COMPILED(q4_0, q4_0)
-#if FATTN_VEC_COMPILED(q4_1, q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_Q4_0)
-#endif // FATTN_VEC_COMPILED(q4_1, q4_0)
-#if FATTN_VEC_COMPILED(q5_0, q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_Q4_0)
-#endif // FATTN_VEC_COMPILED(q5_0, q4_0)
-#if FATTN_VEC_COMPILED(q5_1, q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_Q4_0)
-#endif // FATTN_VEC_COMPILED(q5_1, q4_0)
-#if FATTN_VEC_COMPILED(q8_0, q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q4_0)
-#endif // FATTN_VEC_COMPILED(q8_0, q4_0)
-#if FATTN_VEC_COMPILED(bf16, q4_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_Q4_0)
-#endif // FATTN_VEC_COMPILED(bf16, q4_0)
+    FATTN_VEC_CASES_ALL_D(F16,  Q4_0)
+    FATTN_VEC_CASES_ALL_D(Q4_0, Q4_0)
+    FATTN_VEC_CASES_ALL_D(Q4_1, Q4_0)
+    FATTN_VEC_CASES_ALL_D(Q5_0, Q4_0)
+    FATTN_VEC_CASES_ALL_D(Q5_1, Q4_0)
+    FATTN_VEC_CASES_ALL_D(Q8_0, Q4_0)
+    FATTN_VEC_CASES_ALL_D(BF16, Q4_0)
 
-#if FATTN_VEC_COMPILED(f16, q4_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q4_1)
-#endif // FATTN_VEC_COMPILED(f16, q4_1)
-#if FATTN_VEC_COMPILED(q4_0, q4_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_1)
-#endif // FATTN_VEC_COMPILED(q4_0, q4_1)
-#if FATTN_VEC_COMPILED(q4_1, q4_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_Q4_1)
-#endif // FATTN_VEC_COMPILED(q4_1, q4_1)
-#if FATTN_VEC_COMPILED(q5_0, q4_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_Q4_1)
-#endif // FATTN_VEC_COMPILED(q5_0, q4_1)
-#if FATTN_VEC_COMPILED(q5_1, q4_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_Q4_1)
-#endif // FATTN_VEC_COMPILED(q5_1, q4_1)
-#if FATTN_VEC_COMPILED(q8_0, q4_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q4_1)
-#endif // FATTN_VEC_COMPILED(q8_0, q4_1)
-#if FATTN_VEC_COMPILED(bf16, q4_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_Q4_1)
-#endif // FATTN_VEC_COMPILED(bf16, q4_1)
+    FATTN_VEC_CASES_ALL_D(F16,  Q4_1)
+    FATTN_VEC_CASES_ALL_D(Q4_0, Q4_1)
+    FATTN_VEC_CASES_ALL_D(Q4_1, Q4_1)
+    FATTN_VEC_CASES_ALL_D(Q5_0, Q4_1)
+    FATTN_VEC_CASES_ALL_D(Q5_1, Q4_1)
+    FATTN_VEC_CASES_ALL_D(Q8_0, Q4_1)
+    FATTN_VEC_CASES_ALL_D(BF16, Q4_1)
 
-#if FATTN_VEC_COMPILED(f16, q5_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q5_0)
-#endif // FATTN_VEC_COMPILED(f16, q5_0)
-#if FATTN_VEC_COMPILED(q4_0, q5_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q5_0)
-#endif // FATTN_VEC_COMPILED(q4_0, q5_0)
-#if FATTN_VEC_COMPILED(q4_1, q5_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_Q5_0)
-#endif // FATTN_VEC_COMPILED(q4_1, q5_0)
-#if FATTN_VEC_COMPILED(q5_0, q5_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_Q5_0)
-#endif // FATTN_VEC_COMPILED(q5_0, q5_0)
-#if FATTN_VEC_COMPILED(q5_1, q5_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_Q5_0)
-#endif // FATTN_VEC_COMPILED(q5_1, q5_0)
-#if FATTN_VEC_COMPILED(q8_0, q5_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q5_0)
-#endif // FATTN_VEC_COMPILED(q8_0, q5_0)
-#if FATTN_VEC_COMPILED(bf16, q5_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_Q5_0)
-#endif // FATTN_VEC_COMPILED(bf16, q5_0)
+    FATTN_VEC_CASES_ALL_D(F16,  Q5_0)
+    FATTN_VEC_CASES_ALL_D(Q4_0, Q5_0)
+    FATTN_VEC_CASES_ALL_D(Q4_1, Q5_0)
+    FATTN_VEC_CASES_ALL_D(Q5_0, Q5_0)
+    FATTN_VEC_CASES_ALL_D(Q5_1, Q5_0)
+    FATTN_VEC_CASES_ALL_D(Q8_0, Q5_0)
+    FATTN_VEC_CASES_ALL_D(BF16, Q5_0)
 
-#if FATTN_VEC_COMPILED(f16, q5_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q5_1)
-#endif // FATTN_VEC_COMPILED(f16, q5_1)
-#if FATTN_VEC_COMPILED(q4_0, q5_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q5_1)
-#endif // FATTN_VEC_COMPILED(q4_0, q5_1)
-#if FATTN_VEC_COMPILED(q4_1, q5_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_Q5_1)
-#endif // FATTN_VEC_COMPILED(q4_1, q5_1)
-#if FATTN_VEC_COMPILED(q5_0, q5_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_Q5_1)
-#endif // FATTN_VEC_COMPILED(q5_0, q5_1)
-#if FATTN_VEC_COMPILED(q5_1, q5_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_Q5_1)
-#endif // FATTN_VEC_COMPILED(q5_1, q5_1)
-#if FATTN_VEC_COMPILED(q8_0, q5_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q5_1)
-#endif // FATTN_VEC_COMPILED(q8_0, q5_1)
-#if FATTN_VEC_COMPILED(bf16, q5_1)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_Q5_1)
-#endif // FATTN_VEC_COMPILED(bf16, q5_1)
+    FATTN_VEC_CASES_ALL_D(F16,  Q5_1)
+    FATTN_VEC_CASES_ALL_D(Q4_0, Q5_1)
+    FATTN_VEC_CASES_ALL_D(Q4_1, Q5_1)
+    FATTN_VEC_CASES_ALL_D(Q5_0, Q5_1)
+    FATTN_VEC_CASES_ALL_D(Q5_1, Q5_1)
+    FATTN_VEC_CASES_ALL_D(Q8_0, Q5_1)
+    FATTN_VEC_CASES_ALL_D(BF16, Q5_1)
 
-#if FATTN_VEC_COMPILED(f16, q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q8_0)
-#endif // FATTN_VEC_COMPILED(f16, q8_0)
-#if FATTN_VEC_COMPILED(q4_0, q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q8_0)
-#endif // FATTN_VEC_COMPILED(q4_0, q8_0)
-#if FATTN_VEC_COMPILED(q4_1, q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_Q8_0)
-#endif // FATTN_VEC_COMPILED(q4_1, q8_0)
-#if FATTN_VEC_COMPILED(q5_0, q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_Q8_0)
-#endif // FATTN_VEC_COMPILED(q5_0, q8_0)
-#if FATTN_VEC_COMPILED(q5_1, q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_Q8_0)
-#endif // FATTN_VEC_COMPILED(q5_1, q8_0)
-#if FATTN_VEC_COMPILED(q8_0, q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
-#endif // FATTN_VEC_COMPILED(q8_0, q8_0)
-#if FATTN_VEC_COMPILED(bf16, q8_0)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_Q8_0)
-#endif // FATTN_VEC_COMPILED(bf16, q8_0)
+    FATTN_VEC_CASES_ALL_D(F16,  Q8_0)
+    FATTN_VEC_CASES_ALL_D(Q4_0, Q8_0)
+    FATTN_VEC_CASES_ALL_D(Q4_1, Q8_0)
+    FATTN_VEC_CASES_ALL_D(Q5_0, Q8_0)
+    FATTN_VEC_CASES_ALL_D(Q5_1, Q8_0)
+    FATTN_VEC_CASES_ALL_D(Q8_0, Q8_0)
+    FATTN_VEC_CASES_ALL_D(BF16, Q8_0)
 
-#if FATTN_VEC_COMPILED(f16, bf16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_BF16)
-#endif // FATTN_VEC_COMPILED(f16, bf16)
-#if FATTN_VEC_COMPILED(q4_0, bf16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_BF16)
-#endif // FATTN_VEC_COMPILED(q4_0, bf16)
-#if FATTN_VEC_COMPILED(q4_1, bf16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_BF16)
-#endif // FATTN_VEC_COMPILED(q4_1, bf16)
-#if FATTN_VEC_COMPILED(q5_0, bf16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_BF16)
-#endif // FATTN_VEC_COMPILED(q5_0, bf16)
-#if FATTN_VEC_COMPILED(q5_1, bf16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_BF16)
-#endif // FATTN_VEC_COMPILED(q5_1, bf16)
-#if FATTN_VEC_COMPILED(q8_0, bf16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_BF16)
-#endif // FATTN_VEC_COMPILED(q8_0, bf16)
-#if FATTN_VEC_COMPILED(bf16, bf16)
-    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
-#endif // FATTN_VEC_COMPILED(bf16, bf16)
+    FATTN_VEC_CASES_ALL_D(F16,  BF16)
+    FATTN_VEC_CASES_ALL_D(Q4_0, BF16)
+    FATTN_VEC_CASES_ALL_D(Q4_1, BF16)
+    FATTN_VEC_CASES_ALL_D(Q5_0, BF16)
+    FATTN_VEC_CASES_ALL_D(Q5_1, BF16)
+    FATTN_VEC_CASES_ALL_D(Q8_0, BF16)
+    FATTN_VEC_CASES_ALL_D(BF16, BF16)
 
-    return false;
-}
-
-// Whether the vector kernels were compiled for this combination of K/V types:
-static bool ggml_cuda_fattn_vec_kv_types_compiled(const ggml_type type_K, const ggml_type type_V) {
-    return ggml_cuda_flash_attn_ext_vec_impl<true>(nullptr, nullptr, type_K, type_V, 0);
+    return nullptr;
 }
 
 static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -573,13 +456,19 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
-    if (ggml_cuda_flash_attn_ext_vec_impl<false>(&ctx, dst, K->type, V->type, Q->ne[0])) {
-        return;
+    fattn_vec_case_t vec_case = ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type);
+    if (vec_case == nullptr) {
+        static bool warned = false;
+        if (!warned) {
+            GGML_LOG_WARN("%s: no FlashAttention vector kernel compiled for K/V types %s-%s, converting K and V to f16 instead (slow). "
+                "Add \"%s-%s\" to GGML_CUDA_FA_QUANTS to compile it.\n",
+                __func__, ggml_type_name(K->type), ggml_type_name(V->type), ggml_type_name(K->type), ggml_type_name(V->type));
+            warned = true;
+        }
+        vec_case = ggml_cuda_get_fattn_vec_case(Q->ne[0], GGML_TYPE_F16, GGML_TYPE_F16);
     }
-
-    if (!ggml_cuda_flash_attn_ext_vec_impl<false>(&ctx, dst, GGML_TYPE_F16, GGML_TYPE_F16, Q->ne[0])) {
-        GGML_ABORT("fatal error");
-    }
+    GGML_ASSERT(vec_case != nullptr);
+    vec_case(ctx, dst);
 }
 
 // Best FlashAttention kernel for a specific GPU:
@@ -695,9 +584,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_NONE;
     }
 
-    const bool kv_f16_fallback = !ggml_cuda_fattn_vec_kv_types_compiled(K->type, V->type);
-    const bool kv_quantized    = !kv_f16_fallback && (ggml_is_quantized(K->type) || ggml_is_quantized(V->type));
-
     if (mask && mask->ne[2] != 1) {
         return BEST_FATTN_KERNEL_NONE;
     }
@@ -709,7 +595,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
         if (can_use_vector_kernel) {
-            if (!kv_quantized) {
+            if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
                 if (cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] == 1 && Q->ne[3] == 1 && !(gqa_ratio > 4 && K->ne[1] >= 8192)) {
                     return BEST_FATTN_KERNEL_VEC;
                 }
@@ -767,7 +653,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // If there are no tensor cores available, use the generic tile kernel:
     if (can_use_vector_kernel) {
-        if (!kv_quantized) {
+        if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
             if (Q->ne[1] == 1) {
                 if (!gqa_opt_applies) {
                     return BEST_FATTN_KERNEL_VEC;
@@ -785,6 +671,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
     GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
 
+    const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
@@ -803,7 +690,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
             need_f16_V = true;
             break;
         case BEST_FATTN_KERNEL_VEC: {
-            const bool f16_fallback = !ggml_cuda_fattn_vec_kv_types_compiled(K->type, V->type);
+            const bool f16_fallback = ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) == nullptr;
             need_f16_K = K->type == GGML_TYPE_F32 || f16_fallback;
             need_f16_V = V->type == GGML_TYPE_F32 || f16_fallback;
         } break;
@@ -819,19 +706,6 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
-
-    const ggml_tensor * K = dst->src[1];
-    const ggml_tensor * V = dst->src[2];
-    if (!ggml_cuda_fattn_vec_kv_types_compiled(K->type, V->type)) {
-        static bool warned = false;
-        if (!warned) {
-            GGML_LOG_WARN("%s: FlashAttention kernels for K/V types %s-%s were not compiled, K and V are converted to f16 which is slower. "
-                "Add \"%s-%s\" to GGML_CUDA_FA_QUANTS in the build flags to compile them.\n",
-                __func__, ggml_type_name(K->type), ggml_type_name(V->type), ggml_type_name(K->type), ggml_type_name(V->type));
-            warned = true;
-        }
-    }
-
     switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");
