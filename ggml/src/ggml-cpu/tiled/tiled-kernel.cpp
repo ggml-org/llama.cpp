@@ -86,7 +86,7 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
     // band width, see the register-pressure note above
     constexpr int NUM_ROWS = 8;
 
-    const __m512 d1_vec = _mm512_loadu_ps(&src1.d[j0]);
+    const __m512 d1_vec = _mm512_load_ps(&src1.d[j0]);
 
     __m512i s1_acc[NUM_ROWS];
     for (int t = 0; t < NUM_ROWS; t++) { s1_acc[t] = _mm512_setzero_si512(); }
@@ -97,9 +97,9 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
 
     const int32_t * bsums = src1.bsums; // int32 per-16 sums; NS > 1 combines NS lanes per subblock
     for (int s = 0; s < NB; s++) {
-        __m512i bsums32 = _mm512_loadu_si512((const __m512i *) &bsums[s * NS * TILED_TILE_ROWS + j0]);
+        __m512i bsums32 = _mm512_load_si512((const __m512i *) &bsums[s * NS * TILED_TILE_ROWS + j0]);
         for (int u = 1; u < NS; u++) {
-            bsums32 = _mm512_add_epi32(bsums32, _mm512_loadu_si512((const __m512i *) &bsums[(s * NS + u) * TILED_TILE_ROWS + j0]));
+            bsums32 = _mm512_add_epi32(bsums32, _mm512_load_si512((const __m512i *) &bsums[(s * NS + u) * TILED_TILE_ROWS + j0]));
         }
 
         __m512i bias32 = _mm512_setzero_si512();
@@ -115,7 +115,7 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
 #endif
         for (int g = 0; g < NG; g++) {
             const int kg = s * NG + g;
-            const __m512i codes = _mm512_loadu_si512((const __m512i *) &src1.q[kg * TILED_TILE_ROWS * 4 + j0 * 4]);
+            const __m512i codes = _mm512_load_si512((const __m512i *) &src1.q[kg * TILED_TILE_ROWS * 4 + j0 * 4]);
             for (int t = 0; t < NUM_ROWS; t++) {
                 const uint32_t u4 = *(const uint32_t *) &src0.q[(i0 + t) * TILED_TILE_K + kg * 4];
                 const __m512i u4b = _mm512_set1_epi32((int) u4);
@@ -139,9 +139,9 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
     // band pass: the band pass keeps the register budget for the 8-row band
     if constexpr (HAS_MIN) {
         for (int s = 0; s < NB; s++) {
-            __m512i bsums32 = _mm512_loadu_si512((const __m512i *) &bsums[s * NS * TILED_TILE_ROWS + j0]);
+            __m512i bsums32 = _mm512_load_si512((const __m512i *) &bsums[s * NS * TILED_TILE_ROWS + j0]);
             for (int u = 1; u < NS; u++) {
-                bsums32 = _mm512_add_epi32(bsums32, _mm512_loadu_si512((const __m512i *) &bsums[(s * NS + u) * TILED_TILE_ROWS + j0]));
+                bsums32 = _mm512_add_epi32(bsums32, _mm512_load_si512((const __m512i *) &bsums[(s * NS + u) * TILED_TILE_ROWS + j0]));
             }
             for (int t = 0; t < NUM_ROWS; t++) {
                 s2_acc[t] = _mm512_add_epi32(s2_acc[t],
@@ -160,7 +160,7 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
             result = _mm512_fnmadd_ps(_mm512_set1_ps(src0.dmin[ar]), f2, result);
         }
         float * p = &buf[(i0 + t) * buf_stride + j0];
-        _mm512_storeu_ps(p, _mm512_add_ps(_mm512_loadu_ps(p), _mm512_mul_ps(result, d1_vec)));
+        _mm512_store_ps(p, _mm512_add_ps(_mm512_load_ps(p), _mm512_mul_ps(result, d1_vec)));
     }
 }
 
@@ -533,7 +533,7 @@ bool tiled_repack_src1_codes(const block_q8_K * rows, int64_t row_stride,
             // the butterfly produces columns in a fixed permuted order
             static const int col_order[16] = {0, 8, 1, 9, 4, 12, 5, 13, 2, 10, 3, 11, 6, 14, 7, 15};
             for (int g = 0; g < 16; g++) {
-                _mm512_storeu_si512((void *) (tile->q + ((c * 16 + col_order[g]) * TILED_TILE_ROWS + r0) * 4), v[g]);
+                _mm512_store_si512((void *) (tile->q + ((c * 16 + col_order[g]) * TILED_TILE_ROWS + r0) * 4), v[g]);
             }
         }
     }
