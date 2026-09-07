@@ -3906,7 +3906,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--no-log-jsonl"},
         "Log as JSONL (one JSON object per line) to stdout, this also disables colored logging (default: disabled)",
         [](common_params &, bool value) {
-            common_log_set_jsonl(common_log_main(), value);
+            common_log_set_jsonl(value);
         }
     ).set_env("LLAMA_ARG_LOG_JSONL"));
     add_opt(common_arg(
