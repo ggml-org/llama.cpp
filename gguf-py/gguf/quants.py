@@ -41,11 +41,18 @@ def _apply_over_grouped_rows(func: Callable[[np.ndarray], np.ndarray], arr: np.n
 
 # round away from zero
 # ref: https://stackoverflow.com/a/59143326/22827863
+#
+# The np.sign(...) before the abs is a guard against NumPy 1.x 'temporary
+# elision' on abs(...) on a passed-in temporary at least 256K, rewriting
+# the underlying values for built-ins like abs, which causes a later
+# np.sign(...) to get all-positive numbers. Instead we snapshot the signs,
+# to restore them afterwards.
 def np_roundf(n: np.ndarray) -> np.ndarray:
+    s = np.sign(n)
     a = abs(n)
     floored = np.floor(a)
     b = floored + np.floor(2 * (a - floored))
-    return np.sign(n) * b
+    return s * b
 
 
 class QuantError(Exception): ...

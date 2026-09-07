@@ -156,6 +156,14 @@ def do_test(libggml_path: Path, quick: bool = False, user_type: GGMLQuantization
     # r[0, 3, 0] = np.inf
     # r[0, 3, 1] = -np.inf
 
+    # Regression test: NumPy 1.x does something called 'temporary elision'
+    # on built-in operations on temporaries that are at least 256K. It makes
+    # the operations 'in-place'. This was causing the sign to be dropped for
+    # quantizations including Q8_0. In order to have a quantization group be
+    # the right size, it has to be >=4096 elements wide at 16 rows. So we use
+    # 16 x 8192 at float32 for 512k to trigger the problem with wide rows.
+    rw = np.random.randn(16, 8192).astype(np.float32, copy=False)
+
     for qtype in ((GGMLQuantizationType.F16, *gguf.quants._type_traits.keys()) if user_type is None else (user_type,)):
         has_dequantize = False
         has_quantize = False
@@ -200,6 +208,21 @@ def do_test(libggml_path: Path, quick: bool = False, user_type: GGMLQuantization
                 logger.error(f"Quantization to {qtype.name} does not match ❌")
             else:
                 logger.info(f"Quantization to {qtype.name} matches exactly ✅")
+
+            rwc = rw.copy()
+
+            logger.debug(f"Quantizing wide rows to {qtype.name} with Python")
+            pyqw = gguf.quants.quantize(rwc, qtype)
+            logger.debug(f"Quantizing wide rows to {qtype.name} with C")
+            ggqw = ggml_quants.quantize(rwc, qtype)
+
+            if qtype == GGMLQuantizationType.F16:
+                pyqw = pyqw.view(np.uint8)
+
+            if not compare_tensors(pyqw, ggqw, qtype):
+                logger.error(f"Quantization of wide rows to {qtype.name} does not match ❌")
+            else:
+                logger.info(f"Quantization of wide rows to {qtype.name} matches exactly ✅")
 
         if has_dequantize:
             if ggq is None and not quick:
