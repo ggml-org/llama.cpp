@@ -297,6 +297,26 @@ def test_router_queue_is_fifo():
     assert first.done_at < second.done_at, "queue was not served in arrival order"
 
 
+def test_router_queue_two_waiters_share_one_eviction():
+    """two requests that both find the same idle model must both be served in the end"""
+    global server
+    server.models_max = 1
+    server.start()
+
+    _load_model_and_wait(MODEL_A, timeout=120)
+
+    # both arrive while MODEL_A is idle, so both want its slot; only one eviction can happen
+    first = _Bg(lambda: _tokenize(MODEL_B)).start()
+    second = _Bg(lambda: _tokenize(MODEL_C)).start()
+
+    first.join(90)
+    second.join(90)
+
+    first.assert_ok("first queued request")
+    second.assert_ok("second queued request")
+    assert _get_model_status(MODEL_A) == "unloaded"
+
+
 def test_router_no_models_autoload():
     global server
     server.no_models_autoload = True

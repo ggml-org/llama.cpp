@@ -216,6 +216,10 @@ private:
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
 
+    // ask the monitoring thread to stop a running instance
+    // not thread-safe, caller must hold mutex
+    void request_stop(const std::string & name);
+
     // notify SSE clients
     void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
 
