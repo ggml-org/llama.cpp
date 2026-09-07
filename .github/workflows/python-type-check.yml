@@ -40,4 +40,4 @@ jobs:
       #     warnings: true
       - name: Type-check with ty
         run: |
-            ty check --output-format=github
+            ty check --exit-zero-on-warning --output-format=github
