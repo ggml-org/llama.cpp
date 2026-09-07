@@ -2668,13 +2668,16 @@ struct test_rope_set_rows : public test_case {
     }
 };
 
-// GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ROPE (+ GGML_OP_VIEW + GGML_OP_SET_ROWS)
+// GGML_OP_RMS_NORM with optional GGML_OP_MUL, GGML_OP_ROPE, GGML_OP_VIEW and GGML_OP_SET_ROWS
 struct test_rms_norm_mul_rope : public test_case {
     const std::array<int64_t, 4> ne;
     const float eps;
     const bool multi_add; // test a sequence of adds feeding into rms_norm
+    const bool mul;
+    const bool rope;
     const bool set_rows;
     const bool broadcast; // multiply by a 1D [ne0] weight, as model norm weights are
+    const ggml_type set_rows_type;
     int mode;
 
     std::string op_desc(ggml_tensor * t) override {
@@ -2685,62 +2688,89 @@ struct test_rms_norm_mul_rope : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR6(ne, eps, multi_add, set_rows, broadcast, mode);
+        return VARS_TO_STR9(ne, eps, multi_add, mul, rope, set_rows, broadcast, mode, set_rows_type);
     }
 
     test_rms_norm_mul_rope(std::array<int64_t, 4> ne, float eps = 1e-6f, bool multi_add = false,
-                           bool set_rows = false, bool broadcast = false, int mode = GGML_ROPE_TYPE_NORMAL)
-        : ne(ne), eps(eps), multi_add(multi_add), set_rows(set_rows), broadcast(broadcast), mode(mode) {}
+                           bool set_rows = false, bool broadcast = false, int mode = GGML_ROPE_TYPE_NORMAL,
+                           bool mul = true, bool rope = true, ggml_type set_rows_type = GGML_TYPE_F16)
+        : ne(ne), eps(eps), multi_add(multi_add), mul(mul), rope(rope), set_rows(set_rows), broadcast(broadcast),
+          set_rows_type(set_rows_type), mode(mode) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], 1);
-        ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], 1);
-        ggml_tensor * c = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], 1);
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
+
+        ggml_tensor * b = nullptr;
+        ggml_tensor * c = nullptr;
+        ggml_tensor * w = nullptr;
+
+        if (multi_add || (mul && !broadcast)) {
+            b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], 1);
+        }
+        if (multi_add) {
+            c = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], 1);
+        }
+        if (mul) {
+            w = broadcast ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]) : b;
+        }
 
         if (multi_add) {
             a = ggml_add(ctx, ggml_add(ctx, a, b), c);
         }
 
-        ggml_tensor * w = broadcast ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]) : b;
+        a = ggml_rms_norm(ctx, a, eps);
 
-        a = ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), w);
-
-        ggml_tensor * pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, ne[2]);
-
-        ggml_tensor * rope = ggml_rope(ctx, a, pos, ne[0], mode);
-
-        ggml_tensor * out;
-
-        if (set_rows) {
-            ggml_tensor * view = ggml_view_2d(ctx, rope, ne[0] * ne[1], ne[2], rope->nb[2], 0);
-
-            ggml_tensor * dst = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, ne[0] * ne[1], ne[2] * ne[3], 1, 1);
-            ggml_set_name(dst, "dst");
-
-            ggml_tensor * row_idxs = ggml_new_tensor_3d(ctx, GGML_TYPE_I64, ne[2], 1, 1);
-            ggml_set_name(row_idxs, "row_idxs");
-
-            out = ggml_set_rows(ctx, dst, view, row_idxs);
-            ggml_set_name(out, "out");
-        } else {
-            out = rope;
+        if (mul) {
+            a = ggml_mul(ctx, a, w);
         }
 
-        return out;
+        if (rope) {
+            const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;
+            ggml_tensor * pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, ne[2] * (is_mrope ? 4 : 1));
+
+            if (is_mrope) {
+                const int n_dims = ne[0];
+                int sections[4] = { n_dims/3, n_dims/3, n_dims/3, 0 };
+                a = ggml_rope_multi(ctx, a, pos, nullptr, n_dims, sections, mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
+            } else {
+                a = ggml_rope(ctx, a, pos, ne[0], mode);
+            }
+        }
+
+        if (set_rows) {
+            ggml_tensor * view = ggml_view_2d(ctx, a, ne[0] * ne[1], ne[2], a->nb[2], 0);
+
+            ggml_tensor * dst = ggml_new_tensor_2d(ctx, set_rows_type, ne[0] * ne[1], ne[2] * 2);
+            ggml_set_name(dst, "dst");
+
+            ggml_tensor * row_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, ne[2]);
+            ggml_set_name(row_idxs, "row_idxs");
+
+            a = ggml_set_rows(ctx, dst, view, row_idxs);
+        }
+
+        ggml_set_name(a, "out");
+        return a;
     }
 
     void initialize_tensors(ggml_context * ctx) override {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            if (t->type == GGML_TYPE_I64 || t->type == GGML_TYPE_I32) {
-                if (ggml_is_view_op(t->op)) {
-                    continue;
+            if (t->type == GGML_TYPE_I64) {
+                init_set_rows_row_ids(t, ne[2] * 2);
+            } else if (t->type == GGML_TYPE_I32) {
+                std::vector<int32_t> data(ggml_nelements(t));
+                for (int32_t & value : data) {
+                    value = rand() % 512;
                 }
-
-                init_set_rows_row_ids(t, ne[2]);
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
             } else {
                 init_tensor_uniform(t);
             }
         }
+    }
+
+    double max_nmse_err() override {
+        return ne[0] == 8192 ? 5e-6 : test_case::max_nmse_err();
     }
 };
 
@@ -3636,13 +3666,16 @@ struct test_rms_norm_back : public test_case {
     }
 };
 
-// GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ADD
+// GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ADD (+ GGML_OP_MUL)
 struct test_rms_norm_mul_add : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     const float eps;
     const bool broadcast;
     const bool multi_add; // test a sequence of adds feeding into rms_norm
+    const bool post_mul;
+    const bool alias_rms_input;
+    const bool weight_broadcast;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -3652,20 +3685,23 @@ struct test_rms_norm_mul_add : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR5(type, ne, eps, broadcast, multi_add);
+        return VARS_TO_STR8(type, ne, eps, broadcast, multi_add, post_mul, alias_rms_input, weight_broadcast);
     }
 
     test_rms_norm_mul_add(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {64, 5, 4, 3},
-            float eps = 1e-6f, bool broadcast = false, bool multi_add = false)
-        : type(type), ne(ne), eps(eps), broadcast(broadcast), multi_add(multi_add) {}
+            float eps = 1e-6f, bool broadcast = false, bool multi_add = false, bool post_mul = false,
+            bool alias_rms_input = false, bool weight_broadcast = false)
+        : type(type), ne(ne), eps(eps), broadcast(broadcast), multi_add(multi_add), post_mul(post_mul),
+          alias_rms_input(alias_rms_input), weight_broadcast(weight_broadcast) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         std::array<int64_t, 4> broadcast_dims = {ne[0]*2, ne[1]*3, ne[2]*3, ne[3]*4};
 
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, broadcast ? broadcast_dims.data() : ne.data());
-        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * b = weight_broadcast ? ggml_new_tensor_1d(ctx, type, ne[0]) : ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_tensor * c = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * d = nullptr;
 
         ggml_set_param(a);
         ggml_set_name(a, "a");
@@ -3676,10 +3712,20 @@ struct test_rms_norm_mul_add : public test_case {
 
         // Use a, b and c early, so we don't end up with an OP_NONE between rms_norm and mul
         a = ggml_add(ctx, ggml_add(ctx, a, b), c);
+        if (post_mul) {
+            d = ggml_new_tensor_1d(ctx, type, 1);
+            ggml_set_param(d);
+            ggml_set_name(d, "d");
+            a = ggml_add(ctx, a, d);
+        }
         if (multi_add) {
             a = ggml_add(ctx, ggml_add(ctx, a, b), c);
         }
-        ggml_tensor * out = ggml_add(ctx, ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b), c);
+        ggml_tensor * mul = ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b);
+        ggml_tensor * out = alias_rms_input ? ggml_add_inplace(ctx, a, mul) : ggml_add(ctx, mul, c);
+        if (post_mul) {
+            out = ggml_mul(ctx, out, d);
+        }
         ggml_set_name(out, "out");
 
         return out;
@@ -8848,7 +8894,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, true));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, true));
 
-    for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_VISION }) {
+    for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_VISION, GGML_ROPE_TYPE_IMROPE }) {
         for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
             for (int ne2 : {1, 8, 512}) {
                 test_cases.emplace_back(new test_rope_set_rows(type, GGML_TYPE_I64, { 128, 32, ne2, 1 }, mode));
@@ -8856,6 +8902,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+    test_cases.emplace_back(new test_rope_set_rows(GGML_TYPE_F32, GGML_TYPE_I32, { 128, 32, 8, 1 }, GGML_ROPE_TYPE_IMROPE));
 
     for (ggml_type type_input : {GGML_TYPE_F32}) {
         for (ggml_op_pool pool_type : {GGML_OP_POOL_AVG, GGML_OP_POOL_MAX}) {
@@ -9437,6 +9484,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // in-place tests
     test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {64, 5, 4, 3}, false, 1e-6f, true));
 
+    for (ggml_type set_rows_type : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
+        test_cases.emplace_back(new test_rms_norm_mul_rope({ 256, 1, 1, 1 }, 1e-6f, false, true, false, GGML_ROPE_TYPE_NORMAL, false, false, set_rows_type));
+        test_cases.emplace_back(new test_rms_norm_mul_rope({ 128, 4, 3, 1 }, 1e-6f, false, true, false, GGML_ROPE_TYPE_NORMAL, false, false, set_rows_type));
+    }
+
     for (float eps : { 0.0f, 1e-6f, 1e-4f, 1e-1f, 1.0f }) {
         for (uint32_t n : { 64, 1025 }) {
             test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false));
@@ -9462,10 +9514,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_add_add(GGML_TYPE_F16, GGML_TYPE_F32, { n, 5, 4, 3 }, true, false));
     }
 
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 1536, 1, 1, 1 }, 1e-6f, false, false, true));
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 1, 1 }, 1e-6f, false, false, true));
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 3, 2 }, 1e-6f, false, false, true));
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 3, 2 }, 1e-6f, false, false, true, false, true));
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 1536, 1, 1, 1 }, 1e-6f, false, false, false, true));
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 1, 1 }, 1e-6f, false, false, false, true));
+
+    test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 7, 2}));
+    test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 7, 2}, 1e-6f, false, true));
+
     for (auto multi_add : {false, true}) {
         for (auto set_rows : {false, true}) {
             for (auto broadcast : {false, true}) {
-                for (auto rope : {GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX}) {
+                for (auto rope : {GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_IMROPE}) {
                     test_cases.emplace_back(new test_rms_norm_mul_rope({768, 1, 1, 1}, 1e-6f, multi_add, set_rows, broadcast, rope));
                     test_cases.emplace_back(new test_rms_norm_mul_rope({768, 3, 1, 1}, 1e-6f, multi_add, set_rows, broadcast, rope));
                     test_cases.emplace_back(new test_rms_norm_mul_rope({768, 3, 5, 1}, 1e-6f, multi_add, set_rows, broadcast, rope));
