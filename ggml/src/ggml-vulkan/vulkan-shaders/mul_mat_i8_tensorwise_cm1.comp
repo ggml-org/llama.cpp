@@ -1,0 +1,87 @@
+#version 460
+
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_shader_subgroup_basic : require
+
+layout(constant_id = 0) const uint BLOCK_SIZE = 32;
+layout(constant_id = 1) const uint CM_M = 16;
+layout(constant_id = 2) const uint CM_N = 16;
+layout(constant_id = 3) const uint CM_K = 16;
+const uint TILE_M = 4;
+const uint TILE_N = 4;
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform parameter
+{
+    uint n;
+    uint rows;
+    uint k;
+    uint has_bias;
+    uint row_offset;
+} p;
+
+layout(binding = 0, std430) readonly buffer W { int8_t data_w[]; };
+layout(binding = 1, std430) readonly buffer A { int8_t data_a[]; };
+layout(binding = 2, std430) readonly buffer WS { float data_ws[]; };
+layout(binding = 3, std430) readonly buffer AS { float data_as[]; };
+layout(binding = 4, std430) readonly buffer B { float data_b[]; };
+layout(binding = 5, std430) writeonly buffer D { float data_d[]; };
+
+shared int32_t accumulators[1024];
+
+void main() {
+    const uint output_base = gl_WorkGroupID.x * CM_N * TILE_N;
+    const uint row_base = gl_WorkGroupID.y * CM_M * TILE_M;
+    coopmat<int32_t, gl_ScopeSubgroup, CM_M, CM_N, gl_MatrixUseAccumulator> sums[TILE_M * TILE_N];
+    [[unroll]]
+    for (uint i = 0; i < TILE_M * TILE_N; ++i) {
+        sums[i] = coopmat<int32_t, gl_ScopeSubgroup, CM_M, CM_N, gl_MatrixUseAccumulator>(0);
+    }
+
+    for (uint k_base = 0; k_base < p.k; k_base += CM_K) {
+        coopmat<int8_t, gl_ScopeSubgroup, CM_M, CM_K, gl_MatrixUseA> activations[TILE_M];
+        coopmat<int8_t, gl_ScopeSubgroup, CM_K, CM_N, gl_MatrixUseB> weights[TILE_N];
+        [[unroll]]
+        for (uint tile_m = 0; tile_m < TILE_M; ++tile_m) {
+            coopMatLoad(activations[tile_m], data_a, (row_base + tile_m * CM_M) * p.k + k_base, p.k, gl_CooperativeMatrixLayoutRowMajor);
+        }
+        [[unroll]]
+        for (uint tile_n = 0; tile_n < TILE_N; ++tile_n) {
+            coopMatLoad(weights[tile_n], data_w, (output_base + tile_n * CM_N) * p.k + k_base, p.k, gl_CooperativeMatrixLayoutColumnMajor);
+        }
+        [[unroll]]
+        for (uint tile_m = 0; tile_m < TILE_M; ++tile_m) {
+            [[unroll]]
+            for (uint tile_n = 0; tile_n < TILE_N; ++tile_n) {
+                const uint index = tile_m * TILE_N + tile_n;
+                sums[index] = coopMatMulAdd(activations[tile_m], weights[tile_n], sums[index]);
+            }
+        }
+    }
+
+    [[unroll]]
+    for (uint tile_m = 0; tile_m < TILE_M; ++tile_m) {
+        [[unroll]]
+        for (uint tile_n = 0; tile_n < TILE_N; ++tile_n) {
+            coopMatStore(sums[tile_m * TILE_N + tile_n], accumulators, 0, CM_N, gl_CooperativeMatrixLayoutRowMajor);
+            controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
+
+            for (uint index = gl_SubgroupInvocationID; index < CM_M * CM_N; index += gl_SubgroupSize) {
+                const uint row = row_base + tile_m * CM_M + index / CM_N;
+                const uint output_index = output_base + tile_n * CM_N + index % CM_N;
+                float value = float(accumulators[index]) * data_as[row] * data_ws[output_index];
+                if (p.has_bias != 0) {
+                    value += data_b[output_index];
+                }
+                data_d[row * p.n + output_index] = value;
+            }
+            controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
+        }
+    }
+}
