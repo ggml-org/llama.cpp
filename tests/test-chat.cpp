@@ -6603,6 +6603,34 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("Hello, world!\nWhat's up?")
             .run();
     }
+
+    // MiniCPM5-2B uses the same tool-call and reasoning syntax as 1B, so it must resolve to the
+    // same format. It only differs in how past assistant turns are rendered (see
+    // test_template_generation_prompt).
+    {
+        auto tst = peg_tester("models/templates/openbmb-MiniCPM5-2B.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('Hello, World!')</param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ python_tool })
+            .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
+            .run();
+
+        tst.test(R"(I'm thinking</think><function name="python"><param name="code">print('hey')</param></function>)")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ python_tool })
+            .expect_reasoning("I'm thinking")
+            .expect_tool_calls({ { "python", R"#({"code": "print('hey')"})#", {} } })
+            .run();
+    }
 }
 
 static void test_template_generation_prompt() {
@@ -6908,6 +6936,34 @@ static void test_template_generation_prompt() {
         check(tmpls, basic(),                  "<|im_start|>assistant\n<think>\n");
         check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
         check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
+
+        // 1B drops the reasoning of past assistant turns.
+        common_chat_templates_inputs history_inputs;
+        history_inputs.messages = { message_user, message_assist_thoughts, message_user };
+        auto history_params = common_chat_templates_apply(tmpls.get(), history_inputs);
+        assert_contains(history_params.prompt, "<|im_start|>assistant\nHello, world!");
+        assert_not_contains(history_params.prompt, "<think>\nI'm\nthinking\n</think>");
+    }
+
+    {
+        auto tmpls = read_templates("models/templates/openbmb-MiniCPM5-2B.jinja");
+        check(tmpls, basic(),                  "<|im_start|>assistant\n<think>\n");
+        check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
+        check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
+
+        // Unlike 1B, 2B keeps the reasoning of past assistant turns.
+        common_chat_templates_inputs history_inputs;
+        history_inputs.messages = { message_user, message_assist_thoughts, message_user };
+        auto history_params = common_chat_templates_apply(tmpls.get(), history_inputs);
+        assert_contains(history_params.prompt,
+                        "<|im_start|>assistant\n<think>\nI'm\nthinking\n</think>\n\nHello, world!");
+
+        // A past assistant turn with no reasoning gets an empty <think> block instead.
+        common_chat_templates_inputs no_reasoning_inputs;
+        no_reasoning_inputs.messages = { message_user, message_assist, message_user };
+        auto no_reasoning_params = common_chat_templates_apply(tmpls.get(), no_reasoning_inputs);
+        assert_contains(no_reasoning_params.prompt,
+                        "<|im_start|>assistant\n<think>\n\n</think>\n\nHello, world!");
     }
 }
 
