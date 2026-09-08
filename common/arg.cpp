@@ -2608,6 +2608,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_OFFLOAD"));
     add_opt(common_arg(
+        {"--mmproj-evict-draft"},
+        {"--no-mmproj-evict-draft"},
+        string_format("EXPERIMENTAL: keep mmproj weights (vision and/or audio encoders) in host RAM and stream each to the "
+                      "compute device on demand, only while encoding that modality, evicting the speculative-decoding "
+                      "draft model's unique weights to host RAM for that window (default: %s)\n"
+                      "requires a draft model to be loaded (--spec-draft-model); without one the flag is a no-op with a warning",
+                      params.mmproj_evict_draft ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.mmproj_evict_draft = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MMPROJ_EVICT_DRAFT"));
+    add_opt(common_arg(
         // note: "-mmdev" must sort after "--rpc" in the preset map, else RPC devices are not registered yet
         {"-mmdev", "--mmproj-device"}, "DEVICE",
         "device to use for multimodal projector (none = don't offload, default: auto)\n"
