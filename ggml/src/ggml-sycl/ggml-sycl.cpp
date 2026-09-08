@@ -265,6 +265,10 @@ static ggml_sycl_device_info ggml_sycl_init() {
             if (r == ZE_RESULT_SUCCESS) {
                 info.devices[i].l0_device_type_valid = true;
                 info.devices[i].l0_discrete_gpu = !(props.flags & ZE_DEVICE_PROPERTY_FLAG_INTEGRATED);
+                // Integrated Level Zero drivers do not reliably support repeated VMM pool teardown and reuse.
+                if (!info.devices[i].l0_discrete_gpu) {
+                    info.devices[i].vmm = false;
+                }
             }
         }
 #endif
@@ -2014,6 +2018,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
             SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::unmap(
                 m.map_ptr, m.phys.size(), ctx)));
         }
+        mappings.clear();
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::free_virtual_mem(
             pool_addr, SYCL_POOL_VMM_MAX_SIZE, ctx)));
     }
