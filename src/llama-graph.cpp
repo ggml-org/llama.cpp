@@ -1490,10 +1490,10 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     loras            (params.loras),
     mctx             (params.mctx),
     cross            (params.cross),
+    act_policy       (params.act_policy),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
-    act_policy       (params.act_policy),
     ctx0             (res->get_ctx()),
     gf               (res->get_gf()) {
         res->set_params(params);
@@ -1519,8 +1519,8 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
 
-    if (llama_act_policy_prec_a8(act_policy, w)) {
-        ggml_prec_set_src(res, GGML_PREC_Q8, 1);
+    if (act_policy) {
+        act_policy->apply(res);
     }
 
     if (w_s) {
@@ -1555,8 +1555,8 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
 
-    if (llama_act_policy_prec_a8(act_policy, w)) {
-        ggml_prec_set_src(res, GGML_PREC_Q8, 1);
+    if (act_policy) {
+        act_policy->apply(res);
     }
 
     if (w_s) {
