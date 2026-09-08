@@ -12,6 +12,11 @@
  * We encourage human contributors to ensure the quality and reliability of the codebase.
  */
 
+struct clip_graph_kani_spkenc : clip_graph {
+    clip_graph_kani_spkenc(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_nemo_nano_codec : clip_graph {
     clip_graph_nemo_nano_codec(clip_ctx * ctx, const clip_image_f32 & img, int n_frames)
         : clip_graph(ctx, img), n_frames(n_frames) {}

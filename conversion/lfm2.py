@@ -88,7 +88,7 @@ class KaniTTS2Model(LFM2Model):
             yield f"blk.{layer}.attn_rope_freqs.weight", (1.0 / alpha).expand(head_dim // 2).clone()
             return
         if name == "model.speaker_emb_projection.weight":
-            # Speaker embedding extraction is not part of the unconditional TTS pipeline.
+            # The speaker projection is stored in the mmproj.
             return
         yield from super().modify_tensors(data_torch, name, bid)
 

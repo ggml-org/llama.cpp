@@ -1093,6 +1093,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_mimo_audio>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_KANI_SPKENC:
+            {
+                builder = std::make_unique<clip_graph_kani_spkenc>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
             {
                 builder = std::make_unique<clip_graph_qwen3tts_spkenc>(ctx, img);
@@ -1836,6 +1840,13 @@ struct clip_model_loader {
                         hparams.audio_window_len  = 1024;
                         hparams.audio_hop_len     = 256;
                     } break;
+                case PROJECTOR_TYPE_KANI_SPKENC:
+                    {
+                        if (hparams.n_layer != 24 || hparams.n_embd != 1024 || hparams.n_head != 16 || hparams.projection_dim != 1024) {
+                            throw std::runtime_error("invalid Kani speaker encoder dimensions");
+                        }
+                        hparams.audio_sample_rate = 16000;
+                    } break;
                 case PROJECTOR_TYPE_NEMO_NANO_CODEC:
                     {
                         if (hparams.n_layer != 5 || hparams.n_embd != 864 || hparams.projection_dim != 16 || hparams.n_head != 1) {
@@ -2089,7 +2100,8 @@ struct clip_model_loader {
                 // GEMMA4UA is encoder-free: it uses n_mel_bins as a raw-waveform frame size (640) and has no FFT/filterbank, so the mel-range and FFT
                 // checks below do not apply to it.
                 // pocket-tts is encoder-free in the same sense: mimi convolves the raw waveform
-                const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA &&
+                const bool fft_based = model.proj_type != PROJECTOR_TYPE_KANI_SPKENC &&
+                                       model.proj_type != PROJECTOR_TYPE_GEMMA4UA &&
                                        model.proj_type != PROJECTOR_TYPE_POCKETTTS_SPKENC;
 
                 // Validate audio hparams loaded from GGUF metadata
@@ -2249,6 +2261,7 @@ struct clip_model_loader {
 
         const bool has_standard_layers = (
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
+            model.proj_type != PROJECTOR_TYPE_KANI_SPKENC &&
             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
             model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
             model.proj_type != PROJECTOR_TYPE_NEMO_NANO_CODEC);
@@ -2921,6 +2934,67 @@ struct clip_model_loader {
 
                     model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
                     model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                } break;
+            case PROJECTOR_TYPE_KANI_SPKENC:
+                {
+                    auto & m = model.kani_speaker;
+                    auto tensor = [&](const std::string & name, std::initializer_list<int64_t> shape) {
+                        auto * t = get_tensor("a." + name);
+                        int d = 0;
+                        for (auto n : shape) {
+                            if (t->ne[d++] != n) { throw std::runtime_error("invalid Kani speaker tensor: " + name); }
+                        }
+                        for (; d < 4; ++d) {
+                            if (t->ne[d] != 1) { throw std::runtime_error("invalid Kani speaker tensor rank: " + name); }
+                        }
+                        return t;
+                    };
+                    auto linear = [&](clip_kani_speaker::linear & l, const std::string & name, int in, int out) {
+                        l.w = tensor(name + ".weight", {in, out});
+                        l.b = tensor(name + ".bias", {out});
+                    };
+                    auto norm = [&](clip_kani_speaker::linear & l, const std::string & name, int dim) {
+                        l.w = tensor(name + ".weight", {dim});
+                        l.b = tensor(name + ".bias", {dim});
+                    };
+                    const int kernels[] = {10, 3, 3, 3, 3, 2, 2};
+                    for (int i = 0; i < 7; ++i) {
+                        auto p = "conv1d." + std::to_string(i);
+                        m.convs[i].w = tensor(p + ".weight", {kernels[i], i ? 512 : 1, 512});
+                        norm(m.convs[i].norm, p + ".norm", 512);
+                    }
+                    m.feature_norm = {model.pre_ln_w, model.pre_ln_b};
+                    if (!m.feature_norm.w || !m.feature_norm.b || m.feature_norm.w->ne[0] != 512 || m.feature_norm.b->ne[0] != 512) {
+                        throw std::runtime_error("invalid Kani feature normalization");
+                    }
+                    linear(m.feature_proj, "input_projection", 512, 1024);
+                    m.pos.w = tensor("position_conv.weight", {128, 64, 64, 16});
+                    m.pos.b = tensor("position_conv.bias", {1024});
+                    m.output_norm = {model.post_ln_w, model.post_ln_b};
+                    if (!m.output_norm.w || !m.output_norm.b || m.output_norm.w->ne[0] != 1024 || m.output_norm.b->ne[0] != 1024) {
+                        throw std::runtime_error("invalid Kani output normalization");
+                    }
+                    m.relative = tensor("blk.0.attn_rel_pos_emb.weight", {16, 320});
+                    for (int i = 0; i < 24; ++i) {
+                        auto & l = m.layers[i];
+                        auto p = "blk." + std::to_string(i) + ".";
+                        norm(l.norm, p + "ln1", 1024);
+                        norm(l.ffn_norm, p + "ffn_norm", 1024);
+                        linear(l.q, p + "attn_q", 1024, 1024);
+                        linear(l.k, p + "attn_k", 1024, 1024);
+                        linear(l.v, p + "attn_v", 1024, 1024);
+                        linear(l.o, p + "attn_out", 1024, 1024);
+                        linear(l.up, p + "ffn_up", 1024, 4096);
+                        linear(l.down, p + "ffn_down", 4096, 1024);
+                        linear(l.gate, p + "attn_rel_gate", 64, 2);
+                        l.gate_const = tensor(p + "attn_rel_gate_const.weight", {1, 1, 16});
+                    }
+                    for (int i = 0; i < 2; ++i) {
+                        auto p = "spk_fc." + std::to_string(i);
+                        linear(m.top[i], p, i ? 512 : 2048, i ? 128 : 512);
+                        norm(m.top_norm[i], p + ".norm", i ? 128 : 512);
+                    }
+                    m.projection = tensor("speaker_proj.weight", {128, hparams.projection_dim});
                 } break;
             case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
                 {
@@ -4403,6 +4477,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                 const int ds = ctx->model.hparams.audio_proj_downsample_rate;
                 n_patches = ((img->nx() + ws - 1) / ws) * (ws / ds);
             } break;
+        case PROJECTOR_TYPE_KANI_SPKENC:
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
             {
                 // pooling gives one speaker embedding, whatever the clip length is
@@ -5333,6 +5408,22 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             {
                 // do nothing
             } break;
+        case PROJECTOR_TYPE_KANI_SPKENC:
+            {
+                int64_t n = imgs.entries[0].nx();
+                const int kernels[] = {10, 3, 3, 3, 3, 2, 2};
+                const int strides[] = {5, 2, 2, 2, 2, 2, 2};
+                for (int i = 0; i < 7; ++i) { n = (n - kernels[i]) / strides[i] + 1; }
+                std::vector<int32_t> buckets(n * n);
+                for (int64_t q = 0; q < n; ++q) {
+                    for (int64_t k = 0; k < n; ++k) {
+                        const int distance = (int) std::abs(k - q);
+                        const int bucket = distance < 80 ? distance : std::min(159, 80 + (int) (std::log((float) distance / 80) / std::log(10.0f) * 80));
+                        buckets[q * n + k] = (k > q ? 160 : 0) + bucket;
+                    }
+                }
+                set_input_i32("kani_buckets", buckets);
+            } break;
         case PROJECTOR_TYPE_NEMO_NANO_CODEC:
             {
                 const int n_frames = (int) (params->codes->size() / clip_nemo_nano_codec::n_groups);
@@ -6077,6 +6168,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_ffn_down_w->ne[1];
         case PROJECTOR_TYPE_MIMO_AUDIO:
             return ctx->model.mm_2_w->ne[1];
+        case PROJECTOR_TYPE_KANI_SPKENC:
+            return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
             return ctx->model.mm_fc_w->ne[2];
         case PROJECTOR_TYPE_NEMO_NANO_CODEC:

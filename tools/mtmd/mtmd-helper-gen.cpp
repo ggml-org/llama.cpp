@@ -1000,6 +1000,7 @@ public:
 
     void reset() override {
         prompt.clear();
+        speaker_embd.clear();
         codes.clear();
         pcm.clear();
         wav.clear();
@@ -1019,8 +1020,8 @@ public:
             LOG_ERR("KaniTTS-2 requires a backbone converted from KaniTTS2ForCausalLM\n");
             return 1;
         }
-        if (!inp->prompt || !inp->prompt_len || inp->prompt_len > INT32_MAX - 64 || inp->speaker_ref) {
-            LOG_ERR("KaniTTS-2 requires text; speaker reference audio is not supported\n");
+        if (!inp->prompt || !inp->prompt_len || inp->prompt_len > INT32_MAX - 64) {
+            LOG_ERR("KaniTTS-2 requires text\n");
             return 1;
         }
         if (inp->out_type != MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM && inp->out_type != MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV) {
@@ -1050,6 +1051,11 @@ public:
         }
         prompt[n + 1] = 2; // end_of_text
         prompt[n + 2] = 64404; // end_of_human
+        if (inp->speaker_ref) {
+            if (!encode_speaker(inp->speaker_ref)) { return 1; }
+            prompt.insert(prompt.begin() + 1, LLAMA_TOKEN_NULL);
+            if (prompt.size() >= llama_n_ctx_seq(lctx)) { return 1; }
+        }
         seq_id = inp->seq_id;
         out_type = inp->out_type;
         if (!llama_memory_seq_rm(llama_get_memory(lctx), seq_id, -1, -1)) {
@@ -1168,6 +1174,32 @@ public:
     }
 
 private:
+    bool encode_speaker(mtmd_bitmap * bitmap) {
+        if (!mtmd_support_audio(mctx)) {
+            LOG_ERR("KaniTTS-2: mmproj has no speaker encoder; reconvert with speaker_encoder weights\n");
+            return false;
+        }
+        const std::string marker = mtmd_default_marker();
+        mtmd_input_text text{marker.c_str(), marker.size(), false, true};
+        mtmd_input_chunks * chunks = mtmd_input_chunks_init();
+        const mtmd_bitmap * bptr = bitmap;
+        bool ok = mtmd_tokenize(mctx, chunks, &text, &bptr, 1) == 0;
+        if (ok) {
+            ok = false;
+            for (size_t i = 0; i < mtmd_input_chunks_size(chunks); ++i) {
+                const auto * chunk = mtmd_input_chunks_get(chunks, i);
+                if (mtmd_input_chunk_get_type(chunk) != MTMD_INPUT_CHUNK_TYPE_AUDIO) { continue; }
+                if (mtmd_input_chunk_get_n_tokens(chunk) != 1 || mtmd_encode_chunk(mctx, chunk) != 0) { break; }
+                const float * embd = mtmd_get_output_embd(mctx);
+                speaker_embd.assign(embd, embd + n_embd);
+                ok = true;
+                break;
+            }
+        }
+        mtmd_input_chunks_free(chunks);
+        return ok;
+    }
+
     int decode(const llama_token * tokens, int n, int rope_pos) {
         if (pos + n > (int) llama_n_ctx_seq(lctx)) {
             LOG_ERR("KaniTTS-2: context exhausted; increase -c\n");
@@ -1175,7 +1207,8 @@ private:
         }
         std::vector<float> embd((size_t) n * n_embd);
         for (int i = 0; i < n; ++i) {
-            std::copy_n(tok_embd.data() + (size_t) tokens[i] * n_embd, n_embd, embd.data() + (size_t) i * n_embd);
+            const float * row = tokens[i] == LLAMA_TOKEN_NULL ? speaker_embd.data() : tok_embd.data() + (size_t) tokens[i] * n_embd;
+            std::copy_n(row, n_embd, embd.data() + (size_t) i * n_embd);
         }
         decode_embd_batch batch(embd.data(), n, 4, n_embd);
         batch.set_position_mrope_1d(pos, seq_id);
@@ -1200,6 +1233,7 @@ private:
     std::vector<llama_token> prompt;
     std::vector<int32_t> codes;
     std::vector<float> tok_embd;
+    std::vector<float> speaker_embd;
     std::vector<float> pcm;
     std::vector<char> wav;
 };

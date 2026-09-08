@@ -1555,3 +1555,24 @@ bool mtmd_audio_preprocessor_pockettts::preprocess(const float *                
     output.push_back(std::move(out));
     return true;
 }
+
+bool mtmd_audio_preprocessor_kani::preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const {
+    if (n_samples < 720) {
+        LOG_ERR("%s: Kani speaker reference must contain at least 45 ms of audio\n", __func__);
+        return false;
+    }
+    const size_t max_samples = 30 * 16000;
+    if (n_samples > max_samples) {
+        LOG_WRN("%s: truncating Kani speaker reference to 30 seconds\n", __func__);
+        n_samples = max_samples;
+    }
+    mtmd_audio_mel out;
+    out.n_mel = 1;
+    out.n_len = out.n_len_org = n_samples;
+    out.data.assign(samples, samples + n_samples);
+    for (float sample : out.data) {
+        if (!std::isfinite(sample)) { return false; }
+    }
+    output.push_back(std::move(out));
+    return true;
+}

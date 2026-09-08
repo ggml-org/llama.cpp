@@ -1028,6 +1028,11 @@ class MODEL_TENSOR(IntEnum):
     V_MULTI_PROJ_POST_NORM = auto()
 
     # audio (mtmd)
+    A_ENC_POSITION_CONV = auto()
+    A_ENC_ATTN_REL_GATE = auto()
+    A_ENC_ATTN_REL_GATE_CONST = auto()
+    A_ENC_SPK_FC = auto()
+    A_ENC_SPK_FC_NORM = auto()
     A_ENC_EMBD_POS        = auto()
     A_ENC_EMBD_NORM       = auto()
     A_ENC_EMBD_TO_LOGITS  = auto() # lfm2
@@ -1791,6 +1796,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
 
     # audio (mtmd)
     # note: all audio tensor names must use prefix "a." or "mm.a."
+    MODEL_TENSOR.A_ENC_POSITION_CONV: "a.position_conv",
+    MODEL_TENSOR.A_ENC_ATTN_REL_GATE: "a.blk.{bid}.attn_rel_gate",
+    MODEL_TENSOR.A_ENC_ATTN_REL_GATE_CONST: "a.blk.{bid}.attn_rel_gate_const",
+    MODEL_TENSOR.A_ENC_SPK_FC: "a.spk_fc.{bid}",
+    MODEL_TENSOR.A_ENC_SPK_FC_NORM: "a.spk_fc.{bid}.norm",
     MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
     MODEL_TENSOR.A_ENC_EMBD_NORM:           "a.position_embd_norm",
     MODEL_TENSOR.A_ENC_EMBD_TO_LOGITS:      "a.embd_to_logits",
@@ -2134,6 +2144,11 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_MULTI_PROJ_NORM,
         MODEL_TENSOR.V_MULTI_PROJ_POST_NORM,
         # audio
+        MODEL_TENSOR.A_ENC_POSITION_CONV,
+        MODEL_TENSOR.A_ENC_ATTN_REL_GATE,
+        MODEL_TENSOR.A_ENC_ATTN_REL_GATE_CONST,
+        MODEL_TENSOR.A_ENC_SPK_FC,
+        MODEL_TENSOR.A_ENC_SPK_FC_NORM,
         MODEL_TENSOR.A_ENC_EMBD_POS,
         MODEL_TENSOR.A_ENC_EMBD_NORM,
         MODEL_TENSOR.A_ENC_EMBD_TO_LOGITS,
@@ -5845,6 +5860,7 @@ class VisionProjectorType:
     QWEN3TTS_SPKENC = "qwen3tts_spkenc" # audio: ECAPA-TDNN speaker encoder
     QWEN3TTS_GEN = "qwen3tts_gen" # audio generation: code_predictor
     POCKETTTS_SPKENC = "pockettts_spkenc" # audio: mimi encoder as voice-prompt encoder
+    KANI_SPKENC = "kani_spkenc" # audio: WavLM speaker encoder
     NEMO_NANO_CODEC = "nemo_nano_codec" # audio generation: causal HiFiGAN decoder
     POCKETTTS_GEN = "pockettts_gen" # audio generation: flow-matching decoder + mimi decoder
     HUNYUANVL      = "hunyuanvl"
