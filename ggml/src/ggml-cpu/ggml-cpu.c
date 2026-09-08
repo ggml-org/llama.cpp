@@ -1587,13 +1587,11 @@ static void ggml_compute_forward_mul_mat_id(
     char (*atomic_current_chunk)[CACHE_LINE_SIZE] = // [n_as]
         incr_ptr_aligned(&wdata_cur, CACHE_LINE_SIZE * n_as, CACHE_LINE_SIZE);
 
-    // Tiled matmul (see tiled.h); per-thread staging ring and VNNI interleave region reserved in wdata.
+    // Tiled matmul (see tiled.h); per-thread work buffers
     const bool tiled = ggml_tiled_matmul_id_supported(dst) && !params->use_ref;
-
     char * tiled_scratch = NULL;
-
     if (tiled) {
-        tiled_scratch = incr_ptr_aligned(&wdata_cur, nth * ggml_tiled_mul_mat_id_extra_wdata_len(ne10, 1), 64);
+        tiled_scratch = incr_ptr_aligned(&wdata_cur, nth * ggml_tiled_ws_size(), 64);
     }
 
     GGML_ASSERT(params->wsize >= (size_t)((char *) wdata_cur - (char *) params->wdata));
@@ -1666,7 +1664,7 @@ static void ggml_compute_forward_mul_mat_id(
         if (cne1 == 0) {
             continue;
         }
-
+        // Only do tiled for this expert if we have enough cne1 rows to be profitable
         if (tiled && ggml_tiled_mul_mat_id_min_batch(cne1)) {
             ggml_compute_forward_mul_mat_id_tiled(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0), tiled_scratch);
 
@@ -2901,9 +2899,9 @@ struct ggml_cplan ggml_graph_plan(
                         cur += n_as*ids->ne[0]*ids->ne[1]*sizeof(struct mmid_row_mapping) + sizeof(int64_t);
                         // atomic_current_chunk
                         cur += CACHE_LINE_SIZE*n_as + CACHE_LINE_SIZE;
-                        // the tiled path stages the routed rows per thread (see tiled.h); 0 when disabled
+                        // the tiled path's per-thread workspace (see tiled.h); 0 when disabled
                         if (ggml_tiled_matmul_id_supported(node)) {
-                            cur += n_tasks * ggml_tiled_mul_mat_id_extra_wdata_len(src1->ne[0], 1) + 64;
+                            cur += 64 + n_tasks * ggml_tiled_ws_size(); // 64 for alignment
                         }
                     } break;
                 case GGML_OP_OUT_PROD:
