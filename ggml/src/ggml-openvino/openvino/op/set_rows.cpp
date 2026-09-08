@@ -1,6 +1,7 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
+#include "ggml-openvino/ggml-openvino-extra.h"
 
 #include <cassert>
 #include <cstdint>
@@ -42,6 +43,12 @@ OutputVector translate_set_rows(const NodeContext & context) {
                                   indices_shape.rank().get_length() == 4 &&
                                   ((indices_shape[1].is_static() && indices_shape[1].get_length() > 1) ||
                                    (indices_shape[2].is_static() && indices_shape[2].get_length() > 1));
+
+    // On NPU ScatterUpdate is not in-place: it copies the whole destination to write
+    // one KV row, which dominates decode once ctx grows. ScatterElementsUpdate is
+    // measurably cheaper for the same single-row write.
+    const bool use_elements_update =
+        !multidim_indices && !context.is_stateful() && ggml_openvino_getenv_int("GGML_OPENVINO_KV_SCATTER_ELEMENTS");
 
     auto axes = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {2});
 
@@ -101,7 +108,15 @@ OutputVector translate_set_rows(const NodeContext & context) {
                                              {(int64_t) 1, (int64_t) 1, (int64_t) -1, (int64_t) row_size}),
                 false);
         }
-        res = std::make_shared<ov::op::v3::ScatterUpdate>(dst, ind_squeezed, data_reshaped, axes);
+        if (use_elements_update) {
+            auto updates_shape = std::make_shared<ov::op::v3::ShapeOf>(data_reshaped, ov::element::i64);
+            auto ind_rank4 = std::make_shared<ov::op::v1::Reshape>(
+                ind_squeezed, ov::op::v0::Constant::create(ov::element::i64, {4}, {1, 1, -1, 1}), false);
+            auto broadcasted_indices = std::make_shared<ov::op::v3::Broadcast>(ind_rank4, updates_shape);
+            res = std::make_shared<ov::op::v3::ScatterElementsUpdate>(dst, broadcasted_indices, data_reshaped, axes);
+        } else {
+            res = std::make_shared<ov::op::v3::ScatterUpdate>(dst, ind_squeezed, data_reshaped, axes);
+        }
     }
 
     auto dst_reshape = ov::as_type_ptr<ov::op::v1::Reshape>(dst.get_node_shared_ptr());
