@@ -630,7 +630,7 @@ struct llama_model {
     llama_hparams hparams = {};
     llama_vocab   vocab;
 
-    // per-tensor activation precision policy 
+    // per-tensor activation precision policy
     llama_act_policy act_policy;
 
     // for classifier models
