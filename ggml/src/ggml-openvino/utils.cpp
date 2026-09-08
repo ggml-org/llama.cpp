@@ -1762,7 +1762,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
 
             auto build_static_model = [&core, &compile_config, dump_ir, dump_ir_timestamp](
                                           const std::shared_ptr<GgmlOvDecoder> & decoder, const char * tag,
-                                          std::shared_ptr<ov::Model> & model, ov::CompiledModel & compiled_model,
+                                          const ov::AnyMap & model_config, std::shared_ptr<ov::Model> & model,
+                                          ov::CompiledModel & compiled_model,
                                           std::shared_ptr<ov::InferRequest> & infer_request,
                                           int64_t & local_conversion_end_time, int64_t & local_compile_end_time) {
                 auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(decoder);
@@ -1777,7 +1778,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                     ov::serialize(model, timestamped_filename);
                 }
 
-                compiled_model = core.compile_model(model, device, compile_config);
+                compiled_model = core.compile_model(model, device, model_config);
                 infer_request = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
                 local_compile_end_time = ggml_time_us();
             };
@@ -1791,7 +1792,11 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             int64_t decode_conversion_end_time;
             int64_t prefill_compile_end_time;
             int64_t decode_compile_end_time;
-            build_static_model(ggml_decoder_prefill, "prefill", model_prefill, compiled_model_prefill,
+            ov::AnyMap decode_config = compile_config;
+            if (device == "NPU" && decode_config.find("NPUW_UNFOLD_IREQS") == decode_config.end()) {
+                decode_config["NPUW_UNFOLD_IREQS"] = "YES";
+            }
+            build_static_model(ggml_decoder_prefill, "prefill", compile_config, model_prefill, compiled_model_prefill,
                                infer_request_prefill, prefill_conversion_end_time, prefill_compile_end_time);
             if (no_kv_cache) {
                 model_decode = model_prefill;
@@ -1800,7 +1805,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                 decode_conversion_end_time = prefill_conversion_end_time;
                 decode_compile_end_time = prefill_compile_end_time;
             } else {
-                build_static_model(ggml_decoder_decode, "decode", model_decode, compiled_model_decode,
+                build_static_model(ggml_decoder_decode, "decode", decode_config, model_decode, compiled_model_decode,
                                    infer_request_decode, decode_conversion_end_time, decode_compile_end_time);
             }
             conversion_end_time = std::max(prefill_conversion_end_time, decode_conversion_end_time);
