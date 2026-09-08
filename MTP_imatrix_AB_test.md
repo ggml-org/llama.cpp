@@ -1,6 +1,6 @@
 # MTP head calibration: A/B test design
 
-Status: done 2026-09-04. `MTP_imatrix_AB_test.sh` reproduces everything: imatrix with the head, one quantization per variant, trunk hash proof, teacher-forced agreement, paired tests, summary table. Each variant is built, hashed, scored and deleted in turn, so the disk holds one 21 GB file at a time. Needs `--process-mtp` in `tools/imatrix/imatrix.cpp` (commit 8de9abba1 plus the ubatch cap for the head context) and `examples/mtp-agree`.
+Status: done 2026-09-04. `MTP_imatrix_AB_test.sh` reproduces everything: imatrix with the head, one quantization per variant, trunk hash proof, teacher-forced agreement, paired tests, summary table. Each variant is built, hashed, scored and deleted in turn, so the disk holds one 21 GB file at a time. Needs `--process-mtp` in `tools/imatrix/imatrix.cpp` and `examples/mtp-agree`, both on llama.cpp PR [#28351](https://github.com/ggml-org/llama.cpp/pull/28351) (branch `feat/imatrix-mtp`).
 
 ## Findings
 
