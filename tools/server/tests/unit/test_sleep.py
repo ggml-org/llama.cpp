@@ -1,7 +1,5 @@
-import os
 import pytest
 import re
-import tempfile
 import time
 from utils import *
 
@@ -130,32 +128,34 @@ def test_server_sleep_metrics_buckets():
     assert get_metric(fetch_metrics(server), "predicted_tokens_seconds") == 0
 
 
-def test_server_sleep_mmproj_memory_target():
+def test_server_sleep_mmproj_memory_target(tmp_path):
     global server
     server = ServerPreset.tinygemma3()
     server.sleep_idle_seconds = 1
     server.debug = True
-    fd, server.log_path = tempfile.mkstemp(suffix='.log')
-    os.close(fd)
+    server.log_path = str(tmp_path / "mmproj-memory-target.log")
     server.start()
 
-    wait_for_sleep(server)
-
-    # wake up and let the model reload
-    res = server.make_request("POST", "/completion", data={
-        "n_predict": 1,
-        "prompt": "Hello",
-    })
-    assert res.status_code == 200
-
     with open(server.log_path) as f:
-        log = f.read()
+        previous_log = f.read()
+    assert "[mtmd] adding " in previous_log, "cold load did not add an mmproj margin"
+    target_pattern = re.compile(
+        r"(?:will leave \d+ >= |cannot meet free memory target of |free vs\. target of\s+)(\d+)")
+    cold_targets = target_pattern.findall(previous_log)
+    assert cold_targets, "cold load did not report a free memory target"
 
-    # the fitting step reports the free memory target it was given, once per device
-    targets = [int(x) for x in re.findall(
-        r"(?:will leave \d+ >= |cannot meet free memory target of |free vs\. target of\s+)(\d+)", log)]
+    for _ in range(3):
+        wait_for_sleep(server)
+        res = server.make_request("POST", "/completion", data={
+            "n_predict": 1,
+            "prompt": "Hello",
+        })
+        assert res.status_code == 200
 
-    assert len(targets) >= 2 and len(targets) % 2 == 0, f"expected one fit report per load, got {targets}"
-    # the mmproj margin must not accumulate onto the target across a resume
-    half = len(targets) // 2
-    assert targets[:half] == targets[half:], f"free memory target changed across resume: {targets}"
+        with open(server.log_path) as f:
+            log = f.read()
+        resume_log = log[len(previous_log):]
+        targets = target_pattern.findall(resume_log)
+        assert targets == cold_targets, f"free memory target changed across resume: {cold_targets} vs {targets}"
+        assert "[mtmd] adding " not in resume_log, "mmproj margin was added again on resume"
+        previous_log = log
