@@ -447,24 +447,16 @@ static void tiled_unpack_src0(const block_iq1_m * rows, int64_t row_stride, int 
 }
 
 // unpack src1 tile from q8_K rows
-static void tiled_unpack_src1_q8_K(const block_q8_K * rows, int64_t row_stride, int n_rows, tiled_tile_src1 * tile,
+static void tiled_unpack_src1_q8_K(const block_q8_K * const * rows, int n_rows, tiled_tile_src1 * tile,
                                    int kblk) {
     GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
+    // codes: natural [row][k] fill or the VNNI transposed repack, see tiled_repack_src1_codes
+    tiled_repack_src1_codes(rows, n_rows, tile, kblk);
     const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
-    // codes: special repack or natural [row][k] copy
-    if (!tiled_repack_src1_codes(rows, row_stride, n_rows, tile, kblk)) {
-        for (int r = 0; r < n_padded; r++) {
-            if (r < n_rows) {
-                memcpy(&tile->q[r * TILED_TILE_K], rows[r * row_stride].qs, TILED_TILE_K);
-            } else {
-                memset(&tile->q[r * TILED_TILE_K], 0, TILED_TILE_K);
-            }
-        }
-    }
     // d and bsums (ISA-independent)
     for (int r = 0; r < n_padded; r++) {
         if (r < n_rows) {
-            const block_q8_K & x = rows[r * row_stride];
+            const block_q8_K & x = rows[r][kblk];
             for (int s = 0; s < TILED_TILE_K / TILED_MICRO; s++) { tile->bsums[s * TILED_TILE_ROWS + r] = (int32_t) x.bsums[s]; }
             tile->d[r] = x.d;
         } else {
@@ -669,12 +661,12 @@ static void tiled_store_window_scatter(const float * buf, int n_src0, int n_src1
 
 
 // one (g, k) macrotile: zero the acc window, sweep K in 256 element slabs, scatter the result rows
-// the window rows sit at the base of this thread's ring, so the k window offset is not passed in
+// rows points at this k window's routed src1 rows, row r at its base block
 template <typename B, int SUBBLK, bool HAS_MIN, int BIAS>
 static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_tensor * src0,
                                    const char * src0_cur, int64_t r, int64_t k, int64_t nrows,
                                    const int32_t * expert_rows,
-                                   const block_q8_K * ring,
+                                   const block_q8_K * const * rows,
                                    tiled_ws * ws) {
     const int64_t ne00 = src0->ne[0];
     const int64_t ne01 = src0->ne[1];
@@ -697,13 +689,11 @@ static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_t
                                  expert_rows[2 * (k + m) + 1] * dst->nb[2]);
     }
 
-    const int64_t nblocks = ne00 / TILED_TILE_K;
-
-    // the ring holds this window's rows, so K is stepped in slabs from the ring base
+    // K is stepped in slabs; the slab offset is applied in the unpack
     for (int64_t ib = 0; ib < ne00; ib += TILED_TILE_K) {
         const int kblk = (int) (ib / TILED_TILE_K);
         tiled_unpack_src0((const B *) (src0_cur + r * src0->nb[1] + kblk * src0_bs), src0_stride, n_src0, &ws->src0);
-        tiled_unpack_src1_q8_K(ring + kblk, nblocks, nrows, &ws->src1, kblk);
+        tiled_unpack_src1_q8_K(rows, nrows, &ws->src1, kblk);
         // 16x16 microtiles sweeping the window; the unpack routines zeropad the
         // macrotiles outside the valid ranges, so the ragged tails are harmless
         for (int64_t ir0 = r; ir0 < r_end; ir0 += TILED_MICRO) {
@@ -718,8 +708,8 @@ static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_t
     tiled_store_window_scatter(ws->acc, n_src0, nrows, TILED_TILE_ROWS, col_ptrs);
 }
 
-// one expert of MUL_MAT_ID: each k window of the cne1 dispatched rows is gathered into the
-// per-thread ring and swept over the thread's row windows, the dst rows are scattered back
+// one expert of MUL_MAT_ID: each k window's dispatched rows are pointed at by a per-window
+// row pointer list and swept over the thread's row windows, the dst rows are scattered back
 // per window
 template <typename B, int SUBBLK, bool HAS_MIN, int BIAS>
 static void ggml_compute_forward_mul_mat_id_tiled_one_expert(
@@ -745,12 +735,8 @@ static void ggml_compute_forward_mul_mat_id_tiled_one_expert(
 
     const char * src0_cur = (const char *) src0->data + cur_a * nb02;
 
-    // this thread's per-thread block: [ring | workspace]
-    const size_t per_thread = ggml_tiled_mul_mat_id_extra_wdata_len(ne10, 1);
-    char * ring_c = scratch + (size_t) ith * per_thread;
-    block_q8_K * ring = (block_q8_K *) ring_c;
-    const size_t ring_sz = GGML_PAD((size_t) TILED_TILE_ROWS * ggml_row_size(GGML_TYPE_Q8_K, ne10), 64);
-    tiled_ws * ws = (tiled_ws *) (ring_c + ring_sz);
+    // this thread's workspace
+    tiled_ws * ws = (tiled_ws *) (scratch + (size_t) ith * ggml_tiled_ws_size());
 
     // groups of TILED_MMID_GROUP rows; rounded up, the window tail is clamped in the gemm
     const int64_t ngroups = (ne01 + TILED_MMID_GROUP - 1) / TILED_MMID_GROUP;
@@ -758,41 +744,29 @@ static void ggml_compute_forward_mul_mat_id_tiled_one_expert(
     const int64_t g0 = (ngroups * ith) / nth;
     const int64_t g1 = (ngroups * (ith + 1)) / nth;
 
-    // no rows for this thread; skip the staging copy
+    // no rows for this thread; nothing to do
     if (g0 >= g1) {
         return;
     }
 
-    // MUL_MAT_ID scatters the src1 rows per routed row: gather each k window of the
-    // routed rows into the ring, then sweep the row windows
+    // MUL_MAT_ID scatters the src1 rows per routed row: point each k window's rows
+    // at the routed src1 rows, then sweep the row windows
     for (int64_t k = 0; k < cne1; k += TILED_TILE_K) {
         const int64_t nrows = MIN(TILED_TILE_K, cne1 - k);
 
+        const block_q8_K * rows[TILED_TILE_ROWS];
         for (int64_t i = 0; i < nrows; i++) {
             const int64_t i11 = expert_rows[2 * (k + i) + 0] % ne11;
             const int64_t i12 = expert_rows[2 * (k + i) + 1];
-            memcpy((char *) ring + (size_t) i * nbw1, (const char *) wdata + (i11 + i12 * ne11) * nbw1, nbw1);
+            rows[i] = (const block_q8_K *) ((const char *) wdata + (i11 + i12 * ne11) * nbw1);
         }
 
         for (int64_t g = g0; g < g1; g++) {
             const int64_t r = g * TILED_MMID_GROUP;
 
-            tiled_mmid_gemm_window<B, SUBBLK, HAS_MIN, BIAS>(dst, src0, src0_cur, r, k, nrows, expert_rows, ring, ws);
+            tiled_mmid_gemm_window<B, SUBBLK, HAS_MIN, BIAS>(dst, src0, src0_cur, r, k, nrows, expert_rows, rows, ws);
         }
     }
-}
-
-// wdata reservation for the mul_mat_id tiled path: per thread, a ring of
-// TILED_TILE_ROWS gathered q8_K rows plus the workspace. 0 when the master
-// switch is off. Must match the per-thread layout in the driver.
-size_t ggml_tiled_mul_mat_id_extra_wdata_len(int64_t ne10, int64_t n_tasks) {
-    if (!ggml_tiled_matmul_enabled()) {
-        return 0;
-    }
-    size_t per_thread = (size_t) TILED_TILE_ROWS * ggml_row_size(GGML_TYPE_Q8_K, ne10);
-    per_thread = GGML_PAD(per_thread, 64);
-    per_thread += ggml_tiled_ws_size();
-    return per_thread * (size_t) n_tasks;
 }
 
 void ggml_compute_forward_mul_mat_id_tiled(
@@ -920,7 +894,11 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
         const char * src0_row = (const char *) src0->data + i02 * src0->nb[2] + i03 * src0->nb[3];
         char * dst_col = (char *) dst->data + i12 * nb2 + i13 * nb3;
 
-        const block_q8_K * src1_col = (const block_q8_K *) ((const char *) wdata + iir1 * src1_stride * src1_bs);
+        // rows[r] is the window's row r base block; the k-slab offset is applied in the unpack
+        const block_q8_K * rows[TILED_TILE_ROWS];
+        for (int r = 0; r < n_src1; r++) {
+            rows[r] = (const block_q8_K *) ((const char *) wdata + (iir1 + r) * src1_stride * src1_bs);
+        }
 
         for (int64_t iir0 = ir0_start; iir0 < ir0_end; iir0 += TILE) {
             int64_t iir0_end = MIN(iir0 + TILE, ir0_end);
@@ -934,7 +912,7 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
                 // Unpack src0 and src1 into macrotiles
                 const int kblk = (int) (ib / TILE);
                 tiled_unpack_src0((const B *) (src0_row + iir0 * nb01 + kblk * src0_bs), src0_stride, n_src0, &ws->src0);
-                tiled_unpack_src1_q8_K(src1_col + kblk, src1_stride, n_src1, &ws->src1, kblk);
+                tiled_unpack_src1_q8_K(rows, n_src1, &ws->src1, kblk);
 
                 // 16x16 microtiles sweeping the window
                 for (int64_t ir0 = iir0; ir0 < iir0_end; ir0 += MICRO) {

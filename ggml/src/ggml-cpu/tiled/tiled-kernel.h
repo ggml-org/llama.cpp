@@ -148,11 +148,10 @@ void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & s
                          int i0, int j0, float * buf, int buf_stride);
 
 
-// Repack the src1 codes for one k-slab (256 elements) into the tile in the
-// layout the kernel needs. Returns true if a special layout was applied,
-// false if the caller should copy the codes in natural [row][k] order.
-// rows points to the kblk-th block of the first row; rows[r * row_stride]
-// is row r's kblk-th block.
-bool tiled_repack_src1_codes(const block_q8_K * rows, int64_t row_stride,
-                              int n_rows, tiled_tile_src1 * tile, int kblk);
+// Fill the src1 codes for one k-slab (256 elements) into the tile layout the
+// kernel needs: the VNNI build transposes them to the [k][row] int32 layout,
+// other builds fill the natural [row][k] int8 layout. rows[r] points at row
+// r's first block; the kblk-th block is used.
+void tiled_repack_src1_codes(const block_q8_K * const * rows,
+                             int n_rows, tiled_tile_src1 * tile, int kblk);
 

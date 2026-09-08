@@ -464,8 +464,8 @@ static_assert(sizeof(block_q8_K) == 292 && offsetof(block_q8_K, qs) == 4,
 // load covers 16 rows x 4 k). Load one k-slab's codes as 16 rows of 64 int32s,
 // transpose in registers, store as 64 rows of 16 int32s into the tile.
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-bool tiled_repack_src1_codes(const block_q8_K * rows, int64_t row_stride,
-                              int n_rows, tiled_tile_src1 * tile, int kblk) {
+void tiled_repack_src1_codes(const block_q8_K * const * rows, int n_rows,
+                             tiled_tile_src1 * tile, int kblk) {
     GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
 
     for (int r0 = 0; r0 < n_rows; r0 += TILED_MICRO) {
@@ -476,7 +476,7 @@ bool tiled_repack_src1_codes(const block_q8_K * rows, int64_t row_stride,
             __m512i v[16];
             for (int r = 0; r < TILED_MICRO; r++) {
                 if (r < n) {
-                    v[r] = _mm512_loadu_si512((const void *) ((const int32_t *) rows[(r0 + r) * row_stride].qs + c * 16));
+                    v[r] = _mm512_loadu_si512((const void *) ((const int32_t *) rows[r0 + r][kblk].qs + c * 16));
                 } else {
                     v[r] = _mm512_setzero_si512();
                 }
@@ -537,13 +537,19 @@ bool tiled_repack_src1_codes(const block_q8_K * rows, int64_t row_stride,
             }
         }
     }
-    return true;
 }
 #else
-bool tiled_repack_src1_codes(const block_q8_K * rows, int64_t row_stride,
-                              int n_rows, tiled_tile_src1 * tile, int kblk) {
-    (void)rows; (void)row_stride; (void)n_rows; (void)tile; (void)kblk;
-    return false;
+void tiled_repack_src1_codes(const block_q8_K * const * rows, int n_rows,
+                             tiled_tile_src1 * tile, int kblk) {
+    GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
+    const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
+    for (int r = 0; r < n_padded; r++) {
+        if (r < n_rows) {
+            memcpy(&tile->q[r * TILED_TILE_K], rows[r][kblk].qs, TILED_TILE_K);
+        } else {
+            memset(&tile->q[r * TILED_TILE_K], 0, TILED_TILE_K);
+        }
+    }
 }
 #endif
 
