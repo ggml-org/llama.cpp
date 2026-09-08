@@ -839,6 +839,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
 
     const char * suffix = "";
 
+    bool split = false;
+
     // use custom matrix x vector kernel
     switch (tsrc0) {
         case GGML_TYPE_F32:
@@ -942,6 +944,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
                 nsg = N_SG_IQ3_XXS;
                 nr0 = N_R0_IQ3_XXS;
                 smem = 256*4+128;
+
+                // split the rows across threads when there are fewer than 32 chunks per row
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ3_XXS_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ3_S:
             {
@@ -993,7 +1002,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
     const int16_t r3 = (int16_t) (ne13 / ne03);
 
     snprintf(base, 256, "kernel_mul_mv_%s_%s%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1), suffix);
-    snprintf(name, 256, "%s_nsg=%d_ne12=%d_r2=%d_r3=%d", base, nsg, ne12, r2, r3);
+    snprintf(name, 256, "%s_nsg=%d_ne12=%d_r2=%d_r3=%d_split=%d", base, nsg, ne12, r2, r3, split);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -1003,6 +1012,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
         ggml_metal_cv_set_int16(cv, (int16_t) ne12, FC_MUL_MV + 2);
         ggml_metal_cv_set_int16(cv, r2,             FC_MUL_MV + 3);
         ggml_metal_cv_set_int16(cv, r3,             FC_MUL_MV + 4);
+        ggml_metal_cv_set_bool (cv, split,          FC_MUL_MV + 5);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
@@ -1080,6 +1090,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
     const ggml_type tsrc1 = op->src[1]->type;
 
     const char * suffix = "";
+
+    bool split = false;
 
         // use custom matrix x vector kernel
     switch (tsrc0) {
@@ -1177,6 +1189,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
                 nsg = N_SG_IQ3_XXS;
                 nr0 = N_R0_IQ3_XXS;
                 smem = 256*4+128;
+
+                // split the rows across threads when there are fewer than 32 chunks per row
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ3_XXS_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ3_S:
             {
@@ -1224,7 +1243,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
     };
 
     snprintf(base, 256, "kernel_mul_mv_id_%s_%s%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1), suffix);
-    snprintf(name, 256, "%s_nsg=%d", base, nsg);
+    snprintf(name, 256, "%s_nsg=%d_split=%d", base, nsg, split);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -1234,6 +1253,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
         ggml_metal_cv_set_int16(cv, 1,   FC_MUL_MV + 2);
         ggml_metal_cv_set_int16(cv, 1,   FC_MUL_MV + 3);
         ggml_metal_cv_set_int16(cv, 1,   FC_MUL_MV + 4);
+        ggml_metal_cv_set_bool (cv, split, FC_MUL_MV + 5);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 

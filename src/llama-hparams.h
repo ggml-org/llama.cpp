@@ -28,6 +28,14 @@ enum llama_swa_type {
     LLAMA_SWA_TYPE_SYMMETRIC = 3,
 };
 
+// how the non-causal mask should be constructed with llama_set_causal_attn(ctx, false)
+// (e.g. mtmd decoding image tokens)
+enum llama_non_causal_type {
+    LLAMA_NON_CAUSAL_TYPE_ALL      = 0, // all layers non-causal, SWA still applied (gemma 3, qwen-vl, ...)
+    LLAMA_NON_CAUSAL_TYPE_SWA_ONLY = 1, // SWA layers non-causal, dense layers stay causal (gemma 4)
+    LLAMA_NON_CAUSAL_TYPE_SWA_FULL = 2, // all layers non-causal, SWA not applied between tokens of the current ubatch (deepseek 4)
+};
+
 // forward declaration; full definition in llama-graph.h
 enum llm_ffn_op_type : int;
 
@@ -164,9 +172,9 @@ struct llama_hparams {
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
 
-    // deepseek4 vision: when decoding non-causally (multimodal input), SWA is not applied between tokens of the current ubatch (the image span); older tokens are still window-clipped
-    // for other models (like gemma 3, gemma 4): SWA is always applied to match transformers implementation
-    bool swa_full_non_causal = false;
+    // see llama_non_causal_type
+    // note: for SWA_FULL, older tokens (outside the current ubatch) are still window-clipped
+    llama_non_causal_type non_causal_type = LLAMA_NON_CAUSAL_TYPE_ALL;
 
     // if is_swa_impl[il] == 1, then layer il is SWA
     // if is_swa_impl[il] == 0, then layer il is dense (i.e. non-SWA)
@@ -289,6 +297,9 @@ struct llama_hparams {
     // 0 = full rank (DeepSeek-V4)
     uint32_t hc_low_rank = 0;
 
+    // scale of the hyper-connection post gate (DeepSeek-V4 hardcodes 2.0)
+    float    hc_magnitude = 0.0f;
+
     uint32_t ple_ngram_size      = 0;
     uint32_t ple_heads_per_ngram = 0;
     uint32_t ple_conv_kernel     = 0;
@@ -391,6 +402,9 @@ struct llama_hparams {
     uint32_t n_ff_exp(uint32_t il = 0) const;
 
     uint32_t n_expert_used(uint32_t il = 0) const;
+
+    // return the maximum n_expert_used across all layers
+    uint32_t n_expert_used_max() const;
 
     uint32_t n_gqa(uint32_t il = 0) const;
 
