@@ -1,4 +1,11 @@
 #!/usr/bin/env python
+# /// script
+# dependencies = [
+#   "huggingface_hub",
+#   "requests",
+# ]
+# ///
+
 '''
   Fetches the Jinja chat template of a HuggingFace model.
   If a model has multiple chat templates, you can specify the variant name.
