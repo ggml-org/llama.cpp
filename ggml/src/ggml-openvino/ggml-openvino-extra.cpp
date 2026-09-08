@@ -113,6 +113,11 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR",
         "GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY",
         "GGML_OPENVINO_NPU_COMPILE_CONFIG",
+        "GGML_OPENVINO_NPU_COMPILER_TYPE",
+        "GGML_OPENVINO_NPUW_FUNCALL_FOR_ALL",
+        "GGML_OPENVINO_NPUW_UNFOLD_IREQS",
+        "GGML_OPENVINO_COMPILATION_NUM_THREADS",
+        "GGML_OPENVINO_NPU_CONFIG",
         "GGML_OPENVINO_NPU_REQUANT_POLICY",
         // Integer values (use ggml_openvino_getenv_int)
         "GGML_OPENVINO_PREFILL_CHUNK_SIZE",
@@ -189,26 +194,59 @@ void ggml_openvino_device_config::init() {
             compile_config["NPUW_CACHE_DIR"] = cache_dir;
             compile_config.insert(ov::cache_mode(ov::CacheMode::OPTIMIZE_SIZE));
         }
+        // Legacy alias for GGML_OPENVINO_NPU_CONFIG=NPU_COMPILATION_MODE_PARAMS=...
         const char * compilation_mode_params =
             ggml_openvino_getenv_str("GGML_OPENVINO_NPU_COMPILE_CONFIG");
         if (compilation_mode_params && strlen(compilation_mode_params) > 0) {
             compile_config["NPU_COMPILATION_MODE_PARAMS"] = compilation_mode_params;
         }
-        const char * ggml_npuw_dump_subs = ggml_openvino_getenv_str("GGML_OPENVINO_NPUW_DUMP_SUBS");
-        if (ggml_npuw_dump_subs && strlen(ggml_npuw_dump_subs) > 0) {
-            compile_config["NPUW_DUMP_SUBS"] = ggml_npuw_dump_subs;
-        }
-        const char * ggml_npuw_dump_subs_dir = ggml_openvino_getenv_str("GGML_OPENVINO_NPUW_DUMP_SUBS_DIR");
-        if (ggml_npuw_dump_subs_dir && strlen(ggml_npuw_dump_subs_dir) > 0) {
-            compile_config["NPUW_DUMP_SUBS_DIR"] = ggml_npuw_dump_subs_dir;
-        }
-        const char * ggml_npuw_dump_subs_on_fail = ggml_openvino_getenv_str("GGML_OPENVINO_NPUW_DUMP_SUBS_ON_FAIL");
-        if (ggml_npuw_dump_subs_on_fail && strlen(ggml_npuw_dump_subs_on_fail) > 0) {
-            compile_config["NPUW_DUMP_SUBS_ON_FAIL"] = ggml_npuw_dump_subs_on_fail;
-        }
-        const char * ggml_npuw_dump_io = ggml_openvino_getenv_str("GGML_OPENVINO_NPUW_DUMP_IO");
-        if (ggml_npuw_dump_io && strlen(ggml_npuw_dump_io) > 0) {
-            compile_config["NPUW_DUMP_IO"] = ggml_npuw_dump_io;
+        // PLUGIN | DRIVER | PREFER_PLUGIN. The in-plugin compiler and the driver compiler
+        // can differ substantially in generated code quality for the same op. On the Intel
+        // NPU the driver compiler emits markedly faster prefill kernels (~1940 vs ~1540 t/s
+        // pp1024 on phi-4-mini), matching OpenVINO GenAI, so default to DRIVER here.
+        const char * compiler_type = ggml_openvino_getenv_str("GGML_OPENVINO_NPU_COMPILER_TYPE");
+        compile_config["NPU_COMPILER_TYPE"] =
+            (compiler_type && strlen(compiler_type) > 0) ? std::string(compiler_type) : std::string("DRIVER");
+        // Copy an optional string env var into the compile config only when it is set and non-empty.
+        auto set_compile_option_from_env = [&](const char * env_var, const char * config_key) {
+            const char * value = ggml_openvino_getenv_str(env_var);
+            if (value && strlen(value) > 0) {
+                compile_config[config_key] = value;
+            }
+        };
+        // NPUW_FUNCALL_FOR_ALL=YES hangs the NPU (device lost via TDR) for context
+        // lengths >= ~786 on the 2026.3 in-plugin compiler. Allow turning it off.
+        set_compile_option_from_env("GGML_OPENVINO_NPUW_FUNCALL_FOR_ALL", "NPUW_FUNCALL_FOR_ALL");
+        // Unfolds function calls into separate infer requests, trading memory for the
+        // per-call dispatch overhead that repeated funcalls otherwise pay.
+        set_compile_option_from_env("GGML_OPENVINO_NPUW_UNFOLD_IREQS", "NPUW_UNFOLD_IREQS");
+        // The compiler runs one llvm worker per core by default; each carries its own
+        // working set, so large graphs can exhaust host RAM. Capping the workers trades
+        // compile time for peak memory.
+        set_compile_option_from_env("GGML_OPENVINO_COMPILATION_NUM_THREADS", "COMPILATION_NUM_THREADS");
+        set_compile_option_from_env("GGML_OPENVINO_NPUW_DUMP_SUBS", "NPUW_DUMP_SUBS");
+        set_compile_option_from_env("GGML_OPENVINO_NPUW_DUMP_SUBS_DIR", "NPUW_DUMP_SUBS_DIR");
+        set_compile_option_from_env("GGML_OPENVINO_NPUW_DUMP_SUBS_ON_FAIL", "NPUW_DUMP_SUBS_ON_FAIL");
+        set_compile_option_from_env("GGML_OPENVINO_NPUW_DUMP_IO", "NPUW_DUMP_IO");
+        // Comma-separated KEY=VALUE pairs appended last, so they override anything above.
+        // Escape hatch for bisecting plugin options without a rebuild.
+        const char * extra_config = ggml_openvino_getenv_str("GGML_OPENVINO_NPU_CONFIG");
+        if (extra_config && strlen(extra_config) > 0) {
+            std::string spec(extra_config);
+            size_t pos = 0;
+            while (pos < spec.size()) {
+                size_t comma = spec.find(',', pos);
+                if (comma == std::string::npos) {
+                    comma = spec.size();
+                }
+                const std::string pair = spec.substr(pos, comma - pos);
+                const size_t eq = pair.find('=');
+                if (eq != std::string::npos && eq > 0) {
+                    compile_config[pair.substr(0, eq)] = pair.substr(eq + 1);
+                    GGML_LOG_INFO("GGML OpenVINO: NPU config override %s\n", pair.c_str());
+                }
+                pos = comma + 1;
+            }
         }
     } else if (cache_dir && strlen(cache_dir) > 0) {
         compile_config.insert(ov::cache_dir(cache_dir));
