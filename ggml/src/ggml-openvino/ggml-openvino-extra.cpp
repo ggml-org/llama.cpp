@@ -152,6 +152,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
         "GGML_OPENVINO_GDN_Q_SCALE",
         "GGML_OPENVINO_NPU_KV_SLICE",
+        "GGML_OPENVINO_NPU_L0_HOST_TENSORS",
         // Build the precise (but O(n_nodes)) graph cache key. Needed by op tests.
         "GGML_OPENVINO_FULL_GRAPH_KEY",
     };
@@ -366,6 +367,10 @@ bool ggml_openvino_is_gpu() {
 
 bool ggml_openvino_npu_kv_slice_enabled() {
     return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KV_SLICE") != 0;
+}
+
+bool ggml_openvino_npu_l0_host_tensors_enabled() {
+    return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_L0_HOST_TENSORS") != 0;
 }
 
 bool ggml_openvino_shape_from_mask_enabled() {
