@@ -10839,6 +10839,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             GGML_TYPE_F32, {n_kv, 512, 64, 1}, false, {2, 1, 0, 3}));
     }
 
+    // LEAKY_RELU at FFN activation width, for direct comparison with RELU
+    for (int64_t n_tokens : {512, 2048}) {
+        test_cases.emplace_back(new test_leaky_relu(GGML_TYPE_F32, { 17408, n_tokens, 1, 1 }, 0.1f));
+    }
+
     // Conv2d: K=CRS=NPQ=4096 matmul performance
     uint32_t                        iwh_idx  = 0;
     uint32_t                        kwh_idx  = 1;
