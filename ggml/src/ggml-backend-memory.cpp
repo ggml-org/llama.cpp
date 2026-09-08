@@ -70,6 +70,76 @@ static bool align_up(size_t value, size_t alignment, size_t * result) {
     return true;
 }
 
+bool ggml_backend_memory_plan_workspace_groups(
+        const ggml_backend_buffer_type_t * bufts,
+        const size_t * measurements,
+        size_t n_phases,
+        size_t n_slots,
+        ggml_backend_memory_workspace_group * groups,
+        size_t * n_groups) {
+    if (n_groups == nullptr) {
+        return false;
+    }
+    if (n_slots == 0) {
+        *n_groups = 0;
+        return true;
+    }
+    if (bufts == nullptr || measurements == nullptr || n_phases == 0 ||
+            n_phases > std::numeric_limits<size_t>::max() / n_slots) {
+        return false;
+    }
+
+    std::vector<ggml_backend_memory_workspace_group> planned;
+    try {
+        planned.reserve(n_slots);
+        for (size_t slot = 0; slot < n_slots; ++slot) {
+            ggml_backend_buffer_type_t buft = bufts[slot];
+            if (buft == nullptr) {
+                return false;
+            }
+
+            auto found = std::find_if(
+                planned.begin(), planned.end(), [buft](const ggml_backend_memory_workspace_group & group) {
+                    return group.buft == buft;
+                });
+            if (found == planned.end()) {
+                planned.push_back({buft, 0, ggml_backend_buft_get_alignment(buft), slot});
+                found = planned.end() - 1;
+            }
+
+            size_t size = 0;
+            for (size_t phase = 0; phase < n_phases; ++phase) {
+                size = std::max(size, measurements[phase*n_slots + slot]);
+            }
+            if (size == 0) {
+                continue;
+            }
+
+            if (!is_power_of_two(found->alignment) || !align_up(size, found->alignment, &size)) {
+                return false;
+            }
+            found->size = std::max(found->size, size);
+        }
+        planned.erase(std::remove_if(
+            planned.begin(), planned.end(), [](const ggml_backend_memory_workspace_group & group) {
+                return group.size == 0;
+            }), planned.end());
+    } catch (const std::bad_alloc &) {
+        return false;
+    }
+
+    const size_t capacity = *n_groups;
+    *n_groups = planned.size();
+    if (groups == nullptr) {
+        return true;
+    }
+    if (capacity < planned.size()) {
+        return false;
+    }
+    std::copy(planned.begin(), planned.end(), groups);
+    return true;
+}
+
 static bool has_region_id(
         const std::vector<ggml_backend_memory_region> & regions, uint64_t id) {
     return std::any_of(regions.begin(), regions.end(), [id](const ggml_backend_memory_region & region) {

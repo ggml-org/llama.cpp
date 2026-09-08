@@ -136,6 +136,86 @@ static ggml_backend_memory_region get_region(ggml_backend_memory_planner_t plann
     return region;
 }
 
+static void test_workspace_group_planning() {
+    test_buft_context first_context;
+    test_buft_context second_context;
+    second_context.alignment = 64;
+    auto first_buft = make_test_buft(&first_context);
+    auto second_buft = make_test_buft(&second_context);
+
+    ggml_backend_buffer_type_t bufts[] = {
+        &first_buft,
+        &second_buft,
+        &first_buft,
+        &second_buft,
+    };
+    const size_t measurements[] = {
+        0, 0, 64, 17,
+        0, 1, 160, 33,
+    };
+
+    size_t n_groups = 0;
+    GGML_ASSERT(ggml_backend_memory_plan_workspace_groups(
+        bufts, measurements, 2, 4, nullptr, &n_groups));
+    GGML_ASSERT(n_groups == 2);
+
+    ggml_backend_memory_workspace_group groups[2] = {{nullptr, 7, 0, 0}, {}};
+    n_groups = 1;
+    GGML_ASSERT(!ggml_backend_memory_plan_workspace_groups(
+        bufts, measurements, 2, 4, groups, &n_groups));
+    GGML_ASSERT(n_groups == 2);
+    GGML_ASSERT(groups[0].size == 7);
+
+    n_groups = 2;
+    GGML_ASSERT(ggml_backend_memory_plan_workspace_groups(
+        bufts, measurements, 2, 4, groups, &n_groups));
+    GGML_ASSERT(n_groups == 2);
+    GGML_ASSERT(groups[0].buft == &first_buft);
+    GGML_ASSERT(groups[0].size == 160);
+    GGML_ASSERT(groups[0].alignment == 16);
+    GGML_ASSERT(groups[0].first_slot == 0);
+    GGML_ASSERT(groups[1].buft == &second_buft);
+    GGML_ASSERT(groups[1].size == 64);
+    GGML_ASSERT(groups[1].alignment == 64);
+    GGML_ASSERT(groups[1].first_slot == 1);
+}
+
+static void test_workspace_group_planning_boundaries() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    ggml_backend_buffer_type_t bufts[] = {&buft};
+    size_t n_groups = 9;
+
+    GGML_ASSERT(ggml_backend_memory_plan_workspace_groups(
+        nullptr, nullptr, 0, 0, nullptr, &n_groups));
+    GGML_ASSERT(n_groups == 0);
+
+    const size_t zero[] = {0};
+    n_groups = 9;
+    GGML_ASSERT(ggml_backend_memory_plan_workspace_groups(
+        bufts, zero, 1, 1, nullptr, &n_groups));
+    GGML_ASSERT(n_groups == 0);
+
+    const size_t overflow[] = {SIZE_MAX};
+    n_groups = 1;
+    GGML_ASSERT(!ggml_backend_memory_plan_workspace_groups(
+        bufts, overflow, 1, 1, nullptr, &n_groups));
+
+    n_groups = 1;
+    GGML_ASSERT(!ggml_backend_memory_plan_workspace_groups(
+        nullptr, zero, 1, 1, nullptr, &n_groups));
+    GGML_ASSERT(!ggml_backend_memory_plan_workspace_groups(
+        bufts, nullptr, 1, 1, nullptr, &n_groups));
+    GGML_ASSERT(!ggml_backend_memory_plan_workspace_groups(
+        bufts, zero, 1, 1, nullptr, nullptr));
+
+    context.alignment = 24;
+    const size_t nonzero[] = {1};
+    n_groups = 1;
+    GGML_ASSERT(!ggml_backend_memory_plan_workspace_groups(
+        bufts, nonzero, 1, 1, nullptr, &n_groups));
+}
+
 // Validate construction, transaction state, and generation changes.
 static void test_lifecycle() {
     ggml_backend_memory_planner_free(nullptr);
@@ -1102,6 +1182,8 @@ static void run(const char * name, void (*test)()) {
 }
 
 int main() {
+    run("test_workspace_group_planning", test_workspace_group_planning);
+    run("test_workspace_group_planning_boundaries", test_workspace_group_planning_boundaries);
     run("test_lifecycle", test_lifecycle);
     run("test_placement", test_placement);
     run("test_failure_atomicity", test_failure_atomicity);

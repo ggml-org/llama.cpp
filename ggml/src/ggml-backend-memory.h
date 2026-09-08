@@ -40,6 +40,22 @@ struct ggml_backend_memory_region {
     uint32_t flags;
 };
 
+struct ggml_backend_memory_workspace_group {
+    ggml_backend_buffer_type_t buft;
+    size_t size;
+    size_t alignment;
+    size_t first_slot;
+};
+
+// Group phase measurements by buffer type and keep the largest aligned size.
+GGML_API bool ggml_backend_memory_plan_workspace_groups(
+        const ggml_backend_buffer_type_t * bufts,
+        const size_t * measurements,
+        size_t n_phases,
+        size_t n_slots,
+        struct ggml_backend_memory_workspace_group * groups,
+        size_t * n_groups);
+
 // Create a transactional layout planner for one aligned address range.
 GGML_API ggml_backend_memory_planner_t ggml_backend_memory_planner_new(
         size_t capacity, size_t alignment);
