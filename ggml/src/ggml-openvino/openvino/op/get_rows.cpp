@@ -159,8 +159,15 @@ OutputVector translate_get_rows(const NodeContext & context) {
         auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {1});
         res = std::make_shared<ov::op::v8::Gather>(data, indices, axis, 1);
     } else {
-        auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
-        res = std::make_shared<ov::op::v8::Gather>(data, indices, axis);
+        // For a tied embedding the same weight also feeds the lm_head matmul. Gathering the
+        // dequantized table would give that dequantization chain a second consumer, forcing the
+        // full table to be materialized; gather the packed rows instead and dequantize those.
+        if (auto compressed = gather_compressed_rows(data, indices)) {
+            res = compressed;
+        } else {
+            auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
+            res = std::make_shared<ov::op::v8::Gather>(data, indices, axis);
+        }
     }
 
     if (res.get_element_type() != context.get_output_type()) {
