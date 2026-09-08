@@ -507,21 +507,40 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 #elif defined(DATA_A_IQ4_XS)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
 
+#if LOAD_VEC_A == 8
+            const uint ib = idx / 32;
+            const uint ib32 = (idx % 32) / 4;
+#else
             const uint ib = idx / 64;            // 4 values per idx
             const uint ib32 = (idx % 64) / 8;    // 0..7
+#endif
             const uint iq = 4 * ib32 + (idx % 4);
 
             const uint sl = (data_a[ib].scales_l[ib32/2] >> (4 * (ib32 & 1))) & 0xF;
             const uint sh = ((data_a[ib].scales_h) >> (2 * ib32)) & 3;
-            const uint qshift = idx & 4;
-            u8vec4 qs = unpack8((uint(data_a_packed32[ib].qs[iq]) >> qshift) & 0x0F0F0F0F);
-
             const float d = float(data_a[ib].d);
-            const vec4 v = d * float(int(sl | (sh << 4)) - 32) * vec4(kvalues_iq4nl[qs.x], kvalues_iq4nl[qs.y], kvalues_iq4nl[qs.z], kvalues_iq4nl[qs.w]);
+            const float dl = d * float(int(sl | (sh << 4)) - 32);
+            const uint vui = uint(data_a_packed32[ib].qs[iq]);
 
+#if LOAD_VEC_A == 8
+            const u8vec4 qs0 = unpack8( vui       & 0x0F0F0F0F);
+            const u8vec4 qs1 = unpack8((vui >> 4) & 0x0F0F0F0F);
+            const vec4 v0 = dl * vec4(kvalues_iq4nl[qs0.x], kvalues_iq4nl[qs0.y], kvalues_iq4nl[qs0.z], kvalues_iq4nl[qs0.w]);
+            const vec4 v1 = dl * vec4(kvalues_iq4nl[qs1.x], kvalues_iq4nl[qs1.y], kvalues_iq4nl[qs1.z], kvalues_iq4nl[qs1.w]);
+
+            const uint k_pair = row * 2;
+            store_a(col, k_pair,     FLOAT_TYPEV2(v0.xy));
+            store_a(col, k_pair + 1, FLOAT_TYPEV2(v0.zw));
+            store_a(col, k_pair + 8, FLOAT_TYPEV2(v1.xy));
+            store_a(col, k_pair + 9, FLOAT_TYPEV2(v1.zw));
+#else
+            const uint qshift = idx & 4;
+            const u8vec4 qs = unpack8((vui >> qshift) & 0x0F0F0F0F);
+            const vec4 v = dl * vec4(kvalues_iq4nl[qs.x], kvalues_iq4nl[qs.y], kvalues_iq4nl[qs.z], kvalues_iq4nl[qs.w]);
             const uint k_pair = row * LOAD_VEC_A / 2;
             store_a(col, k_pair,     FLOAT_TYPEV2(v.xy));
             store_a(col, k_pair + 1, FLOAT_TYPEV2(v.zw));
+#endif
 #elif defined(DATA_A_IQ4_NL)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
 

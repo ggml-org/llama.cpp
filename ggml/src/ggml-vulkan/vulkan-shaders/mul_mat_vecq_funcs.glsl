@@ -448,6 +448,28 @@ FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
 }
 #endif
 
+#if defined(DATA_A_IQ4_XS)
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    const uint ib = ib_a / 8;
+    const uint ib32 = ib_a % 8;
+
+    int32_t q_sum = 0;
+    [[unroll]] for (uint j = 0; j < 4; ++j) {
+        const uint32_t vui = data_a_packed32[ib].qs[4 * ib32 + j];
+        const i32vec2 qs_a = iq4nl_to_i8x8(vui);
+
+        q_sum += dotPacked4x8EXT(qs_a.x, cache_b_qs[j]);
+        q_sum += dotPacked4x8EXT(qs_a.y, cache_b_qs[j + 4]);
+    }
+
+    const uint sl = (data_a_packed32[ib].scales_l >> (4 * ib32)) & 0xF;
+    const uint sh = (data_a_packed32[ib].scales_h >> (2 * ib32)) & 3;
+    const float d = float(data_a[ib].d) * float(int(sl | (sh << 4)) - 32);
+
+    return FLOAT_TYPE(float(cache_b_ds.x) * d * float(q_sum));
+}
+#endif
+
 #if defined(DATA_A_IQ1_S)
 void repack8(uint ib, uint iqs, out i32vec4 out0, out i32vec4 out1) {
     const uint ib32 = iqs / 32;
