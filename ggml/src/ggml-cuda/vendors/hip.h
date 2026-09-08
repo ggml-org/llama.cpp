@@ -272,30 +272,34 @@ static __device__ __forceinline__ int __vsubss4(const int a, const int b) {
 #endif // __has_builtin(__builtin_elementwise_sub_sat)
 }
 
+// Per-byte wrapping subtract: for each of the 4 bytes, (a - b) mod 256.
+// A plain 32-bit subtract is wrong because a borrow out of one byte corrupts the next.
 static __device__ __forceinline__ int __vsub4(const int a, const int b) {
-    return __vsubss4(a, b);
+    const unsigned int ua = (unsigned int) a;
+    const unsigned int ub = (unsigned int) b;
+    // Ensure every minuend byte is >= 0x80 and every subtrahend byte is <= 0x7f by setting bit 7
+    // to 1/0 respectively. This ensures that no byte borrows from its neighbour. Bit 7 is restored
+    // again in the final step.
+    const unsigned int minuend    = ua | 0x80808080u;
+    const unsigned int subtrahend = ub & 0x7f7f7f7fu;
+    const unsigned int diff       = minuend - subtrahend;
+    // Restore bit 7 again: it is a7 ^ b7 ^ borrow, and diff's bit 7 currently holds ~borrow.
+    const unsigned int bit7_fixup = (ua ^ ~ub) & 0x80808080u;
+    return (int) (diff ^ bit7_fixup);
+}
+
+// Per-byte inequality: 0xff in each byte where a and b differ, 0x00 where they match.
+static __device__ __forceinline__ unsigned int __vcmpne4(unsigned int a, unsigned int b) {
+    const unsigned int diff    = a ^ b;   // a byte is zero exactly where a and b matched
+    // Adding 0x7f to the low 7 bits of a byte sets bit 7 iff those bits were nonzero, and cannot
+    // carry into the next byte (0x7f + 0x7f = 0xfe). ORing diff back in also catches a byte whose
+    // only set bit is bit 7.
+    const unsigned int low7    = diff & 0x7f7f7f7fu;
+    const unsigned int nonzero = ((low7 + 0x7f7f7f7fu) | diff) & 0x80808080u;
+    const unsigned int ones    = nonzero >> 7;   // 0x01 per differing byte
+    return ones * 0xffu;                         // expand to 0xff per differing byte
 }
 
 static __device__ __forceinline__ unsigned int __vcmpeq4(unsigned int a, unsigned int b) {
-    const uint8x4_t& va = reinterpret_cast<const uint8x4_t&>(a);
-    const uint8x4_t& vb = reinterpret_cast<const uint8x4_t&>(b);
-    unsigned int c;
-    uint8x4_t& vc = reinterpret_cast<uint8x4_t&>(c);
-#pragma unroll
-    for (int i = 0; i < 4; ++i) {
-        vc[i] = va[i] == vb[i] ? 0xff : 0x00;
-    }
-    return c;
-}
-
-static __device__ __forceinline__ unsigned int __vcmpne4(unsigned int a, unsigned int b) {
-    const uint8x4_t& va = reinterpret_cast<const uint8x4_t&>(a);
-    const uint8x4_t& vb = reinterpret_cast<const uint8x4_t&>(b);
-    unsigned int c;
-    uint8x4_t& vc = reinterpret_cast<uint8x4_t&>(c);
-#pragma unroll
-    for (int i = 0; i < 4; ++i) {
-        vc[i] = va[i] == vb[i] ? 0x00 : 0xff;
-    }
-    return c;
+    return ~__vcmpne4(a, b);
 }
