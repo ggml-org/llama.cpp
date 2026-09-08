@@ -1007,6 +1007,13 @@ class DeepseekV4DSparkModel(DeepseekV4Model):
             return self._DSPARK_ROOT_MAP[name]
         return super()._map_dsv4_tensor_name(name, bid)
 
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # the DFlash draft uses the plain exp-probs bias (ffn.gate.bias -> FFN_EXP_PROBS_B);
+        # the mtmd-only hash routing tensors (bias_vl, tid2eid) are not part of the DFLASH arch
+        if name.endswith(".ffn.gate.bias_vl"):
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
+
     def set_vocab(self):
         if self.target_model_dir is None:
             raise ValueError("DeepSeek-V4 DSpark requires --target-model-dir with the target tokenizer")

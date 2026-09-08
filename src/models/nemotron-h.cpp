@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include <algorithm> // std::max
+
 void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
     ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
@@ -16,7 +18,8 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,     hparams.f_norm_eps); // MTP head final_layernorm
 
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp,        false);
+    // Puzzle models set a different expert FFN size per layer
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all, false);
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp,      false);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
@@ -26,7 +29,17 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
     switch (hparams.n_layer()) {
         case 52: type = LLM_TYPE_31B_A3_5B; break; // Nemotron-H_MOE 31B
         case 56: type = LLM_TYPE_9B; break;
-        case 88: type = LLM_TYPE_120B_A12B; break;
+        case 88:
+            {
+                // Nemotron 3 Super (uniform MoE) and Nemotron 3 Puzzle (per-layer
+                // heterogeneous MoE) both have 88 layers; the per-layer top-k array
+                // is the discriminator.
+                bool heterogeneous = false;
+                for (uint32_t i = 1; i < hparams.n_layer(); ++i) {
+                    heterogeneous |= hparams.n_expert_used_arr[i] != hparams.n_expert_used_arr[0];
+                }
+                type = heterogeneous ? LLM_TYPE_75B_A9B : LLM_TYPE_120B_A12B;
+            } break;
         default: type = LLM_TYPE_UNKNOWN;
     }
 }
@@ -94,7 +107,10 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
             layer.wo_b = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
         }  else {
             if (n_expert != 0) {
-                const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+                // Use per-layer n_ff_exp; fall back to n_ff/n_expert_used if absent (existing GGUFs).
+                const int64_t n_ff_exp_i = hparams.n_ff_exp(i)
+                    ? (int64_t)hparams.n_ff_exp(i)
+                    : hparams.n_ff(i) / (int64_t)hparams.n_expert_used(i);
                 const int64_t n_ff_shexp = hparams.n_ff_shexp;
 
                 layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), { n_embd, n_expert}, trunk_flags);
@@ -104,8 +120,8 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
                 layer.ffn_latent_down = create_tensor(tn(LLM_TENSOR_FFN_LATENT_DOWN, "weight", i), {n_embd, moe_n_embd}, TENSOR_NOT_REQUIRED);
                 layer.ffn_latent_up   = create_tensor(tn(LLM_TENSOR_FFN_LATENT_UP,   "weight", i), {moe_n_embd, n_embd}, TENSOR_NOT_REQUIRED);
 
-                layer.ffn_down_exps   = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   moe_n_embd, n_expert}, trunk_flags);
-                layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {moe_n_embd, n_ff_exp, n_expert}, trunk_flags);
+                layer.ffn_down_exps   = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp_i,   moe_n_embd, n_expert}, trunk_flags);
+                layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {moe_n_embd, n_ff_exp_i, n_expert}, trunk_flags);
 
                 // Shared expert branch
                 layer.ffn_down_shexp  = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, trunk_flags);
@@ -129,7 +145,7 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
         const int64_t n_head_i       = hparams.n_head(i);
         const int64_t n_embd_k_gqa_i = hparams.n_embd_k_gqa(i);
         const int64_t n_embd_v_gqa_i = hparams.n_embd_v_gqa(i);
-        const int64_t n_ff_exp       = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+        const int64_t n_ff_exp       = hparams.n_ff_exp(i) ? (int64_t)hparams.n_ff_exp(i) : n_ff / (int64_t)hparams.n_expert_used(i);
         const int64_t n_ff_shexp     = hparams.n_ff_shexp;
 
         // NextN input-fusion tensors
@@ -280,7 +296,7 @@ ggml_tensor * llama_model_nemotron_h::graph::build_ffn_layer(ggml_tensor * cur, 
                     nullptr, // no gate
                     model.layers[il].ffn_down_exps,
                     model.layers[il].ffn_exp_probs_b,
-                    n_expert, n_expert_used,
+                    n_expert, (int64_t)hparams.n_expert_used(il),
                     LLM_FFN_RELU_SQR, hparams.expert_weights_norm,
                     hparams.expert_weights_scale,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID,
