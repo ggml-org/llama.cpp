@@ -552,6 +552,18 @@ struct clip_code2wav {
     ggml_tensor * dac_post_conv_b      = nullptr;
 };
 
+struct clip_vocos {
+    ggml_tensor * input_w        = nullptr;
+    ggml_tensor * input_b        = nullptr;
+    ggml_tensor * norm_w         = nullptr;
+    ggml_tensor * norm_b         = nullptr;
+    ggml_tensor * output_norm_w  = nullptr;
+    ggml_tensor * output_norm_b  = nullptr;
+    ggml_tensor * output_w       = nullptr;
+    ggml_tensor * output_b       = nullptr;
+    std::vector<clip_code2wav::upsample_block> blocks;
+};
+
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
@@ -786,6 +798,7 @@ struct clip_model {
 
     // qwen3tts code2wav: RVQ codes -> raw PCM
     clip_code2wav c2w;
+    clip_vocos vocos;
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     clip_seanet seanet;

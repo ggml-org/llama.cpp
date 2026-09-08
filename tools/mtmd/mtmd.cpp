@@ -583,7 +583,7 @@ struct mtmd_context {
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;
         ctx_gen_a = res.ctx_gen_a;
-        if (!ctx_v && !ctx_a) {
+        if (!ctx_v && !ctx_a && !ctx_gen_a) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
         }
 
@@ -600,7 +600,7 @@ struct mtmd_context {
 
         // since we already validate n_embd of vision and audio mmproj,
         // we can safely assume that they are the same
-        int n_embd_clip = clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a);
+        int n_embd_clip = clip_n_mmproj_embd(ctx_v ? ctx_v : (ctx_a ? ctx_a : ctx_gen_a));
         if (n_embd_text > 0 && n_embd_text != n_embd_clip) {
             throw std::runtime_error(string_format(
                 "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
@@ -1881,6 +1881,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_QWEN3TTS;
             info.sample_rate = 24000;
             break;
+        case PROJECTOR_TYPE_SOPRANO:
+            info.type = MTMD_GEN_AUDIO_TYPE_SOPRANO;
+            info.sample_rate = 32000;
+            break;
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             info.type = MTMD_GEN_AUDIO_TYPE_POCKETTTS;
             info.sample_rate = 24000;
@@ -1901,6 +1905,9 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
     }
 
     switch (clip_get_projector_type(ctx->ctx_gen_a)) {
+        case PROJECTOR_TYPE_SOPRANO:
+            inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+            break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             // https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base/blob/main/generation_config.json
             inp.top_k = 50;
@@ -1927,6 +1934,13 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
     }
 
     *out = {};
+
+    if (clip_get_projector_type(ctx_clip) == PROJECTOR_TYPE_SOPRANO &&
+        (inp->type != MTMD_GEN_PROCESS_TYPE_GEN_WAV || !inp->feats || inp->n_feats < 1024 ||
+         inp->n_feats % 512 != 0 || inp->n_feats / 512 > 512 || inp->codes || inp->state_size)) {
+        LOG_ERR("%s: soprano requires 2 to 512 frames of 512 features, without codes or state\n", __func__);
+        return 1;
+    }
 
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE) {
         const size_t n_embd = (size_t) clip_n_mmproj_embd(ctx_clip);
