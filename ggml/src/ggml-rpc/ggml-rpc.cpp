@@ -760,6 +760,12 @@ static void ggml_backend_rpc_buffer_clear(ggml_backend_buffer_t buffer, uint8_t 
     ctx->dispatcher->send(RPC_CMD_BUFFER_CLEAR, request, sizeof(*request));
 }
 
+static void ggml_backend_rpc_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
+    ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
+    std::vector<uint8_t> data(size, value);
+    ggml_backend_rpc_buffer_set_tensor(buffer, tensor, data.data(), offset, size);
+}
+
 static ggml_backend_buffer_i ggml_backend_rpc_buffer_interface = {
     /* .free_buffer     = */ ggml_backend_rpc_buffer_free_buffer,
     /* .get_base        = */ ggml_backend_rpc_buffer_get_base,
