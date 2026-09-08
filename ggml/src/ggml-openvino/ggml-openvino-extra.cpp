@@ -158,6 +158,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT",
         "GGML_OPENVINO_TOKEN_EMBD_I8",
         "GGML_OPENVINO_TOKEN_EMBD_I4",
+        "GGML_OPENVINO_NPU_KEEP_Q4_0",
         "GGML_OPENVINO_NPU_FAST_MASK",
         "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
         "GGML_OPENVINO_GDN_Q_SCALE",
@@ -488,6 +489,13 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         return ExtraQuantType::Q8_0_C;
     }
     if (ggml_openvino_is_npu()) {
+        // Q4_0 is already u4, so regrouping it to 128-element blocks only saves scale storage
+        // while round-tripping the whole tensor through f32. Taking the direct extract path
+        // instead does compile, but the resulting group-32 graph hangs the NPU at inference
+        // (ZE_RESULT_ERROR_DEVICE_LOST, driver TDR), so it stays off by default.
+        if (tensor->type == GGML_TYPE_Q4_0 && ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KEEP_Q4_0")) {
+            return std::nullopt;
+        }
         return ggml_openvino_get_npu_requant_type();
     }
     // By default Q6_K/Q5_K are requantized to Q8_0_C, which *inflates* 6- and 5-bit weights to 8
