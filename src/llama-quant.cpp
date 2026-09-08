@@ -76,6 +76,50 @@ static std::string remap_layer(const std::string & orig_name, const std::vector<
     return orig_name;
 }
 
+static void prune_metadata_array(
+        gguf_context * ctx,
+        const std::string & key,
+        gguf_type type,
+        uint32_t n_layer,
+        const std::vector<int> & prune) {
+    const int64_t kid = gguf_find_key(ctx, key.c_str());
+    if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY) {
+        return;
+    }
+
+    const gguf_type type_actual = gguf_get_arr_type(ctx, kid);
+    const bool type_valid = type == GGUF_TYPE_UINT32
+        ? type_actual == GGUF_TYPE_BOOL || type_actual == GGUF_TYPE_INT32 || type_actual == GGUF_TYPE_UINT32
+        : type_actual == type;
+    if (!type_valid) {
+        throw std::runtime_error(format("metadata array %s has unsupported type %s", key.c_str(), gguf_type_name(type_actual)));
+    }
+
+    const size_t n = gguf_get_arr_n(ctx, kid);
+    if (n != n_layer) {
+        throw std::runtime_error(format("metadata array %s has length %zu, expected %u", key.c_str(), n, n_layer));
+    }
+
+    size_t type_size = 0;
+    switch (type_actual) {
+        case GGUF_TYPE_BOOL:    type_size = sizeof(int8_t);   break;
+        case GGUF_TYPE_INT32:   type_size = sizeof(int32_t);  break;
+        case GGUF_TYPE_UINT32:  type_size = sizeof(uint32_t); break;
+        case GGUF_TYPE_FLOAT32: type_size = sizeof(float);    break;
+        default: throw std::runtime_error(format("metadata array %s has unsupported type %s", key.c_str(), gguf_type_name(type_actual)));
+    }
+
+    const uint8_t * data = (const uint8_t *) gguf_get_arr_data(ctx, kid);
+    std::vector<uint8_t> data_pruned;
+    data_pruned.reserve(n * type_size);
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (std::find(prune.begin(), prune.end(), il) == prune.end()) {
+            data_pruned.insert(data_pruned.end(), data + il * type_size, data + (il + 1) * type_size);
+        }
+    }
+    gguf_set_arr_data(ctx, key.c_str(), type_actual, data_pruned.data(), data_pruned.size() / type_size);
+}
+
 static std::string remap_imatrix(const std::string & orig_name, const std::map<int, std::string> & mapped) {
     if (mapped.empty()) {
         return orig_name;
@@ -1033,6 +1077,41 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         tensors.push_back(&it.second);
     }
     if (!prune_list.empty()) {
+        const llm_kv keys_u32[] = {
+            LLM_KV_FEED_FORWARD_LENGTH,
+            LLM_KV_EXPERT_FEED_FORWARD_LENGTH,
+            LLM_KV_EXPERT_USED_COUNT,
+            LLM_KV_ATTENTION_HEAD_COUNT,
+            LLM_KV_ATTENTION_HEAD_COUNT_KV,
+            LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,
+            LLM_KV_ATTENTION_ROPE_PATTERN,
+            LLM_KV_ATTENTION_RECURRENT_LAYERS,
+            LLM_KV_ATTENTION_INDEXER_TYPES,
+            LLM_KV_ATTENTION_COMPRESS_RATIOS,
+        };
+        const llm_kv keys_f32[] = {
+            LLM_KV_SWIGLU_CLAMP_EXP,
+            LLM_KV_SWIGLU_CLAMP_SHEXP,
+        };
+
+        for (const llm_kv key : keys_u32) {
+            prune_metadata_array(ctx_out.get(), ml.llm_kv(key), GGUF_TYPE_UINT32, model->hparams.n_layer_all, prune_list);
+        }
+        for (const llm_kv key : keys_f32) {
+            prune_metadata_array(ctx_out.get(), ml.llm_kv(key), GGUF_TYPE_FLOAT32, model->hparams.n_layer_all, prune_list);
+        }
+        if (model->arch == LLM_ARCH_APERTUS) {
+            const llm_kv keys_xielu[] = {
+                LLM_KV_XIELU_ALPHA_N,
+                LLM_KV_XIELU_ALPHA_P,
+                LLM_KV_XIELU_BETA,
+                LLM_KV_XIELU_EPS,
+            };
+            for (const llm_kv key : keys_xielu) {
+                prune_metadata_array(ctx_out.get(), ml.llm_kv(key), GGUF_TYPE_FLOAT32, model->hparams.n_layer_all, prune_list);
+            }
+        }
+
         gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), blk_id);
     }
 
