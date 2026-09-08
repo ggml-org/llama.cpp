@@ -6,6 +6,6 @@ add_subdirectory(sheredom)
 add_subdirectory(stb)
 
 # only used by common
-if (LLAMA_BUILD_COMMON)
+if (LLAMA_BUILD_COMMON AND NOT LLAMA_USE_SYSTEM_HTTPLIB)
     add_subdirectory(cpp-httplib)
 endif()
