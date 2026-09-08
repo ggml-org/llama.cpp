@@ -4525,6 +4525,18 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             l_warptile = { 256, 128, 128, 16, mm_warp_8, 64, 2, tm_m, tn_m, tk_m, mm_warp_8 };
             l_warptile_mmq = l_warptile_mmq_int = { 256, 128, 128, 32, mm_warp_8, 64, 2, tm_m, tn_m, tk_m, mm_warp_8 };
             l_warptile_mmq_int_k = { 256, 128, 128, 32, mm_warp_16, 64, 1, 4, 2, 1, mm_warp_16 };
+            if (device->architecture == AMD_RDNA3 && device->uma) {
+                // RDNA3 integrated GPU (e.g. Radeon 780M, shared system memory): the 64x64 warp
+                // micro-tile is LDS/register limited on the KHR coopmat path; halving the
+                // M micro-dimension (WM 64 -> 32) substantially speeds up prompt processing,
+                // while token generation (mul_mat_vec path) is unaffected. Measured on
+                // RADV PHOENIX (gfx1151) with llama-bench -p 512 -n 64 -r 3:
+                //   Qwen3.8-9B-Q4_K_M:     pp512 250.5 -> 404.4 t/s (+61%);  tg64 14.42 -> 14.43
+                //   Qwen3.8-27B-UD-Q4_K_M: pp512  72.4 -> 117.5 t/s (+62%);  tg64  4.73 ->  4.73
+                // (WN 64 -> 32 is equally good; WMITER 2 -> 4/8 is within noise.)
+                l_warptile = { 256, 128, 128, 16, 32, 64, 2, tm_m, tn_m, tk_m, mm_warp_8 };
+                l_warptile_mmq = l_warptile_mmq_int = { 256, 128, 128, 32, 32, 64, 2, tm_m, tn_m, tk_m, mm_warp_8 };
+            }
         } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support) {
             // Xe2/Xe3 with coopmat enabled - warptile performance tuning
             l_warptile = { 512, 128, 128, 16, mm_warp_8, 32, 2, tm_m, tn_m, tk_m, mm_warp_8 };
