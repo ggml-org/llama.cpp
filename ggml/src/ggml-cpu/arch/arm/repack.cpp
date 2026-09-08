@@ -24,6 +24,7 @@
 
 #define UNUSED GGML_UNUSED
 
+#if defined(__ARM_FEATURE_SVE)
 static inline svint32_t pairwise_add_4xi32_sve1(svint32_t v) {
     svbool_t pg4 = svwhilelt_b32(0, 4);
 
@@ -39,6 +40,7 @@ static inline svint32_t pairwise_add_8xi32_sve1(svint32_t v) {
     svint32_t odd  = svuzp2_s32(v, v);  // [x1 x3 x5 x7 ...]
     return svadd_s32_x(svptrue_b32(), even, odd);
 }
+#endif // defined(__ARM_FEATURE_SVE)
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && (defined(__ARM_FEATURE_MATMUL_INT8) || defined(__ARM_FEATURE_DOTPROD))
 // Helper for decoding scales and mins of Q4_K and Q5_K block formats
