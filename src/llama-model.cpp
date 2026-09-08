@@ -1195,7 +1195,7 @@ bool llama_act_policy::wants_prec_a8(const ggml_tensor * w) const {
 
 static bool load_act_policy_arr(
         llama_model_loader & ml,
-        const std::string & key_tensor,
+        enum llm_kv key_tensor,
         const std::string & key_value,
         llama_act_policy & policy) {
     std::vector<std::string> tensor_names;
@@ -1216,7 +1216,7 @@ static bool load_act_policy_arr(
     if (n_values != tensor_names.size()) {
         throw std::runtime_error(format(
             "%s tensor/value length mismatch (%zu vs %zu)",
-            key_tensor.c_str(), tensor_names.size(), n_values));
+            ml.llm_kv(key_tensor).c_str(), tensor_names.size(), n_values));
     }
 
     const int8_t * values = (const int8_t *) gguf_get_arr_data(ctx, kid);
@@ -1229,7 +1229,7 @@ static bool load_act_policy_arr(
 
 static void load_act_policy(llama_model_loader & ml, llama_act_policy & policy) {
     load_act_policy_arr(ml,
-            ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_NAME),
+            LLM_KV_GENERAL_TENSOR_EXTRA_NAME,
             ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_ALLOW_PREC_A8),
             policy);
 }

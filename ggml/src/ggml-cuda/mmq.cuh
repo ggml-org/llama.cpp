@@ -297,16 +297,8 @@ static constexpr __device__ int ggml_cuda_mmq_get_type(ggml_type type, int J, bo
     return ggml_cuda_mmq_get_config(type, J, fallback, force_w4a8).type;
 }
 
-static __host__ int ggml_cuda_mmq_get_nthreads(const ggml_type type, const int J, const bool fallback, const int cc) {
-    return ggml_cuda_mmq_get_config(type, J, fallback, cc).nthreads;
-}
-
 static constexpr __device__ int ggml_cuda_mmq_get_nthreads(ggml_type type, int J, bool fallback, bool force_w4a8 = false) {
     return ggml_cuda_mmq_get_config(type, J, fallback, force_w4a8).nthreads;
-}
-
-static __host__ int ggml_cuda_mmq_get_occupancy(const ggml_type type, const int J, const bool fallback, const int cc) {
-    return ggml_cuda_mmq_get_config(type, J, fallback, cc).occupancy;
 }
 
 static constexpr __device__ int ggml_cuda_mmq_get_occupancy(ggml_type type, int J, bool fallback, bool force_w4a8 = false) {
