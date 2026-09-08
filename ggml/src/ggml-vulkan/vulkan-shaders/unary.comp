@@ -1,9 +1,23 @@
 #version 450
 
 #include "types.glsl"
+#if defined(UNARY_MUL_FUSION)
+#include "generic_binary_head.glsl"
+#else
 #include "generic_unary_head.glsl"
+#endif
 
+#if defined(UNARY_MUL_FUSION)
+// OP on src1
+layout(constant_id = 1) const bool op_on_b = false;
+#endif
+
+#if defined(UNARY_MUL_FUSION)
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+const uint num_threads = 256;
+#else
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+#endif
 
 float op_abs(float x) {
     return abs(x);
@@ -123,6 +137,7 @@ float op_gelu_erf(float a) {
     return 0.5f * a * (1.0f + sign_x * y);
 }
 
+#if !defined(UNARY_MUL_FUSION)
 float op_xielu(float x) {
     const float alpha_n = p.param1;
     const float alpha_p = p.param2;
@@ -136,6 +151,7 @@ float op_xielu(float x) {
     const float min_x_eps = min(x, eps);
     return (op_expm1(min_x_eps) - x) * alpha_n + beta * x;
 }
+#endif
 
 float op_floor(float x) {
     return floor(x);
@@ -155,8 +171,28 @@ float op_trunc(float x) {
 }
 
 void main() {
-    const uint idx = get_idx();
+    uint idx = get_idx();
 
+#if defined(UNARY_MUL_FUSION)
+    // keep total threads at 512
+    [[unroll]] for (uint iter = 0; iter < 2; ++iter) {
+        if (idx >= p.ne) {
+            continue;
+        }
+        uint i00, i01, i02, i03;
+        get_indices(idx, i00, i01, i02, i03);
+
+        if (op_on_b) {
+            data_d[get_doffset() + dst_idx(i00, i01, i02, i03)] =
+                D_TYPE(FLOAT_TYPE(OP(float(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]))) * FLOAT_TYPE(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]));
+        } else {
+            data_d[get_doffset() + dst_idx(i00, i01, i02, i03)] =
+                D_TYPE(FLOAT_TYPE(OP(float(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]))) * FLOAT_TYPE(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]));
+        }
+
+        idx += num_threads;
+    }
+#else
     if (idx >= p.ne) {
         return;
     }
@@ -165,4 +201,5 @@ void main() {
     const uint d_idx = get_doffset() + dst_idx(idx);
 
     data_d[d_idx] = D_TYPE(OP(float(data_a[a_idx])));
+#endif
 }
