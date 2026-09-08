@@ -27,7 +27,7 @@ ggml_tensor * clip_graph_qwen3tts_spkenc::conv1d_same(ggml_tensor * x, ggml_tens
 
     ggml_tensor * w2d = ggml_reshape_2d(ctx0, w, (int64_t) K * IC, OC);
     ggml_tensor * y   = ggml_mul_mat(ctx0, w2d, col); // [OC, T_out]
-    ggml_mul_mat_set_prec(y, GGML_PREC_F32);
+    ggml_prec_set_acc(y, GGML_PREC_F32);
 
     ggml_tensor * b2d = ggml_reshape_2d(ctx0, b, OC, 1);
     y = ggml_add(ctx0, y, b2d);
