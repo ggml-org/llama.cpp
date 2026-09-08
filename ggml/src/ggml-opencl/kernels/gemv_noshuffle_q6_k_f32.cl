@@ -296,3 +296,114 @@ kernel void kernel_gemv_noshuffle_q6_K_f32(
         if (gid * 2 + 1 < ne01) dst[gid * 2 + 1] = total_sum.s1;
     }
 }
+
+// Multi-column (N=3) q6_K decode GEMV for the spec/MTP verify batch. Same idea
+// as the q4_K mc3: stay on the efficient GEMV path (subgroup broadcast, no
+// transpose) instead of the transposed-GEMM dead-zone. Each K-block's weights
+// (ql/qh, hi+lo) are loaded ONCE and reused across all 3 activation columns.
+// Per-column accumulation is independent and identical to 3 standalone GEMVs
+// => byte-identical; does NOT perturb the lm_head logits / spec accept rate.
+#if defined(ADRENO_GPU)
+REQD_SUBGROUP_SIZE_64
+#endif
+kernel void kernel_gemv_noshuffle_q6_K_f32_mc3(
+    read_only image1d_buffer_t src0_ql,
+    read_only image1d_buffer_t src0_qh,
+    global half2 * src0_s,
+    global half2 * src0_d,
+    read_only image1d_buffer_t src1,
+    global float * dst,
+    ulong offsetd,
+    int ne00,
+    int ne01
+) {
+    int grp  = get_local_id(1);
+    int gid  = get_global_id(0);
+    ushort slid = get_sub_group_local_id();
+
+    int nb = ne00 / 32;
+    int line_stride_a  = ne01 / 2;
+    int block_stride_a = NSUBGROUPS * ne01;
+    int COL_STRIDE     = ne00 / 4;   // float4 pixels per activation column
+
+    uint4   ql_hi, ql_lo;
+    ushort4 qh_hi, qh_lo;
+    half2   reg_d;
+    char4   reg_s;
+    float8  reg_b;
+
+    float2  ts0 = 0.0f, ts1 = 0.0f, ts2 = 0.0f;
+
+    for (int k = grp; k < nb; k += NSUBGROUPS) {
+        reg_d = src0_d[gid + k/8 * line_stride_a];
+        reg_s = as_char4(src0_s[gid + k * line_stride_a]);
+
+        // weights loaded ONCE (hi: blocks 0-3, lo: blocks 4-7), reused x3 cols
+        ql_hi.s0 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*0).x;
+        ql_hi.s1 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*1).x;
+        ql_hi.s2 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*2).x;
+        ql_hi.s3 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*3).x;
+        qh_hi.s0 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*0).x);
+        qh_hi.s1 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*1).x);
+        qh_hi.s2 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*2).x);
+        qh_hi.s3 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*3).x);
+
+        ql_lo.s0 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*4).x;
+        ql_lo.s1 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*5).x;
+        ql_lo.s2 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*6).x;
+        ql_lo.s3 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*7).x;
+        qh_lo.s0 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*4).x);
+        qh_lo.s1 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*5).x);
+        qh_lo.s2 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*6).x);
+        qh_lo.s3 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*7).x);
+
+        // Per-column: load only this column's activation (single reg_b live) ->
+        // 1/3 the activation register pressure, cutting the private-mem spill.
+#ifdef VECTOR_SUB_GROUP_BROADCAT
+        { if (slid < 4) { reg_b.s0123 = read_imagef(src1, 0*COL_STRIDE + 0 + slid*2 + k*8);
+                          reg_b.s4567 = read_imagef(src1, 0*COL_STRIDE + 1 + slid*2 + k*8); }
+          dequantize_block_acc_bcast_8_hi(ts0, as_ushort8(ql_hi), as_uchar8(qh_hi), reg_d, reg_s, reg_b);
+          dequantize_block_acc_bcast_8_lo(ts0, as_ushort8(ql_lo), as_uchar8(qh_lo), reg_d, reg_s, reg_b); }
+        { if (slid < 4) { reg_b.s0123 = read_imagef(src1, 1*COL_STRIDE + 0 + slid*2 + k*8);
+                          reg_b.s4567 = read_imagef(src1, 1*COL_STRIDE + 1 + slid*2 + k*8); }
+          dequantize_block_acc_bcast_8_hi(ts1, as_ushort8(ql_hi), as_uchar8(qh_hi), reg_d, reg_s, reg_b);
+          dequantize_block_acc_bcast_8_lo(ts1, as_ushort8(ql_lo), as_uchar8(qh_lo), reg_d, reg_s, reg_b); }
+        { if (slid < 4) { reg_b.s0123 = read_imagef(src1, 2*COL_STRIDE + 0 + slid*2 + k*8);
+                          reg_b.s4567 = read_imagef(src1, 2*COL_STRIDE + 1 + slid*2 + k*8); }
+          dequantize_block_acc_bcast_8_hi(ts2, as_ushort8(ql_hi), as_uchar8(qh_hi), reg_d, reg_s, reg_b);
+          dequantize_block_acc_bcast_8_lo(ts2, as_ushort8(ql_lo), as_uchar8(qh_lo), reg_d, reg_s, reg_b); }
+#else
+        { if (slid < 4) { reg_b.s0123 = read_imagef(src1, 0*COL_STRIDE + 0 + slid*2 + k*8);
+                          reg_b.s4567 = read_imagef(src1, 0*COL_STRIDE + 1 + slid*2 + k*8); }
+          dequantize_block_acc_bcast_1_hi(ts0, as_ushort8(ql_hi), as_uchar8(qh_hi), reg_d, reg_s, reg_b);
+          dequantize_block_acc_bcast_1_lo(ts0, as_ushort8(ql_lo), as_uchar8(qh_lo), reg_d, reg_s, reg_b); }
+        { if (slid < 4) { reg_b.s0123 = read_imagef(src1, 1*COL_STRIDE + 0 + slid*2 + k*8);
+                          reg_b.s4567 = read_imagef(src1, 1*COL_STRIDE + 1 + slid*2 + k*8); }
+          dequantize_block_acc_bcast_1_hi(ts1, as_ushort8(ql_hi), as_uchar8(qh_hi), reg_d, reg_s, reg_b);
+          dequantize_block_acc_bcast_1_lo(ts1, as_ushort8(ql_lo), as_uchar8(qh_lo), reg_d, reg_s, reg_b); }
+        { if (slid < 4) { reg_b.s0123 = read_imagef(src1, 2*COL_STRIDE + 0 + slid*2 + k*8);
+                          reg_b.s4567 = read_imagef(src1, 2*COL_STRIDE + 1 + slid*2 + k*8); }
+          dequantize_block_acc_bcast_1_hi(ts2, as_ushort8(ql_hi), as_uchar8(qh_hi), reg_d, reg_s, reg_b);
+          dequantize_block_acc_bcast_1_lo(ts2, as_ushort8(ql_lo), as_uchar8(qh_lo), reg_d, reg_s, reg_b); }
+#endif
+    }
+
+    local float8 reduce_lm[SUBGROUP_SIZE * 3];
+    float8 acc = (float8)(ts0.s0, ts0.s1, ts1.s0, ts1.s1, ts2.s0, ts2.s1, 0.0f, 0.0f);
+    if (grp == 1) { reduce_lm[SUBGROUP_SIZE*0 + slid] = acc; }
+    if (grp == 2) { reduce_lm[SUBGROUP_SIZE*1 + slid] = acc; }
+    if (grp == 3) { reduce_lm[SUBGROUP_SIZE*2 + slid] = acc; }
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    if (grp == 0) {
+        acc += reduce_lm[SUBGROUP_SIZE*0 + slid];
+        acc += reduce_lm[SUBGROUP_SIZE*1 + slid];
+        acc += reduce_lm[SUBGROUP_SIZE*2 + slid];
+        dst = (global float*)((global char*)dst + offsetd);
+        // dst column-major [ne01 rows x 3 cols]: (row, col) at col*ne01 + row
+        vstore2((float2)(acc.s0, acc.s1), 0, &(dst[0*ne01 + gid*2]));
+        vstore2((float2)(acc.s2, acc.s3), 0, &(dst[1*ne01 + gid*2]));
+        vstore2((float2)(acc.s4, acc.s5), 0, &(dst[2*ne01 + gid*2]));
+    }
+}

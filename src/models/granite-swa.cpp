@@ -11,7 +11,7 @@ void llama_model_granite_swa::load_arch_hparams(llama_model_loader & ml) {
 
     // MoE expert configuration
     ml.get_key(LLM_KV_EXPERT_COUNT,                hparams.n_expert, false);
-    ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used, false);
+    ml.get_key_or_arr(LLM_KV_EXPERT_USED_COUNT,    hparams.n_expert_used_arr, hparams.n_layer_all, false);
 
      // iSWA configuration
     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);

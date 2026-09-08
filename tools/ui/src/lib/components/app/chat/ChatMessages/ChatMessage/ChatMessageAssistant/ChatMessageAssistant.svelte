@@ -82,8 +82,11 @@
 	let lastUserMessageHeight = $state(0);
 	let assistantMarginTop = $state(0);
 
+	// The measured CSS vars feed the :last-child min-height rule only, so only
+	// the last assistant message needs them. Reading isLastAssistantMessage
+	// here also re-runs the effect when this message stops being the last.
 	$effect(() => {
-		if (!assistantEl) return;
+		if (!assistantEl || !isLastAssistantMessage) return;
 
 		assistantMarginTop = Math.round(parseFloat(getComputedStyle(assistantEl).marginTop));
 

@@ -145,3 +145,52 @@ kernel void kernel_mul_mm_f32_f32_l4_lm(
         }
     }
 }
+
+// Multi-column f32 GEMV for the small-N (spec/MTP verify) batch. The tiled GEMM
+// above always computes a full BM x BN = 64 x 64 output tile, so at ne11=3 with a
+// skinny weight (e.g. GDN ssm_alpha/ssm_beta, M=32) it launches ONE under-occupied
+// workgroup at ~2.3% tile utilization. This kernel assigns one 64-thread workgroup
+// per output element (m,n): the 64 threads split the K reduction (float4) and
+// tree-reduce in __local (no subgroup ops -> portable). ne01*ne11 workgroups.
+// Weight row is re-read per column (N small -> negligible). Summation order differs
+// from the tiled GEMM (lane-strided + tree) -> f32-exact-ish, not bit-identical.
+kernel void kernel_gemv_f32_f32_mc(
+    global float * src0, ulong offset0,   // weight: row m at m*stride_a (elements)
+    global float * src1, ulong offset1,   // activations: col n at n*stride_b
+    global float * dst,  ulong offsetd,   // dst [M x N] col-major: (m,n) at n*stride_d+m
+    int ne00,        // K
+    int ne01,        // M
+    int ne11,        // N
+    int stride_a,    // weight row stride (elements) = K
+    int stride_b,    // activation col stride (elements) = K
+    int stride_d)    // dst column stride (elements) = M
+{
+    src0 = (global float*)((global char*)src0 + offset0);
+    src1 = (global float*)((global char*)src1 + offset1);
+    dst  = (global float*)((global char*)dst  + offsetd);
+
+    uint lane = get_local_id(0);            // 0..63
+    uint out  = get_global_id(1);           // 0 .. ne01*ne11 - 1
+    uint m = out % (uint)ne01;
+    uint n = out / (uint)ne01;
+
+    global float4 * wrow = (global float4*)(src0 + (ulong)m * (uint)stride_a);
+    global float4 * xcol = (global float4*)(src1 + (ulong)n * (uint)stride_b);
+    uint k4 = (uint)ne00 >> 2;
+
+    float acc = 0.0f;
+    for (uint k = lane; k < k4; k += 64) {
+        float4 w = wrow[k];
+        float4 x = xcol[k];
+        acc += w.s0*x.s0 + w.s1*x.s1 + w.s2*x.s2 + w.s3*x.s3;
+    }
+
+    local float red[64];
+    red[lane] = acc;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (uint s = 32; s > 0; s >>= 1) {
+        if (lane < s) red[lane] += red[lane + s];
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (lane == 0) dst[(ulong)n * (uint)stride_d + m] = red[0];
+}
