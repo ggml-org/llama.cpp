@@ -148,6 +148,7 @@ bool ggml_openvino_weight_buffers_released();
 
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
 std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant = false);
+ExtraQuantType ggml_openvino_get_npu_requant_type();
 
 // =====================================================
 // OpenVINO Tensor Extra Types
