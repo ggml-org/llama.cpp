@@ -1103,6 +1103,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             return true;
         }
 
+        // all rows of an M-RoPE image share one position, so a windowed draft cache never frees cells
+        // skip them - the draft can jump over the gap
+        if (has_embeddings && is_mrope) {
+            return true;
+        }
+
         const int32_t n_tokens = batch_in.n_tokens;
 
         // per-seq inclusive batch range (assumes each seq's tokens are contiguous in the batch)
