@@ -108,6 +108,7 @@ enum llama_example {
     LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
     LLAMA_EXAMPLE_DOWNLOAD,
     LLAMA_EXAMPLE_TOKENIZE,
+    LLAMA_EXAMPLE_MEDIAGEN,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -414,6 +415,23 @@ struct common_params_diffusion {
     bool    add_gumbel_noise = false; // add gumbel noise to the logits if temp > 0.0
 };
 
+// diffusion media generation (see tools/mediagen)
+struct common_params_mediagen {
+    struct common_params_model vae;
+    struct common_params_model audio_vae;
+    struct common_params_model text_proj;    // text embedding projection
+    struct common_params_model text_encoder;
+    bool    no_auto     = false;             // do not resolve sidecars and text encoder from -hf
+    int32_t width       = 768;
+    int32_t height      = 512;
+    int32_t n_frames    = 1;
+    float   fps         = 24.0f;
+    int32_t steps       = 0;                 // 0 = model schedule
+    float   cfg_scale   = 1.0f;
+    bool    enhance_prompt = true;           // expand the prompt with the text model
+    std::string negative_prompt;
+};
+
 // reasoning API response format (not to be confused as chat template's reasoning format)
 // only used by server
 enum common_reasoning_format {
@@ -501,6 +519,7 @@ struct common_params {
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
     struct common_params_diffusion   diffusion;
+    struct common_params_mediagen    mediagen;
 
     struct common_params_model model;
 
