@@ -4,23 +4,11 @@
 
 // Adaptive draft depth controller for MTP speculative decoding (draft-mtp-adaptive).
 //
-// Hysteresis state machine with a climb counter and a weighted drop-pressure
-// accumulator. The depth N climbs one step after N_CLIMB(N) consecutive verifies
-// that accepted every drafted token. The climb cost is low at the floor and at
-// depth, high in the middle: 2 at depth 1, 4 at depth 2, 10 at depth 3, then
-// 6/3/2/2 from depth 4 upward. Getting from the floor to depth 3 needs only 6
-// full accepts, but pushing past 3 (where prose acceptance collapses) costs 10
-// full accepts of 3-token drafts, which predictable content clears quickly and
-// marginal content never does. Any miss adds (n_draft - n_accepted) to a
-// drop-pressure accumulator; when it reaches depth * 5 the depth drops one step
-// and the pressure resets. A near miss (n_draft-1) adds 1, a total miss adds
-// n_draft, so high depths fall quickly while low depths hold. The drop budget
-// scales with depth but never drops below 20, so shallow depths shed bad content
-// quickly without collapsing to the floor on a few bad rounds; deep depths hold
-// a little longer. At the floor no pressure accumulates at all. The depth starts
-// at the floor max(1, --spec-draft-n-min-adaptive) and stays in
-// [floor, n_max]; --spec-draft-n-max bounds the upper end of the adaptive
-// range.
+// Hysteresis state machine: the depth climbs one step after N consecutive
+// full-accept verifies and drops one step when accumulated miss pressure
+// (sum of n_draft - n_accepted per round) reaches a depth-scaled budget.
+// The depth stays within [floor, cap]; at the floor no pressure accumulates.
+// See climb_threshold / drop_pressure for the per-depth constants.
 struct common_speculative_adaptive {
     int n_cur   = 0; // current adaptive draft depth N
     int n_climb = 0; // consecutive verifies that accepted every drafted token

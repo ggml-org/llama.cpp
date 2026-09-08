@@ -389,15 +389,19 @@ struct common_params_speculative {
         return !draft.mparams.empty();
     }
 
+    bool has_mtp() const {
+        return std::any_of(types.begin(), types.end(), [](auto t) {
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE;
+        });
+    }
+
     bool has_synth() const {
         return synth_len != -1.0 || !synth_rates.empty();
     }
 
     uint32_t need_n_rs_seq() const {
-        bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP ||
-                   t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE ||
-                   t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||
+        bool needs_rs_seq = has_mtp() || std::any_of(types.begin(), types.end(), [](auto t) {
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH ||
                    t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
         });
