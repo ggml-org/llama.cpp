@@ -8096,6 +8096,21 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_pipeline(ggml_backend_vk_conte
         return pipelines;
     }
 
+    // f16 B on coopmat1
+    if (src1_type == GGML_TYPE_F16 && ctx->device->coopmat_support && !ctx->device->coopmat2) {
+        vk_matmul_pipeline2& mmp = ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type];
+        bool prefer_fp16acc = ctx->device->fp16 && prec == GGML_PREC_DEFAULT;
+        bool support_fp16acc = !mmp.f16acc->is_empty();
+        bool support_fp32acc = !mmp.f32acc->is_empty();
+
+        if (support_fp16acc && (prefer_fp16acc || !support_fp32acc)) {
+            return mmp.f16acc;
+        } else if (support_fp32acc) {
+            return mmp.f32acc;
+        }
+        return nullptr;
+    }
+
     if (src1_type != GGML_TYPE_F32 &&
         !(src1_type == GGML_TYPE_F16 && ctx->device->coopmat_support) &&
         !ctx->device->coopmat2) {
@@ -8137,10 +8152,8 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_pipeline(ggml_backend_vk_conte
         assert(src1_type == GGML_TYPE_F16);
         return prec == GGML_PREC_DEFAULT ? ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type].f32acc;
     }
+
     if (ctx->device->coopmat_support) {
-        if (src1_type == GGML_TYPE_F16) {
-            return (ctx->device->fp16 && ctx->device->coopmat_acc_f16_support && prec == GGML_PREC_DEFAULT) ? ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat_f16[src0_type].f32acc;
-        }
         return (ctx->device->fp16 && ctx->device->coopmat_acc_f16_support && prec == GGML_PREC_DEFAULT) ? ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f32acc;
     }
     return (ctx->device->fp16 && prec == GGML_PREC_DEFAULT) ? ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f16acc : ctx->device->pipeline_dequant_mul_mat_mat[src0_type].f32acc;
