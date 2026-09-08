@@ -42,7 +42,7 @@
 namespace {
 // For a KV cache input, return an ov::Tensor sized to n_kv (== attention_size
 // for that layer) instead of the fully-allocated ctx_per_seq. Pre-conditions:
-//   * non-static (CPU/GPU) backend, single sequence, seq_active_start == 0
+//   * dynamic CPU/GPU or opt-in static NPU prefill, single sequence, seq_active_start == 0
 //   * ggml KV layout is a contiguous [1, 1, ctx_per_seq, n_heads_kv*head_size]
 //     with one token per row (not the transposed V cache of `-fa off`), so the
 //     first n_kv rows are the live prefix and shrinking the ctx axis gives a
@@ -58,7 +58,9 @@ std::optional<ov::Tensor> try_make_kv_sliced_tensor(const std::shared_ptr<GgmlOv
     if (kv_slice_disabled) {
         return std::nullopt;
     }
-    if (ggml_decoder->is_static() || ggml_decoder->is_stateful()) {
+    const bool static_npu_slice =
+        ggml_decoder->is_static() && ggml_decoder->m_is_prefill && ggml_openvino_npu_kv_slice_enabled();
+    if ((ggml_decoder->is_static() && !static_npu_slice) || ggml_decoder->is_stateful()) {
         return std::nullopt;
     }
     if (ggml_tensor->op != GGML_OP_NONE || ggml_tensor->view_src != nullptr) {
@@ -133,6 +135,18 @@ std::optional<ov::Tensor> try_make_kv_4d_tensor(const std::shared_ptr<GgmlOvDeco
         }
         return ov::Tensor(type, shape, ggml_tensor->data);
     });
+}
+
+static size_t get_static_attention_size(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & name) {
+    if (ggml_decoder->m_is_prefill && ggml_openvino_npu_kv_slice_enabled()) {
+        const auto params = ggml_decoder->get_compute_params();
+        const bool is_swa = name.find("swa") != std::string::npos;
+        const int attention_size = is_swa ? params.attention_size_swa : params.attention_size;
+        if (attention_size > 0) {
+            return static_cast<size_t>(attention_size);
+        }
+    }
+    return static_cast<size_t>(ggml_decoder->get_ctx_size());
 }
 
 static uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful, bool recurrent) {
@@ -596,7 +610,7 @@ ov::Tensor get_ov_input_tensor_static_decode(const std::shared_ptr<GgmlOvDecoder
     }
 
     if (GgmlOvDecoder::is_inp_mask(ggml_tensor, op)) {
-        size_t context_size = ggml_decoder->get_ctx_size();
+        size_t context_size = get_static_attention_size(ggml_decoder, param_name);
         if (ggml_tensor->type == GGML_TYPE_F16) {
             std::vector<ggml_fp16_t> padded_data =
                 pad_input<ggml_fp16_t>(ggml_tensor, 1, context_size, GGML_FP32_TO_FP16(-INFINITY));
@@ -742,7 +756,7 @@ ov::Tensor get_ov_input_tensor_static_prefill(const std::shared_ptr<GgmlOvDecode
         size_t cols = ggml_tensor->ne[0];
         size_t rows = ggml_tensor->ne[1];
         size_t chunk_valid_rows = std::min(chunk_size, rows - chunk_index * chunk_size);
-        size_t context_size = ggml_decoder->get_ctx_size();
+        size_t context_size = get_static_attention_size(ggml_decoder, param_name);
         if (ggml_tensor->type == GGML_TYPE_F16) {
             const auto * ggml_data =
                 static_cast<const ggml_fp16_t *>(ggml_tensor->data) + chunk_index * chunk_size * cols;
@@ -1622,6 +1636,11 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         ggml_decoder = entry->ptr;
         old_m_params = ggml_decoder->get_model_params();
         cache_hit = old_m_params.can_reuse_statically(m_params);
+        if (cache_hit && is_prefill && ggml_openvino_npu_kv_slice_enabled()) {
+            const auto old_c_params = ggml_decoder->get_compute_params();
+            cache_hit = old_c_params.attention_size == c_params.attention_size &&
+                        old_c_params.attention_size_swa == c_params.attention_size_swa;
+        }
     }
 
     std::vector<std::string> ov_input_names_local;
@@ -1687,10 +1706,15 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
 
             auto ggml_decoder_prefill = std::make_shared<GgmlOvDecoder>(
                 cgraph, m_params, c_params, model_weights, is_static, stateful, false, true, prefill_chunk_size);
+            auto decode_c_params = c_params;
+            if (ggml_openvino_npu_kv_slice_enabled()) {
+                decode_c_params.attention_size = m_params.ctx_per_seq;
+                decode_c_params.attention_size_swa = m_params.ctx_per_seq_swa;
+            }
             auto ggml_decoder_decode =
                 no_kv_cache ? ggml_decoder_prefill :
-                              std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static,
-                                                              stateful, false, false, prefill_chunk_size);
+                              std::make_shared<GgmlOvDecoder>(cgraph, m_params, decode_c_params, model_weights,
+                                                              is_static, stateful, false, false, prefill_chunk_size);
             decoder_end_time = ggml_time_us();
 
             const bool dump_ir = ggml_openvino_getenv_int("GGML_OPENVINO_DUMP_IR");
