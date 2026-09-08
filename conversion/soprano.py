@@ -4,17 +4,25 @@
 from __future__ import annotations
 
 import torch
+from transformers import AutoTokenizer
 
 from .base import ModelBase, MmprojModel, gguf
 
 
-@ModelBase.register("Qwen3ForCausalLM")
+@ModelBase.register("SopranoModel")
 @ModelBase.example("ekwek/Soprano-1.1-80M")
 class SopranoModel(MmprojModel):
     has_vision_encoder = False
     has_audio_encoder = False
 
     def get_audio_config(self):
+        if self.hparams.get("model_type") != "qwen3" or self.hparams.get("hidden_size") != 512 or self.hparams.get("vocab_size") != 8192:
+            raise ValueError("Soprano requires a Qwen3 backbone with hidden_size=512 and vocab_size=8192")
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=False)
+        if tokenizer.convert_tokens_to_ids(["[UNK]", "[TEXT]", "[START]", "[STOP]"]) != [0, 1, 2, 3]:
+            raise ValueError("Soprano requires its [UNK], [TEXT], [START] and [STOP] control tokens")
+        if not (self.dir_model / "decoder.pth").is_file():
+            raise ValueError("Soprano requires decoder.pth in the model directory")
         return {"num_hidden_layers": 8}
 
     def set_gguf_parameters(self):

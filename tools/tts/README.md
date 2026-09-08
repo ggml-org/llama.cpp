@@ -64,9 +64,11 @@ Soprano-1.1-80M uses a Qwen3 backbone and a Vocos decoder. Convert both files fr
 
 ```sh
 python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --outfile soprano.gguf --outtype f16
-python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --mmproj --outfile mmproj-soprano.gguf --outtype f16
+python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --mmproj --mmproj-architecture SopranoModel --outfile mmproj-soprano.gguf --outtype f16
 llama-tts -m soprano.gguf -mm mmproj-soprano.gguf -p "Hello world!" --temp 0 --output out.wav
 ```
+
+The explicit mmproj architecture is required because the model config only identifies the Qwen3 text backbone, which does not identify an audio decoder.
 
 This pipeline generates mono audio at 32 kHz with the model's fixed voice. It does not accept `--tts-speaker-file`; `--tts-lang` is unused. The helper adds the `[STOP][TEXT]...[START]` prompt format and accumulates hidden states before reconstructing the waveform. The core `GEN_WAV` call accepts 2 to 512 frames of 512 continuous features in frame-major order; it does not use codes or persistent state.
 
