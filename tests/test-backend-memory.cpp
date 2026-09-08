@@ -1,5 +1,6 @@
 #include "../ggml/src/ggml-backend-memory.h"
 #include "../ggml/src/ggml-backend-impl.h"
+#include "../src/llama-context-workspace.h"
 
 #include "ggml-cpp.h"
 #include "ggml-cpu.h"
@@ -15,6 +16,7 @@
 #include <memory>
 #include <new>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using planner_ptr = std::unique_ptr<ggml_backend_memory_planner, decltype(&ggml_backend_memory_planner_free)>;
@@ -214,6 +216,60 @@ static void test_workspace_group_planning_boundaries() {
     n_groups = 1;
     GGML_ASSERT(!ggml_backend_memory_plan_workspace_groups(
         bufts, nonzero, 1, 1, nullptr, &n_groups));
+}
+
+static void test_compute_arena_binding_ownership() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+
+    {
+        llama_compute_arena_binding binding = {
+            &buft,
+            128,
+            3,
+            llama_compute_arena_ptr(ggml_backend_memory_arena_new(&buft, 128)),
+        };
+        GGML_ASSERT(binding.arena);
+        GGML_ASSERT(binding.buft == &buft);
+        GGML_ASSERT(binding.capacity == 128);
+        GGML_ASSERT(binding.first_slot == 3);
+
+        ggml_backend_memory_arena_t retained =
+            ggml_backend_memory_arena_retain(binding.arena.get());
+        GGML_ASSERT(retained);
+
+        llama_compute_arena_binding moved = std::move(binding);
+        GGML_ASSERT(!binding.arena);
+        GGML_ASSERT(moved.arena.get() == retained);
+        moved.arena.reset();
+        GGML_ASSERT(context.physical_free_count == 0);
+        GGML_ASSERT(ggml_backend_memory_arena_capacity(retained) == 128);
+        ggml_backend_memory_arena_free(retained);
+        GGML_ASSERT(context.physical_free_count == 1);
+    }
+
+    {
+        llama_compute_arena_binding first = {
+            &buft,
+            64,
+            0,
+            llama_compute_arena_ptr(ggml_backend_memory_arena_new(&buft, 64)),
+        };
+        llama_compute_arena_binding second = {
+            &buft,
+            96,
+            1,
+            llama_compute_arena_ptr(ggml_backend_memory_arena_new(&buft, 96)),
+        };
+        GGML_ASSERT(first.arena && second.arena);
+        second = std::move(first);
+        GGML_ASSERT(!first.arena);
+        GGML_ASSERT(second.capacity == 64);
+        GGML_ASSERT(second.first_slot == 0);
+        GGML_ASSERT(context.physical_free_count == 2);
+    }
+    GGML_ASSERT(context.alloc_count == 3);
+    GGML_ASSERT(context.physical_free_count == 3);
 }
 
 // Validate construction, transaction state, and generation changes.
@@ -1184,6 +1240,7 @@ static void run(const char * name, void (*test)()) {
 int main() {
     run("test_workspace_group_planning", test_workspace_group_planning);
     run("test_workspace_group_planning_boundaries", test_workspace_group_planning_boundaries);
+    run("test_compute_arena_binding_ownership", test_compute_arena_binding_ownership);
     run("test_lifecycle", test_lifecycle);
     run("test_placement", test_placement);
     run("test_failure_atomicity", test_failure_atomicity);

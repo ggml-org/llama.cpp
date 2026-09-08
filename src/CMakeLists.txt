@@ -47,6 +47,7 @@ set(LLAMA_CORE_SOURCES
 add_library(llama
             ../include/llama.h
             ${LLAMA_CORE_SOURCES}
+            llama-context-workspace.h
             unicode.h
             ${LLAMA_MODELS_SOURCES}
             )

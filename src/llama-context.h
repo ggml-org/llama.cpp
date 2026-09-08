@@ -3,6 +3,7 @@
 #include "llama.h"
 #include "llama-ext.h"
 #include "llama-cparams.h"
+#include "llama-context-workspace.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
 #include "llama-impl.h"
@@ -358,6 +359,8 @@ private:
 
     std::vector<swap_info> output_swaps;
 
+    // The scheduler is declared after this field so it releases its arena leases first.
+    std::vector<llama_compute_arena_binding> compute_arenas;
     ggml_backend_sched_ptr sched;
 
     bool sched_need_reserve = true;
