@@ -37,6 +37,7 @@ _ACT2FN = {
 
 
 @ModelBase.register("Qwen3TTSForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-TTS-12Hz-1.7B-Base")
 class Qwen3TTSTalkerModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN3TTS
 
@@ -185,6 +186,7 @@ class Qwen3TTSTalkerModel(TextModel):
 
 
 @ModelBase.register("Qwen3TTSForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-TTS-12Hz-1.7B-Base")
 class Qwen3TTSSpeakerEncoderModel(MmprojModel):
     has_vision_encoder = False
     has_audio_encoder = True
@@ -273,6 +275,10 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
             return gguf.GGMLQuantizationType.F16
         # ConvTranspose1d kernels: only F16/F32 are implemented, no BF16
         if new_name.endswith(".conv.weight") and (".up.blk." in new_name or ".dac.blk." in new_name):
+            return gguf.GGMLQuantizationType.F32
+        # the code predictor FFN intermediate peaks around 1.5e5, above the F16 range, and mul_mat
+        # casts its input to the weight type
+        if new_name.startswith("a.gen.code.blk.") and new_name.endswith(".ffn_down.weight"):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 

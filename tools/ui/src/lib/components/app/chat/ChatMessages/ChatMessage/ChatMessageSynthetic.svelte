@@ -17,7 +17,7 @@
 </script>
 
 {#if isCwdChange}
-	<ChatMessageCwdChange {message} class={className} />
+	<ChatMessageCwdChange class={className} {message} />
 {:else}
 	<span class="text-muted-foreground block text-sm {className}">{message.content}</span>
 {/if}

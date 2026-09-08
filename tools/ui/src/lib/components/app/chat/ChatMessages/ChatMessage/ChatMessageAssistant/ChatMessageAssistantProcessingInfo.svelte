@@ -13,7 +13,7 @@
 	const marginClass = $derived(position === 'top' ? 'mt-6' : 'mt-4');
 </script>
 
-<div class="{marginClass} w-full max-w-3xl" in:fade>
+<div in:fade class="{marginClass} w-full max-w-3xl">
 	<div class="flex flex-col items-start gap-2">
 		<span class="shimmer-text text-sm">
 			{modelLoadingText ??

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { CODE_BLOCK, CODE_TOKEN_ATTR, UI_DATA_ATTRS } from '$lib/constants';
 	import { BooleanString, ChatFormInputRichTokenKind, ColorMode } from '$lib/enums';
-	import { isMobile } from '$lib/stores';
+	import { deviceStore } from '$lib/stores';
 	import type { ChatFormInputRichToken } from '$lib/types';
 	import type { SourceHistoryEntry } from '$lib/utils';
 	import {
@@ -625,7 +625,7 @@
 		}
 
 		if (rootElement && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
-			const isWordJump = (event.altKey || event.ctrlKey) && !event.metaKey;
+			const isWordJump = (event.altKey || event.ctrlKey) && !event.metaKey && !event.shiftKey;
 			const isPlainLeft =
 				event.key === 'ArrowLeft' && !event.altKey && !event.ctrlKey && !event.metaKey;
 
@@ -750,7 +750,7 @@
 		syncEmptyState();
 		document.addEventListener('selectionchange', handleSelectionChange);
 
-		if (!isMobile.current) {
+		if (!deviceStore.isMobile) {
 			rootElement?.focus({ preventScroll: true });
 		}
 	});
@@ -792,7 +792,7 @@
 	}
 
 	export function focus() {
-		if (isMobile.current) return;
+		if (deviceStore.isMobile) return;
 
 		rootElement?.focus({ preventScroll: true });
 	}
@@ -808,25 +808,25 @@
 <div class="flex-1 {className} mb-0.5">
 	<div
 		bind:this={rootElement}
-		contenteditable={!disabled}
-		role="textbox"
-		aria-multiline="true"
 		aria-disabled={disabled}
+		aria-multiline="true"
 		aria-placeholder={placeholder}
-		data-placeholder={placeholder}
-		tabindex={disabled ? -1 : 0}
 		class={[
 			'chat-form-input-rich text-md min-h-12 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word border-0 bg-transparent p-0 leading-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0',
 			disabled && 'cursor-not-allowed'
 		]}
-		style="max-height: var(--max-message-height);"
-		oncompositionstart={handleCompositionStart}
+		contenteditable={!disabled}
+		data-placeholder={placeholder}
 		oncompositionend={handleCompositionEnd}
+		oncompositionstart={handleCompositionStart}
+		oncopy={handleCopy}
+		oncut={handleCut}
 		oninput={handleInput}
 		onkeydown={handleKeydown}
 		onpaste={handlePaste}
-		oncopy={handleCopy}
-		oncut={handleCut}
+		role="textbox"
+		style="max-height: var(--max-message-height);"
+		tabindex={disabled ? -1 : 0}
 	></div>
 </div>
 

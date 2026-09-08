@@ -24,6 +24,7 @@ def _unpermute_for_rope(tensor: "Tensor", n_heads: int) -> "Tensor":
 
 
 @ModelBase.register("MuseGlimmerForConditionalGeneration")
+@ModelBase.example("meta-models/Muse-Glimmer-30B")
 class MuseGlimmerModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MUSE_GLIMMER
 
@@ -36,7 +37,7 @@ class MuseGlimmerModel(TextModel):
 
         from transformers import AutoTokenizer
         tok = AutoTokenizer.from_pretrained(self.dir_model)
-        eot_id = tok.convert_tokens_to_ids("<|eot|>")
+        eot_id = tok.convert_tokens_to_ids("<|eot|>")  # ty: ignore[unresolved-attribute]
         if isinstance(eot_id, int) and eot_id >= 0:
             self.gguf_writer.add_eot_token_id(eot_id)
 
@@ -78,6 +79,7 @@ class MuseGlimmerModel(TextModel):
 
 
 @ModelBase.register("MuseGlimmerForConditionalGeneration")
+@ModelBase.example("meta-models/Muse-Glimmer-30B")
 class MuseGlimmerVisionModel(MmprojModel):
     def get_vision_config(self) -> dict[str, Any] | None:
         c = self.global_config.get("vision_config")
@@ -131,6 +133,7 @@ class MuseGlimmerVisionModel(MmprojModel):
 
 
 @ModelBase.register("MuseGlimmerAssistantModel")
+@ModelBase.example("meta-models/Muse-Glimmer-30B-assistant")
 class MuseGlimmerAssistantModel(TextModel):
     model_arch = gguf.MODEL_ARCH.DFLASH
 

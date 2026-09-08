@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("LLaDAModelLM")
+@ModelBase.example("GSAI-ML/LLaDA-8B-Instruct")
 class LLaDAModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLADA
     undo_permute = True
@@ -114,6 +115,7 @@ class LLaDAModel(TextModel):
 
 
 @ModelBase.register("LLaDAMoEModel", "LLaDAMoEModelLM")
+@ModelBase.example("inclusionAI/LLaDA-MoE-7B-A1B-Instruct")
 class LLaDAMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLADA_MOE
 

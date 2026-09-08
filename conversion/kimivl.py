@@ -11,6 +11,7 @@ from .base import MmprojModel, ModelBase, gguf
 
 
 @ModelBase.register("KimiVLForConditionalGeneration")
+@ModelBase.example("moonshotai/Kimi-VL-A3B-Instruct")
 class KimiVLModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -52,6 +53,7 @@ class KimiVLModel(MmprojModel):
 
 
 @ModelBase.register("KimiK25ForConditionalGeneration")
+@ModelBase.example("moonshotai/Kimi-K2.5")
 class KimiK25Model(MmprojModel):
     """Kimi-K2.5 with MoonViT3d vision encoder"""
 
@@ -155,6 +157,7 @@ class KimiK25Model(MmprojModel):
 
 
 @ModelBase.register("Glm5vForConditionalGeneration")
+# [TAG_HF_EXAMPLE_MISSING]
 class Glm5vModel(KimiK25Model):
     """GLM-5.2-Vision MoonViT3d encoder and projector
 

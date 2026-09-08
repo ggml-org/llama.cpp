@@ -50,10 +50,10 @@ const FAVICON_PATH = '/favicon.ico';
 // (and that callers read off `SearchResult`), so `FieldKey.TITLE` is a
 // drop-in for the literal `'title'`.
 enum FieldKey {
-	TITLE = 'title',
-	URL = 'url',
+	AUTHOR = 'author',
 	PUBLISHED = 'published',
-	AUTHOR = 'author'
+	TITLE = 'title',
+	URL = 'url'
 }
 const FIELD_PREFIXES: ReadonlyArray<{ key: FieldKey; prefix: string }> = [
 	{ key: FieldKey.TITLE, prefix: 'Title:' },
@@ -156,6 +156,20 @@ function parseChunk(chunk: string): SearchResult | null {
 	return result;
 }
 
+const EMPTY_SEARCH_RESULTS: SearchResult[] = [];
+
+/**
+ * Cheap prefilter for the wire format: a parseable result needs both a
+ * `Title:` and a `URL:` field line, so a blob missing either substring can
+ * never yield a result. Two substring scans cost far less than the
+ * line-split parse for the megabyte tool results exec and file tools emit.
+ */
+export function looksLikeSearchResult(text: string | undefined | null): boolean {
+	if (!text) return false;
+
+	return text.includes('Title:') && text.includes('URL:');
+}
+
 /** Bounded cache for extractSearchResults results. */
 const SEARCH_RESULTS_CACHE_MAX_SIZE = 32;
 const searchResultsCache = new Map<string, SearchResult[]>();
@@ -168,7 +182,7 @@ const searchResultsCache = new Map<string, SearchResult[]>();
  * tool result strings.
  */
 export function extractSearchResults(text: string | undefined | null): SearchResult[] {
-	if (!text) return [];
+	if (!text || !looksLikeSearchResult(text)) return EMPTY_SEARCH_RESULTS;
 
 	const cached = searchResultsCache.get(text);
 

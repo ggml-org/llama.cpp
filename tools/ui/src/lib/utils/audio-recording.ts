@@ -14,10 +14,37 @@ import { MimeTypeAudio } from '$lib/enums';
  * - Proper cleanup and resource management
  */
 export class AudioRecorder {
-	private mediaRecorder: MediaRecorder | null = null;
 	private audioChunks: Blob[] = [];
-	private stream: MediaStream | null = null;
+	private mediaRecorder: MediaRecorder | null = null;
 	private recordingState: boolean = false;
+	private stream: MediaStream | null = null;
+
+	cancelRecording(): void {
+		const recorder = this.mediaRecorder;
+		const stream = this.stream;
+
+		this.mediaRecorder = null;
+		this.audioChunks = [];
+		this.stream = null;
+		this.recordingState = false;
+
+		if (recorder && recorder.state !== 'inactive') {
+			// Drop the original handlers so the pending stop event does not touch the instance
+			recorder.onstop = null;
+			recorder.onerror = null;
+			recorder.stop();
+		}
+
+		if (stream) {
+			for (const track of stream.getTracks()) {
+				track.stop();
+			}
+		}
+	}
+
+	isRecording(): boolean {
+		return this.recordingState;
+	}
 
 	async startRecording(): Promise<void> {
 		try {
@@ -88,33 +115,6 @@ export class AudioRecorder {
 
 			recorder.stop();
 		});
-	}
-
-	isRecording(): boolean {
-		return this.recordingState;
-	}
-
-	cancelRecording(): void {
-		const recorder = this.mediaRecorder;
-		const stream = this.stream;
-
-		this.mediaRecorder = null;
-		this.audioChunks = [];
-		this.stream = null;
-		this.recordingState = false;
-
-		if (recorder && recorder.state !== 'inactive') {
-			// Drop the original handlers so the pending stop event does not touch the instance
-			recorder.onstop = null;
-			recorder.onerror = null;
-			recorder.stop();
-		}
-
-		if (stream) {
-			for (const track of stream.getTracks()) {
-				track.stop();
-			}
-		}
 	}
 
 	private initializeRecorder(stream: MediaStream): void {

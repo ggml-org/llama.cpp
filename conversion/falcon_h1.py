@@ -12,6 +12,7 @@ from .mamba import Mamba2Model
 
 
 @ModelBase.register("FalconH1ForCausalLM")
+@ModelBase.example("tiiuae/Falcon-H1-0.5B-Base")
 class FalconH1Model(Mamba2Model):
     model_arch = gguf.MODEL_ARCH.FALCON_H1
 

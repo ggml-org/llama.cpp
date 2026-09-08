@@ -18,7 +18,7 @@ struct server_tool {
 
     virtual ~server_tool() = default;
     virtual json get_definition() const = 0;
-    virtual std::string type() const { return "builtin"; }
+    virtual std::string type() const { return "server"; }
 
     struct stream {
         server_response & qr;

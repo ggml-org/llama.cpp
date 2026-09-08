@@ -1,3 +1,4 @@
+import { ModelModality } from '$lib/enums';
 import type { ModelOption } from '$lib/types/models';
 import { SvelteMap } from 'svelte/reactivity';
 
@@ -17,6 +18,23 @@ export interface GroupedModelOptions {
 	available: OrgGroup[];
 }
 
+function matchesModality(option: ModelOption, term: string): boolean {
+	const modalities = option.modalities;
+
+	if (!modalities) return false;
+
+	switch (term) {
+		case ModelModality.VISION.toLowerCase():
+			return modalities.vision;
+		case ModelModality.AUDIO.toLowerCase():
+			return modalities.audio;
+		case ModelModality.VIDEO.toLowerCase():
+			return modalities.video;
+		default:
+			return false;
+	}
+}
+
 export function filterModelOptions(options: ModelOption[], searchTerm: string): ModelOption[] {
 	const term = searchTerm.trim().toLowerCase();
 
@@ -27,7 +45,8 @@ export function filterModelOptions(options: ModelOption[], searchTerm: string): 
 			option.model.toLowerCase().includes(term) ||
 			option.name?.toLowerCase().includes(term) ||
 			option.aliases?.some((alias: string) => alias.toLowerCase().includes(term)) ||
-			option.tags?.some((tag: string) => tag.toLowerCase().includes(term))
+			option.tags?.some((tag: string) => tag.toLowerCase().includes(term)) ||
+			matchesModality(option, term)
 	);
 }
 

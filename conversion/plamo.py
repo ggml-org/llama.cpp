@@ -13,6 +13,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("PlamoForCausalLM")
+@ModelBase.example("pfnet/plamo-13b")
 class PlamoModel(TextModel):
     model_arch = gguf.MODEL_ARCH.PLAMO
 
@@ -58,6 +59,7 @@ class PlamoModel(TextModel):
 
 
 @ModelBase.register("Plamo2ForCausalLM", "PLaMo2ForCausalLM")
+@ModelBase.example("pfnet/plamo-2-1b")
 class Plamo2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PLAMO2
 
@@ -147,6 +149,8 @@ class Plamo2Model(TextModel):
 
 
 @ModelBase.register("Plamo3ForCausalLM", "PLaMo3ForCausalLM")
+# [TAG_HF_EXAMPLE_GATED] pfnet/plamo-3-nict-2b-base is gated
+@ModelBase.example("midorin-Linux/plamo-3-12b-self-merged-base")
 class Plamo3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PLAMO3
 

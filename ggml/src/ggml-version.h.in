@@ -1,0 +1,4 @@
+#pragma once
+
+#define GGML_VERSION "@GGML_VERSION@"
+#define GGML_COMMIT  "@GGML_BUILD_COMMIT@"

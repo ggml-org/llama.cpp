@@ -507,6 +507,23 @@ void server_tokens::push_back(const mtmd_input_chunk * chunk) {
     }
 }
 
+void server_tokens::push_back_placeholder(const mtmd_input_chunk * chunk) {
+    auto type = mtmd_input_chunk_get_type(chunk);
+    if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE || type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+        GGML_ASSERT(has_mtmd);
+        mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_get_placeholder(chunk));
+        GGML_ASSERT(new_chunk != nullptr && "failed to create placeholder chunk");
+        const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+        size_t start_idx = tokens.size();
+        for (size_t i = 0; i < n_tokens; ++i) {
+            tokens.emplace_back(LLAMA_TOKEN_NULL);
+        }
+        map_idx_to_media[start_idx] = std::move(new_chunk);
+    } else {
+        push_back(chunk);
+    }
+}
+
 void server_tokens::push_back(server_tokens & tokens) {
     size_t start_idx = size();
     for (size_t i = 0; i < tokens.size(); i++) {
@@ -893,12 +910,17 @@ size_t validate_utf8(const std::string& text) {
     return len;
 }
 
-server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder) {
+server_tokens process_mtmd_prompt(
+        mtmd_context * mctx,
+        const std::string & prompt,
+        const std::vector<raw_buffer> & files,
+        const mtmd_helper_init_opt & init_opt,
+        bool is_placeholder) {
     // these will be freed upon going out of scope
     mtmd::bitmaps bitmaps;
     std::vector<mtmd_helper::video_ptr> videos;
     for (auto & file : files) {
-        auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder);
+        auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder, init_opt);
         if (!out.bitmap) {
             throw std::runtime_error("Failed to load image or audio file");
         }
@@ -939,7 +961,7 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & promp
  * - "prompt": [12, 34, "string", 56, 78]
  * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
  */
-static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string";
     constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data";
     const bool has_mtmd = mctx != nullptr;
@@ -962,7 +984,7 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
             for (const auto & entry : json_prompt.at(JSON_MTMD_DATA_KEY)) {
                 files.push_back(base64_decode(entry));
             }
-            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files);
+            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files, init_opt);
         } else {
             // Not multimodal, but contains a subobject.
             llama_tokens tmp = tokenize_mixed(vocab, json_prompt.at(JSON_STRING_PROMPT_KEY), add_special, parse_special);
@@ -973,15 +995,15 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
    }
 }
 
-std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     std::vector<server_tokens> result;
     if (json_prompt.is_array() && !json_is_array_and_contains_numbers(json_prompt)) {
         result.reserve(json_prompt.size());
         for (const auto & p : json_prompt) {
-            result.push_back(tokenize_input_subprompt(vocab, mctx, p,add_special, parse_special));
+            result.push_back(tokenize_input_subprompt(vocab, mctx, p, add_special, parse_special, init_opt));
         }
     } else {
-        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special));
+        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special, init_opt));
     }
     if (result.empty()) {
         throw std::runtime_error("\"prompt\" must not be empty");
@@ -1040,8 +1062,7 @@ json oaicompat_completion_params_parse(const json & body) {
 static void handle_media(
         std::vector<raw_buffer> & out_files,
         const std::string & url,
-        const std::string & media_path,
-        bool accept_base64_uri) {
+        const std::string & media_path) {
     if (!media_path.empty()) {
         // should already be enforced by arg.cpp, but checking just in case
         GGML_ASSERT(media_path.back() == DIRECTORY_SEPARATOR);
@@ -1082,15 +1103,17 @@ static void handle_media(
         data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         out_files.push_back(data);
 
-    } else if (accept_base64_uri && string_starts_with(url, "data:")) {
-        // try to decode base64 image
+    } else if (string_starts_with(url, "data:")) {
+        // try to decode base64 image, video, or audio
         std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
         if (parts.size() != 2) {
-            throw std::runtime_error("Invalid uri-encoded base64 value");
-        } else if (!string_starts_with(parts[0], "data:image/")) {
-            throw std::runtime_error("Invalid uri format: " + parts[0]);
+            throw std::invalid_argument("Invalid uri-encoded base64 value");
+        } else if (!string_starts_with(parts[0], "data:image/")
+                && !string_starts_with(parts[0], "data:video/")
+                && !string_starts_with(parts[0], "data:audio/")) {
+            throw std::invalid_argument("Invalid uri format: " + parts[0]);
         } else if (!string_ends_with(parts[0], "base64")) {
-            throw std::runtime_error("uri must be base64 encoded");
+            throw std::invalid_argument("uri must be base64 encoded");
         } else {
             auto base64_data = parts[1];
             auto decoded_data = base64_decode(base64_data);
@@ -1197,7 +1220,7 @@ json oaicompat_chat_params_parse(
 
                 json image_url = json_value(p, "image_url", json::object());
                 std::string url = json_value(image_url, "url", std::string());
-                handle_media(out_files, url, opt.media_path, true);
+                handle_media(out_files, url, opt.media_path);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1212,7 +1235,7 @@ json oaicompat_chat_params_parse(
                 json input_audio = json_value(p, "input_audio", json::object());
                 std::string url  = json_value(input_audio, "data",
                                         json_value(input_audio, "url", std::string()));
-                handle_media(out_files, url, opt.media_path, false);
+                handle_media(out_files, url, opt.media_path);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1226,7 +1249,7 @@ json oaicompat_chat_params_parse(
                 json input_video = json_value(p, "input_video", json::object());
                 std::string url  = json_value(input_video, "data",
                                         json_value(input_video, "url", std::string()));
-                handle_media(out_files, url, opt.media_path, false);
+                handle_media(out_files, url, opt.media_path);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1262,6 +1285,12 @@ json oaicompat_chat_params_parse(
     }
     if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && inputs.add_generation_prompt) {
         throw std::invalid_argument("Cannot set both add_generation_prompt and continue_final_message to true.");
+    }
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE
+        && !inputs.messages.empty()
+        && inputs.messages.back().role == "assistant"
+        && !inputs.messages.back().tool_calls.empty()) {
+        throw std::invalid_argument("Cannot continue an assistant message that contains tool calls.");
     }
     inputs.reasoning_format = opt.reasoning_format;
     if (body.contains("reasoning_format")) {
@@ -1523,7 +1552,7 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
 }
 
 std::string safe_json_to_str(const json & data) {
-    return data.dump(-1, ' ', false, json::error_handler_t::replace);
+    return data.dump_safe();
 }
 
 // TODO: reuse llama_detokenize
@@ -1764,7 +1793,8 @@ server_tokens format_prompt_rerank(
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
-        const std::string & doc) {
+        const std::string & doc,
+        const mtmd_helper_init_opt & init_opt) {
     server_tokens result = {};
 
     const char * rerank_prompt = llama_model_chat_template(model, "rerank");
@@ -1773,12 +1803,12 @@ server_tokens format_prompt_rerank(
         std::string prompt = rerank_prompt;
         string_replace_all(prompt, "{query}"   , query);
         string_replace_all(prompt, "{document}", doc  );
-        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true);
+        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
         result.push_back(tokens);
     } else {
         // Get EOS token - use SEP token as fallback if EOS is not available
-        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false);
-        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false);
+        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false, init_opt);
+        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false, init_opt);
         llama_token eos_token = llama_vocab_eos(vocab);
         if (eos_token == LLAMA_TOKEN_NULL) {
             eos_token = llama_vocab_sep(vocab);

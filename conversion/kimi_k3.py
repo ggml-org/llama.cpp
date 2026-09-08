@@ -16,6 +16,7 @@ from .kimi_linear import KimiLinearModel
 
 
 @ModelBase.register("KimiK3ForConditionalGeneration")
+@ModelBase.example("moonshotai/Kimi-K3")
 class KimiK3Model(TextModel):
     """
     Kimi-K3 text model (KimiLinearForCausalLM under a `language_model.` prefix).

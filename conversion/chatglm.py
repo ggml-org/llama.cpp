@@ -9,6 +9,7 @@ from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf
 
 
 @ModelBase.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration")
+@ModelBase.example("THUDM/chatglm3-6b", "zai-org/glm-4-9b-chat-hf")
 class ChatGLMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.CHATGLM
 

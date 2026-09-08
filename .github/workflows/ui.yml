@@ -63,7 +63,7 @@ jobs:
       - name: Download built UI artifacts
         uses: actions/download-artifact@v6
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
 
       - name: Install dependencies
@@ -126,7 +126,7 @@ jobs:
       - name: Download built UI artifacts (reuses ui-build)
         uses: actions/download-artifact@v6
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
 
       - name: Install Playwright browsers

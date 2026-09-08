@@ -3,17 +3,18 @@
 #include <random>
 #include <cstdlib>
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 #include "subproc.h"
 
 #include "jinja/runtime.h"
 #include "jinja/parser.h"
 #include "jinja/lexer.h"
 #include "jinja/utils.h"
+#include "jinja/caps.h"
 
 #include "testing.h"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static void test_template(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect);
 
@@ -33,6 +34,7 @@ static void test_array_methods(testing & t);
 static void test_object_methods(testing & t);
 static void test_hasher(testing & t);
 static void test_stats(testing & t);
+static void test_caps(testing & t);
 static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
 
@@ -73,6 +75,7 @@ int main(int argc, char *argv[]) {
     if (!g_python_mode) {
         t.test("hasher", test_hasher);
         t.test("stats", test_stats);
+        t.test("caps", test_caps);
         t.test("string parts", test_string_parts);
         t.test("fuzzing", test_fuzzing);
     }
@@ -237,7 +240,7 @@ static void test_conditionals(testing & t) {
 
     test_template(t, "is undefined key falsy",
         "{{ 'yes' if not y['x'] else 'no' }}",
-        {{"y", {{}}}},
+        {{"y", json::array({nullptr})}},
         "yes"
     );
 
@@ -279,7 +282,7 @@ static void test_conditionals(testing & t) {
 
     test_template(t, "is non-empty object truthy",
         "{{ 'yes' if y else 'no' }}",
-        {{"y", {"x", false}}},
+        {{"y", json::array({"x", false})}},
         "yes"
     );
 
@@ -2059,6 +2062,51 @@ static void test_stats(testing & t) {
     });
 }
 
+static void test_caps(testing & t) {
+    static auto get_caps = [](const std::string & tmpl) -> jinja::caps {
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(tmpl);
+
+        jinja::program prog = jinja::parse_from_tokens(lexer_res);
+
+        return jinja::caps_get(prog);
+    };
+
+    t.test("string content", [](testing & t) {
+        auto caps = get_caps(
+            "{% for message in messages %}"
+            "{{ message['role'] + ': ' + message['content'] }}"
+            "{% endfor %}"
+        );
+        t.assert_true("supports string content", caps.supports_string_content);
+        t.assert_true("does not support typed content", !caps.supports_typed_content);
+    });
+
+    t.test("typed content, raises on string", [](testing & t) {
+        // 'selectattr' is not a String filter, so it throws
+        auto caps = get_caps(
+            "{% for message in messages %}"
+            "{% for content in message['content'] | selectattr('type', 'equalto', 'text') %}"
+            "{{ content['text'] }}"
+            "{% endfor %}"
+            "{% endfor %}"
+        );
+        t.assert_true("does not support string content", !caps.supports_string_content);
+        t.assert_true("supports typed content", caps.supports_typed_content);
+    });
+
+    t.test("typed content, silently drops string", [](testing & t) {
+        // no throw here, but content[0]['text'] is undefined for a string (MiniMax-M1 case)
+        auto caps = get_caps(
+            "{% for message in messages %}"
+            "{{ message['content'][0]['text'] }}"
+            "{% endfor %}"
+        );
+        t.assert_true("does not support string content", !caps.supports_string_content);
+        t.assert_true("supports typed content", caps.supports_typed_content);
+    });
+}
+
 static void test_string_parts(testing & t) {
     static auto render = [](const std::string & tmpl, const json & vars) -> jinja::string {
         jinja::lexer lexer;
@@ -2116,8 +2164,7 @@ static void test_template_cpp(testing & t, const std::string & name, const std::
                 t.log("Actual  : " + json(rendered).dump());
             }
         } catch (const jinja::not_implemented_exception & e) {
-            // TODO @ngxson : remove this when the test framework supports skipping tests
-            t.log("Skipped: " + std::string(e.what()));
+            t.skip(e.what());
         }
     });
 }

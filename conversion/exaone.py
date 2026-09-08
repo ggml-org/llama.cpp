@@ -15,6 +15,7 @@ from .qwenvl import Qwen2VLVisionModel
 
 
 @ModelBase.register("ExaoneForCausalLM")
+@ModelBase.example("LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct")
 class ExaoneModel(TextModel):
     model_arch = gguf.MODEL_ARCH.EXAONE
 
@@ -60,6 +61,7 @@ class ExaoneModel(TextModel):
 
 
 @ModelBase.register("Exaone4ForCausalLM")
+@ModelBase.example("LGAI-EXAONE/EXAONE-4.0-32B")
 class Exaone4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.EXAONE4
 
@@ -126,6 +128,7 @@ class Exaone4Model(TextModel):
 # note: transformers >= 5.1 renamed the class to "ExaoneMoeForCausalLM" (lowercase 'e'),
 #       so accept both spellings - LG AI have updated the configs of already-released models
 @ModelBase.register("ExaoneMoEForCausalLM", "ExaoneMoeForCausalLM")
+@ModelBase.example("LGAI-EXAONE/K-EXAONE-236B-A23B")
 class ExaoneMoEModel(Exaone4Model):
     model_arch = gguf.MODEL_ARCH.EXAONE_MOE
 
@@ -214,6 +217,7 @@ class ExaoneMoEModel(Exaone4Model):
 
 
 @ModelBase.register("Exaone4_5_ForConditionalGeneration")
+@ModelBase.example("LGAI-EXAONE/EXAONE-4.5-33B")
 class Exaone4_5_TextModel(Exaone4Model):
     """Text tower of EXAONE 4.5; Tensors match EXAONE4"""
 
@@ -267,6 +271,7 @@ class Exaone4_5_TextModel(Exaone4Model):
 
 
 @ModelBase.register("Exaone4_5_ForConditionalGeneration")
+@ModelBase.example("LGAI-EXAONE/EXAONE-4.5-33B")
 class Exaone4_5VisionModel(Qwen2VLVisionModel):
     """Vision tower for EXAONE 4.5; Qwen2-VL-style ViT (GQA) + patch merger"""
 
