@@ -89,14 +89,13 @@ issue several computes without synchronizing rotate between them.
 
 Two obligations come with this:
 
-- **Callers** must call `ggml_backend_sched_prepare_inputs()` before writing the inputs of a graph that is being reused. That path allocates nothing and so cannot rotate on its own. The function has an effect only when the scheduler has multiple copies and a compute may still be in flight; it is a no-op for single-copy schedulers, after `ggml_backend_sched_alloc_graph()`, and after synchronization.
+- **Callers** must call `ggml_backend_sched_prepare_inputs()` before writing the inputs of a graph that is being reused. That path skips graph allocation and so cannot rotate on its own. The function has an effect only when the scheduler has multiple copies and a compute may still be in flight; it is a no-op for single-copy schedulers, after `ggml_backend_sched_alloc_graph()`, and after synchronization.
 
-- **Backends** that cache work against a graph, such as the CUDA graph cache, may treat an
-  unchanged `ggml_cgraph::uid` as a promise that nothing the cached work captured has moved, and
-  skip re-reading the addresses. Rotating moves tensor addresses without re-splitting, so the
-  scheduler re-stamps the split uids whenever it re-points inputs. A backend keeping such a cache
-  must key it on the uid or re-check the addresses itself. Violating this does not degrade
-  gracefully: the cached work replays against stale addresses and the results are quietly wrong.
+- **Backends** may treat an unchanged nonzero `ggml_cgraph::uid` as a promise that the graph properties and captured addresses have not changed. Rotation updates both graph inputs and operands that refer to copied split inputs, then assigns new split uids. A backend must compare graph properties when the uid changes before replaying captured work.
+
+`ggml_cgraph::input_slot` identifies the current input buffer variant independently of the uid. It defaults to 0 for graphs outside the scheduler. The scheduler sets it before backend graph optimization and updates it on rotation; graph views inherit the slot. Returning to a slot restores its cache identity but still changes the uid, so stale properties cannot bypass validation. Graph copies retain the slot and clear the uid; clearing a graph resets both fields.
+
+CUDA/HIP caches each split by its first node and input slot. Each slot has its own graph executable, property snapshot, and warmup state. After two matching visits to a slot, it can capture and replay even when other slots run between those visits. Changed addresses or graph properties restart warmup for the selected slot. Each first-node cache has at most `GGML_SCHED_MAX_COPIES` variants, allocated on demand. Eviction applies to the whole first-node cache after inactivity, so a slow ring traversal does not discard other slots while the graph remains active.
 
 ## Output lifetime under asynchronous execution
 

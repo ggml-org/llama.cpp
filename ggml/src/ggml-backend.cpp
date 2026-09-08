@@ -817,10 +817,6 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #define GGML_SCHED_MAX_SPLIT_INPUTS 30
 #endif
 
-#ifndef GGML_SCHED_MAX_COPIES
-#define GGML_SCHED_MAX_COPIES 4
-#endif
-
 struct ggml_backend_sched_split {
     int backend_id;
     int i_start;
@@ -1605,6 +1601,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     for (int i = 0; i < sched->n_splits; i++) {
         struct ggml_backend_sched_split * split = &sched->splits[i];
         split->graph = ggml_graph_view(graph, split->i_start, split->i_end);
+        split->graph.input_slot = sched->cur_copy;
 
         ggml_backend_graph_optimize(sched->backends[split->backend_id], &split->graph, &opt_params);
     }
@@ -2246,6 +2243,7 @@ static void ggml_backend_sched_point_inputs(ggml_backend_sched_t sched) {
     }
 
     for (int i = 0; i < sched->n_splits; i++) {
+        sched->splits[i].graph.input_slot = sched->cur_copy;
         sched->splits[i].graph.uid = ggml_graph_next_uid();
     }
 
@@ -2258,7 +2256,30 @@ static void ggml_backend_sched_point_inputs(ggml_backend_sched_t sched) {
 static void ggml_backend_sched_rotate_inputs(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched->n_copies > 1);
 
+    const int prev_copy = sched->cur_copy;
     ggml_backend_sched_advance_copy(sched);
+
+    std::unordered_map<ggml_tensor *, ggml_tensor *> input_copies;
+    for (int i = 0; i < sched->n_splits; i++) {
+        struct ggml_backend_sched_split * split = &sched->splits[i];
+        for (int j = 0; j < split->n_inputs; j++) {
+            struct ggml_tensor * input = split->inputs[j];
+            input_copies[tensor_copy(input, split->backend_id, prev_copy)] = tensor_copy(input, split->backend_id, sched->cur_copy);
+        }
+    }
+
+    if (!input_copies.empty()) {
+        for (int i = 0; i < sched->graph.n_nodes; i++) {
+            struct ggml_tensor * node = sched->graph.nodes[i];
+            for (int j = 0; j < GGML_MAX_SRC; j++) {
+                auto it = input_copies.find(node->src[j]);
+                if (it != input_copies.end()) {
+                    node->src[j] = it->second;
+                }
+            }
+        }
+    }
+
     ggml_backend_sched_point_inputs(sched);
 }
 
