@@ -5023,6 +5023,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         // f16 B-type dense GEMM pipelines for coopmat1 (used when y_non_contig auto-converts f32->f16)
         CREATE_MM2(GGML_TYPE_Q1_0, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q1_0], matmul_q1_0_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_Q2_0, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q2_0], matmul_q2_0_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        CREATE_MM2(GGML_TYPE_TQ1_0, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_TQ1_0], matmul_tq1_0_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_TQ2_0, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_TQ2_0], matmul_tq2_0_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q4_0], matmul_q4_0_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_Q4_1, pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_Q4_1], matmul_q4_1_f16, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
@@ -5110,6 +5111,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         // f16 B-type MoE GEMM pipelines for coopmat1 (used when y_non_contig auto-converts f32->f16)
         CREATE_MM2(GGML_TYPE_Q1_0,    pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q1_0],    matmul_id_subgroup_q1_0_f16,    mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
         CREATE_MM2(GGML_TYPE_Q2_0,    pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q2_0],    matmul_id_subgroup_q2_0_f16,    mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
+        CREATE_MM2(GGML_TYPE_TQ1_0,   pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_TQ1_0],   matmul_id_subgroup_tq1_0_f16,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
         CREATE_MM2(GGML_TYPE_TQ2_0,   pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_TQ2_0],   matmul_id_subgroup_tq2_0_f16,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
         CREATE_MM2(GGML_TYPE_Q4_0,    pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q4_0],    matmul_id_subgroup_q4_0_f16,    mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
         CREATE_MM2(GGML_TYPE_Q4_1,    pipeline_dequant_mul_mat_mat_id_f16b[GGML_TYPE_Q4_1],    matmul_id_subgroup_q4_1_f16,    mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id);
@@ -8301,11 +8303,10 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_id_pipeline(ggml_backend_vk_co
             return nullptr;
     }
 
-    // Use the dedicated f16 B pipeline when B is f16, if one was actually registered
-    // (only coopmat1 populates pipeline_dequant_mul_mat_mat_id_f16b; empty otherwise).
-    vk_matmul_pipeline2& mmp_f16b = ctx->device->pipeline_dequant_mul_mat_mat_id_f16b[src0_type];
-    bool use_f16b = src1_type == GGML_TYPE_F16 && (!mmp_f16b.f16acc->is_empty() || !mmp_f16b.f32acc->is_empty());
-    vk_matmul_pipeline2& mmp = use_f16b ? mmp_f16b : ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type];
+    // Use the dedicated f16 B pipeline when B is f16 for coopmat1.
+    vk_matmul_pipeline2& mmp = (src1_type == GGML_TYPE_F16 && ctx->device->coopmat_support && !ctx->device->coopmat2) ?
+        ctx->device->pipeline_dequant_mul_mat_mat_id_f16b[src0_type] :
+        ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type];
     // XXX TODO 'prec' is not actually allowed in mul_mat_id.
     bool prefer_fp16acc = ctx->device->fp16 /*&& prec == GGML_PREC_DEFAULT*/;
     bool support_fp16acc = !mmp.f16acc->is_empty();
