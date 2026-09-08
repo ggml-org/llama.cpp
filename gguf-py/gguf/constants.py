@@ -663,6 +663,7 @@ class MODEL_TENSOR(IntEnum):
     HC_HEAD_NORM         = auto() # qwen4exp
     HC_HEAD_DOWN         = auto() # qwen4exp
     HC_HEAD_UP           = auto() # qwen4exp
+    ATTN_ROPE_FREQS      = auto()
     ROPE_FREQS           = auto()
     ROPE_FACTORS_LONG    = auto()
     ROPE_FACTORS_SHORT   = auto()
@@ -1426,6 +1427,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.HC_HEAD_NORM:              "output_hc_norm",                 # qwen4exp
     MODEL_TENSOR.HC_HEAD_DOWN:              "output_hc_down",                 # qwen4exp
     MODEL_TENSOR.HC_HEAD_UP:                "output_hc_up",                   # qwen4exp
+    MODEL_TENSOR.ATTN_ROPE_FREQS:           "blk.{bid}.attn_rope_freqs",
     MODEL_TENSOR.ROPE_FREQS:                "rope_freqs",
     MODEL_TENSOR.ROPE_FACTORS_LONG:         "rope_factors_long",
     MODEL_TENSOR.ROPE_FACTORS_SHORT:        "rope_factors_short",
@@ -4917,6 +4919,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
     ],
     MODEL_ARCH.LFM2: [
+        MODEL_TENSOR.ATTN_ROPE_FREQS,
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.TOKEN_EMBD_NORM,
         MODEL_TENSOR.SHORTCONV_CONV,

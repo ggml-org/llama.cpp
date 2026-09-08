@@ -609,7 +609,8 @@ struct mtmd_context {
         }
         if (ctx_gen_a) {
             int n_embd_gen = clip_n_mmproj_embd(ctx_gen_a);
-            if (n_embd_text > 0 && n_embd_text != n_embd_gen) {
+            if (n_embd_text > 0 && n_embd_text != n_embd_gen &&
+                    clip_get_projector_type(ctx_gen_a) != PROJECTOR_TYPE_NEMO_NANO_CODEC) {
                 throw std::runtime_error(string_format(
                     "mismatch between text model (n_embd = %d) and gen-audio mmproj (n_embd = %d)\n"
                     "hint: you may be using wrong mmproj\n",

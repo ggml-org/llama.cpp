@@ -20,15 +20,15 @@ struct tts_timings {
     int64_t t_start_us = ggml_time_us();
     int64_t t_last_us  = t_start_us;
 
-    void report(int n_frames) {
+    void report(int n_steps) {
         const int64_t t_now_us = ggml_time_us();
         if (t_now_us - t_last_us < 2000000) {
             return;
         }
         t_last_us = t_now_us;
         const double t_elapsed_s = (t_now_us - t_start_us) / 1e6;
-        const double fps = t_elapsed_s > 0 ? n_frames / t_elapsed_s : 0.0;
-        LOG_INF("frames generated: %d, speed: %.2f frames/s\n", n_frames, fps);
+        const double fps = t_elapsed_s > 0 ? n_steps / t_elapsed_s : 0.0;
+        LOG_INF("generation steps: %d, speed: %.2f steps/s\n", n_steps, fps);
     }
 };
 
@@ -153,7 +153,7 @@ int main(int argc, char ** argv) {
     };
 
     const int max_new = params.n_predict > 0 ? params.n_predict : 512;
-    int n_frames = 0;
+    int n_steps = 0;
     llama_token sampled = sample_semantic_code();
     const float * h_state = llama_get_embeddings_ith(lctx, -1);
 
@@ -161,23 +161,23 @@ int main(int argc, char ** argv) {
     const int64_t t_gen_start_us = ggml_time_us();
 
     bool stop = false;
-    while (!stop && n_frames < max_new) {
+    while (!stop && n_steps < max_new) {
         const float * h_next = nullptr;
 
         // stage 2+3: semantic --> acoustic details --> audio waveform
         //            step_gen() runs both stages and returns new h_state for next step
         if (gen.step_gen(sampled, h_state, &h_next, &stop) != 0) {
-            LOG_ERR("step_gen failed at frame %d\n", n_frames);
+            LOG_ERR("step_gen failed at step %d\n", n_steps);
             return 1;
         }
         if (!h_next) {
             break; // stopped without generating a frame
         }
 
-        n_frames++;
+        n_steps++;
         h_state = h_next;
         sampled = sample_semantic_code();
-        timings.report(n_frames);
+        timings.report(n_steps);
     }
     const double t_gen_s = (ggml_time_us() - t_gen_start_us) / 1e6;
 
@@ -192,7 +192,7 @@ int main(int argc, char ** argv) {
     }
     const double t_wav_s = (ggml_time_us() - t_wav_start_us) / 1e6;
 
-    LOG_INF("generated %d frames, %zu bytes of WAV audio (%d Hz)\n", n_frames, data_len, sample_rate);
+    LOG_INF("generated %d steps, %zu bytes of WAV audio (%d Hz)\n", n_steps, data_len, sample_rate);
 
     const double t_prompt_s = (t_gen_start_us - t_prompt_start_us) / 1e6;
     const double t_total_s  = t_prompt_s + t_gen_s + t_wav_s;

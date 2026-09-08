@@ -429,6 +429,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_OUTPUT_NORM,                            "output_norm" },
     { LLM_TENSOR_OUTPUT_NORM_LFM2,                       "token_embd_norm" }, // fix for wrong tensor name
     { LLM_TENSOR_OUTPUT,                                 "output" },
+    { LLM_TENSOR_ATTN_ROPE_FREQS,                        "blk.%d.attn_rope_freqs" },
     { LLM_TENSOR_ROPE_FREQS,                             "rope_freqs" },
     { LLM_TENSOR_ATTN_NORM,                              "blk.%d.attn_norm" },
     { LLM_TENSOR_ATTN_Q,                                 "blk.%d.attn_q" },
@@ -724,6 +725,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_OUTPUT_NORM_LFM2,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_DEC_OUTPUT_NORM,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_ENC_OUTPUT_NORM,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+    {LLM_TENSOR_ATTN_ROPE_FREQS,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
     {LLM_TENSOR_ROPE_FREQS,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
     {LLM_TENSOR_ROPE_FACTORS_LONG,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
     {LLM_TENSOR_ROPE_FACTORS_SHORT,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
