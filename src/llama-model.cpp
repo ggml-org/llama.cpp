@@ -1421,9 +1421,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    // resolve AUTO: LARGE where mmap is supported, else OFF (e.g. iGPUs); see #28160
+    // resolve AUTO on systems without mmap support (e.g. iGPUs): fall back to OFF; see #28160
     if (ml.lazy.mode == LLAMA_LAZY_MODE_AUTO) {
-        ml.lazy.mode = LLAMA_LAZY_MODE_LARGE;
         for (const auto & dev : devices) {
             ggml_backend_dev_props props;
             ggml_backend_dev_get_props(dev.dev, &props);
