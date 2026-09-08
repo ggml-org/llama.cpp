@@ -10,11 +10,10 @@
 #include "ggml-common.h"
 #include "tiled-kernel.h"
 
-#include <assert.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cassert>
+#include <cstdlib>
+#include <cstring>
 
-#include <new>
 #include <mutex>
 
 #define UNUSED GGML_UNUSED
@@ -488,44 +487,45 @@ static bool ggml_tiled_matmul_forced(void) {
     return forced;
 }
 
-// per-thread workspace size (0 when tiled is disabled)
-size_t ggml_tiled_ws_size(void) {
-    if (!ggml_tiled_matmul_enabled()) {
-        return 0;
-    }
-    return sizeof(tiled_ws);
-}
-
-// compatibility/profitability gate.  anything not supported here will fall back to the vec_dot path
-
-// arch support, master switch, A/B flag and the type list; shared by the mul_mat and MUL_MAT_ID gates
-static bool ggml_tiled_matmul_srcs_supported(const struct ggml_tensor * src0,
-                                             const struct ggml_tensor * src1) {
+// hard constraints shared by the MUL_MAT and MUL_MAT_ID entries; the src0 type gate is the
+// entries' type switch
 
 #if !defined(__AVX512VNNI__) && !defined(__AVX2__) && !defined(__AVX__)
+static bool ggml_tiled_supported(const struct ggml_tensor * src0,
+                                 const struct ggml_tensor * src1) {
     UNUSED(src0);
     UNUSED(src1);
     return false;
+}
 #else
+static bool ggml_tiled_supported(const struct ggml_tensor * src0,
+                                 const struct ggml_tensor * src1) {
     if (!ggml_tiled_matmul_enabled()) {
         return false;
     }
-
-    // hard constraints: the kernel is only correct/defined for these
 
     // repack-buffer weights hold a repacked layout, let that kernel handle
     if (src0->extra != NULL) {
         return false;
     }
-    // K-quant weights and the iq types (LUT-expanded in the unpackers)
-    if (src0->type != GGML_TYPE_Q4_K && src0->type != GGML_TYPE_Q5_K &&
-        src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_Q3_K &&
-        src0->type != GGML_TYPE_Q2_K && src0->type != GGML_TYPE_IQ4_XS &&
-        src0->type != GGML_TYPE_IQ2_XXS && src0->type != GGML_TYPE_IQ2_XS &&
-        src0->type != GGML_TYPE_IQ2_S && src0->type != GGML_TYPE_IQ3_XXS &&
-        src0->type != GGML_TYPE_IQ3_S && src0->type != GGML_TYPE_IQ1_S &&
-        src0->type != GGML_TYPE_IQ1_M) {
-        return false;
+    // Supported quant types for src0
+    switch (src0->type) {
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+            return true;
+        default:
+            return false;
     }
     if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_Q8_K) {
         return false;
@@ -536,25 +536,31 @@ static bool ggml_tiled_matmul_srcs_supported(const struct ggml_tensor * src0,
         return false;
     }
     return true;
+}
 #endif
+
+// per-thread workspace size (0 when tiled is disabled or unsupported on this arch)
+static size_t ggml_tiled_ws_size(void) {
+    if (!ggml_tiled_matmul_enabled()) {
+        return 0;
+    }
+    return sizeof(tiled_ws);
 }
 
-static bool ggml_tiled_matmul_supported(const struct ggml_tensor * src0,
-                                        const struct ggml_tensor * src1) {
-    if (!ggml_tiled_matmul_srcs_supported(src0, src1)) {
-        return false;
+size_t ggml_tiled_wdata_size(int n_tasks, struct ggml_tensor * dst) {
+    if (! ggml_tiled_supported(dst->src[0], dst->src[1])) {
+        return 0; // unsupported, don't allocate
     }
+    return 64 + n_tasks * ggml_tiled_ws_size();  // 64 for alignment plus scratch for each thread
+}
 
-    // If forced, skip profitability check
-    if (ggml_tiled_matmul_forced()) {
-        return true;
-    }
+// the GEMM is profitable at this many src1 rows (MUL_MAT: src1->ne[1], MUL_MAT_ID: the
+// expert's routed row count); below it, fall back to optimized vec_dot
+#define TILED_MIN_BATCH 32
 
-    // We are still profitable at 32 rows, unprofitable below, fall back to optimized vec_dot
-    if (src1->ne[1] < 32) {
-        return false;
-    }
-    return true;
+static bool ggml_tiled_min_batch(int64_t rows) {
+    // FORCE (test/bench only) takes the tiled path even when unprofitable
+    return ggml_tiled_matmul_forced() || rows >= TILED_MIN_BATCH;
 }
 
 // Writeback of the 256x256 window: buf is j-major (row stride buf_stride),
@@ -598,31 +604,8 @@ static void tiled_store_window(const float * buf, int n_src0, int n_src1, int bu
 // unpack and microtile are reused unchanged from mul_mat. Each thread stages the rows itself,
 // no cross-thread sync; staging is small vs the gemm.
 
-// Unprofitable below 32
-#define TILED_MMID_MIN_BATCH 32
-
 // src0 rows per g group; finer than the TILED_TILE_K kernel tile so all threads stay busy at small ne01
 #define TILED_MMID_GROUP 64
-
-bool ggml_tiled_mul_mat_id_min_batch(int64_t cne1) {
-    // FORCE (test/bench only) takes the tiled path for any nonzero expert, as in the dense gate
-    return ggml_tiled_matmul_forced() || cne1 >= TILED_MMID_MIN_BATCH;
-}
-
-// MUL_MAT_ID node level test; per expert eligibility is decided with ggml_tiled_mul_mat_id_min_batch
-bool ggml_tiled_matmul_id_supported(const struct ggml_tensor * dst) {
-    if (dst->op != GGML_OP_MUL_MAT_ID) {
-        return false;
-    }
-    if (!ggml_tiled_matmul_srcs_supported(dst->src[0], dst->src[1])) {
-        return false;
-    }
-    // the microtile operates on 256 element K slabs; the dot length is ne00 == ne10 here
-    if (dst->src[0]->ne[0] % TILED_TILE_K != 0 || dst->src[1]->ne[0] % TILED_TILE_K != 0) {
-        return false;
-    }
-    return true;
-}
 
 // like tiled_store_window, but the dst columns are not contiguous: col_ptrs[j] points at the
 // start of dst column j, whose rows are contiguous (dim 0, nb0 == 4 bytes).
@@ -766,64 +749,6 @@ static void ggml_compute_forward_mul_mat_id_tiled_one_expert(
 
             tiled_mmid_gemm_window<B, SUBBLK, HAS_MIN, BIAS>(dst, src0, src0_cur, r, k, nrows, expert_rows, rows, ws);
         }
-    }
-}
-
-void ggml_compute_forward_mul_mat_id_tiled(
-        const struct ggml_compute_params * params,
-              struct ggml_tensor *         dst,
-        int64_t                            cur_a,
-        int64_t                            cne1,
-        const int32_t *                    expert_rows,
-        char *                             scratch) {
-    if (params->use_ref) {
-        return;
-    }
-    if (!ggml_tiled_matmul_id_supported(dst)) {
-        return;
-    }
-    switch (dst->src[0]->type) {
-        case GGML_TYPE_Q6_K:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_q6_K, 16, false, 32>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_Q5_K:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_q5_K, 32, true,  0>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_Q4_K:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_q4_K, 32, true,  0>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_Q3_K:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_q3_K, 16, false,  4>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_Q2_K:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_q2_K, 16, true,  0>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_IQ4_XS:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_iq4_xs, 32, false, 128>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_IQ2_XXS:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_iq2_xxs, 32, false, 128>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_IQ2_XS:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_iq2_xs, 16, false, 128>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_IQ2_S:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_iq2_s, 16, false, 128>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_IQ3_XXS:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_iq3_xxs, 32, false, 128>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_IQ3_S:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_iq3_s, 32, false, 128>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_IQ1_S:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_iq1_s, 32, false, 128>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        case GGML_TYPE_IQ1_M:
-            ggml_compute_forward_mul_mat_id_tiled_one_expert<block_iq1_m, 16, false, 128>(params, dst, cur_a, cne1, expert_rows, scratch);
-            break;
-        default:
-            return;
     }
 }
 
@@ -1050,6 +975,64 @@ static void ggml_compute_forward_mul_mat_tiled_driver(
     }
 }
 
+// src0 type dispatch, shared by the MUL_MAT and MUL_MAT_ID entries: one expert for
+// MUL_MAT_ID (expert_rows != NULL), the full op for MUL_MAT
+template <typename B, int SUBBLK, bool HAS_MIN, int BIAS>
+static bool tiled_matmul_dispatch(const struct ggml_compute_params * params,
+                                  struct ggml_tensor * dst,
+                                  const int32_t * expert_rows,
+                                  int64_t cur_a,
+                                  int64_t cne1,
+                                  char * scratch) {
+    if (expert_rows == NULL) {
+        ggml_compute_forward_mul_mat_tiled_driver<B, SUBBLK, HAS_MIN, BIAS>(params, dst);
+    } else {
+        ggml_compute_forward_mul_mat_id_tiled_one_expert<B, SUBBLK, HAS_MIN, BIAS>(params, dst, cur_a, cne1, expert_rows, scratch);
+    }
+    return true;
+}
+
+// the supported src0 types, one list for both ops; false to fall through to vec_dot
+static bool ggml_tiled_matmul_type_dispatch(const struct ggml_compute_params * params,
+                                            struct ggml_tensor * dst,
+                                            const int32_t * expert_rows = NULL,
+                                            int64_t cur_a = 0,
+                                            int64_t cne1 = 0,
+                                            char * scratch = NULL) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_Q6_K:
+            return tiled_matmul_dispatch<block_q6_K, 16, false, 32>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_Q5_K:
+            return tiled_matmul_dispatch<block_q5_K, 32, true,  0>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_Q4_K:
+            return tiled_matmul_dispatch<block_q4_K, 32, true,  0>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_Q3_K:
+            return tiled_matmul_dispatch<block_q3_K, 16, false,  4>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_Q2_K:
+            return tiled_matmul_dispatch<block_q2_K, 16, true,  0>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_IQ4_XS:
+            return tiled_matmul_dispatch<block_iq4_xs, 32, false, 128>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_IQ2_XXS:
+            return tiled_matmul_dispatch<block_iq2_xxs, 32, false, 128>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_IQ2_XS:
+            return tiled_matmul_dispatch<block_iq2_xs, 16, false, 128>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_IQ2_S:
+            return tiled_matmul_dispatch<block_iq2_s, 16, false, 128>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_IQ3_XXS:
+            return tiled_matmul_dispatch<block_iq3_xxs, 32, false, 128>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_IQ3_S:
+            return tiled_matmul_dispatch<block_iq3_s, 32, false, 128>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_IQ1_S:
+            return tiled_matmul_dispatch<block_iq1_s, 32, false, 128>(params, dst, expert_rows, cur_a, cne1, scratch);
+        case GGML_TYPE_IQ1_M:
+            return tiled_matmul_dispatch<block_iq1_m, 16, false, 128>(params, dst, expert_rows, cur_a, cne1, scratch);
+        default:
+            return false;
+    }
+}
+
+// tiled K-quant matmul; returns true if the op was computed here,
+// false to fall through to the stock path
 bool ggml_compute_forward_mul_mat_tiled(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -1057,51 +1040,33 @@ bool ggml_compute_forward_mul_mat_tiled(
     if (params->use_ref) {
         return false;
     }
-    if (!ggml_tiled_matmul_supported(dst->src[0], dst->src[1])) {
+    if (!ggml_tiled_supported(dst->src[0], dst->src[1])) {
         return false;
     }
-    switch (dst->src[0]->type) {
-        case GGML_TYPE_Q6_K:
-            ggml_compute_forward_mul_mat_tiled_driver<block_q6_K, 16, false, 32>(params, dst);
-            break;
-        case GGML_TYPE_Q5_K:
-            ggml_compute_forward_mul_mat_tiled_driver<block_q5_K, 32, true,  0>(params, dst);
-            break;
-        case GGML_TYPE_Q4_K:
-            ggml_compute_forward_mul_mat_tiled_driver<block_q4_K, 32, true,  0>(params, dst);
-            break;
-        case GGML_TYPE_Q3_K:
-            ggml_compute_forward_mul_mat_tiled_driver<block_q3_K, 16, false,  4>(params, dst);
-            break;
-        case GGML_TYPE_Q2_K:
-            ggml_compute_forward_mul_mat_tiled_driver<block_q2_K, 16, true,  0>(params, dst);
-            break;
-        case GGML_TYPE_IQ4_XS:
-            ggml_compute_forward_mul_mat_tiled_driver<block_iq4_xs, 32, false, 128>(params, dst);
-            break;
-        case GGML_TYPE_IQ2_XXS:
-            ggml_compute_forward_mul_mat_tiled_driver<block_iq2_xxs, 32, false, 128>(params, dst);
-            break;
-        case GGML_TYPE_IQ2_XS:
-            ggml_compute_forward_mul_mat_tiled_driver<block_iq2_xs, 16, false, 128>(params, dst);
-            break;
-        case GGML_TYPE_IQ2_S:
-            ggml_compute_forward_mul_mat_tiled_driver<block_iq2_s, 16, false, 128>(params, dst);
-            break;
-        case GGML_TYPE_IQ3_XXS:
-            ggml_compute_forward_mul_mat_tiled_driver<block_iq3_xxs, 32, false, 128>(params, dst);
-            break;
-        case GGML_TYPE_IQ3_S:
-            ggml_compute_forward_mul_mat_tiled_driver<block_iq3_s, 32, false, 128>(params, dst);
-            break;
-        case GGML_TYPE_IQ1_S:
-            ggml_compute_forward_mul_mat_tiled_driver<block_iq1_s, 32, false, 128>(params, dst);
-            break;
-        case GGML_TYPE_IQ1_M:
-            ggml_compute_forward_mul_mat_tiled_driver<block_iq1_m, 16, false, 128>(params, dst);
-            break;
-        default:
-            return false;
+    if (!ggml_tiled_min_batch(dst->src[1]->ne[1])) {
+        return false;
     }
-    return true;
+    return ggml_tiled_matmul_type_dispatch(params, dst);
+}
+
+// MUL_MAT_ID (MoE), one expert; returns true if the expert was computed here,
+// per expert eligibility (type gate, batch floor) is decided here
+bool ggml_compute_forward_mul_mat_id_tiled(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor *         dst,
+        int64_t                            cur_a,
+        int64_t                            cne1,
+        const int32_t *                    expert_rows,
+        char *                             scratch) {
+    if (params->use_ref) {
+        return false;
+    }
+    if (!ggml_tiled_supported(dst->src[0], dst->src[1])) {
+        return false;
+    }
+    // profitability is per expert: the rows routed to this expert
+    if (!ggml_tiled_min_batch(cne1)) {
+        return false;
+    }
+    return ggml_tiled_matmul_type_dispatch(params, dst, expert_rows, cur_a, cne1, scratch);
 }
