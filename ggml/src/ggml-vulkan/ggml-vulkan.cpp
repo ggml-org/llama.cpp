@@ -6973,6 +6973,19 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->buffer_device_address = vk12_features.bufferDeviceAddress;
         device->vulkan_memory_model = vk12_features.vulkanMemoryModel;
 
+        // Feature bit is core-1.2, but the proc address still needs the KHR extension
+        // enabled on a pre-1.2 device (some drivers report the feature without listing the
+        // extension name) -- otherwise the later call resolves to a null function pointer.
+        if (device->buffer_device_address && device->properties.apiVersion < VK_API_VERSION_1_2) {
+            device_extensions.push_back("VK_KHR_buffer_device_address");
+        }
+
+        // Same pre-1.2 gap as above, for timeline semaphores (used unconditionally, not
+        // behind a capability check).
+        if (vk12_features.timelineSemaphore && device->properties.apiVersion < VK_API_VERSION_1_2) {
+            device_extensions.push_back("VK_KHR_timeline_semaphore");
+        }
+
         if (device->subgroup_size_control) {
             device->subgroup_min_size = subgroup_size_control_props.minSubgroupSize;
             device->subgroup_max_size = subgroup_size_control_props.maxSubgroupSize;
@@ -7099,7 +7112,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
             throw std::runtime_error("Unsupported device");
         }
 
-        device_extensions.push_back("VK_KHR_16bit_storage");
+        // Core since 1.1; some drivers stop listing it as an extension past that point.
+        if (device->properties.apiVersion < VK_API_VERSION_1_1) {
+            device_extensions.push_back("VK_KHR_16bit_storage");
+        }
 
 #ifdef GGML_VULKAN_VALIDATE
         device_extensions.push_back("VK_KHR_shader_non_semantic_info");
@@ -7222,6 +7238,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
             .setPEnabledExtensionNames(device_extensions);
         device_create_info.setPNext(&device_features2);
         device->device = device->physical_device.createDevice(device_create_info);
+
+        // Only ever init()'d against the instance; some ICDs don't resolve device-level
+        // extension functions through the instance-level trampoline alone.
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(device->device);
 
         if (device->device_fault) {
             device->pfn_vkGetDeviceFaultInfoEXT = (PFN_vkGetDeviceFaultInfoEXT)
