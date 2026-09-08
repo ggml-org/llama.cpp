@@ -327,9 +327,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     if (arch == LLM_ARCH_HRM_TEXT) {
         // 8 cache slots alias 2 physical blocks: 1 low-stack layer + 1 high-stack layer
-        ms.add_kv(LLM_KV_LAYERS_PER_STACK, uint32_t(1));
-        ms.add_kv(LLM_KV_H_CYCLES,         uint32_t(2));
-        ms.add_kv(LLM_KV_L_CYCLES,         uint32_t(3));
+        ms.add_kv(LLM_KV_HRM_LAYERS_PER_STACK, uint32_t(1));
+        ms.add_kv(LLM_KV_HRM_H_CYCLES,         uint32_t(2));
+        ms.add_kv(LLM_KV_HRM_L_CYCLES,         uint32_t(3));
     }
     ms.add_kv(LLM_KV_TOKENIZER_MODEL,         "no_vocab");
     // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,     n_embd);

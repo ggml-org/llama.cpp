@@ -930,16 +930,16 @@ class GGUFWriter:
         self.add_float32(Keys.LLM.EMBEDDING_SCALE.format(arch=self.arch), value)
 
     def add_layers_per_stack(self, value: int) -> None:
-        self.add_uint32(Keys.LLM.HRM_LAYERS_PER_STACK.format(arch=self.arch), value)
+        self.add_uint32(Keys.HRM.LLM_KV_HRM_LAYERS_PER_STACK, value)
 
     def add_h_cycles(self, value: int) -> None:
-        self.add_uint32(Keys.LLM.HRM_H_CYCLES.format(arch=self.arch), value)
+        self.add_uint32(Keys.HRM.LLM_KV_HRM_H_CYCLES, value)
 
     def add_l_cycles(self, value: int) -> None:
-        self.add_uint32(Keys.LLM.HRM_L_CYCLES.format(arch=self.arch), value)
+        self.add_uint32(Keys.HRM.LLM_KV_HRM_L_CYCLES, value)
 
     def add_prefix_lm(self, value: bool) -> None:
-        self.add_bool(Keys.LLM.HRM_PREFIX_LM.format(arch=self.arch), value)
+        self.add_bool(Keys.HRM.LLM_KV_HRM_PREFIX_LM, value)
 
     def add_adapter_count(self, count: int) -> None:
         self.add_uint32(Keys.Adapters.COUNT.format(arch=self.arch), count)

@@ -147,10 +147,6 @@ class Keys:
         TOKEN_SHIFT_COUNT                 = "{arch}.token_shift_count"
         INTERLEAVE_MOE_LAYER_STEP         = "{arch}.interleave_moe_layer_step"
         FULL_ATTENTION_INTERVAL           = "{arch}.full_attention_interval"
-        HRM_LAYERS_PER_STACK               = "{arch}.layers_per_stack"
-        HRM_H_CYCLES                       = "{arch}.h_cycles"
-        HRM_L_CYCLES                       = "{arch}.l_cycles"
-        HRM_PREFIX_LM                      = "{arch}.prefix_lm"
         NUM_LOOPS                         = "{arch}.num_loops"
         SKIP_LOOP_FINAL_NORM              = "{arch}.skip_loop_final_norm"
         HASH_LAYER_COUNT                  = "{arch}.hash_layer_count"
@@ -279,6 +275,12 @@ class Keys:
         LLM_KV_SPLIT_NO            = "split.no"
         LLM_KV_SPLIT_COUNT         = "split.count"
         LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count"
+
+    class HRM:
+        LLM_KV_HRM_LAYERS_PER_STACK = "hrm.layers_per_stack"
+        LLM_KV_HRM_H_CYCLES         = "hrm.h_cycles"
+        LLM_KV_HRM_L_CYCLES         = "hrm.l_cycles"
+        LLM_KV_HRM_PREFIX_LM        = "hrm.prefix_lm"
 
     class SSM:
         CONV_KERNEL    = "{arch}.ssm.conv_kernel"
@@ -1414,7 +1416,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POS_EMBD:                  "position_embd",
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
     MODEL_TENSOR.OUTPUT:                    "output",
-    MODEL_TENSOR.HRM_Z_L_INIT:               "hrm.z_l_init",
+    MODEL_TENSOR.HRM_Z_L_INIT:              "hrm.z_l_init",
     MODEL_TENSOR.DENSE_2_OUT:               "dense_2", # embeddinggemma 2_Dense
     MODEL_TENSOR.DENSE_3_OUT:               "dense_3", # embeddinggemma 2_Dense
     MODEL_TENSOR.HC_HEAD_FN:                "output_hc_fn",
