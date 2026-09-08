@@ -8,60 +8,107 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <memory>
 #include <stdio.h>
 #include "htp-ops.h"
 #include "htp/matmul-ops.h"
 #include "htp/flash-attn-ops.h"
 #include "htp/unary-ops.h"
+#include "htp/allreduce-ops.h"
 
 struct htp_opnode {
-    ggml_tensor * node = nullptr;
+    ggml_tensor * node   { nullptr };
+    htp_op_code   opcode { HTP_OP_INVALID };
+    int32_t       kernel_params[HTP_OP_MAX_KERN_PARAMS] {0};
 
-    std::vector<ggml_tensor *> fused;
+    std::vector<ggml_tensor *>                fused;
+    std::vector<std::shared_ptr<ggml_tensor>> dummy;
 
-    htp_op_code opcode = HTP_OP_INVALID;
+    std::vector<const ggml_tensor *> inputs;
+    std::vector<const ggml_tensor *> outputs;
+    std::string                      name;
 
-    std::vector<ggml_tensor *> extra_dsts;
-
-    int32_t kernel_params[HTP_OP_MAX_KERN_PARAMS] = {0};
-
-    htp_opnode(ggml_tensor * node = nullptr, std::vector<ggml_tensor *> fused = {}, htp_op_code opcode = HTP_OP_INVALID, std::vector<ggml_tensor *> extra_dsts = {})
-        : node(node), fused(std::move(fused)), opcode(opcode), extra_dsts(std::move(extra_dsts)) {}
-
-    ggml_op op() const {
-        return node->op;
+    int n_active_src(const ggml_tensor * t) const {
+        if (!t) return 0;
+        for (int i = GGML_MAX_SRC - 1; i >= 0; i--) {
+            if (t->src[i]) {
+                return i + 1;
+            }
+        }
+        return 0;
     }
 
-    const ggml_tensor * dst() const {
-        return fused.empty() ? node : fused.back();
+    void init(ggml_tensor * node) {
+        this->node = node;
+        if (this->node) {
+            this->name = ggml_op_desc(this->node);
+
+            // Build inputs (preserving optional nullptrs)
+            int n_inputs = n_active_src(this->node);
+            this->inputs.resize(n_inputs, nullptr);
+            for (int i = 0; i < n_inputs; i++) {
+                this->inputs[i] = this->node->src[i];
+            }
+
+            // Build outputs
+            this->outputs.push_back(this->dst());
+        }
+    }
+
+    htp_opnode(htp_op_code opcode = HTP_OP_INVALID, ggml_tensor * node = nullptr) : opcode(opcode) {
+        init(node);
+    }
+
+    ggml_op             op()   const { return node->op; }
+    const ggml_tensor * src0() const { return node->src[0]; }
+    const ggml_tensor * src1() const { return node->src[1]; }
+    const ggml_tensor * dst()  const { return outputs.empty() ? node : outputs.back(); }
+
+    ggml_tensor * add_dummy(const ggml_tensor & t) {
+        dummy.push_back(std::make_shared<ggml_tensor>(t));
+        return dummy.back().get();
     }
 
     void add_fused(ggml_tensor * t, bool extra_dst = false) {
         fused.push_back(t);
-        if (extra_dst) {
-            extra_dsts.push_back(t);
-        }
-    }
 
-    std::vector<const ggml_tensor *> get_outputs() const {
-        std::vector<const ggml_tensor *> res;
-        if (extra_dsts.empty()) {
-            res.push_back(dst());
+        name += "+";
+        name += ggml_op_desc(t);
+
+        if (extra_dst) {
+            outputs.push_back(t);
         } else {
-            res.push_back(node);
-            for (const auto * x : extra_dsts) {
-                res.push_back(x);
+            outputs.clear();
+            outputs.push_back(t);
+        }
+
+        // Remove the newly fused intermediate output tensor t from inputs (if it was there)
+        inputs.erase(std::remove(inputs.begin(), inputs.end(), t), inputs.end());
+
+        // Append new inputs from t, preserving middle nullptrs
+        int n_inputs = n_active_src(t);
+        for (int i = 0; i < n_inputs; i++) {
+            const auto * src = t->src[i];
+            if (!src) {
+                inputs.push_back(nullptr);
+            } else if (src != node &&
+                       std::find(fused.begin(), fused.end(), src) == fused.end() &&
+                       std::find(inputs.begin(), inputs.end(), src) == inputs.end()) {
+                inputs.push_back(src);
             }
         }
-        return res;
     }
 
-    const ggml_tensor * src0() const {
-        return node->src[0];
+    const std::vector<const ggml_tensor *> & get_inputs() const {
+        return inputs;
     }
 
-    const ggml_tensor * src1() const {
-        return node->src[1];
+    const std::vector<const ggml_tensor *> & get_outputs() const {
+        return outputs;
+    }
+
+    std::string op_name() const {
+        return name;
     }
 
     bool is_empty() const {
@@ -80,75 +127,6 @@ struct htp_opnode {
 
     bool same_input(const htp_opnode& n) const {
         return n.src1() == this->src1();
-    }
-
-    std::vector<const ggml_tensor *> get_inputs() const {
-        if (fused.empty()) {
-            int last_non_null = -1;
-            for (int i = 0; i < GGML_MAX_SRC; i++) {
-                if (node->src[i]) {
-                    last_non_null = i;
-                }
-            }
-            std::vector<const ggml_tensor *> inputs(last_non_null + 1, nullptr);
-            for (int i = 0; i <= last_non_null; i++) {
-                inputs[i] = node->src[i];
-            }
-            return inputs;
-        }
-
-        std::vector<const ggml_tensor *> inputs(GGML_MAX_SRC, nullptr);
-        std::vector<const ggml_tensor *> outputs;
-        outputs.push_back(node);
-        for (const auto * f : fused) {
-            outputs.push_back(f);
-        }
-
-        auto contains = [&](const std::vector<const ggml_tensor *> & vec, const ggml_tensor * t) {
-            for (const auto * x : vec) {
-                if (x == t) return true;
-            }
-            return false;
-        };
-
-        int count = 0;
-        auto add_input = [&](const ggml_tensor * t) {
-            if (t && !contains(outputs, t) && !contains(inputs, t)) {
-                if (count < (int)inputs.size()) {
-                    inputs[count++] = t;
-                } else {
-                    inputs.push_back(t);
-                }
-            }
-        };
-
-        for (int i = 0; i < GGML_MAX_SRC; i++) {
-            if (node->src[i]) {
-                add_input(node->src[i]);
-            }
-        }
-        for (const auto * f : fused) {
-            for (int i = 0; i < GGML_MAX_SRC; i++) {
-                if (f->src[i]) {
-                    add_input(f->src[i]);
-                }
-            }
-        }
-
-        inputs.resize(count);
-        return inputs;
-    }
-
-    std::string op_name() const {
-        if (fused.empty()) {
-            return ggml_op_desc(node);
-        }
-        std::string name = ggml_op_desc(node);
-        for (const auto * f : fused) {
-            name += "+";
-            name += ggml_op_desc(f);
-        }
-        return name;
     }
 };
 
@@ -337,7 +315,7 @@ struct htp_opformat {
     }
     void format_kernel_params(char * str, size_t max_size, const htp_opnode & node) {
         if (node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ID ||
-            node.opcode == HTP_OP_MUL_MAT_QKV || node.opcode == HTP_OP_MUL_MAT_FFN ||
+            node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX ||
             node.opcode == HTP_OP_MUL_MAT_ADD) {
             const auto * kparams = (const struct htp_mm_kernel_params *) node.kernel_params;
             const char * path = "unknown";

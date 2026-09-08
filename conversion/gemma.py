@@ -14,6 +14,8 @@ from .base import MmprojModel, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("GemmaForCausalLM")
+# [TAG_HF_EXAMPLE_GATED] google/gemma-2b is gated
+@ModelBase.example("trl-internal-testing/tiny-GemmaForCausalLM")
 class GemmaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA
 
@@ -68,6 +70,8 @@ class GemmaModel(TextModel):
 
 
 @ModelBase.register("Gemma2ForCausalLM")
+# [TAG_HF_EXAMPLE_GATED] google/gemma-2-9b-it is gated
+@ModelBase.example("trl-internal-testing/tiny-Gemma2ForCausalLM")
 class Gemma2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA2
 
@@ -118,6 +122,8 @@ class Gemma2Model(TextModel):
 
 
 @ModelBase.register("Gemma3ForCausalLM", "Gemma3ForConditionalGeneration")
+# [TAG_HF_EXAMPLE_GATED] google/gemma-3-4b-it is gated
+@ModelBase.example("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", "hf-tiny-v2/tiny-random-Gemma3ForCausalLM")
 class Gemma3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA3
 
@@ -174,6 +180,8 @@ class Gemma3Model(TextModel):
 
 
 @ModelBase.register("Gemma3TextModel")
+# [TAG_HF_EXAMPLE_GATED] google/embeddinggemma-300m is gated
+@ModelBase.example("hf-tiny-v2/tiny-random-Gemma3TextModel")
 class EmbeddingGemma(Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA_EMBEDDING
     module_paths = []
@@ -248,6 +256,8 @@ class EmbeddingGemma(Gemma3Model):
 
 
 @ModelBase.register("Gemma3ForConditionalGeneration")
+# [TAG_HF_EXAMPLE_GATED] google/gemma-3-4b-it is gated
+@ModelBase.example("trl-internal-testing/tiny-Gemma3ForConditionalGeneration")
 class Gemma3VisionModel(MmprojModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -352,6 +362,8 @@ class ConformerAudioModel(MmprojModel):
 
 
 @ModelBase.register("Gemma3nForConditionalGeneration")
+# [TAG_HF_EXAMPLE_GATED] google/gemma-3n-E2B-it is gated
+@ModelBase.example("hf-tiny-v2/tiny-random-Gemma3nForConditionalGeneration")
 class Gemma3nVisionAudioModel(ConformerAudioModel):
     has_audio_encoder = True
     has_vision_encoder = True
@@ -471,6 +483,8 @@ class Gemma3nVisionAudioModel(ConformerAudioModel):
 
 
 @ModelBase.register("Gemma3nForCausalLM", "Gemma3nForConditionalGeneration")
+# [TAG_HF_EXAMPLE_GATED] google/gemma-3n-E2B-it is gated
+@ModelBase.example("hf-tiny-v2/tiny-random-Gemma3nForConditionalGeneration")
 class Gemma3NModel(Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA3N
 
@@ -615,6 +629,7 @@ class Gemma3NModel(Gemma3Model):
 
 
 @ModelBase.register("Gemma4ForConditionalGeneration", "Gemma4ForCausalLM")
+@ModelBase.example("google/gemma-4-31B-it", "google/gemma-4-26B-A4B-it", "google/gemma-4-E2B-it")
 class Gemma4Model(Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4
 
@@ -665,7 +680,18 @@ class Gemma4Model(Gemma3Model):
         swa_layers = [t == "sliding_attention" for t in self.hparams["layer_types"]]
         self.gguf_writer.add_sliding_window_pattern(swa_layers)
 
-        head_dim_full = self.hparams["global_head_dim"]
+        per_layer_config = self.hparams.get("per_layer_config")
+        layer_types = self.hparams.get("layer_types", [])
+        if (head_dim_full := self.hparams.get("global_head_dim")) is None and per_layer_config is not None:
+            for layer_idx, layer_config in per_layer_config.items():
+                layer_idx = int(layer_idx)
+                if layer_idx < len(layer_types):
+                    if layer_types[layer_idx] == "full_attention" and "head_dim" in layer_config:
+                        head_dim_full = layer_config["head_dim"]
+                        break
+
+        assert head_dim_full is not None
+
         head_dim_swa = self.hparams["head_dim"]
         # correct the head dim for global/swa layers
         self.gguf_writer.add_key_length(head_dim_full)
@@ -685,8 +711,14 @@ class Gemma4Model(Gemma3Model):
             n_ff_arr = [n_ff if il < first_kv_shared_layer_idx else n_ff * 2 for il in range(self.block_count)]
             self.gguf_writer.add_feed_forward_length(n_ff_arr)
 
-        # handle num_global_key_value_heads
-        num_key_value_heads_full = self.hparams.get("num_global_key_value_heads")
+        if (num_key_value_heads_full := self.hparams.get("num_global_key_value_heads")) is None and per_layer_config is not None:
+            for layer_idx, layer_config in per_layer_config.items():
+                layer_idx = int(layer_idx)
+                if layer_idx < len(layer_types):
+                    if layer_types[layer_idx] == "full_attention" and "num_key_value_heads" in layer_config:
+                        num_key_value_heads_full = layer_config["num_key_value_heads"]
+                        break
+
         num_key_value_heads_swa = self.hparams.get("num_key_value_heads")
         if num_key_value_heads_full is not None and num_key_value_heads_swa is not None:
             value_arr = [num_key_value_heads_swa if is_swa else num_key_value_heads_full for is_swa in swa_layers]
@@ -708,7 +740,19 @@ class Gemma4Model(Gemma3Model):
         # IMPORTANT: this ROPE_FREQS tensor is ONLY used by the full_attention layers
         rope_params_full = self.hparams["rope_parameters"]["full_attention"]
         assert rope_params_full["rope_type"] == "proportional"
-        head_dim_full = (self.hparams["global_head_dim"])
+
+        per_layer_config = self.hparams.get("per_layer_config")
+        if (head_dim_full := self.hparams.get("global_head_dim")) is None and per_layer_config is not None:
+            layer_types = self.hparams.get("layer_types", [])
+            for layer_idx, layer_config in per_layer_config.items():
+                layer_idx = int(layer_idx)
+                if layer_idx < len(layer_types):
+                    if layer_types[layer_idx] == "full_attention" and "head_dim" in layer_config:
+                        head_dim_full = layer_config["head_dim"]
+                        break
+
+        assert head_dim_full is not None
+
         partial_rotary_factor_full = rope_params_full["partial_rotary_factor"]
         n_rot_full = int(head_dim_full * partial_rotary_factor_full / 2)
         n_unrot_full = int(head_dim_full / 2) - n_rot_full
@@ -766,6 +810,7 @@ class Gemma4Model(Gemma3Model):
 
 
 @ModelBase.register("Gemma4UnifiedForConditionalGeneration")
+@ModelBase.example("hf-tiny-v2/tiny-random-Gemma4UnifiedForConditionalGeneration")
 class Gemma4UnifiedModel(Gemma4Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4
 
@@ -786,6 +831,7 @@ class Gemma4UnifiedModel(Gemma4Model):
 
 
 @ModelBase.register("Gemma4AssistantForCausalLM", "Gemma4UnifiedAssistantForCausalLM")
+@ModelBase.example("google/gemma-4-31B-it-assistant", "google/gemma-4-26B-A4B-it-assistant", "google/gemma-4-E2B-it-assistant")
 class Gemma4AssistantModel(Gemma4Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4_ASSISTANT
 
@@ -806,6 +852,7 @@ class Gemma4AssistantModel(Gemma4Model):
 
 
 @ModelBase.register("Gemma4ForConditionalGeneration")
+@ModelBase.example("google/gemma-4-31B-it", "google/gemma-4-26B-A4B-it", "google/gemma-4-E2B-it")
 class Gemma4VisionAudioModel(MmprojModel):
     has_audio_encoder = True
     has_vision_encoder = True
@@ -884,6 +931,7 @@ class Gemma4VisionAudioModel(MmprojModel):
 
 
 @ModelBase.register("Gemma4UnifiedForConditionalGeneration")
+@ModelBase.example("hf-tiny-v2/tiny-random-Gemma4UnifiedForConditionalGeneration")
 class Gemma4UnifiedVisionAudioModel(Gemma4VisionAudioModel):
     has_audio_encoder = True
     has_vision_encoder = True

@@ -20,6 +20,31 @@ trace_pattern = re.compile(
     r"trace-evt\s+(?P<event>[A-Z_0-9\-]+):\s+thread\s+(?P<thread>\d+)\s+info\s+(?P<info>\d+)\s+(?P<state>start|stop)\s+(?P<cycles>\d+)"
 )
 
+device_pattern = re.compile(r"\b(HTP\d+(?::\d+)?)\s+(?:profile-op|trace-evt)\b")
+
+
+def extract_device(line):
+    m = device_pattern.search(line)
+    if m:
+        return m.group(1)
+    return "HTP0"
+
+
+def device_matches(record_device, target_device):
+    targets = [t.strip() for t in target_device.split(',')]
+    for target in targets:
+        if record_device == target:
+            return True
+        if record_device.startswith(target + ":"):
+            return True
+    return False
+
+
+def get_split_output_path(base_path, device_name):
+    safe_device = device_name.replace(':', '_')
+    root, ext = os.path.splitext(base_path)
+    return f"{root}-{safe_device}{ext}"
+
 
 def normalize_event_name(evt_type, info=0):
     if evt_type == "HVX_COMP":
@@ -54,7 +79,79 @@ class CycleUnwrapper:
         return raw + self.high_part
 
 
-def parse_log(file_path):
+class DeviceTimeMapper:
+    def __init__(self, dev, ops):
+        self.dev = dev
+        self.batches = []
+        for op in ops:
+            if op.get('device') == dev and op.get('name') == 'OPBATCH' and op.get('unwrapped_cycles_start') is not None:
+                cycles = op.get('cycles', 0)
+                usec = op.get('usec', 0)
+                start_cyc = op['unwrapped_cycles_start']
+                freq = (cycles / usec) if usec > 0 and cycles > 0 else 1000.0
+                if freq <= 0:
+                    freq = 1000.0
+                self.batches.append({
+                    'start_cycles': start_cyc,
+                    'cycles': cycles,
+                    'end_cycles': start_cyc + cycles,
+                    'usec': usec,
+                    'dur_ns': usec * 1000,
+                    'freq_mhz': freq,
+                })
+
+        self.batches.sort(key=lambda b: b['start_cycles'])
+
+        for i, b in enumerate(self.batches):
+            if i == 0:
+                b['start_time_ns'] = 0
+            else:
+                prev = self.batches[i - 1]
+                idle_cyc = max(0, b['start_cycles'] - prev['end_cycles'])
+                idle_ns = int(round((idle_cyc / prev['freq_mhz']) * 1000))
+                b['start_time_ns'] = prev['start_time_ns'] + prev['dur_ns'] + idle_ns
+
+        self.batch_starts = [b['start_cycles'] for b in self.batches]
+
+        valid_starts = [op['unwrapped_cycles_start'] for op in ops if op.get('device') == dev and op.get('unwrapped_cycles_start') is not None]
+        self.min_cyc = min(valid_starts) if valid_starts else 0
+        if self.batches:
+            self.default_freq = self.batches[0]['freq_mhz']
+        else:
+            freqs = [op['cycles'] / op['usec'] for op in ops if op.get('device') == dev and op.get('usec', 0) > 0 and op.get('cycles', 0) > 0]
+            self.default_freq = statistics.mean(freqs) if freqs else 1000.0
+
+    def get_batch(self, cyc):
+        if not self.batches:
+            return None
+        idx = bisect.bisect_right(self.batch_starts, cyc) - 1
+        if idx >= 0:
+            return self.batches[idx]
+        return self.batches[0]
+
+    def get_freq(self, cyc=None):
+        if cyc is not None:
+            b = self.get_batch(cyc)
+            if b is not None:
+                return b['freq_mhz']
+        return self.default_freq
+
+    def cycle_to_ns(self, cyc):
+        if cyc is None:
+            return 0
+        b = self.get_batch(cyc)
+        if b is not None:
+            return b['start_time_ns'] + int(round(((cyc - b['start_cycles']) / b['freq_mhz']) * 1000))
+        return int(round(((cyc - self.min_cyc) / self.default_freq) * 1000))
+
+    def dur_cycles_to_ns(self, cyc_start, cyc_dur):
+        if cyc_dur is None:
+            return 0
+        freq = self.get_freq(cyc_start)
+        return int(round((cyc_dur / freq) * 1000))
+
+
+def parse_log(file_path, limit=None, device_filter=None, op_filter_re=None):
     try:
         if file_path != "-":
             f = open(file_path, 'r', encoding='utf-8', errors='ignore')
@@ -67,14 +164,25 @@ def parse_log(file_path):
     all_ops: List[Dict[str, Any]] = []
     all_traces: List[Dict[str, Any]] = []
     current_op: Optional[Dict[str, Any]] = None
-    unwrapper = None
-    trace_unwrapper = None
+    ops_count_per_device = {}
+    if device_filter is not None:
+        for target in device_filter.split(','):
+            ops_count_per_device[target.strip()] = 0
+    limit_reached = False
+    unwrappers = {}
+    last_batch_start = {}
+    trace_unwrappers = {}
     line_idx = 0
 
     for line in f:
         line_idx += 1
-        if "|" in line and "profile-op" in line:
-            parts = [p.strip() for p in line.split("|")]
+        if "profile-op" not in line and "trace-evt" not in line:
+            continue
+        device = extract_device(line)
+
+        idx = line.find("profile-op")
+        if idx != -1 and "|" in line[idx:]:
+            parts = [p.strip() for p in line[idx:].split("|")]
             prefix = parts[0]
             prefix_match = re.search(r"profile-op\s+(?P<op_name>[A-Z_0-9+]+)", prefix)
             if not prefix_match:
@@ -115,14 +223,18 @@ def parse_log(file_path):
             if op_name == "OPBATCH":
                 if cycles_start_raw:
                     unwrapped_cycles_start = int(cycles_start_raw)
-                    unwrapper = CycleUnwrapper(unwrapped_cycles_start)
-                    trace_unwrapper = CycleUnwrapper(unwrapped_cycles_start)
+                    unwrappers[device] = CycleUnwrapper(unwrapped_cycles_start)
+                    last_batch_start[device] = unwrapped_cycles_start
+                    for k in list(trace_unwrappers.keys()):
+                        if k[0] == device:
+                            del trace_unwrappers[k]
             else:
-                if cycles_start_raw and unwrapper is not None:
-                    unwrapped_cycles_start = unwrapper.unwrap(int(cycles_start_raw))
+                if cycles_start_raw:
+                    device_unwrapper = unwrappers.get(device)
+                    if device_unwrapper is not None:
+                        unwrapped_cycles_start = device_unwrapper.unwrap(int(cycles_start_raw))
 
-            idx = line.find("profile-op ")
-            op_text = line[idx + 11:].strip() if idx != -1 else line.strip()
+            op_text = re.sub(r"^profile-op\s+", "", line[idx:]).strip() if idx != -1 else line.strip()
 
             evt_str = None
             if types.startswith("evt-cnt "):
@@ -142,24 +254,59 @@ def parse_log(file_path):
                 'cycles_start': int(cycles_start_raw) if cycles_start_raw else None,
                 'unwrapped_cycles_start': unwrapped_cycles_start,
                 'trace_events': [],
-                'line_num':     line_idx
+                'line_num':     line_idx,
+                'device':       device
             }
             all_ops.append(current_op)
+
+            # Check if matching early exit criteria
+            matched = False
+            matched_target = None
+            if device_filter is not None:
+                targets = [t.strip() for t in device_filter.split(',')]
+                for target in targets:
+                    if device == target or device.startswith(target + ":"):
+                        matched = True
+                        matched_target = target
+                        break
+            else:
+                matched = True
+                matched_target = device
+
+            if op_filter_re is not None and not op_filter_re.search(op_text):
+                matched = False
+
+            if matched:
+                if matched_target not in ops_count_per_device:
+                    ops_count_per_device[matched_target] = 0
+                ops_count_per_device[matched_target] += 1
+
+            if limit is not None and len(ops_count_per_device) > 0 and all(count >= limit for count in ops_count_per_device.values()):
+                limit_reached = True
+
+            if limit_reached and op_name == "OPBATCH":
+                break
             continue
 
         trace_match = trace_pattern.search(line)
         if trace_match:
+            thread = int(trace_match.group('thread'))
             raw_cyc = int(trace_match.group('cycles'))
             unwrapped_cyc = None
-            if trace_unwrapper is not None:
-                unwrapped_cyc = trace_unwrapper.unwrap(raw_cyc)
+            th_key = (device, thread)
+            if th_key not in trace_unwrappers:
+                batch_start = last_batch_start.get(device)
+                trace_unwrappers[th_key] = CycleUnwrapper(batch_start)
+            unwrapped_cyc = trace_unwrappers[th_key].unwrap(raw_cyc)
             all_traces.append({
-                'thread': int(trace_match.group('thread')),
+                'thread': thread,
                 'event':  trace_match.group('event'),
                 'info':   int(trace_match.group('info')),
                 'cycles': raw_cyc,
                 'unwrapped_cycles': unwrapped_cyc,
-                'state':  trace_match.group('state')
+                'state':  trace_match.group('state'),
+                'line_num': line_idx,
+                'device': device
             })
 
     f.close()
@@ -274,27 +421,24 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         logger.warning("No operators found after filtering.")
         return
 
-    # Compute average frequency
-    frequencies = []
-    for op in filtered_ops:
-        if op['usec'] > 0 and op['cycles'] > 0:
-            frequencies.append(op['cycles'] / op['usec'])
-    avg_freq_mhz = statistics.mean(frequencies) if frequencies else 1000.0
-    if avg_freq_mhz <= 0:
-        avg_freq_mhz = 1000.0
-
     # Assign start and end cycles to each operator
     for op in filtered_ops:
         op['start_cycles'] = op['unwrapped_cycles_start']
-        op['end_cycles'] = op['start_cycles'] + op['cycles']
+        op['end_cycles'] = op['start_cycles'] + op['cycles'] if op['start_cycles'] is not None else None
 
-    global_min_cyc = min(op['start_cycles'] for op in filtered_ops if op['start_cycles'] is not None)
+    # Get list of unique devices present in the operations
+    unique_devices = sorted(list(set(op['device'] for op in filtered_ops)))
+    device_to_idx = {dev: idx for idx, dev in enumerate(unique_devices)}
+    time_mappers = {dev: DeviceTimeMapper(dev, filtered_ops) for dev in unique_devices}
 
     # Process events
     completed_events = []
     if trace_events:
         trace_events = sorted(trace_events, key=lambda e: e['unwrapped_cycles'])
-        one_usec_cycles = max(avg_freq_mhz, 1.0)
+
+        one_usec_cycles = {}
+        for dev in unique_devices:
+            one_usec_cycles[dev] = max(time_mappers[dev].get_freq(), 1.0)
 
         active_starts = {}
         for e in trace_events:
@@ -303,31 +447,36 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
             info = e['info']
             state = e['state']
             cyc = e['unwrapped_cycles']
+            dev = e['device']
 
-            key = (t, evt, info)
+            key = (dev, t, evt, info)
             if state == 'start':
                 # Handle missing stop (start followed by another start)
                 if key in active_starts:
-                    prev_start = active_starts[key]
+                    prev_e = active_starts[key]
                     completed_events.append({
                         'thread': t,
                         'event': evt,
                         'info': info,
-                        'start_cyc': prev_start,
-                        'end_cyc': prev_start + one_usec_cycles,
+                        'start_cyc': prev_e['unwrapped_cycles'],
+                        'end_cyc': prev_e['unwrapped_cycles'] + one_usec_cycles.get(dev, 1000.0),
+                        'line_num': prev_e.get('line_num'),
                         'missing_stop': True,
+                        'device': dev
                     })
-                active_starts[key] = cyc
+                active_starts[key] = e
             elif state == 'stop':
                 if key in active_starts:
-                    start_cyc = active_starts[key]
+                    prev_e = active_starts[key]
                     del active_starts[key]
                     completed_events.append({
                         'thread': t,
                         'event': evt,
                         'info': info,
-                        'start_cyc': start_cyc,
+                        'start_cyc': prev_e['unwrapped_cycles'],
                         'end_cyc': cyc,
+                        'line_num': prev_e.get('line_num'),
+                        'device': dev
                     })
                 else:
                     # Handle missing start (stop without start)
@@ -335,31 +484,36 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
                         'thread': t,
                         'event': evt,
                         'info': info,
-                        'start_cyc': cyc - one_usec_cycles,
+                        'start_cyc': cyc - one_usec_cycles.get(dev, 1000.0),
                         'end_cyc': cyc,
+                        'line_num': e.get('line_num'),
                         'missing_start': True,
+                        'device': dev
                     })
 
         # Clear remaining unmatched starts
-        for key, start_cyc in active_starts.items():
-            t, evt, info = key
+        for key, prev_e in active_starts.items():
+            dev, t, evt, info = key
             completed_events.append({
                 'thread': t,
                 'event': evt,
                 'info': info,
-                'start_cyc': start_cyc,
-                'end_cyc': start_cyc + one_usec_cycles,
+                'start_cyc': prev_e['unwrapped_cycles'],
+                'end_cyc': prev_e['unwrapped_cycles'] + one_usec_cycles.get(dev, 1000.0),
+                'line_num': prev_e.get('line_num'),
                 'missing_stop': True,
+                'device': dev
             })
 
     completed_events.sort(key=lambda e: e['start_cyc'])
 
-    # Convert event times to microseconds and apply clamp rounded to 1ns resolution (3 decimals)
+    # Convert event times to nanoseconds using per-device / per-batch time mapper
     for e in completed_events:
-        start_us = (e['start_cyc'] - global_min_cyc) / avg_freq_mhz
-        dur_us = (e['end_cyc'] - e['start_cyc']) / avg_freq_mhz
-        e['ts_ns'] = int(round(start_us * 1000))
-        e['dur_ns'] = int(round(max(dur_us, 0.1) * 1000))
+        dev = e['device']
+        tm = time_mappers[dev]
+        e['ts_ns'] = tm.cycle_to_ns(e['start_cyc'])
+        dur_ns = tm.dur_cycles_to_ns(e['start_cyc'], e['end_cyc'] - e['start_cyc'])
+        e['dur_ns'] = max(dur_ns, 100)
 
     # Allocate slots (sub-tracks) to prevent overlaps on same virtual track
     active_slots = defaultdict(list)
@@ -368,14 +522,15 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         evt = e['event']
         ts = e['ts_ns']
         dur = e['dur_ns']
+        dev = e['device']
 
         norm_evt = normalize_event_name(evt, e['info'])
         if norm_evt == "DMA":
-            track_key = (t, "DMA")
+            track_key = (dev, t, "DMA")
         elif t == 10:
-            track_key = (t, "HMX")
+            track_key = (dev, t, "HMX")
         else:
-            track_key = (t, "HVX")
+            track_key = (dev, t, "HVX")
 
         slots = active_slots[track_key]
         allocated_slot = -1
@@ -395,6 +550,7 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         t = e['thread']
         evt = e['event']
         slot = e['slot']
+        dev = e['device']
 
         norm_evt = normalize_event_name(evt, e['info'])
         if norm_evt == "DMA":
@@ -408,56 +564,69 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
             evt_id = 2
 
         t_sort = 1 if t == 10 else t + 2
+        dev_idx = device_to_idx[dev]
+
         # Unique UUID for each sub-track
         if t == 10:
-            uuid = 20  # HMX thread track UUID
+            uuid = dev_idx * 10000000 + 20  # HMX thread track UUID
         else:
-            uuid = int(t_sort * 1000000 + evt_id * 1000 + slot)
+            uuid = int(dev_idx * 10000000 + t_sort * 1000000 + evt_id * 1000 + slot)
         e['uuid'] = uuid
-        used_tracks[uuid] = (t, track_evt, slot)
+        used_tracks[uuid] = (dev, t, track_evt, slot)
 
     with open(output_path, "wb") as f:
-        # Define Process with EXPLICIT child sorting
-        proc_desc = make_process_descriptor(1, "HTP NPU")
-        proc_packet = make_trace_packet(0, track_descriptor=make_track_descriptor(1, process=proc_desc, child_ordering=3))
-        write_trace_packet_to_file(f, proc_packet)
+        for dev in unique_devices:
+            dev_idx = device_to_idx[dev]
+            pid = dev_idx + 1
+            proc_uuid = dev_idx * 10000000 + 1
 
-        # Define Operators Track (UUID = 2) as a thread track at rank 1, tid 8
-        op_thread_desc = make_thread_descriptor(1, 8, "Ops", sort_index=1)
-        op_packet = make_trace_packet(0, track_descriptor=make_track_descriptor(2, parent_uuid=1, thread=op_thread_desc))
-        write_trace_packet_to_file(f, op_packet)
+            # Define Process with EXPLICIT child sorting
+            proc_name = dev
+            proc_desc = make_process_descriptor(pid, proc_name)
+            proc_packet = make_trace_packet(0, track_descriptor=make_track_descriptor(proc_uuid, process=proc_desc, child_ordering=3))
+            write_trace_packet_to_file(f, proc_packet)
 
-        # Define HMX Thread Track (UUID = 20) at rank 2, tid 9
-        hmx_thread_desc = make_thread_descriptor(1, 9, "HMX", sort_index=2)
-        hmx_packet = make_trace_packet(0, track_descriptor=make_track_descriptor(20, parent_uuid=1, thread=hmx_thread_desc))
-        write_trace_packet_to_file(f, hmx_packet)
+            # Define Operators Track as a thread track
+            op_track_uuid = dev_idx * 10000000 + 2
+            op_tid = pid * 100 + 8
+            op_thread_desc = make_thread_descriptor(pid, op_tid, "Ops", sort_index=1)
+            op_packet = make_trace_packet(0, track_descriptor=make_track_descriptor(op_track_uuid, parent_uuid=proc_uuid, thread=op_thread_desc))
+            write_trace_packet_to_file(f, op_packet)
 
-        # Define Thread Tracks (T0, T1, ..., T9)
-        unique_threads = sorted(list(set(t for (t, _, _) in used_tracks.values() if t != 10)))
-        for t in unique_threads:
-            thread_uuid = 10 + t
-            thread_name = f"T{t}"
-            # Sort order starts from index 3 (T0 -> 3, T1 -> 4, etc.)
-            sort_index = 3 + t
-            tid = 10 + t
-            thread_desc = make_thread_descriptor(1, tid, thread_name, sort_index=sort_index)
-            thread_packet = make_trace_packet(0, track_descriptor=make_track_descriptor(
-                thread_uuid,
-                parent_uuid=1,
-                thread=thread_desc,
-                sibling_order_rank=sort_index,
-                child_ordering=3  # Explicit child sorting for sub-tracks
-            ))
-            write_trace_packet_to_file(f, thread_packet)
+            # Define HMX Thread Track at rank 2
+            hmx_track_uuid = dev_idx * 10000000 + 20
+            hmx_tid = pid * 100 + 9
+            hmx_thread_desc = make_thread_descriptor(pid, hmx_tid, "HMX", sort_index=2)
+            hmx_packet = make_trace_packet(0, track_descriptor=make_track_descriptor(hmx_track_uuid, parent_uuid=proc_uuid, thread=hmx_thread_desc))
+            write_trace_packet_to_file(f, hmx_packet)
+
+            # Define Thread Tracks (T0, T1, ..., T9) for this device
+            dev_used_tracks = {uuid: val for uuid, val in used_tracks.items() if val[0] == dev}
+            unique_threads = sorted(list(set(t for (_, t, _, _) in dev_used_tracks.values() if t != 10)))
+            for t in unique_threads:
+                thread_uuid = dev_idx * 10000000 + 10 + t
+                thread_name = f"T{t}"
+                sort_index = 3 + t
+                tid = pid * 100 + 10 + t
+                thread_desc = make_thread_descriptor(pid, tid, thread_name, sort_index=sort_index)
+                thread_packet = make_trace_packet(0, track_descriptor=make_track_descriptor(
+                    thread_uuid,
+                    parent_uuid=proc_uuid,
+                    thread=thread_desc,
+                    sibling_order_rank=sort_index,
+                    child_ordering=3  # Explicit child sorting for sub-tracks
+                ))
+                write_trace_packet_to_file(f, thread_packet)
 
         # Define Track descriptors for sub-tracks parented to thread tracks
         for uuid in sorted(used_tracks.keys()):
-            if uuid == 20:
+            dev, t, evt, slot = used_tracks[uuid]
+            dev_idx = device_to_idx[dev]
+            if t == 10:
                 continue
-            t, evt, slot = used_tracks[uuid]
             name = f"T{t} {evt}"
             rank = 0 if evt == "HVX" else 1
-            parent_thread_uuid = 10 + t
+            parent_thread_uuid = dev_idx * 10000000 + 10 + t
             # Sibling merge behavior: 1 (SIBLING_MERGE_BEHAVIOR_BY_TRACK_NAME)
             track_desc = make_track_descriptor(
                 uuid=uuid,
@@ -470,15 +639,18 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
             write_trace_packet_to_file(f, track_packet)
 
         # Emit Operators
-        last_op_end_ns = 0
+        last_op_end_ns = defaultdict(int)
         for op in filtered_ops:
-            op_start_ns = int(round(((op['start_cycles'] - global_min_cyc) / avg_freq_mhz) * 1000))
-            op_dur_ns = int(round((op['cycles'] / avg_freq_mhz) * 1000))
+            dev = op['device']
+            dev_idx = device_to_idx[dev]
+            tm = time_mappers[dev]
+            op_start_ns = tm.cycle_to_ns(op['start_cycles'])
+            op_dur_ns = tm.dur_cycles_to_ns(op['start_cycles'], op['cycles'])
             if op['name'] != "OPBATCH":
-                if op_start_ns < last_op_end_ns:
-                    op_start_ns = last_op_end_ns
+                if op_start_ns < last_op_end_ns[dev]:
+                    op_start_ns = last_op_end_ns[dev]
                 clamped_dur = max(op_dur_ns, 100) # Clamp to 100ns (0.1us)
-                last_op_end_ns = op_start_ns + clamped_dur
+                last_op_end_ns[dev] = op_start_ns + clamped_dur
             else:
                 clamped_dur = max(op_dur_ns, 100)
 
@@ -495,24 +667,41 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
             if 'evt' in op and op['evt']:
                 debug_annots.append(make_debug_annotation("evt", string_val=op['evt']))
 
+            op_track_uuid = dev_idx * 10000000 + 2
+
             # Slice Begin
-            evt_begin = make_track_event(1, 2, name=f"{op['name']} ({op['dims']})", category="operator", debug_annotations=debug_annots)
+            evt_begin = make_track_event(1, op_track_uuid, name=f"{op['name']} ({op['dims']})", category="operator", debug_annotations=debug_annots)
             packet_begin = make_trace_packet(op_start_ns, track_event=evt_begin)
             write_trace_packet_to_file(f, packet_begin)
 
             # Slice End
-            evt_end = make_track_event(2, 2)
+            evt_end = make_track_event(2, op_track_uuid)
             packet_end = make_trace_packet(op_start_ns + clamped_dur, track_event=evt_end)
             write_trace_packet_to_file(f, packet_end)
 
         # Emit Thread Trace Events
         for e in completed_events:
             norm_name = normalize_event_name(e['event'], e['info'])
-            name = f"DMA {e['info']}" if norm_name == "DMA" else norm_name
+            if norm_name == "DMA":
+                name = f"DMA {e['info']}"
+            elif norm_name == "FENCE":
+                name = f"FENCE {e['info']}" if e.get('info') is not None and e['info'] != 0 else "FENCE"
+            else:
+                name = norm_name
+
             if e.get('missing_start') or e.get('missing_stop'):
                 name += "!"
 
             debug_annots = []
+            if 'line_num' in e and e['line_num'] is not None:
+                debug_annots.append(make_debug_annotation("line", int_val=e['line_num']))
+            if norm_name == "FENCE" and e.get('info') is not None:
+                debug_annots.append(make_debug_annotation("seq", int_val=e['info']))
+            elif norm_name == "DMA" and e.get('info') is not None:
+                debug_annots.append(make_debug_annotation("channel", int_val=e['info']))
+            elif e.get('info') is not None and e['info'] != 0:
+                debug_annots.append(make_debug_annotation("info", int_val=e['info']))
+
             if e.get('missing_start'):
                 debug_annots.append(make_debug_annotation("missing_start", string_val="true"))
             if e.get('missing_stop'):
@@ -536,6 +725,7 @@ def main():
     parser.add_argument("logfile", help="Path to hex-log profile file")
     parser.add_argument("-o", "--output", default="optrace.perfetto-trace", help="Output trace file path (default: optrace.perfetto-trace)")
     parser.add_argument("--filter", type=str, help="Regex filter matching against the original profile-op line")
+    parser.add_argument("--device", type=str, help="Device to filter by (e.g. HTP0, HTP0:0) or 'split' to generate separate files per device")
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--head", type=int, help="Limit to first N ops")
@@ -544,7 +734,21 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-    ops, traces = parse_log(args.logfile)
+    op_filter_re = None
+    if args.filter:
+        try:
+            op_filter_re = re.compile(args.filter)
+        except re.error as e:
+            logger.error(f"Invalid regex filter: {e}")
+            sys.exit(1)
+
+    limit = args.head if args.head is not None else None
+    device_filter = args.device if (args.device and args.device != "split") else None
+    ops, traces = parse_log(args.logfile, limit=limit, device_filter=device_filter, op_filter_re=op_filter_re)
+
+    if args.device and args.device != "split":
+        ops = [op for op in ops if device_matches(op['device'], args.device)]
+        traces = [t for t in traces if device_matches(t['device'], args.device)]
 
     if args.filter:
         try:
@@ -554,35 +758,60 @@ def main():
             sys.exit(1)
         ops = [op for op in ops if filter_re.search(op['op_text'])]
 
-    if args.head is not None:
-        ops = ops[:args.head]
-    elif args.tail is not None:
-        ops = ops[-args.tail:]
+    if args.head is not None or args.tail is not None:
+        ops_by_dev = defaultdict(list)
+        for op in ops:
+            ops_by_dev[op['device']].append(op)
+
+        filtered_ops = []
+        for dev in sorted(ops_by_dev.keys()):
+            dev_ops = ops_by_dev[dev]
+            if args.head is not None:
+                dev_ops = dev_ops[:args.head]
+            elif args.tail is not None:
+                dev_ops = dev_ops[-args.tail:]
+            filtered_ops.extend(dev_ops)
+        ops = filtered_ops
 
     if args.filter or args.head is not None or args.tail is not None:
-        valid_ranges = []
+        # Group valid ranges by device
+        valid_ranges_by_dev = defaultdict(list)
         for op in ops:
             start_cyc = op['unwrapped_cycles_start']
             end_cyc = start_cyc + op['cycles'] if start_cyc is not None else None
             if start_cyc is not None and end_cyc is not None:
-                valid_ranges.append((start_cyc, end_cyc))
+                valid_ranges_by_dev[op['device']].append((start_cyc, end_cyc))
 
-        valid_ranges.sort(key=lambda r: r[0])
-        range_starts = [r[0] for r in valid_ranges]
+        for dev in valid_ranges_by_dev:
+            valid_ranges_by_dev[dev].sort(key=lambda r: r[0])
+
+        range_starts_by_dev = {dev: [r[0] for r in ranges] for dev, ranges in valid_ranges_by_dev.items()}
 
         filtered_traces = []
         for e in traces:
             cyc = e['unwrapped_cycles']
             if cyc is None:
                 continue
+            dev = e['device']
+            range_starts = range_starts_by_dev.get(dev)
+            if not range_starts:
+                continue
             idx = bisect.bisect_right(range_starts, cyc) - 1
             if idx >= 0:
-                start, end = valid_ranges[idx]
+                start, end = valid_ranges_by_dev[dev][idx]
                 if start <= cyc <= end:
                     filtered_traces.append(e)
         traces = filtered_traces
 
-    generate_perfetto_trace(ops, traces, args.output)
+    if args.device == "split":
+        unique_devices = sorted(list(set(op['device'] for op in ops)))
+        for dev in unique_devices:
+            dev_ops = [op for op in ops if device_matches(op['device'], dev)]
+            dev_traces = [t for t in traces if device_matches(t['device'], dev)]
+            out_path = get_split_output_path(args.output, dev)
+            generate_perfetto_trace(dev_ops, dev_traces, out_path)
+    else:
+        generate_perfetto_trace(ops, traces, args.output)
 
 
 if __name__ == "__main__":

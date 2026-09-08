@@ -11,8 +11,9 @@
 #include <memory>
 
 // pseudo-env variable to identify preset-only arguments
-#define COMMON_ARG_PRESET_LOAD_ON_STARTUP "__PRESET_LOAD_ON_STARTUP"
-#define COMMON_ARG_PRESET_STOP_TIMEOUT    "__PRESET_STOP_TIMEOUT"
+#define COMMON_ARG_PRESET_LOAD_ON_STARTUP    "__PRESET_LOAD_ON_STARTUP"
+#define COMMON_ARG_PRESET_STOP_TIMEOUT       "__PRESET_STOP_TIMEOUT"
+#define COMMON_ARG_PRESET_DEDUP_CACHE_MODELS "__PRESET_DEDUP_CACHE_MODELS"
 
 //
 // CLI argument parsing
@@ -137,7 +138,6 @@ void common_params_add_preset_options(std::vector<common_arg> & args);
 struct common_models_handler {
     common_download_hf_plan plan;
     common_download_hf_plan plan_spec;
-    common_download_hf_plan plan_voc;
     common_download_opts opts;
 };
 

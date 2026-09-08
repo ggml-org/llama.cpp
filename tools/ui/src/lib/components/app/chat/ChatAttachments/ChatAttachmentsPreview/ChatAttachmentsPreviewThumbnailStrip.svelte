@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { Music, Video, FileText } from '@lucide/svelte';
-	import { HorizontalScrollCarousel } from '$lib/components/app/misc';
+	import { FileText, Music, Video } from '@lucide/svelte';
+	import { ScrollCarousel } from '$lib/components/app';
+	import { ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
+	import { ScrollCarouselVariant } from '$lib/enums';
 
 	interface PreviewItem {
 		id: string;
@@ -18,33 +19,35 @@
 		onNavigate: (index: number) => void;
 	}
 
-	let { items, currentIndex, onNavigate }: Props = $props();
+	let { currentIndex, items, onNavigate }: Props = $props();
 
 	function getFileExtension(name: string): string {
 		const parts = name.split('.');
+
 		if (parts.length > 1) {
 			return parts.pop()?.toUpperCase() ?? '';
 		}
+
 		return '';
 	}
 </script>
 
 {#if items.length > 1}
 	<div class="sticky bottom-0 z-10 mt-4 flex-shrink-0">
-		<HorizontalScrollCarousel class="max-w-full">
+		<ScrollCarousel class="max-w-full" variant={ScrollCarouselVariant.CENTER}>
 			{#each items as item, index (item.id)}
 				<button
-					data-thumbnail-index={index}
+					{...{ [UI_DATA_ATTRS.THUMBNAIL_INDEX]: index }}
+					aria-label={`Go to ${item.name}`}
 					class={[
 						'relative flex-shrink-0 cursor-pointer overflow-hidden rounded border-2 bg-black/80 backdrop-blur-sm transition-all hover:opacity-90',
 						index === currentIndex ? 'border-white' : 'border-transparent opacity-60',
 						'[&:not(:first-child)]:last:mr-4 [&:not(:last-child)]:first:ml-4'
 					]}
 					onclick={() => onNavigate(index)}
-					aria-label={`Go to ${item.name}`}
 				>
 					{#if item.isImage && item.preview}
-						<img src={item.preview} alt={item.name} class="h-12 w-12 object-cover" />
+						<img alt={item.name} class="h-12 w-12 object-cover" src={item.preview} />
 					{:else}
 						<div
 							class="bg-foreground-muted/50 flex h-12 w-12 flex-col items-center justify-center gap-0.5 py-1"
@@ -62,6 +65,6 @@
 					{/if}
 				</button>
 			{/each}
-		</HorizontalScrollCarousel>
+		</ScrollCarousel>
 	</div>
 {/if}

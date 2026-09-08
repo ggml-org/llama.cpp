@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { ActionIcon } from '$lib/components/app';
 	import { X } from '@lucide/svelte';
+	import { ActionIcon } from '$lib/components/app';
 
 	interface Props {
 		class?: string;
@@ -20,9 +20,9 @@
 		height = 'h-16',
 		id,
 		imageClass = '',
+		name,
 		onclick,
 		onRemove,
-		name,
 		preview,
 		readonly = false,
 		width = 'w-auto'
@@ -30,7 +30,7 @@
 </script>
 
 {#snippet image()}
-	<img src={preview} alt={name} class="{height} {width} cursor-pointer object-cover {imageClass}" />
+	<img alt={name} class="{height} {width} cursor-pointer object-cover {imageClass}" src={preview} />
 {/snippet}
 
 <div

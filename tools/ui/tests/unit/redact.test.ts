@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { redactValue } from '$lib/utils/redact';
+import { describe, expect, it } from 'vitest';
 
 describe('redactValue', () => {
 	it('returns [redacted] by default', () => {

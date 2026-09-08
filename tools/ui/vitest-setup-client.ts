@@ -21,12 +21,12 @@ beforeEach(() => {
 			if (url.includes('/server')) {
 				return new Response(
 					JSON.stringify({
-						mode: 'router',
-						version: 'test',
+						git_branch: 'test',
 						git_commit: 'test',
-						git_branch: 'test'
+						mode: 'router',
+						version: 'test'
 					}),
-					{ status: 200, headers: { 'Content-Type': 'application/json' } }
+					{ headers: { 'Content-Type': 'application/json' }, status: 200 }
 				);
 			}
 
@@ -34,28 +34,28 @@ beforeEach(() => {
 			if (/\/v1\/models|\/models\b/.test(url)) {
 				return new Response(
 					JSON.stringify({
-						object: 'list',
 						data: [
 							{
+								created: 0,
 								id: 'test-model.gguf',
+								in_cache: false,
+								meta: {},
 								object: 'model',
 								owned_by: 'llamacpp',
-								created: 0,
-								in_cache: false,
 								path: 'models/test-model.gguf',
-								status: { value: 'unloaded' },
-								meta: {}
+								status: { value: 'unloaded' }
 							}
 						],
 						models: [
 							{
+								details: {},
 								model: 'test-model.gguf',
-								name: 'Test Model',
-								details: {}
+								name: 'Test Model'
 							}
-						]
+						],
+						object: 'list'
 					}),
-					{ status: 200, headers: { 'Content-Type': 'application/json' } }
+					{ headers: { 'Content-Type': 'application/json' }, status: 200 }
 				);
 			}
 
@@ -65,15 +65,15 @@ beforeEach(() => {
 					JSON.stringify({
 						default_generation_settings: { n_ctx: 2048 }
 					}),
-					{ status: 200, headers: { 'Content-Type': 'application/json' } }
+					{ headers: { 'Content-Type': 'application/json' }, status: 200 }
 				);
 			}
 
 			// Mock /tools endpoint (used for built-in tools list)
 			if (url.includes('/tools')) {
 				return new Response(JSON.stringify([]), {
-					status: 200,
-					headers: { 'Content-Type': 'application/json' }
+					headers: { 'Content-Type': 'application/json' },
+					status: 200
 				});
 			}
 

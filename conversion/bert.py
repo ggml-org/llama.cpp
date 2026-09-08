@@ -15,6 +15,7 @@ from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
 
 
 @ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification")
+@ModelBase.example("BAAI/bge-small-en-v1.5", "dangvantuan/sentence-camembert-base")
 class BertModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
@@ -240,6 +241,7 @@ class BertModel(TextModel):
 
 
 @ModelBase.register("DistilBertModel", "DistilBertForMaskedLM", "DistilBertForSequenceClassification")
+@ModelBase.example("distilbert/distilbert-base-uncased")
 class DistilBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
@@ -263,6 +265,7 @@ class DistilBertModel(BertModel):
 
 
 @ModelBase.register("RobertaModel", "RobertaForSequenceClassification")
+@ModelBase.example("sentence-transformers/stsb-roberta-base")
 class RobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
@@ -312,6 +315,7 @@ class RobertaModel(BertModel):
 
 
 @ModelBase.register("NomicBertModel")
+@ModelBase.example("nomic-ai/nomic-embed-text-v1.5")
 class NomicBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
@@ -400,6 +404,7 @@ class NomicBertModel(BertModel):
 
 
 @ModelBase.register("NeoBERT", "NeoBERTLMHead", "NeoBERTForSequenceClassification")
+@ModelBase.example("chandar-lab/NeoBERT")
 class NeoBert(BertModel):
     model_arch = gguf.MODEL_ARCH.NEO_BERT
 
@@ -431,6 +436,7 @@ class NeoBert(BertModel):
 
 
 @ModelBase.register("EuroBertModel", "JinaEmbeddingsV5Model")
+@ModelBase.example("hf-tiny-v2/tiny-random-EuroBertModel", "jinaai/jina-embeddings-v5-text-nano")
 class EuroBertModel(TextModel):
     model_arch = gguf.MODEL_ARCH.EUROBERT
 
@@ -459,6 +465,7 @@ class EuroBertModel(TextModel):
 
 
 @ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
+@ModelBase.example("BAAI/bge-m3")
 class XLMRobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
     _lora_files = {}
@@ -561,6 +568,7 @@ class XLMRobertaModel(BertModel):
 
 
 @ModelBase.register("JinaBertModel", "JinaBertForMaskedLM")
+@ModelBase.example("jinaai/jina-embeddings-v2-base-en")
 class JinaBertV2Model(BertModel):
     model_arch = gguf.MODEL_ARCH.JINA_BERT_V2
 
@@ -588,6 +596,7 @@ class JinaBertV2Model(BertModel):
 
 
 @ModelBase.register("ModernBertModel", "ModernBertForMaskedLM", "ModernBertForSequenceClassification")
+@ModelBase.example("answerdotai/ModernBERT-base")
 class ModernBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.MODERN_BERT
 

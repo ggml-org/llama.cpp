@@ -5,6 +5,7 @@ from .llama import LlamaModel
 
 
 @ModelBase.register("NanbeigeForCausalLM")
+@ModelBase.example("Nanbeige/Nanbeige4.2-3B")
 class NanbeigeModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.NANBEIGE
     undo_permute = True

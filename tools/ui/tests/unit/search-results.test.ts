@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
 import {
-	extractSearchResults,
 	extractSearchQuery,
+	extractSearchResults,
 	faviconForUrl,
-	isWebSearchToolName
+	isWebSearchToolName,
+	looksLikeSearchResult
 } from '$lib/utils/search-results';
+import { describe, expect, it } from 'vitest';
 
 describe('extractSearchResults', () => {
 	it('parses the Exa fixture with multiple results', () => {
@@ -30,6 +31,7 @@ Highlights:
 # FIFA World Cup Schedule
 ...`;
 		const results = extractSearchResults(fixture);
+
 		expect(results.length).toBe(3);
 		expect(results[0].title).toContain('World Cup 2026');
 		expect(results[0].url).toBe('https://www.fifa.com/articles/match-schedule');
@@ -60,6 +62,7 @@ just a paragraph
 Title: b
 URL: not a url`;
 		const results = extractSearchResults(txt);
+
 		// Only middle one should pass (has title + url).
 		expect(results.length).toBe(1);
 		expect(results[0].url).toBe('https://x.com');
@@ -73,6 +76,7 @@ Author: alice
 Highlights:
 a highlight`;
 		const results = extractSearchResults(txt);
+
 		expect(results.length).toBe(1);
 		expect(results[0].title).toBe('only one');
 		expect(results[0].author).toBe('alice');
@@ -114,5 +118,29 @@ describe('isWebSearchToolName', () => {
 		expect(isWebSearchToolName('web_fetch')).toBe(false);
 		expect(isWebSearchToolName('read_file')).toBe(false);
 		expect(isWebSearchToolName('exec_shell_command')).toBe(false);
+	});
+});
+
+describe('extractSearchResults prefilter', () => {
+	it('returns the shared empty array for blobs without the wire format', () => {
+		// exec/file tool results never carry Title:/URL: field lines; the
+		// cheap prefilter must skip the line-split parse for them
+		const stdout = `${'make[1]: entering directory\n'.repeat(5000)}`;
+
+		expect(extractSearchResults(stdout)).toEqual([]);
+	});
+
+	it('returns an empty result when only one required field is present', () => {
+		expect(extractSearchResults('URL: https://example.com')).toEqual([]);
+		expect(extractSearchResults('Title: only a title')).toEqual([]);
+	});
+});
+
+describe('looksLikeSearchResult', () => {
+	it('requires both Title and URL field markers', () => {
+		expect(looksLikeSearchResult('Title: a\nURL: https://b')).toBe(true);
+		expect(looksLikeSearchResult('URL: https://b')).toBe(false);
+		expect(looksLikeSearchResult('plain stdout')).toBe(false);
+		expect(looksLikeSearchResult(undefined)).toBe(false);
 	});
 });

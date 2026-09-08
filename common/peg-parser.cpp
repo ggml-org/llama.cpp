@@ -10,7 +10,6 @@
 #include <initializer_list>
 #include <map>
 #include <memory>
-#include <nlohmann/json.hpp>
 #include <regex>
 #include <set>
 #include <stdexcept>
@@ -570,23 +569,34 @@ struct parser_executor {
     }
 
     static common_peg_parse_result handle_escape_sequence(common_peg_parse_context & ctx, size_t start, size_t & pos, const char delimiter) {
+        auto save = pos;
+
         ++pos; // consume '\'
         if (pos >= ctx.input.size()) {
             if (!ctx.is_lenient()) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
             }
+            pos = save; // suppress unmatched '\'
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
         }
 
         char c = ctx.input[pos];
+
         if (c == delimiter || c == '\\' || c == '/' || c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't') {
             ++pos;
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start, pos);
-        } else if (c == 'u') {
-            return handle_unicode_escape(ctx, start, pos);
-        } else {
-            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
         }
+
+        if (c == 'u') {
+            auto result = handle_unicode_escape(ctx, start, pos);
+            if (result.need_more_input()) {
+                pos = save; // suppress incomplete sequence
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
+            }
+            return result;
+        }
+
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
     }
 
     static common_peg_parse_result handle_unicode_escape(common_peg_parse_context & ctx, size_t start, size_t & pos) {
@@ -1109,8 +1119,8 @@ common_peg_parser common_peg_parser_builder::chars(const std::string & classes, 
     return wrap(arena_.add_parser(common_peg_chars_parser{classes, ranges, negated, min, max}));
 }
 
-common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, const nlohmann::ordered_json & schema, bool raw) {
-    return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::make_shared<nlohmann::ordered_json>(schema), raw}));
+common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, const common_json & schema, bool raw) {
+    return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::make_shared<common_json>(schema), raw}));
 }
 
 common_peg_parser common_peg_parser_builder::rule(const std::string & name, const common_peg_parser & p, bool trigger) {
@@ -1794,8 +1804,8 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
     }
 }
 
-static nlohmann::json serialize_parser_variant(const common_peg_parser_variant & variant) {
-    using json = nlohmann::json;
+static common_json serialize_parser_variant(const common_peg_parser_variant & variant) {
+    using json = common_json;
 
     return std::visit([](const auto & p) -> json {
         using T = std::decay_t<decltype(p)>;
@@ -1849,7 +1859,7 @@ static nlohmann::json serialize_parser_variant(const common_peg_parser_variant &
                 {"type", "schema"},
                 {"child", p.child},
                 {"name", p.name},
-                {"schema", p.schema ? *p.schema : nullptr},
+                {"schema", p.schema ? *p.schema : json(nullptr)},
                 {"raw", p.raw}
             };
         } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
@@ -1877,19 +1887,19 @@ static nlohmann::json serialize_parser_variant(const common_peg_parser_variant &
     }, variant);
 }
 
-nlohmann::json common_peg_arena::to_json() const {
-    auto parsers = nlohmann::json::array();
+common_json common_peg_arena::to_json() const {
+    auto parsers = common_json::array();
     for (const auto & parser : parsers_) {
         parsers.push_back(serialize_parser_variant(parser));
     }
-    return nlohmann::json{
+    return common_json{
         {"parsers", parsers},
         {"rules", rules_},
         {"root", root_}
     };
 }
 
-static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json & j) {
+static common_peg_parser_variant deserialize_parser_variant(const common_json & j) {
     if (!j.contains("type") || !j["type"].is_string()) {
         throw std::runtime_error("Parser variant JSON missing or invalid 'type' field");
     }
@@ -1958,9 +1968,9 @@ static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json
         }
         common_peg_chars_parser parser;
         parser.pattern = j["pattern"];
-        parser.negated = j["negated"];
-        parser.min_count = j["min_count"];
-        parser.max_count = j["max_count"];
+        parser.negated = j["negated"].get<bool>();
+        parser.min_count = j["min_count"].get<int>();
+        parser.max_count = j["max_count"].get<int>();
         for (const auto & range_json : j["ranges"]) {
             if (!range_json.contains("start") || !range_json.contains("end")) {
                 throw std::runtime_error("char_range missing 'start' or 'end' field");
@@ -1996,7 +2006,7 @@ static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json
         parser.child = j["child"].get<common_peg_parser_id>();
         parser.name = j["name"];
         if (!j["schema"].is_null()) {
-            parser.schema = std::make_shared<nlohmann::ordered_json>(j["schema"]);
+            parser.schema = std::make_shared<common_json>(j["schema"]);
         }
         parser.raw = j["raw"].get<bool>();
         return parser;
@@ -2058,7 +2068,7 @@ static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json
     throw std::runtime_error("Unknown parser type: " + type);
 }
 
-common_peg_arena common_peg_arena::from_json(const nlohmann::json & j) {
+common_peg_arena common_peg_arena::from_json(const common_json & j) {
     if (!j.contains("parsers") || !j["parsers"].is_array()) {
         throw std::runtime_error("JSON missing or invalid 'parsers' array");
     }
@@ -2098,7 +2108,7 @@ std::string common_peg_arena::save() const {
 }
 
 void common_peg_arena::load(const std::string & data) {
-    *this = from_json(nlohmann::json::parse(data));
+    *this = from_json(common_json::parse(data));
 }
 
 common_peg_arena build_peg_parser(const std::function<common_peg_parser(common_peg_parser_builder & builder)> & fn) {

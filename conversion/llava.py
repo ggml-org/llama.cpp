@@ -16,6 +16,7 @@ from .llama import LlamaModel
     "LlavaForConditionalGeneration", # pixtral
     "Mistral3ForConditionalGeneration", # mistral small 3.1
 )
+@ModelBase.example("mistral-community/pixtral-12b", "mistralai/Mistral-Small-3.1-24B-Instruct-2503")
 class LlavaVisionModel(MmprojModel):
     img_break_tok_id = -1
     use_break_tok = True

@@ -1,12 +1,11 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { mode } from 'mode-watcher';
-
-	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
-	import githubLightCss from 'highlight.js/styles/github.css?inline';
-	import { ColorMode } from '$lib/enums';
-	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
+	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX, UI_DATA_ATTRS } from '$lib/constants';
+	import { BooleanString, ColorMode } from '$lib/enums';
 	import { highlightCode } from '$lib/utils';
+	import githubLightCss from 'highlight.js/styles/github.css?inline';
+	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
+	import { mode } from 'mode-watcher';
 
 	interface Props {
 		code: string;
@@ -20,9 +19,9 @@
 	}
 
 	let {
+		class: className = '',
 		code,
 		language = 'text',
-		class: className = '',
 		maxHeight = '60vh',
 		maxWidth = '',
 		streaming = false
@@ -39,11 +38,15 @@
 	function loadHighlightTheme(isDark: boolean) {
 		if (!browser) return;
 
-		const existingThemes = document.querySelectorAll('style[data-highlight-theme-preview]');
+		const existingThemes = document.querySelectorAll(
+			`style[${UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW}]`
+		);
+
 		existingThemes.forEach((style) => style.remove());
 
 		const style = document.createElement('style');
-		style.setAttribute('data-highlight-theme-preview', 'true');
+
+		style.setAttribute(UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW, BooleanString.TRUE);
 		style.textContent = isDark ? githubDarkCss : githubLightCss;
 
 		document.head.appendChild(style);
@@ -51,6 +54,7 @@
 
 	function isAtBottom(): boolean {
 		if (!scrollEl) return false;
+
 		return (
 			scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop <=
 			SCROLL_BOTTOM_THRESHOLD_PX
@@ -59,8 +63,10 @@
 
 	function scrollToBottomOnFrame() {
 		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
+
 		pendingFrame = requestAnimationFrame(() => {
 			pendingFrame = null;
+
 			// User may scroll between scheduling and paint.
 			if (scrollEl && !userScrolledUp) {
 				scrollEl.scrollTop = scrollEl.scrollHeight;
@@ -70,12 +76,15 @@
 
 	function handleScrollEvent() {
 		if (!scrollEl) return;
+
 		const isScrollingUp = scrollEl.scrollTop < lastScrollTop;
+
 		if (isScrollingUp && !isAtBottom()) {
 			userScrolledUp = true;
 		} else if (isAtBottom()) {
 			userScrolledUp = false;
 		}
+
 		lastScrollTop = scrollEl.scrollTop;
 	}
 
@@ -96,7 +105,9 @@
 
 	$effect(() => {
 		void code;
+
 		if (!streaming || userScrolledUp) return;
+
 		scrollToBottomOnFrame();
 	});
 
@@ -105,10 +116,11 @@
 		if (!streaming || !scrollEl) return;
 
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
+
 		observer.observe(scrollEl, {
+			characterData: true,
 			childList: true,
-			subtree: true,
-			characterData: true
+			subtree: true
 		});
 
 		return () => observer.disconnect();
@@ -117,8 +129,8 @@
 
 <div
 	bind:this={scrollEl}
-	onscroll={handleScrollEvent}
 	class="code-preview-wrapper min-w-0 max-w-full overflow-auto rounded-xl border shadow-[0_1px_2px_0_rgb(0_0_0_/_0.05)] {className}"
+	onscroll={handleScrollEvent}
 	style="border-color: color-mix(in oklch, var(--border) 30%, transparent); background: var(--code-background); max-height: {maxHeight}; {maxWidth
 		? `max-width: ${maxWidth};`
 		: ''}"

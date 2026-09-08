@@ -87,6 +87,9 @@ struct mtmd_cli_context {
     mtmd::bitmaps bitmaps;
     std::vector<mtmd_helper::video_ptr> videos;
 
+    mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
+    std::string video_ffmpeg_bin_dir;
+
     mtmd::batch_ptr mbatch;
 
     // chat template
@@ -106,13 +109,20 @@ struct mtmd_cli_context {
     mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
         model = llama_init->model();
         lctx = llama_init->context();
+        if (!model || !lctx) {
+            exit(1);
+        }
         vocab = llama_model_get_vocab(model);
         smpl = common_sampler_init(model, params.sampling);
         n_threads = params.cpuparams.n_threads;
         batch = llama_batch_init(1, 0, 1); // batch for next token generation
         n_batch = params.n_batch;
 
-        if (!model || !lctx) {
+        init_vision_context(params);
+
+        if (!mtmd_helper_model_can_chat(lctx, ctx_vision.get())) {
+            LOG_ERR("Model does not support chat mode\n");
+            LOG_ERR("Hint: for TTS models, please use llama-tts\n");
             exit(1);
         }
 
@@ -128,8 +138,6 @@ struct mtmd_cli_context {
         use_jinja = params.use_jinja;
         chat_history.clear();
         LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(tmpls.get(), params.use_jinja, params.default_template_kwargs).c_str());
-
-        init_vision_context(params);
 
         // load antiprompt tokens for legacy templates
         if (params.chat_template == "vicuna") {
@@ -148,6 +156,7 @@ struct mtmd_cli_context {
         const char * clip_path = params.mmproj.path.c_str();
         mtmd_context_params mparams = mtmd_context_params_default();
         mparams.use_gpu          = params.mmproj_use_gpu;
+        mparams.device           = params.mmproj_device;
         mparams.print_timings    = true;
         mparams.n_threads        = params.cpuparams.n_threads;
         mparams.flash_attn_type  = params.flash_attn_type;
@@ -163,6 +172,12 @@ struct mtmd_cli_context {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
             exit(1);
         }
+
+        video_ffmpeg_bin_dir = params.video_ffmpeg_bin_dir;
+        init_opt.video_params.fps_target = params.video_fps;
+        init_opt.video_params.timestamp_interval_ms = params.video_timestamp_interval_ms;
+        init_opt.video_params.ffmpeg_bin_dir = video_ffmpeg_bin_dir.empty()
+                            ? nullptr : video_ffmpeg_bin_dir.c_str();
     }
 
     bool check_antiprompt(const llama_tokens & generated_tokens) {
@@ -177,7 +192,7 @@ struct mtmd_cli_context {
     }
 
     bool load_media(const std::string & fname) {
-        auto res = mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str(), false);
+        auto res = mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str(), false, init_opt);
         if (!res.bitmap) {
             return false;
         }
@@ -249,21 +264,50 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
     auto formatted_chat = chat_add_and_format(ctx, msg);
     LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
 
-    mtmd_input_text text;
-    text.text          = formatted_chat.data();
-    text.text_len      = formatted_chat.size();
-    text.add_special   = add_bos;
-    text.parse_special = true;
-
     if (g_is_interrupted) return 0;
 
-    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    // note: we replace the marker here instead of letting mtmd_tokenize() to do that
+    //       because we want to demonstrate how to use mtmd_tokenize_from_parts()
+
+    // split the formatted chat on the media marker to get text segments
+    const std::string marker = mtmd_default_marker();
+    std::vector<std::string> segments;
+    size_t start = 0;
+    size_t pos;
+    while ((pos = formatted_chat.find(marker, start)) != std::string::npos) {
+        segments.push_back(formatted_chat.substr(start, pos - start));
+        start = pos + marker.size();
+    }
+    segments.push_back(formatted_chat.substr(start));
+
     auto bitmaps_c_ptr = ctx.bitmaps.c_ptr();
-    int32_t res = mtmd_tokenize(ctx.ctx_vision.get(),
+    if (segments.size() - 1 != bitmaps_c_ptr.size()) {
+        LOG_ERR("Number of media markers (%zu) does not match number of loaded media (%zu)\n",
+                segments.size() - 1, bitmaps_c_ptr.size());
+        return 1;
+    }
+
+    // interleave text and media parts
+    std::vector<mtmd_input_text> texts(segments.size());
+    std::vector<mtmd_input_part> parts;
+    for (size_t i = 0; i < segments.size(); i++) {
+        texts[i] = {segments[i].data(), segments[i].size(), /* add_special */ false, /* parse_special */ true};
+        parts.push_back({&texts[i], nullptr});
+        if (i < bitmaps_c_ptr.size()) {
+            parts.push_back({nullptr, bitmaps_c_ptr[i]});
+        }
+    }
+    std::vector<const mtmd_input_part *> parts_ptr;
+    for (const auto & p : parts) {
+        parts_ptr.push_back(&p);
+    }
+
+    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    int32_t res = mtmd_tokenize_from_parts(ctx.ctx_vision.get(),
                         chunks.ptr.get(), // output
-                        &text, // text
-                        bitmaps_c_ptr.data(),
-                        bitmaps_c_ptr.size());
+                        parts_ptr.data(),
+                        parts_ptr.size(),
+                        add_bos);
     if (res != 0) {
         LOG_ERR("Unable to tokenize prompt, res = %d\n", res);
         return 1;

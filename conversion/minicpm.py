@@ -14,6 +14,7 @@ from .qwen import Qwen3_5TextModel
 
 
 @ModelBase.register("MiniCPMForCausalLM")
+@ModelBase.example("openbmb/MiniCPM-2B-sft-bf16")
 class MiniCPMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MINICPM
 
@@ -61,6 +62,7 @@ class MiniCPMModel(TextModel):
 
 
 @ModelBase.register("MiniCPM3ForCausalLM")
+@ModelBase.example("openbmb/MiniCPM3-4B")
 class MiniCPM3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MINICPM3
 
@@ -117,6 +119,7 @@ class MiniCPM3Model(TextModel):
 # the LM (text mode) and once as the mmproj (vision mode), mirroring the Qwen3-VL setup.
 
 @ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
+@ModelBase.example("openbmb/MiniCPM-V-4_6")
 class MiniCPMV4_6TextModel(Qwen3_5TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
@@ -134,6 +137,7 @@ class MiniCPMV4_6TextModel(Qwen3_5TextModel):
 
 
 @ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
+@ModelBase.example("openbmb/MiniCPM-V-4_6")
 class MiniCPMV4_6VisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

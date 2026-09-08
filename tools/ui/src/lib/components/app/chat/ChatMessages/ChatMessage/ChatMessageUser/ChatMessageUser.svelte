@@ -5,68 +5,43 @@
 		ChatMessageStatistics,
 		ChatMessageUserBubble
 	} from '$lib/components/app/chat';
-	import { getMessageEditContext } from '$lib/contexts';
+	import { getChatMessageEditContext } from '$lib/contexts';
+	import { ChatMessageStatisticsMode, MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { isLoading } from '$lib/stores/chat.svelte';
-	import { MessageRole, ChatMessageStatisticsMode } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
+	import { chatStore, settingsStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		siblingInfo?: ChatMessageSiblingInfo | null;
-		deletionInfo: {
-			totalCount: number;
-			userMessages: number;
-			assistantMessages: number;
-			messageTypes: string[];
-		} | null;
 		isLastUserMessage?: boolean;
 		nextAssistantMessage?: DatabaseMessage | null;
-		showDeleteDialog: boolean;
-		onEdit: () => void;
-		onDelete: () => void;
-		onConfirmDelete: () => void;
-		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
-		onNavigateToSibling?: (siblingId: string) => void;
-		onCopy: () => void;
 	}
 
 	let {
 		class: className = '',
-		message,
-		siblingInfo = null,
-		deletionInfo,
 		isLastUserMessage = false,
-		nextAssistantMessage = null,
-		showDeleteDialog,
-		onEdit,
-		onDelete,
-		onConfirmDelete,
-		onForkConversation,
-		onShowDeleteDialogChange,
-		onNavigateToSibling,
-		onCopy
+		message,
+		nextAssistantMessage = null
 	}: Props = $props();
 
 	// Get contexts
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 	const processingState = useProcessingState();
 
-	const currentConfig = $derived(config());
-	const isActivelyProcessing = $derived(isLastUserMessage && isLoading());
+	const currentConfig = $derived(settingsStore.config);
+	const isActivelyProcessing = $derived(isLastUserMessage && chatStore.isLoading);
 
 	// For agentic turns, prefer the cumulative agentic.llm totals over per-call timings.
 	let storedReadingStats = $derived.by(() => {
 		const timings = nextAssistantMessage?.timings;
+
 		if (!timings?.prompt_n || !timings?.prompt_ms) return null;
 
 		const agentic = timings.agentic;
 
 		return {
-			promptTokens: agentic ? agentic.llm.prompt_n : timings.prompt_n,
-			promptMs: agentic ? agentic.llm.prompt_ms : timings.prompt_ms
+			promptMs: agentic ? agentic.llm.prompt_ms : timings.prompt_ms,
+			promptTokens: agentic ? agentic.llm.prompt_n : timings.prompt_n
 		};
 	});
 
@@ -94,8 +69,8 @@
 		<ChatMessageEditForm />
 	{:else}
 		<ChatMessageUserBubble
-			content={message.content}
 			attachments={message.extra}
+			content={message.content}
 			renderMarkdown={true}
 		/>
 
@@ -107,8 +82,8 @@
 				>
 					<ChatMessageStatistics
 						mode={ChatMessageStatisticsMode.READING}
-						promptTokens={storedReadingStats!.promptTokens}
 						promptMs={storedReadingStats!.promptMs}
+						promptTokens={storedReadingStats!.promptTokens}
 					/>
 				</div>
 			</div>
@@ -120,10 +95,10 @@
 						class="inline-flex flex-wrap items-start justify-end gap-2 text-xs text-muted-foreground"
 					>
 						<ChatMessageStatistics
-							mode={ChatMessageStatisticsMode.READING}
 							isLive
-							promptTokens={liveStats.tokensProcessed}
+							mode={ChatMessageStatisticsMode.READING}
 							promptMs={liveStats.timeMs}
+							promptTokens={liveStats.tokensProcessed}
 						/>
 					</div>
 				</div>
@@ -132,21 +107,7 @@
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons
-					actionsPosition="right"
-					{deletionInfo}
-					justify="end"
-					{onConfirmDelete}
-					{onCopy}
-					{onDelete}
-					{onEdit}
-					{onForkConversation}
-					{onNavigateToSibling}
-					{onShowDeleteDialogChange}
-					{siblingInfo}
-					{showDeleteDialog}
-					role={MessageRole.USER}
-				/>
+				<ChatMessageActionIcons actionsPosition="right" justify="end" role={MessageRole.USER} />
 			</div>
 		{/if}
 	{/if}

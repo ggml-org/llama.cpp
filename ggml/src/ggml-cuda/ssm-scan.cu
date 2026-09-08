@@ -149,7 +149,7 @@ __global__ void __launch_bounds__(d_state, 1)
         const int src0_nb2, const int src0_nb3, const int src1_nb2, const int src1_nb3,
         const int src2_nb1, const int src2_nb2, const int src3_nb1,
         const int src4_nb2, const int src4_nb3, const int src5_nb2, const int src5_nb3,
-        const int64_t s_off, const int64_t n_head, const int64_t d_head, const int64_t n_group, const int64_t n_tok) {
+        const int64_t s_off, const int64_t n_head, const int64_t d_head, const int64_t n_group, const int64_t n_tok, const int64_t K) {
     const float   * GGML_CUDA_RESTRICT src0 = src0_ptr;
     const float   * GGML_CUDA_RESTRICT src1 = src1_ptr;
     const float   * GGML_CUDA_RESTRICT src2 = src2_ptr;
@@ -217,6 +217,16 @@ __global__ void __launch_bounds__(d_state, 1)
         if (lane == 0) {
             y_warp[i * stride_y] = state_sum;
         }
+
+        // Slot 0 is the final state written below; slots 1..K-1 are rollback snapshots.
+        const int64_t slot = n_tok - 1 - i;
+        if (K > 1 && slot > 0 && slot < K) {
+            float * s_snapshot_warp = (float *) ((char *) dst + s_off + (slot * gridDim.y + seq_idx) * src0_nb3 + head_idx * src0_nb2 + head_off * d_state);
+#pragma unroll
+            for (int j = 0; j < c_factor; j++) {
+                s_snapshot_warp[WARP_SIZE * j + lane] = state[j];
+            }
+        }
     }
 
     // write back the state
@@ -232,7 +242,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
                               const int src2_nb2, const int src3_nb1, const int src4_nb2, const int src4_nb3, const int src5_nb2,
                               const int src5_nb3, const int64_t s_off, const int64_t d_state, const int64_t head_dim,
                               const int64_t n_head, const int64_t n_group, const int64_t n_tok, const int64_t n_seq,
-                              cudaStream_t stream) {
+                              const int64_t K, cudaStream_t stream) {
     // NOTE: if you change conditions here, be sure to update the corresponding supports_op condition!
     if (src3_nb1 == sizeof(float)) {
         // Mamba-2
@@ -245,7 +255,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
             ggml_cuda_kernel_launch(ssm_scan_f32_group<128/WARP_SIZE, 128>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok);
+                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, K);
         } else if (d_state == 256) { // Falcon-H1
             constexpr int threads   = 256;
             constexpr int num_warps = threads/WARP_SIZE;
@@ -255,12 +265,13 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
             ggml_cuda_kernel_launch(ssm_scan_f32_group<256/WARP_SIZE, 256>, launch_params,
                     src0, src1, src2, src3, src4, src5, src6, dst,
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
-                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok);
+                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_off, n_head, head_dim, n_group, n_tok, K);
         } else {
             GGML_ABORT("doesn't support d_state!=(128 or 256).");
         }
     } else {
         // Mamba-1
+        GGML_ASSERT(K == 1);
         constexpr int threads = 128;
         GGML_ASSERT(n_head % threads == 0);
         GGML_ASSERT(head_dim == 1);
@@ -621,7 +632,6 @@ static void ssm_scan_ssd_f32_cuda(
     // Step 3: chunked SSD loop
     // Per chunk: pre_matmul (incl. M) + 4 cuBLAS (CB, Y, S@C, state update) + scale_state
     cublasHandle_t handle = ctx.cublas_handle();
-    CUBLAS_CHECK(cublasSetStream(handle, stream));
     const float alpha_one  = 1.0f;
     const float beta_zero  = 0.0f;
     const float beta_one   = 1.0f;
@@ -769,10 +779,12 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t ng  = src4->ne[1];  // n_group
     const int64_t n_t = src1->ne[2];  // number of tokens per sequence
     const int64_t n_s = src1->ne[3];  // number of sequences in the batch
+    const int32_t K_param = ggml_get_op_params_i32(dst, 0);
+    const int64_t K = K_param > 0 ? K_param : 1;
 
     const int64_t s_off = ggml_nelements(src1) * sizeof(float);
 
-    GGML_ASSERT(ggml_nelements(src1) + nc*nr*nh*n_s == ggml_nelements(dst));
+    GGML_ASSERT(ggml_nelements(src1) + K*nc*nr*nh*n_s == ggml_nelements(dst));
     GGML_ASSERT(src0->nb[0] == sizeof(float));
     GGML_ASSERT(src1->nb[0] == sizeof(float));
     GGML_ASSERT(src2->nb[0] == sizeof(float));
@@ -780,6 +792,7 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src4->nb[0] == sizeof(float));
     GGML_ASSERT(src5->nb[0] == sizeof(float));
     GGML_ASSERT(src6->nb[0] == sizeof(int32_t));
+    GGML_ASSERT(src3->ne[0] == 1 || K == 1);
 
     const float * src0_d = (const float *) src0->data;
     const float * src1_d = (const float *) src1->data;
@@ -814,6 +827,7 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const bool is_mamba2 = (src3->nb[1] == sizeof(float));
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const bool use_ssd = is_mamba2 && n_t > SSM_SSD_MIN_TOKENS
+                      && K == 1
                       && n_t <= SSM_SSD_MAX_TOKENS
                       && GGML_CUDA_CC_IS_NVIDIA(cc)
                       && cc >= GGML_CUDA_CC_TURING
@@ -841,5 +855,5 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ssm_scan_f32_cuda(src0_d, src1_d, src2_d, src3_d, src4_d, src5_d, src6_d, dst_d,
                       src0->nb[2], src0->nb[3], src1->nb[2], src1->nb[3], src2->nb[1], src2->nb[2],
                       src3->nb[1], src4->nb[2], src4->nb[3], src5->nb[2], src5->nb[3],
-                      s_off, nc, nr, nh, ng, n_t, n_s, stream);
+                      s_off, nc, nr, nh, ng, n_t, n_s, K, stream);
 }

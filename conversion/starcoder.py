@@ -4,6 +4,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("GPTBigCodeForCausalLM")
+@ModelBase.example("bigcode/gpt_bigcode-santacoder")
 class StarCoderModel(TextModel):
     model_arch = gguf.MODEL_ARCH.STARCODER
 
@@ -19,5 +20,6 @@ class StarCoderModel(TextModel):
 
 
 @ModelBase.register("Starcoder2ForCausalLM")
+@ModelBase.example("bigcode/starcoder2-3b")
 class StarCoder2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STARCODER2

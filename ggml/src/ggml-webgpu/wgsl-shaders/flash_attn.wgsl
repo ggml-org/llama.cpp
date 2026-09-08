@@ -5,34 +5,19 @@ enable subgroups;
 enable chromium_experimental_subgroup_matrix;
 
 #define BYTE_HELPERS
+#define FLASH_ATTN_SCALAR_KV
+#include "flash_attn_decls.tmpl"
 #include "common_decls.tmpl"
 
-#ifdef K_F32
-#define K_TYPE f32
-#elif defined(K_Q4_0) || defined(K_Q8_0)
-#define K_TYPE u32
-#else
-#define K_TYPE f16
-#endif
-
-#ifdef V_F32
-#define V_TYPE f32
-#elif defined(V_Q4_0) || defined(V_Q8_0)
-#define V_TYPE u32
-#else
-#define V_TYPE f16
-#endif
-
 // Default values
+// The actual values are defined in shader-lib.
 #define HEAD_DIM_QK 64
 #define HEAD_DIM_V 64
-
 // The number of rows/columns/k in a subgroup matrix. MxK * KxN = MxN
 // Note that the "K" here does not correspond to the K in attention's Q/K/V, it's just the common dimension.
 #define SG_MAT_M 8
 #define SG_MAT_N 8
 #define SG_MAT_K 8
-
 // Each workgroup processes one subgroup matrix of Q rows
 #define Q_TILE SG_MAT_M
 #define KV_TILE 16
@@ -41,104 +26,13 @@ enable chromium_experimental_subgroup_matrix;
 // Number of subgroup-matrix-width blocks that span the KV tile. SG_MAT_N must divide KV_TILE.
 #define KV_BLOCKS (KV_TILE / SG_MAT_N)
 
-struct Params {
-    offset_q: u32,
-    offset_k: u32,
-    offset_v: u32,
-    offset_mask: u32,
-    offset_sinks: u32,
-    offset_dst: u32,
-
-    // shapes of Q/K/V
-    n_heads: u32,
-    seq_len_q: u32,
-    seq_len_kv: u32,
-
-    // strides (in elements)
-    stride_q1: u32,
-    stride_q2: u32,
-    stride_q3: u32,
-    stride_k1: u32,
-    stride_k2: u32,
-    stride_k3: u32,
-    stride_v1: u32,
-    stride_v2: u32,
-    stride_v3: u32,
-    stride_mask3: u32,
-
-    // repeat factors for K/V, e.g., MHA vs. MQA vs. GQA
-    q_per_kv: u32,
-
-    // softmax params
-    scale: f32,
-    max_bias: f32,
-    logit_softcap: f32,
-    n_head_log2: f32,
-    m0: f32,
-    m1: f32,
-};
-
-@group(0) @binding(0) var<storage, read_write> Q: array<f32>;
-#ifdef KV_OVERLAP
-@group(0) @binding(1) var<storage, read_write> K: array<K_TYPE>;
-#define V K
-#else
-@group(0) @binding(1) var<storage, read_write> K: array<K_TYPE>;
-@group(0) @binding(2) var<storage, read_write> V: array<V_TYPE>;
-#endif
-
-#if defined(MASK) && defined(SINKS)
-#ifdef KV_OVERLAP
-@group(0) @binding(2) var<storage, read_write> mask: array<f16>;
-@group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
-#define DST_BINDING 4
-#define PARAMS_BINDING 5
-#else
-@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
-@group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
-#define DST_BINDING 5
-#define PARAMS_BINDING 6
-#endif
-#elif defined(MASK)
-#ifdef KV_OVERLAP
-@group(0) @binding(2) var<storage, read_write> mask: array<f16>;
-#define DST_BINDING 3
-#define PARAMS_BINDING 4
-#else
-@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
-#define DST_BINDING 4
-#define PARAMS_BINDING 5
-#endif
-#elif defined(SINKS)
-#ifdef KV_OVERLAP
-@group(0) @binding(2) var<storage, read_write> sinks: array<f32>;
-#define DST_BINDING 3
-#define PARAMS_BINDING 4
-#else
-@group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
-#define DST_BINDING 4
-#define PARAMS_BINDING 5
-#endif
-#else
-#ifdef KV_OVERLAP
-#define DST_BINDING 2
-#define PARAMS_BINDING 3
-#else
-#define DST_BINDING 3
-#define PARAMS_BINDING 4
-#endif
-#endif
-
-@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<vec4<f32>>;
-@group(0) @binding(PARAMS_BINDING) var<uniform> params: Params;
-
-// Just a very small float value.
-const FLOAT_MIN: f32 = -1.0e9;
-
 // The number of Q rows processed per workgroup
 var<workgroup> q_shmem: array<f16, Q_TILE * HEAD_DIM_QK>;
 
 #if !defined(K_DIRECT) || !defined(V_DIRECT)
+#define STAGING_SHMEM kv_shmem
+#define STAGING_OUT_TYPE f16
+#include "flash_attn_staging.tmpl"
 const kv_shmem_size = KV_TILE * max(HEAD_DIM_QK, HEAD_DIM_V);
 // we can reuse the same shmem for K and V since we only need one at a time
 var<workgroup> kv_shmem: array<f16, kv_shmem_size>;
@@ -174,50 +68,6 @@ fn calc_softmax_term(kv_idx: u32, q_tile_row: u32, slope: f32) -> f32 {
 #endif
     return v;
 }
-
-fn load_f32x4(buf: ptr<storage, array<vec4<f32>>, read_write>, scalar_index: u32) -> vec4<f32> {
-    return (*buf)[scalar_index >> 2u];
-}
-
-fn load_kx4(buf: ptr<storage, array<vec4<K_TYPE>>, read_write>, scalar_index: u32) -> vec4<K_TYPE> {
-    return (*buf)[scalar_index >> 2u];
-}
-
-#if !defined(K_DIRECT) || !defined(V_DIRECT)
-#define QUANT_SHMEM kv_shmem
-#define QUANT_OUT_TYPE f16
-#include "flash_attn_quant_staging.tmpl"
-
-#if !defined(K_DIRECT) && !defined(K_Q4_0) && !defined(K_Q8_0)
-fn load_k_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, k_head_offset: u32) {
-    for (var elem_idx = local_x; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE) {
-        let k_row = elem_idx / HEAD_DIM_QK;
-        let k_col = elem_idx % HEAD_DIM_QK;
-        let global_k_row = kv_tile + k_row;
-        let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
-        kv_shmem[elem_idx] = f16(select(
-            0.0,
-            K[global_k_row_offset + k_col],
-            global_k_row < params.seq_len_kv && k_col < HEAD_DIM_QK));
-    }
-}
-#endif
-
-#if !defined(V_DIRECT) && !defined(V_Q4_0) && !defined(V_Q8_0)
-fn load_v_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, v_head_offset: u32) {
-    for (var elem_idx = local_x; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE) {
-        let v_row = elem_idx / HEAD_DIM_V;
-        let v_col = elem_idx % HEAD_DIM_V;
-        let global_v_row = kv_tile + v_row;
-        let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
-        kv_shmem[elem_idx] = f16(select(
-            0.0,
-            V[global_v_row_offset + v_col],
-            global_v_row < params.seq_len_kv && v_col < HEAD_DIM_V));
-    }
-}
-#endif
-#endif
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,

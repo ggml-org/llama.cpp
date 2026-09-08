@@ -1,24 +1,18 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { FolderOpen, Plus, Loader2, Braces } from '@lucide/svelte';
-	import { toast } from 'svelte-sonner';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { Button } from '$lib/components/ui/button';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { Braces, FolderOpen, Loader2, Plus } from '@lucide/svelte';
 	import {
-		mcpResources,
-		mcpTotalResourceCount,
-		mcpResourceStore
-	} from '$lib/stores/mcp-resources.svelte';
-	import {
-		McpResourcesBrowser,
 		McpResourcePreview,
+		McpResourcesBrowser,
 		McpResourceTemplateForm
 	} from '$lib/components/app';
+	import { Button } from '$lib/components/ui/button';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { mcpStore } from '$lib/stores';
+	import type { MCPResourceContent, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
 	import { getResourceDisplayName } from '$lib/utils';
-	import type { MCPResourceInfo, MCPResourceContent, MCPResourceTemplateInfo } from '$lib/types';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		open?: boolean;
@@ -27,7 +21,7 @@
 		preSelectedUri?: string;
 	}
 
-	let { open = $bindable(false), onOpenChange, onAttach, preSelectedUri }: Props = $props();
+	let { onAttach, onOpenChange, open = $bindable(false), preSelectedUri }: Props = $props();
 
 	let selectedResources = new SvelteSet<string>();
 	let lastSelectedUri = $state<string | null>(null);
@@ -39,7 +33,7 @@
 	let templatePreviewLoading = $state(false);
 	let templatePreviewError = $state<string | null>(null);
 
-	const totalCount = $derived(mcpTotalResourceCount());
+	const totalCount = $derived(mcpStore.resources.totalResourceCount);
 
 	$effect(() => {
 		if (open) {
@@ -54,8 +48,7 @@
 	});
 
 	async function loadResources() {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-		const initialized = await mcpStore.ensureInitialized(perChatOverrides);
+		const initialized = await mcpStore.ensureInitialized();
 
 		if (initialized) {
 			await mcpStore.fetchAllResources();
@@ -132,29 +125,30 @@
 		isAttaching = true;
 
 		try {
-			const knownResource = mcpResourceStore.findResourceByUri(templatePreviewUri);
+			const knownResource = mcpStore.resources.findResourceByUri(templatePreviewUri);
 
 			if (knownResource) {
-				if (!mcpResourceStore.isAttached(knownResource.uri)) {
+				if (!mcpStore.resources.isAttached(knownResource.uri)) {
 					await mcpStore.attachResource(knownResource.uri);
 				}
 
 				toast.success(`Resource attached: ${knownResource.title || knownResource.name}`);
 			} else {
-				if (mcpResourceStore.isAttached(templatePreviewUri)) {
+				if (mcpStore.resources.isAttached(templatePreviewUri)) {
 					toast.info('Resource already attached');
 					handleOpenChange(false);
+
 					return;
 				}
 
 				const resourceInfo: MCPResourceInfo = {
-					uri: templatePreviewUri,
 					name: templatePreviewUri.split('/').pop() || templatePreviewUri,
-					serverName: selectedTemplate.serverName
+					serverName: selectedTemplate.serverName,
+					uri: templatePreviewUri
 				};
+				const attachment = mcpStore.resources.addAttachment(resourceInfo);
 
-				const attachment = mcpResourceStore.addAttachment(resourceInfo);
-				mcpResourceStore.updateAttachmentContent(attachment.id, templatePreviewContent);
+				mcpStore.resources.updateAttachmentContent(attachment.id, templatePreviewContent);
 
 				toast.success(`Resource attached: ${resourceInfo.name}`);
 			}
@@ -204,7 +198,7 @@
 
 	function getAllResourcesFlatInTreeOrder(): MCPResourceInfo[] {
 		const allResources: MCPResourceInfo[] = [];
-		const resourcesMap = mcpResources();
+		const resourcesMap = mcpStore.resources.serverResources;
 
 		for (const [serverName, serverRes] of resourcesMap.entries()) {
 			for (const resource of serverRes.resources) {
@@ -215,6 +209,7 @@
 		return allResources.sort((a, b) => {
 			const aName = getResourceDisplayName(a);
 			const bName = getResourceDisplayName(b);
+
 			return aName.localeCompare(bName);
 		});
 	}
@@ -256,8 +251,8 @@
 	);
 </script>
 
-<Dialog.Root {open} onOpenChange={handleOpenChange}>
-	<Dialog.Content class="max-h-[80vh] !max-w-4xl overflow-hidden p-0">
+<Dialog.Root onOpenChange={handleOpenChange} {open}>
+	<Dialog.Content class="max-h-[80vh] md:max-w-4xl! w-full! overflow-hidden p-0">
 		<Dialog.Header class="border-b border-border/30 px-6 py-4">
 			<Dialog.Title class="flex items-center gap-2">
 				<FolderOpen class="h-5 w-5" />
@@ -277,12 +272,12 @@
 		<div class="flex h-[500px] min-w-0">
 			<div class="w-72 shrink-0 overflow-y-auto border-r border-border/30 p-4">
 				<McpResourcesBrowser
-					onSelect={handleResourceSelect}
-					onToggle={handleResourceToggle}
-					onTemplateSelect={handleTemplateSelect}
-					selectedUris={selectedResources}
-					{selectedTemplateUri}
 					expandToUri={preSelectedUri}
+					onSelect={handleResourceSelect}
+					onTemplateSelect={handleTemplateSelect}
+					onToggle={handleResourceToggle}
+					{selectedTemplateUri}
+					selectedUris={selectedResources}
 				/>
 			</div>
 
@@ -318,32 +313,32 @@
 								<span class="text-sm">{templatePreviewError}</span>
 
 								<Button
-									size="sm"
-									variant="outline"
 									onclick={() => {
 										templatePreviewError = null;
 									}}
+									size="sm"
+									variant="outline"
 								>
 									Try again
 								</Button>
 							</div>
 						{:else}
 							<McpResourceTemplateForm
-								template={selectedTemplate}
-								onResolve={handleTemplateResolve}
 								onCancel={handleTemplateCancelForm}
+								onResolve={handleTemplateResolve}
+								template={selectedTemplate}
 							/>
 						{/if}
 					</div>
 				{:else if hasTemplateResult}
 					<!-- Template resolved: show preview -->
 					<McpResourcePreview
-						resource={{
-							uri: templatePreviewUri ?? '',
-							name: templatePreviewUri?.split('/').pop() || (templatePreviewUri ?? ''),
-							serverName: selectedTemplate?.serverName || ''
-						}}
 						preloadedContent={templatePreviewContent}
+						resource={{
+							name: templatePreviewUri?.split('/').pop() || (templatePreviewUri ?? ''),
+							serverName: selectedTemplate?.serverName || '',
+							uri: templatePreviewUri ?? ''
+						}}
 					/>
 				{:else if selectedResources.size === 1}
 					{@const allResources = getAllResourcesFlatInTreeOrder()}
@@ -367,10 +362,10 @@
 		</div>
 
 		<Dialog.Footer class="border-t border-border/30 px-6 py-4">
-			<Button variant="outline" onclick={() => handleOpenChange(false)}>Cancel</Button>
+			<Button onclick={() => handleOpenChange(false)} variant="outline">Cancel</Button>
 
 			{#if hasTemplateResult}
-				<Button onclick={handleAttachTemplateResource} disabled={isAttaching}>
+				<Button disabled={isAttaching} onclick={handleAttachTemplateResource}>
 					{#if isAttaching}
 						<Loader2 class="mr-2 {ICON_CLASS_DEFAULT} animate-spin" />
 					{:else}
@@ -380,7 +375,7 @@
 					Attach Resource
 				</Button>
 			{:else}
-				<Button onclick={handleAttach} disabled={selectedResources.size === 0 || isAttaching}>
+				<Button disabled={selectedResources.size === 0 || isAttaching} onclick={handleAttach}>
 					{#if isAttaching}
 						<Loader2 class="mr-2 {ICON_CLASS_DEFAULT} animate-spin" />
 					{:else}

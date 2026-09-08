@@ -1,7 +1,7 @@
+import { AttachmentType, UrlProtocol } from '$lib/enums';
+import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile } from '$lib/types/database';
 import type { Root as HastRoot } from 'hast';
 import { visit } from 'unist-util-visit';
-import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile } from '$lib/types/database';
-import { AttachmentType, UrlProtocol } from '$lib/enums';
 
 /**
  * Rehype plugin to resolve attachment image sources.

@@ -1,23 +1,17 @@
-import { config } from '$lib/stores/settings.svelte';
-import {
-	AUTHORIZATION_HEADER,
-	BEARER_PREFIX,
-	CONTENT_TYPE_HEADER,
-	CORS_PROXY_HEADER_PREFIX,
-	REDACTED_HEADERS
-} from '$lib/constants';
-import { MimeTypeApplication } from '$lib/enums';
 import { redactValue } from './redact';
+import { CORS_PROXY, HEADERS } from '$lib/constants';
+import { MimeTypeApplication } from '$lib/enums';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 
 /**
  * Get authorization headers for API requests
  * Includes Bearer token if API key is configured
  */
 export function getAuthHeaders(): Record<string, string> {
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 	const apiKey = currentConfig.apiKey?.toString().trim();
 
-	return apiKey ? { [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey}` } : {};
+	return apiKey ? { [HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKey}` } : {};
 }
 
 /**
@@ -25,14 +19,14 @@ export function getAuthHeaders(): Record<string, string> {
  */
 export function getJsonHeaders(): Record<string, string> {
 	return {
-		[CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON,
+		[HEADERS.CONTENT_TYPE]: MimeTypeApplication.JSON,
 		...getAuthHeaders()
 	};
 }
 
 /**
  * Sanitize HTTP headers by redacting sensitive values.
- * Known sensitive headers (from REDACTED_HEADERS) and any extra headers
+ * Known sensitive headers (from HEADERS.REDACTED) and any extra headers
  * specified by the caller are fully redacted. Headers listed in
  * `partialRedactHeaders` are partially redacted, showing only the
  * specified number of trailing characters.
@@ -59,8 +53,8 @@ export function sanitizeHeaders(
 
 	for (const [key, value] of normalized.entries()) {
 		const normalizedKey = key.toLowerCase();
-		const unproxiedKey = normalizedKey.startsWith(CORS_PROXY_HEADER_PREFIX)
-			? normalizedKey.slice(CORS_PROXY_HEADER_PREFIX.length)
+		const unproxiedKey = normalizedKey.startsWith(CORS_PROXY.HEADER_PREFIX)
+			? normalizedKey.slice(CORS_PROXY.HEADER_PREFIX.length)
 			: normalizedKey;
 		const partialChars =
 			partialRedactHeaders?.get(normalizedKey) ?? partialRedactHeaders?.get(unproxiedKey);
@@ -68,8 +62,8 @@ export function sanitizeHeaders(
 		if (partialChars !== undefined) {
 			sanitized[key] = redactValue(value, partialChars);
 		} else if (
-			REDACTED_HEADERS.has(normalizedKey) ||
-			REDACTED_HEADERS.has(unproxiedKey) ||
+			HEADERS.REDACTED.has(normalizedKey) ||
+			HEADERS.REDACTED.has(unproxiedKey) ||
 			redactedHeaders.has(normalizedKey) ||
 			redactedHeaders.has(unproxiedKey)
 		) {

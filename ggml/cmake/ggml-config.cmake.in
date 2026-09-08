@@ -110,9 +110,20 @@ set_and_check(GGML_INCLUDE_DIR "@PACKAGE_GGML_INCLUDE_INSTALL_DIR@")
 set_and_check(GGML_LIB_DIR "@PACKAGE_GGML_LIB_INSTALL_DIR@")
 #set_and_check(GGML_BIN_DIR "@PACKAGE_GGML_BIN_INSTALL_DIR@")
 
+if (NOT GGML_SHARED_LIB AND GGML_CPU_KLEIDIAI)
+    unset(KLEIDIAI_LIBRARY CACHE)
+    unset(KLEIDIAI_LIBRARY)
+    find_library(KLEIDIAI_LIBRARY kleidiai
+        REQUIRED
+        HINTS ${GGML_LIB_DIR}
+        NO_CMAKE_FIND_ROOT_PATH)
+    list(APPEND GGML_CPU_INTERFACE_LINK_LIBRARIES ${KLEIDIAI_LIBRARY})
+endif()
+
 if(NOT TARGET ggml::ggml)
     find_package(Threads REQUIRED)
 
+    unset(GGML_LIBRARY CACHE)
     find_library(GGML_LIBRARY ggml
         REQUIRED
         HINTS ${GGML_LIB_DIR}
@@ -121,8 +132,10 @@ if(NOT TARGET ggml::ggml)
     add_library(ggml::ggml UNKNOWN IMPORTED)
     set_target_properties(ggml::ggml
         PROPERTIES
-            IMPORTED_LOCATION "${GGML_LIBRARY}")
+            IMPORTED_LOCATION "${GGML_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${GGML_INCLUDE_DIR}")
 
+    unset(GGML_BASE_LIBRARY CACHE)
     find_library(GGML_BASE_LIBRARY ggml-base
         REQUIRED
         HINTS ${GGML_LIB_DIR}
@@ -132,6 +145,7 @@ if(NOT TARGET ggml::ggml)
     set_target_properties(ggml::ggml-base
         PROPERTIES
             IMPORTED_LOCATION "${GGML_BASE_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${GGML_INCLUDE_DIR}"
             INTERFACE_LINK_LIBRARIES "${GGML_BASE_INTERFACE_LINK_LIBRARIES}")
 
     set(_ggml_all_targets "")
@@ -140,6 +154,7 @@ if(NOT TARGET ggml::ggml)
             string(REPLACE "-" "_" _ggml_backend_pfx "${_ggml_backend}")
             string(TOUPPER "${_ggml_backend_pfx}" _ggml_backend_pfx)
 
+            unset(${_ggml_backend_pfx}_LIBRARY CACHE)
             find_library(${_ggml_backend_pfx}_LIBRARY ${_ggml_backend}
                 REQUIRED
                 HINTS ${GGML_LIB_DIR}

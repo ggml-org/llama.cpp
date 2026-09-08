@@ -1,3 +1,10 @@
+#ifndef SRC0
+#define SRC0 src0
+#endif
+#ifndef SRC1
+#define SRC1 src1
+#endif
+
 #ifdef VEC
 #define VEC_SIZE 4
 #define SHMEM_TYPE vec4<f16>
@@ -39,7 +46,7 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let src0_idx = batch_offset + global_m * params.stride_01 + global_k;
         let src0_val = select( // taking a slight performance hit to avoid oob
             SRC0_TYPE(0.0),
-            src0[src0_idx/VEC_SIZE],
+            SRC0[src0_idx/VEC_SIZE],
             global_m < params.m && global_k < params.k);
         store_shmem(SHMEM_TYPE(src0_val), elem_idx);
     }
@@ -57,7 +64,7 @@ fn init_shmem_src1(thread_id: u32, batch_offset: u32, offset_n: u32, k_outer: u3
         let src1_idx = batch_offset + global_n * params.stride_11 + global_k;
         let src1_val = select(
             SRC1_TYPE(0.0),
-            src1[src1_idx/VEC_SIZE],
+            SRC1[src1_idx/VEC_SIZE],
             global_n < params.n && global_k < params.k);
         store_shmem(SHMEM_TYPE(src1_val), TILE_SRC0_SHMEM + elem_idx);
     }

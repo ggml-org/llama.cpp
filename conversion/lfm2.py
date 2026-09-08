@@ -13,6 +13,7 @@ from .gemma import ConformerAudioModel
 
 
 @ModelBase.register("Lfm2ForCausalLM", "LFM2ForCausalLM")
+@ModelBase.example("LiquidAI/LFM2-1.2B", "LiquidAI/LFM2.5-350M")
 class LFM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2
 
@@ -65,6 +66,7 @@ class LFM2Model(TextModel):
 
 
 @ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel")
+@ModelBase.example("LiquidAI/LFM2.5-ColBERT-350M", "LiquidAI/LFM2.5-Embedding-350M")
 class LFM2ColBertModel(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
     dense_tensor_name = "dense_2"
@@ -93,6 +95,7 @@ class LFM2ColBertModel(LFM2Model):
 
 
 @ModelBase.register("Lfm2MoeForCausalLM")
+@ModelBase.example("LiquidAI/LFM2-8B-A1B")
 class LFM2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2MOE
 
@@ -166,6 +169,7 @@ class LFM2MoeModel(TextModel):
 
 
 @ModelBase.register("Lfm2VlForConditionalGeneration")
+@ModelBase.example("LiquidAI/LFM2-VL-450M")
 class LFM2VLModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -200,6 +204,7 @@ class LFM2VLModel(MmprojModel):
 
 
 @ModelBase.register("Lfm2AudioForConditionalGeneration")
+@ModelBase.example("LiquidAI/LFM2.5-Audio-1.5B", "LiquidAI/LFM2-Audio-1.5B")
 class LFM2AudioModel(ConformerAudioModel):
     has_vision_encoder = False
     has_audio_encoder = True
@@ -238,6 +243,7 @@ class LFM2AudioModel(ConformerAudioModel):
 
 
 @ModelBase.register("Lfm25AudioTokenizer")
+@ModelBase.example("LiquidAI/LFM2.5-Audio-1.5B")
 class LFM25AudioTokenizer(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
 

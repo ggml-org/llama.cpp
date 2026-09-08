@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { RefreshCw } from '@lucide/svelte';
 	import {
 		SettingsChatDesktopSidebar,
 		SettingsChatFields,
@@ -7,56 +8,57 @@
 		SettingsChatToolsTab,
 		SettingsFooter
 	} from '$lib/components/app/settings';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { Button } from '$lib/components/ui/button';
 	import {
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
 		SETTINGS_CHAT_SECTIONS,
-		SETTINGS_SECTION_TITLES
+		SETTINGS_SECTION_SLUGS
 	} from '$lib/constants';
-	import type { SettingsSection } from '$lib/types';
-	import { RouterService } from '$lib/services/router.service';
-	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui.enums';
+	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
+	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
+	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';
-	import { goto } from '$app/navigation';
-	import { Button } from '$lib/components/ui/button';
-	import { RefreshCw } from '@lucide/svelte';
-	import { page } from '$app/state';
-	import { setChatSettingsConfigContext } from '$lib/contexts';
-	import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
 	interface Props {
 		initialSection?: string;
-		getSectionHref?: (section: SettingsSection) => string;
+		onSectionChange?: (section: SettingsSectionTitle) => void;
+		onClose?: () => void;
 	}
 
-	let { initialSection, getSectionHref }: Props = $props();
+	let { initialSection, onClose, onSectionChange }: Props = $props();
 
-	let activeSlug = $derived(
-		initialSection ?? (page.params as Record<string, string | undefined>).section ?? 'general'
-	);
+	let activeSlug = $derived(initialSection ?? 'general');
+
+	function handleSectionChange(section: SettingsSectionTitle) {
+		const found = SETTINGS_CHAT_SECTIONS.find((s) => s.title === section);
+
+		if (found) {
+			activeSlug = found.slug;
+		}
+
+		onSectionChange?.(section);
+	}
 
 	let currentSection = $derived(
 		SETTINGS_CHAT_SECTIONS.find((section) => section.slug === activeSlug) ||
 			SETTINGS_CHAT_SECTIONS[0]
 	);
 
-	let localConfig: SettingsConfigType = $state({ ...config() });
+	let localConfig: SettingsConfigType = $state({ ...settingsStore.config });
 
 	let mobileHeader: { updateCarousel: () => void } | undefined;
 
 	let fetchInitiated = false;
 
 	$effect(() => {
-		if (isRouterMode() && currentSection.fields && !fetchInitiated) {
+		if (serverStore.isRouterMode && currentSection.fields?.length && !fetchInitiated) {
 			fetchInitiated = true;
 
 			void modelsStore
 				.fetch()
 				.then(() => modelsStore.fetchRouterModels())
-				.then(() => modelsStore.fetchModalitiesForLoadedModels())
+				.then(() => modelsStore.props.fetchModalitiesForLoadedModels())
 				.then(() => modelsStore.ensureFirstModelSelected());
 		}
 	});
@@ -71,7 +73,7 @@
 	}
 
 	function handleReset() {
-		localConfig = { ...config() };
+		localConfig = { ...settingsStore.config };
 		setMode(localConfig.theme as ColorMode);
 		mobileHeader?.updateCarousel();
 	}
@@ -87,6 +89,7 @@
 			} catch (error) {
 				alert('Invalid JSON in custom parameters. Please check the format and try again.');
 				console.error(error);
+
 				return;
 			}
 		}
@@ -96,64 +99,57 @@
 		for (const field of NUMERIC_FIELDS) {
 			if (processedConfig[field] !== undefined && processedConfig[field] !== '') {
 				const numValue = Number(processedConfig[field]);
+
 				if (!isNaN(numValue)) {
 					if ((POSITIVE_INTEGER_FIELDS as readonly string[]).includes(field)) {
-						processedConfig[field] = Math.max(1, Math.round(numValue));
+						const entryByMinMax = SETTINGS_CHAT_SECTIONS.flatMap(
+							(section) => section.fields ?? []
+						).find((entry) => entry.key === field);
+						const lo = entryByMinMax?.min ?? 1;
+						const hi = entryByMinMax?.max ?? Number.POSITIVE_INFINITY;
+
+						processedConfig[field] = Math.max(lo, Math.min(hi, Math.round(numValue)));
 					} else {
 						processedConfig[field] = numValue;
 					}
 				} else {
 					alert(`Invalid numeric value for ${field}. Please enter a valid number.`);
+
 					return;
 				}
 			}
 		}
 
 		settingsStore.updateMultipleConfig(processedConfig);
-		goto(settingsReferrer.url);
+		onClose?.();
 	}
 
 	export function reset() {
-		localConfig = { ...config() };
+		localConfig = { ...settingsStore.config };
 	}
-
-	setChatSettingsConfigContext({
-		get localConfig() {
-			return localConfig;
-		},
-		handleConfigChange,
-		handleThemeChange
-	});
 </script>
 
-<div class="mx-auto flex h-full w-full flex-col md:pl-8" in:fade={{ duration: 150 }}>
-	<div class="flex flex-1 flex-col gap-4 md:flex-row">
+<div in:fade={{ duration: 150 }} class="mx-auto flex h-full w-full flex-col">
+	<div class="flex flex-1 flex-col md:flex-row md:gap-4">
 		<SettingsChatDesktopSidebar
-			sections={SETTINGS_CHAT_SECTIONS}
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
-			getHref={getSectionHref ??
-				((section: SettingsSection) => RouterService.settings(section.slug))}
+			onSectionChange={handleSectionChange}
+			sections={SETTINGS_CHAT_SECTIONS}
 		/>
 
 		<SettingsChatMobileHeader
-			sections={SETTINGS_CHAT_SECTIONS}
-			isActive={(section: SettingsSection) => section.slug === activeSlug}
-			getHref={getSectionHref ??
-				((section: SettingsSection) => RouterService.settings(section.slug))}
 			bind:this={mobileHeader}
+			isActive={(section: SettingsSection) => section.slug === activeSlug}
+			onSectionChange={handleSectionChange}
+			sections={SETTINGS_CHAT_SECTIONS}
 		/>
 
-		<div class="mx-auto max-w-3xl flex-1">
-			<div class="space-y-6 p-4 md:p-6 md:pt-28">
+		<div class="mx-auto max-w-2xl px-4 flex-1 md:mt-4">
+			<div class="space-y-6 pt-3">
 				<div class="grid">
-					<div class="mb-6 flex items-center gap-2 border-b border-border/30 pb-6 md:flex">
-						<currentSection.icon class="h-5 w-5" />
-						<h3 class="text-lg font-semibold">{currentSection.title}</h3>
-					</div>
-
-					{#if currentSection.title === SETTINGS_SECTION_TITLES.TOOLS}
+					{#if currentSection.slug === SETTINGS_SECTION_SLUGS.TOOLS}
 						<SettingsChatToolsTab />
-					{:else if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
+					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.IMPORT_EXPORT}
 						<SettingsChatImportExportTab />
 					{:else if currentSection.fields}
 						<div class="space-y-6">
@@ -164,9 +160,9 @@
 								onThemeChange={handleThemeChange}
 							/>
 
-							{#if currentSection.title === SETTINGS_SECTION_TITLES.GENERAL}
+							{#if currentSection.slug === SETTINGS_SECTION_SLUGS.GENERAL}
 								<div class="flex justify-end">
-									<Button variant="outline" onclick={() => window.location.reload()}>
+									<Button onclick={() => window.location.reload()} variant="outline">
 										<RefreshCw class="h-3 w-3" />
 										Reload app
 									</Button>

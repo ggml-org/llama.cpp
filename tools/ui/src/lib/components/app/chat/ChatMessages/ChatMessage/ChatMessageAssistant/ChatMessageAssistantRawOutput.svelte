@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { deriveAgenticSections, buildAssistantRawOutput } from '$lib/utils';
+	import { buildAssistantRawOutput, deriveAgenticSections } from '$lib/utils';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -10,6 +10,7 @@
 
 	let rawOutputContent = $derived.by(() => {
 		const sections = deriveAgenticSections(message, toolMessages, [], false);
+
 		return buildAssistantRawOutput(sections);
 	});
 </script>

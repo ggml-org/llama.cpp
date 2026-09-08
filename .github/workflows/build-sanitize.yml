@@ -15,6 +15,12 @@ on:
       '**/*.cpp'
     ]
 
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-sanitize.yml'
+    ]
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -28,18 +34,34 @@ env:
 
 jobs:
   ctest:
-    runs-on: [self-hosted, X64, CPU, Linux]
-
     continue-on-error: true
 
     strategy:
       matrix:
-        sanitizer: [ADDRESS, THREAD, UNDEFINED]
+        include:
+        # thread and address doesn't run properly on some self hosted machines, so run it on Github instead
+        - sanitizer: ADDRESS
+          machine: ubuntu-24.04
+        - sanitizer: THREAD
+          machine: ubuntu-24.04
+        - sanitizer: UNDEFINED
+          machine: [self-hosted, X64, Linux]
+
+    runs-on: ${{ matrix.machine }}
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.24
+      #   if: ${{ matrix.sanitizer != 'UNDEFINED' }}
+      #   with:
+      #     key: ctest-${{ matrix.sanitizer }}-ubuntu-24.04
+      #     variant: ccache
+      #     evict-old-files: 1d
+      #     save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       # with UNDEFINED sanitizer, we have to build in Debug to avoid GCC 13 false-positive warnings
       - name: Build (undefined)

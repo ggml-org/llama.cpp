@@ -421,7 +421,7 @@ int main(int argc, char ** argv) {
     params.cb_eval_user_data = &cb_data;
     params.warmup = false;
 
-    llama_print_build_info();
+    llama_print_build_info(llama_version());
     llama_backend_init();
     llama_numa_init(params.numa);
 

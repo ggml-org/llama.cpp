@@ -3,17 +3,17 @@
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	let {
-		ref = $bindable(null),
-		class: className,
 		children,
+		class: className,
+		ref = $bindable(null),
 		...restProps
 	}: WithElementRef<HTMLAttributes<HTMLDivElement>> = $props();
 </script>
 
 <div
 	bind:this={ref}
-	data-slot="empty-header"
 	class={cn('gap-2 flex max-w-sm flex-col items-center', className)}
+	data-slot="empty-header"
 	{...restProps}
 >
 	{@render children?.()}

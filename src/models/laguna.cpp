@@ -9,7 +9,7 @@
 void llama_model_laguna::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
@@ -24,7 +24,7 @@ void llama_model_laguna::load_arch_hparams(llama_model_loader & ml) {
         // Weightless fixtures (test-llama-archs) omit this key; derive a nonzero
         // size so the shared expert is still built. Real GGUFs always carry the
         // exact value (routed and shared FF lengths may differ).
-        hparams.n_ff_shexp = hparams.n_ff_exp * hparams.n_expert_shared;
+        hparams.n_ff_shexp = hparams.n_ff_exp() * hparams.n_expert_shared;
     }
 
     // Sliding-window attention is OPTIONAL. XS.2 is hybrid (full / SWA / SWA /
@@ -76,7 +76,7 @@ void llama_model_laguna::load_arch_tensors(llama_model_loader & ml) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
     }
 
-    const int64_t n_ff_exp   = hparams.n_ff_exp;
+    const int64_t n_ff_exp   = hparams.n_ff_exp();
     const int64_t n_ff_shexp = hparams.n_ff_shexp;
 
     for (int i = 0; i < n_layer; ++i) {

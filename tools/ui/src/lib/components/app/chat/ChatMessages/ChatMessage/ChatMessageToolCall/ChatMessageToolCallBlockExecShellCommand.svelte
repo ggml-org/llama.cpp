@@ -6,24 +6,23 @@
 	// The scroll-to-bottom auto-scroll logic mirrors what was here
 	// before extraction.
 
-	import { Check, Loader2, XCircle, AlertTriangle } from '@lucide/svelte';
+	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
+	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { AlertTriangle, Check, Loader2, XCircle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { config } from '$lib/stores/settings.svelte';
-	import { TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
+	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
+	import { AttachmentType } from '$lib/enums';
+	import { settingsStore, toolsStore } from '$lib/stores';
+	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '$lib/types';
 	import {
+		abbreviateHome,
+		type ExecShellExitStatus,
 		highlightCode,
 		isExitCodeSummaryLine,
 		parseExecShellCommandError,
 		parseExecShellCommandExitStatus,
-		parseToolResultWithImages,
-		type AgenticSection,
-		type ExecShellExitStatus,
-		type ToolResultLine
+		parseToolResultWithMedia
 	} from '$lib/utils';
-	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
-	import type { DatabaseMessageExtra } from '$lib/types';
-	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
 		section: AgenticSection;
@@ -37,7 +36,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, isExecuting = false, attachments, onToggle }: Props = $props();
+	let { attachments, isExecuting = false, isStreaming, onToggle, open, section }: Props = $props();
 
 	// `isLive` covers all in-flight phases: pre-chunk spinner and
 	// streaming itself. Frozen output (tool done while agent continues)
@@ -51,7 +50,7 @@
 	);
 
 	const parsedLines: ToolResultLine[] = $derived(
-		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
+		section.toolResult ? parseToolResultWithMedia(section.toolResult, attachments) : []
 	);
 
 	// Drop the trailing "[exit code: N]" line - rendered as a colored
@@ -75,6 +74,14 @@
 		execShellMeta ? highlightCode(execShellMeta.command, 'bash') : ''
 	);
 
+	// The working directory the command ran with, persisted per call on the
+	// tool result message (it travels via the x-tool-cwd header, not the tool
+	// args). Reading it from the section keeps it accurate even if the
+	// conversation cwd changes later.
+	const cwd = $derived(section.toolCwd);
+	const home = $derived(toolsStore.serverHome);
+	const wdDisplay = $derived(abbreviateHome(cwd ?? '', home));
+
 	const exitBadgeClass = $derived(
 		execShellExitStatus?.timedOut
 			? 'exit-badge warning'
@@ -84,7 +91,7 @@
 	);
 
 	const useFullHeightCodeBlocks = $derived(
-		Boolean(config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
+		Boolean(settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
 	);
 
 	const autoScroll = $derived(isLive && !useFullHeightCodeBlocks);
@@ -98,6 +105,7 @@
 
 	function isAtBottom(): boolean {
 		if (!scrollEl) return false;
+
 		return (
 			scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop <=
 			SCROLL_BOTTOM_THRESHOLD_PX
@@ -106,6 +114,7 @@
 
 	function scrollToBottomOnFrame() {
 		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
+
 		pendingFrame = requestAnimationFrame(() => {
 			pendingFrame = null;
 
@@ -118,18 +127,23 @@
 
 	function handleScrollEvent() {
 		if (!scrollEl) return;
+
 		const isScrollingUp = scrollEl.scrollTop < lastScrollTop;
+
 		if (isScrollingUp && !isAtBottom()) {
 			userScrolledUp = true;
 		} else if (isAtBottom()) {
 			userScrolledUp = false;
 		}
+
 		lastScrollTop = scrollEl.scrollTop;
 	}
 
 	$effect(() => {
 		void section.toolResult;
+
 		if (!scrollEl || !autoScroll) return;
+
 		scrollToBottomOnFrame();
 	});
 
@@ -139,10 +153,11 @@
 		if (!scrollEl || !autoScroll) return;
 
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
+
 		observer.observe(scrollEl, {
+			characterData: true,
 			childList: true,
-			subtree: true,
-			characterData: true
+			subtree: true
 		});
 
 		return () => observer.disconnect();
@@ -159,6 +174,12 @@
 </script>
 
 {#snippet execShellTitle()}
+	{#if cwd}
+		<span class="exec-wd" title={cwd}>{wdDisplay}</span>
+
+		<span class="exec-prompt">$</span>
+	{/if}
+
 	{#if highlightedCommandHtml}
 		<span class="font-mono">{@html highlightedCommandHtml}</span>
 	{:else}
@@ -167,14 +188,14 @@
 {/snippet}
 
 <ToolCallBlock
-	{section}
-	{open}
+	extraLiveStreaming={isLive}
 	{isStreaming}
 	meta={execShellMeta ? { errorMessage: execShellError } : null}
-	wrapper={CollapsibleTerminalBlock}
-	extraLiveStreaming={isLive}
-	spinIconWhenActive={true}
 	{onToggle}
+	{open}
+	{section}
+	spinIconWhenActive={true}
+	wrapper={CollapsibleTerminalBlock}
 >
 	{#snippet titleSnippet()}
 		{@render execShellTitle()}
@@ -189,23 +210,25 @@
 		{:else if execShellError}
 			<div class="flex items-start gap-2 text-xs text-red-600 italic dark:text-red-400">
 				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+
 				<span>{execShellError}</span>
 			</div>
 		{:else if section.toolResult}
 			<div
 				bind:this={scrollEl}
-				class="terminal-output"
 				class:is-clamped={!useFullHeightCodeBlocks}
+				class="terminal-output"
 				onscroll={handleScrollEvent}
 			>
 				{#each outputLines as line, i (i)}
 					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
-					{#if line.image}
+
+					{#if line.media?.type === AttachmentType.IMAGE}
 						<img
-							src={line.image.base64Url}
-							alt={line.image.name}
+							alt={line.media.name}
 							class="mt-2 mb-2 h-auto max-w-full rounded-lg"
 							loading="lazy"
+							src={line.media.base64Url}
 						/>
 					{/if}
 				{/each}
@@ -214,14 +237,19 @@
 					<div class={exitBadgeClass}>
 						{#if execShellExitStatus.timedOut}
 							<AlertTriangle class="h-3 w-3" />
+
 							<span>timed out</span>
+
 							<span class="exit-sep">&middot;</span>
+
 							<span>exit {execShellExitStatus.code}</span>
 						{:else if execShellExitStatus.code === 0}
 							<Check class="h-3 w-3" />
+
 							<span>exit 0</span>
 						{:else}
 							<XCircle class="h-3 w-3" />
+
 							<span>exit {execShellExitStatus.code}</span>
 						{/if}
 					</div>
@@ -232,6 +260,23 @@
 </ToolCallBlock>
 
 <style>
+	:root {
+		--exec-wd-margin: 0.4rem;
+	}
+
+	.exec-wd {
+		font-family: var(--font-mono);
+		color: var(--muted-foreground);
+		margin-right: var(--exec-wd-margin);
+	}
+
+	.exec-prompt {
+		font-family: var(--font-mono);
+		color: var(--muted-foreground);
+		opacity: 0.55;
+		margin-right: var(--exec-wd-margin);
+	}
+
 	.terminal-output {
 		overscroll-behavior: contain;
 	}

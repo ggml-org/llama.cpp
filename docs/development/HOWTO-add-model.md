@@ -29,6 +29,7 @@ The required steps to implement for an HF model are:
 
 ```python
 @ModelBase.register("MyModelForCausalLM")
+@ModelBase.example("user/model")
 class MyModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MYMODEL
 ```
@@ -37,9 +38,12 @@ or
 
 ```python
 @ModelBase.register("MyModelForConditionalGeneration")
+@ModelBase.example("user/model")
 class MyModel(MmprojModel):
     model_arch = gguf.MODEL_ARCH.MYMODEL
 ```
+
+The `example` should point to a valid Hugging Face model that will be used for testing. You can add multiple models if necessary. Prefer a non-gated model, or tiny random weights if no such model exists.
 
 2. Define the layout of the GGUF tensors in [constants.py](/gguf-py/gguf/constants.py)
 
@@ -133,6 +137,7 @@ Note:
 - To debug the multimodal preprocessor and encoder, you can use [llama-mtmd-debug](tools/mtmd/debug/mtmd-debug.cpp).
 - Adding a model-specific API or CLI is an anti-pattern in `libmtmd`. The goal of `libmtmd` is to provide an easy-to-use, model-agnostic library for multimodal pipeline.
 - In most cases, `llama-mtmd-cli` should not be modified. If a model requires a specific prompt, either let the user provide it or bake it into the Jinja chat template.
+- For audio generation models, see `tools/mtmd/README-dev.md`
 
 ## Tips and tricks
 
@@ -160,6 +165,19 @@ Examples:
 - [Gemma 4](https://github.com/ggml-org/llama.cpp/pull/21309) uses "proportional" RoPE. We employ a trick where `rope_freqs` is set to a very large value in the last dimensions to prevent those dimensions from being rotated. See the `Gemma4Model` class in `convert_hf_to_gguf.py`.
 - Some models require scaling the input position. For example, `[0, 1, 2, ...]` becomes `[0, 0.5, 1, ...]`. In this case, you can provide the scaling via `freq_scale = 0.5f`.
 - Some models use learned RoPE frequencies instead of relying on `powf(freq_base, -2.0 * i / n_dims)`. In this case, you can provide the learned frequencies via the `rope_freqs` tensor (corresponding to the `c` argument in `ggml_rope_ext`), then set `freq_base = 1.0f`. An important note is that `rope_freqs` in GGML is the **inverse** (`theta = pos[i] / rope_freqs`), so you may need to invert `rope_freqs` during conversion.
+
+### Rotating only a part of the head
+
+Many models rotate only a part of each head and leave the rest untouched (often called the "nope" part). Do not build this with views plus `ggml_concat`, it's not efficient. Both layouts can be done with a single RoPE op:
+
+- `[rope|nope]`, rotated dims first: pass `n_dims` smaller than the head size to `ggml_rope_ext`. Dims from `n_dims` to the end are copied as-is.
+- `[nope|rope]`, rotated dims last: call `ggml_rope_set_offset(cur, n_offs)` on the result of the RoPE, where `n_offs` is the size of the leading untouched part. Dims outside `[n_offs, n_offs + n_dims)` are copied as-is.
+
+`n_offs` must be even, `n_offs + n_dims` must fit in the row, and vision RoPE is not supported. Note that the frequencies are computed relative to the rotated window.
+
+Example: DeepSeek-V4 uses `[nope|rope]` for its query, key and compressed KV tensors, so `src/models/deepseek4.cpp` ropes the whole tensor and then calls `ggml_rope_set_offset(cur, n_embd_head_nope)`.
+
+Exception: some models apply an extra op to the `nope` part, for example `deepseek32.cpp`, and may not use this optimization. While RoPE can be applied selectively to a part of the head, the extra op may not, so these models still need views plus `ggml_concat`.
 
 ## GGUF specification
 
