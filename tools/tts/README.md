@@ -60,16 +60,25 @@ python convert_hf_to_gguf.py path/to/pocket-tts/languages/english --mmproj --out
 
 ## Soprano
 
-Soprano-1.1-80M uses a Qwen3 backbone and a Vocos decoder. Convert both files from the same local [model directory](https://huggingface.co/ekwek/Soprano-1.1-80M), including `decoder.pth`:
+Available params:
+- `--tts-speaker-file` is not supported; the model uses a fixed voice
+- Note: `lang` is not used. Supply normalized English text, with at most 509 text tokens per request
+
+Example usage:
 
 ```sh
-python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --outfile soprano.gguf --outtype f16
-python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --mmproj --mmproj-architecture SopranoModel --outfile mmproj-soprano.gguf --outtype f16
-llama-tts -m soprano.gguf -mm mmproj-soprano.gguf -p "Hello world!" --temp 0 --output out.wav
+llama-tts -m soprano.gguf \
+    -mm mmproj-soprano.gguf \
+    -p "Hello world" \
+    --temp 0 \
+    --output out.wav
 ```
 
-The explicit mmproj architecture is required because the model config only identifies the Qwen3 text backbone, which does not identify an audio decoder.
+**Note for GGUF conversion:**
 
-This pipeline generates mono audio at 32 kHz with the model's fixed voice. It does not accept `--tts-speaker-file`; `--tts-lang` is unused. The helper adds the `[STOP][TEXT]...[START]` prompt format and accumulates hidden states before reconstructing the waveform. The core `GEN_WAV` call accepts 2 to 512 frames of 512 continuous features in frame-major order; it does not use codes or persistent state.
+Convert both files from the same [Soprano-1.1-80M directory](https://huggingface.co/ekwek/Soprano-1.1-80M), including `decoder.pth`. The decoder requires `--mmproj-architecture SopranoModel`:
 
-Supply normalized English text. The tokenizer lowercases text and collapses whitespace, but the Python reference's number/abbreviation expansion, transliteration and sentence splitting are not included. Split long text into separate requests; each prompt must fit within 512 tokens including the three control tokens. Audio is returned after generation finishes; incremental audio output is not supported in this initial implementation.
+```sh
+python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --outtype f16 --outfile soprano.gguf
+python convert_hf_to_gguf.py path/to/Soprano-1.1-80M --mmproj --mmproj-architecture SopranoModel --outtype f16 --outfile mmproj-soprano.gguf
+```
