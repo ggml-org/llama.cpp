@@ -356,6 +356,7 @@ if (NOT LLAMA_USE_SYSTEM_GGML)
     llama_build_and_test(test-alloc.cpp)
     llama_build_and_test(test-backend-buffer.cpp)
     llama_build_and_test(test-backend-memory.cpp)
+    llama_build_and_test(test-backend-meta.cpp)
 endif()
 
 llama_build(test-export-graph-ops.cpp)
