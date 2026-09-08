@@ -149,6 +149,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS",
         "GGML_OPENVINO_REQUANT_KQUANT",
         "GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT",
+        "GGML_OPENVINO_NPU_FAST_MASK",
         "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
         "GGML_OPENVINO_GDN_Q_SCALE",
         "GGML_OPENVINO_NPU_KV_SLICE",
@@ -367,6 +368,10 @@ bool ggml_openvino_is_gpu() {
 
 bool ggml_openvino_npu_kv_slice_enabled() {
     return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KV_SLICE") != 0;
+}
+
+bool ggml_openvino_npu_fast_mask_enabled() {
+    return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_FAST_MASK") != 0;
 }
 
 bool ggml_openvino_npu_l0_host_tensors_enabled() {
