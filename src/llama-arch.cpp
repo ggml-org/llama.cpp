@@ -1103,6 +1103,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
 
 bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
     switch (arch) {
+        case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_QWEN4EXP:
