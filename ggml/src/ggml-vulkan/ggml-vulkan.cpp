@@ -8269,8 +8269,22 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_id_pipeline(ggml_backend_vk_co
         return pipelines;
     }
 
-    GGML_ASSERT(src1_type == GGML_TYPE_F32 ||
-                (src1_type == GGML_TYPE_F16 && (ctx->device->coopmat2 || ctx->device->vendor_id == VK_VENDOR_ID_INTEL)));
+    // f16 B on coopmat1
+    if (src1_type == GGML_TYPE_F16 && ctx->device->coopmat_support && !ctx->device->coopmat2) {
+        vk_matmul_pipeline2& mmp = ctx->device->pipeline_dequant_mul_mat_mat_id_f16b[src0_type];
+        bool prefer_fp16acc = ctx->device->fp16;
+        bool support_fp16acc = !mmp.f16acc->is_empty();
+        bool support_fp32acc = !mmp.f32acc->is_empty();
+
+        if (support_fp16acc && (prefer_fp16acc || !support_fp32acc)) {
+            return mmp.f16acc;
+        } else if (support_fp32acc) {
+            return mmp.f32acc;
+        }
+        return nullptr;
+    }
+
+    GGML_ASSERT(src1_type == GGML_TYPE_F32 || (ctx->device->coopmat2 && src1_type == GGML_TYPE_F16));
 
     switch (src0_type) {
         case GGML_TYPE_Q1_0:
@@ -8303,10 +8317,7 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_id_pipeline(ggml_backend_vk_co
             return nullptr;
     }
 
-    // Use the dedicated f16 B pipeline when B is f16 for coopmat1.
-    vk_matmul_pipeline2& mmp = (src1_type == GGML_TYPE_F16 && ctx->device->coopmat_support && !ctx->device->coopmat2) ?
-        ctx->device->pipeline_dequant_mul_mat_mat_id_f16b[src0_type] :
-        ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type];
+    vk_matmul_pipeline2& mmp = ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type];
     // XXX TODO 'prec' is not actually allowed in mul_mat_id.
     bool prefer_fp16acc = ctx->device->fp16 /*&& prec == GGML_PREC_DEFAULT*/;
     bool support_fp16acc = !mmp.f16acc->is_empty();
