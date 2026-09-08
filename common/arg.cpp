@@ -3835,6 +3835,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--sleep-mode"}, "MODE",
+        "sleep behavior:\n"
+        "- 'free' frees context and model memory\n"
+        "- 'rst' restarts the whole process, may help reset memory to zero on certain backend (only support posix env)\n"
+        "(default: free)",
+        [](common_params & params, const std::string & value) {
+            if (value == "free") {
+                params.sleep_mode = COMMON_SLEEP_MODE_FREE;
+            } else if (value == "rst") {
+                params.sleep_mode = COMMON_SLEEP_MODE_RST;
+            } else {
+                throw std::invalid_argument("invalid value: " + value);
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--simple-io"},
         "use basic IO for better compatibility in subprocesses and limited consoles",
         [](common_params & params) {

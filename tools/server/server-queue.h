@@ -74,6 +74,13 @@ public:
         return sleeping;
     }
 
+    // enter sleeping state before start_loop(), for a process restarted into that state
+    // note: callback_sleeping_state(true) is not called, the state is already known
+    void init_sleeping() {
+        std::unique_lock<std::mutex> lock(mutex_tasks);
+        sleeping = true;
+    }
+
     // end the start_loop routine
     void terminate();
 

@@ -321,6 +321,25 @@ Call stack on waking up:
 
 Endpoints created with `create_response(true)` (`/health`, `/props`, `/models`, `/metrics`) skip `wait_until_no_sleep`, so they answer from the cached responses instead of waking the server.
 
+#### Process reset (`--sleep-mode rst`)
+
+As described in the section above, the sleeping function frees the `llama_context` and `llama_model` instances. However, on certain backends, the underlying driver or library still leaves behind some residual memory. See issue: [#19379](https://github.com/ggml-org/llama.cpp/issues/19379), [#25570](https://github.com/ggml-org/llama.cpp/issues/25570)
+
+Multiple PRs attempted to fix the problem by simply exiting the process ([#25243](https://github.com/ggml-org/llama.cpp/pull/25243), [#27307](https://github.com/ggml-org/llama.cpp/pull/27307)). However, the main issues with this approach are: (1) it requires router mode to handle the respawn, (2) `/props` and `/models` cannot be accessed during sleep and (3) metrics are reset.
+
+Note that [#25271](https://github.com/ggml-org/llama.cpp/pull/25271) proposed a deeper solution, adding a GGML API to reset the physical device. However, it does not work correctly on AMD GPUs due to a limitation of the AMD Tensile library, and the CUDA backend keeps static state that assumes the context is never destroyed.
+
+Therefore, `--sleep-mode rst` was added to reset the process instead (PR [#27418](https://github.com/ggml-org/llama.cpp/pull/27418)), while still allowing `/props` and `/models` to work as-is, and keeping the metrics. Only POSIX platforms are supported for now, because this relies on `exec()` to re-use the same PID. Windows is not yet supported and may require another method.
+
+The way it works: The restart is handled by `server_sleep_rst`, owned by `server_context_impl`:
+- `restart()` is called by `handle_sleeping_state()` right after `destroy()`, so the model is already unloaded
+- the state to preserve is the cached responses (`server_routes::cache_to_json`), passed to the new process via the `LLAMA_SERVER_SLEEP_STATE` env var
+- `init()` reads that env var and clears it, so that child processes do not inherit it
+- all file descriptors except stdio are marked `FD_CLOEXEC`, so `exec()` releases the listening port and the backend devices
+- `load_model()` sees the restored state, skips loading and starts the queue in sleeping state; the model is then loaded upon the first request
+
+The env var is limited to 128 kB by `exec()` on Linux (`MAX_ARG_STRLEN`). If the state does not fit, the restart is skipped and the server stays in a normal sleeping state.
+
 ### Notable Related PRs
 
 - Initial server implementation: https://github.com/ggml-org/llama.cpp/pull/1443
