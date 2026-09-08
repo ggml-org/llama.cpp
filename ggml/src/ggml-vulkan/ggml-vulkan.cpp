@@ -8288,7 +8288,9 @@ static void ggml_vk_cmd_label_begin(vk::CommandBuffer buf, const char * name) {
 
 // no-op unless GGML_VK_DEBUG_MARKERS is set
 struct ggml_vk_debug_label {
+    // at most one of these is set, depending on the scope the label was opened in
     vk_context_struct * subctx {};
+    vk_queue_handle *   qhandle {};
 
     // one region per dispatch, e.g. "matmul_q4_k_f32_f16acc_aligned_m (192,8,1)".
     // RGP cannot recover the pipeline name on its own, it only has the hash
@@ -8315,17 +8317,36 @@ struct ggml_vk_debug_label {
         begin(ctx, name);
     }
 
-    // call before the command buffer can end, the destructor covers the rest
-    void close() {
-        if (subctx == nullptr) {
+    // one region per graph evaluation, opened on the queue instead of a command buffer
+    // so it spans every submit the evaluation makes
+    ggml_vk_debug_label(vk_queue_handle * handle, const char * name) {
+        if (!vk_instance.debug_utils_support || handle == nullptr) {
             return;
         }
-        // close on the current command buffer, which may differ from the one begin used
-        if (subctx->s != nullptr) {
-            vk_instance.pfn_vkCmdEndDebugUtilsLabelEXT(subctx->s->buffer->buf);
+        vk::DebugUtilsLabelEXT label = {};
+        label.pLabelName = name;
+        label.color = std::array<float, 4>{1.0f, 1.0f, 1.0f, 1.0f};
+
+        qhandle = handle;
+        std::lock_guard<vk_queue_handle> guard(*qhandle);
+        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(qhandle->queue, reinterpret_cast<VkDebugUtilsLabelEXT *>(&label));
+    }
+
+    // call before the command buffer can end, the destructor covers the rest
+    void close() {
+        if (subctx != nullptr) {
+            // close on the current command buffer, which may differ from the one begin used
+            if (subctx->s != nullptr) {
+                vk_instance.pfn_vkCmdEndDebugUtilsLabelEXT(subctx->s->buffer->buf);
+            }
+            subctx->debug_labels.pop_back();
+            subctx = nullptr;
         }
-        subctx->debug_labels.pop_back();
-        subctx = nullptr;
+        if (qhandle != nullptr) {
+            std::lock_guard<vk_queue_handle> guard(*qhandle);
+            vk_instance.pfn_vkQueueEndDebugUtilsLabelEXT(qhandle->queue);
+            qhandle = nullptr;
+        }
     }
 
     ~ggml_vk_debug_label() {
@@ -17654,14 +17675,11 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
     if (vk_instance.debug_utils_support) {
         ctx->device->debug_cmdbuf_idx = 0;
-
-        vk::DebugUtilsLabelEXT dul = {};
-        dul.pLabelName = "ggml_backend_vk_graph_compute";
-        dul.color = std::array<float,4>{1.0f, 1.0f, 1.0f, 1.0f};
-
-        std::lock_guard<vk_queue_handle> guard(*ctx->device->compute_queue->handle);
-        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue->handle->queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
     }
+
+    // queue scope, so it encloses every submit this evaluation makes.
+    // closed when the function returns
+    ggml_vk_debug_label queue_dbg(ctx->device->compute_queue->handle.get(), "ggml_backend_vk_graph_compute");
 
     ctx->prealloc_size_add_rms_partials_offset = 0;
     ctx->do_add_rms_partials = false;
