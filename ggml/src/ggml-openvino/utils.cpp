@@ -1699,6 +1699,14 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         conversion_end_time = decoder_end_time;
         compile_end_time = decoder_end_time;
     } else {
+        // Same fail-fast as the dynamic path: once the host weight pages have been dropped
+        // they read as zeros, so a recompile here would bake garbage into the new model.
+        if (ggml_openvino_weight_buffers_released()) {
+            GGML_ABORT(
+                "ggml-openvino: a new graph needs to be compiled but host weight buffers were already "
+                "released via GGML_OPENVINO_RELEASE_WEIGHTS. This mode requires "
+                "stable graph shapes; disable host weight release for dynamic workloads.");
+        }
         if (cache_enabled) {
             std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
             r_ctx->infer_request_cache.erase(key);
