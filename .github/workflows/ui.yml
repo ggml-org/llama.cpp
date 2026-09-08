@@ -59,6 +59,7 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
+          package-manager-cache: false
 
       - name: Download built UI artifacts
         uses: actions/download-artifact@v6
@@ -116,6 +117,7 @@ jobs:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: "tools/ui/package-lock.json"
+          package-manager-cache: false
 
       - name: Install dependencies
         id: setup
