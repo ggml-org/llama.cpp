@@ -212,8 +212,8 @@ void llama_model_saver::add_kv_from_model() {
         std::vector<int8_t> values;
         tensor_names.reserve(model->act_policy.prec_src1.size());
         values.reserve(model->act_policy.prec_src1.size());
-        for (const auto & [name, prec] : model->act_policy.prec_src1) {
-            tensor_names.push_back(name);
+        for (const auto & [w, prec] : model->act_policy.prec_src1) {
+            tensor_names.push_back(ggml_get_name(w));
             values.push_back(prec == GGML_PREC_Q8 ? 1 : 0);
         }
         add_kv(LLM_KV_GENERAL_TENSOR_EXTRA_NAME, tensor_names);
