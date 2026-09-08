@@ -371,6 +371,7 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_NONE, // not supported
     MTMD_GEN_AUDIO_TYPE_QWEN3TTS,
     MTMD_GEN_AUDIO_TYPE_POCKETTTS,
+    MTMD_GEN_AUDIO_TYPE_NEMO_NANO_CODEC,
 };
 
 struct mtmd_gen_audio_info {
@@ -402,6 +403,8 @@ struct mtmd_gen_inp {
 
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
+    // NeMo Nano Codec: frame-major [n_frames, 4], 1 to 128 frames, codes in [0, 4031].
+    // It accepts no feats or state and returns n_frames * 1764 samples at 22050 Hz.
     int32_t * codes;
     size_t    n_codes;
     const float * feats;

@@ -485,6 +485,24 @@ struct clip_flow_net {
     std::vector<block> blocks;
 };
 
+// NeMo Nano Codec 22 kHz / 12.5 fps: grouped FSQ codes -> raw PCM.
+struct clip_nemo_nano_codec {
+    static constexpr int n_groups = 4;
+    static constexpr int codebook_size = 4032;
+    struct conv {
+        ggml_tensor * w = nullptr;
+        ggml_tensor * b = nullptr;
+        ggml_tensor * alpha = nullptr;
+    };
+    struct stage {
+        conv up;
+        conv res[3][3][2];
+    };
+    ggml_tensor * codebook = nullptr;
+    conv pre, post;
+    stage stages[5];
+};
+
 // qwen3tts code2wav: RVQ codes -> raw PCM
 struct clip_code2wav {
     // "upsample" stage: one ConvNeXt block plus the causal ConvTranspose1d before it
@@ -786,6 +804,7 @@ struct clip_model {
 
     // qwen3tts code2wav: RVQ codes -> raw PCM
     clip_code2wav c2w;
+    clip_nemo_nano_codec nemo;
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     clip_seanet seanet;

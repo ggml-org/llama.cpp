@@ -57,3 +57,19 @@ The [upstream repository](https://huggingface.co/kyutai/pocket-tts) holds one co
 python convert_hf_to_gguf.py path/to/pocket-tts/languages/english --outfile pocket-tts.gguf
 python convert_hf_to_gguf.py path/to/pocket-tts/languages/english --mmproj --outfile mmproj-pocket-tts.gguf
 ```
+
+## NeMo Nano Codec decoder (MTMD API)
+
+The [22 kHz / 0.6 kbps / 12.5 fps variant](https://huggingface.co/nvidia/nemo-nano-codec-22khz-0.6kbps-12.5fps) is supported as a standalone codes-to-audio decoder. It is not a text-to-speech model and cannot be used directly with `llama-tts -p`.
+
+Place `nemo-nano-codec-22khz-0.6kbps-12.5fps.nemo` in a local directory and convert it:
+
+```sh
+python convert_hf_to_gguf.py path/to/nemo-nano-codec --mmproj --outtype f16 --outfile mmproj-nemo-nano-codec.gguf
+```
+
+The converter reads the architecture from the archive's `model_config.yaml`; there is no text backbone or tokenizer to convert. Convolution weights are stored as F16 even with `--outtype f32`, to use the existing ggml convolution path. FSQ codebook and activation parameters remain F32.
+
+Load the mmproj with `mtmd_init_from_file(path, nullptr, params)`. Pass `MTMD_GEN_PROCESS_TYPE_GEN_WAV` to `mtmd_gen_audio_process`, with `codes` laid out as `[frame][group]`: four codes per frame, each in `[0, 4031]`. NeMo's `[group, batch, frame]` tokens must be transposed for this interface. Each call accepts 1 to 128 complete frames and returns `n_frames * 1764` mono float samples at 22050 Hz. Copy the output before the next call, and release the context with `mtmd_free`.
+
+This initial implementation decodes a complete sequence with zero initial context. It does not accept continuous features, persistent state or `GEN_CODE`. Independent chunks do not preserve convolution history. Audio encoding, other Nano Codec variants and a text-generation pipeline are not included. NVIDIA describes this particular variant as intended for fine-tuning with a limited set of speakers, rather than general-purpose audio reconstruction.

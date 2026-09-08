@@ -1116,6 +1116,11 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
                 const int  n_frames = params && params->feats ? (int) (params->feats->size() / n_latent) : 1;
                 builder = std::make_unique<clip_graph_pockettts_gen>(ctx, img, gen_process, n_step, n_frames);
             } break;
+        case PROJECTOR_TYPE_NEMO_NANO_CODEC:
+            {
+                const int n_frames = params && params->codes ? (int) (params->codes->size() / clip_nemo_nano_codec::n_groups) : 1;
+                builder = std::make_unique<clip_graph_nemo_nano_codec>(ctx, img, n_frames);
+            } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {
                 const auto  gen_process = params ? params->gen_process : CLIP_GEN_PROCESS_GEN_CODE;
@@ -1831,6 +1836,12 @@ struct clip_model_loader {
                         hparams.audio_window_len  = 1024;
                         hparams.audio_hop_len     = 256;
                     } break;
+                case PROJECTOR_TYPE_NEMO_NANO_CODEC:
+                    {
+                        if (hparams.n_layer != 5 || hparams.n_embd != 864 || hparams.projection_dim != 16 || hparams.n_head != 1) {
+                            throw std::runtime_error("invalid NeMo Nano Codec dimensions");
+                        }
+                    } break;
                 case PROJECTOR_TYPE_QWEN3TTS_GEN:
                     {
                         // TODO: hardcoded for now, read from code_predictor_config instead
@@ -2239,7 +2250,8 @@ struct clip_model_loader {
         const bool has_standard_layers = (
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
-            model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN);
+            model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
+            model.proj_type != PROJECTOR_TYPE_NEMO_NANO_CODEC);
 
         // layers
         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
@@ -3025,6 +3037,57 @@ struct clip_model_loader {
                         layer.ff_down_w = get_tensor(string_format(TN_FFN_DOWN,    p, il, "weight"));
                         layer.ls_2_w    = get_tensor(string_format(TN_LS_2,        p, il, "weight"));
                     }
+                } break;
+            case PROJECTOR_TYPE_NEMO_NANO_CODEC:
+                {
+                    auto tensor = [&](const std::string & name, std::initializer_list<int64_t> dims, ggml_type type = GGML_TYPE_F32) {
+                        auto * t = get_tensor("a.gen.wav.hifigan." + name);
+                        if (t->type != type) {
+                            throw std::runtime_error("invalid NeMo tensor type: " + name);
+                        }
+                        int d = 0;
+                        for (auto dim : dims) {
+                            if (t->ne[d++] != dim) {
+                                throw std::runtime_error(string_format("invalid NeMo tensor %s dimension %d: expected %lld, got %lld", name.c_str(), d - 1, (long long) dim, (long long) t->ne[d - 1]));
+                            }
+                        }
+                        for (; d < GGML_MAX_DIMS; ++d) {
+                            if (t->ne[d] != 1) {
+                                throw std::runtime_error("invalid NeMo tensor rank: " + name);
+                            }
+                        }
+                        return t;
+                    };
+                    auto conv = [&](clip_nemo_nano_codec::conv & c, const std::string & name, int k, int ic, int oc) {
+                        c.w = tensor(name + ".weight", {k, ic, oc}, GGML_TYPE_F16);
+                        c.b = tensor(name + ".bias", {oc});
+                    };
+                    auto & m = model.nemo;
+                    m.codebook = tensor("codebook.weight", {4, m.codebook_size});
+                    conv(m.pre, "pre", 7, 16, 864);
+                    const int rates[] = {7, 7, 6, 3, 2};
+                    const int kernels[] = {3, 7, 11};
+                    int channels = 864;
+                    for (int stage = 0; stage < 5; ++stage) {
+                        auto & s = m.stages[stage];
+                        const std::string prefix = "up." + std::to_string(stage);
+                        s.up.alpha = tensor(prefix + ".act.alpha", {channels / 2});
+                        s.up.w = tensor(prefix + ".conv.weight", {2, 2 * rates[stage], channels / 2}, GGML_TYPE_F16);
+                        channels /= 2;
+                        s.up.b = tensor(prefix + ".conv.bias", {channels});
+                        for (int block = 0; block < 3; ++block) {
+                            for (int layer = 0; layer < 3; ++layer) {
+                                const std::string res = "res." + std::to_string(stage * 9 + block * 3 + layer);
+                                for (int j = 0; j < 2; ++j) {
+                                    auto & c = s.res[block][layer][j];
+                                    conv(c, res + ".conv" + std::to_string(j + 1), kernels[block], channels, channels);
+                                    c.alpha = tensor(res + ".act" + std::to_string(j + 1) + ".alpha", {channels / 2});
+                                }
+                            }
+                        }
+                    }
+                    conv(m.post, "post", 3, channels, 1);
+                    m.post.alpha = tensor("post_act.alpha", {channels / 2});
                 } break;
             case PROJECTOR_TYPE_QWEN3TTS_GEN:
                 {
@@ -4345,6 +4408,10 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                 // pooling gives one speaker embedding, whatever the clip length is
                 n_patches = 1;
             } break;
+        case PROJECTOR_TYPE_NEMO_NANO_CODEC:
+            {
+                n_patches = 1; // GEN_WAV sizes the graph from codes, not the placeholder batch.
+            } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {
                 // one hidden-state vector fed back to the talker per call
@@ -5266,6 +5333,17 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             {
                 // do nothing
             } break;
+        case PROJECTOR_TYPE_NEMO_NANO_CODEC:
+            {
+                const int n_frames = (int) (params->codes->size() / clip_nemo_nano_codec::n_groups);
+                std::vector<int32_t> codes(params->codes->size());
+                for (int f = 0; f < n_frames; ++f) {
+                    for (int g = 0; g < clip_nemo_nano_codec::n_groups; ++g) {
+                        codes[g * n_frames + f] = (*params->codes)[f * clip_nemo_nano_codec::n_groups + g];
+                    }
+                }
+                set_input_i32("inp_codes", codes);
+            } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {
                 if (params->gen_process == CLIP_GEN_PROCESS_GEN_WAV) {
@@ -5820,13 +5898,15 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         out_audio.resize(ggml_nelements(audio));
         ggml_backend_tensor_get(audio, out_audio.data(), 0, ggml_nbytes(audio));
 
-        // drop the tail audio that comes from the code-0 rear padding
-        const int64_t n_codes    = params->codes ? model.gen_code_head_w->ne[2] + 1 : 0;
-        const int64_t n_frames_w = hparams.wav_tfm_swa;
-        const int64_t n_frames   = params->codes ? (int64_t) params->codes->size() / n_codes : n_frames_w;
-        if (n_frames < n_frames_w) {
-            const size_t hop = out_audio.size() / n_frames_w;
-            out_audio.resize((size_t) n_frames * hop);
+        // Qwen3-TTS rear-pads codes to one window; drop the audio from that padding.
+        if (model.proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN && params->codes) {
+            const int64_t n_codes    = model.gen_code_head_w->ne[2] + 1;
+            const int64_t n_frames_w = hparams.wav_tfm_swa;
+            const int64_t n_frames   = (int64_t) params->codes->size() / n_codes;
+            if (n_frames < n_frames_w) {
+                const size_t hop = out_audio.size() / n_frames_w;
+                out_audio.resize((size_t) n_frames * hop);
+            }
         }
     }
     if (params->state_out != nullptr) {
@@ -5999,6 +6079,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
             return ctx->model.mm_fc_w->ne[2];
+        case PROJECTOR_TYPE_NEMO_NANO_CODEC:
+            return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             return ctx->model.gen_code_out_embd_w->ne[0];
         case PROJECTOR_TYPE_POCKETTTS_SPKENC:
