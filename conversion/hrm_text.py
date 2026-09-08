@@ -75,4 +75,5 @@ class HrmTextModel(TextModel):
         else:
             if tensor_name.startswith("attn."):
                 tensor_name = "self_attn." + tensor_name[len("attn."):]
-            yield from super().modify_tensors(data_torch, f"model.layers.{layer_idx}.{tensor_name}", layer_idx)
+            tensor_name = "model.layers.{bid}." + tensor_name
+            yield from super().modify_tensors(data_torch, tensor_name.format(bid=layer_idx), layer_idx)
