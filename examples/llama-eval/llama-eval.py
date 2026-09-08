@@ -25,6 +25,7 @@ class ServerConfig:
     url: str
     threads: int
     name: str = ""
+    api_key: str = ""
 
 def wilson_interval(correct: int, total: int, z: float = 1.96) -> Tuple[float, float]:
     """Wilson score confidence interval for a proportion."""
@@ -981,12 +982,14 @@ class Grader:
         grader_script: Optional[str] = None,
         grader_model_name: Optional[str] = None,
         grader_server_url: str = "",
+        grader_server_api_key: str = "",
         dataset_type: str = "aime"
     ):
         self.grader_type = grader_type
         self.grader_script = grader_script
         self.grader_model_name = grader_model_name
         self.grader_server_url = grader_server_url
+        self.grader_server_api_key = grader_server_api_key
         self.dataset_type = dataset_type
         self.pattern = self._get_pattern()
 
@@ -1078,6 +1081,8 @@ Please provide only the extracted answer, nothing else. If there is no clear ans
 
         url = f"{self.grader_server_url}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
+        if self.grader_server_api_key:
+            headers["Authorization"] = f"Bearer {self.grader_server_api_key}"
         data = {
             "model": self.grader_model_name,
             "messages": [
@@ -1143,6 +1148,8 @@ class Processor:
     ) -> Tuple[Dict[str, Any], int, Optional[float], Optional[float], str]:
         url = f"{server_config.url}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
+        if server_config.api_key:
+            headers["Authorization"] = f"Bearer {server_config.api_key}"
         data = {
             "model": self.model_name if self.model_name else "llama",
             "messages": [{"role": "user", "content": prompt}],
@@ -1359,6 +1366,12 @@ def main():
         help="Comma-separated display names for servers (default: use URLs)"
     )
     parser.add_argument(
+        "--server-api-key",
+        type=str,
+        default="",
+        help="Comma-separated API keys for servers (default: not passed)"
+    )
+    parser.add_argument(
         "--dataset",
         type=str,
         default="aime",
@@ -1450,6 +1463,12 @@ def main():
         help="Server URL for LLM grader (default: same as main server)"
     )
     parser.add_argument(
+        "--grader-server-api-key",
+        type=str,
+        default="",
+        help="Server API key for LLM grader (default: same as main server)"
+    )
+    parser.add_argument(
         "--grader-model",
         type=str,
         default="",
@@ -1480,9 +1499,18 @@ def main():
     else:
         server_names = server_urls  # fallback to URLs
 
+    # Parse server API keys (optional, defaults to none)
+    if args.server_api_key:
+        server_api_keys = [n.strip() for n in args.server_api_key.split(",") if n.strip()]
+        if len(server_api_keys) != len(server_urls):
+            print(f"Error: --server-api-key ({len(server_api_keys)} names) and --server ({len(server_urls)} URLs) must have the same count")
+            sys.exit(1)
+    else:
+        server_api_keys = [""] * len(server_urls)  # fallback to none
+
     server_configs = [
-        ServerConfig(url=url, threads=threads, name=name)
-        for url, threads, name in zip(server_urls, thread_counts, server_names)
+        ServerConfig(url=url, threads=threads, name=name, api_key=api_key)
+        for url, threads, name, api_key in zip(server_urls, thread_counts, server_names, server_api_keys)
     ]
 
     if args.dataset == "gpqa" and args.grader_type != "llm":
@@ -1520,6 +1548,7 @@ def main():
         eval_state.task_states["cases"] = existing_cases
 
         grader_server_url = args.grader_server if args.grader_server else server_configs[0].url
+        grader_server_api_key = args.grader_server_api_key if args.grader_server_api_key else server_configs[0].api_key
         grader_model_name = args.grader_model if args.grader_model else args.model
         if args.grader_type == "llm" and not grader_model_name:
             print("Error: --grader-type llm requires --grader-model or --model")
@@ -1529,6 +1558,7 @@ def main():
             grader_script=args.grader_script,
             grader_model_name=grader_model_name,
             grader_server_url=grader_server_url,
+            grader_server_api_key=grader_server_api_key,
             dataset_type=eval_state.dataset_type
         )
         resume = True
@@ -1538,6 +1568,7 @@ def main():
             sys.exit(1)
 
         grader_server_url = args.grader_server if args.grader_server else server_configs[0].url
+        grader_server_api_key = args.grader_server_api_key if args.grader_server_api_key else server_configs[0].api_key
         grader_model_name = args.grader_model if args.grader_model else args.model
         if args.grader_type == "llm" and not grader_model_name:
             print("Error: --grader-type llm requires --grader-model or --model")
@@ -1548,6 +1579,7 @@ def main():
             grader_script=args.grader_script,
             grader_model_name=grader_model_name,
             grader_server_url=grader_server_url,
+            grader_server_api_key=grader_server_api_key,
             dataset_type=args.dataset
         )
 
