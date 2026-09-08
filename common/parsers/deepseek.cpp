@@ -170,7 +170,10 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
                         p.tool_arg_open(p.literal(PARAM_START + " name=\"") + p.tool_arg_name(p.literal(param_name)) +
                                         p.literal("\" string=\"" + std::string(is_string ? "true" : "false") + "\">")) +
                         (is_string ?
-                             p.tool_arg_string_value(p.until(PARAM_END)) :
+                             // A string value ends at the exact closing tag. Stop early on any
+                             // DSML-looking markup so stray or nested tags fail the parse (and are
+                             // excluded by the grammar) instead of being swallowed into the value.
+                             p.tool_arg_string_value(p.until_one_of({ PARAM_END, "<｜", "</｜" })) :
                              p.tool_arg_json_value(p.schema(p.json(), "tool-" + name + "-arg-" + param_name + "-schema",
                                                             param_schema, false))) +
                         p.tool_arg_close(p.literal(PARAM_END)));

@@ -4127,6 +4127,55 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("I'm thinking")
             .expect_content("Hello, world!\nWhat's up?")
             .run();
+
+        // String parameter values may contain plain angle brackets ...
+        tst.test(
+               "<｜DSML｜function_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo <east> & Osaka</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜function_calls>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_tool_calls({
+                { "get_time", R"({"city": "Tokyo <east> & Osaka"})", {} },
+            })
+            .run();
+
+        // ... but DSML-looking markup inside a string value must not be swallowed
+        // into the value: the grammar rejects it, so constrained sampling cannot
+        // produce a stray or nested tag inside an argument.
+        {
+            auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V3.2.jinja");
+            common_chat_templates_inputs inputs;
+            inputs.messages        = { message_user };
+            inputs.tools           = { get_time_tool };
+            inputs.enable_thinking = false;
+            auto params = common_chat_templates_apply(tmpls.get(), inputs);
+            // match_string() consumes grammar state, so build a fresh grammar per check.
+            auto accepts = [&](const std::string & text) {
+                auto grammar = build_grammar(params.grammar);
+                if (!grammar) {
+                    throw std::runtime_error("Failed to build DeepSeek V3.2 tool grammar");
+                }
+                return match_string(text, grammar.get());
+            };
+            const std::string clean_call =
+                "<｜DSML｜function_calls>\n"
+                "<｜DSML｜invoke name=\"get_time\">\n"
+                "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+                "</｜DSML｜invoke>\n"
+                "</｜DSML｜function_calls>";
+            const std::string markup_in_value =
+                "<｜DSML｜function_calls>\n"
+                "<｜DSML｜invoke name=\"get_time\">\n"
+                "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo<｜DSML｜parameter name=\"x\" string=\"true\">y</｜DSML｜parameter>\n"
+                "</｜DSML｜invoke>\n"
+                "</｜DSML｜function_calls>";
+            assert_equals(true,  accepts(clean_call));
+            assert_equals(false, accepts(markup_in_value));
+        }
     }
 
     // DeepSeek V4 tests - same DSML markup as V3.2, but the tool call block is named
