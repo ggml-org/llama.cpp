@@ -612,14 +612,12 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
 
 // Per-tensor activation precision from GGUF, unlisted tensors default to native (4-bit) activations.
 struct llama_act_policy {
-    std::unordered_map<std::string, bool> per_tensor;
+    // the key is `res->src[0]->name`
+    // TODO: can we use `ggml_tensor *` instead of `std::string`?
+    std::unordered_map<std::string, ggml_prec> prec_src1;
 
-    bool wants_prec_a8(const ggml_tensor * w) const;
+    bool apply(ggml_tensor * res) const;
 };
-
-inline bool llama_act_policy_prec_a8(const llama_act_policy * policy, const ggml_tensor * w) {
-    return policy && policy->wants_prec_a8(w);
-}
 
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
