@@ -66,6 +66,9 @@ struct llama_context {
 
     ggml_backend_sched_t get_sched() const;
 
+    // Return whether at least one scheduler workspace is backed by an arena.
+    bool uses_compute_arenas() const;
+
     uint32_t n_ctx()     const;
     uint32_t n_ctx_seq() const;
     uint32_t n_batch()   const;
@@ -281,6 +284,9 @@ private:
     // that differs from the layer it belongs to (usually due to missing backend support)
     void resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs);
 
+    // Create and attach arena workspaces from phase-major scheduler measurements.
+    bool prepare_compute_arenas(const std::vector<size_t> & measurements, size_t n_phases);
+
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
     size_t state_read_data (llama_io_read_i  & io);
@@ -359,7 +365,10 @@ private:
 
     std::vector<swap_info> output_swaps;
 
-    // The scheduler is declared after this field so it releases its arena leases first.
+    ggml_backend_t backend_cpu = nullptr;
+    std::vector<ggml_backend_ptr> backends;
+
+    // The scheduler is declared after the arenas and backends so it is destroyed first.
     std::vector<llama_compute_arena_binding> compute_arenas;
     ggml_backend_sched_ptr sched;
 
@@ -379,9 +388,6 @@ private:
     };
 
     copy_experts_info copy_experts;
-
-    ggml_backend_t backend_cpu = nullptr;
-    std::vector<ggml_backend_ptr> backends;
 
     // training
     ggml_opt_context_t opt_ctx = nullptr;

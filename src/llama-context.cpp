@@ -511,6 +511,10 @@ llama_context::~llama_context() {
         }
     }
     ggml_opt_free(opt_ctx);
+
+    // Release scheduler leases while the backend objects are still alive.
+    sched.reset();
+    compute_arenas.clear();
 }
 
 void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs) {
@@ -621,6 +625,82 @@ static int llama_graph_n_input_tensors(ggml_cgraph * gf) {
     return (int) users.size();
 }
 
+bool llama_context::prepare_compute_arenas(
+        const std::vector<size_t> & measurements, size_t n_phases) {
+    const size_t n_slots = backend_ptrs.size();
+    if (n_slots == 0 || n_phases == 0 ||
+            n_phases > std::numeric_limits<size_t>::max() / n_slots ||
+            measurements.size() != n_phases*n_slots) {
+        return false;
+    }
+
+    size_t n_groups = 0;
+    if (!ggml_backend_memory_plan_workspace_groups(
+            backend_buft.data(), measurements.data(), n_phases, n_slots, nullptr, &n_groups)) {
+        return false;
+    }
+
+    std::vector<ggml_backend_memory_workspace_group> groups(n_groups);
+    size_t groups_capacity = groups.size();
+    if (!ggml_backend_memory_plan_workspace_groups(
+            backend_buft.data(), measurements.data(), n_phases, n_slots,
+            groups.data(), &groups_capacity)) {
+        return false;
+    }
+
+    std::vector<llama_compute_arena_binding> next;
+    next.reserve(groups.size());
+
+    auto detach = [&]() {
+        for (auto it = next.rbegin(); it != next.rend(); ++it) {
+            ggml_backend_sched_detach_memory_lease(sched.get(), backend_ptrs[it->first_slot]);
+        }
+        next.clear();
+    };
+
+    constexpr uint64_t workspace_region_id = 1;
+    for (const auto & group : groups) {
+        llama_compute_arena_ptr arena(
+            ggml_backend_memory_arena_new(group.buft, group.size));
+        if (!arena ||
+                !ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE) ||
+                !ggml_backend_memory_arena_reserve_at(
+                    arena.get(), workspace_region_id, 0, group.size, group.alignment,
+                    GGML_BACKEND_MEMORY_REGION_NONE, nullptr) ||
+                !ggml_backend_memory_arena_commit(arena.get())) {
+            LLAMA_LOG_DEBUG("%s: %s does not support an arena workspace, using scheduler allocation\n",
+                    __func__, ggml_backend_buft_name(group.buft));
+            continue;
+        }
+
+        ggml_backend_memory_lease_t lease =
+            ggml_backend_memory_arena_acquire(arena.get(), workspace_region_id);
+        if (!lease) {
+            detach();
+            return false;
+        }
+        ggml_backend_buffer_set_usage(
+            ggml_backend_memory_lease_buffer(lease), GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+        if (!ggml_backend_sched_attach_memory_lease(
+                sched.get(), backend_ptrs[group.first_slot], lease)) {
+            ggml_backend_memory_lease_free(lease);
+            detach();
+            return false;
+        }
+        ggml_backend_memory_lease_free(lease);
+
+        next.push_back({
+            group.buft,
+            group.size,
+            group.first_slot,
+            std::move(arena),
+        });
+    }
+
+    compute_arenas = std::move(next);
+    return true;
+}
+
 void llama_context::sched_reserve() {
     if (!sched_need_reserve) {
         return;
@@ -631,6 +711,8 @@ void llama_context::sched_reserve() {
     LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
 
     synchronize();
+    sched.reset();
+    compute_arenas.clear();
 
     const int64_t t_start_us = ggml_time_us();
 
@@ -679,6 +761,20 @@ void llama_context::sched_reserve() {
 
     const uint32_t n_outputs_pp = std::min(n_tokens, cparams.n_outputs_max);
 
+    auto prepare_arenas = [&]() {
+        std::vector<size_t> measurements(2*backend_ptrs.size());
+        auto * gf_pp = graph_reserve(
+            n_tokens, n_seqs, n_outputs_pp, mctx.get(), true, measurements.data());
+        auto * gf_tg = graph_reserve(
+            n_seqs, n_seqs, n_seqs, mctx.get(), true,
+            measurements.data() + backend_ptrs.size());
+        return gf_pp && gf_tg && prepare_compute_arenas(measurements, 2);
+    };
+
+    if (!model.hparams.no_alloc && !prepare_arenas()) {
+        throw std::runtime_error("failed to prepare compute arenas");
+    }
+
     // reserve pp (prompt processing) graph first so that buffers are only allocated once
     {
         auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(),
@@ -687,9 +783,13 @@ void llama_context::sched_reserve() {
             if (cparams.pipeline_parallel) {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
+                sched.reset();
+                compute_arenas.clear();
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
                 ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
-                gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
+                if (model.hparams.no_alloc || prepare_arenas()) {
+                    gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
+                }
             }
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
@@ -821,6 +921,10 @@ const llama_cparams & llama_context::get_cparams() const {
 
 ggml_backend_sched_t llama_context::get_sched() const {
     return sched.get();
+}
+
+bool llama_context::uses_compute_arenas() const {
+    return !compute_arenas.empty();
 }
 
 uint32_t llama_context::n_ctx() const {
