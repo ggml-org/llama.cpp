@@ -751,6 +751,7 @@ void server_http_context::register_gcp_compat() const {
                 payload.erase("@requestFormat");
             }
 
+            // accept both camelCase aliases (e.g. "chatCompletions") and direct paths
             std::string dispatch_path;
             auto it_alias = alias_to_path.find(format);
             if (it_alias != alias_to_path.end()) {
