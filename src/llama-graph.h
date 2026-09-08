@@ -788,6 +788,8 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
+    const llama_act_policy * act_policy = nullptr;
+
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     static bool samplers_equal(
@@ -810,8 +812,6 @@ struct llm_graph_params {
     llm_graph_cb cb;
 
     llm_graph_result * res;
-
-    const llama_act_policy * act_policy = nullptr;
 
     // return true if the "other" params would result in a graph with the same topology as with the current params
     //   having the same topology allows us to reuse the graph in some cases
@@ -1030,13 +1030,13 @@ struct llm_graph_context {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
+    const llama_act_policy * act_policy;
+
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     const llm_graph_cb & cb_func;
 
     llm_graph_result * res;
-
-    const llama_act_policy * act_policy;
 
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;

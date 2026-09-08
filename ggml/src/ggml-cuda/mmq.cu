@@ -97,7 +97,7 @@ static inline bool ggml_cuda_mmq_force_w4a8(const ggml_tensor * src0, const ggml
         const char * env = getenv("GGML_CUDA_FORCE_W4A4");
         return env != nullptr && std::atoi(env) != 0;
     }();
-    if (force_w4a4 || src0->type != GGML_TYPE_NVFP4) {
+    if (src0->type != GGML_TYPE_NVFP4 || force_w4a4) {
         return false;
     }
     return ggml_get_op_params_i32(dst, 3) == GGML_PREC_Q8;

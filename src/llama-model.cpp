@@ -1180,17 +1180,17 @@ struct llama_model::impl {
     std::vector<float> tensor_split_owned;
 };
 
-bool llama_act_policy::wants_prec_a8(const ggml_tensor * w) const {
-    if (!w) {
+bool llama_act_policy::apply(ggml_tensor * res) const {
+    if (!res || !res->src[0]) {
         return false;
     }
 
-    const auto it = per_tensor.find(w->name);
-    if (it != per_tensor.end()) {
-        return it->second;
+    const auto it = prec_src1.find(res->src[0]->name);
+    if (it == prec_src1.end()) {
+        return false;
     }
 
-    return false;
+    return ggml_prec_set_src(res, it->second, 1);
 }
 
 static bool load_act_policy_arr(
@@ -1221,7 +1221,9 @@ static bool load_act_policy_arr(
 
     const int8_t * values = (const int8_t *) gguf_get_arr_data(ctx, kid);
     for (size_t i = 0; i < n_values; ++i) {
-        policy.per_tensor.emplace(tensor_names[i], values[i] != 0);
+        if (values[i] != 0) {
+            policy.prec_src1.emplace(tensor_names[i], GGML_PREC_Q8);
+        }
     }
 
     return true;
