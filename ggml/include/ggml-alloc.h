@@ -90,6 +90,10 @@ GGML_API size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_i
 GGML_API bool ggml_gallocr_set_buffer_range(
     ggml_gallocr_t galloc, int buffer_id, ggml_backend_buffer_t buffer, size_t offset, size_t size);
 
+// Reset and release an attached external range, then invalidate cached tensor placements.
+// The caller must ensure that no tensors or backend work still use the range.
+GGML_API bool ggml_gallocr_clear_buffer_range(ggml_gallocr_t galloc, int buffer_id);
+
 // Utils
 // Create a buffer and allocate all the tensors in a ggml_context
 

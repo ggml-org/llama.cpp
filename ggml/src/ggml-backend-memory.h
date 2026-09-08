@@ -200,6 +200,18 @@ GGML_API size_t ggml_backend_memory_arena_lease_count(
 GGML_API ggml_backend_memory_lease_t ggml_backend_memory_arena_acquire(
         ggml_backend_memory_arena_t arena, uint64_t id);
 
+// Attach and retain a lease as the complete workspace for one scheduler backend.
+// The caller may release its lease handle after this succeeds.
+GGML_API bool ggml_backend_sched_attach_memory_lease(
+        ggml_backend_sched_t sched,
+        ggml_backend_t backend,
+        ggml_backend_memory_lease_t lease);
+
+// Synchronize the scheduler, detach its workspace, and release its lease.
+// Existing graph tensor addresses become invalid.
+GGML_API bool ggml_backend_sched_detach_memory_lease(
+        ggml_backend_sched_t sched, ggml_backend_t backend);
+
 // Retain a lease handle without acquiring another region lease.
 GGML_API ggml_backend_memory_lease_t ggml_backend_memory_lease_retain(
         ggml_backend_memory_lease_t lease);

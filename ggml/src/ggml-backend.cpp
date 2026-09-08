@@ -10,6 +10,7 @@
 
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
+#include "ggml-backend-memory.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
 
@@ -1006,6 +1007,7 @@ struct ggml_backend_sched {
 
     ggml_backend_t backends[GGML_SCHED_MAX_BACKENDS];
     ggml_backend_buffer_type_t bufts[GGML_SCHED_MAX_BACKENDS];
+    ggml_backend_memory_lease_t memory_leases[GGML_SCHED_MAX_BACKENDS];
     ggml_gallocr_t galloc;
 
     // hash map of the nodes in the graph
@@ -2085,12 +2087,22 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     if (sched == NULL) {
         return;
     }
+    bool has_memory_leases = false;
+    for (int b = 0; b < sched->n_backends; ++b) {
+        has_memory_leases = has_memory_leases || sched->memory_leases[b] != NULL;
+    }
+    if (has_memory_leases) {
+        ggml_backend_sched_synchronize(sched);
+    }
     for (int b = 0; b < sched->n_backends; b++) {
         for (int c = 0; c < sched->n_copies; c++) {
             ggml_backend_event_free(sched->events[b][c]);
         }
     }
     ggml_gallocr_free(sched->galloc);
+    for (int b = 0; b < sched->n_backends; ++b) {
+        ggml_backend_memory_lease_free(sched->memory_leases[b]);
+    }
     ggml_free(sched->ctx);
     ggml_hash_set_free(&sched->hash_set);
     for (int i = 0; i < sched->splits_capacity; i++) {
@@ -2263,6 +2275,76 @@ bool ggml_backend_sched_set_buffer_range(
     GGML_ASSERT(backend_index >= 0 && backend_index < sched->n_backends);
 
     return ggml_gallocr_set_buffer_range(sched->galloc, backend_index, buffer, offset, size);
+}
+
+static void ggml_backend_sched_release_memory_lease(ggml_backend_sched_t sched, int backend_index) {
+    ggml_backend_memory_lease_t lease = sched->memory_leases[backend_index];
+    if (lease == NULL) {
+        return;
+    }
+    int references = 0;
+    for (int i = 0; i < sched->n_backends; ++i) {
+        if (sched->memory_leases[i] == lease) {
+            sched->memory_leases[i] = NULL;
+            references++;
+        }
+    }
+    for (int i = 0; i < references; ++i) {
+        ggml_backend_memory_lease_free(lease);
+    }
+}
+
+bool ggml_backend_sched_clear_buffer_range(
+        ggml_backend_sched_t sched, ggml_backend_t backend) {
+    GGML_ASSERT(sched);
+    int backend_index = ggml_backend_sched_backend_id(sched, backend);
+    GGML_ASSERT(backend_index >= 0 && backend_index < sched->n_backends);
+
+    ggml_backend_sched_synchronize(sched);
+    if (!ggml_gallocr_clear_buffer_range(sched->galloc, backend_index)) {
+        return false;
+    }
+    ggml_backend_sched_reset(sched);
+    ggml_backend_sched_release_memory_lease(sched, backend_index);
+    return true;
+}
+
+bool ggml_backend_sched_attach_memory_lease(
+        ggml_backend_sched_t sched,
+        ggml_backend_t backend,
+        ggml_backend_memory_lease_t lease) {
+    GGML_ASSERT(sched);
+    if (lease == NULL) {
+        return false;
+    }
+    int backend_index = ggml_backend_sched_backend_id(sched, backend);
+    GGML_ASSERT(backend_index >= 0 && backend_index < sched->n_backends);
+    if (sched->memory_leases[backend_index] != NULL) {
+        return false;
+    }
+
+    ggml_backend_buffer_t buffer = ggml_backend_memory_lease_buffer(lease);
+    if (buffer == NULL || !ggml_backend_sched_set_buffer_range(
+            sched, backend, buffer, 0, ggml_backend_buffer_get_size(buffer))) {
+        return false;
+    }
+
+    for (int i = 0; i < sched->n_backends; ++i) {
+        if (sched->bufts[i] == sched->bufts[backend_index]) {
+            GGML_ASSERT(sched->memory_leases[i] == NULL);
+            sched->memory_leases[i] = ggml_backend_memory_lease_retain(lease);
+        }
+    }
+    return true;
+}
+
+bool ggml_backend_sched_detach_memory_lease(
+        ggml_backend_sched_t sched, ggml_backend_t backend) {
+    GGML_ASSERT(sched);
+    const int backend_index = ggml_backend_sched_backend_id(sched, backend);
+    GGML_ASSERT(backend_index >= 0 && backend_index < sched->n_backends);
+    return sched->memory_leases[backend_index] != NULL &&
+        ggml_backend_sched_clear_buffer_range(sched, backend);
 }
 
 void ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_t backend) {

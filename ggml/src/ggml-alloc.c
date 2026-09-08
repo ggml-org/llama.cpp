@@ -630,6 +630,9 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
                 }
             }
             if (!freed) {
+                if (galloc->buffer_external[i]) {
+                    ggml_vbuffer_reset(galloc->buffers[i]);
+                }
                 ggml_vbuffer_free(galloc->buffers[i]);
             }
         }
@@ -1292,6 +1295,34 @@ bool ggml_gallocr_set_buffer_range(
         }
     }
 
+    galloc->n_nodes = 0;
+    galloc->n_leafs = 0;
+    return true;
+}
+
+// Release one shared external range and invalidate its cached placements.
+bool ggml_gallocr_clear_buffer_range(ggml_gallocr_t galloc, int buffer_id) {
+    GGML_ASSERT(galloc != NULL);
+    GGML_ASSERT(buffer_id >= 0 && buffer_id < galloc->n_buffers);
+
+    if (galloc->buffers[buffer_id] == NULL || !galloc->buffer_external[buffer_id]) {
+        return false;
+    }
+
+    struct vbuffer * buffer = galloc->buffers[buffer_id];
+    struct ggml_dyn_tallocr * talloc = galloc->buf_tallocs[buffer_id];
+    for (int i = 0; i < galloc->n_buffers; ++i) {
+        if (galloc->buf_tallocs[i] == talloc) {
+            GGML_ASSERT(galloc->buffers[i] == buffer && galloc->buffer_external[i]);
+            galloc->buffers[i] = NULL;
+            galloc->buffer_external[i] = false;
+            galloc->buffer_offsets[i] = 0;
+            galloc->buffer_sizes[i] = 0;
+        }
+    }
+
+    ggml_vbuffer_reset(buffer);
+    ggml_vbuffer_free(buffer);
     galloc->n_nodes = 0;
     galloc->n_leafs = 0;
     return true;

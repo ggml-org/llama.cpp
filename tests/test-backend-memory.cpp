@@ -910,6 +910,190 @@ static void test_arena_concurrent_lease_gate() {
                 GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT);
 }
 
+// Keep a workspace leased while the scheduler can access it and release it on detach or destruction.
+static void test_scheduler_lease_attachment() {
+    ggml_backend_ptr backend(ggml_backend_cpu_init());
+    GGML_ASSERT(backend);
+    ggml_backend_cpu_set_n_threads(backend.get(), 1);
+    auto * buft = ggml_backend_get_default_buffer_type(backend.get());
+    const size_t alignment = ggml_backend_buft_get_alignment(buft);
+    const size_t workspace_size = 16*alignment;
+    arena_ptr arena(ggml_backend_memory_arena_new(buft, workspace_size + alignment),
+                    ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+        arena.get(), 1, 0, workspace_size, alignment, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+
+    ggml_backend_t backends[] = {backend.get()};
+    ggml_backend_buffer_type_t bufts[] = {buft};
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(
+        backends, bufts, 1, GGML_DEFAULT_GRAPH_SIZE, false, true));
+    GGML_ASSERT(sched);
+    GGML_ASSERT(!ggml_backend_sched_attach_memory_lease(sched.get(), backend.get(), nullptr));
+
+    test_buft_context incompatible_context;
+    auto incompatible_buft = make_test_buft(&incompatible_context);
+    arena_ptr incompatible(ggml_backend_memory_arena_new(&incompatible_buft, 128),
+                           ggml_backend_memory_arena_free);
+    GGML_ASSERT(incompatible);
+    GGML_ASSERT(ggml_backend_memory_arena_begin(incompatible.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        incompatible.get(), 9, 64, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(incompatible.get()));
+    lease_ptr incompatible_lease(
+        ggml_backend_memory_arena_acquire(incompatible.get(), 9), ggml_backend_memory_lease_free);
+    GGML_ASSERT(incompatible_lease);
+    GGML_ASSERT(!ggml_backend_sched_attach_memory_lease(
+        sched.get(), backend.get(), incompatible_lease.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(incompatible.get()) == 1);
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), backend.get()) == 0);
+
+    lease_ptr lease(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+    GGML_ASSERT(lease);
+    GGML_ASSERT(ggml_backend_sched_attach_memory_lease(sched.get(), backend.get(), lease.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), backend.get()) == workspace_size);
+    lease.reset();
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+
+    lease_ptr duplicate(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+    GGML_ASSERT(duplicate);
+    GGML_ASSERT(!ggml_backend_sched_attach_memory_lease(sched.get(), backend.get(), duplicate.get()));
+    duplicate.reset();
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_memory_arena_quiesce(arena.get()));
+
+    ggml_init_params params = {
+        /*.mem_size   = */ 8*ggml_tensor_overhead() + ggml_graph_overhead(),
+        /*.mem_buffer = */ nullptr,
+        /*.no_alloc   = */ true,
+    };
+    {
+        ggml_context_ptr ctx(ggml_init(params));
+        auto * graph = ggml_new_graph(ctx.get());
+        auto * lhs = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
+        auto * rhs = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
+        auto * sum = ggml_add(ctx.get(), lhs, rhs);
+        ggml_set_input(lhs);
+        ggml_set_input(rhs);
+        ggml_set_output(sum);
+        ggml_build_forward_expand(graph, sum);
+        GGML_ASSERT(ggml_backend_sched_reserve(sched.get(), graph));
+        GGML_ASSERT(ggml_backend_sched_alloc_graph(sched.get(), graph));
+
+        const float a[] = {1, 2, 3, 4};
+        const float b[] = {5, 6, 7, 8};
+        ggml_backend_tensor_set(lhs, a, 0, sizeof(a));
+        ggml_backend_tensor_set(rhs, b, 0, sizeof(b));
+        GGML_ASSERT(ggml_backend_sched_graph_compute_async(sched.get(), graph) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(ggml_backend_sched_detach_memory_lease(sched.get(), backend.get()));
+        GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 0);
+        GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                    GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT);
+        GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), backend.get()) == 0);
+        GGML_ASSERT(!ggml_backend_sched_detach_memory_lease(sched.get(), backend.get()));
+
+        float result[4] = {};
+        ggml_backend_tensor_get(sum, result, 0, sizeof(result));
+        for (size_t i = 0; i < 4; ++i) {
+            GGML_ASSERT(result[i] == a[i] + b[i]);
+        }
+    }
+
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+        arena.get(), 2, alignment, workspace_size, alignment, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_resume(arena.get()));
+    lease_ptr replacement(ggml_backend_memory_arena_acquire(arena.get(), 2), ggml_backend_memory_lease_free);
+    GGML_ASSERT(replacement);
+    GGML_ASSERT(ggml_backend_sched_attach_memory_lease(sched.get(), backend.get(), replacement.get()));
+    replacement.reset();
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+    {
+        ggml_context_ptr ctx(ggml_init(params));
+        auto * graph = ggml_new_graph(ctx.get());
+        auto * input = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
+        auto * output = ggml_scale(ctx.get(), input, 3.0f);
+        ggml_set_input(input);
+        ggml_set_output(output);
+        ggml_build_forward_expand(graph, output);
+        GGML_ASSERT(ggml_backend_sched_reserve(sched.get(), graph));
+        GGML_ASSERT(ggml_backend_sched_alloc_graph(sched.get(), graph));
+
+        const float values[] = {2, 4, 6, 8};
+        ggml_backend_tensor_set(input, values, 0, sizeof(values));
+        GGML_ASSERT(ggml_backend_sched_graph_compute_async(sched.get(), graph) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(ggml_backend_memory_arena_quiesce(arena.get()));
+        sched.reset();
+        GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 0);
+        GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                    GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT);
+
+        float result[4] = {};
+        ggml_backend_tensor_get(output, result, 0, sizeof(result));
+        for (size_t i = 0; i < 4; ++i) {
+            GGML_ASSERT(result[i] == 3*values[i]);
+        }
+    }
+}
+
+// Share one lease object across aliased scheduler slots and detach it through either backend.
+static void test_scheduler_shared_lease_attachment() {
+    ggml_backend_ptr first_backend(ggml_backend_cpu_init());
+    ggml_backend_ptr second_backend(ggml_backend_cpu_init());
+    GGML_ASSERT(first_backend && second_backend);
+    auto * buft = ggml_backend_get_default_buffer_type(first_backend.get());
+    GGML_ASSERT(ggml_backend_get_default_buffer_type(second_backend.get()) == buft);
+    const size_t alignment = ggml_backend_buft_get_alignment(buft);
+    arena_ptr arena(ggml_backend_memory_arena_new(buft, 8*alignment),
+                    ggml_backend_memory_arena_free);
+    GGML_ASSERT(arena);
+    GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+    GGML_ASSERT(ggml_backend_memory_arena_reserve(
+        arena.get(), 1, 8*alignment, alignment, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+    GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+
+    ggml_backend_t backends[] = {first_backend.get(), second_backend.get()};
+    ggml_backend_buffer_type_t bufts[] = {buft, buft};
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(
+        backends, bufts, 2, GGML_DEFAULT_GRAPH_SIZE, false, true));
+    lease_ptr lease(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+    GGML_ASSERT(lease);
+    GGML_ASSERT(ggml_backend_sched_attach_memory_lease(
+        sched.get(), first_backend.get(), lease.get()));
+    lease.reset();
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), first_backend.get()) == 8*alignment);
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), second_backend.get()) == 0);
+
+    GGML_ASSERT(ggml_backend_memory_arena_quiesce(arena.get()));
+    GGML_ASSERT(ggml_backend_sched_clear_buffer_range(
+        sched.get(), second_backend.get()));
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 0);
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT);
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), first_backend.get()) == 0);
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), second_backend.get()) == 0);
+    GGML_ASSERT(!ggml_backend_sched_detach_memory_lease(
+        sched.get(), first_backend.get()));
+
+    GGML_ASSERT(ggml_backend_memory_arena_resume(arena.get()));
+    lease.reset(ggml_backend_memory_arena_acquire(arena.get(), 1));
+    GGML_ASSERT(lease);
+    GGML_ASSERT(ggml_backend_sched_attach_memory_lease(
+        sched.get(), second_backend.get(), lease.get()));
+    lease.reset();
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+    GGML_ASSERT(ggml_backend_memory_arena_quiesce(arena.get()));
+    sched.reset();
+    GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 0);
+    GGML_ASSERT(ggml_backend_memory_arena_get_state(arena.get()) ==
+                GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT);
+}
+
 static void run(const char * name, void (*test)()) {
     std::printf("%s ", name);
     std::fflush(stdout);
@@ -938,5 +1122,7 @@ int main() {
     run("test_lease_validation", test_lease_validation);
     run("test_arena_state_lifecycle", test_arena_state_lifecycle);
     run("test_arena_concurrent_lease_gate", test_arena_concurrent_lease_gate);
+    run("test_scheduler_lease_attachment", test_scheduler_lease_attachment);
+    run("test_scheduler_shared_lease_attachment", test_scheduler_shared_lease_attachment);
     return 0;
 }

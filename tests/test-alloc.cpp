@@ -1250,6 +1250,33 @@ static void test_borrowed_buffer_range_validation() {
     GGML_ASSERT(reset_backend.context->reset_count == 0);
 }
 
+// Release external ranges, reject owned buffers, and allow later owned allocation.
+static void test_borrowed_buffer_range_detach() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_buffer_t workspace = ggml_backend_buft_alloc_buffer(&backend.buffer_type, 96);
+    GGML_ASSERT(workspace);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 0, workspace, 16, 48));
+    ggml_backend_buffer_free(workspace);
+    GGML_ASSERT(backend.context->allocated_total() == 96);
+    GGML_ASSERT(ggml_gallocr_clear_buffer_range(galloc.get(), 0));
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 0) == 0);
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+    GGML_ASSERT(!ggml_gallocr_clear_buffer_range(galloc.get(), 0));
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    auto * input = make_input_with_size(ctx, 16);
+    auto * output = ggml_scale(ctx, input, 2.0f);
+    ggml_set_output(output);
+    ggml_build_forward_expand(graph, output);
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    const size_t owned_size = ggml_gallocr_get_buffer_size(galloc.get(), 0);
+    GGML_ASSERT(owned_size != 0);
+    GGML_ASSERT(!ggml_gallocr_clear_buffer_range(galloc.get(), 0));
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 0) == owned_size);
+}
+
 // Verify gallocr retains caller-supplied storage until its own lifetime ends.
 static void test_borrowed_buffer_range_retains_buffer() {
     dummy_backend backend = dummy_backend_init(SIZE_MAX);
@@ -1306,7 +1333,37 @@ static void test_borrowed_buffer_view_reset() {
     GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
     GGML_ASSERT(backend.context->reset_count == 2);
 
+    GGML_ASSERT(ggml_gallocr_clear_buffer_range(galloc.get(), 0));
+    GGML_ASSERT(backend.context->reset_count == 3);
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+
     galloc.reset();
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+}
+
+// Reset stateful external view metadata when gallocr destruction releases the workspace.
+static void test_borrowed_buffer_view_free_reset() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX, 8, true);
+    ggml_backend_buffer_t parent = ggml_backend_buft_alloc_buffer(&backend.buffer_type, 96);
+    ggml_backend_buffer_t view = ggml_backend_buffer_view(parent, 24, 48);
+    GGML_ASSERT(parent && view);
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    auto * input = make_input_with_size(ctx, 16);
+    auto * output = ggml_scale(ctx, input, 2.0f);
+    ggml_set_output(output);
+    ggml_build_forward_expand(graph, output);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_set_buffer_range(galloc.get(), 0, view, 0, 48));
+    ggml_backend_buffer_free(parent);
+    ggml_backend_buffer_free(view);
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+    GGML_ASSERT(backend.context->reset_count == 1);
+
+    galloc.reset();
+    GGML_ASSERT(backend.context->reset_count == 2);
     GGML_ASSERT(backend.context->allocated_total() == 0);
 }
 
@@ -1342,6 +1399,10 @@ static void test_borrowed_buffer_range_shared_buffer_type() {
     GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 0) == 48);
     GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 1) == 0);
     GGML_ASSERT(backend.context->allocated_total() == 96);
+    GGML_ASSERT(ggml_gallocr_clear_buffer_range(galloc.get(), 0));
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 0) == 0);
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 1) == 0);
+    GGML_ASSERT(!ggml_gallocr_clear_buffer_range(galloc.get(), 1));
 }
 
 // Verify that attaching a range after measurement replaces cached zero-based tensor placements.
@@ -1476,6 +1537,9 @@ static void test_scheduler_borrowed_buffer_range() {
     }
 
     GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), backend.get()) == size);
+    GGML_ASSERT(ggml_backend_sched_clear_buffer_range(sched.get(), backend.get()));
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), backend.get()) == 0);
+    GGML_ASSERT(!ggml_backend_sched_clear_buffer_range(sched.get(), backend.get()));
 }
 
 // Check alignment gaps, exact fits, and recovery after a range runs out of space.
@@ -1759,7 +1823,9 @@ int main() {
     run("test_borrowed_buffer_range_validation", test_borrowed_buffer_range_validation);
     run("test_borrowed_buffer_range_retains_buffer", test_borrowed_buffer_range_retains_buffer);
     run("test_borrowed_buffer_view_reset", test_borrowed_buffer_view_reset);
+    run("test_borrowed_buffer_view_free_reset", test_borrowed_buffer_view_free_reset);
     run("test_borrowed_buffer_range_shared_buffer_type", test_borrowed_buffer_range_shared_buffer_type);
+    run("test_borrowed_buffer_range_detach", test_borrowed_buffer_range_detach);
     run("test_borrowed_buffer_range_after_measure", test_borrowed_buffer_range_after_measure);
     run("test_gpu_borrowed_buffer_range", test_gpu_borrowed_buffer_range);
     run("test_scheduler_borrowed_buffer_range", test_scheduler_borrowed_buffer_range);
