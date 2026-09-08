@@ -113,6 +113,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR",
         "GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY",
         "GGML_OPENVINO_NPU_COMPILE_CONFIG",
+        "GGML_OPENVINO_NPU_REQUANT_POLICY",
         // Integer values (use ggml_openvino_getenv_int)
         "GGML_OPENVINO_PREFILL_CHUNK_SIZE",
         // Boolean toggles (treated as int flags via ggml_openvino_getenv_int)
@@ -411,6 +412,17 @@ clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL() {
     return ggml_openvino_get_device_config().cl_mem_cpy_fn;
 }
 
+ExtraQuantType ggml_openvino_get_npu_requant_type() {
+    const std::string policy = ggml_openvino_getenv_str("GGML_OPENVINO_NPU_REQUANT_POLICY", "group-128");
+    if (policy == "group-128") {
+        return ExtraQuantType::Q4_0_128;
+    }
+    if (policy == "channel-wise") {
+        return ExtraQuantType::Q4_0_C;
+    }
+    GGML_ABORT("Unknown GGML_OPENVINO_NPU_REQUANT_POLICY: %s", policy.c_str());
+}
+
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
 std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant) {
     if (no_requant) {
@@ -424,7 +436,7 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         return ExtraQuantType::Q8_0_C;
     }
     if (ggml_openvino_is_npu()) {
-        return ExtraQuantType::Q4_0_128;
+        return ggml_openvino_get_npu_requant_type();
     }
     // By default Q6_K/Q5_K are requantized to Q8_0_C, which *inflates* 6- and 5-bit weights to 8
     // while the rest of the model stays at 4 bits, and Q4_K keeps its native group-32 layout
