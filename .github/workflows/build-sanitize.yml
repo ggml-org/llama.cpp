@@ -45,7 +45,7 @@ jobs:
         - sanitizer: THREAD
           machine: ubuntu-24.04
         - sanitizer: UNDEFINED
-          machine: [self-hosted, X64, Linux, OpenVINO]
+          machine: [self-hosted, X64, Linux, NVIDIA]
 
     runs-on: ${{ matrix.machine }}
 
