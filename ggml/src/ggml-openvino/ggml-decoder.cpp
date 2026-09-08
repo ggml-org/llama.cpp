@@ -1242,7 +1242,8 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
             const auto layer = extract_layer_from_name(name);
             if (layer.has_value() && !is_swa_layer(*layer) && m_compute_params.attention_size > 0 &&
                 m_compute_params.attention_size < input_shape[2].get_length()) {
-                input_shape[2] = m_compute_params.attention_size;
+                const int attention_size = m_compute_params.attention_size;
+                input_shape[2] = attention_size;
             }
         }
         if ((is_stateful() && !is_flat_kv) || is_kvcache_4d(input)) {
