@@ -13275,12 +13275,23 @@ static void ggml_vk_fill(ggml_backend_vk_context * ctx, vk_context& subctx, ggml
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, nullptr, nullptr, nullptr, dst, GGML_OP_FILL);
     GGML_ASSERT(pipeline != nullptr);
 
+    // Each workgroup fills wg_denoms[0] elements. Intel Arc caps each grid axis
+    // at maxComputeWorkGroupCount[0] (65535), so split the flat grid across x and y.
+    const uint64_t n = ggml_nelements(dst);
+    if (n == 0) {
+        return;
+    }
+
+    const uint32_t total_wg = CEIL_DIV(n, pipeline->wg_denoms[0]);
+    const uint32_t wg_x = std::min(total_wg, ctx->device->properties.limits.maxComputeWorkGroupCount[0]);
+    const uint32_t wg_y = CEIL_DIV(total_wg, wg_x);
+    GGML_ASSERT(wg_y <= ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
+
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
     vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst, false);
 
-    std::array<uint32_t, 3> elements = { (uint32_t)ggml_nelements(dst), 1, 1 };
-
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { dst_buf }, pc, elements);
+    pc.KX = (uint32_t)n;
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { dst_buf }, pc, { wg_x * pipeline->wg_denoms[0], wg_y * pipeline->wg_denoms[1], 1 });
 }
 
 static void ggml_vk_sin(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
