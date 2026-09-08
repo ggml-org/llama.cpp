@@ -5065,7 +5065,22 @@ static std::string ggml_opencl_fa_kernel_src(ggml_opencl_fa_variant v) {
 static std::string ggml_opencl_fa_compile_opts(ggml_backend_opencl_context * backend_ctx,
                                                 const ggml_opencl_fa_dim * cfg,
                                                 ggml_opencl_fa_variant variant) {
-    std::string opts = backend_ctx->kernel_compile_opts +
+    // ggml_opencl_supports_op() compiles FA programs (the dk == 512 prefill path)
+    // before load_cl_kernels() has run, so kernel_compile_opts can still be empty
+    // here. Without -cl-std the driver is free to fall back to OpenCL C 1.2, where
+    // cl_khr_subgroups does not exist -- the program then fails to build with
+    // "unsupported OpenCL extension 'cl_khr_subgroups'" and the static failed[]
+    // flag means it is never retried, so the op silently falls back to the CPU.
+    std::string fa_base = backend_ctx->kernel_compile_opts;
+    if (fa_base.empty()) {
+        fa_base = std::string("-cl-std=CL") +
+                  std::to_string(backend_ctx->opencl_c_version.major) + "." +
+                  std::to_string(backend_ctx->opencl_c_version.minor) +
+                  " -cl-mad-enable -cl-unsafe-math-optimizations"
+                  " -cl-finite-math-only -cl-fast-relaxed-math";
+    }
+
+    std::string opts = fa_base +
         " -D DK=" + std::to_string(cfg->dk) +
         " -D DV=" + std::to_string(cfg->dv) +
         " -D BLOCK_M=" + std::to_string(cfg->bm) +
