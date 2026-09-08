@@ -371,10 +371,10 @@ template <> inline __m512 load(const ggml_bf16_t *p) {
 
 #if defined(__AVX512BF16__)
 template <> inline __m512bh load(const ggml_bf16_t *p) {
-    return (__m512bh)_mm512_loadu_ps((const float *)p);
+     return (__m512bh)_mm512_castps_si512(_mm512_loadu_ps((const float *)p));
 }
 template <> inline __m256bh load(const ggml_bf16_t *p) {
-    return (__m256bh)_mm256_loadu_ps((const float *)p);
+    return (__m256bh)_mm256_castps_si256(_mm256_loadu_ps((const float *)p));
 }
 template <> inline __m512bh load(const float *p) {
     return _mm512_cvtne2ps_pbh(_mm512_loadu_ps(p + 16), _mm512_loadu_ps(p));
