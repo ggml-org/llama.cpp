@@ -280,8 +280,8 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
             ggml_tensor * beta = ggml_mul_mat(ctx0, layer.ssm_beta, cur);
             beta = ggml_sigmoid(ctx0, ggml_reshape_4d(ctx0, beta, 1, n_head, n_seq_tokens, n_seqs));
 
-            q = ggml_l2_norm(ctx0, q, hparams.f_norm_rms_eps);
-            k = ggml_l2_norm(ctx0, k, hparams.f_norm_rms_eps);
+            q = build_gdn_l2_norm(ctx0, q, hparams.f_norm_rms_eps);
+            k = build_gdn_l2_norm(ctx0, k, hparams.f_norm_rms_eps);
 
             ggml_tensor * states_all = mctx_cur->get_s_l(il);
             ggml_tensor * state = build_rs(inp_rs, states_all, hparams.n_embd_s(), n_seqs);

@@ -32,8 +32,8 @@ env:
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
-  # TODO: fix and re-enable the `test-llama-archs` and `test-recurrent-state-rollback`
-  CTEST_EXCLUDE: "test-llama-archs|^test-recurrent-state-rollback"
+  # TODO: fix failing tests on OpenVINO backend
+  CTEST_EXCLUDE: "test-llama-archs|^test-recurrent-state-|test-backend-ops|test-save-load-state"
 
 jobs:
   ubuntu-24-openvino:

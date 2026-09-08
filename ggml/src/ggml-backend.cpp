@@ -71,7 +71,7 @@ size_t ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, const s
         GGML_ASSERT(size <= ggml_nbytes(tensor) ||
                     ggml_op_is_empty(tensor->op) ||
                     ggml_is_quantized(tensor->type) || // [TAG_ALLOC_SIZE_EXPAND]
-                    ggml_backend_op_alloc_size_may_expand(tensor->op));
+                    ggml_op_alloc_size_may_expand(tensor->op));
 
         return size;
     }
@@ -849,7 +849,7 @@ static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split
     int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
     if (split->inputs_capacity > 0) {
         new_cap = 2*split->inputs_capacity;
-        GGML_LOG_WARN("%s: increasing split inputs capacity from %d to %d\n", __func__, split->inputs_capacity, new_cap);
+        GGML_LOG_DEBUG("%s: increasing split inputs capacity from %d to %d\n", __func__, split->inputs_capacity, new_cap);
     }
     auto * pnew = (struct ggml_tensor **) realloc((void *) split->inputs, new_cap * sizeof(struct ggml_tensor *));
     if (pnew == NULL) {
@@ -864,7 +864,7 @@ static void ggml_backend_sched_graph_inputs_grow(ggml_backend_sched_t sched) {
     int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
     if (sched->graph_inputs_capacity > 0) {
         new_cap = 2*sched->graph_inputs_capacity;
-        GGML_LOG_WARN("%s: increasing graph inputs capacity from %d to %d\n", __func__, sched->graph_inputs_capacity, new_cap);
+        GGML_LOG_DEBUG("%s: increasing graph inputs capacity from %d to %d\n", __func__, sched->graph_inputs_capacity, new_cap);
     }
     auto * pnew = (struct ggml_tensor **) realloc((void *) sched->graph_inputs, new_cap * sizeof(struct ggml_tensor *));
     if (pnew == NULL) {
@@ -1334,17 +1334,6 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
                         int src_backend_id = tensor_backend_id(src);
                         if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
-                            need_new_split = true;
-                            break;
-                        }
-                    }
-                    // check if the split has too many inputs
-                    // FIXME: count the number of inputs instead of only checking when full
-                    if (split->n_inputs >= split->inputs_capacity) {
-                        const size_t id = hash_id(src);
-                        int src_backend_id = sched->hv_tensor_backend_ids[id];
-                        bool supported = ggml_backend_sched_buffer_supported(sched, src, cur_backend_id);
-                        if (src_backend_id != cur_backend_id && tensor_id_copy(id, cur_backend_id, 0) == NULL && !supported) {
                             need_new_split = true;
                             break;
                         }
@@ -2109,10 +2098,7 @@ ggml_backend_t ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched,
 
 // utils
 
-// [TAG_ALLOC_SIZE_EXPAND]
-// returns true for ops that may require additional memory for fleeting data on some backends,
-// i.e. the backend's get_alloc_size may return more than ggml_nbytes for the output tensor
-bool ggml_backend_op_alloc_size_may_expand(enum ggml_op op) {
+bool ggml_op_alloc_size_may_expand(enum ggml_op op) {
     switch (op) {
         case GGML_OP_FLASH_ATTN_EXT:
         case GGML_OP_MUL_MAT:
