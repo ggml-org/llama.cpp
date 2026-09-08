@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -1093,7 +1095,22 @@ public:
             throw std::invalid_argument("JSON schema conversion failed:\n" + string_join(_errors, "\n"));
         }
         if (!_warnings.empty()) {
-            fprintf(stderr, "WARNING: JSON schema conversion was incomplete: %s\n", string_join(_warnings, "; ").c_str());
+            // The grammar is (re)built on every request in llama-server, so
+            // report each distinct warning once and stay quiet afterwards.
+            static std::mutex warned_mtx;
+            static std::set<std::string> warned;
+            std::vector<std::string> fresh;
+            {
+                std::lock_guard<std::mutex> lock(warned_mtx);
+                for (const auto & warning : _warnings) {
+                    if (warned.insert(warning).second) {
+                        fresh.push_back(warning);
+                    }
+                }
+            }
+            if (!fresh.empty()) {
+                fprintf(stderr, "WARNING: JSON schema conversion was incomplete: %s\n", string_join(fresh, "; ").c_str());
+            }
         }
     }
 
