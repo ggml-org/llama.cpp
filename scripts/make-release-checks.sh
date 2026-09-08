@@ -120,6 +120,51 @@ else
     fi
 fi
 
+echo "Checking container images for commit ${SHA}..."
+NIGHTLY_TAG="$(git tag --points-at "${SHA}" | grep -E '(^|-)b[0-9]+(-[0-9a-f]{7})?$' | head -n 1 || true)"
+if [[ -z "${NIGHTLY_TAG}" ]]; then
+    echo "Warning: no nightly tag points at ${SHA} - skipping container image check"
+elif [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
+    echo "Warning: GITHUB_REPOSITORY not set - skipping container image check (local run)"
+else
+    CONTAINER_REPO="${GITHUB_REPOSITORY,,}"  # lower-case owner/repo for ghcr.io
+    GHCR_TOKEN="$(curl -fsSL \
+        "https://ghcr.io/token?scope=repository:${CONTAINER_REPO}:pull&service=ghcr.io" \
+        | grep -oP '"token"\s*:\s*"\K[^"]+')"
+
+    VARIANTS=("" "-cuda" "-cuda13" "-vulkan" "-rocm" "-intel" "-musa" "-openvino")
+    TYPES=("full" "light" "server")
+    CONTAINER_ERR=""
+    for type in "${TYPES[@]}"; do
+        for variant in "${VARIANTS[@]}"; do
+            tag="${type}${variant}-${NIGHTLY_TAG}"
+            STATUS="$(curl -s -o /dev/null -w "%{http_code}" \
+                -H "Authorization: Bearer ${GHCR_TOKEN}" \
+                -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+                "https://ghcr.io/v2/${CONTAINER_REPO}/manifests/${tag}")"
+            if [[ "${STATUS}" == "200" ]]; then
+                echo "  ${tag} - OK"
+            else
+                echo "  ${tag} - MISSING"
+                CONTAINER_ERR+=" ${tag}"
+            fi
+        done
+    done
+
+    if [[ -n "${CONTAINER_ERR}" ]]; then
+        if [[ "$DRY_RUN" == "true" ]]; then
+            echo "Warning: missing container images for ${NIGHTLY_TAG}:${CONTAINER_ERR} (dry run, continuing)."
+            CHECKS_PASSED=false
+        else
+            echo "Error: missing container images for ${NIGHTLY_TAG}:${CONTAINER_ERR}"
+            echo "The Docker workflow must complete successfully before making a release."
+            exit 1
+        fi
+    else
+        echo "All container images found for ${NIGHTLY_TAG} - OK"
+    fi
+fi
+
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "checks_passed=${CHECKS_PASSED}" >> "$GITHUB_OUTPUT"
 fi

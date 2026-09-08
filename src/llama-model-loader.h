@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstring>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -83,17 +84,44 @@ struct llama_model_loader {
     bool no_alloc;
     bool load_mtp;
 
-    // set by the caller before the create_tensor() calls
-    enum llama_tensor_read_lazy tensor_read_lazy = LLAMA_TENSOR_READ_LAZY_OFF;
+    // handle TENSOR_READ_LAZY
+    // use case: keep PLE / engrams embd tensors on disk, read them on demand
+    struct lazy_read {
+        // set by the caller before the create_tensor() calls
+        enum llama_lazy_mode mode = LLAMA_LAZY_MODE_OFF;
+
+        // decide whether this tensor is read lazily
+        // pass w to also record it, or nullptr to only ask
+        bool add(const std::string & name, const ggml_tensor * t, const llama_tensor_weight * w);
+
+        bool any() const {
+            return !ranges.empty();
+        }
+
+        bool has(const ggml_tensor * t) const {
+            return tensors.count(ggml_get_name(t)) > 0;
+        }
+
+        const llama_mmap::ranges & for_file(uint32_t idx) const {
+            static const llama_mmap::ranges none;
+
+            const auto it = ranges.find(idx);
+            return it == ranges.end() ? none : it->second;
+        }
+
+        // lazy tensors are gathered on the host, so no offload setting applies to them
+        static ggml_backend_buffer_type_t buft();
+
+    private:
+        std::map<uint32_t, llama_mmap::ranges> ranges;
+        std::set<std::string>                  tensors;
+    } lazy;
 
     llama_files files;
     llama_ftype ftype;
     llama_fver  fver;
 
     llama_mmaps mappings;
-
-    // byte ranges of TENSOR_READ_LAZY tensors, per file index
-    std::map<uint32_t, llama_mmap::ranges> lazy_tensor_ranges;
 
     std::map<std::string, llama_tensor_weight, weight_name_comparer> weights_map;
     std::unordered_map<std::string, llama_model_kv_override> kv_overrides;
@@ -119,7 +147,22 @@ struct llama_model_loader {
         }
     };
 
-    std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> ctx_map;
+    // lazy tensors need dedicated context
+    struct ctx_key {
+        ggml_backend_buffer_type_t buft;
+        bool lazy;
+    };
+
+    struct ctx_key_comparator {
+        bool operator()(const ctx_key & lhs, const ctx_key & rhs) const {
+            if (lhs.lazy != rhs.lazy) {
+                return lhs.lazy < rhs.lazy;
+            }
+            return strcmp(ggml_backend_buft_name(lhs.buft), ggml_backend_buft_name(rhs.buft)) < 0;
+        }
+    };
+
+    std::map<ctx_key, ggml_context_ptr, ctx_key_comparator> ctx_map;
 
     // track tensors that had to be moved for debugging:
     size_t n_tensors_moved = 0;

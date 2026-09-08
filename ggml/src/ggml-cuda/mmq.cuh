@@ -481,9 +481,6 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
     typedef tile<16,  8, int> tile_C;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 
-    constexpr int warp_size     = ggml_cuda_get_physical_warp_size();
-    constexpr int nwarps        = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
@@ -540,8 +537,6 @@ struct ggml_cuda_mmq_util_funcs {
 
 template <ggml_type type, int J, bool fallback>
 static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_funcs() {
-    constexpr int I = ggml_cuda_mmq_get_I(type, J, fallback);
-
     if (!ggml_cuda_mmq_get_config(type, J, fallback).use_mma_data_layout()) {
         switch (type) {
             case GGML_TYPE_Q1_0:

@@ -894,6 +894,12 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     postprocess_cpu_params(params.speculative.draft.cpuparams,       &params.cpuparams);
     postprocess_cpu_params(params.speculative.draft.cpuparams_batch, &params.cpuparams_batch);
 
+    // default the mmproj device to the global device selection if not set explicitly with -mmdev
+    if (params.mmproj_use_gpu && params.mmproj_device == nullptr && !params.devices.empty()) {
+        params.mmproj_device = params.devices.front();
+        params.mmproj_use_gpu = params.mmproj_device != nullptr;
+    }
+
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
@@ -958,6 +964,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             params.chat_template.c_str(),
             params.use_jinja ? "" : "\nnote: llama.cpp was started without --jinja, we only support commonly used templates"
         ));
+    }
+
+    // if the preserve_reasoning kwarg was not specified explicitly, enable it by default
+    if (!params.default_template_kwargs.count("preserve_reasoning")) {
+        params.default_template_kwargs["preserve_reasoning"] = "true";
     }
 
     return true;
@@ -2605,7 +2616,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         // note: "-mmdev" must sort after "--rpc" in the preset map, else RPC devices are not registered yet
         {"-mmdev", "--mmproj-device"}, "DEVICE",
-        "device to use for multimodal projector (none = don't offload, default: auto)\n"
+        "device to use for multimodal projector (none = don't offload, default: follows --device)\n"
         "use --list-devices to see a list of available devices",
         [](common_params & params, const std::string & value) {
             if (value == "none") {
@@ -2729,18 +2740,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_LOAD_MODE"));
     add_opt(common_arg(
-        {"--tensor-read-lazy"}, "MODE",
+        {"-lzm", "--lazy-mode"}, "MODE",
         "on-demand reading of certain tensors, for example per-layer embeddings (default: auto)\n"
         "- on: read the rows of such tensors from disk on demand instead of keeping them resident (requires mmap)\n"
         "- auto: on, but only for tensors larger than 4 GiB\n"
         "- off: always keep them resident",
         [](common_params & params, const std::string & value) {
-            /**/ if (value == "on")   { params.tensor_read_lazy = LLAMA_TENSOR_READ_LAZY_ON;   }
-            else if (value == "auto") { params.tensor_read_lazy = LLAMA_TENSOR_READ_LAZY_AUTO; }
-            else if (value == "off")  { params.tensor_read_lazy = LLAMA_TENSOR_READ_LAZY_OFF;  }
+            /**/ if (value == "on")   { params.lazy_mode = LLAMA_LAZY_MODE_ON;   }
+            else if (value == "auto") { params.lazy_mode = LLAMA_LAZY_MODE_AUTO; }
+            else if (value == "off")  { params.lazy_mode = LLAMA_LAZY_MODE_OFF;  }
             else { throw std::invalid_argument("invalid value"); }
         }
-    ).set_env("LLAMA_ARG_TENSOR_READ_LAZY"));
+    ).set_env("LLAMA_ARG_LAZY_MODE"));
     add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"
@@ -3553,6 +3564,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     LOG_WRN("Setting 'enable_thinking' via --chat-template-kwargs is deprecated. "
                             "Use --reasoning on / --reasoning off instead.\n");
                 }
+                if (item.key() == "preserve_reasoning") {
+                    LOG_WRN("Setting 'preserve_reasoning' via --chat-template-kwargs is deprecated. "
+                            "Use --reasoning-preserve / --no-reasoning-preserve instead.\n");
+                }
                 params.default_template_kwargs[item.key()] = item.value().dump();
             }
         }
@@ -3743,7 +3758,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--reasoning-preserve"},
         {"--no-reasoning-preserve"},
-        "preserve reasoning trace in the full history, not just the last assistant message (default: template default)\n"
+        "preserve reasoning trace in the full history, not just the last assistant message (default: enabled)\n"
         "compatible with certain templates having 'supports_preserve_reasoning' capability\n"
         "example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking",
         [](common_params & params, bool value) {
@@ -3752,6 +3767,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             } else {
                 params.default_template_kwargs["preserve_reasoning"] = "false";
             }
+            params.preserve_reasoning_specified = true;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING_PRESERVE"));
     add_opt(common_arg(
@@ -3891,6 +3907,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             common_log_set_file(common_log_main(), value.c_str());
         }
     ).set_env("LLAMA_ARG_LOG_FILE"));
+    add_opt(common_arg(
+        {"--log-jsonl"},
+        {"--no-log-jsonl"},
+        "Log as JSONL (one JSON object per line) to stdout, this also disables colored logging (default: disabled)",
+        [](common_params &, bool value) {
+            common_log_set_jsonl(common_log_main(), value);
+        }
+    ).set_env("LLAMA_ARG_LOG_JSONL"));
     add_opt(common_arg(
         {"--log-prompts-dir"}, "PATH",
         "Log prompts to directory (auto-created if not present; only used for debugging, default: disabled)",
@@ -4211,7 +4235,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING"));
     add_opt(common_arg(
         {"--spec-draft-device", "-devd", "--device-draft"}, "<dev1,dev2,..>",
-        "comma-separated list of devices to use for offloading the draft model (none = don't offload)\n"
+        "comma-separated list of devices to use for offloading the draft model (none = don't offload, default: follows --device)\n"
         "use --list-devices to see a list of available devices",
         [](common_params & params, const std::string & value) {
             params.speculative.draft.devices = parse_device_list(value);
