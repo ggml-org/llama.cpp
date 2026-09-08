@@ -344,6 +344,98 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
     return sliced;
 }
 
+namespace {
+
+// Walk a dequantization chain, gathering `indices` out of every leaf Constant that is indexed by
+// the gathered axis, and rebuild the chain on top of the gathered rows. Only the node types
+// make_intX_weights emits are recognized; anything else aborts the rewrite (nullptr).
+std::shared_ptr<ov::Node> rebuild_on_gathered_rows(const ov::Output<ov::Node> & out,
+                                                   const ov::Output<ov::Node> & indices,
+                                                   int64_t rows,
+                                                   size_t idx_rank,
+                                                   bool & saw_compressed,
+                                                   size_t depth) {
+    static constexpr size_t max_depth = 8;
+    if (depth > max_depth) {
+        return nullptr;
+    }
+    auto node = out.get_node_shared_ptr();
+
+    if (auto cnst = ov::as_type_ptr<ov::op::v0::Constant>(node)) {
+        const auto & shape = cnst->get_shape();
+        const auto type = cnst->get_element_type();
+        if (type == ov::element::u4 || type == ov::element::i4 || type == ov::element::u8 ||
+            type == ov::element::i8) {
+            saw_compressed = true;
+        }
+        if (shape.empty() || static_cast<int64_t>(shape[0]) != rows) {
+            // Scalar or already-broadcast operand (e.g. a single zero point): share it unchanged.
+            return cnst;
+        }
+        auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
+        return std::make_shared<ov::op::v8::Gather>(cnst, indices, axis);
+    }
+
+    if (auto reshape = ov::as_type_ptr<ov::op::v1::Reshape>(node)) {
+        // The only Reshape in the chain collapses the group axis back into the row, [N,K/G,G] ->
+        // [N,K]. On gathered rows the leading N becomes the index dims, so keep those and collapse
+        // whatever remains.
+        const auto & ps = reshape->get_output_partial_shape(0);
+        if (ps.rank().is_dynamic() || ps.rank().get_length() != 2) {
+            return nullptr;
+        }
+        auto input = rebuild_on_gathered_rows(reshape->input_value(0), indices, rows, idx_rank,
+                                              saw_compressed, depth + 1);
+        if (!input) {
+            return nullptr;
+        }
+        std::vector<int64_t> target(idx_rank, 0);
+        target.push_back(-1);
+        auto target_shape = ov::op::v0::Constant::create(ov::element::i64, {target.size()}, target);
+        return std::make_shared<ov::op::v1::Reshape>(input, target_shape, true);
+    }
+
+    if (ov::is_type<ov::op::v0::Convert>(node) || ov::is_type<ov::op::v1::Multiply>(node) ||
+        ov::is_type<ov::op::v1::Subtract>(node)) {
+        ov::OutputVector args;
+        args.reserve(node->get_input_size());
+        for (size_t i = 0; i < node->get_input_size(); i++) {
+            auto arg = rebuild_on_gathered_rows(node->input_value(i), indices, rows, idx_rank,
+                                                saw_compressed, depth + 1);
+            if (!arg) {
+                return nullptr;
+            }
+            args.push_back(arg);
+        }
+        return node->clone_with_new_inputs(args);
+    }
+
+    return nullptr;
+}
+
+}  // namespace
+
+std::shared_ptr<ov::Node> gather_compressed_rows(const ov::Output<ov::Node> & weights,
+                                                 const ov::Output<ov::Node> & indices) {
+    // Below this the dequantized table is small enough that the extra nodes are not worth it.
+    static constexpr int64_t min_elements = 1 << 20;
+
+    const auto & ps = weights.get_partial_shape();
+    const auto & idx_ps = indices.get_partial_shape();
+    if (ps.rank().is_dynamic() || ps.rank().get_length() != 2 || ps[0].is_dynamic() ||
+        ps[1].is_dynamic() || idx_ps.rank().is_dynamic()) {
+        return nullptr;
+    }
+    if (ps[0].get_length() * ps[1].get_length() < min_elements) {
+        return nullptr;
+    }
+
+    bool saw_compressed = false;
+    auto gathered = rebuild_on_gathered_rows(weights, indices, ps[0].get_length(),
+                                             idx_ps.rank().get_length(), saw_compressed, 0);
+    return saw_compressed ? gathered : nullptr;
+}
+
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index) {
     auto input = context.get_input(input_index);
 
