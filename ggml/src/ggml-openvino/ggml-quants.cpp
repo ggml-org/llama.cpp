@@ -803,7 +803,8 @@ void quantize_q4_0(const float * x,
                    ov::Tensor & scales_arr,
                    ov::Tensor & zp_arr,
                    int64_t k,
-                   int64_t qk) {
+                   int64_t qk,
+                   int64_t block_offset = 0) {
     assert(k % qk == 0);
     const int nb = k / qk;
 
@@ -814,6 +815,9 @@ void quantize_q4_0(const float * x,
     if (!is_symmetric) {
         auto * zp = static_cast<uint8_t *>(zp_arr.data());
         for (int i = 0; i < nb; i++) {
+            // Destination block index. Chunks are emitted in increasing order, so the
+            // even-block assignment always precedes the odd-block OR of the same zp byte.
+            const int64_t gi = block_offset + i;
             float amax = 0.0f;
             float max = 0.0f;
             for (int j = 0; j < qk; j++) {
@@ -825,33 +829,34 @@ void quantize_q4_0(const float * x,
             }
             const float d = max / -8;
             if (d == 0) {
-                scales[i] = ov::float16(1.0f);
-                if (i % 2 == 0) {
-                    zp[i / 2] = 8;
+                scales[gi] = ov::float16(1.0f);
+                if (gi % 2 == 0) {
+                    zp[gi / 2] = 8;
                 } else {
-                    zp[i / 2] |= (8 << 4);
+                    zp[gi / 2] |= (8 << 4);
                 }
-                memset(weights + i * qk / 2, 8 | (8 << 4), qk / 2);
+                memset(weights + gi * qk / 2, 8 | (8 << 4), qk / 2);
                 continue;
             }
             const float id = 1.0f / d;
-            scales[i] = ov::float16(d);
-            if (i % 2 == 0) {
-                zp[i / 2] = 8;
+            scales[gi] = ov::float16(d);
+            if (gi % 2 == 0) {
+                zp[gi / 2] = 8;
             } else {
-                zp[i / 2] |= (8 << 4);
+                zp[gi / 2] |= (8 << 4);
             }
             for (int j = 0; j < qk / 2; ++j) {
                 const float x0 = x[i * qk + 2 * j] * id;
                 const float x1 = x[i * qk + 2 * j + 1] * id;
                 const uint8_t xi0 = MIN(15, (int8_t) (x0 + 8.5f));
                 const uint8_t xi1 = MIN(15, (int8_t) (x1 + 8.5f));
-                weights[i * qk / 2 + j] = xi0 | (xi1 << 4);
+                weights[gi * qk / 2 + j] = xi0 | (xi1 << 4);
             }
         }
     } else {
         // Symmetric: produce signed i4 values in [-8, 7]
         for (int i = 0; i < nb; i++) {
+            const int64_t gi = block_offset + i;
             float amax = 0.0f;
             float max = 0.0f;
             for (int j = 0; j < qk; j++) {
@@ -863,20 +868,20 @@ void quantize_q4_0(const float * x,
             }
             const float d = max / -8;
             if (d == 0) {
-                scales[i] = ov::float16(1.0f);
+                scales[gi] = ov::float16(1.0f);
                 // i4 value 0 packed: 0x00
-                memset(weights + i * qk / 2, 0, qk / 2);
+                memset(weights + gi * qk / 2, 0, qk / 2);
                 continue;
             }
             const float id = 1.0f / d;
-            scales[i] = ov::float16(d);
+            scales[gi] = ov::float16(d);
             for (int j = 0; j < qk / 2; ++j) {
                 const float x0 = x[i * qk + 2 * j] * id;
                 const float x1 = x[i * qk + 2 * j + 1] * id;
                 // Signed i4: range [-8, 7]. Quantize as round(x*id), then pack as 4-bit two's complement.
                 int8_t si0 = (int8_t) std::max(-8, std::min(7, (int) roundf(x0)));
                 int8_t si1 = (int8_t) std::max(-8, std::min(7, (int) roundf(x1)));
-                weights[i * qk / 2 + j] = (si0 & 0x0F) | ((si1 & 0x0F) << 4);
+                weights[gi * qk / 2 + j] = (si0 & 0x0F) | ((si1 & 0x0F) << 4);
             }
         }
     }
@@ -1167,13 +1172,15 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
     // a chunk of complete rows into a small scratch and quantize/convert it straight into
     // the output buffers, capping the transient F32 footprint at CHUNK_ROWS*ne0 floats.
     //
-    // Only valid (and only used) for the Q8_0_C / Q8_1_C / F16 targets whose block size
-    // divides a row (channel-wise _C uses block_size == ne0) so no target block straddles
-    // a row boundary, and Q8/F16 have no cross-block packing. The u4 (Q4_0) path packs two
-    // weights per byte with running zp ORs that assume a single whole-array call, so it is
-    // never streamed. When the flag is off, behavior is identical to the original
-    // full-materialization path.
-    const bool stream_requant = ggml_openvino_reduce_compile_mem_enabled() && !is_u4 &&
+    // Only valid (and only used) when the target block size divides a row (channel-wise _C
+    // uses block_size == ne0) so no target block straddles a row boundary. The u4 (Q4_0)
+    // path packs two weights per byte and ORs zp nibbles in pairs, but both are indexed by
+    // an absolute block index and chunks are emitted in increasing order, so whole-row
+    // chunks stay byte-aligned and the even-block write always precedes the odd-block OR.
+    // When the flag is off, behavior is identical to the original full-materialization path.
+    // Q4_1_64 (asymmetric u4) has no chunked quantizer, so it always takes the full path.
+    const bool stream_requant = ggml_openvino_reduce_compile_mem_enabled() &&
+                                requant_type != ExtraQuantType::Q4_1_64 &&
                                 !(block_size > 0 && ne0 % block_size != 0);
 
     if (!stream_requant) {
@@ -1214,7 +1221,9 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
                     ->from_float_ref(scratch.data(), f16_base + (r0 * ne0) * sizeof(uint16_t), elems);
             } else {
                 const int64_t block_offset = (r0 * ne0) / block_size;
-                if (requant_type == ExtraQuantType::Q8_1_C) {
+                if (is_u4) {
+                    quantize_q4_0(scratch.data(), weights, scales, zp, elems, block_size, block_offset);
+                } else if (requant_type == ExtraQuantType::Q8_1_C) {
                     quantize_q8_1(scratch.data(), weights, scales, zp, elems, block_size, block_offset);
                 } else {
                     quantize_q8_0(scratch.data(), weights, scales, zp, elems, block_size, block_offset);
