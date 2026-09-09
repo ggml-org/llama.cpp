@@ -82,7 +82,6 @@ void main() {
   const uint localLinearId = gl_SubgroupID;
   const uint wgLane = localLinearId * WARPSIZE + lane;
   const uint qDim = p.qHead * HEAD_DIM;
-  const uint oDim = qDim;
   const uint kvDim = p.kvStride;
   const uint maskDim = p.kvSeqLen;
   const uint maxDim = (p.kvSeqLen + MATP_REDUCE - 1) / MATP_REDUCE;
@@ -94,13 +93,6 @@ void main() {
   const uint offsetSlmLoadPv = (localLinearId * O_COUNT * MATP_REDUCE + lane);
   const uint offsetBaseM = v * MATP_REDUCE + lane;
   const float fp32Min = uintBitsToFloat(0xFEFFFFFF);
-  f16mat2x4 matK[K_COUNT];
-  float matQ[GQA_RATIO];
-  float fp32P[GQA_RATIO];
-  float fp32TempO[GROUPSIZE / WARPSIZE];
-  float fp32O[O_COUNT][MATP_REDUCE / WARPSIZE];
-  float maxOut[O_COUNT];
-  float16_t mask[MATP_REDUCE / WARPSIZE];
 
   const uint loopCount = HEAD_DIM / TK;
   float maskFp32[MATP_REDUCE / WARPSIZE];

@@ -5767,16 +5767,16 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
         for (auto& it : device->pipeline_xe_fa_decode_dual_phases) {
             const uint32_t split_p_chunk = 32;
-            const uint32_t out_dim_per_wg = 8;
             auto HdQk = it.first;
             auto& pipelines = it.second;
             uint32_t head_dim = std::get<0>(HdQk);
             uint32_t gqa_ratio = std::get<1>(HdQk);
             uint32_t q_len = std::get<2>(HdQk);
+            const uint32_t out_dim_per_wg = gqa_ratio > 4 ? 8 : 16;
             uint32_t aligned_q_len = upper_power_of_2(q_len);
             uint32_t group_sz_ph1 = std::max(aligned_q_len * xe_native_sub_group_size, 64u);
             uint32_t aligned_gqa_ratio = upper_power_of_2(gqa_ratio);
-            uint32_t split_p_per_iter_ph2 = 512;
+            uint32_t split_p_per_iter_ph2 = gqa_ratio > 4 ? 512 : 256;
             uint32_t split_p_per_warp = 16;
             uint32_t group_sz_ph2 = (split_p_per_iter_ph2 / split_p_per_warp) * xe_native_sub_group_size;
             uint32_t out_per_wg_sizes = std::min(std::max(16u / aligned_gqa_ratio, 1u), q_len);
@@ -11459,11 +11459,6 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         }
     }
 
-    if (xe_fa_opt == true) {
-        split_k = 1;
-        use_mask_opt = false;
-    }
-
     if (split_k > 1) {
         // Try to evenly split KV into split_k chunks, but it needs to be a multiple
         // of "align", so recompute split_k based on that.
@@ -11632,7 +11627,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                 return ret;
             };
             auto to_fp16_vk_0 = ggml_vk_get_to_fp16(ctx, q->type);
-            const uint32_t out_dim_per_wg = 8;
+            const uint32_t out_dim_per_wg = qk_ratio > 4 ? 8 : 16;
             size_t x_ne = ggml_nelements(q);
             size_t temp_buf_offset = 0;
             vk_fa_xe_opt_push_constants pc_ph1 = { (uint32_t)nek1, (uint32_t)neq1, (uint32_t)neq2, (uint32_t)nek2, qk_ratio, 1, (sinks != nullptr) ? 1 : 0, (uint32_t)k_stride,

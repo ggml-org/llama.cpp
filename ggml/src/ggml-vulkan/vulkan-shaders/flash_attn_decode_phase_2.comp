@@ -58,7 +58,6 @@ layout (constant_id = 8) const uint EXT_FLAG = 0;
 #define ALIGNED_P_M ((MAT_P_M + WARPSIZE - 1) / WARPSIZE)
 #define V_HEAD_GROUPS (HEAD_DIM / WARP_V_DIM)
 
-#define MAT_P_COUNT (DP / WARPSIZE)
 #define SUBGROUP_COUNT (GROUPSIZE / WARPSIZE)
 #define SPLIT_P_GROUPS (MATP_PER_LOOP / TK)
 
@@ -97,7 +96,6 @@ shared slm_pool_alias_block {
 
 void main() {
   const uint lane = gl_SubgroupInvocationID;
-  const uint h = gl_WorkGroupID.x;
   const uint v = gl_WorkGroupID.y;
   const uint d = gl_WorkGroupID.z;
   const uint vWarpIdx = gl_WorkGroupID.x % V_HEAD_GROUPS;
@@ -116,7 +114,6 @@ void main() {
   const float fp32Min = uintBitsToFloat(0xFEFFFFFF);
   const float fp32Max = uintBitsToFloat(0x7EFFFFFF);
   uint offsetV = offsetBaseV;
-  uint offsetMax = offsetBaseMax;
 
   coopmat<float, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> sums[ALIGNED_P_M][MAT_O_N];
   f16vec4 pStateTemp[P_LOAD_LOOPS];
@@ -305,7 +302,6 @@ void main() {
   [[unroll]] for (uint pLoad = 0; pLoad < P_LOAD_LOOPS; pLoad++) {
     fp32SoftMaxSum[pLoad] = subgroupAdd(fp32SoftMaxSum[pLoad]);
   }
-    }
 
   [[unroll]] for (uint mo = 0; mo < ALIGNED_P_M; mo++) {
     [[unroll]] for (uint no = 0; no < MAT_O_N; no++) {
