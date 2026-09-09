@@ -2057,6 +2057,12 @@ static common_chat_params common_chat_params_init_gigachat35(
     const std::string PARAM_START  = "<" + GCML + "parameter";
     const std::string PARAM_END    = "</" + GCML + "parameter>";
 
+    // the reasoning template unconditionally opens a think block in the assistant turn
+    const bool template_opens_think =
+        data.generation_prompt.size() >= THINK_START.size() &&
+        data.generation_prompt.compare(data.generation_prompt.size() - THINK_START.size(),
+                                       THINK_START.size(), THINK_START) == 0;
+
     if (render_inputs.has_continuation()) {
         const auto & msg = render_inputs.continue_msg;
 
@@ -2064,8 +2070,12 @@ static common_chat_params common_chat_params_init_gigachat35(
         if (render_inputs.continue_final_message == COMMON_CHAT_CONTINUATION_REASONING) {
             data.generation_prompt += THINK_START + msg.reasoning_content;
         } else {
+            // assistant turns are laid out as "<think>...</think>\n\n{content}",
+            // with an empty think block when the template forces reasoning
             if (!msg.reasoning_content.empty()) {
-                data.generation_prompt += THINK_START + msg.reasoning_content + THINK_END;
+                data.generation_prompt += THINK_START + msg.reasoning_content + THINK_END + "\n\n";
+            } else if (template_opens_think) {
+                data.generation_prompt += THINK_START + THINK_END + "\n\n";
             }
             data.generation_prompt += msg.render_content();
         }
