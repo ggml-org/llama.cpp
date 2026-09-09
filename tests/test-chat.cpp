@@ -1974,6 +1974,41 @@ static void test_convert_responses_to_chatcmpl() {
 
         assert_equals(false, result.contains("tools"));
     }
+
+    // Test JSON schema conversion
+    {
+        json input = json::parse(R"({
+            "input": "Hello",
+            "model": "test-model",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "TestOutput",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "message": {"type": "string"}
+                        },
+                        "required": ["message"],
+                        "additionalProperties": false
+                    },
+                    "strict": true
+                }
+            }
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals(false, result.contains("text"));
+        assert_equals(true, result.contains("response_format"));
+        const auto & response_format = result.at("response_format");
+        assert_equals(std::string("json_schema"), response_format.at("type").get<std::string>());
+        const auto & json_schema = response_format.at("json_schema");
+        assert_equals(std::string("TestOutput"), json_schema.at("name").get<std::string>());
+        assert_equals(true, json_schema.at("strict").get<bool>());
+        assert_equals(std::string("object"), json_schema.at("schema").at("type").get<std::string>());
+        assert_equals(false, json_schema.contains("type"));
+    }
 }
 
 // Shared LFM2 parser cases - all variants use one output format and parser

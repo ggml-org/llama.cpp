@@ -292,6 +292,34 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         chatcmpl_body.erase("reasoning");
     }
 
+    if (response_body.contains("text")) {
+        const json & text = response_body.at("text");
+        if (!text.is_object()) {
+            throw std::invalid_argument("'text' must be an object");
+        }
+
+        chatcmpl_body.erase("text");
+        if (text.contains("format")) {
+            const json & format = text.at("format");
+            if (!format.is_object()) {
+                throw std::invalid_argument("'text.format' must be an object");
+            }
+
+            const std::string type = json_value(format, "type", std::string());
+            if (type == "json_schema") {
+                chatcmpl_body["response_format"] = {
+                    {"type", "json_schema"},
+                    {"json_schema", format},
+                };
+                chatcmpl_body["response_format"]["json_schema"].erase("type");
+            } else if (type == "json_object" || type == "text") {
+                chatcmpl_body["response_format"] = format;
+            } else if (!type.empty()) {
+                throw std::invalid_argument("'text.format.type' must be one of 'text', 'json_object', or 'json_schema'");
+            }
+        }
+    }
+
     return chatcmpl_body;
 }
 
