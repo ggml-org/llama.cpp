@@ -537,8 +537,6 @@ struct ggml_cuda_mmq_util_funcs {
 
 template <ggml_type type, int J, bool fallback, bool force_w4a8 = false>
 static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_funcs() {
-    constexpr int I = ggml_cuda_mmq_get_I(type, J, fallback, force_w4a8);
-
     if (!ggml_cuda_mmq_get_config(type, J, fallback, force_w4a8).use_mma_data_layout()) {
         switch (type) {
             case GGML_TYPE_Q1_0:
