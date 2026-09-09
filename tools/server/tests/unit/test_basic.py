@@ -1,5 +1,6 @@
 import pytest
 import requests
+import socket
 from utils import *
 
 server = ServerPreset.tinyllama2()
@@ -16,6 +17,38 @@ def test_server_start_simple():
     server.start()
     res = server.make_request("GET", "/health")
     assert res.status_code == 200
+
+
+def test_server_multiple_addresses(monkeypatch):
+    # The CLI value replaces the environment value, including an unavailable address.
+    monkeypatch.setenv("LLAMA_ARG_HOST", "192.0.2.1")
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::1", 0))
+    except OSError:
+        pytest.skip("IPv6 loopback is unavailable")  # ty: ignore[too-many-positional-arguments]
+
+    server.server_listen_hosts = ["127.0.0.1", "::1"]
+    server.api_key = "test-multiple-addresses"
+    server.start()
+
+    def check_address(host):
+        url = f"http://{host}:{server.server_port}"
+        with requests.Session() as client:
+            client.trust_env = False
+            assert client.get(url + "/health", timeout=10).status_code == 200
+            assert client.post(url + "/v1/completions", json={}, timeout=10).status_code == 401
+            with client.post(url + "/v1/completions", json={
+                "prompt": "Once upon a time",
+                "max_tokens": 8,
+                "stream": True,
+            }, headers={"Authorization": f"Bearer {server.api_key}"}, stream=True, timeout=30) as response:
+                assert response.status_code == 200
+                events = [line for line in response.iter_lines() if line.startswith(b"data: ")]
+                assert len(events) > 2
+                assert events[-1] == b"data: [DONE]"
+
+    parallel_function_calls([(check_address, (host,)) for host in ["127.0.0.1", "[::1]"]])
 
 
 def test_server_props():
