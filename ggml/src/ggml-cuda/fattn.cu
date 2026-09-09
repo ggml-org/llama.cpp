@@ -251,6 +251,21 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     const ggml_tensor * V    = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
 
+    // V100 Volta Patch: Start
+    // (Check for SM70 V100 Volta arch)
+    // Corrects crashes with CUDA Flash-Attention in some newer model architecture
+    // Example: Mistral-Small-4
+    if (cc == GGML_CUDA_CC_VOLTA) {
+        int dkq = Q->ne[0];
+
+        // If non-standard (power-of-two head size: 64, 128, 256)
+        // Use cuBLAS fallback layer.
+        if (dkq != 64 && dkq != 128 && dkq != 256) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+    }
+    // V100 Volta Patch: End
+
     switch (Q->ne[0]) {
         case 64:
             GGML_ASSERT(V->ne[0] == 64);
