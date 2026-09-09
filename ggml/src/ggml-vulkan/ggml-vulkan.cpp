@@ -10636,10 +10636,8 @@ static bool ggml_vk_use_mul_mat_vec_id(const ggml_backend_vk_context * ctx, cons
 
     bool use_vec_id = src2->ne[1] <= 8;
     if (!ctx->device->coopmat2) {
-        // The tiled path is slow at small batch without coopmat2 (e.g. the
-        // decode cliff at 9+ sequences on gfx1013/gfx1100/gfx1151 and NV
-        // coopmat1). Keep the vector path while the routed density is low.
-        // coopmat2 (Blackwell) handles small batches fine - keep the cutoff.
+        // Tiled mul_mat_id is slow at low batch without coopmat2; keep the
+        // vector path while the routed density is low.
         const int64_t n_tokens  = src2->ne[1];
         const int64_t n_per_tok = src2->ne[0];
         const int64_t n_experts = src0->ne[2];
