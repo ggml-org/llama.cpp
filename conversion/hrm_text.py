@@ -38,10 +38,10 @@ class HrmTextModel(TextModel):
         head_dim = self.hparams.get("head_dim") or self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(head_dim)
         self.gguf_writer.add_embedding_scale(self.hparams["embedding_scale"])
-        self.gguf_writer.add_layers_per_stack(self.layers_per_stack)
-        self.gguf_writer.add_h_cycles(self.h_cycles)
-        self.gguf_writer.add_l_cycles(self.l_cycles)
-        self.gguf_writer.add_prefix_lm(bool(self.hparams.get("prefix_lm", False)))
+        self.gguf_writer.add_hrm_layers_per_stack(self.layers_per_stack)
+        self.gguf_writer.add_hrm_h_cycles(self.h_cycles)
+        self.gguf_writer.add_hrm_l_cycles(self.l_cycles)
+        self.gguf_writer.add_hrm_prefix_lm(bool(self.hparams.get("prefix_lm", False)))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name == "model.embed_tokens.weight":
