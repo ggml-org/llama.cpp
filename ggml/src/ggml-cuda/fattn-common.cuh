@@ -145,6 +145,34 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_bf16(
     return sum;
 }
 
+template <int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_f8_e4m3(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const uint8_t * K_f8 = (const uint8_t *) K_c;
+    GGML_UNUSED(Q_q8);
+    GGML_UNUSED(Q_ds_v);
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D; k_KQ_0 += nthreads*4) {
+        uint8_t tmp[4];
+        ggml_cuda_memcpy_1<sizeof(tmp)>(tmp, K_f8 + k_KQ_0 + (threadIdx.x % nthreads)*4);
+#pragma unroll
+        for (int k_KQ_1 = 0; k_KQ_1 < 4; ++k_KQ_1) {
+            const float k = ggml_cuda_f8_e4m3_to_fp32(tmp[k_KQ_1]);
+#ifdef V_DOT2_F32_F16_AVAILABLE
+            sum += k * __half2float(((const half *) Q_v)[k_KQ_0/nthreads + k_KQ_1]);
+#else
+            sum += k * ((const float *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+#endif // V_DOT2_F32_F16_AVAILABLE
+        }
+    }
+
+    return sum;
+}
+
 template<int D, int nthreads>
 static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_q4_0(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
@@ -406,6 +434,25 @@ static __device__ __forceinline__ void dequantize_V_bf16(const void * __restrict
 }
 
 template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_f8_e4m3(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    static_assert(ne == 2 || ne == 4, "bad ne");
+    uint8_t tmp[ne];
+    ggml_cuda_memcpy_1<ne>(tmp, (const uint8_t *) vx + i0);
+
+#pragma unroll
+    for (int l = 0; l < ne; ++l) {
+        const float value = ggml_cuda_f8_e4m3_to_fp32(tmp[l]);
+        if constexpr (std::is_same_v<T, half>) {
+            ((half *) dst)[l] = __float2half(value);
+        } else if constexpr (std::is_same_v<T, float>) {
+            ((float *) dst)[l] = value;
+        } else {
+            static_assert(std::is_same_v<T, void>, "unsupported type");
+        }
+    }
+}
+
+template <typename T, int ne>
 static __device__ __forceinline__ void dequantize_V_q4_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     const block_q4_0 * x = (const block_q4_0 *) vx;
 
@@ -633,6 +680,8 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_q8_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_BF16) {
         return vec_dot_fattn_vec_KQ_bf16<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_F8_E4M3) {
+        return vec_dot_fattn_vec_KQ_f8_e4m3<D, nthreads>;
     } else {
         static_assert(type_K == -1, "bad type");
         return nullptr;
@@ -655,6 +704,8 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
         return dequantize_V_q8_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_BF16) {
         return dequantize_V_bf16<float, ne>;
+    } else if constexpr (type_V == GGML_TYPE_F8_E4M3) {
+        return dequantize_V_f8_e4m3<T, ne>;
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;
