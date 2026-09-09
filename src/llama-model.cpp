@@ -2641,11 +2641,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
                     }
 
-                    if ((arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_HY_V3 || arch == LLM_ARCH_GLM_DSA ||
-                            arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_DEEPSEEK32 ||
-                            arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM4_MOE ||
-                            arch == LLM_ARCH_COHERE2MOE) &&
-                            hparams.n_layer_nextn > 0) {
+                    // the trunk graph never attends an appended NextN block, nor the MTP graph
+                    // the trunk, so split the KV cache between them. the extra guards drop the
+                    // archs that repurpose n_layer_nextn without appending one - granite-switch
+                    // for a router layer the decode graph does attend, gemma4-assistant for its
+                    // entire block count
+                    if (hparams.n_layer_nextn > 0 && hparams.n_layer() > 0 && hparams.router_layer < 0) {
                         if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
                             filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
                         } else {

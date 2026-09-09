@@ -212,6 +212,13 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     )
 
     llama_test(
+        test-llama-archs
+        NAME test-llama-archs-mtp-kv
+        LABEL main
+        ARGS --mtp-kv
+    )
+
+    llama_test(
         test-recurrent-state-rollback
         LABEL main
         ARGS -m "${MODEL_DIR}/qwen35-dense.gguf"

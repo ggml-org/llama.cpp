@@ -375,8 +375,13 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_KDA_SAFE_GATE,              true);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,       -5.0f);
     if (arch == LLM_ARCH_BAILINGMOE3) {
-        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   std::vector<float>({0.0f, 4.0f}));
-        ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>({0.0f, 5.0f}));
+        // read at n_layer_all, so size to n_layer; keep layer 0 unclamped for coverage
+        std::vector<float> clamp_exp(n_layer, 4.0f);
+        std::vector<float> clamp_shexp(n_layer, 5.0f);
+        clamp_exp[0]   = 0.0f;
+        clamp_shexp[0] = 0.0f;
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   clamp_exp);
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, clamp_shexp);
     }
     ms.add_kv(LLM_KV_WKV_HEAD_SIZE,             n_embd/n_head);
     ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,         uint32_t(3));
@@ -899,8 +904,18 @@ static int test_mtp_kv(const llm_arch target_arch, const size_t seed) {
             printf("  %-18s skipped (no synthetic fixture)\n", llm_arch_name(arch));
             continue;
         }
+        // mimo2's MTP graph requires a fused attn_qkv, and deepseek4 clears n_layer_nextn unless
+        // blk.N.nextn.eh_proj.weight is present. Both are tensor-level requirements this
+        // metadata-only fixture cannot meet, so skip them instead of reporting them inconclusive
+        if (arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_DEEPSEEK4) {
+            printf("  %-18s skipped (fixture is metadata-only, arch needs real MTP tensors)\n",
+                    llm_arch_name(arch));
+            continue;
+        }
 
-        const bool moe = moe_mandatory(arch) || moe_implemented(arch);
+        // nemotron-h's MTP block is unconditionally MoE even though its trunk has a dense
+        // path, so the fixture needs expert metadata here that moe_implemented() does not imply
+        const bool moe = moe_mandatory(arch) || moe_implemented(arch) || arch == LLM_ARCH_NEMOTRON_H_MOE;
 
         size_t kv_a = 0;
         size_t kv_b = 0;
@@ -924,7 +939,8 @@ static int test_mtp_kv(const llm_arch target_arch, const size_t seed) {
 
     printf("\n%d archs checked, %d with an unfiltered MTP KV cache, %d inconclusive\n",
             n_checked, n_failed, n_errored);
-    return n_failed == 0 ? 0 : 1;
+    // an arch that stops building a model is a regression too, so inconclusive is not a pass
+    return n_failed == 0 && n_errored == 0 ? 0 : 1;
 }
 
 int main(int argc, char ** argv) {
