@@ -7248,6 +7248,49 @@ static void test_msg_diffs_compute() {
     }
 }
 
+static void test_qwen_string_enums() {
+    const auto xml = [](const std::string & value) {
+        return "<tool_call>\n<function=records>\n<parameter=action>\n" + value +
+               "\n</parameter>\n</function>\n</tool_call>";
+    };
+    for (const std::string path : {"models/templates/Qwen3-Coder.jinja", "models/templates/Qwen3.5-4B.jinja"}) {
+        auto tmpls = read_templates(path);
+        common_chat_templates_inputs in;
+        in.messages = {message_user};
+        in.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        in.parallel_tool_calls = true;
+        auto schema = json::parse(R"({"type":"object","properties":{"action":{"type":"string","enum":["load","reload","re","","quoted\"value","line\nbreak"]}},"required":["action"],"additionalProperties":false})");
+        in.tools = {{"records", "Access records.", schema.dump()}};
+        auto params = common_chat_templates_apply(tmpls.get(), in);
+        for (const std::string value : {"erase", "loading", "reloaded", " load", "load "}) {
+            auto grammar = build_grammar(params.grammar);
+            assert_equals(true, grammar != nullptr);
+            assert_equals(false, match_string(xml(value), grammar.get()));
+        }
+        for (const auto & value : schema["properties"]["action"]["enum"]) {
+            const auto text = value.get<std::string>();
+            auto grammar = build_grammar(params.grammar);
+            assert_equals(true, match_string(xml(text), grammar.get()));
+            test_peg_parser(tmpls.get(), [&](peg_test_case & tc) {
+                tc.params = in;
+                tc.input = (path.find("Qwen3-Coder") == std::string::npos ? "</think>\n\n" : "") + xml(text);
+                tc.expect = simple_assist_msg("", "", "records", json({{"action", text}}).dump());
+            }, false);
+        }
+        test_peg_parser(tmpls.get(), [&](peg_test_case & tc) {
+            tc.params = in;
+            tc.input = (path.find("Qwen3-Coder") == std::string::npos ? "</think>\n\n" : "") + xml("re") + "\n" + xml("reload");
+            tc.expect.role = "assistant";
+            tc.expect.tool_calls = {{"records", R"({"action":"re"})", ""}, {"records", R"({"action":"reload"})", ""}};
+        }, false);
+        schema["properties"]["action"].erase("enum");
+        in.tools = {{"records", "Access records.", schema.dump()}};
+        params = common_chat_templates_apply(tmpls.get(), in);
+        auto grammar = build_grammar(params.grammar);
+        assert_equals(true, match_string(xml("erase"), grammar.get()));
+    }
+}
+
 int main(int argc, char ** argv) {
     bool detailed_debug    = false;
     bool only_run_filtered = false;
@@ -7320,6 +7363,7 @@ int main(int argc, char ** argv) {
     } else
 #endif
     {
+        test_qwen_string_enums();
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
         test_msg_token_delimiters_split();
