@@ -2875,7 +2875,7 @@ struct ggml_cplan ggml_graph_plan(
                             cur = GGML_PAD(ggml_row_size(vec_dot_type, ggml_nelements(node->src[1])), 64);
                         }
                         // Workspace for tiled (see tiled.h)
-                        cur += ggml_tiled_wdata_size(n_tasks, node); 
+                        cur += ggml_tiled_wdata_size(n_tasks, node);
                     } break;
                 case GGML_OP_MUL_MAT_ID:
                     {
@@ -2896,7 +2896,7 @@ struct ggml_cplan ggml_graph_plan(
                         // atomic_current_chunk
                         cur += CACHE_LINE_SIZE*n_as + CACHE_LINE_SIZE;
                         // Workspace for tiled (see tiled.h)
-                        cur += ggml_tiled_wdata_size(n_tasks, node); 
+                        cur += ggml_tiled_wdata_size(n_tasks, node);
                     } break;
                 case GGML_OP_OUT_PROD:
                     {
