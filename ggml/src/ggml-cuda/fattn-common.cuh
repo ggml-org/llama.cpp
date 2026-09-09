@@ -1222,6 +1222,16 @@ void launch_fattn(
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
+    // bisect hack (revert me)
+    if (getenv("GGML_FATTN_TRACE")) {
+        fprintf(stderr, "FATTN DV=%d Q=%lldx%lldx%lldx%lld(nb%lld,%lld,%lld) K=%lldx%lldx%lld nkv=%d ntok=%lld c1=%d c2=%d nfa=%d sk=%d blk=(%u,%u,%u) pb=%d metasz=%zu kvmax=%d sink=%d mask=%d mtype=%d mne=%lldx%lldx%lld\n",
+            DV, (long long)Q->ne[0], (long long)Q->ne[1], (long long)Q->ne[2], (long long)Q->ne[3], (long long)Q->nb[1], (long long)Q->nb[2], (long long)Q->nb[3],
+            (long long)K->ne[0], (long long)K->ne[1], (long long)K->ne[2], n_kv, (long long)Q->ne[1], ncols1, ncols2, nbatch_fa,
+            (int)stream_k, blocks_num.x, blocks_num.y, blocks_num.z, parallel_blocks, dst_tmp_meta.actual_size,
+            KV_max.actual_size > 0 ? 1 : 0, sinks ? 1 : 0, mask ? 1 : 0, mask ? mask->type : -1,
+            mask ? (long long)mask->ne[1] : -1, mask ? (long long)mask->ne[2] : -1, mask ? (long long)mask->ne[3] : -1);
+    }
+
         ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num, block_dim, nbytes_shared, main_stream);
         ggml_cuda_kernel_launch(fattn_kernel, launch_params,
         (const char *) Q->data,

@@ -59,7 +59,15 @@ void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
     qwen4exp_require_nonzero(ml, LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
     qwen4exp_require_nonzero(ml, LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
     qwen4exp_require_nonzero(ml, LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
+    if (getenv("LLAMA_QSA_TOPK")) {
+        hparams.indexer_top_k = (uint32_t) atoi(getenv("LLAMA_QSA_TOPK"));
+        fprintf(stderr, "%s: BISECT LLAMA_QSA_TOPK override -> %u\n", __func__, hparams.indexer_top_k);
+    }
     ml.get_key_or_arr(LLM_KV_ATTENTION_COMPRESS_RATIOS, hparams.dsv4_compress_ratios, hparams.n_layer_all, false);
+    if (getenv("LLAMA_QSA_OFF")) {
+        hparams.dsv4_compress_ratios.fill(0);
+        fprintf(stderr, "%s: BISECT LLAMA_QSA_OFF -> all attention layers dense\n", __func__);
+    }
 
     // PLE n-gram hash embeddings; if the key group is absent every field stays zero
     hparams.is_ple_impl.reset();
@@ -610,7 +618,14 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_indexer(
     k_raw = ggml_reshape_3d(ctx0, k_raw, idx_dim, 1, n_tokens);
     cb(k_raw, "indexer_k_raw", il);
 
-    ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, k_raw, inp->k_idxs, il));
+    // bisect hack (revert me): drop the indexer cache write, keep the cell indices input
+    // alive with a no-op consumer so set_inputs still finds an allocated tensor
+    if (getenv("LLAMA_QSA_NOIDXW")) {
+        fprintf(stderr, "%s: BISECT LLAMA_QSA_NOIDXW -> skip indexer cache write, layer %d\n", __func__, il);
+        ggml_build_forward_expand(gf, inp->k_idxs);
+    } else {
+        ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, k_raw, inp->k_idxs, il));
+    }
 
     // one key head, so rows are contiguous. get_k gives [idx_dim, n_head_kv, n_kv, n_stream].
     ggml_tensor * k_all = mctx_idx->get_k(ctx0, il);
@@ -1005,17 +1020,30 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa_chunked(
         // the cells each query of the chunk may attend to: [width, n_c, 1, 1]
         ggml_tensor * top_k = ggml_top_k(ctx0, expanded, width);
 
+        // bisect hack (revert me): skip the mask rewrite, feed plain causal to fattn
+        const bool qsa_no_sel = getenv("LLAMA_QSA_NOSEL") != nullptr;
+
+        // bisect hack (revert me): never share mask_base/zeros across chunk iterations.
+        // same-binary A/B: default CORRUPT vs fresh SANE at d78k/ub4096 would pin the
+        // in-place cross-chunk buffer reuse as the corruption source.
+        const bool qsa_fresh_mask = getenv("LLAMA_QSA_FRESH_MASK") != nullptr;
+
+        ggml_tensor * mask_top_k = nullptr;
+
+        if (qsa_no_sel) {
+            mask_top_k = dev_causal ? ggml_cast(ctx0, causal, GGML_TYPE_F16) : mask_c;
+        } else {
         // -inf everywhere but the selected cells: [n_kv, n_c, 1, 1] -> [1, n_kv, n_c, 1]
         // flash attention wants the mask in f16 either way. the fill must see a contiguous
         // tensor, so the partial tail chunk still gets a tensor of its own size
-        ggml_tensor * mask_f = n_c == n_chunk ? mask_base :
+        ggml_tensor * mask_f = (n_c == n_chunk && !qsa_fresh_mask) ? mask_base :
             ggml_new_tensor_4d(ctx0, GGML_TYPE_F16, n_kv, n_c, 1, 1);
-        ggml_tensor * mask_top_k = ggml_fill_inplace(ctx0, mask_f, -INFINITY);
+        mask_top_k = ggml_fill_inplace(ctx0, mask_f, -INFINITY);
         mask_top_k = ggml_view_4d(ctx0, mask_top_k, 1, mask_top_k->ne[0], n_c,
                 mask_top_k->ne[3], mask_top_k->nb[0], mask_top_k->nb[1], mask_top_k->nb[2], 0);
 
         // unmask the selected cells, then put the causal values back on top
-        ggml_tensor * zeros_c = n_c == n_chunk ? zeros :
+        ggml_tensor * zeros_c = (n_c == n_chunk && !qsa_fresh_mask) ? zeros :
             ggml_fill_inplace(ctx0,
                     ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, width, n_c, 1), 0.0f);
 
@@ -1028,6 +1056,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa_chunked(
         // the causal values go back on top, dropping any cell selected past the window
         mask_top_k = ggml_add(ctx0, mask_top_k, dev_causal ?
                     ggml_cast(ctx0, causal, GGML_TYPE_F16) : mask_c);
+        }
 
         ggml_tensor * q_c = ggml_view_3d(ctx0, q_cur, q_cur->ne[0], q_cur->ne[1], n_c,
                 q_cur->nb[1], q_cur->nb[2], t0*q_cur->nb[2]);
@@ -1035,7 +1064,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa_chunked(
         // n_kv_max bounds how many cells a row may select, which turns on the kernel's
         // mask-compacting sparse path once the cache is long enough to make it pay
         ggml_tensor * out_c = build_attn_mha(q_c, k_all, v_all, nullptr,
-                mask_top_k, nullptr, nullptr, width, kq_scale, il);
+                mask_top_k, nullptr, nullptr, qsa_no_sel ? 0 : width, kq_scale, il);
 
         ggml_tensor * idx = ggml_view_1d(ctx0, ids, n_c, t0*ggml_element_size(ids));
 

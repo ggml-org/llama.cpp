@@ -10500,6 +10500,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // bisect hack (revert me): exact QWEN4EXP fattn shapes (hsk 256, gqa 12)
+    // long-KV numerical sweep: err should be flat with kv; a jump = long-KV kernel defect.
+    // kv_view toggle separates strided-view addressing bug (fails only as view) from f16 numerical bug (fails contiguous too)
+    for (int kv : { 16384, 32768, 65536, 78016, }) {
+        for (int nb : { 2048, }) {
+            for (ggml_type tk : { GGML_TYPE_F16, GGML_TYPE_F32, }) {
+                test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, kv, nb, true, false, 0, 0, GGML_PREC_DEFAULT, tk, tk));
+            }
+        }
+    }
+    for (bool vv : { false, true }) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 32768, 2048, true, false, 0, 0, GGML_PREC_DEFAULT, GGML_TYPE_F16, GGML_TYPE_F16, {0,1,2,3}, vv));
+    }
+
     for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 320, 512, 576 }) {
         for (int hsv : { 40, 64, 72, 80, 96, 128, 192, 256, 512 }) {
             if (hsk != 192 && hsk != 320 && hsk != 576 && hsk != hsv) continue;
