@@ -276,6 +276,20 @@ static void test_compute_arena_binding_ownership() {
     GGML_ASSERT(context.physical_free_count == 3);
 }
 
+static void test_compute_reserve_state() {
+    llama_compute_reserve_state state;
+    GGML_ASSERT(state.begin());
+    GGML_ASSERT(state.begin());
+
+    state.complete();
+    GGML_ASSERT(!state.begin());
+
+    state.invalidate();
+    GGML_ASSERT(state.begin());
+    state.complete();
+    GGML_ASSERT(!state.begin());
+}
+
 static ggml_backend_sched_ptr make_test_scheduler(
         std::vector<ggml_backend_t> & backends,
         std::vector<ggml_backend_buffer_type_t> & bufts) {
@@ -452,6 +466,41 @@ static void test_compute_arena_attachment_recovery() {
     detach_compute_arena_bindings(sched.get(), backends, bindings);
     GGML_ASSERT(first_context.alloc_count == 2 && first_context.physical_free_count == 2);
     GGML_ASSERT(second_context.alloc_count == 3 && second_context.physical_free_count == 3);
+}
+
+static void test_compute_arena_recreate_stress() {
+    test_buft_context context;
+    auto buft = make_test_buft(&context);
+    ggml_backend_ptr backend(ggml_backend_cpu_init());
+    std::vector<ggml_backend_t> backends = {backend.get()};
+    std::vector<ggml_backend_buffer_type_t> bufts = {&buft};
+    std::vector<ggml_backend_memory_workspace_group> groups = {
+        {&buft, 64, 16, 0},
+    };
+
+    for (size_t i = 0; i < 64; ++i) {
+        auto sched = make_test_scheduler(backends, bufts);
+        GGML_ASSERT(sched);
+        std::vector<llama_compute_arena_binding> bindings;
+
+        if (i % 4 == 0) {
+            context.fail_alloc = true;
+            GGML_ASSERT(!llama_prepare_compute_arena_bindings(sched.get(), backends, groups, bindings));
+            GGML_ASSERT(bindings.empty());
+            context.fail_alloc = false;
+        }
+
+        GGML_ASSERT(llama_prepare_compute_arena_bindings(sched.get(), backends, groups, bindings));
+        GGML_ASSERT(bindings.size() == 1);
+        if (i % 2 == 0) {
+            detach_compute_arena_bindings(sched.get(), backends, bindings);
+        } else {
+            sched.reset();
+            bindings.clear();
+        }
+    }
+
+    GGML_ASSERT(context.alloc_count == context.physical_free_count);
 }
 
 // Validate construction, transaction state, and generation changes.
@@ -1423,10 +1472,12 @@ int main() {
     run("test_workspace_group_planning", test_workspace_group_planning);
     run("test_workspace_group_planning_boundaries", test_workspace_group_planning_boundaries);
     run("test_compute_arena_binding_ownership", test_compute_arena_binding_ownership);
+    run("test_compute_reserve_state", test_compute_reserve_state);
     run("test_compute_arena_mixed_fallback", test_compute_arena_mixed_fallback);
     run("test_compute_arena_accelerator_mixed_fallback", test_compute_arena_accelerator_mixed_fallback);
     run("test_compute_arena_failure_recovery", test_compute_arena_failure_recovery);
     run("test_compute_arena_attachment_recovery", test_compute_arena_attachment_recovery);
+    run("test_compute_arena_recreate_stress", test_compute_arena_recreate_stress);
     run("test_lifecycle", test_lifecycle);
     run("test_placement", test_placement);
     run("test_failure_atomicity", test_failure_atomicity);

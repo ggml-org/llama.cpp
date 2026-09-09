@@ -372,7 +372,7 @@ private:
     std::vector<llama_compute_arena_binding> compute_arenas;
     ggml_backend_sched_ptr sched;
 
-    bool sched_need_reserve = true;
+    llama_compute_reserve_state sched_reserve_state;
 
     // state of sched_copy_experts, reset before each graph compute
     struct copy_experts_info {

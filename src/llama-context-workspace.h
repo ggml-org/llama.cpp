@@ -14,6 +14,27 @@ struct llama_compute_arena_deleter {
 
 using llama_compute_arena_ptr = std::unique_ptr<ggml_backend_memory_arena, llama_compute_arena_deleter>;
 
+class llama_compute_reserve_state {
+public:
+    // Return true until a complete scheduler reservation succeeds.
+    bool begin() const noexcept {
+        return pending;
+    }
+
+    // Mark the current scheduler reservation as complete.
+    void complete() noexcept {
+        pending = false;
+    }
+
+    // Require a new scheduler reservation after graph requirements change.
+    void invalidate() noexcept {
+        pending = true;
+    }
+
+private:
+    bool pending = true;
+};
+
 struct llama_compute_arena_binding {
     ggml_backend_buffer_type_t buft = nullptr;
     size_t capacity = 0;

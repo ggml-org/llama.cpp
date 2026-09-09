@@ -668,7 +668,7 @@ static void test_compute_arena_rereserve(
     }
 
     llama_memory_clear(llama_get_memory(lctx), true);
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 16; ++i) {
         llama_set_causal_attn(lctx, false);
         lctx->sched_reserve();
         GGML_ASSERT(lctx->uses_compute_arenas());

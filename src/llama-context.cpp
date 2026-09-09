@@ -653,11 +653,9 @@ bool llama_context::prepare_compute_arenas(
 }
 
 void llama_context::sched_reserve() {
-    if (!sched_need_reserve) {
+    if (!sched_reserve_state.begin()) {
         return;
     }
-
-    sched_need_reserve = false;
 
     LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
 
@@ -826,6 +824,8 @@ void llama_context::sched_reserve() {
 
     LLAMA_LOG_INFO("%s: reserve took %.2f ms, sched copies = %d\n",
             __func__, (t_end_us - t_start_us)/1000.0, ggml_backend_sched_get_n_copies(sched.get()));
+
+    sched_reserve_state.complete();
 }
 
 void llama_context::synchronize() {
@@ -1290,7 +1290,7 @@ void llama_context::set_embeddings(bool value) {
     cparams.embeddings = value;
 
     // TODO: not sure yet if we want to reserve here
-    //sched_need_reserve = true;
+    //sched_reserve_state.invalidate();
 }
 
 void llama_context::set_embeddings_nextn(bool value, bool masked) {
@@ -1313,7 +1313,7 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
     cparams.embeddings_layer_inp[lid] = enable;
 
     // note: without this reserve, the draft acceptance drops to zero. not sure why - this is unexpected
-    sched_need_reserve = true;
+    sched_reserve_state.invalidate();
 }
 
 void llama_context::set_nextn_layer_offset(int32_t offset) {
@@ -1347,7 +1347,7 @@ void llama_context::set_warmup(bool value) {
     cparams.warmup = value;
 
     // warmups are usually with small batches, so no need to reserve
-    //sched_need_reserve = true;
+    //sched_reserve_state.invalidate();
 }
 
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
@@ -1364,7 +1364,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
             warned = true;
         }
         if (sampling.samplers.count(seq_id) > 0) {
-            sched_need_reserve = true;
+            sched_reserve_state.invalidate();
         }
         sampling.samplers.erase(seq_id);
         return false;
@@ -1383,7 +1383,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
 
         sampling.samplers[seq_id] = sampler;
 
-        sched_need_reserve = true;
+        sched_reserve_state.invalidate();
 
         return true;
     }
@@ -1392,7 +1392,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
         LLAMA_LOG_WARN("%s: sampler '%s' for seq_id = %d, cannot be offloaded to the backend\n", __func__, llama_sampler_name(sampler), seq_id);
 
         if (sampling.samplers.count(seq_id) > 0) {
-            sched_need_reserve = true;
+            sched_reserve_state.invalidate();
         }
 
         sampling.samplers.erase(seq_id);
@@ -1402,7 +1402,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
 
     sampling.samplers.erase(seq_id);
 
-    sched_need_reserve = true;
+    sched_reserve_state.invalidate();
 
     return true;
 }
@@ -1422,7 +1422,7 @@ void llama_context::set_adapters_lora(llama_adapter_lora ** adapters, size_t n_a
         }
     }
 
-    sched_need_reserve = true;
+    sched_reserve_state.invalidate();
 }
 
 bool llama_context::adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales) {
@@ -1461,7 +1461,7 @@ bool llama_context::set_adapter_cvec(
 
     bool res = cvec->apply(model, data, len, n_embd, il_start, il_end);
 
-    sched_need_reserve = true;
+    sched_reserve_state.invalidate();
 
     return res;
 }
