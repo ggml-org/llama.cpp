@@ -109,7 +109,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
-                const auto & params   = function.at("parameters");
+                auto         params   = common_chat_tool_parameters(function);
 
                 auto func_name  = p.literal(" to=functions.") + p.tool_name(p.literal(name));
                 auto constraint = p.optional(p.space() + p.optional(p.literal("<|constrain|>")) + constrain_type);

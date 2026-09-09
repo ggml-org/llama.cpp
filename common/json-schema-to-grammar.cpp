@@ -347,7 +347,6 @@ private:
     std::vector<std::string> _errors;
     std::vector<std::string> _warnings;
 
-    // every schema given to resolve_refs() or add_schema() is parsed into this document, so their $refs resolve through each other
     common_schema_document _doc;
 
     template <typename T>
@@ -681,19 +680,19 @@ private:
         return out.str();
     }
 
-    std::string _resolve_ref(const common_schema_ref & ref) {
-        auto it = ref.ref.find('#');
-        std::string ref_fragment = it != std::string::npos ? ref.ref.substr(it + 1) : ref.ref;
+    std::string _resolve_ref(const common_schema_ref & schema) {
+        auto it = schema.ref.find('#');
+        std::string ref_fragment = it != std::string::npos ? schema.ref.substr(it + 1) : schema.ref;
         static const std::regex nonalphanumeric_regex(R"([^a-zA-Z0-9-]+)");
         std::string ref_name = "ref" + std::regex_replace(ref_fragment, nonalphanumeric_regex, "-");
-        if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(ref.ref) == _refs_being_resolved.end()) {
-            if (!ref.target) {
-                _errors.push_back("Unresolved $ref " + ref.ref);
+        if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(schema.ref) == _refs_being_resolved.end()) {
+            if (!schema.target) {
+                _errors.push_back("Unresolved $ref " + schema.ref);
                 return "";
             }
-            _refs_being_resolved.insert(ref.ref);
-            ref_name = visit(*ref.target, ref_name);
-            _refs_being_resolved.erase(ref.ref);
+            _refs_being_resolved.insert(schema.ref);
+            ref_name = visit(*schema.target, ref_name);
+            _refs_being_resolved.erase(schema.ref);
         }
         return ref_name;
     }
@@ -848,7 +847,7 @@ public:
         return _add_primitive(rule_name == "root" ? "root" : type, PRIMITIVE_RULES.at(type));
     }
 
-    // An allOf merged the way the Python converter does it: the properties of a direct component are required, those of a nested anyOf are optional, enums are intersected.
+    // An allOf merges its components: the properties of a direct component are required, those of a nested anyOf are optional, enums are intersected.
     std::string _visit_all_of(const common_schema_all_of & schema, const std::string & name, const std::string & rule_name) {
         std::unordered_set<std::string> required;
         std::vector<std::pair<std::string, const common_schema *>> properties;
@@ -988,9 +987,6 @@ public:
                 return _visit_primitive(rule_name, "null");
             case COMMON_SCHEMA_KIND_ANY:
                 return _add_rule(rule_name, _add_primitive("value", PRIMITIVE_RULES.at("value")));
-            case COMMON_SCHEMA_KIND_NONE:
-                _errors.push_back("No value satisfies the schema of " + rule_name);
-                return "";
         }
         return "";
     }

@@ -45,7 +45,7 @@ common_chat_params common_chat_params_init_functionary_v3_2(const common_chat_te
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
-            const auto & schema   = function.at("parameters");
+            auto         schema   = common_chat_tool_parameters(function);
 
             // Tool format: >>>function_name\n{json_args}
             auto tool_parser = p.tool(

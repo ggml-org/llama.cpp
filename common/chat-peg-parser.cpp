@@ -640,7 +640,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         // Build inner object fields
         std::vector<common_peg_parser> inner_fields;
@@ -726,7 +726,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
                           atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
@@ -795,7 +795,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         auto tool_name_ = name_key_parser + space() + literal(":") + space() +
                          atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
@@ -1229,4 +1229,15 @@ void common_chat_peg_minimax_m3_mapper::visit(const common_peg_ast_arena & arena
     for (auto child_id : node.children) {
         visit(arena, child_id);
     }
+}
+
+common_json common_chat_tool_parameters(const common_json & function) {
+    if (function.contains("parameters") && function.at("parameters").is_object() && !function.at("parameters").empty()) {
+        return function.at("parameters");
+    }
+    auto schema = common_json::object();
+    schema["type"] = "object";
+    schema["properties"] = common_json::object();
+    schema["additionalProperties"] = false;
+    return schema;
 }
