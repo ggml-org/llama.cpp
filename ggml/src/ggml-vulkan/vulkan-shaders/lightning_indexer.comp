@@ -12,9 +12,9 @@
 
 #include "types.glsl"
 #include "fa_types.glsl"
-#define FaTypeV FA_TYPE_F32
+#define FaTypeV GGML_TYPE_F32
 
-layout(constant_id = 0) const uint FaTypeK = FA_TYPE_F32;
+layout(constant_id = 0) const uint FaTypeK = GGML_TYPE_F32;
 layout(constant_id = 1) const uint FaBlockBytesK = 4;
 layout(constant_id = 2) const uint SUBGROUP_SIZE = 32;
 
@@ -84,11 +84,11 @@ void main() {
     const uint k_block_elems = fa_block_elems(FaTypeK);
     const uint k_elem_bytes = FaBlockBytesK / k_block_elems;
 
-    if (FaTypeK == FA_TYPE_F16) {
+    if (FaTypeK == GGML_TYPE_F16) {
         k_row[tid] = float(k_f16[k_offset / k_elem_bytes + tid]);
-    } else if (FaTypeK == FA_TYPE_F32) {
+    } else if (FaTypeK == GGML_TYPE_F32) {
         k_row[tid] = k_f32[k_offset / k_elem_bytes + tid];
-    } else if (FaTypeK == FA_TYPE_BF16) {
+    } else if (FaTypeK == GGML_TYPE_BF16) {
         k_row[tid] = bf16_to_fp32(uint(k_bf16[k_offset / k_elem_bytes + tid]));
     } else if (4 * tid < HEAD_SIZE) {
         const uint coord = 4 * tid;
