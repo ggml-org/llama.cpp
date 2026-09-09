@@ -1,14 +1,15 @@
-// mulmat microtile kernels, only optimized for x86 archs so far.
+// mulmat microtile kernels
 
 #include "tiled-kernel.h"
-#include "tiled.h"
-#include "ggml-cpu-impl.h"
+
+#include "ggml.h"
 
 #include <string.h>
 
 #if defined(__AVX512VNNI__) || defined(__AVX2__) || defined(__AVX__)
 #include <immintrin.h>
 #endif
+
 
 // Reference implementation, slower than existing vec_dot approach
 template <int SUBBLK, bool HAS_MIN, int BIAS>
@@ -39,7 +40,7 @@ static void tiled_run_microtile_scalar(const tiled_tile_src0 & src0, const tiled
                     raw += (int32_t) q0[e] * (int32_t) q1[e];
                 }
 
-                // BIAS: subtract BIAS*bsum (src1's per-subblock code sum) from the exact int raw 
+                // BIAS: subtract BIAS*bsum (src1's per-subblock code sum) from the exact int raw
                 int32_t corr = raw;
                 if constexpr (BIAS != 0) {
                     corr -= BIAS * bsum;
@@ -274,8 +275,8 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                     q1g[t] = &src1.q[(j0 + g + t) * TILED_TILE_K];
                     acc[t] = _mm256_setzero_si256();
                 }
-                // SUBBLK = 16: two subblocks per 32B load. 
-                // Build the interleaved scale from two 128-bit set1s (one set_m128i) 
+                // SUBBLK = 16: two subblocks per 32B load.
+                // Build the interleaved scale from two 128-bit set1s (one set_m128i)
                 // instead of one 8-scalar-arg 256-bit set
                 for (int sp = 0; sp < NB; sp += 2) {
                     const __m256i q0_32 = _mm256_loadu_si256((const __m256i *) &q0[sp * SUBBLK]);
@@ -456,15 +457,19 @@ template void tiled_run_microtile<16, false, 4>(const tiled_tile_src0 & src0, co
 template void tiled_run_microtile<16, true, 0>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                int i0, int j0, float * buf, int buf_stride);
 
+
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+
 // block_q8_K in 4-byte words, for the int32 gather indices
 static_assert(sizeof(block_q8_K) == 292 && offsetof(block_q8_K, qs) == 4,
               "block_q8_K layout changed, fix the src1 repack");
 
 // VNNI: the dpbusd kernel reads src1 codes in [k/4][row][4] order (one 512-bit
-// load covers 16 rows x 4 k). Load one k-slab's codes as 16 rows of 64 int32s,
-// transpose in registers, store as 64 rows of 16 int32s into the tile.
+// load covers 16 rows x 4 k). Load one k-slab's codes as 16 rows of 16 int32s,
+// transpose in registers, store as 16 rows of 16 int32s into the tile.
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-void tiled_repack_src1_codes(const block_q8_K * const * rows, int n_rows,
+
+bool tiled_repack_src1_codes(const block_q8_K * const * rows, int n_rows,
                              tiled_tile_src1 * tile, int kblk) {
     GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
 
@@ -537,19 +542,14 @@ void tiled_repack_src1_codes(const block_q8_K * const * rows, int n_rows,
             }
         }
     }
+    return true;
 }
 #else
-void tiled_repack_src1_codes(const block_q8_K * const * rows, int n_rows,
+bool tiled_repack_src1_codes(const block_q8_K * const * rows, int n_rows,
                              tiled_tile_src1 * tile, int kblk) {
-    GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
-    const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
-    for (int r = 0; r < n_padded; r++) {
-        if (r < n_rows) {
-            memcpy(&tile->q[r * TILED_TILE_K], rows[r][kblk].qs, TILED_TILE_K);
-        } else {
-            memset(&tile->q[r * TILED_TILE_K], 0, TILED_TILE_K);
-        }
-    }
+    GGML_UNUSED(rows); GGML_UNUSED(n_rows);
+    GGML_UNUSED(tile); GGML_UNUSED(kblk);
+    return false;
 }
 #endif
 

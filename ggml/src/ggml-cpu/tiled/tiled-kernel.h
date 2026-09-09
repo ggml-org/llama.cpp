@@ -6,9 +6,9 @@
 // tiled_run_microtile:  16x16 microkernel
 // bit unpacking routines: tiled_unpk_nib4, tiled_unpk_2bit, tiled_unpk_or
 // LUT value expansion routines: tiled_lut8, tiled_unpk_sign8, tiled_unpk_tern8
-#include "ggml-quants.h"
-#include "ggml.h"
-#include "ggml-cpu-impl.h" // ggml_compute_params; no-op for the consumers, which include it first
+
+#define GGML_COMMON_DECL_C
+#include "ggml-common.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -135,23 +135,16 @@ inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
 }
 #endif
 
-
 // Accumulate one 16x16 microtile (src0 rows [i0, i0+16), src1 cols [j0, j0+16))
 // over the full 256-K slab held in the tiles into a j-major float buffer
 // (row width buf_stride): buf[i*buf_stride + j] += partial.
-// 
-// No store to dst here: the driver holds the buffer across the 256-K slabs
-// and transpose-stores it once, so each dst element is written a single time.
 // SUBBLK/HAS_MIN/BIAS are the src0 format constants (see tiled_tile_src0).
 template <int SUBBLK, bool HAS_MIN, int BIAS>
 void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                          int i0, int j0, float * buf, int buf_stride);
 
-
-// Fill the src1 codes for one k-slab (256 elements) into the tile layout the
-// kernel needs: the VNNI build transposes them to the [k][row] int32 layout,
-// other builds fill the natural [row][k] int8 layout. rows[r] points at row
-// r's first block; the kblk-th block is used.
-void tiled_repack_src1_codes(const block_q8_K * const * rows,
+// If this architecture requires repacking of src1 int8 weights, do so and return true.
+// Otherwise, return false and driver will fill as natural [row][k] contiguous rows.
+bool tiled_repack_src1_codes(const block_q8_K * const * rows,
                              int n_rows, tiled_tile_src1 * tile, int kblk);
 

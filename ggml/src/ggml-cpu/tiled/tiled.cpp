@@ -1,14 +1,13 @@
+#include "tiled.h"
+#include "tiled-kernel.h"
 
 #include "ggml-cpu-impl.h"
 #include "ggml-cpu.h"
 #include "ggml.h"
-#include "tiled.h"
 
-#include "ggml-quants.h"
 // kvalues table (impl section) for the iq4_xs unpack
 #define GGML_COMMON_IMPL_CPP
 #include "ggml-common.h"
-#include "tiled-kernel.h"
 
 #include <cassert>
 #include <cstdlib>
@@ -449,8 +448,17 @@ static void tiled_unpack_src0(const block_iq1_m * rows, int64_t row_stride, int 
 static void tiled_unpack_src1_q8_K(const block_q8_K * const * rows, int n_rows, tiled_tile_src1 * tile,
                                    int kblk) {
     GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
-    // codes: natural [row][k] fill or the VNNI transposed repack, see tiled_repack_src1_codes
-    tiled_repack_src1_codes(rows, n_rows, tile, kblk);
+    // codes: use kernel-specific packing if provided, otherwise natural [row][k] fill
+    if (!tiled_repack_src1_codes(rows, n_rows, tile, kblk)) {
+    const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
+        for (int r = 0; r < n_padded; r++) {
+            if (r < n_rows) {
+                memcpy(&tile->q[r * TILED_TILE_K], rows[r][kblk].qs, TILED_TILE_K);
+            } else {
+                memset(&tile->q[r * TILED_TILE_K], 0, TILED_TILE_K);
+            }
+        }
+    }
     const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
     // d and bsums (ISA-independent)
     for (int r = 0; r < n_padded; r++) {
