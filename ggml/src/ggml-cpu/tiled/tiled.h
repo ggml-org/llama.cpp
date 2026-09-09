@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -8,7 +10,7 @@ extern "C" {
 // Amount of wdata to reserve for tiled workspaces
 size_t ggml_tiled_wdata_size(int n_tasks, struct ggml_tensor * dst);
 
-// tiled K-quant matmul; returns true if the op was computed here, 
+// tiled K-quant matmul; returns true if the op was computed here,
 // false to fall through to the stock path
 bool ggml_compute_forward_mul_mat_tiled(const struct ggml_compute_params * params,
                                         struct ggml_tensor * dst);
