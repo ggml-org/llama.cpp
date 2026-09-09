@@ -2642,7 +2642,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     }
 
                     if ((arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_HY_V3 || arch == LLM_ARCH_GLM_DSA ||
-                            arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_DEEPSEEK32) &&
+                            arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_DEEPSEEK32 ||
+                            arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM4_MOE ||
+                            arch == LLM_ARCH_COHERE2MOE) &&
                             hparams.n_layer_nextn > 0) {
                         if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
                             filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
