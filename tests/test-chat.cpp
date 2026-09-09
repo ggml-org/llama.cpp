@@ -4405,6 +4405,100 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // Spark2.5 uses tagged arguments with forced-open thinking.
+    {
+        auto tst = peg_tester("models/templates/Spark2.5.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .expect(message_assist)
+            .expect_reconstruction()
+            .run();
+
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "<tool_call>special_function"
+               "<arg_key>arg1</arg_key><arg_value>1</arg_value>"
+               "</tool_call>")
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "I'm\nthinking</think>"
+               "<tool_call>special_function"
+               "<arg_key>arg1</arg_key><arg_value>1</arg_value>"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "<tool_call>special_function"
+               "<arg_key>arg1</arg_key><arg_value>1</arg_value>"
+               "</tool_call>"
+               "<tool_call>special_function_with_opt"
+               "<arg_key>arg1</arg_key><arg_value>1</arg_value>"
+               "<arg_key>arg2</arg_key><arg_value>2</arg_value>"
+               "</tool_call>")
+            .enable_thinking(false)
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "Preparing updates."
+               "<tool_call>magic_int"
+               "<arg_key>ref</arg_key><arg_value>42</arg_value>"
+               "<arg_key>name</arg_key><arg_value>上海</arg_value>"
+               "</tool_call>"
+               "<tool_call>amount"
+               "<arg_key>orig</arg_key><arg_value>2.5</arg_value>"
+               "</tool_call>"
+               "<tool_call>toggle"
+               "<arg_key>enabled</arg_key><arg_value>true</arg_value>"
+               "</tool_call>"
+               "<tool_call>set_config"
+               "<arg_key>config</arg_key><arg_value>{\"source\": \"spark\", \"options\": {\"strict\": true}}</arg_value>"
+               "</tool_call>"
+               "<tool_call>nested_args"
+               "<arg_key>tags</arg_key><arg_value>[\"alpha\", \"测试\"]</arg_value>"
+               "<arg_key>entries</arg_key><arg_value>[{\"id\": 1, \"label\": \"first\"}, {\"id\": 2, \"label\": \"第二\"}]</arg_value>"
+               "</tool_call>"
+               "<tool_call>empty_args"
+               "</tool_call>")
+            .enable_thinking(false)
+            .parallel_tool_calls(true)
+            .tools({ magic_int_tool, amount_tool, toggle_tool, config_tool, nested_args_tool, empty_args_tool })
+            .expect_content("Preparing updates.")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": 42, "name": "上海"})", {} },
+                { "amount", R"({"orig": 2.5})", {} },
+                { "toggle", R"({"enabled": true})", {} },
+                { "set_config", R"({"config": {"source": "spark", "options": {"strict": true}}})", {} },
+                { "nested_args", R"({"tags": ["alpha", "测试"], "entries": [{"id": 1, "label": "first"}, {"id": 2, "label": "第二"}]})", {} },
+                { "empty_args", "{}", {} },
+            })
+            .expect_reconstruction()
+            .run();
+    }
+
     // Verify the throw path produces a readable error message, not std::out_of_range.
     // #20424 introduced effective_input = generation_prompt + input, but the throw
     // uses input.substr(result.end) where result.end is in effective_input space.
