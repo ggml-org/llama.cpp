@@ -53,7 +53,10 @@ endif()
 
 set(TARGET llama-common)
 
+include(parsers/sources.cmake)
+
 add_library(${TARGET}
+    ${LLAMA_CHAT_PARSERS_SOURCES}
     arg.cpp
     arg.h
     base64.hpp

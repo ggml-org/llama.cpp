@@ -13,7 +13,12 @@
 	import ChatMessageToolCallBlockWriteFile from './ChatMessageToolCallBlockWriteFile.svelte';
 	import { BuiltInTool } from '$lib/enums';
 	import type { AgenticSection, DatabaseMessageExtra } from '$lib/types';
-	import { extractSearchQuery, extractSearchResults, isWebSearchToolName } from '$lib/utils';
+	import {
+		extractSearchQuery,
+		extractSearchResults,
+		isWebSearchToolName,
+		looksLikeSearchResult
+	} from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -26,11 +31,16 @@
 
 	let { attachments, isExecuting, isStreaming, onToggle, open, section }: Props = $props();
 
-	const searchResults = $derived(extractSearchResults(section.toolResult));
-	const searchQuery = $derived(extractSearchQuery(section.toolArgs));
-	const isSearchCall = $derived(
-		searchResults.length > 0 || (searchQuery.length > 0 && isWebSearchToolName(section.toolName))
-	);
+	// Runs for every tool block on mount, before the body renders: the cheap
+	// content prefilter and the tool-name allow-list come first so blobs from
+	// exec/file tools are never line-split or JSON-parsed here
+	const isSearchCall = $derived.by(() => {
+		if (looksLikeSearchResult(section.toolResult)) {
+			return extractSearchResults(section.toolResult).length > 0;
+		}
+
+		return isWebSearchToolName(section.toolName) && extractSearchQuery(section.toolArgs).length > 0;
+	});
 </script>
 
 {#if isSearchCall}
