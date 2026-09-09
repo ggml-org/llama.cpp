@@ -1627,6 +1627,28 @@ static void test_msgs_oaicompat_json_conversion() {
     assert_equals<std::string>(res[0].role, "assistant");
     assert_equals(true, res[0].content.empty());
     assert_equals(true, res[0].tool_calls.empty());
+    assert_equals(false, res[0].content_present);
+    assert_equals(
+        std::string("[{\"role\":\"assistant\"}]"),
+        common_chat_msgs_to_json_oaicompat(res).dump());
+
+    auto null_content =
+        common_chat_msgs_parse_oaicompat(json::parse("[{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[]}]"));
+    assert_equals<size_t>(1, null_content.size());
+    assert_equals(true, null_content[0].content_present);
+    assert_equals(true, null_content[0].content_is_null);
+    assert_equals(
+        std::string("[{\"role\":\"assistant\",\"content\":null}]"),
+        common_chat_msgs_to_json_oaicompat(null_content).dump());
+
+    auto empty_content =
+        common_chat_msgs_parse_oaicompat(json::parse("[{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[]}]"));
+    assert_equals<size_t>(1, empty_content.size());
+    assert_equals(true, empty_content[0].content_present);
+    assert_equals(false, empty_content[0].content_is_null);
+    assert_equals(
+        std::string("[{\"role\":\"assistant\",\"content\":\"\"}]"),
+        common_chat_msgs_to_json_oaicompat(empty_content).dump());
 
     try {
         common_chat_msgs_parse_oaicompat(json::parse("[{\"role\": \"assistant\"}]"));
