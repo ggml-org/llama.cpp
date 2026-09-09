@@ -318,6 +318,7 @@ llama_kv_cache::llama_kv_cache(
             LLAMA_LOG_WARN("%s: attention rotation force disabled (LLAMA_ATTN_ROT_DISABLE)\n", __func__);
         }
 
+        // Do not rotate scalar FP8 caches. Their static scales are calibrated on unrotated K and V.
         attn_rot_k =
             !attn_rot_disable &&
             n_embd_head_k_all > 0 &&
@@ -1313,6 +1314,14 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
             ggml_row_size(v->type, kv_size),                        // v->nb[2]
             ggml_row_size(v->type, kv_size*n_embd_v_gqa),           // v->nb[3]
             ggml_row_size(v->type, kv_size*n_embd_v_gqa)*sinfo.s0);
+}
+
+ggml_tensor * llama_kv_cache::get_k_scale(int32_t il) const {
+    return model.layers[il].k_cache_scale;
+}
+
+ggml_tensor * llama_kv_cache::get_v_scale(int32_t il) const {
+    return model.layers[il].v_cache_scale;
 }
 
 ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
@@ -2756,6 +2765,14 @@ ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) cons
 
 ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) const {
     return kv->get_v(ctx, il, n_kv, sinfos[i_cur]);
+}
+
+ggml_tensor * llama_kv_cache_context::get_k_scale(int32_t il) const {
+    return kv->get_k_scale(il);
+}
+
+ggml_tensor * llama_kv_cache_context::get_v_scale(int32_t il) const {
+    return kv->get_v_scale(il);
 }
 
 ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
