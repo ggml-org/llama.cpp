@@ -120,7 +120,7 @@ if (CUDAToolkit_FOUND)
                              ${GGML_SOURCES_CUDA}
                             )
 
-    if (CMAKE_CUDA_ARCHITECTURES MATCHES "(^|;)12[0-9]a(-real|-virtual)?($|;)")
+    if (CMAKE_CUDA_ARCHITECTURES MATCHES "(^|;)12[0-9][af](-real|-virtual)?($|;)")
         add_compile_definitions(GGML_CUDA_HAS_BLACKWELL_TARGET)
     endif()
 
