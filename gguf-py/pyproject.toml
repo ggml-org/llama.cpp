@@ -6,8 +6,8 @@ keywords = ["ggml", "gguf", "llama.cpp"]
 dynamic = ["classifiers"]
 readme = "README.md"
 authors = [{name = "GGML", email = "ggml@ggml.ai"}]
-requires-python = '>=3.10'
-dependencies = ['numpy (>=1.17)', 'tqdm (>=4.27)', 'pyyaml (>=5.1)', 'requests (>=2.25)']
+requires-python = '>=3.11'
+dependencies = ['numpy (>=2.4.6)', 'tqdm (>=4.27)', 'pyyaml (>=5.1)', 'requests (>=2.25)']
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -35,7 +35,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.10"
+python = ">=3.11"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^5.2"
