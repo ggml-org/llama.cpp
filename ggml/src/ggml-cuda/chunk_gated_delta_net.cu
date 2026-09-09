@@ -14,7 +14,7 @@
 
 // Tensor-core kernels are supported on this architecture; otherwise the bodies are stubs.
 #if defined(GDN_USE_GGML_MMA)
-#  if defined(TURING_MMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#  if defined(TURING_MMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE) || (defined(AMD_WMMA_AVAILABLE) && !defined(RDNA3))
 #    define GDN_TC_AVAILABLE
 #  endif
 #elif defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
