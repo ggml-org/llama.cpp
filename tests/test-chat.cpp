@@ -4382,6 +4382,95 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // GigaChat 3.5 Reasoning tests - same GCML markup, but the template always opens
+    // a forced "<think>" in the generation prompt (no opt-out) and every assistant
+    // turn carries a think block (empty "<think></think>" when there is no reasoning)
+    {
+        auto tst = peg_tester("models/templates/GigaChat3.5-Reasoning.jinja", detailed_debug);
+
+        // model closes the forced think block immediately and answers
+        tst.test("</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        tst.test("I'm\nthinking</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test(
+               "</think>\n\n"
+               "<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"special_function\">\n"
+               "<｜GCML｜parameter name=\"arg1\" string=\"false\">1</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "</｜GCML｜tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+               "Let me check</think>\n\n"
+               "<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"get_time\">\n"
+               "<｜GCML｜parameter name=\"city\" string=\"true\">Tokyo</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "</｜GCML｜tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check"))
+            .run();
+
+        tst.test(
+               "Calling both</think>\n\n"
+               "<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"get_time\">\n"
+               "<｜GCML｜parameter name=\"city\" string=\"true\">Paris</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "<｜GCML｜invoke name=\"get_weather\">\n"
+               "<｜GCML｜parameter name=\"city\" string=\"true\">Paris</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "</｜GCML｜tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .run();
+
+        // Continuation tests
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(" thinking</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        // content continuation with no prior reasoning: the prompt still carries
+        // the forced empty think block
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .messages({ message_user, simple_assist_msg("Hello, ", "") })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
+
     // GLM-4.6 tests - format: <tool_call>function_name\n<arg_key>...</arg_key>\n<arg_value>...</arg_value>\n</tool_call>
     {
         auto tst = peg_tester("models/templates/GLM-4.6.jinja", detailed_debug);
