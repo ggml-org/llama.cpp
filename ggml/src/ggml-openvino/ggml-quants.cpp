@@ -1166,21 +1166,25 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
     bool is_u4 = (requant_type == ExtraQuantType::Q4_0_C || requant_type == ExtraQuantType::Q4_0_128 ||
                   requant_type == ExtraQuantType::Q4_0_64 || requant_type == ExtraQuantType::Q4_1_64);
 
-    // Streaming dequant (opt-in via GGML_OPENVINO_REDUCE_COMPILE_MEM or
-    // GGML_OPENVINO_MEMORY_OPTIMIZE): instead of
-    // materializing the full n_elements F32 array (e.g. ~1 GB for token_embd), dequantize
-    // a chunk of complete rows into a small scratch and quantize/convert it straight into
-    // the output buffers, capping the transient F32 footprint at CHUNK_ROWS*ne0 floats.
+    // Streaming dequant: instead of materializing the full n_elements F32 array (e.g. ~1 GB
+    // for token_embd), dequantize a chunk of complete rows into a small scratch and
+    // quantize/convert it straight into the output buffers, capping the transient F32
+    // footprint at CHUNK_ROWS*ne0 floats. Default on for NPU (caps the compile-time peak with
+    // identical output and no steady/throughput cost); also opt-in on any device via
+    // GGML_OPENVINO_REDUCE_COMPILE_MEM or GGML_OPENVINO_MEMORY_OPTIMIZE. Set either to 0 to force off.
     //
     // Only valid (and only used) when the target block size divides a row (channel-wise _C
     // uses block_size == ne0) so no target block straddles a row boundary. The u4 (Q4_0)
     // path packs two weights per byte and ORs zp nibbles in pairs, but both are indexed by
     // an absolute block index and chunks are emitted in increasing order, so whole-row
     // chunks stay byte-aligned and the even-block write always precedes the odd-block OR.
-    // When the flag is off, behavior is identical to the original full-materialization path.
+    // When off, behavior is identical to the original full-materialization path.
     // Q4_1_64 (asymmetric u4) has no chunked quantizer, so it always takes the full path.
-    const bool stream_requant = ggml_openvino_reduce_compile_mem_enabled() &&
-                                requant_type != ExtraQuantType::Q4_1_64 &&
+    const bool stream_enabled = ggml_openvino_getenv_str("GGML_OPENVINO_REDUCE_COMPILE_MEM") != nullptr ||
+                                        ggml_openvino_getenv_str("GGML_OPENVINO_MEMORY_OPTIMIZE") != nullptr
+                                    ? ggml_openvino_reduce_compile_mem_enabled()
+                                    : ggml_openvino_is_npu();
+    const bool stream_requant = stream_enabled && requant_type != ExtraQuantType::Q4_1_64 &&
                                 !(block_size > 0 && ne0 % block_size != 0);
 
     if (!stream_requant) {
