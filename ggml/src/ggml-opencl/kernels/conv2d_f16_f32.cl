@@ -39,8 +39,8 @@ kernel void kernel_conv_2d(
     uint Cout, uint Cin, uint N,
     uint KW, uint KH, uint W, uint H, uint OW, uint OH,
     uint s0, uint s1, uint p0, uint p1, uint d0, uint d1,
-    uint nb01, uint nb02, uint nb03,
-    uint nb11, uint nb12, uint nb13,
+    uint nb00, uint nb01, uint nb02, uint nb03,
+    uint nb10, uint nb11, uint nb12, uint nb13,
     uint nb1, uint nb2, uint nb3
 ) {
     global half* knl_data = (global half*) ((global char*)p_knl + off_knl);
@@ -86,7 +86,7 @@ kernel void kernel_conv_2d(
                 const uint Cin_idx = crs_g / (KW*KH);
                 const uint KH_idx = (crs_g - Cin_idx*KW*KH) / KW;
                 const uint KW_idx = crs_g - Cin_idx*KW*KH - KH_idx*KW;
-                const uint knl_idx = KW_idx + KH_idx*nb01 + Cin_idx*nb02 + k_g*nb03;
+                const uint knl_idx = KW_idx*nb00 + KH_idx*nb01 + Cin_idx*nb02 + k_g*nb03;
                 Ash[k_l * BS_CRS + crs_l] = knl_data[knl_idx];
             } else {
                 Ash[k_l * BS_CRS + crs_l] = (half)0.0f;
@@ -114,7 +114,7 @@ kernel void kernel_conv_2d(
                         const int W_idx = (int)(OW_idx * s0 + KW_idx * d0 - p0);
 
                         if (H_idx >= 0 && H_idx < H && W_idx >= 0 && W_idx < W) {
-                            const uint src_idx = W_idx + H_idx * nb11 + Cin_idx * nb12 + N_idx * nb13;
+                            const uint src_idx = W_idx * nb10 + H_idx * nb11 + Cin_idx * nb12 + N_idx * nb13;
                             ((float*)&val)[v] = src_data[src_idx];
                         }
                     }

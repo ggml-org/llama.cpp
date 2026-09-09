@@ -16,6 +16,7 @@ export * from './context-gauge-popup.constants';
 export * from './conversation-import.constants';
 export * from './binary-detection.constants';
 export * from './content-detection.constants';
+export * from './tool-call-args.constants';
 export * from './tool-ui.constants';
 export * from './cache.constants';
 export * from './chat-form.constants';
