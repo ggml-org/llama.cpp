@@ -1262,6 +1262,40 @@ struct ggml_tensor_extra_gpu {
 #define USE_CUDA_GRAPH
 #endif
 
+// Coarse graph identity + execution-variant discriminator.
+//
+// Graph cache entries are keyed by (first node pointer, leading extents of
+// that node).  Workloads whose graphs recur with a small set of mutually
+// incompatible shapes - e.g. speculative-decode catch-up vs draft steps, or
+// MoE micro-batches of 1..4 tokens - each get their own cache entry instead
+// of churning a single shared property/warmup history.  Differences that this key does not capture (dtype, layout, op params, ...) keep going through the unchanged property check in ggml_cuda_graph_update_required(), including its uid fast path.  This change only splits previously shared entries - it never merges previously separate ones - so replay decisions are made exactly as before.
+struct ggml_cuda_graph_key {
+    const void * first_node_ptr;
+    int64_t      ne[GGML_MAX_DIMS];
+
+    bool operator==(const ggml_cuda_graph_key & other) const {
+        if (first_node_ptr != other.first_node_ptr) {
+            return false;
+        }
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (ne[i] != other.ne[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
+struct ggml_cuda_graph_key_hash {
+    size_t operator()(const ggml_cuda_graph_key & k) const {
+        size_t h = (size_t)(uintptr_t) k.first_node_ptr;
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            h ^= (size_t) k.ne[i] + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+        }
+        return h;
+    }
+};
+
 struct ggml_cuda_graph {
 #ifdef USE_CUDA_GRAPH
     ~ggml_cuda_graph() {
@@ -1459,13 +1493,14 @@ struct ggml_backend_cuda_context {
     int curr_stream_no = 0;
 
 #ifdef USE_CUDA_GRAPH
-    // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
+    // Map from graph key (first node + leading extents) to cuda_graph - allows
+    // multiple graphs per context
     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
-    std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
+    std::unordered_map<ggml_cuda_graph_key, std::unique_ptr<ggml_cuda_graph>, ggml_cuda_graph_key_hash> cuda_graphs;
 
     int64_t last_graph_eviction_sweep = 0;
 
-    ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
+    ggml_cuda_graph * cuda_graph(const ggml_cuda_graph_key & graph_key) {
         const int64_t time_now = ggml_time_us();
 
         // sweep every 5s, evicting cuda graphs unused for >=10s
@@ -1480,9 +1515,9 @@ struct ggml_backend_cuda_context {
             }
         }
 
-        auto it = cuda_graphs.find(first_node_ptr);
+        auto it = cuda_graphs.find(graph_key);
         if (it == cuda_graphs.end()) {
-            it = cuda_graphs.emplace(first_node_ptr, std::make_unique<ggml_cuda_graph>()).first;
+            it = cuda_graphs.emplace(graph_key, std::make_unique<ggml_cuda_graph>()).first;
         }
         it->second->last_used_time = time_now;
         return it->second.get();
