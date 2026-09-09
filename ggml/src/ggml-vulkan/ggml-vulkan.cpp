@@ -13541,9 +13541,7 @@ static void ggml_vk_fill(ggml_backend_vk_context * ctx, vk_context& subctx, ggml
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, nullptr, nullptr, nullptr, dst, GGML_OP_FILL);
     GGML_ASSERT(pipeline != nullptr);
 
-    // Intel GPU caps maxComputeWorkGroupCount at 65535 which
-    // may not be enough to procss entire task in 1D.
-    // We split the task indexing to 2D as a workaround.
+    // Split the task distribution to 2D to avoid exceeding maxComputeWorkGroupCount
     const uint32_t total_wg = CEIL_DIV(n, pipeline->wg_denoms[0]);
     const uint32_t wg_x = std::min(total_wg, ctx->device->properties.limits.maxComputeWorkGroupCount[0]);
     const uint32_t wg_y = CEIL_DIV(total_wg, wg_x);
