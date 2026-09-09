@@ -277,10 +277,10 @@ class Keys:
         LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count"
 
     class HRM:
-        LAYERS_PER_STACK = "{arch}.layers_per_stack"
-        H_CYCLES         = "{arch}.h_cycles"
-        L_CYCLES         = "{arch}.l_cycles"
-        PREFIX_LM        = "{arch}.prefix_lm"
+        LAYERS_PER_STACK = "{arch}.hrm.layers_per_stack"
+        H_CYCLES         = "{arch}.hrm.h_cycles"
+        L_CYCLES         = "{arch}.hrm.l_cycles"
+        PREFIX_LM        = "{arch}.hrm.prefix_lm"
 
     class SSM:
         CONV_KERNEL    = "{arch}.ssm.conv_kernel"
