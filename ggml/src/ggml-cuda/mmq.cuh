@@ -1476,6 +1476,17 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
     int J_best        = 0;
     int ntiles_J_best = INT_MAX;
 
+    // The grid's y-dimension tiles the columns of each z-slice. For dense GEMM
+    // every z-slice spans the full ncols_max columns, but for MoE (ids_dst) the
+    // columns are the per-expert routed slots, averaging ncols_dst/nchannels_y.
+    // Selecting J from ncols_max for MoE over-provisions the column tile and, once
+    // J exceeds the per-expert width, wastes a full J-wide compute per tile. Use
+    // the per-channel width for selection only; the launch grid still uses
+    // ncols_max, which is a safe upper bound on any single expert's slots.
+    const int64_t ncols_sel = (GGML_CUDA_CC_IS_RDNA2(cc) && args.ids_dst != nullptr)
+        ? std::max<int64_t>(1, args.ncols_dst / args.nchannels_y)
+        : args.ncols_max;
+
     for (int J = 8; J <= 128 && ntiles_J_best > 1; J += 8) {
         const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, J, fallback, cc);
         if (config.type == GGML_TYPE_COUNT) {
@@ -1486,7 +1497,7 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
             continue;
         }
 
-        const int ntiles_x = (args.ncols_max + config.J - 1) / config.J;
+        const int ntiles_x = (ncols_sel + config.J - 1) / config.J;
 
         if (ntiles_x < ntiles_J_best) {
             J_best = J;
