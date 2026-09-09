@@ -383,6 +383,73 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     return ret;
 }
 
+// Exercise the public user-loader path without an external model file.
+static void test_complete_tensor_inventory(const size_t seed) {
+    llama_model_params params = llama_model_default_params();
+    params.n_gpu_layers = 0;
+    params.progress_callback = [](float, void *) { return true; };
+    struct capture {
+        gguf_context * metadata;
+        size_t seed;
+        bool saw_bias = false;
+    };
+    auto synthetic = get_gguf_ctx(LLM_ARCH_LLAMA, false);
+    gguf_context_ptr inventory(gguf_init_empty());
+    gguf_set_kv(inventory.get(), synthetic.get());
+    capture source{inventory.get(), seed};
+    auto collect = [](ggml_tensor * tensor, void * userdata) {
+        auto & data = *static_cast<capture *>(userdata);
+        if (gguf_find_tensor(data.metadata, tensor->name) < 0) {
+            gguf_add_tensor(data.metadata, tensor);
+        }
+        set_tensor_data(tensor, &data.seed);
+        if (strcmp(tensor->name, "blk.0.attn_output.bias") == 0) {
+            data.saw_bias = true;
+        }
+    };
+    llama_model_ptr baseline(llama_model_init_from_user(synthetic.get(), collect, &source, params));
+    GGML_ASSERT(baseline && source.saw_bias);
+    baseline.reset();
+
+    for (int scenario = 0; scenario < 5; ++scenario) {
+        auto metadata = get_gguf_ctx(LLM_ARCH_LLAMA, false);
+        // Rebuild the inventory without one optional tensor, and optionally one required tensor.
+        for (int64_t i = 0; i < gguf_get_n_tensors(inventory.get()); ++i) {
+            const char * name = gguf_get_tensor_name(inventory.get(), i);
+            if (strcmp(name, "blk.0.attn_output.bias") == 0 ||
+                    (scenario == 1 && strcmp(name, "output_norm.weight") == 0)) {
+                continue;
+            }
+            ggml_tensor tensor = {};
+            tensor.type = gguf_get_tensor_type(inventory.get(), i);
+            std::copy_n(gguf_get_tensor_ne(inventory.get(), i), GGML_MAX_DIMS, tensor.ne);
+            ggml_set_name(&tensor, name);
+            gguf_add_tensor(metadata.get(), &tensor);
+        }
+        if (scenario == 2) {
+            gguf_set_val_str(metadata.get(), "general.tensor_inventory_complete", "true");
+        } else if (scenario != 3) {
+            gguf_set_val_bool(metadata.get(), "general.tensor_inventory_complete", scenario != 4);
+        }
+        capture loaded{nullptr, seed};
+        auto load = [](ggml_tensor * tensor, void * userdata) {
+            auto & data = *static_cast<capture *>(userdata);
+            set_tensor_data(tensor, &data.seed);
+            if (strcmp(tensor->name, "blk.0.attn_output.bias") == 0) {
+                data.saw_bias = true;
+            }
+        };
+        llama_model_ptr model(llama_model_init_from_user(metadata.get(), load, &loaded, params));
+        if (scenario == 1 || scenario == 2) {
+            GGML_ASSERT(!model);
+        } else {
+            GGML_ASSERT(model);
+            GGML_ASSERT(loaded.saw_bias == (scenario == 3 || scenario == 4));
+        }
+    }
+    printf("complete tensor inventory: optional, required, type, absent and false cases passed\n");
+}
+
 static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/) {
     return true;
 }
@@ -866,6 +933,7 @@ int main(int argc, char ** argv) {
     printf("%s: using seed %zu\n", __func__, seed);
 
     try {
+        test_complete_tensor_inventory(seed);
         if (!out.empty()) {
             return save_models(arch, seed, verbosity, out);
         }

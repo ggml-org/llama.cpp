@@ -472,6 +472,9 @@ mtmd_context_params mtmd_context_params_default() {
         /* batch_max_tokens  */ 1024,
         /* progress_callback */ nullptr,
         /* progress_callback_user_data */ nullptr,
+        /* model_reader */ nullptr,
+        /* model_reader_user_data */ nullptr,
+        /* model_reader_size */ 0,
     };
     return params;
 }
@@ -577,6 +580,9 @@ struct mtmd_context {
             /* no_alloc          */ no_alloc,
             /* progress_callback */ ctx_params.progress_callback,
             /* progress_callback_user_data */ ctx_params.progress_callback_user_data,
+            /* model_reader */ ctx_params.model_reader,
+            /* model_reader_user_data */ ctx_params.model_reader_user_data,
+            /* model_reader_size */ ctx_params.model_reader_size,
         };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);

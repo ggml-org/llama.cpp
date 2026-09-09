@@ -2,6 +2,7 @@
 #define MTMD_H
 
 #include "ggml.h"
+#include "gguf.h"
 #include "llama.h"
 
 #include <stddef.h>
@@ -122,6 +123,12 @@ struct mtmd_context_params {
     // If it returns false, model loading is immediately aborted.
     mtmd_progress_callback progress_callback;
     void * progress_callback_user_data;
+
+    // Optional GGUF byte source used during loading instead of the filename.
+    // The callback must return the requested byte count, or a short read on failure.
+    gguf_reader_callback_t model_reader;
+    void * model_reader_user_data;
+    uint64_t model_reader_size;
 };
 
 MTMD_API const char * mtmd_default_marker(void);

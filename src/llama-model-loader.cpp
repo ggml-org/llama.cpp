@@ -1288,6 +1288,16 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
         ggml_type type = GGML_TYPE_F32;
         const int64_t tid = gguf_find_tensor(metadata, tn.str().c_str());
+        const int64_t inventory = gguf_find_key(metadata, "general.tensor_inventory_complete");
+        if (inventory >= 0) {
+            if (gguf_get_kv_type(metadata, inventory) != GGUF_TYPE_BOOL) {
+                throw std::runtime_error("general.tensor_inventory_complete must be boolean");
+            }
+            if (gguf_get_val_bool(metadata, inventory) && tid == -1) {
+                if (flags & TENSOR_NOT_REQUIRED) { return nullptr; }
+                throw std::runtime_error(format("missing required tensor: %s", tn.str().c_str()));
+            }
+        }
         if (tid != -1) {
             type = gguf_get_tensor_type(metadata, tid);
         }

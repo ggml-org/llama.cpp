@@ -58,6 +58,9 @@ struct clip_context_params {
     bool no_alloc;
     mtmd_progress_callback progress_callback;
     void * progress_callback_user_data;
+    gguf_reader_callback_t model_reader = nullptr;
+    void * model_reader_user_data = nullptr;
+    uint64_t model_reader_size = 0;
 };
 
 struct clip_init_result {

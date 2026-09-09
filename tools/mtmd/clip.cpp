@@ -1160,6 +1160,9 @@ struct clip_model_loader {
     gguf_context_ptr ctx_gguf;
 
     std::string fname;
+    gguf_reader_callback_t reader = nullptr;
+    void * reader_user_data = nullptr;
+    uint64_t reader_size = 0;
 
     size_t model_size = 0; // in bytes
 
@@ -1174,8 +1177,12 @@ struct clip_model_loader {
     clip_model_loader(const char * fname,
             bool skip_tensors = false,
             mtmd_progress_callback progress_cb = nullptr,
-            void * progress_user_data = nullptr)
+            void * progress_user_data = nullptr,
+            gguf_reader_callback_t reader = nullptr,
+            void * reader_user_data = nullptr,
+            uint64_t reader_size = 0)
         : fname(fname),
+          reader(reader), reader_user_data(reader_user_data), reader_size(reader_size),
           progress_callback(progress_cb),
           progress_callback_user_data(progress_user_data) {
         struct ggml_context * meta = nullptr;
@@ -1185,7 +1192,12 @@ struct clip_model_loader {
             /*.ctx      = */ &meta,
         };
 
-        ctx_gguf = gguf_context_ptr(gguf_init_from_file(fname, params));
+        if (reader && reader_size == 0) {
+            throw std::runtime_error("model reader size must be positive");
+        }
+        ctx_gguf = gguf_context_ptr(reader
+            ? gguf_init_from_callback(reader, reader_user_data, 1024 * 1024, reader_size, params)
+            : gguf_init_from_file(fname, params));
         if (!ctx_gguf.get()) {
             throw std::runtime_error(string_format("%s: failed to load CLIP model from %s. Does this file exist?\n", __func__, fname));
         }
@@ -2102,10 +2114,31 @@ struct clip_model_loader {
         std::map<std::string, size_t> tensor_offset;
         std::vector<ggml_tensor *> tensors_to_load;
 
-        auto fin = open_ifstream_binary(fname);
-        if (!fin) {
-            throw std::runtime_error(string_format("%s: failed to open %s\n", __func__, fname.c_str()));
+        std::ifstream fin;
+        if (!reader) {
+            fin = open_ifstream_binary(fname);
+            if (!fin) { throw std::runtime_error("failed to open model file"); }
         }
+        auto read_bytes = [&](uint64_t offset, void * dst, size_t bytes) {
+            if (reader) {
+                if (offset > reader_size || bytes > reader_size - offset) {
+                    throw std::runtime_error("model tensor is outside reader bounds");
+                }
+                auto * out = static_cast<char *>(dst);
+                while (bytes) {
+                    const size_t chunk = std::min<size_t>(bytes, 1024 * 1024);
+                    if (reader(reader_user_data, out, offset, chunk) != chunk) {
+                        throw std::runtime_error("short model tensor read");
+                    }
+                    offset += chunk; out += chunk; bytes -= chunk;
+                }
+            } else {
+                fin.seekg(offset, std::ios::beg);
+                if (!fin.read(static_cast<char *>(dst), bytes)) {
+                    throw std::runtime_error("short model tensor read");
+                }
+            }
+        };
 
         // TODO @ngxson : support both audio and video in the future
         const char * prefix = model.modality == CLIP_MODALITY_AUDIO ? "a"
@@ -2201,8 +2234,7 @@ struct clip_model_loader {
 
             const size_t n_elems = n_bytes / sizeof(float);
             result.resize(n_elems);
-            fin.seekg(it->second, std::ios::beg);
-            fin.read(reinterpret_cast<char*>(result.data()), n_bytes);
+            read_bytes(it->second, result.data(), n_bytes);
             return result;
         };
 
@@ -3609,18 +3641,14 @@ struct clip_model_loader {
                     auto it_off = tensor_offset.find(t->name);
                     GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
                     const size_t offset = it_off->second;
-                    fin.seekg(offset, std::ios::beg);
-                    if (!fin) {
-                        throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
-                    }
                     size_t num_bytes = ggml_nbytes(cur);
                     if (ggml_backend_buft_is_host(buft)) {
                         // for the CPU and Metal backend, we can read directly into the tensor
-                        fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
+                        read_bytes(offset, cur->data, num_bytes);
                     } else {
                         // read into a temporary buffer first, then copy to device memory
                         read_buf.resize(num_bytes);
-                        fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
+                        read_bytes(offset, read_buf.data(), num_bytes);
                         ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
                     }
                     data_loaded += num_bytes;
@@ -3963,7 +3991,10 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
         clip_model_loader loader(fname,
             /* skip_tensors */ false,
             ctx_params.progress_callback,
-            ctx_params.progress_callback_user_data);
+            ctx_params.progress_callback_user_data,
+            ctx_params.model_reader,
+            ctx_params.model_reader_user_data,
+            ctx_params.model_reader_size);
         bool skip_audio = false;
 
         if (loader.has_vision) {
