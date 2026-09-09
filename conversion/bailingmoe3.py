@@ -121,9 +121,9 @@ class BailingMoeV3Model(TextModel):
 
         if is_mtp and cls.no_mtp:
             return None
-        if cls.mtp_only and not is_mtp and name not in (
+        if cls.mtp_only and not is_mtp and (cls.mtp_shared_embd or name not in (
             "model.word_embeddings.weight", "model.norm.weight", "lm_head.weight",
-        ):
+        )):
             return None
 
         return super().filter_tensors((name, gen))
