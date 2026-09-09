@@ -748,8 +748,6 @@ static void ggml_cuda_op_gated_delta_net_chunked_impl(ggml_backend_cuda_context 
     CUDA_CHECK(cudaGetLastError());
 }
 
-// Public entry: validates the op, extracts dims, and runs the pipeline. Selected by the
-// eligibility check in gated_delta_net.cu; otherwise the recurrent path runs.
 // cache: when non-null (CUDA graph / fused state copy), the final state is written to cache->data.
 void ggml_cuda_op_gated_delta_net_chunked(ggml_backend_cuda_context & ctx, ggml_tensor * dst,
                                           const ggml_cuda_gated_delta_net_fused_cache * cache) {
