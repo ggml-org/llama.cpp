@@ -6,9 +6,9 @@ version = "0.0.0"
 dynamic = ["classifiers"]
 readme = "README.md"
 authors = [{name = "GGML", email = "ggml@ggml.ai"}]
-requires-python = '>=3.11,<3.15'
+requires-python = '>=3.10,<3.15'
 dependencies = [
-    'numpy (>=2.4.6,<3.0.0)',
+    'numpy (>=2.2.6,<3.0.0)',
     'sentencepiece (>=0.1.98,<0.3.0)',
     'transformers (==4.57.6)',
     'protobuf (>=4.21.0,<5.0.0)',
