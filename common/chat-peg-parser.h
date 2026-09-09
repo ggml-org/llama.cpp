@@ -218,7 +218,3 @@ struct tagged_peg_parser {
 
 tagged_peg_parser build_tagged_peg_parser(
     const std::function<common_peg_parser(common_peg_parser_builder & builder)> & fn);
-
-// The parameters schema of a tool for its arguments parser. Like the OpenAI API, a missing or empty
-// "parameters" means the tool takes no arguments, not that any value is accepted.
-common_json common_chat_tool_parameters(const common_json & function);

@@ -312,7 +312,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
     foreach_function(inputs.tools, [&](const json & tool) {
         const auto & func   = tool.at("function");
         std::string  name   = func.at("name");
-        auto         schema = common_chat_tool_parameters(func);
+        const auto & schema = func.contains("parameters") ? func.at("parameters") : json::object();
 
         // Build call_id parser based on position (if supported)
         bool have_call_id = false;

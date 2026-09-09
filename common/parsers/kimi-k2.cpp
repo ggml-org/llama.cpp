@@ -82,7 +82,7 @@ common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & 
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
-            auto         schema   = common_chat_tool_parameters(function);
+            const auto & schema   = function.at("parameters");
 
             // Match: functions.<name>:<digits>
             // Capture the full call id (functions.<name>:<digits>) using tool_id tag

@@ -89,7 +89,7 @@ common_chat_params common_chat_params_init_ministral_3(const common_chat_templat
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
-                auto         schema   = common_chat_tool_parameters(function);
+                const auto & schema   = function.at("parameters");
 
                 tool_choice |=
                     p.rule("tool-" + name, p.tool_open(p.tool_name(p.literal(name)) + "[ARGS]") +
