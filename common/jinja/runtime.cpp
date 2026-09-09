@@ -412,10 +412,16 @@ value test_expression::execute_impl(context & ctx) {
         throw std::runtime_error("Invalid test expression");
     }
 
-    auto it = builtins.find("test_is_" + test_id);
-    JJ_DEBUG("Test expression %s '%s' %s (using function 'test_is_%s')", operand->type().c_str(), test_id.c_str(), negate ? "(negate)" : "", test_id.c_str());
+    const std::string test_name = "test_is_" + test_id;
+    auto it = builtins.find(test_name);
+    JJ_DEBUG("Test expression %s '%s' %s (using function '%s')", operand->type().c_str(), test_id.c_str(), negate ? "(negate)" : "", test_name.c_str());
     if (it == builtins.end()) {
         throw std::runtime_error("Unknown test '" + test_id + "'");
+    }
+
+    if (ctx.is_get_stats) {
+        value_t::stats_t::mark_used(input);
+        input->stats.ops.insert(test_name);
     }
 
     auto res = it->second(args);
