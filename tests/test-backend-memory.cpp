@@ -32,6 +32,7 @@ struct test_buft_context {
     size_t view_fail_after = SIZE_MAX;
     bool fail_alloc = false;
     bool support_views = true;
+    bool stateful = false;
 };
 
 struct test_buffer_context {
@@ -66,6 +67,8 @@ static void test_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     std::memset(test_buffer_base(buffer), value, buffer->size);
 }
 
+static void test_buffer_reset(ggml_backend_buffer_t) {}
+
 static ggml_backend_buffer_t test_buft_alloc(ggml_backend_buffer_type_t buft, size_t size) {
     auto * owner = static_cast<test_buft_context *>(buft->context);
     if (owner->fail_alloc || size == 0) {
@@ -83,6 +86,7 @@ static ggml_backend_buffer_t test_buft_alloc(ggml_backend_buffer_type_t buft, si
     iface.free_buffer = test_buffer_free;
     iface.get_base = test_buffer_base;
     iface.clear = test_buffer_clear;
+    iface.reset = owner->stateful ? test_buffer_reset : nullptr;
     ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, iface, context, size);
     buffer->view_buffer = owner->support_views ? test_buffer_view : nullptr;
     owner->alloc_count++;
@@ -270,6 +274,184 @@ static void test_compute_arena_binding_ownership() {
     }
     GGML_ASSERT(context.alloc_count == 3);
     GGML_ASSERT(context.physical_free_count == 3);
+}
+
+static ggml_backend_sched_ptr make_test_scheduler(
+        std::vector<ggml_backend_t> & backends,
+        std::vector<ggml_backend_buffer_type_t> & bufts) {
+    GGML_ASSERT(backends.size() == bufts.size());
+    return ggml_backend_sched_ptr(ggml_backend_sched_new(
+        backends.data(), bufts.data(), backends.size(), GGML_DEFAULT_GRAPH_SIZE, false, true));
+}
+
+static void detach_compute_arena_bindings(
+        ggml_backend_sched_t sched,
+        const std::vector<ggml_backend_t> & backends,
+        std::vector<llama_compute_arena_binding> & bindings) {
+    for (auto it = bindings.rbegin(); it != bindings.rend(); ++it) {
+        GGML_ASSERT(ggml_backend_sched_detach_memory_lease(sched, backends[it->first_slot]));
+    }
+    bindings.clear();
+}
+
+static void test_compute_arena_mixed_fallback() {
+    test_buft_context supported_context;
+    test_buft_context unsupported_context;
+    unsupported_context.support_views = false;
+    unsupported_context.stateful = true;
+    auto supported_buft = make_test_buft(&supported_context);
+    auto unsupported_buft = make_test_buft(&unsupported_context);
+    ggml_backend_ptr first_backend(ggml_backend_cpu_init());
+    ggml_backend_ptr second_backend(ggml_backend_cpu_init());
+    std::vector<ggml_backend_t> backends = {first_backend.get(), second_backend.get()};
+    std::vector<ggml_backend_buffer_type_t> bufts = {&supported_buft, &unsupported_buft};
+    auto sched = make_test_scheduler(backends, bufts);
+    GGML_ASSERT(sched);
+
+    std::vector<ggml_backend_memory_workspace_group> groups = {
+        {&supported_buft, 256, 16, 0},
+        {&unsupported_buft, 256, 16, 1},
+    };
+    std::vector<llama_compute_arena_binding> bindings;
+    GGML_ASSERT(llama_prepare_compute_arena_bindings(sched.get(), backends, groups, bindings));
+    GGML_ASSERT(bindings.size() == 1 && bindings[0].buft == &supported_buft);
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), first_backend.get()) == 256);
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), second_backend.get()) == 0);
+    GGML_ASSERT(supported_context.alloc_count == 1 && supported_context.physical_free_count == 0);
+    GGML_ASSERT(unsupported_context.alloc_count == 1 && unsupported_context.physical_free_count == 1);
+
+    ggml_init_params params = {
+        /*.mem_size   = */ 4*ggml_tensor_overhead() + ggml_graph_overhead(),
+        /*.mem_buffer = */ nullptr,
+        /*.no_alloc   = */ true,
+    };
+    ggml_context_ptr ctx(ggml_init(params));
+    auto * graph = ggml_new_graph(ctx.get());
+    auto * input = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
+    auto * output = ggml_scale(ctx.get(), input, 2.0f);
+    ggml_backend_sched_set_tensor_backend(sched.get(), input, second_backend.get());
+    ggml_backend_sched_set_tensor_backend(sched.get(), output, second_backend.get());
+    ggml_build_forward_expand(graph, output);
+    GGML_ASSERT(ggml_backend_sched_reserve(sched.get(), graph));
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), second_backend.get()) > 0);
+    GGML_ASSERT(unsupported_context.alloc_count == 2);
+
+    detach_compute_arena_bindings(sched.get(), backends, bindings);
+    GGML_ASSERT(supported_context.physical_free_count == 1);
+    sched.reset();
+    GGML_ASSERT(unsupported_context.physical_free_count == 2);
+}
+
+static void test_compute_arena_accelerator_mixed_fallback() {
+    ggml_backend_load_all();
+    ggml_backend_ptr accelerator(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr));
+    if (!accelerator) {
+        return;
+    }
+
+    test_buft_context unsupported_context;
+    unsupported_context.support_views = false;
+    unsupported_context.stateful = true;
+    auto unsupported_buft = make_test_buft(&unsupported_context);
+    ggml_backend_ptr fallback_backend(ggml_backend_cpu_init());
+    auto * accelerator_buft = ggml_backend_get_default_buffer_type(accelerator.get());
+    const size_t alignment = ggml_backend_buft_get_alignment(accelerator_buft);
+    std::vector<ggml_backend_t> backends = {accelerator.get(), fallback_backend.get()};
+    std::vector<ggml_backend_buffer_type_t> bufts = {accelerator_buft, &unsupported_buft};
+    auto sched = make_test_scheduler(backends, bufts);
+    GGML_ASSERT(sched);
+
+    std::vector<ggml_backend_memory_workspace_group> groups = {
+        {accelerator_buft, 4*alignment, alignment, 0},
+        {&unsupported_buft, 64, 16, 1},
+    };
+    std::vector<llama_compute_arena_binding> bindings;
+    GGML_ASSERT(llama_prepare_compute_arena_bindings(sched.get(), backends, groups, bindings));
+    GGML_ASSERT(bindings.size() == 1 && bindings[0].buft == accelerator_buft);
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), accelerator.get()) == 4*alignment);
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), fallback_backend.get()) == 0);
+    GGML_ASSERT(unsupported_context.alloc_count == 1 && unsupported_context.physical_free_count == 1);
+
+    detach_compute_arena_bindings(sched.get(), backends, bindings);
+}
+
+static void test_compute_arena_failure_recovery() {
+    test_buft_context first_context;
+    test_buft_context second_context;
+    second_context.fail_alloc = true;
+    auto first_buft = make_test_buft(&first_context);
+    auto second_buft = make_test_buft(&second_context);
+    ggml_backend_ptr first_backend(ggml_backend_cpu_init());
+    ggml_backend_ptr second_backend(ggml_backend_cpu_init());
+    std::vector<ggml_backend_t> backends = {first_backend.get(), second_backend.get()};
+    std::vector<ggml_backend_buffer_type_t> bufts = {&first_buft, &second_buft};
+    auto sched = make_test_scheduler(backends, bufts);
+    GGML_ASSERT(sched);
+
+    std::vector<ggml_backend_memory_workspace_group> groups = {
+        {&first_buft, 64, 16, 0},
+        {&second_buft, 64, 16, 1},
+    };
+    std::vector<llama_compute_arena_binding> bindings;
+    GGML_ASSERT(!llama_prepare_compute_arena_bindings(sched.get(), backends, groups, bindings));
+    GGML_ASSERT(bindings.empty());
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), first_backend.get()) == 0);
+    GGML_ASSERT(first_context.alloc_count == 1 && first_context.physical_free_count == 1);
+    GGML_ASSERT(second_context.alloc_count == 0 && second_context.physical_free_count == 0);
+
+    second_context.fail_alloc = false;
+    second_context.view_fail_after = 0;
+    GGML_ASSERT(!llama_prepare_compute_arena_bindings(sched.get(), backends, groups, bindings));
+    GGML_ASSERT(bindings.empty());
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), first_backend.get()) == 0);
+    GGML_ASSERT(first_context.alloc_count == 2 && first_context.physical_free_count == 2);
+    GGML_ASSERT(second_context.alloc_count == 1 && second_context.physical_free_count == 1);
+
+    second_context.view_fail_after = SIZE_MAX;
+    GGML_ASSERT(llama_prepare_compute_arena_bindings(sched.get(), backends, groups, bindings));
+    GGML_ASSERT(bindings.size() == 2);
+    detach_compute_arena_bindings(sched.get(), backends, bindings);
+    GGML_ASSERT(first_context.alloc_count == 3 && first_context.physical_free_count == 3);
+    GGML_ASSERT(second_context.alloc_count == 2 && second_context.physical_free_count == 2);
+}
+
+static void test_compute_arena_attachment_recovery() {
+    test_buft_context first_context;
+    test_buft_context second_context;
+    auto first_buft = make_test_buft(&first_context);
+    auto second_buft = make_test_buft(&second_context);
+    ggml_backend_ptr first_backend(ggml_backend_cpu_init());
+    ggml_backend_ptr second_backend(ggml_backend_cpu_init());
+    std::vector<ggml_backend_t> backends = {first_backend.get(), second_backend.get()};
+    std::vector<ggml_backend_buffer_type_t> bufts = {&first_buft, &second_buft};
+    auto sched = make_test_scheduler(backends, bufts);
+    GGML_ASSERT(sched);
+
+    ggml_backend_buffer_ptr occupied(ggml_backend_buft_alloc_buffer(&second_buft, 64));
+    GGML_ASSERT(occupied);
+    GGML_ASSERT(ggml_backend_sched_set_buffer_range(
+        sched.get(), second_backend.get(), occupied.get(), 0, 64));
+
+    std::vector<ggml_backend_memory_workspace_group> groups = {
+        {&first_buft, 64, 16, 0},
+        {&second_buft, 64, 16, 1},
+    };
+    std::vector<llama_compute_arena_binding> bindings;
+    GGML_ASSERT(!llama_prepare_compute_arena_bindings(sched.get(), backends, groups, bindings));
+    GGML_ASSERT(bindings.empty());
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), first_backend.get()) == 0);
+    GGML_ASSERT(ggml_backend_sched_get_buffer_size(sched.get(), second_backend.get()) == 64);
+    GGML_ASSERT(first_context.alloc_count == 1 && first_context.physical_free_count == 1);
+    GGML_ASSERT(second_context.alloc_count == 2 && second_context.physical_free_count == 1);
+
+    GGML_ASSERT(ggml_backend_sched_clear_buffer_range(sched.get(), second_backend.get()));
+    occupied.reset();
+    GGML_ASSERT(second_context.physical_free_count == 2);
+    GGML_ASSERT(llama_prepare_compute_arena_bindings(sched.get(), backends, groups, bindings));
+    GGML_ASSERT(bindings.size() == 2);
+    detach_compute_arena_bindings(sched.get(), backends, bindings);
+    GGML_ASSERT(first_context.alloc_count == 2 && first_context.physical_free_count == 2);
+    GGML_ASSERT(second_context.alloc_count == 3 && second_context.physical_free_count == 3);
 }
 
 // Validate construction, transaction state, and generation changes.
@@ -1241,6 +1423,10 @@ int main() {
     run("test_workspace_group_planning", test_workspace_group_planning);
     run("test_workspace_group_planning_boundaries", test_workspace_group_planning_boundaries);
     run("test_compute_arena_binding_ownership", test_compute_arena_binding_ownership);
+    run("test_compute_arena_mixed_fallback", test_compute_arena_mixed_fallback);
+    run("test_compute_arena_accelerator_mixed_fallback", test_compute_arena_accelerator_mixed_fallback);
+    run("test_compute_arena_failure_recovery", test_compute_arena_failure_recovery);
+    run("test_compute_arena_attachment_recovery", test_compute_arena_attachment_recovery);
     run("test_lifecycle", test_lifecycle);
     run("test_placement", test_placement);
     run("test_failure_atomicity", test_failure_atomicity);

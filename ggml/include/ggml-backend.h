@@ -61,6 +61,8 @@ extern "C" {
     GGML_API void                           ggml_backend_buffer_free          (ggml_backend_buffer_t buffer);
     // Create an independently classified buffer over a retained range of parent storage.
     GGML_API ggml_backend_buffer_t           ggml_backend_buffer_view          (ggml_backend_buffer_t buffer, size_t offset, size_t size);
+    // Return whether this buffer can create bounded child views.
+    GGML_API bool                            ggml_backend_buffer_supports_views(ggml_backend_buffer_t buffer);
     // Return true when the buffer retains parent storage.
     GGML_API bool                            ggml_backend_buffer_is_view       (ggml_backend_buffer_t buffer);
     GGML_API void *                         ggml_backend_buffer_get_base      (ggml_backend_buffer_t buffer);

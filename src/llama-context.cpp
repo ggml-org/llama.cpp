@@ -648,57 +648,8 @@ bool llama_context::prepare_compute_arenas(
         return false;
     }
 
-    std::vector<llama_compute_arena_binding> next;
-    next.reserve(groups.size());
-
-    auto detach = [&]() {
-        for (auto it = next.rbegin(); it != next.rend(); ++it) {
-            ggml_backend_sched_detach_memory_lease(sched.get(), backend_ptrs[it->first_slot]);
-        }
-        next.clear();
-    };
-
-    constexpr uint64_t workspace_region_id = 1;
-    for (const auto & group : groups) {
-        llama_compute_arena_ptr arena(
-            ggml_backend_memory_arena_new(group.buft, group.size));
-        if (!arena ||
-                !ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE) ||
-                !ggml_backend_memory_arena_reserve_at(
-                    arena.get(), workspace_region_id, 0, group.size, group.alignment,
-                    GGML_BACKEND_MEMORY_REGION_NONE, nullptr) ||
-                !ggml_backend_memory_arena_commit(arena.get())) {
-            LLAMA_LOG_DEBUG("%s: %s does not support an arena workspace, using scheduler allocation\n",
-                    __func__, ggml_backend_buft_name(group.buft));
-            continue;
-        }
-
-        ggml_backend_memory_lease_t lease =
-            ggml_backend_memory_arena_acquire(arena.get(), workspace_region_id);
-        if (!lease) {
-            detach();
-            return false;
-        }
-        ggml_backend_buffer_set_usage(
-            ggml_backend_memory_lease_buffer(lease), GGML_BACKEND_BUFFER_USAGE_COMPUTE);
-        if (!ggml_backend_sched_attach_memory_lease(
-                sched.get(), backend_ptrs[group.first_slot], lease)) {
-            ggml_backend_memory_lease_free(lease);
-            detach();
-            return false;
-        }
-        ggml_backend_memory_lease_free(lease);
-
-        next.push_back({
-            group.buft,
-            group.size,
-            group.first_slot,
-            std::move(arena),
-        });
-    }
-
-    compute_arenas = std::move(next);
-    return true;
+    return llama_prepare_compute_arena_bindings(
+        sched.get(), backend_ptrs, groups, compute_arenas);
 }
 
 void llama_context::sched_reserve() {

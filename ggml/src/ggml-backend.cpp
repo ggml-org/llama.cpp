@@ -297,6 +297,10 @@ void ggml_backend_buffer_free(ggml_backend_buffer_t buffer) {
     ggml_backend_buffer_free(parent);
 }
 
+bool ggml_backend_buffer_supports_views(ggml_backend_buffer_t buffer) {
+    return buffer != NULL && buffer->view_buffer != NULL;
+}
+
 // Create a backend-defined sub-buffer and retain its parent storage.
 ggml_backend_buffer_t ggml_backend_buffer_view(ggml_backend_buffer_t buffer, size_t offset, size_t size) {
     if (buffer == NULL || size == 0 || buffer->view_buffer == NULL) {

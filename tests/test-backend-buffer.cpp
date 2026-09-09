@@ -186,6 +186,8 @@ static void test_buffer_view_validation() {
     test_buffer_context context;
     auto test_buft = make_test_buft(&context);
     ggml_backend_buffer_t unsupported = ggml_backend_buft_alloc_buffer(&test_buft, context.data.size());
+    GGML_ASSERT(!ggml_backend_buffer_supports_views(nullptr));
+    GGML_ASSERT(!ggml_backend_buffer_supports_views(unsupported));
     GGML_ASSERT(ggml_backend_buffer_view(unsupported, 0, 16) == nullptr);
     ggml_backend_buffer_free(unsupported);
     GGML_ASSERT(context.free_count.load(std::memory_order_relaxed) == 1);
@@ -194,6 +196,7 @@ static void test_buffer_view_validation() {
     auto * buft = ggml_backend_get_default_buffer_type(backend.get());
     const size_t alignment = ggml_backend_buft_get_alignment(buft);
     ggml_backend_buffer_ptr parent(ggml_backend_buft_alloc_buffer(buft, 4*alignment));
+    GGML_ASSERT(ggml_backend_buffer_supports_views(parent.get()));
     GGML_ASSERT(ggml_backend_buffer_view(nullptr, 0, alignment) == nullptr);
     GGML_ASSERT(ggml_backend_buffer_view(parent.get(), 0, 0) == nullptr);
     GGML_ASSERT(ggml_backend_buffer_view(parent.get(), 4*alignment, alignment) == nullptr);
