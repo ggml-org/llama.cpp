@@ -32,7 +32,7 @@ import { mcpStore } from '$lib/stores/mcp/index.svelte';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
-import { buildSandboxToolDefinition } from '$lib/utils';
+import { ApiError, buildSandboxToolDefinition } from '$lib/utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 /** Stable selection identity for a tool, shared by the disabled set and the permission store */
@@ -246,13 +246,10 @@ class ToolsStore {
 				toolInfos.filter((info) => info.uses_cwd).map((info) => info.tool)
 			);
 		} catch (err) {
-			const errorMessage = err instanceof Error ? err.message : String(err);
-
-			this._error = errorMessage;
+			this._error = err instanceof Error ? err.message : String(err);
 
 			// 403 from /tools means the server was started without --tools
-			// TODO: check status code instead of relying on message
-			if (errorMessage.includes('this feature is disabled')) {
+			if (err instanceof ApiError && err.status === 403) {
 				this._toolsEndpointUnreachable = true;
 				console.info('[ToolsStore] Server tools are disabled on the server');
 			} else {
