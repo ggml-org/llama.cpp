@@ -277,6 +277,24 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                         list(APPEND ARCH_FLAGS -mavx512bf16)
                     endif()
                 endif()
+
+                # FindSIMD.cmake (included above for GGML_NATIVE) only detects the
+                # base AVX-512 flag; it never sets the extension options, and MSVC
+                # does not define their macros on its own. A "native" build on a
+                # VNNI-capable CPU therefore silently drops the __AVX512VNNI__ paths
+                # in ggml-cpu (arch/x86/quants.c, llamafile/sgemm.cpp, amx/), and
+                # ggml_cpu_has_avx512_vnni() reports 0 for a CPU that has VNNI.
+                if (GGML_NATIVE AND NOT GGML_AVX512_VNNI)
+                    message(WARNING
+                        "GGML_NATIVE enabled AVX-512 for MSVC, but the AVX-512 extension "
+                        "macros are not set: MSVC does not define them and FindSIMD.cmake "
+                        "detects only the base AVX-512 flag. The __AVX512VNNI__ code paths "
+                        "in ggml-cpu are therefore not compiled, and "
+                        "ggml_cpu_has_avx512_vnni() will report 0 even on a CPU that "
+                        "supports VNNI. If this CPU supports AVX512-VNNI (Zen 4, Sapphire "
+                        "Rapids and later), reconfigure with -DGGML_AVX512_VNNI=ON "
+                        "-DGGML_AVX512_VBMI=ON -DGGML_AVX512_BF16=ON.")
+                endif()
                 if (GGML_AMX_TILE)
                     list(APPEND ARCH_DEFINITIONS __AMX_TILE__ GGML_AMX_TILE)
                 endif()
