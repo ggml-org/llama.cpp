@@ -2998,7 +2998,7 @@ private:
                 if (n_draft_max > 0) {
                     GGML_ASSERT(slot.can_speculate());
 
-                    // any candidates still here are for a draft we are about to replace
+                    // stale candidates: a replay never reads them, a new draft refills them
                     slot.spec_draft_q.clear();
 
                     if (!slot.spec_draft.empty()) {
@@ -3915,7 +3915,8 @@ private:
                 // drafters that fill no distribution fall back here, as does a chained draft
                 const bool use_rejection = slot.use_spec_rejection() &&
                                            !slot.spec_draft.empty() &&
-                                           slot.spec_draft_q.size() == slot.spec_draft.size();
+                                           (slot.spec_is_replay ||
+                                            slot.spec_draft_q.size() == slot.spec_draft.size());
 
                 std::vector<llama_token> accepted;
                 if (!synth_probs.empty()) {
@@ -3924,7 +3925,7 @@ private:
                             slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft,
                             synth_probs, slot.spec_synth_rng, slot.spec_is_replay);
                 } else if (use_rejection) {
-                    accepted = common_sampler_sample_and_accept_n_rejection(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft, slot.spec_draft_q);
+                    accepted = common_sampler_sample_and_accept_n_rejection(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft, slot.spec_draft_q, slot.spec_is_replay);
                 } else {
                     accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
                 }

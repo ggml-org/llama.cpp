@@ -541,6 +541,7 @@ void common_sampler_copy(const common_sampler * src, common_sampler * dst) {
     dst->cur        = src->cur;
     dst->cur_p      = src->cur_p;
     dst->cur_p.data = src->cur_p.data ? dst->cur.data() : nullptr; // re-point to dst's buffer
+    dst->rng        = src->rng;
     dst->t_total_us = src->t_total_us;
 }
 
@@ -723,9 +724,9 @@ static float prob_of(const llama_token_data * data, size_t n, llama_token id) {
 // Accept a drafted token with probability min(1, p/q), else draw from norm(max(0, p - q)).
 // Preserves the target distribution exactly, and accepts more often than matching does when the
 // draft samples instead of taking its argmax.
-std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool grammar_first) {
+std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, const std::vector<std::vector<llama_token_data>> & draft_q, bool is_replay, bool grammar_first) {
     GGML_ASSERT(idxs.size()    == draft.size() + 1 && "idxs.size() must be draft.size() + 1");
-    GGML_ASSERT(draft_q.size() == draft.size()     && "draft_q must have one entry per draft token");
+    GGML_ASSERT((is_replay || draft_q.size() == draft.size()) && "draft_q must have one entry per draft token");
 
     std::vector<llama_token> result;
     result.reserve(idxs.size());
@@ -741,6 +742,13 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
     for (; i < draft.size(); i++) {
         // leaves the target distribution in the candidate array
         const llama_token id_tgt = common_sampler_sample(gsmpl, ctx, idxs[i], grammar_first);
+
+        // a replay re-decodes already accepted tokens, so re-accept rather than decide again
+        if (is_replay) {
+            common_sampler_accept(gsmpl, draft[i], true);
+            result.push_back(draft[i]);
+            continue;
+        }
 
         const auto * cur_p = common_sampler_get_candidates(gsmpl, true);
         const auto & q     = draft_q[i];
