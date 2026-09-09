@@ -1,327 +1,178 @@
-# 🧠 HOW IT FUCKING WORKS: The Universal Theory & Engineering of Macro-Recurrence in `llama.cpp` (`llamar.cpp`)
+# How It Works: Weight-Tied Recurrent Transformer Layers in llama.cpp
 
-> **Executive Summary for Engineers, Researchers, & Investors:**  
-> Standard Large Language Models (Transformers) suffer from the *Fixed-Depth Fallacy*: every single token receives the exact same fixed amount of compute ($N$ layers), whether predicting an obvious space/comma or formulating a complex multi-step deductive proof.  
-> **Macro-Recurrence solves this at the computational graph level inside `llama.cpp`.** By creating feedback loops through residual connections across the model's abstract reasoning layers ($38\% \dots 71\%$ of total depth), we enable **internal test-time thinking** with **zero parameter expansion, zero additional VRAM, zero fine-tuning required, and universal support across all architectures (Qwen, LLaMA, Mistral, DeepSeek-R1).**
->
-> 🚀 **Empirical Gains:** $+300\%$ benchmark accuracy on hard logic/math suites, flawless deductive proof generation, and production-grade C++20 concurrency code generation with **KV-cache bandwidth bypass** delivering fast real-time inference.
+This document describes the inference-time recurrence implemented in the `llamar.cpp` fork: its rationale, the exact equations executed, the graph construction in the model builders, and the stability properties of the scheme. It is the authoritative reference for the recurrence mechanism; the README is the quick overview.
 
----
+## 1. Problem statement
 
-## 📑 TABLE OF CONTENTS
-1. [The Foundational Insight: Breaking the Fixed-Depth Fallacy](#1-the-foundational-insight)
-2. [The 3-Zone Latent Anatomy of Transformers](#2-the-3-zone-latent-anatomy)
-3. [The Core Mathematical Machinery (Rigorous Formulation)](#3-the-core-mathematical-machinery)
-4. [Universal Architecture Matrix & Dynamic Presets](#4-universal-architecture-matrix)
-5. [The Stability Breakthroughs (Harmonic Decay & Variance Damping)](#5-the-stability-breakthroughs)
-6. [High-Performance Hardware & VRAM Optimization (KV Bypass)](#6-high-performance-hardware--vram-optimization)
-7. [Exact GGML Graph Engineering & C++ Code Walkthrough](#7-exact-ggml-graph-engineering)
-8. [Comprehensive Empirical Benchmarks & Real-World Case Studies](#8-comprehensive-empirical-benchmarks)
-9. [Developer Cheat-Sheet & FAQ](#9-developer-cheat-sheet--faq)
+A standard transformer applies every layer exactly once per token. The effective depth — and therefore the reasoning capacity — of a single forward pass is fixed by the architecture, independent of token difficulty. The usual workaround is to spend reasoning effort in *context space*: the model emits many intermediate tokens, which grow the KV cache quadratically in the number of such tokens and increase latency linearly.
 
----
+The alternative explored here is to spend effort in *latent space*: apply a subset of the network more than once per token, without allocating any new parameters and without feeding additional tokens to the attention cache. Weight-tied recurrence reuses one existing layer as the "reasoning core" and iterates it, so the effective depth of that stage becomes an input-dependent hyperparameter.
 
-## 1. The Foundational Insight: Breaking the Fixed-Depth Fallacy
+## 2. Design overview
 
-### The Conventional Pipeline (Single-Pass Feed-Forward):
-$$\text{Token } t \longrightarrow L_0 \longrightarrow L_1 \longrightarrow \dots \longrightarrow L_{N-1} \longrightarrow \text{Next Token } t+1$$
-
-In standard inference:
-- $L_0 \dots L_{N-1}$ are executed strictly once per generated token.
-- To simulate "reasoning", current systems force the model to emit hundreds of verbose `<think>` tokens into the context window. This burns KV-cache memory quadratically ($\mathcal{O}(T^2)$), spikes latency, and is vulnerable to chain-of-thought drift.
-
-### The Macro-Recurrent Paradigm (`llamar.cpp`):
-Instead of spending compute in **context space** (generating more tokens), we spend compute in **depth/latent space** (iterating within the computational graph before emitting the token):
-
-$$\text{Token } t \longrightarrow \text{Entry Zone} \longrightarrow \underbrace{\left[ \text{Reasoning Core} \right] \rightleftarrows \left[ \text{Harmonic State Fusion} \right]}_{K \text{ Iterations}} \longrightarrow \text{Exit Zone} \longrightarrow \text{Logits}$$
-
-**Why is this a revolution?**
-1. **$0\text{ MB}$ Extra VRAM:** The same loaded weights (`blk.i.attn_q`, `blk.i.ffn_gate`, etc.) are reused across loops without allocating a single additional weight parameter.
-2. **Zero Training / Zero Fine-tuning:** Works out-of-the-box on existing quantized GGUF weights (`Q4_K_M`, `Q8_0`, `FP16`).
-3. **Internal Denoising:** Each pass through the attention and MLP circuits acts as a contractive mapping, suppressing noise and refining the logical hypothesis.
-
----
-
-## 2. The 3-Zone Latent Anatomy of Transformers
-
-Why not loop the entire model ($L_0 \to L_{N-1}$)?  
-Linear probing, activation patching, and representation engineering reveal that Transformer layers naturally specialize into distinct semantic roles:
+The network of `N` layers is split into three sequential stages for each token:
 
 ```
-DEPTH:         0% ───────────────────────── 38% ───────────────────────── 71% ───────────────────────── 100%
-ZONE:                  [ ZONE 1: ENTRY ]                 [ ZONE 2: MACRO-CORE ]               [ ZONE 3: EXIT ]
-ROLE:           Syntactic & Positional Grounding    Relational Reasoning & World Models    Vocabulary & Logit Projection
-RECURRENCE:               Single-Pass                  ⭐ K-LOOP MACRO-RECURSION ⭐                 Single-Pass
+Layers:   [ 0 .. L-1 ]        [ L ] recurred T times          [ L+1 .. N-1 ]
+Stage:    prelude (1 pass)    recurrent core (T passes)       coda (1 pass)
 ```
 
-```
-                      ┌────────────────────────────────────────┐
-                      │             INPUT EMBEDDING            │
-                      └───────────────────┬────────────────────┘
-                                          │
-    [ZONE 1]                              ▼
-  ENTRY ZONE             ┌─────────────────────────────────┐
-  (Layers 0 .. L_start)  │ Layer 0 ──> Layer 1 ──> ...     │  Grounding & Syntax
-                         └────────────────┬────────────────┘
-                                          │  h_core_in = h^(0)
-                                          ▼
-                                   [ FUSION NODE ] <──────────────────────┐
-                                          │                               │
-    [ZONE 2]                              ▼                               │ (Feedback Loop)
-  MACRO-LOOP             ┌─────────────────────────────────┐              │ (Loops = 1..8)
-  REASONING CORE         │ Layer L_start                   │              │
-  (38% .. 71% of depth)  │ Layer ...                       │              │
-                         │ Layer L_end                     │              │
-                         └────────────────┬────────────────┘              │
-                                          │  h^(t) (Pass t Output)        │
-                                          ▼                               │
-                                   [ ALPHA BLEND ] ───────────────────────┘
-                                   h_loop^(t) = (1-α_t)·h^(0) + α_t·h^(t)
-                                          │
-                                          ▼ (Pass K completes -> h^(K))
-                                   [ EXIT DAMPING ]
-                                   h_out = exit_alpha(K)·h^(K) + (1-exit_alpha(K))·h^(0)
-                                          │
-    [ZONE 3]                              ▼
-  EXIT ZONE              ┌─────────────────────────────────┐
-  (L_end+1 .. L_final)   │ Layer L_end+1 ──> ... ──> L_N-1 │  Vocabulary Projection
-                         └────────────────┬────────────────┘
-                                          │
-                                          ▼
-                      ┌────────────────────────────────────────┐
-                      │              LM HEAD / LOGITS          │
-                      └────────────────────────────────────────┘
-```
+- **Prelude** decodes the token through the lower layers once. Its output `e` is the **frozen anchor**: computed once per token and kept constant for the whole recurrence.
+- **Recurrent core** is a *single* layer `L` applied `T` times. Each application receives `h_t + e` (the sum of the previous recurrent state and the anchor), and the state is updated by a linear time-invariant (LTI) rule.
+- **Coda** decodes the final recurrent state through the upper layers once, then a normalisation and the LM head produce logits.
 
-1. **Zone 1: Entry Layers ($0\% \dots 38\%$):**
-   - *Function:* Projects discrete token IDs into continuous space and applies RoPE positional encoding.
-   - *Why NOT re-loop:* Re-looping early layers mutates positional embeddings, resulting in catastrophic loss of word order and syntax (ungrammatical word salad).
-2. **Zone 2: Macro-Loop Reasoning Core ($38\% \dots 71\%$):**
-   - *Function:* Hosts the multi-head self-attention relation matrices and SwiGLU factual knowledge MLPs. This is where induction heads, algorithmic state machines, and latent reasoning reside.
-   - *Why RE-LOOP:* Multiple iterations through this zone allow attention heads to attend to *their own initial conclusions*, performing hypothesis testing, error correction, and constraint verification.
-3. **Zone 3: Exit Layers ($71\% \dots 100\%$):**
-   - *Function:* Decodes high-dimensional semantic states into narrow token vocabulary probability distributions.
-   - *Why NOT re-loop:* Re-looping late layers causes extreme logit over-sharpening (entropy collapse $\to 0$), trapping the model in repetitive token loops.
+Choosing `L` near 38% of the model depth preserves the lower layers (positional and syntactic grounding) and the upper layers (logit calibration) as single-pass.
 
----
+## 3. Mathematics
 
-## 3. The Core Mathematical Machinery
-
-Let $F_{\text{core}}(h)$ represent the composite forward transformation of layers $L_{\text{start}}$ through $L_{\text{end}}$:
-
-$$F_{\text{core}}(h) = \left( f_{L_{\text{end}}} \circ f_{L_{\text{end}-1}} \circ \dots \circ f_{L_{\text{start}}} \right)(h)$$
-
-Where each individual layer $f_l(x)$ computes Self-Attention + RMSNorm + SwiGLU MLP:
-$$f_l(x) = x + \text{MLP}(\text{RMSNorm}(x + \text{Attn}(\text{RMSNorm}(x))))$$
-
----
-
-### Step-by-Step Computational Protocol:
-
-#### 1. Baseline Anchor Capture
-The hidden state output from the final layer of Zone 1 is recorded as the immutable reference anchor $h^{(0)}$:
-$$h^{(0)} = x_{L_{\text{start}} - 1}$$
-
-#### 2. Iterative Recurrent Passes ($t = 0 \dots K-1$)
-- **Initial Pass ($t=0$):**
-  $$h^{(1)} = F_{\text{core}}(h^{(0)})$$
-  *(Contains the model's raw initial hypothesis).*
-
-- **Subsequent Passes ($t = 1 \dots K-1$):**
-  Instead of feeding $h^{(t)}$ raw, we construct a convex combination between the baseline anchor $h^{(0)}$ and the transformed state $h^{(t)}$ parameterized by $\alpha_t$:
-  $$h_{\text{loop}}^{(t)} = (1 - \alpha_t) \cdot h^{(0)} + \alpha_t \cdot h^{(t)}$$
-  $$h^{(t+1)} = F_{\text{core}}(h_{\text{loop}}^{(t)})$$
-
----
-
-## 4. Universal Architecture Matrix
-
-Through extensive Bayesian & Nelder-Mead hyperparameter searches across diverse model scales, we established optimal champion presets:
-
-| Model Architecture | Parameter Scale | $n_{\text{embd}}$ | Range ($L_{\text{start}} \dots L_{\text{end}}$) | $\alpha_{\text{base}}$ | $\text{exit\_alpha}_{\text{base}}$ | Default Loops ($K$) |
-|---|---|---|---|---|---|---|
-| **DeepSeek-R1-Distill / Qwen-Small** | 1.5B – 3B | $\le 2048$ | **38% — 70%** | **0.11** | **0.47** | $K = 4$ |
-| **Qwen2.5-Coder / Instruct** | 7B – 14B | $2049 \dots 5120$ | **38% — 71%** | **0.12** | **0.42** | $K = 4 \text{ or } 8$ |
-| **LLaMA-3 / Mistral-v0.2** | 7B – 8B | $4096$ | **38% — 71%** | **0.12** | **0.42** | $K = 4$ |
-| **Large Frontier Models** | 27B – 70B+ | $> 5120$ | **38% — 71%** | **0.12** | **0.40** | $K = 8$ |
-
----
-
-## 5. The Stability Breakthroughs
-
-When scaling recurrence to deep iterations ($K = 4 \dots 8$, "Ultra-Max Mode"), two major failure modes emerge in standard recurrent dynamics:
-1. **Latent Fixed-Point Attraction:** $h^{(t)}$ converges into a singular dominant eigenvector, causing loss of nuance and repetitive phrasing.
-2. **Logit Variance Explosion:** Cumulative magnitude growth of $h^{(K)}$ inflates activations beyond the calibration bounds of the final RMSNorm and LM Head.
-
-To solve this, `llamar.cpp` introduces two mathematical stabilization formulas:
-
-### A. Harmonic Decay Scaling ($\alpha_t$)
-Rather than keeping $\alpha$ static across all loops, $\alpha_t$ decays harmonically:
-
-$$\alpha_t = \frac{\alpha_{\text{base}}}{1 + \gamma \cdot t}, \quad \text{where } \gamma = 0.20 \quad (\text{for } K > 4)$$
+Let `F_l(h)` be the forward function of layer `l`. For the architectures involved `F_l` is a residual block; for example, an attention–SSM–FFN hybrid layer computes
 
 ```
-Loop t:      t=0 (Pass 1)    t=1 (Pass 2)    t=2 (Pass 3)    t=3 (Pass 4)    ...    t=7 (Pass 8)
-Alpha α_t:      0.120           0.100           0.086           0.075                 0.050
-Function:    [ Exploration ] -------------> [ Verification ] -------------> [ Micro-Denoising ]
+F_l(h) = h + FFN(RMSNorm( Attn(RMSNorm(h)) + SSM(RMSNorm(h)) ))
 ```
-*Mathematical Impact:* Early passes perform broad exploratory hypothesis formation; late passes act as high-precision localized contractive projections ($\delta h \to 0$), guaranteeing mathematical convergence without saturation.
 
-### B. Adaptive Square-Root Variance Damping ($\text{exit\_alpha}$)
-Before entering Zone 3, the final hidden state $h^{(K)}$ is blended back with the anchor $h^{(0)}$:
+where the SSM term is present only for hybrid architectures (Falcon-H1, Qwen3.5 DeltaNet). Define `L = RECURRENT_LAYER` and `T = RECURRENT_T`.
 
-$$h_{\text{exit}} = \text{exit\_alpha}(K) \cdot h^{(K)} + (1 - \text{exit\_alpha}(K)) \cdot h^{(0)}$$
+### 3.1 Prelude
 
-Where $\text{exit\_alpha}(K)$ scales inversely with the square root of loop depth:
+```
+h_0  = embed(x)
+e    = F_{L-1}( … F_1(F_0(h_0)) … )            // anchor, frozen
+```
 
-$$\text{exit\_alpha}(K) = \text{exit\_alpha}_{\text{base}} \cdot \sqrt{\frac{2}{K}} \quad (\text{for } K > 4)$$
+### 3.2 Recurrent core
 
-*Mathematical Impact:* Preserves the canonical logit variance $\text{Var}[\text{Logits}]$, preventing artificial temperature freezing.
+Initialise the recurrent state to the anchor, `h = e`. For `t = 0 … T-1`:
 
----
+```
+combined  = h + e                               // anchor injection into input
+block_out = F_L(combined)                       // weight-tied pass through core
+h         = A·h + B·e + block_out               // LTI state update
+```
 
-## 6. High-Performance Hardware & VRAM Optimization
+With `A = RECURRENT_A` and `B = RECURRENT_B`. The same tensor `F_L` (attention weights, SSM, FFN) is reused for every pass — hence *weight-tied*.
 
-### The Memory-Bandwidth Bottleneck in Transformers:
-Transformer decoding is strictly memory-bandwidth bound. On every layer, the model reads from and writes to the Key-Value (KV) cache in GPU VRAM:
-$$\text{Memory Traffic per Token} \approx 2 \cdot N_{\text{layers}} \cdot n_{\text{embd}} \cdot \text{BytesPerElem}$$
+### 3.3 Coda and output
 
-### The Solution: `KV Cache Bandwidth Bypass`
-In a multi-pass macro-loop ($K > 1$), intermediate passes ($t < K-1$) are computing temporary exploratory states. **Only the final pass $t = K-1$ represents the definitive token representation that future context must attend to.**
+```
+c   = F_{N-1}( … F_{L+2}(F_{L+1}(h)) … )
+out = LMHead(RMSNorm(c))
+```
 
-$$\text{StoreKV}(iter, bloop, K) = \begin{cases} \text{false} & \text{if } K > 1 \text{ and } bloop < K - 1 \\ \text{true} & \text{if } bloop = K - 1 \text{ (Final Loop)} \end{cases}$$
+### 3.4 Relation to OpenMythos-style recurrence
+
+The update is the discrete version of a continuous-time state-space increment:
+
+```
+ḣ = (A-1)·h + (B+1)·e + F_L(h + e)      // continuous interpretation
+```
+
+The `A·h + B·e` term is a linear time-invariant (LTI) system in the sense of a scalar state: constant, input-independent coefficients, no nonlinearity. It is the minimal construction that simultaneously
+
+1. bounds the state norm (decay), and
+2. preserves the decoded input semantics (anchor re-injection).
+
+All nonlinear "thinking" happens inside `F_L`; the LTI term only stabilises and carries memory.
+
+## 4. Stability analysis
+
+### 4.1 Contraction
+
+Ignoring the bounded activation of `F_L` (a residual block whose norm is bounded for well-trained models), the homogeneous part of the recurrence is
+
+```
+h_{t+1} = A · h_t
+```
+
+Its spectral radius is `ρ(A) = |A|`. For `|A| < 1` (default `A = 0.90`) the homogeneous component decays geometrically:
+
+```
+|A^t · h_0| ≤ |A|^t · |h_0|  →  0
+```
+
+The recurrence is therefore a contraction with respect to the anchor. This makes the iteration unconditionally stable for any `T`, without needing the harmonic-decay or exit-damping schedules of earlier recurrence designs.
+
+### 4.2 Anchor conservation
+
+The scalar `B` controls how strongly the anchor is re-injected each step. Setting `B = 1 - A` (default `0.10` with the default `A = 0.90`) makes the LTI term `A·h + B·e` a convex combination of the current state and the anchor when `block_out` is ignored, fully conserving the decoded context weight. This prevents the "drift to a dominant eigenvector" failure mode: even at large `T`, the input to the core is never far from `e`.
+
+### 4.3 KV cache locality
+
+Because the core layer index is constant across passes, the attention of every pass writes to the *same* KV rows for the current token's position (in the last pass the cache must retain the representation, but intermediate passes may freely overwrite). The graph reuses one `build_layer`/decoder call; native SSM per-layer state is recomputed fresh each pass, while the LTI state `h` is the only cross-pass memory.
+
+### 4.4 Fixed point
+
+A fixed point of the loop satisfies, with the same `F_L` applied,
+
+```
+h* = A·h* + B·e + F_L(h* + e)   ⟺   F_L(h* + e) = (1-A)·h* - B·e
+```
+
+For `B = 1 - A` this becomes `F_L(h* + e) = (1-A)·(h* - e)`: the layer output at a fixed point compensates the decaying residual exactly. The contraction bound above guarantees the iteration approaches a neighbourhood of such a point.
+
+## 5. Graph construction (exact code path)
+
+The canonical implementation is `src/models/falcon-h1.cpp`; `src/models/qwen2.cpp`, `src/models/qwen2vl.cpp` and `src/models/qwen35.cpp` follow the identical structure.
+
+### 5.1 Configuration (per builder)
 
 ```cpp
-// Implemented in src/models/models.h
-static inline bool get_store_kv(int iter, int iters, int bloop = 0, int block_loops = 1) {
-    if (block_loops > 1 && bloop < block_loops - 1) {
-        return false; // Skip redundant VRAM writes on intermediate passes!
-    }
-    return true;
-}
+const int   RECURRENT_T   = [] { const char * v = std::getenv("RECURRENT_T");   return v ? std::atoi(v) : 1; }();
+const float RECURRENT_A   = [] { const char * v = std::getenv("RECURRENT_A");   return v ? std::atof(v) : 0.90f; }();
+const float RECURRENT_B   = [] { const char * v = std::getenv("RECURRENT_B");   return v ? std::atof(v) : 0.10f; }();
+const int   n_rec_layer   = [] { const char * v = std::getenv("RECURRENT_LAYER"); return v ? std::atoi(v) : -1; }();
 ```
 
-### Performance Impact:
-- **VRAM Write Traffic:** Reduced by **up to 75%** inside Zone 2.
-- **Inference Speed:** Throughput increased from **~5.0 tok/s to 8.5+ tok/s** (+70% boost) on standard consumer laptops with 0% logic degradation.
+### 5.2 Decoder lambda
 
----
+A single decoder closure takes a layer index and an input tensor and returns the layer output (SSM, attention, aggregation, FFN). For the recurrent core this closure is invoked `T` times with the *same* `il`, which is exactly what makes the layer weight-tied in the compute graph. The SSM cache entry for the core layer is reset before each pass so the native recurrent state does not carry stale activations across passes.
 
-## 7. Exact GGML Graph Engineering
+### 5.3 Control flow
 
-All mechanics are built directly into the C++ compute graph builders of `llama.cpp`.
-
-### 1. Architectural Dispatcher: `src/models/models.h`
 ```cpp
-struct recurrent_block_preset {
-    int start_pct;
-    int end_pct;
-    float alpha;
-    float exit_alpha;
-};
+if (RECURRENT_T > 1 && n_rec_layer >= 0 && n_rec_layer < n_layer) {
+    // 1. Prelude
+    for (int il = 0; il < n_rec_layer; ++il) inpL = falcon_decoder(il, inpL);
 
-static inline recurrent_block_preset get_recurrent_preset_for_arch(llm_arch arch, int n_embd) {
-    switch (arch) {
-        case LLM_ARCH_QWEN2:
-        case LLM_ARCH_QWEN3:
-        case LLM_ARCH_QWEN35:
-            if (n_embd > 0 && n_embd <= 2048) {
-                return {38, 70, 0.11f, 0.47f}; // Small scale (DeepSeek-R1-1.5B)
-            }
-            return {38, 71, 0.12f, 0.42f};     // Medium/Large scale (7B+)
-        case LLM_ARCH_LLAMA:
-            return {38, 71, 0.12f, 0.42f};     // LLaMA-3 / Mistral
-        default:
-            return {38, 71, 0.12f, 0.42f};
+    // 2. Freeze anchor
+    ggml_tensor * anchor_e = inpL;
+
+    // 3. Weight-tied loop (LTI update)
+    ggml_tensor * h = inpL;
+    for (int t = 0; t < RECURRENT_T; ++t) {
+        ggml_tensor * combined  = ggml_add(ctx0, h, anchor_e);
+        ggml_tensor * block_out = falcon_decoder(n_rec_layer, combined);
+        h = ggml_add(ctx0,
+                     ggml_add(ctx0,
+                              ggml_scale(ctx0, h, RECURRENT_A),
+                              ggml_scale(ctx0, anchor_e, RECURRENT_B)),
+                     block_out);
     }
+    inpL = h;
+
+    // 4. Coda
+    for (int il = n_rec_layer + 1; il < n_layer; ++il) inpL = falcon_decoder(il, inpL);
+} else {
+    // Vanilla: single pass over all layers (exact upstream behavior)
+    for (int il = 0; il < n_layer; ++il) inpL = falcon_decoder(il, inpL);
 }
 ```
 
-### 2. Physical Tensor Graph Construction: `src/models/qwen2.cpp` & `src/models/llama.cpp`
-```cpp
-// 1. Zone 1: Early Layers (Syntactic Grounding)
-for (int il = 0; il < block_start; ++il) {
-    build_layer(il, 0, 1);
-}
+The vanilla branch is taken whenever `RECURRENT_T = 1` (the default) or `RECURRENT_LAYER` is unset, so default inference is graph-identical to upstream.
 
-// 2. Zone 2: Macro-Recurrent Reasoning Core
-ggml_tensor * block_inp_orig = inpL; // Capture h^(0)
-ggml_tensor * first_pass_out = nullptr;
+## 6. Empirical status
 
-for (int bloop = 0; bloop < block_loops; ++bloop) {
-    for (int il = block_start; il <= block_end; ++il) {
-        // build_layer passes bloop to get_store_kv to bypass intermediate KV writes
-        build_layer(il, 0, 1, bloop, block_loops);
-    }
-    if (bloop == 0) {
-        first_pass_out = inpL; // Capture h^(1)
-    }
-    if (bloop + 1 < block_loops) {
-        float b_alpha = get_recurrent_block_alpha(bloop, block_loops, model.arch, model.hparams.n_embd);
-        ggml_tensor * s_orig = ggml_scale(ctx0, block_inp_orig, 1.0f - b_alpha);
-        ggml_tensor * s_cur  = ggml_scale(ctx0, inpL, b_alpha);
-        inpL = ggml_add(ctx0, s_orig, s_cur); // Injected h_loop^(t)
-    }
-}
+Measured on Falcon-H1R-7B-IQ4_XS with `llama-cli`:
 
-// Exit Damping Blend
-if (first_pass_out != nullptr) {
-    float exit_alpha = get_recurrent_block_exit_alpha(model.arch, model.hparams.n_embd, block_loops);
-    if (exit_alpha < 1.0f) {
-        ggml_tensor * s_pass1 = ggml_scale(ctx0, first_pass_out, 1.0f - exit_alpha);
-        ggml_tensor * s_pass2 = ggml_scale(ctx0, inpL, exit_alpha);
-        inpL = ggml_add(ctx0, s_pass1, s_pass2);
-    }
-}
+| Configuration | Prompt evaluation (t/s) | Generation (t/s) |
+|---------------|-------------------------|------------------|
+| Baseline (`RECURRENT_T=1`) | 149.5 | 18.5 |
+| `RECURRENT_T=3 RECURRENT_LAYER=16` | 111.4 | 15.6 |
 
-// 3. Zone 3: Exit Layers (Logit Calibration)
-for (int il = block_end + 1; il < n_layer; ++il) {
-    build_layer(il, 0, 1);
-}
-```
+The recurrent path runs without crash or numerical divergence at `T = 3`; throughput drops in proportion to the extra core passes. Accuracy evaluation (GSM8K chain-of-thought, MBPP unit tests) against an unmodified upstream baseline is pending and will be published in a separate benchmark report.
 
----
+## 7. Known limitations
 
-## 8. Comprehensive Empirical Benchmarks
-
-### 1. Hyper-Logic & Deduction Suite (Knights & Knaves Paradoxes)
-* **Problem:** 3 agents $A, B, C$ with nested biconditionals and self-referential liar paradoxes.
-* **Baseline (`Loops=1`):** Failed (misidentified truth assignments due to shallow forward attention).
-* **Macro-Recurrent (`Loops=8`):** **100% Correct Proof**. Performed rigorous exhaustive case elimination across all 8 truth permutations.
-
-### 2. Quantitative Finance & Algorithmic Trading
-* **Problem:** Multi-asset Black-Scholes Delta-Gamma simultaneous neutralization & Almgren-Chriss optimal execution trajectory.
-* **Baseline:** Oversimplified to 1D linear approximation.
-* **Macro-Recurrent:** Solved full 2x2 simultaneous contract matrix equations and formulated continuous-time Euler-Lagrange equations with quadratic market impact.
-
-### 3. Production C++20 Systems Engineering
-* **Problem:** Lock-Free MPMC Bounded Queue (Dmitry Vyukov algorithm) with atomic sequences, cacheline alignment, and acquire/release semantics.
-* **Result:** Generated 1403 tokens of pristine C++20 code. Compiled on `g++ -O3 -std=c++20` with zero errors. Multi-threaded benchmark executed **1,000,000 operations across 8 threads in 0.073 seconds (13.7 Million Ops/sec)**.
-
----
-
-## 9. Developer Cheat-Sheet & FAQ
-
-### Environment Variables Quick-Reference:
-| Variable | Default | Description |
-|---|---|---|
-| `RECURRENT_BLOCK_LOOPS` | `1` (off) | Number of macro-loops through Zone 2 ($K=4$ or $K=8$ recommended). |
-| `RECURRENT_D` | `0` (off) | Micro-iteration depth per individual layer. |
-| `RECURRENT_BLOCK_ALPHA` | Auto (`0.12`) | Base blending factor $\alpha_{\text{base}}$. |
-| `RECURRENT_BLOCK_EXIT_ALPHA`| Auto (`0.42`) | Base exit damping factor $\text{exit\_alpha}_{\text{base}}$. |
-| `RECURRENT_BLOCK_DECAY` | `0.20` | Harmonic decay rate for $K > 4$. |
-| `RECURRENT_KV` | `all` | KV storage policy (`all`, `first`, `last`). Automatically optimized by engine. |
-
-### How to Run:
-```bash
-# High-Speed Balanced Reasoning (Loops=4):
-RECURRENT_BLOCK_LOOPS=4 RECURRENT_D=12 ./llama-cli -m model.gguf -p "Your prompt"
-
-# Maximum Ultra-Deduction Mode (Loops=8):
-RECURRENT_BLOCK_LOOPS=8 RECURRENT_D=24 ./llama-cli -m model.gguf -p "Your prompt"
-```
-
----
-
-*Lead Architect: Ryzen Architecture Protocol (Z.E.R.O.A.I)*  
-*Engineered inside `llama.cpp` for High-Order Autonomous Inference.*
+- **Latency vs. reasoning trade-off.** Each pass adds a full layer execution; total cost scales linearly with `T`.
+- **Single layer core.** The current scheme recurses one layer. Recurring a contiguous *block* of layers would multiply compute proportionally and is deliberately avoided in this build.
+- **SSM hybrid layers.** For architectures with native SSM state, only the LTI scalar state `h` carries memory across passes; the native SSM is re-evaluated per pass. This is a deliberate, documented choice, not a latent bug.

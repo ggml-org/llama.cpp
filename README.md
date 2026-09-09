@@ -1,328 +1,90 @@
-# llamar.cpp (Llama Recurrent)
+# llamar.cpp
 
-> [!IMPORTANT]
-> **llamar.cpp** is a fork of `llama.cpp` implementing **KV-Decoupled Recurrent Transformer Layers** with **Euler Step Scaling** for stable inference-time recurrence.
-> 
-> * **Theory & Architecture:** Conceived, designed, and formulated by a human developer.
-> * **Implementation & Coding:** Written by Google Gemini 3.7 Flash (high) AI assistant, with key final parts and architectural integration written by the human developer.
-> * **Purpose:** Research implementation of recurrence within causal and parallel transformer blocks to scale reasoning capabilities of smaller models at inference time.
+`llamar.cpp` is a research fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) that implements **weight-tied recurrent transformer layers** for inference-time reasoning. A single transformer layer — the *recurrent core* — is applied `T` times per token, with each pass's input formed as the sum of the core's own previous output and a frozen anchor produced by the network's lower layers, stabilised by a linear time-invariant (LTI) state update. The scheme adds no parameters, requires no fine-tuning, and is disabled by default: with defaults, the executed graph is byte-for-byte the vanilla single-pass graph.
 
----
+**Theory:** conceived by a human developer. **Implementation:** written by AI coding assistants, with the final architectural integration performed by the human developer.
 
-### Key Optimizations & Features
+## Background
 
-1. **⚡ MoE Fused Gate-Up Execution (`-fgu` / `--fuse-gu`)**
-   - Dynamically concatenates MoE `gate_exps` and `up_exps` tensors during graph construction into a single merged `gate_up` matrix multiplication per layer.
-   - Bypasses serial Thread-0 grouping and atomic synchronization barrier twice, cutting token memory read operations in half and speeding up MoE CPU inference.
+Standard transformer inference applies every layer exactly once per token, giving each token a fixed compute budget regardless of difficulty. Recurrent computation reallocates that budget: instead of emitting more tokens (which grows the KV cache and latency), the recurrent core iterates in latent space, increasing the effective depth at which a mid-network layer attends and transforms its own output. This makes the effective depth input-dependent at zero parameter and memory cost.
 
-2. **🛡️ Kahan-Compensated Recurrence (FP32 Drift Fix)**
-   - Eliminates numerical drift in Gated Delta Net recurrence loops over long contexts (>4K tokens).
-   - Tracks lost low-order precision bits in the state update equations `S[j] += delta[j] * k[i]` using Kahan summation.
+## Implementation
 
-3. **🚀 Expert Batching (GEMM Dispatch)**
-   - Reorders computation in `mul_mat_id` to process in weight-major order, dequantizing each `Q4_K_M` weight block exactly *once* and reusing it across all tokens dispatched to that expert.
-   - Guarded under the `GGML_EXPERIMENTAL_BUILD` compile-time flag.
+Recurrence is controlled by four environment variables. The default configuration (`RECURRENT_T=1`, unset `RECURRENT_LAYER`) reproduces vanilla single-pass inference exactly.
 
-4. **🏎️ Token Prefetching**
-   - Integrates hardware-level prefetching (`__builtin_prefetch`) inside the sparse expert routing loop to hide memory latency during token dispatch.
+| Variable   | Default | Semantics |
+|------------|---------|-----------|
+| `RECURRENT_T`     | `1`  | Number of applications of the recurrent core layer per token. |
+| `RECURRENT_LAYER` | `-1` | Index of the recurrent core layer; `-1` disables recurrence. |
+| `RECURRENT_A`     | `0.90` | LTI decay scalar; must satisfy `|A| < 1` for the iteration to be contractive. |
+| `RECURRENT_B`     | `0.10` | LTI anchor injection scalar. |
 
-5. **🏷️ SIMD Recurrence Loop Control (`--simdv`)**
-   - A CLI flag to control the experimental SIMD-vectorized recurrence inner loops at runtime.
+### Graph structure
 
----
+Let `F_l` denote the forward function of layer `l` (attention, native SSM where the architecture has one, and FFN), and `x` the input embeddings.
 
-### Supported Architectures for Inference-Time Recurrence
+1. **Prelude.** Layers `0 … L-1`, with `L = RECURRENT_LAYER`, run once:
+   `e = F_{L-1}(… F_1(F_0(x)))`. The output `e` is the frozen anchor.
+2. **Recurrent core.** Setting `h_0 = e`, iterate `T` times:
+   `h_{t+1} = A·h_t + B·e + F_L(h_t + e)`.
+3. **Coda.** Layers `L+1 … N-1` run once:
+   `y = F_{N-1}(… F_{L+1}(h_T))`.
 
-`llamar.cpp` injects KV-Decoupled Recurrent layers at inference-time for the following architectures without fine-tuning:
-* 🦙 **LLaMA & LLaMA 2 / 3 / 3.1 / 3.2** (`src/models/llama.cpp`)
-* 👑 **Qwen, Qwen2, Qwen2.5, & Qwen3** (`src/models/qwen2.cpp`, `src/models/qwen3.cpp`)
-* 🎛️ **Qwen2 MoE & Qwen3 MoE** (`src/models/qwen2moe.cpp`, `src/models/qwen3moe.cpp`) *(New)*
-* ✨ **Qwen3.5 (Next/Dense) & Qwen3.5 MoE** (`src/models/qwen35.cpp`, `src/models/qwen35moe.cpp`) *(New)*
-* 💎 **Gemma 2** (`src/models/gemma2.cpp`)
-* 🌪️ **Mistral (7B v0.3) & Mixtral (8x22B)** (`src/models/mistral3.cpp`)
+Because the core layer index never changes across iterations, its attention KV cache is written once and reused; any per-layer state of a hybrid SSM block is recomputed fresh each iteration, while the LTI state `h` carries the cross-iteration memory.
 
----
+### Stability
 
+The homogeneous component `A·h_t` decays exponentially for `|A| < 1`, so the recurrence acts as a contraction. The anchor term `B·e` continually re-injects the decoded input, preventing the state from drifting from the prompt's semantics as the iteration count grows.
 
-### Building & Running
+## Supported architectures
 
-`llamar.cpp` can be compiled for various hardware backends. Choose the appropriate build command for your platform:
+Recurrence is injected in the following model builders; all other architectures execute vanilla:
 
-#### 1. NVIDIA GPU (CUDA)
-For system with NVIDIA graphics cards:
-```bash
+- Falcon-H1 (state-space hybrids) — `src/models/falcon-h1.cpp`
+- Qwen / Qwen2 / Qwen2.5 / Qwen3 — `src/models/qwen2.cpp`
+- Qwen2-VL — `src/models/qwen2vl.cpp`
+- Qwen3.5 (Next / Dense) — `src/models/qwen35.cpp`
+
+## Usage
+
+```sh
+# Vanilla (default): identical to upstream behavior
+llama-cli -m model.gguf -p "..."
+
+# Weight-tied recurrence: three passes through layer 16 (of a 44-layer model)
+RECURRENT_T=3 RECURRENT_LAYER=16 llama-cli -m model.gguf -p "..."
+```
+
+For hybrid SSM architectures (Falcon-H1, Qwen3.5 DeltaNet), recurrence applies to the chosen layer only; the native recurrent layers are executed once and are recurrent by design.
+
+## Current results
+
+Measured on Falcon-H1R-7B-IQ4_XS via `llama-cli`; the numbers report throughput and stability only. Structured accuracy evaluation (GSM8K chain-of-thought and MBPP unit tests via `lm-eval`) is pending and will be reported against an unmodified upstream baseline.
+
+| Configuration | Prompt evaluation (t/s) | Generation (t/s) |
+|---------------|-------------------------|------------------|
+| Baseline (`RECURRENT_T=1`) | 149.5 | 18.5 |
+| `RECURRENT_T=3 RECURRENT_LAYER=16` | 111.4 | 15.6 |
+
+The recurrent path at `T=3` runs without divergence or instability; the throughput cost reflects the two extra passes through the core layer.
+
+## Additional engine optimizations
+
+- **MoE fused gate+up (`-fgu`).** Concatenates the MoE `gate_exps` and `up_exps` tensors during graph construction into a single `gate_up` GEMM per layer, halving the memory traffic and barrier sync of the two-projection path (`src/llama-context.cpp`).
+- **MoE prefill offload.** Host pinned-memory registration (`GGML_CUDA_REGISTER_HOST=1`) and asynchronous expert prefetching (`GGML_SCHED_PREFETCH_EXPERTS=1`) reduce PCIe transfer stalls for partially-offloaded MoE models; the latter requires disabling CUDA graphs (`GGML_CUDA_DISABLE_GRAPHS=1`).
+- **Expert batching / token prefetching.** Weight-major dequantisation and hardware prefetching inside the expert routing loops in the CPU backend.
+
+## Build
+
+Builds follow upstream llama.cpp. The recurrence feature lives entirely in the model graph builders (`src/models/*.cpp`) and needs no special compile-time flag.
+
+```sh
 mkdir build && cd build
-cmake .. -DGGML_CUDA=ON -DGGML_AVX_VNNI=ON
+cmake .. -DGGML_CUDA=ON
 make -j$(nproc) llama-cli llama-server llama-bench
 ```
 
-#### 2. Apple Silicon (Metal)
-For macOS (MacBook Pro/Studio/Mini with M1/M2/M3/M4 chips):
-```bash
-mkdir build && cd build
-cmake .. -DGGML_METAL=ON
-make -j$(sysctl -n hw.ncpu) llama-cli llama-server llama-bench
-```
-
-#### 3. AMD GPU (ROCm)
-For systems with AMD Radeon/Instinct graphics cards:
-```bash
-mkdir build && cd build
-HIPCXX="$(hipconfig --path)/bin/clang++" cmake -DGGML_HIP=ON ..
-make -j$(nproc) llama-cli llama-server llama-bench
-```
-
-#### 4. CPU Only
-For standard systems without dedicated GPUs:
-```bash
-mkdir build && cd build
-cmake .. -DGGML_AVX_VNNI=ON
-make -j$(nproc) llama-cli llama-server llama-bench
-```
-
----
-
-### Inference Configuration
-
-In `llamar.cpp`, recurrence is injected dynamically at inference-time and is controlled via environment variables.
-
-#### 1. Recurrence Control Variables
-* **`RECURRENT_D`** (Default: `12`): The depth of recurrence (number of reasoning iterations). This is the default for all supported architectures. Set `RECURRENT_D=12` for optimal reasoning (as used in the GSM8K benchmark) or `RECURRENT_D=0` to run standard model baseline inference without recurrence.
-* **`RECURRENT_S`** (Default: `50`): The recurrence stability threshold parameter (Euler scaling scale).
-* **`RECURRENT_LAYERS_COUNT`** (Default: `auto`, `n_layer/8`): The number of layers that get recurrence. By default it is adaptive - one recurrent layer per 8 model layers (64-layer model -> 8, 24-layer model -> 3). Set to any N to force a specific count; N spreads recurrence across N evenly-spaced layers. `RECURRENT_LAYERS_COUNT=3` restores the classic 3-anchor schedule. The total depth `RECURRENT_D` is split across them.
-* **`RECURRENT_ALPHA` / `RECURRENT_BETA`** (Optional): Euler-scaling decay/growth coefficients (defaults are automatically scaled based on `iters`).
-* **`RECURRENT_LAYERS`** (Optional): Comma-separated list of 0-indexed layer IDs to apply recurrence (e.g. `RECURRENT_LAYERS="10,20,30"`). Overrides standard automatic layer placement.
-* **`RECURRENT_DEPTHS`** (Optional): Comma-separated list of iterations for each layer specified in `RECURRENT_LAYERS` (e.g. `RECURRENT_DEPTHS="3,6,3"`).
-* **`RECURRENT_STEP_MODE`** (Optional): Set to `harmonic` to enable adaptive step scaling, where $\alpha_{\text{iter}} = \frac{1}{\text{iter} + 1}$ and $\beta_{\text{iter}} = 1 - \alpha_{\text{iter}}$. This is theoretically proven to guarantee fixed-point convergence and reduce semantic drift during deep reasoning.
-* **`RECURRENT_KV`** (Optional): Controls **when the KV cache is written** during recurrent iterations. Defaults to `last`.
-  * `last` - write KV only on the final iteration, so the cache reflects the refined state (recommended).
-  * `first` - write KV on the first iteration only (previous behaviour).
-  * `all` - write KV on every iteration.
-
-
-#### 2. Macro-Recurrent Block Configuration & Parameter Guide
-
-In `llamar.cpp`, Macro-Recurrent Blocks allow executing a contiguous sequence of middle transformer layers multiple times with state blending and convex exit interpolation.
-
-##### Mathematical Foundation
-
-Let $z^{(0)}$ be the hidden state entering the recurrent block at layer $L_{\text{start}}$.
-For each recurrent iteration $t = 1 \dots T$ (where $T = \text{loops}$):
-1. **Input State Blending (Convex Step):**
-   $$z_{\text{in}}^{(t)} = (1 - \alpha) z^{(0)} + \alpha z^{(t-1)}$$
-2. **Block Propagation:**
-   $$z_{\text{out}}^{(t)} = \mathcal{F}_{L_{\text{start}} \to L_{\text{end}}}(z_{\text{in}}^{(t)})$$
-3. **Bounded Exit Interpolation (Variance Guard):**
-   $$z_{\text{exit}} = (1 - \alpha_{\text{exit}}) z^{(0)} + \alpha_{\text{exit}} z_{\text{out}}^{(T)}$$
-
-The exit interpolation guarantees variance boundedness:
-$$\text{Var}(z_{\text{exit}}) \le (1 - \alpha_{\text{exit}})\text{Var}(z^{(0)}) + \alpha_{\text{exit}}\text{Var}(z_{\text{out}}^{(T)})$$
-
----
-
-##### Detailed Parameter Reference
-
-| Parameter | Environment Variable | Default | Recommended Range | Description & Architectural Impact |
-| :--- | :--- | :---: | :---: | :--- |
-| **Recurrence Loops** | `RECURRENT_BLOCK_LOOPS` | `2` | `1 .. 4` | Total number of passes through the recurrent layer block. `1` disables block recurrence (standard single-pass baseline). `2` provides optimal algorithmic reasoning boost with zero latency degradation. |
-| **Start Layer Percentage** | `RECURRENT_BLOCK_START_PCT` | `38` | `35 .. 46` | Percentage of model depth where the recurrent block starts ($L_{\text{start}} = \lfloor N \times \text{start\_pct} / 100 \rfloor$). Protects lower layers ($0\% \dots 35\%$) responsible for tokenization, syntax parsing, and prompt variable scope. |
-| **End Layer Percentage** | `RECURRENT_BLOCK_END_PCT` | `72` | `68 .. 78` | Percentage of model depth where the recurrent block ends ($L_{\text{end}} = \lfloor N \times \text{end\_pct} / 100 \rfloor$). Protects upper layers ($75\% \dots 100\%$) responsible for logit calibration, vocabulary projection, and temperature normalization. |
-| **Loop Residual Weight ($\alpha$)** | `RECURRENT_BLOCK_ALPHA` | `0.16` | `0.08 .. 0.25` | Blending factor for subsequent loop inputs: $z_{\text{in}}^{(t)} = (1-\alpha)z^{(0)} + \alpha z^{(t-1)}$. Lower values ($0.10 \dots 0.14$) maximize syntactic stability; higher values ($0.18 \dots 0.25$) unlock deeper cyclic algorithm and root-finding reasoning. |
-| **Exit Blending Weight ($\alpha_{\text{exit}}$)** | `RECURRENT_BLOCK_EXIT_ALPHA` | `0.45` | `0.25 .. 0.50` | Interpolation weight between initial feedforward state and refined recurrent output: $z_{\text{exit}} = (1-\alpha_{\text{exit}})z^{(0)} + \alpha_{\text{exit}}z^{(T)}$. Prevents out-of-distribution logit drift while preserving deep reasoning artifacts. |
-| **Max Block Layers** | `RECURRENT_BLOCK_MAX_LAYERS` | `32` | `8 .. 64` | Safety upper bound on the number of layers encompassed in a single recurrent block to prevent excessive VRAM allocation in 70B+ models. |
-
----
-
-##### Architectural Layer Centroid Shift & Why Auto-Tuning Matters
-
-Different model architectures and training recipes structure their reasoning depth differently:
-- **Math / Reasoning-Dense Models (e.g. DeepSeek-Math, Qwen-Coder)**: Shift their algorithmic centroid deeper towards $40\% \dots 76\%$.
-- **General Chat / Instruction Models (e.g. LLaMA-3-Instruct)**: Retain broader syntactic layers, favoring $36\% \dots 70\%$ with lower $\alpha \approx 0.12$.
-- **MoE Architectures (e.g. Mixtral, Qwen-MoE)**: Route tokens through dynamic expert combinations on secondary passes, requiring lower $\alpha_{\text{exit}} \approx 0.35$ for variance stabilization.
-
-##### Automatic Hyperparameter Discovery (`auto_tune_recurrence.py`)
-
-`llamar.cpp` includes an automated Bayesian Hyperparameter Tuner using Optuna (TPE Sampler) and Two-Phase Filtering on HumanEval:
-
-```bash
-# Run Bayesian auto-tuner for your custom model
-python3.13 auto_tune_recurrence.py
-```
-
-The auto-tuner automatically:
-1. Runs **Phase 1 (Anchor Filter)** across 10 critical syntax, mathematical, and algorithmic reasoning problems in ~40 seconds.
-2. Prunes unviable parameter combinations early.
-3. Runs **Phase 2 (Full 50-Task Validation)** on top candidates scoring $\ge 80\%$.
-##### 📈 Cross-Architecture Empirical Validation Table (HumanEval)
-
-Empirical evaluation comparing **Single-Pass Baseline** vs **KV-Decoupled Recurrent Block** across diverse model architectures:
-
-| Model Architecture | Scale / Type | Baseline Pass@1 | Recurrent Pass@1 | Delta (Gain) | Key Algorithmic Breakthroughs & Behavior |
-| :--- | :---: | :---: | :---: | :---: | :--- |
-| **Qwen2.5-Coder-7B-Instruct** (`qwen2`) | 7B Dense | 90.0% | **94.0%** | **`+4.0%`** | 💥 **Solves BOTH Task 32 (`find_zero`) & Task 38 (`decode_cyclic`)**. 100% pass rate across tasks 20..49. |
-| **Mistral-7B-Instruct-v0.2** (`mistral`) | 7B Dense | 28.0% | **30.0%** | **`+2.0%`** | Unlocked Task 8, Task 20, Task 25, Task 35, Task 48 with sliding window stability. |
-| **Qwen3.5-Next-Bonsai-27B-DeltaNet** (`qwen35`) | 27B Hybrid | 4.0% | **4.0%** | **`+0.0%`** | Hybrid Gated Delta Net executed with zero numerical drift or memory explosion. |
-| **DeepSeek-R1-Distill-Qwen-1.5B** (`qwen2`) | 1.5B Distill | 14.0% | **10.0%** | **`-4.0%`** | Reasoning trace (`<think>`) length expanded; requires regex parser adapted for chain-of-thought. |
-
----
-
-#### 3. Optimizations Flags for MoE & Causal Blocks
-Always run with the following flags to maximize throughput:
-* **`-fa on`** (or `--flash-attn on`): Enables Flash Attention (crucial for accelerating prompt evaluation).
-* **`-fgu`** (or `--fuse-gate-up`): Fuses MoE Gate and Up projections dynamically, cutting memory accesses and thread barrier sync operations in half (highly recommended for MoE CPU offloading).
-* **`-t <threads>`**: Number of CPU threads (set this to match your physical CPU core count).
-
-#### 4. Execution Example
-
-**Running Qwen 35B MoE on a 6GB VRAM Laptop GPU + 12-thread CPU:**
-```bash
-RECURRENT_D=12 ./bin/llama-cli \
-  -m /path/to/Qwen3.5-35B-A3B-Q4_K_M.gguf \
-  -ngl 28 \
-  --n-cpu-moe 36 \
-  -fa on \
-  -fgu \
-  -t 12 \
-  -p "Count 1 to 20: 1, 2,"
-```
-
-**Running LLaMA / Gemma 2 / Mistral on CPU/GPU:**
-```bash
-RECURRENT_D=12 ./bin/llama-cli \
-  -m /path/to/gemma-2-9b-it-Q4_K_M.gguf \
-  -ngl 16 \
-  -fa on \
-  -t 12 \
-  -p "Explain quantum computing in simple terms."
-```
-
-**Running a hybrid Delta-Net / Qwen3.5 model (e.g. Bonsai-27B) on CPU/GPU:**
-```bash
-RECURRENT_D=12 ./bin/llama-cli \
-  -m /path/to/Bonsai-27B-Q1_0.gguf \
-  -ngl 16 \
-  -fa on \
-  -t 12 \
-  -p "Write a short story about a robot."
-```
-> [!NOTE]
-> In hybrid models (Qwen3.5 Next, Qwen3.5 MoE, and Delta-Net variants), recurrence applies only to the **full-attention layers**; the native recurrent (linear/gated delta net) layers are executed once and are already recurrent by design.
-
----
-
-### GIGA Auto-tuning Tool
-
-`llamar.cpp` includes a universal hardware-aware auto-tuning script located at `scripts/autotune.py`. This script automatically compiles multiple build targets (`standard`, `no-vnni`, `native-o3`), runs a parameter sweep grid (threads, GPU layers, Flash Attention) across all `.gguf` models in your directory, and identifies the absolute champions for token generation speed.
-
-#### Usage:
-```bash
-python3 scripts/autotune.py --models-dir ./models --ngl 16,24,28,32 --recurrent-d 12
-```
-
-#### Parameters:
-* **`--models-dir`** (Default: `./models`): Directory containing GGUF models or path to a specific model.
-* **`--threads`** (Optional): Comma-separated list of threads to test (e.g. `6,8,12`). Defaults to automatic hardware-aware detection of physical cores.
-* **`--ngl`** (Default: `16,24,32`): GPU offloaded layers to sweep.
-* **`--recurrent-d`** (Default: `12`): Recurrence depth for benchmark runs.
-* **`--builds`** (Default: `standard,no-vnni,native-o3`): CMake configurations to build and test.
-* **`--output`** (Default: `benchmark_report.md`): Output markdown filename.
-
-After sweeping, the script automatically copies the winning build configuration binaries to the default targets in `build/bin/` so you always run the fastest possible inference!
-
----
-
-### MoE / Prefill Offload Optimizations
-
-For large Mixture-of-Experts (MoE) models (like Qwen 3.5 35B MoE, DeepSeek MoE) that are partially offloaded to system memory (RAM), `llamar.cpp` includes custom high-performance PCIe transfer optimizations:
-
-* **Host pinned memory registration (`GGML_CUDA_REGISTER_HOST=1`):** Registers (pins) pageable system memory pages backing model weights on the CPU. This enables direct DMA (Direct Memory Access) transfers from host RAM to VRAM without CPU copy overhead, increasing transfer speeds across the PCIe bus.
-* **Asynchronous expert prefetching (`GGML_SCHED_PREFETCH_EXPERTS=1`):** Utilizes a secondary CUDA queue and double-buffered staging slots to stream next-layer experts to the GPU in the background while the current layer is executing. This reduces GPU idle time from ~41% to ~2%.
-
-Combined, these features provide up to **+64% prefill speedup** (e.g. from ~1140 to ~1880 t/s on RTX 3060 for Qwen3.6-35B-A3B).
-
-> [!IMPORTANT]
-> When using `GGML_SCHED_PREFETCH_EXPERTS=1`, you must also disable CUDA graphs using `GGML_CUDA_DISABLE_GRAPHS=1` to prevent stream capture synchronization errors.
-
-#### How to Enable:
-These optimizations are optional and can be activated via environment variables:
-```bash
-# Enable expert prefetching and pinned memory registration
-export GGML_SCHED_PREFETCH_EXPERTS=1
-export GGML_CUDA_REGISTER_HOST=1
-
-# Disable CUDA graphs to support concurrent background prefetching
-export GGML_CUDA_DISABLE_GRAPHS=1
-
-# Run your model
-./bin/llama-cli -m models/qwen3.5-35b-moe.gguf -ngl 28 -fa on -ncmoe 36
-```
-
----
-
-### GSM8K Benchmark Results (N=500)
-Evaluating **DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M**:
-
-| Configuration | GSM8K Accuracy | Correct Answers |
-| ------------- | -------------- | --------------- |
-| **Baseline ($D=0$)** | **39.20%** | 196 / 500 |
-| **Recurrent ($D=12$)** | **77.20%** | 386 / 500 |
-
-*Using Euler step scaling and KV cache decoupling to prevent semantic drift across iterations.*
-
-### Reasoning Riddle Benchmark (Bonsai-27B-Q1_0, GPU RTX 3050 6GB)
-
-Trick questions and counterintuitive math problems, `--seed 42`, all configs share the same prompt so any difference is purely from the recurrence layout. Correct answer shown in the "Answer" column. "Loop" means the model never finished reasoning within the 4096-token budget and produced no final answer.
-
-Easy/medium tasks:
-
-| # | Task | Answer | D=0 | 3/D=12 | 8/D=12 | 3/D=24 | 8/D=24 |
-|---|------|--------|-----|--------|--------|--------|--------|
-| 1 | 17 sheep, all but 9 run away | 9 | Yes | Yes | Yes | Yes | Yes |
-| 2 | 6 matchsticks -> 4 equilateral triangles | Tetrahedron | Yes | **No** | Yes | Yes | Yes |
-| 3 | Bat & ball ($1.10, bat $1.00 more) | $0.05 | Yes | Yes | Yes | Yes | Yes |
-| 4 | 5 machines / 5 minutes / 5 widgets, 100 -> 100 | 5 min | Yes | Yes | Yes | Yes | Yes |
-| 5 | Girl: brothers = sisters, brothers: half -> family size | 7 children | Yes | Yes | Yes | **Loop** | Yes |
-| 6 | Trains 150m@30 + 120m@40 passing | 27/7 s | Yes | **Loop** | **Loop** | Yes | Yes |
-| 7 | Digit 9 in 1..100 | 20 | Yes | Yes | Yes | Yes | Yes |
-| 8 | Shirt $80, -25%, -15%, +10% tax | $56.10 | Yes | Yes | Yes | Yes | Yes |
-| 9 | Lily doubles daily, full day 30, half day? | Day 29 | Yes | Yes | Yes | Yes | Yes |
-
-Hard tasks (multi-step math / planning):
-
-| # | Task | Answer | D=0 | 3/D=12 | 8/D=12 | 3/D=24 | 8/D=24 |
-|---|------|--------|-----|--------|--------|--------|--------|
-| 10 | Squares of any size on 8x8 chessboard | 204 | Yes | Yes | Yes | Yes | Yes |
-| 11 | Angle between hands at 3:15 | 7.5 deg | Yes | Yes | Yes | Yes | Yes |
-| 12 | P(both red) drawing 2 of 3/4/5 | 1/22 | Yes | Yes | Yes | Yes | Yes |
-| 13 | Freight 60 km/h, +1h passenger 90 km/h, catch-up time | 3 h | **Loop** | Yes | Yes | Yes | Yes |
-| 14 | Min weighings, 8 coins 1 heavier | 2 | Yes | Yes | Yes | Yes | Yes |
-| 15 | Sum of multiples of 6 in 1..200 | 3366 | Yes | Yes | Yes | Yes | Yes |
-
-Reasoning effort (bytes of generated output before the answer; larger = more flailing, D=0 often needs the double budget to finish):
-
-| Task | D=0 | 3/D=12 | 8/D=12 | 3/D=24 | 8/D=24 |
-|------|-----|--------|--------|--------|--------|
-| #13 catch-up train | 14 KB (cut off) | 8 KB | 8 KB | 6 KB | 6 KB |
-| #14 counterfeit coin | 13 KB | 8 KB | 8 KB | 9 KB | 9 KB |
-| #10 chessboard | 7 KB | 4 KB | 4 KB | 5 KB | 5 KB |
-
-Generation speed (tokens/s) per config, averaged across all tasks:
-
-| Config | Gen t/s |
-|--------|---------|
-| D=0 (baseline) | ~21.5 |
-| 3 layers, D=12 | ~19.0 |
-| 8 layers, D=12 | ~19.1 |
-| 3 layers, D=24 | ~16.7 |
-| 8 layers, D=24 | ~17.7 |
-
-Observations:
-
-- Total recurrence depth `D` costs speed roughly linearly (D=12: ~19 t/s, D=24: ~17 t/s), while spreading the same `D` over more layers (3 vs 8) is nearly free.
-- The default 3/D=12 layout failed the tetrahedron puzzle and looped on the passing-trains problem, while 8/D=12 and D=0 both solved the tetrahedron and 8/D=12 solved the trains. More recurrent layers changes *which* weaknesses surface rather than strictly fixing them.
-- 3/D=24 looped on the sibling puzzle; 8/D=24 completed everything.
-- The clearest recurrence win is on the catch-up train problem (#13): D=0 could not finish within 4096 tokens while every recurrent config answered correctly. Even when D=0 eventually reaches the same answer, it consumes 2-3x more reasoning tokens to get there.
-- All configs pass trivial arithmetic (bat & ball, digit 9, percentages) regardless of recurrence.
+See [docs/build.md](docs/build.md) and [docs/backend](docs/backend) for CUDA, Metal, ROCm, Vulkan, SYCL, and CPU backend options.
 
 ---
 

@@ -60,41 +60,35 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    for (int il = 0; il < n_layer; ++il) {
-        ggml_tensor * inpSA = inpL;
+    // --- OpenMythos-style weight-tied recurrence ---
+    const int RECURRENT_T   = [] { const char * v = std::getenv("RECURRENT_T");   return v ? std::atoi(v) : 1; }();
+    const float RECURRENT_A = [] { const char * v = std::getenv("RECURRENT_A");   return v ? std::atof(v) : 0.90f; }();
+    const float RECURRENT_B = [] { const char * v = std::getenv("RECURRENT_B");   return v ? std::atof(v) : 0.10f; }();
+    const int n_rec_layer   = [] { const char * v = std::getenv("RECURRENT_LAYER"); return v ? std::atoi(v) : -1; }();
+    const float kq_scale    = 1.0f / sqrtf(float(n_embd_head));
 
-        // norm
-        cur = build_norm(inpL,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, il);
-        cb(cur, "attn_norm", il);
+    auto qwen2vl_decoder = [&](int il, ggml_tensor * input) -> ggml_tensor* {
+        ggml_tensor * cur_a = build_norm(input, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur_a, "attn_norm", il);
 
-        // self-attention
-        {
-            // compute Q and K and RoPE them
-            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
-                    n_embd_head, n_head, n_head_kv, il);
+        auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur_a,
+                n_embd_head, n_head, n_head_kv, il);
+        Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, nullptr,
+                n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
+                ext_factor, attn_factor, beta_fast, beta_slow);
+        Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, nullptr,
+                n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
+                ext_factor, attn_factor, beta_fast, beta_slow);
+        cb(Qcur, "Qcur", il);
+        cb(Kcur, "Kcur", il);
+        cb(Vcur, "Vcur", il);
 
-            Qcur = ggml_rope_multi(
-                    ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+        ggml_tensor * cur   = build_attn(inp_attn,
+                model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il, true);
+        cb(cur, "attn_out", il);
 
-            Kcur = ggml_rope_multi(
-                    ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
-
-            cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
-        }
+        ggml_tensor * inpSA = input;
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
@@ -102,27 +96,36 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
 
-        // feed-forward network
-        cur = build_norm(ffn_inp,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, il);
+        cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
-
         cur = build_ffn(cur,
                 model.layers[il].ffn_up,   NULL, NULL,
                 model.layers[il].ffn_gate, NULL, NULL,
                 model.layers[il].ffn_down, NULL, NULL,
-                NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, il);
+                NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
-
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
+        return cur;
+    };
 
-        // input for next layer
-        inpL = cur;
+    if (RECURRENT_T > 1 && n_rec_layer >= 0 && n_rec_layer < n_layer) {
+        for (int il = 0; il < n_rec_layer; ++il) inpL = qwen2vl_decoder(il, inpL);
+        ggml_tensor * anchor_e = inpL;
+        ggml_tensor * h = inpL;
+        for (int t = 0; t < RECURRENT_T; ++t) {
+            ggml_tensor * combined  = ggml_add(ctx0, h, anchor_e);
+            ggml_tensor * block_out = qwen2vl_decoder(n_rec_layer, combined);
+            h = ggml_add(ctx0, ggml_add(ctx0, ggml_scale(ctx0, h, RECURRENT_A),
+                                              ggml_scale(ctx0, anchor_e, RECURRENT_B)),
+                         block_out);
+        }
+        inpL = h;
+        for (int il = n_rec_layer + 1; il < n_layer; ++il) inpL = qwen2vl_decoder(il, inpL);
+    } else {
+        for (int il = 0; il < n_layer; ++il) inpL = qwen2vl_decoder(il, inpL);
     }
     cur = inpL;
 

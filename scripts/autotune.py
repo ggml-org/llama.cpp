@@ -14,7 +14,8 @@ def parse_args():
     parser.add_argument("--threads", type=str, default="", help="Comma-separated CPU threads to test (default: auto-detect physical cores)")
     parser.add_argument("--ngl", type=str, default="16,24,32", help="Comma-separated GPU layers to test")
     parser.add_argument("--fa", type=str, default="on,off", help="Comma-separated Flash Attention options (on, off)")
-    parser.add_argument("--recurrent-d", type=int, default=12, help="Recurrence depth D (RECURRENT_D) value for benchmarks")
+    parser.add_argument("--recurrent-t", type=int, default=2, help="Recurrence passes T (RECURRENT_T) for benchmarks (1 = vanilla)")
+    parser.add_argument("--recurrent-layer", type=int, default=16, help="Recurrent core layer index (RECURRENT_LAYER)")
     parser.add_argument("--builds", type=str, default="standard,no-vnni,native-o3", help="Comma-separated build configs to test")
     parser.add_argument("--output", type=str, default="benchmark_report.md", help="Path to generate markdown benchmark report")
     return parser.parse_args()
@@ -114,7 +115,7 @@ def parse_bench_output(stdout):
                     pass
     return pp16_ts, tg32_ts
 
-def sweep(src_dir, models, compiled_builds, args_threads, args_ngl, args_fa, recurrent_d):
+def sweep(src_dir, models, compiled_builds, args_threads, args_ngl, args_fa, recurrent_t, recurrent_layer):
     print("=== PARAMETER SWEEP ===")
     bin_dir = os.path.join(src_dir, "build", "bin")
     
@@ -143,7 +144,9 @@ def sweep(src_dir, models, compiled_builds, args_threads, args_ngl, args_fa, rec
                 run_cmd("pkill -9 -f llama-cli; pkill -9 -f llama-server; pkill -9 -f llama-bench; sleep 1")
                 
                 env = os.environ.copy()
-                env["RECURRENT_D"] = str(recurrent_d)
+                env["RECURRENT_T"] = str(recurrent_t)
+                if recurrent_layer >= 0:
+                    env["RECURRENT_LAYER"] = str(recurrent_layer)
                 
                 cmd = f"{bench_bin} -m {model_path} -p 16 -n 32 -r 1 --no-warmup -ngl {ngl} -ncmoe 36 -fa {fa} -t {t}"
                 
@@ -230,7 +233,7 @@ def main():
         print("Error: All build compilation failed.")
         sys.exit(1)
         
-    results = sweep(src_dir, models, compiled_builds, args.threads, args.ngl, args.fa, args.recurrent_d)
+    results = sweep(src_dir, models, compiled_builds, args.threads, args.ngl, args.fa, args.recurrent_t, args.recurrent_layer)
     write_report(results, args.output, compiled_builds, src_dir)
 
 if __name__ == "__main__":

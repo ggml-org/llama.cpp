@@ -129,54 +129,64 @@ llama_model_falcon_h1::graph::graph(const llama_model & model, const llm_graph_p
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    for (int il = 0; il < n_layer; ++il) {
-        ggml_tensor * inpSA = inpL;
+    // --- OpenMythos-style weight-tied recurrence ---
+    // One decoder layer applied T times with frozen anchor injection + LTI state.
+    // h_{t+1} = A * h_t + B * e + decoder(h_t + e)
+    // A: decay (rho(A) < 1 by scalar), B: anchor injection, e: frozen prelude output.
+    // KV cache accumulates naturally across loop iterations (same layer index).
+    // SSM recomputes fresh each iteration (state overwritten; LTI carries inter-iteration memory).
+    // T=1 (default): vanilla — straight loop over all layers, exact original behavior.
 
-        cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
-        cb(cur, "attn_norm", il);
+    const int RECURRENT_T   = [] { const char * v = std::getenv("RECURRENT_T");   return v ? std::atoi(v) : 1; }();
+    const float RECURRENT_A = [] { const char * v = std::getenv("RECURRENT_A");   return v ? std::atof(v) : 0.90f; }();
+    const float RECURRENT_B = [] { const char * v = std::getenv("RECURRENT_B");   return v ? std::atof(v) : 0.10f; }();
+    const int n_rec_layer   = [] { const char * v = std::getenv("RECURRENT_LAYER"); return v ? std::atoi(v) : -1; }();
 
-        // self-attention
-        auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+    // Decoder: SSM + Attention + FFN for one layer. Pure function of (layer_idx, input).
+    // SSM cache is per-layer; recurrent layer's cache is cleared before each iteration.
+    std::vector<ggml_tensor*> ssm_cache(n_layer, nullptr);
+    auto falcon_decoder = [&](int il, ggml_tensor * input) -> ggml_tensor* {
+        // SSM (native recurrent state — recomputed fresh in loop iterations)
+        if (ssm_cache[il] != nullptr) ssm_cache[il] = nullptr;
+        ggml_tensor * ssm_in = build_norm(input, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+        cb(ssm_in, "ssm_in", il);
+        ggml_tensor * ssm_out = build_mamba2_layer(inp->get_recr(), ssm_in, model, ubatch, il);
+        cb(ssm_out, "ssm_out", il);
+        ssm_cache[il] = ssm_out;
+
+        // Attention
+        ggml_tensor * cur_a = build_norm(input, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur_a, "attn_norm", il);
+
+        auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur_a,
                 n_embd_head, n_head, n_head_kv, il);
-
         Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, hparams.rope_type, n_ctx_orig, freq_base, freq_scale,
                              ext_factor, attn_factor, beta_fast, beta_slow);
-
         Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, hparams.rope_type, n_ctx_orig, freq_base, freq_scale,
                              ext_factor, attn_factor, beta_fast, beta_slow);
-
         cb(Qcur, "Qcur-post-rope", il);
         cb(Kcur, "Kcur-post-rope", il);
         cb(Vcur, "Vcur-post-rope", il);
 
         ggml_tensor * attn_out = build_attn(inp->get_attn(),
                                     model.layers[il].wo, NULL, model.layers[il].wo_s,
-                                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+                                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il, true);
         cb(attn_out, "attn_out", il);
 
-        cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
-        // Mamba2 layer
-        cb(cur, "ssm_in", il);
-
-        ggml_tensor * ssm_out = build_mamba2_layer(inp->get_recr(), cur, model, ubatch, il);
-        cb(ssm_out, "ssm_out", il);
-
-        // // Aggregation
-        cur   = ggml_add(ctx0, attn_out, ssm_out);
-        inpSA = ggml_add(ctx0, cur, inpSA);
+        // Aggregation: Attention + SSM + residual
+        ggml_tensor * cur   = ggml_add(ctx0, attn_out, ssm_out);
+        ggml_tensor * inpSA = ggml_add(ctx0, cur, input);
         cb(cur, "layer_out", il);
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
-        ggml_tensor * ffn_inp = inpSA;
-        cb(ffn_inp, "ffn_inp", il);
+        cb(inpSA, "ffn_inp", il);
 
-        // feed-forward network
-        cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+        // FFN
+        cur = build_norm(inpSA, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
-
         cur = build_ffn(cur,
                 model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL,
                 model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
@@ -185,12 +195,44 @@ llama_model_falcon_h1::graph::graph(const llama_model & model, const llm_graph_p
         cb(cur, "ffn_out", il);
 
         cur = ggml_add(ctx0, cur, inpSA);
-
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
+        return cur;
+    };
 
-        // input for next layer
-        inpL = cur;
+    if (RECURRENT_T > 1 && n_rec_layer >= 0 && n_rec_layer < n_layer) {
+        // --- Recurrent path: weight-tied loop with LTI injection ---
+
+        // 1. Prelude: layers [0, n_rec_layer) straight through
+        for (int il = 0; il < n_rec_layer; ++il) {
+            inpL = falcon_decoder(il, inpL);
+        }
+
+        // 2. Freeze anchor (encoded input from prelude — injected every loop step)
+        ggml_tensor * anchor_e = inpL;
+
+        // 3. Weight-tied loop: layer n_rec_layer applied T times
+        ggml_tensor * h = inpL;
+        for (int t = 0; t < RECURRENT_T; ++t) {
+            // Combine recurrent state with frozen anchor, run decoder
+            ggml_tensor * combined = ggml_add(ctx0, h, anchor_e);
+            ggml_tensor * block_out = falcon_decoder(n_rec_layer, combined);
+            // LTI update: h = A * h + B * anchor_e + block_out
+            h = ggml_add(ctx0, ggml_add(ctx0, ggml_scale(ctx0, h, RECURRENT_A),
+                                               ggml_scale(ctx0, anchor_e, RECURRENT_B)),
+                         block_out);
+        }
+        inpL = h;
+
+        // 4. Coda: layers [n_rec_layer+1, n_layer) straight through
+        for (int il = n_rec_layer + 1; il < n_layer; ++il) {
+            inpL = falcon_decoder(il, inpL);
+        }
+    } else {
+        // --- Vanilla path: straight loop, exact original behavior ---
+        for (int il = 0; il < n_layer; ++il) {
+            inpL = falcon_decoder(il, inpL);
+        }
     }
     cur = inpL;
 
