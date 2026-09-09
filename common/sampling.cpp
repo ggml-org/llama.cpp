@@ -753,8 +753,22 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
         }
 
         // a candidate the grammar rejects carries no probability, whatever the target thinks
-        auto p_of = [&](size_t k) {
+        auto p_raw = [&](size_t k) {
             return masked && cand[k].logit == -INFINITY ? 0.0f : cur_p->data[k].p;
+        };
+
+        // masking drops probability mass, so rescale what is left or the residual is over-weighted
+        float p_sum = 0.0f;
+        if (masked) {
+            for (size_t k = 0; k < cur_p->size; ++k) {
+                p_sum += p_raw(k);
+            }
+        }
+
+        const float p_norm = masked && p_sum > 0.0f ? 1.0f/p_sum : 1.0f;
+
+        auto p_of = [&](size_t k) {
+            return p_raw(k)*p_norm;
         };
 
         // q_x is never 0 for a token the draft produced, but guard the divide
