@@ -7248,6 +7248,121 @@ static void test_msg_diffs_compute() {
     }
 }
 
+static void test_qwen_root_tool_unions() {
+    const std::string schema = R"({
+        "oneOf": [
+            {"type":"object","properties":{"mode":{"type":"string","const":"list"},"limit":{"type":"integer","minimum":1,"maximum":5}},"required":["mode"],"additionalProperties":false},
+            {"type":"object","properties":{"mode":{"type":"string","enum":["load","reload"]},"paths":{"type":"array","minItems":1,"items":{"type":"string"}},"limit":{"type":"integer","minimum":10,"maximum":20}},"required":["mode","paths"],"additionalProperties":false}
+        ]
+    })";
+    const auto xml = [](const std::string & body) {
+        return "<tool_call>\n<function=manage_records>\n" + body + "</function>\n</tool_call>";
+    };
+    const auto arg = [](const std::string & name, const std::string & value) {
+        return "<parameter=" + name + ">\n" + value + "\n</parameter>\n";
+    };
+    for (const std::string path : {"models/templates/Qwen3-Coder.jinja", "models/templates/Qwen3.5-4B.jinja"}) {
+        auto tmpls = read_templates(path);
+        for (const char * keyword : {"oneOf", "anyOf"}) {
+            auto parameters = json::parse(schema);
+            if (std::string(keyword) == "anyOf") {
+                parameters["anyOf"] = parameters.at("oneOf");
+                parameters.erase("oneOf");
+            }
+            const common_chat_tool tool = {"manage_records", "Manage records.", parameters.dump()};
+            common_chat_templates_inputs in;
+            in.messages = {message_user};
+            in.tools = {tool};
+            in.parallel_tool_calls = true;
+            in.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+            const auto params = common_chat_templates_apply(tmpls.get(), in);
+            const std::vector<std::pair<std::string, std::string>> valid = {
+                {arg("mode", "list"), R"({"mode":"list"})"},
+                {arg("mode", "list") + arg("limit", "3"), R"({"mode":"list","limit":3})"},
+                {arg("mode", "load") + arg("paths", "[\"example\"]") + arg("limit", "12"), R"({"mode":"load","paths":["example"],"limit":12})"},
+                {arg("paths", "[\"example\"]") + arg("mode", "reload"), R"({"paths":["example"],"mode":"reload"})"}
+            };
+            for (const auto & item : valid) {
+                auto grammar = build_grammar(params.grammar);
+                assert_equals(true, grammar != nullptr);
+                assert_equals(true, match_string(xml(item.first), grammar.get()));
+                test_peg_parser(tmpls.get(), [&](peg_test_case & tc) {
+                    tc.params = in;
+                    tc.input = "Inspect the records.\n</think>\n\n" + xml(item.first);
+                    if (path.find("Qwen3-Coder") != std::string::npos) {
+                        tc.input = xml(item.first);
+                    }
+                    tc.expect = simple_assist_msg("", path.find("Qwen3-Coder") == std::string::npos ? "Inspect the records." : "", "manage_records", item.second);
+                }, false);
+            }
+            const std::vector<std::string> invalid = {
+                "", arg("mode", "unknown"), arg("mode", "load"),
+                arg("mode", "list") + arg("paths", "[\"example\"]"),
+                arg("mode", "list") + arg("limit", "12"),
+                arg("mode", "load") + arg("paths", "[]"),
+                arg("mode", "load") + arg("paths", "[1]"),
+                arg("mode", "load") + arg("paths", "[\"example\"]") + arg("limit", "3")
+            };
+            for (const auto & item : invalid) {
+                auto grammar = build_grammar(params.grammar);
+                assert_equals(false, match_string(xml(item), grammar.get()));
+            }
+            test_peg_parser(tmpls.get(), [&](peg_test_case & tc) {
+                tc.params = in;
+                tc.input = std::string(path.find("Qwen3-Coder") == std::string::npos ? "</think>\n\n" : "") +
+                    xml(valid[0].first) + "\n" + xml(valid[3].first);
+                tc.expect.role = "assistant";
+                tc.expect.tool_calls = {{"manage_records", valid[0].second, ""}, {"manage_records", valid[3].second, ""}};
+            }, false);
+        }
+    }
+}
+
+static void test_qwen_union_stream_types() {
+    auto tmpls = read_templates("models/templates/Qwen3.5-4B.jinja");
+    common_chat_templates_inputs in;
+    in.messages = {message_user};
+    in.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    in.tools = {{"choose_value", "Choose a typed value.", R"({"oneOf":[
+        {"type":"object","properties":{"kind":{"type":"string","const":"text"},"value":{"type":"string"}},"required":["kind","value"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"type":"string","enum":["int","integer"]},"value":{"type":"integer"}},"required":["kind","value"],"additionalProperties":false}
+    ]})"}};
+    for (const auto & kind : {"int", "integer"}) {
+        test_peg_parser(tmpls.get(), [&](peg_test_case & tc) {
+            tc.params = in;
+            tc.input = std::string("</think>\n\n<tool_call>\n<function=choose_value>\n") +
+                       "<parameter=value>\n42\n</parameter>\n<parameter=kind>\n" + std::string(kind) +
+                       "\n</parameter>\n</function>\n</tool_call>";
+            tc.expect = simple_assist_msg("", "", "choose_value", "{\"value\":42,\"kind\":\"" + std::string(kind) + "\"}");
+        }, false);
+    }
+    auto parameters = json::parse(in.tools[0].parameters);
+    parameters["oneOf"][1]["properties"]["kind"] = json::parse(R"({"type":"string","const":"text"})");
+    in.tools[0].parameters = parameters.dump();
+    bool rejected = false;
+    try {
+        common_chat_templates_apply(tmpls.get(), in);
+    } catch (const std::runtime_error & error) {
+        rejected = std::string(error.what()).find("disjoint") != std::string::npos;
+    }
+    assert_equals(true, rejected);
+
+    parameters = json::parse(in.tools[0].parameters);
+    parameters["oneOf"][1]["properties"]["kind"] = json::parse(R"({"type":"string","const":"number"})");
+    for (const std::string key : {"properties", "required", "additionalProperties", "$ref", "type"}) {
+        auto mixed = parameters;
+        mixed[key] = key == "type" ? json("string") : json(false);
+        in.tools[0].parameters = mixed.dump();
+        rejected = false;
+        try {
+            common_chat_templates_apply(tmpls.get(), in);
+        } catch (const std::runtime_error &) {
+            rejected = true;
+        }
+        assert_equals(true, rejected);
+    }
+}
+
 int main(int argc, char ** argv) {
     bool detailed_debug    = false;
     bool only_run_filtered = false;
@@ -7320,6 +7435,8 @@ int main(int argc, char ** argv) {
     } else
 #endif
     {
+        test_qwen_root_tool_unions();
+        test_qwen_union_stream_types();
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
         test_msg_token_delimiters_split();

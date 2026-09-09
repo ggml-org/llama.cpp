@@ -279,6 +279,14 @@ This table can be generated with:
 
 </details>
 
+## Qwen XML tool schemas
+
+The Qwen3-Coder XML handler also accepts root `anyOf` alternatives of direct object schemas. Root `oneOf` uses the same grammar construction only when every pair of alternatives has a required string `const` or `enum` property with disjoint values. The property name is not fixed. Each alternative retains its own required arguments and property schemas; string constants and enums constrain the raw XML parameter value.
+
+Root `properties`, `required`, `additionalProperties` or `$ref` mixed with a union, a non-object root type, referenced or nested root alternatives, and `oneOf` alternatives without a provably disjoint string discriminator are not supported by this handler and return an error. This is not full JSON Schema conformance; nested JSON values retain the converter's existing limitations. Required parameters precede optional parameters, as with ordinary XML tool schemas.
+
+For union schemas, argument deltas are held until the argument branch completes. A discriminator may follow a value whose type differs between branches, so publishing a provisional parse could emit JSON that later needs to be retracted. Reasoning and the tool name can still stream normally.
+
 # Usage - need tool-aware Jinja template
 
 First, start a server with any model, but make sure it has a tools-enabled template: you can verify this by inspecting the `chat_template` or `chat_template_tool_use` properties in `http://localhost:8080/props`).

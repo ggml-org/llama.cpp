@@ -14,11 +14,10 @@ void foreach_function(const json & tools, const std::function<void(const json &)
     }
 }
 
-void foreach_parameter(const json & function, const std::function<void(const std::string &, const json &, bool)> & fn) {
-    if (!function.contains("parameters") || !function.at("parameters").is_object()) {
+void foreach_parameter(const json & params, const std::function<void(const std::string &, const json &, bool)> & fn) {
+    if (!params.is_object()) {
         return;
     }
-    const auto & params = function.at("parameters");
     if (!params.contains("properties") || !params.at("properties").is_object()) {
         return;
     }

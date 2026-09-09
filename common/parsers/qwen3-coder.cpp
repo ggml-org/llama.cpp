@@ -100,28 +100,105 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 auto schema_info = common_schema_info();
                 schema_info.resolve_refs(parameters);
 
-                std::vector<common_peg_parser> required_args;
-                std::vector<common_peg_parser> optional_args;
+                auto build_args = [&](const json & schema, const std::string & rule_prefix) {
+                    std::vector<common_peg_parser> required_args;
+                    std::vector<common_peg_parser> optional_args;
 
-                foreach_parameter(function, [&](const std::string & param_name, const json & param_schema, bool is_required) {
-                    auto rule_name = "tool-" + name + "-arg-" + param_name;
+                    foreach_parameter(schema, [&](const std::string & param_name, const json & param_schema, bool is_required) {
+                        auto rule_name = rule_prefix + "-arg-" + param_name;
+                        auto arg_open = p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param_name)) + ">\n");
+                        auto arg_value = arg_string;
 
-                    auto arg_open = p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param_name)) + ">\n");
+                        if (param_schema.contains("const") && param_schema.at("const").is_string()) {
+                            arg_value = p.tool_arg_string_value(p.literal(param_schema.at("const").get<std::string>())) + arg_close;
+                        } else if (param_schema.contains("enum") && !param_schema.at("enum").empty() &&
+                                   std::all_of(param_schema.at("enum").begin(), param_schema.at("enum").end(),
+                                               [](const json & value) { return value.is_string(); })) {
+                            auto values = p.choice();
+                            for (const auto & value : param_schema.at("enum")) {
+                                values |= p.literal(value.get<std::string>()) + p.peek(p.literal("\n</parameter>\n"));
+                            }
+                            arg_value = p.tool_arg_string_value(values) + arg_close;
+                        } else if (!schema_info.resolves_to_string(param_schema)) {
+                            arg_value = p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", param_schema)) + arg_close;
+                        }
 
-                    auto arg_value = schema_info.resolves_to_string(param_schema) ?
-                        arg_string :
-                        p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", param_schema)) + arg_close;
+                        auto arg_rule = p.rule(rule_name, p.tool_arg(arg_open + arg_value));
+                        (is_required ? required_args : optional_args).push_back(arg_rule);
+                    });
 
-                    auto arg_rule = p.rule(rule_name, p.tool_arg(arg_open + arg_value));
+                    // Required arguments may arrive in any order; optional arguments follow them.
+                    auto args = p.permute(rule_prefix + "-args", required_args);
+                    if (!optional_args.empty()) {
+                        args = args + p.zero_or_more(p.choice(optional_args));
+                    }
+                    return args;
+                };
 
-                    (is_required ? required_args : optional_args).push_back(arg_rule);
-                });
-
-                // Accept required arguments in any order, as Qwen does not always adhere to the
-                // order provided.
-                auto args = p.permute("tool-" + name + "-args", required_args);
-                if (!optional_args.empty()) {
-                    args = args + p.zero_or_more(p.choice(optional_args));
+                auto args = p.eps();
+                if (parameters.contains("oneOf") || parameters.contains("anyOf")) {
+                    if (parameters.contains("properties") || parameters.contains("required") ||
+                        parameters.contains("additionalProperties") || parameters.contains("$ref") ||
+                        parameters.value("type", "object") != "object" || parameters.contains("allOf") ||
+                        (parameters.contains("oneOf") && parameters.contains("anyOf"))) {
+                        throw std::runtime_error("Qwen XML tool schema cannot mix root object constraints with a union");
+                    }
+                    const auto & variants = parameters.at(parameters.contains("oneOf") ? "oneOf" : "anyOf");
+                    if (!variants.is_array() || variants.empty()) {
+                        throw std::runtime_error("Qwen XML tool schema needs nonempty object alternatives");
+                    }
+                    // A plain grammar choice implements anyOf. For oneOf, prove that every
+                    // pair is separated by a required finite-valued property before using it.
+                    if (parameters.contains("oneOf")) {
+                        for (size_t i = 0; i < variants.size(); ++i) {
+                            for (size_t j = 0; j < i; ++j) {
+                                bool disjoint = false;
+                                foreach_parameter(variants.at(i), [&](const std::string & key, const json & prop, bool required) {
+                                    if (!required) {
+                                        return;
+                                    }
+                                    foreach_parameter(variants.at(j), [&](const std::string & other_key, const json & other, bool other_required) {
+                                        if (!other_required || key != other_key) {
+                                            return;
+                                        }
+                                        const auto values = prop.contains("const") ? json::array({prop.at("const")}) : prop.value("enum", json::array());
+                                        const auto other_values = other.contains("const") ? json::array({other.at("const")}) : other.value("enum", json::array());
+                                        if (!values.is_array() || !other_values.is_array() || values.empty() || other_values.empty() ||
+                                            !std::all_of(values.begin(), values.end(), [](const json & value) { return value.is_string(); }) ||
+                                            !std::all_of(other_values.begin(), other_values.end(), [](const json & value) { return value.is_string(); })) {
+                                            return;
+                                        }
+                                        bool overlap = false;
+                                        for (const auto & value : values) {
+                                            for (const auto & other_value : other_values) {
+                                                overlap |= value == other_value;
+                                            }
+                                        }
+                                        disjoint |= !overlap;
+                                    });
+                                });
+                                if (!disjoint) {
+                                    throw std::runtime_error("Qwen XML oneOf tool alternatives need disjoint required const/enum values");
+                                }
+                            }
+                        }
+                    }
+                    auto alternatives = p.choice();
+                    size_t index = 0;
+                    for (const auto & variant : variants) {
+                        if (!variant.is_object() || variant.value("type", "object") != "object" ||
+                            variant.contains("$ref") || variant.contains("oneOf") || variant.contains("anyOf") ||
+                            variant.contains("allOf")) {
+                            throw std::runtime_error("Qwen XML tool schema requires direct object alternatives");
+                        }
+                        const auto rule_prefix = "tool-" + name + "-variant-" + std::to_string(index++);
+                        alternatives |= p.rule(rule_prefix, build_args(variant, rule_prefix) + p.peek(p.literal("</function>\n")));
+                    }
+                    // A later discriminator can change an earlier argument's type. Do not stream
+                    // a provisional branch, since emitted argument deltas cannot be retracted.
+                    args = p.atomic(alternatives);
+                } else {
+                    args = build_args(parameters, "tool-" + name);
                 }
 
                 auto func = p.tool(p.tool_open("<function=" + p.tool_name(p.literal(name)) + ">\n") +
