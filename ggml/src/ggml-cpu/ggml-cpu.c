@@ -1570,8 +1570,8 @@ static void ggml_compute_forward_mul_mat_id(
     GGML_ASSERT(nb2 <= nb3);
 
     // row groups
-    const int n_ids = ids->ne[0]; // n_expert_used
-    const int n_as  = ne02;       // n_expert
+    const int64_t n_ids = ids->ne[0]; // n_expert_used
+    const int64_t n_as  = ne02;       // n_expert
 
     void * wdata_cur = params->wdata;
 
@@ -1646,7 +1646,7 @@ static void ggml_compute_forward_mul_mat_id(
             for (int id = 0; id < n_ids; ++id) {
                 const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
 
-                assert(i02 >= 0 && i02 < n_as);
+                GGML_ASSERT(i02 >= 0 && i02 < n_as);
 
                 MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = (struct mmid_row_mapping) {id, iid1};
                 matrix_row_counts[i02] += 1;
@@ -2896,7 +2896,7 @@ struct ggml_cplan ggml_graph_plan(
                         const struct ggml_tensor * src1 = node->src[1];
                         const struct ggml_tensor * ids = node->src[2];
                         const enum ggml_type vec_dot_type = type_traits_cpu[src0->type].vec_dot_type;
-                        const int n_as = src0->ne[2];
+                        const int64_t n_as = src0->ne[2];
                         // src1
                         if (src1->type != vec_dot_type) {
                             cur += ggml_row_size(vec_dot_type, ggml_nelements(src1)) + sizeof(int64_t);
