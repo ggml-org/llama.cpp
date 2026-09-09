@@ -464,6 +464,11 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             rotation = hparams.n_layer() % ud->n_devices;
         }
         const ggml_tensor * tensor_axis_0 = suffix.empty() ? tensor : ud->model->get_tensor((prefix + suffix).c_str());
+        if (tensor_axis_0 == nullptr && tensor_name.compare(0, 6, "cache_") == 0 && il < hparams.n_layer()) {
+            // the hrm_text cache slots alias physical blocks, so a cache tensor can reference a block
+            // index with no weight tensor names and the output projection has to come from the layer array
+            tensor_axis_0 = ud->model->layers[il].wo;
+        }
         if (tensor_axis_0 == nullptr) {
             GGML_ASSERT(!suffix_fallback.empty());
             tensor_axis_0 = ud->model->get_tensor((prefix + suffix_fallback).c_str());
