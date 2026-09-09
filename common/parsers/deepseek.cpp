@@ -149,39 +149,24 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
-                auto         params   = function.contains("parameters") ? function.at("parameters") : json::object();
-                const auto & props    = params.contains("properties") ? params.at("properties") : json::object();
-
-                std::set<std::string> required;
-                if (params.contains("required")) {
-                    required = params.at("required").get<std::set<std::string>>();
-                }
-
-                auto schema_info = common_schema_info();
-                schema_info.resolve_refs(params);
 
                 std::vector<common_peg_parser> required_parsers;
                 std::vector<common_peg_parser> optional_parsers;
-                for (const auto & [param_name, param_schema] : props.items()) {
-                    bool is_required = required.find(param_name) != required.end();
-                    bool is_string   = schema_info.resolves_to_string(param_schema);
+                foreach_parameter(function, [&](const common_schema_property & param, const json & param_schema) {
+                    bool is_string = param.schema->resolves_to_string();
 
                     auto arg = p.tool_arg(
-                        p.tool_arg_open(p.literal(PARAM_START + " name=\"") + p.tool_arg_name(p.literal(param_name)) +
+                        p.tool_arg_open(p.literal(PARAM_START + " name=\"") + p.tool_arg_name(p.literal(param.name)) +
                                         p.literal("\" string=\"" + std::string(is_string ? "true" : "false") + "\">")) +
                         (is_string ?
                              p.tool_arg_string_value(p.until(PARAM_END)) :
-                             p.tool_arg_json_value(p.schema(p.json(), "tool-" + name + "-arg-" + param_name + "-schema",
+                             p.tool_arg_json_value(p.schema(p.json(), "tool-" + name + "-arg-" + param.name + "-schema",
                                                             param_schema, false))) +
                         p.tool_arg_close(p.literal(PARAM_END)));
 
-                    auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
-                    if (is_required) {
-                        required_parsers.push_back(named_arg);
-                    } else {
-                        optional_parsers.push_back(named_arg);
-                    }
-                }
+                    auto named_arg = p.rule("tool-" + name + "-arg-" + param.name, arg);
+                    (param.required ? required_parsers : optional_parsers).push_back(named_arg);
+                });
 
                 common_peg_parser args_seq = p.eps();
                 for (size_t i = 0; i < required_parsers.size(); i++) {

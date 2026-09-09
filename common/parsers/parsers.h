@@ -20,8 +20,8 @@ using json = common_json;
 // iterate over the function tools of an OpenAI-style tools array
 void foreach_function(const json & tools, const std::function<void(const json &)> & fn);
 
-// iterate over the parameters of a function tool, flagging the ones listed as required
-void foreach_parameter(const json & function, const std::function<void(const std::string &, const json &, bool)> & fn);
+// iterate over the parameters of a function tool: the parsed schema of each one for probing, its JSON for the grammar
+void foreach_parameter(const json & function, const std::function<void(const common_schema_property &, const json &)> & fn);
 
 // render a template; the override arguments let a parser feed in messages, tools or context it has rewritten
 std::string common_chat_template_direct_apply_impl(

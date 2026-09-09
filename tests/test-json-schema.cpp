@@ -637,6 +637,126 @@ static void test_ref(testing & t) {
     });
 }
 
+static void test_resolves_to_string(testing & t) {
+    auto check = [](testing & t, const std::string & schema, bool expected) {
+        t.assert_equal(schema, expected, parse(schema).root->resolves_to_string());
+    };
+
+    t.test("types", [&](testing & t) {
+        check(t, R"({"type": "string"})", true);
+        check(t, R"({"type": "integer"})", false);
+        check(t, R"({"type": "number"})", false);
+        check(t, R"({"type": "boolean"})", false);
+        check(t, R"({"type": "object"})", false);
+        check(t, R"({"type": "array"})", false);
+        check(t, R"({"type": ["string", "null"]})", true);
+        check(t, R"({"type": ["integer", "null"]})", false);
+    });
+
+    t.test("an any is not a string", [&](testing & t) {
+        check(t, R"({})", false);
+        check(t, R"({"minLength": 1})", false);
+        check(t, R"({"maxLength": 10})", false);
+        check(t, R"({"format": "email"})", false);
+    });
+
+    t.test("string keywords", [&](testing & t) {
+        check(t, R"({"pattern": "^[a-z]+$"})", true);
+        check(t, R"({"format": "date"})", true);
+        check(t, R"({"format": "uuid"})", true);
+    });
+
+    t.test("const and enum", [&](testing & t) {
+        check(t, R"({"const": "hello"})", true);
+        check(t, R"({"const": 123})", false);
+        check(t, R"({"enum": ["a", "b", "c"]})", true);
+        check(t, R"({"enum": [1, 2, 3]})", false);
+        check(t, R"({"enum": [1, "a", null]})", true);
+    });
+
+    t.test("any_of", [&](testing & t) {
+        check(t, R"({"anyOf": [{"type": "string"}, {"type": "integer"}]})", true);
+        check(t, R"({"anyOf": [{"type": "integer"}, {"type": "boolean"}]})", false);
+        check(t, R"({"oneOf": [{"type": "string"}, {"type": "number"}]})", true);
+        check(t, R"({"oneOf": [{"type": "object"}, {"type": "array"}]})", false);
+        check(t, R"({"anyOf": [{"anyOf": [{"type": "integer"}, {"type": "string"}]}, {"type": "boolean"}]})", true);
+    });
+
+    t.test("all_of", [&](testing & t) {
+        check(t, R"({"allOf": [{"type": "string"}, {"minLength": 1}]})", true);
+        check(t, R"({"allOf": [{"type": "string"}, {"type": "integer"}]})", false);
+        check(t, R"({"allOf": [{"minLength": 1}, {"maxLength": 2}]})", false);
+    });
+
+    t.test("ref", [&](testing & t) {
+        check(t, R"({"$ref": "#/$defs/str", "$defs": {"str": {"type": "string"}}})", true);
+        check(t, R"({"$ref": "#/$defs/num", "$defs": {"num": {"type": "integer"}}})", false);
+        check(t, R"({"$ref": "#/$defs/n", "$defs": {"n": {"anyOf": [{"$ref": "#/$defs/n"}, {"type": "string"}]}}})", true);
+        check(t, R"({"$ref": "#/$defs/n", "$defs": {"n": {"$ref": "#/$defs/n"}}})", false);
+    });
+}
+
+// e.g. {number, integer}, in kind order
+static std::string dump(const common_schema_kinds & kinds) {
+    static const char * names[] = { "null", "boolean", "number", "integer", "string", "array", "object" };
+    static const common_schema_kind order[] = { COMMON_SCHEMA_KIND_NULL,   COMMON_SCHEMA_KIND_BOOLEAN, COMMON_SCHEMA_KIND_NUMBER,
+                                                COMMON_SCHEMA_KIND_INTEGER, COMMON_SCHEMA_KIND_STRING,  COMMON_SCHEMA_KIND_ARRAY,
+                                                COMMON_SCHEMA_KIND_OBJECT };
+    std::string out;
+    for (size_t i = 0; i < 7; i++) {
+        if (kinds.has(order[i])) {
+            out += (out.empty() ? "" : ", ") + std::string(names[i]);
+        }
+    }
+    return "{" + out + "}";
+}
+
+static void test_resolve_kinds(testing & t) {
+    auto check = [](testing & t, const std::string & schema, const common_schema_kinds & expected) {
+        t.assert_equal(schema, dump(expected), dump(parse(schema).root->resolve_kinds()));
+    };
+
+    t.test("types", [&](testing & t) {
+        check(t, R"({"type": "string"})", { COMMON_SCHEMA_KIND_STRING });
+        check(t, R"({"type": "integer"})", { COMMON_SCHEMA_KIND_INTEGER });
+        check(t, R"({"type": "number"})", { COMMON_SCHEMA_KIND_NUMBER, COMMON_SCHEMA_KIND_INTEGER });
+        check(t, R"({"type": ["string", "null"]})", { COMMON_SCHEMA_KIND_STRING, COMMON_SCHEMA_KIND_NULL });
+    });
+
+    t.test("an any is every kind", [&](testing & t) {
+        check(t, R"({"description": "anything"})", common_schema_kinds::all());
+        check(t, R"({"minLength": 1})", common_schema_kinds::all());
+    });
+
+    t.test("structural keywords", [&](testing & t) {
+        check(t, R"({"properties": {"a": {"type": "string"}}})", { COMMON_SCHEMA_KIND_OBJECT });
+        check(t, R"({"items": {"type": "string"}})", { COMMON_SCHEMA_KIND_ARRAY });
+        check(t, R"({"prefixItems": [{"type": "string"}]})", { COMMON_SCHEMA_KIND_ARRAY });
+    });
+
+    t.test("const and enum", [&](testing & t) {
+        check(t, R"({"const": 1.5})", { COMMON_SCHEMA_KIND_NUMBER });
+        check(t, R"({"enum": [1, "a", null]})", { COMMON_SCHEMA_KIND_INTEGER, COMMON_SCHEMA_KIND_STRING, COMMON_SCHEMA_KIND_NULL });
+    });
+
+    t.test("any_of is the union", [&](testing & t) {
+        check(t, R"({"anyOf": [{"type": "string"}, {"type": "integer"}]})", { COMMON_SCHEMA_KIND_STRING, COMMON_SCHEMA_KIND_INTEGER });
+    });
+
+    t.test("all_of is the intersection", [&](testing & t) {
+        check(t, R"({"allOf": [{"type": ["string", "number"]}, {"type": ["number", "object"]}]})", { COMMON_SCHEMA_KIND_NUMBER, COMMON_SCHEMA_KIND_INTEGER });
+        check(t, R"({"allOf": [{"type": "string"}, {"description": "x"}]})", { COMMON_SCHEMA_KIND_STRING });
+        check(t, R"({"allOf": [{"type": "string"}, {"type": "integer"}]})", {});
+    });
+
+    t.test("ref", [&](testing & t) {
+        check(t, R"({"$ref": "#/$defs/u", "$defs": {"u": {"anyOf": [{"type": "boolean"}, {"type": "array"}]}}})",
+              { COMMON_SCHEMA_KIND_BOOLEAN, COMMON_SCHEMA_KIND_ARRAY });
+        check(t, R"({"$ref": "#/$defs/n", "$defs": {"n": {"anyOf": [{"$ref": "#/$defs/n"}, {"type": "string"}]}}})",
+              { COMMON_SCHEMA_KIND_STRING });
+    });
+}
+
 static void test_errors(testing & t) {
     t.test("not a schema", [](testing & t) {
         assert_error(t, R"([])", "#: schema must be an object");
@@ -721,6 +841,8 @@ int main(int argc, char * argv[]) {
     t.test("any_of", test_any_of);
     t.test("all_of", test_all_of);
     t.test("ref", test_ref);
+    t.test("resolves_to_string", test_resolves_to_string);
+    t.test("resolve_kinds", test_resolve_kinds);
     t.test("errors", test_errors);
 
     return t.summary();

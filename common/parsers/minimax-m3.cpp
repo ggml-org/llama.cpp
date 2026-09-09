@@ -99,8 +99,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
             std::string  name     = function.at("name");
             auto         params   = function.contains("parameters") ? function.at("parameters") : json::object();
 
-            auto schema_info = common_schema_info();
-            schema_info.resolve_refs(params);
+            auto doc = common_schema_parse(params);
 
             // The template expands argument values recursively in XML (see the to_xml() macro)
             std::function<common_peg_parser(const json &, const std::string &, const std::string &)> value_of;
@@ -123,7 +122,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
                 auto close_tag = p.tool_arg_close(p.literal(close));
 
                 // A string accepts anything, so a union with a string alternative is a string
-                if (schema_info.resolves_to_string(schema)) {
+                if (common_schema_parse(schema, doc)->resolves_to_string()) {
                     return p.ac(p.tool_arg_string_value(p.until(close)) + close_tag, close);
                 }
 

@@ -93,28 +93,24 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
             auto tool_choice = p.choice();
             foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function   = tool.at("function");
-                std::string  name       = function.at("name");
-                auto         parameters = function.contains("parameters") ? function.at("parameters") : json::object();
-
-                auto schema_info = common_schema_info();
-                schema_info.resolve_refs(parameters);
+                const auto & function = tool.at("function");
+                std::string  name     = function.at("name");
 
                 std::vector<common_peg_parser> required_args;
                 std::vector<common_peg_parser> optional_args;
 
-                foreach_parameter(function, [&](const std::string & param_name, const json & param_schema, bool is_required) {
-                    auto rule_name = "tool-" + name + "-arg-" + param_name;
+                foreach_parameter(function, [&](const common_schema_property & param, const json & param_schema) {
+                    auto rule_name = "tool-" + name + "-arg-" + param.name;
 
-                    auto arg_open = p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param_name)) + ">\n");
+                    auto arg_open = p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param.name)) + ">\n");
 
-                    auto arg_value = schema_info.resolves_to_string(param_schema) ?
+                    auto arg_value = param.schema->resolves_to_string() ?
                         arg_string :
                         p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", param_schema)) + arg_close;
 
                     auto arg_rule = p.rule(rule_name, p.tool_arg(arg_open + arg_value));
 
-                    (is_required ? required_args : optional_args).push_back(arg_rule);
+                    (param.required ? required_args : optional_args).push_back(arg_rule);
                 });
 
                 // Accept required arguments in any order, as Qwen does not always adhere to the

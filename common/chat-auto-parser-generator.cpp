@@ -5,22 +5,13 @@
 #include "common.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
+#include "parsers/parsers.h"
 #include "peg-parser.h"
 
 #include <stdexcept>
 #include <string>
 
 using json = common_json;
-
-// Helper to iterate over tools/functions
-static void foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
-    for (const auto & tool : tools) {
-        if (!tool.contains("type") || tool.at("type") != "function" || !tool.contains("function")) {
-            continue;
-        }
-        fn(tool);
-    }
-}
 
 namespace autoparser {
 
@@ -383,43 +374,27 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     common_peg_parser tool_choice = p.choice();
 
     foreach_function(inputs.tools, [&](const json & tool) {
-        const auto &          func       = tool.at("function");
-        std::string           name       = func.at("name");
-        auto                  params     = func.contains("parameters") ? func.at("parameters") : json::object();
-        const auto &          properties = params.contains("properties") ? params.at("properties") : json::object();
-
-        std::set<std::string> required;
-        if (params.contains("required")) {
-            required = params.at("required").get<std::set<std::string>>();
-        }
-
-        auto schema_info = common_schema_info();
-        schema_info.resolve_refs(params);
+        const auto & func = tool.at("function");
+        std::string  name = func.at("name");
 
         // Build parser for each argument, separating required and optional
         std::vector<common_peg_parser> required_parsers;
         std::vector<common_peg_parser> optional_parsers;
-        for (const auto & [param_name, param_schema] : properties.items()) {
-            bool is_required = required.find(param_name) != required.end();
-
+        foreach_parameter(func, [&](const common_schema_property & param, const json & param_schema) {
             auto arg =
-                p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
+                p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param.name)) +
                                            arguments.name_suffix) +
                            arguments.value_prefix +
-                           (schema_info.resolves_to_string(param_schema) ?
+                           (param.schema->resolves_to_string() ?
                                 p.ac(p.tool_arg_string_value(until_suffix) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)), arguments.value_suffix) :
                                 (p.tool_arg_json_value(p.schema(
-                                    p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
+                                    p.json(), "tool-" + name + "-arg-" + param.name + "-schema", param_schema, false)) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));
 
-            auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
-            if (is_required) {
-                required_parsers.push_back(named_arg);
-            } else {
-                optional_parsers.push_back(named_arg);
-            }
-        }
+            auto named_arg = p.rule("tool-" + name + "-arg-" + param.name, arg);
+            (param.required ? required_parsers : optional_parsers).push_back(named_arg);
+        });
 
         // Build required arg sequence in definition order
         common_peg_parser args_seq = p.eps();

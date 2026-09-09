@@ -422,7 +422,56 @@ static common_schema_kinds resolve_kinds(const common_schema & s, std::unordered
     return {};
 }
 
-common_schema_kinds common_schema_resolve_kinds(const common_schema & schema) {
+common_schema_kinds common_schema::resolve_kinds() const {
     std::unordered_set<const common_schema *> visited;
-    return resolve_kinds(schema, visited);
+    return ::resolve_kinds(*this, visited);
+}
+
+static bool resolves_to_string(const common_schema & s, std::unordered_set<const common_schema *> & visited) {
+    switch (s.kind()) {
+        case COMMON_SCHEMA_KIND_STRING:
+            return true;
+        case COMMON_SCHEMA_KIND_CONST:
+            return static_cast<const common_schema_const &>(s).value.is_string();
+        case COMMON_SCHEMA_KIND_ENUM:
+            for (const auto & v : static_cast<const common_schema_enum &>(s).values) {
+                if (v.is_string()) {
+                    return true;
+                }
+            }
+            return false;
+        case COMMON_SCHEMA_KIND_REF: {
+            // a cycle is taken as not a string, to be safe
+            const auto * target = static_cast<const common_schema_ref &>(s).target;
+            return target && visited.insert(target).second && resolves_to_string(*target, visited);
+        }
+        case COMMON_SCHEMA_KIND_ANY_OF:
+            for (const auto & child : static_cast<const common_schema_any_of &>(s).children) {
+                if (resolves_to_string(*child, visited)) {
+                    return true;
+                }
+            }
+            return false;
+        case COMMON_SCHEMA_KIND_ALL_OF: {
+            // every child must allow a string, an any child constrains nothing
+            bool any_string = false;
+            for (const auto & child : static_cast<const common_schema_all_of &>(s).children) {
+                if (child->kind() == COMMON_SCHEMA_KIND_ANY) {
+                    continue;
+                }
+                if (!resolves_to_string(*child, visited)) {
+                    return false;
+                }
+                any_string = true;
+            }
+            return any_string;
+        }
+        default:
+            return false;
+    }
+}
+
+bool common_schema::resolves_to_string() const {
+    std::unordered_set<const common_schema *> visited;
+    return ::resolves_to_string(*this, visited);
 }

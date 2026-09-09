@@ -74,31 +74,26 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto &      function = tool.at("function");
                 const std::string name     = function.at("name");
-                auto              params   = function.contains("parameters") ? function.at("parameters") : json::object();
+
+                std::vector<common_peg_parser> arg_rules;
+                foreach_parameter(function, [&](const common_schema_property & prop, const json & prop_schema) {
+                    auto value_parser = p.eps();
+                    if (prop.schema->resolves_to_string()) {
+                        value_parser = string_value;
+                    } else {
+                        value_parser = p.tool_arg_json_value(
+                                p.schema(p.json(), "tool-" + name + "-arg-" + prop.name + "-schema", prop_schema, false))
+                            + p.tool_arg_close(p.literal("</atem:parameter>"));
+                    }
+
+                    arg_rules.push_back(p.tool_arg(
+                        p.tool_arg_open(p.literal("<atem:parameter name=\"") + p.tool_arg_name(p.literal(prop.name)) + p.literal("\">")) +
+                        value_parser));
+                });
 
                 auto args = p.eps();
-                if (params.contains("properties") && params.at("properties").is_object() && !params.at("properties").empty()) {
-                    auto schema_info = common_schema_info();
-                    schema_info.resolve_refs(params);
-
-                    auto arg_choice = p.choice();
-                    for (const auto & [prop_name, prop_schema] : params.at("properties").items()) {
-                        auto value_parser = p.eps();
-                        if (schema_info.resolves_to_string(prop_schema)) {
-                            value_parser = string_value;
-                        } else {
-                            value_parser = p.tool_arg_json_value(
-                                    p.schema(p.json(), "tool-" + name + "-arg-" + prop_name + "-schema", prop_schema, false))
-                                + p.tool_arg_close(p.literal("</atem:parameter>"));
-                        }
-
-                        auto arg_rule = p.tool_arg(
-                            p.tool_arg_open(p.literal("<atem:parameter name=\"") + p.tool_arg_name(p.literal(prop_name)) + p.literal("\">")) +
-                            value_parser);
-
-                        arg_choice |= arg_rule;
-                    }
-                    args = p.zero_or_more(arg_choice + p.space());
+                if (!arg_rules.empty()) {
+                    args = p.zero_or_more(p.choice(arg_rules) + p.space());
                 }
 
                 auto tool_parser = p.tool(
