@@ -18,7 +18,6 @@
 
 #include <cassert>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
 #include <numeric>
 #include <sstream>
@@ -1567,7 +1566,6 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
         s = ggml_get_rows(ctx0, s, ids);
         res = ggml_mul(ctx0, res, s);
     }
-
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
         if (lw == nullptr) {

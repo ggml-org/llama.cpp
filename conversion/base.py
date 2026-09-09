@@ -170,9 +170,9 @@ class ModelBase:
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
         self._is_nvfp4 = False
         self._is_mxfp4 = False
-        self._nvfp4_all_w4a16 = False # checkpoint quantized entirely as W4A16_NVFP4
-        self._prec_a8_w4a4_override: set[str] = set() # gguf names explicitly kept at plain NVFP4 (W4A4) under a global W4A16 default
-        self._allow_prec_a8: dict[str, bool] = {} # gguf tensor name -> wants = 8-bit (A8) activations
+        self._nvfp4_global_algo: str | None = None # checkpoint-wide NVFP4 quant_algo
+        self._nvfp4_layer_algo: dict[str, str | None] = {} # per-layer quant_algo, keyed by HF module path
+        self._allow_prec_a8: dict[str, bool] = {} # gguf tensor name -> wants 8-bit (A8) activations
         self._fp8_as_q8 = fp8_as_q8
         self._fp8_dequantized: set[str] = set()
 
@@ -667,46 +667,17 @@ class ModelBase:
                 if bias_types:
                     self._fusable_qkv_bias_layers.add(bid)
 
-    def _gguf_weight_name(self, name: str) -> str:
-        if name.endswith((".weight", ".bias")):
-            return name
-        return name + ".weight"
-
-    def _tag_prec_a8(self, new_name: str) -> None:
-        # Tag a W4A16_NVFP4 weight as needing 8-bit activation.
-        if self._nvfp4_all_w4a16:
-            gguf_name = self._gguf_weight_name(new_name)
-            if gguf_name not in self._prec_a8_w4a4_override:
-                self._allow_prec_a8[gguf_name] = True
-
-    def _hf_quant_tensors_to_gguf(self, hf_name: str) -> list[str]:
-        # Map an HF quantized-layer name to its GGUF tensor name(s).
-        if hf_name == "lm_head" or hf_name.endswith(".lm_head"):
-            return ["output.weight"]
-
-        name = hf_name
-        if name.startswith("model.language_model."):
-            name = "model." + name[len("model.language_model."):]
-
-        m = re.fullmatch(r"model\.layers\.(\d+)\.mlp\.experts", name)
-        if m:
-            bid = int(m.group(1))
-            return [
-                self._gguf_weight_name(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid)),
-                self._gguf_weight_name(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid)),
-                self._gguf_weight_name(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid)),
-            ]
-
-        candidates = [name]
-        if not name.endswith((".weight", ".bias")):
-            candidates.append(name + ".weight")
-
-        for cand in candidates:
-            try:
-                return [self._gguf_weight_name(self.map_tensor_name(cand))]
-            except ValueError:
-                continue
-        return []
+    def _tag_prec_a8(self, hf_name: str, gguf_name: str) -> None:
+        # W4A16_NVFP4 leaves activations at 8-bit
+        name = hf_name.removesuffix(".weight").removesuffix(".bias")
+        algo = self._nvfp4_global_algo
+        while name:
+            if name in self._nvfp4_layer_algo:
+                algo = self._nvfp4_layer_algo[name]
+                break
+            name = name.rpartition(".")[0]
+        if algo == "W4A16_NVFP4":
+            self._allow_prec_a8[gguf_name] = True
 
     def set_gguf_parameters(self):
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
@@ -851,7 +822,7 @@ class ModelBase:
         raw, shape = self._nvfp4_pack(weight, scale)
         logger.info(f"Repacked {new_name} with shape {shape} and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, raw, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
-        self._tag_prec_a8(new_name)
+        self._tag_prec_a8(name, new_name)
 
         self._write_scale_tensor(new_name.replace(".weight", ".scale"), scale2)
         self._write_scale_tensor(new_name.replace(".weight", ".input_scale"), input_scale)
@@ -944,7 +915,7 @@ class ModelBase:
         new_name = self.map_tensor_name(merged_name)
         logger.info(f"Repacked {new_name} with shape [{len(experts)}, {shape[0]}, {shape[1]}] and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, merged, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
-        self._tag_prec_a8(new_name)
+        self._tag_prec_a8(merged_name, new_name)
 
         scales.sort(key=lambda x: x[0])
         self._write_scales_tensor(new_name.replace(".weight", ".scale"), [s[1] for s in scales])
@@ -987,8 +958,8 @@ class ModelBase:
             and bool(quant_groups)
             and all(g.get("format") == "nvfp4-pack-quantized" for g in quant_groups.values() if isinstance(g, dict))
         )
-        # A checkpoint quantized entirely as W4A16_NVFP4 uses a single global quant_algo
-        self._nvfp4_all_w4a16 = quant_algo == "W4A16_NVFP4"
+
+        self._nvfp4_global_algo = quant_algo
 
         if quant_algo != "NVFP4":
             if nvfp4_compressed_tensors:
@@ -999,20 +970,21 @@ class ModelBase:
         self._is_nvfp4 = quant_algo in ("NVFP4", "W4A16_NVFP4")
         self._is_mxfp4 = quant_method == "mxfp4"
 
-        # Collect per-tensor W4A16_NVFP4 metadata (activations were not quantized to 4-bit).
-        if self._is_nvfp4 and not self._nvfp4_all_w4a16:
-            # Per-layer map tag only the W4A16_NVFP4 layers.
-            for tensor_name, entry in quant_layers.items():
-                if not isinstance(entry, dict) or entry.get("quant_algo") != "W4A16_NVFP4":
+        # Per-tensor NVFP4 precision.
+        self._nvfp4_layer_algo = {}
+        if quant_layers:
+            # store all possible module paths and assert if a quantized layer is not in the model
+            modules: set[str] = set()
+            for name in self.model_tensors:
+                while name := name.rpartition(".")[0]:
+                    modules.add(name)
+
+            for layer_name, entry in quant_layers.items():
+                if not isinstance(entry, dict):
                     continue
-                for gguf_name in self._hf_quant_tensors_to_gguf(tensor_name):
-                    self._allow_prec_a8[gguf_name] = True
-        elif self._nvfp4_all_w4a16:
-            # Record any per-layer entries that override back to plain NVFP4 (W4A4)
-            for tensor_name, entry in quant_layers.items():
-                algo = entry.get("quant_algo") if isinstance(entry, dict) else None
-                if isinstance(algo, str) and algo.endswith("NVFP4") and algo != "W4A16_NVFP4":
-                    self._prec_a8_w4a4_override.update(self._hf_quant_tensors_to_gguf(tensor_name))
+                if titem := self.filter_tensors((layer_name, lambda: torch.empty(0))):
+                    assert titem[0] in modules, f"quantized_layers entry {layer_name!r} is not in the model tensors"
+                    self._nvfp4_layer_algo[titem[0]] = entry.get("quant_algo")
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
