@@ -192,7 +192,7 @@ def run_agentic_loop(url, messages, tools, mock_tool_responses, stream, max_turn
         if not tcs:
             # Print a visual separator before the final model response
             if content:
-                _print(f"\n{DIM}{'·'*60}{RESET}")
+                _print(f"\n{DIM}{'·' * 60}{RESET}")
                 _print(f"{DIM}  model response:{RESET}\n")
             return all_tool_calls, content
 
@@ -1141,9 +1141,9 @@ def main():
                 passed += 1
 
     color = GREEN if passed == total else RED
-    _print(f"\n{BOLD}{color}{'─'*60}{RESET}")
+    _print(f"\n{BOLD}{color}{'─' * 60}{RESET}")
     _print(f"{BOLD}{color}  Results: {passed}/{total} passed{RESET}")
-    _print(f"{BOLD}{color}{'─'*60}{RESET}\n")
+    _print(f"{BOLD}{color}{'─' * 60}{RESET}\n")
     sys.exit(0 if passed == total else 1)
 
 
