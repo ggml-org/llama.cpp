@@ -5,6 +5,7 @@
 
 #undef NDEBUG
 #include <assert.h>
+#include <algorithm>
 #include <math.h>
 #include <stdio.h>
 #include <string>
@@ -82,12 +83,19 @@ static float dot_product(const float * a1, const float * a2, size_t test_size) {
     return sum;
 }
 
-// Total dot product error
-static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_traits_cpu * qfns_cpu, size_t test_size, const float * test_data1, const float * test_data2) {
-    GGML_UNUSED(qfns);
+static size_t dot_product_scratch_size(ggml_type type, size_t test_size) {
+    const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
+    return std::max(
+        ggml_row_size(type, test_size),
+        ggml_row_size(qfns_cpu->vec_dot_type, test_size));
+}
 
-    std::vector<uint8_t> tmp_q1(2*test_size);
-    std::vector<uint8_t> tmp_q2(2*test_size);
+// Total dot product error
+static float dot_product_error(ggml_type type, const ggml_type_traits_cpu * qfns_cpu, size_t test_size, const float * test_data1, const float * test_data2) {
+    const size_t scratch_size = dot_product_scratch_size(type, test_size);
+
+    std::vector<uint8_t> tmp_q1(scratch_size);
+    std::vector<uint8_t> tmp_q2(scratch_size);
 
     const auto * vdot = ggml_get_type_traits_cpu(qfns_cpu->vec_dot_type);
 
@@ -100,6 +108,19 @@ static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_tr
     const float dot_ref = dot_product(test_data1, test_data2, test_size);
 
     return fabsf(result - dot_ref) / test_size;
+}
+
+static int test_dot_product_scratch_size(void) {
+    const size_t test_size = 32 * 128;
+
+    const auto q_size   = dot_product_scratch_size(GGML_TYPE_Q4_0, test_size);
+    const auto f32_size = dot_product_scratch_size(GGML_TYPE_F32,  test_size);
+
+    assert(q_size   >= ggml_row_size(GGML_TYPE_Q4_0, test_size));
+    assert(q_size   >= ggml_row_size(ggml_get_type_traits_cpu(GGML_TYPE_Q4_0)->vec_dot_type, test_size));
+    assert(f32_size >= ggml_row_size(GGML_TYPE_F32, test_size));
+
+    return 0;
 }
 
 static int test_vec_dot_f32(bool verbose) {
@@ -178,7 +199,7 @@ static int test_vec_dot_q(bool verbose) {
                 printf("%5s reference implementation error: %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], reference_error);
             }
 
-            const float vec_dot_error = dot_product_error(qfns, qfns_cpu, test_size, test_data.data(), test_data2.data());
+            const float vec_dot_error = dot_product_error(type, qfns_cpu, test_size, test_data.data(), test_data2.data());
             const float max_allowed_error = type == GGML_TYPE_Q2_K || type == GGML_TYPE_IQ2_XS || type == GGML_TYPE_IQ2_XXS ||
                 type == GGML_TYPE_IQ3_XXS || type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ2_S
                 ? MAX_DOT_PRODUCT_ERROR_LOWBIT
@@ -219,6 +240,7 @@ int main(int argc, char * argv[]) {
 
     int num_failed = 0;
 
+    num_failed += test_dot_product_scratch_size();
     num_failed += test_vec_dot_f32(verbose);
     num_failed += test_vec_dot_q(verbose);
 
