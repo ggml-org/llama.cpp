@@ -563,7 +563,9 @@ static void process_handler_response(server_http_req_ptr && request, server_http
                 SRV_DBG("http: streamed chunk: %s\n", chunk.c_str());
             }
             if (!has_next) {
-                sink.done();
+                if (sink.done) {
+                    sink.done();
+                }
                 SRV_DBG("%s", "http: stream ended\n");
             }
             return has_next;
