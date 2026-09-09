@@ -152,7 +152,7 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
 
                 std::vector<common_peg_parser> required_parsers;
                 std::vector<common_peg_parser> optional_parsers;
-                foreach_parameter(function, [&](const common_schema_property & param, const json & param_schema) {
+                foreach_parameter(function, [&](const common_schema_property & param, const common_schema_document_ptr & doc) {
                     bool is_string = param.schema->resolves_to_string();
 
                     auto arg = p.tool_arg(
@@ -161,7 +161,7 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
                         (is_string ?
                              p.tool_arg_string_value(p.until(PARAM_END)) :
                              p.tool_arg_json_value(p.schema(p.json(), "tool-" + name + "-arg-" + param.name + "-schema",
-                                                            param_schema, false))) +
+                                                            doc, *param.schema))) +
                         p.tool_arg_close(p.literal(PARAM_END)));
 
                     auto named_arg = p.rule("tool-" + name + "-arg-" + param.name, arg);
@@ -251,15 +251,6 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
     if (include_grammar) {
         data.grammar_lazy = has_tools && !require_tools;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
-                builder.resolve_refs(schema);
-            });
-            if (has_response_format) {
-                auto schema = inputs.json_schema;
-                builder.resolve_refs(schema);
-            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 

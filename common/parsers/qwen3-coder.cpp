@@ -99,14 +99,14 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 std::vector<common_peg_parser> required_args;
                 std::vector<common_peg_parser> optional_args;
 
-                foreach_parameter(function, [&](const common_schema_property & param, const json & param_schema) {
+                foreach_parameter(function, [&](const common_schema_property & param, const common_schema_document_ptr & doc) {
                     auto rule_name = "tool-" + name + "-arg-" + param.name;
 
                     auto arg_open = p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param.name)) + ">\n");
 
                     auto arg_value = param.schema->resolves_to_string() ?
                         arg_string :
-                        p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", param_schema)) + arg_close;
+                        p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", doc, *param.schema)) + arg_close;
 
                     auto arg_rule = p.rule(rule_name, p.tool_arg(arg_open + arg_value));
 
@@ -154,15 +154,6 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
         data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
 
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
-                builder.resolve_refs(schema);
-            });
-            if (has_response_format) {
-                auto schema = inputs.json_schema;
-                builder.resolve_refs(schema);
-            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 

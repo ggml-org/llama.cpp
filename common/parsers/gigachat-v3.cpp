@@ -65,11 +65,6 @@ common_chat_params common_chat_params_init_gigachat_v3(
         data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
 
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                auto schema = function.at("parameters");
-                builder.resolve_refs(schema);
-            });
             parser.build_grammar(builder, data.grammar_lazy);
         });
 

@@ -347,8 +347,6 @@ private:
     std::vector<std::string> _errors;
     std::vector<std::string> _warnings;
 
-    common_schema_document _doc;
-
     template <typename T>
     static const T & as(const common_schema & node) {
         return static_cast<const T &>(node);
@@ -818,24 +816,8 @@ public:
         _rules["space"] = SPACE_RULE;
     }
 
-    // Parses the document, so that the $refs of the schemas added after it resolve
-    void resolve_refs(const common_json & schema) {
-        try {
-            common_schema_parse(schema, _doc);
-        } catch (const std::runtime_error & e) {
-            _errors.push_back(e.what());
-        }
-    }
-
-    std::string add_schema(const std::string & name, const common_json & schema) {
-        common_schema_ptr node;
-        try {
-            node = common_schema_parse(schema, _doc);
-        } catch (const std::runtime_error & e) {
-            _errors.push_back(e.what());
-            return "";
-        }
-        return visit(*node, name);
+    std::string add_schema(const std::string & name, const common_schema & schema) {
+        return visit(schema, name);
     }
 
     static std::string _generate_constant_rule(const json & value) {
@@ -1017,9 +999,11 @@ std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) 
 #else
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
-    return build_grammar([&](const common_grammar_builder & callbacks) {
-        callbacks.add_schema("", schema);
-    });
+    try {
+        return json_schema_to_grammar(common_schema_parse(schema));
+    } catch (const std::runtime_error & e) {
+        throw std::invalid_argument(std::string("JSON schema conversion failed:\n") + e.what());
+    }
 }
 
 std::string json_schema_to_grammar(const common_schema_document & schema) {
@@ -1035,12 +1019,9 @@ std::string build_grammar(const std::function<void(const common_grammar_builder 
         /* .add_rule = */ [&](const std::string & name, const std::string & rule) {
             return converter._add_rule(name, rule);
         },
-        /* .add_schema = */ [&](const std::string & name, const common_json & schema) {
+        /* .add_schema = */ [&](const std::string & name, const common_schema & schema) {
             return converter.add_schema(name == "root" ? "" : name, schema);
         },
-        /* .resolve_refs = */ [&](const common_json & schema) {
-            converter.resolve_refs(schema);
-        }
     };
     cb(builder);
     converter.check_errors();

@@ -427,6 +427,26 @@ common_schema_kinds common_schema::resolve_kinds() const {
     return ::resolve_kinds(*this, visited);
 }
 
+const char * common_schema_kind_name(common_schema_kind kind) {
+    switch (kind) {
+        case COMMON_SCHEMA_KIND_ANY:     return "any";
+        case COMMON_SCHEMA_KIND_REF:     return "ref";
+        case COMMON_SCHEMA_KIND_ANY_OF:  return "anyOf";
+        case COMMON_SCHEMA_KIND_ALL_OF:  return "allOf";
+        case COMMON_SCHEMA_KIND_CONST:   return "const";
+        case COMMON_SCHEMA_KIND_ENUM:    return "enum";
+        case COMMON_SCHEMA_KIND_NULL:    return "null";
+        case COMMON_SCHEMA_KIND_BOOLEAN: return "boolean";
+        case COMMON_SCHEMA_KIND_NUMBER:  return "number";
+        case COMMON_SCHEMA_KIND_INTEGER: return "integer";
+        case COMMON_SCHEMA_KIND_STRING:  return "string";
+        case COMMON_SCHEMA_KIND_ARRAY:   return "array";
+        case COMMON_SCHEMA_KIND_TUPLE:   return "tuple";
+        case COMMON_SCHEMA_KIND_OBJECT:  return "object";
+    }
+    return "?";
+}
+
 static bool resolves_to_string(const common_schema & s, std::unordered_set<const common_schema *> & visited) {
     switch (s.kind()) {
         case COMMON_SCHEMA_KIND_STRING:

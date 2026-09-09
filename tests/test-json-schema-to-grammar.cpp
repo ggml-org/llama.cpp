@@ -1537,7 +1537,7 @@ int main() {
         assert(json_schema_to_grammar(common_schema_parse(schema)) == json_schema_to_grammar(schema, true));
     }
 
-    // a sub-schema added on its own resolves its $refs through the document given to resolve_refs()
+    // a property node carries its $ref target, so its grammar names the ref rule
     {
         fprintf(stderr, "- sub-schema $ref\n");
         auto parameters = common_json::parse(R"""({
@@ -1565,9 +1565,10 @@ int main() {
                 string ::= "\"" char* "\""
             )""",
         };
+        auto doc = common_schema_parse(parameters);
         tc.verify(build_grammar([&](const common_grammar_builder & builder) {
-            builder.resolve_refs(parameters);
-            builder.add_schema("root", parameters.at("properties").at("item"));
+            const auto & item = static_cast<const common_schema_object &>(*doc.root).properties.at(0);
+            builder.add_schema("root", *item.schema);
         }));
     }
 

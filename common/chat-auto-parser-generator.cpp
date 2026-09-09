@@ -78,15 +78,6 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     if (include_grammar) {
         data.grammar_lazy = !has_response_format && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
-                builder.resolve_refs(schema);
-            });
-            if (has_response_format) {
-                auto schema = inputs.json_schema;
-                builder.resolve_refs(schema);
-            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -380,7 +371,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         // Build parser for each argument, separating required and optional
         std::vector<common_peg_parser> required_parsers;
         std::vector<common_peg_parser> optional_parsers;
-        foreach_parameter(func, [&](const common_schema_property & param, const json & param_schema) {
+        foreach_parameter(func, [&](const common_schema_property & param, const common_schema_document_ptr & doc) {
             auto arg =
                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param.name)) +
                                            arguments.name_suffix) +
@@ -389,7 +380,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                 p.ac(p.tool_arg_string_value(until_suffix) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)), arguments.value_suffix) :
                                 (p.tool_arg_json_value(p.schema(
-                                    p.json(), "tool-" + name + "-arg-" + param.name + "-schema", param_schema, false)) +
+                                    p.json(), "tool-" + name + "-arg-" + param.name + "-schema", doc, *param.schema)) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));
 
             auto named_arg = p.rule("tool-" + name + "-arg-" + param.name, arg);

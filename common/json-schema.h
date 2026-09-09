@@ -189,6 +189,12 @@ struct common_schema_document {
     std::map<std::string, common_schema_ptr> refs;
 };
 
+// A document shared by the parsers built from its nodes, which it keeps alive
+using common_schema_document_ptr = std::shared_ptr<const common_schema_document>;
+
+// e.g. "string", for messages
+const char * common_schema_kind_name(common_schema_kind kind);
+
 // Parses a JSON schema into a document.
 // Throws std::runtime_error when the schema falls outside the supported subset.
 common_schema_document common_schema_parse(const common_json & schema);
