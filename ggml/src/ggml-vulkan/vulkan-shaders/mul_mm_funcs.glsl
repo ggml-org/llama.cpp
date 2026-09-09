@@ -197,6 +197,24 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint k_pair = row * LOAD_VEC_A / 2;
             store_a(col, k_pair,     FLOAT_TYPEV2(v.xy));
             store_a(col, k_pair + 1, FLOAT_TYPEV2(v.zw));
+#elif defined(DATA_A_TQ1_0)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+
+            const uint ib  = idx / 128;               // 2 values per idx
+            const uint iqs = (idx % 128) * 2;         // element 0,2,4..254
+
+            const float d = float(data_a[ib].d);
+            vec2 v;
+            for (uint kk = 0u; kk < 2u; ++kk) {
+                const uint e = iqs + kk;
+                const uint bidx = tq1_0_byte_of(e);
+                const uint qbyte = uint(bidx < 48u ? data_a[ib].qs[bidx]
+                                                   : data_a[ib].qh[bidx - 48u]);
+                v[kk] = d * (float(tq1_0_trit(qbyte, tq1_0_digit_of(e))) - 1.0);
+            }
+
+            const uint k_pair = row * LOAD_VEC_A / 2;
+            store_a(col, k_pair, FLOAT_TYPEV2(v.xy));
 #elif defined(DATA_A_TQ2_0)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
 
