@@ -1,5 +1,7 @@
 #include "../ggml/src/ggml-backend-impl.h"
+#include "../ggml/src/ggml-backend-memory.h"
 
+#include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpp.h"
 #include "ggml.h"
@@ -16,6 +18,12 @@ struct test_device_context {
     size_t set_count = 0;
     size_t get_count = 0;
     size_t reset_count = 0;
+    size_t alloc_count = 0;
+    size_t free_count = 0;
+    size_t clear_count = 0;
+    size_t alignment = 16;
+    size_t last_alloc_size = 0;
+    uint8_t * last_alloc_data = nullptr;
     bool fail_init = false;
     ggml_backend_buffer_type buft = {};
     ggml_backend_device device = {};
@@ -36,6 +44,10 @@ static const char * test_buft_name(ggml_backend_buffer_type_t) {
 
 static void test_buffer_free(ggml_backend_buffer_t buffer) {
     auto * context = static_cast<test_buffer_context *>(buffer->context);
+    context->owner->free_count++;
+    if (context->owner->last_alloc_data == context->data) {
+        context->owner->last_alloc_data = nullptr;
+    }
     delete[] context->data;
     delete context;
 }
@@ -75,6 +87,7 @@ static void test_buffer_get_tensor(
 }
 
 static void test_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
+    static_cast<test_buffer_context *>(buffer->context)->owner->clear_count++;
     std::memset(test_buffer_base(buffer), value, buffer->size);
 }
 
@@ -90,6 +103,9 @@ static ggml_backend_buffer_t test_buft_alloc(ggml_backend_buffer_type_t buft, si
         owner,
         new uint8_t[size],
     };
+    owner->alloc_count++;
+    owner->last_alloc_size = size;
+    owner->last_alloc_data = context->data;
     const ggml_backend_buffer_i iface = {
         /* .free_buffer   = */ test_buffer_free,
         /* .get_base      = */ test_buffer_base,
@@ -106,8 +122,8 @@ static ggml_backend_buffer_t test_buft_alloc(ggml_backend_buffer_type_t buft, si
     return ggml_backend_buffer_init(buft, iface, context, size);
 }
 
-static size_t test_buft_alignment(ggml_backend_buffer_type_t) {
-    return 16;
+static size_t test_buft_alignment(ggml_backend_buffer_type_t buft) {
+    return static_cast<test_device_context *>(buft->context)->alignment;
 }
 
 static bool test_buft_is_host(ggml_backend_buffer_type_t) {
@@ -158,8 +174,9 @@ static ggml_backend_meta_split_state test_split_state(const ggml_tensor *, void 
     };
 }
 
-static test_device_context make_test_device() {
+static test_device_context make_test_device(size_t alignment = 16) {
     test_device_context result;
+    result.alignment = alignment;
     result.buft.iface = {
         /* .get_name       = */ test_buft_name,
         /* .alloc_buffer   = */ test_buft_alloc,
@@ -191,12 +208,15 @@ static test_device_context make_test_device() {
     return result;
 }
 
-int main() {
-    test_device_context device = make_test_device();
+// Rebind self-referential test interfaces after a device context is moved.
+static void bind_test_device(test_device_context & device) {
     device.buft.device = &device.device;
     device.buft.context = &device;
     device.device.context = &device;
+}
 
+// Verify Meta initializes and refreshes backend-specific tensor metadata.
+static void test_meta_tensor_initialization(test_device_context & device) {
     ggml_backend_dev_t simple_devices[] = {&device.device};
     ggml_backend_dev_t meta_device = ggml_backend_meta_device(
         simple_devices, 1, test_split_state, nullptr);
@@ -263,6 +283,90 @@ int main() {
     GGML_ASSERT(device.init_count == 5);
     GGML_ASSERT(device.set_count == 4);
     GGML_ASSERT(device.get_count == 2);
-    std::puts("test_backend_meta_tensor_initialization PASSED");
+}
+
+// Verify one logical Meta allocation composes independent child buffers without a spanning view.
+static void test_meta_buffer_composition(
+        test_device_context & first, test_device_context & second) {
+    constexpr size_t buffer_size = 256;
+    constexpr size_t range_offset = 64;
+    constexpr size_t range_size = 64;
+    ggml_backend_dev_t simple_devices[] = {&first.device, &second.device};
+    ggml_backend_dev_t meta_device = ggml_backend_meta_device(
+        simple_devices, 2, test_split_state, nullptr);
+    ggml_backend_buffer_type_t meta_buft = ggml_backend_dev_buffer_type(meta_device);
+    GGML_ASSERT(ggml_backend_buft_get_alignment(meta_buft) == second.alignment);
+
+    {
+        ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(meta_buft, buffer_size));
+        GGML_ASSERT(buffer && ggml_backend_buffer_is_meta(buffer.get()));
+        GGML_ASSERT(ggml_backend_buffer_get_type(buffer.get()) == meta_buft);
+        GGML_ASSERT(ggml_backend_buffer_get_size(buffer.get()) == buffer_size);
+        GGML_ASSERT(first.alloc_count == 1 && second.alloc_count == 1);
+        GGML_ASSERT(first.last_alloc_size == buffer_size && second.last_alloc_size == buffer_size);
+        GGML_ASSERT(first.last_alloc_data != nullptr && second.last_alloc_data != nullptr);
+        GGML_ASSERT(first.last_alloc_data != second.last_alloc_data);
+
+        GGML_ASSERT(!ggml_backend_buffer_supports_views(buffer.get()));
+        GGML_ASSERT(ggml_backend_buffer_view(buffer.get(), range_offset, range_size) == nullptr);
+        GGML_ASSERT(ggml_backend_memory_arena_new_from_buffer(buffer.get()) == nullptr);
+
+        ggml_backend_buffer_clear(buffer.get(), 0x5a);
+        GGML_ASSERT(first.clear_count == 1 && second.clear_count == 1);
+        for (size_t i = 0; i < buffer_size; ++i) {
+            GGML_ASSERT(first.last_alloc_data[i] == 0x5a);
+            GGML_ASSERT(second.last_alloc_data[i] == 0x5a);
+        }
+
+        ggml_init_params params = {
+            /* .mem_size   = */ 2*ggml_tensor_overhead(),
+            /* .mem_buffer = */ nullptr,
+            /* .no_alloc   = */ true,
+        };
+        ggml_context_ptr ctx(ggml_init(params));
+        ggml_tensor * tensor = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 4);
+        ggml_tallocr alloc{};
+        GGML_ASSERT(!ggml_tallocr_new_range(
+            &alloc, buffer.get(), range_offset, range_size));
+        GGML_ASSERT(tensor->buffer == nullptr && tensor->data == nullptr);
+        void * tensor_address =
+            static_cast<uint8_t *>(ggml_backend_buffer_get_base(buffer.get())) + range_offset;
+        GGML_ASSERT(ggml_backend_tensor_alloc(
+            buffer.get(), tensor, tensor_address) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(tensor->buffer == buffer.get());
+        GGML_ASSERT(tensor->data == tensor_address);
+        GGML_ASSERT(first.init_count == 1 && second.init_count == 1);
+
+        const float values[] = {1, 2, 3, 4};
+        ggml_backend_tensor_set(tensor, values, 0, sizeof(values));
+        GGML_ASSERT(first.set_count == 1 && second.set_count == 1);
+        GGML_ASSERT(std::memcmp(first.last_alloc_data + range_offset, values, sizeof(values)) == 0);
+        GGML_ASSERT(std::memcmp(second.last_alloc_data + range_offset, values, sizeof(values)) == 0);
+
+        float result[4] = {};
+        ggml_backend_tensor_get(tensor, result, 0, sizeof(result));
+        GGML_ASSERT(std::memcmp(values, result, sizeof(values)) == 0);
+        GGML_ASSERT(first.get_count == 1 && second.get_count == 0);
+
+        ggml_backend_buffer_reset(buffer.get());
+        GGML_ASSERT(first.reset_count == 1 && second.reset_count == 1);
+    }
+
+    GGML_ASSERT(first.free_count == 1 && second.free_count == 1);
+    GGML_ASSERT(first.last_alloc_data == nullptr && second.last_alloc_data == nullptr);
+}
+
+int main() {
+    test_device_context initialization_device = make_test_device();
+    test_device_context first = make_test_device(16);
+    test_device_context second = make_test_device(32);
+    bind_test_device(initialization_device);
+    bind_test_device(first);
+    bind_test_device(second);
+
+    test_meta_tensor_initialization(initialization_device);
+    std::puts("test_meta_tensor_initialization PASSED");
+    test_meta_buffer_composition(first, second);
+    std::puts("test_meta_buffer_composition PASSED");
     return 0;
 }
