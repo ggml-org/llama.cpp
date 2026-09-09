@@ -130,7 +130,8 @@ class ModelBase:
                  sentence_transformers_dense_modules: bool = False,
                  target_model_dir: Path | None = None,
                  fuse_gate_up_exps: bool = False,
-                 fp8_as_q8: bool = False):
+                 fp8_as_q8: bool = False,
+                 fuse_qkv: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -153,6 +154,15 @@ class ModelBase:
         self.fuse_gate_up_exps = fuse_gate_up_exps
         self._gate_exp_buffer: dict[int, Tensor] = {}
         self._up_exp_buffer: dict[int, Tensor] = {}
+        self.fuse_qkv = fuse_qkv
+        self._q_buffer: dict[int, Tensor] = {}
+        self._k_buffer: dict[int, Tensor] = {}
+        self._v_buffer: dict[int, Tensor] = {}
+        self._q_bias_buffer: dict[int, Tensor] = {}
+        self._k_bias_buffer: dict[int, Tensor] = {}
+        self._v_bias_buffer: dict[int, Tensor] = {}
+        self._fusable_qkv_weight_layers: set[int] = set()
+        self._fusable_qkv_bias_layers: set[int] = set()
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
@@ -617,6 +627,43 @@ class ModelBase:
             raise ValueError(f"Can not map tensor {name!r}")
         return new_name
 
+    def prepare_qkv_fusion(self) -> None:
+        self._fusable_qkv_weight_layers.clear()
+        self._fusable_qkv_bias_layers.clear()
+        if not self.fuse_qkv or gguf.MODEL_TENSOR.ATTN_QKV not in gguf.MODEL_TENSORS[self.model_arch]:
+            return
+
+        qkv_types = {
+            gguf.MODEL_TENSOR.ATTN_Q,
+            gguf.MODEL_TENSOR.ATTN_K,
+            gguf.MODEL_TENSOR.ATTN_V,
+        }
+        weights: dict[int, set[gguf.MODEL_TENSOR]] = {}
+        biases: dict[int, set[gguf.MODEL_TENSOR]] = {}
+
+        for name in self.model_tensors:
+            mapped = self.tensor_map.get_type_and_name(name, try_suffixes=(".weight", ".bias"))
+            if mapped is None:
+                continue
+            tensor_type, new_name = mapped
+            if tensor_type not in qkv_types:
+                continue
+
+            bid = next((int(part) for part in new_name.split(".") if part.isdecimal()), None)
+            if bid is None:
+                continue
+            if new_name.endswith(".weight"):
+                weights.setdefault(bid, set()).add(tensor_type)
+            elif new_name.endswith(".bias"):
+                biases.setdefault(bid, set()).add(tensor_type)
+
+        for bid, weight_types in weights.items():
+            bias_types = biases.get(bid, set())
+            if weight_types == qkv_types and (not bias_types or bias_types == qkv_types):
+                self._fusable_qkv_weight_layers.add(bid)
+                if bias_types:
+                    self._fusable_qkv_bias_layers.add(bid)
+
     def set_gguf_parameters(self):
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
@@ -643,6 +690,40 @@ class ModelBase:
             # If we buffered a gate/up tensor, wait for the other
             if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_EXP, bid) or \
                self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
+                return []
+
+        # Handle Q/K/V tensor fusion if enabled
+        qkv_bid = next((int(part) for part in new_name.split(".") if part.isdecimal()), None) if self.fuse_qkv else None
+        if qkv_bid is not None:
+            is_bias = new_name.endswith('.bias')
+            suffix = '.bias' if is_bias else '.weight'
+            fusable_layers = self._fusable_qkv_bias_layers if is_bias else self._fusable_qkv_weight_layers
+            if qkv_bid not in fusable_layers:
+                return [(new_name, data_torch)]
+
+            buf_q = self._q_bias_buffer if is_bias else self._q_buffer
+            buf_k = self._k_bias_buffer if is_bias else self._k_buffer
+            buf_v = self._v_bias_buffer if is_bias else self._v_buffer
+
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, qkv_bid, suffix):
+                buf_q[qkv_bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, qkv_bid, suffix):
+                buf_k[qkv_bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, qkv_bid, suffix):
+                buf_v[qkv_bid] = data_torch
+
+            if qkv_bid in buf_q and qkv_bid in buf_k and qkv_bid in buf_v:
+                q_data = buf_q.pop(qkv_bid)
+                k_data = buf_k.pop(qkv_bid)
+                v_data = buf_v.pop(qkv_bid)
+                fused_data = torch.cat([q_data, k_data, v_data], dim=0)
+                fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, qkv_bid, suffix=suffix)
+                logger.info(f"Fused Q, K, V {suffix[1:]} into QKV for layer {qkv_bid}")
+                return [(fused_name, fused_data)]
+
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, qkv_bid, suffix) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, qkv_bid, suffix) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, qkv_bid, suffix):
                 return []
 
         return [(new_name, data_torch)]
@@ -899,6 +980,8 @@ class ModelBase:
 
         self.dequant_model()
 
+        self.prepare_qkv_fusion()
+
         # Handle empty tensor_map for models with block_count=0 (like MobileNetV5)
         if self.tensor_map.mapping:
             max_name_len = max(len(s) for _, s in self.tensor_map.mapping.values()) + len(".weight,")
@@ -1026,6 +1109,13 @@ class ModelBase:
                 logger.info(f"{f'%-{max_name_len}s' % f'{new_name},'} {old_dtype} --> {data_qtype.name}, shape = {shape_str}")
 
                 self.gguf_writer.add_tensor(new_name, data, raw_dtype=data_qtype)
+
+        qkv_buffers = (
+            self._q_buffer, self._k_buffer, self._v_buffer,
+            self._q_bias_buffer, self._k_bias_buffer, self._v_bias_buffer,
+        )
+        if any(qkv_buffers):
+            raise ValueError("QKV fusion did not consume all buffered tensors")
 
     def set_type(self):
         self.gguf_writer.add_type(gguf.GGUFType.MODEL)
@@ -1543,6 +1633,9 @@ class TextModel(ModelBase):
         if chkhsh == "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7":
             # ref: https://huggingface.co/LiquidAI/LFM2.5-8B-A1B
             res = "lfm2"
+        if chkhsh == "0a766d034107bc736a3f2dc4968fd62e54a3570f1454443e0c5a4cc6bd7941ed":
+            # ref: https://huggingface.co/XHToken/Spark-X2.5-1.7B
+            res = "spark2_5"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
