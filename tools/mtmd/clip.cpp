@@ -770,7 +770,15 @@ ggml_tensor * clip_graph::build_attn(
 
     ggml_tensor * cur;
 
-    if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
+    // HIP tile FA kernel crashes for D=72 with large sequences (issue #28608)
+    bool use_flash_attn = (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED);
+#ifdef GGML_USE_HIP
+    if (d_head == 72) {
+        use_flash_attn = false;
+    }
+#endif
+
+    if (use_flash_attn) {
         ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
 
         k = ggml_cast(ctx0, k, GGML_TYPE_F16);
