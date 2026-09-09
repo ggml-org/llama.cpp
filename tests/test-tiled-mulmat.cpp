@@ -656,7 +656,7 @@ int main(int argc, char ** argv) {
     }
 
     // Enable tiled MM, also force tiled MM even when unprofitable for benchmarks
-#if defined(_MSC_VER)
+#if defined(_WIN32)
     _putenv("GGML_CPU_TILED_MM=1");
     _putenv("GGML_CPU_TILED_MM_FORCE=1");
 #else
