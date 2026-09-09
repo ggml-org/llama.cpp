@@ -657,6 +657,31 @@ static bool check_causal_attn_toggle(
     return ok;
 }
 
+// Rebuild arena-backed scheduler storage repeatedly and verify that graph placement remains deterministic.
+static void test_compute_arena_rereserve(
+        llama_model * model,
+        llama_context * lctx,
+        const std::vector<llama_token> & tokens,
+        const std::vector<float> & expected) {
+    if (!lctx->uses_compute_arenas()) {
+        return;
+    }
+
+    llama_memory_clear(llama_get_memory(lctx), true);
+    for (int i = 0; i < 3; ++i) {
+        llama_set_causal_attn(lctx, false);
+        lctx->sched_reserve();
+        GGML_ASSERT(lctx->uses_compute_arenas());
+
+        llama_set_causal_attn(lctx, true);
+        lctx->sched_reserve();
+        GGML_ASSERT(lctx->uses_compute_arenas());
+    }
+
+    const std::vector<float> actual = get_logits(model, lctx, tokens);
+    GGML_ASSERT(actual == expected);
+}
+
 static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_LLAMA4:
@@ -1023,6 +1048,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         test_executed = true;
                         model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
+                        if (arch == LLM_ARCH_LLAMA && !moe) {
+                            test_compute_arena_rereserve(
+                                model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, logits_dev);
+                        }
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
