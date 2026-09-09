@@ -1974,6 +1974,81 @@ static void test_convert_responses_to_chatcmpl() {
 
         assert_equals(false, result.contains("tools"));
     }
+
+    // Test function_call_output with text and image content parts
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": "what is in this image?"
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "view_image",
+                    "arguments": "{\"path\": \"/tmp/test.jpg\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": "Image loaded"
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/jpeg;base64,/9j/4AAQ"
+                        }
+                    ]
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals((size_t)3, result.at("messages").size());
+
+        const auto & tool_msg = result.at("messages")[2];
+        assert_equals(std::string("tool"), tool_msg.at("role").get<std::string>());
+        assert_equals(std::string("call_1"), tool_msg.at("tool_call_id").get<std::string>());
+        assert_equals(true, tool_msg.at("content").is_array());
+        assert_equals((size_t)2, tool_msg.at("content").size());
+        assert_equals(std::string("text"), tool_msg.at("content")[0].at("type").get<std::string>());
+        assert_equals(std::string("Image loaded"), tool_msg.at("content")[0].at("text").get<std::string>());
+        assert_equals(std::string("image_url"), tool_msg.at("content")[1].at("type").get<std::string>());
+        assert_equals(std::string("data:image/jpeg;base64,/9j/4AAQ"), tool_msg.at("content")[1].at("image_url").at("url").get<std::string>());
+    }
+
+    // Test function_call_output rejects unsupported content part types
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "type": "input_file",
+                            "file_id": "file_1"
+                        }
+                    ]
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        bool threw = false;
+        try {
+            server_chat_convert_responses_to_chatcmpl(input);
+        } catch (const std::exception &) {
+            threw = true;
+        }
+        assert_equals(true, threw);
+    }
 }
 
 // Shared LFM2 parser cases - all variants use one output format and parser
