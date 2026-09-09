@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <map>
 #include <random>
 #include <regex>
 #include <stdexcept>
@@ -492,6 +493,38 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
     return true;
 }
 
+// Verify compute-memory reports match either measured requirements or attached scheduler storage.
+static void test_compute_memory_reporting(llama_context * lctx, bool no_alloc) {
+    ggml_backend_sched_t sched = lctx->get_sched();
+    std::map<ggml_backend_buffer_type_t, size_t> allocated;
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
+        ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
+        ggml_backend_buffer_type_t buft = ggml_backend_sched_get_buffer_type(sched, backend);
+        const size_t size = ggml_backend_sched_get_buffer_size(sched, backend);
+        if (no_alloc) {
+            GGML_ASSERT(size == 0);
+        } else {
+            allocated[buft] = std::max(allocated[buft], size);
+        }
+    }
+
+    const llama_memory_breakdown breakdown = lctx->memory_breakdown();
+    if (no_alloc) {
+        size_t measured = 0;
+        for (const auto & entry : breakdown) {
+            measured += entry.second.compute;
+        }
+        GGML_ASSERT(measured > 0);
+        return;
+    }
+
+    for (const auto & entry : allocated) {
+        auto found = breakdown.find(entry.first);
+        GGML_ASSERT(found != breakdown.end());
+        GGML_ASSERT(found->second.compute == entry.second);
+    }
+}
+
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
@@ -535,6 +568,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     if (devs.empty()) {
         GGML_ASSERT(lctx->uses_compute_arenas() != no_alloc);
     }
+    test_compute_memory_reporting(lctx.get(), no_alloc);
     return std::make_pair(std::move(model), std::move(lctx));
 }
 
@@ -657,6 +691,36 @@ static bool check_causal_attn_toggle(
     return ok;
 }
 
+// Run a short prefill followed by one TG1 step and return the resulting logits.
+static std::vector<float> get_tg1_logits(
+        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
+    constexpr uint32_t n_prefill = 16;
+    GGML_ASSERT(tokens.size() > n_prefill);
+
+    llama_batch prefill = llama_batch_init(n_prefill, 0, 1);
+    for (uint32_t pos = 0; pos < n_prefill; ++pos) {
+        common_batch_add(prefill, tokens[pos], pos, {0}, pos + 1 == n_prefill);
+    }
+    if (llama_decode(lctx, prefill)) {
+        llama_batch_free(prefill);
+        throw std::runtime_error("failed to decode short prefill");
+    }
+    llama_batch_free(prefill);
+
+    llama_batch tg1 = llama_batch_init(1, 0, 1);
+    common_batch_add(tg1, tokens[n_prefill], n_prefill, {0}, true);
+    if (llama_decode(lctx, tg1)) {
+        llama_batch_free(tg1);
+        throw std::runtime_error("failed to decode TG1 token");
+    }
+
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const float * logits = llama_get_logits_ith(lctx, 0);
+    std::vector<float> result(logits, logits + n_vocab);
+    llama_batch_free(tg1);
+    return result;
+}
+
 // Rebuild arena-backed scheduler storage repeatedly and verify that graph placement remains numerically stable.
 static void test_compute_arena_rereserve(
         llama_model * model,
@@ -667,6 +731,8 @@ static void test_compute_arena_rereserve(
         return;
     }
 
+    llama_memory_clear(llama_get_memory(lctx), true);
+    const std::vector<float> expected_tg1 = get_tg1_logits(model, lctx, tokens);
     llama_memory_clear(llama_get_memory(lctx), true);
     for (int i = 0; i < 16; ++i) {
         llama_set_causal_attn(lctx, false);
@@ -681,6 +747,10 @@ static void test_compute_arena_rereserve(
     const std::vector<float> actual = get_logits(model, lctx, tokens);
     const double error = nmse(expected, actual);
     GGML_ASSERT(error <= 1e-4);
+
+    llama_memory_clear(llama_get_memory(lctx), true);
+    const std::vector<float> actual_tg1 = get_tg1_logits(model, lctx, tokens);
+    GGML_ASSERT(nmse(expected_tg1, actual_tg1) <= 1e-4);
 }
 
 static bool moe_mandatory(const llm_arch arch) {
