@@ -6,12 +6,23 @@ static constexpr int PARAKEET_LOCAL_ATTN_WINDOW    = 128;
 // conv subsampling + conformer encoder
 ggml_cgraph * clip_graph_parakeet::build() {
 
+    auto conv = [&](ggml_tensor * w, ggml_tensor * x, int stride, int pad) {
+        if (!model.hparams.parakeet_mlx_frontend) {
+            return ggml_conv_2d(ctx0, w, x, stride, stride, pad, pad, 1, 1);
+        }
+        auto * col = ggml_im2col(ctx0, w, x, stride, stride, pad, pad, 1, 1, true, GGML_TYPE_F32);
+        auto * result = ggml_mul_mat(ctx0,
+            ggml_reshape_2d(ctx0, col, col->ne[0], col->ne[1] * col->ne[2] * col->ne[3]),
+            ggml_reshape_2d(ctx0, w, w->ne[0] * w->ne[1] * w->ne[2], w->ne[3]));
+        result = ggml_reshape_4d(ctx0, result, col->ne[1], col->ne[2], col->ne[3], w->ne[3]);
+        return ggml_cont(ctx0, ggml_permute(ctx0, result, 0, 1, 3, 2));
+    };
     // Conv subsampling
     ggml_tensor * inp = build_inp_raw(1);
     inp = ggml_cont(ctx0, ggml_transpose(ctx0, inp));
 
     // [freq, time, channels, batch]
-    ggml_tensor * cur = ggml_conv_2d(ctx0, model.pre_encode_conv_X_w[0], inp, 2, 2, 1, 1, 1, 1);
+    ggml_tensor * cur = conv(model.pre_encode_conv_X_w[0], inp, 2, 1);
     cur = ggml_add(ctx0, cur, model.pre_encode_conv_X_b[0]);
     cb(cur, "pre_conv_0", -1);
 
@@ -24,7 +35,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
     cb(cur, "pre_conv_2", -1);
 
     // [freq, time, channels, batch]
-    cur = ggml_conv_2d(ctx0, model.pre_encode_conv_X_w[3], cur, 1, 1, 0, 0, 1, 1);
+    cur = conv(model.pre_encode_conv_X_w[3], cur, 1, 0);
     cur = ggml_add(ctx0, cur, model.pre_encode_conv_X_b[3]);
     cb(cur, "pre_conv_3", -1);
 
@@ -38,7 +49,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
     cb(cur, "pre_conv_5", -1);
 
     // [freq, time, channels, batch]
-    cur = ggml_conv_2d(ctx0, model.pre_encode_conv_X_w[6], cur, 1, 1, 0, 0, 1, 1);
+    cur = conv(model.pre_encode_conv_X_w[6], cur, 1, 0);
     cur = ggml_add(ctx0, cur, model.pre_encode_conv_X_b[6]);
     cb(cur, "pre_conv_6", -1);
 
@@ -118,7 +129,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
             cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.ff_norm_w), layer.ff_norm_b);
             ggml_format_name(cur, "enc_%d_ffn_norm_1", il);
 
-            cur = build_ffn(cur, layer.ff_up_w, nullptr, nullptr, nullptr, layer.ff_down_w, nullptr, FFN_SILU, il);
+            cur = build_ffn(cur, layer.ff_up_w, layer.ff_up_b, nullptr, nullptr, layer.ff_down_w, layer.ff_down_b, FFN_SILU, il);
             ggml_format_name(cur, "enc_%d_ffn_1", il);
 
             cur = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, fc_factor));
@@ -141,6 +152,10 @@ ggml_cgraph * clip_graph_parakeet::build() {
             struct ggml_tensor * Q_cur = build_mm(layer.q_w, cur);
             struct ggml_tensor * K_cur = build_mm(layer.k_w, cur);
             struct ggml_tensor * V_cur = build_mm(layer.v_w, cur);
+
+            if (layer.q_b) { Q_cur = ggml_add(ctx0, Q_cur, layer.q_b); }
+            if (layer.k_b) { K_cur = ggml_add(ctx0, K_cur, layer.k_b); }
+            if (layer.v_b) { V_cur = ggml_add(ctx0, V_cur, layer.v_b); }
 
             // [d_head, n_heads, n_time, 1]
             Q_cur = ggml_reshape_3d(ctx0, Q_cur, d_head, n_head, n_time);
@@ -334,6 +349,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
                 cur = ggml_cont_2d(ctx0, cur, n_state, n_time);
                 cur = build_mm(layer.o_w, cur);
             }
+            if (layer.o_b) { cur = ggml_add(ctx0, cur, layer.o_b); }
             ggml_format_name(cur, "enc_%d_attn_out", il);
 
             cur = ggml_add(ctx0, residual, cur);
@@ -351,6 +367,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
 
             // pointwise 1d convolution:
             cur = build_mm(layer.conv_pw1_w, cur);
+            if (layer.conv_pw1_b) { cur = ggml_add(ctx0, cur, layer.conv_pw1_b); }
             ggml_format_name(cur, "enc_%d_conv_pw1", il);
 
             {
@@ -372,10 +389,13 @@ ggml_cgraph * clip_graph_parakeet::build() {
             ggml_format_name(cur, "enc_%d_conv_dw_pad", il);
 
             cur = ggml_ssm_conv(ctx0, cur, layer.conv_dw_w);
+            if (layer.conv_dw_b) { cur = ggml_add(ctx0, cur, layer.conv_dw_b); }
             ggml_format_name(cur, "enc_%d_conv_1d_dw", il);
 
             cur = ggml_sub(ctx0, cur, layer.conv_norm_mean);
-            struct ggml_tensor * std = ggml_sqrt(ctx0, layer.conv_norm_var);
+            auto * variance = layer.conv_norm_var;
+            if (hparams.parakeet_mlx_frontend) { variance = ggml_scale_bias(ctx0, variance, 1.0f, 1e-5f); }
+            struct ggml_tensor * std = ggml_sqrt(ctx0, variance);
             cur = ggml_div(ctx0, cur, std);
             cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.conv_norm_w), layer.conv_norm_b);
             ggml_format_name(cur, "enc_%d_conv_bn", il);
@@ -384,6 +404,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
             ggml_format_name(cur, "enc_%d_conv_silu", il);
 
             cur = build_mm(layer.conv_pw2_w, cur);
+            if (layer.conv_pw2_b) { cur = ggml_add(ctx0, cur, layer.conv_pw2_b); }
             ggml_format_name(cur, "enc_%d_conv_pw2", il);
 
             cur = ggml_add(ctx0, residual, cur);
@@ -397,16 +418,22 @@ ggml_cgraph * clip_graph_parakeet::build() {
             cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.ff_norm_1_w), layer.ff_norm_1_b);
             ggml_format_name(cur, "enc_%d_ffn_norm_2", il);
 
-            cur = build_ffn(cur, layer.ff_up_1_w, nullptr, nullptr, nullptr, layer.ff_down_1_w, nullptr, FFN_SILU, il);
+            cur = build_ffn(cur, layer.ff_up_1_w, layer.ff_up_1_b, nullptr, nullptr, layer.ff_down_1_w, layer.ff_down_1_b, FFN_SILU, il);
             cur = ggml_add(ctx0, residual, ggml_scale(ctx0, cur, 0.5));
             ggml_format_name(cur, "enc_%d_ffn_res", il);
         }
 
         cur = ggml_norm(ctx0, cur, hparams.eps);
         cur = ggml_add(ctx0, ggml_mul(ctx0, cur, layer.ln_2_w), layer.ln_2_b);
+        cb(cur, "parakeet_layer", il);
     }
 
     cb(cur, "encoder_out", -1);
+
+    if (hparams.parakeet_mlx_frontend) {
+        ggml_build_forward_expand(gf, cur);
+        return gf;
+    }
 
     cur = ggml_rms_norm(ctx0, cur, 1e-6);
     cur = ggml_mul(ctx0, cur, model.mm_norm_pre_w);

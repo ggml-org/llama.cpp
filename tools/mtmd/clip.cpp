@@ -1489,6 +1489,7 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_PARAKEET:
                     {
+                        get_bool("clip.audio.parakeet_mlx_frontend", hparams.parakeet_mlx_frontend, false);
                         get_u32(KEY_AUDIO_SUBSMPL_FACTOR, hparams.subsampling_factor);
                         GGML_ASSERT(hparams.subsampling_factor == 8 &&
                             "subsampling_factor must match the conv strides in clip_graph_parakeet::build()");
@@ -3469,9 +3470,11 @@ struct clip_model_loader {
                         layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"));
                     }
 
+                    if (!hparams.parakeet_mlx_frontend) {
                     model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
                     model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
                     model.mm_model_mlp_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
+                    }
                 } break;
             case PROJECTOR_TYPE_GRANITE_SPEECH:
                 {
@@ -6037,7 +6040,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             return ctx->model.gen_input_lin_w->ne[1];
         case PROJECTOR_TYPE_PARAKEET:
-            return ctx->model.mm_1_w->ne[1];
+            return ctx->model.hparams.parakeet_mlx_frontend ? ctx->model.hparams.n_embd : ctx->model.mm_1_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }

@@ -137,6 +137,10 @@ struct clip_hparams {
     int32_t audio_n_fft       = -1;
     int32_t audio_window_len  = -1;
     int32_t audio_hop_len     = -1;
+    // Pinned Parakeet MLX variant: matching mel frontend, F32 convolution,
+    // BN epsilon 1e-5, and raw encoder output without the Nemotron projector.
+    // Optional checkpoint biases are loaded independently of this flag.
+    bool parakeet_mlx_frontend = false;
 
     // parakeet
     std::vector<float> mel_filters;

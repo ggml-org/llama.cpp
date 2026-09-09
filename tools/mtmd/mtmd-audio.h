@@ -55,6 +55,8 @@ struct mtmd_audio_preprocessor {
 
     mtmd_audio_preprocessor(const clip_ctx * ctx): hparams(*clip_get_hparams(ctx)) {}
 
+    explicit mtmd_audio_preprocessor(const clip_hparams & params): hparams(params) {}
+
     virtual ~mtmd_audio_preprocessor() = default;
     virtual void initialize() = 0; // NOT thread-safe
     virtual bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const = 0;
@@ -147,11 +149,13 @@ struct mtmd_audio_preprocessor_pockettts : mtmd_audio_preprocessor {
 
 struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_parakeet(clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) { }
+    explicit mtmd_audio_preprocessor_parakeet(const clip_hparams & params) : mtmd_audio_preprocessor(params) { }
     void initialize() override;
     bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
 
   private:
     mtmd_audio_cache cache;
+    bool preprocess_mlx(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const;
 
     static void worker_thread(int ith, const float * window_func, int window_size,
                               const std::vector<float> & samples, int n_samples,

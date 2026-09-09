@@ -1264,9 +1264,56 @@ void mtmd_audio_preprocessor_parakeet::initialize() {
     cache.hann_window = hparams.window;
 }
 
+bool mtmd_audio_preprocessor_parakeet::preprocess_mlx(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const {
+    // This checkpoint uses a left-aligned window and L1 complex magnitude.
+    constexpr size_t pad = 256;
+    if (!samples || n_samples <= pad || n_samples > 16000 * 80 ||
+        !std::all_of(samples, samples + n_samples, [](float x) { return std::isfinite(x); })) { return false; }
+    std::vector<float> signal(samples, samples + n_samples);
+    for (size_t i = n_samples - 1; i > 0; --i) { signal[i] -= 0.97f * signal[i - 1]; }
+    std::vector<float> padded(n_samples + 2 * pad);
+    std::copy(signal.begin(), signal.end(), padded.begin() + pad);
+    for (size_t i = 0; i < pad; ++i) {
+        padded[i] = signal[pad - i];
+        padded[pad + n_samples + i] = signal[n_samples - 2 - i];
+    }
+    mtmd_audio_mel mel;
+    mel.n_mel = 80;
+    mel.n_len = (padded.size() - 400 + 160) / 160;
+    mel.n_len_org = mel.n_len;
+    mel.data.resize(mel.n_len * mel.n_mel);
+    std::vector<float> in(1024, 0.0f), spectrum(8192);
+    for (int64_t frame = 0; frame < mel.n_len; ++frame) {
+        for (size_t j = 0; j < 400; ++j) { in[j] = padded[frame * 160 + j] * cache.hann_window[j]; }
+        fft(cache, in.data(), 512, spectrum.data());
+        for (size_t j = 0; j < 257; ++j) {
+            const float mag = std::abs(spectrum[2 * j]) + std::abs(spectrum[2 * j + 1]);
+            spectrum[j] = mag * mag;
+        }
+        for (int64_t m = 0; m < mel.n_mel; ++m) {
+            double sum = 0;
+            for (size_t j = 0; j < 257; ++j) { sum += spectrum[j] * cache.filters.data[m * 257 + j]; }
+            mel.data[m * mel.n_len + frame] = std::log(sum + 1e-5);
+        }
+    }
+    for (int64_t m = 0; m < mel.n_mel; ++m) {
+        auto * values = mel.data.data() + m * mel.n_len;
+        double sum = 0, variance = 0;
+        for (int64_t i = 0; i < mel.n_len; ++i) { sum += values[i]; }
+        const double mean = sum / mel.n_len;
+        for (int64_t i = 0; i < mel.n_len; ++i) { const double d = values[i] - mean; variance += d * d; }
+        const double denom = std::sqrt(variance / mel.n_len) + 1e-5;
+        for (int64_t i = 0; i < mel.n_len; ++i) { values[i] = (values[i] - mean) / denom; }
+    }
+    if (!std::all_of(mel.data.begin(), mel.data.end(), [](float x) { return std::isfinite(x); })) { return false; }
+    output.push_back(std::move(mel));
+    return true;
+}
+
 bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
                                                        size_t   n_samples_in,
                                   std::vector<mtmd_audio_mel> & output) const {
+    if (hparams.parakeet_mlx_frontend) { return preprocess_mlx(samples, n_samples_in, output); }
     if (n_samples_in == 0) {
         return false;
     }
