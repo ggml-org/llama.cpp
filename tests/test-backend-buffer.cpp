@@ -207,8 +207,8 @@ static void test_buffer_view_validation() {
 // Verify accelerator views preserve device storage and isolate their byte range.
 static void test_accelerator_buffer_view() {
     ggml_backend_load_all();
-    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr));
-    if (!backend) {
+    ggml_backend_ptr backend(ggml_backend_init_best());
+    if (!backend || ggml_backend_dev_type(ggml_backend_get_device(backend.get())) == GGML_BACKEND_DEVICE_TYPE_CPU) {
         return;
     }
 
@@ -217,12 +217,21 @@ static void test_accelerator_buffer_view() {
     const size_t parent_size = 5*alignment;
     ggml_backend_buffer_t parent = ggml_backend_buft_alloc_buffer(buft, parent_size);
     GGML_ASSERT(parent != nullptr);
+    GGML_ASSERT(ggml_backend_buffer_supports_views(parent));
     ggml_backend_buffer_clear(parent, 0xa5);
     void * base = ggml_backend_buffer_get_base(parent);
 
     ggml_backend_buffer_t middle = ggml_backend_buffer_view(parent, alignment, 3*alignment);
     ggml_backend_buffer_t leaf = ggml_backend_buffer_view(middle, alignment, alignment);
     GGML_ASSERT(middle != nullptr && leaf != nullptr);
+    GGML_ASSERT(ggml_backend_buffer_is_view(middle) && ggml_backend_buffer_is_view(leaf));
+    GGML_ASSERT(ggml_backend_buffer_supports_views(middle));
+    GGML_ASSERT(ggml_backend_buffer_get_type(leaf) == buft);
+    GGML_ASSERT(ggml_backend_buffer_get_size(leaf) == alignment);
+    GGML_ASSERT(ggml_backend_buffer_get_base(leaf) == (uint8_t *) base + 2*alignment);
+    ggml_backend_buffer_set_usage(leaf, GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+    GGML_ASSERT(ggml_backend_buffer_get_usage(leaf) == GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+    GGML_ASSERT(ggml_backend_buffer_get_usage(parent) == GGML_BACKEND_BUFFER_USAGE_ANY);
 
     ggml_init_params params = {
         /*.mem_size   = */ 3*ggml_tensor_overhead(),

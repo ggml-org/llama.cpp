@@ -12941,14 +12941,25 @@ bool ggml_backend_buffer_is_vk(ggml_backend_buffer_t buffer) {
 void ggml_backend_vk_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     VK_LOG_MEMORY("ggml_backend_vk_buffer_free_buffer()");
     ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *)buffer->context;
-    ggml_vk_destroy_buffer(ctx->dev_buffer);
     delete ctx;
 }
 
 void * ggml_backend_vk_buffer_get_base(ggml_backend_buffer_t buffer) {
-    return vk_ptr_base;
+    auto * ctx = (ggml_backend_vk_buffer_context *) buffer->context;
+    return (uint8_t *) vk_ptr_base + ctx->base_offset;
+}
 
-    UNUSED(buffer);
+// Create a Vulkan view over a retained range of the same device allocation.
+static ggml_backend_buffer_t ggml_backend_vk_buffer_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    auto * parent = (ggml_backend_vk_buffer_context *) buffer->context;
+    auto * context = new ggml_backend_vk_buffer_context(
+        parent->device, parent->dev_buffer, parent->name,
+        parent->base_offset + offset, false);
+    ggml_backend_buffer_t view = ggml_backend_buffer_init(
+        buffer->buft, buffer->iface, context, size);
+    view->view_buffer = ggml_backend_vk_buffer_view;
+    return view;
 }
 
 enum ggml_status ggml_backend_vk_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
@@ -13050,7 +13061,8 @@ bool ggml_backend_vk_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_
 void ggml_backend_vk_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *)buffer->context;
 
-    ggml_vk_buffer_memset(ctx->dev_buffer, 0, value, buffer->size);
+    const uint32_t value32 = (uint32_t)value * 0x01010101;
+    ggml_vk_buffer_memset(ctx->dev_buffer, ctx->base_offset, value32, buffer->size);
 }
 
 const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t buft) {
@@ -13072,7 +13084,10 @@ ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buff
 
     ggml_backend_vk_buffer_context * bufctx = new ggml_backend_vk_buffer_context(ctx->device, std::move(dev_buffer), ctx->name);
 
-    return ggml_backend_buffer_init(buft, ggml_backend_vk_buffer_interface, bufctx, size);
+    ggml_backend_buffer_t buffer = ggml_backend_buffer_init(
+        buft, ggml_backend_vk_buffer_interface, bufctx, size);
+    buffer->view_buffer = ggml_backend_vk_buffer_view;
+    return buffer;
 }
 
 size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
@@ -16539,7 +16554,9 @@ std::string vk_perf_logger::get_node_fusion_name(const ggml_tensor * node, const
 }
 
 ggml_backend_vk_buffer_context::~ggml_backend_vk_buffer_context() {
-    ggml_vk_destroy_buffer(dev_buffer);
+    if (owns_storage) {
+        ggml_vk_destroy_buffer(dev_buffer);
+    }
 }
 
 ggml_vk_debug_label::ggml_vk_debug_label(vk_context & ctx, const std::string & pipeline_name, uint32_t wg0, uint32_t wg1, uint32_t wg2) {
@@ -16600,4 +16617,3 @@ void ggml_vk_debug_label::begin(vk_context & ctx, const std::string & name) {
     subctx->debug_labels.push_back(name);
     ggml_vk_cmd_label_begin(subctx->s->buffer->buf, subctx->debug_labels.back().c_str());
 }
-

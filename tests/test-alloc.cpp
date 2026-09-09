@@ -1435,11 +1435,11 @@ static void test_borrowed_buffer_range_after_measure() {
     GGML_ASSERT(backend.context->allocated_total() == offset + required[0]);
 }
 
-// Execute an addition graph in borrowed GPU storage and check the result; skip when no GPU is available.
-static void test_gpu_borrowed_buffer_range() {
+// Execute an addition graph in borrowed accelerator storage and check the result.
+static void test_accelerator_borrowed_buffer_range() {
     ggml_backend_load_all();
-    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr));
-    if (!backend) {
+    ggml_backend_ptr backend(ggml_backend_init_best());
+    if (!backend || ggml_backend_dev_type(ggml_backend_get_device(backend.get())) == GGML_BACKEND_DEVICE_TYPE_CPU) {
         return;
     }
 
@@ -1705,17 +1705,18 @@ static void test_tallocr_range_stateful_buffer() {
     GGML_ASSERT(backend.context->reset_count == 0);
 }
 
-// Keep persistent tensors intact while fresh CPU or GPU graphs reuse another range of the same buffer.
+// Keep persistent tensors intact while fresh CPU or accelerator graphs reuse another range of the same buffer.
 static void test_tallocr_range_shared_workspace(ggml_backend_t target) {
     ggml_backend_ptr backend_cpu(ggml_backend_cpu_init());
     ggml_backend_t backend = target ? target : backend_cpu.get();
     GGML_ASSERT(backend);
     auto * buft = ggml_backend_get_default_buffer_type(backend);
     const size_t alignment = ggml_backend_buft_get_alignment(buft);
-    const size_t persistent_offset = alignment;
-    const size_t workspace_offset = 4*alignment;
-    const size_t workspace_size = 8*alignment;
-    const size_t total_size = workspace_offset + workspace_size + alignment;
+    const size_t allocation_unit = GGML_PAD(4*sizeof(float), alignment);
+    const size_t persistent_offset = allocation_unit;
+    const size_t workspace_offset = 4*allocation_unit;
+    const size_t workspace_size = 8*allocation_unit;
+    const size_t total_size = workspace_offset + workspace_size + allocation_unit;
     ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(buft, total_size));
     GGML_ASSERT(buffer);
     auto * bytes = static_cast<uint8_t *>(ggml_backend_buffer_get_base(buffer.get()));
@@ -1730,7 +1731,7 @@ static void test_tallocr_range_shared_workspace(ggml_backend_t target) {
     auto * input = make_input_with_size(ctx, 16);
     auto * bias = make_input_with_size(ctx, 16);
     ggml_tallocr alloc{};
-    GGML_ASSERT(ggml_tallocr_new_range(&alloc, buffer.get(), persistent_offset, 2*alignment));
+    GGML_ASSERT(ggml_tallocr_new_range(&alloc, buffer.get(), persistent_offset, 2*allocation_unit));
     GGML_ASSERT(ggml_tallocr_alloc(&alloc, input) == GGML_STATUS_SUCCESS);
     GGML_ASSERT(ggml_tallocr_alloc(&alloc, bias) == GGML_STATUS_SUCCESS);
     const float a[] = {1, 2, 3, 4};
@@ -1827,7 +1828,7 @@ int main() {
     run("test_borrowed_buffer_range_shared_buffer_type", test_borrowed_buffer_range_shared_buffer_type);
     run("test_borrowed_buffer_range_detach", test_borrowed_buffer_range_detach);
     run("test_borrowed_buffer_range_after_measure", test_borrowed_buffer_range_after_measure);
-    run("test_gpu_borrowed_buffer_range", test_gpu_borrowed_buffer_range);
+    run("test_accelerator_borrowed_buffer_range", test_accelerator_borrowed_buffer_range);
     run("test_scheduler_borrowed_buffer_range", test_scheduler_borrowed_buffer_range);
     run("test_tallocr_range_capacity", test_tallocr_range_capacity);
     run("test_tallocr_range_validation", test_tallocr_range_validation);
@@ -1837,12 +1838,12 @@ int main() {
     run("test_tallocr_range_views", test_tallocr_range_views);
     run("test_tallocr_range_stateful_buffer", test_tallocr_range_stateful_buffer);
     run("test_tallocr_range_shared_workspace_cpu", [] { test_tallocr_range_shared_workspace(nullptr); });
-    ggml_backend_ptr gpu(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr));
-    if (gpu) {
-        test_tallocr_range_shared_workspace(gpu.get());
-        printf("test_tallocr_range_shared_workspace_gpu PASSED\n");
+    ggml_backend_ptr accelerator(ggml_backend_init_best());
+    if (accelerator && ggml_backend_dev_type(ggml_backend_get_device(accelerator.get())) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+        test_tallocr_range_shared_workspace(accelerator.get());
+        printf("test_tallocr_range_shared_workspace_accelerator PASSED\n");
     } else {
-        printf("test_tallocr_range_shared_workspace_gpu SKIPPED (no GPU)\n");
+        printf("test_tallocr_range_shared_workspace_accelerator SKIPPED (no accelerator)\n");
     }
     return 0;
 }

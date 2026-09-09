@@ -1321,11 +1321,17 @@ struct ggml_backend_vk_context {
 struct ggml_backend_vk_buffer_context {
     vk_device_ref device;
     vk_buffer dev_buffer;
+    size_t base_offset;
+    bool owns_storage;
     std::string name;
 
-    ggml_backend_vk_buffer_context(vk_device_ref device, vk_buffer&& dev_buffer, std::string& name) :
+    ggml_backend_vk_buffer_context(
+            vk_device_ref device, vk_buffer dev_buffer, const std::string & name,
+            size_t base_offset = 0, bool owns_storage = true) :
         device(device),
-        dev_buffer(dev_buffer),
+        dev_buffer(std::move(dev_buffer)),
+        base_offset(base_offset),
+        owns_storage(owns_storage),
         name(name) {
     }
 

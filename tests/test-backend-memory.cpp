@@ -358,8 +358,9 @@ static void test_compute_arena_mixed_fallback() {
 
 static void test_compute_arena_accelerator_mixed_fallback() {
     ggml_backend_load_all();
-    ggml_backend_ptr accelerator(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr));
-    if (!accelerator) {
+    ggml_backend_ptr accelerator(ggml_backend_init_best());
+    if (!accelerator ||
+            ggml_backend_dev_type(ggml_backend_get_device(accelerator.get())) == GGML_BACKEND_DEVICE_TYPE_CPU) {
         return;
     }
 
@@ -978,9 +979,10 @@ static void test_arena_real_backends() {
     test_arena_backend(cpu.get());
 
     ggml_backend_load_all();
-    ggml_backend_ptr gpu(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr));
-    if (gpu) {
-        test_arena_backend(gpu.get());
+    ggml_backend_ptr accelerator(ggml_backend_init_best());
+    if (accelerator &&
+            ggml_backend_dev_type(ggml_backend_get_device(accelerator.get())) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+        test_arena_backend(accelerator.get());
     }
 }
 
