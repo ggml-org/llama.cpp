@@ -1,0 +1,74 @@
+[[docs:funcstructs:ggml-cpu.cpp]]
+== ggml-cpu.cpp
+
+
+[[docs:funcstructs:ggml-cpu.cpp:ggml_backend_cpu_graph_compute]]
+=== ggml_backend_cpu_graph_compute
+
+Signature:
+[.codebit]#`static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph)`#
+
+Creates a [.codebit]#`struct ggml_cplan`# through a call to [.codebit]#`ggml_graph_plan(...)`#, updates the [.codebit]#`ggml_backend`#'s context if needed based on the result, sets the [.codebit]#`ggml_cplan`#'s [.codebit]#`work_data`#, [.codebit]#`abort_callback`# and [.codebit]#`abort_callback_data`# members and calls [.codebit]#`ggml_graph_compute(...)`#.
+
+
+[[docs:funcstructs:ggml-cpu.cpp:variable-ggml_backend_cpu_i]]
+=== variable ggml_backend_cpu_i
+
+Full declaration:
+[.codebit]#`static const struct ggml_backend_i ggml_backend_cpu_i`#
+
+The interface of a cpu backend. Its [.codebit]#`graph_compute`# member is set to [.codebit]#`ggml_backend_cpu_graph_compute(...)`#.
+
+
+[[docs:funcstructs:ggml-cpu.cpp:ggml_backend_cpu_init]]
+=== ggml_backend_cpu_init
+
+Signature:
+[.codebit]#`ggml_backend_t ggml_backend_cpu_init(void)`#
+
+Calls [.codebit]#`ggml_cpu_init()`# and creates a [.codebit]#`ggml_backend`# object with its interface set to [.codebit]#`ggml_backend_cpu_i`#.
+
+
+[[docs:funcstructs:ggml-cpu.cpp:ggml_backend_cpu_device_init_backend]]
+=== ggml_backend_cpu_device_init_backend
+
+Signature:
+[.codebit]#`static ggml_backend_t ggml_backend_cpu_device_init_backend(ggml_backend_dev_t dev, const char * params)`#
+
+Simply calls and returns the output of [.codebit]#`ggml_backend_cpu_init()`#.
+
+
+[[docs:funcstructs:ggml-cpu.cpp:variable-ggml_backend_cpu_device_i]]
+=== variable ggml_backend_cpu_device_i
+
+Full declaration:
+[.codebit]#`static const struct ggml_backend_device_i ggml_backend_cpu_device_i`#
+
+The interface of a cpu device. The [.codebit]#`init_backend`# member points to [.codebit]#`ggml_backend_cpu_device_init_backend(...)`#.
+
+
+[[docs:funcstructs:ggml-cpu.cpp:ggml_backend_cpu_reg_get_device]]
+=== ggml_backend_cpu_reg_get_device
+
+Signature:
+[.codebit]#`static ggml_backend_dev_t ggml_backend_cpu_reg_get_device(ggml_backend_reg_t reg, size_t index)`#
+
+Instantiates and returns a pointer to a static [.codebit]#`ggml_backend_device`# for the cpu. Its [.codebit]#`iface`# member is set to [.codebit]#`ggml_backend_cpu_device_i`#.
+
+
+[[docs:funcstructs:ggml-cpu.cpp:variable-ggml_backend_cpu_reg_i]]
+=== variable ggml_backend_cpu_reg_i
+
+Full declaration:
+[.codebit]#`static const struct ggml_backend_reg_i ggml_backend_cpu_reg_i`#
+
+The [.codebit]#`ggml_backend_reg_i`# for cpu. Its [.codebit]#`get_device`# member is set to [.codebit]#`ggml_backend_cpu_reg_get_device(...)`#.
+
+
+[[docs:funcstructs:ggml-cpu.cpp:ggml_backend_cpu_reg]]
+=== ggml_backend_cpu_reg
+
+Signature:
+[.codebit]#`ggml_backend_reg_t ggml_backend_cpu_reg(void)`#
+
+Calls [.codebit]#`ggml_cpu_init()`# and instantiates a static [.codebit]#`ggml_backend_reg`# for the cpu. Its [.codebit]#`context`# member is set to [.codebit]#`NULL`# and its [.codebit]#`iface`# member is set to [.codebit]#`ggml_backend_cpu_reg_i`#.
