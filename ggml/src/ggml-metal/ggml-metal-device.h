@@ -327,15 +327,8 @@ const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_de
 
 // shared fusion debugging context, owned by the device; newly created backend contexts for that
 // device register with it so the fusion counters are race-free and accumulate across contexts.
-struct ggml_metal_fusion_info {
-    int           n_fusions;      // number of fusion patterns
-    const char ** labels;         // one label per pattern (set by the context)
-    uint64_t *    counts;         // one counter per pattern (incremented by the op encoders)
-    bool          enabled;        // whether the backend actually fuses (set by the test)
-    bool          stats;          // whether to collect fusion stats
-    bool          labels_set;     // whether the labels have been registered yet
-    int           debug;          // env: GGML_METAL_FUSION_DEBUG
-};
+struct ggml_metal_fusion_info;
+typedef struct ggml_metal_fusion_info ggml_metal_fusion_info;
 
 // the device-owned fusion debugging context (NULL unless fusion debugging is enabled)
 struct ggml_metal_fusion_info * ggml_metal_device_get_fusion_info(ggml_metal_device_t dev);

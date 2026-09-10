@@ -4,7 +4,8 @@
 #include "ggml-metal-device.h"
 
 #include <algorithm>
-#include <cstring>
+#include <string>
+#include <vector>
 
 // ---- helpers -------------------------------------------------------------
 
@@ -241,37 +242,173 @@ const ggml_metal_fusion * ggml_metal_fusion_all(int * n) {
     return ggml_metal_fusions;
 }
 
-const char * ggml_metal_fusion_label(const ggml_metal_fusion * fusion) {
-    const int n_fusions = (int) sizeof(ggml_metal_fusions) / sizeof(ggml_metal_fusions[0]);
+// ---- shared fusion info ---------------------------------------------------
 
-    const int idx = (int)(fusion - ggml_metal_fusions);
-    GGML_ASSERT(idx >= 0 && idx < n_fusions);
+static std::string ggml_metal_fusion_label(const ggml_metal_fusion * fusion) {
+    GGML_ASSERT(fusion != nullptr);
 
-    // labels are built once and cached (the table is static, so the pointers stay valid)
-    // TODO: avoid this global state
-    static char labels[sizeof(ggml_metal_fusions) / sizeof(ggml_metal_fusions[0])][GGML_METAL_FUSION_LABEL_MAX];
-    static bool built = false;
-
-    if (!built) {
-        for (int i = 0; i < n_fusions; i++) {
-            char * buf = labels[i];
-            int len = 0;
-            for (int j = 0; j < ggml_metal_fusions[i].n_ops; j++) {
-                if (j > 0) {
-                    buf[len++] = '+';
-                }
-                const char * name = ggml_op_name(ggml_metal_fusions[i].ops[j]);
-                const int name_len = (int) strlen(name);
-                GGML_ASSERT(len + name_len < GGML_METAL_FUSION_LABEL_MAX);
-                memcpy(buf + len, name, name_len);
-                len += name_len;
-            }
-            buf[len] = '\0';
+    std::string label;
+    for (int j = 0; j < fusion->n_ops; j++) {
+        if (j > 0) {
+            label += '+';
         }
-        built = true;
+        label += ggml_op_name(fusion->ops[j]);
+    }
+    return label;
+}
+
+struct ggml_metal_fusion_info {
+    std::vector<std::string> labels;
+    std::vector<uint64_t>    counts;
+    bool enabled;
+    bool stats;
+    bool labels_set;
+    int  debug;
+};
+
+struct ggml_metal_fusion_info * ggml_metal_fusion_info_init(bool enabled, int debug) {
+    ggml_metal_fusion_info * finfo = new ggml_metal_fusion_info;
+    finfo->enabled    = enabled;
+    finfo->stats      = debug > 0;
+    finfo->labels_set = false;
+    finfo->debug      = debug;
+
+    if (finfo->stats) {
+        ggml_metal_fusion_info_labels_init(finfo);
     }
 
-    return labels[idx];
+    return finfo;
+}
+
+void ggml_metal_fusion_info_free(struct ggml_metal_fusion_info * finfo) {
+    delete finfo;
+}
+
+bool ggml_metal_fusion_info_enabled(const struct ggml_metal_fusion_info * finfo) {
+    return finfo->enabled;
+}
+
+bool ggml_metal_fusion_info_stats(const struct ggml_metal_fusion_info * finfo) {
+    return finfo->stats;
+}
+
+int ggml_metal_fusion_info_debug(const struct ggml_metal_fusion_info * finfo) {
+    return finfo->debug;
+}
+
+int ggml_metal_fusion_info_n_fusions(const struct ggml_metal_fusion_info * finfo) {
+    return (int) finfo->labels.size();
+}
+
+const char * ggml_metal_fusion_info_label(const struct ggml_metal_fusion_info * finfo, int idx) {
+    GGML_ASSERT(idx >= 0 && idx < (int) finfo->labels.size());
+    return finfo->labels[idx].c_str();
+}
+
+uint64_t ggml_metal_fusion_info_count(const struct ggml_metal_fusion_info * finfo, int idx) {
+    GGML_ASSERT(idx >= 0 && idx < (int) finfo->counts.size());
+    return finfo->counts[idx];
+}
+
+void ggml_metal_fusion_info_count_fusion(struct ggml_metal_fusion_info * finfo, const struct ggml_metal_fusion * fusion) {
+    if (!finfo->stats || fusion == nullptr) {
+        return;
+    }
+
+    int n = 0;
+    const ggml_metal_fusion * all = ggml_metal_fusion_all(&n);
+
+    int idx = -1;
+    for (int i = 0; i < n; i++) {
+        if (&all[i] == fusion) {
+            idx = i;
+            break;
+        }
+    }
+
+    if (idx >= 0 && idx < (int) finfo->counts.size()) {
+        finfo->counts[idx]++;
+    }
+}
+
+void ggml_metal_fusion_info_set_enabled(struct ggml_metal_fusion_info * finfo, bool enabled) {
+    finfo->enabled = enabled;
+}
+
+void ggml_metal_fusion_info_labels_init(struct ggml_metal_fusion_info * finfo) {
+    if (finfo->labels_set) {
+        return;
+    }
+
+    int n = 0;
+    const ggml_metal_fusion * all = ggml_metal_fusion_all(&n);
+
+    finfo->labels.clear();
+    finfo->counts.assign(n, 0);
+    finfo->labels.reserve(n);
+
+    for (int i = 0; i < n; i++) {
+        finfo->labels.emplace_back(ggml_metal_fusion_label(&all[i]));
+    }
+
+    finfo->labels_set = true;
+}
+
+void ggml_metal_fusion_info_stats_init(struct ggml_metal_fusion_info * finfo) {
+    finfo->stats = true;
+    ggml_metal_fusion_info_labels_init(finfo);
+}
+
+void ggml_metal_fusion_info_stats_reset(struct ggml_metal_fusion_info * finfo) {
+    std::fill(finfo->counts.begin(), finfo->counts.end(), 0);
+}
+
+int ggml_metal_fusion_info_stats_get(const struct ggml_metal_fusion_info * finfo, const char ** labels, uint64_t * counts, int n) {
+    const int n_fusions = (int) finfo->labels.size();
+
+    if (labels == nullptr) {
+        return n_fusions;
+    }
+
+    const int n_fill = std::min(n, n_fusions);
+    for (int i = 0; i < n_fill; i++) {
+        labels[i] = finfo->labels[i].c_str();
+        if (counts != nullptr) {
+            counts[i] = finfo->counts[i];
+        }
+    }
+
+    return n_fill;
+}
+
+// device-level wrappers (the backend proc-address API operates on the device)
+void ggml_metal_device_fusion_info_stats_init(ggml_metal_device_t dev) {
+    struct ggml_metal_fusion_info * finfo = ggml_metal_device_get_fusion_info(dev);
+    if (finfo != nullptr) {
+        ggml_metal_fusion_info_stats_init(finfo);
+    }
+}
+
+void ggml_metal_device_fusion_info_stats_reset(ggml_metal_device_t dev) {
+    struct ggml_metal_fusion_info * finfo = ggml_metal_device_get_fusion_info(dev);
+    if (finfo != nullptr) {
+        ggml_metal_fusion_info_stats_reset(finfo);
+    }
+}
+
+int ggml_metal_device_fusion_info_stats_get(ggml_metal_device_t dev, const char ** labels, uint64_t * counts, int n) {
+    struct ggml_metal_fusion_info * finfo = ggml_metal_device_get_fusion_info(dev);
+    if (finfo == nullptr) {
+        return 0;
+    }
+    return ggml_metal_fusion_info_stats_get(finfo, labels, counts, n);
+}
+
+void ggml_metal_device_fusion_info_set_enabled(ggml_metal_device_t dev, bool enabled) {
+    struct ggml_metal_fusion_info * finfo = ggml_metal_device_get_fusion_info(dev);
+    if (finfo != nullptr) {
+        ggml_metal_fusion_info_set_enabled(finfo, enabled);
+    }
 }
 
 // ---- queries -------------------------------------------------------------

@@ -89,21 +89,12 @@ struct ggml_metal_op {
     // whether to attempt fusion; the toggle lives in the shared fusion debugging context owned
     // by the device (initialized from GGML_METAL_FUSION_DISABLE, overridable by the test)
     bool use_fusion() const {
-        return finfo->enabled;
+        return ggml_metal_fusion_info_enabled(finfo);
     }
 
     // record that a fusion fired, indexed by the matching table entry
     void count_fusions(const ggml_metal_fusion * fusion) const {
-        if (!finfo->stats || fusion == nullptr) {
-            return;
-        }
-
-        int n = 0;
-        const ggml_metal_fusion * all = ggml_metal_fusion_all(&n);
-        const int idx = (int)(fusion - all); // TODO: fix
-        if (idx >= 0 && idx < n) {
-            finfo->counts[idx]++;
-        }
+        ggml_metal_fusion_info_count_fusion(finfo, fusion);
     }
 
     ggml_metal_device_t  dev;
@@ -1885,7 +1876,7 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_t enc = ctx->enc;
 
     const bool use_fusion = ctx->use_fusion();
-    const int  debug_fusion = ctx->finfo->debug;
+    const int  debug_fusion = ggml_metal_fusion_info_debug(ctx->finfo);
 
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
@@ -3786,7 +3777,7 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
 
     const bool use_fusion = ctx->use_fusion();
 
-    const int debug_fusion = ctx->finfo->debug;
+    const int debug_fusion = ggml_metal_fusion_info_debug(ctx->finfo);
 
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
@@ -4053,7 +4044,7 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
 
     const bool use_fusion = ctx->use_fusion();
 
-    const int debug_fusion = ctx->finfo->debug;
+    const int debug_fusion = ggml_metal_fusion_info_debug(ctx->finfo);
 
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);

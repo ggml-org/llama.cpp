@@ -151,23 +151,12 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
         }
 
         res->finfo = ggml_metal_device_get_fusion_info(dev);
-        if (res->finfo->stats) {
-            if (!res->finfo->labels_set) {
-                int n = 0;
-                const ggml_metal_fusion * all = ggml_metal_fusion_all(&n);
-
-                res->finfo->labels = calloc(n > 0 ? n : 1, sizeof(char *));
-                res->finfo->counts = calloc(n > 0 ? n : 1, sizeof(uint64_t));
-                for (int i = 0; i < n; i++) {
-                    res->finfo->labels[i] = ggml_metal_fusion_label(&all[i]);
-                }
-                res->finfo->n_fusions  = n;
-                res->finfo->labels_set = true;
-            }
+        if (ggml_metal_fusion_info_stats(res->finfo)) {
+            ggml_metal_fusion_info_labels_init(res->finfo);
             res->n_cb = 0;
         }
 
-        GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, res->finfo->enabled     ? "true" : "false");
+        GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, ggml_metal_fusion_info_enabled(res->finfo) ? "true" : "false");
         GGML_LOG_INFO("%s: use concurrency    = %s\n", __func__, res->use_concurrency    ? "true" : "false");
         GGML_LOG_INFO("%s: use graph optimize = %s\n", __func__, res->use_graph_optimize ? "true" : "false");
 
@@ -229,16 +218,18 @@ void ggml_metal_free(ggml_metal_t ctx) {
         ctx->pipelines_ext = nil;
     }
 
-    if (ctx->finfo->debug > 0) {
+    if (ggml_metal_fusion_info_debug(ctx->finfo) > 0) {
         GGML_LOG_DEBUG("%s: fusion stats:\n", __func__);
 
-        for (int i = 0; i < ctx->finfo->n_fusions; i++) {
-            if (ctx->finfo->counts[i] == 0) {
+        const int n_fusions = ggml_metal_fusion_info_n_fusions(ctx->finfo);
+        for (int i = 0; i < n_fusions; i++) {
+            const uint64_t count = ggml_metal_fusion_info_count(ctx->finfo, i);
+            if (count == 0) {
                 continue;
             }
 
             // note: cannot use ggml_log here
-            GGML_LOG_DEBUG("%s: - %s: %" PRIu64 "\n", __func__, ctx->finfo->labels[i], ctx->finfo->counts[i]);
+            GGML_LOG_DEBUG("%s: - %s: %" PRIu64 "\n", __func__, ggml_metal_fusion_info_label(ctx->finfo, i), count);
         }
     }
 
@@ -699,7 +690,7 @@ ggml_metal_event_t ggml_metal_get_ev_cpy(ggml_metal_t ctx) {
 void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
     // when fusion stats are collected the graph must be encoded by a single thread so the
     // counters are race-free; override whatever the caller requested
-    if (ctx->finfo->stats) {
+    if (ggml_metal_fusion_info_stats(ctx->finfo)) {
         n_cb = 0;
     }
 
