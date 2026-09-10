@@ -666,7 +666,6 @@ void llama_context::sched_reserve() {
         //       need to implement a more robust mechanism that tries a few different inputs and analyzes the results
         ggml_cgraph * gf = nullptr;
         switch (model.arch) {
-            case LLM_ARCH_KIMI_K3:
             case LLM_ARCH_KIMI_LINEAR:
             case LLM_ARCH_MINIMAX_01:
                 // [TAG_RESERVE_DIAG_DECAY]
