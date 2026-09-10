@@ -2641,11 +2641,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
                     }
 
-                    // the trunk graph never attends an appended NextN block, nor the MTP graph
-                    // the trunk, so split the KV cache between them. the extra guards drop the
-                    // archs that repurpose n_layer_nextn without appending one - granite-switch
-                    // for a router layer the decode graph does attend, gemma4-assistant for its
-                    // entire block count
+                    // don't filter when n_layer_nextn is repurposed for a router layer the trunk attends
+                    // or when a model is entirely n_layer_nextn layers and has no trunk
                     if (hparams.n_layer_nextn > 0 && hparams.n_layer() > 0 && hparams.router_layer < 0) {
                         if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
                             filter = [&](uint32_t il) { return il >= hparams.n_layer(); };

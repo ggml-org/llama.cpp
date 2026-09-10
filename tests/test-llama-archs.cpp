@@ -9,7 +9,6 @@
 
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
-#include "../src/llama-ext.h"
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
@@ -66,7 +65,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [--mtp-kv] [-v N] [-h/--help]\n", argv[0]);
+    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
@@ -80,8 +79,7 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
     return ret;
 }
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const bool mtp = false,
-        const uint32_t n_layer_trunk = 0) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     gguf_context_ptr ret(gguf_init_empty());
     llama_model_saver ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -133,15 +131,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_vocab = 4096; // must be >= the hard-coded codec head size (3072)
     }
 
-    if (n_layer_trunk > 0) {
-        n_layer = n_layer_trunk;
-    }
-
-    // append a NextN/MTP block past the trunk. n_layer is block_count == n_layer_all,
-    // so every per-layer array below is sized to include it, matching a real MTP GGUF.
-    const uint32_t n_layer_nextn = mtp ? 1 : 0;
-    n_layer += n_layer_nextn;
-
     uint32_t n_head_kv = n_head;
     if (arch == LLM_ARCH_QWEN3) {
         n_head_kv = 1; // MQA coverage
@@ -157,9 +146,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
     ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
-    if (mtp) {
-        ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS,  n_layer_nextn);
-    }
 
     if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         std::vector<uint32_t> n_ff_per_layer;
@@ -253,14 +239,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
             arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE) {
-        // cohere2moe, mimo2 and muse-glimmer read this array at hparams.n_layer(); step35
-        // reads it at n_layer_all, and granite-swa/dots3note/spark2-5 accept either
-        const bool swa_trunk_only =
-            arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_MUSE_GLIMMER;
-        const uint32_t n_swa = swa_trunk_only ? n_layer - n_layer_nextn : n_layer;
         std::vector<uint32_t> pattern;
-        pattern.reserve(n_swa);
-        for (uint32_t il = 0; il < n_swa; il++) {
+        pattern.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
             pattern.push_back(il % 2);
         }
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
@@ -375,13 +356,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_KDA_SAFE_GATE,              true);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,       -5.0f);
     if (arch == LLM_ARCH_BAILINGMOE3) {
-        // read at n_layer_all, so size to n_layer; keep layer 0 unclamped for coverage
-        std::vector<float> clamp_exp(n_layer, 4.0f);
-        std::vector<float> clamp_shexp(n_layer, 5.0f);
-        clamp_exp[0]   = 0.0f;
-        clamp_shexp[0] = 0.0f;
-        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   clamp_exp);
-        ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, clamp_shexp);
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   std::vector<float>({0.0f, 4.0f}));
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>({0.0f, 5.0f}));
     }
     ms.add_kv(LLM_KV_WKV_HEAD_SIZE,             n_embd/n_head);
     ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,         uint32_t(3));
@@ -413,13 +389,10 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
-        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-        bool load_mtp = false) {
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
-    // mirrors common_model_params_to_llama(), which sets this when draft-mtp is requested
-    model_params.load_mtp = load_mtp;
     std::vector<ggml_backend_dev_t> devs_copy = devs;
     devs_copy.push_back(nullptr);
     model_params.devices = devs_copy.data();
@@ -834,115 +807,6 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
     return all_ok ? 0 : 1;
 }
 
-// archs that implement an LLM_GRAPH_TYPE_DECODER_MTP graph (src/models/*.cpp)
-static bool mtp_capable(const llm_arch arch) {
-    switch (arch) {
-        case LLM_ARCH_BAILINGMOE3:
-        case LLM_ARCH_COHERE2MOE:
-        case LLM_ARCH_DEEPSEEK2:
-        case LLM_ARCH_DEEPSEEK32:
-        case LLM_ARCH_DEEPSEEK4:
-        case LLM_ARCH_GLM_DSA:
-        case LLM_ARCH_GLM4_MOE:
-        case LLM_ARCH_HY_V3:
-        case LLM_ARCH_MIMO2:
-        case LLM_ARCH_NEMOTRON_H_MOE:
-        case LLM_ARCH_QWEN35:
-        case LLM_ARCH_QWEN35MOE:
-        case LLM_ARCH_QWEN3NEXT:
-        case LLM_ARCH_STEP35:
-            return true;
-        default:
-            return false;
-    }
-}
-
-// the MTP graph runs one block regardless of trunk depth, so a correctly filtered MTP KV
-// cache is the same size at any depth - an unfiltered one spans n_layer_all and grows
-static int test_mtp_kv(const llm_arch target_arch, const size_t seed) {
-    // bytes held by the context's memory module, i.e. the KV cache, excluding weights
-    auto kv_bytes = [&](const llm_arch arch, const bool moe, const uint32_t trunk) {
-        gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, /*mtp =*/ true, trunk);
-        auto mc = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {},
-                LLAMA_SPLIT_MODE_LAYER, /*encode =*/ false, /*load_mtp =*/ true);
-        if (llama_model_n_layer_nextn(mc.first.get()) == 0) {
-            throw std::runtime_error("fixture produced no NextN block");
-        }
-
-        llama_context_params cp = llama_context_default_params();
-        cp.n_ctx    = 0;
-        cp.n_ubatch = 64;
-        cp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
-
-        llama_context_ptr ctx(llama_init_from_model(mc.first.get(), cp));
-        if (!ctx) {
-            throw std::runtime_error("failed to create MTP context");
-        }
-
-        size_t bytes = 0;
-        for (const auto & [buft, mb] : llama_get_memory_breakdown(ctx.get())) {
-            GGML_UNUSED(buft);
-            bytes += mb.context;
-        }
-        return bytes;
-    };
-
-    const uint32_t trunk_a = 2;
-    const uint32_t trunk_b = 8;
-
-    int n_checked = 0;
-    int n_failed  = 0;
-    int n_errored = 0;
-
-    for (const llm_arch & arch : llm_arch_all()) {
-        if (!mtp_capable(arch) || (target_arch != LLM_ARCH_UNKNOWN && arch != target_arch)) {
-            continue;
-        }
-        // llama_model_saver_supports_arch() is not required here - this mode never writes
-        // a GGUF, it only builds a model from metadata and creates a context over it
-        if (!arch_supported(arch)) {
-            printf("  %-18s skipped (no synthetic fixture)\n", llm_arch_name(arch));
-            continue;
-        }
-        // mimo2's MTP graph requires a fused attn_qkv, and deepseek4 clears n_layer_nextn unless
-        // blk.N.nextn.eh_proj.weight is present. Both are tensor-level requirements this
-        // metadata-only fixture cannot meet, so skip them instead of reporting them inconclusive
-        if (arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_DEEPSEEK4) {
-            printf("  %-18s skipped (fixture is metadata-only, arch needs real MTP tensors)\n",
-                    llm_arch_name(arch));
-            continue;
-        }
-
-        // nemotron-h's MTP block is unconditionally MoE even though its trunk has a dense
-        // path, so the fixture needs expert metadata here that moe_implemented() does not imply
-        const bool moe = moe_mandatory(arch) || moe_implemented(arch) || arch == LLM_ARCH_NEMOTRON_H_MOE;
-
-        size_t kv_a = 0;
-        size_t kv_b = 0;
-        try {
-            kv_a = kv_bytes(arch, moe, trunk_a);
-            kv_b = kv_bytes(arch, moe, trunk_b);
-        } catch (const std::exception & err) {
-            printf("  %-18s INCONCLUSIVE: %s\n", llm_arch_name(arch), err.what());
-            n_errored++;
-            continue;
-        }
-
-        n_checked++;
-        const bool leaked = kv_b != kv_a; // filtered => byte-identical at both depths
-        n_failed += leaked;
-        printf("  %-18s MTP KV @%u-layer trunk %9zu B | @%u-layer %9zu B | growth %5.2fx  %s\n",
-                llm_arch_name(arch), trunk_a, kv_a, trunk_b, kv_b,
-                kv_a ? (double) kv_b / kv_a : 0.0,
-                leaked ? "** UNFILTERED (scales with trunk) **" : "filtered");
-    }
-
-    printf("\n%d archs checked, %d with an unfiltered MTP KV cache, %d inconclusive\n",
-            n_checked, n_failed, n_errored);
-    // an arch that stops building a model is a regression too, so inconclusive is not a pass
-    return n_failed == 0 && n_errored == 0 ? 0 : 1;
-}
-
 int main(int argc, char ** argv) {
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
@@ -953,7 +817,6 @@ int main(int argc, char ** argv) {
     llm_arch arch = LLM_ARCH_UNKNOWN;
     size_t seed = rd();
     std::string out;
-    bool mtp_kv = false;
 
     int verbosity = LOG_LEVEL_ERROR;
 
@@ -991,9 +854,6 @@ int main(int argc, char ** argv) {
                 return 1;
             }
         }
-        if (strcmp(argv[i], "--mtp-kv") == 0) {
-            mtp_kv = true;
-        }
         if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--out") == 0) {
             if (i + 1 < argc) {
                 out = argv[++i];
@@ -1006,9 +866,6 @@ int main(int argc, char ** argv) {
     printf("%s: using seed %zu\n", __func__, seed);
 
     try {
-        if (mtp_kv) {
-            return test_mtp_kv(arch, seed);
-        }
         if (!out.empty()) {
             return save_models(arch, seed, verbosity, out);
         }
