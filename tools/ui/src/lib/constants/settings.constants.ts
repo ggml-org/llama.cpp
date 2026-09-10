@@ -154,6 +154,18 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.TEXTAREA
 			},
 			{
+				defaultValue: TITLE_GENERATION.MODEL_AUTO,
+				dependsOn: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
+				emptyOption: {
+					label: 'Auto (model of the conversation)',
+					value: TITLE_GENERATION.MODEL_AUTO
+				},
+				help: 'Model that writes the title. Pick a smaller one to keep the chat model free. Router mode only.',
+				key: SETTINGS_KEYS.TITLE_GENERATION_MODEL,
+				label: 'LLM title generation model',
+				type: SettingsFieldType.MODEL_SELECT
+			},
+			{
 				defaultValue: false,
 				help: 'Counterpart of the conversation title radio; stored and synced without a dedicated UI field.',
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
@@ -665,6 +677,7 @@ function toSettingsSection(section: SettingsSectionEntry): SettingsSection {
 			.filter((s) => s.standaloneField !== false)
 			.map((s) => ({
 				dependsOn: s.dependsOn,
+				emptyOption: s.emptyOption,
 				help: s.help,
 				isExperimental: s.isExperimental,
 				isPositiveInteger: s.isPositiveInteger,
@@ -673,6 +686,7 @@ function toSettingsSection(section: SettingsSectionEntry): SettingsSection {
 				label: s.label,
 				max: s.max,
 				min: s.min,
+				modelFilter: s.modelFilter,
 				options: s.options as SettingsFieldConfig['options'],
 				placeholder: s.placeholder,
 				radioOptions: s.radioOptions,

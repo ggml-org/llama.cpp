@@ -67,6 +67,7 @@ export const SETTINGS_KEYS = {
 	TEMPERATURE: 'temperature',
 	// General
 	THEME: 'theme',
+	TITLE_GENERATION_MODEL: 'titleGenerationModel',
 	TITLE_GENERATION_PROMPT: 'titleGenerationPrompt',
 	TITLE_GENERATION_USE_FIRST_LINE: 'titleGenerationUseFirstLine',
 	TITLE_GENERATION_USE_LLM: 'titleGenerationUseLLM',
