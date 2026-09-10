@@ -44,6 +44,7 @@
 #include "ssm_conv.hpp"
 #include "softmax.hpp"
 #include "topk-moe.hpp"
+#include "topk-radix.hpp"
 #include "tsembd.hpp"
 #include "upscale.hpp"
 #include "wkv.hpp"
