@@ -1931,9 +1931,9 @@ void kernel_mul_mv_iq2_xxs_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq2_xxs * xr = x + ibl;
-        device const uint16_t * q2 = xr->qs + 4 * ib + (uint64_t) row0*args.nb01/2;
-        device const half * dh = &xr->d + (uint64_t) row0*args.nb01/2;
+        device const block_iq2_xxs * xr = (device const block_iq2_xxs *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const uint16_t * q2 = xr->qs + 4 * ib;
+        device const half * dh = &xr->d;
 
         for (short row = row0; row < row1; row++) {
             const float db = dh[0];
@@ -2063,10 +2063,10 @@ void kernel_mul_mv_iq2_xs_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq2_xs * xr = x + ibl;
-        device const uint16_t * q2 = xr->qs + 4 * ib + (uint64_t) row0*args.nb01/2;
-        device const uint8_t  * sc = xr->scales + ib + (uint64_t) row0*args.nb01;
-        device const half * dh = &xr->d + (uint64_t) row0*args.nb01/2;
+        device const block_iq2_xs * xr = (device const block_iq2_xs *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const uint16_t * q2 = xr->qs + 4 * ib;
+        device const uint8_t  * sc = xr->scales + ib;
+        device const half * dh = &xr->d;
 
         for (short row = row0; row < row1; row++) {
             const float db = dh[0];
@@ -2207,10 +2207,10 @@ void kernel_mul_mv_iq3_xxs_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq3_xxs * xr = x + ibl;
-        device const uint8_t  * q3 = xr->qs + 8 * ib + (uint64_t) row0*args.nb01;
-        device const uint16_t * gas = (device const uint16_t *)(xr->qs + QK_K/4) + 2 * ib + (uint64_t) row0*args.nb01/2;
-        device const half * dh = &xr->d + (uint64_t) row0*args.nb01/2;
+        device const block_iq3_xxs * xr = (device const block_iq3_xxs *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const uint8_t  * q3 = xr->qs + 8 * ib;
+        device const uint16_t * gas = (device const uint16_t *)(xr->qs + QK_K/4) + 2 * ib;
+        device const half * dh = &xr->d;
 
         for (short row = row0; row < row1; row++) {
             const float db = dh[0];
@@ -2339,12 +2339,12 @@ void kernel_mul_mv_iq3_s_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq3_s * xr = x + ibl;
-        device const uint8_t * qs = xr->qs + 8 * ib + (uint64_t) row0*args.nb01;
-        device const uint8_t * qh = xr->qh + ib + (uint64_t) row0*args.nb01;
-        device const uint8_t * sc = xr->scales + (ib/2) + (uint64_t) row0*args.nb01;
-        device const uint8_t * signs = xr->signs + 4 * ib + (uint64_t) row0*args.nb01;
-        device const half * dh = &xr->d + (uint64_t) row0*args.nb01/2;
+        device const block_iq3_s * xr = (device const block_iq3_s *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const uint8_t * qs = xr->qs + 8 * ib;
+        device const uint8_t * qh = xr->qh + ib;
+        device const uint8_t * sc = xr->scales + (ib/2);
+        device const uint8_t * signs = xr->signs + 4 * ib;
+        device const half * dh = &xr->d;
 
         for (short row = row0; row < row1; row++) {
             const float db = dh[0];
@@ -2475,12 +2475,12 @@ void kernel_mul_mv_iq2_s_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq2_s * xr = x + ibl;
-        device const uint8_t * qs = xr->qs + 4 * ib + (uint64_t) row0*args.nb01;
-        device const uint8_t * qh = xr->qh + ib + (uint64_t) row0*args.nb01;
-        device const uint8_t * sc = xr->scales + ib + (uint64_t) row0*args.nb01;
+        device const block_iq2_s * xr = (device const block_iq2_s *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const uint8_t * qs = xr->qs + 4 * ib;
+        device const uint8_t * qh = xr->qh + ib;
+        device const uint8_t * sc = xr->scales + ib;
         device const uint8_t * signs = qs + QK_K/8;
-        device const half * dh = &xr->d + (uint64_t) row0*args.nb01/2;
+        device const half * dh = &xr->d;
 
         for (short row = row0; row < row1; row++) {
             const float db = dh[0];
@@ -2606,10 +2606,10 @@ void kernel_mul_mv_iq1_s_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq1_s * xr = x + ibl;
-        device const uint8_t  * qs = xr->qs + 4 * ib + (uint64_t) row0*args.nb01;
-        device const uint16_t * qh = xr->qh + ib + (uint64_t) row0*args.nb01/2;
-        device const half     * dh = &xr->d + (uint64_t) row0*args.nb01/2;
+        device const block_iq1_s * xr = (device const block_iq1_s *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const uint8_t  * qs = xr->qs + 4 * ib;
+        device const uint16_t * qh = xr->qh + ib;
+        device const half     * dh = &xr->d;
 
         for (short row = row0; row < row1; row++) {
             constant uint8_t * grid1 = (constant uint8_t *)(iq1s_grid_gpu + (qs[0] | ((qh[0] << 8) & 0x700)));
@@ -2733,10 +2733,10 @@ void kernel_mul_mv_iq1_m_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq1_m * xr = x + ibl;
-        device const uint8_t  * qs = xr->qs + 4 * ib + (uint64_t) row0*args.nb01;
-        device const uint8_t  * qh = xr->qh + 2 * ib + (uint64_t) row0*args.nb01;
-        device const uint16_t * sc = (device const uint16_t *)xr->scales + (uint64_t) row0*args.nb01/2;
+        device const block_iq1_m * xr = (device const block_iq1_m *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const uint8_t  * qs = xr->qs + 4 * ib;
+        device const uint8_t  * qh = xr->qh + 2 * ib;
+        device const uint16_t * sc = (device const uint16_t *)xr->scales;
 
         for (short row = row0; row < row1; row++) {
             scale.u16 = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) | ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
