@@ -611,7 +611,11 @@ class ModelBase:
             expert_match = re.search(r"\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$", weight_name)
             # accept per-tensor (scalar) or per-output-channel scales
             if scale.numel() != 1 and scale.numel() != weight.shape[0]:
-                continue
+                raise ValueError(
+                    f"FP8 weight {weight_name!r} has an unsupported block/group scale "
+                    f"(scale numel {scale.numel()}, weight shape {list(weight.shape)}); "
+                    f"only per-tensor or per-output-channel scales can be preserved. "
+                    f"Re-run with --fp8-as-q8 to dequantize instead.")
 
             weight_prefix = weight_name.removesuffix(".weight")
             # Transformers fine-grained FP8 uses activation_scale while ModelOpt uses input_scale.
