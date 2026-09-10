@@ -30,11 +30,11 @@
 		role="navigation"
 	>
 		<ActionIcon
-			icon={ChevronLeft}
-			tooltip="Previous version"
-			disabled={!hasPrevious}
 			class="h-5 w-5 p-0 {!hasPrevious ? '!cursor-not-allowed opacity-30' : ''}"
+			disabled={!hasPrevious}
+			icon={ChevronLeft}
 			onclick={() => messageActions.navigateToSibling(previousSiblingId!)}
+			tooltip="Previous version"
 		/>
 
 		<span class="px-1 font-mono text-xs">
@@ -42,11 +42,11 @@
 		</span>
 
 		<ActionIcon
-			icon={ChevronRight}
-			tooltip="Next version"
-			disabled={!hasNext}
 			class="h-5 w-5 p-0 {!hasNext ? 'opacity-30' : ''}"
+			disabled={!hasNext}
+			icon={ChevronRight}
 			onclick={() => messageActions.navigateToSibling(nextSiblingId!)}
+			tooltip="Next version"
 		/>
 	</div>
 {/if}

@@ -13,15 +13,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 
 const FILE_SEARCH_DEF: OpenAIToolDefinition = {
-	function: { description: '', name: BuiltInTool.FILE_GLOB_SEARCH, parameters: {} },
+	function: { description: '', name: BuiltInTool.SERVER_FILE_GLOB_SEARCH, parameters: {} },
 	type: 'function'
 };
-const FILE_SEARCH_KEY = `builtin:${BuiltInTool.FILE_GLOB_SEARCH}`;
+const FILE_SEARCH_KEY = `server:${BuiltInTool.SERVER_FILE_GLOB_SEARCH}`;
 
-// The store keeps its builtin tool list private; tests inject it through
+// The store keeps its server tool list private; tests inject it through
 // the reactive field so the derived gates recompute.
-function setBuiltinTools(defs: OpenAIToolDefinition[]) {
-	(toolsStore as unknown as { _builtinTools: OpenAIToolDefinition[] })._builtinTools = defs;
+function setServerTools(defs: OpenAIToolDefinition[]) {
+	(toolsStore as unknown as { _serverTools: OpenAIToolDefinition[] })._serverTools = defs;
 }
 
 function renderPicker() {
@@ -34,14 +34,14 @@ function renderPicker() {
 }
 
 afterEach(() => {
-	setBuiltinTools([]);
+	setServerTools([]);
 	toolsStore.setToolEnabled(FILE_SEARCH_KEY, true);
 	localStorage.removeItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
 });
 
 describe('ChatFormPickerMention file_glob_search gate', () => {
 	it('explains that file search is unavailable when the server has no tools', async () => {
-		setBuiltinTools([]);
+		setServerTools([]);
 		renderPicker();
 		await tick();
 
@@ -51,7 +51,7 @@ describe('ChatFormPickerMention file_glob_search gate', () => {
 	});
 
 	it('explains that file search must be enabled when the user disabled it', async () => {
-		setBuiltinTools([FILE_SEARCH_DEF]);
+		setServerTools([FILE_SEARCH_DEF]);
 		toolsStore.setToolEnabled(FILE_SEARCH_KEY, false);
 		renderPicker();
 		await tick();

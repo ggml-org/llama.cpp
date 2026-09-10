@@ -28,7 +28,7 @@ export type GrepSearchMeta = {
 };
 
 export function parseGrepSearchMeta(section: AgenticSection): GrepSearchMeta | null {
-	const args = parseToolArgs(BuiltInTool.GREP_SEARCH, section);
+	const args = parseToolArgs(BuiltInTool.SERVER_GREP_SEARCH, section);
 
 	if (!args) return null;
 

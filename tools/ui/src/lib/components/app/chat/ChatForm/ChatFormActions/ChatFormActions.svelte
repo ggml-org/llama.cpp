@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { SkipForward, Square } from '@lucide/svelte';
-	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
 		ChatFormActionModels,
@@ -10,11 +9,11 @@
 		ChatFormContextGauge
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT, ROUTES } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { setChatFormActionsContext } from '$lib/contexts';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
-	import { chatStore, conversationsStore, mcpStore, settingsStore } from '$lib/stores';
+	import { chatStore, conversationsStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
@@ -32,8 +31,7 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
-		onMcpResourcesClick?: () => void;
+		onMcpSettingsClick?: () => void;
 	}
 
 	let {
@@ -45,8 +43,7 @@
 		isReasoning = false,
 		isRecording = false,
 		onFileUpload,
-		onMcpPromptClick,
-		onMcpResourcesClick,
+		onMcpSettingsClick,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
@@ -56,18 +53,6 @@
 	}: Props = $props();
 
 	let currentConfig = $derived(settingsStore.config);
-
-	let hasMcpPromptsSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-
-		return mcpStore.hasPromptsCapability(perChatOverrides);
-	});
-
-	let hasMcpResourcesSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-
-		return mcpStore.hasResourcesCapability(perChatOverrides);
-	});
 
 	let hasAudioModality = $state(false);
 	let hasVideoModality = $state(false);
@@ -121,7 +106,7 @@
 
 		if (!chatStore.isLoading && !chatStore.isStreaming()) return false;
 
-		const processingState = chatStore.activeProcessingState;
+		const processingState = chatStore.processing.activeState;
 
 		if (!processingState) return false;
 
@@ -141,12 +126,6 @@
 		get hasAudioModality() {
 			return hasAudioModality;
 		},
-		get hasMcpPromptsSupport() {
-			return hasMcpPromptsSupport;
-		},
-		get hasMcpResourcesSupport() {
-			return hasMcpResourcesSupport;
-		},
 		get hasVideoModality() {
 			return hasVideoModality;
 		},
@@ -156,14 +135,8 @@
 		get onFileUpload() {
 			return onFileUpload;
 		},
-		get onMcpPromptClick() {
-			return onMcpPromptClick;
-		},
-		get onMcpResourcesClick() {
-			return onMcpResourcesClick;
-		},
 		get onMcpSettingsClick() {
-			return () => goto(ROUTES.MCP_SERVERS);
+			return onMcpSettingsClick;
 		},
 		get onSystemPromptClick() {
 			return onSystemPromptClick;
@@ -188,14 +161,14 @@
 
 		{#if showModelSelector}
 			<ChatFormActionModels
-				{disabled}
-				bind:this={selectorModelRef}
 				bind:hasAudioModality
+				bind:hasModelSelected
 				bind:hasVideoModality
 				bind:hasVisionModality
-				bind:hasModelSelected
 				bind:isSelectedModelInCache
 				bind:submitTooltip
+				bind:this={selectorModelRef}
+				{disabled}
 				forceForegroundText
 				useGlobalSelection
 			/>
@@ -204,12 +177,12 @@
 
 	{#if isReasoning}
 		<Button
-			type="button"
-			variant="secondary"
+			class="group h-8 w-8 rounded-full p-0"
 			onclick={() =>
 				ChatService.stopReasoning(activeMessage?.completionId ?? '', activeMessage?.model)}
-			class="group h-8 w-8 rounded-full p-0"
 			title="Skip reasoning"
+			type="button"
+			variant="secondary"
 		>
 			<span class="sr-only">Skip reasoning</span>
 
@@ -221,10 +194,10 @@
 
 	{#if isLoading && !canSubmit}
 		<Button
+			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
+			onclick={onStop}
 			type="button"
 			variant="secondary"
-			onclick={onStop}
-			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
 		>
 			<span class="sr-only">Stop</span>
 
@@ -238,8 +211,8 @@
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
 			{disabled}
-			tooltipLabel={submitTooltip}
 			showErrorState={showModelSelector && hasModelSelected && !isSelectedModelInCache}
+			tooltipLabel={submitTooltip}
 		/>
 	{/if}
 </div>

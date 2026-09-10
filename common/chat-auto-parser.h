@@ -4,7 +4,7 @@
 #include "common.h"
 #include "jinja/caps.h"
 #include "peg-parser.h"
-#include "nlohmann/json.hpp"
+#include "json.h"
 
 #include <chrono>
 #include <optional>
@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 class common_chat_peg_builder;
 

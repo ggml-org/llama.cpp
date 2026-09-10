@@ -86,55 +86,60 @@
 	{@const safeUrl = sanitizeExternalUrl(result.url)}
 	{@const showHoverCard = safeUrl !== null && hasDetails(result)}
 	{#if safeUrl}
-		<HoverCard.Root openDelay={150} closeDelay={100}>
+		<HoverCard.Root closeDelay={100} openDelay={150}>
 			<HoverCard.Trigger
-				href={safeUrl}
-				target="_blank"
-				rel="noopener noreferrer"
 				class="hover:bg-muted/80 focus-visible:ring-ring inline-flex max-w-full items-center gap-1.5 rounded-full border bg-muted px-2.5 py-1 text-xs transition-colors outline-none focus-visible:ring-2"
+				href={safeUrl}
+				rel="noopener noreferrer"
+				target="_blank"
 			>
 				{#if faviconUrl}
 					<img
-						src={faviconUrl}
 						alt=""
 						class="h-3 w-3 shrink-0 rounded-sm"
 						onerror={hideBrokenIcon}
+						src={faviconUrl}
 					/>
 				{:else}
 					<Globe class="text-muted-foreground/70 h-3 w-3 shrink-0" />
 				{/if}
+
 				<span class="truncate font-medium text-foreground/80">{result.title}</span>
 			</HoverCard.Trigger>
+
 			{#if showHoverCard}
 				{@const publishDate = formatPublishDate(result.published)}
 				{@const host = hostFor(safeUrl)}
 				<HoverCard.Content
-					side="top"
 					align="start"
-					sideOffset={6}
 					class="bg-popover text-popover-foreground z-50 w-80 max-w-[90vw] rounded-lg border p-0 shadow-lg"
+					side="top"
+					sideOffset={6}
 				>
 					<div class="flex flex-col gap-2 p-3">
 						<a
-							href={safeUrl}
-							target="_blank"
-							rel="noopener noreferrer"
 							class="line-clamp-3 text-sm font-medium leading-snug hover:underline"
-							>{result.title}</a
+							href={safeUrl}
+							rel="noopener noreferrer"
+							target="_blank">{result.title}</a
 						>
+
 						{#if publishDate || result.author}
 							<div class="text-muted-foreground flex items-center gap-1.5 text-[11px]">
 								{#if publishDate}
 									<span>{publishDate}</span>
 								{/if}
+
 								{#if publishDate && result.author}
 									<span class="opacity-50">&middot;</span>
 								{/if}
+
 								{#if result.author}
 									<span class="truncate">{result.author}</span>
 								{/if}
 							</div>
 						{/if}
+
 						{#if result.highlights}
 							<p
 								class="text-popover-foreground/85 line-clamp-5 text-xs leading-relaxed whitespace-pre-line"
@@ -142,6 +147,7 @@
 								{result.highlights}
 							</p>
 						{/if}
+
 						{#if host}
 							<div class="text-muted-foreground/80 truncate text-[11px]">{host}</div>
 						{/if}
@@ -152,7 +158,7 @@
 	{/if}
 {/snippet}
 
-<CollapsibleContentBlock {open} class="my-2" {icon} {iconClass} {iconUrl} {title} {onToggle}>
+<CollapsibleContentBlock class="my-2" {icon} {iconClass} {iconUrl} {onToggle} {open} {title}>
 	{#if results.length > 0}
 		<div class="flex flex-wrap items-center gap-2 pb-1">
 			{#each results as result (result.url)}
@@ -162,6 +168,7 @@
 	{:else if showSpinner}
 		<div class="text-muted-foreground/70 flex items-center gap-2 py-1 text-xs italic">
 			<Loader2 class="h-3 w-3 animate-spin" />
+
 			<span>Searching...</span>
 		</div>
 	{:else}

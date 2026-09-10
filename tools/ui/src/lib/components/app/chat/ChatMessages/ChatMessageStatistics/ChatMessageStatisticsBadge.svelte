@@ -32,6 +32,7 @@
 				</BadgeInfo>
 			{/snippet}
 		</Tooltip.Trigger>
+
 		<Tooltip.Content>
 			<p>{tooltipLabel}</p>
 		</Tooltip.Content>

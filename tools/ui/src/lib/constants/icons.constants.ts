@@ -8,10 +8,13 @@ import {
 	File as FileIcon,
 	FileText as FileTextIcon,
 	Image as ImageIcon,
+	Lightbulb as ReasoningIcon,
 	Mic as AudioIcon,
 	Video as VideoIcon
 } from '@lucide/svelte';
-import { FileTypeCategory, ModelModality } from '$lib/enums';
+import { FileTypeCategory, ModelCapability, ModelModality } from '$lib/enums';
+import type { ModelCapabilities, ModelModalities } from '$lib/types/models';
+import type { Component } from 'svelte';
 
 export const FILE_TYPE_ICONS = {
 	[FileTypeCategory.AUDIO]: AudioIcon,
@@ -34,6 +37,29 @@ export const MODALITY_LABELS = {
 	[ModelModality.VIDEO]: 'Video',
 	[ModelModality.VISION]: 'Vision'
 } as const;
+
+/** Maps an input ModelModality to the boolean flag it drives on the ModelModalities type */
+export const MODALITY_FLAG_KEYS: Record<
+	Exclude<ModelModality, ModelModality.TEXT>,
+	keyof ModelModalities
+> = {
+	[ModelModality.AUDIO]: 'audio',
+	[ModelModality.VIDEO]: 'video',
+	[ModelModality.VISION]: 'vision'
+};
+
+export const CAPABILITY_ICONS: Record<ModelCapability, Component> = {
+	[ModelCapability.REASONING]: ReasoningIcon
+} as const;
+
+export const CAPABILITY_LABELS: Record<ModelCapability, string> = {
+	[ModelCapability.REASONING]: 'Reasoning'
+} as const;
+
+/** Maps a ModelCapability to the boolean flag it drives on the ModelCapabilities type */
+export const CAPABILITY_FLAG_KEYS: Record<ModelCapability, keyof ModelCapabilities> = {
+	[ModelCapability.REASONING]: 'reasoning'
+};
 
 // Shared SVG icon strings for copy and preview buttons
 export const COPY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
