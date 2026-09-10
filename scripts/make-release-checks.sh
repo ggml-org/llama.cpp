@@ -22,9 +22,9 @@ for arg in "$@"; do
     esac
 done
 
-MAJOR=$(grep "set(LLAMA_VERSION_MAJOR" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
-MINOR=$(grep "set(LLAMA_VERSION_MINOR" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
-PATCH=$(grep "set(LLAMA_VERSION_PATCH" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
+MAJOR=$(grep "set(LLAMA_VERSION_MAJOR" "$REPO_ROOT/CMakeLists.txt" | sed 's/.*MAJOR \([0-9]*\).*/\1/')
+MINOR=$(grep "set(LLAMA_VERSION_MINOR" "$REPO_ROOT/CMakeLists.txt" | sed 's/.*MINOR \([0-9]*\).*/\1/')
+PATCH=$(grep "set(LLAMA_VERSION_PATCH" "$REPO_ROOT/CMakeLists.txt" | sed 's/.*PATCH \([0-9]*\).*/\1/')
 VERSION="v${MAJOR}.${MINOR}.${PATCH}"
 echo "Determined version: ${VERSION}"
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -91,9 +91,9 @@ else
     fi
 fi
 
-MAJOR=$(grep "set(GGML_VERSION_MAJOR" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
-MINOR=$(grep "set(GGML_VERSION_MINOR" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
-PATCH=$(grep "set(GGML_VERSION_PATCH" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
+MAJOR=$(grep "set(GGML_VERSION_MAJOR" "$REPO_ROOT/ggml/CMakeLists.txt" | sed 's/.*MAJOR \([0-9]*\).*/\1/')
+MINOR=$(grep "set(GGML_VERSION_MINOR" "$REPO_ROOT/ggml/CMakeLists.txt" | sed 's/.*MINOR \([0-9]*\).*/\1/')
+PATCH=$(grep "set(GGML_VERSION_PATCH" "$REPO_ROOT/ggml/CMakeLists.txt" | sed 's/.*PATCH \([0-9]*\).*/\1/')
 GGML_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
 echo "Local ggml version: ${GGML_VERSION}"
 
