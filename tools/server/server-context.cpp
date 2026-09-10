@@ -1705,8 +1705,8 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
-        // process per-request lora adapters
-        if (!task.params.lora.empty()) {
+        // process per-request lora adapters ("lora": [] zeros every adapter)
+        if (task.params.lora_specified) {
             auto task_loras = construct_lora_list(task.params.lora);
             if (!are_lora_equal(task_loras, slot.lora)) {
                 // if lora has changed, check to see if the cache should be cleared

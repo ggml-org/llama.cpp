@@ -95,6 +95,7 @@ class ServerProcess:
     models_preset: str | None = None
     no_models_autoload: bool | None = None
     lora_files: List[str] | None = None
+    lora_init_without_apply: bool = False
     enable_ctx_shift: int | None = False
     spec_type: str | None = None
     spec_draft_n_min: int | None = None
@@ -237,6 +238,8 @@ class ServerProcess:
         if self.lora_files:
             for lora_file in self.lora_files:
                 server_args.extend(["--lora", lora_file])
+        if self.lora_init_without_apply:
+            server_args.append("--lora-init-without-apply")
         if self.enable_ctx_shift:
             server_args.append("--context-shift")
         if self.spec_type:
