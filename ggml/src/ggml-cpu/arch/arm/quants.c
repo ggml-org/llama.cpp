@@ -875,23 +875,23 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         const int8x8_t q8_3_lo = vld1_s8(y[2*ib+1].qs + 16);
         const int8x8_t q8_3_hi = vld1_s8(y[2*ib+1].qs + 24);
 
-        const int32x4_t sumi = (int32x4_t){
+        const int32x4_t sumi = vld1q_s32(((const int32_t[4]) {
             vaddvq_s32(ggml_nvfp4_dot8(q4_0_lo, q8_0_lo, q4_0_hi, q8_0_hi)),
             vaddvq_s32(ggml_nvfp4_dot8(q4_1_lo, q8_1_lo, q4_1_hi, q8_1_hi)),
             vaddvq_s32(ggml_nvfp4_dot8(q4_2_lo, q8_2_lo, q4_2_hi, q8_2_hi)),
             vaddvq_s32(ggml_nvfp4_dot8(q4_3_lo, q8_3_lo, q4_3_hi, q8_3_hi)),
-        };
+        }));
 #endif
 
         const float dy0 = GGML_CPU_FP16_TO_FP32(y[2*ib].d);
         const float dy1 = GGML_CPU_FP16_TO_FP32(y[2*ib+1].d);
-        const float32x4_t nvsc = {
+        const float32x4_t nvsc = vld1q_f32(((const float[4]) {
             GGML_CPU_UE4M3_TO_FP32(x[ib].d[0]),
             GGML_CPU_UE4M3_TO_FP32(x[ib].d[1]),
             GGML_CPU_UE4M3_TO_FP32(x[ib].d[2]),
             GGML_CPU_UE4M3_TO_FP32(x[ib].d[3])
-        };
-        const float32x4_t scales = vmulq_f32(nvsc, (float32x4_t){dy0, dy0, dy1, dy1});
+        }));
+        const float32x4_t scales = vmulq_f32(nvsc, vld1q_f32(((const float[4]) {dy0, dy0, dy1, dy1})));
 
         acc = vfmaq_f32(acc, vcvtq_f32_s32(sumi), scales);
     }
