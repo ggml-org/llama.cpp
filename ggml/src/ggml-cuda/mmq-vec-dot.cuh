@@ -148,6 +148,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
     typedef tile<16,  8, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
 
+    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -161,6 +162,68 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
     const half2 * y_ds = (const half2 *) y;
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
+
+#if defined(RDNA3_5)
+    // A single x minitile per warp leaves the loop below with one MMA per j-tile, so it
+    // stalls on that tile's scale load before it can issue. With the widest tile there
+    // are enough j-tiles to hide those loads instead: issue every tile's first mma half,
+    // load all the scales, then issue the second halves.
+    if constexpr (I == 64 && J == 128 && ntx == 1) {
+        constexpr int ntiles = J/tile_C::J;
+
+        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
+            const int k0 = k00 + k01;
+
+            tile_A A;
+            load_ldmatrix(A, x_qs + i0*sram_stride + k0, sram_stride);
+
+            tile_B B[ntiles];
+            tile_C C[ntiles];
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                load_ldmatrix(B[jb], y_qs + jb*tile_C::J*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+                mma_half<0>(C[jb], A, B[jb]);
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+            float dA[tile_C::ne];
+            float dB[ntiles];
+#pragma unroll
+            for (int l = 0; l < tile_C::ne; ++l) {
+                const int i = i0 + tile_C::get_i(l);
+                dA[l] = x_df[i*sram_stride + k0/QI8_0];
+            }
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                const int j = jb*tile_C::J + tile_C::get_j(0);
+                if constexpr (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
+                    dB[jb] = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
+                } else {
+                    dB[jb] = __low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                }
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                mma_half<1>(C[jb], A, B[jb]);
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+#pragma unroll
+                for (int l = 0; l < tile_C::ne; ++l) {
+                    sum[jb*tile_C::ne + l] += C[jb].x[l]*dA[l]*dB[jb];
+                }
+            }
+        }
+        return;
+    }
+#endif // defined(RDNA3_5)
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
         const int k0 = k00 + k01;
@@ -318,6 +381,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile<16,  8, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
 
+    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
@@ -330,6 +394,73 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const half2 * y_dm = (const half2 *) y;
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
+
+#if defined(RDNA3_5)
+    // See the matching branch in ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma. The scales here are
+    // half2 rather than float, and the second of their two terms does not depend on the
+    // MMA result, so that part of the sum is folded in while the first halves are still
+    // in flight.
+    if constexpr (I == 64 && J == 128 && ntx == 1) {
+        constexpr int ntiles = J/tile_C::J;
+
+        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_1) {
+            const int k0 = k00 + k01;
+
+            tile_A A;
+            load_ldmatrix(A, x_qs + i0*sram_stride + k0, sram_stride);
+
+            tile_B B[ntiles];
+            tile_C C[ntiles];
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                load_ldmatrix(B[jb], y_qs + jb*tile_C::J*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+                mma_half<0>(C[jb], A, B[jb]);
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+            float2 dmA[tile_C::ne];
+            float2 dsB[ntiles];
+#pragma unroll
+            for (int l = 0; l < tile_C::ne; ++l) {
+                const int i = i0 + tile_C::get_i(l);
+                dmA[l] = __half22float2(x_dm[i*sram_stride + k0/QI8_1]);
+            }
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                const int j = jb*tile_C::J + tile_C::get_j(0);
+                dsB[jb] = __half22float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
+            }
+
+            // The bias term needs no MMA result, so retire it before the second halves.
+#pragma unroll
+            for (int l = 0; l < tile_C::ne; ++l) {
+#pragma unroll
+                for (int jb = 0; jb < ntiles; ++jb) {
+                    sum[jb*tile_C::ne + l] += dmA[l].y*dsB[jb].y;
+                }
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+                mma_half<1>(C[jb], A, B[jb]);
+            }
+
+            __builtin_amdgcn_sched_barrier(0);
+
+#pragma unroll
+            for (int jb = 0; jb < ntiles; ++jb) {
+#pragma unroll
+                for (int l = 0; l < tile_C::ne; ++l) {
+                    sum[jb*tile_C::ne + l] += dmA[l].x*dsB[jb].x*C[jb].x[l];
+                }
+            }
+        }
+        return;
+    }
+#endif // defined(RDNA3_5)
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_1) {
         const int k0 = k00 + k01;
