@@ -3328,6 +3328,14 @@ struct test_bin_bcast : public test_case {
         return op == ggml_div;
     }
 
+    double max_nmse_err() override {
+        if (op == ggml_add && type == GGML_TYPE_F16 && nf > 1) {
+            // Fused ADDs can keep FP32 intermediates while the CPU rounds each ADD to FP16.
+            return 1e-6;
+        }
+        return test_case::max_nmse_err();
+    }
+
     double max_maa_err() override {
         return op == ggml_add ? 1e-4 : 1e-3;
     }
