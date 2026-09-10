@@ -4899,9 +4899,9 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     }
 };
 
-// NVFP4 W4A8 path (GGML_PREC_Q8 on src1 disallows 4-bit activations)
-struct test_mul_mat_nvfp4_w4a8 : public test_mul_mat {
-    test_mul_mat_nvfp4_w4a8(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
+// FP4 W4A8 path (GGML_PREC_Q8 on src1 disallows 4-bit activations)
+struct test_mul_mat_w4a8 : public test_mul_mat {
+    test_mul_mat_w4a8(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
             int64_t m = 32, int64_t n = 32, int64_t k = 256,
             std::array<int64_t, 2> bs = {1, 1},
             std::array<int64_t, 2> nr = {1, 1})
@@ -4917,20 +4917,20 @@ struct test_mul_mat_nvfp4_w4a8 : public test_mul_mat {
     }
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "MUL_MAT_NVFP4_W4A8";
+        return "MUL_MAT_W4A8";
     }
 };
 
-// NVFP4 native W4A4 path (default precision)
-struct test_mul_mat_nvfp4_w4a4 : public test_mul_mat {
-    test_mul_mat_nvfp4_w4a4(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
+// FP4 native W4A4 path (default precision)
+struct test_mul_mat_w4a4 : public test_mul_mat {
+    test_mul_mat_w4a4(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
             int64_t m = 32, int64_t n = 32, int64_t k = 256,
             std::array<int64_t, 2> bs = {1, 1},
             std::array<int64_t, 2> nr = {1, 1})
         : test_mul_mat(type_a, type_b, m, n, k, bs, nr) {}
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "MUL_MAT_NVFP4_W4A4";
+        return "MUL_MAT_W4A4";
     }
 };
 
@@ -5023,9 +5023,9 @@ struct test_mul_mat_id : public test_case {
     }
 };
 
-// NVFP4 W4A8 path on the MoE path (GGML_PREC_Q8 on src1 disallows 4-bit activations)
-struct test_mul_mat_id_nvfp4_w4a8 : public test_mul_mat_id {
-    test_mul_mat_id_nvfp4_w4a8(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
+// FP4 W4A8 path on the MoE path (GGML_PREC_Q8 on src1 disallows 4-bit activations)
+struct test_mul_mat_id_w4a8 : public test_mul_mat_id {
+    test_mul_mat_id_w4a8(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
             int64_t m = 32, int64_t n = 32, int64_t k = 256)
         : test_mul_mat_id(type_a, type_b, n_mats, n_used, b, m, n, k) {}
@@ -5040,19 +5040,19 @@ struct test_mul_mat_id_nvfp4_w4a8 : public test_mul_mat_id {
     }
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "MUL_MAT_ID_NVFP4_W4A8";
+        return "MUL_MAT_ID_W4A8";
     }
 };
 
-// NVFP4 native W4A4 path on the MoE path (default precision)
-struct test_mul_mat_id_nvfp4_w4a4 : public test_mul_mat_id {
-    test_mul_mat_id_nvfp4_w4a4(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
+// FP4 native W4A4 path on the MoE path (default precision)
+struct test_mul_mat_id_w4a4 : public test_mul_mat_id {
+    test_mul_mat_id_w4a4(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
             int64_t m = 32, int64_t n = 32, int64_t k = 256)
         : test_mul_mat_id(type_a, type_b, n_mats, n_used, b, m, n, k) {}
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "MUL_MAT_ID_NVFP4_W4A4";
+        return "MUL_MAT_ID_W4A4";
     }
 };
 
@@ -9719,16 +9719,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 32, 1, 32)); // too small (N<64)
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 1024, 1, 1024)); // too big (N>512)
 
-    // NVFP4 activation precision (default = native W4A4, src1 GGML_PREC_Q8 = W4A8)
-    test_cases.emplace_back(new test_mul_mat_nvfp4_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32,  1, 256));
-    test_cases.emplace_back(new test_mul_mat_nvfp4_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32, 32, 256));
-    test_cases.emplace_back(new test_mul_mat_nvfp4_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 64, 16, 512));
-    test_cases.emplace_back(new test_mul_mat_nvfp4_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32,  1, 256));
-    test_cases.emplace_back(new test_mul_mat_nvfp4_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32, 32, 256));
-    test_cases.emplace_back(new test_mul_mat_id_nvfp4_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
-    test_cases.emplace_back(new test_mul_mat_id_nvfp4_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 4, 2, true,  64, 16, 256));
-    test_cases.emplace_back(new test_mul_mat_id_nvfp4_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
-    test_cases.emplace_back(new test_mul_mat_id_nvfp4_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 4, 2, true,  64, 16, 256));
+    // FP4 activation precision (default = native W4A4, src1 GGML_PREC_Q8 = W4A8)
+    test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32,  1, 256));
+    test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32, 32, 256));
+    test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 64, 16, 512));
+    test_cases.emplace_back(new test_mul_mat_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32,  1, 256));
+    test_cases.emplace_back(new test_mul_mat_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32, 32, 256));
+    test_cases.emplace_back(new test_mul_mat_id_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
+    test_cases.emplace_back(new test_mul_mat_id_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 4, 2, true,  64, 16, 256));
+    test_cases.emplace_back(new test_mul_mat_id_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
+    test_cases.emplace_back(new test_mul_mat_id_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 4, 2, true,  64, 16, 256));
+    test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 32, 256));
+    test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 64, 16, 512));
+    test_cases.emplace_back(new test_mul_mat_w4a4(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 32, 256));
+    test_cases.emplace_back(new test_mul_mat_id_w4a8(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
+    test_cases.emplace_back(new test_mul_mat_id_w4a4(GGML_TYPE_MXFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
 
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.

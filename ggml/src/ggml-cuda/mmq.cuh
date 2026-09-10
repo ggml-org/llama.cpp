@@ -243,8 +243,8 @@ static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type ty
         return ggml_cuda_mmq_get_config_rdna2(type, J, fallback);
     }
     if (blackwell_mma_available(cc)) {
-        // W4A16 NVFP4: keep src1 at Q8_1 (W4A8) by using the generic NVFP4 config even on Blackwell.
-        if (!can_w4a4 && type == GGML_TYPE_NVFP4) {
+        // W4A16 FP4: keep src1 at Q8_1 (W4A8) by using the generic FP4 config even on Blackwell.
+        if (!can_w4a4 && (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4)) {
             return ggml_cuda_mmq_get_config_ampere(type, J, fallback);
         }
         return ggml_cuda_mmq_get_config_blackwell(type, J, fallback);
@@ -273,8 +273,8 @@ static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_t
 #endif // CDNA
 #else
 #ifdef BLACKWELL_MMA_AVAILABLE
-    // W4A16 NVFP4: keep src1 at Q8_1 (W4A8) by using the generic NVFP4 config even on Blackwell.
-    if (!can_w4a4 && type == GGML_TYPE_NVFP4) {
+    // W4A16 FP4: keep src1 at Q8_1 (W4A8) by using the generic FP4 config even on Blackwell.
+    if (!can_w4a4 && (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4)) {
         return ggml_cuda_mmq_get_config_ampere(type, J, fallback);
     }
     return ggml_cuda_mmq_get_config_blackwell(type, J, fallback);
@@ -684,11 +684,14 @@ static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_func
 #ifdef BLACKWELL_MMA_AVAILABLE
     switch (type) {
         case GGML_TYPE_MXFP4:
-            return ggml_cuda_mmq_util_funcs(
-                -1,
-                ggml_cuda_mmq_load_tiles_mxfp4_fp4<type, J, fallback>,
-                ggml_cuda_mmq_vec_dot_fp4_fp4_mma<type, J, fallback>,
-                ggml_cuda_mmq_write_back_mma<type, J, fallback>);
+            if (can_w4a4) {
+                return ggml_cuda_mmq_util_funcs(
+                    -1,
+                    ggml_cuda_mmq_load_tiles_mxfp4_fp4<type, J, fallback>,
+                    ggml_cuda_mmq_vec_dot_fp4_fp4_mma<type, J, fallback>,
+                    ggml_cuda_mmq_write_back_mma<type, J, fallback>);
+            }
+            break;
         case GGML_TYPE_NVFP4:
             if (can_w4a4) {
                 return ggml_cuda_mmq_util_funcs(
@@ -889,9 +892,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     int * tile_x = tile_y + GGML_PAD(J*MMQ_TILE_Y_K, nwarps*warp_size);
 
 #if defined(BLACKWELL_MMA_AVAILABLE)
-    // FP4 tile stores 8 blocks. The NVFP4 W4A8 path uses the generic
+    // FP4 tile stores 8 blocks. The W4A8 path uses the generic
     // Q8_1 tile layout instead of the packed FP4 tile.
-    constexpr int ne_block = ((type == GGML_TYPE_MXFP4 || type == GGML_TYPE_NVFP4) && (type != GGML_TYPE_NVFP4 || can_w4a4)) ? QK_FP4_MMQ : QK8_1_MMQ;
+    constexpr int ne_block = ((type == GGML_TYPE_MXFP4 || type == GGML_TYPE_NVFP4) && can_w4a4) ? QK_FP4_MMQ : QK8_1_MMQ;
 #else
     constexpr int ne_block = QK8_1_MMQ;
 #endif  // defined(BLACKWELL_MMA_AVAILABLE)
@@ -1569,7 +1572,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
 #define DECL_MMQ_CASE(type)                                                        \
     template void mul_mat_q_case<type>(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) \
 
-// W4A16 NVFP4 variant: keeps src1 at Q8_1 (W4A8) instead of native FP4 MMA on Blackwell.
+// W4A16 FP4 variant: keeps src1 at Q8_1 (W4A8) instead of native FP4 MMA on Blackwell.
 #define DECL_MMQ_CASE_W4A8(type)                                                   \
     template void mul_mat_q_case<type, false>(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) \
 
@@ -1599,7 +1602,9 @@ extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS);
 extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
 extern DECL_MMQ_CASE(GGML_TYPE_NVFP4);
 #ifdef GGML_CUDA_HAS_BLACKWELL_TARGET
-extern DECL_MMQ_CASE_W4A8(GGML_TYPE_NVFP4); // W4A8 path only differs on Blackwell
+// W4A8 path only differs on Blackwell
+extern DECL_MMQ_CASE_W4A8(GGML_TYPE_MXFP4);
+extern DECL_MMQ_CASE_W4A8(GGML_TYPE_NVFP4);
 #endif // GGML_CUDA_HAS_BLACKWELL_TARGET
 
 // -------------------------------------------------------------------------------------------------------------------------
