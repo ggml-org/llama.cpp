@@ -1,3 +1,4 @@
+include(CheckCCompilerFlag)
 include(CheckCXXCompilerFlag)
 include("../cmake/common.cmake")
 
@@ -511,11 +512,14 @@ function(ggml_add_cpu_backend_variant tag_name)
         if (GGML_CPU_ALL_VARIANTS)
             # Not every compiler version supports every ARM ISA extension
             # (e.g. GCC < 14 rejects "+sme"). Probe the exact -march= string
-            # this variant would be built with and skip it if the compiler
-            # rejects it, instead of failing the whole build.
+            # this variant would be built with and skip it if either compiler
+            # rejects it, instead of failing the whole build. Both C and C++
+            # are checked since the flag is applied to sources of both
+            # languages, and CMake allows them to be different compilers.
             ggml_compute_arm_all_variants_march_flag(GGML_CPU_VARIANT_MARCH_FLAG)
-            check_cxx_compiler_flag("${GGML_CPU_VARIANT_MARCH_FLAG}" GGML_CPU_VARIANT_${tag_name}_SUPPORTED)
-            if (NOT GGML_CPU_VARIANT_${tag_name}_SUPPORTED)
+            check_c_compiler_flag("${GGML_CPU_VARIANT_MARCH_FLAG}" GGML_CPU_VARIANT_${tag_name}_C_SUPPORTED)
+            check_cxx_compiler_flag("${GGML_CPU_VARIANT_MARCH_FLAG}" GGML_CPU_VARIANT_${tag_name}_CXX_SUPPORTED)
+            if (NOT GGML_CPU_VARIANT_${tag_name}_C_SUPPORTED OR NOT GGML_CPU_VARIANT_${tag_name}_CXX_SUPPORTED)
                 message(STATUS "Skipping CPU backend variant '${tag_name}': compiler does not support '${GGML_CPU_VARIANT_MARCH_FLAG}'")
                 return()
             endif()
