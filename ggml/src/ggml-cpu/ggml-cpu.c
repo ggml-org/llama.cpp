@@ -1258,6 +1258,38 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
+// apply the weight scale (src[2]) carried by ggml_mul_mat_ext, broadcast over dst
+static void ggml_compute_forward_mul_mat_scale(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst) {
+    const struct ggml_tensor * scale = dst->src[2];
+    if (!scale) {
+        return;
+    }
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t ne0 = dst->ne[0], ne1 = dst->ne[1], ne2 = dst->ne[2], ne3 = dst->ne[3];
+    const size_t  nb1 = dst->nb[1], nb2 = dst->nb[2], nb3 = dst->nb[3];
+
+    ggml_barrier(params->threadpool);
+
+    const float * sd = (const float *) scale->data;
+    const int64_t sne0 = scale->ne[0], sne1 = scale->ne[1], sne2 = scale->ne[2], sne3 = scale->ne[3];
+    const int64_t nr = ne1 * ne2 * ne3;
+    for (int64_t ir = ith; ir < nr; ir += nth) {
+        const int64_t i1 = ir % ne1;
+        const int64_t i2 = (ir / ne1) % ne2;
+        const int64_t i3 = ir / (ne1 * ne2);
+        float * dp = (float *) ((char *) dst->data + i1*nb1 + i2*nb2 + i3*nb3);
+        const int64_t so = (i1 % sne1)*sne0 + (i2 % sne2)*sne0*sne1 + (i3 % sne3)*sne0*sne1*sne2;
+        for (int64_t i0 = 0; i0 < ne0; i0++) {
+            dp[i0] *= sd[(i0 % sne0) + so];
+        }
+    }
+}
+
 void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -1321,6 +1353,7 @@ void ggml_compute_forward_mul_mat(
                                      src1->type,
                                      dst->type))
                     goto UseGgmlGemm1;
+        ggml_compute_forward_mul_mat_scale(params, dst);
         return;
     }
 UseGgmlGemm1:;
@@ -1374,6 +1407,7 @@ UseGgmlGemm1:;
     // of src1 from the work buffer
     if (ggml_cpu_iqp_supports_mul_mat(dst) && !params->use_ref) {
         ggml_compute_forward_mul_mat_iqp(params, dst);
+        ggml_compute_forward_mul_mat_scale(params, dst);
         return;
     }
 
@@ -1396,6 +1430,7 @@ UseGgmlGemm1:;
                                      vec_dot_type,
                                      dst->type))
                     goto UseGgmlGemm2;
+        ggml_compute_forward_mul_mat_scale(params, dst);
         return;
     }
 UseGgmlGemm2:;
@@ -1464,25 +1499,7 @@ UseGgmlGemm2:;
         current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
     }
 
-    // apply the weight scale (src[2]) carried by ggml_mul_mat_ext, broadcast over dst
-    const struct ggml_tensor * scale = dst->src[2];
-    if (scale) {
-        ggml_barrier(params->threadpool);
-
-        const float * sd = (const float *) scale->data;
-        const int64_t sne0 = scale->ne[0], sne1 = scale->ne[1], sne2 = scale->ne[2], sne3 = scale->ne[3];
-        const int64_t nr = ne1 * ne2 * ne3;
-        for (int64_t ir = ith; ir < nr; ir += nth) {
-            const int64_t i1 = ir % ne1;
-            const int64_t i2 = (ir / ne1) % ne2;
-            const int64_t i3 = ir / (ne1 * ne2);
-            float * dp = (float *) ((char *) dst->data + i1*nb1 + i2*nb2 + i3*nb3);
-            const int64_t so = (i1 % sne1)*sne0 + (i2 % sne2)*sne0*sne1 + (i3 % sne3)*sne0*sne1*sne2;
-            for (int64_t i0 = 0; i0 < ne0; i0++) {
-                dp[i0] *= sd[(i0 % sne0) + so];
-            }
-        }
-    }
+    ggml_compute_forward_mul_mat_scale(params, dst);
 }
 
 // ggml_compute_forward_mul_mat_id
