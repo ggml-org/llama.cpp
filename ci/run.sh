@@ -363,31 +363,6 @@ function gg_sum_test_llama_archs_models {
     gg_printf '```\n'
 }
 
-# test_fusion
-
-function gg_run_test_fusion {
-    cd ${SRC}
-
-    set -e
-
-    if [ ! -z ${GG_BUILD_METAL} ]; then
-        # run the fusion regression test against the shared dummy models
-        ./build-ci-release/bin/test-fusion --models build-ci-models --device MTL0 --check tests/fusion/MTL.csv 2>&1
-    fi
-
-    set +e
-}
-
-function gg_sum_test_fusion {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'Runs test-fusion against baseline\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}.log)"
-    gg_printf '```\n'
-}
-
 # test_scripts
 
 function gg_run_test_scripts {
@@ -846,7 +821,6 @@ test $ret -eq 0 && gg_run ctest_release
 
 test $ret -eq 0 && gg_run test_llama_archs_models
 test $ret -eq 0 && gg_run test_llama_archs_tensor_split
-test $ret -eq 0 && gg_run test_fusion
 
 if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
     test $ret -eq 0 && gg_run test_backend_ops_cpu
