@@ -284,6 +284,10 @@ private:
     llama_adapter_cvec_ptr  cvec;
     llama_adapter_loras_ptr loras;
 
+    // all adapters from the last set_adapters_lora call, at full scale. reserved graphs
+    // cover all of these so changing LoRA scale does not need a new reserve call.
+    llama_adapter_loras_ptr loras_reserve;
+
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
     llama_memory_ptr memory;
