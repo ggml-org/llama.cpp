@@ -208,6 +208,22 @@ add_library(ggml-base
             ggml-quants.h
             gguf.cpp)
 
+# ggml-quants.c contains the reference quantization kernels used when producing
+# quantized model files (ggml_quantize_chunk). The k-quant / i-quant scale
+# search loops in this file are sensitive to floating point contraction (FMA):
+# when the compiler is allowed to contract a*b+c, the selected scales - and
+# therefore the quantized output bits - differ between compilers and
+# architectures. Disabling contraction for this single translation unit makes
+# quantization results bit-identical across compilers and architectures
+# (ref: <link-to-evidence>). Quantization is an offline, one-time operation;
+# the measured cost ranges from none (Apple Silicon/clang) to ~33% slower
+# (x86-64/gcc). Runtime inference kernels (ggml-cpu) are not affected.
+# A '#pragma STDC FP_CONTRACT OFF' in the source is not sufficient:
+# GCC does not implement the pragma and ignores it with a warning.
+if (CMAKE_C_COMPILER_ID MATCHES "GNU" OR CMAKE_C_COMPILER_ID MATCHES "Clang")
+    set_source_files_properties(ggml-quants.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
+
 set_target_properties(ggml-base PROPERTIES
     VERSION ${GGML_VERSION}
     SOVERSION ${GGML_VERSION_MAJOR}
