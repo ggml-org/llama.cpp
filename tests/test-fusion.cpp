@@ -545,6 +545,15 @@ int main(int argc, char ** argv) {
         if (!record_path.empty()) {
             LOG_INF("%s: baseline written to '%s'\n", __func__, record_path.c_str());
         }
+
+        if (n_bad && !models_dir.empty() && !check_path.empty()) {
+            LOG_WRN("%s: if the fusion counts are expected to change, run with --record to update the baseline:\n"
+                    "\n"
+                    "./bin/test-llama-archs -o %s\n"
+                    "%s --device %s --models %s --record %s\n",
+                    __func__, models_dir.c_str(), argv[0], device_name.c_str(), models_dir.c_str(), check_path.c_str());
+        }
+
         return n_bad;
     }
 }
