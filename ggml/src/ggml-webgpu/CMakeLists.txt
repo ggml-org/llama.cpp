@@ -42,6 +42,9 @@ add_dependencies(ggml-webgpu generate_shaders)
 # Dawn needs C++20 (https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/quickstart-cmake.md#prerequisites)
 target_compile_features(ggml-webgpu PRIVATE cxx_std_20)
 
+# Don't scan headers for module dependencies
+set_target_properties(ggml-webgpu PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+
 if(EMSCRIPTEN)
     set(EMDAWNWEBGPU_DIR "" CACHE PATH "Path to emdawnwebgpu_pkg")
 
