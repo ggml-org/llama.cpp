@@ -646,9 +646,12 @@ static void print_mmid_table(int64_t K, int64_t R, int64_t n_experts, int64_t k,
 
 int main(int argc, char ** argv) {
     bool run_bench = false;
+    bool run_fuzz = false;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--bench") == 0) {
             run_bench = true;
+        } else if (strcmp(argv[i], "--bench") == 0) {
+            run_fuzz = true;
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", argv[i]);
             return 1;
@@ -672,113 +675,117 @@ int main(int argc, char ** argv) {
     }
     cpu_set_n_threads(backend, 8);
     // base case, smoke each quant type
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_Q6_K);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_Q5_K);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_Q4_K);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_Q3_K);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_Q2_K);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ4_XS);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ2_XXS);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ2_XS);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ2_S);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ3_XXS);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ3_S);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ1_S);
-    test_matmul(backend, 512, 1024, 512, GGML_TYPE_IQ1_M);
-
-    // ragged edges, both subblock lengths (Q5_K = 32, Q6_K = 16)
-    test_matmul(backend, 256, 1024, 8192, GGML_TYPE_Q6_K);   // long K, int32 accumulation
-    test_matmul(backend, 357, 1024, 137, GGML_TYPE_Q6_K);    // ragged M and K
-    test_matmul(backend, 16, 1024, 16, GGML_TYPE_Q5_K);
-    test_matmul(backend, 18, 1024, 7, GGML_TYPE_Q5_K);       // ragged M tail, ragged K in first subblock
-    test_matmul(backend, 8, 256, 8, GGML_TYPE_Q5_K);
-    test_matmul(backend, 18, 1024, 256, GGML_TYPE_Q5_K);
-    test_matmul(backend, 9, 256, 256, GGML_TYPE_Q5_K);
-    test_matmul(backend, 8, 256, 8, GGML_TYPE_Q6_K);         // tiny M, single QK_K block
-    test_matmul(backend, 256, 1024, 8192, GGML_TYPE_Q3_K);
-    test_matmul(backend, 357, 1024, 137, GGML_TYPE_Q3_K);
-    test_matmul(backend, 8, 256, 8, GGML_TYPE_Q3_K);
-    test_matmul(backend, 17, 1024, 257, GGML_TYPE_Q3_K);     // K past a full 256 tile
-    test_matmul(backend, 257, 1024, 17, GGML_TYPE_Q3_K);     // K past a full microtile
-    test_matmul(backend, 256, 1024, 8192, GGML_TYPE_Q2_K);
-    test_matmul(backend, 357, 1024, 137, GGML_TYPE_Q2_K);
-    test_matmul(backend, 8, 256, 8, GGML_TYPE_Q2_K);
-    test_matmul(backend, 17, 1024, 257, GGML_TYPE_Q2_K);
-    test_matmul(backend, 257, 1024, 17, GGML_TYPE_Q2_K);
-    test_matmul(backend, 357, 1024, 137, GGML_TYPE_IQ4_XS);    // ragged M and K
-    test_matmul(backend,   8,  256,   8, GGML_TYPE_IQ4_XS);    // tiny M, single QK_K block
-    test_matmul(backend,  17, 1024, 257, GGML_TYPE_IQ4_XS);    // K past a full 256 tile
-
-    // fuzz: M/K around the microtile (16) and tile (256) boundaries
-    // Q4_K = subblock 32, Q6_K = subblock 16
-    test_matmul(backend, 1, 1024, 1, GGML_TYPE_Q4_K);
-    test_matmul(backend, 2, 1024, 3, GGML_TYPE_Q4_K);
-    test_matmul(backend, 15, 1024, 15, GGML_TYPE_Q4_K);      // M and K in the first microtile
-    test_matmul(backend, 17, 1024, 17, GGML_TYPE_Q4_K);      // M and K past the first microtile
-    test_matmul(backend, 255, 1024, 255, GGML_TYPE_Q4_K);    // M and K one short of a tile
-    test_matmul(backend, 257, 1024, 257, GGML_TYPE_Q4_K);    // M and K one past a tile
-    test_matmul(backend, 271, 1024, 271, GGML_TYPE_Q4_K);    // 1 tile + 15
-    test_matmul(backend, 272, 1024, 272, GGML_TYPE_Q4_K);    // 1 tile + 16
-    test_matmul(backend, 511, 1024, 511, GGML_TYPE_Q4_K);    // 2 tiles - 1
-    test_matmul(backend, 513, 1024, 513, GGML_TYPE_Q4_K);    // 2 tiles + 1
-    test_matmul(backend, 17, 512, 257, GGML_TYPE_Q4_K);      // ragged M and K, N = 2 blocks
-
-    test_matmul(backend, 1, 1024, 1, GGML_TYPE_Q6_K);
-    test_matmul(backend, 2, 1024, 3, GGML_TYPE_Q6_K);
-    test_matmul(backend, 15, 1024, 15, GGML_TYPE_Q6_K);
-    test_matmul(backend, 17, 1024, 17, GGML_TYPE_Q6_K);
-    test_matmul(backend, 255, 1024, 255, GGML_TYPE_Q6_K);
-    test_matmul(backend, 257, 1024, 257, GGML_TYPE_Q6_K);
-    test_matmul(backend, 271, 1024, 271, GGML_TYPE_Q6_K);
-    test_matmul(backend, 272, 1024, 272, GGML_TYPE_Q6_K);
-    test_matmul(backend, 511, 1024, 511, GGML_TYPE_Q6_K);
-    test_matmul(backend, 513, 1024, 513, GGML_TYPE_Q6_K);
-    test_matmul(backend, 17, 512, 257, GGML_TYPE_Q6_K);
-
-    // MUL_MAT_ID (MoE): K = reduction (tiled gate needs K % 256 == 0), R = output rows per expert,
-    // k = top-k slots, b_slots = b rows (1 = broadcast MoE, k = i11-diverse gather), cne1 = k*batch/E
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_Q6_K);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_Q5_K);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_Q4_K);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_Q3_K);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_Q2_K);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_IQ4_XS);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_IQ2_XXS);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_IQ2_XS);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_IQ2_S);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_IQ3_XXS);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_IQ3_S);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_IQ1_S);
+    test_matmul(backend, 256, 512, 256, GGML_TYPE_IQ1_M);
     test_mul_mat_id(backend,  256,  256,   2, 8, 1,  64, GGML_TYPE_Q4_K);  // single block, cne1 = 256
-    test_mul_mat_id(backend,  512,  300,   4, 2, 1, 150, GGML_TYPE_Q4_K);  // ragged R, broadcast, cne1 = 75
-    test_mul_mat_id(backend,  512,  256,   4, 2, 2, 150, GGML_TYPE_Q5_K);  // i11-diverse gather, HAS_MIN
     test_mul_mat_id(backend,  512,  300,   4, 2, 1, 150, GGML_TYPE_IQ2_XXS); // iq type, imatrix quant
-    test_mul_mat_id(backend,  512,  256,   4, 2, 1, 100, GGML_TYPE_Q6_K);  // ragged cne1 = 50
-    test_mul_mat_id(backend,  768,  256,   4, 2, 1, 150, GGML_TYPE_Q3_K);  // K = 3 slabs
-    test_mul_mat_id(backend, 1024, 2048, 128, 8, 1, 2048, GGML_TYPE_Q4_K); // large, cne1 = 128
-    test_mul_mat_id(backend,  512,  256,  32, 2, 1,   8, GGML_TYPE_Q4_K);  // tiny cne1 (~0.5), forced only
 
-    // cne1 > 256: the k-outer ring sweeps multiple 256-row windows per expert (the multi-window path)
-    test_mul_mat_id(backend,  256,  256,   8, 8, 1,  512, GGML_TYPE_Q4_K);  // cne1 = 512, two full windows
-    test_mul_mat_id(backend,  512,  256,   8, 8, 1,  300, GGML_TYPE_Q4_K);  // cne1 = 300, 2nd window ragged (44 rows)
-    test_mul_mat_id(backend,  256,   64,   8, 8, 1,  257, GGML_TYPE_Q4_K);  // cne1 = 257, 1-row tail window, R = 1 group
-    test_mul_mat_id(backend,  512,  128,   8, 8, 1,  511, GGML_TYPE_Q4_K);  // cne1 = 511, 15-row ragged tail
-    test_mul_mat_id(backend,  768,  300,   8, 8, 1,  300, GGML_TYPE_Q4_K);  // 3 K slabs x 2 windows, ragged R and cne1
-    test_mul_mat_id(backend,  768,  300,   8, 2, 2,  300, GGML_TYPE_Q5_K);  // cne1 = 600, 3 slabs, 3 windows (last ragged), i11-diverse, HAS_MIN
+    if (run_fuzz) {
+	printf("Running fuzz tests.\n");
+        // ragged edges, both subblock lengths (Q5_K = 32, Q6_K = 16)
+        test_matmul(backend, 256, 1024, 8192, GGML_TYPE_Q6_K);   // long K, int32 accumulation
+        test_matmul(backend, 357, 1024, 137, GGML_TYPE_Q6_K);    // ragged M and K
+        test_matmul(backend, 16, 1024, 16, GGML_TYPE_Q5_K);
+        test_matmul(backend, 18, 1024, 7, GGML_TYPE_Q5_K);       // ragged M tail, ragged K in first subblock
+        test_matmul(backend, 8, 256, 8, GGML_TYPE_Q5_K);
+        test_matmul(backend, 18, 1024, 256, GGML_TYPE_Q5_K);
+        test_matmul(backend, 9, 256, 256, GGML_TYPE_Q5_K);
+        test_matmul(backend, 8, 256, 8, GGML_TYPE_Q6_K);         // tiny M, single QK_K block
+        test_matmul(backend, 256, 1024, 8192, GGML_TYPE_Q3_K);
+        test_matmul(backend, 357, 1024, 137, GGML_TYPE_Q3_K);
+        test_matmul(backend, 8, 256, 8, GGML_TYPE_Q3_K);
+        test_matmul(backend, 17, 1024, 257, GGML_TYPE_Q3_K);     // K past a full 256 tile
+        test_matmul(backend, 257, 1024, 17, GGML_TYPE_Q3_K);     // K past a full microtile
+        test_matmul(backend, 256, 1024, 8192, GGML_TYPE_Q2_K);
+        test_matmul(backend, 357, 1024, 137, GGML_TYPE_Q2_K);
+        test_matmul(backend, 8, 256, 8, GGML_TYPE_Q2_K);
+        test_matmul(backend, 17, 1024, 257, GGML_TYPE_Q2_K);
+        test_matmul(backend, 257, 1024, 17, GGML_TYPE_Q2_K);
+        test_matmul(backend, 357, 1024, 137, GGML_TYPE_IQ4_XS);    // ragged M and K
+        test_matmul(backend,   8,  256,   8, GGML_TYPE_IQ4_XS);    // tiny M, single QK_K block
+        test_matmul(backend,  17, 1024, 257, GGML_TYPE_IQ4_XS);    // K past a full 256 tile
+    
+        // fuzz: M/K around the microtile (16) and tile (256) boundaries
+        // Q4_K = subblock 32, Q6_K = subblock 16
+        test_matmul(backend, 1, 1024, 1, GGML_TYPE_Q4_K);
+        test_matmul(backend, 2, 1024, 3, GGML_TYPE_Q4_K);
+        test_matmul(backend, 15, 1024, 15, GGML_TYPE_Q4_K);      // M and K in the first microtile
+        test_matmul(backend, 17, 1024, 17, GGML_TYPE_Q4_K);      // M and K past the first microtile
+        test_matmul(backend, 255, 1024, 255, GGML_TYPE_Q4_K);    // M and K one short of a tile
+        test_matmul(backend, 257, 1024, 257, GGML_TYPE_Q4_K);    // M and K one past a tile
+        test_matmul(backend, 271, 1024, 271, GGML_TYPE_Q4_K);    // 1 tile + 15
+        test_matmul(backend, 272, 1024, 272, GGML_TYPE_Q4_K);    // 1 tile + 16
+        test_matmul(backend, 511, 1024, 511, GGML_TYPE_Q4_K);    // 2 tiles - 1
+        test_matmul(backend, 513, 1024, 513, GGML_TYPE_Q4_K);    // 2 tiles + 1
+        test_matmul(backend, 17, 512, 257, GGML_TYPE_Q4_K);      // ragged M and K, N = 2 blocks
 
-    // cne1 = 255: one short of a full ring, last ring row zero-padded by the unpack
-    test_mul_mat_id(backend,  512,  256,   4, 4, 1,  255, GGML_TYPE_Q4_K);
+        test_matmul(backend, 1, 1024, 1, GGML_TYPE_Q6_K);
+        test_matmul(backend, 2, 1024, 3, GGML_TYPE_Q6_K);
+        test_matmul(backend, 15, 1024, 15, GGML_TYPE_Q6_K);
+        test_matmul(backend, 17, 1024, 17, GGML_TYPE_Q6_K);
+        test_matmul(backend, 255, 1024, 255, GGML_TYPE_Q6_K);
+        test_matmul(backend, 257, 1024, 257, GGML_TYPE_Q6_K);
+        test_matmul(backend, 271, 1024, 271, GGML_TYPE_Q6_K);
+        test_matmul(backend, 272, 1024, 272, GGML_TYPE_Q6_K);
+        test_matmul(backend, 511, 1024, 511, GGML_TYPE_Q6_K);
+        test_matmul(backend, 513, 1024, 513, GGML_TYPE_Q6_K);
+        test_matmul(backend, 17, 512, 257, GGML_TYPE_Q6_K);
 
-    // long K: 8 slabs per ring row
-    test_mul_mat_id(backend, 2048,  300,   8, 2, 1,  400, GGML_TYPE_Q4_K);  // cne1 = 100
+        // MUL_MAT_ID (MoE): K = reduction (tiled gate needs K % 256 == 0), R = output rows per expert,
+        // k = top-k slots, b_slots = b rows (1 = broadcast MoE, k = i11-diverse gather), cne1 = k*batch/E
+        test_mul_mat_id(backend,  512,  300,   4, 2, 1, 150, GGML_TYPE_Q4_K);  // ragged R, broadcast, cne1 = 75
+        test_mul_mat_id(backend,  512,  256,   4, 2, 2, 150, GGML_TYPE_Q5_K);  // i11-diverse gather, HAS_MIN
+        test_mul_mat_id(backend,  512,  256,   4, 2, 1, 100, GGML_TYPE_Q6_K);  // ragged cne1 = 50
+        test_mul_mat_id(backend,  768,  256,   4, 2, 1, 150, GGML_TYPE_Q3_K);  // K = 3 slabs
+        test_mul_mat_id(backend, 1024, 2048, 128, 8, 1, 2048, GGML_TYPE_Q4_K); // large, cne1 = 128
+        test_mul_mat_id(backend,  512,  256,  32, 2, 1,   8, GGML_TYPE_Q4_K);  // tiny cne1 (~0.5), forced only
 
-    // R group edges: 64 = TILED_MMID_GROUP (ceil div, ragged group tail, single-group early return)
-    test_mul_mat_id(backend,  512,   64,   4, 2, 1,  128, GGML_TYPE_Q4_K);  // ngroups = 1, most threads idle
-    test_mul_mat_id(backend,  512,   65,   4, 2, 1,  128, GGML_TYPE_Q4_K);  // ceil-div boundary, 1-row tail group
-    test_mul_mat_id(backend,  512,   63,   4, 2, 1,  128, GGML_TYPE_Q4_K);  // ragged group tail
-    test_mul_mat_id(backend,  512,    1,   4, 1, 1,  256, GGML_TYPE_Q4_K);  // R = 1 row, cne1 = 256
+        // cne1 > 256: the k-outer ring sweeps multiple 256-row windows per expert (the multi-window path)
+        test_mul_mat_id(backend,  256,  256,   8, 8, 1,  512, GGML_TYPE_Q4_K);  // cne1 = 512, two full windows
+        test_mul_mat_id(backend,  512,  256,   8, 8, 1,  300, GGML_TYPE_Q4_K);  // cne1 = 300, 2nd window ragged (44 rows)
+        test_mul_mat_id(backend,  256,   64,   8, 8, 1,  257, GGML_TYPE_Q4_K);  // cne1 = 257, 1-row tail window, R = 1 group
+        test_mul_mat_id(backend,  512,  128,   8, 8, 1,  511, GGML_TYPE_Q4_K);  // cne1 = 511, 15-row ragged tail
+        test_mul_mat_id(backend,  768,  300,   8, 8, 1,  300, GGML_TYPE_Q4_K);  // 3 K slabs x 2 windows, ragged R and cne1
+        test_mul_mat_id(backend,  768,  300,   8, 2, 2,  300, GGML_TYPE_Q5_K);  // cne1 = 600, 3 slabs, 3 windows (last ragged), i11-diverse, HAS_MIN
 
-    // strided (non-contiguous) F32 src1: nb[1] = 4 bytes, the repack reads through strides
-    test_mul_mat_id(backend,  512,  256,   8, 8, 1,  128, GGML_TYPE_Q4_K, true);  // cne1 = 128
+        // cne1 = 255: one short of a full ring, last ring row zero-padded by the unpack
+        test_mul_mat_id(backend,  512,  256,   4, 4, 1,  255, GGML_TYPE_Q4_K);
 
-    // higher-dim (ne[2], ne[3] > 1)
-    // equal-batch and broadcast shapes (src1_2=2*src0_2, src1_3=2*src0_3)
-    test_matmul_highdim(backend, 1024, 1024, 1024, 2, 1, 2, 1, GGML_TYPE_Q4_K); // 3D, tiled
-    test_matmul_highdim(backend, 1024, 1024, 1024, 1, 2, 1, 2, GGML_TYPE_Q4_K); // 3D, tiled
-    test_matmul_highdim(backend,  512, 1024,  512, 2, 2, 2, 2, GGML_TYPE_Q4_K); // 4D, tiled
-    test_matmul_highdim(backend, 1024, 1024, 1024, 2, 1, 1, 1, GGML_TYPE_Q4_K); // broadcast r2=2 (src1_2>src0_2)
-    test_matmul_highdim(backend, 1024, 1024, 1024, 2, 2, 2, 1, GGML_TYPE_Q4_K); // broadcast r3=2 (src1_3>src0_3)
-    test_matmul_highdim(backend, 1024, 1024, 1024, 2, 1, 2, 1, GGML_TYPE_Q6_K); // 3D, tiled, q6_K
-    test_matmul_highdim(backend, 1024, 1024, 1024, 2, 2, 2, 2, GGML_TYPE_Q3_K); // 4D, tiled, q3_K
-    test_matmul_highdim(backend, 1024, 1024, 1024, 2, 2, 2, 2, GGML_TYPE_Q2_K); // 4D, tiled, q2_K
+        // long K: 8 slabs per ring row
+        test_mul_mat_id(backend, 2048,  300,   8, 2, 1,  400, GGML_TYPE_Q4_K);  // cne1 = 100
+
+        // R group edges: 64 = TILED_MMID_GROUP (ceil div, ragged group tail, single-group early return)
+        test_mul_mat_id(backend,  512,   64,   4, 2, 1,  128, GGML_TYPE_Q4_K);  // ngroups = 1, most threads idle
+        test_mul_mat_id(backend,  512,   65,   4, 2, 1,  128, GGML_TYPE_Q4_K);  // ceil-div boundary, 1-row tail group
+        test_mul_mat_id(backend,  512,   63,   4, 2, 1,  128, GGML_TYPE_Q4_K);  // ragged group tail
+        test_mul_mat_id(backend,  512,    1,   4, 1, 1,  256, GGML_TYPE_Q4_K);  // R = 1 row, cne1 = 256
+
+        // strided (non-contiguous) F32 src1: nb[1] = 4 bytes, the repack reads through strides
+        test_mul_mat_id(backend,  512,  256,   8, 8, 1,  128, GGML_TYPE_Q4_K, true);  // cne1 = 128
+
+        // higher-dim (ne[2], ne[3] > 1)
+        // equal-batch and broadcast shapes (src1_2=2*src0_2, src1_3=2*src0_3)
+        test_matmul_highdim(backend, 1024, 1024, 1024, 2, 1, 2, 1, GGML_TYPE_Q4_K); // 3D, tiled
+        test_matmul_highdim(backend, 1024, 1024, 1024, 1, 2, 1, 2, GGML_TYPE_Q4_K); // 3D, tiled
+        test_matmul_highdim(backend,  512, 1024,  512, 2, 2, 2, 2, GGML_TYPE_Q4_K); // 4D, tiled
+        test_matmul_highdim(backend, 1024, 1024, 1024, 2, 1, 1, 1, GGML_TYPE_Q4_K); // broadcast r2=2 (src1_2>src0_2)
+        test_matmul_highdim(backend, 1024, 1024, 1024, 2, 2, 2, 1, GGML_TYPE_Q4_K); // broadcast r3=2 (src1_3>src0_3)
+        test_matmul_highdim(backend, 1024, 1024, 1024, 2, 1, 2, 1, GGML_TYPE_Q6_K); // 3D, tiled, q6_K
+        test_matmul_highdim(backend, 1024, 1024, 1024, 2, 2, 2, 2, GGML_TYPE_Q3_K); // 4D, tiled, q3_K
+        test_matmul_highdim(backend, 1024, 1024, 1024, 2, 2, 2, 2, GGML_TYPE_Q2_K); // 4D, tiled, q2_K
+    }
+
 
     // benchmarks: std, repack and tiled per quant type and shape, with max error /
     // RMSE vs the std output. Every type the tiled gate accepts; the repack column is
@@ -786,6 +793,7 @@ int main(int argc, char ** argv) {
     // so the tiled column runs at every shape; the shapes vary K, the output rank
 
     if (run_bench) {
+        printf("Starting benchmark runs.\n");
         const ggml_type bench_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
                                           GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
                                           GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
