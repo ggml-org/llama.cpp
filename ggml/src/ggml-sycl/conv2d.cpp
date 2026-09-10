@@ -11,6 +11,10 @@ struct conv2d_params {
     const int64_t IC, OC;
     const int64_t B;
     const int64_t TOTAL;
+    // input element strides. The input is NOT required to be contiguous: test-backend-ops'
+    // cwhn=1 cases hand this op a permuted (channel-most-contiguous) view whose ne matches
+    // a WHCN tensor, and reading it with contiguous arithmetic silently returns garbage.
+    const int64_t IS_X, IS_Y, IS_C, IS_N;
 };
 
 struct conv2d_kernel_bounds {
@@ -42,7 +46,7 @@ static inline int calculate_input_coord(int64_t out_coord, int64_t kern_coord, i
 
 // whcn layout helpers (matching ggml tensor memory order)
 static inline int64_t whcn_input_index(int64_t n, int64_t c, int64_t y, int64_t x, const conv2d_params & P) {
-    return n * (P.IC * P.IW * P.IH) + c * P.IW * P.IH + y * P.IW + x;
+    return n * P.IS_N + c * P.IS_C + y * P.IS_Y + x * P.IS_X;
 }
 
 static inline int64_t whcn_kernel_index(int64_t c_out, int64_t c_in, int64_t ky, int64_t kx, const conv2d_params & P) {
@@ -126,9 +130,6 @@ void ggml_sycl_op_conv2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int       DL_X = p[4];
     const int       DL_Y = p[5];
 
-    // no cwhn layout support
-    GGML_ASSERT(p[6] == 0);
-
     const int IW = input->ne[0];
     const int IH = input->ne[1];
     const int OW = dst->ne[0];
@@ -139,8 +140,15 @@ void ggml_sycl_op_conv2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int OC = kernel->ne[3];
     const int B  = input->ne[3];
 
+    const int64_t IS_X = input->nb[0] / sizeof(float);
+    const int64_t IS_Y = input->nb[1] / sizeof(float);
+    const int64_t IS_C = input->nb[2] / sizeof(float);
+    const int64_t IS_N = input->nb[3] / sizeof(float);
+
     const int64_t     total  = (int64_t) B * OC * OH * OW;
-    const conv2d_params params = { IW, IH, OW, OH, KW, KH, ST_X, ST_Y, PD_X, PD_Y, DL_X, DL_Y, IC, OC, B, total };
+    const conv2d_params params = { IW,   IH,   OW,   OH,   KW,   KH,   ST_X, ST_Y, PD_X,
+                                   PD_Y, DL_X, DL_Y, IC,   OC,   B,    total,
+                                   IS_X, IS_Y, IS_C, IS_N };
 
     if (kernel->type == GGML_TYPE_F16) {
         conv2d_sycl<sycl::half>(X_D, (const sycl::half *) K_D, Y_D, params, stream);
