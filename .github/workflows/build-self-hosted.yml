@@ -122,7 +122,7 @@ jobs:
           GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   gpu-vulkan-nvidia-cm:
-    runs-on: "hf-jobs-t4-small:ubuntu26_04"
+    runs-on: "hf-jobs-t4-medium:ubuntu26_04"
 
     steps:
       - name: Clone
@@ -166,7 +166,7 @@ jobs:
           save: true
 
   gpu-vulkan-nvidia-cm2:
-    runs-on: "hf-jobs-t4-small:ubuntu26_04"
+    runs-on: "hf-jobs-t4-medium:ubuntu26_04"
 
     steps:
       - name: Clone
