@@ -214,12 +214,10 @@ class NemotronHModel(GraniteHybridModel):
         hparams = kwargs.pop("hparams", None)
         if hparams is None:
             hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
-        llm_config = hparams.get("llm_config")
-        if not isinstance(llm_config, dict):
-            llm_config = {}
+        llm_config = {**hparams, **(hparams.get("llm_config") or {})}
 
-        has_moe_params = "num_experts_per_tok" in hparams or "num_experts_per_tok" in llm_config
-        layers_block_type = hparams.get("layers_block_type") or llm_config.get("layers_block_type")
+        has_moe_params = "num_experts_per_tok" in llm_config
+        layers_block_type = llm_config.get("layers_block_type")
 
         if has_moe_params:
             self.model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
