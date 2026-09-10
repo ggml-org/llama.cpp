@@ -72,11 +72,17 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
             break;
 // -----------------------------------------------------------------------
         case GGML_TYPE_MXFP4:
+#ifdef GGML_CUDA_HAS_BLACKWELL_TARGET
+            // W4A16 FP4: dispatch the W4A8 instantiation so activations stay at higher precision even on Blackwell.
+            if (!can_w4a4) {
+                mul_mat_q_case<GGML_TYPE_MXFP4, false>(ctx, args, stream);
+                break;
+            }
+#endif // GGML_CUDA_HAS_BLACKWELL_TARGET
             mul_mat_q_case<GGML_TYPE_MXFP4>(ctx, args, stream);
             break;
         case GGML_TYPE_NVFP4:
 #ifdef GGML_CUDA_HAS_BLACKWELL_TARGET
-            // W4A16 NVFP4: dispatch the W4A8 instantiation so activations stay at higher precision even on Blackwell.
             if (!can_w4a4) {
                 mul_mat_q_case<GGML_TYPE_NVFP4, false>(ctx, args, stream);
                 break;
@@ -90,15 +96,18 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
     }
 }
 
-// NVFP4 defaults to native W4A4 on Blackwell. A src1 precision of GGML_PREC_Q8 selects the W4A8
+// FP4 types default to native W4A4 on Blackwell. A src1 precision above Q4 selects the W4A8
 // path instead, unless GGML_CUDA_FORCE_W4A4 overrides it.
 static inline bool ggml_cuda_mmq_can_w4a4(const ggml_tensor * src0, const ggml_tensor * dst) {
     static const bool force_w4a4 = []() {
         const char * env = getenv("GGML_CUDA_FORCE_W4A4");
         return env != nullptr && std::atoi(env) != 0;
     }();
-    if (src0->type != GGML_TYPE_NVFP4 || force_w4a4) {
+    if (force_w4a4) {
         return true;
+    }
+    if (src0->type != GGML_TYPE_NVFP4 && src0->type != GGML_TYPE_MXFP4) {
+        return false;
     }
     const auto prec = ggml_get_op_params_i32(dst, 3);
     return prec == GGML_PREC_UNDEFINED || prec == GGML_PREC_Q4;
