@@ -652,15 +652,31 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
     // update the pos of the used seqs
     for (uint32_t s = 0; s < n_seqs; ++s) {
         const uint32_t i = s*n_seq_tokens;
-        const llama_pos last_pos = ubatch.pos[i + n_seq_tokens - 1];
+        const llama_pos first_pos = ubatch.pos[i];
+        const llama_pos last_pos  = ubatch.pos[i + n_seq_tokens - 1];
         const int32_t cell_id = s + min;
         auto & cell = cells[cell_id];
 
-        if (cell.pos >= 0 && last_pos != cell.pos + (llama_pos) n_seq_tokens) {
-            // What should happen when the pos backtracks or skips a value?
-            // Clearing the state mid-batch would require special-casing which isn't done.
-            LLAMA_LOG_WARN("%s: non-consecutive token position %d after %d for sequence %d with %u new tokens\n",
-                __func__, last_pos, cell.pos, ubatch.seq_id[i][0], n_seq_tokens);
+        if (cell.pos >= 0) {
+            if (ubatch.is_pos_2d()) {
+                // under M-RoPE every token of an image shares one temporal position (section 0) and the
+                // text after the image resumes at pos + max(nx, ny), so positions legitimately repeat
+                // within an image ubatch and jump forward past it - only a backtrack is inconsistent.
+                // this mirrors the M-RoPE rule of llama_batch_allocr::init, where embd input (images)
+                // may overlap the last stored position, but token input may not
+                const bool backtrack = ubatch.token != nullptr ? first_pos <= cell.pos : first_pos < cell.pos;
+                if (backtrack) {
+                    // What should happen when the pos backtracks?
+                    // Clearing the state mid-batch would require special-casing which isn't done.
+                    LLAMA_LOG_WARN("%s: backtracking token position %d after %d for sequence %d with %u new tokens\n",
+                        __func__, first_pos, cell.pos, ubatch.seq_id[i][0], n_seq_tokens);
+                }
+            } else if (last_pos != cell.pos + (llama_pos) n_seq_tokens) {
+                // What should happen when the pos backtracks or skips a value?
+                // Clearing the state mid-batch would require special-casing which isn't done.
+                LLAMA_LOG_WARN("%s: non-consecutive token position %d after %d for sequence %d with %u new tokens\n",
+                    __func__, last_pos, cell.pos, ubatch.seq_id[i][0], n_seq_tokens);
+            }
         }
         cell.pos = last_pos;
         cell.seq_id.clear();
