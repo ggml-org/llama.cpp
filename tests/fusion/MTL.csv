@@ -66,6 +66,8 @@ hunyuan-moe         ,1   ,any     ,RMS_NORM+MUL                ,      9
 hunyuan_vl          ,0   ,any     ,RMS_NORM+MUL                ,      9
 hy_v3               ,0   ,any     ,ADD+ADD                     ,      2
 hy_v3               ,0   ,any     ,RMS_NORM+MUL                ,      9
+hy_v4               ,0   ,any     ,NORM+MUL+ADD                ,      1
+hy_v4               ,0   ,any     ,RMS_NORM+MUL                ,      9
 internlm2           ,0   ,any     ,RMS_NORM+MUL                ,      5
 jais                ,0   ,any     ,NORM+MUL+ADD                ,      5
 jais2               ,0   ,any     ,NORM+MUL+ADD                ,      5
