@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChevronDown } from '@lucide/svelte';
 	import { DropdownMenuSearchable, ModelsSelectorList } from '$lib/components/app';
-	import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
+	import { filterModelOptions, groupModelOptions } from '$lib/components/app/navigation/utils';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { modelsStore } from '$lib/stores';
