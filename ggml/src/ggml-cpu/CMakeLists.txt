@@ -520,7 +520,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     elseif (GGML_SYSTEM_ARCH STREQUAL "s390x")
         message(STATUS "s390x detected")
         list(APPEND GGML_CPU_SOURCES
-            ggml-cpu/arch/s390/quants.c)
+            ggml-cpu/arch/s390/quants.c
+            ggml-cpu/arch/s390/repack.cpp
+            )
 
         # for native compilation
         if (GGML_NATIVE)
