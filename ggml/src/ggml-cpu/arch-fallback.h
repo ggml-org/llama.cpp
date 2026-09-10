@@ -247,7 +247,6 @@
 // quants.c
 #define quantize_row_q8_K_generic quantize_row_q8_K
 #define ggml_vec_dot_nvfp4_q8_0_generic ggml_vec_dot_nvfp4_q8_0
-#define ggml_vec_dot_q1_0_q8_0_generic ggml_vec_dot_q1_0_q8_0
 #define ggml_vec_dot_q2_0_q8_0_generic ggml_vec_dot_q2_0_q8_0
 #define ggml_vec_dot_tq1_0_q8_K_generic ggml_vec_dot_tq1_0_q8_K
 #define ggml_vec_dot_tq2_0_q8_K_generic ggml_vec_dot_tq2_0_q8_K
