@@ -2,6 +2,8 @@
 
 #define GGML_CUDA_VENDOR_NVIDIA_MMA 0
 #define GGML_CUDA_VENDOR_REDUCE_ADD 0
+#define GGML_CUDA_VENDOR_DP4A 0
+#define GGML_CUDA_VENDOR_HOST_CONSTEXPR __host__
 
 struct ggml_maca_policy {
     static constexpr bool supports_mmf = false;

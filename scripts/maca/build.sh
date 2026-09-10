@@ -7,11 +7,18 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
 
 MACA_PATH=${MACA_PATH:-/opt/maca}
 MACA_CU_BRIDGE=${MACA_CU_BRIDGE:-$MACA_PATH/tools/cu-bridge}
-MACA_VIRTUAL_ROOT=${MACA_VIRTUAL_ROOT:-${HOME:?HOME must be set}/cu-bridge}
+export CUBRIDGE_HOME=${WCUDA_HOME:-${CUBRIDGE_HOME:-${HOME:?HOME must be set}}}
+CUBRIDGE_HOME=${CUBRIDGE_HOME%/}
+MACA_VIRTUAL_ROOT=${MACA_VIRTUAL_ROOT:-$CUBRIDGE_HOME/cu-bridge}
 MACA_VIRTUAL_CUDA=${MACA_VIRTUAL_CUDA:-$MACA_VIRTUAL_ROOT/CUDA_DIR}
 MACA_BUILD_DIR=${MACA_BUILD_DIR:-$REPO_ROOT/build-maca}
 MACA_BUILD_JOBS=${MACA_BUILD_JOBS:-8}
 MACA_GRAPHS=${MACA_GRAPHS:-OFF}
+
+if [[ "$MACA_VIRTUAL_ROOT" != "$CUBRIDGE_HOME/cu-bridge" || "$MACA_VIRTUAL_CUDA" != "$MACA_VIRTUAL_ROOT/CUDA_DIR" ]]; then
+    echo "Virtual toolchain paths must match the SDK layout under CUBRIDGE_HOME/cu-bridge (WCUDA_HOME takes precedence)" >&2
+    exit 1
+fi
 
 for tool in "$MACA_CU_BRIDGE/tools/cmake_mock" "$MACA_CU_BRIDGE/tools/cmake_maca"; do
     if [[ ! -x "$tool" ]]; then
@@ -48,11 +55,28 @@ echo "MACA target: ${CUCC_TARGETS:-${CUCC_TARGETS_FROM_DEVICE}}"
 
 cd "$REPO_ROOT"
 
-"$MACA_CU_BRIDGE/tools/cmake_mock" \
+mkdir -p "$MACA_BUILD_DIR"
+
+run_maca_tool() {
+    local log=$1
+    shift
+    if ! "$@" 2>&1 | tee "$log"; then
+        return 1
+    fi
+    # Some SDK wrappers return zero even when CMake or Ninja fails.
+    if grep -Eq '^FAILED:|^ninja: (build stopped:|error:)|^CMake Error' "$log"; then
+        echo "MACA build tool reported a failure; see $log" >&2
+        return 1
+    fi
+}
+
+run_maca_tool "$MACA_BUILD_DIR/maca-configure.log" "$MACA_CU_BRIDGE/tools/cmake_mock" \
     -S . \
     -B "$MACA_BUILD_DIR" \
     -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
+    -DMACA_PATH="$MACA_PATH" \
+    -DMACA_CU_BRIDGE="$MACA_CU_BRIDGE" \
     -DCMAKE_CUDA_ARCHITECTURES=52 \
     -DCUDAToolkit_ROOT="$MACA_VIRTUAL_CUDA" \
     -DCMAKE_CUDA_COMPILER="$MACA_VIRTUAL_CUDA/bin/nvcc" \
@@ -68,12 +92,12 @@ cd "$REPO_ROOT"
 # cu-bridge can consume substantial memory while instantiating ggml-cuda
 # templates. Build the backend conservatively, then finish host targets in
 # parallel.
-"$MACA_CU_BRIDGE/tools/cmake_maca" \
+run_maca_tool "$MACA_BUILD_DIR/maca-backend-build.log" "$MACA_CU_BRIDGE/tools/cmake_maca" \
     --build "$MACA_BUILD_DIR" \
     --target ggml-maca \
     -j1
 
-"$MACA_CU_BRIDGE/tools/cmake_maca" \
+run_maca_tool "$MACA_BUILD_DIR/maca-tools-build.log" "$MACA_CU_BRIDGE/tools/cmake_maca" \
     --build "$MACA_BUILD_DIR" \
     --target test-backend-ops llama-bench llama-cli llama-server \
     -j"$MACA_BUILD_JOBS"

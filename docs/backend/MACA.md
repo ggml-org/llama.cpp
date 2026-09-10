@@ -37,7 +37,7 @@ host tools in parallel:
 
 ```bash
 export MACA_PATH=/opt/maca
-scripts/maca/build.sh
+bash scripts/maca/build.sh
 ```
 
 When automatic target detection is unavailable, set one of the SDK target
@@ -45,7 +45,7 @@ variables before building:
 
 ```bash
 export CUCC_TARGETS_FROM_DEVICE=xcore1000
-scripts/maca/build.sh
+bash scripts/maca/build.sh
 ```
 
 The `CMAKE_CUDA_ARCHITECTURES` value used by the compatibility toolchain is a
@@ -58,29 +58,36 @@ placeholder. The actual device target is selected by `CUCC_TARGETS` or
 | --- | --- | --- |
 | `MACA_PATH` | `/opt/maca` | MACA SDK root |
 | `MACA_CU_BRIDGE` | `$MACA_PATH/tools/cu-bridge` | Compatibility bridge root |
-| `MACA_VIRTUAL_ROOT` | `$HOME/cu-bridge` | Virtual CUDA toolchain root |
+| `CUBRIDGE_HOME` | `$HOME` | Parent directory where the SDK creates `cu-bridge`; `WCUDA_HOME`, when set, takes precedence |
+| `MACA_VIRTUAL_ROOT` | `$CUBRIDGE_HOME/cu-bridge` | Must match the SDK-generated toolchain location |
 | `MACA_BUILD_DIR` | `build-maca` | CMake build directory |
 | `MACA_BUILD_JOBS` | `8` | Parallel jobs for host targets |
 | `CUCC_TARGETS` | unset | Explicit multi-target architecture list |
 | `CUCC_TARGETS_FROM_DEVICE` | auto-detected | Device architecture selected by the SDK |
 | `MACA_GRAPHS` | `OFF` | Experimental graph capture and replay in the helper build |
 
+To keep SDK-generated files in a workspace, set `CUBRIDGE_HOME` to an existing writable directory, unset `WCUDA_HOME`, and leave `MACA_VIRTUAL_ROOT` and `MACA_VIRTUAL_CUDA` unset. When changing the toolchain location, use a new `MACA_BUILD_DIR` to avoid stale compiler paths in the CMake cache.
+
 ## Verify the backend
 
 List the detected devices:
 
 ```bash
+export MACA_PATH=/opt/maca
+export MACA_BUILD_DIR="$PWD/build-maca"
+export LD_LIBRARY_PATH="$MACA_BUILD_DIR/bin:$MACA_PATH/lib:${MACA_CU_BRIDGE:-$MACA_PATH/tools/cu-bridge}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 ./build-maca/bin/llama-cli --list-devices
 ```
 
 Run the Q8_0 matrix multiplication coverage and a model benchmark:
 
 ```bash
-scripts/maca/validate.sh /path/to/model-q8_0.gguf
+bash scripts/maca/validate.sh /path/to/model.gguf
 ```
 
-Validation artifacts are written to
-`${MACA_TEST_OUTPUT:-${TMPDIR:-/tmp}/llama-maca-validation}`.
+Each run creates a unique model-named subdirectory under `${MACA_TEST_OUTPUT:-$MACA_BUILD_DIR/validation}` and prints its location. It contains `devices.log`, `q8-mul-mat.log`, `benchmark.jsonl`, and `benchmark.log`. Set `MACA_DEVICE` to select one device for both operator tests and the benchmark (default: `MACA0`).
+
+The operator test always covers Q8_0 x F32 `MUL_MAT`, regardless of the supplied GGUF format. The benchmark uses the supplied model. Testing a Q4 or K-quant model does not establish standalone operator coverage for that format. An unknown device, a failed test, or an empty test summary causes the script to fail.
 
 Individual backend operation coverage can also be run directly:
 
@@ -101,7 +108,6 @@ Interactive inference:
   -m /path/to/model.gguf \
   -ngl 99 \
   -c 4096 \
-  -cnv \
   --simple-io
 ```
 
@@ -132,8 +138,7 @@ synchronization overhead can exceed the compute saved on each device.
 
 ## Validation matrix
 
-The following configurations have model-level correctness, benchmark, and
-interactive or HTTP inference coverage:
+Earlier development versions were reported tested with the configurations below. These historical results are not a claim that every configuration was rerun on the current source revision; attach revision-specific logs when reporting validation.
 
 | Hardware | Model | Formats | Coverage |
 | --- | --- | --- | --- |
@@ -144,8 +149,7 @@ interactive or HTTP inference coverage:
 | MetaX C600-A, four devices | Qwen2.5-3B-Instruct | F16, Q8_0, Q4_0 | per-device execution and layer split |
 | MetaX C600-A, four devices | Llama-3.2-3B-Instruct | F16, Q8_0, Q4_0 | per-device execution and layer split |
 
-This matrix records tested configurations; it is not a restriction on model
-architectures that can use the shared backend paths.
+The current post-rebase C500 run passed 49 Q8_0 x F32 `MUL_MAT` cases. Model benchmarks and interactive smoke tests also completed for Llama-3.2-3B-Instruct Q8_0 and Qwen2.5-3B-Instruct Q4_0, Q2_K, and Q3_K_M. C600-A and multi-device results for this revision remain to be refreshed. Interactive generation is a smoke test, not a full numerical accuracy test.
 
 ## Current limitations
 
