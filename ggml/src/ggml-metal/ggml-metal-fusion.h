@@ -72,20 +72,20 @@ struct ggml_metal_fusion_info * ggml_metal_fusion_info_init(bool enabled, int de
 void ggml_metal_fusion_info_free(struct ggml_metal_fusion_info * finfo);
 
 bool ggml_metal_fusion_info_enabled(const struct ggml_metal_fusion_info * finfo);
-bool ggml_metal_fusion_info_stats(const struct ggml_metal_fusion_info * finfo);
-int  ggml_metal_fusion_info_debug(const struct ggml_metal_fusion_info * finfo);
+bool ggml_metal_fusion_info_stats  (const struct ggml_metal_fusion_info * finfo);
+int  ggml_metal_fusion_info_debug  (const struct ggml_metal_fusion_info * finfo);
 
-int  ggml_metal_fusion_info_n_fusions(const struct ggml_metal_fusion_info * finfo);
-const char * ggml_metal_fusion_info_label(const struct ggml_metal_fusion_info * finfo, int idx);
-uint64_t ggml_metal_fusion_info_count(const struct ggml_metal_fusion_info * finfo, int idx);
+int          ggml_metal_fusion_info_n_fusions(const struct ggml_metal_fusion_info * finfo);
+const char * ggml_metal_fusion_info_label    (const struct ggml_metal_fusion_info * finfo, int idx);
+uint64_t     ggml_metal_fusion_info_count    (const struct ggml_metal_fusion_info * finfo, int idx);
 
 void ggml_metal_fusion_info_count_fusion(struct ggml_metal_fusion_info * finfo, const struct ggml_metal_fusion * fusion);
-void ggml_metal_fusion_info_set_enabled(struct ggml_metal_fusion_info * finfo, bool enabled);
+void ggml_metal_fusion_info_set_enabled (struct ggml_metal_fusion_info * finfo, bool enabled);
 
-void ggml_metal_fusion_info_stats_init(struct ggml_metal_fusion_info * finfo);
-void ggml_metal_fusion_info_stats_reset(struct ggml_metal_fusion_info * finfo);
-int  ggml_metal_fusion_info_stats_get(const struct ggml_metal_fusion_info * finfo, const char ** labels, uint64_t * counts, int n);
-void ggml_metal_fusion_info_labels_init(struct ggml_metal_fusion_info * finfo);
+void ggml_metal_fusion_info_stats_init (      struct ggml_metal_fusion_info * finfo);
+void ggml_metal_fusion_info_stats_reset(      struct ggml_metal_fusion_info * finfo);
+int  ggml_metal_fusion_info_stats_get  (const struct ggml_metal_fusion_info * finfo, const char ** labels, uint64_t * counts, int n);
+void ggml_metal_fusion_info_labels_init(      struct ggml_metal_fusion_info * finfo);
 
 // compute phase: longest fusion starting at idx (a position in node_idxs) that matches in `mode`.
 // returns the matching pattern (nullptr if no fusion) and sets *n_out to the number of nodes consumed.
