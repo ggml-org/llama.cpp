@@ -381,36 +381,6 @@ int ggml_metal_fusion_info_stats_get(const struct ggml_metal_fusion_info * finfo
     return n_fill;
 }
 
-// device-level wrappers (the backend proc-address API operates on the device)
-void ggml_metal_device_fusion_info_stats_init(ggml_metal_device_t dev) {
-    struct ggml_metal_fusion_info * finfo = ggml_metal_device_get_fusion_info(dev);
-    if (finfo != nullptr) {
-        ggml_metal_fusion_info_stats_init(finfo);
-    }
-}
-
-void ggml_metal_device_fusion_info_stats_reset(ggml_metal_device_t dev) {
-    struct ggml_metal_fusion_info * finfo = ggml_metal_device_get_fusion_info(dev);
-    if (finfo != nullptr) {
-        ggml_metal_fusion_info_stats_reset(finfo);
-    }
-}
-
-int ggml_metal_device_fusion_info_stats_get(ggml_metal_device_t dev, const char ** labels, uint64_t * counts, int n) {
-    struct ggml_metal_fusion_info * finfo = ggml_metal_device_get_fusion_info(dev);
-    if (finfo == nullptr) {
-        return 0;
-    }
-    return ggml_metal_fusion_info_stats_get(finfo, labels, counts, n);
-}
-
-void ggml_metal_device_fusion_info_set_enabled(ggml_metal_device_t dev, bool enabled) {
-    struct ggml_metal_fusion_info * finfo = ggml_metal_device_get_fusion_info(dev);
-    if (finfo != nullptr) {
-        ggml_metal_fusion_info_set_enabled(finfo, enabled);
-    }
-}
-
 // ---- queries -------------------------------------------------------------
 
 // find the longest pattern matching the node sequence starting at idx

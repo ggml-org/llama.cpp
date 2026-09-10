@@ -330,12 +330,6 @@ struct ggml_metal_fusion_info;
 // the device-owned fusion debugging context (NULL unless fusion debugging is enabled)
 struct ggml_metal_fusion_info * ggml_metal_device_get_fusion_info(ggml_metal_device_t dev);
 
-// fusion debugging control (backend side of the ad-hoc ggml_backend_debug_fusion_* proc-address API)
-void ggml_metal_device_fusion_info_stats_init (ggml_metal_device_t dev);
-void ggml_metal_device_fusion_info_stats_reset(ggml_metal_device_t dev);
-int  ggml_metal_device_fusion_info_stats_get  (ggml_metal_device_t dev, const char ** labels, uint64_t * counts, int n);
-void ggml_metal_device_fusion_info_set_enabled(ggml_metal_device_t dev, bool enabled);
-
 //
 // device buffers
 //

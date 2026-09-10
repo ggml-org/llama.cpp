@@ -38,10 +38,13 @@
 // generic fusion debugging API, resolved through the ad-hoc get_proc_address mechanism
 // (not part of the official ggml backend interface yet). a backend that adopts fusion debugging
 // exports these exact names.
-typedef void ( * fusion_stats_init_t) (ggml_backend_dev_t);
-typedef void ( * fusion_stats_reset_t)(ggml_backend_dev_t);
-typedef int  ( * fusion_stats_get_t)  (ggml_backend_dev_t, const char **, uint64_t *, int);
-typedef void ( * fusion_set_enabled_t)(ggml_backend_dev_t, bool);
+typedef void * ggml_backend_fusion_t;
+
+typedef ggml_backend_fusion_t ( * fusion_get_t)       (ggml_backend_dev_t);
+typedef void ( * fusion_stats_init_t)  (ggml_backend_fusion_t);
+typedef void ( * fusion_stats_reset_t) (ggml_backend_fusion_t);
+typedef int  ( * fusion_stats_get_t)   (ggml_backend_fusion_t, const char **, uint64_t *, int);
+typedef void ( * fusion_set_enabled_t) (ggml_backend_fusion_t, bool);
 
 static bool silent_model_load_progress(float, void *) {
     return true;
@@ -185,12 +188,12 @@ static std::vector<float> decode_gen(llama_model * model, llama_context * lctx, 
     return ret;
 }
 
-static void read_counts(fusion_stats_get_t api_stats_get, ggml_backend_dev_t dev,
+static void read_counts(fusion_stats_get_t api_stats_get, ggml_backend_fusion_t finfo,
                         std::vector<const char *> & labels, std::vector<uint64_t> & counts) {
-    const int n = api_stats_get(dev, nullptr, nullptr, 0);
+    const int n = api_stats_get(finfo, nullptr, nullptr, 0);
     labels.assign(n, nullptr);
     counts.assign(n, 0);
-    api_stats_get(dev, labels.data(), counts.data(), n);
+    api_stats_get(finfo, labels.data(), counts.data(), n);
 }
 
 // one row of the per-label report
@@ -311,20 +314,23 @@ int main(int argc, char ** argv) {
     // name (e.g. "MTL0") the test was invoked with
     const std::string base_name = ggml_backend_reg_name(reg);
 
+    auto api_get         = (fusion_get_t)         ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_get");
     auto api_stats_init  = (fusion_stats_init_t)  ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_init");
     auto api_stats_reset = (fusion_stats_reset_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_reset");
     auto api_stats_get   = (fusion_stats_get_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_stats_get");
     auto api_set_enabled = (fusion_set_enabled_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_fusion_set_enabled");
 
-    if (!api_stats_init || !api_set_enabled || !api_stats_reset || !api_stats_get) {
+    if (!api_get || !api_stats_init || !api_set_enabled || !api_stats_reset || !api_stats_get) {
         LOG_ERR("%s: device '%s' does not export the generic fusion debugging API "
                 "(ggml_backend_fusion_*) - cannot run the fusion regression test\n",
                 __func__, device_name.c_str());
         return 1;
     }
 
+    ggml_backend_fusion_t finfo = api_get(dev);
+
     // enable fusions stats
-    api_stats_init(dev);
+    api_stats_init(finfo);
 
     const bool has_counts = true;
 
@@ -420,12 +426,12 @@ int main(int argc, char ** argv) {
             {
                 llama_context_ptr ctx = create_ctx(model.get(), 32);
                 if (has_counts) {
-                    api_set_enabled(dev, true);
-                    api_stats_reset(dev);
+                    api_set_enabled(finfo, true);
+                    api_stats_reset(finfo);
                 }
                 logits_fused = mode.decode(model.get(), ctx.get(), tokens);
                 if (has_counts) {
-                    read_counts(api_stats_get, dev, labels, counts_fused);
+                    read_counts(api_stats_get, finfo, labels, counts_fused);
                 }
             }
 
@@ -435,12 +441,12 @@ int main(int argc, char ** argv) {
             {
                 llama_context_ptr ctx = create_ctx(model.get(), 32);
                 if (has_counts) {
-                    api_set_enabled(dev, false);
-                    api_stats_reset(dev);
+                    api_set_enabled(finfo, false);
+                    api_stats_reset(finfo);
                 }
                 logits_unfused = mode.decode(model.get(), ctx.get(), tokens);
                 if (has_counts) {
-                    read_counts(api_stats_get, dev, labels, counts_unfused);
+                    read_counts(api_stats_get, finfo, labels, counts_unfused);
                 }
             }
 
