@@ -17135,6 +17135,22 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
             return false;
         }
 
+        // If the backend is idle, use a CPU copy to avoid GPU synchronization overhead.
+        static constexpr size_t max_cpu_copy_size = 128 * 1024;
+        const bool src_backend_synchronous = backend_src->iface.synchronize == nullptr;
+        const bool transfer_idle = !ctx->device->async_use_transfer_queue ||
+                                   ctx->transfer_semaphore_last_submitted == ctx->transfer_semaphore.value;
+        const bool backend_idle = ctx->compute_ctx.expired() && ctx->transfer_ctx.expired() &&
+                                  !ctx->submit_pending && !ctx->almost_ready_fence_pending && transfer_idle;
+        const bool dst_host_coherent =
+            (dst_buf->memory_property_flags & (vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent)) ==
+            (vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+        if ((backend_src == backend_dst || src_backend_synchronous) && backend_idle && dst_host_coherent && ggml_nbytes(src) <= max_cpu_copy_size) {
+            ggml_vk_buffer_write(dst_buf, vk_tensor_offset(dst) + dst->view_offs, src->data, ggml_nbytes(src));
+            return true;
+        }
+
         vk_context cpy_ctx;
         if (ctx->device->async_use_transfer_queue) {
             cpy_ctx = ggml_vk_get_transfer_ctx(ctx);
@@ -17147,7 +17163,6 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
                                           src->data, ggml_nbytes(src));
     }
 
-    GGML_UNUSED(backend_src);
     return false;
 }
 
