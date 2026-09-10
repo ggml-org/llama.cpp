@@ -1889,16 +1889,25 @@ void kernel_mul_mv_iq2_xxs_f32_impl(
     const uint i12 = im%FC_mul_mv_ne12;
     const uint i13 = im/FC_mul_mv_ne12;
 
-    const uint64_t offset0 = first_row*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
-    const uint64_t offset1 =        r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
+    const int nb32 = nb * (QK_K / 32);
+
+    const short ntx  = FC_mul_mv_split ? nb32 : 32;
+    const short nrep = 32 / ntx;
+
+    const short ix   = tiisg % ntx;
+    const short irep = tiisg / ntx;
+
+    const short row0 = (nr0 * irep      ) / nrep;
+    const short row1 = (nr0 * (irep + 1)) / nrep;
+
+    const uint64_t offset0 = (first_row + row0)*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
+    const uint64_t offset1 =                r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
 
     device const block_iq2_xxs * x = (device const block_iq2_xxs *) (src0 + offset0);
     device const float         * y = (device const float         *) (src1 + offset1);
 
     float yl[32];
     float sumf[nr0]={0.f};
-
-    const int nb32 = nb * (QK_K / 32);
 
     threadgroup uint64_t * svalues = (threadgroup uint64_t *)(shmem);
     threadgroup uint8_t  * ssigns  = (threadgroup uint8_t  *)(svalues + 256);
@@ -1912,15 +1921,6 @@ void kernel_mul_mv_iq2_xxs_f32_impl(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    const short ntx  = FC_mul_mv_split ? nb32 : 32;
-    const short nrep = 32 / ntx;
-
-    const short ix   = tiisg % ntx;
-    const short irep = tiisg / ntx;
-
-    const short row0 = (nr0 * irep      ) / nrep;
-    const short row1 = (nr0 * (irep + 1)) / nrep;
-
     device const float * y4 = y + 32 * ix;
 
     for (int ib32 = ix; ib32 < nb32; ib32 += ntx) {
@@ -1931,7 +1931,7 @@ void kernel_mul_mv_iq2_xxs_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq2_xxs * xr = (device const block_iq2_xxs *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const block_iq2_xxs * xr = x + ibl;
         device const uint16_t * q2 = xr->qs + 4 * ib;
         device const half * dh = &xr->d;
 
@@ -2021,16 +2021,25 @@ void kernel_mul_mv_iq2_xs_f32_impl(
     const uint i12 = im%FC_mul_mv_ne12;
     const uint i13 = im/FC_mul_mv_ne12;
 
-    const uint64_t offset0 = first_row*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
-    const uint64_t offset1 =        r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
+    const int nb32 = nb * (QK_K / 32);
+
+    const short ntx  = FC_mul_mv_split ? nb32 : 32;
+    const short nrep = 32 / ntx;
+
+    const short ix   = tiisg % ntx;
+    const short irep = tiisg / ntx;
+
+    const short row0 = (nr0 * irep      ) / nrep;
+    const short row1 = (nr0 * (irep + 1)) / nrep;
+
+    const uint64_t offset0 = (first_row + row0)*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
+    const uint64_t offset1 =                r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
 
     device const block_iq2_xs * x = (device const block_iq2_xs *) (src0 + offset0);
     device const float        * y = (device const float        *) (src1 + offset1);
 
     float yl[32];
     float sumf[nr0]={0.f};
-
-    const int nb32 = nb * (QK_K / 32);
 
     threadgroup uint64_t * svalues = (threadgroup uint64_t *)(shmem);
     threadgroup uint8_t  * ssigns  = (threadgroup uint8_t  *)(svalues + 512);
@@ -2044,15 +2053,6 @@ void kernel_mul_mv_iq2_xs_f32_impl(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    const short ntx  = FC_mul_mv_split ? nb32 : 32;
-    const short nrep = 32 / ntx;
-
-    const short ix   = tiisg % ntx;
-    const short irep = tiisg / ntx;
-
-    const short row0 = (nr0 * irep      ) / nrep;
-    const short row1 = (nr0 * (irep + 1)) / nrep;
-
     device const float * y4 = y + 32 * ix;
 
     for (int ib32 = ix; ib32 < nb32; ib32 += ntx) {
@@ -2063,7 +2063,7 @@ void kernel_mul_mv_iq2_xs_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq2_xs * xr = (device const block_iq2_xs *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const block_iq2_xs * xr = x + ibl;
         device const uint16_t * q2 = xr->qs + 4 * ib;
         device const uint8_t  * sc = xr->scales + ib;
         device const half * dh = &xr->d;
@@ -2165,16 +2165,25 @@ void kernel_mul_mv_iq3_xxs_f32_impl(
     const uint i12 = im%FC_mul_mv_ne12;
     const uint i13 = im/FC_mul_mv_ne12;
 
-    const uint64_t offset0 = first_row*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
-    const uint64_t offset1 =        r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
+    const int nb32 = nb * (QK_K / 32);
+
+    const short ntx  = FC_mul_mv_split ? nb32 : 32;
+    const short nrep = 32 / ntx;
+
+    const short ix   = tiisg % ntx;
+    const short irep = tiisg / ntx;
+
+    const short row0 = (nr0 * irep      ) / nrep;
+    const short row1 = (nr0 * (irep + 1)) / nrep;
+
+    const uint64_t offset0 = (first_row + row0)*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
+    const uint64_t offset1 =                r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
 
     device const block_iq3_xxs * x = (device const block_iq3_xxs *) (src0 + offset0);
     device const float         * y = (device const float         *) (src1 + offset1);
 
     float yl[32];
     float sumf[nr0]={0.f};
-
-    const int nb32 = nb * (QK_K / 32);
 
     threadgroup uint32_t * svalues = (threadgroup uint32_t *)(shmem);
     threadgroup uint8_t  * ssigns  = (threadgroup uint8_t  *)(svalues + 256);
@@ -2188,15 +2197,6 @@ void kernel_mul_mv_iq3_xxs_f32_impl(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    const short ntx  = FC_mul_mv_split ? nb32 : 32;
-    const short nrep = 32 / ntx;
-
-    const short ix   = tiisg % ntx;
-    const short irep = tiisg / ntx;
-
-    const short row0 = (nr0 * irep      ) / nrep;
-    const short row1 = (nr0 * (irep + 1)) / nrep;
-
     device const float * y4 = y + 32 * ix;
 
     for (int ib32 = ix; ib32 < nb32; ib32 += ntx) {
@@ -2207,7 +2207,7 @@ void kernel_mul_mv_iq3_xxs_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq3_xxs * xr = (device const block_iq3_xxs *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const block_iq3_xxs * xr = x + ibl;
         device const uint8_t  * q3 = xr->qs + 8 * ib;
         device const uint16_t * gas = (device const uint16_t *)(xr->qs + QK_K/4) + 2 * ib;
         device const half * dh = &xr->d;
@@ -2301,24 +2301,7 @@ void kernel_mul_mv_iq3_s_f32_impl(
     const uint i12 = im%FC_mul_mv_ne12;
     const uint i13 = im/FC_mul_mv_ne12;
 
-    const uint64_t offset0 = first_row*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
-    const uint64_t offset1 =        r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
-
-    device const block_iq3_s * x = (device const block_iq3_s *) (src0 + offset0);
-    device const float       * y = (device const float       *) (src1 + offset1);
-
-    float yl[32];
-    float sumf[nr0]={0.f};
-
     const int nb32 = nb * (QK_K / 32);
-
-    threadgroup uint32_t * svalues = (threadgroup uint32_t *) shmem;
-    {
-        int nval = 8;
-        int pos  = (32*sgitg + tiisg)*nval;
-        for (int i = 0; i < nval; ++i) svalues[pos + i] = iq3s_grid[pos + i];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
 
     const short ntx  = FC_mul_mv_split ? nb32 : 32;
     const short nrep = 32 / ntx;
@@ -2328,6 +2311,23 @@ void kernel_mul_mv_iq3_s_f32_impl(
 
     const short row0 = (nr0 * irep      ) / nrep;
     const short row1 = (nr0 * (irep + 1)) / nrep;
+
+    const uint64_t offset0 = (first_row + row0)*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
+    const uint64_t offset1 =                r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
+
+    device const block_iq3_s * x = (device const block_iq3_s *) (src0 + offset0);
+    device const float       * y = (device const float       *) (src1 + offset1);
+
+    float yl[32];
+    float sumf[nr0]={0.f};
+
+    threadgroup uint32_t * svalues = (threadgroup uint32_t *) shmem;
+    {
+        int nval = 8;
+        int pos  = (32*sgitg + tiisg)*nval;
+        for (int i = 0; i < nval; ++i) svalues[pos + i] = iq3s_grid[pos + i];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
 
     device const float * y4 = y + 32 * ix;
 
@@ -2339,7 +2339,7 @@ void kernel_mul_mv_iq3_s_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq3_s * xr = (device const block_iq3_s *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const block_iq3_s * xr = x + ibl;
         device const uint8_t * qs = xr->qs + 8 * ib;
         device const uint8_t * qh = xr->qh + ib;
         device const uint8_t * sc = xr->scales + (ib/2);
@@ -2437,24 +2437,7 @@ void kernel_mul_mv_iq2_s_f32_impl(
     const uint i12 = im%FC_mul_mv_ne12;
     const uint i13 = im/FC_mul_mv_ne12;
 
-    const uint64_t offset0 = first_row*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
-    const uint64_t offset1 =        r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
-
-    device const block_iq2_s * x = (device const block_iq2_s *) (src0 + offset0);
-    device const float       * y = (device const float       *) (src1 + offset1);
-
-    float yl[32];
-    float sumf[nr0]={0.f};
-
     const int nb32 = nb * (QK_K / 32);
-
-    //threadgroup uint64_t * svalues = (threadgroup uint64_t *) shmem;
-    //{
-    //    int nval = 32;
-    //    int pos  = (32*sgitg + tiisg)*nval;
-    //    for (int i = 0; i < nval; ++i) svalues[pos + i] = iq2s_grid[pos + i];
-    //    threadgroup_barrier(mem_flags::mem_threadgroup);
-    //}
 
     const short ntx  = FC_mul_mv_split ? nb32 : 32;
     const short nrep = 32 / ntx;
@@ -2464,6 +2447,23 @@ void kernel_mul_mv_iq2_s_f32_impl(
 
     const short row0 = (nr0 * irep      ) / nrep;
     const short row1 = (nr0 * (irep + 1)) / nrep;
+
+    const uint64_t offset0 = (first_row + row0)*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
+    const uint64_t offset1 =                r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
+
+    device const block_iq2_s * x = (device const block_iq2_s *) (src0 + offset0);
+    device const float       * y = (device const float       *) (src1 + offset1);
+
+    float yl[32];
+    float sumf[nr0]={0.f};
+
+    //threadgroup uint64_t * svalues = (threadgroup uint64_t *) shmem;
+    //{
+    //    int nval = 32;
+    //    int pos  = (32*sgitg + tiisg)*nval;
+    //    for (int i = 0; i < nval; ++i) svalues[pos + i] = iq2s_grid[pos + i];
+    //    threadgroup_barrier(mem_flags::mem_threadgroup);
+    //}
 
     device const float * y4 = y + 32 * ix;
 
@@ -2475,7 +2475,7 @@ void kernel_mul_mv_iq2_s_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq2_s * xr = (device const block_iq2_s *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const block_iq2_s * xr = x + ibl;
         device const uint8_t * qs = xr->qs + 4 * ib;
         device const uint8_t * qh = xr->qh + ib;
         device const uint8_t * sc = xr->scales + ib;
@@ -2574,15 +2574,6 @@ void kernel_mul_mv_iq1_s_f32_impl(
     const uint i12 = im%FC_mul_mv_ne12;
     const uint i13 = im/FC_mul_mv_ne12;
 
-    const uint64_t offset0 = first_row*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
-    const uint64_t offset1 =        r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
-
-    device const block_iq1_s * x = (device const block_iq1_s *) (src0 + offset0);
-    device const float       * y = (device const float       *) (src1 + offset1);
-
-    float yl[32];
-    float sumf[nr0]={0.f};
-
     const int nb32 = nb * (QK_K / 32);
 
     const short ntx  = FC_mul_mv_split ? nb32 : 32;
@@ -2593,6 +2584,15 @@ void kernel_mul_mv_iq1_s_f32_impl(
 
     const short row0 = (nr0 * irep      ) / nrep;
     const short row1 = (nr0 * (irep + 1)) / nrep;
+
+    const uint64_t offset0 = (first_row + row0)*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
+    const uint64_t offset1 =                r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
+
+    device const block_iq1_s * x = (device const block_iq1_s *) (src0 + offset0);
+    device const float       * y = (device const float       *) (src1 + offset1);
+
+    float yl[32];
+    float sumf[nr0]={0.f};
 
     device const float * y4 = y + 32 * ix;
 
@@ -2606,7 +2606,7 @@ void kernel_mul_mv_iq1_s_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq1_s * xr = (device const block_iq1_s *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const block_iq1_s * xr = x + ibl;
         device const uint8_t  * qs = xr->qs + 4 * ib;
         device const uint16_t * qh = xr->qh + ib;
         device const half     * dh = &xr->d;
@@ -2697,15 +2697,6 @@ void kernel_mul_mv_iq1_m_f32_impl(
     const uint i12 = im%FC_mul_mv_ne12;
     const uint i13 = im/FC_mul_mv_ne12;
 
-    const uint64_t offset0 = first_row*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
-    const uint64_t offset1 =        r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
-
-    device const block_iq1_m * x = (device const block_iq1_m *) (src0 + offset0);
-    device const float       * y = (device const float       *) (src1 + offset1);
-
-    float yl[32];
-    float sumf[nr0]={0.f};
-
     const int nb32 = nb * (QK_K / 32);
 
     const short ntx  = FC_mul_mv_split ? nb32 : 32;
@@ -2716,6 +2707,15 @@ void kernel_mul_mv_iq1_m_f32_impl(
 
     const short row0 = (nr0 * irep      ) / nrep;
     const short row1 = (nr0 * (irep + 1)) / nrep;
+
+    const uint64_t offset0 = (first_row + row0)*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
+    const uint64_t offset1 =                r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
+
+    device const block_iq1_m * x = (device const block_iq1_m *) (src0 + offset0);
+    device const float       * y = (device const float       *) (src1 + offset1);
+
+    float yl[32];
+    float sumf[nr0]={0.f};
 
     device const float * y4 = y + 32 * ix;
 
@@ -2733,7 +2733,7 @@ void kernel_mul_mv_iq1_m_f32_impl(
         const int ibl = ib32 / (QK_K / 32);
         const int ib  = ib32 % (QK_K / 32);
 
-        device const block_iq1_m * xr = (device const block_iq1_m *) ((device const char *) x + (uint64_t) row0*args.nb01) + ibl;
+        device const block_iq1_m * xr = x + ibl;
         device const uint8_t  * qs = xr->qs + 4 * ib;
         device const uint8_t  * qh = xr->qh + 2 * ib;
         device const uint16_t * sc = (device const uint16_t *)xr->scales;
