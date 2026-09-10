@@ -17,6 +17,7 @@ add_library(llama
             llama-chat.cpp
             llama-context.cpp
             llama-cparams.cpp
+            llama-deterministic-draft-serviceloader.cpp
             llama-grammar.cpp
             llama-graph.cpp
             llama-hparams.cpp
@@ -57,6 +58,8 @@ configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @O
 target_include_directories(llama PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
+
+target_compile_definitions(llama PRIVATE LLAMA_DETERMINISTIC_DRAFT_INTERNAL)
 
 target_link_libraries(llama PUBLIC ggml)
 
