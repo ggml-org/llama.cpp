@@ -5,6 +5,7 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "chat.h"
+#include "unicode.h"
 #include "base64.hpp"
 
 #include "server-common.h"
@@ -881,6 +882,53 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
     }
 
     return prompt_tokens;
+}
+
+// Replace invalid UTF-8 sequences in text[from..] with U+FFFD. A trailing
+// incomplete sequence is kept (it may complete with the next token), or dropped when finalize is set.
+void sanitize_invalid_utf8(std::string & text, size_t from, bool finalize) {
+    const size_t start = std::min(from, text.size());
+    bool        modified = false;
+    bool        keep_tail = true;
+    std::string out;
+
+    size_t i = start;
+    while (i < text.size()) {
+        const auto res = common_parse_utf8_codepoint(text, i);
+
+        if (res.status == utf8_parse_result::SUCCESS) {
+            if (modified) {
+                out.append(text, i, res.bytes_consumed);
+            }
+            i += res.bytes_consumed;
+            continue;
+        }
+
+        if (res.status == utf8_parse_result::INCOMPLETE) {
+            // trailing incomplete sequence: never sent; keep it (it may
+            // complete with the next token), or drop it at end of generation
+            if (finalize) {
+                keep_tail = false;
+            }
+            break;
+        }
+
+        if (!modified) {
+            out   = text.substr(0, i);
+            modified = true;
+        }
+        out += "\xEF\xBF\xBD";
+        i += 1;
+    }
+
+    if (modified) {
+        if (keep_tail && i < text.size()) {
+            out += text.substr(i);  // trailing incomplete sequence
+        }
+        text = std::move(out);
+    } else if (!keep_tail) {
+        text.resize(i);  // drop a dangling incomplete sequence, nothing else changed
+    }
 }
 
 size_t validate_utf8(const std::string& text) {

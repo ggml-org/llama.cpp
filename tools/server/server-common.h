@@ -268,6 +268,10 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 // if validate_utf8(text) == text.size(), then the whole text is valid utf8
 size_t validate_utf8(const std::string& text);
 
+// Replace invalid UTF-8 sequences in text[from..] with U+FFFD; a trailing
+// incomplete multi-byte sequence is preserved unless finalize is set.
+void sanitize_invalid_utf8(std::string & text, size_t from, bool finalize);
+
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
 // if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
 server_tokens process_mtmd_prompt(
