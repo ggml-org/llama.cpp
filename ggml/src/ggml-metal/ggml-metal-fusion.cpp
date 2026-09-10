@@ -1,4 +1,4 @@
-#include "ggml-metal-fuse.h"
+#include "ggml-metal-fusion.h"
 
 #include "ggml-backend-impl.h"
 #include "ggml-metal-device.h"
@@ -9,16 +9,16 @@
 // ---- helpers -------------------------------------------------------------
 
 // the pattern outputs (absolute graph node indices); the default is the last node
-static const int * ggml_metal_fuse_outputs(const ggml_metal_fuse * fuse, const int * buf) {
-    if (fuse->outputs) {
-        return fuse->outputs;
+static const int * ggml_metal_fusion_outputs(const ggml_metal_fusion * fusion, const int * buf) {
+    if (fusion->outputs) {
+        return fusion->outputs;
     }
 
     return buf;
 }
 
 // true if two tensors live in the same Metal buffer
-static bool ggml_metal_fuse_same_buffer(const ggml_tensor * a, const ggml_tensor * b) {
+static bool ggml_metal_fusion_same_buffer(const ggml_tensor * a, const ggml_tensor * b) {
     if (!a || !b) {
         return false;
     }
@@ -36,14 +36,15 @@ static bool ggml_metal_fuse_same_buffer(const ggml_tensor * a, const ggml_tensor
 
 // NORM/RMS_NORM + MUL + ADD: the weight/bias of each fused step must match the norm input
 // width, be contiguous rows, and the fused outputs must stay F32
-static bool ggml_metal_fuse_check_norm(const ggml_tensor * const  * nodes,
-                                       const ggml_metal_fuse      * fuse,
-                                             ggml_metal_fuse_mode   mode) {
+static bool ggml_metal_fusion_check_norm(
+        const ggml_metal_fusion      * fusion,
+        const ggml_tensor * const    * nodes,
+              ggml_metal_fusion_mode   mode) {
     GGML_UNUSED(mode);
 
-    GGML_ASSERT(fuse->n_ops >= 2);
+    GGML_ASSERT(fusion->n_ops >= 2);
 
-    for (int j = 1; j < fuse->n_ops; j++) {
+    for (int j = 1; j < fusion->n_ops; j++) {
         // the fused MUL/ADD must read the previous node as src0
         if (nodes[j]->src[0] != nodes[j - 1]) {
             return false;
@@ -68,12 +69,13 @@ static bool ggml_metal_fuse_check_norm(const ggml_tensor * const  * nodes,
 
 // ADD x N: each ADD reads the previous ADD as src0, and all addends must share layout
 // (and, in FULL mode, live in the same Metal buffer)
-static bool ggml_metal_fuse_check_add_chain(const ggml_tensor * const  * nodes,
-                                            const ggml_metal_fuse      * fuse,
-                                                  ggml_metal_fuse_mode   mode) {
-    GGML_ASSERT(fuse->n_ops >= 2);
+static bool ggml_metal_fusion_check_add_chain(
+        const ggml_metal_fusion      * fusion,
+        const ggml_tensor * const    * nodes,
+              ggml_metal_fusion_mode   mode) {
+    GGML_ASSERT(fusion->n_ops >= 2);
 
-    for (int j = 1; j < fuse->n_ops; j++) {
+    for (int j = 1; j < fusion->n_ops; j++) {
         if (nodes[j]->src[0] != nodes[j - 1]) {
             return false;
         }
@@ -82,8 +84,8 @@ static bool ggml_metal_fuse_check_add_chain(const ggml_tensor * const  * nodes,
             return false;
         }
 
-        if (mode == GGML_METAL_FUSE_FULL) {
-            if (!ggml_metal_fuse_same_buffer(nodes[j]->src[1], nodes[0]->src[1])) {
+        if (mode == GGML_METAL_FUSION_FULL) {
+            if (!ggml_metal_fusion_same_buffer(nodes[j]->src[1], nodes[0]->src[1])) {
                 return false;
             }
         }
@@ -97,10 +99,11 @@ static bool ggml_metal_fuse_check_add_chain(const ggml_tensor * const  * nodes,
 // mirrors ggml_metal_op_can_fuse_gdn_cache (PR #25788). the gdn output has other consumers (the
 // attn scores view), so unlike the other patterns this is not an elision chain: the structural
 // checks live entirely in this callback (unsafe = true).
-static bool ggml_metal_fuse_check_gdn_cache(const ggml_tensor * const * nodes,
-                                            const ggml_metal_fuse     * fuse,
-                                                  ggml_metal_fuse_mode  mode) {
-    GGML_UNUSED(fuse);
+static bool ggml_metal_fusion_check_gdn_cache(
+        const ggml_metal_fusion      * fusion,
+        const ggml_tensor * const    * nodes,
+              ggml_metal_fusion_mode    mode) {
+    GGML_UNUSED(fusion);
 
     const ggml_tensor * gdn = nodes[0];
     const ggml_tensor * cpy = nodes[1];
@@ -141,7 +144,7 @@ static bool ggml_metal_fuse_check_gdn_cache(const ggml_tensor * const * nodes,
         return false;
     }
 
-    if (mode == GGML_METAL_FUSE_FULL) {
+    if (mode == GGML_METAL_FUSION_FULL) {
         // the cache must be allocated so the kernel can write straight to its buffer
         if (dst->data == nullptr) {
             return false;
@@ -152,10 +155,11 @@ static bool ggml_metal_fuse_check_gdn_cache(const ggml_tensor * const * nodes,
 }
 
 // MUL + SIN + SQR + MUL + ADD (snake activation)
-static bool ggml_metal_fuse_check_snake(const ggml_tensor * const * nodes,
-                                        const ggml_metal_fuse     * fuse,
-                                              ggml_metal_fuse_mode  mode) {
-    GGML_UNUSED(fuse);
+static bool ggml_metal_fusion_check_snake(
+        const ggml_metal_fusion      * fusion,
+        const ggml_tensor * const    * nodes,
+              ggml_metal_fusion_mode   mode) {
+    GGML_UNUSED(fusion);
     GGML_UNUSED(mode);
 
     const ggml_tensor * mul0     = nodes[0];
@@ -216,48 +220,49 @@ static const ggml_op ops_snake[] = { GGML_OP_MUL, GGML_OP_SIN, GGML_OP_SQR, GGML
 
 static const ggml_op ops_gdn_cache[] = { GGML_OP_GATED_DELTA_NET, GGML_OP_CPY };
 
-static const ggml_metal_fuse ggml_metal_fuses[] = {
-    { GGML_METAL_FUSE_NORM_MUL,     ops_norm_mul,         2, nullptr, 0, false, ggml_metal_fuse_check_norm },
-    { GGML_METAL_FUSE_NORM_MUL_ADD, ops_norm_mul_add,     3, nullptr, 0, false, ggml_metal_fuse_check_norm },
-    { GGML_METAL_FUSE_NORM_MUL,     ops_rms_norm_mul,     2, nullptr, 0, false, ggml_metal_fuse_check_norm },
-    { GGML_METAL_FUSE_NORM_MUL_ADD, ops_rms_norm_mul_add, 3, nullptr, 0, false, ggml_metal_fuse_check_norm },
-    { GGML_METAL_FUSE_ADD_CHAIN,    ops_add_2,            2, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_ADD_CHAIN,    ops_add_3,            3, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_ADD_CHAIN,    ops_add_4,            4, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_ADD_CHAIN,    ops_add_5,            5, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_ADD_CHAIN,    ops_add_6,            6, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_ADD_CHAIN,    ops_add_7,            7, nullptr, 0, false, ggml_metal_fuse_check_add_chain },
-    { GGML_METAL_FUSE_SNAKE,        ops_snake,            5, nullptr, 0, false, ggml_metal_fuse_check_snake },
-    { GGML_METAL_FUSE_GDN_CACHE,    ops_gdn_cache,        2, nullptr, 0, true,  ggml_metal_fuse_check_gdn_cache },
+static const ggml_metal_fusion ggml_metal_fusions[] = {
+    { GGML_METAL_FUSION_NORM_MUL,     ops_norm_mul,         2, nullptr, 0, false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL_ADD, ops_norm_mul_add,     3, nullptr, 0, false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL,     ops_rms_norm_mul,     2, nullptr, 0, false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL_ADD, ops_rms_norm_mul_add, 3, nullptr, 0, false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_2,            2, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_3,            3, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_4,            4, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_5,            5, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_6,            6, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_7,            7, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_SNAKE,        ops_snake,            5, nullptr, 0, false, ggml_metal_fusion_check_snake },
+    { GGML_METAL_FUSION_GDN_CACHE,    ops_gdn_cache,        2, nullptr, 0, true,  ggml_metal_fusion_check_gdn_cache },
 };
 
-const ggml_metal_fuse * ggml_metal_fuse_all(int * n) {
-    *n = (int) sizeof(ggml_metal_fuses) / sizeof(ggml_metal_fuses[0]);
+const ggml_metal_fusion * ggml_metal_fusion_all(int * n) {
+    *n = (int) sizeof(ggml_metal_fusions) / sizeof(ggml_metal_fusions[0]);
 
-    return ggml_metal_fuses;
+    return ggml_metal_fusions;
 }
 
-const char * ggml_metal_fuse_label(const ggml_metal_fuse * fuse) {
-    const int n_fusions = (int) sizeof(ggml_metal_fuses) / sizeof(ggml_metal_fuses[0]);
+const char * ggml_metal_fusion_label(const ggml_metal_fusion * fusion) {
+    const int n_fusions = (int) sizeof(ggml_metal_fusions) / sizeof(ggml_metal_fusions[0]);
 
-    const int idx = (int)(fuse - ggml_metal_fuses);
+    const int idx = (int)(fusion - ggml_metal_fusions);
     GGML_ASSERT(idx >= 0 && idx < n_fusions);
 
     // labels are built once and cached (the table is static, so the pointers stay valid)
-    static char labels[sizeof(ggml_metal_fuses) / sizeof(ggml_metal_fuses[0])][GGML_METAL_FUSE_LABEL_MAX];
+    // TODO: avoid this global state
+    static char labels[sizeof(ggml_metal_fusions) / sizeof(ggml_metal_fusions[0])][GGML_METAL_FUSION_LABEL_MAX];
     static bool built = false;
 
     if (!built) {
         for (int i = 0; i < n_fusions; i++) {
             char * buf = labels[i];
             int len = 0;
-            for (int j = 0; j < ggml_metal_fuses[i].n_ops; j++) {
+            for (int j = 0; j < ggml_metal_fusions[i].n_ops; j++) {
                 if (j > 0) {
                     buf[len++] = '+';
                 }
-                const char * name = ggml_op_name(ggml_metal_fuses[i].ops[j]);
+                const char * name = ggml_op_name(ggml_metal_fusions[i].ops[j]);
                 const int name_len = (int) strlen(name);
-                GGML_ASSERT(len + name_len < GGML_METAL_FUSE_LABEL_MAX);
+                GGML_ASSERT(len + name_len < GGML_METAL_FUSION_LABEL_MAX);
                 memcpy(buf + len, name, name_len);
                 len += name_len;
             }
@@ -273,37 +278,37 @@ const char * ggml_metal_fuse_label(const ggml_metal_fuse * fuse) {
 
 // find the longest pattern matching the node sequence starting at idx
 // (idx is a position in node_idxs, which maps to graph node indices)
-const ggml_metal_fuse * ggml_metal_fuse_next(
+const ggml_metal_fusion * ggml_metal_fusion_next(
         const ggml_cgraph * gf,
         const int * node_idxs,
         int n_idxs,
         int idx,
-        ggml_metal_fuse_mode mode,
+        ggml_metal_fusion_mode mode,
         int * n_out) {
     int n = 0;
-    const ggml_metal_fuse * all = ggml_metal_fuse_all(&n);
+    const ggml_metal_fusion * all = ggml_metal_fusion_all(&n);
 
-    const ggml_metal_fuse * res = nullptr;
+    const ggml_metal_fusion * res = nullptr;
     int best = 1;
 
     for (int i = 0; i < n; i++) {
-        const ggml_metal_fuse * fuse = &all[i];
+        const ggml_metal_fusion * fusion = &all[i];
 
         // only look for a longer match than the current best
-        if (fuse->n_ops <= best) {
+        if (fusion->n_ops <= best) {
             continue;
         }
-        if (idx + fuse->n_ops > n_idxs) {
+        if (idx + fusion->n_ops > n_idxs) {
             continue;
         }
 
-        const ggml_tensor * nodes[GGML_METAL_FUSE_MAX];
+        const ggml_tensor * nodes[GGML_METAL_FUSION_MAX];
 
         // the op sequence must match exactly
         bool ok = true;
-        for (int j = 0; j < fuse->n_ops; j++) {
+        for (int j = 0; j < fusion->n_ops; j++) {
             nodes[j] = gf->nodes[node_idxs[idx + j]];
-            if (nodes[j]->op != fuse->ops[j]) {
+            if (nodes[j]->op != fusion->ops[j]) {
                 ok = false;
                 break;
             }
@@ -312,10 +317,10 @@ const ggml_metal_fuse * ggml_metal_fuse_next(
             continue;
         }
 
-        if (!fuse->unsafe) {
+        if (!fusion->unsafe) {
             // common element-wise chain constraints: each node reads the previous one,
             // and all nodes have the same shape
-            for (int j = 1; j < fuse->n_ops && ok; j++) {
+            for (int j = 1; j < fusion->n_ops && ok; j++) {
                 if (nodes[j]->src[0] != nodes[j - 1] && nodes[j]->src[1] != nodes[j - 1]) {
                     ok = false;
                     break;
@@ -329,25 +334,25 @@ const ggml_metal_fuse * ggml_metal_fuse_next(
                 continue;
             }
 
-            // ggml_can_fuse_subgraph_ext expects outputs as absolute graph node indices
+            // ggml_can_fusion_subgraph_ext expects outputs as absolute graph node indices
             int outputs_buf[GGML_MAX_SRC];
-            outputs_buf[0] = node_idxs[idx + fuse->n_ops - 1];
-            const int * outputs = ggml_metal_fuse_outputs(fuse, outputs_buf);
-            const int n_outputs = fuse->n_outputs ? fuse->n_outputs : 1;
+            outputs_buf[0] = node_idxs[idx + fusion->n_ops - 1];
+            const int * outputs = ggml_metal_fusion_outputs(fusion, outputs_buf);
+            const int n_outputs = fusion->n_outputs ? fusion->n_outputs : 1;
 
             // structural subgraph checks (op sequence, elidable uses, view containment)
-            if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, fuse->n_ops, fuse->ops, outputs, n_outputs)) {
+            if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, fusion->n_ops, fusion->ops, outputs, n_outputs)) {
                 continue;
             }
         }
 
         // pattern-specific checks (the sole validator for unsafe patterns)
-        if (fuse->check && !fuse->check(nodes, fuse, mode)) {
+        if (fusion->check && !fusion->check(fusion, nodes, mode)) {
             continue;
         }
 
-        best = fuse->n_ops;
-        res = fuse;
+        best = fusion->n_ops;
+        res = fusion;
     }
 
     *n_out = best;
@@ -359,16 +364,16 @@ const ggml_metal_fuse * ggml_metal_fuse_next(
 // could be fused, chaining patterns back-to-back. matching runs on the same filtered (view
 // transparent) node sequence that the compute phase uses, so the returned count is the raw index
 // span from idx to the last matched node (intermediate views are packed along).
-int ggml_metal_fuse_max(const ggml_cgraph * gf, int idx) {
+int ggml_metal_fusion_max(const ggml_cgraph * gf, int idx) {
     // an empty/view node cannot start a pattern - pack it alone
     if (ggml_op_is_empty(gf->nodes[idx]->op) || ggml_is_empty(gf->nodes[idx])) {
         return 1;
     }
 
     // collect the non-empty node indices starting at idx
-    int idxs[GGML_METAL_FUSE_MAX];
+    int idxs[GGML_METAL_FUSION_MAX];
     int n_idxs = 0;
-    for (int i = idx; i < gf->n_nodes && n_idxs < GGML_METAL_FUSE_MAX; i++) {
+    for (int i = idx; i < gf->n_nodes && n_idxs < GGML_METAL_FUSION_MAX; i++) {
         if (!ggml_op_is_empty(gf->nodes[i]->op) && !ggml_is_empty(gf->nodes[i])) {
             idxs[n_idxs++] = i;
         }
@@ -380,10 +385,10 @@ int ggml_metal_fuse_max(const ggml_cgraph * gf, int idx) {
     int total = 0;
     int i_f = 0;
 
-    while (i_f < n_idxs && total < GGML_METAL_FUSE_MAX) {
+    while (i_f < n_idxs && total < GGML_METAL_FUSION_MAX) {
         int len = 1;
-        const ggml_metal_fuse * fuse = ggml_metal_fuse_next(gf, idxs, n_idxs, i_f, GGML_METAL_FUSE_STRUCTURAL, &len);
-        if (!fuse || total + len > GGML_METAL_FUSE_MAX) {
+        const ggml_metal_fusion * fusion = ggml_metal_fusion_next(gf, idxs, n_idxs, i_f, GGML_METAL_FUSION_STRUCTURAL, &len);
+        if (!fusion || total + len > GGML_METAL_FUSION_MAX) {
             break;
         }
 
@@ -396,5 +401,5 @@ int ggml_metal_fuse_max(const ggml_cgraph * gf, int idx) {
     }
 
     // map the matched non-empty nodes back to the raw index span (views are included)
-    return std::min(GGML_METAL_FUSE_MAX, idxs[i_f - 1] - idx + 1);
+    return std::min(GGML_METAL_FUSION_MAX, idxs[i_f - 1] - idx + 1);
 }

@@ -1,5 +1,5 @@
 #include "ggml-metal-common.h"
-#include "ggml-metal-fuse.h"
+#include "ggml-metal-fusion.h"
 
 #include "ggml.h"
 #include "ggml-impl.h"
@@ -408,7 +408,7 @@ void ggml_graph_optimize(ggml_cgraph * gf) {
             /*.fused =*/ {},
         };
 
-        const int f = ggml_metal_fuse_max(gf, i);
+        const int f = ggml_metal_fusion_max(gf, i);
 
         // add the fused tensors into the node info so we can unfuse them later
         for (int k = 1; k < f; k++) {

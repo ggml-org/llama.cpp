@@ -14,7 +14,7 @@ ggml_metal_op_t ggml_metal_op_init(
         ggml_metal_device_t dev,
         ggml_metal_cmd_buf_t cmd_buf,
         struct ggml_cgraph * gf,
-        struct ggml_metal_fusion * fusion,
+        struct ggml_metal_fusion_info * finfo,
         int  idx_start,
         int  idx_end,
         bool use_concurrency,

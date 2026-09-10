@@ -896,11 +896,11 @@ struct ggml_metal_device {
 
     struct ggml_metal_device_props props;
 
+    // shared fusion debugging context
+    struct ggml_metal_fusion_info * finfo;
+
     // virtual address for GPU memory allocations
     atomic_uintptr_t addr_virt;
-
-    // shared fusion debugging context
-    struct ggml_metal_fusion * fusion;
 };
 
 //
@@ -1277,14 +1277,14 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
                     dev->props.max_working_set_size   = dev->mtl_device.maxBufferLength;
                 }
 
-                dev->fusion = calloc(1, sizeof(struct ggml_metal_fusion));
-                dev->fusion->enabled = getenv("GGML_METAL_FUSION_DISABLE") == nil;
+                dev->finfo = calloc(1, sizeof(struct ggml_metal_fusion_info));
+                dev->finfo->enabled = getenv("GGML_METAL_FUSION_DISABLE") == nil;
 
                 {
                     const char * val = getenv("GGML_METAL_FUSION_DEBUG");
-                    dev->fusion->debug = val ? atoi(val) : 0;
-                    if (dev->fusion->debug > 0) {
-                        dev->fusion->stats = true;
+                    dev->finfo->debug = val ? atoi(val) : 0;
+                    if (dev->finfo->debug > 0) {
+                        dev->finfo->stats = true;
                     }
                 }
 
@@ -1362,9 +1362,9 @@ void ggml_metal_device_free(ggml_metal_device_t dev) {
     assert(dev != NULL);
 
     @autoreleasepool {
-        free(dev->fusion->labels);
-        free(dev->fusion->counts);
-        free(dev->fusion);
+        free(dev->finfo->labels);
+        free(dev->finfo->counts);
+        free(dev->finfo);
 
         ggml_metal_rsets_free(dev->rsets);
 
@@ -1953,43 +1953,43 @@ static void ggml_metal_device_disable_tensor(ggml_metal_device_t dev) {
     dev->props.has_tensor = false;
 }
 
-struct ggml_metal_fusion * ggml_metal_device_get_fusion(ggml_metal_device_t dev) {
-    return dev->fusion;
+struct ggml_metal_fusion_info * ggml_metal_device_get_fusion_info(ggml_metal_device_t dev) {
+    return dev->finfo;
 }
 
-void ggml_metal_device_fusion_stats_init(ggml_metal_device_t dev) {
-    dev->fusion->stats = true;
+void ggml_metal_device_fusion_info_stats_init(ggml_metal_device_t dev) {
+    dev->finfo->stats = true;
 }
 
-void ggml_metal_device_fusion_stats_reset(ggml_metal_device_t dev) {
-    if (dev->fusion != NULL && dev->fusion->counts != NULL) {
-        memset(dev->fusion->counts, 0, dev->fusion->n_fusions * sizeof(uint64_t));
+void ggml_metal_device_fusion_info_stats_reset(ggml_metal_device_t dev) {
+    if (dev->finfo != NULL && dev->finfo->counts != NULL) {
+        memset(dev->finfo->counts, 0, dev->finfo->n_fusions * sizeof(uint64_t));
     }
 }
 
-int ggml_metal_device_fusion_stats_get(ggml_metal_device_t dev, const char ** labels, uint64_t * counts, int n) {
-    if (dev->fusion == NULL) {
+int ggml_metal_device_fusion_info_stats_get(ggml_metal_device_t dev, const char ** labels, uint64_t * counts, int n) {
+    if (dev->finfo == NULL) {
         return 0;
     }
 
     // query: report how many fusion patterns are available
     if (labels == NULL) {
-        return dev->fusion->n_fusions;
+        return dev->finfo->n_fusions;
     }
 
-    const int n_fill = MIN(n, dev->fusion->n_fusions);
+    const int n_fill = MIN(n, dev->finfo->n_fusions);
     for (int i = 0; i < n_fill; i++) {
-        labels[i] = dev->fusion->labels[i];
+        labels[i] = dev->finfo->labels[i];
         if (counts != NULL) {
-            counts[i] = dev->fusion->counts[i];
+            counts[i] = dev->finfo->counts[i];
         }
     }
 
     return n_fill;
 }
 
-void ggml_metal_device_fusion_set_enabled(ggml_metal_device_t dev, bool enabled) {
-    dev->fusion->enabled = enabled;
+void ggml_metal_device_fusion_info_set_enabled(ggml_metal_device_t dev, bool enabled) {
+    dev->finfo->enabled = enabled;
 }
 
 //

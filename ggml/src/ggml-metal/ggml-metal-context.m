@@ -6,7 +6,7 @@
 #import "ggml-metal-impl.h"
 #import "ggml-metal-common.h"
 #import "ggml-metal-ops.h"
-#import "ggml-metal-fuse.h"
+#import "ggml-metal-fusion.h"
 
 #import <Foundation/Foundation.h>
 
@@ -42,7 +42,7 @@ struct ggml_metal {
 
     int debug_graph;
 
-    struct ggml_metal_fusion * fusion;
+    struct ggml_metal_fusion_info * finfo;
 
     // capture state
     int capture_compute;
@@ -150,24 +150,24 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
             res->use_graph_optimize = false;
         }
 
-        res->fusion = ggml_metal_device_get_fusion(dev);
-        if (res->fusion->stats) {
-            if (!res->fusion->labels_set) {
+        res->finfo = ggml_metal_device_get_fusion_info(dev);
+        if (res->finfo->stats) {
+            if (!res->finfo->labels_set) {
                 int n = 0;
-                const ggml_metal_fuse * all = ggml_metal_fuse_all(&n);
+                const ggml_metal_fusion * all = ggml_metal_fusion_all(&n);
 
-                res->fusion->labels = calloc(n > 0 ? n : 1, sizeof(char *));
-                res->fusion->counts = calloc(n > 0 ? n : 1, sizeof(uint64_t));
+                res->finfo->labels = calloc(n > 0 ? n : 1, sizeof(char *));
+                res->finfo->counts = calloc(n > 0 ? n : 1, sizeof(uint64_t));
                 for (int i = 0; i < n; i++) {
-                    res->fusion->labels[i] = ggml_metal_fuse_label(&all[i]);
+                    res->finfo->labels[i] = ggml_metal_fusion_label(&all[i]);
                 }
-                res->fusion->n_fusions  = n;
-                res->fusion->labels_set = true;
+                res->finfo->n_fusions  = n;
+                res->finfo->labels_set = true;
             }
             res->n_cb = 0;
         }
 
-        GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, res->fusion->enabled    ? "true" : "false");
+        GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, res->finfo->enabled     ? "true" : "false");
         GGML_LOG_INFO("%s: use concurrency    = %s\n", __func__, res->use_concurrency    ? "true" : "false");
         GGML_LOG_INFO("%s: use graph optimize = %s\n", __func__, res->use_graph_optimize ? "true" : "false");
 
@@ -229,16 +229,16 @@ void ggml_metal_free(ggml_metal_t ctx) {
         ctx->pipelines_ext = nil;
     }
 
-    if (ctx->fusion->debug > 0) {
+    if (ctx->finfo->debug > 0) {
         GGML_LOG_DEBUG("%s: fusion stats:\n", __func__);
 
-        for (int i = 0; i < ctx->fusion->n_fusions; i++) {
-            if (ctx->fusion->counts[i] == 0) {
+        for (int i = 0; i < ctx->finfo->n_fusions; i++) {
+            if (ctx->finfo->counts[i] == 0) {
                 continue;
             }
 
             // note: cannot use ggml_log here
-            GGML_LOG_DEBUG("%s: - %s: %" PRIu64 "\n", __func__, ctx->fusion->labels[i], ctx->fusion->counts[i]);
+            GGML_LOG_DEBUG("%s: - %s: %" PRIu64 "\n", __func__, ctx->finfo->labels[i], ctx->finfo->counts[i]);
         }
     }
 
@@ -699,7 +699,7 @@ ggml_metal_event_t ggml_metal_get_ev_cpy(ggml_metal_t ctx) {
 void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
     // when fusion stats are collected the graph must be encoded by a single thread so the
     // counters are race-free; override whatever the caller requested
-    if (ctx->fusion->stats) {
+    if (ctx->finfo->stats) {
         n_cb = 0;
     }
 
@@ -738,7 +738,7 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             ctx->dev,
             cmd_buf,
             ctx->gf,
-            ctx->fusion,
+            ctx->finfo,
             idx_start,
             idx_end,
             ctx->use_concurrency,

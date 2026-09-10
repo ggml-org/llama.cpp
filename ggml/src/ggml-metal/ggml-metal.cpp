@@ -909,19 +909,19 @@ static const char * ggml_backend_metal_tuning_device_token(ggml_backend_dev_t de
 // generic fusion debugging API (ad-hoc proc-address mechanism): these operate on the device and
 // reach the shared fusion debugging context owned by the device
 static void ggml_backend_metal_fusion_stats_init(ggml_backend_dev_t dev) {
-    ggml_metal_device_fusion_stats_init((ggml_metal_device_t)dev->context);
+    ggml_metal_device_fusion_info_stats_init((ggml_metal_device_t)dev->context);
 }
 
 static void ggml_backend_metal_fusion_stats_reset(ggml_backend_dev_t dev) {
-    ggml_metal_device_fusion_stats_reset((ggml_metal_device_t)dev->context);
+    ggml_metal_device_fusion_info_stats_reset((ggml_metal_device_t)dev->context);
 }
 
 static int ggml_backend_metal_fusion_stats_get(ggml_backend_dev_t dev, const char ** labels, uint64_t * counts, int n) {
-    return ggml_metal_device_fusion_stats_get((ggml_metal_device_t)dev->context, labels, counts, n);
+    return ggml_metal_device_fusion_info_stats_get((ggml_metal_device_t)dev->context, labels, counts, n);
 }
 
 static void ggml_backend_metal_fusion_set_enabled(ggml_backend_dev_t dev, bool enabled) {
-    ggml_metal_device_fusion_set_enabled((ggml_metal_device_t)dev->context, enabled);
+    ggml_metal_device_fusion_info_set_enabled((ggml_metal_device_t)dev->context, enabled);
 }
 
 static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const char * name) {

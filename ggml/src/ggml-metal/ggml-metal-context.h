@@ -1,7 +1,6 @@
 #pragma once
 
 #include "ggml-metal-device.h"
-#include "ggml-metal-fuse.h"
 
 #ifdef __cplusplus
 extern "C" {
