@@ -100,7 +100,8 @@ static inline bool ggml_cuda_mmq_can_w4a4(const ggml_tensor * src0, const ggml_t
     if (src0->type != GGML_TYPE_NVFP4 || force_w4a4) {
         return true;
     }
-    return ggml_get_op_params_i32(dst, 3) != GGML_PREC_Q8;
+    const auto prec = ggml_get_op_params_i32(dst, 3);
+    return prec == GGML_PREC_UNDEFINED || prec == GGML_PREC_Q4;
 }
 
 void ggml_cuda_mul_mat_q(
