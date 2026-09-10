@@ -1199,7 +1199,8 @@ void llama_context::set_causal_attn(bool value) {
 
     cparams.causal_attn = value;
 
-    sched_need_reserve = true;
+    // no scheduler reserve needed because causal_attn only changes the values written to the KQ mask, not any shapes
+    //sched_need_reserve = true;
 }
 
 void llama_context::set_warmup(bool value) {
