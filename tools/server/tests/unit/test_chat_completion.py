@@ -238,6 +238,7 @@ def test_apply_chat_template():
     ({"type": "json_object", "schema": {"const": "42"}}, 6, "\"42\""),
     ({"type": "json_object", "schema": {"items": [{"type": "integer"}]}}, 10, "[ -3000 ]"),
     ({"type": "json_schema", "json_schema": {"schema": {"const": "foooooo"}}}, 10, "\"foooooo\""),
+    ({"type": "json_schema", "schema": {"const": "foooooo"}}, 10, "\"foooooo\""),
     ({"type": "json_object"}, 10, "(\\{|John)+"),
     ({"type": "sound"}, 0, None),
     # invalid response format (expected to fail)
