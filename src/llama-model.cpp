@@ -1200,7 +1200,7 @@ static void load_act_policy(llama_model_loader & ml, const llama_model & model, 
     }
 
     const gguf_context * ctx = ml.metadata;
-    const std::string key = ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_ALLOW_PREC_A8);
+    const std::string key = ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_PREC_A4);
     const int kid = gguf_find_key(ctx, key.c_str());
     if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY || gguf_get_arr_type(ctx, kid) != GGUF_TYPE_BOOL) {
         throw std::runtime_error(format("%s must be a bool array", key.c_str()));
@@ -1213,11 +1213,11 @@ static void load_act_policy(llama_model_loader & ml, const llama_model & model, 
             key.c_str(), tensor_names.size(), n_values));
     }
 
-    // tensor names flagged to keep src1 at higher precision
+    // tensors that can not use 4-bit activations, keep src1 at higher precision
     const int8_t * values = (const int8_t *) gguf_get_arr_data(ctx, kid);
     std::unordered_set<std::string> want;
     for (size_t i = 0; i < n_values; ++i) {
-        if (values[i] != 0) {
+        if (values[i] == 0) {
             want.insert(tensor_names[i]);
         }
     }
