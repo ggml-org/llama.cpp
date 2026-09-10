@@ -1341,7 +1341,7 @@ struct test_case {
         }
     }
 
-    test_status_t eval(ggml_backend_t backend1,
+    virtual test_status_t eval(ggml_backend_t backend1,
                        ggml_backend_t backend2,
                        const char *   op_names_filter,
                        printer *      output_printer) {
@@ -4831,6 +4831,586 @@ struct test_mul_mat : public test_case {
     }
 };
 
+// batch invariance for DMMV/MMVQ: Vulkan N=1 vs N=2 col0 must be bit-exact
+// reproduces frizikk:17 Q8_0 [6144,5120] x F32, here scaled to m=512 k=2048
+struct test_mmvq_batch : public test_case {
+    const ggml_type type_a;
+    const ggml_type type_b;
+    const int64_t m;
+    const int64_t k;
+
+    std::string vars() override {
+        return VARS_TO_STR4(type_a, type_b, m, k);
+    }
+
+    double max_nmse_err() override { return 1e-7; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_UNUSED(ctx);
+        return nullptr;
+    }
+
+    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
+        GGML_UNUSED(backend2);
+        GGML_UNUSED(op_filter);
+        const std::string op_name = "MMVQ_BATCH";
+        const std::string op_params = vars();
+        const std::string backend_name = ggml_backend_name(backend1);
+
+        // check support for MUL_MAT with these types
+        {
+            ggml_init_params p = { ggml_tensor_overhead()*4 + ggml_graph_overhead(), nullptr, true };
+            ggml_context_ptr c(ggml_init(p));
+            ggml_tensor * a = ggml_new_tensor_2d(c.get(), type_a, k, m);
+            ggml_tensor * b = ggml_new_tensor_2d(c.get(), type_b, k, 1);
+            ggml_tensor * o = ggml_mul_mat(c.get(), a, b);
+            GGML_UNUSED(o);
+            bool sup = true;
+            for (ggml_tensor * t = ggml_get_first_tensor(c.get()); t; t = ggml_get_next_tensor(c.get(), t)) {
+                if (!ggml_backend_supports_op(backend1, t)) sup = false;
+            }
+            if (!sup) {
+                test_operation_info info(op_name, op_params, backend_name, test_status_t::NOT_SUPPORTED, "not supported");
+                if (output_printer) output_printer->print_operation(info);
+                return test_status_t::NOT_SUPPORTED;
+            }
+        }
+
+        auto run_one = [&](ggml_backend_t backend, int64_t n, uint32_t seed_a, uint32_t seed_b, std::vector<float> & out) -> bool {
+            ggml_init_params p = { ggml_tensor_overhead()*16 + ggml_graph_overhead() + 32*1024*1024, nullptr, true };
+            // need true no_alloc for alloc test
+            p.no_alloc = true;
+            struct ggml_context * ctx = ggml_init(p);
+            ggml_tensor * a = ggml_new_tensor_2d(ctx, type_a, k, m);
+            ggml_tensor * b = ggml_new_tensor_2d(ctx, type_b, k, n);
+            ggml_set_name(a, "a");
+            ggml_set_name(b, "b");
+            ggml_tensor * o = ggml_mul_mat(ctx, a, b);
+            ggml_set_name(o, "out");
+            ggml_cgraph * gf = ggml_new_graph(ctx);
+            ggml_build_forward_expand(gf, o);
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+            if (!buf) { ggml_free(ctx); return false; }
+            // deterministic init with fixed seed, same as test-vk-mmvq-batch
+            auto init_fixed = [&](ggml_tensor * t, uint32_t seed) {
+                size_t nels = ggml_nelements(t);
+                std::vector<float> data(nels);
+                std::mt19937 gen(seed);
+                std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+                for (size_t i = 0; i < nels; ++i) data[i] = dis(gen);
+                if (t->type == GGML_TYPE_F32) {
+                    ggml_backend_tensor_set(t, data.data(), 0, nels*sizeof(float));
+                } else if (ggml_is_quantized(t->type) || t->type==GGML_TYPE_F16 || t->type==GGML_TYPE_BF16) {
+                    std::vector<uint8_t> dataq(ggml_row_size(t->type, nels));
+                    std::vector<float> im(t->ne[0], 1.0f);
+                    float * im_ptr = ggml_quantize_requires_imatrix(t->type) ? im.data() : nullptr;
+                    ggml_quantize_chunk(t->type, data.data(), dataq.data(), 0, nels/ggml_blck_size(t->type), ggml_blck_size(t->type), im_ptr);
+                    ggml_backend_tensor_set(t, dataq.data(), 0, dataq.size());
+                }
+            };
+            init_fixed(a, seed_a);
+            init_fixed(b, seed_b);
+            int ret = ggml_backend_graph_compute(backend, gf);
+            if (ret != GGML_STATUS_SUCCESS) { ggml_backend_buffer_free(buf); ggml_free(ctx); return false; }
+            // read o
+            std::vector<uint8_t> buf2(ggml_nbytes(o));
+            ggml_backend_tensor_get(o, buf2.data(), 0, ggml_nbytes(o));
+            const auto * tt = ggml_get_type_traits(o->type);
+            size_t bs = ggml_blck_size(o->type);
+            std::vector<float> vq(bs);
+            out.clear();
+            out.reserve(ggml_nelements(o));
+            for (int64_t i3=0;i3<o->ne[3];++i3)
+            for (int64_t i2=0;i2<o->ne[2];++i2)
+            for (int64_t i1=0;i1<o->ne[1];++i1)
+            for (int64_t i0=0;i0<o->ne[0];i0+=bs) {
+                size_t i = i3*o->nb[3]+i2*o->nb[2]+i1*o->nb[1]+i0/bs*o->nb[0];
+                if (o->type==GGML_TYPE_F32) out.push_back(*(float*)&buf2[i]);
+                else if (o->type==GGML_TYPE_F16) out.push_back(ggml_fp16_to_fp32(*(ggml_fp16_t*)&buf2[i]));
+                else if (ggml_is_quantized(o->type)) { tt->to_float(&buf2[i], vq.data(), bs); out.insert(out.end(), vq.begin(), vq.end()); }
+            }
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return true;
+        };
+
+        std::vector<float> out_cpu1, out_cpu2, out_vk1, out_vk2;
+        // CPU gold must be invariant
+        ggml_backend_t cpu = ggml_backend_init_by_name("CPU", nullptr);
+        if (!cpu) cpu = backend1;
+        bool ok = true;
+        ok &= run_one(cpu, 1, 123, 42, out_cpu1);
+        ok &= run_one(cpu, 2, 123, 42, out_cpu2);
+        ok &= run_one(backend1, 1, 123, 42, out_vk1);
+        ok &= run_one(backend1, 2, 123, 42, out_vk2);
+        if (!ok) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "alloc/compute failed");
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        // CPU invariance check (harness sanity)
+        double cpu_max = 0;
+        for (size_t i=0;i<(size_t)m;++i) cpu_max = std::max(cpu_max, fabs(double(out_cpu1[i])-double(out_cpu2[i])));
+        if (cpu_max != 0) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "CPU not invariant, harness bug");
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        // Vulkan batch invariance: col0
+        double max_abs = 0, rms = 0;
+        int diff = 0;
+        for (size_t i=0;i<(size_t)m;++i) {
+            double d = fabs(double(out_vk1[i]) - double(out_vk2[i]));
+            max_abs = std::max(max_abs, d);
+            rms += d*d;
+            if (d!=0) diff++;
+        }
+        rms = sqrt(rms/m);
+        test_status_t status = (max_abs==0) ? test_status_t::OK : test_status_t::FAIL;
+        test_operation_info info(op_name, op_params, backend_name, status, "");
+        if (status==test_status_t::FAIL) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "batch invariance broken diff %d/%lld max %.9f rms %.9f", diff, (long long)m, max_abs, rms);
+            info.set_error("compare", buf);
+            info.set_compare_failure();
+        }
+        if (output_printer) output_printer->print_operation(info);
+        return status;
+    }
+
+    test_mmvq_batch(ggml_type a=GGML_TYPE_Q8_0, ggml_type b=GGML_TYPE_F32, int64_t m=512, int64_t k=2048)
+        : type_a(a), type_b(b), m(m), k(k) {}
+};
+
+// batch invariance for ADD+RMS_NORM: N=1 uses rms_norm_mul_partials, N>1 uses regular
+// reproduces frizikk:17 3417/5120 2 ULP
+struct test_rms_batch : public test_case {
+    const int64_t m; // ne0
+    const float eps;
+
+    std::string vars() override {
+        return VARS_TO_STR2(m, eps);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override { GGML_UNUSED(ctx); return nullptr; }
+
+    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
+        GGML_UNUSED(backend2); GGML_UNUSED(op_filter);
+        const std::string op_name = "RMS_BATCH";
+        const std::string op_params = vars();
+        const std::string backend_name = ggml_backend_name(backend1);
+
+        auto run_one = [&](ggml_backend_t backend, int64_t n, std::vector<float> & out) -> bool {
+            ggml_init_params p = { ggml_tensor_overhead()*16 + ggml_graph_overhead() + 8*1024*1024, nullptr, true };
+            p.no_alloc = true;
+            struct ggml_context * ctx = ggml_init(p);
+            ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, m, n);
+            ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, m, n);
+            ggml_tensor * c = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, m, n);
+            ggml_set_name(a, "a");
+            ggml_set_name(b, "b");
+            ggml_set_name(c, "c");
+            ggml_tensor * add = ggml_add(ctx, a, b);
+            ggml_tensor * norm = ggml_rms_norm(ctx, add, eps);
+            ggml_tensor * out_mul = ggml_mul(ctx, norm, c);
+            ggml_set_name(out_mul, "out");
+            ggml_cgraph * gf = ggml_new_graph(ctx);
+            ggml_build_forward_expand(gf, out_mul);
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+            if (!buf) { ggml_free(ctx); return false; }
+            auto init_fixed = [&](ggml_tensor * t, uint32_t seed) {
+                size_t nels = ggml_nelements(t);
+                std::vector<float> data(nels);
+                std::mt19937 gen(seed);
+                std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+                for (size_t i=0;i<nels;++i) data[i]=dis(gen);
+                ggml_backend_tensor_set(t, data.data(), 0, nels*sizeof(float));
+            };
+            init_fixed(a, 11);
+            init_fixed(b, 22);
+            init_fixed(c, 33);
+            int ret = ggml_backend_graph_compute(backend, gf);
+            if (ret != GGML_STATUS_SUCCESS) { ggml_backend_buffer_free(buf); ggml_free(ctx); return false; }
+            ggml_tensor * out_t = out_mul;
+            std::vector<uint8_t> buf2(ggml_nbytes(out_t));
+            ggml_backend_tensor_get(out_t, buf2.data(), 0, ggml_nbytes(out_t));
+            out.resize(m*n);
+            for (int64_t i=0;i<m*n;++i) out[i] = ((float*)buf2.data())[i];
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return true;
+        };
+
+        std::vector<float> out_cpu1, out_cpu2, out_vk1, out_vk2;
+        ggml_backend_t cpu = ggml_backend_init_by_name("CPU", nullptr);
+        if (!cpu) cpu = backend1;
+        bool ok = true;
+        ok &= run_one(cpu, 1, out_cpu1);
+        ok &= run_one(cpu, 2, out_cpu2);
+        ok &= run_one(backend1, 1, out_vk1);
+        ok &= run_one(backend1, 2, out_vk2);
+        if (!ok) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "alloc/compute failed");
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        double cpu_max = 0;
+        for (size_t i=0;i<(size_t)m;++i) cpu_max = std::max(cpu_max, fabs(double(out_cpu1[i])-double(out_cpu2[i])));
+        if (cpu_max != 0) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "CPU not invariant");
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        double max_abs = 0, rms = 0;
+        int diff = 0;
+        for (size_t i=0;i<(size_t)m;++i) {
+            double d = fabs(double(out_vk1[i]) - double(out_vk2[i]));
+            max_abs = std::max(max_abs, d);
+            rms += d*d;
+            if (d!=0) diff++;
+        }
+        rms = sqrt(rms/m);
+        // 2 ULP ~ 1e-7*scale, allow 0 but report as FAIL if >0
+        test_status_t status = (max_abs==0) ? test_status_t::OK : test_status_t::FAIL;
+        test_operation_info info(op_name, op_params, backend_name, status, "");
+        if (status==test_status_t::FAIL) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "batch invariance broken diff %d/%lld max %.9f rms %.9f", diff, (long long)m, max_abs, rms);
+            info.set_error("compare", buf);
+            info.set_compare_failure();
+        }
+        if (output_printer) output_printer->print_operation(info);
+        return status;
+    }
+
+    test_rms_batch(int64_t m=512, float eps=1e-6f) : m(m), eps(eps) {}
+};
+
+// batch invariance for FA-off KxQ p021: F16 0213 permuted x F32 with heads,
+// N=1 uses p021, N=2 falls to GEMM (DMMV needs src1 ne2==1). CPU F16 allows 1e-3,
+// Vulkan must be bit-exact (Bug 4)
+struct test_p021_batch : public test_case {
+    const int64_t m;
+    const int64_t k;
+    const int64_t nh;
+    const std::array<int64_t,4> per = {0,2,1,3};
+
+    std::string vars() override { return VARS_TO_STR3(m,k,nh); }
+    ggml_tensor * build_graph(ggml_context * ctx) override { GGML_UNUSED(ctx); return nullptr; }
+
+    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
+        GGML_UNUSED(backend2); GGML_UNUSED(op_filter);
+        const std::string op_name = "P021_BATCH";
+        const std::string op_params = vars();
+        const std::string backend_name = ggml_backend_name(backend1);
+
+        auto run_one = [&](ggml_backend_t backend, int64_t n, std::vector<float> & out) -> bool {
+            ggml_init_params prm = { ggml_tensor_overhead()*16 + ggml_graph_overhead() + 8*1024*1024, nullptr, true };
+            prm.no_alloc = true;
+            struct ggml_context * ctx = ggml_init(prm);
+            const int64_t ne_a[4] = {k, m, nh, 1};
+            const int64_t ne_b[4] = {k, n, nh, 1};
+            ggml_tensor * a0 = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, ne_a[per[0]], ne_a[per[1]], ne_a[per[2]], ne_a[per[3]]);
+            ggml_tensor * b0 = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne_b[per[0]], ne_b[per[1]], ne_b[per[2]], ne_b[per[3]]);
+            ggml_tensor * a = ggml_permute(ctx, a0, per[0], per[1], per[2], per[3]);
+            ggml_tensor * b = ggml_permute(ctx, b0, per[0], per[1], per[2], per[3]);
+            ggml_set_name(a, "a");
+            ggml_set_name(b, "b");
+            ggml_tensor * o = ggml_mul_mat(ctx, a, b);
+            ggml_set_name(o, "out");
+            ggml_cgraph * gf = ggml_new_graph(ctx);
+            ggml_build_forward_expand(gf, o);
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+            if (!buf) { ggml_free(ctx); return false; }
+            // per-(h,n) seeds so col0 (n=0) identical across n=1 vs n=2 despite strides
+            // a does not depend on n, single seed is fine
+            {
+                size_t nels = ggml_nelements(a);
+                std::vector<float> data(nels);
+                std::mt19937 gen(101);
+                std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+                for (size_t i=0;i<nels;++i) data[i]=dis(gen);
+                std::vector<ggml_fp16_t> d16(nels);
+                for (size_t i=0;i<nels;++i) d16[i]=ggml_fp32_to_fp16(data[i]);
+                ggml_backend_tensor_set(a, d16.data(), 0, nels*sizeof(ggml_fp16_t));
+            }
+            {
+                // b is a permuted view; set via logical (h,n) loops using tensor_set on slices?
+                // simpler: set the base b0 physically with per-(h,n) seeds in physical order
+                // b0 shape is ne_b permuted: [k,nh,n,1] for per 0213? ne_b=[k,n,nh,1] -> b0=[k,nh,n,1]
+                // physical order k fastest, then nh, then n. Generate with per-(h,n) seeds.
+                int64_t ncur = n;
+                int64_t K = k, NH = nh;
+                std::vector<float> data((size_t)K*(size_t)ncur*(size_t)NH);
+                for (int64_t h=0;h<NH;++h) for (int64_t nn=0;nn<ncur;++nn) {
+                    std::mt19937 gen(202 + (uint32_t)h*16 + (uint32_t)nn);
+                    std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+                    for (int64_t kk=0;kk<K;++kk) {
+                        size_t phys = (size_t)kk + (size_t)h*(size_t)K + (size_t)nn*(size_t)K*(size_t)NH;
+                        data[phys] = dis(gen);
+                    }
+                }
+                ggml_backend_tensor_set(b, data.data(), 0, data.size()*sizeof(float));
+            }
+            int ret = ggml_backend_graph_compute(backend, gf);
+            if (ret != GGML_STATUS_SUCCESS) { ggml_backend_buffer_free(buf); ggml_free(ctx); return false; }
+            std::vector<uint8_t> buf2(ggml_nbytes(o));
+            ggml_backend_tensor_get(o, buf2.data(), 0, ggml_nbytes(o));
+            // o is [m,n,nh]: gather col0 via logical index r + h*m*n
+            out.resize((size_t)m*(size_t)nh);
+            float * f = (float*)buf2.data();
+            // buf2 is contiguous physical [m,n,nh]: idx = r + nn*m + h*m*ncur
+            int64_t ncur = n;
+            for (int64_t h=0;h<nh;++h) for (int64_t r=0;r<m;++r)
+                out[(size_t)r + (size_t)h*(size_t)m] = f[(size_t)r + (size_t)h*(size_t)m*(size_t)ncur];
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return true;
+        };
+
+        std::vector<float> out_cpu1, out_cpu2, out_vk1, out_vk2;
+        ggml_backend_t cpu = ggml_backend_init_by_name("CPU", nullptr);
+        if (!cpu) cpu = backend1;
+        bool ok = true;
+        ok &= run_one(cpu, 1, out_cpu1);
+        ok &= run_one(cpu, 2, out_cpu2);
+        ok &= run_one(backend1, 1, out_vk1);
+        ok &= run_one(backend1, 2, out_vk2);
+        if (!ok) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "alloc/compute failed");
+            info.set_error("compare", "alloc/compute failed");
+            info.set_compare_failure();
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        size_t slice = (size_t)m * (size_t)nh;
+        double cpu_max=0;
+        for (size_t i=0;i<slice;++i) cpu_max = std::max(cpu_max, fabs(double(out_cpu1[i])-double(out_cpu2[i])));
+        if (cpu_max > 1e-3) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "CPU not invariant");
+            info.set_error("compare", "CPU not invariant");
+            info.set_compare_failure();
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        double max_abs=0, rms=0; int diff=0;
+        for (size_t i=0;i<slice;++i){ double d=fabs(double(out_vk1[i])-double(out_vk2[i])); max_abs=std::max(max_abs,d); rms+=d*d; if(d>1e-4) diff++; }
+        rms = sqrt(rms/slice);
+        test_status_t status = (max_abs<=1e-4) ? test_status_t::OK : test_status_t::FAIL;
+        test_operation_info info(op_name, op_params, backend_name, status, "");
+        if (status==test_status_t::FAIL){
+            char buf[256]; snprintf(buf,sizeof(buf),"batch invariance broken diff %d/%zu max %.9f rms %.9f",diff,slice,max_abs,rms);
+            info.set_error("compare",buf); info.set_compare_failure();
+        }
+        if (output_printer) output_printer->print_operation(info);
+        return status;
+    }
+    test_p021_batch(int64_t m=256, int64_t k=128, int64_t nh=8) : m(m), k(k), nh(nh) {}
+};
+
+// batch invariance control: Q8_0 small-k (no MMVQ) N=1 vs N=2 both F32 DMMV, col0 must be bit-exact
+struct test_dmmv_batch : public test_case {
+    const int64_t m;
+    const int64_t k;
+    const ggml_type type_a = GGML_TYPE_Q8_0;
+
+    std::string vars() override { return VARS_TO_STR3(type_a, m,k); }
+    ggml_tensor * build_graph(ggml_context * ctx) override { GGML_UNUSED(ctx); return nullptr; }
+
+    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
+        GGML_UNUSED(backend2); GGML_UNUSED(op_filter);
+        const std::string op_name = "DMMV_BATCH";
+        const std::string op_params = vars();
+        const std::string backend_name = ggml_backend_name(backend1);
+
+        auto run_one = [&](ggml_backend_t backend, int64_t n, std::vector<float> & out) -> bool {
+            ggml_init_params prm = { ggml_tensor_overhead()*16 + ggml_graph_overhead() + 8*1024*1024, nullptr, true };
+            prm.no_alloc = true;
+            struct ggml_context * ctx = ggml_init(prm);
+            ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, k, m);
+            ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+            ggml_set_name(a, "a");
+            ggml_set_name(b, "b");
+            ggml_tensor * o = ggml_mul_mat(ctx, a, b);
+            ggml_set_name(o, "out");
+            ggml_cgraph * gf = ggml_new_graph(ctx);
+            ggml_build_forward_expand(gf, o);
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+            if (!buf) { ggml_free(ctx); return false; }
+            auto init_fixed = [&](ggml_tensor * tt, uint32_t seed) {
+                size_t nels = ggml_nelements(tt);
+                std::vector<float> data(nels);
+                std::mt19937 gen(seed);
+                std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+                for (size_t i=0;i<nels;++i) data[i]=dis(gen);
+                if (tt->type==GGML_TYPE_F32) ggml_backend_tensor_set(tt, data.data(), 0, nels*sizeof(float));
+                else {
+                    std::vector<uint8_t> dq(ggml_row_size(tt->type, nels));
+                    std::vector<float> im(tt->ne[0], 1.0f);
+                    float * imp = ggml_quantize_requires_imatrix(tt->type) ? im.data() : nullptr;
+                    ggml_quantize_chunk(tt->type, data.data(), dq.data(), 0, nels/ggml_blck_size(tt->type), ggml_blck_size(tt->type), imp);
+                    ggml_backend_tensor_set(tt, dq.data(), 0, dq.size());
+                }
+            };
+            init_fixed(a, 301);
+            init_fixed(b, 302);
+            int ret = ggml_backend_graph_compute(backend, gf);
+            if (ret != GGML_STATUS_SUCCESS) { ggml_backend_buffer_free(buf); ggml_free(ctx); return false; }
+            std::vector<uint8_t> buf2(ggml_nbytes(o));
+            ggml_backend_tensor_get(o, buf2.data(), 0, ggml_nbytes(o));
+            out.resize(m*n);
+            for (int64_t i=0;i<m*n;++i) out[i]=((float*)buf2.data())[i];
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return true;
+        };
+
+        std::vector<float> out_cpu1, out_cpu16, out_vk1, out_vk16;
+        // N=1 vs N=2 control (both small, same kernels)
+        ggml_backend_t cpu = ggml_backend_init_by_name("CPU", nullptr);
+        if (!cpu) cpu = backend1;
+        bool ok = true;
+        ok &= run_one(cpu, 1, out_cpu1);
+        ok &= run_one(cpu, 2, out_cpu16);
+        ok &= run_one(backend1, 1, out_vk1);
+        ok &= run_one(backend1, 2, out_vk16);
+        if (!ok) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "alloc/compute failed");
+            info.set_error("compare", "alloc/compute failed");
+            info.set_compare_failure();
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        // col0 is first m contiguous for 2D, same seed prefix so data matches
+        double cpu_max=0;
+        for (size_t i=0;i<(size_t)m;++i) cpu_max = std::max(cpu_max, fabs(double(out_cpu1[i])-double(out_cpu16[i])));
+        if (cpu_max != 0) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "CPU not invariant");
+            info.set_error("compare", "CPU not invariant");
+            info.set_compare_failure();
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        double max_abs=0, rms=0; int diff=0;
+        for (size_t i=0;i<(size_t)m;++i){ double d=fabs(double(out_vk1[i])-double(out_vk16[i])); max_abs=std::max(max_abs,d); rms+=d*d; if(d!=0) diff++; }
+        rms = sqrt(rms/m);
+        test_status_t status = (max_abs==0) ? test_status_t::OK : test_status_t::FAIL;
+        test_operation_info info(op_name, op_params, backend_name, status, "");
+        if (status==test_status_t::FAIL){
+            char buf[256]; snprintf(buf,sizeof(buf),"batch invariance broken diff %d/%lld max %.9f rms %.9f",diff,(long long)m,max_abs,rms);
+            info.set_error("compare",buf); info.set_compare_failure();
+        }
+        if (output_printer) output_printer->print_operation(info);
+        return status;
+    }
+    test_dmmv_batch(int64_t m=256, int64_t k=256) : m(m), k(k) {}
+};
+
+// holey-view DMMV strides vs naive hardcoded reference (backend-agnostic, Bug 5b)
+// view [k,2,nh] @tok2 into parent [k,ntok,nh] must match naive dot with parent cols 2..3.
+// naive is computed in-test with double accumulation, no backend needed as gold.
+struct test_dmmv_view_batch : public test_case {
+    const int64_t m;
+    const int64_t k;
+    const int64_t nh;
+    const int64_t ntok;
+
+    std::string vars() override { return VARS_TO_STR4(m,k,nh,ntok); }
+    ggml_tensor * build_graph(ggml_context * ctx) override { GGML_UNUSED(ctx); return nullptr; }
+
+    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
+        GGML_UNUSED(backend2); GGML_UNUSED(op_filter);
+        const std::string op_name = "DMMV_VIEW_BATCH";
+        const std::string op_params = vars();
+        const std::string backend_name = ggml_backend_name(backend1);
+
+        // host-side input data with per-(h,n) seeds (same for all backends)
+        std::vector<float> adata((size_t)k*(size_t)m*(size_t)nh);
+        {
+            std::mt19937 gen(401);
+            std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+            for (size_t i=0;i<adata.size();++i) adata[i]=dis(gen);
+        }
+        std::vector<float> bdata((size_t)k*(size_t)ntok*(size_t)nh);
+        for (int64_t h=0;h<nh;++h) for (int64_t nn=0;nn<ntok;++nn) {
+            std::mt19937 gen(402 + (uint32_t)h*16 + (uint32_t)nn);
+            std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+            for (int64_t kk=0;kk<k;++kk)
+                bdata[(size_t)kk + (size_t)nn*(size_t)k + (size_t)h*(size_t)k*(size_t)ntok] = dis(gen);
+        }
+        // naive expected view out [m,2,nh] for tokens 2..3 with double accumulation
+        std::vector<double> expected((size_t)m*2*(size_t)nh);
+        for (int64_t h=0;h<nh;++h) for (int64_t j=0;j<2;++j) for (int64_t r=0;r<m;++r) {
+            double s = 0;
+            for (int64_t kk=0;kk<k;++kk) {
+                // a is [k,m,nh] contiguous: a[kk,r,h] at kk + r*k + h*k*m
+                float av = adata[(size_t)kk + (size_t)r*(size_t)k + (size_t)h*(size_t)k*(size_t)m];
+                float bv = bdata[(size_t)kk + (size_t)(2+j)*(size_t)k + (size_t)h*(size_t)k*(size_t)ntok];
+                s += (double)av * (double)bv;
+            }
+            expected[(size_t)r + (size_t)j*(size_t)m + (size_t)h*(size_t)m*2] = s;
+        }
+
+        auto run_view = [&](ggml_backend_t backend, std::vector<float> & out) -> bool {
+            ggml_init_params prm = { ggml_tensor_overhead()*16 + ggml_graph_overhead() + 8*1024*1024, nullptr, true };
+            prm.no_alloc = true;
+            struct ggml_context * ctx = ggml_init(prm);
+            ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, k, m, nh, 1);
+            ggml_tensor * bpar = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, k, ntok, nh, 1);
+            ggml_set_name(a, "a");
+            ggml_set_name(bpar, "bpar");
+            size_t off = (size_t)2 * bpar->nb[1];
+            ggml_tensor * b = ggml_view_4d(ctx, bpar, k, 2, nh, 1, bpar->nb[1], bpar->nb[2], bpar->nb[3], off);
+            ggml_set_name(b, "bview");
+            ggml_tensor * o = ggml_mul_mat(ctx, a, b);
+            ggml_set_name(o, "out");
+            ggml_cgraph * gf = ggml_new_graph(ctx);
+            ggml_build_forward_expand(gf, o);
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+            if (!buf) { ggml_free(ctx); return false; }
+            ggml_backend_tensor_set(a, adata.data(), 0, adata.size()*sizeof(float));
+            ggml_backend_tensor_set(bpar, bdata.data(), 0, bdata.size()*sizeof(float));
+            int ret = ggml_backend_graph_compute(backend, gf);
+            if (ret != GGML_STATUS_SUCCESS) { ggml_backend_buffer_free(buf); ggml_free(ctx); return false; }
+            std::vector<uint8_t> buf2(ggml_nbytes(o));
+            ggml_backend_tensor_get(o, buf2.data(), 0, ggml_nbytes(o));
+            out.resize((size_t)m*2*(size_t)nh);
+            for (size_t i=0;i<out.size();++i) out[i]=((float*)buf2.data())[i];
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return true;
+        };
+
+        std::vector<float> out;
+        if (!run_view(backend1, out)) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "alloc/compute failed");
+            info.set_error("compare", "alloc/compute failed");
+            info.set_compare_failure();
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        // backend-agnostic: compare against naive hardcoded reference, epsilon 1e-4 for F32 order
+        double max_abs=0, rms=0; int diff=0;
+        size_t slice = out.size();
+        for (size_t i=0;i<slice;++i){
+            double d=fabs(double(out[i])-expected[i]);
+            max_abs=std::max(max_abs,d); rms+=d*d;
+            if(d>1e-4) diff++;
+        }
+        rms = sqrt(rms/slice);
+        test_status_t status = (max_abs<=1e-3) ? test_status_t::OK : test_status_t::FAIL;
+        test_operation_info info(op_name, op_params, backend_name, status, "");
+        if (status==test_status_t::FAIL){
+            char buf[256]; snprintf(buf,sizeof(buf),"holey-view vs naive broken diff %d/%zu max %.9f rms %.9f",diff,slice,max_abs,rms);
+            info.set_error("compare",buf); info.set_compare_failure();
+        }
+        if (output_printer) output_printer->print_operation(info);
+        return status;
+    }
+    test_dmmv_view_batch(int64_t m=256, int64_t k=256, int64_t nh=8, int64_t ntok=8) : m(m), k(k), nh(nh), ntok(ntok) {}
+};
+
+
 #define P 1.0f
 #define N -1.0f
 
@@ -7715,6 +8295,186 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
+// batch invariance for FA GQA: N=1 vs N=2 with GQA ratio 4, no mask for determinism (Bug 1)
+// reproduces frizikk:13 token 548 vs 320, PR #26358 N<=8 gate. CPU allows 1e-4, Vulkan must match.
+struct test_fa_batch : public test_case {
+    const int64_t hsk;
+    const int64_t hsv;
+    const int64_t nh;
+    const int64_t kv;
+
+    std::string vars() override { return VARS_TO_STR4(hsk, hsv, nh, kv); }
+    ggml_tensor * build_graph(ggml_context * ctx) override { GGML_UNUSED(ctx); return nullptr; }
+
+    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
+        GGML_UNUSED(backend2); GGML_UNUSED(op_filter);
+        const std::string op_name = "FA_BATCH";
+        const std::string op_params = vars();
+        const std::string backend_name = ggml_backend_name(backend1);
+
+        auto run_one = [&](ggml_backend_t backend, int64_t nb, std::vector<float> & out) -> bool {
+            ggml_init_params prm = { ggml_tensor_overhead()*128 + ggml_graph_overhead() + 8*1024*1024, nullptr, true };
+            prm.no_alloc = true;
+            struct ggml_context * ctx = ggml_init(prm);
+            // GQA 4: Q 8 heads (nh*4), KV 2 heads (nh), no mask, F16 KV
+            test_flash_attn_ext helper(hsk, hsv, nh, {4,1}, kv, nb, true, false, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0,1,2,3}, false, false, 0);
+            ggml_tensor * out_t = helper.build_graph(ctx);
+            ggml_cgraph * gf = ggml_new_graph(ctx);
+            ggml_build_forward_expand(gf, out_t);
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+            if (!buf) { ggml_free(ctx); return false; }
+            // deterministic per-(head,batch) init so nb=0 slice matches across nb=1 vs nb=2
+            for (ggml_tensor * tt = ggml_get_first_tensor(ctx); tt; tt = ggml_get_next_tensor(ctx, tt)) {
+                size_t nels = ggml_nelements(tt);
+                std::vector<float> data(nels);
+                if (strcmp(tt->name, "q") == 0) {
+                    int64_t HSK = tt->ne[0], NB = tt->ne[1], NH = ggml_nrows(tt) / NB;
+                    for (int64_t h=0;h<NH;++h) for (int64_t b=0;b<NB;++b) {
+                        std::mt19937 gen(1000 + (uint32_t)h*16 + (uint32_t)b);
+                        std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+                        for (int64_t kk=0;kk<HSK;++kk)
+                            data[(size_t)kk + (size_t)b*(size_t)HSK + (size_t)h*(size_t)HSK*(size_t)NB] = dis(gen);
+                    }
+                } else if (strcmp(tt->name, "m") == 0) {
+                    // mask [kv, nb]: per-column seeds so col0 matches, causal (0 allow, -inf block upper)
+                    int64_t KV = tt->ne[0], NB = tt->ne[1];
+                    for (int64_t b=0;b<NB;++b) {
+                        std::mt19937 gen(2000 + (uint32_t)b);
+                        std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+                        for (int64_t kk=0;kk<KV;++kk) {
+                            float v = dis(gen) > 0 ? 0.0f : -INFINITY;
+                            data[(size_t)kk + (size_t)b*(size_t)KV] = v;
+                        }
+                    }
+                } else {
+                    uint32_t h = 42;
+                    for (const char * p = tt->name; *p; ++p) h = h*31 + (uint8_t)*p;
+                    h += (uint32_t)tt->ne[0];
+                    std::mt19937 gen(h);
+                    std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+                    for (size_t i=0;i<nels;++i) data[i]=dis(gen);
+                }
+                if (tt->type==GGML_TYPE_F32) ggml_backend_tensor_set(tt, data.data(), 0, nels*sizeof(float));
+                else if (tt->type==GGML_TYPE_F16) {
+                    std::vector<ggml_fp16_t> d16(nels);
+                    for (size_t i=0;i<nels;++i) d16[i]=ggml_fp32_to_fp16(data[i]);
+                    ggml_backend_tensor_set(tt, d16.data(), 0, nels*sizeof(ggml_fp16_t));
+                }
+            }
+            int ret = ggml_backend_graph_compute(backend, gf);
+            if (ret != GGML_STATUS_SUCCESS) { ggml_backend_buffer_free(buf); ggml_free(ctx); return false; }
+            std::vector<uint8_t> buf2(ggml_nbytes(out_t));
+            ggml_backend_tensor_get(out_t, buf2.data(), 0, ggml_nbytes(out_t));
+            size_t nels = ggml_nelements(out_t);
+            out.resize(nels);
+            for (size_t i=0;i<nels;++i) out[i] = ((float*)buf2.data())[i];
+            ggml_backend_buffer_free(buf);
+            ggml_free(ctx);
+            return true;
+        };
+
+        std::vector<float> out_cpu1, out_cpu2, out_vk1, out_vk2;
+        ggml_backend_t cpu = ggml_backend_init_by_name("CPU", nullptr);
+        if (!cpu) cpu = backend1;
+        bool ok = true;
+        ok &= run_one(cpu, 1, out_cpu1);
+        ok &= run_one(cpu, 2, out_cpu2);
+        ok &= run_one(backend1, 1, out_vk1);
+        ok &= run_one(backend1, 2, out_vk2);
+        if (!ok) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "alloc/compute failed");
+            info.set_error("compare", "alloc/compute failed");
+            info.set_compare_failure();
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        // out is [hsv, nb, nh*4]: first nb=1 slice is hsv*nh*4 contiguous
+        size_t slice = (size_t)hsv * (size_t)nh * 4;
+        double cpu_max=0;
+        for (size_t i=0;i<slice;++i) cpu_max = std::max(cpu_max, fabs(double(out_cpu1[i])-double(out_cpu2[i])));
+        if (cpu_max > 1e-4) {
+            test_operation_info info(op_name, op_params, backend_name, test_status_t::FAIL, "CPU not invariant");
+            info.set_error("compare", "CPU not invariant");
+            info.set_compare_failure();
+            if (output_printer) output_printer->print_operation(info);
+            return test_status_t::FAIL;
+        }
+        double max_abs=0, rms=0; int diff=0;
+        for (size_t i=0;i<slice;++i){ double d=fabs(double(out_vk1[i])-double(out_vk2[i])); max_abs=std::max(max_abs,d); rms+=d*d; if(d>1e-4) diff++; }
+        rms = sqrt(rms/slice);
+        test_status_t status = (max_abs<=1e-4) ? test_status_t::OK : test_status_t::FAIL;
+        test_operation_info info(op_name, op_params, backend_name, status, "");
+        if (status==test_status_t::FAIL){
+            char buf[256]; snprintf(buf,sizeof(buf),"batch invariance broken diff %d/%zu max %.9f rms %.9f",diff,slice,max_abs,rms);
+            info.set_error("compare",buf); info.set_compare_failure();
+        }
+        if (output_printer) output_printer->print_operation(info);
+        return status;
+    }
+    test_fa_batch(int64_t hsk=64, int64_t hsv=64, int64_t nh=2, int64_t kv=128) : hsk(hsk), hsv(hsv), nh(nh), kv(kv) {}
+};
+// FA vs naive hardcoded reference, backend-agnostic, F32 no-GQA masked nb=2 (simplest FA vs naive)
+struct test_fa_naive : public test_case {
+    const int64_t nb;
+    const int64_t kv;
+    std::string vars() override { return "nogqa_nb" + std::to_string(nb) + "_kv" + std::to_string(kv); }
+    std::string op_desc(ggml_tensor * t) override { GGML_UNUSED(t); return "FA_NAIVE"; }
+    ggml_tensor * build_graph(ggml_context * ctx) override { GGML_UNUSED(ctx); return nullptr; }
+    test_status_t eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_filter, printer * output_printer) override {
+        GGML_UNUSED(backend2); GGML_UNUSED(op_filter);
+        const int64_t hsk=8, hsv=8, nh=1; const int64_t kv = this->kv;
+        std::vector<float> qhost(hsk*nb*nh), khost(hsk*kv*nh), vhost(hsv*kv*nh), mhost(kv*nb);
+        for (size_t i=0;i<qhost.size();++i) qhost[i]=0.1f*((int)i%7)-0.3f;
+        for (size_t i=0;i<khost.size();++i) khost[i]=0.1f*((int)i%5)-0.2f;
+        for (size_t i=0;i<vhost.size();++i) vhost[i]=0.1f*((int)i%3)-0.1f;
+        for (int64_t b=0;b<nb;++b) for (int64_t k=0;k<kv;++k) mhost[k+b*kv]=(k%2==0)?0.0f:-INFINITY;
+        const double scale=1.0/sqrt((double)hsk);
+        std::vector<double> exp_out(hsv*nb*nh);
+        std::vector<double> scores(kv);
+        for (int64_t h=0;h<nh;++h) for (int64_t b=0;b<nb;++b){
+            double mx=-1e30;
+            for (int64_t k=0;k<kv;++k){
+                double mm=mhost[k+b*kv];
+                if(mm==-INFINITY){scores[k]=-1e30;continue;}
+                double dot=0;
+                for(int64_t d=0;d<hsk;++d) dot+=(double)qhost[d+b*hsk+h*hsk*nb]*(double)khost[d+k*hsk+h*hsk*kv];
+                scores[k]=dot*scale+mm; mx=std::max(mx,scores[k]);
+            }
+            double sum=0;
+            for(int64_t k=0;k<kv;++k){scores[k]=exp(scores[k]-mx);sum+=scores[k];}
+            for(int64_t d=0;d<hsv;++d){double o=0;for(int64_t k=0;k<kv;++k)o+=scores[k]*(double)vhost[d+k*hsv+h*hsv*kv];exp_out[d+b*hsv+h*hsv*nb]=o/sum;}
+        }
+        ggml_init_params prm={ggml_tensor_overhead()*128+ggml_graph_overhead()+8*1024*1024,nullptr,true};
+        prm.no_alloc=true;
+        struct ggml_context * ctx=ggml_init(prm);
+        test_flash_attn_ext helper(hsk,hsv,nh,{1,1},kv,nb,true,false,0,0,GGML_PREC_F32,GGML_TYPE_F32,GGML_TYPE_F32,{0,1,2,3},false,false,0);
+        ggml_tensor * out_t=helper.build_graph(ctx);
+        ggml_cgraph * gf=ggml_new_graph(ctx);
+        ggml_build_forward_expand(gf,out_t);
+        ggml_backend_buffer_t buf=ggml_backend_alloc_ctx_tensors(ctx,backend1);
+        if(!buf){ggml_free(ctx);return test_status_t::FAIL;}
+        for(ggml_tensor *tt=ggml_get_first_tensor(ctx);tt;tt=ggml_get_next_tensor(ctx,tt)){
+            if(!strcmp(tt->name,"q"))ggml_backend_tensor_set(tt,qhost.data(),0,qhost.size()*sizeof(float));
+            else if(!strcmp(tt->name,"k"))ggml_backend_tensor_set(tt,khost.data(),0,khost.size()*sizeof(float));
+            else if(!strcmp(tt->name,"v"))ggml_backend_tensor_set(tt,vhost.data(),0,vhost.size()*sizeof(float));
+            else if(!strcmp(tt->name,"m")){std::vector<ggml_fp16_t>d16(mhost.size());for(size_t i=0;i<mhost.size();++i)d16[i]=ggml_fp32_to_fp16(mhost[i]);ggml_backend_tensor_set(tt,d16.data(),0,d16.size()*sizeof(ggml_fp16_t));}
+        }
+        int ret=ggml_backend_graph_compute(backend1,gf);
+        if(ret!=GGML_STATUS_SUCCESS){ggml_backend_buffer_free(buf);ggml_free(ctx);return test_status_t::FAIL;}
+        std::vector<uint8_t> b2(ggml_nbytes(out_t));
+        ggml_backend_tensor_get(out_t,b2.data(),0,ggml_nbytes(out_t));
+        float *f=(float*)b2.data();
+        double mx=0;for(size_t i=0;i<exp_out.size();++i)mx=std::max(mx,fabs(double(f[i])-exp_out[i]));
+        ggml_backend_buffer_free(buf);ggml_free(ctx);
+        test_operation_info info("FA_NAIVE","nogqa_nb2",ggml_backend_name(backend1),mx<=1e-4?test_status_t::OK:test_status_t::FAIL,"");
+        if(mx>1e-4){char b[128];snprintf(b,sizeof(b),"max %.9f",mx);info.set_error("compare",b);info.set_compare_failure();}
+        if(output_printer)output_printer->print_operation(info);
+        return mx<=1e-4?test_status_t::OK:test_status_t::FAIL;
+    }
+    test_fa_naive(int64_t n=2, int64_t kv=4) : nb(n), kv(kv) {}
+};
+
+
 // GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
@@ -9773,6 +10533,35 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
+
+    // batch invariance for DMMV/MMVQ: Q8_0/Q4_K x F32 spec N=1 vs N=2 col0 must be bit-exact (Bug 6 frizikk:17)
+    // generic yet reproduces: 3 quantized types x 2 shapes small for CI, all fail before fix m=512 k=2048 0.209
+    for (ggml_type t : {GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0}) {
+        test_cases.emplace_back(new test_mmvq_batch(t, GGML_TYPE_F32, 512, 2048));
+        test_cases.emplace_back(new test_mmvq_batch(t, GGML_TYPE_F32, 256, 1024));
+    }
+    // batch invariance for ADD+RMS_NORM+MUL: N=1 fused partials vs N>1 regular (Bug 7 frizikk:17 2 ULP 3417/5120)
+    for (int64_t m : {512, 1024, 2048, 5120}) {
+        test_cases.emplace_back(new test_rms_batch(m, 1e-6f));
+    }
+    // batch invariance for FA-off KxQ p021 0213 with heads: N=1 p021 vs N=2 GEMM (Bug 4)
+    for (int64_t nh : {4, 8}) {
+        test_cases.emplace_back(new test_p021_batch(256, 128, nh));
+    }
+    test_cases.emplace_back(new test_fa_naive(2, 4));
+    test_cases.emplace_back(new test_fa_naive(8, 4));
+    test_cases.emplace_back(new test_fa_naive(2, 512));
+    // batch invariance for FA GQA masked: N=1 vs N=2 GQA 4 (Bug 1 control, small shapes pass)
+    test_cases.emplace_back(new test_fa_batch(64, 64, 2, 128));
+    test_cases.emplace_back(new test_fa_batch(128, 128, 2, 256));
+    // holey-view DMMV vs naive hardcoded reference, backend-agnostic (Bug 5b)
+    test_cases.emplace_back(new test_dmmv_view_batch(256, 256, 8, 8));
+    test_cases.emplace_back(new test_dmmv_view_batch(128, 64, 4, 8));
+    // batch invariance control: Q8_0 small-k no MMVQ, N=1 vs N=2 (should pass)
+    for (int64_t m : {256, 512}) {
+        test_cases.emplace_back(new test_dmmv_batch(m, 256));
+    }
+
 
     // m == 1, with n on both sides of MMVF_MAX_BATCH_SIZE (8): mmvf below, operand swap above
     for (int64_t n : {1, 7, 8, 9, 16, 128, 512}) {
