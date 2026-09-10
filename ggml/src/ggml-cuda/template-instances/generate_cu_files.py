@@ -105,6 +105,10 @@ for ncols in [8, 16, 32, 64]:
 for type in TYPES_MMQ:
     with open(f"mmq-instance-{get_short_name(type)}.cu", "w") as f:
         f.write(SOURCE_MMQ.format(type=type))
+        if type == "GGML_TYPE_Q4_K":
+            f.write("#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)\n")
+            f.write("DECL_MMQ_GATE_UP_SWIGLU_CASE(GGML_TYPE_Q4_K);\n")
+            f.write("#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)\n")
 
 for type in range(1, 17):
     with open(f"mmf-instance-ncols_{type}.cu", "w") as f:
