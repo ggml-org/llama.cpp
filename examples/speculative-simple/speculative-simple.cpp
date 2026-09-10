@@ -188,7 +188,7 @@ int main(int argc, char ** argv) {
             common_speculative_get_draft_params(spec, seq_id) = {
                 /* .drafting   = */ true,
                 /* .n_max      = */ n_draft_max,
-                /* .n_past     = */ n_past,
+                /* .pos0       = */ n_past,
                 /* .id_last    = */ id_last,
                 /* .prompt     = */ &prompt_tgt,
                 /* .result     = */ &draft, // output
