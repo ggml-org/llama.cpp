@@ -4771,80 +4771,51 @@ static void quantize_row_iq1_m_impl(const float * GGML_RESTRICT x, void * GGML_R
             // 1: +, -
             // 2: -, +
             // 3: -, -
-            for (int i1 = 0; i1 <= block_size; ++i1) {
-                for (int i2 = i1; i2 <= block_size; ++i2) {
-                    memset(sumqx, 0, 4*sizeof(float));
-                    memset(sumq2, 0, 4*sizeof(float));
-                    for (int j = 0; j < i1; ++j) {
-                        int i = idx[2*j];
-                        if (i < block_size/2) {
-                            sumqx[0] += weight[i]*x_p[0]*xb[i];
-                            sumqx[1] += weight[i]*x_p[0]*xb[i];
-                            sumqx[2] += weight[i]*x_m[0]*xb[i];
-                            sumqx[3] += weight[i]*x_m[0]*xb[i];
-                            sumq2[0] += weight[i]*x_p[0]*x_p[0];
-                            sumq2[1] += weight[i]*x_p[0]*x_p[0];
-                            sumq2[2] += weight[i]*x_m[0]*x_m[0];
-                            sumq2[3] += weight[i]*x_m[0]*x_m[0];
-                        } else {
-                            sumqx[0] += weight[i]*x_p[0]*xb[i];
-                            sumqx[2] += weight[i]*x_p[0]*xb[i];
-                            sumqx[1] += weight[i]*x_m[0]*xb[i];
-                            sumqx[3] += weight[i]*x_m[0]*xb[i];
-                            sumq2[0] += weight[i]*x_p[0]*x_p[0];
-                            sumq2[2] += weight[i]*x_p[0]*x_p[0];
-                            sumq2[1] += weight[i]*x_m[0]*x_m[0];
-                            sumq2[3] += weight[i]*x_m[0]*x_m[0];
+            // prefix sums are kept per half of the block because each half can use a different sign (x_p or x_m)
+            // since v[0]-v[1] = v[1]-v[2] = -1 for both x_p and x_m, the 3-group sum for a split collapses to T*v[2] - px[i1] - px[i2]
+            {
+                float px[2][IQ1M_BLOCK_SIZE+1];
+                float pw[2][IQ1M_BLOCK_SIZE+1];
+                px[0][0] = px[1][0] = 0;
+                pw[0][0] = pw[1][0] = 0;
+                for (int j = 0; j < block_size; ++j) {
+                    const int i = idx[2*j];
+                    const int h = i < block_size/2 ? 0 : 1;
+                    px[h][j+1]   = px[h][j] + weight[i]*xb[i];
+                    px[1-h][j+1] = px[1-h][j];
+                    pw[h][j+1]   = pw[h][j] + weight[i];
+                    pw[1-h][j+1] = pw[1-h][j];
+                }
+                const float txs[2] = {px[0][block_size], px[1][block_size]}; // total weight*x per half
+                const float tws[2] = {pw[0][block_size], pw[1][block_size]}; // total weight per half
+                const float p2   = x_p[2], m2 = x_m[2];
+                const float cp1  = x_p[0]*x_p[0] - x_p[1]*x_p[1];
+                const float cp2  = x_p[1]*x_p[1] - x_p[2]*x_p[2];
+                const float cm1  = x_m[0]*x_m[0] - x_m[1]*x_m[1];
+                const float cm2  = x_m[1]*x_m[1] - x_m[2]*x_m[2];
+                for (int i1 = 0; i1 <= block_size; ++i1) {
+                    for (int i2 = i1; i2 <= block_size; ++i2) {
+                        float qx_p[2], qx_m[2], q2_p[2], q2_m[2];
+                        for (int h = 0; h < 2; ++h) {
+                            const float sx = px[h][i1] + px[h][i2];
+                            qx_p[h] = txs[h]*p2 - sx;
+                            qx_m[h] = txs[h]*m2 - sx;
+                            q2_p[h] = tws[h]*p2*p2 + pw[h][i1]*cp1 + pw[h][i2]*cp2;
+                            q2_m[h] = tws[h]*m2*m2 + pw[h][i1]*cm1 + pw[h][i2]*cm2;
                         }
-                    }
-                    for (int j = i1; j < i2; ++j) {
-                        int i = idx[2*j];
-                        if (i < block_size/2) {
-                            sumqx[0] += weight[i]*x_p[1]*xb[i];
-                            sumqx[1] += weight[i]*x_p[1]*xb[i];
-                            sumqx[2] += weight[i]*x_m[1]*xb[i];
-                            sumqx[3] += weight[i]*x_m[1]*xb[i];
-                            sumq2[0] += weight[i]*x_p[1]*x_p[1];
-                            sumq2[1] += weight[i]*x_p[1]*x_p[1];
-                            sumq2[2] += weight[i]*x_m[1]*x_m[1];
-                            sumq2[3] += weight[i]*x_m[1]*x_m[1];
-                        } else {
-                            sumqx[0] += weight[i]*x_p[1]*xb[i];
-                            sumqx[2] += weight[i]*x_p[1]*xb[i];
-                            sumqx[1] += weight[i]*x_m[1]*xb[i];
-                            sumqx[3] += weight[i]*x_m[1]*xb[i];
-                            sumq2[0] += weight[i]*x_p[1]*x_p[1];
-                            sumq2[2] += weight[i]*x_p[1]*x_p[1];
-                            sumq2[1] += weight[i]*x_m[1]*x_m[1];
-                            sumq2[3] += weight[i]*x_m[1]*x_m[1];
-                        }
-                    }
-                    for (int j = i2; j < block_size; ++j) {
-                        int i = idx[2*j];
-                        if (i < block_size/2) {
-                            sumqx[0] += weight[i]*x_p[2]*xb[i];
-                            sumqx[1] += weight[i]*x_p[2]*xb[i];
-                            sumqx[2] += weight[i]*x_m[2]*xb[i];
-                            sumqx[3] += weight[i]*x_m[2]*xb[i];
-                            sumq2[0] += weight[i]*x_p[2]*x_p[2];
-                            sumq2[1] += weight[i]*x_p[2]*x_p[2];
-                            sumq2[2] += weight[i]*x_m[2]*x_m[2];
-                            sumq2[3] += weight[i]*x_m[2]*x_m[2];
-                        } else {
-                            sumqx[0] += weight[i]*x_p[2]*xb[i];
-                            sumqx[2] += weight[i]*x_p[2]*xb[i];
-                            sumqx[1] += weight[i]*x_m[2]*xb[i];
-                            sumqx[3] += weight[i]*x_m[2]*xb[i];
-                            sumq2[0] += weight[i]*x_p[2]*x_p[2];
-                            sumq2[2] += weight[i]*x_p[2]*x_p[2];
-                            sumq2[1] += weight[i]*x_m[2]*x_m[2];
-                            sumq2[3] += weight[i]*x_m[2]*x_m[2];
-                        }
-                    }
-                    for (int k = 0; k < 4; ++k) {
-                        if (sumq2[k] > 0 && sumqx[k]*sumqx[k] > best_score*sumq2[k]) {
-                            scale = sumqx[k]/sumq2[k]; best_score = scale*sumqx[k];
-                            besti1 = i1; besti2 = i2; best_k = k;
+                        sumqx[0] = qx_p[0] + qx_p[1];
+                        sumqx[1] = qx_p[0] + qx_m[1];
+                        sumqx[2] = qx_m[0] + qx_p[1];
+                        sumqx[3] = qx_m[0] + qx_m[1];
+                        sumq2[0] = q2_p[0] + q2_p[1];
+                        sumq2[1] = q2_p[0] + q2_m[1];
+                        sumq2[2] = q2_m[0] + q2_p[1];
+                        sumq2[3] = q2_m[0] + q2_m[1];
+                        for (int k = 0; k < 4; ++k) {
+                            if (sumq2[k] > 0 && sumqx[k]*sumqx[k] > best_score*sumq2[k]) {
+                                scale = sumqx[k]/sumq2[k]; best_score = scale*sumqx[k];
+                                besti1 = i1; besti2 = i2; best_k = k;
+                            }
                         }
                     }
                 }
