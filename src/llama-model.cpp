@@ -1180,6 +1180,56 @@ struct llama_model::impl {
     std::vector<float> tensor_split_owned;
 };
 
+bool llama_act_policy::apply(ggml_tensor * res) const {
+    if (!res || !res->src[0]) {
+        return false;
+    }
+
+    const auto it = prec_src1.find(res->src[0]);
+    if (it == prec_src1.end()) {
+        return false;
+    }
+
+    return ggml_prec_set_src(res, it->second, 1);
+}
+
+static void load_act_policy(llama_model_loader & ml, const llama_model & model, llama_act_policy & policy) {
+    std::vector<std::string> tensor_names;
+    if (!ml.get_arr(LLM_KV_GENERAL_TENSOR_EXTRA_NAME, tensor_names, false)) {
+        return;
+    }
+
+    const gguf_context * ctx = ml.metadata;
+    const std::string key = ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_PREC_A4);
+    const int kid = gguf_find_key(ctx, key.c_str());
+    if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY || gguf_get_arr_type(ctx, kid) != GGUF_TYPE_BOOL) {
+        throw std::runtime_error(format("%s must be a bool array", key.c_str()));
+    }
+
+    const size_t n_values = gguf_get_arr_n(ctx, kid);
+    if (n_values != tensor_names.size()) {
+        throw std::runtime_error(format(
+            "%s tensor/value length mismatch (%zu vs %zu)",
+            key.c_str(), tensor_names.size(), n_values));
+    }
+
+    // tensors that can not use 4-bit activations, keep src1 at higher precision
+    const int8_t * values = (const int8_t *) gguf_get_arr_data(ctx, kid);
+    std::unordered_set<std::string> want;
+    for (size_t i = 0; i < n_values; ++i) {
+        if (values[i] == 0) {
+            want.insert(tensor_names[i]);
+        }
+    }
+
+    // resolve names to tensor pointers
+    for (const auto & [name, w] : model.tensors_by_name) {
+        if (want.count(name)) {
+            policy.prec_src1.emplace(w, GGML_PREC_Q8);
+        }
+    }
+}
+
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
     if (params.tensor_split != nullptr) {
         // llama_model_params stores tensor_split as a borrowed pointer, but the model
@@ -1703,6 +1753,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
     }
+
+    // per-tensor activation precision policy
+    load_act_policy(ml, *this, act_policy);
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());

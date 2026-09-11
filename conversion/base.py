@@ -170,6 +170,9 @@ class ModelBase:
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
         self._is_nvfp4 = False
         self._is_mxfp4 = False
+        self._nvfp4_global_algo: str | None = None # checkpoint-wide NVFP4 quant_algo
+        self._nvfp4_layer_algo: dict[str, str | None] = {} # per-layer quant_algo, keyed by HF module path
+        self._prec_a4: dict[str, bool] = {} # gguf tensor name -> can use 4-bit (A4) activations
         self._fp8_as_q8 = fp8_as_q8
         self._fp8_dequantized: set[str] = set()
 
@@ -664,6 +667,18 @@ class ModelBase:
                 if bias_types:
                     self._fusable_qkv_bias_layers.add(bid)
 
+    def _tag_prec_a4(self, hf_name: str, gguf_name: str) -> None:
+        # W4A16_NVFP4 should not use 4-bit activations
+        name = hf_name.removesuffix(".weight").removesuffix(".bias")
+        algo = self._nvfp4_global_algo
+        while name:
+            if name in self._nvfp4_layer_algo:
+                algo = self._nvfp4_layer_algo[name]
+                break
+            name = name.rpartition(".")[0]
+        if algo == "W4A16_NVFP4":
+            self._prec_a4[gguf_name] = False
+
     def set_gguf_parameters(self):
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
@@ -807,6 +822,7 @@ class ModelBase:
         raw, shape = self._nvfp4_pack(weight, scale)
         logger.info(f"Repacked {new_name} with shape {shape} and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, raw, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+        self._tag_prec_a4(name, new_name)
 
         self._write_scale_tensor(new_name.replace(".weight", ".scale"), scale2)
         self._write_scale_tensor(new_name.replace(".weight", ".input_scale"), input_scale)
@@ -899,6 +915,7 @@ class ModelBase:
         new_name = self.map_tensor_name(merged_name)
         logger.info(f"Repacked {new_name} with shape [{len(experts)}, {shape[0]}, {shape[1]}] and quantization NVFP4")
         self.gguf_writer.add_tensor(new_name, merged, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+        self._tag_prec_a4(merged_name, new_name)
 
         scales.sort(key=lambda x: x[0])
         self._write_scales_tensor(new_name.replace(".weight", ".scale"), [s[1] for s in scales])
@@ -941,6 +958,9 @@ class ModelBase:
             and bool(quant_groups)
             and all(g.get("format") == "nvfp4-pack-quantized" for g in quant_groups.values() if isinstance(g, dict))
         )
+
+        self._nvfp4_global_algo = quant_algo
+
         if quant_algo != "NVFP4":
             if nvfp4_compressed_tensors:
                 quant_algo = "NVFP4"
@@ -949,6 +969,22 @@ class ModelBase:
 
         self._is_nvfp4 = quant_algo in ("NVFP4", "W4A16_NVFP4")
         self._is_mxfp4 = quant_method == "mxfp4"
+
+        # Per-tensor NVFP4 precision.
+        self._nvfp4_layer_algo = {}
+        if quant_layers:
+            # store all possible module paths and assert if a quantized layer is not in the model
+            modules: set[str] = set()
+            for name in self.model_tensors:
+                while name := name.rpartition(".")[0]:
+                    modules.add(name)
+
+            for layer_name, entry in quant_layers.items():
+                if not isinstance(entry, dict):
+                    continue
+                if titem := self.filter_tensors((layer_name, lambda: torch.empty(0))):
+                    assert titem[0] in modules, f"quantized_layers entry {layer_name!r} is not in the model tensors"
+                    self._nvfp4_layer_algo[titem[0]] = entry.get("quant_algo")
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
@@ -1154,6 +1190,12 @@ class ModelBase:
 
         logger.info("Set model quantization version")
         self.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
+
+        if self._prec_a4:
+            names = sorted(self._prec_a4.keys())
+            values = [self._prec_a4[n] for n in names]
+            logger.info(f"Set prec_a4 metadata for {len(names)} tensor(s)")
+            self.gguf_writer.add_tensor_extra_prec_a4(names, values)
 
     def write_vocab(self):
         raise NotImplementedError("write_vocab() must be implemented in subclasses")
