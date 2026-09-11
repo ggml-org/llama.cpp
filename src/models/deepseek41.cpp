@@ -24,9 +24,14 @@
 //    These two facts explain each other, and the file ships no output_hc_* tensors.
 // 3. The engram tables: n-gram keyed lookups added into the stream at a few layers.
 //
-// TODO: the sparse attention is still V4's and does not match this model. V4.1 compresses KV on
-// four source layers and shares one stream, derives index keys from that latent instead of from a
-// second compressor, and filters with a two-level candidate mask. See build_attention() below.
+// The sparse attention also differs. V4 compresses KV on every layer at one of two fixed ratios;
+// V4.1 compresses on a few source layers and the layers after each source read the same rows, and
+// it derives index keys from that shared latent rather than from a second compressor. See
+// build_attention_v41().
+//
+// Not implemented: the two level candidate mask. Measured against the reference, it selects every
+// block until the compressed length passes candidate_topk_blocks * candidate_block_size, so it
+// changes nothing below that and the context is capped there instead.
 
 // mean over the hyper-connection copies; deepseek4.cpp keeps its own copy of this
 static ggml_tensor * dsv41_hc_mean(ggml_context * ctx, ggml_tensor * x) {
@@ -248,15 +253,6 @@ void llama_model_deepseek41::load_arch_tensors(llama_model_loader & ml) {
                                             i, hparams.dsv4_compress_ratios[i]));
         }
     }
-
-    // TODO: remove once the graph reads the compressed stream. Until then the attention here is
-    // V4's, which recognises neither of this model's ratios and would silently drop the long
-    // range half of attention while still producing fluent text. Refuse rather than mislead.
-    for (int i = 0; i < n_layer; ++i) {
-        if (hparams.dsv41_kv_source[i] >= 0) {
-            throw std::runtime_error("DeepSeek-V4.1 sparse attention is not implemented yet");
-        }
-    }
 }
 
 std::unique_ptr<llm_graph_context> llama_model_deepseek41::build_arch_graph(const llm_graph_params & params) const {
@@ -431,6 +427,372 @@ ggml_tensor * llama_model_deepseek41::graph::build_engram(
     return ggml_add(ctx0, x, ggml_mul(ctx0, v, gate));
 }
 
+// Rope settings for one layer. A layer that reads a compressed stream rotates with the
+// compressor's base and YaRN; a plain sliding window layer rotates with the model's.
+struct dsv41_rope_cfg {
+    float   base;
+    float   scale;
+    float   ext_factor;
+    float   attn_factor;
+    float   beta_fast;
+    float   beta_slow;
+    int32_t n_ctx_orig;
+};
+
+dsv41_rope_cfg llama_model_deepseek41::graph::rope_cfg(int il) const {
+    if (hparams.dsv4_compress_ratios[il] == 0) {
+        return { freq_base, 1.0f, 0.0f, dsv4_rope_attn_factor(1.0f, 0.0f), 0.0f, 0.0f, 0 };
+    }
+
+    return {
+        hparams.dsv4_compress_rope_base, freq_scale, ext_factor,
+        dsv4_rope_attn_factor(freq_scale, ext_factor), beta_fast, beta_slow, n_ctx_orig,
+    };
+}
+
+// Undo the rotation the query carried into attention, then the grouped output projection. wo_a is
+// block diagonal over groups, each projecting only its own heads, hence a batched mul_mat.
+ggml_tensor * llama_model_deepseek41::graph::build_attention_tail(
+        const llama_model & model,
+        ggml_tensor * out,
+        ggml_tensor * inp_pos,
+        int64_t nt,
+        int il) const {
+    const auto & layer = model.layers[il];
+
+    const int64_t n_embd_head      = hparams.n_embd_head_k();
+    const int64_t n_embd_head_rope = hparams.n_rot();
+    const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
+    const int64_t n_groups         = hparams.dsv4_o_group_count;
+    const int64_t o_lora_rank      = hparams.dsv4_o_lora_rank;
+    const int64_t o_group_dim      = (n_head/n_groups)*n_embd_head;
+
+    const dsv41_rope_cfg rc = rope_cfg(il);
+
+    out = ggml_reshape_3d(ctx0, out, n_embd_head, n_head, nt);
+    out = ggml_rope_ext_back(ctx0, out, inp_pos, nullptr, n_embd_head_rope, rope_type, rc.n_ctx_orig,
+            rc.base, rc.scale, rc.ext_factor, rc.attn_factor, rc.beta_fast, rc.beta_slow);
+    out = ggml_rope_set_offset(out, n_embd_head_nope);
+    cb(out, "attn_derope", il);
+
+    out = ggml_reshape_3d(ctx0, out, o_group_dim, n_groups, nt);
+    out = ggml_permute(ctx0, out, 0, 2, 1, 3);
+
+    ggml_tensor * oa = ggml_mul_mat(ctx0, layer.wo_a, out);
+    cb(oa, "attn_wo_a", il);
+
+    oa = ggml_permute(ctx0, oa, 0, 2, 1, 3);
+    oa = ggml_cont_2d(ctx0, oa, o_lora_rank*n_groups, nt);
+
+    out = build_lora_mm(layer.wo_b, oa);
+    cb(out, "attn_out", il);
+
+    return out;
+}
+
+// Score this layer's queries against the shared index keys and keep the best compressed positions.
+// The keys were published by an earlier layer, so this only builds the query side.
+ggml_tensor * llama_model_deepseek41::graph::build_indexer_top_k(
+        const llama_model & model,
+        llm_graph_input_dsv4 * inp_dsv4,
+        const llm_graph_input_dsv4::comp_input & inp_comp,
+        ggml_tensor * qr,
+        ggml_tensor * cur,
+        ggml_tensor * inp_pos,
+        int il) const {
+    const auto & layer = model.layers[il];
+
+    const int64_t n_idx_head      = hparams.indexer_n_head;
+    const int64_t n_idx_head_dim  = hparams.indexer_head_size;
+    const int64_t n_idx_head_rope = hparams.n_rot();
+    const int64_t n_idx_head_nope = n_idx_head_dim - n_idx_head_rope;
+    const int64_t nt              = cur->ne[1];
+
+    GGML_ASSERT(inp_comp.kq_mask);
+    GGML_ASSERT(n_idx_head_dim >= n_idx_head_rope);
+
+    ggml_tensor * idx_q = build_lora_mm(layer.indexer_attn_q_b, qr);
+    idx_q = ggml_reshape_3d(ctx0, idx_q, n_idx_head_dim, n_idx_head, nt);
+    idx_q = ggml_rope_ext(ctx0, idx_q, inp_pos, nullptr, n_idx_head_rope, rope_type, n_ctx_orig,
+            hparams.dsv4_compress_rope_base, freq_scale, ext_factor,
+            dsv4_rope_attn_factor(freq_scale, ext_factor), beta_fast, beta_slow);
+    idx_q = ggml_rope_set_offset(idx_q, n_idx_head_nope);
+    cb(idx_q, "idx_q", il);
+
+    ggml_tensor * idx_k_rot = inp_dsv4->get_lid().k_rot;
+    if (idx_k_rot) {
+        idx_q = llama_mul_mat_hadamard(ctx0, idx_q, idx_k_rot);
+        cb(idx_q, "idx_q_rot", il);
+    }
+
+    // one weight per head, scaled so the score matches the reference's
+    // softmax_scale * n_heads**-0.5
+    ggml_tensor * idx_w = build_lora_mm(layer.indexer_proj, cur);
+    idx_w = ggml_scale(ctx0, idx_w, 1.0f/sqrtf(float(n_idx_head_dim*n_idx_head)));
+    cb(idx_w, "idx_weights", il);
+
+    ggml_tensor * idx_k = inp_dsv4->mctx->get_lid()->get_k(ctx0, il);
+
+    const int64_t n_comp = inp_comp.kq_mask->ne[0];
+    GGML_ASSERT(n_comp > 0);
+    GGML_ASSERT(n_comp <= idx_k->ne[2]);
+
+    idx_k = ggml_view_4d(ctx0, idx_k,
+            idx_k->ne[0], idx_k->ne[1], n_comp, idx_k->ne[3],
+            idx_k->nb[1], idx_k->nb[2], idx_k->nb[3], 0);
+    cb(idx_k, "idx_k", il);
+
+    const int64_t n_stream = idx_k->ne[3];
+    idx_q = ggml_view_4d(ctx0, idx_q,
+            idx_q->ne[0], idx_q->ne[1], idx_q->ne[2]/n_stream, n_stream,
+            idx_q->nb[1], idx_q->nb[2], idx_q->nb[3]/n_stream, 0);
+    idx_w = ggml_view_4d(ctx0, idx_w,
+            idx_w->ne[0], idx_w->ne[1]/n_stream, idx_w->ne[2], n_stream,
+            idx_w->nb[1], idx_w->nb[2]/n_stream, idx_w->nb[3]/n_stream, 0);
+
+    idx_q = ggml_permute(ctx0, idx_q, 0, 2, 1, 3);
+    idx_k = ggml_permute(ctx0, idx_k, 0, 2, 1, 3);
+
+    ggml_tensor * score = ggml_mul_mat(ctx0, idx_k, idx_q);
+    score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3));
+
+    score = ggml_relu(ctx0, score);
+    score = ggml_mul(ctx0, score, idx_w);
+    score = ggml_sum_rows(ctx0, score);
+    score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3));
+
+    // the attention mask is F16 when flash attention is on, and this score is F32. the mask only
+    // ever holds 0 or -inf, so widening it is exact.
+    ggml_tensor * mask = inp_comp.kq_mask;
+    if (mask->type != score->type) {
+        mask = ggml_cast(ctx0, mask, score->type);
+    }
+
+    score = ggml_add(ctx0, score, mask);
+    cb(score, "idx_score", il);
+
+    const uint32_t n_top_k = score->ne[0] < hparams.indexer_top_k ? score->ne[0] : hparams.indexer_top_k;
+
+    ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, score, n_top_k));
+    cb(top_k, "idx_top_k", il);
+
+    return top_k;
+}
+
+// DeepSeek-V4.1 attention: a sliding window of raw KV, plus, where the layer uses one, the
+// compressed positions the indexer picked, concatenated into a single masked attention.
+//
+// Only a source layer compresses. The layers after it read the same rows, which the KV cache
+// hands them through the reuse callback, so a reader builds no compressor at all.
+ggml_tensor * llama_model_deepseek41::graph::build_attention_v41(
+        const llama_model & model,
+        llm_graph_input_dsv4 * inp_dsv4,
+        ggml_tensor * cur,
+        ggml_tensor * inp_pos,
+        int il) const {
+    const auto & layer = model.layers[il];
+    llm_graph_input_dsv4_raw * inp_attn = inp_dsv4->get_raw();
+
+    const int64_t n_embd_head      = hparams.n_embd_head_k();
+    const int64_t n_embd_head_rope = hparams.n_rot();
+    const int64_t nt               = cur->ne[1];
+    const int64_t ratio            = hparams.dsv4_compress_ratios[il];
+
+    GGML_ASSERT(n_embd_head == n_embd_head_v);
+    GGML_ASSERT(n_head % hparams.dsv4_o_group_count == 0);
+
+    const dsv41_rope_cfg rc = rope_cfg(il);
+
+    // Query. V4 normalizes again after wq_b; V4.1 normalizes only the low rank part.
+    ggml_tensor * qr = build_lora_mm(layer.wq_a, cur);
+    qr = build_norm(qr, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
+    cb(qr, "qr", il);
+
+    ggml_tensor * q = build_lora_mm(layer.wq_b, qr);
+    q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head, nt);
+    q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, n_embd_head_rope, rope_type, rc.n_ctx_orig,
+            rc.base, rc.scale, rc.ext_factor, rc.attn_factor, rc.beta_fast, rc.beta_slow);
+    q = ggml_rope_set_offset(q, n_embd_head - n_embd_head_rope);
+    cb(q, "q", il);
+
+    // the sliding window KV, which every layer keeps for itself
+    ggml_tensor * kv = build_lora_mm(layer.wkv, cur);
+    kv = build_norm(kv, layer.attn_kv_norm, nullptr, LLM_NORM_RMS, il);
+    kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, nt);
+    kv = ggml_rope_ext(ctx0, kv, inp_pos, nullptr, n_embd_head_rope, rope_type, rc.n_ctx_orig,
+            rc.base, rc.scale, rc.ext_factor, rc.attn_factor, rc.beta_fast, rc.beta_slow);
+    kv = ggml_rope_set_offset(kv, n_embd_head - n_embd_head_rope);
+    cb(kv, "kv", il);
+
+    const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
+
+    ggml_tensor * out = nullptr;
+
+    if (ratio == 0) {
+        // no compressed stream, so this layer sees only its own window
+        out = build_raw_attention(inp_attn, q, kv, layer.attn_sinks, kq_scale, il);
+
+        return build_attention_tail(model, out, inp_pos, nt, il);
+    }
+
+    // The plan slot follows the ratio, since a plan encodes how many tokens make a row. The rows
+    // themselves always live in the CSA cache, and the index keys in the indexer cache, whichever
+    // plan produced them.
+    const bool use_csa = (uint32_t) ratio == inp_dsv4->mctx->get_csa_state()->get_ratio();
+
+    const auto & inp_comp = use_csa ? inp_dsv4->get_csa() : inp_dsv4->get_hca();
+
+    const llama_dsv4_comp_state * comp_state = use_csa
+        ? inp_dsv4->mctx->get_csa_state()
+        : inp_dsv4->mctx->get_hca_state();
+
+    GGML_ASSERT(inp_comp.kq_mask && "a compressed layer needs a plan for its ratio");
+
+    if (hparams.dsv41_is_kv_source(il) && inp_comp.state_pos) {
+        ggml_tensor * state_kv = build_lora_mm(layer.attn_comp_wkv, cur);
+        cb(state_kv, "comp_state_kv", il);
+
+        // At ratio 1 there is nothing to pool and the file carries no gate. The softmax below
+        // then runs over a single element and returns 1.0 whatever the score holds, so the
+        // values reach the cache unweighted, which is what a plain projection means.
+        ggml_tensor * state_score = layer.attn_comp_wgate
+            ? build_lora_mm(layer.attn_comp_wgate, cur)
+            : state_kv;
+        cb(state_score, "comp_state_score", il);
+
+        const dsv4_state_tensors restored = dsv4_build_state_restore(ctx0, inp_comp, comp_state, il);
+
+        ggml_tensor * base_kv = dsv4_view_2d(
+                ctx0, restored.kv, restored.kv->ne[0], comp_state->get_n_rows(), 0);
+        ggml_tensor * base_score = dsv4_view_2d(
+                ctx0, restored.score, restored.score->ne[0], comp_state->get_n_rows(), 0);
+
+        ggml_tensor * source_kv    = ggml_concat(ctx0, base_kv,    state_kv,    1);
+        ggml_tensor * source_score = ggml_concat(ctx0, base_score, state_score, 1);
+
+        // the indexer reads the latent before it is rotated, so ask for both forms at once
+        ggml_tensor * latent_pre = nullptr;
+
+        ggml_tensor * latent = build_hca_compressed_kv_from_state(
+                source_kv,
+                source_score,
+                inp_comp.state_read_idxs,
+                inp_comp.state_write_pos,
+                layer.attn_comp_norm,
+                ratio,
+                n_embd_head,
+                "comp_kv",
+                il,
+                &latent_pre);
+
+        if (hparams.dsv41_owns_index_k(il)) {
+            const int64_t n_idx_head_dim  = hparams.indexer_head_size;
+            const int64_t n_idx_head_rope = hparams.n_rot();
+
+            ggml_tensor * idx_k = build_lora_mm(layer.indexer_attn_k, latent_pre);
+            idx_k = build_norm(idx_k, layer.indexer_k_norm, nullptr, LLM_NORM_RMS, il);
+            idx_k = ggml_rope_ext(ctx0, idx_k, inp_comp.state_write_pos, nullptr, n_idx_head_rope,
+                    rope_type, n_ctx_orig, hparams.dsv4_compress_rope_base, freq_scale, ext_factor,
+                    dsv4_rope_attn_factor(freq_scale, ext_factor), beta_fast, beta_slow);
+            idx_k = ggml_rope_set_offset(idx_k, n_idx_head_dim - n_idx_head_rope);
+            cb(idx_k, "idx_k_new", il);
+
+            if (inp_dsv4->get_lid().k_rot) {
+                idx_k = llama_mul_mat_hadamard(ctx0, idx_k, inp_dsv4->get_lid().k_rot);
+            }
+
+            ggml_build_forward_expand(gf, inp_dsv4->mctx->get_lid()->cpy_k(
+                        ctx0, idx_k, inp_comp.state_write_idxs, il));
+        }
+
+        if (inp_dsv4->get_csa().k_rot) {
+            latent = llama_mul_mat_hadamard(ctx0, latent, inp_dsv4->get_csa().k_rot);
+            cb(latent, "comp_kv_rot", il);
+        }
+
+        ggml_build_forward_expand(gf, inp_dsv4->mctx->get_csa()->cpy_k(
+                    ctx0, latent, inp_comp.state_write_idxs, il));
+
+        // carry whatever did not complete a row into the next ubatch
+        ggml_tensor * snapshot_kv    = ggml_concat(ctx0, restored.kv,    state_kv,    1);
+        ggml_tensor * snapshot_score = ggml_concat(ctx0, restored.score, state_score, 1);
+
+        const dsv4_state_tensors snapshot = dsv4_build_state_snapshot(
+                ctx0, inp_comp, comp_state, snapshot_kv, snapshot_score, il);
+        if (snapshot.kv != nullptr) {
+            ggml_build_forward_expand(gf, snapshot.kv);
+        }
+        if (snapshot.score != nullptr) {
+            ggml_build_forward_expand(gf, snapshot.score);
+        }
+
+        ggml_tensor * persist_kv = ggml_get_rows(ctx0, state_kv, inp_comp.state_persist_src_idxs);
+        ggml_tensor * persist_score = ggml_get_rows(ctx0, state_score, inp_comp.state_persist_src_idxs);
+
+        ggml_build_forward_expand(gf, comp_state->cpy_kv(
+                    ctx0, persist_kv, inp_comp.state_persist_dst_idxs, il));
+        ggml_build_forward_expand(gf, comp_state->cpy_score(
+                    ctx0, persist_score, inp_comp.state_persist_dst_idxs, il));
+    }
+
+    // an index source picks the positions; the layers in between reuse what it picked
+    ggml_tensor * top_k = nullptr;
+    if (hparams.dsv41_is_index_source(il)) {
+        top_k = build_indexer_top_k(model, inp_dsv4, inp_comp, qr, cur, inp_pos, il);
+    }
+
+    ggml_tensor * k_rot = inp_attn->self_k_rot;
+    if (k_rot) {
+        q  = llama_mul_mat_hadamard(ctx0, q, k_rot);
+        kv = llama_mul_mat_hadamard(ctx0, kv, k_rot);
+    }
+
+    ggml_build_forward_expand(gf, q);
+    ggml_build_forward_expand(gf, kv);
+
+    const llama_kv_cache_dsv4_raw_context * mctx_raw = inp_attn->mctx;
+
+    ggml_build_forward_expand(gf, mctx_raw->cpy_k(ctx0, kv, inp_attn->get_k_idxs(), il));
+
+    ggml_tensor * raw_k = mctx_raw->get_k(ctx0, il);
+    cb(raw_k, "raw_k", il);
+
+    ggml_tensor * comp_k = inp_dsv4->mctx->get_csa()->get_k(ctx0, il);
+
+    const int64_t n_comp = inp_comp.kq_mask->ne[0];
+    GGML_ASSERT(n_comp > 0);
+    GGML_ASSERT(n_comp <= comp_k->ne[2]);
+
+    comp_k = ggml_view_4d(ctx0, comp_k,
+            comp_k->ne[0], comp_k->ne[1], n_comp, comp_k->ne[3],
+            comp_k->nb[1], comp_k->nb[2], comp_k->nb[3], 0);
+    cb(comp_k, "comp_k", il);
+
+    ggml_tensor * k_all = ggml_concat(ctx0, raw_k, comp_k, 2);
+    cb(k_all, "k_all", il);
+
+    ggml_tensor * raw_mask  = inp_attn->get_kq_mask();
+    ggml_tensor * comp_mask = top_k
+        ? build_top_k_mask(inp_comp.kq_mask, top_k, "comp_top_k_mask", il)
+        : inp_comp.kq_mask;
+
+    ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, comp_mask, 0);
+    cb(kq_mask, "kq_mask", il);
+
+    const int64_t n_kv_max = top_k
+        ? std::min<int64_t>(raw_mask->ne[0], hparams.n_swa) + top_k->ne[0]
+        : 0;
+
+    out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks,
+            nullptr, n_kv_max, kq_scale, il);
+    if (k_rot) {
+        out = llama_mul_mat_hadamard(ctx0, out, k_rot);
+    }
+    cb(out, "attn_out_raw", il);
+
+    return build_attention_tail(model, out, inp_pos, nt, il);
+}
+
 llama_model_deepseek41::graph::graph(const llama_model & model, const llm_graph_params & params) :
     llama_model_deepseek4::graph(params) {
     const auto & pmodel = static_cast<const llama_model_deepseek41 &>(model);
@@ -487,7 +849,7 @@ llama_model_deepseek41::graph::graph(const llama_model & model, const llm_graph_
         cur = build_norm(cur, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        cur = build_attention(model, inp_dsv4, cur, inp_pos, il);
+        cur = build_attention_v41(model, inp_dsv4, cur, inp_pos, il);
 
         inpL = build_hc_post(cur, residual, post, comb, il);
         cb(inpL, "hc_attn_post", il);

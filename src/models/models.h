@@ -10,6 +10,7 @@
 
 class llama_memory_hybrid_idx_context;
 class llama_dsv4_comp_state;
+struct dsv41_rope_cfg;
 
 // The compressor state of a DeepSeek-V4 style compressed stream, as the graph sees it.
 struct dsv4_state_tensors {
@@ -1405,6 +1406,32 @@ struct llama_model_deepseek41 : public llama_model_deepseek4 {
                 const llama_model & model,
                 ggml_tensor * x,
                 ggml_tensor * emb,
+                int il) const;
+
+        struct dsv41_rope_cfg rope_cfg(int il) const;
+
+        ggml_tensor * build_attention_tail(
+                const llama_model & model,
+                ggml_tensor * out,
+                ggml_tensor * inp_pos,
+                int64_t nt,
+                int il) const;
+
+        // which compressed positions this layer's queries attend to
+        ggml_tensor * build_indexer_top_k(
+                const llama_model & model,
+                llm_graph_input_dsv4 * inp_dsv4,
+                const llm_graph_input_dsv4::comp_input & inp_comp,
+                ggml_tensor * qr,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                int il) const;
+
+        ggml_tensor * build_attention_v41(
+                const llama_model & model,
+                llm_graph_input_dsv4 * inp_dsv4,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
                 int il) const;
     };
 

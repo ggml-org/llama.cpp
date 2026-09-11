@@ -544,7 +544,10 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         }
     }
 
-    if (ratio == DSV4_CSA_RATIO && !plan.state_pos.empty()) {
+    // The overlap compressor reads a fixed window per block, so every sequence has to write the
+    // same number of blocks or the graph shape moves between ubatches. For DeepSeek-V4 this is
+    // exactly the CSA and indexer streams.
+    if (overlap && !plan.state_pos.empty()) {
         assert(kv_size > 0);
 
         // Pad each stream to the reserve plan's block count.
@@ -599,7 +602,10 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         }
     }
 
-    if (ratio == DSV4_HCA_RATIO && !plan.state_pos.empty() && plan.state_write_idxs.empty()) {
+    // A non-overlap stream completes a block only every `ratio` tokens, so a decode step often
+    // completes none. For DeepSeek-V4 this is the HCA stream; V4.1 pools without overlap on both
+    // of its streams and reaches this at ratio 2 on every other token.
+    if (!overlap && !plan.state_pos.empty() && plan.state_write_idxs.empty()) {
         assert(kv_size > 0);
         // the last slot must not be live, or the dummy write would corrupt it;
         // a full stream implies a completed block, which implies real writes
