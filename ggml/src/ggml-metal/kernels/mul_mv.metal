@@ -1043,6 +1043,7 @@ template [[host_name("kernel_mul_mv_f16_f16")]]   kernel mul_mv_t_t kernel_mul_m
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_mul_mv_bf16_f32")]]  kernel mul_mv_t_t kernel_mul_mv_t_t<bfloat, float>;
 template [[host_name("kernel_mul_mv_bf16_bf16")]] kernel mul_mv_t_t kernel_mul_mv_t_t<bfloat, bfloat>;
+template [[host_name("kernel_mul_mv_f32_bf16")]]  kernel mul_mv_t_t kernel_mul_mv_t_t<float,  bfloat>;
 #endif
 
 template<typename T0, typename T04, typename T1, typename T14, short NR0, typename args_t>
@@ -1167,6 +1168,7 @@ template [[host_name("kernel_mul_mv_f16_f16_4")]]   kernel mul_mv_t_t_4 kernel_m
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_mul_mv_bf16_f32_4")]]  kernel mul_mv_t_t_4 kernel_mul_mv_t_t_4<bfloat, bfloat4, float,  float4>;
 template [[host_name("kernel_mul_mv_bf16_bf16_4")]] kernel mul_mv_t_t_4 kernel_mul_mv_t_t_4<bfloat, bfloat4, bfloat, bfloat4>;
+template [[host_name("kernel_mul_mv_f32_bf16_4")]]  kernel mul_mv_t_t_4 kernel_mul_mv_t_t_4<float,  float4,  bfloat, bfloat4>;
 #endif
 
 template<typename T0, typename T1, typename args_t>
@@ -1232,6 +1234,7 @@ template [[host_name("kernel_mul_mv_f16_f16_short")]]  kernel mul_mv_t_t_short_t
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_mul_mv_bf16_f32_short")]]  kernel mul_mv_t_t_short_t kernel_mul_mv_t_t_short<bfloat, float>;
 template [[host_name("kernel_mul_mv_bf16_bf16_short")]] kernel mul_mv_t_t_short_t kernel_mul_mv_t_t_short<bfloat, bfloat>;
+template [[host_name("kernel_mul_mv_f32_bf16_short")]]  kernel mul_mv_t_t_short_t kernel_mul_mv_t_t_short<float,  bfloat>;
 #endif
 
 template<int nr0, typename args_t>
