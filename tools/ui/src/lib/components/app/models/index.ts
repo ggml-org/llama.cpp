@@ -109,3 +109,12 @@ export { default as ModelBadge } from './ModelBadge.svelte';
  * Respects the user's `showRawModelNames` setting.
  */
 export { default as ModelId } from './ModelId.svelte';
+
+/**
+ * **ModelCapabilityIcons** - Capability and modality icon row
+ *
+ * The shared tool-use / reasoning / vision / video / audio icon cluster with
+ * tooltips, used by ModelId and the discover details header so the order and
+ * styling stay consistent across every model-id surface.
+ */
+export { default as ModelCapabilityIcons } from './ModelCapabilityIcons.svelte';
