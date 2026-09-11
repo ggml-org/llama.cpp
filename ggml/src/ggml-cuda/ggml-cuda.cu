@@ -1,4 +1,5 @@
 #include "ggml-cuda.h"
+#include "ggml-cuda-graph.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
@@ -6010,8 +6011,48 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+// The caller has drained this backend and still retains every captured dependency.
+static void ggml_backend_cuda_graph_release(ggml_backend_t backend, const void * key) {
+    GGML_ASSERT(backend && ggml_backend_is_cuda(backend));
+#ifdef USE_CUDA_GRAPH
+    auto * ctx = static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_set_device(ctx->device);
+    ctx->cuda_graphs.erase(key);
+#else
+    GGML_UNUSED(key);
+#endif
+}
+
+// Inspect without populating the cache or returning a native handle.
+static bool ggml_backend_cuda_graph_is_captured(ggml_backend_t backend, const void * key) {
+    GGML_ASSERT(backend && ggml_backend_is_cuda(backend));
+#ifdef USE_CUDA_GRAPH
+    auto * ctx = static_cast<ggml_backend_cuda_context *>(backend->context);
+    const auto entry = ctx->cuda_graphs.find(key);
+    return entry != ctx->cuda_graphs.end() && entry->second->instance != nullptr;
+#else
+    GGML_UNUSED(key);
+    return false;
+#endif
+}
+#endif
+
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    const bool release_graph = strcmp(name, "ggml_backend_cuda_graph_release") == 0;
+    if (release_graph || strcmp(name, "ggml_backend_cuda_graph_is_captured") == 0) {
+        // Experimental stream scheduling metadata is backend-wide, not owned by one graph cache entry.
+        static const bool graph_opt = [] {
+            const char * env = getenv("GGML_CUDA_GRAPH_OPT");
+            return env && atoi(env) == 1;
+        }();
+        if (graph_opt) return nullptr;
+        if (release_graph) return (void *)ggml_backend_cuda_graph_release;
+        return (void *)ggml_backend_cuda_graph_is_captured;
+    }
+#endif
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
         return (void *)ggml_backend_cuda_comm_init;
     }
