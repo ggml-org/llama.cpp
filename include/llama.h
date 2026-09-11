@@ -1631,6 +1631,49 @@ extern "C" {
             ggml_opt_epoch_callback   callback_train,
             ggml_opt_epoch_callback   callback_eval);
 
+	 // --- Speculative Decoding & MTP ---
+
+	 struct llama_speculative_context;
+
+	 struct llama_speculative_params {
+		 int32_t n_draft;    // Maximum tokens to draft per step. For MTP, this should match the number of projection heads.
+		 int32_t n_predict;  // Max tokens to generate (-1 for infinite)
+		 bool    is_mtp;     // Enable Multi-Token Prediction (MTP) routing, bypassing standard draft evaluation
+	 };
+
+	 struct llama_speculative_result {
+		 llama_seq_id seq_id;      // The sequence/conversation ID
+		 int32_t      count;       // Total accepted tokens (includes the 1 base sampled token + any accepted drafts)
+		 llama_token  tokens[32];  // Accepted tokens array (truncated to 32 max for ABI stability/compatibility)
+	 };
+
+	 // Get default speculative decoding parameters
+	 LLAMA_API struct llama_speculative_params llama_speculative_default_params(void);
+
+	 // Initialize a native speculative execution context.
+	 // In Dual-Model speculation, ctx_dft is the smaller draft model.
+	 // In MTP mode, ctx_dft is a secondary context using the target model's weights specifically configured for MTP.
+	 // The sampler chain is expected to be greedy to guarantee mathematical correctness during draft verification.
+	 LLAMA_API struct llama_speculative_context * llama_speculative_init(struct llama_context *                  ctx_tgt,
+																		 struct llama_context *                  ctx_dft,
+																		 struct llama_sampler *                  sampler,
+																		 const struct llama_speculative_params * params);
+
+	 // Free the speculative context and safely clean up its internal batched memory
+	 LLAMA_API void llama_speculative_free(struct llama_speculative_context * spec_ctx);
+
+	 // Executes a complete multi-sequence speculative pipeline (Draft, Verify, Rollback) in a single native call.
+	 // This handles unconditional byte-level state rollbacks upon draft rejection to protect M-RoPE/RNN math.
+	 // Returns the number of populated llama_speculative_result structs written to the 'results' array.
+	 LLAMA_API int32_t llama_speculative_decode(struct llama_speculative_context * spec_ctx,
+												struct llama_batch *               batch,
+												struct llama_speculative_result *  results,
+												int32_t                            max_results);
+
+	 // MTP hidden state routing functions (required for DeepSeek-R1 / Qwen3.5-MTP projection evaluation)
+	 LLAMA_API void    llama_set_embeddings_nextn(struct llama_context * ctx, bool enable, bool masked);
+	 LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
+
 #ifdef __cplusplus
 }
 #endif
