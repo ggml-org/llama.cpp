@@ -193,15 +193,15 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
-	 * Fetch router models with full metadata (ROUTER mode only).
-	 * No-op in router mode — fetch() already calls listRouter() internally.
+	 * Fetch models with full metadata (ROUTER mode only).
+	 * No-op in MODEL mode - fetch() already calls list() internally.
 	 * Kept for API compatibility (e.g. handleOpenChange dropdown open handler).
 	 */
 	async fetchRouterModels(): Promise<void> {
 		if (!serverStore.isRouterMode) return;
 
 		try {
-			const response = await ModelsService.listRouter();
+			const response = await ModelsService.list();
 
 			this.routerModels = response.data;
 			await this.props.fetchModalitiesForLoadedModels();
@@ -358,9 +358,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	 * Both MODEL and ROUTER modes share the same mapping logic;
 	 * they differ only in which endpoint is called.
 	 */
-	private buildModelOptions(
-		response: ApiModelListResponse | ApiRouterModelsListResponse
-	): ModelOption[] {
+	private buildModelOptions(response: ApiModelsListResponse): ModelOption[] {
 		return response.data.map((item: ApiModelDataEntry, index: number) => {
 			const details = response.models?.[index];
 			const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
@@ -390,7 +388,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 		return this.buildModelOptions(response);
 	}
-
 	/**
 	 * Filter to models visible in the UI (ui !== false).
 	 */
@@ -422,7 +419,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			const router = serverStore.isRouterMode;
 
 			if (router) {
-				const response = await ModelsService.listRouter();
+				const response = await ModelsService.list();
 
 				this.routerModels = response.data;
 				this.models = this.buildModelOptions(response);
