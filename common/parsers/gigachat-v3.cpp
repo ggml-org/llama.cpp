@@ -33,7 +33,7 @@ common_chat_params common_chat_params_init_gigachat_v3(
             for (const auto & tool : inputs.tools) {
                 const auto & function = tool.at("function");
                 std::string name = function.at("name");
-                const auto & schema = function.at("parameters");
+                const auto  schema = common_chat_tool_parameters(function);
 
                 auto tool_name = p.json_member("name", "\"" + p.tool_name(p.literal(name)) + "\"");
                 auto tool_args = p.json_member("arguments", p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)));

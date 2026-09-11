@@ -574,6 +574,16 @@ json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & t
     return result;
 }
 
+json common_chat_tool_parameters(const json & function) {
+    if (function.contains("parameters")) {
+        const auto & params = function.at("parameters");
+        if (!params.is_null() && !(params.is_object() && params.empty())) {
+            return params;
+        }
+    }
+    return json{{"type", "object"}, {"properties", json::object()}};
+}
+
 std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & tools) {
     std::vector<common_chat_tool> result;
 
