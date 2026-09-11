@@ -123,6 +123,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "HunYuanDenseV1ForCausalLM": "hunyuan",
     "HunYuanMoEV1ForCausalLM": "hunyuan",
     "HunYuanVLForConditionalGeneration": "hunyuan",
+    "HrmTextForCausalLM": "hrm_text",
     "HYV3ForCausalLM": "hunyuan",
     "HYV4ForCausalLM": "hy_v4",
     "IQuestCoderForCausalLM": "llama",
