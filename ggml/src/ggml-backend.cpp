@@ -917,6 +917,42 @@ static char causes[GGML_DEFAULT_GRAPH_SIZE*16 + GGML_SCHED_MAX_SPLITS_DEBUG*GGML
 #define GET_CAUSE(node) ""
 #endif
 
+// walk up the graph from an activation tensor until a backend assignment is found
+// tensors with host-resident weights are skipped so that they do not bias the result
+static int ggml_backend_sched_resolve_act_backend(ggml_backend_sched_t sched, struct ggml_tensor * tensor, int depth) {
+    if (tensor == NULL || depth > 32) {
+        return -1;
+    }
+
+    if (tensor->view_src != NULL) {
+        int b = tensor_backend_id(tensor->view_src);
+        if (b != -1) {
+            return b;
+        }
+    }
+
+    int b = tensor_backend_id(tensor);
+    if (b != -1) {
+        return b;
+    }
+
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        struct ggml_tensor * src = tensor->src[i];
+        if (src == NULL) {
+            continue;
+        }
+        if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+            continue;
+        }
+        int rb = ggml_backend_sched_resolve_act_backend(sched, src, depth + 1);
+        if (rb != -1) {
+            return rb;
+        }
+    }
+
+    return -1;
+}
+
 // returns the backend that should be used for the node based on the current locations
 static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, struct ggml_tensor * tensor) {
     // assign pre-allocated nodes to their backend
@@ -968,10 +1004,42 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
                 int src_backend_id = ggml_backend_sched_backend_from_buffer(sched, src, tensor);
                 // check if a backend with higher prio wants to offload the op
                 if (sched->op_offload && src_backend_id == sched->n_backends - 1 && ggml_backend_buffer_is_host(src->buffer)) {
+                    // by default host-weight ops (e.g. CPU-offloaded MoE experts) all land on the
+                    // lowest-prio GPU, which serializes the entire model through a single device.
+                    // optionally distribute them by following the backend of the op's activations
+                    int pref_backend_id = -1;
+                    if (getenv("GGML_SCHED_HOST_WGT_ACT") != NULL) {
+                        for (int i = 0; i < GGML_MAX_SRC; i++) {
+                            struct ggml_tensor * act = tensor->src[i];
+                            if (act == NULL || act == src) {
+                                continue;
+                            }
+                            if (act->buffer != NULL && act->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                                continue;
+                            }
+                            int b = ggml_backend_sched_resolve_act_backend(sched, act, 0);
+                            if (b >= 0 && b < src_backend_id) {
+                                pref_backend_id = b;
+                                break;
+                            }
+                        }
+                    }
                     for (int b = 0; b < src_backend_id; b++) {
+                        if (pref_backend_id != -1 && b != pref_backend_id) {
+                            continue;
+                        }
                         if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
                             SET_CAUSE(tensor, "1.off");
                             return b;
+                        }
+                    }
+                    // preferred backend did not qualify - fall back to the default sweep
+                    if (pref_backend_id != -1) {
+                        for (int b = 0; b < src_backend_id; b++) {
+                            if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
+                                SET_CAUSE(tensor, "1.off");
+                                return b;
+                            }
                         }
                     }
                 }
@@ -1644,6 +1712,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
 
+    // [pp-diag] env-gated per-split timing (log backend + nodes + ms + first node)
+    const bool sched_time = getenv("GGML_SCHED_TIME") != NULL;
+
     ggml_tensor * prev_ids_tensor = nullptr;
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
@@ -1654,6 +1725,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+        const int64_t t_split0 = sched_time ? ggml_time_us() : 0;
 
         // ensure the previous split's async work has completed before we start
         // this split, the allocator may have reused buffer regions across splits
@@ -1830,6 +1902,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         // record the event of this split
         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
             ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
+        }
+
+        // [pp-diag] per-split timing
+        if (sched_time) {
+            ggml_backend_synchronize(split_backend);
+            const int64_t t_split1 = ggml_time_us();
+            fprintf(stderr, "SPLITTT backend=%-6s nodes=%-3d ms=%9.2f first=%.24s\n",
+                    ggml_backend_name(split_backend), split->graph.n_nodes,
+                    (t_split1 - t_split0)/1000.0,
+                    split->graph.n_nodes > 0 ? split->graph.nodes[0]->name : "-");
         }
 
         prev_backend_id = split_backend_id;
