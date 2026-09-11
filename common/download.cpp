@@ -38,7 +38,6 @@
 // isatty
 #if defined(_WIN32)
 #include <io.h>
-#include <process.h>
 #else
 #include <unistd.h>
 #endif
@@ -46,17 +45,6 @@
 //
 // downloader
 //
-
-// the in-progress file of a download is private to the process writing it, so
-// two downloads of the same blob never share a partial file
-static std::string download_temporary_path(const std::string & path) {
-#ifdef _WIN32
-    const int pid = _getpid();
-#else
-    const int pid = getpid();
-#endif
-    return path + "." + std::to_string(pid) + ".downloadInProgress";
-}
 
 // validate repo name format: owner/repo
 static void write_file(const std::string & fname, const std::string & content) {
@@ -70,13 +58,9 @@ static void write_file(const std::string & fname, const std::string & content) {
         file << content;
         file.close();
 
-        // makes the write atomic, and replaces an existing destination on
-        // every platform, which std::rename does not do on Windows
-        std::error_code ec;
-        std::filesystem::rename(fname_tmp, fname, ec);
-        if (ec) {
-            LOG_ERR("%s: unable to rename file: %s to %s (%s)\n",
-                    __func__, fname_tmp.c_str(), fname.c_str(), ec.message().c_str());
+        // Makes write atomic
+        if (rename(fname_tmp.c_str(), fname.c_str()) != 0) {
+            LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, fname_tmp.c_str(), fname.c_str());
             // If rename fails, try to delete the temporary file
             if (remove(fname_tmp.c_str()) != 0) {
                 LOG_ERR("%s: unable to delete temporary file: %s\n", __func__, fname_tmp.c_str());
@@ -382,7 +366,7 @@ static int common_download_file_single_online(const std::string & url,
     }
 
     bool success = false;
-    const std::string path_temporary = download_temporary_path(path);
+    const std::string path_temporary = path + ".downloadInProgress";
     int delay = retry_delay_seconds;
 
     if (opts.callback) {
@@ -417,13 +401,8 @@ static int common_download_file_single_online(const std::string & url,
                 path_temporary.c_str(), etag.c_str());
 
         if (common_pull_file(cli, parts.path, path_temporary, supports_ranges, p, opts.callback)) {
-            // replaces an existing destination on every platform, which
-            // std::rename does not do on Windows
-            std::error_code ec;
-            std::filesystem::rename(path_temporary, path, ec);
-            if (ec) {
-                LOG_ERR("%s: unable to rename file: %s to %s (%s)\n",
-                        __func__, path_temporary.c_str(), path.c_str(), ec.message().c_str());
+            if (std::rename(path_temporary.c_str(), path.c_str()) != 0) {
+                LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
                 break;
             }
             if (!etag.empty() && !skip_etag) {
