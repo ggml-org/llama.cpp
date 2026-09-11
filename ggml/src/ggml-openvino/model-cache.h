@@ -1,6 +1,12 @@
 #pragma once
 
 // Compiled blobs include weights. Cache-only execution skips weight uploads and graph compilation.
+// On NPU, GGML_OPENVINO_SELF_CONTAINED_BLOB=1 exports embedded-weight prefill/decode
+// blobs. A warm hit skips weight requantization, graph conversion, and compilation,
+// at the cost of roughly model-size storage per blob and separate NPUW weight banks.
+// After both blobs exist, GGML_OPENVINO_SELF_CONTAINED_MMAP=1 additionally wraps the
+// GGUF mmap instead of allocating the private OpenVINO model buffer. This mode is
+// import-only and fails clearly if either required blob is missing or invalid.
 
 #include "ggml.h"
 

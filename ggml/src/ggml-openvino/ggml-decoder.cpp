@@ -1803,14 +1803,19 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
     if (ggml_is_quantized(tensor->type)) {
         auto use_bias = naive;
         if (is_ov_buffer) {
-            // For quantized weights, copy raw data to a temp buffer first because
-            // process_weight_tensor reads from data and writes extracted results
-            // (weights/scales/zp) to output_base_ptr — they would overlap if both
-            // point to tensor->data.
-            size_t raw_size = ggml_nbytes(tensor);
-            std::vector<uint8_t> tmp(raw_size);
-            memcpy(tmp.data(), tensor->data, raw_size);
-            ov_weight = process_weight_tensor(tensor, tmp.data(), tensor->data, use_bias);
+            const bool preserve_raw = ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") != 0;
+            if (preserve_raw) {
+                // A later context must fingerprint the same raw GGUF bytes before importing its
+                // self-contained blob, so keep the model buffer immutable in this mode.
+                ov_weight = process_weight_tensor(tensor, tensor->data, nullptr, use_bias);
+            } else {
+                // The regular path stores extracted weights in the model buffer. Copy raw data
+                // first because input and output ranges would otherwise overlap.
+                size_t raw_size = ggml_nbytes(tensor);
+                std::vector<uint8_t> tmp(raw_size);
+                memcpy(tmp.data(), tensor->data, raw_size);
+                ov_weight = process_weight_tensor(tensor, tmp.data(), tensor->data, use_bias);
+            }
         } else {
             ov_weight = process_weight_tensor(tensor, tensor->data, nullptr, use_bias);
         }
