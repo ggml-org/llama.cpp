@@ -7,7 +7,10 @@
 // math flag; attachment-bearing pipelines are cached by the attachments
 // array identity, which changes whenever extras are updated.
 
-import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
+import {
+	rehypeEnhanceCodeBlocks,
+	remarkPreserveCodeMeta
+} from './plugins/rehype/enhance-code-blocks';
 import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
 import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
 import { rehypeEnhanceSvgBlocks } from './plugins/rehype/enhance-svg-blocks';
@@ -59,8 +62,8 @@ function buildPipeline({
 
 	proc = proc
 		.use(remarkBreaks) // Convert line breaks to <br>
-		// Treat raw HTML as literal text with preserved indentation
-		.use(remarkLiteralHtml)
+		.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
+		.use(remarkPreserveCodeMeta) // Preserve code block meta string for filename extraction
 		.use(remarkRehype); // Convert Markdown AST to rehype
 
 	if (!disableMath) {

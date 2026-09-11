@@ -9,7 +9,6 @@
 		isAppendMode,
 		isValidCodeblockFilename
 	} from './markdown-utils';
-	import { remarkPreserveCodeMeta } from './plugins/rehype/enhance-code-blocks';
 	import {
 		ActionIconCopyToClipboard,
 		CodeBlockActions,
