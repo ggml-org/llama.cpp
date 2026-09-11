@@ -782,6 +782,20 @@ namespace ggml_cuda_mma {
         }
     }
 
+    // Byte offset of tile element (row, col). If swz, XOR swizzle it to avoid bank conflicts without row padding.
+    template <bool swz, typename T>
+    static __device__ __forceinline__ int swizzle_bytes(const int row, const int col, const int stride) {
+        static_assert(!swz || sizeof(T) == 4, "swizzled tiles need 32 bit elements");
+        const int off = (row*stride + col) * (int) sizeof(T);
+        return swz ? off ^ ((row & 7) << 4) : off;
+    }
+
+    template <bool swz, typename T>
+    static __device__ __forceinline__ const T * swizzle(
+            const T * __restrict__ tile_base, const int row, const int col, const int stride) {
+        return (const T *) ((const char *) tile_base + swizzle_bytes<swz, T>(row, col, stride));
+    }
+
     template <typename T>
     static __device__ __forceinline__ void load_ldmatrix(
             tile<8, 8, T> & t, const T * __restrict__ xs0, const int stride) {
@@ -858,6 +872,27 @@ namespace ggml_cuda_mma {
 #endif // TURING_MMA_AVAILABLE
     }
 
+    // Load from tile element (row0, col0), swz tells if the tile is stored swizzled.
+    template <bool swz, typename T, data_layout dl>
+    static __device__ __forceinline__ void load_ldmatrix(
+            tile<16, 8, T, dl> & t, const T * __restrict__ tile_base, const int row0, const int col0, const int stride) {
+        if constexpr (!swz) {
+            load_ldmatrix(t, tile_base + row0*stride + col0, stride);
+            return;
+        }
+#if defined(TURING_MMA_AVAILABLE)
+        const int row = row0 + threadIdx.x % t.I;
+        const int col = col0 + (threadIdx.x / t.I) * (t.J / 2);
+        int * xi = (int *) t.x;
+        asm volatile("ldmatrix.sync.aligned.m8n8.x4.b16 {%0, %1, %2, %3}, [%4];"
+            : "=r"(xi[0]), "=r"(xi[1]), "=r"(xi[2]), "=r"(xi[3])
+            : "l"(swizzle<true>(tile_base, row, col, stride)));
+#else
+        GGML_UNUSED_VARS(t, tile_base, row0, col0, stride);
+        NO_DEVICE_CODE;
+#endif // defined(TURING_MMA_AVAILABLE)
+    }
+
     static __device__ __forceinline__ void load_ldmatrix(
             tile<8, 4, half2, DATA_LAYOUT_I_MAJOR_MIRRORED> & t, const half2 * __restrict__ xs0, const int stride) {
         ggml_cuda_memcpy_1<4*sizeof(half2)>(t.x, xs0 + t.get_i(0)*stride);
@@ -915,6 +950,29 @@ namespace ggml_cuda_mma {
         GGML_UNUSED_VARS(t, xs0, stride);
         NO_DEVICE_CODE;
 #endif // TURING_MMA_AVAILABLE
+    }
+
+    // Load from tile element (row0, col0), swz tells if the tile is stored swizzled.
+    template <bool swz, int I, typename T, data_layout dl>
+    static __device__ __forceinline__ void load_ldmatrix_trans(
+            tile<I, 8, T, dl> & t, const T * __restrict__ tile_base, const int row0, const int col0, const int stride) {
+        if constexpr (!swz) {
+            load_ldmatrix_trans(t, tile_base + row0*stride + col0, stride);
+            return;
+        }
+#if defined(TURING_MMA_AVAILABLE)
+        static_assert(I == 16, "bad tile width");
+        static_assert(dl == DATA_LAYOUT_I_MAJOR, "bad data layout");
+        const int row = row0 + threadIdx.x % t.I;
+        const int col = col0 + (threadIdx.x / t.I) * (t.J / 2);
+        int * xi = (int *) t.x;
+        asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.b16 {%0, %1, %2, %3}, [%4];"
+            : "=r"(xi[0]), "=r"(xi[2]), "=r"(xi[1]), "=r"(xi[3])
+            : "l"(swizzle<true>(tile_base, row, col, stride)));
+#else
+        GGML_UNUSED_VARS(t, tile_base, row0, col0, stride);
+        NO_DEVICE_CODE;
+#endif // defined(TURING_MMA_AVAILABLE)
     }
 
     static __device__ __forceinline__ void mma(
