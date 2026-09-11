@@ -650,7 +650,7 @@ int main(int argc, char ** argv) {
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--bench") == 0) {
             run_bench = true;
-        } else if (strcmp(argv[i], "--bench") == 0) {
+        } else if (strcmp(argv[i], "--fuzz") == 0) {
             run_fuzz = true;
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", argv[i]);
