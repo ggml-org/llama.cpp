@@ -104,9 +104,33 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
                     auto arg_open = p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param.name)) + ">\n");
 
-                    auto arg_value = param.schema->may_be_string() ?
-                        arg_string :
-                        p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", doc, *param.schema)) + arg_close;
+                    auto types = param.schema->value_types();
+
+                    auto arg_value = p.eps();
+                    if (!types.has(common_chat_schema::TYPE_STRING)) {
+                        arg_value = p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", doc, *param.schema)) + arg_close;
+                    } else if (types.is_only(common_chat_schema::TYPE_STRING)) {
+                        arg_value = arg_string;
+                    } else {
+                        // The string alternative accepts any text, so the grammar cannot constrain the value.
+                        auto json_value = p.choice();
+                        if (types.has(common_chat_schema::TYPE_OBJECT)) {
+                            json_value |= p.json_object();
+                        }
+                        if (types.has(common_chat_schema::TYPE_ARRAY)) {
+                            json_value |= p.json_array();
+                        }
+                        if (types.has(common_chat_schema::TYPE_NUMBER) || types.has(common_chat_schema::TYPE_INTEGER)) {
+                            json_value |= p.json_number();
+                        }
+                        if (types.has(common_chat_schema::TYPE_BOOLEAN)) {
+                            json_value |= p.json_bool();
+                        }
+                        if (types.has(common_chat_schema::TYPE_NULL)) {
+                            json_value |= p.json_null();
+                        }
+                        arg_value = p.atomic(p.tool_arg_json_value(json_value) + arg_close) | arg_string;
+                    }
 
                     auto arg_rule = p.rule(rule_name, p.tool_arg(arg_open + arg_value));
 
