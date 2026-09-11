@@ -1320,14 +1320,17 @@ bool server_models::remove(const std::string & name) {
         return true;
     }
 
-    // join before erasing - thread no longer acquires this mutex
-    if (it->second.th.joinable()) {
-        it->second.th.join();
+    // the monitoring thread takes this mutex on its way out, so join outside it
+    std::thread th = std::move(it->second.th);
+    mapping.erase(name);
+    lk.unlock();
+
+    if (th.joinable()) {
+        th.join();
     }
 
     // remove from disk (best-effort: cancelled downloads may have no cached files)
     bool ok = common_download_remove(name);
-    mapping.erase(name);
     if (!ok) {
         SRV_WRN("removing model name=%s from disk returned false (no cached files?)\n", name.c_str());
     }
@@ -2076,8 +2079,9 @@ void server_models_routes::init_routes() {
             server_models::load_options load_opts;
             load_opts.mode = SERVER_CHILD_MODE_DOWNLOAD;
             load_opts.custom_meta = server_model_meta{};
-            load_opts.custom_meta->source = SERVER_MODEL_SOURCE_CACHE;
-            load_opts.custom_meta->name   = name;
+            load_opts.custom_meta->source       = SERVER_MODEL_SOURCE_CACHE;
+            load_opts.custom_meta->name         = name;
+            load_opts.custom_meta->stop_timeout = DEFAULT_STOP_TIMEOUT;
             models.load(name, load_opts);
         }
 
