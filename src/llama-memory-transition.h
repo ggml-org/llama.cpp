@@ -43,6 +43,11 @@ struct llama_memory_preparation {
     virtual bool bind(const std::vector<llama_memory_region_binding> &) { return false; }
     // Publish already-bound state without submitting execution.
     virtual bool activate() { return false; }
+
+    // Opt in only when old bindings AND consumer data can be restored after any partial forward step.
+    // Return a reverse preparation using the same lifecycle; true/null promises no restoration is needed.
+    // Reverse preparations may borrow this object, which outlives them. Preparation itself must not mutate active state.
+    virtual bool prepare_recovery(std::unique_ptr<llama_memory_preparation> &) { return false; }
 };
 
 struct llama_memory_consumer {
@@ -73,6 +78,8 @@ enum class llama_memory_transition_state {
     binding,
     activating,
     failed,
+    recovering,
+    invalid,
 };
 
 enum class llama_memory_transition_status {
@@ -89,6 +96,10 @@ enum class llama_memory_transition_status {
     not_prepared,
     invalid_arena,
     activation_failed,
+    recovered,
+    not_failed,
+    session_invalid,
+    recovery_failed,
 };
 
 struct llama_memory_transition_result {
@@ -125,7 +136,13 @@ public:
     // Preflight rejection keeps the proposal prepared; failures after quiescing remain closed for recovery.
     llama_memory_transition_result activate(const std::vector<llama_memory_transition_arena> & arenas);
 
-    // Defer cancellation inside callbacks. Once activation starts, cancellation leaves the session failed/closed.
+    // Restore a failed transition only with explicit consumer support. A failed recovery invalidates the session.
+    llama_memory_transition_result recover();
+
+    // Preserve the original activation failure while recovery runs or fails.
+    const llama_memory_transition_result * last_failure() const noexcept;
+
+    // Defer cancellation inside forward callbacks; recovery is not interruptible.
     bool cancel() noexcept;
 
     // Inspect the gate and completed preparation only, never a partially constructed candidate.
@@ -148,4 +165,5 @@ private:
     llama_memory_transition_state phase = llama_memory_transition_state::idle;
     uint64_t last_admission = 0;
     bool cancellation_requested = false;
+    bool recovering = false;
 };

@@ -24,6 +24,8 @@ struct llama_memory_transition::pending_state {
     std::vector<llama_memory_region_binding> bindings;
     std::vector<llama_memory_resource_id> changed_resources;
     std::vector<std::unique_ptr<llama_memory_preparation>> preparations;
+    std::vector<std::unique_ptr<llama_memory_preparation>> recovery_preparations;
+    llama_memory_transition_result failure;
 
     // Keep callback metadata independent of the caller's request lifetime.
     explicit pending_state(const llama_memory_transition_target & target) : target(target) {}
@@ -33,6 +35,10 @@ struct llama_memory_transition::pending_state {
 
     // Keep snapshots, arenas, and staged leases alive throughout consumer cleanup.
     void clear_preparations() noexcept {
+        for (auto it = recovery_preparations.rbegin(); it != recovery_preparations.rend(); ++it) {
+            it->reset();
+        }
+        recovery_preparations.clear();
         for (auto it = preparations.rbegin(); it != preparations.rend(); ++it) {
             it->reset();
         }
@@ -149,6 +155,7 @@ llama_memory_transition_result llama_memory_transition::prepare(const llama_memo
 
 // Never destroy metadata or a partial output underneath an executing prepare callback.
 bool llama_memory_transition::cancel() noexcept {
+    if (recovering) return false;
     if (phase == llama_memory_transition_state::preparing ||
             phase == llama_memory_transition_state::validating ||
             (phase >= llama_memory_transition_state::quiescing && phase <= llama_memory_transition_state::activating)) {
@@ -169,12 +176,12 @@ llama_memory_transition_state llama_memory_transition::state() const noexcept {
 
 // Expose only fully prepared snapshots.
 const llama_memory_transition_target * llama_memory_transition::pending_target() const noexcept {
-    return phase == llama_memory_transition_state::prepared || phase == llama_memory_transition_state::failed ? &pending->target : nullptr;
+    return phase == llama_memory_transition_state::prepared || phase == llama_memory_transition_state::failed || phase == llama_memory_transition_state::invalid ? &pending->target : nullptr;
 }
 
 // Expose only fully prepared layouts; cancellation invalidates this borrowed pointer.
 const llama_memory_layout * llama_memory_transition::pending_layout() const noexcept {
-    return phase == llama_memory_transition_state::prepared || phase == llama_memory_transition_state::failed ? &pending->layout : nullptr;
+    return phase == llama_memory_transition_state::prepared || phase == llama_memory_transition_state::failed || phase == llama_memory_transition_state::invalid ? &pending->layout : nullptr;
 }
 
 // Compare complete region identity; matching sizes alone do not preserve a view.
@@ -199,7 +206,9 @@ llama_memory_transition_result llama_memory_transition::activation_error(
     result.arena = arena;
     result.resource = resource;
     result.failed_at = phase;
-    phase = llama_memory_transition_state::failed;
+    if (!recovering) pending->failure = result;
+    phase = recovering ? llama_memory_transition_state::invalid : llama_memory_transition_state::failed;
+    recovering = false;
     for (auto & record : pending->arenas) {
         if (record.arena) {
             if (record.planning) {
@@ -449,4 +458,163 @@ const llama_memory_transition_target * llama_memory_transition::active_target() 
 // Failed transitions leave this logical snapshot unchanged and keep execution admission closed.
 const llama_memory_layout * llama_memory_transition::active_layout() const noexcept {
     return active ? &active->layout : nullptr;
+}
+
+// Read the first activation failure even while a reverse transition is being attempted.
+const llama_memory_transition_result * llama_memory_transition::last_failure() const noexcept {
+    return pending && pending->failure.status != llama_memory_transition_status::no_change ? &pending->failure : nullptr;
+}
+
+// Compare live committed metadata with the retained pre-transition snapshot.
+static bool matches_transition_snapshot(ggml_backend_memory_arena_t arena,
+        const std::vector<ggml_backend_memory_region> & regions) {
+    if (ggml_backend_memory_arena_region_count(arena) != regions.size()) return false;
+    for (size_t i = 0; i < regions.size(); ++i) {
+        ggml_backend_memory_region current;
+        if (!ggml_backend_memory_arena_get_region_at(arena, i, &current) ||
+                !same_transition_region(current, regions[i])) return false;
+    }
+    return true;
+}
+
+// Restore only with explicit consumer support; a failed reverse transition is terminal.
+llama_memory_transition_result llama_memory_transition::recover() {
+    using status = llama_memory_transition_status;
+    using step = llama_memory_transition_state;
+    if (phase == step::invalid) {
+        return {status::session_invalid, no_consumer, {}, {}};
+    }
+    if (phase != step::failed || recovering) {
+        return {phase == step::idle ? status::not_failed : status::busy, no_consumer, {}, {}};
+    }
+    GGML_ASSERT(pending);
+    recovering = true;
+    cancellation_requested = false;
+    phase = step::recovering;
+    size_t current_consumer = no_consumer;
+    size_t current_arena = no_consumer;
+    uint64_t current_resource = 0;
+    try {
+        // Late failures after backups were discarded cannot be presented as recoverable.
+        if (pending->preparations.size() != consumers.size()) {
+            return activation_error(status::session_invalid, no_consumer);
+        }
+        for (size_t i = 0; i < pending->arenas.size(); ++i) {
+            auto & record = pending->arenas[i];
+            if (record.arena && record.generation != ggml_backend_memory_arena_generation(record.arena.get())) {
+                return activation_error(status::session_invalid, no_consumer, i);
+            }
+        }
+        pending->recovery_preparations.resize(consumers.size());
+        for (size_t i = 0; i < pending->preparations.size(); ++i) {
+            if (!pending->preparations[i]) continue;
+            current_consumer = i;
+            if (!pending->preparations[i]->prepare_recovery(pending->recovery_preparations[i])) {
+                return activation_error(status::session_invalid, i);
+            }
+        }
+
+        for (auto operation : {step::quiescing, step::draining, step::invalidating, step::releasing}) {
+            phase = operation;
+            for (size_t i = 0; i < pending->recovery_preparations.size(); ++i) {
+                auto & preparation = pending->recovery_preparations[i];
+                if (!preparation) continue;
+                current_consumer = i;
+                bool ok = false;
+                switch (operation) {
+                    case step::quiescing:    ok = preparation->quiesce(pending->changed_resources); break;
+                    case step::draining:     ok = preparation->drain(); break;
+                    case step::invalidating: ok = preparation->invalidate(); break;
+                    case step::releasing:    ok = preparation->release(); break;
+                    default: GGML_ABORT("invalid recovery phase");
+                }
+                if (!ok) return activation_error(status::recovery_failed, i);
+            }
+        }
+        current_consumer = no_consumer;
+        // Consumer-held candidates were released above; remove coordinator-held candidates before restoring metadata.
+        pending->bindings.clear();
+        pending->leases.clear();
+
+        phase = step::committing;
+        for (size_t i = 0; i < pending->arenas.size(); ++i) {
+            current_arena = i;
+            auto & record = pending->arenas[i];
+            if (!record.arena) continue;
+            if (record.generation != ggml_backend_memory_arena_generation(record.arena.get())) {
+                return activation_error(status::session_invalid, no_consumer, i);
+            }
+            if (matches_transition_snapshot(record.arena.get(), record.before)) continue;
+            if (!ggml_backend_memory_arena_begin(record.arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE)) {
+                return activation_error(status::recovery_failed, no_consumer, i);
+            }
+            record.planning = true;
+            for (const auto & region : record.before) {
+                current_resource = region.id;
+                if (!ggml_backend_memory_arena_reserve_at(record.arena.get(), region.id, region.offset,
+                        region.size, region.alignment, region.flags, nullptr)) {
+                    return activation_error(status::recovery_failed, no_consumer, i, region.id);
+                }
+            }
+            if (!ggml_backend_memory_arena_commit(record.arena.get())) {
+                return activation_error(status::recovery_failed, no_consumer, i);
+            }
+            record.planning = false;
+            record.generation = ggml_backend_memory_arena_generation(record.arena.get());
+        }
+
+        phase = step::binding;
+        for (size_t i = 0; i < pending->arenas.size(); ++i) {
+            current_arena = i;
+            auto & record = pending->arenas[i];
+            if (!record.arena) continue;
+            if (!ggml_backend_memory_arena_resume(record.arena.get())) {
+                return activation_error(status::recovery_failed, no_consumer, i);
+            }
+            for (const auto & region : record.before) {
+                current_resource = region.id;
+                transition_lease_ptr lease(ggml_backend_memory_arena_acquire(record.arena.get(), region.id),
+                    ggml_backend_memory_lease_free);
+                if (!lease) return activation_error(status::recovery_failed, no_consumer, i, region.id);
+                pending->leases.push_back(std::move(lease));
+                pending->bindings.push_back({i, region, pending->leases.back().get()});
+            }
+            ggml_backend_memory_arena_quiesce(record.arena.get());
+        }
+
+        current_arena = no_consumer;
+        current_resource = 0;
+        for (auto operation : {step::binding, step::activating}) {
+            phase = operation;
+            for (size_t i = 0; i < pending->recovery_preparations.size(); ++i) {
+                auto & preparation = pending->recovery_preparations[i];
+                if (!preparation) continue;
+                current_consumer = i;
+                const bool ok = operation == step::binding ? preparation->bind(pending->bindings) : preparation->activate();
+                if (!ok) return activation_error(status::recovery_failed, i);
+            }
+        }
+        current_consumer = no_consumer;
+        phase = step::discarding;
+        pending->clear_preparations();
+        pending->bindings.clear();
+        pending->leases.clear();
+        phase = step::activating;
+        for (size_t i = 0; i < pending->arenas.size(); ++i) {
+            auto & record = pending->arenas[i];
+            if (record.arena && (record.generation != ggml_backend_memory_arena_generation(record.arena.get()) ||
+                    !ggml_backend_memory_arena_resume(record.arena.get()))) {
+                return activation_error(status::recovery_failed, no_consumer, i);
+            }
+        }
+        phase = step::discarding;
+        pending.reset();
+        recovering = false;
+        cancellation_requested = false;
+        phase = step::idle;
+        return {status::recovered, no_consumer, {}, {}};
+    } catch (...) {
+        return activation_error(status::recovery_failed, current_consumer, current_arena,
+                                current_resource, std::current_exception());
+    }
 }
