@@ -1290,81 +1290,80 @@ class DeepseekV41Model(DeepseekV4Model):
             # Generate and write engram hash constants
             import numpy as _np
 
-            # Load tokenizer to compute compressed vocab map
-            try:
-                from transformers import AutoTokenizer
-                tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-            except Exception:
-                # Fallback: try loading tokenizer.model or tokenizer.json directly
-                try:
-                    from transformers import AutoTokenizer
-                    tokenizer = AutoTokenizer.from_pretrained(str(self.dir_model), trust_remote_code=True, local_files_only=True)
-                except Exception as e:
-                    logger.warning("Could not load tokenizer for engram constants: %s", e)
-                    return
+            # A model with engram layers cannot run without these constants, so every step below
+            # raises rather than warns: a file that is missing them loads and then hashes wrong.
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
 
             # Build compressed token map
-            try:
-                token_map, compressed_vocab_size = _v41_build_compressed_token_map(tokenizer)
-                expected_vocab = hparams.get("engram_compressed_vocab_size")
-                if compressed_vocab_size != expected_vocab:
-                    logger.warning("Compressed vocab size mismatch: got %d, expected %d", compressed_vocab_size, expected_vocab)
-                    return
-            except Exception as e:
-                logger.warning("Could not build token map: %s", e)
-                return
+            token_map, compressed_vocab_size = _v41_build_compressed_token_map(tokenizer)
+            expected_vocab = hparams.get("engram_compressed_vocab_size")
+            if compressed_vocab_size != expected_vocab:
+                # every multiplier derives from this size, so a mismatch rehashes the whole table
+                raise ValueError(f"compressed vocab size is {compressed_vocab_size}, config says {expected_vocab}")
 
             # Compute multipliers
-            try:
-                layer_ids = tuple(engram_ids)
-                multipliers = _v41_compute_hash_multipliers(layer_ids, hparams["engram_max_ngram_size"], compressed_vocab_size)
-            except Exception as e:
-                logger.warning("Could not compute multipliers: %s", e)
-                return
+            layer_ids = tuple(engram_ids)
+            multipliers = _v41_compute_hash_multipliers(layer_ids, hparams["engram_max_ngram_size"], compressed_vocab_size)
 
-            # Compute primes and offsets
-            try:
-                max_ngram_size = hparams["engram_max_ngram_size"]
-                n_heads = hparams["engram_n_heads"]
-                primes_list, seen_primes = [], set()
+            # Compute primes and offsets. Every (n-gram size, head) pair gets its own bucket, and
+            # the search starts over at engram_vocab_size - 1 for each n-gram size, so the shared
+            # `seen` set is what keeps the buckets distinct.
+            max_ngram_size = hparams["engram_max_ngram_size"]
+            n_heads = hparams["engram_n_heads"]
+            primes_list, seen_primes = [], set()
 
-                for layer_id in layer_ids:
-                    per_ngram = []
-                    for ngram_idx in range(max_ngram_size - 1):
-                        # Reset search position for each n-gram within this layer
-                        current_search = hparams["engram_vocab_size"] - 1
-                        sizes = []
-                        for head_idx in range(n_heads):
-                            current_search = _v41_find_next_prime(current_search, seen_primes)
-                            seen_primes.add(current_search)
-                            sizes.append(current_search)
-                        per_ngram.append(sizes)
-                    primes_list.append(per_ngram)
+            for layer_id in layer_ids:
+                per_ngram = []
+                for ngram_idx in range(max_ngram_size - 1):
+                    current_search = hparams["engram_vocab_size"] - 1
+                    sizes = []
+                    for head_idx in range(n_heads):
+                        current_search = _v41_find_next_prime(current_search, seen_primes)
+                        seen_primes.add(current_search)
+                        sizes.append(current_search)
+                    per_ngram.append(sizes)
+                primes_list.append(per_ngram)
 
-                # Reshape primes into the expected structure [n_engram_layers, max_ngram_size - 1, n_heads]
-                primes_array = _np.array(primes_list, dtype=_np.int64)
+            # [n_engram_layers, max_ngram_size - 1, n_heads]
+            primes_array = _np.array(primes_list, dtype=_np.uint64)
 
-                # Compute offsets as cumulative sum of primes
-                offsets_list = []
-                for layer_primes in primes_array:
-                    flat_primes = layer_primes.flatten()
-                    offsets = _np.cumsum(_np.concatenate(([0], flat_primes[:-1])))
-                    offsets_list.append(offsets.reshape(layer_primes.shape))
-                offsets_array = _np.array(offsets_list, dtype=_np.int64)
-            except Exception as e:
-                logger.warning("Could not compute primes/offsets: %s", e)
-                return
+            # each bucket starts where the previous one ended, in that same order flattened
+            offsets_list = []
+            for layer_primes in primes_array:
+                flat_primes = layer_primes.flatten()
+                offsets = _np.cumsum(_np.concatenate(([0], flat_primes[:-1])))
+                offsets_list.append(offsets.reshape(layer_primes.shape))
+            offsets_array = _np.array(offsets_list, dtype=_np.uint64)
 
-            # Write constants to GGUF
-            try:
-                self.gguf_writer.add_array(gguf.Keys.Engram.MULTIPLIERS.format(arch=arch), multipliers.numpy())
-                self.gguf_writer.add_array(gguf.Keys.Engram.PRIMES.format(arch=arch), primes_array)
-                self.gguf_writer.add_array(gguf.Keys.Engram.OFFSETS.format(arch=arch), offsets_array)
-                self.gguf_writer.add_array(gguf.Keys.Engram.TOKEN_MAP.format(arch=arch), _np.array(token_map, dtype=_np.int32))
-                logger.info("Engram constants written: multipliers %s, primes %s, offsets %s, token_map %s",
-                           multipliers.shape, primes_array.shape, offsets_array.shape, len(token_map))
-            except Exception as e:
-                logger.warning("Could not write engram constants: %s", e)
+            # Write constants to GGUF.
+            # add_array() infers the element type from the first item and maps every Python int to
+            # INT32, which would truncate the multipliers, so pass the element type explicitly and
+            # flatten by hand: a gguf array is one dimensional.
+            def add_u64(key, arr):
+                self.gguf_writer.add_key_value(
+                    key,
+                    [int(x) for x in _np.asarray(arr).reshape(-1)],
+                    gguf.GGUFValueType.ARRAY,
+                    gguf.GGUFValueType.UINT64,
+                )
+
+            add_u64(gguf.Keys.Engram.MULTIPLIERS.format(arch=arch), multipliers.numpy())
+            add_u64(gguf.Keys.Engram.PRIMES.format(arch=arch), primes_array)
+            add_u64(gguf.Keys.Engram.OFFSETS.format(arch=arch), offsets_array)
+            self.gguf_writer.add_key_value(
+                gguf.Keys.Engram.TOKEN_MAP.format(arch=arch),
+                [int(x) for x in token_map],
+                gguf.GGUFValueType.ARRAY,
+                gguf.GGUFValueType.INT32,
+            )
+            # the reference stores the padding token already mapped, so do the same here
+            self.gguf_writer.add_uint32(
+                gguf.Keys.Engram.PAD_ID.format(arch=arch),
+                int(token_map[hparams.get("engram_pad_id", 2)]),
+            )
+            logger.info("Engram constants written: multipliers %s, primes %s, offsets %s, token_map %d",
+                        multipliers.shape, primes_array.shape, offsets_array.shape, len(token_map))
 
 
     # rows per block when rewriting an engram table; 1M rows is about 1 GB of float32 scratch
