@@ -384,7 +384,11 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));
 
             auto named_arg = p.rule("tool-" + name + "-arg-" + param.name, arg);
-            (param.required ? required_parsers : optional_parsers).push_back(named_arg);
+            if (param.required) {
+                required_parsers.push_back(named_arg);
+            } else {
+                optional_parsers.push_back(named_arg);
+            }
         });
 
         // Build required arg sequence in definition order

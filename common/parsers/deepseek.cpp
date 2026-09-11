@@ -165,7 +165,11 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
                         p.tool_arg_close(p.literal(PARAM_END)));
 
                     auto named_arg = p.rule("tool-" + name + "-arg-" + param.name, arg);
-                    (param.required ? required_parsers : optional_parsers).push_back(named_arg);
+                    if (param.required) {
+                        required_parsers.push_back(named_arg);
+                    } else {
+                        optional_parsers.push_back(named_arg);
+                    }
                 });
 
                 common_peg_parser args_seq = p.eps();
