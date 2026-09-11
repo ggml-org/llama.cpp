@@ -347,13 +347,19 @@ bool ggml_backend_buft_is_meta(ggml_backend_buffer_type_t buft) {
     return buft != nullptr && buft->iface.get_name == ggml_backend_meta_buffer_type_iface.get_name;
 }
 
+// Keep the context alive for exactly as long as its cached buffer type.
+struct ggml_backend_meta_buffer_type {
+    std::unique_ptr<ggml_backend_meta_buffer_type_context> context;
+    ggml_backend_buffer_type buffer;
+};
+
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_backend_dev_t dev) {
-    static std::map<ggml_backend_dev_t, struct ggml_backend_buffer_type> meta_bufts;
+    static std::map<ggml_backend_dev_t, ggml_backend_meta_buffer_type> meta_bufts;
     GGML_ASSERT(ggml_backend_dev_is_meta(dev));
     {
         auto it = meta_bufts.find(dev);
         if (it != meta_bufts.end()) {
-            return &it->second;
+            return &it->second.buffer;
         }
     }
 
@@ -363,15 +369,15 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_
     for (size_t i = 0; i < n_devs; i++) {
         simple_bufts.push_back(ggml_backend_dev_buffer_type(ggml_backend_meta_dev_simple_dev(dev, i)));
     }
-    ggml_backend_meta_buffer_type_context * buft_ctx = new ggml_backend_meta_buffer_type_context(simple_bufts);
+    auto buft_ctx = std::make_unique<ggml_backend_meta_buffer_type_context>(std::move(simple_bufts));
 
     struct ggml_backend_buffer_type meta_buft = {
         /*iface  =*/ ggml_backend_meta_buffer_type_iface,
         /*device =*/ dev,
-        /*ctx    =*/ buft_ctx,
+        /*ctx    =*/ buft_ctx.get(),
     };
-    auto result = meta_bufts.emplace(dev, meta_buft);
-    return &result.first->second;
+    auto result = meta_bufts.emplace(dev, ggml_backend_meta_buffer_type{std::move(buft_ctx), meta_buft});
+    return &result.first->second.buffer;
 }
 
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(ggml_backend_dev_t dev) {

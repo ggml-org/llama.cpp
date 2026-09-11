@@ -356,6 +356,56 @@ static void test_meta_buffer_composition(
     GGML_ASSERT(first.last_alloc_data == nullptr && second.last_alloc_data == nullptr);
 }
 
+// Keep cached type pointers stable across insertions and release their metadata at process exit.
+static void test_meta_buffer_type_cache(test_device_context & first, test_device_context & second) {
+    constexpr size_t n_types = 32;
+    static uint8_t split_keys[n_types] = {};
+    ggml_backend_dev_t simple_devices[] = {&first.device, &second.device};
+    ggml_backend_buffer_type_t types[n_types] = {};
+
+    ggml_backend_dev_t first_meta = ggml_backend_meta_device(
+        simple_devices, 2, test_split_state, &split_keys[0]);
+    types[0] = ggml_backend_dev_buffer_type(first_meta);
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(types[0], 64));
+    GGML_ASSERT(buffer);
+    const char * first_name = ggml_backend_buft_name(types[0]);
+    void * first_context = types[0]->context;
+    const size_t first_frees = first.free_count;
+    const size_t second_frees = second.free_count;
+
+    for (size_t i = 0; i < n_types; ++i) {
+        ggml_backend_dev_t meta = ggml_backend_meta_device(
+            simple_devices, 2, test_split_state, &split_keys[i]);
+        types[i] = ggml_backend_dev_buffer_type(meta);
+        GGML_ASSERT(types[i] == ggml_backend_dev_buffer_type(meta));
+        GGML_ASSERT(ggml_backend_buft_get_device(types[i]) == meta);
+        for (size_t j = 0; j < i; ++j) {
+            GGML_ASSERT(types[j] != types[i]);
+            GGML_ASSERT(types[j]->context != types[i]->context);
+        }
+    }
+
+    for (size_t i = 0; i < n_types; ++i) {
+        ggml_backend_dev_t meta = ggml_backend_meta_device(
+            simple_devices, 2, test_split_state, &split_keys[i]);
+        GGML_ASSERT(types[i] == ggml_backend_dev_buffer_type(meta));
+        GGML_ASSERT(ggml_backend_buft_get_alignment(types[i]) == second.alignment);
+    }
+    GGML_ASSERT(types[0] == ggml_backend_dev_buffer_type(first_meta));
+    GGML_ASSERT(types[0]->context == first_context);
+    GGML_ASSERT(ggml_backend_buft_name(types[0]) == first_name);
+    GGML_ASSERT(ggml_backend_buffer_get_type(buffer.get()) == types[0]);
+    ggml_backend_buffer_clear(buffer.get(), 0x3c);
+    for (size_t i = 0; i < 64; ++i) {
+        GGML_ASSERT(first.last_alloc_data[i] == 0x3c);
+        GGML_ASSERT(second.last_alloc_data[i] == 0x3c);
+    }
+    buffer.reset();
+    GGML_ASSERT(first.free_count == first_frees + 1);
+    GGML_ASSERT(second.free_count == second_frees + 1);
+    GGML_ASSERT(types[0] == ggml_backend_dev_buffer_type(first_meta));
+}
+
 int main() {
     test_device_context initialization_device = make_test_device();
     test_device_context first = make_test_device(16);
@@ -368,5 +418,7 @@ int main() {
     std::puts("test_meta_tensor_initialization PASSED");
     test_meta_buffer_composition(first, second);
     std::puts("test_meta_buffer_composition PASSED");
+    test_meta_buffer_type_cache(first, second);
+    std::puts("test_meta_buffer_type_cache PASSED");
     return 0;
 }
