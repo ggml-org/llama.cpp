@@ -7,7 +7,7 @@ on:
       - master
     paths: [
       '.github/workflows/fusion.yml',
-      'ggml/**'
+      'ggml/**',
       'tests/fusion/**',
       'tests/test-fusion.cpp'
     ]
