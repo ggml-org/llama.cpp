@@ -73,7 +73,7 @@ common_chat_params common_chat_params_init_minicpm5(const common_chat_template &
                 const std::string name     = function.at("name");
 
                 std::vector<common_peg_parser> arg_rules;
-                foreach_parameter(function, [&](const common_schema_property & prop, const common_schema_document_ptr & doc) {
+                foreach_parameter(function, [&](const common_chat_schema_property & prop, const common_chat_schema_document_ptr & doc) {
                     auto value_parser = p.eps();
                     if (prop.schema->may_be_string()) {
                         value_parser = string_value;

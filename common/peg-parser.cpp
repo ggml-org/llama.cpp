@@ -953,7 +953,7 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id                    
         } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
             return "Until(" + string_join(p.delimiters, " | ") + ")";
         } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
-            return "Schema(" + dump_impl(p.child, visited) + ", " + (p.node ? common_schema::kind_name(p.node->kind()) : "null") + ")";
+            return "Schema(" + dump_impl(p.child, visited) + ", " + (p.node ? common_chat_schema::kind_name(p.node->kind()) : "null") + ")";
         } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
             return "Rule(" + p.name + ", " + dump_impl(p.child, visited) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
@@ -1119,12 +1119,12 @@ common_peg_parser common_peg_parser_builder::chars(const std::string & classes, 
     return wrap(arena_.add_parser(common_peg_chars_parser{classes, ranges, negated, min, max}));
 }
 
-common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, common_schema_document_ptr doc, const common_schema & node, bool raw) {
+common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, common_chat_schema_document_ptr doc, const common_chat_schema & node, bool raw) {
     return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::move(doc), &node, raw}));
 }
 
 common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, const common_json & schema, bool raw) {
-    auto doc = std::make_shared<const common_schema_document>(common_schema_from_json(schema));
+    auto doc = std::make_shared<const common_chat_schema_document>(common_chat_schema_from_json(schema));
     return this->schema(p, name, doc, *doc->root, raw);
 }
 

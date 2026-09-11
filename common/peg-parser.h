@@ -246,8 +246,8 @@ struct common_peg_until_parser {
 struct common_peg_schema_parser {
     common_peg_parser_id child;
     std::string name;
-    common_schema_document_ptr doc;  // owns node
-    const common_schema * node = nullptr;
+    common_chat_schema_document_ptr doc;  // owns node
+    const common_chat_schema * node = nullptr;
 
     // Indicates if the GBNF should accept a raw string that matches the schema.
     bool raw;
@@ -491,7 +491,7 @@ class common_peg_parser_builder {
     common_peg_parser marker();
 
     // Wraps a parser with the schema its GBNF is generated from, a node of the document that owns it
-    common_peg_parser schema(const common_peg_parser & p, const std::string & name, common_schema_document_ptr doc, const common_schema & node, bool raw = false);
+    common_peg_parser schema(const common_peg_parser & p, const std::string & name, common_chat_schema_document_ptr doc, const common_chat_schema & node, bool raw = false);
 
     // Parses the JSON schema into a document of its own
     common_peg_parser schema(const common_peg_parser & p, const std::string & name, const common_json & schema, bool raw = false);

@@ -21,7 +21,7 @@ using json = common_json;
 void foreach_function(const json & tools, const std::function<void(const json &)> & fn);
 
 // iterate over the parameters of a function tool, with the document that owns them
-void foreach_parameter(const json & function, const std::function<void(const common_schema_property &, const common_schema_document_ptr &)> & fn);
+void foreach_parameter(const json & function, const std::function<void(const common_chat_schema_property &, const common_chat_schema_document_ptr &)> & fn);
 
 // render a template; the override arguments let a parser feed in messages, tools or context it has rewritten
 std::string common_chat_template_direct_apply_impl(

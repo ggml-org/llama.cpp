@@ -11,7 +11,7 @@
 
 // JSON schema, covering the subset that json_schema_to_grammar() can convert.
 
-struct common_schema {
+struct common_chat_schema {
     enum node_kind {
         KIND_ANY,
         KIND_REF,
@@ -75,7 +75,7 @@ struct common_schema {
         bool operator!=(const type_set & other) const { return mask_ != other.mask_; }
     };
 
-    virtual ~common_schema() = default;
+    virtual ~common_chat_schema() = default;
     virtual node_kind kind() const = 0;
 
     type_set value_types() const;
@@ -87,70 +87,70 @@ struct common_schema {
     static const char * type_name(value_type type);
 };
 
-using common_schema_ptr = std::unique_ptr<common_schema>;
+using common_chat_schema_ptr = std::unique_ptr<common_chat_schema>;
 
-struct common_schema_any : common_schema {
+struct common_chat_schema_any : common_chat_schema {
     node_kind kind() const override { return KIND_ANY; }
 };
 
 // {"$ref": "#/..."}, only references into the same document are supported
-struct common_schema_ref : common_schema {
-    std::string           ref;
-    const common_schema * target = nullptr;  // owned by common_schema_document::refs
+struct common_chat_schema_ref : common_chat_schema {
+    std::string                ref;
+    const common_chat_schema * target = nullptr;  // owned by common_chat_schema_document::refs
 
-    explicit common_schema_ref(std::string ref) : ref(std::move(ref)) {}
+    explicit common_chat_schema_ref(std::string ref) : ref(std::move(ref)) {}
 
     node_kind kind() const override { return KIND_REF; }
 };
 
 // oneOf / anyOf, or a "type" array expanded to one alternative per type
-struct common_schema_any_of : common_schema {
-    std::vector<common_schema_ptr> children;
+struct common_chat_schema_any_of : common_chat_schema {
+    std::vector<common_chat_schema_ptr> children;
 
     node_kind kind() const override { return KIND_ANY_OF; }
 };
 
-struct common_schema_all_of : common_schema {
-    std::vector<common_schema_ptr> children;
+struct common_chat_schema_all_of : common_chat_schema {
+    std::vector<common_chat_schema_ptr> children;
 
     node_kind kind() const override { return KIND_ALL_OF; }
 };
 
-struct common_schema_const : common_schema {
+struct common_chat_schema_const : common_chat_schema {
     common_json value;
 
-    explicit common_schema_const(common_json value) : value(std::move(value)) {}
+    explicit common_chat_schema_const(common_json value) : value(std::move(value)) {}
 
     node_kind kind() const override { return KIND_CONST; }
 };
 
-struct common_schema_enum : common_schema {
+struct common_chat_schema_enum : common_chat_schema {
     std::vector<common_json> values;
 
     node_kind kind() const override { return KIND_ENUM; }
 };
 
-struct common_schema_null : common_schema {
+struct common_chat_schema_null : common_chat_schema {
     node_kind kind() const override { return KIND_NULL; }
 };
 
-struct common_schema_boolean : common_schema {
+struct common_chat_schema_boolean : common_chat_schema {
     node_kind kind() const override { return KIND_BOOLEAN; }
 };
 
-struct common_schema_number : common_schema {
+struct common_chat_schema_number : common_chat_schema {
     node_kind kind() const override { return KIND_NUMBER; }
 };
 
 // bounds are inclusive, exclusiveMinimum / exclusiveMaximum are folded in
-struct common_schema_integer : common_schema {
+struct common_chat_schema_integer : common_chat_schema {
     int64_t minimum = INT64_MIN;  // INT64_MIN for unbounded
     int64_t maximum = INT64_MAX;  // INT64_MAX for unbounded
 
     node_kind kind() const override { return KIND_INTEGER; }
 };
 
-struct common_schema_string : common_schema {
+struct common_chat_schema_string : common_chat_schema {
     std::string   pattern;  // empty when absent
     string_format format     = FORMAT_NONE;
     int           min_length = 0;
@@ -159,40 +159,40 @@ struct common_schema_string : common_schema {
     node_kind kind() const override { return KIND_STRING; }
 };
 
-struct common_schema_array : common_schema {
-    common_schema_ptr items;  // a common_schema_any when "items" is absent
-    int               min_items = 0;
-    int               max_items = -1;  // -1 for unbounded
+struct common_chat_schema_array : common_chat_schema {
+    common_chat_schema_ptr items;  // a common_chat_schema_any when "items" is absent
+    int                    min_items = 0;
+    int                    max_items = -1;  // -1 for unbounded
 
     node_kind kind() const override { return KIND_ARRAY; }
 };
 
-struct common_schema_tuple : common_schema {
-    std::vector<common_schema_ptr> items;
+struct common_chat_schema_tuple : common_chat_schema {
+    std::vector<common_chat_schema_ptr> items;
 
     node_kind kind() const override { return KIND_TUPLE; }
 };
 
-struct common_schema_property {
-    std::string       name;
-    common_schema_ptr schema;
-    bool              required = false;
+struct common_chat_schema_property {
+    std::string            name;
+    common_chat_schema_ptr schema;
+    bool                   required = false;
 };
 
-struct common_schema_object : common_schema {
-    std::vector<common_schema_property> properties;             // in schema order
-    common_schema_ptr                   additional_properties;  // null when not allowed
+struct common_chat_schema_object : common_chat_schema {
+    std::vector<common_chat_schema_property> properties;             // in schema order
+    common_chat_schema_ptr                   additional_properties;  // null when not allowed
 
     node_kind kind() const override { return KIND_OBJECT; }
 };
 
-struct common_schema_document {
-    common_schema_ptr                        root;
-    std::map<std::string, common_schema_ptr> refs;
+struct common_chat_schema_document {
+    common_chat_schema_ptr                        root;
+    std::map<std::string, common_chat_schema_ptr> refs;
 };
 
 // A document shared by the PEG parsers built from its nodes, which it keeps alive
-using common_schema_document_ptr = std::shared_ptr<const common_schema_document>;
+using common_chat_schema_document_ptr = std::shared_ptr<const common_chat_schema_document>;
 
 // Throws std::runtime_error when the schema falls outside the supported subset.
-common_schema_document common_schema_from_json(const common_json & schema);
+common_chat_schema_document common_chat_schema_from_json(const common_json & schema);

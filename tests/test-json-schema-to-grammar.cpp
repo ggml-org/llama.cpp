@@ -1534,7 +1534,7 @@ int main() {
                 }
             }
         })""");
-        assert(json_schema_to_grammar(common_schema_from_json(schema)) == json_schema_to_grammar(schema, true));
+        assert(json_schema_to_grammar(common_chat_schema_from_json(schema)) == json_schema_to_grammar(schema, true));
     }
 
     // a property node carries its $ref target, so its grammar names the ref rule
@@ -1565,9 +1565,9 @@ int main() {
                 string ::= "\"" char* "\""
             )""",
         };
-        auto doc = common_schema_from_json(parameters);
+        auto doc = common_chat_schema_from_json(parameters);
         tc.verify(build_grammar([&](const common_grammar_builder & builder) {
-            const auto & item = static_cast<const common_schema_object &>(*doc.root).properties.at(0);
+            const auto & item = static_cast<const common_chat_schema_object &>(*doc.root).properties.at(0);
             builder.add_schema("root", *item.schema);
         }));
     }

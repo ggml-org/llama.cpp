@@ -108,7 +108,7 @@ For a more complete example, see `test_example_native()` in
 - **`rule(name, p, trigger)`** - Creates a named rule and returns a reference
 - **`trigger_rule(name, p)`** - Creates a trigger rule (entry point for lazy grammar generation)
 - **`schema(p, name, schema, raw)`** - Wraps parser with JSON schema metadata for grammar generation
-- **`schema(p, name, doc, node, raw)`** - Same, for a node of a `common_schema_document` built earlier, e.g. one tool parameter
+- **`schema(p, name, doc, node, raw)`** - Same, for a node of a `common_chat_schema_document` built earlier, e.g. one tool parameter
 
 ### AST Control
 
@@ -150,7 +150,7 @@ implementation to generate the grammar instead of the underlying parser.
 The `raw` option emits a grammar suitable for a raw string instead of a JSON
 string. In other words, it won't be wrapped in quotes or require escaping
 quotes. It only takes effect when the schema may be a string, as reported by
-`common_schema::may_be_string()`, otherwise the JSON grammar is used.
+`common_chat_schema::may_be_string()`, otherwise the JSON grammar is used.
 
 The downside is that it can potentially lead to ambiguous grammars. For
 example, if a user provides the pattern `^.*$`, the following grammar may be

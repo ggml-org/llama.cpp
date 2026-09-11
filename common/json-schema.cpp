@@ -9,15 +9,15 @@
 #include <utility>
 #include <vector>
 
-class common_schema_builder {
+class common_chat_schema_builder {
     const common_json &      root_;
-    common_schema_document & doc_;
+    common_chat_schema_document & doc_;
 
     // the targets built here, moved into doc_ once the whole schema is built
-    std::map<std::string, common_schema_ptr> refs_;
+    std::map<std::string, common_chat_schema_ptr> refs_;
 
     // ref nodes get their target once every $ref is built, a cycle would otherwise need it too early
-    std::vector<common_schema_ref *> pending_;
+    std::vector<common_chat_schema_ref *> pending_;
 
     [[noreturn]] static void fail(const std::string & path, const std::string & msg) {
         throw std::runtime_error("JSON schema error at " + path + ": " + msg);
@@ -47,9 +47,9 @@ class common_schema_builder {
         return (int64_t) (round_up ? std::ceil(d) : std::floor(d));
     }
 
-    static common_schema::string_format get_format(const common_json & schema, const std::string & path) {
+    static common_chat_schema::string_format get_format(const common_json & schema, const std::string & path) {
         if (!schema.contains("format")) {
-            return common_schema::FORMAT_NONE;
+            return common_chat_schema::FORMAT_NONE;
         }
         const common_json & value = schema.at("format");
         if (!value.is_string()) {
@@ -57,18 +57,18 @@ class common_schema_builder {
         }
         std::string format = value.get<std::string>();
         if (format == "date") {
-            return common_schema::FORMAT_DATE;
+            return common_chat_schema::FORMAT_DATE;
         }
         if (format == "time") {
-            return common_schema::FORMAT_TIME;
+            return common_chat_schema::FORMAT_TIME;
         }
         if (format == "date-time") {
-            return common_schema::FORMAT_DATE_TIME;
+            return common_chat_schema::FORMAT_DATE_TIME;
         }
         if (format == "uuid" || (format.size() == 5 && format.compare(0, 4, "uuid") == 0 && format[4] >= '1' && format[4] <= '5')) {
-            return common_schema::FORMAT_UUID;
+            return common_chat_schema::FORMAT_UUID;
         }
-        return common_schema::FORMAT_NONE;
+        return common_chat_schema::FORMAT_NONE;
     }
 
     const common_json & resolve_ref(const std::string & ref, const std::string & path) {
@@ -96,7 +96,7 @@ class common_schema_builder {
         return *target;
     }
 
-    common_schema_ptr build_ref(const common_json & value, const std::string & path) {
+    common_chat_schema_ptr build_ref(const common_json & value, const std::string & path) {
         if (!value.is_string()) {
             fail(path, "$ref must be a string");
         }
@@ -109,13 +109,13 @@ class common_schema_builder {
             refs_[ref] = nullptr;
             refs_[ref] = build_node(resolve_ref(ref, path), ref);
         }
-        auto node = std::make_unique<common_schema_ref>(ref);
+        auto node = std::make_unique<common_chat_schema_ref>(ref);
         pending_.push_back(node.get());
         return node;
     }
 
     template <typename T>
-    common_schema_ptr build_alternatives(const common_json & alts, const std::string & path) {
+    common_chat_schema_ptr build_alternatives(const common_json & alts, const std::string & path) {
         if (!alts.is_array()) {
             fail(path, "must be an array of schemas");
         }
@@ -130,8 +130,8 @@ class common_schema_builder {
         return node;
     }
 
-    common_schema_ptr build_object(const common_json & schema, const std::string & path) {
-        auto node = std::make_unique<common_schema_object>();
+    common_chat_schema_ptr build_object(const common_json & schema, const std::string & path) {
+        auto node = std::make_unique<common_chat_schema_object>();
 
         std::unordered_set<std::string> required;
         if (schema.contains("required") && schema.at("required").is_array()) {
@@ -156,7 +156,7 @@ class common_schema_builder {
             const common_json & additional = schema.at("additionalProperties");
             if (additional.is_boolean()) {
                 if (additional.get<bool>()) {
-                    node->additional_properties = std::make_unique<common_schema_any>();
+                    node->additional_properties = std::make_unique<common_chat_schema_any>();
                 }
             } else if (additional.is_object()) {
                 node->additional_properties = build_node(additional, path + "/additionalProperties");
@@ -165,20 +165,20 @@ class common_schema_builder {
             }
         } else if (!schema.contains("properties")) {
             // {"type": "object"} on its own accepts any object
-            node->additional_properties = std::make_unique<common_schema_any>();
+            node->additional_properties = std::make_unique<common_chat_schema_any>();
         }
 
         return node;
     }
 
-    common_schema_ptr build_array(const common_json & schema, const std::string & path) {
-        auto node = std::make_unique<common_schema_array>();
+    common_chat_schema_ptr build_array(const common_json & schema, const std::string & path) {
+        auto node = std::make_unique<common_chat_schema_array>();
         if (schema.contains("items") || schema.contains("prefixItems")) {
             // "items" wins when both are present; as in the converter, a schema instead of an array is the item schema
             const std::string key = schema.contains("items") ? "items" : "prefixItems";
             const common_json & items = schema.at(key);
             if (items.is_array()) {
-                auto tuple = std::make_unique<common_schema_tuple>();
+                auto tuple = std::make_unique<common_chat_schema_tuple>();
                 size_t i = 0;
                 for (const auto & item : items) {
                     tuple->items.push_back(build_node(item, path + "/" + key + "/" + std::to_string(i++)));
@@ -187,15 +187,15 @@ class common_schema_builder {
             }
             node->items = build_node(items, path + "/" + key);
         } else {
-            node->items = std::make_unique<common_schema_any>();
+            node->items = std::make_unique<common_chat_schema_any>();
         }
         node->min_items = get_count(schema, "minItems", path, 0);
         node->max_items = get_count(schema, "maxItems", path, -1);
         return node;
     }
 
-    common_schema_ptr build_string(const common_json & schema, const std::string & path) {
-        auto node = std::make_unique<common_schema_string>();
+    common_chat_schema_ptr build_string(const common_json & schema, const std::string & path) {
+        auto node = std::make_unique<common_chat_schema_string>();
         if (schema.contains("pattern")) {
             const common_json & pattern = schema.at("pattern");
             if (!pattern.is_string()) {
@@ -209,8 +209,8 @@ class common_schema_builder {
         return node;
     }
 
-    common_schema_ptr build_integer(const common_json & schema, const std::string & path) {
-        auto node = std::make_unique<common_schema_integer>();
+    common_chat_schema_ptr build_integer(const common_json & schema, const std::string & path) {
+        auto node = std::make_unique<common_chat_schema_integer>();
         if (schema.contains("minimum")) {
             node->minimum = get_bound(schema, "minimum", path, /* round_up */ true);
         } else if (schema.contains("exclusiveMinimum")) {
@@ -224,7 +224,7 @@ class common_schema_builder {
         return node;
     }
 
-    common_schema_ptr build_node(const common_json & schema, const std::string & path) {
+    common_chat_schema_ptr build_node(const common_json & schema, const std::string & path) {
         if (!schema.is_object()) {
             fail(path, "schema must be an object");
         }
@@ -233,7 +233,7 @@ class common_schema_builder {
         }
         if (schema.contains("oneOf") || schema.contains("anyOf")) {
             const std::string key = schema.contains("oneOf") ? "oneOf" : "anyOf";
-            return build_alternatives<common_schema_any_of>(schema.at(key), path + "/" + key);
+            return build_alternatives<common_chat_schema_any_of>(schema.at(key), path + "/" + key);
         }
 
         common_json type;
@@ -245,7 +245,7 @@ class common_schema_builder {
             if (type.empty()) {
                 fail(path, "type must not be empty");
             }
-            auto node = std::make_unique<common_schema_any_of>();
+            auto node = std::make_unique<common_chat_schema_any_of>();
             size_t i = 0;
             for (const auto & t : type) {
                 common_json alt = schema;
@@ -255,14 +255,14 @@ class common_schema_builder {
             return node;
         }
         if (schema.contains("const")) {
-            return std::make_unique<common_schema_const>(schema.at("const"));
+            return std::make_unique<common_chat_schema_const>(schema.at("const"));
         }
         if (schema.contains("enum")) {
             const common_json & values = schema.at("enum");
             if (!values.is_array() || values.empty()) {
                 fail(path, "enum must be a non-empty array");
             }
-            auto node = std::make_unique<common_schema_enum>();
+            auto node = std::make_unique<common_chat_schema_enum>();
             for (const auto & value : values) {
                 node->values.push_back(value);
             }
@@ -282,25 +282,25 @@ class common_schema_builder {
                 return build_object(schema, path);
             }
             if (schema.contains("allOf")) {
-                return build_alternatives<common_schema_all_of>(schema.at("allOf"), path + "/allOf");
+                return build_alternatives<common_chat_schema_all_of>(schema.at("allOf"), path + "/allOf");
             }
             if (schema.contains("items") || schema.contains("prefixItems")) {
                 return build_array(schema, path);
             }
-            if (schema.contains("pattern") || schema.contains("minLength") || schema.contains("maxLength") || get_format(schema, path) != common_schema::FORMAT_NONE) {
+            if (schema.contains("pattern") || schema.contains("minLength") || schema.contains("maxLength") || get_format(schema, path) != common_chat_schema::FORMAT_NONE) {
                 return build_string(schema, path);
             }
-            return std::make_unique<common_schema_any>();
+            return std::make_unique<common_chat_schema_any>();
         }
         if (type_name == "object") {
             if (!has_properties && schema.contains("allOf")) {
-                return build_alternatives<common_schema_all_of>(schema.at("allOf"), path + "/allOf");
+                return build_alternatives<common_chat_schema_all_of>(schema.at("allOf"), path + "/allOf");
             }
             return build_object(schema, path);
         }
         if (type_name == "string") {
             if (schema.contains("allOf")) {
-                return build_alternatives<common_schema_all_of>(schema.at("allOf"), path + "/allOf");
+                return build_alternatives<common_chat_schema_all_of>(schema.at("allOf"), path + "/allOf");
             }
             return build_string(schema, path);
         }
@@ -311,21 +311,21 @@ class common_schema_builder {
             return build_integer(schema, path);
         }
         if (type_name == "number") {
-            return std::make_unique<common_schema_number>();
+            return std::make_unique<common_chat_schema_number>();
         }
         if (type_name == "boolean") {
-            return std::make_unique<common_schema_boolean>();
+            return std::make_unique<common_chat_schema_boolean>();
         }
         if (type_name == "null") {
-            return std::make_unique<common_schema_null>();
+            return std::make_unique<common_chat_schema_null>();
         }
         fail(path, "unrecognized type " + type_name);
     }
 
   public:
-    common_schema_builder(const common_json & root, common_schema_document & doc) : root_(root), doc_(doc) {}
+    common_chat_schema_builder(const common_json & root, common_chat_schema_document & doc) : root_(root), doc_(doc) {}
 
-    common_schema_ptr build() {
+    common_chat_schema_ptr build() {
         auto node = build_node(root_, "#");
         for (auto & entry : refs_) {
             doc_.refs[entry.first] = std::move(entry.second);
@@ -337,64 +337,64 @@ class common_schema_builder {
     }
 };
 
-common_schema_document common_schema_from_json(const common_json & schema) {
-    common_schema_document doc;
-    doc.root = common_schema_builder(schema, doc).build();
+common_chat_schema_document common_chat_schema_from_json(const common_json & schema) {
+    common_chat_schema_document doc;
+    doc.root = common_chat_schema_builder(schema, doc).build();
     return doc;
 }
 
-static common_schema::value_type json_type(const common_json & value) {
+static common_chat_schema::value_type json_type(const common_json & value) {
     if (value.is_null()) {
-        return common_schema::TYPE_NULL;
+        return common_chat_schema::TYPE_NULL;
     }
     if (value.is_boolean()) {
-        return common_schema::TYPE_BOOLEAN;
+        return common_chat_schema::TYPE_BOOLEAN;
     }
     if (value.is_number_integer()) {
-        return common_schema::TYPE_INTEGER;
+        return common_chat_schema::TYPE_INTEGER;
     }
     if (value.is_number()) {
-        return common_schema::TYPE_NUMBER;
+        return common_chat_schema::TYPE_NUMBER;
     }
     if (value.is_string()) {
-        return common_schema::TYPE_STRING;
+        return common_chat_schema::TYPE_STRING;
     }
     if (value.is_array()) {
-        return common_schema::TYPE_ARRAY;
+        return common_chat_schema::TYPE_ARRAY;
     }
-    return common_schema::TYPE_OBJECT;
+    return common_chat_schema::TYPE_OBJECT;
 }
 
-static common_schema::type_set value_types_impl(const common_schema & s, std::unordered_set<const common_schema *> & visited) {
+static common_chat_schema::type_set value_types_impl(const common_chat_schema & s, std::unordered_set<const common_chat_schema *> & visited) {
     switch (s.kind()) {
-        case common_schema::KIND_ANY:
-            return common_schema::type_set::all();
-        case common_schema::KIND_NULL:
-            return { common_schema::TYPE_NULL };
-        case common_schema::KIND_BOOLEAN:
-            return { common_schema::TYPE_BOOLEAN };
-        case common_schema::KIND_NUMBER:
-            return { common_schema::TYPE_NUMBER, common_schema::TYPE_INTEGER };
-        case common_schema::KIND_INTEGER:
-            return { common_schema::TYPE_INTEGER };
-        case common_schema::KIND_STRING:
-            return { common_schema::TYPE_STRING };
-        case common_schema::KIND_ARRAY:
-        case common_schema::KIND_TUPLE:
-            return { common_schema::TYPE_ARRAY };
-        case common_schema::KIND_OBJECT:
-            return { common_schema::TYPE_OBJECT };
-        case common_schema::KIND_CONST:
-            return { json_type(static_cast<const common_schema_const &>(s).value) };
-        case common_schema::KIND_ENUM: {
-            common_schema::type_set types;
-            for (const auto & value : static_cast<const common_schema_enum &>(s).values) {
+        case common_chat_schema::KIND_ANY:
+            return common_chat_schema::type_set::all();
+        case common_chat_schema::KIND_NULL:
+            return { common_chat_schema::TYPE_NULL };
+        case common_chat_schema::KIND_BOOLEAN:
+            return { common_chat_schema::TYPE_BOOLEAN };
+        case common_chat_schema::KIND_NUMBER:
+            return { common_chat_schema::TYPE_NUMBER, common_chat_schema::TYPE_INTEGER };
+        case common_chat_schema::KIND_INTEGER:
+            return { common_chat_schema::TYPE_INTEGER };
+        case common_chat_schema::KIND_STRING:
+            return { common_chat_schema::TYPE_STRING };
+        case common_chat_schema::KIND_ARRAY:
+        case common_chat_schema::KIND_TUPLE:
+            return { common_chat_schema::TYPE_ARRAY };
+        case common_chat_schema::KIND_OBJECT:
+            return { common_chat_schema::TYPE_OBJECT };
+        case common_chat_schema::KIND_CONST:
+            return { json_type(static_cast<const common_chat_schema_const &>(s).value) };
+        case common_chat_schema::KIND_ENUM: {
+            common_chat_schema::type_set types;
+            for (const auto & value : static_cast<const common_chat_schema_enum &>(s).values) {
                 types.add(json_type(value));
             }
             return types;
         }
-        case common_schema::KIND_REF: {
-            const auto * target = static_cast<const common_schema_ref &>(s).target;
+        case common_chat_schema::KIND_REF: {
+            const auto * target = static_cast<const common_chat_schema_ref &>(s).target;
             if (!target || !visited.insert(target).second) {
                 // a cycle contributes no type, to be safe
                 return {};
@@ -403,16 +403,16 @@ static common_schema::type_set value_types_impl(const common_schema & s, std::un
             visited.erase(target);
             return types;
         }
-        case common_schema::KIND_ANY_OF: {
-            common_schema::type_set types;
-            for (const auto & child : static_cast<const common_schema_any_of &>(s).children) {
+        case common_chat_schema::KIND_ANY_OF: {
+            common_chat_schema::type_set types;
+            for (const auto & child : static_cast<const common_chat_schema_any_of &>(s).children) {
                 types |= value_types_impl(*child, visited);
             }
             return types;
         }
-        case common_schema::KIND_ALL_OF: {
-            auto types = common_schema::type_set::all();
-            for (const auto & child : static_cast<const common_schema_all_of &>(s).children) {
+        case common_chat_schema::KIND_ALL_OF: {
+            auto types = common_chat_schema::type_set::all();
+            for (const auto & child : static_cast<const common_chat_schema_all_of &>(s).children) {
                 types &= value_types_impl(*child, visited);
             }
             return types;
@@ -421,27 +421,27 @@ static common_schema::type_set value_types_impl(const common_schema & s, std::un
     return {};
 }
 
-common_schema::type_set common_schema::value_types() const {
-    std::unordered_set<const common_schema *> visited;
+common_chat_schema::type_set common_chat_schema::value_types() const {
+    std::unordered_set<const common_chat_schema *> visited;
     return value_types_impl(*this, visited);
 }
 
-static bool may_be_string_impl(const common_schema & s, std::unordered_set<const common_schema *> & visited) {
+static bool may_be_string_impl(const common_chat_schema & s, std::unordered_set<const common_chat_schema *> & visited) {
     switch (s.kind()) {
-        case common_schema::KIND_STRING:
+        case common_chat_schema::KIND_STRING:
             return true;
-        case common_schema::KIND_CONST:
-            return static_cast<const common_schema_const &>(s).value.is_string();
-        case common_schema::KIND_ENUM:
-            for (const auto & v : static_cast<const common_schema_enum &>(s).values) {
+        case common_chat_schema::KIND_CONST:
+            return static_cast<const common_chat_schema_const &>(s).value.is_string();
+        case common_chat_schema::KIND_ENUM:
+            for (const auto & v : static_cast<const common_chat_schema_enum &>(s).values) {
                 if (v.is_string()) {
                     return true;
                 }
             }
             return false;
-        case common_schema::KIND_REF: {
+        case common_chat_schema::KIND_REF: {
             // a cycle is taken as not a string, to be safe
-            const auto * target = static_cast<const common_schema_ref &>(s).target;
+            const auto * target = static_cast<const common_chat_schema_ref &>(s).target;
             if (!target || !visited.insert(target).second) {
                 return false;
             }
@@ -449,18 +449,18 @@ static bool may_be_string_impl(const common_schema & s, std::unordered_set<const
             visited.erase(target);
             return result;
         }
-        case common_schema::KIND_ANY_OF:
-            for (const auto & child : static_cast<const common_schema_any_of &>(s).children) {
+        case common_chat_schema::KIND_ANY_OF:
+            for (const auto & child : static_cast<const common_chat_schema_any_of &>(s).children) {
                 if (may_be_string_impl(*child, visited)) {
                     return true;
                 }
             }
             return false;
-        case common_schema::KIND_ALL_OF: {
+        case common_chat_schema::KIND_ALL_OF: {
             // every child must allow a string, an any child constrains nothing
             bool any_string = false;
-            for (const auto & child : static_cast<const common_schema_all_of &>(s).children) {
-                if (child->kind() == common_schema::KIND_ANY) {
+            for (const auto & child : static_cast<const common_chat_schema_all_of &>(s).children) {
+                if (child->kind() == common_chat_schema::KIND_ANY) {
                     continue;
                 }
                 if (!may_be_string_impl(*child, visited)) {
@@ -475,12 +475,12 @@ static bool may_be_string_impl(const common_schema & s, std::unordered_set<const
     }
 }
 
-bool common_schema::may_be_string() const {
-    std::unordered_set<const common_schema *> visited;
+bool common_chat_schema::may_be_string() const {
+    std::unordered_set<const common_chat_schema *> visited;
     return may_be_string_impl(*this, visited);
 }
 
-const char * common_schema::kind_name(node_kind kind) {
+const char * common_chat_schema::kind_name(node_kind kind) {
     switch (kind) {
         case KIND_ANY:     return "any";
         case KIND_REF:     return "ref";
@@ -500,7 +500,7 @@ const char * common_schema::kind_name(node_kind kind) {
     return "?";
 }
 
-const char * common_schema::type_name(value_type type) {
+const char * common_chat_schema::type_name(value_type type) {
     switch (type) {
         case TYPE_NULL:    return "null";
         case TYPE_BOOLEAN: return "boolean";

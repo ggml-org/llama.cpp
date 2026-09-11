@@ -99,7 +99,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 std::vector<common_peg_parser> required_args;
                 std::vector<common_peg_parser> optional_args;
 
-                foreach_parameter(function, [&](const common_schema_property & param, const common_schema_document_ptr & doc) {
+                foreach_parameter(function, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
                     auto rule_name = "tool-" + name + "-arg-" + param.name;
 
                     auto arg_open = p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param.name)) + ">\n");
