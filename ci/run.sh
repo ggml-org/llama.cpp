@@ -823,10 +823,10 @@ ret=0
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
+test $ret -eq 0 && gg_run test_backend_ops
+
 test $ret -eq 0 && gg_run test_llama_archs_models
 test $ret -eq 0 && gg_run test_llama_archs_tensor_split
-
-test $ret -eq 0 && gg_run test_backend_ops
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run embd_bge_small
