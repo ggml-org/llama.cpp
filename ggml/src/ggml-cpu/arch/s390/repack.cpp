@@ -70,6 +70,7 @@ void ggml_quantize_mat_q8_0_4x4(const float * GGML_RESTRICT x, void * GGML_RESTR
 #endif
 }
 
+#if defined(__VXE__) || defined(__VXE2__)
 static inline int16x8_t vxe_dot_acc(const int8x16_t v_x, const int8x16_t v_y, const int16x8_t v_acc) {
     return vec_meadd(v_x, v_y, vec_moadd(v_x, v_y, v_acc));
 }
@@ -84,6 +85,7 @@ static inline int32x4_t vxe_fold(const int16x8_t v_sumi) {
     const int16x8_t v_ones = vec_splats((int16_t)1);
     return vec_add(vec_mule(v_sumi, v_ones), vec_mulo(v_sumi, v_ones));
 }
+#endif
 
 void ggml_gemv_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
