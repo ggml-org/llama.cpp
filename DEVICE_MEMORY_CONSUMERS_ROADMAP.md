@@ -6,7 +6,7 @@ Last source review: 2026-09-10, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 3 originally completed at `79e25c139`; its checkpoint now includes the prerequisite Meta ownership fix at `9c6d4b06f`. On `feature/device-memory-consumers`, substage **4.1a** is implemented and validated, awaiting user review and commit. The rest of milestones 4-8 remains planned. The next substage after review is **4.1b**.
+Milestone 3 originally completed at `79e25c139`; its checkpoint now includes the prerequisite Meta ownership fix at `9c6d4b06f`. On `feature/device-memory-consumers`, substage **4.1a** is committed at `7da9821f5`; **4.1b** is implemented and validated, awaiting user review and commit. The rest of milestones 4-8 remains planned. The next substage after review is **4.2a**.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -320,14 +320,15 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Only 4.1a is implemented; do not start 4.1b until the user has reviewed this change.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Substages 4.1a and 4.1b are implemented; do not start 4.2a until the user has reviewed this change.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
 | Milestone 3 | Complete | 9c6d4b06f | Original A/B evidence at 79e25c139 under benchmarks/server-ab/results/; prerequisite Meta ownership fix tested separately. |
-| 4.1a | Ready for user review | Uncommitted | 16 cases / 231 assertions; all five selected suites pass in debug, ASan/leak-checking, and UBSan after integration onto 9c6d4b06f. |
-| 4.1b | Next after review; not started | - | Execution-plan dependency and lifetime validation. |
-| 4.2a-4.5b | Planned | - | Includes 4.4a before 4.3b; see dependency table. |
+| 4.1a | Complete | 7da9821f5 | 16 cases / 231 assertions; all five selected suites pass in debug, ASan/leak-checking, and UBSan after integration onto 9c6d4b06f. |
+| 4.1b | Ready for user review | Uncommitted | 16 cases / 259 assertions; all six selected memory suites pass in debug, ASan/leak-checking, and UBSan. |
+| 4.2a | Next after review; not started | - | Pure minimum-layout planning. |
+| 4.2b-4.5b | Planned | - | Includes 4.4a before 4.3b; see dependency table. |
 | 5.1a-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
@@ -375,3 +376,40 @@ The same leak was reproduced with the unchanged Meta test linked only to GGML; `
 c++ -std=c++17 -g -fsanitize=address -fno-omit-frame-pointer -I ggml/include tests/test-backend-meta.cpp -L build-device-memory-infra-asan/bin -Wl,-rpath,"$PWD/build-device-memory-infra-asan/bin" -lggml -lggml-base -lggml-cpu -o build-device-memory-infra-asan/bin/test-backend-meta-ggml-only
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 build-device-memory-infra-asan/bin/test-backend-meta-ggml-only
 ```
+
+## Substage 4.1b implementation and validation
+
+Implemented in `src/llama-memory-plan.h/.cpp`, with `tests/test-memory-plan.cpp` registered through CMake. This stage reuses the 4.1a resource validator and adds no inference call site, allocator, backend call, or GPU work.
+
+### Ordered serial plan contract
+
+- The caller supplies stages in execution order. Dependencies must name earlier stages. This rules out self-dependencies and cycles without a recursive graph traversal or temporary graph allocation.
+- An acyclic but incorrectly ordered list is also rejected; validation does not sort it. The serial order itself orders accesses between stages, even without explicit dependency edges.
+- Stage IDs are labels, not positions. Every listed stage executes once; repeated decode or return-to-prefill uses another invocation, not a cycle inside one plan.
+- Each stage declares at most one requirement per resource. Separate conflicting declarations are rejected by 4.1a; use READ_WRITE to express one stage consuming incoming contents and defining outgoing contents.
+- Explicit inputs promise initialized contents at plan entry. READ and READ_WRITE need those inputs or a preceding writer. WRITE defines outgoing contents; NONE keeps a binding but cannot act as a producer. Internal scratch that is initialized by the stage declares WRITE.
+- Explicit outputs extend content lifetime through the final stage, even if no stage reads them. A missing output producer is an error at the plan boundary.
+
+### Preservation and limits
+
+- Once initialized, preserved contents must have an explicit requirement in every stage through the last declared use/output, including a NONE requirement in an otherwise inactive stage.
+- Preservation is conservative until the last declaration: a later overwrite does not implicitly waive the preservation policy. Reuse disposable scratch with a discardable resource instead.
+- A missing binding discards discardable contents. A later read needs reinitialization; a later write can establish new contents.
+- Reconstructible contents may cross a binding gap only after initialization. That property is a consumer promise of independent backing, not an implicit producer or an implemented reload operation.
+- Validation is read-only and allocation-free. It checks resource-level declarations, not the initialization of individual byte ranges, correctness of reconstruction, device synchronization, available capacity, or actual execution.
+- Single-stage structural errors and plan/lifetime errors are checked before returning an unsupported-capability result, so a malformed plan cannot silently select a fallback.
+- Parallel execution, unordered DAG scheduling, conditional branches, and runtime transition recovery are not implemented in this substage.
+
+### TDD evidence
+
+The new test compiled against a success-only placeholder and failed 101 of 259 assertions across 16 cases. The implementation then passed all 259 assertions. Cases include empty plans, duplicate/missing IDs, dependencies and cycles, missing producers, preserved-but-unread contents, imported state, outputs and last use, discarded/reconstructible gaps, duplicate access declarations, and diagnostic precedence.
+
+The six selected suites (`test-memory-plan`, `test-memory-requirements`, `test-alloc`, `test-backend-buffer`, `test-backend-memory`, and `test-backend-meta`) pass in the debug CPU, ASan with leak detection, and UBSan builds. Both sanitizer configurations instrument the new llama source. The new validator also passes `-Wall -Wextra -Werror -Wconversion -Wsign-conversion -pedantic`.
+
+```sh
+cmake -S . -B build-device-memory-infra
+cmake --build build-device-memory-infra --target test-memory-plan test-memory-requirements test-alloc test-backend-buffer test-backend-memory test-backend-meta -j 20
+ctest --test-dir build-device-memory-infra -R '^test-(memory-plan|memory-requirements|alloc|backend-buffer|backend-memory|backend-meta)$' --output-on-failure
+```
+
+For sanitizers, use the existing `build-device-memory-infra-asan` and `build-device-memory-infra-ubsan` configurations with the same target list and selection. ASan uses `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1`; UBSan uses `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`. TSan and GPU-specific tests were not run for this non-executing, non-concurrent validation stage.

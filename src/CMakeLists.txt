@@ -49,6 +49,8 @@ add_library(llama
             ${LLAMA_CORE_SOURCES}
             llama-context-workspace.cpp
             llama-context-workspace.h
+            llama-memory-plan.cpp
+            llama-memory-plan.h
             llama-memory-requirements.cpp
             llama-memory-requirements.h
             unicode.h
