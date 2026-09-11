@@ -1005,6 +1005,106 @@ static void test_context_buffer_set_borrowed_view() {
     GGML_ASSERT(ggml_backend_buffer_get_size(source_buffer.get()) == 32);
 }
 
+static void test_meta_split_preparation() {
+    static auto first = dummy_backend_init(256);
+    static auto second = dummy_backend_init(256);
+    for (auto * backend : {&first, &second}) {
+        backend->context->buffer_type = &backend->buffer_type;
+        backend->context->device.iface.get_buffer_type = test_device_buffer_type;
+        backend->context->device.iface.get_name = [](ggml_backend_dev_t) { return "prepare_member"; };
+        backend->context->device.iface.get_description = [](ggml_backend_dev_t) { return "preparation test member"; };
+    }
+    ggml_backend_dev_t devices[] = {&first.context->device, &second.context->device};
+    auto * meta = ggml_backend_meta_device(devices, 2, [](const ggml_tensor * tensor, void *) {
+        ggml_backend_meta_split_state result{GGML_BACKEND_SPLIT_AXIS_1, {0}, {1}, 1};
+        if (std::strcmp(tensor->name, "mirror") == 0) {
+            result.axis = GGML_BACKEND_SPLIT_AXIS_MIRRORED;
+        } else if (std::strcmp(tensor->name, "segmented") == 0) {
+            result.n_segments = 2;
+            result.nr[1] = 1;
+            result.ne[0] = 1;
+            result.ne[1] = 2;
+            result.ne[2] = 3;
+            result.ne[3] = 6;
+        } else {
+            result.axis = std::strcmp(tensor->name, "axis0") == 0 ? GGML_BACKEND_SPLIT_AXIS_0 : GGML_BACKEND_SPLIT_AXIS_1;
+            result.ne[0] = tensor->ne[result.axis]/3;
+            result.ne[1] = tensor->ne[result.axis] - result.ne[0];
+        }
+        return result;
+    }, nullptr);
+    auto * buft = ggml_backend_dev_buffer_type(meta);
+    auto test_ctx = make_context();
+    auto * source = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 8, 6);
+    auto * mirror = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 8, 6);
+    ggml_set_name(mirror, "mirror");
+    auto * segmented = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 8, 12);
+    ggml_set_name(segmented, "segmented");
+    auto * empty = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 0, 6);
+    auto * small = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 8, 2);
+    auto * weight = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_Q4_0, 96, 4);
+    auto * input = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 96, 2);
+    ggml_set_name(weight, "axis0");
+    ggml_set_name(input, "axis0");
+    auto * product = ggml_mul_mat(test_ctx.ctx, weight, input);
+    auto * scaled = ggml_scale(test_ctx.ctx, source, 0.5f);
+    auto * scaled_segments = ggml_scale(test_ctx.ctx, segmented, 0.5f);
+    auto * view = ggml_view_2d(test_ctx.ctx, source, 4, 6, source->nb[1], 4*sizeof(float));
+    ggml_backend_buffer_ptr assigned(ggml_backend_buft_alloc_buffer(buft, 0));
+    ggml_backend_buffer_set_usage(assigned.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    for (auto * tensor : {source, weight, input, segmented}) {
+        tensor->buffer = assigned.get();
+    }
+    std::vector<std::pair<ggml_tensor *, std::array<uint8_t, GGML_TENSOR_SIZE>>> before;
+    for (auto * tensor = ggml_get_first_tensor(test_ctx.ctx); tensor; tensor = ggml_get_next_tensor(test_ctx.ctx, tensor)) {
+        before.emplace_back();
+        before.back().first = tensor;
+        std::memcpy(before.back().second.data(), tensor, GGML_TENSOR_SIZE);
+    }
+    auto * weights = ggml_backend_meta_split_context_new(buft, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    auto * compute = ggml_backend_meta_split_context_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+    auto ss = ggml_backend_meta_split_context_get(weights, source, true);
+    GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_1 && ss.ne[0] == 2 && ss.ne[1] == 4);
+    ss = ggml_backend_meta_split_context_get(weights, mirror, true);
+    GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+    ss = ggml_backend_meta_split_context_get(weights, segmented, true);
+    GGML_ASSERT(ss.n_segments == 2 && ss.ne[0] + ss.ne[2] == 4 && ss.ne[1] + ss.ne[3] == 8);
+    ss = ggml_backend_meta_split_context_get(weights, small, true);
+    GGML_ASSERT(ss.ne[0] == 0 && ss.ne[1] == 2);
+    ss = ggml_backend_meta_split_context_get(weights, empty, true);
+    GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_UNKNOWN);
+    ss = ggml_backend_meta_split_context_get(compute, scaled, true);
+    GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_1 && ss.ne[0] == 2 && ss.ne[1] == 4);
+    ss = ggml_backend_meta_split_context_get(compute, scaled_segments, true);
+    GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_1 && ss.ne[0] == 4 && ss.ne[1] == 8);
+    ss = ggml_backend_meta_split_context_get(compute, view, true);
+    GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_1 && ss.ne[0] == 2 && ss.ne[1] == 4);
+    ss = ggml_backend_meta_split_context_get(compute, product, false);
+    GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL);
+    ss = ggml_backend_meta_split_context_get(compute, product, true);
+    GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+    GGML_ASSERT(!ggml_backend_tensor_is_bound(source) && !ggml_backend_tensor_is_bound(product));
+    GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
+    for (const auto & entry : before) {
+        GGML_ASSERT(std::memcmp(entry.first, entry.second.data(), GGML_TENSOR_SIZE) == 0);
+    }
+
+    auto bound_ctx = make_context();
+    auto * bound = ggml_new_tensor_2d(bound_ctx.ctx, GGML_TYPE_F32, 8, 6);
+    ggml_backend_buffer_ptr bound_buffer(ggml_backend_alloc_ctx_tensors_from_buft(bound_ctx.ctx, buft));
+    GGML_ASSERT(bound_buffer != nullptr);
+    GGML_ASSERT(first.context->buffers.size() == 1 && second.context->buffers.size() == 1);
+    GGML_ASSERT(ggml_backend_buffer_get_size(first.context->buffers[0]) == 64);
+    GGML_ASSERT(ggml_backend_buffer_get_size(second.context->buffers[0]) == 128);
+    ss = ggml_backend_meta_split_context_get(compute, bound, true);
+    GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_1 && ss.ne[0] == 2 && ss.ne[1] == 4);
+    ggml_backend_buffer_set_usage(bound_buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ss = ggml_backend_meta_split_context_get(compute, bound, false);
+    GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_1 && ss.ne[0] == 2 && ss.ne[1] == 4);
+    ggml_backend_meta_split_context_free(compute);
+    ggml_backend_meta_split_context_free(weights);
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -1013,6 +1113,7 @@ static void run(const char * name, void (*f)()) {
 }
 
 int main() {
+    run("test_meta_split_preparation", test_meta_split_preparation);
     run("test_context_buffer_sets", test_context_buffer_sets);
     run("test_context_buffer_set_failures", test_context_buffer_set_failures);
     run("test_context_buffer_set_borrowed_view", test_context_buffer_set_borrowed_view);

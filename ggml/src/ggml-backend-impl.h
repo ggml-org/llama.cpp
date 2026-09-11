@@ -114,6 +114,12 @@ extern "C" {
     GGML_API bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf);
     GGML_API bool ggml_backend_buft_is_meta  (ggml_backend_buffer_type_t buft);
 
+    struct ggml_backend_meta_split_context;
+    GGML_API struct ggml_backend_meta_split_context * ggml_backend_meta_split_context_new(ggml_backend_buffer_type_t buft, enum ggml_backend_buffer_usage usage);
+    GGML_API void ggml_backend_meta_split_context_free(struct ggml_backend_meta_split_context * ctx);
+    GGML_API struct ggml_backend_meta_split_state ggml_backend_meta_split_context_get(
+            struct ggml_backend_meta_split_context * ctx, const struct ggml_tensor * tensor, bool assume_sync);
+
     GGML_API size_t         ggml_backend_meta_n_backends    (ggml_backend_t meta_backend);
     GGML_API ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, size_t index);
 
