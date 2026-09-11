@@ -775,12 +775,18 @@ function gg_run_test_backend_ops {
 
     set -e
 
-    local args_extra=""
+    local args_extra="-j $(nproc)"
 
     # TODO: fix multi-threaded for ROCm
     #       https://github.com/ggml-org/llama.cpp/actions/runs/34576278519/job/103297889044?pr=28740#step:3:4865
-    if [ -z ${GG_BUILD_ROCM} ]; then
-        args_extra="-j $(nproc)"
+    if [ ! -z ${GG_BUILD_ROCM} ]; then
+        args_extra=""
+    fi
+
+    # TODO: MoltenVK bug?
+    #       https://github.com/ggml-org/llama.cpp/actions/runs/34611260059/job/103302413736?pr=28740#step:3:5897
+    if [ ! -z "${GG_BUILD_VULKAN}" ] && [ "$(uname -s)" = "Darwin" ]; then
+        args_extra=""
     fi
 
     if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
