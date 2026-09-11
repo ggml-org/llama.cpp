@@ -1535,19 +1535,13 @@ void server_models::handle_child_state(const std::string & name, const std::stri
             {
                 std::string result = json_value(payload, "result", std::string());
                 std::string url    = json_value(payload, "url",    std::string());
-                auto request_exit = [&]() {
+                if (result == "download_finished" || result == "download_failed") {
+                    update_download_progress(name, {}, true, result == "download_finished");
+                    // the monitoring thread owns the child's stdin and the stop
+                    // timeout, so the exit request travels through it and a child
+                    // that outlives the command is killed after stop_timeout
                     std::lock_guard<std::mutex> lk(mutex);
-                    auto it = mapping.find(name);
-                    if (it != mapping.end()) {
-                        return it->second.subproc->request_exit();
-                    }
-                };
-                if (result == "download_finished") {
-                    update_download_progress(name, {}, true, true);
-                    request_exit();
-                } else if (result == "download_failed") {
-                    update_download_progress(name, {}, true, false);
-                    request_exit();
+                    request_stop(name);
                 } else if (!url.empty()) {
                     common_download_progress p;
                     p.url        = url;
