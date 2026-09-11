@@ -29,6 +29,11 @@ struct dummy_backend_context {
     ggml_backend_buffer_type_t buffer_type = nullptr;
     bool real_data = false;
     std::map<ggml_backend_buffer_t, std::vector<uint8_t>> data;
+    size_t alloc_calls = 0;
+    size_t free_calls = 0;
+    size_t init_calls = 0;
+    size_t fail_alloc = SIZE_MAX;
+    size_t fail_init = SIZE_MAX;
 
     size_t allocated_total() const {
         size_t n = 0;
@@ -47,6 +52,9 @@ static const char * dummy_backend_buffer_type_get_name(ggml_backend_buffer_type_
 
 static ggml_backend_buffer_t dummy_backend_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     dummy_backend_context * ctx    = (dummy_backend_context *) buft->context;
+    if (++ctx->alloc_calls == ctx->fail_alloc) {
+        return nullptr;
+    }
     ggml_backend_buffer_t & buffer = ctx->buffers.emplace_back();
     buffer                         = ggml_backend_buffer_init(buft, ctx->buffer_interface, ctx, size);
     if (ctx->real_data) {
@@ -78,6 +86,7 @@ static void dummy_backend_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(i != ctx->buffers.end());
     ctx->buffers.erase(i);
     ctx->data.erase(buffer);
+    ctx->free_calls++;
 }
 
 static void * dummy_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
@@ -85,8 +94,9 @@ static void * dummy_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
     return ctx->real_data ? ctx->data.at(buffer).data() : alloc_base;
 }
 
-static ggml_status dummy_backend_buffer_init_tensor(ggml_backend_buffer_t, ggml_tensor *) {
-    return GGML_STATUS_SUCCESS;
+static ggml_status dummy_backend_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor *) {
+    auto * ctx = static_cast<dummy_backend_context *>(buffer->context);
+    return ++ctx->init_calls == ctx->fail_init ? GGML_STATUS_FAILED : GGML_STATUS_SUCCESS;
 }
 
 static void dummy_backend_buffer_memset_tensor(ggml_backend_buffer_t, ggml_tensor *, uint8_t, size_t, size_t) {}
@@ -892,6 +902,107 @@ static void test_meta_buffer_type_lifetime() {
     GGML_ASSERT(ggml_backend_buft_get_alignment(buft) == 8);
     GGML_ASSERT(ggml_backend_buft_get_device(buft) == meta);
     GGML_ASSERT(!ggml_backend_buft_is_host(buft));
+    auto ctx = make_context();
+    ggml_new_tensor_1d(ctx.ctx, GGML_TYPE_F32, 8);
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.ctx, buft) == 32);
+    ggml_backend_buffer_set buffers{};
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_set(ctx.ctx, buft, &buffers) == GGML_STATUS_FAILED);
+    GGML_ASSERT(buffers.buffers == nullptr && buffers.n_buffers == 0);
+}
+
+static void test_context_buffer_sets() {
+    auto ctx_set = make_context();
+    auto ctx_legacy = make_context();
+    auto set_backend = dummy_backend_init(64);
+    auto legacy_backend = dummy_backend_init(64);
+    std::array<ggml_tensor *, 3> set_tensors;
+    std::array<ggml_tensor *, 3> legacy_tensors;
+    for (size_t i = 0; i < set_tensors.size(); i++) {
+        set_tensors[i] = ggml_new_tensor_1d(ctx_set.ctx, GGML_TYPE_F32, 8);
+        legacy_tensors[i] = ggml_new_tensor_1d(ctx_legacy.ctx, GGML_TYPE_F32, 8);
+    }
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(ctx_set.ctx, &set_backend.buffer_type) == 96);
+    GGML_ASSERT(set_backend.context->alloc_calls == 0);
+    ggml_backend_buffer_set buffers{};
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_set(ctx_set.ctx, &set_backend.buffer_type, &buffers) == GGML_STATUS_SUCCESS);
+    ggml_backend_buffer_ptr legacy(ggml_backend_alloc_ctx_tensors_from_buft(ctx_legacy.ctx, &legacy_backend.buffer_type));
+    GGML_ASSERT(buffers.n_buffers == 2 && ggml_backend_buffer_is_multi_buffer(legacy.get()));
+    GGML_ASSERT(ggml_backend_buffer_get_size(buffers.buffers[0]) == 64);
+    GGML_ASSERT(ggml_backend_buffer_get_size(buffers.buffers[1]) == 32);
+    GGML_ASSERT(ggml_backend_buffer_get_size(legacy.get()) == 96);
+    GGML_ASSERT(set_backend.context->allocated_total() == legacy_backend.context->allocated_total());
+    for (size_t i = 0; i < set_tensors.size(); i++) {
+        GGML_ASSERT(set_tensors[i]->buffer == buffers.buffers[i/2]);
+        GGML_ASSERT(legacy_tensors[i]->buffer == legacy_backend.context->buffers[i/2]);
+        GGML_ASSERT(size_t(set_tensors[i]->data) - size_t(alloc_base) == size_t(legacy_tensors[i]->data) - size_t(alloc_base));
+    }
+    ggml_backend_buffer_set again{};
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_set(ctx_set.ctx, &set_backend.buffer_type, &again) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(again.buffers == nullptr && again.n_buffers == 0);
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft(ctx_legacy.ctx, &legacy_backend.buffer_type) == nullptr);
+    ggml_backend_buffer_set_free(&buffers);
+    ggml_backend_buffer_set_free(&buffers);
+    GGML_ASSERT(buffers.buffers == nullptr && buffers.n_buffers == 0);
+    GGML_ASSERT(set_backend.context->buffers.empty() && set_backend.context->free_calls == 2);
+    legacy.reset();
+    GGML_ASSERT(legacy_backend.context->buffers.empty() && legacy_backend.context->free_calls == 2);
+
+    for (bool zero_tensor : {false, true}) {
+        auto empty = make_context();
+        if (zero_tensor) {
+            ggml_new_tensor_1d(empty.ctx, GGML_TYPE_F32, 0);
+        }
+        GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_set(empty.ctx, &set_backend.buffer_type, &buffers) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(buffers.buffers == nullptr && buffers.n_buffers == 0);
+        GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft(empty.ctx, &set_backend.buffer_type) == nullptr);
+    }
+
+    auto oversized = make_context();
+    ggml_new_tensor_1d(oversized.ctx, GGML_TYPE_F32, 32);
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_set(oversized.ctx, &set_backend.buffer_type, &buffers) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(buffers.n_buffers == 1 && ggml_backend_buffer_get_size(buffers.buffers[0]) == 128);
+    ggml_backend_buffer_set_free(&buffers);
+}
+
+static void test_context_buffer_set_failures() {
+    for (bool fail_init : {false, true}) {
+        for (size_t nth = 1; nth <= 3; nth++) {
+            auto ctx = make_context();
+            auto backend = dummy_backend_init(32);
+            for (int i = 0; i < 3; i++) {
+                ggml_new_tensor_1d(ctx.ctx, GGML_TYPE_F32, 8);
+            }
+            if (fail_init) {
+                backend.context->fail_init = nth;
+            } else {
+                backend.context->fail_alloc = nth;
+            }
+            ggml_backend_buffer_set buffers{};
+            auto status = ggml_backend_alloc_ctx_tensors_from_buft_set(ctx.ctx, &backend.buffer_type, &buffers);
+            GGML_ASSERT(status == (fail_init ? GGML_STATUS_FAILED : GGML_STATUS_ALLOC_FAILED));
+            GGML_ASSERT(buffers.buffers == nullptr && buffers.n_buffers == 0);
+            GGML_ASSERT(backend.context->buffers.empty());
+            GGML_ASSERT(backend.context->free_calls == (fail_init ? nth : nth - 1));
+            ggml_backend_buffer_set_free(&buffers);
+        }
+    }
+}
+
+static void test_context_buffer_set_borrowed_view() {
+    auto source_ctx = make_context();
+    auto new_ctx = make_context();
+    auto backend = dummy_backend_init(32);
+    ggml_tensor * source = ggml_new_tensor_1d(source_ctx.ctx, GGML_TYPE_F32, 8);
+    ggml_backend_buffer_ptr source_buffer(ggml_backend_alloc_ctx_tensors_from_buft(source_ctx.ctx, &backend.buffer_type));
+    ggml_tensor * view = ggml_view_1d(new_ctx.ctx, source, 4, sizeof(float));
+    ggml_tensor * owned = ggml_new_tensor_1d(new_ctx.ctx, GGML_TYPE_F32, 8);
+    ggml_backend_buffer_set buffers{};
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_set(new_ctx.ctx, &backend.buffer_type, &buffers) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(buffers.n_buffers == 1 && owned->buffer == buffers.buffers[0]);
+    GGML_ASSERT(view->buffer == source_buffer.get());
+    ggml_backend_buffer_set_free(&buffers);
+    GGML_ASSERT(backend.context->buffers.size() == 1 && backend.context->buffers[0] == source_buffer.get());
+    GGML_ASSERT(ggml_backend_buffer_get_size(source_buffer.get()) == 32);
 }
 
 static void run(const char * name, void (*f)()) {
@@ -902,6 +1013,9 @@ static void run(const char * name, void (*f)()) {
 }
 
 int main() {
+    run("test_context_buffer_sets", test_context_buffer_sets);
+    run("test_context_buffer_set_failures", test_context_buffer_set_failures);
+    run("test_context_buffer_set_borrowed_view", test_context_buffer_set_borrowed_view);
     run("test_meta_buffer_type_lifetime", test_meta_buffer_type_lifetime);
     run("test_tensor_binding_state", test_tensor_binding_state);
     run("test_addressless_views_and_transfers", test_addressless_views_and_transfers);
