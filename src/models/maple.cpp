@@ -13,11 +13,7 @@ void llama_model_maple::load_arch_hparams(llama_model_loader & ml) {
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
 
-    // The reference implementation clamps the MoE SwiGLU gate/up at 7.0
-    // (modeling_maple.py). Official GGUFs carry it as swiglu_clamp_exp; the
-    // 7.0 prefill is the fallback for GGUFs that predate the key.
-    hparams.swiglu_clamp_exp.fill(7.0f);
-    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP, hparams.swiglu_clamp_exp, hparams.n_layer(), false);
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP, hparams.swiglu_clamp_exp, hparams.n_layer_all);
 
     switch (hparams.n_layer()) {
         case 24: type = LLM_TYPE_20B; break;

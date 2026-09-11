@@ -32,23 +32,8 @@ class MapleModel(TextModel):
         self.gguf_writer.add_sliding_window(hparams["sliding_window"])
         self.gguf_writer.add_sliding_window_pattern([layer_type == "sliding_attention" for layer_type in hparams["layer_types"]])
         self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
-
-    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
-        if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_INP, bid):
-            return gguf.GGMLQuantizationType.F32
-
-        # Keep embeddings and the output head in F16: they are the two
-        # tensors that stay dense (not ternary) in Maple, and quantizing
-        # them is what costs most in perplexity. DeepGrove ships all
-        # official GGUFs with an F16 or Q4_K head and F16 embeddings;
-        # F16 here matches that reference and avoids a silent downgrade.
-        if any(self.match_model_tensor_name(new_name, key, bid) for key in (
-            gguf.MODEL_TENSOR.TOKEN_EMBD,
-            gguf.MODEL_TENSOR.OUTPUT,
-        )):
-            return gguf.GGMLQuantizationType.F16
-
-        return super().tensor_force_quant(name, new_name, bid, n_dims)
+        # the reference clamps the MoE SwiGLU gate/up at 7.0 (modeling_maple.py)
+        self.gguf_writer.add_swiglu_clamp_exp([7.0] * self.block_count)
 
     _experts: list[dict[str, Tensor]] | None = None
 
