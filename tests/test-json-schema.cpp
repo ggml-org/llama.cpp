@@ -478,6 +478,8 @@ static void test_errors(testing & t) {
     t.test("ref", [](testing & t) {
         assert_error(t, R"({"$ref": 5})", "#: $ref must be a string");
         assert_error(t, R"({"$ref": "https://example.com/x.json"})", "#: unsupported $ref https://example.com/x.json");
+        assert_error(t, R"({"$ref": ""})", "#: unsupported $ref ,");
+        assert_error(t, R"({"$ref": "#"})", "#: unsupported $ref #,");
         assert_error(t, R"({"$defs": {}, "$ref": "#/$defs/missing"})", "#: cannot resolve $ref #/$defs/missing, missing not found");
         assert_error(t, R"({"oneOf": [{}], "$ref": "#/oneOf/1"})", "#: cannot resolve $ref #/oneOf/1, 1 is out of range");
         assert_error(t, R"({"$defs": {"a": {"$ref": "#/$defs/a/nope"}}, "$ref": "#/$defs/a"})", "#/$defs/a: cannot resolve $ref #/$defs/a/nope, nope not found");
