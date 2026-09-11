@@ -776,9 +776,9 @@ function gg_run_test_backend_ops {
     set -e
 
     if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
-        (time ./bin/test-backend-ops -b CPU ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+        (time ./bin/test-backend-ops -j $(nproc) -b CPU) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
     else
-        (time ./bin/test-backend-ops ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+        (time ./bin/test-backend-ops -j $(nproc)       ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
     fi
 
     set +e
