@@ -9,8 +9,7 @@
 #include <string>
 #include <vector>
 
-// JSON schema IR, covering the subset that json_schema_to_grammar() can convert.
-// A $ref becomes a common_schema_ref whose target is owned by the common_schema_document, so a recursive schema stays finite.
+// JSON schema, covering the subset that json_schema_to_grammar() can convert.
 
 struct common_schema {
     enum node_kind {
@@ -30,7 +29,6 @@ struct common_schema {
         KIND_OBJECT,
     };
 
-    // The JSON types a value may have, as named by the "type" keyword
     enum value_type {
         TYPE_NULL,
         TYPE_BOOLEAN,
@@ -80,23 +78,17 @@ struct common_schema {
     virtual ~common_schema() = default;
     virtual node_kind kind() const = 0;
 
-    // The types of value matching the schema: the union over anyOf, the intersection over allOf, every type for an any.
-    // A number schema accepts integers too, so it has both.
     type_set value_types() const;
 
     // Whether a value matching the schema may be a string, through any branch of it.
-    // Unlike value_types() an any does not count: some models emit raw string values rather than
-    // JSON-encoded strings for string parameters, and an unconstrained parameter is parsed as JSON.
     bool may_be_string() const;
 
-    // e.g. "anyOf" / "string", for messages
     static const char * kind_name(node_kind kind);
     static const char * type_name(value_type type);
 };
 
 using common_schema_ptr = std::unique_ptr<common_schema>;
 
-// {} or a schema with no recognized keywords: any JSON value
 struct common_schema_any : common_schema {
     node_kind kind() const override { return KIND_ANY; }
 };
@@ -175,7 +167,6 @@ struct common_schema_array : common_schema {
     node_kind kind() const override { return KIND_ARRAY; }
 };
 
-// "prefixItems", or "items" given as an array: one schema per position
 struct common_schema_tuple : common_schema {
     std::vector<common_schema_ptr> items;
 
@@ -195,7 +186,6 @@ struct common_schema_object : common_schema {
     node_kind kind() const override { return KIND_OBJECT; }
 };
 
-// A parsed schema: its root, and the target of every $ref it reaches keyed by the $ref string
 struct common_schema_document {
     common_schema_ptr                        root;
     std::map<std::string, common_schema_ptr> refs;

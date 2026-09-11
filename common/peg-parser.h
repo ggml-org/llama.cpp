@@ -243,7 +243,6 @@ struct common_peg_until_parser {
     std::vector<std::string> delimiters;
 };
 
-// The schema is not saved: a loaded arena parses, only the arena that built it generates grammar
 struct common_peg_schema_parser {
     common_peg_parser_id child;
     std::string name;

@@ -828,7 +828,6 @@ public:
         return _add_primitive(rule_name == "root" ? "root" : type, PRIMITIVE_RULES.at(type));
     }
 
-    // An allOf merges its components: the properties of a direct component are required, those of a nested anyOf are optional, enums are intersected.
     std::string _visit_all_of(const common_schema_all_of & schema, const std::string & name, const std::string & rule_name) {
         std::unordered_set<std::string> required;
         std::vector<std::pair<std::string, const common_schema *>> properties;
