@@ -120,6 +120,16 @@ extern "C" {
     GGML_API struct ggml_backend_meta_split_state ggml_backend_meta_split_context_get(
             struct ggml_backend_meta_split_context * ctx, const struct ggml_tensor * tensor, bool assume_sync);
 
+    struct ggml_backend_meta_preparation;
+    GGML_API struct ggml_backend_meta_preparation * ggml_backend_meta_preparation_new(
+            ggml_backend_buffer_type_t buft, enum ggml_backend_buffer_usage usage, size_t max_tensors);
+    GGML_API void ggml_backend_meta_preparation_free(struct ggml_backend_meta_preparation * preparation);
+    // Prepare dependencies first; discard the preparation after a failure.
+    GGML_API enum ggml_status ggml_backend_meta_preparation_tensor(
+            struct ggml_backend_meta_preparation * preparation, const struct ggml_tensor * tensor);
+    GGML_API struct ggml_tensor * ggml_backend_meta_preparation_get_tensor(
+            struct ggml_backend_meta_preparation * preparation, const struct ggml_tensor * tensor, size_t device);
+
     GGML_API size_t         ggml_backend_meta_n_backends    (ggml_backend_t meta_backend);
     GGML_API ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, size_t index);
 

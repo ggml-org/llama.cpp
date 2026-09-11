@@ -1049,10 +1049,12 @@ static void test_meta_split_preparation() {
     auto * product = ggml_mul_mat(test_ctx.ctx, weight, input);
     auto * scaled = ggml_scale(test_ctx.ctx, source, 0.5f);
     auto * scaled_segments = ggml_scale(test_ctx.ctx, segmented, 0.5f);
+    auto * scaled_small = ggml_scale(test_ctx.ctx, small, 0.5f);
+    scaled_small->flags |= GGML_TENSOR_FLAG_COMPUTE;
     auto * view = ggml_view_2d(test_ctx.ctx, source, 4, 6, source->nb[1], 4*sizeof(float));
     ggml_backend_buffer_ptr assigned(ggml_backend_buft_alloc_buffer(buft, 0));
     ggml_backend_buffer_set_usage(assigned.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-    for (auto * tensor : {source, weight, input, segmented}) {
+    for (auto * tensor : {source, weight, input, segmented, small}) {
         tensor->buffer = assigned.get();
     }
     std::vector<std::pair<ggml_tensor *, std::array<uint8_t, GGML_TENSOR_SIZE>>> before;
@@ -1089,18 +1091,86 @@ static void test_meta_split_preparation() {
         GGML_ASSERT(std::memcmp(entry.first, entry.second.data(), GGML_TENSOR_SIZE) == 0);
     }
 
+    auto * preparation = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, before.size());
+    GGML_ASSERT(preparation != nullptr);
+    for (const auto & entry : before) {
+        GGML_ASSERT(ggml_backend_meta_preparation_tensor(preparation, entry.first) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(ggml_backend_meta_preparation_tensor(preparation, entry.first) == GGML_STATUS_SUCCESS);
+        for (size_t device = 0; device < 2; device++) {
+            auto * simple = ggml_backend_meta_preparation_get_tensor(preparation, entry.first, device);
+            GGML_ASSERT(simple && simple->data == nullptr && simple->buffer == nullptr);
+        }
+        GGML_ASSERT(std::memcmp(entry.first, entry.second.data(), GGML_TENSOR_SIZE) == 0);
+    }
+    for (size_t device = 0; device < 2; device++) {
+        auto * simple_source = ggml_backend_meta_preparation_get_tensor(preparation, source, device);
+        auto * simple_scaled = ggml_backend_meta_preparation_get_tensor(preparation, scaled, device);
+        auto * simple_view = ggml_backend_meta_preparation_get_tensor(preparation, view, device);
+        auto * simple_weight = ggml_backend_meta_preparation_get_tensor(preparation, weight, device);
+        auto * simple_mirror = ggml_backend_meta_preparation_get_tensor(preparation, mirror, device);
+        auto * simple_small = ggml_backend_meta_preparation_get_tensor(preparation, scaled_small, device);
+        GGML_ASSERT(simple_source->ne[1] == (device == 0 ? 2 : 4));
+        GGML_ASSERT(ggml_nbytes(simple_source) == (device == 0 ? 64 : 128));
+        GGML_ASSERT(simple_scaled->src[0] == simple_source);
+        GGML_ASSERT(simple_scaled->ne[1] == simple_source->ne[1]);
+        GGML_ASSERT(simple_view->view_src == simple_source && simple_view->view_offs == 4*sizeof(float));
+        GGML_ASSERT(simple_view->nb[1] == 8*sizeof(float));
+        GGML_ASSERT(ggml_nbytes(simple_view) + simple_view->view_offs == ggml_nbytes(simple_source));
+        GGML_ASSERT(simple_weight->ne[0] == (device == 0 ? 32 : 64));
+        GGML_ASSERT(ggml_nbytes(simple_weight) == (device == 0 ? 72 : 144));
+        GGML_ASSERT(ggml_nbytes(simple_mirror) == ggml_nbytes(mirror));
+        GGML_ASSERT(bool(simple_small->flags & GGML_TENSOR_FLAG_COMPUTE) == (device != 0));
+    }
+    GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
+
+    auto * missing_source = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 2);
+    GGML_ASSERT(missing_source != nullptr);
+    GGML_ASSERT(ggml_backend_meta_preparation_tensor(missing_source, scaled) == GGML_STATUS_FAILED);
+    GGML_ASSERT(ggml_backend_meta_preparation_get_tensor(missing_source, scaled, 0) == nullptr);
+    ggml_backend_meta_preparation_free(missing_source);
+    auto * no_capacity = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 0);
+    GGML_ASSERT(no_capacity != nullptr);
+    GGML_ASSERT(ggml_backend_meta_preparation_tensor(no_capacity, source) == GGML_STATUS_ALLOC_FAILED);
+    ggml_backend_meta_preparation_free(no_capacity);
+    GGML_ASSERT(ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, SIZE_MAX) == nullptr);
+    GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
+
     auto bound_ctx = make_context();
     auto * bound = ggml_new_tensor_2d(bound_ctx.ctx, GGML_TYPE_F32, 8, 6);
+    auto * bound_view = ggml_view_2d(bound_ctx.ctx, bound, 4, 6, bound->nb[1], 4*sizeof(float));
     ggml_backend_buffer_ptr bound_buffer(ggml_backend_alloc_ctx_tensors_from_buft(bound_ctx.ctx, buft));
     GGML_ASSERT(bound_buffer != nullptr);
     GGML_ASSERT(first.context->buffers.size() == 1 && second.context->buffers.size() == 1);
     GGML_ASSERT(ggml_backend_buffer_get_size(first.context->buffers[0]) == 64);
     GGML_ASSERT(ggml_backend_buffer_get_size(second.context->buffers[0]) == 128);
+    GGML_ASSERT(ggml_backend_meta_preparation_tensor(preparation, bound) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_meta_preparation_tensor(preparation, bound_view) == GGML_STATUS_SUCCESS);
+    for (size_t device = 0; device < 2; device++) {
+        auto * simple_bound = ggml_backend_meta_preparation_get_tensor(preparation, bound, device);
+        auto * simple_view = ggml_backend_meta_preparation_get_tensor(preparation, bound_view, device);
+        GGML_ASSERT(simple_bound->buffer != nullptr && simple_view->buffer == simple_bound->buffer);
+        GGML_ASSERT(size_t(simple_view->data) == size_t(simple_bound->data) + 4*sizeof(float));
+    }
     ss = ggml_backend_meta_split_context_get(compute, bound, true);
     GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_1 && ss.ne[0] == 2 && ss.ne[1] == 4);
     ggml_backend_buffer_set_usage(bound_buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     ss = ggml_backend_meta_split_context_get(compute, bound, false);
     GGML_ASSERT(ss.axis == GGML_BACKEND_SPLIT_AXIS_1 && ss.ne[0] == 2 && ss.ne[1] == 4);
+    ggml_backend_meta_preparation_free(preparation);
+    GGML_ASSERT(first.context->buffers.size() == 1 && second.context->buffers.size() == 1);
+    for (bool fail_init : {false, true}) {
+        auto failed_ctx = make_context();
+        ggml_new_tensor_2d(failed_ctx.ctx, GGML_TYPE_F32, 8, 6);
+        if (fail_init) {
+            second.context->fail_init = second.context->init_calls + 1;
+        } else {
+            second.context->fail_alloc = second.context->alloc_calls + 1;
+        }
+        GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft(failed_ctx.ctx, buft) == nullptr);
+        GGML_ASSERT(first.context->buffers.size() == 1 && second.context->buffers.size() == 1);
+        second.context->fail_init = SIZE_MAX;
+        second.context->fail_alloc = SIZE_MAX;
+    }
     ggml_backend_meta_split_context_free(compute);
     ggml_backend_meta_split_context_free(weights);
 }
