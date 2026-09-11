@@ -4738,9 +4738,197 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
     UNUSED(nb);
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
+    constexpr int    q8_k_blocklen = 4;
+
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_MATMUL_INT8)
+    switch(svcntb() * 8){
+        case 256:{
+            const svbool_t pg8    = svptrue_b8();
+            const svbool_t pg32   = svptrue_b32();
+
+            const svuint8_t low_nibble = svdup_n_u8(0x0f);
+            const svuint8_t high_lo2   = svdup_n_u8(0x03);
+            const svuint8_t high_hi2   = svdup_n_u8(0x30);
+            const svint8_t  q6_bias    = svdup_n_s8(32);
+            const svint32_t zero_s32   = svdup_n_s32(0);
+
+            for (int y = 0; y < nr / q8_k_blocklen; ++y) {
+                const block_q8_Kx4 * GGML_RESTRICT q8_ptr = (const block_q8_Kx4 *) vy + y * nb;
+
+                for (int x = 0; x < nc / ncols_interleaved; ++x) {
+                    const block_q6_Kx8 * GGML_RESTRICT q6_ptr = (const block_q6_Kx8 *) vx + x * nb;
+
+                    //each acc handles all columns for one row
+                    svfloat32_t acc_f32_r0 = svdup_n_f32(0);
+                    svfloat32_t acc_f32_r1 = svdup_n_f32(0);
+                    svfloat32_t acc_f32_r2 = svdup_n_f32(0);
+                    svfloat32_t acc_f32_r3 = svdup_n_f32(0);
+
+                    for (int b = 0; b < nb; ++b) {
+                        svint32_t acc_c03_r01 = zero_s32;
+                        svint32_t acc_c03_r23 = zero_s32;
+                        svint32_t acc_c47_r01 = zero_s32;
+                        svint32_t acc_c47_r23 = zero_s32;
+
+                        for (int half = 0; half < 2; ++half) {
+                            const uint8_t * ql_base = q6_ptr[b].ql + half * 512;
+                            const uint8_t * qh_base = q6_ptr[b].qh + half * 256;
+
+                            for (int sb = 0; sb < QK_K / 64; ++sb) {
+                                const int8_t * q8_base_l = q8_ptr[b].qs + half * 512 + sb * 64;
+                                const int8_t * q8_base_h = q8_ptr[b].qs + half * 512 + 256 + sb * 64;
+
+                                //load 16 bytes (8B of R0, 8B of R1) and repeat in upper half
+                                //low lanes will multiply with 16 bytes of C0 and high lanes will multiply with 16 bytes of C1
+                                const svint8_t q8_l_r01_k0 = svld1rq_s8(pg8, q8_base_l + 0);
+                                const svint8_t q8_l_r01_k1 = svld1rq_s8(pg8, q8_base_l + 32);
+                                const svint8_t q8_l_r23_k0 = svld1rq_s8(pg8, q8_base_l + 16);
+                                const svint8_t q8_l_r23_k1 = svld1rq_s8(pg8, q8_base_l + 48);
+
+                                const svint8_t q8_h_r01_k0 = svld1rq_s8(pg8, q8_base_h + 0);
+                                const svint8_t q8_h_r01_k1 = svld1rq_s8(pg8, q8_base_h + 32);
+                                const svint8_t q8_h_r23_k0 = svld1rq_s8(pg8, q8_base_h + 16);
+                                const svint8_t q8_h_r23_k1 = svld1rq_s8(pg8, q8_base_h + 48);
+
+                                const int ql_off = sb * QK_K / 2;
+                                const int qh_off = ql_off & 255;
+
+                                const int scale_idx_l = half * 8 + sb;
+                                const int scale_idx_h = scale_idx_l + 4;
+
+                                const svint32_t scales_l_all = svld1sb_s32(pg32, q6_ptr[b].scales + scale_idx_l * 8);
+                                const svint32_t scales_h_all = svld1sb_s32(pg32, q6_ptr[b].scales + scale_idx_h * 8);
+
+                                const svint32_t scales_l_c03 = svzip1_s32(scales_l_all, scales_l_all);
+                                const svint32_t scales_h_c03 = svzip1_s32(scales_h_all, scales_h_all);
+
+                                {
+                                    svuint8_t q6_ql0_01 = svld1_u8(pg8, ql_base + ql_off);
+                                    svuint8_t q6_ql1_01 = svld1_u8(pg8, ql_base + ql_off + 64);
+                                    svuint8_t q6_qh0_01 = svld1_u8(pg8, qh_base + qh_off);
+                                    svuint8_t q6_qh1_01 = svld1_u8(pg8, qh_base + qh_off + 64);
+
+                                    if (sb > 1) {
+                                        q6_qh0_01 = svlsr_n_u8_x(pg8, q6_qh0_01, 2);
+                                        q6_qh1_01 = svlsr_n_u8_x(pg8, q6_qh1_01, 2);
+                                    }
+
+                                    const svuint8_t q6_qh0_01_hi = svand_u8_x(pg8, q6_qh0_01, high_hi2);
+                                    const svuint8_t q6_qh1_01_hi = svand_u8_x(pg8, q6_qh1_01, high_hi2);
+
+                                    const svuint8_t q6_l0_01_bits = svorr_u8_x(pg8, svand_u8_x(pg8, q6_ql0_01, low_nibble), svlsl_n_u8_x(pg8, svand_u8_x(pg8, q6_qh0_01, high_lo2), 4));
+                                    const svuint8_t q6_l1_01_bits = svorr_u8_x(pg8, svand_u8_x(pg8, q6_ql1_01, low_nibble), svlsl_n_u8_x(pg8, svand_u8_x(pg8, q6_qh1_01, high_lo2), 4));
+                                    const svuint8_t q6_h0_01_bits = svorr_u8_x(pg8, svlsr_n_u8_x(pg8, q6_ql0_01, 4), q6_qh0_01_hi);
+                                    const svuint8_t q6_h1_01_bits = svorr_u8_x(pg8, svlsr_n_u8_x(pg8, q6_ql1_01, 4), q6_qh1_01_hi);
+
+                                    const svint8_t q6_l0_01 = svsub_s8_x(pg8, svreinterpret_s8_u8(q6_l0_01_bits), q6_bias);
+                                    const svint8_t q6_l1_01 = svsub_s8_x(pg8, svreinterpret_s8_u8(q6_l1_01_bits), q6_bias);
+                                    const svint8_t q6_h0_01 = svsub_s8_x(pg8, svreinterpret_s8_u8(q6_h0_01_bits), q6_bias);
+                                    const svint8_t q6_h1_01 = svsub_s8_x(pg8, svreinterpret_s8_u8(q6_h1_01_bits), q6_bias);
+
+                                    svint32_t dot_l_r01 = svmmla_s32(zero_s32, q6_l0_01, q8_l_r01_k0);
+                                    dot_l_r01 = svmmla_s32(dot_l_r01, q6_l1_01, q8_l_r01_k1);
+
+                                    svint32_t dot_h_r01 = svmmla_s32(zero_s32, q6_h0_01, q8_h_r01_k0);
+                                    dot_h_r01 = svmmla_s32(dot_h_r01, q6_h1_01, q8_h_r01_k1);
+
+                                    svint32_t dot_l_r23 = svmmla_s32(zero_s32, q6_l0_01, q8_l_r23_k0);
+                                    dot_l_r23 = svmmla_s32(dot_l_r23, q6_l1_01, q8_l_r23_k1);
+
+                                    svint32_t dot_h_r23 = svmmla_s32(zero_s32, q6_h0_01, q8_h_r23_k0);
+                                    dot_h_r23 = svmmla_s32(dot_h_r23, q6_h1_01, q8_h_r23_k1);
+
+                                    acc_c03_r01 = svmla_s32_x(pg32, acc_c03_r01, dot_l_r01, scales_l_c03);
+                                    acc_c03_r01 = svmla_s32_x(pg32, acc_c03_r01, dot_h_r01, scales_h_c03);
+                                    acc_c03_r23 = svmla_s32_x(pg32, acc_c03_r23, dot_l_r23, scales_l_c03);
+                                    acc_c03_r23 = svmla_s32_x(pg32, acc_c03_r23, dot_h_r23, scales_h_c03);
+                                }
+
+                                const svint32_t scales_l_c47 = svzip2_s32(scales_l_all, scales_l_all);
+                                const svint32_t scales_h_c47 = svzip2_s32(scales_h_all, scales_h_all);
+
+                                {
+                                    svuint8_t q6_ql0_23 = svld1_u8(pg8, ql_base + ql_off + 32);
+                                    svuint8_t q6_ql1_23 = svld1_u8(pg8, ql_base + ql_off + 96);
+                                    svuint8_t q6_qh0_23 = svld1_u8(pg8, qh_base + qh_off + 32);
+                                    svuint8_t q6_qh1_23 = svld1_u8(pg8, qh_base + qh_off + 96);
+
+                                    if (sb > 1) {
+                                        q6_qh0_23 = svlsr_n_u8_x(pg8, q6_qh0_23, 2);
+                                        q6_qh1_23 = svlsr_n_u8_x(pg8, q6_qh1_23, 2);
+                                    }
+
+                                    const svuint8_t q6_qh0_23_hi = svand_u8_x(pg8, q6_qh0_23, high_hi2);
+                                    const svuint8_t q6_qh1_23_hi = svand_u8_x(pg8, q6_qh1_23, high_hi2);
+
+                                    const svuint8_t q6_l0_23_bits = svorr_u8_x(pg8, svand_u8_x(pg8, q6_ql0_23, low_nibble), svlsl_n_u8_x(pg8, svand_u8_x(pg8, q6_qh0_23, high_lo2), 4));
+                                    const svuint8_t q6_l1_23_bits = svorr_u8_x(pg8, svand_u8_x(pg8, q6_ql1_23, low_nibble), svlsl_n_u8_x(pg8, svand_u8_x(pg8, q6_qh1_23, high_lo2), 4));
+                                    const svuint8_t q6_h0_23_bits = svorr_u8_x(pg8, svlsr_n_u8_x(pg8, q6_ql0_23, 4), q6_qh0_23_hi);
+                                    const svuint8_t q6_h1_23_bits = svorr_u8_x(pg8, svlsr_n_u8_x(pg8, q6_ql1_23, 4), q6_qh1_23_hi);
+
+                                    const svint8_t q6_l0_23 = svsub_s8_x(pg8, svreinterpret_s8_u8(q6_l0_23_bits), q6_bias);
+                                    const svint8_t q6_l1_23 = svsub_s8_x(pg8, svreinterpret_s8_u8(q6_l1_23_bits), q6_bias);
+                                    const svint8_t q6_h0_23 = svsub_s8_x(pg8, svreinterpret_s8_u8(q6_h0_23_bits), q6_bias);
+                                    const svint8_t q6_h1_23 = svsub_s8_x(pg8, svreinterpret_s8_u8(q6_h1_23_bits), q6_bias);
+
+                                    svint32_t dot_l_r01 = svmmla_s32(zero_s32, q6_l0_23, q8_l_r01_k0);
+                                    dot_l_r01 = svmmla_s32(dot_l_r01, q6_l1_23, q8_l_r01_k1);
+
+                                    svint32_t dot_h_r01 = svmmla_s32(zero_s32, q6_h0_23, q8_h_r01_k0);
+                                    dot_h_r01 = svmmla_s32(dot_h_r01, q6_h1_23, q8_h_r01_k1);
+
+                                    svint32_t dot_l_r23 = svmmla_s32(zero_s32, q6_l0_23, q8_l_r23_k0);
+                                    dot_l_r23 = svmmla_s32(dot_l_r23, q6_l1_23, q8_l_r23_k1);
+
+                                    svint32_t dot_h_r23 = svmmla_s32(zero_s32, q6_h0_23, q8_h_r23_k0);
+                                    dot_h_r23 = svmmla_s32(dot_h_r23, q6_h1_23, q8_h_r23_k1);
+
+                                    acc_c47_r01 = svmla_s32_x(pg32, acc_c47_r01, dot_l_r01, scales_l_c47);
+                                    acc_c47_r01 = svmla_s32_x(pg32, acc_c47_r01, dot_h_r01, scales_h_c47);
+                                    acc_c47_r23 = svmla_s32_x(pg32, acc_c47_r23, dot_l_r23, scales_l_c47);
+                                    acc_c47_r23 = svmla_s32_x(pg32, acc_c47_r23, dot_h_r23, scales_h_c47);
+                                }
+                            }
+                        }
+
+                        // acc_c03_r01 -> c0-r0,c0-r1,c1-r0,c1-r1,c2-r0,c2-r1,c3-r0,c3-r1
+                        // acc_c47_r01 -> c4-r0,c4-r1,c5-r0,c5-r1,c6-r0,c6-r1,c7-r0,c7-r1
+                        // svuzp1_s32 picks even lanes -> c0-r0,c1-r0,c2-r0,c3-r0,c4-r0,c5-r0,c6-r0,c7-r0
+                        // similarly svuzp2_s32 picks remaining values from odd lanes
+                        const svint32_t dot_r0 = svuzp1_s32(acc_c03_r01, acc_c47_r01);
+                        const svint32_t dot_r1 = svuzp2_s32(acc_c03_r01, acc_c47_r01);
+                        const svint32_t dot_r2 = svuzp1_s32(acc_c03_r23, acc_c47_r23);
+                        const svint32_t dot_r3 = svuzp2_s32(acc_c03_r23, acc_c47_r23);
+
+                        const svuint32_t q6_d_bits = svld1uh_u32(pg32, (const uint16_t *) q6_ptr[b].d);
+                        const svfloat32_t q6_d_f32 = svcvt_f32_f16_x(pg32, svreinterpret_f16_u32(q6_d_bits));
+
+                        const svfloat32_t scale_r0 = svmul_n_f32_x(pg32, q6_d_f32, q8_ptr[b].d[0]);
+                        const svfloat32_t scale_r1 = svmul_n_f32_x(pg32, q6_d_f32, q8_ptr[b].d[1]);
+                        const svfloat32_t scale_r2 = svmul_n_f32_x(pg32, q6_d_f32, q8_ptr[b].d[2]);
+                        const svfloat32_t scale_r3 = svmul_n_f32_x(pg32, q6_d_f32, q8_ptr[b].d[3]);
+
+                        acc_f32_r0 = svmla_f32_x(pg32, acc_f32_r0, svcvt_f32_s32_x(pg32, dot_r0), scale_r0);
+                        acc_f32_r1 = svmla_f32_x(pg32, acc_f32_r1, svcvt_f32_s32_x(pg32, dot_r1), scale_r1);
+                        acc_f32_r2 = svmla_f32_x(pg32, acc_f32_r2, svcvt_f32_s32_x(pg32, dot_r2), scale_r2);
+                        acc_f32_r3 = svmla_f32_x(pg32, acc_f32_r3, svcvt_f32_s32_x(pg32, dot_r3), scale_r3);
+                    }
+
+                    const int row = y * q8_k_blocklen;
+                    const int col = x * ncols_interleaved;
+
+                    svst1_f32(pg32, s + (row + 0) * bs + col, acc_f32_r0);
+                    svst1_f32(pg32, s + (row + 1) * bs + col, acc_f32_r1);
+                    svst1_f32(pg32, s + (row + 2) * bs + col, acc_f32_r2);
+                    svst1_f32(pg32, s + (row + 3) * bs + col, acc_f32_r3);
+                }
+            }
+            return;
+        }
+    }
+#endif  // SVE compile-time end
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
-    constexpr int    q8_k_blocklen = 4;
     const uint8x16_t m4b           = vdupq_n_u8(0x0f);
     const uint8x16_t mask_lo       = vdupq_n_u8(0x03);
     const uint8x16_t mask_hi       = vdupq_n_u8(0x30);
