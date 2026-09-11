@@ -1932,6 +1932,10 @@ void llama_kv_cache_dsv4_raw_context::set_input_k_rot(ggml_tensor * dst) const {
     kv_swa->set_input_k_rot(dst);
 }
 
+void llama_kv_cache_dsv4_raw_context::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const {
+    kv_swa->get_prev_tokens(ubatch, n, res);
+}
+
 //
 // llama_kv_cache_dsv4_comp_context
 //

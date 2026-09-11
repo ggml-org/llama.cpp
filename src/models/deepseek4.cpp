@@ -48,7 +48,8 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.dsv4_hc_mult);
     ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
     ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
-    ml.get_key(LLM_KV_HASH_LAYER_COUNT,                     hparams.dsv4_hash_layer_count);
+    // DeepSeek-V4.1 routes every layer through the gate and omits the key, leaving the count at 0
+    ml.get_key(LLM_KV_HASH_LAYER_COUNT,                     hparams.dsv4_hash_layer_count, false);
 
     hparams.n_embd_out_impl = hparams.dsv4_hc_mult * hparams.n_embd;
 
@@ -351,11 +352,14 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_sinkhorn(
     return comb;
 }
 
-ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
-        ggml_tensor * x,
-        ggml_tensor * hc_fn,
-        ggml_tensor * hc_scale,
-        ggml_tensor * hc_base,
+// derive the pre / post / comb coefficients from the stream, without collapsing it
+// DeepSeek-V4 always collapses right away, V4.1 hands `pre` to the next sublayer instead
+void llama_model_deepseek4::graph::build_hc_mixes(
+        ggml_tensor *  x,
+        ggml_tensor *  hc_fn,
+        ggml_tensor *  hc_scale,
+        ggml_tensor *  hc_base,
+        ggml_tensor ** pre,
         ggml_tensor ** post,
         ggml_tensor ** comb,
         int il) const {
@@ -378,11 +382,11 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
     ggml_tensor * base_pre  = dsv4_view_1d(ctx0, hc_base, hc, 0);
     ggml_tensor * base_post = dsv4_view_1d(ctx0, hc_base, hc, hc);
 
-    ggml_tensor * pre = dsv4_view_2d(ctx0, mixes, hc, nt, 0);
-    pre = dsv4_hc_affine(ctx0, pre, scale_pre, base_pre);
-    pre = ggml_sigmoid(ctx0, pre);
-    pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
-    cb(pre, "hc_pre", il);
+    *pre = dsv4_view_2d(ctx0, mixes, hc, nt, 0);
+    *pre = dsv4_hc_affine(ctx0, *pre, scale_pre, base_pre);
+    *pre = ggml_sigmoid(ctx0, *pre);
+    *pre = ggml_scale_bias(ctx0, *pre, 1.0f, hparams.dsv4_hc_eps);
+    cb(*pre, "hc_pre", il);
 
     *post = dsv4_view_2d(ctx0, mixes, hc, nt, hc);
     *post = dsv4_hc_affine(ctx0, *post, scale_post, base_post);
@@ -404,9 +408,20 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
         *comb = build_hc_sinkhorn(*comb, il);
     }
     cb(*comb, "hc_comb", il);
+}
 
-    ggml_tensor * result = build_hc_pre(x, pre, il);
-    return result;
+ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
+        ggml_tensor * x,
+        ggml_tensor * hc_fn,
+        ggml_tensor * hc_scale,
+        ggml_tensor * hc_base,
+        ggml_tensor ** post,
+        ggml_tensor ** comb,
+        int il) const {
+    ggml_tensor * pre = nullptr;
+    build_hc_mixes(x, hc_fn, hc_scale, hc_base, &pre, post, comb, il);
+
+    return build_hc_pre(x, pre, il);
 }
 
 ggml_tensor * llama_model_deepseek4::graph::build_hc_post(

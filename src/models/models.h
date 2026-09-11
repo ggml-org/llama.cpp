@@ -1200,6 +1200,16 @@ struct llama_model_deepseek4 : public llama_model_base {
         graph(const llm_graph_params & params) : llm_graph_context(params) {}
         graph(const llama_model & model, const llm_graph_params & params);
 
+        void build_hc_mixes(
+                ggml_tensor *  x,
+                ggml_tensor *  hc_fn,
+                ggml_tensor *  hc_scale,
+                ggml_tensor *  hc_base,
+                ggml_tensor ** pre,
+                ggml_tensor ** post,
+                ggml_tensor ** comb,
+                int il) const;
+
         ggml_tensor * build_hc_pre(
                 ggml_tensor * x,
                 ggml_tensor * hc_fn,
@@ -1321,6 +1331,45 @@ struct llama_model_deepseek4 : public llama_model_base {
 
     struct graph_mtp : public graph {
         graph_mtp(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
+// DeepSeek-V4.1. Same machinery as V4, minus the hash layers, the MTP block and the learned
+// hyper-connection head, plus the engram n-gram tables. See src/models/deepseek41.cpp.
+struct llama_model_deepseek41 : public llama_model_deepseek4 {
+    llama_model_deepseek41(const struct llama_model_params & params) : llama_model_deepseek4(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    // engram hash constants, read from the file
+    // these live here rather than in hparams because the token map alone is half a megabyte
+    uint32_t engram_n_layer = 0;
+    uint32_t engram_pad_id  = 0;   // already through the token map, as the reference stores it
+
+    std::vector<uint64_t> engram_multipliers; // [engram_n_layer][engram_max_ngram_size]
+    std::vector<uint64_t> engram_primes;      // [engram_n_layer][engram_max_ngram_size - 1][engram_n_head]
+    std::vector<uint64_t> engram_offsets;     // same layout as engram_primes
+    std::vector<int32_t>  engram_token_map;   // [n_vocab], folds case and accents together
+
+    // position of layer il in the engram constants, or -1 if that layer has no engram
+    int engram_index(int il) const;
+
+    struct graph : public llama_model_deepseek4::graph {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // gather the n-gram rows of layer il: [engram_key_length * n_hash_cols, n_tokens]
+        ggml_tensor * build_inp_engram(
+                const llama_model & model,
+                int il);
+
+        ggml_tensor * build_engram(
+                const llama_model & model,
+                ggml_tensor * x,
+                ggml_tensor * emb,
+                int il) const;
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

@@ -306,6 +306,12 @@ struct llama_hparams {
     // scale of the hyper-connection post gate (DeepSeek-V4 hardcodes 2.0)
     float    hc_magnitude = 0.0f;
 
+    // Engram (n-gram lookup table) for DeepSeek-V4.1
+    uint32_t engram_n_head          = 0;
+    uint32_t engram_key_length      = 0;
+    uint32_t engram_max_ngram_size  = 0;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> engram_layer_ids;
+
     uint32_t ple_ngram_size      = 0;
     uint32_t ple_heads_per_ngram = 0;
     uint32_t ple_conv_kernel     = 0;
