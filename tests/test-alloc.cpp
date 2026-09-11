@@ -5,7 +5,10 @@
 #include "ggml.h"
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <exception>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -690,6 +693,140 @@ static void test_tensor_binding_state() {
     GGML_ASSERT(!ggml_backend_tensor_is_bound(tensor));
 }
 
+struct test_binding_context {
+    std::vector<uint8_t> bytes = std::vector<uint8_t>(64);
+    std::map<const ggml_tensor *, size_t> offsets;
+    int synchronizations = 0;
+    int native_inits = 0;
+    bool fail_view = false;
+};
+
+static bool test_addressless_is_bound(ggml_backend_buffer_t buffer, const ggml_tensor * tensor) {
+    auto * ctx = static_cast<test_binding_context *>(buffer->context);
+    return ctx->offsets.count(tensor) != 0;
+}
+
+static bool test_addressless_is_host(ggml_backend_buffer_type_t) {
+    return false;
+}
+
+static ggml_status test_addressless_init_view(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+    auto * ctx = static_cast<test_binding_context *>(buffer->context);
+    if (ctx->fail_view) {
+        return GGML_STATUS_FAILED;
+    }
+    GGML_ASSERT(tensor->view_offs <= ggml_nbytes(tensor->view_src));
+    GGML_ASSERT(ggml_nbytes(tensor) <= ggml_nbytes(tensor->view_src) - tensor->view_offs);
+    ctx->offsets[tensor] = ctx->offsets.at(tensor->view_src) + tensor->view_offs;
+    tensor->buffer = buffer;
+    tensor->data = nullptr;
+    return GGML_STATUS_SUCCESS;
+}
+
+static ggml_status test_addressless_native_init(ggml_backend_buffer_t buffer, ggml_tensor *) {
+    auto * ctx = static_cast<test_binding_context *>(buffer->context);
+    ctx->native_inits++;
+    return GGML_STATUS_FAILED;
+}
+
+static uint8_t * test_addressless_data(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, size_t offset, size_t size) {
+    auto * ctx = static_cast<test_binding_context *>(buffer->context);
+    GGML_ASSERT(tensor->data == nullptr);
+    size_t start = ctx->offsets.at(tensor) + offset;
+    GGML_ASSERT(start <= ctx->bytes.size() && size <= ctx->bytes.size() - start);
+    return ctx->bytes.data() + start;
+}
+
+static void test_addressless_set(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    std::memcpy(test_addressless_data(buffer, tensor, offset, size), data, size);
+}
+
+static void test_addressless_get(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    std::memcpy(data, test_addressless_data(buffer, tensor, offset, size), size);
+}
+
+static void test_addressless_memset(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
+    std::memset(test_addressless_data(buffer, tensor, offset, size), value, size);
+}
+
+static void test_addressless_synchronize(ggml_backend_t backend) {
+    auto * ctx = static_cast<test_binding_context *>(backend->context);
+    ctx->synchronizations++;
+}
+
+static void test_addressless_views_and_transfers() {
+    auto test_ctx = make_context();
+    auto device = dummy_backend_init(64);
+    device.buffer_type.iface.is_host = test_addressless_is_host;
+    test_binding_context ctx;
+    ggml_backend_buffer_i iface{};
+    iface.init_tensor = test_addressless_native_init;
+    iface.set_tensor = test_addressless_set;
+    iface.get_tensor = test_addressless_get;
+    iface.memset_tensor = test_addressless_memset;
+    ggml_backend_buffer_ptr buffer(ggml_backend_buffer_init(&device.buffer_type, iface, &ctx, ctx.bytes.size()));
+    static const ggml_backend_buffer_binding_i binding = {test_addressless_is_bound, test_addressless_init_view};
+    buffer->binding = &binding;
+    GGML_ASSERT(ggml_backend_buffer_get_base(buffer.get()) == nullptr);
+
+    ggml_tensor * tensor = ggml_new_tensor_1d(test_ctx.ctx, GGML_TYPE_F32, 16);
+    tensor->buffer = buffer.get();
+    ctx.offsets[tensor] = 0;
+    std::array<float, 16> values;
+    for (size_t i = 0; i < values.size(); i++) {
+        values[i] = float(i + 1);
+    }
+    ggml_backend_tensor_set(tensor, values.data(), 0, sizeof(values));
+    std::array<float, 16> read{};
+    ggml_backend_tensor_get(tensor, read.data(), 0, sizeof(read));
+    GGML_ASSERT(read == values);
+    ggml_backend_tensor_memset(tensor, 0, sizeof(float), 2*sizeof(float));
+    ggml_backend_tensor_get(tensor, read.data(), 0, sizeof(read));
+    GGML_ASSERT(read[0] == 1.0f && read[1] == 0.0f && read[2] == 0.0f && read[3] == 4.0f);
+
+    std::array<float, 6> rows = {21, 22, 31, 32, 41, 42};
+    ggml_backend_tensor_set_2d(tensor, rows.data(), 2*sizeof(float), 2*sizeof(float), 3, 4*sizeof(float), 2*sizeof(float));
+    std::array<float, 6> read_rows{};
+    ggml_backend_tensor_get_2d(tensor, read_rows.data(), 2*sizeof(float), 2*sizeof(float), 3, 4*sizeof(float), 2*sizeof(float));
+    GGML_ASSERT(read_rows == rows);
+
+    ggml_backend backend{};
+    backend.context = &ctx;
+    backend.iface.synchronize = test_addressless_synchronize;
+    ggml_backend_tensor_set_async(&backend, tensor, values.data(), 0, sizeof(values));
+    ggml_backend_tensor_get_async(&backend, tensor, read.data(), 0, sizeof(read));
+    GGML_ASSERT(read == values && ctx.synchronizations == 2);
+    ggml_backend_tensor_set_2d_async(&backend, tensor, rows.data(), 0, 2*sizeof(float), 3, 4*sizeof(float), 2*sizeof(float));
+    ggml_backend_tensor_get_2d_async(&backend, tensor, read_rows.data(), 0, 2*sizeof(float), 3, 4*sizeof(float), 2*sizeof(float));
+    GGML_ASSERT(read_rows == rows && ctx.synchronizations == 8);
+
+    ggml_tensor * view = ggml_view_1d(test_ctx.ctx, tensor, 4, 4*sizeof(float));
+    GGML_ASSERT(ggml_backend_view_init(view) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(view->buffer == buffer.get() && view->data == nullptr);
+    ggml_tensor * nested = ggml_view_1d(test_ctx.ctx, view, 2, sizeof(float));
+    GGML_ASSERT(ggml_backend_view_init(nested) == GGML_STATUS_SUCCESS);
+    std::array<float, 2> replacement = {101, 102};
+    ggml_backend_tensor_set(nested, replacement.data(), 0, sizeof(replacement));
+    ggml_backend_tensor_get(tensor, read.data(), 0, sizeof(read));
+    GGML_ASSERT(read[5] == 101 && read[6] == 102);
+    GGML_ASSERT(nested->buffer == buffer.get() && nested->data == nullptr);
+
+    ggml_tensor * rejected = ggml_view_1d(test_ctx.ctx, tensor, 1, 0);
+    ctx.fail_view = true;
+    GGML_ASSERT(ggml_backend_view_init(rejected) == GGML_STATUS_FAILED);
+    GGML_ASSERT(!ggml_backend_tensor_is_bound(rejected) && rejected->buffer == nullptr);
+    ctx.fail_view = false;
+    GGML_ASSERT(ggml_backend_view_init(rejected) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ctx.native_inits == 0);
+
+    ggml_tensor * empty = ggml_new_tensor_1d(test_ctx.ctx, GGML_TYPE_F32, 0);
+    ggml_backend_buffer_ptr empty_buffer(ggml_backend_buft_alloc_buffer(&device.buffer_type, 0));
+    empty->buffer = empty_buffer.get();
+    ggml_tensor * empty_view = ggml_view_1d(test_ctx.ctx, empty, 0, 0);
+    GGML_ASSERT(ggml_backend_view_init(empty_view) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_tensor_is_bound(empty_view) && empty_view->data == nullptr);
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -699,6 +836,7 @@ static void run(const char * name, void (*f)()) {
 
 int main() {
     run("test_tensor_binding_state", test_tensor_binding_state);
+    run("test_addressless_views_and_transfers", test_addressless_views_and_transfers);
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
     run("test_tensor_larger_than_max_size", test_tensor_larger_than_max_size);
