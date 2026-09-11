@@ -1188,10 +1188,7 @@ json oaicompat_chat_params_parse(
         std::string response_type = json_value(response_format, "type", std::string());
         if (response_type == "json_object") {
             if (response_format.contains("schema") || json_schema.empty()) {
-                // any object without a schema, {} would be any value
-                json any_object = json::object();
-                any_object["type"] = "object";
-                json_schema = json_value(response_format, "schema", any_object);
+                json_schema = json_value(response_format, "schema", json::object());
             }
         } else if (response_type == "json_schema") {
             auto schema_wrapper = json_value(response_format, "json_schema", json::object());
@@ -1199,6 +1196,11 @@ json oaicompat_chat_params_parse(
         } else if (!response_type.empty() && response_type != "text") {
             throw std::invalid_argument("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
         }
+    }
+
+    // an absent or empty schema means any object
+    if (json_schema.is_object() && json_schema.empty()) {
+        json_schema["type"] = "object";
     }
 
     // get input files
