@@ -1705,6 +1705,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     ggml_tensor * ids_tensor = node->src[2];
                     ggml_backend_t ids_backend = split_backend;
 
+                    if (ggml_nelements(ids_tensor) == 0) {
+                        continue;
+                    }
+
                     // if the ids tensor is also an input of the split, it may not have been copied yet to the split backend
                     // in that case, we use the original ids tensor
                     for (int i = input_id + 1; i < split->n_inputs; i++) {

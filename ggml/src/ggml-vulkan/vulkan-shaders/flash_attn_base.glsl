@@ -105,8 +105,8 @@ layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 #define BLOCK_SIZE_V fa_block_elems(FaTypeV)
 // F16 reads f16 elements directly from the binding; everything else routes
 // through dequantize4 / the MMQ helpers to unpack from the packed block layout.
-#define USE_DECODE_K (FaTypeK != FA_TYPE_F16)
-#define USE_DECODE_V (FaTypeV != FA_TYPE_F16)
+#define USE_DECODE_K (FaTypeK != GGML_TYPE_F16)
+#define USE_DECODE_V (FaTypeV != GGML_TYPE_F16)
 
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 
