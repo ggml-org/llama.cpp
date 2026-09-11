@@ -18,7 +18,15 @@
 #endif
 #endif
 
+// -Winterference-size was introduced in GCC 12
+#if defined(__cplusplus) && defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 12
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winterference-size"
+#endif
 static const size_t CACHE_LINE_SIZE_F32 = CACHE_LINE_SIZE/sizeof(float);
+#if defined(__cplusplus) && defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 12
+#pragma GCC diagnostic pop
+#endif
 
 // Work buffer size for im2col operations in CONV2D
 #define GGML_IM2COL_WORK_SIZE (16 * 1024 * 1024)
