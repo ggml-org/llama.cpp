@@ -190,7 +190,7 @@ if [ ! -z ${GG_BUILD_OPENVINO} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 
     # TODO: fix failing tests on OpenVINO backend
-    CTEST_EXTRA="-E test-llama-archs|^test-recurrent-state-|test-backend-ops|test-save-load-state"
+    CTEST_EXTRA="-E test-llama-archs|^test-recurrent-state-|test-save-load-state"
 fi
 
 ## helpers
@@ -250,7 +250,7 @@ function gg_run_ctest_debug {
     (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time cmake --build . --config Debug -j$(nproc)) 2>&1 | tee -a $OUT/${ci}-make.log
 
-    (time ctest -C Debug --output-on-failure -L main -E "test-opt|test-backend-ops|test-llama-archs" ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
+    (time ctest -C Debug --output-on-failure -L main -E "test-opt|test-llama-archs" ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
     set +e
 }
@@ -768,25 +768,29 @@ function gg_check_build_requirements {
     fi
 }
 
-function gg_run_test_backend_ops_cpu {
+function gg_run_test_backend_ops {
     cd ${SRC}
 
     cd build-ci-release
 
     set -e
 
-    (time ./bin/test-backend-ops -b CPU ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops-cpu.log
+    if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
+        (time ./bin/test-backend-ops -b CPU ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+    else
+        (time ./bin/test-backend-ops ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+    fi
 
     set +e
 }
 
-function gg_sum_test_backend_ops_cpu {
+function gg_sum_test_backend_ops {
     gg_printf '### %s\n\n' "${ci}"
 
-    gg_printf 'Runs test-backend-ops for CPU backend\n'
+    gg_printf 'Runs test-backend-ops\n'
     gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
     gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}-test-backend-ops-cpu.log)"
+    gg_printf '%s\n' "$(cat $OUT/${ci}-test-backend-ops.log)"
     gg_printf '```\n'
     gg_printf '\n'
 }
@@ -822,9 +826,7 @@ test $ret -eq 0 && gg_run ctest_release
 test $ret -eq 0 && gg_run test_llama_archs_models
 test $ret -eq 0 && gg_run test_llama_archs_tensor_split
 
-if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
-    test $ret -eq 0 && gg_run test_backend_ops_cpu
-fi
+test $ret -eq 0 && gg_run test_backend_ops
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run embd_bge_small
