@@ -1237,9 +1237,13 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa_chunked(
                     ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, n_c));
 
             // the raw difference stays only a few points below zero on future cells, so it
-            // is scaled first: those cells must saturate, not pass as mildly penalized
+            // is scaled first: those cells must saturate, not pass as mildly penalized.
+            // the magnitude has to exceed the per-block tail boost (+1e9, set in
+            // set_input_qsa): with an equal magnitude the two cancel to zero in the top_k
+            // score, so a future cell is selected here and only dropped by the f16 re-mask
+            // below, spending a slot of the attention budget on a cell it cannot attend to
             causal = ggml_clamp_inplace(ctx0,
-                    ggml_scale_inplace(ctx0, ggml_sub(ctx0, pos_t, pos_kv), 1e9f), -1e9f, 0.0f);
+                    ggml_scale_inplace(ctx0, ggml_sub(ctx0, pos_t, pos_kv), 1e12f), -1e12f, 0.0f);
         } else {
             mask_c = ggml_view_4d(ctx0, kq_mask, n_kv, n_c, 1, 1,
                     kq_mask->nb[1], kq_mask->nb[2], kq_mask->nb[3], t0*kq_mask->nb[1]);
