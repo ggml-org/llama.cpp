@@ -1052,7 +1052,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
                     std::string str(buffer);
                     if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_STATE)) {
                         LOG_DBG("[%5d] %s", port, buffer); // prevent spamming the log
-                        this->handle_child_state(name, str);
+                        this->handle_child_state(name, str, *child_proc);
                     } else {
                         // forward log
                         LOG("[%5d] %s", port, buffer);
@@ -1517,7 +1517,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     return proxy;
 }
 
-void server_models::handle_child_state(const std::string & name, const std::string & raw_input) {
+void server_models::handle_child_state(const std::string & name, const std::string & raw_input, server_subproc & subproc) {
     server_state state;
     json payload;
 
@@ -1535,19 +1535,12 @@ void server_models::handle_child_state(const std::string & name, const std::stri
             {
                 std::string result = json_value(payload, "result", std::string());
                 std::string url    = json_value(payload, "url",    std::string());
-                auto request_exit = [&]() {
-                    std::lock_guard<std::mutex> lk(mutex);
-                    auto it = mapping.find(name);
-                    if (it != mapping.end()) {
-                        return it->second.subproc->request_exit();
-                    }
-                };
                 if (result == "download_finished") {
                     update_download_progress(name, {}, true, true);
-                    request_exit();
+                    subproc.request_exit();
                 } else if (result == "download_failed") {
                     update_download_progress(name, {}, true, false);
-                    request_exit();
+                    subproc.request_exit();
                 } else if (!url.empty()) {
                     common_download_progress p;
                     p.url        = url;

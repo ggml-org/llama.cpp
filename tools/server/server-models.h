@@ -302,7 +302,7 @@ public:
     //     state = loading     -> payload = {} (TODO: add progress info)
     //     state = ready       -> payload = model_info (json), or {} if wakeup from sleeping
     //     state = sleeping    -> payload = {}
-    void handle_child_state(const std::string & name, const std::string & raw_input);
+    void handle_child_state(const std::string & name, const std::string & raw_input, server_subproc & subproc);
 };
 
 struct server_child {
