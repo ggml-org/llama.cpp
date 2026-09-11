@@ -444,6 +444,21 @@ typedef union {
 } iq1m_scale_t;
 
 // Non-linear quants
+#define QK2_NL 32
+typedef struct {
+    ggml_half d;
+    uint8_t qs[QK2_NL/4];
+} block_iq2_nl;
+static_assert(sizeof(block_iq2_nl) == sizeof(ggml_half) + QK2_NL/4, "wrong iq2_nl block size/padding");
+
+#define QK3_NL 32
+typedef struct {
+    ggml_half d;
+    uint8_t qh[QK3_NL/8];
+    uint8_t qs[QK3_NL/4];
+} block_iq3_nl;
+static_assert(sizeof(block_iq3_nl) == sizeof(ggml_half) + QK3_NL/8 + QK3_NL/4, "wrong iq3_nl block size/padding");
+
 #define QK4_NL 32
 typedef struct {
     ggml_half d;
@@ -1114,6 +1129,14 @@ GGML_TABLE_BEGIN(uint32_t, iq3s_grid, 512)
     0x0f030509, 0x0f030907, 0x0f03090b, 0x0f050103, 0x0f050109, 0x0f050301, 0x0f05030d, 0x0f050503,
     0x0f050701, 0x0f050b03, 0x0f070105, 0x0f070705, 0x0f07070b, 0x0f070b07, 0x0f090103, 0x0f09010b,
     0x0f090307, 0x0f090501, 0x0f090b01, 0x0f0b0505, 0x0f0b0905, 0x0f0d0105, 0x0f0d0703, 0x0f0f0101,
+GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(int8_t, kvalues_iq2nl, 4)
+    -127, -49, 9, 88,
+GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(int8_t, kvalues_iq3nl, 8)
+    -127, -78, -45, -18, 3, 30, 62, 107,
 GGML_TABLE_END()
 
 // TODO: fix name to kvalues_iq4_nl

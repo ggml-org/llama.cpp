@@ -4193,6 +4193,129 @@ void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #endif
 }
 
+void ggml_vec_dot_iq2_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK2_NL == 0);
+    static_assert(QK2_NL == QK8_0, "QK2_NL and QK8_0 must be the same");
+
+    const block_iq2_nl * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK2_NL;
+
+    int ib = 0;
+    float sumf = 0;
+
+#if defined __ARM_NEON
+    int32_t aux32;
+    memcpy(&aux32, kvalues_iq2nl, sizeof(aux32));
+
+    // splat the 4 entry LUT over the whole table, only indices 0..3 are used
+    const int8x16_t values = vreinterpretq_s8_s32(vdupq_n_s32(aux32));
+    const uint8x16_t m3 = vdupq_n_u8(0x03);
+
+    // a qs byte holds 4 weights that are 8 apart, so each group of 8 lanes needs its own shift
+    const int8x16_t sh_1 = vcombine_s8(vdup_n_s8( 0), vdup_n_s8(-2));
+    const int8x16_t sh_2 = vcombine_s8(vdup_n_s8(-4), vdup_n_s8(-6));
+
+    for (; ib < nb; ++ib) {
+        const uint8x8_t  q2bits = vld1_u8(x[ib].qs);
+        const uint8x16_t qs     = vcombine_u8(q2bits, q2bits);
+
+        const int8x16_t q2b_1 = ggml_vqtbl1q_s8(values, vandq_u8(vshlq_u8(qs, sh_1), m3));
+        const int8x16_t q2b_2 = ggml_vqtbl1q_s8(values, vandq_u8(vshlq_u8(qs, sh_2), m3));
+
+        const int32x4_t prod = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), q2b_1, vld1q_s8(y[ib].qs)),
+                                              q2b_2, vld1q_s8(y[ib].qs + 16));
+
+        sumf += GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d) * vaddvq_s32(prod);
+    }
+
+#endif
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d)*GGML_CPU_FP16_TO_FP32(x[ib].d);
+        int sumi = 0;
+        for (int j = 0; j < QK2_NL/4; ++j) {
+            for (int g = 0; g < 4; ++g) {
+                sumi += y[ib].qs[j + g*(QK2_NL/4)] * kvalues_iq2nl[(x[ib].qs[j] >> 2*g) & 3];
+            }
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_iq3_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK3_NL == 0);
+    static_assert(QK3_NL == QK8_0, "QK3_NL and QK8_0 must be the same");
+
+    const block_iq3_nl * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK3_NL;
+
+    int ib = 0;
+    float sumf = 0;
+
+#if defined __ARM_NEON
+    const int8x8_t  values8 = vld1_s8(kvalues_iq3nl);
+    const int8x16_t values  = vcombine_s8(values8, values8);
+
+    const uint8x16_t m3 = vdupq_n_u8(0x03);
+    const uint8x16_t m4 = vdupq_n_u8(0x04);
+
+    const int8x16_t sh_1 = vcombine_s8(vdup_n_s8( 0), vdup_n_s8(-2));
+    const int8x16_t sh_2 = vcombine_s8(vdup_n_s8(-4), vdup_n_s8(-6));
+
+    // qh byte g holds the high bit of the 8 weights of group g, one bit per lane
+    const uint8x16_t bit    = vreinterpretq_u8_u64(vdupq_n_u64(0x8040201008040201ULL));
+    const uint8x16_t hsel_1 = vcombine_u8(vdup_n_u8(0), vdup_n_u8(1));
+    const uint8x16_t hsel_2 = vcombine_u8(vdup_n_u8(2), vdup_n_u8(3));
+
+    for (; ib < nb; ++ib) {
+        const uint8x8_t  q3bits = vld1_u8(x[ib].qs);
+        const uint8x16_t qs     = vcombine_u8(q3bits, q3bits);
+
+        uint32_t aux32;
+        memcpy(&aux32, x[ib].qh, sizeof(aux32));
+        const uint8x16_t qh = vreinterpretq_u8_u32(vdupq_n_u32(aux32));
+
+        const uint8x16_t idx_1 = vorrq_u8(vandq_u8(vshlq_u8(qs, sh_1), m3),
+                                          vandq_u8(vtstq_u8(ggml_vqtbl1q_u8(qh, hsel_1), bit), m4));
+        const uint8x16_t idx_2 = vorrq_u8(vandq_u8(vshlq_u8(qs, sh_2), m3),
+                                          vandq_u8(vtstq_u8(ggml_vqtbl1q_u8(qh, hsel_2), bit), m4));
+
+        const int32x4_t prod = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0),
+                    ggml_vqtbl1q_s8(values, idx_1), vld1q_s8(y[ib].qs)),
+                    ggml_vqtbl1q_s8(values, idx_2), vld1q_s8(y[ib].qs + 16));
+
+        sumf += GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d) * vaddvq_s32(prod);
+    }
+
+#endif
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d)*GGML_CPU_FP16_TO_FP32(x[ib].d);
+        int sumi = 0;
+        for (int j = 0; j < QK3_NL/4; ++j) {
+            for (int g = 0; g < 4; ++g) {
+                const int idx = ((x[ib].qs[j] >> 2*g) & 3) | (((x[ib].qh[g] >> j) & 1) << 2);
+                sumi += y[ib].qs[j + g*(QK3_NL/4)] * kvalues_iq3nl[idx];
+            }
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
 void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
