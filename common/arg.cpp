@@ -872,17 +872,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                     arg.c_str(), e.what(), opt.to_string().c_str()));
             }
         }
-
-        // TODO: remove this check after deprecating --mmap|mlock|dio
-        auto has_arg = [&](std::initializer_list<const char *> names) {
-            return std::any_of(names.begin(), names.end(), [&](const char * name) {
-                return seen_args.count(name);
-            });
-        };
-        if (has_arg({"-lm", "--load-mode"}) &&
-            has_arg({"--mlock", "--mmap", "--no-mmap", "-dio", "--direct-io", "-ndio", "--no-direct-io"})) {
-            LOG_WRN("DEPRECATED: `--load-mode` and `--mlock`/`--mmap`/`--direct-io` should not be combined; only the last flag on the command line will take effect\n");
-        }
     };
 
     // parse all CLI args now, so that -hf is available below for remote preset resolution
@@ -893,6 +882,12 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     postprocess_cpu_params(params.speculative.draft.cpuparams,       &params.cpuparams);
     postprocess_cpu_params(params.speculative.draft.cpuparams_batch, &params.cpuparams_batch);
+
+    // default the mmproj device to the global device selection if not set explicitly with -mmdev
+    if (params.mmproj_use_gpu && params.mmproj_device == nullptr && !params.devices.empty()) {
+        params.mmproj_device = params.devices.front();
+        params.mmproj_use_gpu = params.mmproj_device != nullptr;
+    }
 
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
@@ -2610,7 +2605,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         // note: "-mmdev" must sort after "--rpc" in the preset map, else RPC devices are not registered yet
         {"-mmdev", "--mmproj-device"}, "DEVICE",
-        "device to use for multimodal projector (none = don't offload, default: auto)\n"
+        "device to use for multimodal projector (none = don't offload, default: follows --device)\n"
         "use --list-devices to see a list of available devices",
         [](common_params & params, const std::string & value) {
             if (value == "none") {
@@ -2688,32 +2683,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         ).set_env("LLAMA_ARG_RPC"));
     }
-    add_opt(common_arg(
-        {"--mlock"},
-        "DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing",
-        [](common_params & params) {
-            LOG_WRN("DEPRECATED: --mlock is deprecated. use --load-mode mlock instead\n");
-            params.load_mode = LLAMA_LOAD_MODE_MLOCK;
-        }
-    ).set_env("LLAMA_ARG_MLOCK"));
-    add_opt(common_arg(
-        {"--mmap"},
-        {"--no-mmap"},
-        "DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)",
-        [](common_params & params, bool value) {
-            LOG_WRN("DEPRECATED: --mmap and --no-mmap are deprecated. use --load-mode mmap instead\n");
-            params.load_mode = value ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
-        }
-    ).set_env("LLAMA_ARG_MMAP"));
-    add_opt(common_arg(
-        {"-dio", "--direct-io"},
-        {"-ndio", "--no-direct-io"},
-        "DEPRECATED in favor of `--load-mode`: use DirectIO if available",
-        [](common_params & params, bool value) {
-            LOG_WRN("DEPRECATED: --direct-io and --no-direct-io are deprecated. use --load-mode dio instead\n");
-            params.load_mode = value ? LLAMA_LOAD_MODE_DIRECT_IO : LLAMA_LOAD_MODE_NONE;
-        }
-    ).set_env("LLAMA_ARG_DIO"));
     add_opt(common_arg(
         {"-lm", "--load-mode"}, "MODE",
         "model loading mode (default: auto)\n"
@@ -3902,6 +3871,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_LOG_FILE"));
     add_opt(common_arg(
+        {"--log-jsonl"},
+        {"--no-log-jsonl"},
+        "Log as JSONL (one JSON object per line) to stdout, this also disables colored logging (default: disabled)",
+        [](common_params &, bool value) {
+            common_log_set_jsonl(common_log_main(), value);
+        }
+    ).set_env("LLAMA_ARG_LOG_JSONL"));
+    add_opt(common_arg(
         {"--log-prompts-dir"}, "PATH",
         "Log prompts to directory (auto-created if not present; only used for debugging, default: disabled)",
         [](common_params & params, const std::string & value) {
@@ -4221,7 +4198,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING"));
     add_opt(common_arg(
         {"--spec-draft-device", "-devd", "--device-draft"}, "<dev1,dev2,..>",
-        "comma-separated list of devices to use for offloading the draft model (none = don't offload)\n"
+        "comma-separated list of devices to use for offloading the draft model (none = don't offload, default: follows --device)\n"
         "use --list-devices to see a list of available devices",
         [](common_params & params, const std::string & value) {
             params.speculative.draft.devices = parse_device_list(value);

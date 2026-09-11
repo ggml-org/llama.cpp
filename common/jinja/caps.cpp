@@ -117,6 +117,7 @@ caps caps_get(jinja::program & prog) {
 
     JJ_DEBUG("%s\n", ">>> Running capability check: typed content");
 
+    bool checks_for_string = false;
     static const std::string content_marker = "STRING_MARKER";
 
     // case: typed content support
@@ -136,6 +137,10 @@ caps caps_get(jinja::program & prog) {
         [&](context &, bool success, value & messages, value &, const std::string & rendered) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
+            if (has_op(content, "test_is_string")) {
+                // checked if content is string
+                checks_for_string = true;
+            }
             bool used_as_array = has_op(content, "selectattr") || has_op(content, "array_access");
             if (used_as_array) {
                 // accessed as an array
@@ -150,6 +155,33 @@ caps caps_get(jinja::program & prog) {
             }
         }
     );
+
+    if (checks_for_string) {
+        caps_try_execute(
+            prog,
+            [&]() {
+                // messages
+                return json::array({
+                    {
+                        {"role", "user"},
+                        {"content", json::array({
+                        })}
+                    }
+                });
+            },
+            nullptr, // ctx_fn
+            nullptr, // tools_fn
+            [&](context &, bool success, value & messages, value &, const std::string &) {
+                auto & content = messages->at(0)->at("content");
+                caps_print_stats(content, "messages[0].content");
+                bool used_as_array = has_op(content, "selectattr") || has_op(content, "array_access");
+                if (used_as_array && success) {
+                    // accessed as an array
+                    result.supports_typed_content = true;
+                }
+            }
+        );
+    }
 
     JJ_DEBUG("%s\n", ">>> Running capability check: system prompt");
 

@@ -748,6 +748,10 @@ private:
             optional_props.push_back("*");
         }
 
+        if (required_props.empty() && optional_props.empty()) {
+            return "\"{\" space \"}\"";
+        }
+
         std::string rule = "\"{\" space ";
         for (size_t i = 0; i < required_props.size(); i++) {
             if (i > 0) {

@@ -771,6 +771,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_RMS_NORM_MUL:
         case HTP_OP_SCALE:
         case HTP_OP_CLAMP:
+        case HTP_OP_LEAKY_RELU:
         case HTP_OP_SQR:
         case HTP_OP_SQRT:
         case HTP_OP_UNARY_SOFTPLUS:
@@ -782,6 +783,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_TANH:
         case HTP_OP_UNARY_ABS:
         case HTP_OP_UNARY_LOG:
+        case HTP_OP_UNARY_RELU:
         case HTP_OP_L2_NORM:
             return op_unary(octx);
 
