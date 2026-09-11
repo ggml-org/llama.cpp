@@ -7,42 +7,18 @@ on:
       - master
     paths: [
       '.github/workflows/fusion.yml',
+      'ggml/**'
       'tests/fusion/**',
-      'tests/test-fusion.cpp',
-      'ggml/**/CMakeLists.txt',
-      'ggml/**/*.h',
-      'ggml/**/*.hpp',
-      'ggml/**/*.c',
-      'ggml/**/*.cpp',
-      'ggml/**/*.cu',
-      'ggml/**/*.cuh',
-      'ggml/**/*.swift',
-      'ggml/**/*.m',
-      'ggml/**/*.metal',
-      'ggml/**/*.comp',
-      'ggml/**/*.glsl',
-      'ggml/**/*.wgsl'
+      'tests/test-fusion.cpp'
     ]
 
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/fusion.yml',
+      'ggml/**',
       'tests/fusion/**',
-      'tests/test-fusion.cpp',
-      'ggml/**/CMakeLists.txt',
-      'ggml/**/*.h',
-      'ggml/**/*.hpp',
-      'ggml/**/*.c',
-      'ggml/**/*.cpp',
-      'ggml/**/*.cu',
-      'ggml/**/*.cuh',
-      'ggml/**/*.swift',
-      'ggml/**/*.m',
-      'ggml/**/*.metal',
-      'ggml/**/*.comp',
-      'ggml/**/*.glsl',
-      'ggml/**/*.wgsl'
+      'tests/test-fusion.cpp'
     ]
 
 concurrency:
