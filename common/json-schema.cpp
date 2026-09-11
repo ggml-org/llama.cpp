@@ -287,7 +287,7 @@ class common_schema_builder {
             if (schema.contains("items") || schema.contains("prefixItems")) {
                 return build_array(schema, path);
             }
-            if (schema.contains("pattern") || get_format(schema, path) != common_schema::FORMAT_NONE) {
+            if (schema.contains("pattern") || schema.contains("minLength") || schema.contains("maxLength") || get_format(schema, path) != common_schema::FORMAT_NONE) {
                 return build_string(schema, path);
             }
             return std::make_unique<common_schema_any>();

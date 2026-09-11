@@ -45,7 +45,7 @@ static void test_any(testing & t) {
     });
 
     t.test("keywords that do not imply a type", [](testing & t) {
-        auto doc = parse(R"({"description": "x", "format": "email", "minLength": 3, "additionalProperties": true})");
+        auto doc = parse(R"({"description": "x", "format": "email", "additionalProperties": true})");
         root<common_schema_any>(t, doc);
     });
 }
@@ -122,9 +122,12 @@ static void test_string(testing & t) {
         expect("email",     common_schema::FORMAT_NONE);
     });
 
-    t.test("pattern and known format imply a string", [](testing & t) {
+    t.test("pattern, length and known format imply a string", [](testing & t) {
         auto doc_pattern = parse(R"({"pattern": "^a$"})");
         t.assert_equal("pattern", "^a$", root<common_schema_string>(t, doc_pattern).pattern);
+        auto doc_length = parse(R"({"minLength": 1, "maxLength": 3})");
+        t.assert_equal("min_length", 1, root<common_schema_string>(t, doc_length).min_length);
+        t.assert_equal("max_length", 3, root<common_schema_string>(t, doc_length).max_length);
         auto doc_format = parse(R"({"format": "uuid"})");
         t.assert_equal("format", common_schema::FORMAT_UUID, root<common_schema_string>(t, doc_format).format);
     });
@@ -377,7 +380,7 @@ static void test_may_be_string(testing & t) {
     t.test("leaves", [&](testing & t) {
         check(t, R"({"type": "string"})", true);
         check(t, R"({"type": "integer"})", false);
-        check(t, R"({"minLength": 1})", false);
+        check(t, R"({"minLength": 1})", true);
         check(t, R"({"pattern": "^[a-z]+$"})", true);
         check(t, R"({"const": "hello"})", true);
         check(t, R"({"const": 123})", false);
@@ -390,7 +393,7 @@ static void test_may_be_string(testing & t) {
         check(t, R"({"anyOf": [{"type": "integer"}, {"type": "boolean"}]})", false);
         check(t, R"({"allOf": [{"type": "string"}, {"minLength": 1}]})", true);
         check(t, R"({"allOf": [{"type": "string"}, {"type": "integer"}]})", false);
-        check(t, R"({"allOf": [{"minLength": 1}, {"maxLength": 2}]})", false);
+        check(t, R"({"allOf": [{"minLength": 1}, {"maxLength": 2}]})", true);
     });
 
     t.test("ref", [&](testing & t) {
@@ -422,7 +425,7 @@ static void test_value_types(testing & t) {
     t.test("leaves", [&](testing & t) {
         check(t, R"({"type": "string"})", { common_schema::TYPE_STRING });
         check(t, R"({"type": "number"})", { common_schema::TYPE_NUMBER, common_schema::TYPE_INTEGER });
-        check(t, R"({"minLength": 1})", common_schema::type_set::all());
+        check(t, R"({"description": "x"})", common_schema::type_set::all());
         check(t, R"({"properties": {"a": {"type": "string"}}})", { common_schema::TYPE_OBJECT });
         check(t, R"({"items": {"type": "string"}})", { common_schema::TYPE_ARRAY });
         check(t, R"({"const": 1.5})", { common_schema::TYPE_NUMBER });
