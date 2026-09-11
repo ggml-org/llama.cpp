@@ -121,8 +121,17 @@ extern "C" {
             struct ggml_backend_meta_split_context * ctx, const struct ggml_tensor * tensor, bool assume_sync);
 
     struct ggml_backend_meta_preparation;
+    // Assignments are fixed during preparation; borrowed descriptors and context must outlive it.
+    struct ggml_backend_alloc_source_i {
+        ggml_backend_buffer_type_t (*get_buft)(void * context, const struct ggml_tensor * tensor, enum ggml_backend_buffer_usage * usage);
+        // Borrow descriptors from another preparation; return NULL for an unprepared tensor.
+        struct ggml_tensor * (*get_tensor)(void * context, const struct ggml_tensor * tensor, size_t device);
+        void * context;
+    };
+
     GGML_API struct ggml_backend_meta_preparation * ggml_backend_meta_preparation_new(
-            ggml_backend_buffer_type_t buft, enum ggml_backend_buffer_usage usage, size_t max_tensors);
+            ggml_backend_buffer_type_t buft, enum ggml_backend_buffer_usage usage, size_t max_tensors,
+            const struct ggml_backend_alloc_source_i * sources);
     GGML_API void ggml_backend_meta_preparation_free(struct ggml_backend_meta_preparation * preparation);
     // Prepare dependencies first; discard the preparation after a failure.
     GGML_API enum ggml_status ggml_backend_meta_preparation_tensor(

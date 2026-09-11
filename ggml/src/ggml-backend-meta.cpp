@@ -409,6 +409,7 @@ struct ggml_backend_meta_simple_tensor_container {
 struct ggml_backend_meta_split_context {
     ggml_backend_buffer_type_t buft;
     ggml_backend_buffer_usage usage;
+    ggml_backend_alloc_source_i sources = {};
     int debug;
     // FIXME
     // The size of the split state cache is unbounded and can theoretically grow infinitely large.
@@ -421,6 +422,14 @@ struct ggml_backend_meta_split_context {
         GGML_ASSERT(ggml_backend_buft_is_meta(buft));
         const char * value = getenv("GGML_META_DEBUG");
         debug = value ? atoi(value) : 0;
+    }
+
+    ggml_backend_buffer_type_t source_buft(const ggml_tensor * tensor, ggml_backend_buffer_usage & source_usage) const {
+        if (tensor->buffer) {
+            source_usage = tensor->buffer->usage;
+            return ggml_backend_buffer_get_type(tensor->buffer);
+        }
+        return sources.get_buft ? sources.get_buft(sources.context, tensor, &source_usage) : nullptr;
     }
 };
 
@@ -502,19 +511,21 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     // Since the operations in question are developed specifically for llama.cpp this currently does not manifest as a bug there.
     // However, in a broader ggml context with arbitrary ggml graphs this can lead to unexpected results.
     GGML_ASSERT(tensor);
-    if (tensor->buffer) {
-        auto * source_buft = ggml_backend_buffer_get_type(tensor->buffer);
-        if (!ggml_backend_buft_is_meta(source_buft)) {
-            return {ggml_nelements(tensor) == 0 ? GGML_BACKEND_SPLIT_AXIS_UNKNOWN : GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
-        }
+    ggml_backend_buffer_usage source_usage = split_ctx.usage;
+    auto * source_buft = split_ctx.source_buft(tensor, source_usage);
+    if ((!tensor->buffer && tensor->data) || (source_buft && !ggml_backend_buft_is_meta(source_buft))) {
+        return {ggml_nelements(tensor) == 0 ? GGML_BACKEND_SPLIT_AXIS_UNKNOWN : GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+    }
+    if (source_buft) {
         GGML_ASSERT(source_buft == split_ctx.buft || ggml_backend_meta_device_supports_buft(ggml_backend_buft_get_device(split_ctx.buft), source_buft));
         if (ggml_backend_buffer_is_meta(tensor->buffer)) {
             auto * source_ctx = static_cast<ggml_backend_meta_buffer_context *>(tensor->buffer->context);
             if (&source_ctx->split != &split_ctx) {
                 return ggml_backend_meta_get_split_state(source_ctx->split, tensor, assume_sync);
             }
-        } else if (source_buft != split_ctx.buft || tensor->buffer->usage != split_ctx.usage) {
-            ggml_backend_meta_split_context assigned(source_buft, tensor->buffer->usage);
+        } else if (source_buft != split_ctx.buft || source_usage != split_ctx.usage) {
+            ggml_backend_meta_split_context assigned(source_buft, source_usage);
+            assigned.sources = split_ctx.sources;
             return ggml_backend_meta_get_split_state(assigned, tensor, assume_sync);
         }
     }
@@ -1218,7 +1229,8 @@ static void * ggml_backend_meta_buffer_get_base(ggml_backend_buffer_t buffer) {
 }
 
 static ggml_tensor * ggml_backend_meta_find_simple_tensor(
-        const ggml_backend_meta_simple_tensor_container & stc, const ggml_tensor * tensor, size_t device) {
+        const ggml_backend_meta_simple_tensor_container & stc, const ggml_tensor * tensor, size_t device,
+        const ggml_backend_alloc_source_i & sources) {
     auto it = stc.simple_tensors.find(tensor);
     if (it != stc.simple_tensors.end()) {
         return it->second[device];
@@ -1229,6 +1241,18 @@ static ggml_tensor * ggml_backend_meta_find_simple_tensor(
     if ((tensor->buffer && !ggml_backend_buft_is_meta(ggml_backend_buffer_get_type(tensor->buffer))) ||
             (!tensor->buffer && tensor->data)) {
         return const_cast<ggml_tensor *>(tensor);
+    }
+    if (sources.get_tensor) {
+        if (auto * result = sources.get_tensor(sources.context, tensor, device)) {
+            return result;
+        }
+    }
+    if (!tensor->buffer && sources.get_buft) {
+        auto usage = GGML_BACKEND_BUFFER_USAGE_ANY;
+        auto * buft = sources.get_buft(sources.context, tensor, &usage);
+        if (buft && !ggml_backend_buft_is_meta(buft)) {
+            return const_cast<ggml_tensor *>(tensor);
+        }
     }
     return nullptr;
 }
@@ -1280,7 +1304,7 @@ static enum ggml_status ggml_backend_meta_prepare_tensor(
         t_ij->view_src = tensor->view_src;
         t_ij->view_offs = tensor->view_offs;
         if (t_ij->view_src != nullptr) {
-            t_ij->view_src = ggml_backend_meta_find_simple_tensor(stc, tensor->view_src, j);
+            t_ij->view_src = ggml_backend_meta_find_simple_tensor(stc, tensor->view_src, j, split_ctx.sources);
             if (!t_ij->view_src) {
                 return GGML_STATUS_FAILED;
             }
@@ -1309,7 +1333,7 @@ static enum ggml_status ggml_backend_meta_prepare_tensor(
             if (tensor->src[i] == tensor) {
                 t_ij->src[i] = t_ij;
             } else if (t_ij->src[i] != nullptr) {
-                t_ij->src[i] = ggml_backend_meta_find_simple_tensor(stc, tensor->src[i], j);
+                t_ij->src[i] = ggml_backend_meta_find_simple_tensor(stc, tensor->src[i], j, split_ctx.sources);
                 if (!t_ij->src[i]) {
                     return GGML_STATUS_FAILED;
                 }
@@ -1321,7 +1345,7 @@ static enum ggml_status ggml_backend_meta_prepare_tensor(
 
     // If one of the sources has a zero-sized slice, disable the computation:
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (tensor->src[i] == nullptr || ggml_backend_meta_find_simple_tensor(stc, tensor->src[i], 0) == tensor->src[i]) {
+        if (tensor->src[i] == nullptr || ggml_backend_meta_find_simple_tensor(stc, tensor->src[i], 0, split_ctx.sources) == tensor->src[i]) {
             continue;
         }
 
@@ -1351,31 +1375,46 @@ struct ggml_backend_meta_preparation {
     size_t max_tensors;
     bool failed = false;
 
-    ggml_backend_meta_preparation(ggml_backend_buffer_type_t buft, ggml_backend_buffer_usage usage, size_t max_tensors)
+    ggml_backend_meta_preparation(ggml_backend_buffer_type_t buft, ggml_backend_buffer_usage usage, size_t max_tensors,
+            const ggml_backend_alloc_source_i * sources)
         : split(buft, usage),
           tensors({std::max(size_t(1), max_tensors)*ggml_tensor_overhead(), nullptr, true}, ggml_backend_meta_buft_n_bufts(buft)),
-          max_tensors(max_tensors) {}
+          max_tensors(max_tensors) {
+        if (sources) {
+            split.sources = *sources;
+        }
+    }
 
     bool accepts(const ggml_tensor * tensor) const {
-        if (!tensor->buffer) {
-            return true;
-        }
-        auto * buft = ggml_backend_buffer_get_type(tensor->buffer);
+        auto usage = split.usage;
+        auto * buft = split.source_buft(tensor, usage);
         return !ggml_backend_buft_is_meta(buft) || ggml_backend_meta_device_supports_buft(ggml_backend_buft_get_device(split.buft), buft);
     }
 
     bool has_source(const ggml_tensor * tensor) const {
-        return !tensor || (accepts(tensor) && ggml_backend_meta_find_simple_tensor(tensors, tensor, 0));
+        if (!tensor) {
+            return true;
+        }
+        if (!accepts(tensor)) {
+            return false;
+        }
+        for (size_t device = 0; device < tensors.ctxs.size(); device++) {
+            if (!ggml_backend_meta_find_simple_tensor(tensors, tensor, device, split.sources)) {
+                return false;
+            }
+        }
+        return true;
     }
 };
 
 ggml_backend_meta_preparation * ggml_backend_meta_preparation_new(
-        ggml_backend_buffer_type_t buft, ggml_backend_buffer_usage usage, size_t max_tensors) {
+        ggml_backend_buffer_type_t buft, ggml_backend_buffer_usage usage, size_t max_tensors,
+        const ggml_backend_alloc_source_i * sources) {
     if (max_tensors > SIZE_MAX/ggml_tensor_overhead() || ggml_backend_meta_buft_n_bufts(buft) == 0) {
         return nullptr;
     }
     try {
-        auto result = std::make_unique<ggml_backend_meta_preparation>(buft, usage, max_tensors);
+        auto result = std::make_unique<ggml_backend_meta_preparation>(buft, usage, max_tensors, sources);
         for (const auto & ctx : result->tensors.ctxs) {
             if (!ctx) {
                 return nullptr;
@@ -1400,8 +1439,9 @@ ggml_status ggml_backend_meta_preparation_tensor(ggml_backend_meta_preparation *
         preparation->failed = true;
         return GGML_STATUS_FAILED;
     }
-    if (ggml_backend_meta_find_simple_tensor(preparation->tensors, tensor, 0)) {
-        return GGML_STATUS_SUCCESS;
+    if (ggml_backend_meta_find_simple_tensor(preparation->tensors, tensor, 0, preparation->split.sources)) {
+        preparation->failed = !preparation->has_source(tensor);
+        return preparation->failed ? GGML_STATUS_FAILED : GGML_STATUS_SUCCESS;
     }
     if (!preparation->has_source(tensor->view_src)) {
         preparation->failed = true;
@@ -1429,7 +1469,7 @@ ggml_tensor * ggml_backend_meta_preparation_get_tensor(
         ggml_backend_meta_preparation * preparation, const ggml_tensor * tensor, size_t device) {
     GGML_ASSERT(preparation && tensor && device < preparation->tensors.ctxs.size());
     return preparation->failed || !preparation->accepts(tensor) ? nullptr :
-        ggml_backend_meta_find_simple_tensor(preparation->tensors, tensor, device);
+        ggml_backend_meta_find_simple_tensor(preparation->tensors, tensor, device, preparation->split.sources);
 }
 
 static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor) {
