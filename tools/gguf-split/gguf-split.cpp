@@ -73,12 +73,16 @@ static void split_print_usage(const char * executable) {
 // return convert string, for example "128M" or "4G" to number of bytes
 static size_t split_str_to_n_bytes(std::string str) {
     size_t n_bytes = 0;
-    int n;
+    int n = 0;
     if (str.back() == 'M') {
-        sscanf(str.c_str(), "%d", &n);
+        if (sscanf(str.c_str(), "%d", &n) != 1) {
+            throw std::invalid_argument("error: invalid size, expected a number followed by M or G, but got: " + str);
+        }
         n_bytes = (size_t)n * 1000 * 1000; // megabytes
     } else if (str.back() == 'G') {
-        sscanf(str.c_str(), "%d", &n);
+        if (sscanf(str.c_str(), "%d", &n) != 1) {
+            throw std::invalid_argument("error: invalid size, expected a number followed by M or G, but got: " + str);
+        }
         n_bytes = (size_t)n * 1000 * 1000 * 1000; // gigabytes
     } else {
         throw std::invalid_argument("error: supported units are M (megabytes) or G (gigabytes), but got: " + std::string(1, str.back()));
@@ -138,6 +142,9 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
             }
             params.mode = MODE_TENSOR;
             params.n_split_tensors = atoi(argv[arg_idx]);
+            if (params.n_split_tensors <= 0) {
+                throw std::invalid_argument("error: --split-max-tensors must be a positive value");
+            }
         } else if (arg == "--split-max-size") {
             if (++arg_idx >= argc) {
                 invalid_param = true;

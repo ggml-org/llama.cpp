@@ -28,6 +28,19 @@ mkdir -p "$WORK_PATH"
 # Clean up in case of previously failed test
 rm -f $WORK_PATH/ggml-model-split*.gguf $WORK_PATH/ggml-model-merge*.gguf
 
+# 0. Reject invalid split limits instead of crashing or silently accepting garbage (#28720)
+# No model needed: argument validation happens before the input file is opened.
+if $SPLIT --split-max-tensors 0 nonexistent.gguf $WORK_PATH/out; then
+    echo "FAIL: --split-max-tensors 0 should be rejected"
+    exit 1
+fi
+if $SPLIT --split-max-size G nonexistent.gguf $WORK_PATH/out; then
+    echo "FAIL: --split-max-size G should be rejected"
+    exit 1
+fi
+echo PASS
+echo
+
 # 1. Get a model
 (
 cd $WORK_PATH
