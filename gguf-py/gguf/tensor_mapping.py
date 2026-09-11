@@ -7,6 +7,10 @@ from .constants import MODEL_ARCH, MODEL_TENSOR, MODEL_TENSORS, TENSOR_NAMES
 
 class TensorNameMap:
     mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
+        MODEL_TENSOR.A_GEN_WAV_INPUT:       ("decoder.embed",),
+        MODEL_TENSOR.A_GEN_WAV_NORM:        ("decoder.norm",),
+        MODEL_TENSOR.A_GEN_WAV_OUTPUT_NORM: ("decoder.final_layer_norm",),
+        MODEL_TENSOR.A_GEN_WAV_OUTPUT:      ("head.out",),
         # Token embeddings
         MODEL_TENSOR.TOKEN_EMBD: (
             "gpt_neox.embed_in",                         # gptneox
@@ -182,6 +186,11 @@ class TensorNameMap:
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
+        MODEL_TENSOR.A_GEN_WAV_UP_DWCONV: ("decoder.convnext.{bid}.dwconv",),
+        MODEL_TENSOR.A_GEN_WAV_UP_NORM:   ("decoder.convnext.{bid}.norm",),
+        MODEL_TENSOR.A_GEN_WAV_UP_PW1:    ("decoder.convnext.{bid}.pwconv1",),
+        MODEL_TENSOR.A_GEN_WAV_UP_PW2:    ("decoder.convnext.{bid}.pwconv2",),
+        MODEL_TENSOR.A_GEN_WAV_UP_GAMMA:  ("decoder.convnext.{bid}.gamma",),
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
             "gpt_neox.layers.{bid}.input_layernorm",                # gptneox

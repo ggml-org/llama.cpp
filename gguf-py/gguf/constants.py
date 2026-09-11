@@ -1084,6 +1084,10 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_CODE_FFN_GATE    = auto()
     A_GEN_CODE_FFN_UP      = auto()
     A_GEN_CODE_FFN_DOWN    = auto()
+    A_GEN_WAV_INPUT               = auto()
+    A_GEN_WAV_NORM                = auto()
+    A_GEN_WAV_OUTPUT_NORM         = auto()
+    A_GEN_WAV_OUTPUT              = auto()
     A_GEN_CODE_OUTPUT_NORM = auto()
     # qwen3tts code2wav: RVQ codes -> raw PCM
     A_GEN_WAV_QUANT_FIRST_IN       = auto() # semantic RVQ, in_proj (1x1 conv, loaded as 2D)
@@ -1835,6 +1839,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_GEN_CODE_FFN_GATE:       "a.gen.code.blk.{bid}.ffn_gate",
     MODEL_TENSOR.A_GEN_CODE_FFN_UP:         "a.gen.code.blk.{bid}.ffn_up",
     MODEL_TENSOR.A_GEN_CODE_FFN_DOWN:       "a.gen.code.blk.{bid}.ffn_down",
+    MODEL_TENSOR.A_GEN_WAV_INPUT:         "a.gen.wav.input",
+    MODEL_TENSOR.A_GEN_WAV_NORM:          "a.gen.wav.norm",
+    MODEL_TENSOR.A_GEN_WAV_OUTPUT_NORM:   "a.gen.wav.output_norm",
+    MODEL_TENSOR.A_GEN_WAV_OUTPUT:        "a.gen.wav.output",
     MODEL_TENSOR.A_GEN_CODE_OUTPUT_NORM:    "a.gen.code.output_norm",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN:  "a.gen.wav.quant.first.in_proj",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT: "a.gen.wav.quant.first.out_proj",
@@ -2192,6 +2200,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_GEN_CODE_FFN_GATE,
         MODEL_TENSOR.A_GEN_CODE_FFN_UP,
         MODEL_TENSOR.A_GEN_CODE_FFN_DOWN,
+        MODEL_TENSOR.A_GEN_WAV_INPUT,
+        MODEL_TENSOR.A_GEN_WAV_NORM,
+        MODEL_TENSOR.A_GEN_WAV_OUTPUT_NORM,
+        MODEL_TENSOR.A_GEN_WAV_OUTPUT,
         MODEL_TENSOR.A_GEN_CODE_OUTPUT_NORM,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT,
@@ -5813,6 +5825,7 @@ class VisionProjectorType:
     QWEN3TTS_GEN = "qwen3tts_gen" # audio generation: code_predictor
     POCKETTTS_SPKENC = "pockettts_spkenc" # audio: mimi encoder as voice-prompt encoder
     POCKETTTS_GEN = "pockettts_gen" # audio generation: flow-matching decoder + mimi decoder
+    SOPRANO = "soprano" # audio generation: Vocos decoder
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"

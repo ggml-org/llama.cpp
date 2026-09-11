@@ -334,6 +334,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "Qwen3ASRForConditionalGeneration": "qwen3vl",
     "Qwen3OmniMoeForConditionalGeneration": "qwen3vl",
     "PocketTTSModel": "pockettts",
+    "SopranoModel": "soprano",
     "Qwen3TTSForConditionalGeneration": "qwen3tts",
     "Qwen3VLForConditionalGeneration": "qwen3vl",
     "Qwen3VLMoeForConditionalGeneration": "qwen3vl",
