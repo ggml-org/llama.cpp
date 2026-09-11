@@ -118,7 +118,7 @@ jobs:
           PYTEST_WORKERS=1 ./tests.sh
 
   server-cuda:
-    runs-on: "hf-jobs-t4-small:cuda13"
+    runs-on: [self-hosted, linux, x64, linux-gpu]
 
     steps:
       - name: Clone
