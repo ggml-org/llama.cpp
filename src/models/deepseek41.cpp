@@ -395,6 +395,16 @@ ggml_tensor * llama_model_deepseek41::graph::build_engram(
     ggml_tensor * key   = ggml_cont(ctx0, ggml_view_2d(ctx0, kv, hc_dim, nt, kv->nb[1], 0));
     ggml_tensor * value = ggml_cont(ctx0, ggml_view_2d(ctx0, kv, n_embd, nt, kv->nb[1], hc_dim*kv->nb[0]));
 
+    // The gate scales reach ggml_mul, which takes only f32, and a file quantized before
+    // llama-quant.cpp learned to skip them carries them quantized. get_rows dequantizes.
+    auto as_f32 = [&](ggml_tensor * w) {
+        if (w->type == GGML_TYPE_F32) {
+            return w;
+        }
+        ggml_tensor * ids = ggml_cast(ctx0, ggml_arange(ctx0, 0.0f, (float) w->ne[1], 1.0f), GGML_TYPE_I32);
+        return ggml_get_rows(ctx0, w, ids);
+    };
+
     // normalized per (token, hc copy) over n_embd, not jointly over the copies. The reference
     // keeps engram_q and engram_k apart but only ever uses their product, so applying one to each
     // side of the dot product gives the same result.
@@ -406,8 +416,8 @@ ggml_tensor * llama_model_deepseek41::graph::build_engram(
         return ggml_reshape_3d(ctx0, t, n_embd, hc, nt);
     };
 
-    ggml_tensor * k = grouped_norm(key, model.layers[il].engram_k);
-    ggml_tensor * q = grouped_norm(x,   model.layers[il].engram_q);
+    ggml_tensor * k = grouped_norm(key, as_f32(model.layers[il].engram_k));
+    ggml_tensor * q = grouped_norm(x,   as_f32(model.layers[il].engram_q));
 
     ggml_tensor * s = ggml_sum_rows(ctx0, ggml_mul(ctx0, k, q));
     s = ggml_scale(ctx0, s, 1.0f/sqrtf((float) n_embd));
