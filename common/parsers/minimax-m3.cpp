@@ -89,7 +89,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
             auto         params   = function.contains("parameters") ? function.at("parameters") : json::object();
-            auto         doc      = std::make_shared<const common_schema_document>(common_schema_parse(params));
+            auto         doc      = std::make_shared<const common_schema_document>(common_schema_from_json(params));
 
             // The template expands argument values recursively in XML (see the to_xml() macro)
             std::function<common_peg_parser(const common_schema &, const std::string &, const std::string &)> value_of;

@@ -1124,7 +1124,7 @@ common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p,
 }
 
 common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, const common_json & schema, bool raw) {
-    auto doc = std::make_shared<const common_schema_document>(common_schema_parse(schema));
+    auto doc = std::make_shared<const common_schema_document>(common_schema_from_json(schema));
     return this->schema(p, name, doc, *doc->root, raw);
 }
 

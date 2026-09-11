@@ -9,14 +9,14 @@
 #include <utility>
 #include <vector>
 
-class common_schema_parser {
+class common_schema_builder {
     const common_json &      root_;
     common_schema_document & doc_;
 
-    // the targets parsed here, moved into doc_ once the whole schema parsed
+    // the targets built here, moved into doc_ once the whole schema is built
     std::map<std::string, common_schema_ptr> refs_;
 
-    // ref nodes get their target once every $ref is parsed, a cycle would otherwise need it too early
+    // ref nodes get their target once every $ref is built, a cycle would otherwise need it too early
     std::vector<common_schema_ref *> pending_;
 
     [[noreturn]] static void fail(const std::string & path, const std::string & msg) {
@@ -323,9 +323,9 @@ class common_schema_parser {
     }
 
   public:
-    common_schema_parser(const common_json & root, common_schema_document & doc) : root_(root), doc_(doc) {}
+    common_schema_builder(const common_json & root, common_schema_document & doc) : root_(root), doc_(doc) {}
 
-    common_schema_ptr parse() {
+    common_schema_ptr build() {
         auto node = parse_schema(root_, "#");
         for (auto & entry : refs_) {
             doc_.refs[entry.first] = std::move(entry.second);
@@ -337,14 +337,14 @@ class common_schema_parser {
     }
 };
 
-common_schema_document common_schema_parse(const common_json & schema) {
+common_schema_document common_schema_from_json(const common_json & schema) {
     common_schema_document doc;
-    doc.root = common_schema_parser(schema, doc).parse();
+    doc.root = common_schema_builder(schema, doc).build();
     return doc;
 }
 
-common_schema_ptr common_schema_parse(const common_json & schema, common_schema_document & doc) {
-    return common_schema_parser(schema, doc).parse();
+common_schema_ptr common_schema_from_json(const common_json & schema, common_schema_document & doc) {
+    return common_schema_builder(schema, doc).build();
 }
 
 static common_schema::value_type json_type(const common_json & value) {

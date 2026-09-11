@@ -998,7 +998,7 @@ std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) 
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
     try {
-        return json_schema_to_grammar(common_schema_parse(schema));
+        return json_schema_to_grammar(common_schema_from_json(schema));
     } catch (const std::runtime_error & e) {
         throw std::invalid_argument(std::string("JSON schema conversion failed:\n") + e.what());
     }

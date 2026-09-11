@@ -191,13 +191,13 @@ struct common_schema_document {
     std::map<std::string, common_schema_ptr> refs;
 };
 
-// A document shared by the parsers built from its nodes, which it keeps alive
+// A document shared by the PEG parsers built from its nodes, which it keeps alive
 using common_schema_document_ptr = std::shared_ptr<const common_schema_document>;
 
 // Throws std::runtime_error when the schema falls outside the supported subset.
-common_schema_document common_schema_parse(const common_json & schema);
+common_schema_document common_schema_from_json(const common_json & schema);
 
-// Parses a schema that belongs to a document parsed earlier, e.g. one property of it.
+// Builds a schema that belongs to a document built earlier, e.g. one property of it.
 // A $ref it cannot resolve on its own is looked up in doc.refs, the targets it resolves itself are added there.
 // doc is unchanged when the schema is rejected.
-common_schema_ptr common_schema_parse(const common_json & schema, common_schema_document & doc);
+common_schema_ptr common_schema_from_json(const common_json & schema, common_schema_document & doc);
