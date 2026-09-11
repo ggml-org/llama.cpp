@@ -775,10 +775,18 @@ function gg_run_test_backend_ops {
 
     set -e
 
+    local args_extra=""
+
+    # TODO: fix multi-threaded for ROCm
+    #       https://github.com/ggml-org/llama.cpp/actions/runs/34576278519/job/103297889044?pr=28740#step:3:4865
+    if [ -z ${GG_BUILD_ROCM} ]; then
+        args_extra="-j $(nproc)"
+    fi
+
     if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
-        (time ./bin/test-backend-ops -j $(nproc) -b CPU) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+        (time ./bin/test-backend-ops ${args_extra} -b CPU) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
     else
-        (time ./bin/test-backend-ops -j $(nproc)       ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+        (time ./bin/test-backend-ops ${args_extra}       ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
     fi
 
     set +e
