@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <string>
 
-static float dsv4_rope_attn_factor(float freq_scale, float ext_factor) {
+float dsv4_rope_attn_factor(float freq_scale, float ext_factor) {
     if (ext_factor == 0.0f) {
         return 1.0f;
     }
@@ -198,7 +198,7 @@ static ggml_tensor * dsv4_view_1d(ggml_context * ctx, ggml_tensor * t, int64_t n
     return ggml_view_1d(ctx, t, ne0, dsv4_elem_offset(t, i0));
 }
 
-static ggml_tensor * dsv4_view_2d(
+ggml_tensor * dsv4_view_2d(
         ggml_context * ctx,
         ggml_tensor  * t,
         int64_t        ne0,
@@ -215,12 +215,7 @@ static ggml_tensor * dsv4_append_zero_row(ggml_context * ctx, ggml_tensor * t, b
     return ggml_concat(ctx, t, row, 1);
 }
 
-struct dsv4_state_tensors {
-    ggml_tensor * kv;
-    ggml_tensor * score;
-};
-
-static dsv4_state_tensors dsv4_build_state_restore(
+dsv4_state_tensors dsv4_build_state_restore(
         ggml_context * ctx,
         const llm_graph_input_dsv4::comp_input & inp,
         const llama_dsv4_comp_state * state,
@@ -243,7 +238,7 @@ static dsv4_state_tensors dsv4_build_state_restore(
     return restored;
 }
 
-static dsv4_state_tensors dsv4_build_state_snapshot(
+dsv4_state_tensors dsv4_build_state_snapshot(
         ggml_context * ctx,
         const llm_graph_input_dsv4::comp_input & inp,
         const llama_dsv4_comp_state * state,
@@ -492,7 +487,8 @@ ggml_tensor * llama_model_deepseek4::graph::build_hca_compressed_kv_from_state(
         int64_t ratio,
         int64_t n_embd_head,
         const char * name,
-        int il) const {
+        int il,
+        ggml_tensor ** pre_rope) const {
     const int64_t n_embd_head_rope = hparams.n_rot();
     const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
     const int64_t n_blocks         = comp_pos ? comp_pos->ne[0] : 0;
@@ -521,6 +517,12 @@ ggml_tensor * llama_model_deepseek4::graph::build_hca_compressed_kv_from_state(
 
     comp = build_norm(comp, norm, nullptr, LLM_NORM_RMS, il);
     cb(comp, name, il);
+
+    // DeepSeek-V4.1 derives its index keys from the pooled latent before it is rotated, because
+    // the rotated form is what goes into the cache.
+    if (pre_rope) {
+        *pre_rope = comp;
+    }
 
     comp = ggml_rope_ext(ctx0, comp, comp_pos, nullptr, n_embd_head_rope, rope_type, n_ctx_orig,
             hparams.dsv4_compress_rope_base, freq_scale, ext_factor,

@@ -9,6 +9,37 @@
 #include <map>
 
 class llama_memory_hybrid_idx_context;
+class llama_dsv4_comp_state;
+
+// The compressor state of a DeepSeek-V4 style compressed stream, as the graph sees it.
+struct dsv4_state_tensors {
+    ggml_tensor * kv;
+    ggml_tensor * score;
+};
+
+// Shared by the DeepSeek-V4 and V4.1 graphs, which run the same compressed stream machinery.
+float dsv4_rope_attn_factor(float freq_scale, float ext_factor);
+
+ggml_tensor * dsv4_view_2d(
+        ggml_context * ctx,
+        ggml_tensor  * t,
+        int64_t        ne0,
+        int64_t        ne1,
+        int64_t        i0);
+
+dsv4_state_tensors dsv4_build_state_restore(
+        ggml_context * ctx,
+        const llm_graph_input_dsv4::comp_input & inp,
+        const llama_dsv4_comp_state * state,
+        int32_t il);
+
+dsv4_state_tensors dsv4_build_state_snapshot(
+        ggml_context * ctx,
+        const llm_graph_input_dsv4::comp_input & inp,
+        const llama_dsv4_comp_state * state,
+        ggml_tensor * source_kv,
+        ggml_tensor * source_score,
+        int32_t il);
 
 // ref: https://github.com/ggml-org/llama.cpp/pull/28068
 static inline ggml_tensor * build_gdn_l2_norm(ggml_context * ctx, ggml_tensor * x, float eps) {
@@ -1263,7 +1294,8 @@ struct llama_model_deepseek4 : public llama_model_base {
                 int64_t ratio,
                 int64_t n_embd_head,
                 const char * name,
-                int il) const;
+                int il,
+                ggml_tensor ** pre_rope = nullptr) const;
 
         ggml_tensor * build_overlap_compressed_kv_from_state(
                 ggml_tensor * kv_state,
