@@ -5,6 +5,21 @@
 #include "vecdotq.cuh"
 
 #include <cstdint>
+#include <cstdlib>
+
+// On SM120 the flash-attention dispatch selects the narrowest template instance that fits
+// Q->ne[1]. Speculative verification varies ne[1] from step to step, so one logical computation
+// is served by two instances that differ in tile geometry, and therefore in KV loop and combine
+// order, and so cannot agree bitwise. Widths 3 and 4 are routed to the 4 wide vector tile, which
+// widths 1 and 2 already reduce to, leaving a single instance across the whole 1..4 range.
+// Set LLAMA_SM120_FA_INVARIANT=0 to restore the stock dispatch.
+inline bool ggml_cuda_fa_sm120_invariant() {
+    static const bool enabled = []() {
+        const char * env = getenv("LLAMA_SM120_FA_INVARIANT");
+        return env == nullptr || atoi(env) != 0;
+    }();
+    return enabled;
+}
 
 #define FATTN_KQ_STRIDE       256
 #define HALF_MAX_HALF         __float2half(65504.0f/2) // Use neg. of this instead of -INFINITY to initialize KQ max vals to avoid NaN upon subtraction.
