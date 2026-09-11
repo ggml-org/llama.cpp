@@ -20,6 +20,7 @@ public:
             bool            unified,
             uint32_t        n_seq_max,
             uint32_t        ratio,
+                bool        overlap,
             uint32_t        state_size,
             uint32_t        n_embd_state,
             uint32_t        n_rs_seq,
@@ -31,6 +32,7 @@ public:
     void apply_copies(const stream_copy_info & sc_info) const;
 
     uint32_t get_ratio()      const;
+    bool     get_overlap()    const;
     uint32_t get_state_size() const;
     uint32_t get_n_stream()   const;
     uint32_t get_n_rs_seq()   const;
@@ -61,6 +63,8 @@ private:
     };
 
     const uint32_t ratio;
+    // whether a pooled group overlaps the previous one; V4's CSA does, V4.1's compressor does not
+    const bool     overlap;
     const uint32_t state_size;
     const uint32_t n_embd_state;
     const uint32_t n_stream;
