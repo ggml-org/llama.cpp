@@ -872,17 +872,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                     arg.c_str(), e.what(), opt.to_string().c_str()));
             }
         }
-
-        // TODO: remove this check after deprecating --mmap|mlock|dio
-        auto has_arg = [&](std::initializer_list<const char *> names) {
-            return std::any_of(names.begin(), names.end(), [&](const char * name) {
-                return seen_args.count(name);
-            });
-        };
-        if (has_arg({"-lm", "--load-mode"}) &&
-            has_arg({"--mlock", "--mmap", "--no-mmap", "-dio", "--direct-io", "-ndio", "--no-direct-io"})) {
-            LOG_WRN("DEPRECATED: `--load-mode` and `--mlock`/`--mmap`/`--direct-io` should not be combined; only the last flag on the command line will take effect\n");
-        }
     };
 
     // parse all CLI args now, so that -hf is available below for remote preset resolution
@@ -2694,32 +2683,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         ).set_env("LLAMA_ARG_RPC"));
     }
-    add_opt(common_arg(
-        {"--mlock"},
-        "DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing",
-        [](common_params & params) {
-            LOG_WRN("DEPRECATED: --mlock is deprecated. use --load-mode mlock instead\n");
-            params.load_mode = LLAMA_LOAD_MODE_MLOCK;
-        }
-    ).set_env("LLAMA_ARG_MLOCK"));
-    add_opt(common_arg(
-        {"--mmap"},
-        {"--no-mmap"},
-        "DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)",
-        [](common_params & params, bool value) {
-            LOG_WRN("DEPRECATED: --mmap and --no-mmap are deprecated. use --load-mode mmap instead\n");
-            params.load_mode = value ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
-        }
-    ).set_env("LLAMA_ARG_MMAP"));
-    add_opt(common_arg(
-        {"-dio", "--direct-io"},
-        {"-ndio", "--no-direct-io"},
-        "DEPRECATED in favor of `--load-mode`: use DirectIO if available",
-        [](common_params & params, bool value) {
-            LOG_WRN("DEPRECATED: --direct-io and --no-direct-io are deprecated. use --load-mode dio instead\n");
-            params.load_mode = value ? LLAMA_LOAD_MODE_DIRECT_IO : LLAMA_LOAD_MODE_NONE;
-        }
-    ).set_env("LLAMA_ARG_DIO"));
     add_opt(common_arg(
         {"-lm", "--load-mode"}, "MODE",
         "model loading mode (default: auto)\n"

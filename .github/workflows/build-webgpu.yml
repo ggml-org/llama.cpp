@@ -190,6 +190,4 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          # This is using llvmpipe and runs slower than other backends
-          # test-backend-ops is too slow on llvmpipe, skip it
-          ctest -L main -E test-backend-ops --verbose --timeout 900
+          ctest -L main --verbose --timeout 900
