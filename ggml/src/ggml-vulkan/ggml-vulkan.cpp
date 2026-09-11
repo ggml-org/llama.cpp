@@ -4055,6 +4055,11 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat2(const vk_device& device
     result.subgroup_size = device->subgroup_size;
     result.workgroup_size = (small_rows && (D % 32) == 0) ? 256 : 128;
 
+    if (device->vendor_id == VK_VENDOR_ID_INTEL) {
+        // 32 rows use fewer registers per thread than 64 and run faster at every head size measured on Xe.
+        result.block_rows = 32;
+    }
+
     return result;
 }
 
