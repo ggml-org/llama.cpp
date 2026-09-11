@@ -181,6 +181,10 @@ GGML_API bool ggml_backend_memory_arena_get_region(
         uint64_t id,
         struct ggml_backend_memory_region * region);
 
+// Read committed metadata in address order without borrowing a view.
+GGML_API bool ggml_backend_memory_arena_get_region_at(
+        ggml_backend_memory_arena_t arena, size_t index, struct ggml_backend_memory_region * region);
+
 GGML_API size_t ggml_backend_memory_arena_capacity(
         ggml_backend_memory_arena_t arena);
 

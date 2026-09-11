@@ -85,6 +85,9 @@ public:
     // Test whether a proposed resource change touches this capture.
     bool affected_by(const std::vector<llama_memory_resource_id> & resources) const noexcept;
 
+    // Close submission admission before a coordinator drains multiple participants.
+    void quiesce() noexcept;
+
     // Close admission, drain, and invalidate native resources before releasing leases.
     // Failure or unreturned pins remain fail-closed and can be retried.
     llama_memory_executor_result retire(llama_memory_executor_backend & backend);

@@ -219,3 +219,8 @@ bool llama_memory_executor::ready() const noexcept {
 size_t llama_memory_executor::outstanding() const noexcept {
     return captured ? static_cast<size_t>(captured.use_count() - 1) : 0;
 }
+
+// Close launch admission without destroying captures that another participant still needs to drain.
+void llama_memory_executor::quiesce() noexcept {
+    accepting = false;
+}

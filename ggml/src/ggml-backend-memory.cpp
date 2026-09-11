@@ -801,3 +801,13 @@ bool ggml_backend_memory_lease_get_region(
 uint64_t ggml_backend_memory_lease_generation(ggml_backend_memory_lease_t lease) {
     return lease != nullptr ? lease->generation : 0;
 }
+
+// Copy address-ordered committed metadata under the arena lock; failure leaves the output unchanged.
+bool ggml_backend_memory_arena_get_region_at(
+        ggml_backend_memory_arena_t arena, size_t index, ggml_backend_memory_region * region) {
+    if (arena == nullptr || region == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(arena->mutex);
+    return ggml_backend_memory_planner_get_region_at(arena->planner, index, region);
+}

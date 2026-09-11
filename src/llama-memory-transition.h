@@ -13,10 +13,36 @@ struct llama_memory_transition_target {
     std::vector<llama_memory_fixed_region> fixed;
 };
 
-// Destroying a preparation discards only temporary state, never an active binding.
-// Destructors must not throw; activation and ownership transfer are added separately.
+struct llama_memory_transition_arena {
+    llama_memory_domain_id domain = 0;
+    llama_memory_allocation_class allocation_class = LLAMA_MEMORY_ALLOCATION_HOST;
+    ggml_backend_memory_arena_t arena = nullptr;
+};
+
+// Borrowed during bind; a consumer must retain any lease it keeps after activation.
+struct llama_memory_region_binding {
+    size_t arena = 0;
+    ggml_backend_memory_region region = {};
+    ggml_backend_memory_lease_t lease = nullptr;
+};
+
+// Destruction releases temporary state only. Successfully activated ownership stays with the consumer.
+// Activation callbacks must not submit new execution; defaults reject unsupported activation protocols.
 struct llama_memory_preparation {
     virtual ~llama_memory_preparation() = default;
+
+    // Close affected submission paths, including any consumer-internal executable changes.
+    virtual bool quiesce(const std::vector<llama_memory_resource_id> &) { return false; }
+    // Complete affected compute/copies before any resource is released.
+    virtual bool drain() { return false; }
+    // Retire affected native executables while their leased dependencies still exist.
+    virtual bool invalidate() { return false; }
+    // Drop changed bindings only; exact surviving persistent leases may remain.
+    virtual bool release() { return false; }
+    // Retain candidate leases without publishing them as active.
+    virtual bool bind(const std::vector<llama_memory_region_binding> &) { return false; }
+    // Publish already-bound state without submitting execution.
+    virtual bool activate() { return false; }
 };
 
 struct llama_memory_consumer {
@@ -38,6 +64,15 @@ enum class llama_memory_transition_state {
     preparing,
     prepared,
     discarding,
+    validating,
+    quiescing,
+    draining,
+    invalidating,
+    releasing,
+    committing,
+    binding,
+    activating,
+    failed,
 };
 
 enum class llama_memory_transition_status {
@@ -50,6 +85,10 @@ enum class llama_memory_transition_status {
     consumer_exception,
     cancelled,
     allocation_failed,
+    activated,
+    not_prepared,
+    invalid_arena,
+    activation_failed,
 };
 
 struct llama_memory_transition_result {
@@ -57,6 +96,9 @@ struct llama_memory_transition_result {
     size_t consumer = std::numeric_limits<size_t>::max();
     llama_memory_layout_result layout;
     std::exception_ptr exception;
+    size_t arena = std::numeric_limits<size_t>::max();
+    llama_memory_resource_id resource = 0;
+    llama_memory_transition_state failed_at = llama_memory_transition_state::idle;
 };
 
 // Owner-thread-only gate. Callbacks may reenter admission, prepare, and cancel, but must not destroy this object.
@@ -79,19 +121,29 @@ public:
     // Calculate an owned candidate and prepare consumers in registration order; do not activate or rebind.
     llama_memory_transition_result prepare(const llama_memory_transition_target & target);
 
-    // Defer cancellation inside prepare; otherwise discard pending state immediately in reverse order.
+    // Activate against exclusive, caller-identified parent arenas; this does not allocate device storage.
+    // Preflight rejection keeps the proposal prepared; failures after quiescing remain closed for recovery.
+    llama_memory_transition_result activate(const std::vector<llama_memory_transition_arena> & arenas);
+
+    // Defer cancellation inside callbacks. Once activation starts, cancellation leaves the session failed/closed.
     bool cancel() noexcept;
 
     // Inspect the gate and completed preparation only, never a partially constructed candidate.
     llama_memory_transition_state state() const noexcept;
     const llama_memory_transition_target * pending_target() const noexcept;
     const llama_memory_layout * pending_layout() const noexcept;
+    const llama_memory_transition_target * active_target() const noexcept;
+    const llama_memory_layout * active_layout() const noexcept;
 
 private:
     struct pending_state;
     void discard_pending() noexcept;
+    llama_memory_transition_result activation_error(llama_memory_transition_status status,
+            size_t consumer, size_t arena = std::numeric_limits<size_t>::max(),
+            llama_memory_resource_id resource = 0, std::exception_ptr exception = {});
 
     std::vector<llama_memory_consumer *> consumers;
+    std::unique_ptr<pending_state> active;
     std::unique_ptr<pending_state> pending;
     llama_memory_transition_state phase = llama_memory_transition_state::idle;
     uint64_t last_admission = 0;
