@@ -109,6 +109,12 @@ if (Vulkan_FOUND)
         "GGML_VULKAN_FLOAT_E4M3_GLSLC_SUPPORT"
     )
 
+    test_shader_extension_support(
+        "GL_EXT_shader_realtime_clock"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/shader_clock.comp"
+        "GGML_VULKAN_SHADER_CLOCK_GLSLC_SUPPORT"
+    )
+
     target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan)
     target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
