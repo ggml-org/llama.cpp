@@ -75,7 +75,7 @@ jobs:
       - name: ccache-buckets-restore
         uses: ./.github/actions/ccache-buckets
         with:
-          key: server-sanitize
+          key: server-sanitize-${{ matrix.sanitizer }}
           folder: llama.cpp
           hf_bucket: ggml-org/cache
 
@@ -99,7 +99,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          key: server-sanitize
+          key: server-sanitize-${{ matrix.sanitizer }}
           folder: llama.cpp
           evict-old-files: 1d
           hf_bucket: ggml-org/cache
