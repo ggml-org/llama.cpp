@@ -63,3 +63,14 @@ llama_memory_layout_result llama_memory_layout_minimum(
         const std::vector<llama_memory_arena_budget> & budgets,
         const std::vector<llama_memory_fixed_region> & fixed,
         llama_memory_layout & output);
+
+// Grant equal extra bytes above minima, capped at preferences, then usable remainders in resource-ID order.
+// Fixed regions never change. Movable regions keep their minimum-layout address order; zero minima append.
+// This is deterministic ordered packing, not an optimal packing solver. Missing optional budgets keep zero grants.
+// As with minimum planning, only host metadata is allocated and failure leaves output unchanged.
+llama_memory_layout_result llama_memory_layout_elastic(
+        const llama_memory_execution_plan & plan,
+        llama_memory_stage_id stage,
+        const std::vector<llama_memory_arena_budget> & budgets,
+        const std::vector<llama_memory_fixed_region> & fixed,
+        llama_memory_layout & output);

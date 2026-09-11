@@ -196,3 +196,230 @@ llama_memory_layout_result llama_memory_layout_minimum(
     }
     return {};
 }
+
+struct llama_memory_elastic_request {
+    ggml_backend_memory_region region;
+    size_t minimum;
+    size_t preferred;
+};
+
+// Align a relative offset without overflowing at SIZE_MAX.
+static bool align_offset(size_t offset, size_t alignment, size_t & aligned) {
+    const size_t mask = alignment - 1;
+    if (offset > std::numeric_limits<size_t>::max() - mask) {
+        return false;
+    }
+    aligned = (offset + mask) & ~mask;
+    return true;
+}
+
+// Pack movable requests forward around fixed regions. Increasing sizes cannot move later requests backward.
+static bool pack_elastic(
+        size_t capacity,
+        const std::vector<ggml_backend_memory_region> & fixed,
+        std::vector<llama_memory_elastic_request> & requests) {
+    size_t cursor = 0;
+    for (auto & request : requests) {
+        auto & region = request.region;
+        if (region.size == 0) {
+            continue;
+        }
+        size_t offset = 0;
+        if (!align_offset(cursor, region.alignment, offset)) {
+            return false;
+        }
+        for (const auto & obstacle : fixed) {
+            const size_t end = obstacle.offset + obstacle.size;
+            if (end <= offset) {
+                continue;
+            }
+            if (offset <= obstacle.offset && region.size <= obstacle.offset - offset) {
+                break;
+            }
+            if (!align_offset(end, region.alignment, offset)) {
+                return false;
+            }
+        }
+        if (offset > capacity || region.size > capacity - offset) {
+            return false;
+        }
+        region.offset = offset;
+        cursor = offset + region.size;
+    }
+    return true;
+}
+
+// Apply the same extra-byte level to each movable request, capped at its own preference.
+static void set_elastic_level(std::vector<llama_memory_elastic_request> & requests, size_t level) {
+    for (auto & request : requests) {
+        request.region.size = request.minimum + std::min(level, request.preferred - request.minimum);
+    }
+}
+
+// Choose an upper midpoint without computing high + 1.
+static size_t upper_midpoint(size_t low, size_t high) {
+    const size_t difference = high - low;
+    return low + difference / 2 + difference % 2;
+}
+
+// Grow one arena's grants without changing fixed regions or exceeding its independent budget.
+static llama_memory_layout_result grant_elastic_arena(
+        const llama_memory_execution_plan & plan,
+        const llama_memory_stage & stage,
+        size_t arena_index,
+        llama_memory_arena_layout & arena) {
+    using status = llama_memory_layout_status;
+    if (arena.budget.capacity == 0) {
+        return {};
+    }
+
+    std::vector<ggml_backend_memory_region> fixed;
+    std::vector<llama_memory_elastic_request> requests;
+    requests.reserve(stage.requirements.size());
+    for (const auto & region : arena.regions) {
+        if (region.flags & GGML_BACKEND_MEMORY_REGION_PERSISTENT) {
+            fixed.push_back(region);
+        } else {
+            const auto * requirement = find_requirement(stage, region.id);
+            GGML_ASSERT(requirement != nullptr);
+            requests.push_back({region, requirement->size_min, requirement->size_preferred});
+        }
+    }
+
+    for (const auto & requirement : stage.requirements) {
+        if (requirement.size_min != 0 || requirement.size_preferred == 0) {
+            continue;
+        }
+        const auto * resource = find_resource(plan, requirement.resource);
+        GGML_ASSERT(resource != nullptr);
+        if (!matches_budget(*resource, arena.budget)) {
+            continue;
+        }
+        bool retained = false;
+        for (const auto & region : fixed) {
+            if (region.id == requirement.resource) {
+                retained = true;
+                break;
+            }
+        }
+        if (!retained) {
+            requests.push_back({
+                {resource->id, 0, 0, std::max(arena.budget.alignment, requirement.alignment),
+                    GGML_BACKEND_MEMORY_REGION_NONE},
+                0, requirement.size_preferred,
+            });
+        }
+    }
+
+    size_t maximum_level = 0;
+    std::vector<size_t> remainder_order;
+    for (size_t i = 0; i < requests.size(); ++i) {
+        const size_t demand = requests[i].preferred - requests[i].minimum;
+        if (demand != 0) {
+            maximum_level = std::max(maximum_level, demand);
+            remainder_order.push_back(i);
+        }
+    }
+    if (maximum_level == 0) {
+        return {};
+    }
+    std::sort(remainder_order.begin(), remainder_order.end(), [&](size_t a, size_t b) {
+        return requests[a].region.id < requests[b].region.id;
+    });
+
+    size_t low = 0;
+    size_t high = maximum_level;
+    while (low < high) {
+        const size_t level = upper_midpoint(low, high);
+        set_elastic_level(requests, level);
+        if (pack_elastic(arena.budget.capacity, fixed, requests)) {
+            low = level;
+        } else {
+            high = level - 1;
+        }
+    }
+    set_elastic_level(requests, low);
+
+    // Alignment can leave more than one byte per consumer; consume each usable remainder by stable ID.
+    for (size_t index : remainder_order) {
+        auto & request = requests[index];
+        low = request.region.size;
+        high = request.preferred;
+        while (low < high) {
+            const size_t grant = upper_midpoint(low, high);
+            request.region.size = grant;
+            if (pack_elastic(arena.budget.capacity, fixed, requests)) {
+                low = grant;
+            } else {
+                high = grant - 1;
+            }
+        }
+        request.region.size = low;
+    }
+    if (!pack_elastic(arena.budget.capacity, fixed, requests)) {
+        return {status::placement_failed, 0, arena_index, {}};
+    }
+
+    planner_ptr planner(
+        ggml_backend_memory_planner_new(arena.budget.capacity, arena.budget.alignment),
+        ggml_backend_memory_planner_free);
+    if (!planner || !ggml_backend_memory_planner_begin(planner.get(), GGML_BACKEND_MEMORY_PLAN_NONE)) {
+        return {status::allocation_failed, 0, arena_index, {}};
+    }
+    for (const auto & region : fixed) {
+        if (!ggml_backend_memory_planner_reserve_at(planner.get(),
+                region.id, region.offset, region.size, region.alignment, region.flags, nullptr)) {
+            return {status::allocation_failed, region.id, arena_index, {}};
+        }
+    }
+    for (const auto & request : requests) {
+        const auto & region = request.region;
+        if (region.size != 0 && !ggml_backend_memory_planner_reserve_at(planner.get(),
+                region.id, region.offset, region.size, region.alignment, region.flags, nullptr)) {
+            return {status::placement_failed, region.id, arena_index, {}};
+        }
+    }
+    if (!ggml_backend_memory_planner_commit(planner.get())) {
+        return {status::placement_failed, 0, arena_index, {}};
+    }
+    arena.regions.resize(ggml_backend_memory_planner_region_count(planner.get()));
+    for (size_t i = 0; i < arena.regions.size(); ++i) {
+        GGML_ASSERT(ggml_backend_memory_planner_get_region_at(planner.get(), i, &arena.regions[i]));
+    }
+    arena.used = ggml_backend_memory_planner_used(planner.get());
+    arena.high_water = ggml_backend_memory_planner_high_water(planner.get());
+    arena.unused = arena.budget.capacity - arena.used;
+    return {};
+}
+
+// Solve into private metadata so failed growth never replaces the caller's previous layout.
+llama_memory_layout_result llama_memory_layout_elastic(
+        const llama_memory_execution_plan & plan,
+        llama_memory_stage_id stage_id,
+        const std::vector<llama_memory_arena_budget> & budgets,
+        const std::vector<llama_memory_fixed_region> & fixed,
+        llama_memory_layout & output) {
+    llama_memory_layout next;
+    const auto minimum = llama_memory_layout_minimum(plan, stage_id, budgets, fixed, next);
+    if (minimum.status != llama_memory_layout_status::success) {
+        return minimum;
+    }
+    try {
+        for (const auto & stage : plan.stages) {
+            if (stage.id != stage_id) {
+                continue;
+            }
+            for (size_t i = 0; i < next.arenas.size(); ++i) {
+                const auto result = grant_elastic_arena(plan, stage, i, next.arenas[i]);
+                if (result.status != llama_memory_layout_status::success) {
+                    return result;
+                }
+            }
+            break;
+        }
+        output = std::move(next);
+    } catch (const std::bad_alloc &) {
+        return {llama_memory_layout_status::allocation_failed, 0, no_arena, {}};
+    }
+    return {};
+}
