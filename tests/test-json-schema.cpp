@@ -14,10 +14,10 @@ static common_schema_document parse(const std::string & schema) {
 
 // the node as T, aborting the current test when it is some other kind
 template <typename T>
-static const T & as(testing & t, const common_schema * node, std::string what) {
+static const T & as(testing & t, const common_schema * node, const char * what) {
     const T * typed = dynamic_cast<const T *>(node);
-    if (!t.assert_true(what + " has the expected kind", typed != nullptr)) {
-        throw std::runtime_error(what + " has the wrong kind");
+    if (!t.assert_true(std::string(what) + " has the expected kind", typed != nullptr)) {
+        throw std::runtime_error(std::string(what) + " has the wrong kind");
     }
     return *typed;
 }
