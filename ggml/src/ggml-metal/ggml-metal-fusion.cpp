@@ -9,15 +9,6 @@
 
 // ---- helpers -------------------------------------------------------------
 
-// the pattern outputs (absolute graph node indices); the default is the last node
-static const int * ggml_metal_fusion_outputs(const ggml_metal_fusion * fusion, const int * buf) {
-    if (fusion->outputs) {
-        return fusion->outputs;
-    }
-
-    return buf;
-}
-
 // true if two tensors live in the same Metal buffer
 static bool ggml_metal_fusion_same_buffer(const ggml_tensor * a, const ggml_tensor * b) {
     if (!a || !b) {
@@ -222,18 +213,18 @@ static const ggml_op ops_snake[] = { GGML_OP_MUL, GGML_OP_SIN, GGML_OP_SQR, GGML
 static const ggml_op ops_gdn_cache[] = { GGML_OP_GATED_DELTA_NET, GGML_OP_CPY };
 
 static const ggml_metal_fusion ggml_metal_fusions[] = {
-    { GGML_METAL_FUSION_NORM_MUL,     ops_norm_mul,         2, nullptr, 0, false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_MUL_ADD, ops_norm_mul_add,     3, nullptr, 0, false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_MUL,     ops_rms_norm_mul,     2, nullptr, 0, false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_NORM_MUL_ADD, ops_rms_norm_mul_add, 3, nullptr, 0, false, ggml_metal_fusion_check_norm },
-    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_2,            2, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_3,            3, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_4,            4, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_5,            5, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_6,            6, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_7,            7, nullptr, 0, false, ggml_metal_fusion_check_add_chain },
-    { GGML_METAL_FUSION_SNAKE,        ops_snake,            5, nullptr, 0, false, ggml_metal_fusion_check_snake },
-    { GGML_METAL_FUSION_GDN_CACHE,    ops_gdn_cache,        2, nullptr, 0, true,  ggml_metal_fusion_check_gdn_cache },
+    { GGML_METAL_FUSION_NORM_MUL,     ops_norm_mul,         2, false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL_ADD, ops_norm_mul_add,     3, false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL,     ops_rms_norm_mul,     2, false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL_ADD, ops_rms_norm_mul_add, 3, false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_2,            2, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_3,            3, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_4,            4, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_5,            5, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_6,            6, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_7,            7, false, ggml_metal_fusion_check_add_chain },
+    { GGML_METAL_FUSION_SNAKE,        ops_snake,            5, false, ggml_metal_fusion_check_snake },
+    { GGML_METAL_FUSION_GDN_CACHE,    ops_gdn_cache,        2, true,  ggml_metal_fusion_check_gdn_cache },
 };
 
 const ggml_metal_fusion * ggml_metal_fusion_all(int * n) {
@@ -441,14 +432,13 @@ const ggml_metal_fusion * ggml_metal_fusion_next(
                 continue;
             }
 
-            // ggml_can_fusion_subgraph_ext expects outputs as absolute graph node indices
-            int outputs_buf[GGML_MAX_SRC];
+            // all current fusions are single-output elision chains, so the last node is the only output
+            // TODO: multi-output fusions: store pattern-relative offsets in the table and translate them here
+            int outputs_buf[1];
             outputs_buf[0] = node_idxs[idx + fusion->n_ops - 1];
-            const int * outputs = ggml_metal_fusion_outputs(fusion, outputs_buf);
-            const int n_outputs = fusion->n_outputs ? fusion->n_outputs : 1;
 
             // structural subgraph checks (op sequence, elidable uses, view containment)
-            if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, fusion->n_ops, fusion->ops, outputs, n_outputs)) {
+            if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, fusion->n_ops, fusion->ops, outputs_buf, 1)) {
                 continue;
             }
         }
