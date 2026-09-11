@@ -1,5 +1,6 @@
 import pytest
 import requests
+import time
 from utils import *
 
 server = ServerPreset.tinyllama2()
@@ -38,6 +39,14 @@ def test_server_models():
     assert res.status_code == 200
     assert len(res.body["data"]) == 1
     assert res.body["data"][0]["id"] == server.model_alias
+
+    # 'created' must be stable across requests, not regenerated per request
+    created = res.body["data"][0]["created"]
+    assert isinstance(created, int)
+
+    time.sleep(1.1)
+    res = server.make_request("GET", "/models")
+    assert res.body["data"][0]["created"] == created
 
 
 def test_server_slots():
