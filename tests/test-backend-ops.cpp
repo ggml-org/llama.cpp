@@ -53,6 +53,18 @@
 
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
+    if (tensor->type == GGML_TYPE_F8_E4M3 || tensor->type == GGML_TYPE_F8_E5M2) {
+        std::vector<uint8_t> data(nels);
+        const uint8_t limit = tensor->type == GGML_TYPE_F8_E4M3 ? 0x7f : 0x7c;
+        for (size_t i = 0; i < nels; ++i) {
+            data[i] = uint8_t(i);
+            if ((data[i] & 0x7f) >= limit) {
+                data[i] = 0;
+            }
+        }
+        ggml_backend_tensor_set(tensor, data.data(), 0, data.size());
+        return;
+    }
     std::vector<float> data(nels);
     {
         // parallel initialization
@@ -280,7 +292,7 @@ static std::vector<float> tensor_to_float(const ggml_tensor * t) {
                         tv.push_back((float)*(int16_t *) &buf[i]);
                     } else if (t->type == GGML_TYPE_I8) {
                         tv.push_back((float)*(int8_t *) &buf[i]);
-                    } else if (quantized) {
+                    } else if (quantized || t->type == GGML_TYPE_F8_E4M3 || t->type == GGML_TYPE_F8_E5M2) {
                         tt->to_float(&buf[i], vq.data(), bs);
                         tv.insert(tv.end(), vq.begin(), vq.end());
                     } else {
@@ -3089,6 +3101,13 @@ struct test_cpy : public test_case {
 
     int64_t total_elements() const {
         return ne_src[0] * ne_src[1] * ne_src[2] * ne_src[3];
+    }
+
+    double err(const float * a, const float * b, size_t n) override {
+        if (type_src == GGML_TYPE_F8_E4M3 || type_src == GGML_TYPE_F8_E5M2) {
+            return memcmp(a, b, n * sizeof(float)) == 0 ? 0.0 : 1.0;
+        }
+        return test_case::err(a, b, n);
     }
 
     double max_nmse_err() override {
@@ -9322,6 +9341,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_cpy(type_src, type_dst, {256, 2, 3, 4}, {-1,-1,-1,-1}, {1, 0, 2, 3})); // cpy not-contiguous
         }
     }
+    for (ggml_type type_src : {GGML_TYPE_F8_E4M3, GGML_TYPE_F8_E5M2}) {
+        for (ggml_type type_dst : {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32}) {
+            test_cases.emplace_back(new test_cpy(type_src, type_dst, {257, 2, 3, 2}));
+            test_cases.emplace_back(new test_cpy(type_src, type_dst, {256, 2, 3, 4}, {-1, -1, -1, -1}, {0, 2, 1, 3}));
+            test_cases.emplace_back(new test_cpy(type_src, type_dst, {256, 2, 3, 4}, {-1, -1, -1, -1}, {1, 0, 2, 3}));
+            test_cases.emplace_back(new test_cpy(type_src, type_dst, {256, 2, 3, 1}, {256, 2, 3, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, false, {256, 4, 3, 1}));
+        }
+    }
+
     // quant block count not a multiple of the kernel block size
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_Q4_0, {96, 1, 1, 1}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_Q4_0, GGML_TYPE_F32, {96, 1, 1, 1}));

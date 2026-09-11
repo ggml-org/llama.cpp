@@ -430,7 +430,9 @@ extern "C" {
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
-        GGML_TYPE_COUNT   = 43,
+        GGML_TYPE_F8_E4M3 = 43, // E4M3FN
+        GGML_TYPE_F8_E5M2 = 44,
+        GGML_TYPE_COUNT   = 45,
     };
 
     // [TAG_GGML_PREC]
