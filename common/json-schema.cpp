@@ -96,7 +96,7 @@ class common_schema_builder {
         return *target;
     }
 
-    common_schema_ptr parse_ref(const common_json & value, const std::string & path) {
+    common_schema_ptr build_ref(const common_json & value, const std::string & path) {
         if (!value.is_string()) {
             fail(path, "$ref must be a string");
         }
@@ -107,7 +107,7 @@ class common_schema_builder {
         if (doc_.refs.find(ref) == doc_.refs.end() && refs_.find(ref) == refs_.end()) {
             // reserve the key first, so that a cycle back to this $ref stops here
             refs_[ref] = nullptr;
-            refs_[ref] = parse_schema(resolve_ref(ref, path), ref);
+            refs_[ref] = build_node(resolve_ref(ref, path), ref);
         }
         auto node = std::make_unique<common_schema_ref>(ref);
         pending_.push_back(node.get());
@@ -115,7 +115,7 @@ class common_schema_builder {
     }
 
     template <typename T>
-    common_schema_ptr parse_alternatives(const common_json & alts, const std::string & path) {
+    common_schema_ptr build_alternatives(const common_json & alts, const std::string & path) {
         if (!alts.is_array()) {
             fail(path, "must be an array of schemas");
         }
@@ -125,12 +125,12 @@ class common_schema_builder {
         auto node = std::make_unique<T>();
         size_t i = 0;
         for (const auto & alt : alts) {
-            node->children.push_back(parse_schema(alt, path + "/" + std::to_string(i++)));
+            node->children.push_back(build_node(alt, path + "/" + std::to_string(i++)));
         }
         return node;
     }
 
-    common_schema_ptr parse_object(const common_json & schema, const std::string & path) {
+    common_schema_ptr build_object(const common_json & schema, const std::string & path) {
         auto node = std::make_unique<common_schema_object>();
 
         std::unordered_set<std::string> required;
@@ -148,7 +148,7 @@ class common_schema_builder {
                 fail(path, "properties must be an object");
             }
             for (const auto & [name, prop] : properties.items()) {
-                node->properties.push_back({name, parse_schema(prop, path + "/properties/" + name), required.count(name) > 0});
+                node->properties.push_back({name, build_node(prop, path + "/properties/" + name), required.count(name) > 0});
             }
         }
 
@@ -159,7 +159,7 @@ class common_schema_builder {
                     node->additional_properties = std::make_unique<common_schema_any>();
                 }
             } else if (additional.is_object()) {
-                node->additional_properties = parse_schema(additional, path + "/additionalProperties");
+                node->additional_properties = build_node(additional, path + "/additionalProperties");
             } else {
                 fail(path, "additionalProperties must be a boolean or a schema");
             }
@@ -171,7 +171,7 @@ class common_schema_builder {
         return node;
     }
 
-    common_schema_ptr parse_array(const common_json & schema, const std::string & path) {
+    common_schema_ptr build_array(const common_json & schema, const std::string & path) {
         auto node = std::make_unique<common_schema_array>();
         if (schema.contains("items") || schema.contains("prefixItems")) {
             // "items" wins when both are present; as in the converter, a schema instead of an array is the item schema
@@ -181,11 +181,11 @@ class common_schema_builder {
                 auto tuple = std::make_unique<common_schema_tuple>();
                 size_t i = 0;
                 for (const auto & item : items) {
-                    tuple->items.push_back(parse_schema(item, path + "/" + key + "/" + std::to_string(i++)));
+                    tuple->items.push_back(build_node(item, path + "/" + key + "/" + std::to_string(i++)));
                 }
                 return tuple;
             }
-            node->items = parse_schema(items, path + "/" + key);
+            node->items = build_node(items, path + "/" + key);
         } else {
             node->items = std::make_unique<common_schema_any>();
         }
@@ -194,7 +194,7 @@ class common_schema_builder {
         return node;
     }
 
-    common_schema_ptr parse_string(const common_json & schema, const std::string & path) {
+    common_schema_ptr build_string(const common_json & schema, const std::string & path) {
         auto node = std::make_unique<common_schema_string>();
         if (schema.contains("pattern")) {
             const common_json & pattern = schema.at("pattern");
@@ -209,7 +209,7 @@ class common_schema_builder {
         return node;
     }
 
-    common_schema_ptr parse_integer(const common_json & schema, const std::string & path) {
+    common_schema_ptr build_integer(const common_json & schema, const std::string & path) {
         auto node = std::make_unique<common_schema_integer>();
         if (schema.contains("minimum")) {
             node->minimum = get_bound(schema, "minimum", path, /* round_up */ true);
@@ -224,16 +224,16 @@ class common_schema_builder {
         return node;
     }
 
-    common_schema_ptr parse_schema(const common_json & schema, const std::string & path) {
+    common_schema_ptr build_node(const common_json & schema, const std::string & path) {
         if (!schema.is_object()) {
             fail(path, "schema must be an object");
         }
         if (schema.contains("$ref")) {
-            return parse_ref(schema.at("$ref"), path);
+            return build_ref(schema.at("$ref"), path);
         }
         if (schema.contains("oneOf") || schema.contains("anyOf")) {
             const std::string key = schema.contains("oneOf") ? "oneOf" : "anyOf";
-            return parse_alternatives<common_schema_any_of>(schema.at(key), path + "/" + key);
+            return build_alternatives<common_schema_any_of>(schema.at(key), path + "/" + key);
         }
 
         common_json type;
@@ -250,7 +250,7 @@ class common_schema_builder {
             for (const auto & t : type) {
                 common_json alt = schema;
                 alt["type"] = t;
-                node->children.push_back(parse_schema(alt, path + "/type/" + std::to_string(i++)));
+                node->children.push_back(build_node(alt, path + "/type/" + std::to_string(i++)));
             }
             return node;
         }
@@ -279,36 +279,36 @@ class common_schema_builder {
         if (type_name.empty()) {
             // without a type the structural keywords decide, in the same order as the converter
             if (has_properties) {
-                return parse_object(schema, path);
+                return build_object(schema, path);
             }
             if (schema.contains("allOf")) {
-                return parse_alternatives<common_schema_all_of>(schema.at("allOf"), path + "/allOf");
+                return build_alternatives<common_schema_all_of>(schema.at("allOf"), path + "/allOf");
             }
             if (schema.contains("items") || schema.contains("prefixItems")) {
-                return parse_array(schema, path);
+                return build_array(schema, path);
             }
             if (schema.contains("pattern") || get_format(schema, path) != common_schema::FORMAT_NONE) {
-                return parse_string(schema, path);
+                return build_string(schema, path);
             }
             return std::make_unique<common_schema_any>();
         }
         if (type_name == "object") {
             if (!has_properties && schema.contains("allOf")) {
-                return parse_alternatives<common_schema_all_of>(schema.at("allOf"), path + "/allOf");
+                return build_alternatives<common_schema_all_of>(schema.at("allOf"), path + "/allOf");
             }
-            return parse_object(schema, path);
+            return build_object(schema, path);
         }
         if (type_name == "string") {
             if (schema.contains("allOf")) {
-                return parse_alternatives<common_schema_all_of>(schema.at("allOf"), path + "/allOf");
+                return build_alternatives<common_schema_all_of>(schema.at("allOf"), path + "/allOf");
             }
-            return parse_string(schema, path);
+            return build_string(schema, path);
         }
         if (type_name == "array") {
-            return parse_array(schema, path);
+            return build_array(schema, path);
         }
         if (type_name == "integer") {
-            return parse_integer(schema, path);
+            return build_integer(schema, path);
         }
         if (type_name == "number") {
             return std::make_unique<common_schema_number>();
@@ -326,7 +326,7 @@ class common_schema_builder {
     common_schema_builder(const common_json & root, common_schema_document & doc) : root_(root), doc_(doc) {}
 
     common_schema_ptr build() {
-        auto node = parse_schema(root_, "#");
+        auto node = build_node(root_, "#");
         for (auto & entry : refs_) {
             doc_.refs[entry.first] = std::move(entry.second);
         }
