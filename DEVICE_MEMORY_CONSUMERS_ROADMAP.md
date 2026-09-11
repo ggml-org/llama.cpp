@@ -6,7 +6,7 @@ Last source review: 2026-09-10, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 3 originally completed at `79e25c139`; its checkpoint now includes the prerequisite Meta ownership fix at `9c6d4b06f`. On `feature/device-memory-consumers`, substage **4.1a** is committed at `7da9821f5`, **4.1b** at `5b5b22d1e`, **4.2a** at `5e1f8d7c5`, and **4.2b** at `31911ddf8`; **4.3a** is implemented and validated, awaiting user review and commit. The rest of milestones 4-8 remains planned. The next substage after review is **4.4a**, a prerequisite for 4.3b.
+Milestone 3 originally completed at `79e25c139`; its checkpoint now includes the prerequisite Meta ownership fix at `9c6d4b06f`. On `feature/device-memory-consumers`, substage **4.1a** is committed at `7da9821f5`, **4.1b** at `5b5b22d1e`, **4.2a** at `5e1f8d7c5`, **4.2b** at `31911ddf8`, and **4.3a** at `481a13d0b`; **4.4a** is implemented and validated, awaiting user review and commit. The rest of milestones 4-8 remains planned. The next substage after review is **4.3b**, whose executor-lifetime prerequisite is now implemented.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -320,7 +320,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Substages 4.1a through 4.3a are implemented; do not start 4.4a until the user has reviewed this change. Stage 4.3b still depends on 4.4a.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Substages 4.1a through 4.3a and 4.4a are implemented; do not start 4.3b until the user has reviewed this change.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -329,9 +329,10 @@ Record substage completion here only after the required validation succeeds. Exp
 | 4.1b | Complete | 5b5b22d1e | 16 cases / 259 assertions; all six selected memory suites pass in debug, ASan/leak-checking, and UBSan. |
 | 4.2a | Complete | 5e1f8d7c5 | 18 cases / 276 assertions; all seven selected memory suites pass in debug, ASan/leak-checking, and UBSan. |
 | 4.2b | Complete | 31911ddf8 | Layout suite: 32 cases / 2,170 assertions, including 144 small configurations; all seven selected suites pass in debug, ASan/leak-checking, and UBSan. |
-| 4.3a | Ready for user review | Uncommitted | 19 cases / 809 assertions; all eight focused memory suites pass in debug, ASan/leak-checking, and UBSan. |
-| 4.3b-4.3c | Planned | - | Requires 4.4a before draining/rebinding implementation. |
-| 4.4a | Next after review; not started | - | Executor lifetime contract and fake executor. |
+| 4.3a | Complete | 481a13d0b | 19 cases / 809 assertions; all eight focused memory suites pass in debug, ASan/leak-checking, and UBSan. |
+| 4.3b | Next after review; not started | - | Connect draining, invalidation, lease changes, binding, and activation. |
+| 4.3c | Planned | - | Transition failure recovery. |
+| 4.4a | Ready for user review | Uncommitted | 16 cases / 176 assertions using real CPU leases and fake execution; all nine selected suites pass in debug, ASan/leak-checking, and UBSan. |
 | 4.4b-4.5b | Planned | - | See dependency table. |
 | 5.1a-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
@@ -551,3 +552,52 @@ ctest --test-dir build-device-memory-infra -R '^test-(memory-transition|memory-l
 ```
 
 The sanitizer runs use the same targets and selection in `build-device-memory-infra-asan` with `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1` and `build-device-memory-infra-ubsan` with `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`. Implement 4.4a before adding the 4.3b drain/invalidate/release/commit/bind/activate path.
+
+## Substage 4.4a implementation and validation
+
+Added `src/llama-memory-executor.h/.cpp` and `tests/test-memory-executor.cpp`. This is the common capture-dependency and execution-lifetime contract plus fake-executor validation, not a CUDA adapter or an inference integration.
+
+### Capture identity and ownership
+
+- An executor adopts an idle native executable only after retaining its complete leased dependency set. Rejected adoption leaves the caller's executable ownership unchanged.
+- Dependency identity uses the actual buffer-view handle and the region's ID, offset, size, alignment, and flags. Input order and exact aliases do not change the key; conflicting IDs and invalid leases are rejected.
+- A separate caller-supplied runtime revision covers captured consumer assumptions. It is not the arena generation and should not advance for ordinary tensor writes that leave captured assumptions unchanged.
+- Neither arena generation nor lease acquisition generation is used as a staleness test. A fresh lease for the same surviving persistent view can match a capture that still owns an older lease.
+- A stale key or closed executor cannot issue an execution pin. The adapter must obtain a pin before submitting work and retain it until all related compute/copies have completed.
+- Dependencies without arena leases must be owned by the native executable itself or otherwise kept alive by its backend. Empty leased sets are supported, but still require correct runtime revisions and completion pin lifetimes.
+
+```mermaid
+flowchart LR
+    E["Executor cache owner"] --> S["Shared capture state"]
+    W["Outstanding compute/copy pins"] --> S
+    S --> N["Owned native executable"]
+    S --> L["Retained arena leases"]
+```
+
+Pins are move-only and retain the same capture snapshot. Destroying the executor owner does not destroy a snapshot still held by backend work. The snapshot destroys the native executable before releasing its leases, including when the last execution pin is its final owner.
+
+### Explicit retirement
+
+Retirement closes launch admission before asking the backend to drain. If draining fails or throws, the capture and leases remain retained and admission stays closed. If the backend reports completion but any pins remain, retirement reports pending and does not invalidate the native executable.
+
+Once draining succeeds and all pins are returned, retirement destroys the native executable and then releases the captured leases. Reentrant retirement during the drain callback is rejected. A resource-change list that does not intersect captured dependencies is a no-op: it does not drain, destroy, or reopen a previously closed executor.
+
+The tests check that real arena commits cannot resize a captured region before retirement, and can do so afterward. They also change an unrelated region while an older persistent lease survives, acquire a fresh lease at the new generation, and replay the same fake capture successfully without unnecessary invalidation.
+
+### Limits and TDD evidence
+
+This is an owner-thread-only contract. A pin release is the backend's promise of completion, not an automatic GPU fence. Queues, backend contexts, and the code needed to destroy native artifacts must remain alive until their pins are released. Lease retention does not serialize arbitrary tensor writes or verify that the supplied runtime revision is truthful. The adapter must obey these rules; real backend synchronization and integration remain in 4.4b and 4.3b respectively.
+
+TDD began with 13 cases against placeholder methods; 12 assertions failed before implementation. After implementing the contract and adding boundary cases, all 16 cases and 176 assertions pass. Cases include capture adoption, stale runtime/buffer identities, normalized aliases, persistent leases across arena generations, no-op invalidation, delayed compute/copy pins, blocked storage reuse, failed/exceptional/incomplete drains, ownership surviving executor and arena-owner destruction, replacement, empty dependency sets, reserved IDs, and fail-closed retry behavior.
+
+The fake backend records completion and native destruction order and reads from real CPU-backed arena storage. Native destructors assert that the arena lease still exists. ASan exercises the case where the original executor and arena owner disappear before queued work completes; this is not a real CUDA execution test.
+
+All nine focused suites pass in debug CPU, ASan/leak-checking, and UBSan builds. Strict warnings pass with `-Wall -Wextra -Werror -Wconversion -Wsign-conversion -pedantic -I ggml/include`. Host allocation failure during capture adoption is handled but was not fault-injected. TSan and real GPU execution were not tested for this owner-thread contract. No production service or model configuration changed.
+
+```sh
+cmake -S . -B build-device-memory-infra
+cmake --build build-device-memory-infra --target test-memory-executor test-memory-transition test-memory-layout test-memory-plan test-memory-requirements test-alloc test-backend-buffer test-backend-memory test-backend-meta -j 20
+ctest --test-dir build-device-memory-infra -R '^test-(memory-executor|memory-transition|memory-layout|memory-plan|memory-requirements|alloc|backend-buffer|backend-memory|backend-meta)$' --output-on-failure
+```
+
+The sanitizer runs use the same target list and selection in `build-device-memory-infra-asan` with `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1` and `build-device-memory-infra-ubsan` with `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`.
