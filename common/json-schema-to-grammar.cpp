@@ -281,6 +281,12 @@ static const int MAX_PATTERN_DEPTH = 100;
 
 static std::unordered_set<char> NON_LITERAL_SET = {'|', '.', '(', ')', '[', ']', '{', '}', '*', '+', '?', '^', '$'};
 static std::unordered_set<char> ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = {'^', '$', '.', '[', ']', '(', ')', '|', '{', '}', '*', '+', '?'};
+// regex class escapes (\d etc.) as GBNF char classes
+static std::unordered_map<char, std::string> REGEXP_CLASS_ESCAPES = {
+    {'d', "[0-9]"},          {'D', "[^0-9]"},
+    {'w', "[0-9A-Za-z_]"},   {'W', "[^0-9A-Za-z_]"},
+    {'s', "[ \\t\\n\\r]"},   {'S', "[^ \\t\\n\\r]"},
+};
 
 static std::string replacePattern(const std::string & input, const std::regex & regex, const std::function<std::string(const std::smatch  &)> & replacement) {
     std::smatch match;
@@ -495,12 +501,25 @@ private:
                     i++;
                     while (i < length && sub_pattern[i] != ']') {
                         if (sub_pattern[i] == '\\') {
-                            auto escape_length = gbnf_escape_length(sub_pattern, i);
-                            if (escape_length == 0) {
-                                throw unsupported_pattern("unsupported escape in character class: " + sub_pattern.substr(i, 2));
+                            // expand \d/\w/\s; GBNF has no such escapes
+                            char next = i + 1 < length ? sub_pattern[i + 1] : '\0';
+                            if (next == 'd') {
+                                square_brackets += "0-9";
+                                i += 2;
+                            } else if (next == 'w') {
+                                square_brackets += "0-9A-Za-z_";
+                                i += 2;
+                            } else if (next == 's') {
+                                square_brackets += " \\t\\n\\r";
+                                i += 2;
+                            } else {
+                                auto escape_length = gbnf_escape_length(sub_pattern, i);
+                                if (escape_length == 0) {
+                                    throw unsupported_pattern("unsupported escape in character class: " + sub_pattern.substr(i, 2));
+                                }
+                                square_brackets += sub_pattern.substr(i, escape_length);
+                                i += escape_length;
                             }
-                            square_brackets += sub_pattern.substr(i, escape_length);
-                            i += escape_length;
                         } else {
                             square_brackets += sub_pattern[i];
                             i++;
@@ -574,6 +593,10 @@ private:
                         ""
                     );
                     seq.back().second = false;
+                } else if (c == '\\' && i + 1 < length &&
+                        REGEXP_CLASS_ESCAPES.find(sub_pattern[i + 1]) != REGEXP_CLASS_ESCAPES.end()) {
+                    seq.emplace_back(REGEXP_CLASS_ESCAPES.at(sub_pattern[i + 1]), false);
+                    i += 2;
                 } else {
                     std::string literal;
                     auto is_non_literal = [&](char c) {
@@ -585,6 +608,9 @@ private:
                                 throw invalid_pattern("trailing backslash");
                             }
                             char next = sub_pattern[i + 1];
+                            if (REGEXP_CLASS_ESCAPES.find(next) != REGEXP_CLASS_ESCAPES.end()) {
+                                break; // class escape, handled by outer loop
+                            }
                             if (ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS.find(next) != ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS.end()) {
                                 i++;
                                 literal += sub_pattern[i];
