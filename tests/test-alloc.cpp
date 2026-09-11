@@ -827,6 +827,21 @@ static void test_addressless_views_and_transfers() {
     GGML_ASSERT(ggml_backend_tensor_is_bound(empty_view) && empty_view->data == nullptr);
 }
 
+static void test_meta_buffer_type_lifetime() {
+    static auto backend = dummy_backend_init(64);
+    backend.context->device.iface.get_buffer_type = [](ggml_backend_dev_t) { return &backend.buffer_type; };
+    backend.context->device.iface.get_name = [](ggml_backend_dev_t) { return "dummy_meta_member"; };
+    backend.context->device.iface.get_description = [](ggml_backend_dev_t) { return "test meta member"; };
+    ggml_backend_dev_t device = &backend.context->device;
+    auto * meta = ggml_backend_meta_device(&device, 1, [](const ggml_tensor *, void *) {
+        return ggml_backend_meta_split_state{GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+    }, nullptr);
+    auto * buft = ggml_backend_dev_buffer_type(meta);
+    GGML_ASSERT(buft == ggml_backend_dev_buffer_type(meta));
+    GGML_ASSERT(ggml_backend_buft_get_alignment(buft) == 8);
+    GGML_ASSERT(ggml_backend_buft_get_device(buft) == meta);
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -835,6 +850,7 @@ static void run(const char * name, void (*f)()) {
 }
 
 int main() {
+    run("test_meta_buffer_type_lifetime", test_meta_buffer_type_lifetime);
     run("test_tensor_binding_state", test_tensor_binding_state);
     run("test_addressless_views_and_transfers", test_addressless_views_and_transfers);
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);

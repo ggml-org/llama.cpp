@@ -344,6 +344,7 @@ bool ggml_backend_buft_is_meta(ggml_backend_buffer_type_t buft) {
 }
 
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_backend_dev_t dev) {
+    static std::vector<std::unique_ptr<ggml_backend_meta_buffer_type_context>> contexts;
     static std::map<ggml_backend_dev_t, struct ggml_backend_buffer_type> meta_bufts;
     GGML_ASSERT(ggml_backend_dev_is_meta(dev));
     {
@@ -359,7 +360,8 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_
     for (size_t i = 0; i < n_devs; i++) {
         simple_bufts.push_back(ggml_backend_dev_buffer_type(ggml_backend_meta_dev_simple_dev(dev, i)));
     }
-    ggml_backend_meta_buffer_type_context * buft_ctx = new ggml_backend_meta_buffer_type_context(simple_bufts);
+    contexts.push_back(std::make_unique<ggml_backend_meta_buffer_type_context>(simple_bufts));
+    ggml_backend_meta_buffer_type_context * buft_ctx = contexts.back().get();
 
     struct ggml_backend_buffer_type meta_buft = {
         /*iface  =*/ ggml_backend_meta_buffer_type_iface,
