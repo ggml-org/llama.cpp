@@ -824,7 +824,6 @@ public:
         return format_literal(value.dump());
     }
 
-    // the primitive under its own name, or inlined when it is the root
     std::string _visit_primitive(const std::string & rule_name, const std::string & type) {
         return _add_primitive(rule_name == "root" ? "root" : type, PRIMITIVE_RULES.at(type));
     }

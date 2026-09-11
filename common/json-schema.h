@@ -12,9 +12,7 @@
 // JSON schema IR, covering the subset that json_schema_to_grammar() can convert.
 // A $ref becomes a common_schema_ref whose target is owned by the common_schema_document, so a recursive schema stays finite.
 
-// Base class for all nodes, the concrete ones are the common_schema_* structs below
 struct common_schema {
-    // What a node is, the shape of the schema
     enum node_kind {
         KIND_ANY,
         KIND_REF,
@@ -51,7 +49,6 @@ struct common_schema {
         FORMAT_DATE_TIME,
     };
 
-    // A set of value types
     class type_set {
         uint32_t mask_ = 0;
 
@@ -207,7 +204,6 @@ struct common_schema_document {
 // A document shared by the parsers built from its nodes, which it keeps alive
 using common_schema_document_ptr = std::shared_ptr<const common_schema_document>;
 
-// Parses a JSON schema into a document.
 // Throws std::runtime_error when the schema falls outside the supported subset.
 common_schema_document common_schema_parse(const common_json & schema);
 

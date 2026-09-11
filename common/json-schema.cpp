@@ -68,7 +68,6 @@ class common_schema_parser {
         if (format == "uuid" || (format.size() == 5 && format.compare(0, 4, "uuid") == 0 && format[4] >= '1' && format[4] <= '5')) {
             return common_schema::FORMAT_UUID;
         }
-        // any other format is a plain string
         return common_schema::FORMAT_NONE;
     }
 

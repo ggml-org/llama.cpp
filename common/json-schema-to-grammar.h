@@ -6,7 +6,6 @@
 #include <functional>
 #include <string>
 
-// The JSON overload goes through common_schema_parse() first: JSON -> common_schema -> GBNF
 std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf = false);
 std::string json_schema_to_grammar(const common_schema_document & schema);
 
