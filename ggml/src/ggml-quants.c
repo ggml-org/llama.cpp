@@ -638,7 +638,7 @@ static void ggml_bp8_sorted_init(void) {
     g_bp8_sorted_ready = 1;
 }
 static uint8_t ggml_bp8_encode_scan(double x, int bounded) {
-    uint8_t best = BP8_ZERO; double bestd = INFINITY;
+    uint8_t best = BP8_ZERO; double bestd = HUGE_VAL;
     for (int c = 0; c < 256; c++) {
         if (c == BP8_NAR) continue;
         if (bounded && g_bp8_absT[c] > 12) continue;
@@ -664,7 +664,7 @@ static uint8_t ggml_bp8_encode_nearest(double x) {
     while (lo < hi) { int mid = (lo + hi) >> 1; if (g_bp8_sv[mid] < x) lo = mid + 1; else hi = mid; }
     // the two value-neighbours (lo-1, lo) are the closest codes by value and hence by
     // double distance; ties go to the lower code number as the scan does
-    int best_k = -1; double bestd = INFINITY;
+    int best_k = -1; double bestd = HUGE_VAL;
     const int start = lo > 0 ? lo - 1 : lo, end = lo < 255 ? lo : lo - 1;
     for (int k = start; k <= end; k++) {
         const double d = fabs(g_bp8_sv[k] - x);

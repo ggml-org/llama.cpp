@@ -10,6 +10,8 @@
  *      bit-identical float results (the property float accumulation does not have). */
 #include "ggml.h"
 #include "ggml-cpu.h"
+/* the exact W8A8 quire dot (the deterministic profile's vec_dot; the type's default vec_dot uses bf16 activations) */
+void ggml_vec_dot_bposit8_bposit8(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc);
 #include "test-bposit8-quire-golden.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,7 +67,7 @@ int main(void) {
         ttc->from_float(x, qx, n);
         ttc->from_float(y, qy, n);
         float s = 0.0f;
-        ttc->vec_dot(n, &s, 0, qx, 0, qy, 0, 1);
+        ggml_vec_dot_bposit8_bposit8(n, &s, 0, qx, 0, qy, 0, 1);
         float *dx = malloc(n*sizeof(float)), *dy = malloc(n*sizeof(float));
         tt->to_float(qx, dx, n);
         tt->to_float(qy, dy, n);
@@ -75,7 +77,7 @@ int main(void) {
         double rel = fabs((double)s - ref) / denom;
         int ok = rel < 1e-5;
         if (!ok) fails++;
-        printf("  dispatch nb=%d n=%4d vec_dot=%.7g dequant-dot=%.7g rel=%.2e %s\n", nb, n, s, ref, rel, ok ? "ok" : "FAIL");
+        printf("  dispatch nb=%d n=%4d vec_dot=%.7g dequant-dot=%.7g rel=%.2e %s\n", nb, n, (double) s, (double) ref, rel, ok ? "ok" : "FAIL");
         free(x); free(y); free(qx); free(qy); free(dx); free(dy);
     }
 
@@ -88,10 +90,10 @@ int main(void) {
         bx[0] = (uint8_t)(int8_t)tc->sx; memcpy(bx + 1, tc->xs, BP8_QK);
         by[0] = (uint8_t)(int8_t)tc->sy; memcpy(by + 1, tc->ys, BP8_QK);
         float s = 0.0f;
-        ttc->vec_dot(BP8_QK, &s, 0, bx, 0, by, 0, 1);
+        ggml_vec_dot_bposit8_bposit8(BP8_QK, &s, 0, bx, 0, by, 0, 1);
         float want = quire_to_float(tc->golden);
         if (f2u(s) == f2u(want)) gold_ok++;
-        else { fails++; printf("  golden case %d: vec_dot %08x (%.9g) vs reference %08x (%.9g) FAIL\n", c, f2u(s), s, f2u(want), want); }
+        else { fails++; printf("  golden case %d: vec_dot %08x (%.9g) vs reference %08x (%.9g) FAIL\n", c, f2u(s), (double) s, f2u(want), (double) want); }
     }
     printf("  golden vectors: %d/%d bit-exact\n", gold_ok, BP8_NCASES);
 
@@ -104,17 +106,17 @@ int main(void) {
         ttc->from_float(x, qx, n);
         ttc->from_float(y, qy, n);
         float base = 0.0f;
-        ttc->vec_dot(n, &base, 0, qx, 0, qy, 0, 1);
+        ggml_vec_dot_bposit8_bposit8(n, &base, 0, qx, 0, qy, 0, 1);
         int perm[16], same = 0, trials = 32;
         for (int t = 0; t < trials; t++) {
             for (int i = 0; i < nb; i++) perm[i] = i;
             for (int i = nb - 1; i > 0; i--) { st = st * 6364136223846793005ULL + 1442695040888963407ULL; int j = (int)((st >> 33) % (unsigned)(i + 1)); int tmp = perm[i]; perm[i] = perm[j]; perm[j] = tmp; }
             for (int i = 0; i < nb; i++) { memcpy(px + i*bs, qx + perm[i]*bs, bs); memcpy(py + i*bs, qy + perm[i]*bs, bs); }
             float s = 0.0f;
-            ttc->vec_dot(n, &s, 0, px, 0, py, 0, 1);
+            ggml_vec_dot_bposit8_bposit8(n, &s, 0, px, 0, py, 0, 1);
             if (f2u(s) == f2u(base)) same++;
         }
-        printf("  order independence: %d/%d block permutations bit-identical (%.9g)\n", same, trials, base);
+        printf("  order independence: %d/%d block permutations bit-identical (%.9g)\n", same, trials, (double) base);
         if (same != trials) fails++;
         free(x); free(y); free(qx); free(qy); free(px); free(py);
     }
