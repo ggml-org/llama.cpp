@@ -110,13 +110,17 @@ llama_memory_context_ptr llama_memory_hybrid_iswa::init_batch(llama_batch_allocr
         // prepare the attention cache (iswa version returns both base and swa slot infos)
         auto sinfos_base = mem_attn->get_base()->prepare(ubatches);
         if (sinfos_base.empty()) {
-            LLAMA_LOG_ERROR("%s: failed to prepare attention base ubatches\n", __func__);
+            if (!mem_attn->get_has_lazy_quant()) {
+                LLAMA_LOG_ERROR("%s: failed to prepare attention base ubatches\n", __func__);
+            }
             return std::make_unique<llama_memory_hybrid_iswa_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
         }
 
         auto sinfos_swa = mem_attn->get_swa()->prepare(ubatches);
         if (sinfos_swa.empty()) {
-            LLAMA_LOG_ERROR("%s: failed to prepare attention swa ubatches\n", __func__);
+            if (!mem_attn->get_has_lazy_quant()) {
+                LLAMA_LOG_ERROR("%s: failed to prepare attention swa ubatches\n", __func__);
+            }
             return std::make_unique<llama_memory_hybrid_iswa_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
         }
 
@@ -133,6 +137,14 @@ llama_memory_context_ptr llama_memory_hybrid_iswa::init_full() {
 
 llama_memory_context_ptr llama_memory_hybrid_iswa::init_update(llama_context * lctx, bool optimize) {
     return std::make_unique<llama_memory_hybrid_iswa_context>(this, lctx, optimize);
+}
+
+bool llama_memory_hybrid_iswa::try_lazy_quantize(llama_context * lctx) {
+    return mem_attn->try_lazy_quantize(lctx);
+}
+
+bool llama_memory_hybrid_iswa::get_has_lazy_quant() const {
+    return mem_attn->get_has_lazy_quant();
 }
 
 bool llama_memory_hybrid_iswa::get_can_shift() const {
