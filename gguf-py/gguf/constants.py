@@ -245,6 +245,7 @@ class Keys:
         PRIMES         = "{arch}.engram.primes"
         OFFSETS        = "{arch}.engram.offsets"
         TOKEN_MAP      = "{arch}.engram.token_map"
+        PAD_ID         = "{arch}.engram.pad_id"
 
     class PerLayerEmbedding:
         LAYERS             = "{arch}.ple.layers"
