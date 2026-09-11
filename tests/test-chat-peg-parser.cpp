@@ -8,11 +8,12 @@
 
 #include <iostream>
 #include <numeric>
+#include <regex>
 #include <string>
 
-#include "nlohmann/json.hpp"
+#include "json.h"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static json create_tools();
 static void test_example_native(testing & t);
@@ -21,6 +22,7 @@ static void test_example_qwen3_non_coder(testing & t);
 static void test_command7_parser_compare(testing & t);
 static void test_prefix_tool_names(testing & t);
 static void test_tagged_peg_parser(testing & t);
+static void test_permute(testing & t);
 
 int main(int argc, char * argv[]) {
     testing t(std::cout);
@@ -39,6 +41,7 @@ int main(int argc, char * argv[]) {
     t.test("comparison", test_command7_parser_compare);
     t.test("prefix tool names", test_prefix_tool_names);
     t.test("tagged peg parser", test_tagged_peg_parser);
+    t.test("permute", test_permute);
 
     return t.summary();
 }
@@ -60,10 +63,10 @@ static json create_tools() {
                           { { "type", "string" }, { "description", "The city and state, e.g. San Francisco, CA" } } },
                         { "unit",
                           { { "type", "string" },
-                            { "enum", { "celsius", "fahrenheit" } },
+                            { "enum", json::array({ "celsius", "fahrenheit" }) },
                             { "description",
                               "The temperature unit to use. Infer this from the users location." } } } } },
-                    { "required", { "location", "unit" } },
+                    { "required", json::array({ "location", "unit" }) },
                 } },
           }                      }
     };
@@ -83,14 +86,14 @@ static json create_tools() {
                           { { "type", "string" }, { "description", "The city and state, e.g. San Francisco, CA" } } },
                         { "unit",
                           { { "type", "string" },
-                            { "enum", { "celsius", "fahrenheit" } },
+                            { "enum", json::array({ "celsius", "fahrenheit" }) },
                             { "description", "The temperature unit to use. Infer this from the users location." } } },
                         { "days",
                           { { "type", "integer" },
                             { "description", "Number of days to forecast (1-10)" },
                             { "minimum", 1 },
                             { "maximum", 10 } } } } },
-                    { "required", { "location", "unit" } },
+                    { "required", json::array({ "location", "unit" }) },
                 } },
           }                      }
     };
@@ -111,9 +114,9 @@ static json create_tools() {
                         { "default", 5 } } },
                     { "category",
                       { { "type", "string" },
-                        { "enum", { "api", "troubleshooting", "billing", "general" } },
+                        { "enum", json::array({ "api", "troubleshooting", "billing", "general" }) },
                         { "description", "Filter search by specific category." } } } } },
-                { "required", { "query", "category" } },
+                { "required", json::array({ "query", "category" }) },
                 { "additionalProperties", false } } },
             { "strict", true } } }
     };
@@ -338,7 +341,7 @@ static void test_example_native(testing & t) {
                 { { "invoice_number", { { "type", "string" } } },
                   { "amount", { { "type", "number" } } },
                   { "due_date", { { "type", "string" } } } } },
-              { "required", { "invoice_number", "amount", "due_date" } } },
+              { "required", json::array({ "invoice_number", "amount", "due_date" }) } },
          /* .parallel_tool_calls =  */ false,
          /* .generation_prompt =    */ "<think>",
          /* .input =                */
@@ -403,7 +406,7 @@ static void test_example_qwen3_coder(testing & t) {
 
             std::set<std::string> required_properties;
             if (function.contains("required")) {
-                function.at("required").get_to(required_properties);
+                required_properties = function.at("required").get<std::set<std::string>>();
             }
 
             std::vector<common_peg_parser> arg_parsers;
@@ -658,8 +661,8 @@ void test_command7_parser_compare(testing & t) {
         "5. Provide a detailed cost breakdown that includes accommodation, transportation, meals, and entry fees "
         "to attractions.";
 
-    std::vector<std::tuple<std::string, std::string, nlohmann::json>> tool_calls = {
-        { "call_0", "plan_trip", nlohmann::json::parse(R"({
+    std::vector<std::tuple<std::string, std::string, common_json>> tool_calls = {
+        { "call_0", "plan_trip", common_json::parse(R"({
             "destination": "Japan",
             "duration": 14,
             "budget": 4000,
@@ -683,16 +686,16 @@ void test_command7_parser_compare(testing & t) {
     if (!tool_calls.empty()) {
         tokens.emplace_back("<|START_ACTION|>");
 
-        auto json = nlohmann::json::array();
+        auto json = common_json::array();
         for (const auto & tc : tool_calls) {
-            auto tc_json            = nlohmann::json::object();
+            auto tc_json            = common_json::object();
             tc_json["tool_call_id"] = std::get<0>(tc);
             tc_json["tool_name"]    = std::get<1>(tc);
             tc_json["parameters"]   = std::get<2>(tc);
             json.push_back(tc_json);
         }
 
-        auto tokenized = simple_tokenize(json.dump(-1, ' ', true));
+        auto tokenized = simple_tokenize(json.dump(-1));
         tokens.insert(tokens.end(), tokenized.begin(), tokenized.end());
 
         tokens.emplace_back("<|END_ACTION|>");
@@ -734,7 +737,7 @@ static void test_prefix_tool_names(testing & t) {
                       {
                           { "arg1", { { "type", "integer" } } },
                       } },
-                    { "required", { "arg1" } },
+                    { "required", json::array({ "arg1" }) },
                 } },
           } }
     };
@@ -754,7 +757,7 @@ static void test_prefix_tool_names(testing & t) {
                           { "arg1", { { "type", "integer" } } },
                           { "arg2", { { "type", "integer" } } },
                       } },
-                    { "required", { "arg1" } },
+                    { "required", json::array({ "arg1" }) },
                 } },
           } }
     };
@@ -979,5 +982,105 @@ static void test_tagged_peg_parser(testing & t) {
         t.assert_true("success", result.result.success());
         t.assert_equal("fun_pre should be '<function='", "<function=", result.tags["fun_pre"]);
         t.assert_equal("fun_post should be '>'", ">", result.tags["fun_post"]);
+    });
+}
+
+static void test_permute(testing & t) {
+    auto accepts = [](const common_peg_arena & parser, const std::string & input) {
+        common_peg_parse_context ctx(input);
+        return parser.parse(ctx).success();
+    };
+
+    auto gbnf_of = [](const common_peg_arena & parser) {
+        return build_grammar([&](const common_grammar_builder & builder) { parser.build_grammar(builder); });
+    };
+
+    auto assert_gbnf_equal = [](testing & t, const std::string & expected, const std::string & actual) {
+        static const std::regex leading_ws_re = std::regex(R"((^|\n)\s+)");
+        t.assert_equal("gbnf are equal", std::regex_replace(expected, leading_ws_re, "$1"), actual);
+    };
+
+    auto count_rules = [](const std::string & gbnf, const std::string & prefix) {
+        size_t count = 0;
+        for (const auto & line : string_split<std::string>(gbnf, '\n')) {
+            if (line.rfind(prefix, 0) == 0) {
+                count++;
+            }
+        }
+        return count;
+    };
+
+    t.test("accepts every ordering", [&](testing & t) {
+        auto parser = build_chat_peg_parser([](common_chat_peg_builder & p) {
+            return p.permute("abc", { p.literal("a"), p.literal("b"), p.literal("c") }) + p.end();
+        });
+
+        for (const std::string input : { "abc", "acb", "bac", "bca", "cab", "cba" }) {
+            t.assert_true("accepts " + input, accepts(parser, input));
+        }
+    });
+
+    t.test("single element", [&](testing & t) {
+        auto parser = build_chat_peg_parser([](common_chat_peg_builder & p) {
+            return p.permute("a", { p.literal("a") }) + p.end();
+        });
+
+        t.assert_true("accepts a", accepts(parser, "a"));
+        t.assert_true("rejects aa", !accepts(parser, "aa"));
+    });
+
+    t.test("grammar left-factorizes shared tails", [&](testing & t) {
+        auto parser = build_chat_peg_parser([](common_chat_peg_builder & p) {
+            return p.permute("abc", { p.literal("a"), p.literal("b"), p.literal("c") }) + p.end();
+        });
+
+        // Every rule is one remaining subset, keyed by bitmask: abc-3 is {a,b}, abc-7 is {a,b,c}.
+        // Each subset is emitted once and shared by every branch that leads into it.
+        assert_gbnf_equal(t, R"""(
+            abc-1 ::= "a"
+            abc-2 ::= "b"
+            abc-3 ::= "a" abc-2 | "b" abc-1
+            abc-4 ::= "c"
+            abc-5 ::= "a" abc-4 | "c" abc-1
+            abc-6 ::= "b" abc-4 | "c" abc-2
+            abc-7 ::= "a" abc-6 | "b" abc-5 | "c" abc-3
+            root ::= abc-7
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf_of(parser));
+    });
+
+    t.test("grammar emits one rule per remaining subset", [&](testing & t) {
+        auto parser = build_chat_peg_parser([](common_chat_peg_builder & p) {
+            return p.permute("abcd", { p.literal("a"), p.literal("b"), p.literal("c"), p.literal("d") }) + p.end();
+        });
+
+        // 2^4 - 1 non-empty subsets, one rule each - not the 4! = 24 orderings.
+        t.assert_equal("permute rule count", 15u, count_rules(gbnf_of(parser), "abcd-"));
+    });
+
+    t.test("grammar emits no rules for a single element", [&](testing & t) {
+        auto parser = build_chat_peg_parser([](common_chat_peg_builder & p) {
+            return p.permute("a", { p.literal("a") }) + p.end();
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= "a"
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf_of(parser));
+    });
+
+    t.test("grammar falls back to the given order when too large", [&](testing & t) {
+        auto parser = build_chat_peg_parser([](common_chat_peg_builder & p) {
+            std::vector<common_peg_parser> parsers;
+            for (size_t i = 0; i <= COMMON_CHAT_MAX_PERMUTE; i++) {
+                parsers.push_back(p.literal(std::string(1, (char) ('a' + i))));
+            }
+            return p.permute("big", parsers) + p.end();
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= "a" "b" "c" "d" "e" "f" "g"
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf_of(parser));
     });
 }

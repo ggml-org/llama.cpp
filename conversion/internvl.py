@@ -9,6 +9,7 @@ from .base import MmprojModel, ModelBase, gguf
 
 
 @ModelBase.register("InternVisionModel")
+@ModelBase.example("OpenGVLab/InternVL3-2B", "OpenGVLab/InternVL2_5-1B")
 class InternVisionModel(MmprojModel):
 
     min_dynamic_tiles: int = 0

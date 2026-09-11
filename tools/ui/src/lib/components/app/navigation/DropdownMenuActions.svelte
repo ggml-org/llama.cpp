@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import type { Component } from 'svelte';
 
 	interface ActionItem {
@@ -24,34 +24,40 @@
 	}
 
 	let {
-		triggerIcon,
-		triggerTooltip,
-		triggerClass = '',
 		actions,
 		align = 'end',
-		open = $bindable(false)
+		open = $bindable(false),
+		triggerClass = '',
+		triggerIcon,
+		triggerTooltip
 	}: Props = $props();
 </script>
 
 <DropdownMenu.Root bind:open>
-	<DropdownMenu.Trigger
-		class="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground {triggerClass}"
-		onclick={(e) => e.stopPropagation()}
-	>
-		{#if triggerTooltip}
-			<Tooltip.Root>
-				<Tooltip.Trigger>
+	<Tooltip.Root>
+		<Tooltip.Trigger>
+			<!-- prevent another nested button element -->
+			{#snippet child({ props })}
+				<DropdownMenu.Trigger
+					{...props}
+					class="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground {triggerClass}"
+					onclick={(e) => e.stopPropagation()}
+				>
 					{@render iconComponent(triggerIcon, 'h-3 w-3')}
-					<span class="sr-only">{triggerTooltip}</span>
-				</Tooltip.Trigger>
-				<Tooltip.Content>
-					<p>{triggerTooltip}</p>
-				</Tooltip.Content>
-			</Tooltip.Root>
-		{:else}
-			{@render iconComponent(triggerIcon, 'h-3 w-3')}
+
+					{#if triggerTooltip}
+						<span class="sr-only">{triggerTooltip}</span>
+					{/if}
+				</DropdownMenu.Trigger>
+			{/snippet}
+		</Tooltip.Trigger>
+
+		{#if triggerTooltip}
+			<Tooltip.Content>
+				<p>{triggerTooltip}</p>
+			</Tooltip.Content>
 		{/if}
-	</DropdownMenu.Trigger>
+	</Tooltip.Root>
 
 	<DropdownMenu.Content {align} class="z-[999999] w-48">
 		{#each actions as action, index (action.label)}
@@ -60,10 +66,10 @@
 			{/if}
 
 			<DropdownMenu.Item
+				class="flex items-center justify-between hover:[&>kbd]:opacity-100"
+				disabled={action.disabled}
 				onclick={action.onclick}
 				variant={action.variant}
-				disabled={action.disabled}
-				class="flex items-center justify-between hover:[&>kbd]:opacity-100"
 			>
 				<div class="flex items-center gap-2">
 					{@render iconComponent(

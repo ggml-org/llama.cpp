@@ -5,7 +5,7 @@ on:
 
 jobs:
   linux:
-    runs-on: [self-hosted, Linux, CPU]
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -21,31 +21,33 @@ jobs:
                 -DLLAMA_BUILD_TOOLS=OFF \
                 -DLLAMA_BUILD_EXAMPLES=OFF \
                 -DLLAMA_BUILD_APP=OFF \
+                -DLLAMA_BUILD_IS_DEV=OFF \
                 -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release
+          cmake --build build --config Release -j $(nproc)
           cmake --install build --prefix "$PREFIX" --config Release
 
           export LLAMA_CONFIG="$PREFIX"/lib/cmake/llama/llama-config.cmake
-          tclsh <<'EOF'
-          set build(commit)  [string trim [exec git rev-parse --short HEAD]]
-          set build(number)  [string trim [exec git rev-list  --count HEAD]]
-          set build(version) "0.0.$build(number)"
+          build_commit=$(git rev-parse --short HEAD | xargs)
+          build_number=$(git rev-list --count HEAD | xargs)
 
-          set llamaconfig [read [open "$env(LLAMA_CONFIG)" r]]
-          set checks [list "set\\(LLAMA_VERSION     \\s+$build(version)\\)" \
-                           "set\\(LLAMA_BUILD_COMMIT\\s+$build(commit)\\)" \
-                           "set\\(LLAMA_BUILD_NUMBER\\s+$build(number)\\)"]
+          major=$(grep -oE "set\(LLAMA_VERSION_MAJOR[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          minor=$(grep -oE "set\(LLAMA_VERSION_MINOR[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          patch=$(grep -oE "set\(LLAMA_VERSION_PATCH[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          build_version="$major.$minor.$patch"
 
-          puts -nonewline "Checking llama-config.cmake version... "
-          foreach check $checks {
-              if {![regexp -expanded -- $check $llamaconfig]} {
-                  puts "\"$check\" failed!"
+          checks=("set\(LLAMA_VERSION[[:space:]]+$build_version\)"
+                  "set\(LLAMA_BUILD_COMMIT[[:space:]]+$build_commit\)"
+                  "set\(LLAMA_BUILD_NUMBER[[:space:]]+$build_number\)")
+
+          for check in "${checks[@]}"; do
+              if ! grep -qE "$check" "$LLAMA_CONFIG"; then
+                  echo "Checking llama-config.cmake version... \"$check\" failed!"
                   exit 1
-              }
-          }
-          puts "success."
-          EOF
+              fi
+          done
+
+          echo "Checking llama-config.cmake version... success."
 
           cd examples/simple-cmake-pkg
           cmake -S . -B build -DCMAKE_PREFIX_PATH="$PREFIX"/lib/cmake
-          cmake --build build
+          cmake --build build -j $(nproc)

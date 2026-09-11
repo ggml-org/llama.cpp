@@ -8,8 +8,26 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Setup ROCm
-      uses: ./.github/actions/install-exe
-      with:
-        url: https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ inputs.version }}-Win11-For-HIP.exe
-        args: -install
+    - name: Install ROCm with Wheels
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        write-host "Setting up Python virtual environment"
+
+        # Create the venv directly at the cache location to avoid relocation issues
+        New-Item -Path "C:\TheRock\build" -ItemType Directory -Force | Out-Null
+        python -m venv C:\TheRock\build\.venv
+        & C:\TheRock\build\.venv\Scripts\Activate.ps1
+
+        write-host "Upgrading pip"
+        python -m pip install --upgrade pip
+
+        write-host "Installing ROCm wheels for multi-arch support"
+        # Install ROCm wheels for multi-arch support (this may take several minutes)
+        python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel]==${{ inputs.version }}"
+
+        # Pre-expand the devel tree so it is included in the cache
+        write-host "Initializing ROCm devel tree"
+        rocm-sdk init
+        if ($LASTEXITCODE -ne 0) { throw "rocm-sdk init failed with exit code $LASTEXITCODE" }
+        write-host "Completed ROCm wheel installation to C:\TheRock\build"

@@ -13,6 +13,12 @@ struct block_a_cache {
     uint32_t qs[16/4];
     FLOAT_TYPE dm;
 };
+#elif defined(DATA_A_Q2_0)
+#define QUANT_R_MMQ 1
+struct block_a_cache {
+    int32_t qs[8];
+    FLOAT_TYPE dm;
+};
 #elif defined(DATA_A_Q4_1)
 #define QUANT_R_MMQ 2
 struct block_a_cache {

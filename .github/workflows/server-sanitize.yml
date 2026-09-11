@@ -25,7 +25,15 @@ on:
       'tools/server/**.*'
     ]
 
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/server-sanitize.yml'
+    ]
+
 env:
+  # note: this is dud token to avoid rate limiting (https://github.com/ggml-org/llama.cpp/pull/25706#issuecomment-4979941302)
+  HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
@@ -37,7 +45,7 @@ concurrency:
 
 jobs:
   server:
-    runs-on: [self-hosted, CPU, Linux, llama-server]
+    runs-on: hf-jobs-cpu-upgrade
 
     strategy:
       matrix:
@@ -46,20 +54,6 @@ jobs:
       fail-fast: false
 
     steps:
-      #- name: Dependencies
-      #  id: depends
-      #  run: |
-      #    sudo apt-get update
-      #    sudo apt-get -y install \
-      #      build-essential \
-      #      xxd \
-      #      git \
-      #      cmake \
-      #      curl \
-      #      wget \
-      #      language-pack-en \
-      #      libssl-dev
-
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
@@ -67,12 +61,23 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential cmake python3-full
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: server-sanitize-${{ matrix.sanitizer }}
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build
         id: cmake_build
@@ -88,25 +93,37 @@ jobs:
             -DLLAMA_SANITIZE_UNDEFINED=${{ matrix.sanitizer == 'UNDEFINED' }}
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
-      - name: Python setup
-        id: setup_python
-        uses: actions/setup-python@v6
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          python-version: '3.11'
-          pip-install: -r tools/server/tests/requirements.txt
+          key: server-sanitize-${{ matrix.sanitizer }}
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -r tools/server/tests/requirements.txt
 
       - name: Tests
         id: server_integration_tests
         if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) }}
         run: |
+          source .venv/bin/activate
           cd tools/server/tests
           export ${{ matrix.extra_args }}
-          pytest -v -x -m "not slow"
+          PYTEST_WORKERS=1 ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow
         if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
         run: |
+          source .venv/bin/activate
           cd tools/server/tests
           export ${{ matrix.extra_args }}
-          SLOW_TESTS=1 pytest -v -x
+          PYTEST_WORKERS=1 SLOW_TESTS=1 ./tests.sh

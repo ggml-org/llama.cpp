@@ -30,7 +30,7 @@ cd "$REPO_ROOT/tools/ui"
 
 # Check that node_modules exists
 if [ ! -d "node_modules" ]; then
-    echo "❌ node_modules not found. Run 'npm install' first."
+    echo "❌ node_modules not found. Run 'npm ci' first."
     exit 1
 fi
 
@@ -57,6 +57,7 @@ if [ $lint_ok -ne 0 ]; then
     echo "❌ Lint failed"
     exit 1
 fi
+
 if [ $test_ok -ne 0 ]; then
     echo "❌ Tests failed"
     exit 1

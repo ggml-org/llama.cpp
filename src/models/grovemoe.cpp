@@ -1,13 +1,13 @@
 #include "models.h"
 
 void llama_model_grovemoe::load_arch_hparams(llama_model_loader & ml) {
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp, false);
     ml.get_key(LLM_KV_EXPERT_GROUP_SCALE,                hparams.expert_group_scale);
     ml.get_key(LLM_KV_EXPERTS_PER_GROUP,                 hparams.n_group_experts);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 48: type = LLM_TYPE_30B_A3B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
@@ -46,7 +46,7 @@ void llama_model_grovemoe::load_arch_tensors(llama_model_loader &) {
         layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
 
         // MoE branch
-        const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+        const int64_t n_ff_exp = hparams.n_ff_exp() ? hparams.n_ff_exp() : n_ff / n_expert_used;
         const int64_t n_ff_chexp = hparams.n_ff_chexp ? hparams.n_ff_chexp : n_embd_head_k;
         const int64_t n_chunk_expert = n_expert / hparams.n_group_experts;
 

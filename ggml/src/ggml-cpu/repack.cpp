@@ -2739,7 +2739,7 @@ static block_q8_0x4 make_block_q8_0x4(block_q8_0 * in, unsigned int blck_size_in
     return out;
 }
 
-static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_interleave) {
+static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, int blck_size_interleave) {
     block_q4_0x4 out;
 
     for (int i = 0; i < 4; i++) {
@@ -4582,6 +4582,11 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             }
         }
         if (ggml_cpu_has_neon() && ggml_cpu_has_dotprod()) {
+            if (cur->ne[1] % 4 == 0) {
+                return &q4_0_4x4_q8_0;
+            }
+        }
+        if (ggml_cpu_has_vxe()) {
             if (cur->ne[1] % 4 == 0) {
                 return &q4_0_4x4_q8_0;
             }

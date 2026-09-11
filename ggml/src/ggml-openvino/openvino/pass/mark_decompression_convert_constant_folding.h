@@ -1,8 +1,8 @@
 #pragma once
 
 #include "mark_decompression_convert_constant_folding.h"
-#include "openvino/pass/matcher_pass.hpp"
 #include "openvino/core/visibility.hpp"
+#include "openvino/pass/matcher_pass.hpp"
 
 #ifdef OPENVINO_STATIC_LIBRARY
 #    define TRANSFORMATIONS_API

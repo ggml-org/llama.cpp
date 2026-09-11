@@ -6,10 +6,6 @@
 #include <hip/hip_fp16.h>
 #include <hip/hip_bf16.h>
 
-#if defined(GGML_HIP_ROCWMMA_FATTN)
-#include <rocwmma/rocwmma-version.hpp>
-#endif // defined(GGML_HIP_ROCWMMA_FATTN)
-
 #ifdef GGML_USE_NCCL
 #include <rccl/rccl.h>
 #endif // GGML_USE_NCCL
@@ -48,6 +44,7 @@
 #define cublasSetMathMode(handle, mode) CUBLAS_STATUS_SUCCESS
 #define cublasSetStream hipblasSetStream
 #define cublasSgemm hipblasSgemm
+#define cublasSgemmBatched hipblasSgemmBatched
 #define cublasSgemmStridedBatched hipblasSgemmStridedBatched
 #define cublasStatus_t hipblasStatus_t
 #define cublasOperation_t hipblasOperation_t
@@ -179,9 +176,9 @@
 
 #define __CUDA_ARCH__ 1300
 
-#if defined(__gfx900__) || defined(__gfx906__)
+#if defined(__gfx900__) || defined(__gfx906__) || defined(__gfx909__) || defined(__gfx90c__)
 #define GCN5
-#endif // defined(__gfx900__) || defined(__gfx906__)
+#endif // defined(__gfx900__) || defined(__gfx906__) || defined(__gfx909__) || defined(__gfx90c__)
 
 #if defined(__gfx803__)
 #define GCN4
@@ -219,9 +216,9 @@
 #define RDNA3
 #endif // defined(__GFX11__)
 
-#if defined(__gfx1150__) || defined(__gfx1151__)
+#if defined(__gfx1150__) || defined(__gfx1151__) || defined(__gfx1152__) || defined(__gfx1153__)
 #define RDNA3_5
-#endif // defined(__gfx1150__) || defined(__gfx1151__)
+#endif // defined(__gfx1150__) || defined(__gfx1151__) || defined(__gfx1152__) || defined(__gfx1153__)
 
 #if defined(RDNA3) && !defined(RDNA3_5)
 #define RDNA3_0

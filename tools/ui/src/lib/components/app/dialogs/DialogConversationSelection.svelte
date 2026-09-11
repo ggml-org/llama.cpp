@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as Dialog from '$lib/components/ui/dialog';
 	import { ConversationSelection } from '$lib/components/app';
+	import * as Dialog from '$lib/components/ui/dialog';
 
 	interface Props {
 		conversations: DatabaseConversation[];
@@ -37,9 +37,9 @@
 
 <Dialog.Root bind:open>
 	<Dialog.Portal>
-		<Dialog.Overlay class="z-[1000000]" />
+		<Dialog.Overlay class="z-1000000" />
 
-		<Dialog.Content class="z-[1000001] max-w-2xl">
+		<Dialog.Content class="z-1000001 max-w-2xl">
 			<Dialog.Header>
 				<Dialog.Title>
 					Select Conversations to {mode === 'export' ? 'Export' : 'Import'}
@@ -59,6 +59,7 @@
 			<ConversationSelection
 				bind:this={conversationSelectionRef}
 				{conversations}
+				isOpen={open}
 				{messageCountMap}
 				{mode}
 				{onCancel}

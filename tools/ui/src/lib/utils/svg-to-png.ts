@@ -20,6 +20,7 @@ export function svgBase64UrlToPngDataURL(
 
 				if (!ctx) {
 					reject(new Error('Failed to get 2D canvas context.'));
+
 					return;
 				}
 
@@ -33,6 +34,7 @@ export function svgBase64UrlToPngDataURL(
 					ctx.fillStyle = backgroundColor;
 					ctx.fillRect(0, 0, canvas.width, canvas.height);
 				}
+
 				ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
 
 				resolve(canvas.toDataURL(MimeTypeImage.PNG));
@@ -46,6 +48,7 @@ export function svgBase64UrlToPngDataURL(
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const errorMessage = `Error converting SVG to PNG: ${message}`;
+
 			console.error(errorMessage, error);
 			reject(new Error(errorMessage));
 		}

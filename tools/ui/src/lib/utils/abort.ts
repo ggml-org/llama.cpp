@@ -6,6 +6,16 @@
  * when needed (e.g., user stops generation, navigates away, etc.).
  */
 
+// the standard DOMException name for a cancelled operation
+const ABORT_ERROR_NAME = 'AbortError';
+// browser specific TypeError messages emitted when a fetch reader is cut by page unload,
+// navigation, or a transient network drop. functionally aborts, not actionable errors
+const ABORT_LIKE_MESSAGE_PATTERNS = [
+	/input stream/i, // Firefox: stream cut at unload
+	/network connection was lost/i, // Safari: transient network drop
+	/load failed/i // Safari: page navigation during fetch
+];
+
 /**
  * Throws an AbortError if the signal is aborted.
  * Use this at the start of async operations to fail fast.
@@ -23,7 +33,7 @@
  */
 export function throwIfAborted(signal?: AbortSignal): void {
 	if (signal?.aborted) {
-		throw new DOMException('Operation was aborted', 'AbortError');
+		throw new DOMException('Operation was aborted', ABORT_ERROR_NAME);
 	}
 }
 
@@ -48,12 +58,23 @@ export function throwIfAborted(signal?: AbortSignal): void {
  * ```
  */
 export function isAbortError(error: unknown): boolean {
-	if (error instanceof DOMException && error.name === 'AbortError') {
+	if (error instanceof DOMException && error.name === ABORT_ERROR_NAME) {
 		return true;
 	}
-	if (error instanceof Error && error.name === 'AbortError') {
-		return true;
+
+	if (error instanceof Error) {
+		if (error.name === ABORT_ERROR_NAME) {
+			return true;
+		}
+
+		// these patterns are functionally aborts, keep them out of the red console
+		if (error instanceof TypeError) {
+			const msg = error.message ?? '';
+
+			if (ABORT_LIKE_MESSAGE_PATTERNS.some((re) => re.test(msg))) return true;
+		}
 	}
+
 	return false;
 }
 
@@ -83,6 +104,7 @@ export function createLinkedController(...signals: (AbortSignal | undefined)[]):
 		// If already aborted, abort immediately
 		if (signal.aborted) {
 			controller.abort(signal.reason);
+
 			return controller;
 		}
 
@@ -133,7 +155,7 @@ export async function withAbortSignal<T>(promise: Promise<T>, signal?: AbortSign
 
 	return new Promise<T>((resolve, reject) => {
 		const abortHandler = () => {
-			reject(new DOMException('Operation was aborted', 'AbortError'));
+			reject(new DOMException('Operation was aborted', ABORT_ERROR_NAME));
 		};
 
 		signal.addEventListener('abort', abortHandler, { once: true });

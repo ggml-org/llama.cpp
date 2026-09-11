@@ -1,79 +1,65 @@
 <script lang="ts">
-	import { Plus } from '@lucide/svelte';
+	import { File, Image, MessageSquare, Mic, Plus, Video } from '@lucide/svelte';
+	import { ChatFormActionAddToolsSubmenu, McpLogo } from '$lib/components/app';
+	import { buttonVariants } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { buttonVariants } from '$lib/components/ui/button';
 	import { cn } from '$lib/components/ui/utils';
 	import {
 		ATTACHMENT_FILE_ITEMS,
-		ATTACHMENT_EXTRA_ITEMS,
-		ATTACHMENT_MCP_ITEMS,
 		ATTACHMENT_TOOLTIP_TEXT,
-		TOOLTIP_DELAY_DURATION
+		ICON_CLASS_DEFAULT
 	} from '$lib/constants';
-	import { AttachmentMenuItemId } from '$lib/enums';
-	import {
-		ChatFormActionAddToolsSubmenu,
-		ChatFormActionAddMcpServersSubmenu
-	} from '$lib/components/app';
-
+	import { getChatFormActionsContext } from '$lib/contexts';
+	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
 	interface Props {
 		class?: string;
-		disabled?: boolean;
-		hasAudioModality?: boolean;
-		hasVideoModality?: boolean;
-		hasVisionModality?: boolean;
-		hasMcpPromptsSupport?: boolean;
-		hasMcpResourcesSupport?: boolean;
-		onFileUpload?: () => void;
-		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
-		onMcpResourcesClick?: () => void;
 	}
 
-	let {
-		class: className = '',
-		disabled = false,
-		hasAudioModality = false,
-		hasVideoModality = false,
-		hasVisionModality = false,
-		hasMcpPromptsSupport = false,
-		hasMcpResourcesSupport = false,
-		onFileUpload,
-		onSystemPromptClick,
-		onMcpPromptClick,
-		onMcpSettingsClick,
-		onMcpResourcesClick
-	}: Props = $props();
+	let { class: className = '' }: Props = $props();
+
+	const chatFormActions = getChatFormActionsContext();
 
 	let dropdownOpen = $state(false);
-
-	function handleMcpSettingsClick() {
-		dropdownOpen = false;
-		onMcpSettingsClick?.();
-	}
+	// The system message action moves focus to the message editor, so the menu
+	// must not restore focus to the trigger on close
+	let suppressCloseAutoFocus = false;
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
-			hasVisionModality,
-			hasAudioModality,
-			hasVideoModality,
-			hasMcpPromptsSupport,
-			hasMcpResourcesSupport
+			hasAudioModality: chatFormActions.hasAudioModality,
+			hasVideoModality: chatFormActions.hasVideoModality,
+			hasVisionModality: chatFormActions.hasVisionModality
 		}),
-		() => ({ onFileUpload, onSystemPromptClick, onMcpPromptClick, onMcpResourcesClick }),
+		() => ({
+			onFileUpload: chatFormActions.onFileUpload,
+			onSystemPromptClick: chatFormActions.onSystemPromptClick
+		}),
 		() => {
 			dropdownOpen = false;
 		}
+	);
+
+	const FILE_MODALITY_ICONS: Record<string, { icon: typeof Image; label: string }> = {
+		[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]: { icon: Mic, label: 'Audio' },
+		[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: { icon: Video, label: 'Video' },
+		[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]: { icon: Image, label: 'Vision' }
+	};
+
+	const supportedModalities = $derived.by(() =>
+		ATTACHMENT_FILE_ITEMS.filter((item) => attachmentMenu.isItemEnabled(item.enabledWhen))
+			.map((item) => FILE_MODALITY_ICONS[item.enabledWhen ?? ''])
+			.filter((modality) => modality !== undefined)
 	);
 </script>
 
 <div class="flex items-center gap-1 {className}">
 	<DropdownMenu.Root bind:open={dropdownOpen}>
-		<Tooltip.Root>
+		<!-- ignoreNonKeyboardFocus prevents the tooltip from flashing when the
+		     menu closes and focus returns to the trigger -->
+		<Tooltip.Root ignoreNonKeyboardFocus>
 			<Tooltip.Trigger>
 				{#snippet child({ props })}
 					<DropdownMenu.Trigger
@@ -82,11 +68,11 @@
 							buttonVariants({ variant: 'secondary' }),
 							'file-upload-button h-8 w-8 cursor-pointer rounded-full p-0'
 						)}
-						{disabled}
+						disabled={chatFormActions.disabled}
 					>
 						<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
 
-						<Plus class="h-4 w-4" />
+						<Plus class={ICON_CLASS_DEFAULT} />
 					</DropdownMenu.Trigger>
 				{/snippet}
 			</Tooltip.Trigger>
@@ -96,108 +82,65 @@
 			</Tooltip.Content>
 		</Tooltip.Root>
 
-		<DropdownMenu.Content align="start" class="w-48">
-			{#each ATTACHMENT_FILE_ITEMS as item (item.id)}
-				{@const enabled = attachmentMenu.isItemEnabled(item.enabledWhen)}
-				{#if enabled}
-					<DropdownMenu.Item
-						class="{item.class ?? ''} flex cursor-pointer items-center gap-2"
-						onclick={() => attachmentMenu.callbacks[item.action]()}
-					>
-						<item.icon class="h-4 w-4" />
+		<DropdownMenu.Content
+			align="start"
+			class="w-52"
+			onCloseAutoFocus={(e) => {
+				if (suppressCloseAutoFocus) {
+					suppressCloseAutoFocus = false;
+					e.preventDefault();
+				}
+			}}
+		>
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-center gap-2"
+				onclick={() => attachmentMenu.callbacks[AttachmentAction.FILE_UPLOAD]()}
+			>
+				<File class={ICON_CLASS_DEFAULT} />
 
-						<span>{item.label}</span>
-					</DropdownMenu.Item>
-				{:else if item.disabledTooltip}
-					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-						<Tooltip.Trigger tabindex={-1}>
-							{#snippet child({ props })}
-								<div {...props} class="cursor-default">
-									<DropdownMenu.Item class="{item.class ?? ''} flex items-center gap-2" disabled>
-										<item.icon class="h-4 w-4" />
+				<span class="flex min-w-0 items-center gap-2">
+					<span>Add files</span>
 
-										<span>{item.label}</span>
-									</DropdownMenu.Item>
-								</div>
-							{/snippet}
-						</Tooltip.Trigger>
+					{#if supportedModalities.length > 0}
+						<span class="flex items-center gap-0.75 text-muted-foreground">
+							{#each supportedModalities as modality (modality.label)}
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										<modality.icon class="size-2.75" />
+									</Tooltip.Trigger>
 
-						<Tooltip.Content side="right">
-							<p>{item.disabledTooltip}</p>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				{/if}
-			{/each}
+									<Tooltip.Content>
+										<p>{modality.label}</p>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							{/each}
+						</span>
+					{/if}
+				</span>
+			</DropdownMenu.Item>
 
-			{#if !attachmentMenu.isItemEnabled('hasVisionModality')}
-				<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-					<Tooltip.Trigger>
-						{#snippet child({ props })}
-							<DropdownMenu.Item
-								{...props}
-								class="flex cursor-pointer items-center gap-2"
-								onclick={attachmentMenu.callbacks.onFileUpload}
-							>
-								{@const pdfItem = ATTACHMENT_FILE_ITEMS.find(
-									(i) => i.id === AttachmentMenuItemId.PDF
-								)}
-								{#if pdfItem}
-									<pdfItem.icon class="h-4 w-4" />
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-center gap-2"
+				onclick={() => {
+					suppressCloseAutoFocus = true;
+					chatFormActions.onSystemPromptClick?.();
+				}}
+			>
+				<MessageSquare class={ICON_CLASS_DEFAULT} />
 
-									<span>{pdfItem.label}</span>
-								{/if}
-							</DropdownMenu.Item>
-						{/snippet}
-					</Tooltip.Trigger>
-
-					<Tooltip.Content side="right">
-						<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
-
-			<DropdownMenu.Separator />
-
-			{#each ATTACHMENT_EXTRA_ITEMS as item (item.id)}
-				{#if item.id === AttachmentMenuItemId.SYSTEM_MESSAGE}
-					<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
-						<Tooltip.Trigger>
-							{#snippet child({ props })}
-								<DropdownMenu.Item
-									{...props}
-									class="flex cursor-pointer items-center gap-2"
-									onclick={() => attachmentMenu.callbacks[item.action]()}
-								>
-									<item.icon class="h-4 w-4" />
-
-									<span>{item.label}</span>
-								</DropdownMenu.Item>
-							{/snippet}
-						</Tooltip.Trigger>
-
-						<Tooltip.Content side="right">
-							<p>{attachmentMenu.getSystemMessageTooltip()}</p>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				{/if}
-			{/each}
+				<span>System Message</span>
+			</DropdownMenu.Item>
 
 			<ChatFormActionAddToolsSubmenu />
 
-			<ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-center gap-2"
+				onclick={chatFormActions.onMcpSettingsClick}
+			>
+				<McpLogo class={ICON_CLASS_DEFAULT} />
 
-			{#each ATTACHMENT_MCP_ITEMS as item (item.id)}
-				{#if attachmentMenu.isItemVisible(item.visibleWhen)}
-					<DropdownMenu.Item
-						class="flex cursor-pointer items-center gap-2"
-						onclick={() => attachmentMenu.callbacks[item.action]()}
-					>
-						<item.icon class="h-4 w-4" />
-
-						<span>{item.label}</span>
-					</DropdownMenu.Item>
-				{/if}
-			{/each}
+				<span>MCP Servers</span>
+			</DropdownMenu.Item>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>

@@ -1,9 +1,9 @@
 import {
 	AUDIO_FILE_TYPES,
-	VIDEO_FILE_TYPES,
 	IMAGE_FILE_TYPES,
 	PDF_FILE_TYPES,
-	TEXT_FILE_TYPES
+	TEXT_FILE_TYPES,
+	VIDEO_FILE_TYPES
 } from '$lib/constants';
 import {
 	FileExtensionAudio,
@@ -13,9 +13,9 @@ import {
 	FileTypeCategory,
 	MimeTypeApplication,
 	MimeTypeAudio,
-	MimeTypeVideo,
 	MimeTypeImage,
-	MimeTypeText
+	MimeTypeText,
+	MimeTypeVideo
 } from '$lib/enums';
 
 function normalizeMimeType(mimeType: string): string {
@@ -30,6 +30,8 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 		case MimeTypeImage.GIF:
 		case MimeTypeImage.WEBP:
 		case MimeTypeImage.SVG:
+		case MimeTypeImage.HEIC:
+		case MimeTypeImage.HEIF:
 			return FileTypeCategory.IMAGE;
 
 		// Audio
@@ -118,6 +120,8 @@ export function getFileTypeCategoryByExtension(filename: string): FileTypeCatego
 		case FileExtensionImage.GIF:
 		case FileExtensionImage.WEBP:
 		case FileExtensionImage.SVG:
+		case FileExtensionImage.HEIC:
+		case FileExtensionImage.HEIF:
 			return FileTypeCategory.IMAGE;
 
 		// Audio
@@ -220,6 +224,7 @@ export function isFileTypeSupported(filename: string, mimeType?: string): boolea
 	// Images are detected and handled separately for vision models
 	if (mimeType) {
 		const category = getFileTypeCategory(mimeType);
+
 		if (
 			category === FileTypeCategory.IMAGE ||
 			category === FileTypeCategory.AUDIO ||
@@ -231,6 +236,7 @@ export function isFileTypeSupported(filename: string, mimeType?: string): boolea
 
 	// Check extension for known types (especially images without MIME)
 	const extCategory = getFileTypeCategoryByExtension(filename);
+
 	if (
 		extCategory === FileTypeCategory.IMAGE ||
 		extCategory === FileTypeCategory.AUDIO ||

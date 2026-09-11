@@ -1,8 +1,10 @@
 <script lang="ts">
-	import { Input } from '$lib/components/ui/input';
 	import { Search, X } from '@lucide/svelte';
+	import { Input } from '$lib/components/ui/input';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 
 	interface Props {
+		autofocus?: boolean;
 		value?: string;
 		placeholder?: string;
 		onInput?: (value: string) => void;
@@ -15,15 +17,16 @@
 	}
 
 	let {
-		value = $bindable(''),
-		placeholder = 'Search...',
-		onInput,
-		onClose,
-		onKeyDown,
+		autofocus,
 		class: className,
 		id,
+		isCancelAlwaysVisible = false,
+		onClose,
+		onInput,
+		onKeyDown,
+		placeholder = 'Search...',
 		ref = $bindable(null),
-		isCancelAlwaysVisible = false
+		value = $bindable('')
 	}: Props = $props();
 
 	let showClearButton = $derived(isCancelAlwaysVisible || !!value || !!onClose);
@@ -39,7 +42,7 @@
 		if (value) {
 			value = '';
 			onInput?.('');
-			ref?.focus();
+			ref?.focus({ preventScroll: true });
 		} else {
 			onClose?.();
 		}
@@ -48,14 +51,15 @@
 
 <div class="relative {className}">
 	<Search
-		class="absolute top-1/2 left-3 z-10 h-4 w-4 -translate-y-1/2 transform text-muted-foreground"
+		class="absolute top-1/2 left-3 z-10 {ICON_CLASS_DEFAULT} -translate-y-1/2 transform text-muted-foreground"
 	/>
 
 	<Input
-		{id}
-		bind:value
 		bind:ref
+		bind:value
+		{autofocus}
 		class="pl-9 {showClearButton ? 'pr-9' : ''}"
+		{id}
 		oninput={handleInput}
 		onkeydown={onKeyDown}
 		{placeholder}
@@ -64,12 +68,12 @@
 
 	{#if showClearButton}
 		<button
-			type="button"
+			aria-label={value ? 'Clear search' : 'Close'}
 			class="absolute top-1/2 right-3 -translate-y-1/2 transform cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
 			onclick={handleClear}
-			aria-label={value ? 'Clear search' : 'Close'}
+			type="button"
 		>
-			<X class="h-4 w-4" />
+			<X class={ICON_CLASS_DEFAULT} />
 		</button>
 	{/if}
 </div>

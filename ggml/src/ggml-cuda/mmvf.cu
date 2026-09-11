@@ -6,11 +6,15 @@
 
 template <typename T, typename type_acc, int ncols_dst, int block_size, bool has_fusion = false, bool is_multi_token_id = false>
 static __global__ void mul_mat_vec_f(
-        const T * __restrict__ x, const float * __restrict__ y, const int32_t * __restrict__ ids, const ggml_cuda_mm_fusion_args_device fusion, float * __restrict__ dst,
+        const T * x_ptr, const float * y_ptr, const int32_t * ids_ptr, const ggml_cuda_mm_fusion_args_device fusion, float * dst_ptr,
         const int ncols2, const uint3 nchannels_y, const int stride_row, const int stride_col_y2, const int stride_col_dst,
         const uint3 channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const uint3 sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
         const int ids_stride) {
+    const T       * GGML_CUDA_RESTRICT x   = x_ptr;
+    const float   * GGML_CUDA_RESTRICT y   = y_ptr;
+    const int32_t * GGML_CUDA_RESTRICT ids = ids_ptr;
+    float         * GGML_CUDA_RESTRICT dst = dst_ptr;
     const int row         = blockIdx.x;
     // for MUL_MAT_ID - blockIdx.y = n_expert_used, blockIdx.z = ncols_dst (tokens)
     const int channel_dst = blockIdx.y;
@@ -52,6 +56,7 @@ static __global__ void mul_mat_vec_f(
     bool use_bias = false;
     bool use_gate_bias = false;
     ggml_glu_op glu_op = ggml_glu_op::GGML_GLU_OP_SWIGLU;
+    float glu_limit = 0.0f;
     const T * gate_x = nullptr;
     const float * x_bias = nullptr;
     const float * gate_bias = nullptr;
@@ -61,6 +66,7 @@ static __global__ void mul_mat_vec_f(
         use_bias = fusion.x_bias != nullptr;
         use_gate_bias = fusion.gate_bias != nullptr;
         glu_op = fusion.glu_op;
+        glu_limit = fusion.glu_limit;
 
         if (use_gate) {
             gate_x = static_cast<const T *>(fusion.gate);
@@ -80,9 +86,8 @@ static __global__ void mul_mat_vec_f(
         gate_x += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
     }
 
-    const int channel_bias = ids ? channel_x : channel_dst;
-
     if constexpr (has_fusion) {
+        const int channel_bias = ids ? channel_x : channel_dst;
         if (use_bias) {
             x_bias += int64_t(sample_dst)*stride_sample_dst + channel_bias*stride_channel_dst;
         }
@@ -95,7 +100,7 @@ static __global__ void mul_mat_vec_f(
 
     extern __shared__ char data_mmv[];
     float * buf_iw = (float *) data_mmv;
-    float * buf_iw_gate = nullptr;
+    [[maybe_unused]] float * buf_iw_gate = nullptr;
     if constexpr (has_fusion) {
         buf_iw_gate = (float *) (data_mmv + warp_size*sizeof(float));
     }
@@ -123,7 +128,7 @@ static __global__ void mul_mat_vec_f(
 
     if constexpr (std::is_same_v<T, float>) {
         const float2 * x2 = (const float2 *) x;
-        const float2 * gate_x2 = nullptr;
+        [[maybe_unused]] const float2 * gate_x2 = nullptr;
         if constexpr (has_fusion) {
             if (use_gate) {
                 gate_x2 = (const float2 *) gate_x;
@@ -155,7 +160,7 @@ static __global__ void mul_mat_vec_f(
         }
     } else if constexpr (std::is_same_v<T, half>) {
         const half2 * x2 = (const half2 *) x;
-        const half2 * gate_x2 = nullptr;
+        [[maybe_unused]] const half2 * gate_x2 = nullptr;
         if constexpr (has_fusion) {
             if (use_gate) {
                 gate_x2 = (const half2 *) gate_x;
@@ -266,7 +271,7 @@ static __global__ void mul_mat_vec_f(
         }
 #else
         const nv_bfloat162 * x2 = (const nv_bfloat162 *) x;
-        const nv_bfloat162 * gate_x2 = nullptr;
+        [[maybe_unused]] const nv_bfloat162 * gate_x2 = nullptr;
         if constexpr (has_fusion) {
             if (use_gate) {
                 gate_x2 = (const nv_bfloat162 *) gate_x;
@@ -274,7 +279,7 @@ static __global__ void mul_mat_vec_f(
         }
         for (int col2 = tid; col2 < ncols2; col2 += block_size) {
             const nv_bfloat162 tmpx = x2[col2];
-            nv_bfloat162 tmpx_gate;
+            [[maybe_unused]] nv_bfloat162 tmpx_gate;
             if constexpr (has_fusion) {
                 if (use_gate) {
                     tmpx_gate = gate_x2[col2];
@@ -362,6 +367,9 @@ static __global__ void mul_mat_vec_f(
                     value = ggml_cuda_op_swiglu_oai_single(gate_value, value);
                     break;
                 }
+                case GGML_GLU_OP_SWIGLU_CLAMP:
+                    value = ggml_cuda_op_swiglu_clamp_single(gate_value, value, glu_limit);
+                    break;
                 default:
                     break;
             }
@@ -371,7 +379,7 @@ static __global__ void mul_mat_vec_f(
     dst[tid*stride_col_dst + row] = value;
 
     if constexpr (!has_fusion) {
-        GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, glu_op, gate_x, x_bias, gate_bias, sumf_gate);
+        GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, glu_op, glu_limit, gate_x, x_bias, gate_bias, sumf_gate);
     }
 }
 
@@ -672,6 +680,7 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
             fusion_local.gate_bias = fusion->gate_bias->data;
         }
         fusion_local.glu_op = fusion->glu_op;
+        fusion_local.glu_limit = fusion->glu_limit;
     }
 
     const int64_t s01 = src0->nb[1] / ts_src0;

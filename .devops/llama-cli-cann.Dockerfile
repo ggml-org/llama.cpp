@@ -3,7 +3,7 @@ ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
 
-FROM ascendai/cann:$ASCEND_VERSION AS build
+FROM docker.io/ascendai/cann:$ASCEND_VERSION AS build
 
 WORKDIR /app
 
@@ -47,7 +47,7 @@ RUN --mount=type=cache,target=/root/.cache/ccache \
     && cmake --build build --config Release --target llama-completion
 
 # TODO: use image with NNRT
-FROM ascendai/cann:$ASCEND_VERSION AS runtime
+FROM docker.io/ascendai/cann:$ASCEND_VERSION AS runtime
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A

@@ -1,6 +1,10 @@
 export enum ModelModality {
-	TEXT = 'TEXT',
 	AUDIO = 'AUDIO',
-	VISION = 'VISION',
-	VIDEO = 'VIDEO'
+	TEXT = 'TEXT',
+	VIDEO = 'VIDEO',
+	VISION = 'VISION'
+}
+
+export enum ModelCapability {
+	REASONING = 'REASONING'
 }

@@ -18,7 +18,7 @@ void llama_model_mistral3::load_arch_hparams(llama_model_loader & ml) {
         }
     }
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 26: type = LLM_TYPE_3B; break;
         case 34: type = LLM_TYPE_8B; break;
         case 40: type = LLM_TYPE_14B; break;

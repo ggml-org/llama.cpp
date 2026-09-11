@@ -1,9 +1,13 @@
-import type { ApiModelDataEntry, ApiModelDetails } from '$lib/types/api';
+import type { ApiModelDataEntry, ApiModelDetails, ApiModelLoadStage } from '$lib/types/api';
 
 export interface ModelModalities {
 	vision: boolean;
 	audio: boolean;
 	video: boolean;
+}
+
+export interface ModelCapabilities {
+	reasoning: boolean;
 }
 
 export interface ModelOption {
@@ -18,6 +22,17 @@ export interface ModelOption {
 	parsedId?: ParsedModelId;
 	aliases?: string[];
 	tags?: string[];
+}
+
+/**
+ * Ephemeral UI-only load progress for one model instance.
+ * Lives only while a load runs, driven by the /models/sse feed.
+ * stage is absent until the feed reports its first stage.
+ */
+export interface ModelLoadProgress {
+	stages: ApiModelLoadStage[];
+	current: ApiModelLoadStage;
+	value: number;
 }
 
 export interface ParsedModelId {

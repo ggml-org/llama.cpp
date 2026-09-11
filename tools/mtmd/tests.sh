@@ -13,6 +13,8 @@ mkdir -p $SCRIPT_DIR/output
 PROJ_ROOT="$SCRIPT_DIR/../.."
 cd $PROJ_ROOT
 
+export MTMD_TEST_RESPONSE_MARKER="<MTMD_TEST_RESPONSE_MARKER>"
+
 # Check if the first argument is "big", then run test with big models
 # This is useful if we're running the script on a larger machine, so we can test the big models
 RUN_BIG_TESTS=false
@@ -26,6 +28,15 @@ if [ "${1:-}" = "huge" ]; then
     RUN_HUGE_TESTS=true
     RUN_BIG_TESTS=true
     echo "Include BIG and HUGE models..."
+fi
+
+USE_VIDEO=false
+if [ "${1:-}" = "video" ]; then
+    USE_VIDEO=true
+    echo "Using video as input..."
+    # behavior of USE_VIDEO:
+    # do NOT check if the output contains "new york", only verify if the exit code is 0
+    # when printing the result, print the OK/FAIL line then print the generated text
 fi
 
 # Check if the second argument is "flash", then enable flash attention
@@ -50,13 +61,20 @@ add_test_vision() {
     if [ $# -gt 0 ]; then
         extra_args=$(printf " %q" "$@")
     fi
+    if [ "$USE_VIDEO" = true ]; then
+        arr_file+=("test-3.mp4")
+    else
+        arr_file+=("test-1.jpeg")
+    fi
     arr_prefix+=("[vision]")
     arr_hf+=("$hf")
     arr_extra_args+=("$extra_args")
-    arr_file+=("test-1.jpeg")
 }
 
 add_test_audio() {
+    if [ "$USE_VIDEO" = true ]; then
+        return 0
+    fi
     local hf=$1
     shift
     local extra_args=""
@@ -91,7 +109,6 @@ add_test_vision "ggml-org/LightOnOCR-1B-1025-GGUF:Q8_0"
 add_test_vision "ggml-org/DeepSeek-OCR-GGUF:Q8_0" -p "Free OCR." --chat-template deepseek-ocr
 add_test_vision "ggml-org/dots.ocr-GGUF:Q8_0" -p "OCR"
 add_test_vision "ggml-org/HunyuanOCR-GGUF:Q8_0" -p "OCR"
-add_test_vision "ggml-org/HunyuanVL-4B-GGUF:Q8_0"
 add_test_vision "ggml-org/gemma-4-E2B-it-GGUF:Q8_0" --jinja
 
 add_test_audio  "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF:Q8_0"
@@ -167,19 +184,35 @@ for i in "${!arr_hf[@]}"; do
         cmd+=" -p \"what is the publisher name of the newspaper?\""
     fi
 
-    output=$(eval "$cmd" 2>&1 | tee /dev/tty)
+    exit_code=0
+    output=$(eval "$cmd" 2>&1 | tee /dev/tty) || exit_code=$?
 
     echo "$output" > $SCRIPT_DIR/output/$bin-$(echo "$hf" | tr '/' '-').log
 
-    # either contains "new york" or both "men" and "walk"
-    if echo "$output" | grep -iq "new york" \
-            || (echo "$output" | grep -iq "men" && echo "$output" | grep -iq "walk")
-    then
-        result="$prefix \033[32mOK\033[0m:   $hf"
+    if [ "$USE_VIDEO" = true ]; then
+        # for video, only check exit code; do not grep for "new york"
+        if [ $exit_code -eq 0 ]; then
+            result="$prefix \033[32mOK\033[0m:   $hf"
+        else
+            result="$prefix \033[31mFAIL\033[0m: $hf"
+        fi
+        # append generated text (after the response marker)
+        generated_text=$(echo "$output" | sed "1,/${MTMD_TEST_RESPONSE_MARKER}/d" | tail -10)
+        if [ -n "$generated_text" ]; then
+            result+="\n$generated_text"
+        fi
+        echo -e "$result"
     else
-        result="$prefix \033[31mFAIL\033[0m: $hf"
+        # either contains "new york" or both "men" and "walk"
+        if echo "$output" | grep -iq "new york" \
+                || (echo "$output" | grep -iq "men" && echo "$output" | grep -iq "walk")
+        then
+            result="$prefix \033[32mOK\033[0m:   $hf"
+        else
+            result="$prefix \033[31mFAIL\033[0m: $hf"
+        fi
+        echo -e "$result"
     fi
-    echo -e "$result"
     arr_res+=("$result")
 
     echo ""

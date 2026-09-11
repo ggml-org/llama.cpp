@@ -51,10 +51,7 @@ fn repack_b_dm(block: u32) -> B_DS_TYPE {
 fn get_dm(block_byte_base: u32) -> f32 {
     return f32(load_f16_at_src0(block_byte_base));
 }
-fn mul_q8_1(row_sum: i32, da: f32, b_ds: B_DS_TYPE) -> f32 {
-    return f32(row_sum) * (da * b_ds.x) - 8.0 * da * b_ds.y / THREADS_PER_BLOCK;
-}
-#endif
+#endif // MUL_ACC_Q4_0
 
 #ifdef MUL_ACC_Q4_1
 #define BLOCK_SIZE_BYTES 20
@@ -85,10 +82,7 @@ fn get_dm(block_byte_base: u32) -> vec2<f32> {
         f32(load_f16_at_src0(block_byte_base + 2u))
     );
 }
-fn mul_q8_1(row_sum: i32, dma: vec2<f32>, b_ds: B_DS_TYPE) -> f32 {
-    return f32(row_sum) * (dma.x * b_ds.x) + dma.y * b_ds.y / THREADS_PER_BLOCK;
-}
-#endif
+#endif // MUL_ACC_Q4_1
 
 #ifdef MUL_ACC_Q8_0
 #define BLOCK_SIZE_BYTES 34
@@ -111,46 +105,48 @@ fn repack_b_dm(block: u32) -> B_DS_TYPE {
 fn get_dm(block_byte_base: u32) -> f32 {
     return f32(load_f16_at_src0(block_byte_base));
 }
-fn mul_q8_1(row_sum: i32, da: f32, b_ds: B_DS_TYPE) -> f32 {
-    return f32(row_sum) * (da * b_ds);
-}
-#endif
+#endif // MUL_ACC_Q8_0
 
-#ifdef LEGACY_QUANTS
-fn mmvq_dot_product(a_byte_base: u32, b_inner_id: u32, b_repacked: vec2<u32>, b_ds: B_DS_TYPE) -> f32 {
-    var row_sum = 0;
-    let a_repacked = repack_a(a_byte_base, b_inner_id);
-
-    row_sum += dot4I8Packed(a_repacked[0], b_repacked[0]);
-    row_sum += dot4I8Packed(a_repacked[1], b_repacked[1]);
-
-    return mul_q8_1(row_sum, get_dm(a_byte_base), b_ds);
-}
-
-fn accumulate_vec_q_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src1q_idx_base: u32) -> array<f32, OUTPUTS_PER_WG> {
-    var acc: array<f32, OUTPUTS_PER_WG>;
+#if defined(LEGACY_QUANTS)
+fn accumulate_vec_q_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src1q_idx_base: u32) -> array<array<f32, OUTPUTS_PER_WG>, NUM_COLS> {
+    var acc: array<array<f32, OUTPUTS_PER_WG>, NUM_COLS>;
 
     let num_blocks = params.k / BLOCK_SIZE;
 
     for (var block = thread_id / THREADS_PER_BLOCK; block < num_blocks; block += WG_SIZE / THREADS_PER_BLOCK) {
-        let b_inner_id = thread_id % THREADS_PER_BLOCK;
-        let b_block_idx = src1q_idx_base + block;
-
-        let b_repacked = repack_b_qs(b_block_idx, b_inner_id);
-        let b_ds = repack_b_dm(b_block_idx);
-
+        let inner_id = thread_id % THREADS_PER_BLOCK;
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
             let output_row = row_base + row;
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
-                acc[row] += mmvq_dot_product(block_byte_base, b_inner_id, b_repacked, b_ds);
+                let a_repacked = repack_a(block_byte_base, inner_id);
+                let da = get_dm(block_byte_base);
+                for (var col = 0u;col < NUM_COLS;col += 1) {
+                    let src1q_idx = src1q_idx_base + col * (params.k / Q8_BLOCK_SIZE) + block;
+                    let b_repacked = repack_b_qs(src1q_idx, inner_id);
+                    let b_ds = repack_b_dm(src1q_idx);
+
+                    let row_sum = dot4I8Packed(a_repacked[0], b_repacked[0]) + dot4I8Packed(a_repacked[1], b_repacked[1]);
+
+#if defined(MUL_ACC_Q4_0)
+                    acc[col][row] += f32(row_sum) * (da * b_ds.x) - 8.0 * da * b_ds.y / THREADS_PER_BLOCK;
+#endif // MUL_ACC_Q4_0
+
+#if defined(MUL_ACC_Q4_1)
+                    acc[col][row] += f32(row_sum) * (da.x * b_ds.x) + da.y * b_ds.y / THREADS_PER_BLOCK;
+#endif // MUL_ACC_Q4_1
+
+#if defined(MUL_ACC_Q8_0)
+                    acc[col][row] += f32(row_sum) * (da * b_ds);
+#endif // MUL_ACC_Q8_0
+                }
             }
         }
     }
 
     return acc;
 }
-#endif
+#endif // LEGACY_QUANTS
 
 #ifdef MUL_ACC_Q2_K
 #define BLOCK_SIZE_BYTES 84
@@ -191,22 +187,7 @@ fn get_scale_min(block_byte_base: u32, tid: u32) -> vec2<f32> {
     let scale = byte_of(load_u32_at_src0_aligned(scale_byte), scale_byte & 3u);
     return vec2<f32>(f32(scale & 0xFu), f32(scale >> 4u));
 }
-fn mmvq_dot_product(a_byte_base: u32, tid: u32, b_repacked: vec4<u32>, b_ds: B_DS_TYPE) -> f32 {
-    let a_repacked = repack_a(a_byte_base, tid);
-    let dm = get_dm(a_byte_base);
-    let scale_min = get_scale_min(a_byte_base, tid);
-
-    let scale_q = i32(scale_min.x);
-    let scale_m_i8x4 = u32(scale_min.y) * 0x01010101u;
-
-    let row_sum_d = (dot4I8Packed(b_repacked[0], a_repacked[0]) + dot4I8Packed(b_repacked[1], a_repacked[1])
-                   + dot4I8Packed(b_repacked[2], a_repacked[2]) + dot4I8Packed(b_repacked[3], a_repacked[3])) * scale_q;
-    let row_sum_m = dot4I8Packed(b_repacked[0], scale_m_i8x4) + dot4I8Packed(b_repacked[1], scale_m_i8x4)
-                  + dot4I8Packed(b_repacked[2], scale_m_i8x4) + dot4I8Packed(b_repacked[3], scale_m_i8x4);
-
-    return b_ds * (dm.x * f32(row_sum_d) - dm.y * f32(row_sum_m));
-}
-#endif
+#endif // MUL_ACC_Q2_K
 
 #ifdef MUL_ACC_Q4_K
 #define BLOCK_SIZE_BYTES 144
@@ -265,39 +246,52 @@ fn get_scale_min(block_byte_base: u32, tid: u32) -> vec2<f32> {
 
     return vec2<f32>(scale, min_val);
 }
-fn mmvq_dot_product(a_byte_base: u32, tid: u32, b_repacked: vec4<u32>, b_ds: B_DS_TYPE) -> f32 {
-    let a_repacked = repack_a(a_byte_base, tid);
-    let dm = get_dm(a_byte_base);
-    let scale_min = get_scale_min(a_byte_base, tid);
-
-    let row_sum = dot4I8Packed(a_repacked[0], b_repacked[0]) + dot4I8Packed(a_repacked[1], b_repacked[1])
-                + dot4I8Packed(a_repacked[2], b_repacked[2]) + dot4I8Packed(a_repacked[3], b_repacked[3]);
-
-    // Each thread covers half of the Q8_1 block, so add only b_ds.y/2.
-    return b_ds.x * dm.x * scale_min.x * f32(row_sum) - dm.y * scale_min.y * (b_ds.y / (Q8_BLOCK_SIZE / ELEMS_PER_THREAD));
-}
-#endif
+#endif // MUL_ACC_Q4_K
 
 #ifdef K_QUANTS
-fn accumulate_vec_q_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src1q_idx_base: u32) -> array<f32, OUTPUTS_PER_WG> {
-    var acc: array<f32, OUTPUTS_PER_WG>;
+fn accumulate_vec_q_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src1q_idx_base: u32) -> array<array<f32, OUTPUTS_PER_WG>, NUM_COLS> {
+    var acc: array<array<f32, OUTPUTS_PER_WG>, NUM_COLS>;
 
     let tid = thread_id % THREADS_PER_BLOCK;
 
     for (var block = thread_id / THREADS_PER_BLOCK; block < params.k / BLOCK_SIZE; block += WG_SIZE / THREADS_PER_BLOCK) {
-        let src1q_idx = src1q_idx_base + (block * BLOCK_SIZE + ELEMS_PER_THREAD * tid) / Q8_BLOCK_SIZE;
-        let b_repacked = repack_b_qs(src1q_idx, tid);
-        let b_ds = repack_b_dm(src1q_idx);
-
         for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
             let output_row = row_base + row;
             if (output_row < params.m) {
                 let block_byte_base = (src0_batch_offset + output_row * params.stride_01 + block) * BLOCK_SIZE_BYTES;
-                acc[row] += mmvq_dot_product(block_byte_base, tid, b_repacked, b_ds);
+                let a_repacked = repack_a(block_byte_base, tid);
+                let dm = get_dm(block_byte_base);
+                let scale_min = get_scale_min(block_byte_base, tid);
+                for (var col = 0u;col < NUM_COLS;col += 1) {
+                    let src1q_idx = src1q_idx_base + col * (params.k / Q8_BLOCK_SIZE) + (block * BLOCK_SIZE + ELEMS_PER_THREAD * tid) / Q8_BLOCK_SIZE;
+                    let b_repacked = repack_b_qs(src1q_idx, tid);
+                    let b_ds = repack_b_dm(src1q_idx);
+
+#if defined(MUL_ACC_Q2_K)
+                    let scale_q = i32(scale_min.x);
+                    let scale_m_i8x4 = u32(scale_min.y) * 0x01010101u;
+
+                    let row_sum_d = (dot4I8Packed(b_repacked[0], a_repacked[0]) + dot4I8Packed(b_repacked[1], a_repacked[1])
+                                        + dot4I8Packed(b_repacked[2], a_repacked[2]) + dot4I8Packed(b_repacked[3], a_repacked[3])) * scale_q;
+                    let row_sum_m = dot4I8Packed(b_repacked[0], scale_m_i8x4) + dot4I8Packed(b_repacked[1], scale_m_i8x4)
+                                        + dot4I8Packed(b_repacked[2], scale_m_i8x4) + dot4I8Packed(b_repacked[3], scale_m_i8x4);
+
+                    acc[col][row] += b_ds * (dm.x * f32(row_sum_d) - dm.y * f32(row_sum_m));
+#endif // MUL_ACC_Q2_K
+
+#if defined(MUL_ACC_Q4_K)
+                    let row_sum = dot4I8Packed(a_repacked[0], b_repacked[0]) + dot4I8Packed(a_repacked[1], b_repacked[1])
+                                    + dot4I8Packed(a_repacked[2], b_repacked[2]) + dot4I8Packed(a_repacked[3], b_repacked[3]);
+
+                    // Each thread covers half of the Q8_1 block, so add only b_ds.y/2.
+                    acc[col][row] += b_ds.x * dm.x * scale_min.x * f32(row_sum) - dm.y * scale_min.y * (b_ds.y / (Q8_BLOCK_SIZE / ELEMS_PER_THREAD));
+#endif // MUL_ACC_Q4_K
+
+                }
             }
         }
     }
 
     return acc;
 }
-#endif
+#endif // K_QUANTS

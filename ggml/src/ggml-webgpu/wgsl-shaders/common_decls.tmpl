@@ -1,3 +1,7 @@
+#ifndef SRC0
+#define SRC0 src0
+#endif
+
 #ifdef BYTE_HELPERS
 fn get_byte(value: u32, index: u32) -> u32 {
     return (value >> (index * 8)) & 0xFF;
@@ -9,6 +13,12 @@ fn get_byte_i32(value: u32, index: u32) -> i32 {
 #endif
 
 #ifdef U32_DEQUANT_HELPERS
+
+fn f16_from_u16(bits: u32) -> f16 {
+    let packed = unpack2x16float(bits);
+    return f16(packed[0]);
+}
+
 #ifdef DECLARE_BYTE_LOADERS_SRC
 fn load_u16_at_src(byte_offset: u32) -> u32 {
     let word = src[byte_offset / 4u];
@@ -36,11 +46,11 @@ fn load_f16_as_f32_at_src(byte_offset: u32) -> f32 {
     let d_bits = (word >> shift) & 0xFFFFu;
     return unpack2x16float(d_bits)[0];
 }
-#endif
+#endif // DECLARE_BYTE_LOADERS_SRC
 
 #ifdef DECLARE_BYTE_LOADERS_SRC0
 fn load_u16_at_src0(byte_offset: u32) -> u32 {
-    let word = src0[byte_offset / 4u];
+    let word = SRC0[byte_offset / 4u];
     let shift = (byte_offset & 0x2u) * 8u;
     return (word >> shift) & 0xFFFFu;
 }
@@ -49,14 +59,14 @@ fn load_u16_at_src0(byte_offset: u32) -> u32 {
 // Caller extracts the 16-bit half it needs via & 0xFFFFu or >> 16u.
 // this is used in k-quants for better performance
 fn load_u32_at_src0_aligned(byte_offset: u32) -> u32 {
-    return src0[(byte_offset & ~3u) / 4u];
+    return SRC0[(byte_offset & ~3u) / 4u];
 }
 
 fn load_u32_at_src0(byte_offset: u32) -> u32 {
     let word_idx = byte_offset / 4u;
     let shift = (byte_offset & 0x3u) * 8u;
-    let lo = src0[word_idx];
-    let hi = src0[word_idx + 1u];
+    let lo = SRC0[word_idx];
+    let hi = SRC0[word_idx + 1u];
     let shifted = (lo >> shift) | (hi << (32u - shift));
     return select(shifted, lo, shift == 0u);
 }
@@ -67,13 +77,52 @@ fn load_f16_at_src0(byte_offset: u32) -> f16 {
 }
 
 fn load_f16_as_f32_at_src0(byte_offset: u32) -> f32 {
-    let word = src0[byte_offset / 4u];
+    let word = SRC0[byte_offset / 4u];
     let shift = (byte_offset & 0x2u) * 8u;
     let d_bits = (word >> shift) & 0xFFFFu;
     return unpack2x16float(d_bits)[0];
 }
-#endif
-#endif
+#endif // DECLARE_BYTE_LOADERS_SRC0
+
+#ifdef LOADERS_QUANTIZED_K
+fn load_k_u16_at(byte_offset: u32) -> u32 {
+    let word = K[byte_offset / 4u];
+    let shift = (byte_offset & 2u) * 8u;
+    return (word >> shift) & 0xFFFFu;
+}
+
+fn load_k_u32_at(byte_offset: u32) -> u32 {
+    let word_idx = byte_offset / 4u;
+    let shift = (byte_offset & 3u) * 8u;
+    let lo = K[word_idx];
+    if (shift == 0u) {
+        return lo;
+    }
+    let hi = K[word_idx + 1u];
+    return (lo >> shift) | (hi << (32u - shift));
+}
+#endif // LOADERS_QUANTIZED_K
+
+#ifdef LOADERS_QUANTIZED_V
+fn load_v_u16_at(byte_offset: u32) -> u32 {
+    let word = V[byte_offset / 4u];
+    let shift = (byte_offset & 2u) * 8u;
+    return (word >> shift) & 0xFFFFu;
+}
+
+fn load_v_u32_at(byte_offset: u32) -> u32 {
+    let word_idx = byte_offset / 4u;
+    let shift = (byte_offset & 3u) * 8u;
+    let lo = V[word_idx];
+    if (shift == 0u) {
+        return lo;
+    }
+    let hi = V[word_idx + 1u];
+    return (lo >> shift) | (hi << (32u - shift));
+}
+#endif // LOADERS_QUANTIZED_V
+
+#endif // U32_DEQUANT_HELPERS
 
 
 
@@ -896,9 +945,23 @@ const kvalues_iq4nl = array<i32, 16>(
 
 #endif
 
-#ifdef MXFP4_LUT
+#if defined(MXFP4_LUT) || defined(NVFP4_LUT)
 const kvalues_mxfp4 = array<i32, 16>(
     0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12
 );
-#endif
+#endif // MXFP4_LUT || NVFP4_LUT
 
+#ifdef NVFP4_LUT
+fn ue4m3_to_fp32(u: u32) -> f32 {
+    if (u == 0u || u == 127u) {
+        return 0.0;
+    }
+    let exp = (u >> 3u) & 15u;
+    let man = u & 7u;
+    if (exp == 0u) {
+        return f32(man) * (1.0 / 512.0);
+    }
+    let bits = ((exp + 120u) << 23u) | (man << 20u);
+    return bitcast<f32>(bits);
+}
+#endif // NVFP4_LUT

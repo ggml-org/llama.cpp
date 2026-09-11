@@ -36,6 +36,7 @@ SOURCE_FATTN_MMA_CASE = "DECL_FATTN_MMA_F16_CASE({head_size_kq}, {head_size_v}, 
 
 TYPES_MMQ = [
     "GGML_TYPE_Q1_0",
+    "GGML_TYPE_Q2_0",
     "GGML_TYPE_Q4_0", "GGML_TYPE_Q4_1", "GGML_TYPE_Q5_0", "GGML_TYPE_Q5_1", "GGML_TYPE_Q8_0",
     "GGML_TYPE_Q2_K", "GGML_TYPE_Q3_K", "GGML_TYPE_Q4_K", "GGML_TYPE_Q5_K", "GGML_TYPE_Q6_K",
     "GGML_TYPE_IQ2_XXS", "GGML_TYPE_IQ2_XS", "GGML_TYPE_IQ2_S", "GGML_TYPE_IQ3_XXS", "GGML_TYPE_IQ3_S",
@@ -92,7 +93,7 @@ for ncols in [8, 16, 32, 64]:
                     continue
                 if head_size_kq == 320 and ncols2 != 32: # Mistral Small 4
                     continue
-                if head_size_kq == 512 and ncols2 not in (4, 8): # Gemma 4
+                if head_size_kq == 512 and ncols2 not in (2, 4, 8): # Gemma 4 (+ MTP)
                     continue
                 if head_size_kq == 576 and ncols2 not in (4, 16, 32): # Deepseek, GLM 4.7 Flash
                     continue

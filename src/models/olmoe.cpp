@@ -2,7 +2,8 @@
 
 void llama_model_olmoe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    switch (hparams.n_layer) {
+
+    switch (hparams.n_layer()) {
         case 16: type = LLM_TYPE_A1_7B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
@@ -78,14 +79,13 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
 
         // self_attention
         {
-            // compute Q and K and RoPE them
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head,
+                    n_embd_head, n_head_kv,
+                    n_embd_head, n_head_kv,
+                    il, false);
             cb(Qcur, "Qcur", il);
-
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
             cb(Kcur, "Kcur", il);
-
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
             cb(Vcur, "Vcur", il);
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL,

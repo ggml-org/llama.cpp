@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("BailingMoeForCausalLM")
+@ModelBase.example("inclusionAI/Ling-lite")
 class BailingMoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BAILINGMOE
 
@@ -108,6 +109,7 @@ class BailingMoeModel(TextModel):
 
 
 @ModelBase.register("BailingMoeV2ForCausalLM")
+@ModelBase.example("inclusionAI/Ling-mini-2.0")
 class BailingMoeV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.BAILINGMOE2
 
@@ -126,7 +128,7 @@ class BailingMoeV2Model(TextModel):
         if (rope_dim := hparams.get("head_dim")) is None:
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
 
-        self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.5)))
+        self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.rope_parameters.get("partial_rotary_factor", 0.5)))
         self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
@@ -189,6 +191,7 @@ class BailingMoeV2Model(TextModel):
 
 
 @ModelBase.register("SarvamMoEForCausalLM", "modeling_sarvam_moe.SarvamMoEForCausalLM")
+@ModelBase.example("sarvamai/sarvam-30b")
 class SarvamMoEModel(BailingMoeV2Model):
     model_arch = gguf.MODEL_ARCH.BAILINGMOE2
     # Sarvam-MoE shares the BailingMoeV2 architecture; only differences:

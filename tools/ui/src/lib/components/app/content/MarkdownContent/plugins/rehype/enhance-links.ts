@@ -5,8 +5,8 @@
  * ensuring external links open in new tabs safely.
  */
 
+import type { Element, Root } from 'hast';
 import type { Plugin } from 'unified';
-import type { Root, Element } from 'hast';
 import { visit } from 'unist-util-visit';
 
 /**

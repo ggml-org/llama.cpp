@@ -9,6 +9,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("MPTForCausalLM")
+@ModelBase.example("anas-awadalla/mpt-7b")
 class MPTModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MPT
 

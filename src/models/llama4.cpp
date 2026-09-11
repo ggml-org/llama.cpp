@@ -2,20 +2,21 @@
 
 void llama_model_llama4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,   hparams.n_moe_layer_step);
 
     const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
     if (found_swa && hparams.n_swa == 0) {
         hparams.swa_type             = LLAMA_SWA_TYPE_NONE;
-        hparams.n_no_rope_layer_step = hparams.n_layer; // always use rope
+        hparams.n_no_rope_layer_step = hparams.n_layer(); // always use rope
     } else {
         hparams.swa_type                = LLAMA_SWA_TYPE_CHUNKED;
         hparams.n_swa                   = 8192;
         hparams.n_attn_temp_floor_scale = 8192;
         hparams.f_attn_temp_scale       = 0.1f;
         hparams.f_attn_temp_offset      = 1.0f;
-        uint32_t swa_period             = 4; // pattern: 3 chunked - 1 full
+
+        uint32_t swa_period = 4; // pattern: 3 chunked - 1 full
         ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
         hparams.set_swa_pattern(swa_period);
 
@@ -74,7 +75,7 @@ void llama_model_llama4::load_arch_tensors(llama_model_loader &) {
         layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
 
         if (is_moe_layer) {
-            const int64_t n_ff_exp = hparams.n_ff_exp;
+            const int64_t n_ff_exp = hparams.n_ff_exp();
 
             layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
             layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
