@@ -142,6 +142,11 @@ llama_model_plamo2::graph::graph(const llama_model & model, const llm_graph_para
             cur = build_plamo2_attn_layer(inp_hybrid->get_attn(), inp_pos, cur, model, il);
         }
 
+        if (il == n_layer - 1 && inp_out_ids) {
+            cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
+            residual = ggml_get_rows(ctx0, residual, inp_out_ids);
+        }
+
         // post_mixer_norm
         cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_post_norm", il);
@@ -166,11 +171,6 @@ llama_model_plamo2::graph::graph(const llama_model & model, const llm_graph_para
         // post ffn norm
         cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_post_norm", il);
-
-        if (il == n_layer - 1 && inp_out_ids) {
-            cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
-            residual = ggml_get_rows(ctx0, residual, inp_out_ids);
-        }
 
         // residual connection
         cur = ggml_add(ctx0, cur, residual);
