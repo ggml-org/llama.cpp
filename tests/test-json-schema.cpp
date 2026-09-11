@@ -367,29 +367,6 @@ static void test_ref(testing & t) {
         t.assert_true("target", r.target == doc.refs.at("#/$defs/t").get());
         as<common_schema_null>(t, r.target, "target");
     });
-
-    t.test("a schema parsed into a document shares its refs", [](testing & t) {
-        auto doc  = parse(R"({"properties": {"a": {"$ref": "#/$defs/t"}}, "$defs": {"t": {"type": "boolean"}}})");
-        auto node = common_schema_from_json(common_json::parse(R"({"items": {"$ref": "#/$defs/t"}})"), doc);
-        const auto & a = as<common_schema_array>(t, node.get(), "node");
-        const auto & r = as<common_schema_ref>(t, a.items.get(), "items");
-        t.assert_true("shared target", r.target == doc.refs.at("#/$defs/t").get());
-        t.assert_equal("refs", (size_t) 1, doc.refs.size());
-
-        auto added = common_schema_from_json(common_json::parse(R"({"$ref": "#/$defs/u", "$defs": {"u": {"type": "null"}}})"), doc);
-        as<common_schema_null>(t, as<common_schema_ref>(t, added.get(), "added").target, "target");
-        t.assert_equal("refs", (size_t) 2, doc.refs.size());
-    });
-
-    t.test("a rejected schema leaves the document unchanged", [](testing & t) {
-        common_schema_document doc;
-        try {
-            common_schema_from_json(common_json::parse(R"({"allOf": [{"$ref": "#/$defs/t"}, {"type": "x"}], "$defs": {"t": {"type": "null"}}})"), doc);
-            t.assert_true("rejected", false);
-        } catch (const std::runtime_error &) {
-            t.assert_true("no refs", doc.refs.empty());
-        }
-    });
 }
 
 static void test_may_be_string(testing & t) {

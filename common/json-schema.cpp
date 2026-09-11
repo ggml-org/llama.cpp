@@ -104,7 +104,7 @@ class common_schema_builder {
         if (ref.compare(0, 2, "#/") != 0) {
             fail(path, "unsupported $ref " + ref + ", only references into the same document are supported");
         }
-        if (doc_.refs.find(ref) == doc_.refs.end() && refs_.find(ref) == refs_.end()) {
+        if (refs_.find(ref) == refs_.end()) {
             // reserve the key first, so that a cycle back to this $ref stops here
             refs_[ref] = nullptr;
             refs_[ref] = build_node(resolve_ref(ref, path), ref);
@@ -341,10 +341,6 @@ common_schema_document common_schema_from_json(const common_json & schema) {
     common_schema_document doc;
     doc.root = common_schema_builder(schema, doc).build();
     return doc;
-}
-
-common_schema_ptr common_schema_from_json(const common_json & schema, common_schema_document & doc) {
-    return common_schema_builder(schema, doc).build();
 }
 
 static common_schema::value_type json_type(const common_json & value) {

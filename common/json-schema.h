@@ -196,8 +196,3 @@ using common_schema_document_ptr = std::shared_ptr<const common_schema_document>
 
 // Throws std::runtime_error when the schema falls outside the supported subset.
 common_schema_document common_schema_from_json(const common_json & schema);
-
-// Builds a schema that belongs to a document built earlier, e.g. one property of it.
-// A $ref it cannot resolve on its own is looked up in doc.refs, the targets it resolves itself are added there.
-// doc is unchanged when the schema is rejected.
-common_schema_ptr common_schema_from_json(const common_json & schema, common_schema_document & doc);
