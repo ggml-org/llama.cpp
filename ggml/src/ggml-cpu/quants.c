@@ -62,6 +62,10 @@ void quantize_row_nvfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, i
     quantize_row_nvfp4_ref(x, y, k);
 }
 
+void quantize_row_f8_e4m3(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_f8_e4m3_ref(x, y, k);
+}
+
 //
 // 2-6 bit quantization in super-blocks
 //
@@ -358,6 +362,23 @@ void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 
             sumf += dy * d * (sumi_lo + sumi_hi);
         }
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_f8_e4m3_f32(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const ggml_fp8_e4m3_t * GGML_RESTRICT x = vx;
+    const float * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        sumf += ggml_f8_e4m3_to_fp32(x[i].bits) * y[i];
     }
     *s = sumf;
 }

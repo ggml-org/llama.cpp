@@ -86,10 +86,9 @@ static float dot_product(const float * a1, const float * a2, size_t test_size) {
 static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_traits_cpu * qfns_cpu, size_t test_size, const float * test_data1, const float * test_data2) {
     GGML_UNUSED(qfns);
 
-    std::vector<uint8_t> tmp_q1(2*test_size);
-    std::vector<uint8_t> tmp_q2(2*test_size);
-
     const auto * vdot = ggml_get_type_traits_cpu(qfns_cpu->vec_dot_type);
+    std::vector<uint8_t> tmp_q1(2*test_size);
+    std::vector<uint8_t> tmp_q2(ggml_row_size(qfns_cpu->vec_dot_type, test_size));
 
     qfns_cpu->from_float(test_data1, tmp_q1.data(), test_size);
     vdot->from_float(test_data2, tmp_q2.data(), test_size);
@@ -122,6 +121,62 @@ static int test_vec_dot_f32(bool verbose) {
             printf(" f32 vec_dot n=%4d:                 %s (ref=%f got=%f err=%f)\n",
                    n, RESULT_STR[failed], ref, result, error);
         }
+    }
+    return num_failed;
+}
+
+static float f8_e4m3_to_fp32_ref(uint8_t value) {
+    const uint8_t magnitude = value & 0x7F;
+    if (magnitude == 0x7F) {
+        return NAN;
+    }
+    const int exponent = magnitude >> 3;
+    const int mantissa = magnitude & 0x07;
+    const float result = exponent == 0
+        ? ldexpf((float) mantissa, -9)
+        : ldexpf(1.0f + (float) mantissa / 8.0f, exponent - 7);
+    return value & 0x80 ? -result : result;
+}
+
+static int test_f8_e4m3(bool verbose) {
+    static_assert(sizeof(ggml_fp8_e4m3_t) == 1);
+
+    const auto * traits = ggml_get_type_traits(GGML_TYPE_F8_E4M3);
+    const auto * traits_cpu = ggml_get_type_traits_cpu(GGML_TYPE_F8_E4M3);
+    std::vector<uint8_t> encoded(256);
+    std::vector<uint8_t> roundtrip(256);
+    std::vector<float> decoded(256);
+    int num_failed = 0;
+
+    const bool traits_failed = traits->blck_size != 1 || traits->type_size != sizeof(ggml_fp8_e4m3_t) || traits->is_quantized;
+    num_failed += traits_failed;
+    if (verbose || traits_failed) {
+        printf("f8_e4m3 scalar type traits:          %s\n", RESULT_STR[traits_failed]);
+    }
+
+    for (int i = 0; i < 256; ++i) {
+        encoded[i] = (uint8_t) i;
+    }
+    traits->to_float(encoded.data(), decoded.data(), decoded.size());
+    traits_cpu->from_float(decoded.data(), roundtrip.data(), decoded.size());
+
+    for (int i = 0; i < 256; ++i) {
+        const float expected = f8_e4m3_to_fp32_ref((uint8_t) i);
+        const bool is_nan = (i & 0x7F) == 0x7F;
+        const bool decode_failed = is_nan ? !isnan(decoded[i])
+            : decoded[i] != expected || (expected == 0.0f && signbit(decoded[i]) != signbit(expected));
+        const bool encode_failed = !is_nan && roundtrip[i] != encoded[i];
+        if (decode_failed || encode_failed) {
+            num_failed++;
+            if (verbose) {
+                printf("f8_e4m3 code 0x%02x failed: decoded=%f expected=%f roundtrip=0x%02x\n",
+                        i, decoded[i], expected, roundtrip[i]);
+            }
+        }
+    }
+
+    if (verbose || num_failed) {
+        printf("f8_e4m3 exhaustive conversion:      %s (%d failures)\n", RESULT_STR[num_failed != 0], num_failed);
     }
     return num_failed;
 }
@@ -220,6 +275,7 @@ int main(int argc, char * argv[]) {
     int num_failed = 0;
 
     num_failed += test_vec_dot_f32(verbose);
+    num_failed += test_f8_e4m3(verbose);
     num_failed += test_vec_dot_q(verbose);
 
     if (num_failed || verbose) {

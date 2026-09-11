@@ -296,6 +296,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_Q8_0,
         .nrows                    = 1,
     },
+    [GGML_TYPE_F8_E4M3] = {
+        .from_float               = quantize_row_f8_e4m3,
+        .vec_dot                  = ggml_vec_dot_f8_e4m3_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_Q2_K] = {
         .from_float               = quantize_row_q2_K,
         .vec_dot                  = ggml_vec_dot_q2_K_q8_K,
@@ -2848,7 +2854,7 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_CPY:
                 case GGML_OP_DUP:
                     {
-                        if (ggml_is_quantized(node->type) ||
+                        if (ggml_is_quantized(node->type) || node->type == GGML_TYPE_F8_E4M3 ||
                             // F16 -> BF16 and BF16 -> F16 copies go through intermediate F32
                             (node->src[0]->type == GGML_TYPE_F16  && node->src[1] && node->src[1]->type == GGML_TYPE_BF16) ||
                             (node->src[0]->type == GGML_TYPE_BF16 && node->src[1] && node->src[1]->type == GGML_TYPE_F16) ||
@@ -2862,7 +2868,7 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_ADD_ID:
                 case GGML_OP_ADD1:
                     {
-                        if (ggml_is_quantized(node->src[0]->type)) {
+                        if (ggml_is_quantized(node->src[0]->type) || node->src[0]->type == GGML_TYPE_F8_E4M3) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                         }
                     } break;
@@ -2914,7 +2920,7 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_OUT_PROD:
                     {
-                        if (ggml_is_quantized(node->src[0]->type) ||
+                        if (ggml_is_quantized(node->src[0]->type) || node->src[0]->type == GGML_TYPE_F8_E4M3 ||
                             node->src[0]->type == GGML_TYPE_F16) {
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                         }
