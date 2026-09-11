@@ -224,7 +224,11 @@ void ggml_backend_buffer_reset(ggml_backend_buffer_t buffer) {
 }
 
 bool ggml_backend_buffer_copy_tensor(const struct ggml_tensor * src, struct ggml_tensor * dst) {
+    ggml_backend_buffer_t src_buf = src->view_src ? src->view_src->buffer : src->buffer;
     ggml_backend_buffer_t dst_buf = dst->view_src ? dst->view_src->buffer : dst->buffer;
+    if ((src_buf && src_buf->binding) || (dst_buf && dst_buf->binding)) {
+        return false;
+    }
     if (dst_buf->iface.cpy_tensor) {
         return dst_buf->iface.cpy_tensor(dst_buf, src, dst);
     }
@@ -502,9 +506,12 @@ void ggml_backend_tensor_copy(const struct ggml_tensor * src, struct ggml_tensor
         return;
     }
 
-    if (ggml_backend_buffer_is_host(src->buffer)) {
+    GGML_ASSERT(ggml_backend_tensor_is_bound(src));
+    GGML_ASSERT(ggml_backend_tensor_is_bound(dst));
+
+    if (src->data && ggml_backend_buffer_is_host(src->buffer)) {
         ggml_backend_tensor_set(dst, src->data, 0, ggml_nbytes(src));
-    } else if (ggml_backend_buffer_is_host(dst->buffer)) {
+    } else if (dst->data && ggml_backend_buffer_is_host(dst->buffer)) {
         ggml_backend_tensor_get(src, dst->data, 0, ggml_nbytes(src));
     } else if (!ggml_backend_buffer_copy_tensor(src, dst)) {
 #ifndef NDEBUG
@@ -526,7 +533,9 @@ void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t b
     }
 
     GGML_ASSERT(backend_dst);
-    if (backend_dst->iface.cpy_tensor_async != NULL) {
+    GGML_ASSERT(ggml_backend_tensor_is_bound(src));
+    GGML_ASSERT(ggml_backend_tensor_is_bound(dst));
+    if (!(src->buffer && src->buffer->binding) && !(dst->buffer && dst->buffer->binding) && backend_dst->iface.cpy_tensor_async != NULL) {
         if (backend_dst->iface.cpy_tensor_async(backend_src, backend_dst, src, dst)) {
             return;
         }
@@ -2163,14 +2172,14 @@ static struct ggml_tensor * graph_copy_dup_tensor(struct ggml_hash_set hash_set,
     struct ggml_context * ctx_allocated, struct ggml_context * ctx_unallocated, struct ggml_tensor * src) {
 
     GGML_ASSERT(src != NULL);
-    GGML_ASSERT(src->data && "graph must be allocated");
+    GGML_ASSERT(ggml_backend_tensor_is_bound(src) && "graph must be allocated");
 
     size_t id = ggml_hash_insert(&hash_set, src);
     if (id == GGML_HASHSET_ALREADY_EXISTS) {
         return node_copies[ggml_hash_find(&hash_set, src)];
     }
 
-    struct ggml_tensor * dst = ggml_dup_tensor_layout(src->data && !src->view_src ? ctx_allocated : ctx_unallocated, src);
+    struct ggml_tensor * dst = ggml_dup_tensor_layout(!src->view_src ? ctx_allocated : ctx_unallocated, src);
     if (src->view_src != NULL) {
         dst->view_src = graph_copy_dup_tensor(hash_set, node_copies, ctx_allocated, ctx_unallocated, src->view_src);
         dst->view_offs = src->view_offs;

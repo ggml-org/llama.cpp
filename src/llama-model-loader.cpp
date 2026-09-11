@@ -1646,8 +1646,8 @@ bool llama_model_loader::load_all_data(
                 }));
             }
 
-            GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
-            if (buf_mmap && cur->data == nullptr) {
+            GGML_ASSERT(buf_mmap || ggml_backend_tensor_is_bound(cur));
+            if (buf_mmap && !ggml_backend_tensor_is_bound(cur)) {
                 ggml_backend_tensor_alloc(buf_mmap, cur, data);
 
                 // locking a lazy tensor would fault all of it in, which is what lazy avoids

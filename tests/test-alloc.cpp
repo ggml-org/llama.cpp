@@ -26,6 +26,9 @@ struct dummy_backend_context {
     ggml_backend                       backend;
     std::vector<ggml_backend_buffer_t> buffers;
     const ggml_tensor * bound_tensor = nullptr;
+    ggml_backend_buffer_type_t buffer_type = nullptr;
+    bool real_data = false;
+    std::map<ggml_backend_buffer_t, std::vector<uint8_t>> data;
 
     size_t allocated_total() const {
         size_t n = 0;
@@ -46,6 +49,9 @@ static ggml_backend_buffer_t dummy_backend_buffer_type_alloc_buffer(ggml_backend
     dummy_backend_context * ctx    = (dummy_backend_context *) buft->context;
     ggml_backend_buffer_t & buffer = ctx->buffers.emplace_back();
     buffer                         = ggml_backend_buffer_init(buft, ctx->buffer_interface, ctx, size);
+    if (ctx->real_data) {
+        ctx->data[buffer].resize(size);
+    }
     return buffer;
 }
 
@@ -71,10 +77,12 @@ static void dummy_backend_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     auto i = std::find(ctx->buffers.begin(), ctx->buffers.end(), buffer);
     GGML_ASSERT(i != ctx->buffers.end());
     ctx->buffers.erase(i);
+    ctx->data.erase(buffer);
 }
 
-static void * dummy_backend_buffer_get_base(ggml_backend_buffer_t) {
-    return alloc_base;
+static void * dummy_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
+    auto * ctx = static_cast<dummy_backend_context *>(buffer->context);
+    return ctx->real_data ? ctx->data.at(buffer).data() : alloc_base;
 }
 
 static ggml_status dummy_backend_buffer_init_tensor(ggml_backend_buffer_t, ggml_tensor *) {
@@ -710,6 +718,10 @@ static bool test_addressless_is_host(ggml_backend_buffer_type_t) {
     return false;
 }
 
+static ggml_backend_buffer_type_t test_device_buffer_type(ggml_backend_dev_t device) {
+    return static_cast<dummy_backend_context *>(device->context)->buffer_type;
+}
+
 static ggml_status test_addressless_init_view(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     auto * ctx = static_cast<test_binding_context *>(buffer->context);
     if (ctx->fail_view) {
@@ -819,6 +831,45 @@ static void test_addressless_views_and_transfers() {
     GGML_ASSERT(ggml_backend_view_init(rejected) == GGML_STATUS_SUCCESS);
     GGML_ASSERT(ctx.native_inits == 0);
 
+    auto native = dummy_backend_init(64);
+    native.context->real_data = true;
+    native.context->buffer_type = &native.buffer_type;
+    native.context->device.iface.get_buffer_type = test_device_buffer_type;
+    native.context->device.iface.get_name = [](ggml_backend_dev_t) { return "dummy_host"; };
+    native.context->device.iface.get_description = [](ggml_backend_dev_t) { return "test host storage"; };
+    auto native_ctx = make_context();
+    ggml_tensor * native_tensor = ggml_new_tensor_1d(native_ctx.ctx, GGML_TYPE_F32, 16);
+    ggml_backend_buffer_ptr native_buffer(ggml_backend_alloc_ctx_tensors_from_buft(native_ctx.ctx, &native.buffer_type));
+    GGML_ASSERT(native_buffer != nullptr);
+    ggml_backend_tensor_copy(tensor, native_tensor);
+    GGML_ASSERT(std::memcmp(native_tensor->data, read.data(), sizeof(read)) == 0);
+    std::memcpy(native_tensor->data, values.data(), sizeof(values));
+    ggml_backend_tensor_copy(native_tensor, tensor);
+    ggml_backend_tensor_get(tensor, read.data(), 0, sizeof(read));
+    GGML_ASSERT(read == values);
+
+    backend.iface.cpy_tensor_async = [](ggml_backend_t, ggml_backend_t, const ggml_tensor *, ggml_tensor *) -> bool {
+        GGML_ABORT("native async copy received an addressless tensor");
+    };
+    ggml_backend_tensor_copy_async(&backend, &backend, tensor, native_tensor);
+    GGML_ASSERT(ctx.synchronizations == 10);
+    ggml_backend_tensor_copy_async(&backend, &backend, native_tensor, tensor);
+    GGML_ASSERT(ctx.synchronizations == 12);
+
+    buffer->iface.cpy_tensor = [](ggml_backend_buffer_t, const ggml_tensor *, ggml_tensor *) -> bool {
+        GGML_ABORT("native buffer copy received an addressless tensor");
+    };
+    GGML_ASSERT(!ggml_backend_buffer_copy_tensor(native_tensor, tensor));
+    GGML_ASSERT(!ggml_backend_buffer_copy_tensor(tensor, native_tensor));
+
+    ggml_build_forward_expand(test_ctx.graph, nested);
+    auto copy = ggml_backend_graph_copy(&native.context->backend, test_ctx.graph);
+    GGML_ASSERT(copy.buffer != nullptr);
+    ggml_tensor * copied_view = ggml_graph_node(copy.graph, ggml_graph_n_nodes(copy.graph) - 1);
+    GGML_ASSERT(copied_view->data != nullptr);
+    GGML_ASSERT(std::memcmp(copied_view->data, values.data() + 5, sizeof(replacement)) == 0);
+    ggml_backend_graph_copy_free(copy);
+
     ggml_tensor * empty = ggml_new_tensor_1d(test_ctx.ctx, GGML_TYPE_F32, 0);
     ggml_backend_buffer_ptr empty_buffer(ggml_backend_buft_alloc_buffer(&device.buffer_type, 0));
     empty->buffer = empty_buffer.get();
@@ -840,6 +891,7 @@ static void test_meta_buffer_type_lifetime() {
     GGML_ASSERT(buft == ggml_backend_dev_buffer_type(meta));
     GGML_ASSERT(ggml_backend_buft_get_alignment(buft) == 8);
     GGML_ASSERT(ggml_backend_buft_get_device(buft) == meta);
+    GGML_ASSERT(!ggml_backend_buft_is_host(buft));
 }
 
 static void run(const char * name, void (*f)()) {
