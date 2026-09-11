@@ -8,20 +8,20 @@ on:
     paths: [
       '.github/workflows/fusion.yml',
       'tests/fusion/**',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.cu',
-      '**/*.cuh',
-      '**/*.swift',
-      '**/*.m',
-      '**/*.metal',
-      '**/*.comp',
-      '**/*.glsl',
-      '**/*.wgsl'
+      'tests/test-fusion.cpp',
+      'ggml/**/CMakeLists.txt',
+      'ggml/**/*.h',
+      'ggml/**/*.hpp',
+      'ggml/**/*.c',
+      'ggml/**/*.cpp',
+      'ggml/**/*.cu',
+      'ggml/**/*.cuh',
+      'ggml/**/*.swift',
+      'ggml/**/*.m',
+      'ggml/**/*.metal',
+      'ggml/**/*.comp',
+      'ggml/**/*.glsl',
+      'ggml/**/*.wgsl'
     ]
 
   pull_request:
@@ -29,20 +29,20 @@ on:
     paths: [
       '.github/workflows/fusion.yml',
       'tests/fusion/**',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.cu',
-      '**/*.cuh',
-      '**/*.swift',
-      '**/*.m',
-      '**/*.metal',
-      '**/*.comp',
-      '**/*.glsl',
-      '**/*.wgsl'
+      'tests/test-fusion.cpp',
+      'ggml/**/CMakeLists.txt',
+      'ggml/**/*.h',
+      'ggml/**/*.hpp',
+      'ggml/**/*.c',
+      'ggml/**/*.cpp',
+      'ggml/**/*.cu',
+      'ggml/**/*.cuh',
+      'ggml/**/*.swift',
+      'ggml/**/*.m',
+      'ggml/**/*.metal',
+      'ggml/**/*.comp',
+      'ggml/**/*.glsl',
+      'ggml/**/*.wgsl'
     ]
 
 concurrency:
