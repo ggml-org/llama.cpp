@@ -395,7 +395,11 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) \
+          GG_BUILD_HIGH_PERF=1 \
+          GG_BUILD_NO_BF16=1 \
+          GG_BUILD_EXTRA_TESTS_0=1 \
+          bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   cpu-arm64-graviton4-kleidiai:
     runs-on: ah-ubuntu_22_04-c8g_8x
@@ -434,6 +438,8 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
+          LLAMA_ARG_THREADS=$(nproc) \
           GG_BUILD_KLEIDIAI=1 \
           GG_BUILD_EXTRA_TESTS_0=1 \
-          bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          GG_BUILD_HIGH_PERF=1 \
+          bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
