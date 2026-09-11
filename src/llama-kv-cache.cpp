@@ -260,8 +260,11 @@ llama_kv_cache::llama_kv_cache(
                 continue;
             }
 
-            if (filter && !filter(il)) {
-                LLAMA_LOG_DEBUG("%s: - layer %3d: filtered\n", __func__, il);
+            // A layer the filter rejected has no storage of its own, which is the case that most
+            // needs to borrow another layer's. Owning storage and reading storage are separate
+            // questions, so only a layer with no KV at all is skipped here.
+            if (!hparams.has_kv(il)) {
+                LLAMA_LOG_DEBUG("%s: - layer %3d: does not have KV cache\n", __func__, il);
                 continue;
             }
 
