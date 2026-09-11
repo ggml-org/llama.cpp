@@ -3,4 +3,4 @@
 add_library(sheredom INTERFACE)
 add_library(vendor::sheredom ALIAS sheredom)
 
-target_include_directories(sheredom INTERFACE ..)
+target_include_directories(sheredom SYSTEM INTERFACE ..)
