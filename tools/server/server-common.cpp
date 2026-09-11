@@ -17,6 +17,11 @@
 #include <type_traits>
 
 #ifdef _WIN32
+// windows.h defines min and max as macros, which breaks std::min and std::max
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
 #include <windows.h>
 #include <io.h>
 #else
