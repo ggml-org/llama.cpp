@@ -86,6 +86,23 @@
 #define KEY_A_PROJ_WINDOW_SIZE     "clip.audio.projector.window_size"
 #define KEY_A_PROJ_DOWNSAMPLE_RATE "clip.audio.projector.downsample_rate"
 #define KEY_A_PROJ_HEAD_COUNT      "clip.audio.projector.head_count"
+#define KEY_A_GT_ASR_ENABLED       "clip.audio.gt_asr.enabled"
+#define KEY_A_GT_ASR_SCHEMA        "clip.audio.gt_asr.schema_version"
+#define KEY_A_GT_ASR_STAGE         "clip.audio.gt_asr.stage"
+#define KEY_A_GT_ASR_ENCODER_DIM   "clip.audio.gt_asr.encoder_dim"
+#define KEY_A_GT_ASR_TEXT_DIM      "clip.audio.gt_asr.text_dim"
+#define KEY_A_GT_ASR_HIDDEN_DIM    "clip.audio.gt_asr.hidden_dim"
+#define KEY_A_GT_ASR_CONV_KERNEL   "clip.audio.gt_asr.conv_kernel_size"
+#define KEY_A_GT_ASR_HEAD_COUNT    "clip.audio.gt_asr.head_count"
+#define KEY_A_GT_ASR_FFN_DIM       "clip.audio.gt_asr.feed_forward_dim"
+#define KEY_A_GT_ASR_NORM_EPS      "clip.audio.gt_asr.layer_norm_epsilon"
+#define KEY_A_GT_ASR_MAX_SCALE     "clip.audio.gt_asr.maximum_residual_scale"
+#define KEY_A_GT_ASR_LOCAL         "clip.audio.gt_asr.local_fusion"
+#define KEY_A_GT_ASR_LOCAL_GATE    "clip.audio.gt_asr.local_uncertainty_gate"
+#define KEY_A_GT_ASR_FRAME_HEAD    "clip.audio.gt_asr.nonlinear_frame_evidence"
+#define KEY_A_GT_ASR_ZERO_ANCHOR   "clip.audio.gt_asr.global_zero_anchor"
+#define KEY_A_GT_ASR_NULL_MIXTURE  "clip.audio.gt_asr.probabilistic_null_mixture"
+#define KEY_A_GT_ASR_EOS_IDS       "clip.audio.gt_asr.eos_token_ids"
 #define KEY_A_RVQ_NUM_QUANTIZERS   "clip.audio.rvq.num_quantizers"   // mimo-audio-tokenizer
 #define KEY_A_RVQ_CODEBOOK_SIZE    "clip.audio.rvq.codebook_size"    // mimo-audio-tokenizer: per-quantizer bin count
 #define KEY_A_WA_PATTERN_MODE      "clip.audio.wa_pattern_mode"      // mimo-audio-tokenizer, per-layer -1 (full) / 0 (windowed)
@@ -194,6 +211,7 @@
 #define TN_CONV_OUT     "a.conv_out.%s"
 #define TN_MM_AUDIO_MLP "mm.a.mlp.%d.%s"
 #define TN_MM_AUDIO_FC  "mm.a.fc.%s" // fully connected layer
+#define TN_A_GT_ASR     "a.gt_asr.%s"
 #define TN_MM_NORM_PRE  "mm.a.norm_pre.%s"
 #define TN_MM_NORM_MID  "mm.a.norm_mid.%s"
 
@@ -686,9 +704,19 @@ struct clip_image_f32 {
     int nx() const { return nx_; }
     int ny() const { return ny_; }
 
+    int audio_n_frames() const {
+        return audio_n_frames_ > 0 ? audio_n_frames_ : nx_;
+    }
+
+    void set_audio_n_frames(int n_frames) {
+        GGML_ASSERT(n_frames > 0 && n_frames <= nx_);
+        audio_n_frames_ = n_frames;
+    }
+
     void set_size(clip_image_size size, bool is_placeholder, bool is_audio) {
         nx_ = size.width;
         ny_ = size.height;
+        audio_n_frames_ = 0;
         if (is_placeholder) {
             buf.clear();
         } else {
@@ -754,6 +782,7 @@ struct clip_image_f32 {
     std::vector<float> buf;
     int nx_ = 0;
     int ny_ = 0;
+    int audio_n_frames_ = 0;
 
     size_t n_pixels() const {
         return (size_t) nx_ * (size_t) ny_;
