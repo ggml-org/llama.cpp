@@ -12,81 +12,96 @@
 // JSON schema IR, covering the subset that json_schema_to_grammar() can convert.
 // A $ref becomes a common_schema_ref whose target is owned by the common_schema_document, so a recursive schema stays finite.
 
-enum common_schema_kind {
-    COMMON_SCHEMA_KIND_ANY,
-    COMMON_SCHEMA_KIND_REF,
-    COMMON_SCHEMA_KIND_ANY_OF,
-    COMMON_SCHEMA_KIND_ALL_OF,
-    COMMON_SCHEMA_KIND_CONST,
-    COMMON_SCHEMA_KIND_ENUM,
-    COMMON_SCHEMA_KIND_NULL,
-    COMMON_SCHEMA_KIND_BOOLEAN,
-    COMMON_SCHEMA_KIND_NUMBER,
-    COMMON_SCHEMA_KIND_INTEGER,
-    COMMON_SCHEMA_KIND_STRING,
-    COMMON_SCHEMA_KIND_ARRAY,
-    COMMON_SCHEMA_KIND_TUPLE,
-    COMMON_SCHEMA_KIND_OBJECT,
-};
-
-enum common_schema_format {
-    COMMON_SCHEMA_FORMAT_NONE,
-    COMMON_SCHEMA_FORMAT_UUID,  // uuid, uuid1 .. uuid5
-    COMMON_SCHEMA_FORMAT_DATE,
-    COMMON_SCHEMA_FORMAT_TIME,
-    COMMON_SCHEMA_FORMAT_DATE_TIME,
-};
-
-// A set of the kinds of value a schema may match: only the value kinds NULL to OBJECT occur, a tuple counts as an array
-class common_schema_kinds {
-    uint32_t mask_ = 0;
-
-  public:
-    common_schema_kinds() = default;
-    common_schema_kinds(std::initializer_list<common_schema_kind> kinds) {
-        for (auto kind : kinds) {
-            add(kind);
-        }
-    }
-
-    static common_schema_kinds all() {
-        return { COMMON_SCHEMA_KIND_NULL,   COMMON_SCHEMA_KIND_BOOLEAN, COMMON_SCHEMA_KIND_NUMBER, COMMON_SCHEMA_KIND_INTEGER,
-                 COMMON_SCHEMA_KIND_STRING, COMMON_SCHEMA_KIND_ARRAY,   COMMON_SCHEMA_KIND_OBJECT };
-    }
-
-    void add(common_schema_kind kind) { mask_ |= 1u << kind; }
-
-    bool has(common_schema_kind kind) const { return (mask_ & (1u << kind)) != 0; }
-    bool is_only(common_schema_kind kind) const { return mask_ == (1u << kind); }
-    bool empty() const { return mask_ == 0; }
-
-    common_schema_kinds & operator|=(const common_schema_kinds & other) { mask_ |= other.mask_; return *this; }
-    common_schema_kinds & operator&=(const common_schema_kinds & other) { mask_ &= other.mask_; return *this; }
-
-    bool operator==(const common_schema_kinds & other) const { return mask_ == other.mask_; }
-    bool operator!=(const common_schema_kinds & other) const { return mask_ != other.mask_; }
-};
-
 // Base class for all nodes, the concrete ones are the common_schema_* structs below
 struct common_schema {
-    virtual ~common_schema() = default;
-    virtual common_schema_kind kind() const = 0;
+    // What a node is, the shape of the schema
+    enum node_kind {
+        KIND_ANY,
+        KIND_REF,
+        KIND_ANY_OF,
+        KIND_ALL_OF,
+        KIND_CONST,
+        KIND_ENUM,
+        KIND_NULL,
+        KIND_BOOLEAN,
+        KIND_NUMBER,
+        KIND_INTEGER,
+        KIND_STRING,
+        KIND_ARRAY,
+        KIND_TUPLE,
+        KIND_OBJECT,
+    };
 
-    // The kinds of value matching the schema: the union over anyOf, the intersection over allOf, every kind for an any.
-    // A number schema accepts integers too, so it resolves to both.
-    common_schema_kinds resolve_kinds() const;
+    // The JSON types a value may have, as named by the "type" keyword
+    enum value_type {
+        TYPE_NULL,
+        TYPE_BOOLEAN,
+        TYPE_NUMBER,
+        TYPE_INTEGER,
+        TYPE_STRING,
+        TYPE_ARRAY,
+        TYPE_OBJECT,
+    };
+
+    enum string_format {
+        FORMAT_NONE,
+        FORMAT_UUID,  // uuid, uuid1 .. uuid5
+        FORMAT_DATE,
+        FORMAT_TIME,
+        FORMAT_DATE_TIME,
+    };
+
+    // A set of value types
+    class type_set {
+        uint32_t mask_ = 0;
+
+      public:
+        type_set() = default;
+        type_set(std::initializer_list<value_type> types) {
+            for (auto type : types) {
+                add(type);
+            }
+        }
+
+        static type_set all() {
+            return { TYPE_NULL, TYPE_BOOLEAN, TYPE_NUMBER, TYPE_INTEGER, TYPE_STRING, TYPE_ARRAY, TYPE_OBJECT };
+        }
+
+        void add(value_type type) { mask_ |= 1u << type; }
+
+        bool has(value_type type) const { return (mask_ & (1u << type)) != 0; }
+        bool is_only(value_type type) const { return mask_ == (1u << type); }
+        bool empty() const { return mask_ == 0; }
+
+        type_set & operator|=(const type_set & other) { mask_ |= other.mask_; return *this; }
+        type_set & operator&=(const type_set & other) { mask_ &= other.mask_; return *this; }
+
+        bool operator==(const type_set & other) const { return mask_ == other.mask_; }
+        bool operator!=(const type_set & other) const { return mask_ != other.mask_; }
+    };
+
+    virtual ~common_schema() = default;
+    virtual node_kind kind() const = 0;
+
+    // The types of value matching the schema: the union over anyOf, the intersection over allOf, every type for an any.
+    // A number schema accepts integers too, so it has both.
+    type_set value_types() const;
 
     // Whether a value matching the schema may be a string, through any branch of it.
-    // Unlike resolve_kinds() an any does not count: some models emit raw string values rather than
+    // Unlike value_types() an any does not count: some models emit raw string values rather than
     // JSON-encoded strings for string parameters, and an unconstrained parameter is parsed as JSON.
-    bool resolves_to_string() const;
+    bool may_be_string() const;
+
+    // e.g. "anyOf" / "string", for messages
+    static const char * kind_name(node_kind kind);
+    static const char * type_name(value_type type);
 };
 
 using common_schema_ptr = std::unique_ptr<common_schema>;
 
 // {} or a schema with no recognized keywords: any JSON value
 struct common_schema_any : common_schema {
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_ANY; }
+    node_kind kind() const override { return KIND_ANY; }
 };
 
 // {"$ref": "#/..."}, only references into the same document are supported
@@ -96,20 +111,20 @@ struct common_schema_ref : common_schema {
 
     explicit common_schema_ref(std::string ref) : ref(std::move(ref)) {}
 
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_REF; }
+    node_kind kind() const override { return KIND_REF; }
 };
 
 // oneOf / anyOf, or a "type" array expanded to one alternative per type
 struct common_schema_any_of : common_schema {
     std::vector<common_schema_ptr> children;
 
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_ANY_OF; }
+    node_kind kind() const override { return KIND_ANY_OF; }
 };
 
 struct common_schema_all_of : common_schema {
     std::vector<common_schema_ptr> children;
 
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_ALL_OF; }
+    node_kind kind() const override { return KIND_ALL_OF; }
 };
 
 struct common_schema_const : common_schema {
@@ -117,25 +132,25 @@ struct common_schema_const : common_schema {
 
     explicit common_schema_const(common_json value) : value(std::move(value)) {}
 
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_CONST; }
+    node_kind kind() const override { return KIND_CONST; }
 };
 
 struct common_schema_enum : common_schema {
     std::vector<common_json> values;
 
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_ENUM; }
+    node_kind kind() const override { return KIND_ENUM; }
 };
 
 struct common_schema_null : common_schema {
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_NULL; }
+    node_kind kind() const override { return KIND_NULL; }
 };
 
 struct common_schema_boolean : common_schema {
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_BOOLEAN; }
+    node_kind kind() const override { return KIND_BOOLEAN; }
 };
 
 struct common_schema_number : common_schema {
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_NUMBER; }
+    node_kind kind() const override { return KIND_NUMBER; }
 };
 
 // bounds are inclusive, exclusiveMinimum / exclusiveMaximum are folded in
@@ -143,16 +158,16 @@ struct common_schema_integer : common_schema {
     int64_t minimum = INT64_MIN;  // INT64_MIN for unbounded
     int64_t maximum = INT64_MAX;  // INT64_MAX for unbounded
 
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_INTEGER; }
+    node_kind kind() const override { return KIND_INTEGER; }
 };
 
 struct common_schema_string : common_schema {
-    std::string          pattern;  // empty when absent
-    common_schema_format format     = COMMON_SCHEMA_FORMAT_NONE;
-    int                  min_length = 0;
-    int                  max_length = -1;  // -1 for unbounded
+    std::string   pattern;  // empty when absent
+    string_format format     = FORMAT_NONE;
+    int           min_length = 0;
+    int           max_length = -1;  // -1 for unbounded
 
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_STRING; }
+    node_kind kind() const override { return KIND_STRING; }
 };
 
 struct common_schema_array : common_schema {
@@ -160,14 +175,14 @@ struct common_schema_array : common_schema {
     int               min_items = 0;
     int               max_items = -1;  // -1 for unbounded
 
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_ARRAY; }
+    node_kind kind() const override { return KIND_ARRAY; }
 };
 
 // "prefixItems", or "items" given as an array: one schema per position
 struct common_schema_tuple : common_schema {
     std::vector<common_schema_ptr> items;
 
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_TUPLE; }
+    node_kind kind() const override { return KIND_TUPLE; }
 };
 
 struct common_schema_property {
@@ -180,7 +195,7 @@ struct common_schema_object : common_schema {
     std::vector<common_schema_property> properties;             // in schema order
     common_schema_ptr                   additional_properties;  // null when not allowed
 
-    common_schema_kind kind() const override { return COMMON_SCHEMA_KIND_OBJECT; }
+    node_kind kind() const override { return KIND_OBJECT; }
 };
 
 // A parsed schema: its root, and the target of every $ref it reaches keyed by the $ref string
@@ -191,9 +206,6 @@ struct common_schema_document {
 
 // A document shared by the parsers built from its nodes, which it keeps alive
 using common_schema_document_ptr = std::shared_ptr<const common_schema_document>;
-
-// e.g. "string", for messages
-const char * common_schema_kind_name(common_schema_kind kind);
 
 // Parses a JSON schema into a document.
 // Throws std::runtime_error when the schema falls outside the supported subset.

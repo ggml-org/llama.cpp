@@ -112,11 +112,11 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
                 auto close_tag = p.tool_arg_close(p.literal(close));
 
                 // A string accepts anything, so a union with a string alternative is a string
-                if (schema.resolves_to_string()) {
+                if (schema.may_be_string()) {
                     return p.ac(p.tool_arg_string_value(p.until(close)) + close_tag, close);
                 }
 
-                if (schema.kind() == COMMON_SCHEMA_KIND_ANY_OF) {
+                if (schema.kind() == common_schema::KIND_ANY_OF) {
                     std::vector<common_peg_parser> choices;
 
                     size_t index = 0;
@@ -131,14 +131,14 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
                     return p.choice(choices);
                 }
 
-                if (schema.kind() == COMMON_SCHEMA_KIND_OBJECT) {
+                if (schema.kind() == common_schema::KIND_OBJECT) {
                     const auto & object = static_cast<const common_schema_object &>(schema);
                     if (!object.properties.empty()) {
                         return p.tag(mm3::TOOL_ARG_OBJECT, members_of(object, rule_name)) + p.space() + close_tag;
                     }
                 }
 
-                if (schema.kind() == COMMON_SCHEMA_KIND_ARRAY) {
+                if (schema.kind() == common_schema::KIND_ARRAY) {
                     const std::string item_close = NS + "</item>";
                     auto item = p.rule(rule_name + "-item",
                         p.tag(mm3::TOOL_ARG_ITEM,
@@ -179,7 +179,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
             };
 
             common_peg_parser invoke_body = p.eps();
-            if (doc->root->kind() == COMMON_SCHEMA_KIND_OBJECT) {
+            if (doc->root->kind() == common_schema::KIND_OBJECT) {
                 invoke_body = members_of(static_cast<const common_schema_object &>(*doc->root), "tool-" + name + "-arg");
             }
 

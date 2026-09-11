@@ -104,7 +104,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
                     auto arg_open = p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param.name)) + ">\n");
 
-                    auto arg_value = param.schema->resolves_to_string() ?
+                    auto arg_value = param.schema->may_be_string() ?
                         arg_string :
                         p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", doc, *param.schema)) + arg_close;
 

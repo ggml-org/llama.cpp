@@ -376,7 +376,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param.name)) +
                                            arguments.name_suffix) +
                            arguments.value_prefix +
-                           (param.schema->resolves_to_string() ?
+                           (param.schema->may_be_string() ?
                                 p.ac(p.tool_arg_string_value(until_suffix) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)), arguments.value_suffix) :
                                 (p.tool_arg_json_value(p.schema(

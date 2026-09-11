@@ -953,7 +953,7 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id                    
         } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
             return "Until(" + string_join(p.delimiters, " | ") + ")";
         } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
-            return "Schema(" + dump_impl(p.child, visited) + ", " + (p.node ? common_schema_kind_name(p.node->kind()) : "null") + ")";
+            return "Schema(" + dump_impl(p.child, visited) + ", " + (p.node ? common_schema::kind_name(p.node->kind()) : "null") + ")";
         } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
             return "Rule(" + p.name + ", " + dump_impl(p.child, visited) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
@@ -1580,7 +1580,7 @@ static std::set<std::string> collect_reachable_rules(
 void common_peg_arena::build_grammar(const common_grammar_builder & builder, bool lazy) const {
     // A raw string value is parsed by the child rather than constrained by the schema
     auto schema_delegates = [](const common_peg_schema_parser & s) -> bool {
-        return !s.node || (s.raw && s.node->resolves_to_string());
+        return !s.node || (s.raw && s.node->may_be_string());
     };
 
     // Unwrap the parser so we can properly check if it's a sequence or choice

@@ -48,43 +48,43 @@ static std::string dump_range(int64_t min, int64_t min_def, int64_t max, int64_t
 // one line per node, e.g. object{a: string, b?: integer[1..], *: any}
 static std::string dump(const common_schema & node) {
     switch (node.kind()) {
-        case COMMON_SCHEMA_KIND_ANY:     return "any";
-        case COMMON_SCHEMA_KIND_NULL:    return "null";
-        case COMMON_SCHEMA_KIND_BOOLEAN: return "boolean";
-        case COMMON_SCHEMA_KIND_NUMBER:  return "number";
-        case COMMON_SCHEMA_KIND_REF:     return "ref(" + static_cast<const common_schema_ref &>(node).ref + ")";
-        case COMMON_SCHEMA_KIND_ANY_OF:  return "anyOf(" + dump_all(static_cast<const common_schema_any_of &>(node).children) + ")";
-        case COMMON_SCHEMA_KIND_ALL_OF:  return "allOf(" + dump_all(static_cast<const common_schema_all_of &>(node).children) + ")";
-        case COMMON_SCHEMA_KIND_CONST:   return "const(" + static_cast<const common_schema_const &>(node).value.dump() + ")";
-        case COMMON_SCHEMA_KIND_TUPLE:   return "tuple(" + dump_all(static_cast<const common_schema_tuple &>(node).items) + ")";
-        case COMMON_SCHEMA_KIND_ENUM: {
+        case common_schema::KIND_ANY:     return "any";
+        case common_schema::KIND_NULL:    return "null";
+        case common_schema::KIND_BOOLEAN: return "boolean";
+        case common_schema::KIND_NUMBER:  return "number";
+        case common_schema::KIND_REF:     return "ref(" + static_cast<const common_schema_ref &>(node).ref + ")";
+        case common_schema::KIND_ANY_OF:  return "anyOf(" + dump_all(static_cast<const common_schema_any_of &>(node).children) + ")";
+        case common_schema::KIND_ALL_OF:  return "allOf(" + dump_all(static_cast<const common_schema_all_of &>(node).children) + ")";
+        case common_schema::KIND_CONST:   return "const(" + static_cast<const common_schema_const &>(node).value.dump() + ")";
+        case common_schema::KIND_TUPLE:   return "tuple(" + dump_all(static_cast<const common_schema_tuple &>(node).items) + ")";
+        case common_schema::KIND_ENUM: {
             std::string out;
             for (const auto & v : static_cast<const common_schema_enum &>(node).values) {
                 out += (out.empty() ? "" : ", ") + v.dump();
             }
             return "enum(" + out + ")";
         }
-        case COMMON_SCHEMA_KIND_INTEGER: {
+        case common_schema::KIND_INTEGER: {
             const auto & i = static_cast<const common_schema_integer &>(node);
             return "integer" + dump_range(i.minimum, INT64_MIN, i.maximum, INT64_MAX);
         }
-        case COMMON_SCHEMA_KIND_STRING: {
+        case common_schema::KIND_STRING: {
             const auto & s = static_cast<const common_schema_string &>(node);
             static const char * formats[] = {"", "uuid", "date", "time", "date-time"};
             std::string out = "string";
             if (!s.pattern.empty()) {
                 out += "/" + s.pattern + "/";
             }
-            if (s.format != COMMON_SCHEMA_FORMAT_NONE) {
+            if (s.format != common_schema::FORMAT_NONE) {
                 out += std::string(":") + formats[s.format];
             }
             return out + dump_range(s.min_length, 0, s.max_length, -1);
         }
-        case COMMON_SCHEMA_KIND_ARRAY: {
+        case common_schema::KIND_ARRAY: {
             const auto & a = static_cast<const common_schema_array &>(node);
             return "array(" + dump(*a.items) + ")" + dump_range(a.min_items, 0, a.max_items, -1);
         }
-        case COMMON_SCHEMA_KIND_OBJECT: {
+        case common_schema::KIND_OBJECT: {
             const auto & o = static_cast<const common_schema_object &>(node);
             std::string out;
             for (const auto & p : o.properties) {
@@ -215,7 +215,7 @@ static void test_string(testing & t) {
         auto doc = parse(R"({"type": "string"})");
         const auto & s = root<common_schema_string>(t, doc);
         t.assert_equal("pattern", "", s.pattern);
-        t.assert_equal("format", COMMON_SCHEMA_FORMAT_NONE, s.format);
+        t.assert_equal("format", common_schema::FORMAT_NONE, s.format);
         t.assert_equal("min_length", 0, s.min_length);
         t.assert_equal("max_length", -1, s.max_length);
     });
@@ -224,25 +224,25 @@ static void test_string(testing & t) {
         auto doc = parse(R"({"type": "string", "pattern": "^[a-z]+$", "format": "date", "minLength": 2, "maxLength": 8})");
         const auto & s = root<common_schema_string>(t, doc);
         t.assert_equal("pattern", "^[a-z]+$", s.pattern);
-        t.assert_equal("format", COMMON_SCHEMA_FORMAT_DATE, s.format);
+        t.assert_equal("format", common_schema::FORMAT_DATE, s.format);
         t.assert_equal("min_length", 2, s.min_length);
         t.assert_equal("max_length", 8, s.max_length);
     });
 
     t.test("formats", [](testing & t) {
-        auto expect = [&](const char * format, common_schema_format expected) {
+        auto expect = [&](const char * format, common_schema::string_format expected) {
             auto doc = parse(std::string(R"({"type": "string", "format": ")") + format + "\"}");
             t.assert_equal(format, expected, root<common_schema_string>(t, doc).format);
         };
-        expect("date",      COMMON_SCHEMA_FORMAT_DATE);
-        expect("time",      COMMON_SCHEMA_FORMAT_TIME);
-        expect("date-time", COMMON_SCHEMA_FORMAT_DATE_TIME);
-        expect("uuid",      COMMON_SCHEMA_FORMAT_UUID);
-        expect("uuid1",     COMMON_SCHEMA_FORMAT_UUID);
-        expect("uuid5",     COMMON_SCHEMA_FORMAT_UUID);
-        expect("uuid6",     COMMON_SCHEMA_FORMAT_NONE);
-        expect("email",     COMMON_SCHEMA_FORMAT_NONE);
-        expect("uri",       COMMON_SCHEMA_FORMAT_NONE);
+        expect("date",      common_schema::FORMAT_DATE);
+        expect("time",      common_schema::FORMAT_TIME);
+        expect("date-time", common_schema::FORMAT_DATE_TIME);
+        expect("uuid",      common_schema::FORMAT_UUID);
+        expect("uuid1",     common_schema::FORMAT_UUID);
+        expect("uuid5",     common_schema::FORMAT_UUID);
+        expect("uuid6",     common_schema::FORMAT_NONE);
+        expect("email",     common_schema::FORMAT_NONE);
+        expect("uri",       common_schema::FORMAT_NONE);
     });
 
     t.test("pattern implies a string", [](testing & t) {
@@ -252,7 +252,7 @@ static void test_string(testing & t) {
 
     t.test("known format implies a string", [](testing & t) {
         auto doc = parse(R"({"format": "uuid"})");
-        t.assert_equal("format", COMMON_SCHEMA_FORMAT_UUID, root<common_schema_string>(t, doc).format);
+        t.assert_equal("format", common_schema::FORMAT_UUID, root<common_schema_string>(t, doc).format);
     });
 }
 
@@ -637,9 +637,9 @@ static void test_ref(testing & t) {
     });
 }
 
-static void test_resolves_to_string(testing & t) {
+static void test_may_be_string(testing & t) {
     auto check = [](testing & t, const std::string & schema, bool expected) {
-        t.assert_equal(schema, expected, parse(schema).root->resolves_to_string());
+        t.assert_equal(schema, expected, parse(schema).root->may_be_string());
     };
 
     t.test("types", [&](testing & t) {
@@ -696,64 +696,63 @@ static void test_resolves_to_string(testing & t) {
     });
 }
 
-// e.g. {number, integer}, in kind order
-static std::string dump(const common_schema_kinds & kinds) {
-    static const char * names[] = { "null", "boolean", "number", "integer", "string", "array", "object" };
-    static const common_schema_kind order[] = { COMMON_SCHEMA_KIND_NULL,   COMMON_SCHEMA_KIND_BOOLEAN, COMMON_SCHEMA_KIND_NUMBER,
-                                                COMMON_SCHEMA_KIND_INTEGER, COMMON_SCHEMA_KIND_STRING,  COMMON_SCHEMA_KIND_ARRAY,
-                                                COMMON_SCHEMA_KIND_OBJECT };
+// e.g. {number, integer}, in type order
+static std::string dump(const common_schema::type_set & types) {
+    static const common_schema::value_type order[] = { common_schema::TYPE_NULL,   common_schema::TYPE_BOOLEAN, common_schema::TYPE_NUMBER,
+                                                       common_schema::TYPE_INTEGER, common_schema::TYPE_STRING,  common_schema::TYPE_ARRAY,
+                                                       common_schema::TYPE_OBJECT };
     std::string out;
-    for (size_t i = 0; i < 7; i++) {
-        if (kinds.has(order[i])) {
-            out += (out.empty() ? "" : ", ") + std::string(names[i]);
+    for (auto type : order) {
+        if (types.has(type)) {
+            out += (out.empty() ? "" : ", ") + std::string(common_schema::type_name(type));
         }
     }
     return "{" + out + "}";
 }
 
-static void test_resolve_kinds(testing & t) {
-    auto check = [](testing & t, const std::string & schema, const common_schema_kinds & expected) {
-        t.assert_equal(schema, dump(expected), dump(parse(schema).root->resolve_kinds()));
+static void test_value_types(testing & t) {
+    auto check = [](testing & t, const std::string & schema, const common_schema::type_set & expected) {
+        t.assert_equal(schema, dump(expected), dump(parse(schema).root->value_types()));
     };
 
     t.test("types", [&](testing & t) {
-        check(t, R"({"type": "string"})", { COMMON_SCHEMA_KIND_STRING });
-        check(t, R"({"type": "integer"})", { COMMON_SCHEMA_KIND_INTEGER });
-        check(t, R"({"type": "number"})", { COMMON_SCHEMA_KIND_NUMBER, COMMON_SCHEMA_KIND_INTEGER });
-        check(t, R"({"type": ["string", "null"]})", { COMMON_SCHEMA_KIND_STRING, COMMON_SCHEMA_KIND_NULL });
+        check(t, R"({"type": "string"})", { common_schema::TYPE_STRING });
+        check(t, R"({"type": "integer"})", { common_schema::TYPE_INTEGER });
+        check(t, R"({"type": "number"})", { common_schema::TYPE_NUMBER, common_schema::TYPE_INTEGER });
+        check(t, R"({"type": ["string", "null"]})", { common_schema::TYPE_STRING, common_schema::TYPE_NULL });
     });
 
-    t.test("an any is every kind", [&](testing & t) {
-        check(t, R"({"description": "anything"})", common_schema_kinds::all());
-        check(t, R"({"minLength": 1})", common_schema_kinds::all());
+    t.test("an any is every type", [&](testing & t) {
+        check(t, R"({"description": "anything"})", common_schema::type_set::all());
+        check(t, R"({"minLength": 1})", common_schema::type_set::all());
     });
 
     t.test("structural keywords", [&](testing & t) {
-        check(t, R"({"properties": {"a": {"type": "string"}}})", { COMMON_SCHEMA_KIND_OBJECT });
-        check(t, R"({"items": {"type": "string"}})", { COMMON_SCHEMA_KIND_ARRAY });
-        check(t, R"({"prefixItems": [{"type": "string"}]})", { COMMON_SCHEMA_KIND_ARRAY });
+        check(t, R"({"properties": {"a": {"type": "string"}}})", { common_schema::TYPE_OBJECT });
+        check(t, R"({"items": {"type": "string"}})", { common_schema::TYPE_ARRAY });
+        check(t, R"({"prefixItems": [{"type": "string"}]})", { common_schema::TYPE_ARRAY });
     });
 
     t.test("const and enum", [&](testing & t) {
-        check(t, R"({"const": 1.5})", { COMMON_SCHEMA_KIND_NUMBER });
-        check(t, R"({"enum": [1, "a", null]})", { COMMON_SCHEMA_KIND_INTEGER, COMMON_SCHEMA_KIND_STRING, COMMON_SCHEMA_KIND_NULL });
+        check(t, R"({"const": 1.5})", { common_schema::TYPE_NUMBER });
+        check(t, R"({"enum": [1, "a", null]})", { common_schema::TYPE_INTEGER, common_schema::TYPE_STRING, common_schema::TYPE_NULL });
     });
 
     t.test("any_of is the union", [&](testing & t) {
-        check(t, R"({"anyOf": [{"type": "string"}, {"type": "integer"}]})", { COMMON_SCHEMA_KIND_STRING, COMMON_SCHEMA_KIND_INTEGER });
+        check(t, R"({"anyOf": [{"type": "string"}, {"type": "integer"}]})", { common_schema::TYPE_STRING, common_schema::TYPE_INTEGER });
     });
 
     t.test("all_of is the intersection", [&](testing & t) {
-        check(t, R"({"allOf": [{"type": ["string", "number"]}, {"type": ["number", "object"]}]})", { COMMON_SCHEMA_KIND_NUMBER, COMMON_SCHEMA_KIND_INTEGER });
-        check(t, R"({"allOf": [{"type": "string"}, {"description": "x"}]})", { COMMON_SCHEMA_KIND_STRING });
+        check(t, R"({"allOf": [{"type": ["string", "number"]}, {"type": ["number", "object"]}]})", { common_schema::TYPE_NUMBER, common_schema::TYPE_INTEGER });
+        check(t, R"({"allOf": [{"type": "string"}, {"description": "x"}]})", { common_schema::TYPE_STRING });
         check(t, R"({"allOf": [{"type": "string"}, {"type": "integer"}]})", {});
     });
 
     t.test("ref", [&](testing & t) {
         check(t, R"({"$ref": "#/$defs/u", "$defs": {"u": {"anyOf": [{"type": "boolean"}, {"type": "array"}]}}})",
-              { COMMON_SCHEMA_KIND_BOOLEAN, COMMON_SCHEMA_KIND_ARRAY });
+              { common_schema::TYPE_BOOLEAN, common_schema::TYPE_ARRAY });
         check(t, R"({"$ref": "#/$defs/n", "$defs": {"n": {"anyOf": [{"$ref": "#/$defs/n"}, {"type": "string"}]}}})",
-              { COMMON_SCHEMA_KIND_STRING });
+              { common_schema::TYPE_STRING });
     });
 }
 
@@ -841,8 +840,8 @@ int main(int argc, char * argv[]) {
     t.test("any_of", test_any_of);
     t.test("all_of", test_all_of);
     t.test("ref", test_ref);
-    t.test("resolves_to_string", test_resolves_to_string);
-    t.test("resolve_kinds", test_resolve_kinds);
+    t.test("may_be_string", test_may_be_string);
+    t.test("value_types", test_value_types);
     t.test("errors", test_errors);
 
     return t.summary();

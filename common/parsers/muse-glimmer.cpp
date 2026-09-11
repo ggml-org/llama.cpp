@@ -78,7 +78,7 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
                 std::vector<common_peg_parser> arg_rules;
                 foreach_parameter(function, [&](const common_schema_property & prop, const common_schema_document_ptr & doc) {
                     auto value_parser = p.eps();
-                    if (prop.schema->resolves_to_string()) {
+                    if (prop.schema->may_be_string()) {
                         value_parser = string_value;
                     } else {
                         value_parser = p.tool_arg_json_value(
