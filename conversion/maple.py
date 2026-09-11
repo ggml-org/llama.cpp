@@ -11,6 +11,7 @@ from .base import LazyTorchTensor, ModelBase, TextModel, gguf
 
 
 @ModelBase.register("MapleForCausalLM")
+@ModelBase.example("deepgrove/maple-preview")
 class MapleModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MAPLE
 
@@ -24,7 +25,7 @@ class MapleModel(TextModel):
         assert hparams.get("nope_on_global_attention", False)
 
         head_dim = hparams.get("head_dim", hparams["hidden_size"] // hparams["num_attention_heads"])
-        partial_rotary_factor = self.rope_parameters.get("partial_rotary_factor", hparams.get("partial_rotary_factor", 1.0))
+        partial_rotary_factor = self.rope_parameters.get("partial_rotary_factor", 1.0)
 
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         self.gguf_writer.add_rope_dimension_count(int(head_dim * partial_rotary_factor))
@@ -36,6 +37,11 @@ class MapleModel(TextModel):
         if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_INP, bid):
             return gguf.GGMLQuantizationType.F32
 
+        # Keep embeddings and the output head in F16: they are the two
+        # tensors that stay dense (not ternary) in Maple, and quantizing
+        # them is what costs most in perplexity. DeepGrove ships all
+        # official GGUFs with an F16 or Q4_K head and F16 embeddings;
+        # F16 here matches that reference and avoids a silent downgrade.
         if any(self.match_model_tensor_name(new_name, key, bid) for key in (
             gguf.MODEL_TENSOR.TOKEN_EMBD,
             gguf.MODEL_TENSOR.OUTPUT,
