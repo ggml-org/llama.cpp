@@ -199,10 +199,61 @@ void llama_model_deepseek41::load_arch_tensors(llama_model_loader & ml) {
             layer.engram_k    = create_tensor(tn(LLM_TENSOR_ENGRAM_K,    "weight", i), {n_embd, hc_mult}, 0);
         }
 
-        // TODO: remove once build_attention() below handles the shared compressed stream.
-        // V4's builder recognises neither of this model's compression ratios, so it would quietly
-        // drop the long range half of attention and still produce fluent text. Refuse instead.
-        if (layer.attn_comp_wkv) {
+    }
+
+    // Work out which layer publishes the stream each layer reads. Only a source carries a
+    // compressor, only an index key owner carries indexer_attn_k, and only an index source
+    // carries indexer_attn_q_b, so the file itself says which layer plays which role.
+    kv_source_of.assign(n_layer, -1);
+    index_key_source_of.assign(n_layer, -1);
+    topk_source_of.assign(n_layer, -1);
+
+    int32_t last_kv_source    = -1;
+    int32_t last_key_owner    = -1;
+    int32_t last_index_source = -1;
+
+    for (int i = 0; i < n_layer; ++i) {
+        const auto & layer = layers[i];
+
+        if (layer.attn_comp_wkv)    { last_kv_source    = i; }
+        if (layer.indexer_attn_k)   { last_key_owner    = i; }
+        if (layer.indexer_attn_q_b) { last_index_source = i; }
+
+        if (hparams.dsv4_compress_ratios[i] == 0) {
+            // pure sliding window, no compressed stream to read
+            continue;
+        }
+
+        if (last_kv_source < 0 || last_key_owner < 0 || last_index_source < 0) {
+            throw std::runtime_error(format("layer %d reads a compressed stream before any layer publishes one", i));
+        }
+
+        // the row layout of a stream follows the ratio it was compressed at, so a reader that
+        // disagrees with its source would index into rows that stand for different positions
+        if (hparams.dsv4_compress_ratios[i] != hparams.dsv4_compress_ratios[last_kv_source]) {
+            throw std::runtime_error(format("layer %d compresses at ratio %u but reads layer %d, compressed at %u",
+                                            i, hparams.dsv4_compress_ratios[i],
+                                            last_kv_source, hparams.dsv4_compress_ratios[last_kv_source]));
+        }
+
+        kv_source_of[i]        = last_kv_source;
+        index_key_source_of[i] = last_key_owner;
+        topk_source_of[i]      = last_index_source;
+    }
+
+    // a compressor with no gate only makes sense where there is nothing to pool
+    for (int i = 0; i < n_layer; ++i) {
+        if (is_kv_source(i) && !layers[i].attn_comp_wgate && hparams.dsv4_compress_ratios[i] != 1) {
+            throw std::runtime_error(format("layer %d compresses %u tokens per row but has no pooling gate",
+                                            i, hparams.dsv4_compress_ratios[i]));
+        }
+    }
+
+    // TODO: remove once the graph reads the compressed stream. Until then the attention here is
+    // V4's, which recognises neither of this model's ratios and would silently drop the long
+    // range half of attention while still producing fluent text. Refuse rather than mislead.
+    for (int i = 0; i < n_layer; ++i) {
+        if (kv_source_of[i] >= 0) {
             throw std::runtime_error("DeepSeek-V4.1 sparse attention is not implemented yet");
         }
     }
