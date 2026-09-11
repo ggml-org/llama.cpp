@@ -757,7 +757,6 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     const int64_t n_pos_all  =              (int64_t) n_tokens*n_pos_per_embd;
 
     udata->token     .resize(n_tokens);
-    udata->embd      .resize(n_embd_all);
     udata->pos       .resize(n_pos_all);
     udata->n_seq_id  .resize(n_tokens);
     udata->seq_id    .resize(n_tokens);
@@ -766,6 +765,12 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     udata->output    .resize(n_tokens);
 
     udata->seq_id_data.reserve(n_tokens);
+    if (batch.embd) {
+        udata->embd.clear();
+        udata->embd.reserve(n_embd_all);
+    } else {
+        udata->embd.resize(n_embd_all); // fill all size..new_size elems by 0.0f
+    }
 
     seq_set_t seq_set_unq;
 
@@ -775,7 +780,10 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         }
 
         if (batch.embd) {
-            memcpy(udata->embd.data() + i*n_embd, batch.embd + (int64_t) idxs[i]*n_embd, n_embd*sizeof(float));
+            auto src = batch.embd + (int64_t) idxs[1] * n_embd;
+            // use safe method for auto increase size
+            // next improvements - write own vector without automatic filling float)
+            udata->embd.insert(udata->embd.end(), src, src + n_embd);
         }
 
         for (size_t j = 0; j < (size_t)n_pos_per_embd; ++j) {
