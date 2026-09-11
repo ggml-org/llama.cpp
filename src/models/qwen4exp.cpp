@@ -211,8 +211,14 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
             ple_rows = ple_w->tensor->ne[1];
         }
 
+        // LLAMA_PLE_RESIDENT=1 reads the whole PLE table into RAM at startup instead of
+        // keeping it lazy: the per-ubatch gather then runs at RAM bandwidth instead of
+        // faulting n_heads*n_tokens scattered pages (~8s of a 34s ubatch at 7.3k tokens).
+        // Costs the full table size of RSS (~51 GiB for this model).
+        const bool ple_lazy = getenv("LLAMA_PLE_RESIDENT") == nullptr;
         per_layer_tok_embd = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),
-                                           { hparams.ple_head_dim, ple_rows }, TENSOR_READ_LAZY);
+                                           { hparams.ple_head_dim, ple_rows },
+                                           ple_lazy ? TENSOR_READ_LAZY : 0);
     }
 
     const int mtp_flags = !ml.load_mtp ? TENSOR_SKIP : 0;
