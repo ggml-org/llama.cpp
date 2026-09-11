@@ -446,6 +446,7 @@ static const struct ggml_backend_buffer_type_i ggml_backend_et_buffer_type_i = {
     /* .get_max_size     = */ ggml_backend_et_buffer_type_get_max_size,
     /* .get_alloc_size   = */ ggml_backend_et_buffer_type_get_alloc_size,
     /* .is_host          = */ ggml_backend_et_buffer_type_is_host,
+    /* .get_alloc_interface = */ NULL,
 };
 
 static const char * ggml_backend_et_get_name(ggml_backend_t backend) {

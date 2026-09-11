@@ -1656,6 +1656,7 @@ ggml_backend_buffer_type_t ggml_backend_cpu_riscv64_spacemit_buffer_type(void) {
          /* .get_max_size     = */ nullptr,
          /* .get_alloc_size   = */ ggml_backend_cpu_riscv64_spacemit_nbytes,
          /* .is_host          = */ nullptr,
+         /* .get_alloc_interface = */ nullptr,
          },
  /* .device  = */
         ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),

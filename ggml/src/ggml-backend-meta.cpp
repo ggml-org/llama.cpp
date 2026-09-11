@@ -325,6 +325,8 @@ static bool ggml_backend_meta_buffer_type_is_host(ggml_backend_buffer_type_t buf
     return false;
 }
 
+static const ggml_backend_buffer_type_alloc_i * ggml_backend_meta_buffer_type_get_alloc_interface(ggml_backend_buffer_type_t buft);
+
 static const struct ggml_backend_buffer_type_i ggml_backend_meta_buffer_type_iface = {
     /* .get_name         = */ ggml_backend_meta_buffer_type_get_name,
     /* .alloc_buffer     = */ ggml_backend_meta_buffer_type_alloc_buffer,
@@ -332,6 +334,7 @@ static const struct ggml_backend_buffer_type_i ggml_backend_meta_buffer_type_ifa
     /* .get_max_size     = */ ggml_backend_meta_buffer_type_get_max_size,
     /* .get_alloc_size   = */ ggml_backend_meta_buffer_type_get_alloc_size,
     /* .is_host          = */ ggml_backend_meta_buffer_type_is_host,
+    /* .get_alloc_interface = */ ggml_backend_meta_buffer_type_get_alloc_interface,
 };
 
 bool ggml_backend_buft_is_meta(ggml_backend_buffer_type_t buft) {
@@ -1470,6 +1473,29 @@ ggml_tensor * ggml_backend_meta_preparation_get_tensor(
     GGML_ASSERT(preparation && tensor && device < preparation->tensors.ctxs.size());
     return preparation->failed || !preparation->accepts(tensor) ? nullptr :
         ggml_backend_meta_find_simple_tensor(preparation->tensors, tensor, device, preparation->split.sources);
+}
+
+static const ggml_backend_buffer_type_alloc_i * ggml_backend_meta_buffer_type_get_alloc_interface(ggml_backend_buffer_type_t buft) {
+    GGML_UNUSED(buft);
+    static const ggml_backend_buffer_type_alloc_i iface = {
+        /* .n_domains        = */ ggml_backend_meta_buft_n_bufts,
+        /* .get_domain       = */ ggml_backend_meta_buft_simple_buft,
+        /* .new_preparation  = */ [](ggml_backend_buffer_type_t type, ggml_backend_buffer_usage usage, size_t max_tensors,
+                                       const ggml_backend_alloc_source_i * sources) -> void * {
+            return ggml_backend_meta_preparation_new(type, usage, max_tensors, sources);
+        },
+        /* .free_preparation = */ [](void * preparation) {
+            ggml_backend_meta_preparation_free(static_cast<ggml_backend_meta_preparation *>(preparation));
+        },
+        /* .prepare_tensor   = */ [](void * preparation, const ggml_tensor * tensor) {
+            return ggml_backend_meta_preparation_tensor(static_cast<ggml_backend_meta_preparation *>(preparation), tensor);
+        },
+        /* .get_tensor       = */ [](void * preparation, const ggml_tensor * tensor, size_t domain) {
+            return ggml_backend_meta_preparation_get_tensor(static_cast<ggml_backend_meta_preparation *>(preparation), tensor, domain);
+        },
+        /* .materialize      = */ nullptr,
+    };
+    return &iface;
 }
 
 static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor) {

@@ -1060,6 +1060,12 @@ static void test_meta_split_preparation() {
         return result;
     }, nullptr);
     auto * buft = ggml_backend_dev_buffer_type(meta);
+    auto * allocation = ggml_backend_buft_get_alloc_interface(buft);
+    GGML_ASSERT(allocation && allocation->n_domains(buft) == 2);
+    GGML_ASSERT(allocation->get_domain(buft, 0) == &first.buffer_type);
+    GGML_ASSERT(allocation->get_domain(buft, 1) == &second.buffer_type);
+    GGML_ASSERT(ggml_backend_buft_get_alloc_interface(&first.buffer_type) == nullptr);
+    GGML_ASSERT(ggml_backend_buft_get_alloc_interface(ggml_backend_cpu_buffer_type()) == nullptr);
     auto test_ctx = make_context();
     auto * source = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 8, 6);
     auto * mirror = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 8, 6);
@@ -1146,6 +1152,25 @@ static void test_meta_split_preparation() {
         GGML_ASSERT(ggml_nbytes(simple_weight) == (device == 0 ? 72 : 144));
         GGML_ASSERT(ggml_nbytes(simple_mirror) == ggml_nbytes(mirror));
         GGML_ASSERT(bool(simple_small->flags & GGML_TENSOR_FLAG_COMPUTE) == (device != 0));
+    }
+    GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
+
+    void * generic = allocation->new_preparation(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 1, nullptr);
+    GGML_ASSERT(generic);
+    GGML_ASSERT(allocation->prepare_tensor(generic, source) == GGML_STATUS_SUCCESS);
+    for (size_t device = 0; device < allocation->n_domains(buft); device++) {
+        auto * simple = allocation->get_tensor(generic, source, device);
+        GGML_ASSERT(simple && !simple->buffer && !simple->data);
+        GGML_ASSERT(ggml_backend_buft_get_alloc_size(allocation->get_domain(buft, device), simple) == (device == 0 ? 64 : 128));
+    }
+    allocation->free_preparation(generic);
+    generic = allocation->new_preparation(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 0, nullptr);
+    GGML_ASSERT(generic);
+    GGML_ASSERT(allocation->prepare_tensor(generic, source) == GGML_STATUS_ALLOC_FAILED);
+    GGML_ASSERT(allocation->get_tensor(generic, source, 0) == nullptr);
+    allocation->free_preparation(generic);
+    for (const auto & entry : before) {
+        GGML_ASSERT(std::memcmp(entry.first, entry.second.data(), GGML_TENSOR_SIZE) == 0);
     }
     GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
 

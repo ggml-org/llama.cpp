@@ -8,11 +8,13 @@
 extern "C" {
 #endif
 
-    #define GGML_BACKEND_API_VERSION 3
+    #define GGML_BACKEND_API_VERSION 4
 
     //
     // Backend buffer type
     //
+
+    struct ggml_backend_buffer_type_alloc_i;
 
     struct ggml_backend_buffer_type_i {
         const char *          (*get_name)      (ggml_backend_buffer_type_t buft);
@@ -26,6 +28,8 @@ extern "C" {
         size_t                (*get_alloc_size)(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor);
         // (optional) check if tensor data is in host memory and uses standard ggml tensor layout (defaults to false)
         bool                  (*is_host)       (ggml_backend_buffer_type_t buft);
+        // (optional) composite allocation operations
+        const struct ggml_backend_buffer_type_alloc_i * (*get_alloc_interface)(ggml_backend_buffer_type_t buft);
     };
 
     struct ggml_backend_buffer_type {
@@ -128,6 +132,21 @@ extern "C" {
         struct ggml_tensor * (*get_tensor)(void * context, const struct ggml_tensor * tensor, size_t device);
         void * context;
     };
+
+    struct ggml_backend_buffer_type_alloc_i {
+        size_t (*n_domains)(ggml_backend_buffer_type_t buft);
+        ggml_backend_buffer_type_t (*get_domain)(ggml_backend_buffer_type_t buft, size_t domain);
+        void * (*new_preparation)(ggml_backend_buffer_type_t buft, enum ggml_backend_buffer_usage usage, size_t max_tensors,
+                const struct ggml_backend_alloc_source_i * sources);
+        void (*free_preparation)(void * preparation);
+        enum ggml_status (*prepare_tensor)(void * preparation, const struct ggml_tensor * tensor);
+        struct ggml_tensor * (*get_tensor)(void * preparation, const struct ggml_tensor * tensor, size_t domain);
+        // Takes prepared, physically bound descriptors and owned buffer sets; consumes both only on success.
+        // The returned owner's init_tensor publishes logical bindings. A NULL callback means materialization is unsupported.
+        ggml_backend_buffer_t (*materialize)(void * preparation, struct ggml_backend_buffer_set * domains, size_t n_domains);
+    };
+
+    GGML_API const struct ggml_backend_buffer_type_alloc_i * ggml_backend_buft_get_alloc_interface(ggml_backend_buffer_type_t buft);
 
     GGML_API struct ggml_backend_meta_preparation * ggml_backend_meta_preparation_new(
             ggml_backend_buffer_type_t buft, enum ggml_backend_buffer_usage usage, size_t max_tensors,

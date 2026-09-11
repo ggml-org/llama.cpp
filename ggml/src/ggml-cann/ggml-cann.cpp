@@ -1601,6 +1601,7 @@ static const ggml_backend_buffer_type_i ggml_backend_cann_buffer_type_interface 
     /* .get_max_size     = */ NULL,  // defaults to SIZE_MAX
     /* .get_alloc_size   = */ ggml_backend_cann_buffer_type_get_alloc_size,
     /* .is_host          = */ ggml_backend_cann_buffer_type_is_host,
+    /* .get_alloc_interface = */ NULL,
 };
 
 /**
@@ -1748,6 +1749,7 @@ ggml_backend_buffer_type_t ggml_backend_cann_host_buffer_type() {
                            /* .get_max_size     = */ NULL,  // defaults to SIZE_MAX
             /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
                            /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+                           /* .get_alloc_interface = */ NULL,
                            },
         /* .device   = */
         ggml_backend_reg_dev_get(ggml_backend_cann_reg(), 0),

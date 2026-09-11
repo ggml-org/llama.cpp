@@ -12552,6 +12552,7 @@ static ggml_backend_buffer_type_i ggml_backend_opencl_buffer_type_interface = {
     /* .get_max_size     = */ ggml_backend_opencl_buffer_type_get_max_size,
     /* .get_alloc_size   = */ ggml_backend_opencl_buffer_type_get_alloc_size,
     /* .is_host          = */ NULL,
+    /* .get_alloc_interface = */ NULL,
 };
 
 //

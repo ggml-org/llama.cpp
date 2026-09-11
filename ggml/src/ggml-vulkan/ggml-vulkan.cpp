@@ -405,6 +405,7 @@ static ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface = {
     /* .get_max_size     = */ ggml_backend_vk_buffer_type_get_max_size,
     /* .get_alloc_size   = */ ggml_backend_vk_buffer_type_get_alloc_size,
     /* .is_host          = */ NULL,
+    /* .get_alloc_interface = */ NULL,
 };
 
 class vk_memory_logger;
@@ -16955,6 +16956,7 @@ ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type() {
             /* .get_max_size     = */ ggml_backend_vk_host_buffer_type_get_max_size,
             /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
             /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+            /* .get_alloc_interface = */ NULL,
         },
         /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_vk_reg(), 0),
         /* .context  = */ nullptr,

@@ -86,6 +86,11 @@ bool ggml_backend_buft_is_host(ggml_backend_buffer_type_t buft) {
     return false;
 }
 
+const struct ggml_backend_buffer_type_alloc_i * ggml_backend_buft_get_alloc_interface(ggml_backend_buffer_type_t buft) {
+    GGML_ASSERT(buft);
+    return buft->iface.get_alloc_interface ? buft->iface.get_alloc_interface(buft) : nullptr;
+}
+
 ggml_backend_dev_t ggml_backend_buft_get_device(ggml_backend_buffer_type_t buft) {
     GGML_ASSERT(buft);
     return buft->device;
@@ -2505,6 +2510,7 @@ ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void) {
             /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
             /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
             /* .is_host          = */ ggml_backend_cpu_buffer_type_is_host,
+            /* .get_alloc_interface = */ NULL,
         },
         /* .device  = */ NULL, // FIXME ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
         /* .context = */ NULL,
@@ -2528,6 +2534,7 @@ static ggml_backend_buffer_type_t ggml_backend_cpu_buffer_from_ptr_type(void) {
             /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
             /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
             /* .is_host          = */ ggml_backend_cpu_buffer_type_is_host,
+            /* .get_alloc_interface = */ NULL,
         },
         /* .device  = */ NULL, // FIXME ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
         /* .context = */ NULL,
