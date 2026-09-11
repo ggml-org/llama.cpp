@@ -42,7 +42,7 @@ add_dependencies(ggml-webgpu generate_shaders)
 # Dawn needs C++20 (https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/quickstart-cmake.md#prerequisites)
 target_compile_features(ggml-webgpu PRIVATE cxx_std_20)
 
-# Don't scan headers for module dependencies
+# Disable C++20 module scanning since emscan-deps fails to find webgpu_cpp.h
 set_target_properties(ggml-webgpu PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 
 if(EMSCRIPTEN)
