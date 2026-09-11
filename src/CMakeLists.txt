@@ -26,6 +26,7 @@ add_library(llama
             llama-kv-cache-iswa.cpp
             llama-kv-cache-dsa.cpp
             llama-kv-cache-dsa-iswa.cpp
+            llama-kv-cache-kpool.cpp
             llama-kv-cache-msa.cpp
             llama-kv-cache-dsv4.cpp
             llama-memory.cpp

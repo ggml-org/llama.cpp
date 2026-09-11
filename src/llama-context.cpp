@@ -236,6 +236,15 @@ llama_context::llama_context(
     cparams.fused_lid = true;
     cparams.auto_flid = false;
 
+    {
+        // the fused kernel sums heads in a different order, so a near-tied top-k can differ
+        const char * LLAMA_FUSED_LID_DISABLE = getenv("LLAMA_FUSED_LID_DISABLE");
+        if (LLAMA_FUSED_LID_DISABLE && atoi(LLAMA_FUSED_LID_DISABLE) != 0) {
+            cparams.fused_lid = false;
+            cparams.auto_flid = false;
+        }
+    }
+
     cparams.fused_dsv4_hc_pre  = true;
     cparams.fused_dsv4_hc_comb = true;
     cparams.fused_dsv4_hc_post = true;
@@ -2304,8 +2313,9 @@ void llama_context::output_reorder() {
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     uint32_t res;
-    if (model.arch == LLM_ARCH_KIMI_K3) {
-        // the n_tokens*40 budget below is exhausted at ubatch 3840
+    if (model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_GLM5NEXT) {
+        // the n_tokens*40 budget below runs out by ubatch 3840: KDA costs 182 nodes + ~16/token
+        // per layer, so 34 KDA layers alone need 6.2k + 31.9*n_tokens before DSA or the MoE
         res = std::max<uint32_t>(n_tokens * 160, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_QWEN3NEXT ||
         model.arch == LLM_ARCH_KIMI_LINEAR ||

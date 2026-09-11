@@ -160,6 +160,12 @@ public:
 
     bool get_has_shift() const;
 
+    // GLM-5-Next pooled-key cache: seq_add/seq_div regroup pools while every cached key still
+    // looks complete. sticky by design, a flag that clears too early is silently wrong
+    void set_kpool_dirty();
+    bool get_kpool_dirty() const;
+    void clear_kpool_dirty() const;
+
     ggml_type type_k() const;
     ggml_type type_v() const;
 
@@ -192,6 +198,11 @@ public:
     // store k_cur and v_cur in the cache based on the provided head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
+
+    // writes n_embd elements at element offset i_off, leaving the rest of the row untouched.
+    // returns the ggml_set_rows result so a later gather chains off it as a real graph edge
+    ggml_tensor * cpy_k_part(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il,
+            int64_t n_embd, int64_t i_off) const;
 
     //
     // preparation API
@@ -260,6 +271,9 @@ private:
     };
 
     bool v_trans = true;  // the value tensor is transposed
+
+    // see set_kpool_dirty. mutable: its only consumer runs from set_input, holding a const cache
+    mutable bool kpool_dirty = false;
 
     const uint32_t n_seq_max = 1;
     const uint32_t n_stream  = 1;
@@ -391,6 +405,15 @@ public:
 
     uint32_t get_n_kv() const;
 
+    // the stream RANGE s1 - s0 + 1 that get_k/get_v use as `ns`, not n_seqs_unq
+    uint32_t get_n_stream() const;
+
+    // physical stream behind view s; a global row for cell j is get_strm(s)*get_size() + j,
+    // the convention set_input_k_idxs uses. needed by k-pool, which writes non-ubatch cells
+    uint32_t get_strm(uint32_t s) const;
+
+    const llama_kv_cache * get_kv() const;
+
     ggml_type type_k() const;
     ggml_type type_v() const;
 
@@ -405,6 +428,8 @@ public:
     //   - v_cur  [n_embd_head_v, n_head_v, n_tokens]
     //   - v_idxs [n_tokens] or [n_tokens*n_embd_v_gqa] depending if V cache is transposed
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
+    ggml_tensor * cpy_k_part(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il,
+            int64_t n_embd, int64_t i_off) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const;
 
     // create destination indices for each head of the current batch for where it would be written in the KV cache

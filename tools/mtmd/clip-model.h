@@ -17,6 +17,7 @@ enum ffn_op_type {
     FFN_SILU,
     FFN_GELU_QUICK,
     FFN_RELU_SQR,
+    FFN_SILU_CLAMP,
 };
 
 enum norm_type {
@@ -88,6 +89,9 @@ struct clip_hparams {
     int32_t warmup_audio_size = 3000;
 
     ffn_op_type ffn_op = FFN_GELU;
+
+    // clamp applied to the SwiGLU gate/up before the activation (FFN_SILU_CLAMP)
+    float swiglu_limit = 0.0f;
 
     patch_merge_type mm_patch_merge_type = PATCH_MERGE_FLAT;
 
