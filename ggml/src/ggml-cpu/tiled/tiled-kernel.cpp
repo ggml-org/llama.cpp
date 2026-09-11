@@ -176,6 +176,7 @@ static void tiled_run_microtile_vnni(const tiled_tile_src0 & src0, const tiled_t
 #endif // __AVX512VNNI__ && __AVX512VL__
 
 #if defined(__AVX2__)
+
 // AVX2 kernel.
 // We're effectively applying the existing vec_dot algorithms to an 8x16 block here.
 // Different paths based on subblock size as it affects when/where we multiply in scales and apply mins
@@ -191,17 +192,21 @@ template <int SUBBLK, bool HAS_MIN, int BIAS>
 static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                      int i0, int j0, float * buf, int buf_stride) {
     constexpr int NB = TILED_TILE_K / SUBBLK;
-    constexpr int GROUP = 8; // src1 columns per group: one acc32 per column
+    constexpr int GROUP = 8; // Process 8 src1 columns concurrently (1 YMM vector)
 
     static_assert(SUBBLK == 16 || SUBBLK == 32, "unsupported SUBBLK");
 
+    // Horizontal sum helper: converts 8x32-bit int lane inside a YMM register to scalar int32
+    auto hsum256_epi32 = [](const __m256i v) -> int32_t {
+        __m128i low = _mm256_castsi256_si128(v);
+        __m128i high = _mm256_extracti128_si256(v, 1);
+        __m128i sum128 = _mm_add_epi32(low, high);
+        sum128 = _mm_add_epi32(sum128, _mm_shuffle_epi32(sum128, _MM_SHUFFLE(2, 3, 0, 1)));
+        sum128 = _mm_add_epi32(sum128, _mm_shuffle_epi32(sum128, _MM_SHUFFLE(1, 0, 3, 2)));
+        return _mm_cvtsi128_si32(sum128);
+    };
+
     for (int i = 0; i < TILED_MICRO; i++) {
-        // 4-lane i32 hsum (used in the group epilogue)
-        auto hsum4 = [](const __m128i v) {
-            __m128i s = _mm_add_epi32(v, _mm_shuffle_epi32(v, _MM_SHUFFLE(2, 3, 0, 1)));
-            s = _mm_add_epi32(s, _mm_shuffle_epi32(s, _MM_SHUFFLE(1, 0, 3, 2)));
-            return _mm_cvtsi128_si32(s);
-        };
         const int ar = i0 + i;
         const float d0 = src0.d[ar];
         const float dmin0 = src0.dmin[ar];
@@ -210,132 +215,138 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
         const int32_t * mins_row = &src0.mins[ar * NB];
 
         for (int g = 0; g < TILED_MICRO; g += GROUP) {
-            const int8_t * q1g[GROUP];
-            __m256i corr = _mm256_setzero_si256(); // -BIAS * sum_s scales_s * bsums_s, 1 lane per col (vanishes via constexpr)
-            __m256i s2 = _mm256_setzero_si256();   // sum_s mins_s * bsums_s
+            // Pre-calculate weight pointers for this column group
+            const int8_t * q1_ptr[GROUP];
+            for (int t = 0; t < GROUP; t++) {
+                q1_ptr[t] = &src1.q[(j0 + g + t) * TILED_TILE_K];
+            }
+
+            __m256i corr = _mm256_setzero_si256();
+            __m256i s2   = _mm256_setzero_si256();
+
+            __m256i acc[GROUP];
+            for (int t = 0; t < GROUP; t++) {
+                acc[t] = _mm256_setzero_si256();
+            }
+
             if constexpr (SUBBLK == 32) {
-                __m256i acc[GROUP];
-                for (int t = 0; t < GROUP; t++) {
-                    q1g[t] = &src1.q[(j0 + g + t) * TILED_TILE_K];
-                    acc[t] = _mm256_setzero_si256();
-                }
-                // one 32B q0 load per (s); with biased codes (up to 241) the maddubs i16 pairs
-                // overflow, so for BIAS != 0 split q0 into 4-bit halves, each pair then <= 2*15*127
                 for (int s = 0; s < NB; s++) {
-                    const __m256i q0_32 = _mm256_loadu_si256((const __m256i *) &q0[s * SUBBLK]);
+                    // OPTIMIZATION 1: Use aligned loads (_mm256_load_si256)
+                    const __m256i q0_32 = _mm256_load_si256((const __m256i *) &q0[s * SUBBLK]);
                     const __m256i scales16 = _mm256_set1_epi16(scales_row[s]);
+                    
                     const __m256i bsums_v = _mm256_add_epi32(
-                        _mm256_loadu_si256((const __m256i *) &src1.bsums[s * 2 * TILED_TILE_ROWS + j0 + g]),
-                        _mm256_loadu_si256((const __m256i *) &src1.bsums[(s * 2 + 1) * TILED_TILE_ROWS + j0 + g]));
+                        _mm256_load_si256((const __m256i *) &src1.bsums[s * 2 * TILED_TILE_ROWS + j0 + g]),
+                        _mm256_load_si256((const __m256i *) &src1.bsums[(s * 2 + 1) * TILED_TILE_ROWS + j0 + g]));
+
                     if constexpr (BIAS != 0) {
                         const __m256i q0a = _mm256_and_si256(q0_32, _mm256_set1_epi8(0x0F));
-                        const __m256i q0b = _mm256_and_si256(_mm256_srli_epi16(q0_32, 4), _mm256_set1_epi8(0x0F)); // srli is per 16-bit lane, mask out the neighbor bleed
+                        const __m256i q0b = _mm256_and_si256(_mm256_srli_epi16(q0_32, 4), _mm256_set1_epi8(0x0F));
                         const __m256i scales16b = _mm256_set1_epi16(16 * scales_row[s]);
+
+                        #pragma GCC unroll 8
                         for (int t = 0; t < GROUP; t++) {
-                            const __m256i q1_32 = _mm256_loadu_si256((const __m256i *) &q1g[t][s * SUBBLK]);
+                            const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][s * SUBBLK]);
+                            const __m256i d_lo = _mm256_maddubs_epi16(q0a, q1_32);
+                            const __m256i d_hi = _mm256_maddubs_epi16(q0b, q1_32);
+                            
                             acc[t] = _mm256_add_epi32(acc[t], _mm256_add_epi32(
-                                _mm256_madd_epi16(scales16, _mm256_maddubs_epi16(q0a, q1_32)),
-                                _mm256_madd_epi16(scales16b, _mm256_maddubs_epi16(q0b, q1_32))));
+                                _mm256_madd_epi16(scales16, d_lo),
+                                _mm256_madd_epi16(scales16b, d_hi)));
                         }
-                    } else {
-                        for (int t = 0; t < GROUP; t++) {
-                            acc[t] = _mm256_add_epi32(acc[t],
-                                _mm256_madd_epi16(scales16, _mm256_maddubs_epi16(
-                                    q0_32, _mm256_loadu_si256((const __m256i *) &q1g[t][s * SUBBLK]))));
-                        }
-                    }
-                    if constexpr (BIAS != 0) {
                         corr = _mm256_sub_epi32(corr, _mm256_mullo_epi32(bsums_v, _mm256_set1_epi32(BIAS * scales_row[s])));
+                    } else {
+                        #pragma GCC unroll 8
+                        for (int t = 0; t < GROUP; t++) {
+                            const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][s * SUBBLK]);
+                            acc[t] = _mm256_add_epi32(acc[t],
+                                _mm256_madd_epi16(scales16, _mm256_maddubs_epi16(q0_32, q1_32)));
+                        }
                     }
+
                     if constexpr (HAS_MIN) {
                         s2 = _mm256_add_epi32(s2, _mm256_mullo_epi32(bsums_v, _mm256_set1_epi32(mins_row[s])));
                     }
                 }
-                int32_t corr_s[GROUP] = { 0 };
-                int32_t s2_s[GROUP] = { 0 };
-                if constexpr (BIAS != 0) {
-                    _mm256_storeu_si256((__m256i *) corr_s, corr);
-                }
-                if constexpr (HAS_MIN) {
-                    _mm256_storeu_si256((__m256i *) s2_s, s2);
-                }
-                for (int t = 0; t < GROUP; t++) {
-                    // 8 i32 lanes -> scalar (the per-pair dot, pre-correction)
-                    const __m128i lo = _mm256_castsi256_si128(acc[t]);
-                    const int32_t s1 = hsum4(_mm_add_epi32(lo, _mm256_extracti128_si256(acc[t], 1))) + corr_s[t];
-                    float res = d0 * (float) s1;
-                    if constexpr (HAS_MIN) {
-                        res -= dmin0 * (float) s2_s[t];
-                    }
-                    buf[ar * buf_stride + j0 + g + t] += src1.d[j0 + g + t] * res;
-                }
-            } else {
-                __m256i acc[GROUP];
-                for (int t = 0; t < GROUP; t++) {
-                    q1g[t] = &src1.q[(j0 + g + t) * TILED_TILE_K];
-                    acc[t] = _mm256_setzero_si256();
-                }
-                // SUBBLK = 16: two subblocks per 32B load.
-                // Build the interleaved scale from two 128-bit set1s (one set_m128i)
-                // instead of one 8-scalar-arg 256-bit set
+            } else { // SUBBLK == 16
                 for (int sp = 0; sp < NB; sp += 2) {
-                    const __m256i q0_32 = _mm256_loadu_si256((const __m256i *) &q0[sp * SUBBLK]);
+                    const __m256i q0_32 = _mm256_load_si256((const __m256i *) &q0[sp * SUBBLK]);
                     const __m256i scalesv = _mm256_set_m128i(_mm_set1_epi16(scales_row[sp + 1]), _mm_set1_epi16(scales_row[sp]));
-                    const __m256i bsums0_v = _mm256_loadu_si256((const __m256i *) &src1.bsums[sp * TILED_TILE_ROWS + j0 + g]);
-                    const __m256i bsums1_v = _mm256_loadu_si256((const __m256i *) &src1.bsums[(sp + 1) * TILED_TILE_ROWS + j0 + g]);
+                    const __m256i bsums0_v = _mm256_load_si256((const __m256i *) &src1.bsums[sp * TILED_TILE_ROWS + j0 + g]);
+                    const __m256i bsums1_v = _mm256_load_si256((const __m256i *) &src1.bsums[(sp + 1) * TILED_TILE_ROWS + j0 + g]);
+
                     if constexpr (BIAS != 0) {
-                        // 4-bit split as in the SUBBLK = 32 path above
                         const __m256i q0a = _mm256_and_si256(q0_32, _mm256_set1_epi8(0x0F));
-                        const __m256i q0b = _mm256_and_si256(_mm256_srli_epi16(q0_32, 4), _mm256_set1_epi8(0x0F)); // srli is per 16-bit lane, mask out the neighbor bleed
+                        const __m256i q0b = _mm256_and_si256(_mm256_srli_epi16(q0_32, 4), _mm256_set1_epi8(0x0F));
                         const __m256i scalesvb = _mm256_set_m128i(_mm_set1_epi16(16 * scales_row[sp + 1]), _mm_set1_epi16(16 * scales_row[sp]));
+
+                        #pragma GCC unroll 8
                         for (int t = 0; t < GROUP; t++) {
-                            const __m256i q1_32 = _mm256_loadu_si256((const __m256i *) &q1g[t][sp * SUBBLK]);
+                            const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][sp * SUBBLK]);
                             acc[t] = _mm256_add_epi32(acc[t], _mm256_add_epi32(
                                 _mm256_madd_epi16(scalesv, _mm256_maddubs_epi16(q0a, q1_32)),
                                 _mm256_madd_epi16(scalesvb, _mm256_maddubs_epi16(q0b, q1_32))));
                         }
-                    } else {
-                        for (int t = 0; t < GROUP; t++) {
-                            acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(
-                                scalesv, _mm256_maddubs_epi16(
-                                    q0_32, _mm256_loadu_si256((const __m256i *) &q1g[t][sp * SUBBLK]))));
-                        }
-                    }
-                    // per-subblock scales differ, so corr/s2 keep the bsums0/bsums1 split
-                    if constexpr (BIAS != 0) {
                         corr = _mm256_sub_epi32(corr, _mm256_add_epi32(
                             _mm256_mullo_epi32(bsums0_v, _mm256_set1_epi32(BIAS * scales_row[sp])),
                             _mm256_mullo_epi32(bsums1_v, _mm256_set1_epi32(BIAS * scales_row[sp + 1]))));
+                    } else {
+                        #pragma GCC unroll 8
+                        for (int t = 0; t < GROUP; t++) {
+                            const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][sp * SUBBLK]);
+                            acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(
+                                scalesv, _mm256_maddubs_epi16(q0_32, q1_32)));
+                        }
                     }
+
                     if constexpr (HAS_MIN) {
                         s2 = _mm256_add_epi32(s2, _mm256_add_epi32(
                             _mm256_mullo_epi32(bsums0_v, _mm256_set1_epi32(mins_row[sp])),
                             _mm256_mullo_epi32(bsums1_v, _mm256_set1_epi32(mins_row[sp + 1]))));
                     }
                 }
-                int32_t corr_s[GROUP] = { 0 };
-                int32_t s2_s[GROUP] = { 0 };
-                if constexpr (BIAS != 0) {
-                    _mm256_storeu_si256((__m256i *) corr_s, corr);
-                }
-                if constexpr (HAS_MIN) {
-                    _mm256_storeu_si256((__m256i *) s2_s, s2);
-                }
-                for (int t = 0; t < GROUP; t++) {
-                    // 8 i32 lanes -> scalar (the per-pair dot, pre-correction)
-                    const __m128i lo = _mm256_castsi256_si128(acc[t]);
-                    const int32_t s1 = hsum4(_mm_add_epi32(lo, _mm256_extracti128_si256(acc[t], 1))) + corr_s[t];
-                    float res = d0 * (float) s1;
-                    if constexpr (HAS_MIN) {
-                        res -= dmin0 * (float) s2_s[t];
-                    }
-                    buf[ar * buf_stride + j0 + g + t] += src1.d[j0 + g + t] * res;
-                }
             }
+
+            // OPTIMIZATION 2: Vectorized Epilogue with FMA3 gating
+            // Reduce accumulators into a 256-bit vector across 8 columns
+            alignas(32) int32_t s1_vals[GROUP];
+            #pragma GCC unroll 8
+            for (int t = 0; t < GROUP; t++) {
+                s1_vals[t] = hsum256_epi32(acc[t]);
+            }
+            __m256i s1_vec = _mm256_load_si256((const __m256i *) s1_vals);
+
+            if constexpr (BIAS != 0) {
+                s1_vec = _mm256_add_epi32(s1_vec, corr);
+            }
+
+            const __m256 src1_d_vec = _mm256_load_ps(&src1.d[j0 + g]);
+            __m256 res_vec = _mm256_mul_ps(_mm256_set1_ps(d0), _mm256_cvtepi32_ps(s1_vec));
+
+            if constexpr (HAS_MIN) {
+#if defined(__FMA__)
+                // FMA3 implementation: res_vec = res_vec - (dmin0 * s2)
+                res_vec = _mm256_fnmadd_ps(_mm256_set1_ps(dmin0), _mm256_cvtepi32_ps(s2), res_vec);
+#else
+                // Non-FMA fallback
+                res_vec = _mm256_sub_ps(res_vec, _mm256_mul_ps(_mm256_set1_ps(dmin0), _mm256_cvtepi32_ps(s2)));
+#endif
+            }
+
+            float * buf_ptr = &buf[ar * buf_stride + j0 + g];
+            __m256 current_buf = _mm256_loadu_ps(buf_ptr);
+
+#if defined(__FMA__)
+            // FMA3 accumulation: current_buf + (res_vec * src1_d_vec)
+            __m256 updated_buf = _mm256_fmadd_ps(res_vec, src1_d_vec, current_buf);
+#else
+            __m256 updated_buf = _mm256_add_ps(current_buf, _mm256_mul_ps(res_vec, src1_d_vec));
+#endif
+
+            _mm256_storeu_ps(buf_ptr, updated_buf);
         }
     }
 }
-
 #endif // __AVX2__
 
 #if defined(__AVX__) && !defined(__AVX2__)
