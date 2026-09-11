@@ -15,6 +15,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -30,6 +31,8 @@ struct test_buft_context {
     size_t view_free_count = 0;
     size_t view_attempts = 0;
     size_t view_fail_after = SIZE_MAX;
+    size_t view_throw_at = SIZE_MAX;
+    bool throw_runtime = false;
     bool fail_alloc = false;
     bool support_views = true;
     bool stateful = false;
@@ -115,6 +118,10 @@ static ggml_backend_buffer_t test_buffer_view(
         ggml_backend_buffer_t buffer, size_t offset, size_t size) {
     auto * parent = static_cast<test_buffer_context *>(buffer->context);
     parent->owner->view_attempts++;
+    if (parent->owner->view_attempts == parent->owner->view_throw_at) {
+        if (parent->owner->throw_runtime) throw std::runtime_error("view factory failure");
+        throw std::bad_alloc();
+    }
     if (parent->owner->view_attempts > parent->owner->view_fail_after) {
         return nullptr;
     }
@@ -1463,6 +1470,73 @@ static void test_scheduler_shared_lease_attachment() {
                 GGML_BACKEND_MEMORY_ARENA_STATE_QUIESCENT);
 }
 
+// Release every temporary view and retained persistent reference when a later view factory throws.
+static void test_arena_commit_exception_safety() {
+    for (bool runtime_error : {false, true}) {
+        test_buft_context context;
+        context.throw_runtime = runtime_error;
+        auto buft = make_test_buft(&context);
+        arena_ptr arena(ggml_backend_memory_arena_new(&buft, 128), ggml_backend_memory_arena_free);
+        GGML_ASSERT(arena);
+        GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_NONE));
+        GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+            arena.get(), 1, 0, 16, 16, GGML_BACKEND_MEMORY_REGION_PERSISTENT, nullptr));
+        GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+            arena.get(), 2, 64, 16, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+        GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+        lease_ptr persistent(ggml_backend_memory_arena_acquire(arena.get(), 1), ggml_backend_memory_lease_free);
+        auto * first = ggml_backend_memory_arena_get_buffer(arena.get(), 1);
+        auto * second = ggml_backend_memory_arena_get_buffer(arena.get(), 2);
+        ggml_backend_buffer_clear(first, 0x5a);
+        ggml_backend_buffer_clear(second, 0xa5);
+
+        auto stage = [&]() {
+            GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), GGML_BACKEND_MEMORY_PLAN_PRESERVE_PERSISTENT));
+            GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+                arena.get(), 2, 32, 16, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+            GGML_ASSERT(ggml_backend_memory_arena_reserve_at(
+                arena.get(), 3, 64, 16, 16, GGML_BACKEND_MEMORY_REGION_NONE, nullptr));
+        };
+        context.view_throw_at = context.view_attempts + 2;
+        GGML_ASSERT(ggml_backend_memory_arena_quiesce(arena.get()));
+        stage();
+        bool committed = false;
+        bool allocation_thrown = false;
+        bool runtime_thrown = false;
+        try {
+            committed = ggml_backend_memory_arena_commit(arena.get());
+        } catch (const std::bad_alloc &) {
+            allocation_thrown = true;
+        } catch (const std::runtime_error & error) {
+            runtime_thrown = std::strcmp(error.what(), "view factory failure") == 0;
+        }
+        GGML_ASSERT(!committed);
+        GGML_ASSERT(context.view_free_count == 1);
+        GGML_ASSERT(!allocation_thrown);
+        GGML_ASSERT(runtime_thrown == runtime_error);
+        GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 1);
+        GGML_ASSERT(ggml_backend_memory_arena_region_count(arena.get()) == 2);
+        GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 1) == first);
+        GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 2) == second);
+        GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 3) == nullptr);
+        GGML_ASSERT(ggml_backend_memory_arena_lease_count(arena.get()) == 1);
+        GGML_ASSERT(*static_cast<uint8_t *>(ggml_backend_buffer_get_base(first)) == 0x5a);
+        GGML_ASSERT(*static_cast<uint8_t *>(ggml_backend_buffer_get_base(second)) == 0xa5);
+        // Rollback must have ended planning, so admission can resume and a new plan can succeed.
+        GGML_ASSERT(ggml_backend_memory_arena_resume(arena.get()));
+        context.view_throw_at = SIZE_MAX;
+        stage();
+        GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
+        GGML_ASSERT(ggml_backend_memory_arena_generation(arena.get()) == 2);
+        GGML_ASSERT(ggml_backend_memory_lease_generation(persistent.get()) == 1);
+        GGML_ASSERT(ggml_backend_memory_arena_get_buffer(arena.get(), 1) == first);
+        persistent.reset();
+        arena.reset();
+        GGML_ASSERT(context.view_free_count == 5);
+        GGML_ASSERT(context.physical_free_count == 1);
+    }
+}
+
 static void run(const char * name, void (*test)()) {
     std::printf("%s ", name);
     std::fflush(stdout);
@@ -1490,6 +1564,7 @@ int main() {
     run("test_arena_owned_parent", test_arena_owned_parent);
     run("test_arena_construction_failure", test_arena_construction_failure);
     run("test_arena_commit_atomicity", test_arena_commit_atomicity);
+    run("test_arena_commit_exception_safety", test_arena_commit_exception_safety);
     run("test_arena_persistent_view_identity", test_arena_persistent_view_identity);
     run("test_arena_real_backends", test_arena_real_backends);
     run("test_arena_reference_lifetime", test_arena_reference_lifetime);

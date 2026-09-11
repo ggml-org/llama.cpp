@@ -573,7 +573,17 @@ bool ggml_backend_memory_arena_commit(ggml_backend_memory_arena_t arena) {
             }
         }
         if (view == nullptr) {
-            view = ggml_backend_buffer_view(arena->parent, region.offset, region.size);
+            try {
+                view = ggml_backend_buffer_view(arena->parent, region.offset, region.size);
+            } catch (const std::bad_alloc &) {
+                free_arena_views(next_views);
+                ggml_backend_memory_planner_rollback(arena->planner);
+                return false;
+            } catch (...) {
+                free_arena_views(next_views);
+                ggml_backend_memory_planner_rollback(arena->planner);
+                throw;
+            }
         }
         if (view == nullptr) {
             free_arena_views(next_views);
