@@ -637,6 +637,12 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 
 bool gpu_has_xmx(sycl::device &dev);
 
+#if GGML_SYCL_DNNL
+// oneDNN builds JIT kernels only for some GPU architectures. On the rest it falls back to
+// reference kernels, which are much slower than the SYCL kernels here.
+bool ggml_sycl_dnnl_has_optimized_gemm(queue_ptr q);
+#endif
+
 int ggml_sycl_get_env(const char *env_name, int default_val);
 
 template <int N, class T> std::string debug_get_array_str(const std::string & prefix, const T array[N]) {
