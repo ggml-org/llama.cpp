@@ -1824,11 +1824,10 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
 }
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-static bool ggml_cuda_should_fuse_mul_mat_q_gate_up_swiglu(
-        const ggml_tensor * up, const ggml_tensor * gate, const ggml_tensor * glu) {
-    const ggml_tensor * x_up   = up->src[0];
-    const ggml_tensor * x_gate = gate->src[0];
-    const ggml_tensor * y      = up->src[1];
+static bool ggml_cuda_mul_mat_q_gate_up_swiglu_matches(
+        const ggml_tensor * up, const ggml_tensor * gate, const ggml_tensor * glu, const int device) {
+    const ggml_tensor * x_up = up->src[0];
+    const ggml_tensor * y    = up->src[1];
 
     if (up->op != GGML_OP_MUL_MAT || x_up->type != GGML_TYPE_Q4_K || y->type != GGML_TYPE_F32 || y->ne[1] <= 1 ||
             ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU || glu->type != GGML_TYPE_F32 ||
@@ -1840,16 +1839,6 @@ static bool ggml_cuda_should_fuse_mul_mat_q_gate_up_swiglu(
         return false;
     }
 
-    if (ggml_cuda_mul_mat_bad_padding_clear(x_up) || ggml_cuda_mul_mat_bad_padding_clear(x_gate)) {
-        return false;
-    }
-
-    // The fused tile loader uses 16 byte vector loads.
-    if (!ggml_cuda_is_aligned(x_up, 16) || !ggml_cuda_is_aligned(x_gate, 16)) {
-        return false;
-    }
-
-    const int device    = ggml_cuda_get_device();
     const int cc        = ggml_cuda_info().devices[device].cc;
     const int warp_size = ggml_cuda_info().devices[device].warp_size;
     // Only replace matrix multiplications that ggml_cuda_mul_mat would have sent to MMQ.
@@ -1861,6 +1850,21 @@ static bool ggml_cuda_should_fuse_mul_mat_q_gate_up_swiglu(
     }
 
     return ggml_cuda_should_use_mmq(GGML_TYPE_Q4_K, cc, y->ne[1], 0);
+}
+
+static bool ggml_cuda_should_fuse_mul_mat_q_gate_up_swiglu(
+        const ggml_tensor * up, const ggml_tensor * gate, const ggml_tensor * glu) {
+    if (!ggml_cuda_mul_mat_q_gate_up_swiglu_matches(up, gate, glu, ggml_cuda_get_device())) {
+        return false;
+    }
+
+    const ggml_tensor * x_up   = up->src[0];
+    const ggml_tensor * x_gate = gate->src[0];
+    if (ggml_cuda_mul_mat_bad_padding_clear(x_up) || ggml_cuda_mul_mat_bad_padding_clear(x_gate)) {
+        return false;
+    }
+
+    return ggml_cuda_is_aligned(x_up, 16) && ggml_cuda_is_aligned(x_gate, 16);
 }
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
@@ -4552,6 +4556,7 @@ static void ggml_backend_cuda_event_wait(ggml_backend_t backend, ggml_backend_ev
 
 static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph, ggml_backend_graph_optimize_params * params) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+    ggml_cuda_set_device(cuda_ctx->device);
 
     static const bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
 
@@ -4572,6 +4577,19 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
         // add alloc deps for performance positive fusions. This may increase the overall compute buffer size.
         // TODO: consolidate fusion paths in graph_optimize and graph_compute
         for (int i = 0; i < cgraph->n_nodes; ++i) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+            if (i + 2 < cgraph->n_nodes && cgraph->nodes[i + 2]->op == GGML_OP_GLU) {
+                ggml_tensor * glu  = cgraph->nodes[i + 2];
+                ggml_tensor * gate = cgraph->nodes[i];
+                ggml_tensor * up   = cgraph->nodes[i + 1];
+                if (glu->src[0] == gate && glu->src[1] == up &&
+                        ggml_cuda_mul_mat_q_gate_up_swiglu_matches(up, gate, glu, cuda_ctx->device)) {
+                    params->add_alloc_dep(params->user_data, up->src[1], glu);
+                    i += 2;
+                    continue;
+                }
+            }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
             ggml_cuda_moe_weighted_reduction_match match;
             if (ggml_cuda_match_moe_weighted_reduction(cgraph, i, match)) {
                 params->add_alloc_dep(params->user_data, const_cast<ggml_tensor *>(match.experts), match.dst);
@@ -4665,8 +4683,6 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     if (!use_cuda_graph) {
         return;
     }
-
-    ggml_cuda_set_device(cuda_ctx->device);
 
     // number of out-degrees for a particular node
     std::unordered_map<const ggml_tensor *, int> fan_out;
