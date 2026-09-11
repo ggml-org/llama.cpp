@@ -713,6 +713,7 @@ static void test_tensor_binding_state() {
 
 struct test_binding_context {
     std::vector<uint8_t> bytes = std::vector<uint8_t>(64);
+    std::vector<uint8_t> * borrowed_bytes = nullptr;
     std::map<const ggml_tensor *, size_t> offsets;
     int synchronizations = 0;
     int native_inits = 0;
@@ -755,8 +756,9 @@ static uint8_t * test_addressless_data(ggml_backend_buffer_t buffer, const ggml_
     auto * ctx = static_cast<test_binding_context *>(buffer->context);
     GGML_ASSERT(tensor->data == nullptr);
     size_t start = ctx->offsets.at(tensor) + offset;
-    GGML_ASSERT(start <= ctx->bytes.size() && size <= ctx->bytes.size() - start);
-    return ctx->bytes.data() + start;
+    auto & bytes = ctx->borrowed_bytes ? *ctx->borrowed_bytes : ctx->bytes;
+    GGML_ASSERT(start <= bytes.size() && size <= bytes.size() - start);
+    return bytes.data() + start;
 }
 
 static void test_addressless_set(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
@@ -879,6 +881,30 @@ static void test_addressless_views_and_transfers() {
     GGML_ASSERT(copied_view->data != nullptr);
     GGML_ASSERT(std::memcmp(copied_view->data, values.data() + 5, sizeof(replacement)) == 0);
     ggml_backend_graph_copy_free(copy);
+
+    test_binding_context view_ctx;
+    view_ctx.borrowed_bytes = &ctx.bytes;
+    ggml_backend_buffer_ptr view_owner(ggml_backend_buffer_init(&device.buffer_type, iface, &view_ctx, 0));
+    view_owner->binding = &binding;
+    auto * owned_view = ggml_view_1d(test_ctx.ctx, tensor, 2, 2*sizeof(float));
+    owned_view->buffer = view_owner.get();
+    view_ctx.offsets[owned_view] = 2*sizeof(float);
+    GGML_ASSERT(owned_view->buffer != owned_view->view_src->buffer);
+    GGML_ASSERT(ggml_backend_tensor_is_bound(owned_view));
+    std::array<float, 2> owned_values = {201, 202};
+    ggml_backend_tensor_set(owned_view, owned_values.data(), 0, sizeof(owned_values));
+    ggml_backend_tensor_get(tensor, read.data(), 0, sizeof(read));
+    GGML_ASSERT(read[2] == 201 && read[3] == 202 && read[1] == 2 && read[4] == 5);
+    auto * native_view = ggml_view_1d(native_ctx.ctx, native_tensor, 2, 2*sizeof(float));
+    GGML_ASSERT(ggml_backend_view_init(native_view) == GGML_STATUS_SUCCESS);
+    ggml_backend_tensor_copy(owned_view, native_view);
+    GGML_ASSERT(std::memcmp(native_view->data, owned_values.data(), sizeof(owned_values)) == 0);
+    owned_values = {301, 302};
+    std::memcpy(native_view->data, owned_values.data(), sizeof(owned_values));
+    ggml_backend_tensor_copy(native_view, owned_view);
+    ggml_backend_tensor_get(tensor, read.data(), 0, sizeof(read));
+    GGML_ASSERT(read[2] == 301 && read[3] == 302);
+    GGML_ASSERT(ggml_backend_buffer_get_size(view_owner.get()) == 0);
 
     ggml_tensor * empty = ggml_new_tensor_1d(test_ctx.ctx, GGML_TYPE_F32, 0);
     ggml_backend_buffer_ptr empty_buffer(ggml_backend_buft_alloc_buffer(&device.buffer_type, 0));

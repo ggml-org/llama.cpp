@@ -139,6 +139,13 @@ bool ggml_backend_tensor_is_bound(const struct ggml_tensor * tensor) {
     return tensor->data != NULL || (buffer && buffer->size == 0 && ggml_nelements(tensor) == 0);
 }
 
+static ggml_backend_buffer_t ggml_backend_tensor_buffer(const ggml_tensor * tensor) {
+    if (tensor->buffer && tensor->buffer->binding) {
+        return tensor->buffer;
+    }
+    return tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+}
+
 void * ggml_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(buffer);
     // get_base is optional if the buffer is zero-sized
@@ -224,8 +231,8 @@ void ggml_backend_buffer_reset(ggml_backend_buffer_t buffer) {
 }
 
 bool ggml_backend_buffer_copy_tensor(const struct ggml_tensor * src, struct ggml_tensor * dst) {
-    ggml_backend_buffer_t src_buf = src->view_src ? src->view_src->buffer : src->buffer;
-    ggml_backend_buffer_t dst_buf = dst->view_src ? dst->view_src->buffer : dst->buffer;
+    ggml_backend_buffer_t src_buf = ggml_backend_tensor_buffer(src);
+    ggml_backend_buffer_t dst_buf = ggml_backend_tensor_buffer(dst);
     if ((src_buf && src_buf->binding) || (dst_buf && dst_buf->binding)) {
         return false;
     }
@@ -348,7 +355,7 @@ void ggml_backend_tensor_get_2d_async(ggml_backend_t backend, const struct ggml_
 
 void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     GGML_ASSERT(tensor);
-    ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    ggml_backend_buffer_t buf = ggml_backend_tensor_buffer(tensor);
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
 
     if (size == 0) {
@@ -363,7 +370,7 @@ void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, siz
 
 void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     GGML_ASSERT(tensor);
-    ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    ggml_backend_buffer_t buf = ggml_backend_tensor_buffer(tensor);
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
 
     if (size == 0) {
@@ -379,7 +386,7 @@ void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void * data, siz
 void ggml_backend_tensor_set_2d(struct ggml_tensor * tensor, const void * data, size_t offset, size_t size,
             size_t n_copies, size_t stride_tensor, size_t stride_data) {
     GGML_ASSERT(tensor);
-    ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    ggml_backend_buffer_t buf = ggml_backend_tensor_buffer(tensor);
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
 
     if (n_copies <= 1 || buf->iface.set_tensor_2d == NULL) {
@@ -401,7 +408,7 @@ void ggml_backend_tensor_set_2d(struct ggml_tensor * tensor, const void * data, 
 void ggml_backend_tensor_get_2d(const struct ggml_tensor * tensor, void * data, size_t offset, size_t size,
             size_t n_copies, size_t stride_tensor, size_t stride_data) {
     GGML_ASSERT(tensor);
-    ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    ggml_backend_buffer_t buf = ggml_backend_tensor_buffer(tensor);
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
 
     if (n_copies <= 1 || buf->iface.get_tensor_2d == NULL) {
@@ -422,7 +429,7 @@ void ggml_backend_tensor_get_2d(const struct ggml_tensor * tensor, void * data, 
 
 void ggml_backend_tensor_memset(struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
     GGML_ASSERT(tensor);
-    ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    ggml_backend_buffer_t buf = ggml_backend_tensor_buffer(tensor);
 
     if (size == 0) {
         return;
@@ -905,7 +912,7 @@ static int ggml_backend_sched_backend_id(ggml_backend_sched_t sched, ggml_backen
 }
 
 static int ggml_backend_sched_backend_from_buffer(ggml_backend_sched_t sched, const struct ggml_tensor * tensor, const struct ggml_tensor * op) {
-    ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    ggml_backend_buffer_t buffer = ggml_backend_tensor_buffer(tensor);
     if (buffer == NULL) {
         return -1;
     }
@@ -956,7 +963,7 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
 
     if (tensor->buffer || (tensor->view_src && tensor->view_src->buffer)) {
         // since the tensor is pre-allocated, it cannot be moved to another backend
-        ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+        ggml_backend_buffer_t buffer = ggml_backend_tensor_buffer(tensor);
         GGML_ABORT("pre-allocated tensor (%s) in a buffer (%s) that cannot run the operation (%s)", tensor->name, ggml_backend_buffer_name(buffer), ggml_op_name(tensor->op));
     }
 
