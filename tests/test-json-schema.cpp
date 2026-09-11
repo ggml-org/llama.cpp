@@ -419,6 +419,7 @@ static void test_may_be_string(testing & t) {
     t.test("ref", [&](testing & t) {
         check(t, R"({"$ref": "#/$defs/n", "$defs": {"n": {"anyOf": [{"$ref": "#/$defs/n"}, {"type": "string"}]}}})", true);
         check(t, R"({"$ref": "#/$defs/n", "$defs": {"n": {"$ref": "#/$defs/n"}}})", false);
+        check(t, R"({"anyOf": [{"$ref": "#/$defs/a"}, {"$ref": "#/$defs/b"}], "$defs": {"a": {"allOf": [{"$ref": "#/$defs/b"}, {"type": "integer"}]}, "b": {"type": "string"}}})", true);
     });
 }
 

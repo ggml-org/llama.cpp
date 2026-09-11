@@ -446,7 +446,12 @@ static bool may_be_string_impl(const common_schema & s, std::unordered_set<const
         case common_schema::KIND_REF: {
             // a cycle is taken as not a string, to be safe
             const auto * target = static_cast<const common_schema_ref &>(s).target;
-            return target && visited.insert(target).second && may_be_string_impl(*target, visited);
+            if (!target || !visited.insert(target).second) {
+                return false;
+            }
+            bool result = may_be_string_impl(*target, visited);
+            visited.erase(target);
+            return result;
         }
         case common_schema::KIND_ANY_OF:
             for (const auto & child : static_cast<const common_schema_any_of &>(s).children) {
