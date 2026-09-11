@@ -204,9 +204,9 @@ void llama_model_deepseek41::load_arch_tensors(llama_model_loader & ml) {
     // Work out which layer publishes the stream each layer reads. Only a source carries a
     // compressor, only an index key owner carries indexer_attn_k, and only an index source
     // carries indexer_attn_q_b, so the file itself says which layer plays which role.
-    kv_source_of.assign(n_layer, -1);
-    index_key_source_of.assign(n_layer, -1);
-    topk_source_of.assign(n_layer, -1);
+    hparams.dsv41_kv_source.fill(-1);
+    hparams.dsv41_index_key_source.fill(-1);
+    hparams.dsv41_topk_source.fill(-1);
 
     int32_t last_kv_source    = -1;
     int32_t last_key_owner    = -1;
@@ -236,14 +236,14 @@ void llama_model_deepseek41::load_arch_tensors(llama_model_loader & ml) {
                                             last_kv_source, hparams.dsv4_compress_ratios[last_kv_source]));
         }
 
-        kv_source_of[i]        = last_kv_source;
-        index_key_source_of[i] = last_key_owner;
-        topk_source_of[i]      = last_index_source;
+        hparams.dsv41_kv_source[i]        = last_kv_source;
+        hparams.dsv41_index_key_source[i] = last_key_owner;
+        hparams.dsv41_topk_source[i]      = last_index_source;
     }
 
     // a compressor with no gate only makes sense where there is nothing to pool
     for (int i = 0; i < n_layer; ++i) {
-        if (is_kv_source(i) && !layers[i].attn_comp_wgate && hparams.dsv4_compress_ratios[i] != 1) {
+        if (hparams.dsv41_is_kv_source(i) && !layers[i].attn_comp_wgate && hparams.dsv4_compress_ratios[i] != 1) {
             throw std::runtime_error(format("layer %d compresses %u tokens per row but has no pooling gate",
                                             i, hparams.dsv4_compress_ratios[i]));
         }
@@ -253,7 +253,7 @@ void llama_model_deepseek41::load_arch_tensors(llama_model_loader & ml) {
     // V4's, which recognises neither of this model's ratios and would silently drop the long
     // range half of attention while still producing fluent text. Refuse rather than mislead.
     for (int i = 0; i < n_layer; ++i) {
-        if (kv_source_of[i] >= 0) {
+        if (hparams.dsv41_kv_source[i] >= 0) {
             throw std::runtime_error("DeepSeek-V4.1 sparse attention is not implemented yet");
         }
     }

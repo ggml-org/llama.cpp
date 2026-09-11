@@ -1354,17 +1354,8 @@ struct llama_model_deepseek41 : public llama_model_deepseek4 {
     std::vector<uint64_t> engram_offsets;     // same layout as engram_primes
     std::vector<int32_t>  engram_token_map;   // [n_vocab], folds case and accents together
 
-    // Layer roles for the shared streams, derived from which tensors a layer actually carries.
-    // A source layer compresses its own KV and publishes it; the layers after it read that stream
-    // until the next source does the same. Index keys and the indexer top-k are shared the same
-    // way, on their own sets of source layers. -1 means the layer uses no compressed stream.
-    std::vector<int32_t> kv_source_of;        // [n_layer] whose compressed KV this layer reads
-    std::vector<int32_t> index_key_source_of; // [n_layer] whose index keys it scores against
-    std::vector<int32_t> topk_source_of;      // [n_layer] whose indexer picked its positions
-
-    bool is_kv_source(int il)    const { return kv_source_of[il]        == il; }
-    bool owns_index_k(int il)    const { return index_key_source_of[il] == il; }
-    bool is_index_source(int il) const { return topk_source_of[il]      == il; }
+    // The shared stream layer roles live in hparams as dsv41_kv_source and friends, because the
+    // KV cache needs them to alias a reader's storage onto its source's. See load_arch_tensors.
 
     // position of layer il in the engram constants, or -1 if that layer has no engram
     int engram_index(int il) const;
