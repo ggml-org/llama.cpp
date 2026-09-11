@@ -1,6 +1,5 @@
 import threading
 import pytest
-from filelock import FileLock
 from utils import *
 
 server: ServerProcess
@@ -505,18 +504,6 @@ MODEL_DOWNLOAD_ID = "ggml-org/test-model-router-download:F16"
 MODEL_DOWNLOAD_TIMEOUT = 30
 
 
-@pytest.fixture
-def download_model_lock(tmp_path_factory):
-    """Serialize the tests that download MODEL_DOWNLOAD_ID.
-
-    Parallel workers share one cache, so they would fetch the same blob into
-    the same in-progress file and race to rename it.
-    """
-    root_tmp_dir = tmp_path_factory.getbasetemp().parent
-    with FileLock(str(root_tmp_dir / "model_download.lock")):
-        yield
-
-
 def _listen_sse(
     server: ServerProcess, collected: list, stop: threading.Event, ready: threading.Event | None = None
 ):
@@ -552,7 +539,7 @@ def _wait_for_sse_event(collected: list, event_type: str, model: str, timeout: i
     return False
 
 
-def test_router_download_model(download_model_lock):
+def test_router_download_model():
     """Case 1: download a model, verify SSE events and GET /models."""
     global server
     server.start()
@@ -595,7 +582,7 @@ def test_router_download_model(download_model_lock):
     assert MODEL_DOWNLOAD_ID in ids, f"{MODEL_DOWNLOAD_ID} not found in /models after download"
 
 
-def test_router_delete_model(download_model_lock):
+def test_router_delete_model():
     """Case 2: delete the downloaded model, verify it disappears from GET /models."""
     global server
     server.start()
