@@ -112,6 +112,9 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 #define VDR_Q2_0_Q8_1_MMVQ 1  // Process one 32-element chunk at a time for parallelism
 #define VDR_Q2_0_Q8_1_MMQ  2  // Q2_0 group 64: 128 bits (4 ints) per block, 2 32-element chunks
 
+#define VDR_TQ2_0_Q8_1_MMVQ 1  // TQ2_0 group 256: same 2-bit encoding as Q2_0, 8 chunks of 32
+#define VDR_TQ2_0_Q8_1_MMQ  2
+
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
 
@@ -767,6 +770,53 @@ static __device__ __forceinline__ float vec_dot_q2_0_q8_1(
     }
 
     // Apply Q2_0's single scale and this chunk's Q8_1 scale
+    const float d8 = __low2float(bq8_1_chunk->ds);
+    return d2 * d8 * sumi;
+}
+
+// TQ2_0 stores 4 bit planes of 32 bytes: element n is at byte 32*(n/128) + n%32, bits 2*((n%128)/32).
+// Map 4 crumbs, one per byte, to 4 signed bytes (-1, 0, +1, +2) via the 0x020100FF table.
+static __device__ __forceinline__ int tq2_0_crumbs_to_int8(const int q, const int shift) {
+    const int x = (q >> shift) & 0x03030303;
+
+#if defined(GGML_USE_HIP)
+    // plain arithmetic, so this path needs no AMD intrinsic that cannot be tested here
+    const int c0 = (x >>  0) & 0x3;
+    const int c1 = (x >>  8) & 0x3;
+    const int c2 = (x >> 16) & 0x3;
+    const int c3 = (x >> 24) & 0x3;
+
+    return ((c0 - 1) & 0xFF) | (((c1 - 1) & 0xFF) << 8) | (((c2 - 1) & 0xFF) << 16) | (((c3 - 1) & 0xFF) << 24);
+#else
+    const int lo = __byte_perm(0x020100FF, 0x020100FF, x);
+    const int hi = __byte_perm(0x020100FF, 0x020100FF, x >> 16);
+    return __byte_perm(lo, hi, 0x6420);
+#endif // defined(GGML_USE_HIP)
+}
+
+static __device__ __forceinline__ float vec_dot_tq2_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_tq2_0 * bq2_0 = (const block_tq2_0 *) vbq + kbx;
+
+    const float d2 = bq2_0->d;
+
+    // iqs selects one of the 8 chunks of 32 elements. A chunk is one bit plane: its 32 bytes each
+    // hold a single crumb, all at shift 2*(iqs%4). get_int_b2 is used because block_tq2_0 is 66 bytes.
+    const uint8_t * qs = bq2_0->qs + 32*(iqs/4);
+    const int shift = 2*(iqs%4);
+
+    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int q = get_int_b2(qs, j);
+        const int u = get_int_b4(bq8_1_chunk->qs, j);
+
+        sumi = ggml_cuda_dp4a(u, tq2_0_crumbs_to_int8(q, shift), sumi);
+    }
+
     const float d8 = __low2float(bq8_1_chunk->ds);
     return d2 * d8 * sumi;
 }

@@ -43,6 +43,23 @@ static __device__ __forceinline__ void dequantize_q2_0(const void * vx, const in
     v.y = (c1 - 1) * d;
 }
 
+static __device__ __forceinline__ void dequantize_tq2_0(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_tq2_0 * x = (const block_tq2_0 *) vx;
+
+    const float d = x[ib].d;
+
+    // TQ2_0 keeps the Q2_0 2-bit codes but stores 4 bit planes of 32 bytes:
+    // element n is at byte 32*(n/128) + n%32, bits 2*((n%128)/32).
+    const int n0 = iqs;
+    const int n1 = iqs + 1;
+
+    const int c0 = (x[ib].qs[32*(n0/128) + n0%32] >> (2*((n0%128)/32))) & 0x3;
+    const int c1 = (x[ib].qs[32*(n1/128) + n1%32] >> (2*((n1%128)/32))) & 0x3;
+
+    v.x = (c0 - 1) * d;
+    v.y = (c1 - 1) * d;
+}
+
 static __device__ __forceinline__ void dequantize_q4_0(const void * vx, const int64_t ib, const int iqs, float2 & v){
     const block_q4_0 * x = (const block_q4_0 *) vx;
 
