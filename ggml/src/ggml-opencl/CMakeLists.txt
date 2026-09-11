@@ -190,6 +190,7 @@ set(GGML_OPENCL_KERNELS
     gemv_noshuffle_q6_k_f32_tiled
     gemm_noshuffle_q6_k_f32
     gemm_noshuffle_q6_k_f32_tiled
+    gemv_noshuffle_q6_k_f32_32b_trans
     gemv_noshuffle_q5_k_f32
     gemm_noshuffle_q5_k_f32
     mul
