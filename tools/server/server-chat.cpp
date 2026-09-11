@@ -202,14 +202,37 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                     });
                 } else {
                     json chatcmpl_outputs = item.at("output");
+                    json tool_content     = json::array();
+
                     for (json & chatcmpl_output : chatcmpl_outputs) {
-                        if (!chatcmpl_output.contains("type") || chatcmpl_output.at("type") != "input_text") {
-                            throw std::invalid_argument("Output of tool call should be 'Input text'");
+                        const std::string output_type = json_value(chatcmpl_output, "type", std::string());
+
+                        if (output_type == "input_text") {
+                            chatcmpl_output["type"] = "text";
+                            tool_content.push_back(chatcmpl_output);
+                        } else if (output_type == "input_image") {
+                            // Mirrors the "Input image" branch of input messages above.
+                            // Some clients (e.g. Codex) return screenshots as the output
+                            // of a tool call. The image stays in the tool message: media
+                            // is extracted later by oaicompat_chat_params_parse(), which
+                            // rewrites image_url into a media marker for every role, so
+                            // the chat template never sees the media itself.
+                            if (!chatcmpl_output.contains("image_url")) {
+                                throw std::invalid_argument("'image_url' is required");
+                            }
+                            tool_content.push_back(json {
+                                {"image_url", json {
+                                    {"url", chatcmpl_output.at("image_url")}
+                                }},
+                                {"type", "image_url"},
+                            });
+                        } else {
+                            throw std::invalid_argument("Output of tool call should be 'Input text' or 'Input image'");
                         }
-                        chatcmpl_output["type"] = "text";
                     }
+
                     chatcmpl_messages.push_back(json {
-                        {"content",      chatcmpl_outputs},
+                        {"content",      tool_content},
                         {"role",         "tool"},
                         {"tool_call_id", item.at("call_id")},
                     });
