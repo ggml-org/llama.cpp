@@ -11,6 +11,21 @@ on:
         description: 'Run slow tests'
         required: true
         type: boolean
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/server-self-hosted.yml',
+      '**/CMakeLists.txt',
+      '**/Makefile',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.swift',
+      '**/*.m',
+      'tools/server/**.*'
+    ]
   push:
     branches:
       - master
@@ -42,6 +57,7 @@ concurrency:
 
 jobs:
   server-metal:
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: [self-hosted, llama-server, macOS, ARM64]
 
     steps:
@@ -158,7 +174,8 @@ jobs:
 
       - name: Tests (GPUx1)
         id: server_integration_tests
-        if: ${{ !github.event.pull_request }}
+        env:
+          SERVER_TEST_SUBSET: ${{ github.event_name == 'pull_request' && '1' || '0' }}
         run: |
           cd tools/server/tests
           source venv/bin/activate
@@ -192,6 +209,7 @@ jobs:
           PYTEST_WORKERS=1 ./tests.sh
 
   server-kleidiai:
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ah-ubuntu_22_04-c8g_8x
 
     steps:

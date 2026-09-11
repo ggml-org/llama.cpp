@@ -12,6 +12,8 @@ if [ $# -lt 1 ]
 then
     if [[ "${SLOW_TESTS:-0}" == 1 ]]; then
         pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal
+    elif [[ "${SERVER_TEST_SUBSET:-0}" == 1 ]]; then
+        pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal -m "pr and not slow"
     else
         pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal -m "not slow"
     fi
