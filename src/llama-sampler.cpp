@@ -3312,6 +3312,186 @@ struct llama_sampler * llama_sampler_init_top_n_sigma(float n) {
     );
 }
 
+// synthid
+
+struct llama_sampler_synthid {
+    const std::vector<int64_t> keys;
+    const std::vector<uint8_t> sampling_table;
+    const int32_t ngram_len;
+    const int32_t context_history_size;
+
+    // last ngram_len - 1 accepted tokens
+    std::vector<llama_token> context;
+
+    ring_buffer<uint64_t> context_history;
+
+    std::vector<uint64_t> hashes;
+    std::vector<uint8_t>  g_values;
+
+    llama_sampler_synthid(
+            std::vector<int64_t> keys,
+            std::vector<uint8_t> sampling_table,
+            int32_t ngram_len,
+            int32_t context_history_size)
+        : keys                (std::move(keys))
+        , sampling_table      (std::move(sampling_table))
+        , ngram_len           (ngram_len)
+        , context_history_size(context_history_size)
+        , context             (ngram_len - 1, 0)
+        , context_history     (context_history_size) {
+    }
+
+    // linear congruential generator, same constants as the HF implementation
+    static uint64_t hash(uint64_t h, uint64_t x) {
+        return (h + x) * 6364136223846793005ULL + 1;
+    }
+
+    uint8_t g_value(uint64_t key) const {
+        const int64_t n = (int64_t) sampling_table.size();
+
+        // python-style modulo, the result is always in [0, n)
+        int64_t idx = (int64_t) key % n;
+        if (idx < 0) {
+            idx += n;
+        }
+
+        return sampling_table[idx];
+    }
+};
+
+static const char * llama_sampler_synthid_name(const struct llama_sampler * /*smpl*/) {
+    return "synthid";
+}
+
+static void llama_sampler_synthid_accept(struct llama_sampler * smpl, llama_token token) {
+    auto * ctx = (llama_sampler_synthid *) smpl->ctx;
+
+    if (ctx->context.empty()) {
+        return;
+    }
+
+    std::copy(ctx->context.begin() + 1, ctx->context.end(), ctx->context.begin());
+    ctx->context.back() = token;
+}
+
+static void llama_sampler_synthid_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (llama_sampler_synthid *) smpl->ctx;
+
+    uint64_t h_context = 1;
+    for (const llama_token t : ctx->context) {
+        h_context = llama_sampler_synthid::hash(h_context, (uint64_t) (int64_t) t);
+    }
+
+    bool is_repeated = false;
+    for (size_t i = 0; i < ctx->context_history.size(); ++i) {
+        if (ctx->context_history.rat(i) == h_context) {
+            is_repeated = true;
+            break;
+        }
+    }
+
+    ctx->context_history.push_back(h_context);
+
+    if (is_repeated) {
+        return;
+    }
+
+    llama_sampler_softmax_impl(cur_p, false);
+
+    ctx->hashes.resize(cur_p->size);
+    ctx->g_values.resize(cur_p->size);
+
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        ctx->hashes[i] = llama_sampler_synthid::hash(h_context, (uint64_t) (int64_t) cur_p->data[i].id);
+    }
+
+    for (const int64_t key : ctx->keys) {
+        float g_mass = 0.0f;
+
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            ctx->g_values[i] = ctx->g_value(llama_sampler_synthid::hash(ctx->hashes[i], (uint64_t) key));
+            g_mass += ctx->g_values[i] * cur_p->data[i].p;
+        }
+
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            cur_p->data[i].p *= 1.0f + ctx->g_values[i] - g_mass;
+        }
+    }
+
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        cur_p->data[i].logit = cur_p->data[i].p > 0.0f ? logf(cur_p->data[i].p) : -INFINITY;
+    }
+
+    cur_p->sorted = false;
+}
+
+static void llama_sampler_synthid_reset(struct llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_synthid *) smpl->ctx;
+    std::fill(ctx->context.begin(), ctx->context.end(), 0);
+    ctx->context_history.clear();
+}
+
+static struct llama_sampler * llama_sampler_synthid_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (const llama_sampler_synthid *) smpl->ctx;
+    auto * result = llama_sampler_init_synthid(
+            ctx->keys.data(),
+            ctx->keys.size(),
+            ctx->sampling_table.data(),
+            ctx->sampling_table.size(),
+            ctx->ngram_len,
+            ctx->context_history_size);
+
+    // copy the state
+    {
+        auto * result_ctx = (llama_sampler_synthid *) result->ctx;
+
+        result_ctx->context         = ctx->context;
+        result_ctx->context_history = ctx->context_history;
+    }
+
+    return result;
+}
+
+static void llama_sampler_synthid_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_synthid *) smpl->ctx;
+}
+
+static struct llama_sampler_i llama_sampler_synthid_i = {
+    /* .name              = */ llama_sampler_synthid_name,
+    /* .accept            = */ llama_sampler_synthid_accept,
+    /* .apply             = */ llama_sampler_synthid_apply,
+    /* .reset             = */ llama_sampler_synthid_reset,
+    /* .clone             = */ llama_sampler_synthid_clone,
+    /* .free              = */ llama_sampler_synthid_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+    /* .backend_reset     = */ nullptr,
+    /* .copy_state        = */ nullptr,
+};
+
+struct llama_sampler * llama_sampler_init_synthid(
+        const int64_t * keys,
+               size_t   n_keys,
+        const uint8_t * sampling_table,
+               size_t   sampling_table_size,
+              int32_t   ngram_len,
+              int32_t   context_history_size) {
+    if (n_keys == 0 || sampling_table_size == 0 || ngram_len < 1 || context_history_size < 1) {
+        return llama_sampler_init_empty("?synthid");
+    }
+
+    return llama_sampler_init(
+        /* .iface = */ &llama_sampler_synthid_i,
+        /* .ctx   = */ new llama_sampler_synthid(
+            std::vector<int64_t>(keys, keys + n_keys),
+            std::vector<uint8_t>(sampling_table, sampling_table + sampling_table_size),
+            ngram_len,
+            context_history_size)
+    );
+}
+
 // DRY
 
 struct llama_sampler_dry {

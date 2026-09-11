@@ -12,6 +12,7 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
+#include <random>
 #include <unordered_map>
 #include <vector>
 
@@ -184,6 +185,24 @@ std::string common_params_sampling::print() const {
     return std::string(result);
 }
 
+// same defaults as SynthIDTextWatermarkingConfig from HF transformers
+// the sampling table is generated the same way as torch.randint(0, 2, ...) with a seeded CPU generator
+static struct llama_sampler * common_sampler_init_synthid(const std::vector<int64_t> & keys) {
+    const int32_t ngram_len            = 5;
+    const int32_t context_history_size = 1024;
+    const size_t  sampling_table_size  = 65536;
+    const uint32_t sampling_table_seed = 0;
+
+    std::vector<uint8_t> sampling_table(sampling_table_size);
+
+    std::mt19937 rng(sampling_table_seed);
+    for (auto & v : sampling_table) {
+        v = rng() % 2;
+    }
+
+    return llama_sampler_init_synthid(keys.data(), keys.size(), sampling_table.data(), sampling_table.size(), ngram_len, context_history_size);
+}
+
 struct common_sampler * common_sampler_init(
         const struct llama_model * model,
         struct common_params_sampling & params) {
@@ -337,6 +356,10 @@ struct common_sampler * common_sampler_init(
         }
     }
 
+    if (params.mirostat != 0 && !params.synthid_keys.empty()) {
+        LOG_WRN("%s: SynthID watermarking is not supported with mirostat, disabling\n", __func__);
+    }
+
     if (params.mirostat == 0) {
 
         bool use_adaptive_p = false; // see below
@@ -391,6 +414,10 @@ struct common_sampler * common_sampler_init(
                     GGML_ASSERT(false && "unknown sampler type");
             }
         }
+        if (!params.synthid_keys.empty()) {
+            samplers.push_back(common_sampler_init_synthid(params.synthid_keys));
+        }
+
         if (use_adaptive_p) {
             // only if user explicitly included adaptive-p sampler
             samplers.push_back(llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.seed));

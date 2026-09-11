@@ -258,6 +258,8 @@ struct common_params_sampling {
 
     std::vector<std::string> dry_sequence_breakers = {"\n", ":", "\"", "*"};     // default sequence breakers for DRY
 
+    std::vector<int64_t> synthid_keys; // SynthID watermarking keys (empty = disabled)
+
     std::vector<enum common_sampler_type> samplers = {
         COMMON_SAMPLER_TYPE_PENALTIES,
         COMMON_SAMPLER_TYPE_DRY,
