@@ -103,7 +103,8 @@ ggml_backend_buffer_t ggml_backend_buffer_init(
         /* .buft      = */ buft,
         /* .context   = */ context,
         /* .size      = */ size,
-        /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY
+        /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY,
+        /* .binding   = */ NULL,
     };
 
     return buffer;
@@ -127,6 +128,15 @@ void ggml_backend_buffer_free(ggml_backend_buffer_t buffer) {
 size_t ggml_backend_buffer_get_size(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(buffer);
     return buffer->size;
+}
+
+bool ggml_backend_tensor_is_bound(const struct ggml_tensor * tensor) {
+    GGML_ASSERT(tensor);
+    ggml_backend_buffer_t buffer = tensor->buffer;
+    if (buffer && buffer->binding) {
+        return buffer->binding->is_bound(buffer, tensor);
+    }
+    return tensor->data != NULL || (buffer && buffer->size == 0 && ggml_nelements(tensor) == 0);
 }
 
 void * ggml_backend_buffer_get_base(ggml_backend_buffer_t buffer) {

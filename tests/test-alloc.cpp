@@ -22,6 +22,7 @@ struct dummy_backend_context {
     ggml_backend_device                device;
     ggml_backend                       backend;
     std::vector<ggml_backend_buffer_t> buffers;
+    const ggml_tensor * bound_tensor = nullptr;
 
     size_t allocated_total() const {
         size_t n = 0;
@@ -650,6 +651,45 @@ static void test_graph_optimize_alloc_dep() {
     GGML_ASSERT(!graph_reuses_allocation(true));
 }
 
+static bool test_buffer_is_bound(ggml_backend_buffer_t buffer, const ggml_tensor * tensor) {
+    auto * ctx = static_cast<dummy_backend_context *>(buffer->context);
+    return ctx->bound_tensor == tensor;
+}
+
+static void test_tensor_binding_state() {
+    auto test_ctx = make_context();
+    auto backend = dummy_backend_init(64);
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 64));
+    ggml_tensor * tensor = ggml_new_tensor_1d(test_ctx.ctx, GGML_TYPE_F32, 1);
+
+    GGML_ASSERT(!ggml_backend_tensor_is_bound(tensor));
+    float external = 1.0f;
+    tensor->data = &external;
+    GGML_ASSERT(ggml_backend_tensor_is_bound(tensor));
+    tensor->data = nullptr;
+    tensor->buffer = buffer.get();
+    GGML_ASSERT(!ggml_backend_tensor_is_bound(tensor));
+
+    static const ggml_backend_buffer_binding_i binding = {test_buffer_is_bound, nullptr};
+    buffer->binding = &binding;
+    GGML_ASSERT(!ggml_backend_tensor_is_bound(tensor));
+    backend.context->bound_tensor = tensor;
+    GGML_ASSERT(ggml_backend_tensor_is_bound(tensor));
+    GGML_ASSERT(tensor->data == nullptr);
+    backend.context->bound_tensor = nullptr;
+    tensor->data = &external;
+    GGML_ASSERT(!ggml_backend_tensor_is_bound(tensor));
+
+    ggml_tensor * empty = ggml_new_tensor_1d(test_ctx.ctx, GGML_TYPE_F32, 0);
+    ggml_backend_buffer_ptr empty_buffer(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 0));
+    GGML_ASSERT(!ggml_backend_tensor_is_bound(empty));
+    empty->buffer = empty_buffer.get();
+    GGML_ASSERT(ggml_backend_tensor_is_bound(empty));
+    tensor->data = nullptr;
+    tensor->buffer = empty_buffer.get();
+    GGML_ASSERT(!ggml_backend_tensor_is_bound(tensor));
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -658,6 +698,7 @@ static void run(const char * name, void (*f)()) {
 }
 
 int main() {
+    run("test_tensor_binding_state", test_tensor_binding_state);
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
     run("test_tensor_larger_than_max_size", test_tensor_larger_than_max_size);

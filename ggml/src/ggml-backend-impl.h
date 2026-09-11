@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-    #define GGML_BACKEND_API_VERSION 2
+    #define GGML_BACKEND_API_VERSION 3
 
     //
     // Backend buffer type
@@ -66,12 +66,18 @@ extern "C" {
         void         (*reset)        (ggml_backend_buffer_t buffer);
     };
 
+    struct ggml_backend_buffer_binding_i {
+        bool (*is_bound)(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor);
+        enum ggml_status (*init_view)(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor);
+    };
+
     struct ggml_backend_buffer {
         struct ggml_backend_buffer_i  iface;
         ggml_backend_buffer_type_t    buft;
         void * context;
         size_t size;
         enum ggml_backend_buffer_usage usage;
+        const struct ggml_backend_buffer_binding_i * binding;
     };
 
     GGML_API ggml_backend_buffer_t ggml_backend_buffer_init(
