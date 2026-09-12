@@ -55,6 +55,10 @@ struct llama_context {
     //   - etc.
     void sched_reserve();
 
+    // release the backend scheduler and hand its compute buffers back to the
+    // backend allocator; the next encode()/decode() re-reserves them
+    void sched_release();
+
     void synchronize();
 
     const llama_model   & get_model()   const;
