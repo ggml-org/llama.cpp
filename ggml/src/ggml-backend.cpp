@@ -145,6 +145,11 @@ bool ggml_backend_tensor_is_bound(const struct ggml_tensor * tensor) {
         !ggml_backend_buft_get_alloc_interface(buffer->buft));
 }
 
+uint64_t ggml_backend_tensor_binding_generation(const struct ggml_tensor * tensor) {
+    ggml_backend_buffer_t buffer = tensor->buffer;
+    return buffer && buffer->binding && buffer->binding->generation ? buffer->binding->generation(buffer, tensor) : 0;
+}
+
 static ggml_backend_buffer_t ggml_backend_tensor_buffer(const ggml_tensor * tensor) {
     if (tensor->buffer && tensor->buffer->binding) {
         return tensor->buffer;
@@ -1640,6 +1645,9 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     }
 
     // allocate graph
+    if (!backend_ids_changed && ggml_gallocr_reuse_bindings(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids)) {
+        return true;
+    }
     const bool replace_bindings = ggml_gallocr_has_active_bindings(sched->galloc);
     if (backend_ids_changed || replace_bindings || !ggml_gallocr_alloc_graph(sched->galloc, &sched->graph)) {
 #ifndef NDEBUG

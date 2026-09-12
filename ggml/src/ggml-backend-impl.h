@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-    #define GGML_BACKEND_API_VERSION 6
+    #define GGML_BACKEND_API_VERSION 7
 
     //
     // Backend buffer type
@@ -73,6 +73,8 @@ extern "C" {
     struct ggml_backend_buffer_binding_i {
         bool (*is_bound)(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor);
         enum ggml_status (*init_view)(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor);
+        // Optional; zero means no generation is available for reuse validation.
+        uint64_t (*generation)(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor);
     };
 
     struct ggml_backend_buffer {
@@ -92,6 +94,7 @@ extern "C" {
 
     // do not use directly, use ggml_backend_tensor_copy instead
     GGML_API bool ggml_backend_buffer_copy_tensor(const struct ggml_tensor * src, struct ggml_tensor * dst);
+    GGML_API uint64_t ggml_backend_tensor_binding_generation(const struct ggml_tensor * tensor);
 
     // multi-buffer
     // buffer that contains a collection of buffers
@@ -158,6 +161,8 @@ extern "C" {
 
     struct ggml_gallocr;
     GGML_API bool ggml_gallocr_has_active_bindings(struct ggml_gallocr * galloc);
+    GGML_API bool ggml_gallocr_reuse_bindings(struct ggml_gallocr * galloc, struct ggml_cgraph * graph,
+            const int * node_buffer_ids, const int * leaf_buffer_ids);
     struct ggml_gallocr_domain_plan_info {
         size_t size;
         size_t n_chunks;

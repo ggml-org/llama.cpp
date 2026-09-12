@@ -724,7 +724,7 @@ static void test_tensor_binding_state() {
     tensor->buffer = buffer.get();
     GGML_ASSERT(!ggml_backend_tensor_is_bound(tensor));
 
-    static const ggml_backend_buffer_binding_i binding = {test_buffer_is_bound, nullptr};
+    static const ggml_backend_buffer_binding_i binding = {test_buffer_is_bound, nullptr, nullptr};
     buffer->binding = &binding;
     GGML_ASSERT(!ggml_backend_tensor_is_bound(tensor));
     backend.context->bound_tensor = tensor;
@@ -822,7 +822,7 @@ static void test_addressless_views_and_transfers() {
     iface.get_tensor = test_addressless_get;
     iface.memset_tensor = test_addressless_memset;
     ggml_backend_buffer_ptr buffer(ggml_backend_buffer_init(&device.buffer_type, iface, &ctx, ctx.bytes.size()));
-    static const ggml_backend_buffer_binding_i binding = {test_addressless_is_bound, test_addressless_init_view};
+    static const ggml_backend_buffer_binding_i binding = {test_addressless_is_bound, test_addressless_init_view, nullptr};
     buffer->binding = &binding;
     GGML_ASSERT(ggml_backend_buffer_get_base(buffer.get()) == nullptr);
 
@@ -1719,7 +1719,15 @@ static void test_meta_graph_materialization(bool relative) {
         GGML_ASSERT(required == 288);
         GGML_ASSERT(first.context->alloc_calls == first_calls && second.context->alloc_calls == second_calls);
         for (int repeat = 0; repeat < 2; repeat++) {
+            float factor = repeat == 0 ? 0.5f : 0.25f;
+            std::memcpy(a->op_params, &factor, sizeof(factor));
             GGML_ASSERT(ggml_gallocr_alloc_graph(allocator.get(), ctx.graph));
+            auto * stable_owner = a->buffer;
+            uint64_t stable_generation = ggml_backend_tensor_binding_generation(a);
+            size_t init_calls = first.context->init_calls + second.context->init_calls;
+            GGML_ASSERT(stable_generation && ggml_gallocr_alloc_graph(allocator.get(), ctx.graph));
+            GGML_ASSERT(a->buffer == stable_owner && ggml_backend_tensor_binding_generation(a) == stable_generation);
+            GGML_ASSERT(first.context->init_calls + second.context->init_calls == init_calls);
             for (auto * tensor : {a, view, b}) {
                 GGML_ASSERT(ggml_backend_tensor_is_bound(tensor) && tensor->data == nullptr);
                 GGML_ASSERT(tensor->buffer == a->buffer);
@@ -1764,7 +1772,7 @@ static void test_meta_graph_materialization(bool relative) {
                 ggml_backend_tensor_get(b, check.data(), 0, ggml_nbytes(b));
                 for (int row = 0; row < 6; row++) {
                     for (int col = 0; col < 4; col++) {
-                        GGML_ASSERT(check[row*4 + col] == 0.5f*values[row*8 + col + 4]);
+                        GGML_ASSERT(check[row*4 + col] == factor*values[row*8 + col + 4]);
                     }
                 }
             }
@@ -1772,6 +1780,24 @@ static void test_meta_graph_materialization(bool relative) {
             ggml_backend_buffer_t owner = a->buffer;
             ggml_gallocr_reserve_n_size(allocator.get(), ctx.graph, nullptr, nullptr, &size);
             GGML_ASSERT(size == 288 && a->buffer == owner && ggml_backend_tensor_is_bound(a));
+            {
+                auto measurement = make_context();
+                auto * first = ggml_scale(measurement.ctx, input, 0.75f);
+                auto * second = ggml_scale(measurement.ctx, first, 0.5f);
+                ggml_set_output(first);
+                ggml_set_output(second);
+                ggml_build_forward_expand(measurement.graph, second);
+                ggml_gallocr_reserve_n_size(allocator.get(), measurement.graph, nullptr, nullptr, &size);
+                GGML_ASSERT(size == 384 && !first->buffer && !second->buffer);
+            }
+            GGML_ASSERT(ggml_gallocr_get_buffer_size(allocator.get(), 0) == 288);
+            GGML_ASSERT(ggml_gallocr_reuse_bindings(allocator.get(), ctx.graph, nullptr, nullptr));
+            GGML_ASSERT(ggml_backend_tensor_binding_generation(a) == stable_generation);
+            GGML_ASSERT(ggml_backend_graph_compute_async(execution.get(), ctx.graph) == GGML_STATUS_SUCCESS);
+            GGML_ASSERT(ggml_gallocr_alloc_graph(allocator.get(), ctx.graph));
+            GGML_ASSERT(first.context->pending_compute && second.context->pending_compute);
+            GGML_ASSERT(first.context->init_calls + second.context->init_calls == init_calls);
+            ggml_backend_synchronize(execution.get());
         }
         if (pass == 0) {
             first_calls++;
@@ -1817,6 +1843,8 @@ static void test_meta_graph_materialization(bool relative) {
         ggml_gallocr_reserve_n_size(scopes.get(), ctx.graph, nodes, leafs, sizes);
         GGML_ASSERT(sizes[0] == 192 && sizes[1] == 96 && sizes[2] == 0);
         for (int repeat = 0; repeat < 2; repeat++) {
+            float factor = repeat == 0 ? 0.5f : 0.25f;
+            std::memcpy(a->op_params, &factor, sizeof(factor));
             GGML_ASSERT(ggml_gallocr_alloc_graph(scopes.get(), ctx.graph));
             GGML_ASSERT(a->buffer->buft == buft && b->buffer->buft == other_buft);
             GGML_ASSERT(view->buffer == b->buffer && view->view_src == a);
@@ -1830,7 +1858,7 @@ static void test_meta_graph_materialization(bool relative) {
             ggml_backend_tensor_get(b, result.data(), 0, ggml_nbytes(b));
             for (int row = 0; row < 6; row++) {
                 for (int col = 0; col < 4; col++) {
-                    GGML_ASSERT(result[row*4 + col] == 0.5f*original[row*8 + col + 4]);
+                    GGML_ASSERT(result[row*4 + col] == factor*original[row*8 + col + 4]);
                 }
             }
         }
@@ -1898,6 +1926,98 @@ static void test_meta_graph_materialization(bool relative) {
             }
         }
         ggml_backend_sched_synchronize(sched.get());
+    }
+    {
+        auto source_ctx = make_context();
+        auto * external = ggml_view_tensor(source_ctx.ctx, input);
+        GGML_ASSERT(ggml_backend_view_init(external) == GGML_STATUS_SUCCESS);
+        auto ctx = make_context();
+        auto * result = ggml_reshape_2d(ctx.ctx, external, 8, 6);
+        ggml_build_forward_expand(ctx.graph, result);
+        ctx.graph->uid = ggml_graph_next_uid();
+        ggml_gallocr_ptr reuse(ggml_gallocr_new(buft));
+        GGML_ASSERT(ggml_gallocr_alloc_graph(reuse.get(), ctx.graph));
+        GGML_ASSERT(ggml_gallocr_reuse_bindings(reuse.get(), ctx.graph, nullptr, nullptr));
+        uint64_t old_generation = ggml_backend_tensor_binding_generation(result);
+        uint64_t old_external = ggml_backend_tensor_binding_generation(external);
+        external->buffer = nullptr;
+        GGML_ASSERT(ggml_backend_view_init(external) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(ggml_backend_tensor_binding_generation(external) != old_external);
+        GGML_ASSERT(!ggml_gallocr_reuse_bindings(reuse.get(), ctx.graph, nullptr, nullptr));
+        GGML_ASSERT(ggml_gallocr_alloc_graph(reuse.get(), ctx.graph));
+        GGML_ASSERT(ggml_backend_tensor_binding_generation(result) != old_generation);
+        GGML_ASSERT(ggml_backend_graph_compute(execution.get(), ctx.graph) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(ggml_gallocr_reuse_bindings(reuse.get(), ctx.graph, nullptr, nullptr));
+        ggml_tensor original = *result;
+        result->flags ^= GGML_TENSOR_FLAG_OUTPUT;
+        GGML_ASSERT(!ggml_gallocr_reuse_bindings(reuse.get(), ctx.graph, nullptr, nullptr));
+        result->flags = original.flags;
+        result->ne[0] = 4;
+        result->ne[1] = 12;
+        result->nb[1] = 4*sizeof(float);
+        GGML_ASSERT(ggml_nbytes(result) == ggml_nbytes(&original));
+        GGML_ASSERT(!ggml_gallocr_reuse_bindings(reuse.get(), ctx.graph, nullptr, nullptr));
+        GGML_ASSERT(ggml_gallocr_alloc_graph(reuse.get(), ctx.graph));
+        GGML_ASSERT(ggml_gallocr_reuse_bindings(reuse.get(), ctx.graph, nullptr, nullptr));
+        GGML_ASSERT(result->data == nullptr && ggml_backend_tensor_is_bound(result));
+        std::vector<float> expected(48), actual(48);
+        ggml_backend_tensor_get(input, expected.data(), 0, ggml_nbytes(input));
+        ggml_backend_tensor_get(result, actual.data(), 0, ggml_nbytes(result));
+        GGML_ASSERT(expected == actual);
+    }
+    {
+        auto ctx = make_context();
+        auto * a = ggml_scale(ctx.ctx, input, 0.5f);
+        auto * b = ggml_scale(ctx.ctx, input, 0.25f);
+        auto * result = ggml_scale(ctx.ctx, a, 2.0f);
+        ggml_set_output(a);
+        ggml_set_output(b);
+        for (auto * tensor : {a, b, result}) {
+            ggml_build_forward_expand(ctx.graph, tensor);
+        }
+        ggml_gallocr_ptr topology(ggml_gallocr_new(buft));
+        GGML_ASSERT(ggml_gallocr_alloc_graph(topology.get(), ctx.graph));
+        int nodes = ctx.graph->n_nodes;
+        int leafs = ctx.graph->n_leafs;
+        result->src[0] = b;
+        ggml_graph_clear(ctx.graph);
+        for (auto * tensor : {a, b, result}) {
+            ggml_build_forward_expand(ctx.graph, tensor);
+        }
+        GGML_ASSERT(ctx.graph->n_nodes == nodes && ctx.graph->n_leafs == leafs);
+        GGML_ASSERT(!ggml_gallocr_reuse_bindings(topology.get(), ctx.graph, nullptr, nullptr));
+        GGML_ASSERT(ggml_gallocr_alloc_graph(topology.get(), ctx.graph));
+        GGML_ASSERT(ggml_backend_graph_compute(execution.get(), ctx.graph) == GGML_STATUS_SUCCESS);
+        std::vector<float> expected(48), actual(48);
+        ggml_backend_tensor_get(input, expected.data(), 0, ggml_nbytes(input));
+        ggml_backend_tensor_get(result, actual.data(), 0, ggml_nbytes(result));
+        for (size_t i = 0; i < actual.size(); i++) {
+            GGML_ASSERT(actual[i] == 0.5f*expected[i]);
+        }
+    }
+    {
+        auto source_ctx = make_context();
+        auto * source = ggml_new_tensor_2d(source_ctx.ctx, GGML_TYPE_Q4_0, 32, 6);
+        ggml_backend_buffer_ptr source_buffer(ggml_backend_alloc_ctx_tensors_from_buft(source_ctx.ctx, buft));
+        GGML_ASSERT(source_buffer);
+        auto ctx = make_context();
+        auto * result = ggml_cont(ctx.ctx, source);
+        ggml_build_forward_expand(ctx.graph, result);
+        ggml_gallocr_ptr padding(ggml_gallocr_new(buft));
+        GGML_ASSERT(ggml_gallocr_alloc_graph(padding.get(), ctx.graph));
+        GGML_ASSERT(ggml_gallocr_get_buffer_size(padding.get(), 0) == 112);
+        second.buffer_type.iface.get_alloc_size = [](ggml_backend_buffer_type_t, const ggml_tensor * tensor) {
+            return ggml_nbytes(tensor) + (tensor->op == GGML_OP_CONT ? 64 : 0);
+        };
+        GGML_ASSERT(!ggml_gallocr_reuse_bindings(padding.get(), ctx.graph, nullptr, nullptr));
+        GGML_ASSERT(ggml_gallocr_alloc_graph(padding.get(), ctx.graph));
+        GGML_ASSERT(ggml_gallocr_get_buffer_size(padding.get(), 0) == 176);
+        std::vector<uint8_t> values(ggml_nbytes(result), 37), actual(values.size());
+        ggml_backend_tensor_set(result, values.data(), 0, values.size());
+        ggml_backend_tensor_get(result, actual.data(), 0, actual.size());
+        GGML_ASSERT(values == actual);
+        GGML_ASSERT(ggml_gallocr_reuse_bindings(padding.get(), ctx.graph, nullptr, nullptr));
+        second.buffer_type.iface.get_alloc_size = nullptr;
     }
     weights_buffer.reset();
     GGML_ASSERT(first.context->buffers.empty() && second.context->buffers.empty());

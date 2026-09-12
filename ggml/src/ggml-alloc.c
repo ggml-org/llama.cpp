@@ -501,6 +501,18 @@ struct ggml_gallocr_composite_plan {
 
 struct ggml_gallocr_tensor_requirement {
     struct tensor_alloc native;
+    enum ggml_type type;
+    enum ggml_op op;
+    int flags;
+    int64_t ne[GGML_MAX_DIMS];
+    size_t nb[GGML_MAX_DIMS];
+    int32_t op_params[GGML_MAX_OP_PARAMS/sizeof(int32_t)];
+    ggml_backend_buffer_t external_buffer;
+    ggml_backend_buffer_type_t external_buft;
+    const void * external_data;
+    const void * external_extra;
+    uint64_t external_generation;
+    enum ggml_backend_buffer_usage external_usage;
     int buffer_id;
     int src[GGML_MAX_SRC];
     int view_src;
@@ -512,6 +524,9 @@ struct ggml_gallocr_tensor_requirement {
 
 struct ggml_gallocr_shard_requirement {
     struct buffer_address addr;
+    enum ggml_type type;
+    enum ggml_op op;
+    int32_t op_params[GGML_MAX_OP_PARAMS/sizeof(int32_t)];
     int64_t ne[GGML_MAX_DIMS];
     size_t nb[GGML_MAX_DIMS];
     size_t size;
@@ -546,13 +561,43 @@ struct ggml_gallocr_composite_storage {
     bool released;
 };
 
+struct ggml_gallocr_tensor_binding {
+    struct ggml_gallocr_tensor_requirement requirement;
+    const struct ggml_tensor * tensor;
+    ggml_backend_buffer_t buffer;
+    const void * data;
+    const void * extra;
+    uint64_t generation;
+};
+
+struct ggml_gallocr_binding_plan {
+    struct ggml_gallocr_tensor_binding * tensors;
+    struct ggml_gallocr_shard_requirement * shards;
+    int * node_ids;
+    int * leaf_ids;
+    size_t n_tensors;
+    size_t n_shards;
+    int n_nodes;
+    int n_leafs;
+    bool valid;
+};
+
 struct ggml_gallocr {
     ggml_backend_buffer_type_t * bufts; // [n_buffers]
     struct vbuffer ** buffers; // [n_buffers]
     struct ggml_gallocr_composite_storage ** composite_buffers;
     int n_buffers;
     struct ggml_gallocr_plan plan;
+    struct ggml_gallocr_binding_plan bindings;
 };
+
+static void ggml_gallocr_binding_plan_free(struct ggml_gallocr_binding_plan * bindings) {
+    free(bindings->tensors);
+    free(bindings->shards);
+    free(bindings->node_ids);
+    free(bindings->leaf_ids);
+    memset(bindings, 0, sizeof(*bindings));
+}
 
 ggml_gallocr_t ggml_gallocr_new_n(ggml_backend_buffer_type_t * bufts, int n_bufs) {
     ggml_gallocr_t galloc = (ggml_gallocr_t)calloc(1, sizeof(struct ggml_gallocr));
@@ -701,6 +746,7 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
     free(galloc->plan.hash_ids);
     free(galloc->plan.node_allocs);
     free(galloc->plan.leaf_allocs);
+    ggml_gallocr_binding_plan_free(&galloc->bindings);
     free(galloc);
 }
 
@@ -1153,6 +1199,20 @@ static bool ggml_gallocr_prepare_graph_tensor(struct ggml_gallocr_graph * graph,
     struct ggml_tensor * tensor = graph->tensors[id];
     struct ggml_gallocr_tensor_requirement * requirement = &graph->galloc->plan.tensors[id];
     requirement->external = ggml_gallocr_is_external(graph->galloc, tensor);
+    requirement->type = tensor->type;
+    requirement->op = tensor->op;
+    requirement->flags = tensor->flags;
+    memcpy(requirement->ne, tensor->ne, sizeof(requirement->ne));
+    memcpy(requirement->nb, tensor->nb, sizeof(requirement->nb));
+    memcpy(requirement->op_params, tensor->op_params, sizeof(requirement->op_params));
+    if (requirement->external) {
+        requirement->external_buffer = tensor->buffer;
+        requirement->external_buft = tensor->buffer ? tensor->buffer->buft : NULL;
+        requirement->external_usage = tensor->buffer ? tensor->buffer->usage : GGML_BACKEND_BUFFER_USAGE_ANY;
+        requirement->external_data = tensor->data;
+        requirement->external_extra = tensor->extra;
+        requirement->external_generation = ggml_backend_tensor_binding_generation(tensor);
+    }
     requirement->view_offs = tensor->view_offs;
     requirement->view_src = -1;
     for (int i = 0; i < GGML_MAX_SRC; i++) {
@@ -1230,6 +1290,15 @@ static bool ggml_gallocr_prepare_graph(ggml_gallocr_t galloc, struct ggml_cgraph
         if (!composite || composite->preparation) {
             continue;
         }
+        if (composite->iface->n_domains(galloc->bufts[i]) != composite->n_domains) {
+            goto cleanup;
+        }
+        for (size_t device = 0; device < composite->n_domains; device++) {
+            if (composite->iface->get_domain(galloc->bufts[i], device) != composite->domains[device].buft ||
+                    ggml_backend_buft_get_alignment(composite->domains[device].buft) != composite->domains[device].alloc->alignment) {
+                goto cleanup;
+            }
+        }
         struct ggml_backend_alloc_source_i sources = {ggml_gallocr_source_buft, ggml_gallocr_source_tensor, composite, NULL, ggml_gallocr_source_replaced};
         composite->graph = &graph;
         composite->preparation = composite->iface->new_preparation(galloc->bufts[i], GGML_BACKEND_BUFFER_USAGE_COMPUTE, capacity, &sources);
@@ -1264,6 +1333,9 @@ static bool ggml_gallocr_prepare_graph(ggml_gallocr_t galloc, struct ggml_cgraph
             }
             struct ggml_gallocr_shard_requirement * shard = &plan->shards[requirement->first_shard + device];
             shard->addr = GGML_BUFFER_ADDRESS_INVALID;
+            shard->type = simple->type;
+            shard->op = simple->op;
+            memcpy(shard->op_params, simple->op_params, sizeof(shard->op_params));
             memcpy(shard->ne, simple->ne, sizeof(shard->ne));
             memcpy(shard->nb, simple->nb, sizeof(shard->nb));
             shard->view_offs = simple->view_offs;
@@ -1792,6 +1864,103 @@ cleanup:
     return result;
 }
 
+static bool ggml_gallocr_same_requirement(
+        const struct ggml_gallocr_tensor_requirement * a, const struct ggml_gallocr_tensor_requirement * b) {
+    return a->buffer_id == b->buffer_id && a->type == b->type && a->op == b->op && a->flags == b->flags &&
+        a->view_src == b->view_src && a->view_offs == b->view_offs && a->first_shard == b->first_shard && a->n_shards == b->n_shards &&
+        a->external == b->external && a->external_buffer == b->external_buffer && a->external_buft == b->external_buft &&
+        a->external_data == b->external_data && a->external_extra == b->external_extra &&
+        a->external_generation == b->external_generation && a->external_usage == b->external_usage &&
+        a->native.size_max == b->native.size_max && a->native.addr.chunk == b->native.addr.chunk && a->native.addr.offset == b->native.addr.offset &&
+        !memcmp(a->ne, b->ne, sizeof(a->ne)) && !memcmp(a->nb, b->nb, sizeof(a->nb)) &&
+        !memcmp(a->src, b->src, sizeof(a->src)) && !memcmp(a->op_params, b->op_params, sizeof(a->op_params));
+}
+
+static bool ggml_gallocr_bindings_match(struct ggml_gallocr_graph * graph) {
+    ggml_gallocr_t galloc = graph->galloc;
+    struct ggml_gallocr_binding_plan * bindings = &galloc->bindings;
+    struct ggml_gallocr_plan * plan = &galloc->plan;
+    if (!bindings->valid || bindings->n_tensors != plan->n_tensors || bindings->n_shards != plan->n_shards ||
+            bindings->n_nodes != plan->n_nodes || bindings->n_leafs != plan->n_leafs ||
+            memcmp(bindings->node_ids, plan->node_ids, plan->n_nodes*sizeof(plan->node_ids[0])) ||
+            memcmp(bindings->leaf_ids, plan->leaf_ids, plan->n_leafs*sizeof(plan->leaf_ids[0]))) {
+        return false;
+    }
+    for (size_t i = 0; i < plan->n_tensors; i++) {
+        const struct ggml_gallocr_tensor_binding * binding = &bindings->tensors[i];
+        const struct ggml_tensor * tensor = graph->tensors[i];
+        if (!ggml_gallocr_same_requirement(&binding->requirement, &plan->tensors[i]) || binding->tensor != tensor ||
+                binding->buffer != tensor->buffer || binding->data != tensor->data || binding->extra != tensor->extra ||
+                !ggml_backend_tensor_is_bound(tensor) || binding->generation != ggml_backend_tensor_binding_generation(tensor) ||
+                (tensor->buffer && tensor->buffer->binding && binding->generation == 0)) {
+            return false;
+        }
+    }
+    for (size_t i = 0; i < plan->n_shards; i++) {
+        const struct ggml_gallocr_shard_requirement * a = &bindings->shards[i];
+        const struct ggml_gallocr_shard_requirement * b = &plan->shards[i];
+        if (a->type != b->type || a->op != b->op || a->size != b->size || a->view_offs != b->view_offs || a->flags != b->flags ||
+                a->addr.chunk != b->addr.chunk || a->addr.offset != b->addr.offset ||
+                memcmp(a->ne, b->ne, sizeof(a->ne)) || memcmp(a->nb, b->nb, sizeof(a->nb)) ||
+                memcmp(a->op_params, b->op_params, sizeof(a->op_params))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool ggml_gallocr_binding_plan_new(struct ggml_gallocr_graph * graph, struct ggml_gallocr_binding_plan * bindings) {
+    struct ggml_gallocr_plan * plan = &graph->galloc->plan;
+    bindings->n_tensors = plan->n_tensors;
+    bindings->n_shards = plan->n_shards;
+    bindings->n_nodes = plan->n_nodes;
+    bindings->n_leafs = plan->n_leafs;
+    bindings->tensors = calloc(MAX((size_t) 1, plan->n_tensors), sizeof(bindings->tensors[0]));
+    bindings->shards = calloc(MAX((size_t) 1, plan->n_shards), sizeof(bindings->shards[0]));
+    bindings->node_ids = calloc(MAX(1, plan->n_nodes), sizeof(bindings->node_ids[0]));
+    bindings->leaf_ids = calloc(MAX(1, plan->n_leafs), sizeof(bindings->leaf_ids[0]));
+    if (!bindings->tensors || !bindings->shards || !bindings->node_ids || !bindings->leaf_ids) {
+        ggml_gallocr_binding_plan_free(bindings);
+        return false;
+    }
+    for (size_t i = 0; i < plan->n_tensors; i++) {
+        bindings->tensors[i].requirement = plan->tensors[i];
+        bindings->tensors[i].tensor = graph->tensors[i];
+    }
+    memcpy(bindings->shards, plan->shards, plan->n_shards*sizeof(bindings->shards[0]));
+    memcpy(bindings->node_ids, plan->node_ids, plan->n_nodes*sizeof(bindings->node_ids[0]));
+    memcpy(bindings->leaf_ids, plan->leaf_ids, plan->n_leafs*sizeof(bindings->leaf_ids[0]));
+    return true;
+}
+
+static void ggml_gallocr_binding_plan_commit(ggml_gallocr_t galloc, struct ggml_gallocr_binding_plan * bindings) {
+    for (size_t i = 0; i < bindings->n_tensors; i++) {
+        struct ggml_gallocr_tensor_binding * binding = &bindings->tensors[i];
+        binding->buffer = binding->tensor->buffer;
+        binding->data = binding->tensor->data;
+        binding->extra = binding->tensor->extra;
+        binding->generation = ggml_backend_tensor_binding_generation(binding->tensor);
+    }
+    ggml_gallocr_binding_plan_free(&galloc->bindings);
+    bindings->valid = true;
+    galloc->bindings = *bindings;
+    memset(bindings, 0, sizeof(*bindings));
+}
+
+bool ggml_gallocr_reuse_bindings(ggml_gallocr_t galloc, struct ggml_cgraph * cgraph,
+        const int * node_buffer_ids, const int * leaf_buffer_ids) {
+    if (!galloc->bindings.valid || !ggml_gallocr_has_active_bindings(galloc)) {
+        return false;
+    }
+    struct ggml_gallocr_graph graph = {0};
+    if (!ggml_gallocr_reserve_plan(galloc, cgraph, node_buffer_ids, leaf_buffer_ids, &graph)) {
+        return false;
+    }
+    bool result = ggml_gallocr_bindings_match(&graph);
+    ggml_gallocr_graph_free(&graph);
+    return result;
+}
+
 static bool ggml_gallocr_alloc_composite_graph(ggml_gallocr_t galloc, struct ggml_cgraph * cgraph) {
     if (galloc->n_buffers > 1 && (!galloc->plan.valid || galloc->plan.n_nodes != cgraph->n_nodes || galloc->plan.n_leafs != cgraph->n_leafs)) {
         return false;
@@ -1814,6 +1983,10 @@ static bool ggml_gallocr_alloc_composite_graph(ggml_gallocr_t galloc, struct ggm
     if (!result) {
         return false;
     }
+    if (ggml_gallocr_bindings_match(&graph)) {
+        ggml_gallocr_graph_free(&graph);
+        return true;
+    }
     // Reject assignment-only external tensors before retiring current bindings.
     for (size_t i = 0; i < graph.count; i++) {
         if (galloc->plan.tensors[i].external && !ggml_backend_tensor_is_bound(graph.tensors[i])) {
@@ -1821,6 +1994,12 @@ static bool ggml_gallocr_alloc_composite_graph(ggml_gallocr_t galloc, struct ggm
             return false;
         }
     }
+    struct ggml_gallocr_binding_plan bindings = {0};
+    if (!ggml_gallocr_binding_plan_new(&graph, &bindings)) {
+        ggml_gallocr_graph_free(&graph);
+        return false;
+    }
+    galloc->bindings.valid = false;
     if (ggml_gallocr_reserve_buffers(galloc)) {
         for (int i = 0; i < galloc->n_buffers; i++) {
             if (galloc->buffers[i]) {
@@ -1847,6 +2026,10 @@ static bool ggml_gallocr_alloc_composite_graph(ggml_gallocr_t galloc, struct ggm
             }
         }
     }
+    if (result) {
+        ggml_gallocr_binding_plan_commit(galloc, &bindings);
+    }
+    ggml_gallocr_binding_plan_free(&bindings);
     ggml_gallocr_graph_free(&graph);
     return result;
 }

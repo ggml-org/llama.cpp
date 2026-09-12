@@ -1889,7 +1889,7 @@ static bool ggml_backend_meta_binding_is_bound(ggml_backend_buffer_t buffer, con
     const auto & binding = it->second;
     const auto * source = tensor->view_src;
     return !source || (source->buffer == binding.source_buffer && source->data == binding.source_data &&
-        ggml_backend_tensor_is_bound(source) && ggml_backend_meta_binding_generation(source) == binding.source_generation);
+        ggml_backend_tensor_is_bound(source) && ggml_backend_tensor_binding_generation(source) == binding.source_generation);
 }
 
 static ggml_status ggml_backend_meta_binding_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
@@ -1921,7 +1921,7 @@ static ggml_status ggml_backend_meta_binding_init_tensor(ggml_backend_buffer_t b
         }
         binding.source_buffer = tensor->view_src->buffer;
         binding.source_data = tensor->view_src->data;
-        binding.source_generation = ggml_backend_meta_binding_generation(tensor->view_src);
+        binding.source_generation = ggml_backend_tensor_binding_generation(tensor->view_src);
     }
     static std::atomic<uint64_t> next_generation{1};
     binding.generation = next_generation.fetch_add(1, std::memory_order_relaxed);
@@ -2025,6 +2025,7 @@ static ggml_backend_buffer_t ggml_backend_meta_materialize(void * preparation, g
         static const ggml_backend_buffer_binding_i binding = {
             ggml_backend_meta_binding_is_bound,
             ggml_backend_meta_binding_init_view,
+            [](ggml_backend_buffer_t, const ggml_tensor * tensor) { return ggml_backend_meta_binding_generation(tensor); },
         };
         ggml_backend_buffer_ptr owner(ggml_backend_buffer_init(prepared->split.buft, ggml_backend_meta_buffer_iface, ctx.get(), size));
         auto * materialized = ctx.release();
@@ -2454,7 +2455,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         if (!ggml_backend_tensor_is_bound(tensor)) {
             return false;
         }
-        bindings.emplace_back(tensor, tensor->buffer, tensor->data, ggml_backend_meta_binding_generation(tensor));
+        bindings.emplace_back(tensor, tensor->buffer, tensor->data, ggml_backend_tensor_binding_generation(tensor));
         return true;
     };
     for (int i = 0; i < cgraph->n_nodes; i++) {
