@@ -35,6 +35,9 @@ ggml_cgraph * clip_graph_gemma4uv::build() {
     ggml_set_input(pos_y);
 
     {
+        if (model.position_embeddings == nullptr) {
+            throw std::runtime_error("position_embeddings tensor is missing");
+        }
         const int64_t pos_size = model.position_embeddings->ne[1];
         const size_t  nb1      = ggml_row_size(model.position_embeddings->type, n_embd);
 
