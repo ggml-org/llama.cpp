@@ -1438,6 +1438,26 @@ static void test_meta_materialization(bool relative_addresses) {
     ggml_backend_tensor_get(view, view_values.data(), 0, sizeof(view_values));
     GGML_ASSERT(std::equal(view_values.begin(), view_values.end(), values.begin() + 8));
 
+    auto * external = ggml_view_1d(test_ctx.ctx, mirror, 4, 16*sizeof(float));
+    GGML_ASSERT(ggml_backend_view_init(external) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(external->data == nullptr && ggml_backend_tensor_is_bound(external));
+    ggml_backend_tensor_get(external, view_values.data(), 0, sizeof(view_values));
+    GGML_ASSERT(std::equal(view_values.begin(), view_values.end(), values.begin() + 16));
+    external->buffer = nullptr;
+    external->view_offs = 20*sizeof(float);
+    GGML_ASSERT(ggml_backend_view_init(external) == GGML_STATUS_SUCCESS);
+    ggml_backend_tensor_get(external, view_values.data(), 0, sizeof(view_values));
+    GGML_ASSERT(std::equal(view_values.begin(), view_values.end(), values.begin() + 20));
+    auto * failed_view = ggml_view_1d(test_ctx.ctx, mirror, 4, 24*sizeof(float));
+    second.context->fail_init = second.context->init_calls + 1;
+    GGML_ASSERT(ggml_backend_view_init(failed_view) == GGML_STATUS_FAILED);
+    GGML_ASSERT(failed_view->buffer == nullptr && failed_view->data == nullptr);
+    GGML_ASSERT(ggml_backend_tensor_is_bound(external) && ggml_backend_tensor_is_bound(mirror));
+    second.context->fail_init = SIZE_MAX;
+    GGML_ASSERT(ggml_backend_view_init(failed_view) == GGML_STATUS_SUCCESS);
+    ggml_backend_tensor_get(failed_view, view_values.data(), 0, sizeof(view_values));
+    GGML_ASSERT(std::equal(view_values.begin(), view_values.end(), values.begin() + 24));
+
     auto borrowed_ctx = make_context();
     auto * borrowed = ggml_view_1d(borrowed_ctx.ctx, mirror, 4, 12*sizeof(float));
     void * borrowed_preparation = allocation->new_preparation(buft, GGML_BACKEND_BUFFER_USAGE_WEIGHTS, 1, nullptr);
@@ -1450,6 +1470,16 @@ static void test_meta_materialization(bool relative_addresses) {
     GGML_ASSERT(borrowed_owner && ggml_backend_buffer_get_size(borrowed_owner.get()) == 0);
     GGML_ASSERT(ggml_backend_buffer_init_tensor(borrowed_owner.get(), borrowed) == GGML_STATUS_SUCCESS);
     GGML_ASSERT(borrowed->data == nullptr && borrowed->buffer != mirror->buffer);
+    auto * dependent = ggml_view_1d(borrowed_ctx.ctx, mirror, 4, 28*sizeof(float));
+    void * dependent_preparation = allocation->new_preparation(buft, GGML_BACKEND_BUFFER_USAGE_WEIGHTS, 1, nullptr);
+    GGML_ASSERT(dependent_preparation);
+    GGML_ASSERT(allocation->prepare_tensor(dependent_preparation, dependent) == GGML_STATUS_SUCCESS);
+    for (size_t device = 0; device < 2; device++) {
+        GGML_ASSERT(ggml_backend_view_init(allocation->get_tensor(dependent_preparation, dependent, device)) == GGML_STATUS_SUCCESS);
+    }
+    ggml_backend_buffer_ptr dependent_owner(allocation->materialize(dependent_preparation, domains, 2));
+    GGML_ASSERT(dependent_owner);
+    GGML_ASSERT(ggml_backend_buffer_init_tensor(dependent_owner.get(), dependent) == GGML_STATUS_SUCCESS);
     view_values.fill(123);
     ggml_backend_tensor_set(borrowed, view_values.data(), 0, sizeof(view_values));
     ggml_backend_buffer_clear(borrowed_owner.get(), 0);
@@ -1459,6 +1489,7 @@ static void test_meta_materialization(bool relative_addresses) {
     GGML_ASSERT(!ggml_backend_tensor_is_bound(borrowed));
     GGML_ASSERT(ggml_backend_buffer_init_tensor(borrowed_owner.get(), borrowed) == GGML_STATUS_FAILED);
     borrowed_owner.reset();
+    GGML_ASSERT(ggml_backend_tensor_is_bound(dependent) && ggml_backend_tensor_is_bound(mirror));
     GGML_ASSERT(first.context->free_calls == 0 && second.context->free_calls == 0);
     ggml_backend_buffer_clear(owner.get(), 0);
     for (auto * backend : {&first, &second}) {
@@ -1466,6 +1497,11 @@ static void test_meta_materialization(bool relative_addresses) {
             GGML_ASSERT(std::all_of(bytes.second.begin(), bytes.second.end(), [](uint8_t value) { return value == 0; }));
         }
     }
+    ggml_backend_buffer_reset(owner.get());
+    GGML_ASSERT(!ggml_backend_tensor_is_bound(mirror) && !ggml_backend_tensor_is_bound(external));
+    GGML_ASSERT(!ggml_backend_tensor_is_bound(dependent));
+    GGML_ASSERT(ggml_backend_buffer_init_tensor(dependent_owner.get(), dependent) == GGML_STATUS_FAILED);
+    dependent_owner.reset();
     owner.reset();
     GGML_ASSERT(first.context->free_calls == 2 && second.context->free_calls == 2);
     GGML_ASSERT(first.context->buffers.empty() && second.context->buffers.empty());

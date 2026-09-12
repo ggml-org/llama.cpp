@@ -6,6 +6,7 @@
 #include "ggml-cpp.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -436,6 +437,13 @@ struct ggml_backend_meta_split_context {
     }
 };
 
+struct ggml_backend_meta_tensor_binding {
+    uint64_t generation = 0;
+    ggml_backend_buffer_t source_buffer = nullptr;
+    uint64_t source_generation = 0;
+    const void * source_data = nullptr;
+};
+
 struct ggml_backend_meta_buffer_context {
     // FIXME
     // Most tensors can simply be stored statically in their own buffer.
@@ -450,7 +458,8 @@ struct ggml_backend_meta_buffer_context {
     int stc_compute_index_next = 0;
     std::vector<ggml_backend_buffer_ptr> bufs;
     std::vector<size_t> domain_ends;
-    std::map<const ggml_tensor *, bool> bindings;
+    std::map<const ggml_tensor *, ggml_backend_meta_tensor_binding> bindings;
+    std::map<const ggml_tensor *, ggml_backend_meta_simple_tensor_container> external_views;
     bool planned = false;
     bool retired = false;
 
@@ -473,6 +482,10 @@ struct ggml_backend_meta_buffer_context {
     }
 
     ggml_backend_meta_simple_tensor_container & get_simple_tensor_container(const ggml_tensor * tensor) {
+        auto view = external_views.find(tensor);
+        if (view != external_views.end()) {
+            return view->second;
+        }
         if (stc_static.simple_tensors.find(tensor) != stc_static.simple_tensors.end()) {
             return stc_static;
         }
@@ -1886,6 +1899,12 @@ static void ggml_backend_meta_buffer_reset(ggml_backend_buffer_t buffer) {
     for (size_t i = 0; i < buf_ctx->bufs.size(); i++) {
         ggml_backend_buffer_reset(buf_ctx->bufs[i].get());
     }
+    if (buf_ctx->planned) {
+        buf_ctx->external_views.clear();
+        buf_ctx->bindings.clear();
+        buf_ctx->stc_static = {};
+        buf_ctx->split.cache.clear();
+    }
 }
 
 static const ggml_backend_buffer_i ggml_backend_meta_buffer_iface = {
@@ -1906,10 +1925,25 @@ bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf) {
     return buf != nullptr && buf->iface.free_buffer == ggml_backend_meta_buffer_iface.free_buffer;
 }
 
+static uint64_t ggml_backend_meta_binding_generation(const ggml_tensor * tensor) {
+    if (!ggml_backend_buffer_is_meta(tensor->buffer)) {
+        return 0;
+    }
+    auto * ctx = static_cast<ggml_backend_meta_buffer_context *>(tensor->buffer->context);
+    auto it = ctx->bindings.find(tensor);
+    return ctx->retired || it == ctx->bindings.end() ? 0 : it->second.generation;
+}
+
 static bool ggml_backend_meta_binding_is_bound(ggml_backend_buffer_t buffer, const ggml_tensor * tensor) {
     auto * ctx = static_cast<ggml_backend_meta_buffer_context *>(buffer->context);
     auto it = ctx->bindings.find(tensor);
-    return !ctx->retired && tensor->buffer == buffer && it != ctx->bindings.end() && it->second;
+    if (ctx->retired || tensor->buffer != buffer || it == ctx->bindings.end() || it->second.generation == 0) {
+        return false;
+    }
+    const auto & binding = it->second;
+    const auto * source = tensor->view_src;
+    return !source || (source->buffer == binding.source_buffer && source->data == binding.source_data &&
+        ggml_backend_tensor_is_bound(source) && ggml_backend_meta_binding_generation(source) == binding.source_generation);
 }
 
 static ggml_status ggml_backend_meta_binding_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
@@ -1919,10 +1953,82 @@ static ggml_status ggml_backend_meta_binding_init_tensor(ggml_backend_buffer_t b
             (tensor->buffer && tensor->buffer != buffer && ggml_backend_tensor_is_bound(tensor))) {
         return GGML_STATUS_FAILED;
     }
+    if (ggml_backend_meta_binding_is_bound(buffer, tensor)) {
+        return GGML_STATUS_SUCCESS;
+    }
+    if (it->second.generation != 0) {
+        return GGML_STATUS_FAILED;
+    }
+    auto & binding = it->second;
+    if (tensor->view_src) {
+        if (!ggml_backend_tensor_is_bound(tensor->view_src)) {
+            return GGML_STATUS_FAILED;
+        }
+        const auto & views = ctx->get_simple_tensor_container(tensor).simple_tensors.at(tensor);
+        for (size_t device = 0; device < views.size(); device++) {
+            const auto * source = ggml_backend_buffer_is_meta(tensor->view_src->buffer) ?
+                ggml_backend_meta_buffer_simple_tensor(tensor->view_src, device) : tensor->view_src;
+            if (!source || views[device]->view_src != source || views[device]->buffer != source->buffer ||
+                    uintptr_t(views[device]->data) != uintptr_t(source->data) + views[device]->view_offs) {
+                return GGML_STATUS_FAILED;
+            }
+        }
+        binding.source_buffer = tensor->view_src->buffer;
+        binding.source_data = tensor->view_src->data;
+        binding.source_generation = ggml_backend_meta_binding_generation(tensor->view_src);
+    }
+    static std::atomic<uint64_t> next_generation{1};
+    binding.generation = next_generation.fetch_add(1, std::memory_order_relaxed);
+    GGML_ASSERT(binding.generation != 0);
     tensor->buffer = buffer;
     tensor->data = nullptr;
-    it->second = true;
     return GGML_STATUS_SUCCESS;
+}
+
+static ggml_status ggml_backend_meta_binding_init_view(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+    auto * ctx = static_cast<ggml_backend_meta_buffer_context *>(buffer->context);
+    if (ctx->retired || tensor->buffer || tensor->data || !tensor->view_src || tensor->view_src->buffer != buffer ||
+            !ggml_backend_tensor_is_bound(tensor->view_src)) {
+        return GGML_STATUS_FAILED;
+    }
+    std::unique_ptr<ggml_backend_meta_preparation> prepared(
+        ggml_backend_meta_preparation_new(buffer->buft, buffer->usage, 1, nullptr));
+    if (!prepared) {
+        return GGML_STATUS_ALLOC_FAILED;
+    }
+    ggml_status status = ggml_backend_meta_preparation_tensor(prepared.get(), tensor);
+    if (status != GGML_STATUS_SUCCESS) {
+        return status;
+    }
+    for (size_t device = 0; device < prepared->tensors.ctxs.size(); device++) {
+        auto * simple = ggml_backend_meta_preparation_get_tensor(prepared.get(), tensor, device);
+        if (!simple->view_src || simple->view_offs > ggml_nbytes(simple->view_src) ||
+                ggml_nbytes(simple) > ggml_nbytes(simple->view_src) - simple->view_offs) {
+            return GGML_STATUS_FAILED;
+        }
+        status = ggml_backend_view_init(simple);
+        if (status != GGML_STATUS_SUCCESS) {
+            return status;
+        }
+    }
+    try {
+        auto view = ctx->external_views.try_emplace(tensor);
+        try {
+            auto binding = ctx->bindings.try_emplace(tensor);
+            view.first->second = std::move(prepared->tensors);
+            binding.first->second = {};
+        } catch (const std::bad_alloc &) {
+            if (view.second) {
+                ctx->external_views.erase(view.first);
+            }
+            throw;
+        }
+        ctx->split.cache.erase({tensor, false});
+        ctx->split.cache.erase({tensor, true});
+        return ggml_backend_meta_binding_init_tensor(buffer, tensor);
+    } catch (const std::bad_alloc &) {
+        return GGML_STATUS_ALLOC_FAILED;
+    }
 }
 
 static ggml_backend_buffer_t ggml_backend_meta_materialize(void * preparation, ggml_backend_buffer_set * domains, size_t n_domains) {
@@ -1967,7 +2073,7 @@ static ggml_backend_buffer_t ggml_backend_meta_materialize(void * preparation, g
             }
         }
         for (const auto & entry : prepared->tensors.simple_tensors) {
-            ctx->bindings.emplace(entry.first, false);
+            ctx->bindings.emplace(entry.first, ggml_backend_meta_tensor_binding{});
         }
         ctx->bufs.reserve(owned.size());
         auto iface = ggml_backend_meta_buffer_iface;
@@ -1975,7 +2081,7 @@ static ggml_backend_buffer_t ggml_backend_meta_materialize(void * preparation, g
         iface.init_tensor = ggml_backend_meta_binding_init_tensor;
         static const ggml_backend_buffer_binding_i binding = {
             ggml_backend_meta_binding_is_bound,
-            ggml_backend_meta_binding_init_tensor,
+            ggml_backend_meta_binding_init_view,
         };
         ggml_backend_buffer_ptr owner(ggml_backend_buffer_init(prepared->split.buft, iface, ctx.get(), size));
         auto * materialized = ctx.release();
