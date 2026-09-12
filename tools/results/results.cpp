@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
+#include <memory>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -42,32 +44,75 @@ static double nmse(const std::vector<float> & a, const std::vector<float> & b, s
 }
 
 static std::vector<float> get_logits(
-        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
+        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, uint32_t decode_steps) {
     const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
     const uint32_t n_ctx    = llama_n_ctx(lctx);
     const uint32_t n_tokens = tokens.size();
     llama_batch batch = llama_batch_init(n_ctx, 0, 1);
-    GGML_ASSERT(n_tokens <= n_ctx);
+    struct batch_cleanup {
+        llama_batch & batch;
+        ~batch_cleanup() { llama_batch_free(batch); }
+    } cleanup{batch};
+    GGML_ASSERT(n_tokens > 0 && n_tokens <= n_ctx && (!decode_steps || decode_steps < n_ctx - n_tokens));
     for (uint32_t pos = 0; pos < n_tokens; pos++) {
         common_batch_add(batch, tokens[pos], pos, {0}, true);
     }
     batch.n_tokens = n_tokens;
     if (llama_decode(lctx, batch)) {
-        llama_batch_free(batch);
         throw std::runtime_error("failed to decode batch");
     }
 
     std::vector<float> ret;
-    ret.reserve(n_tokens*n_vocab);
-    for (uint32_t i = 0; i < n_tokens; i++) {
-        const float * logits_ith = llama_get_logits_ith(lctx, i);
-        for (uint32_t j = 0; j < n_vocab; j++) {
-            ret.push_back(logits_ith[j]);
+    const auto append_logits = [&](uint32_t count) {
+        for (uint32_t i = 0; i < count; i++) {
+            const float * logits = llama_get_logits_ith(lctx, i);
+            if (!logits) {
+                throw std::runtime_error("missing logits");
+            }
+            for (uint32_t j = 0; j < n_vocab; j++) {
+                if (!std::isfinite(logits[j])) {
+                    throw std::runtime_error("non-finite logits");
+                }
+                ret.push_back(logits[j]);
+            }
         }
+    };
+    append_logits(n_tokens);
+    for (uint32_t step = 0; step < decode_steps; step++) {
+        common_batch_clear(batch);
+        common_batch_add(batch, tokens[step % n_tokens], n_tokens + step, {0}, true);
+        if (llama_decode(lctx, batch)) {
+            throw std::runtime_error("decode step failed");
+        }
+        append_logits(1);
     }
-    llama_batch_free(batch);
+    if (decode_steps) {
+        std::vector<uint8_t> state(llama_state_seq_get_size(lctx, 0));
+        if (state.empty() || llama_state_seq_get_data(lctx, state.data(), state.size(), 0) != state.size()) {
+            throw std::runtime_error("failed to save decode state");
+        }
+        llama_memory_clear(llama_get_memory(lctx), true);
+        common_batch_clear(batch);
+        for (uint32_t i = 0; i < n_tokens; i++) {
+            common_batch_add(batch, tokens[i], i, {0}, true);
+        }
+        if (llama_decode(lctx, batch)) {
+            throw std::runtime_error("refill failed");
+        }
+        append_logits(n_tokens);
+        if (llama_state_seq_set_data(lctx, state.data(), state.size(), 0) != state.size()) {
+            throw std::runtime_error("failed to restore decode state");
+        }
+        common_batch_clear(batch);
+        common_batch_add(batch, tokens.back(), n_tokens + decode_steps, {0}, true);
+        if (llama_decode(lctx, batch)) {
+            throw std::runtime_error("decode after restore failed");
+        }
+        append_logits(1);
+    }
     return ret;
 }
+
 
 int main(int argc, char ** argv) {
     common_params params;
@@ -75,7 +120,30 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_RESULTS)) {
+    uint32_t decode_steps = 0;
+    std::vector<char *> filtered_argv{argv[0]};
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--decode-steps") == 0) {
+            try {
+                if (++i == argc) {
+                    throw std::invalid_argument("missing count");
+                }
+                size_t parsed = 0;
+                long long value = std::stoll(argv[i], &parsed);
+                if (argv[i][parsed] || value < 0 || value > UINT32_MAX) {
+                    throw std::invalid_argument("invalid count");
+                }
+                decode_steps = value;
+            } catch (const std::exception &) {
+                LOG_ERR("--decode-steps requires a non-negative 32-bit count\n");
+                return 1;
+            }
+        } else {
+            filtered_argv.push_back(argv[i]);
+        }
+    }
+    filtered_argv.push_back(nullptr);
+    if (!common_params_parse(int(filtered_argv.size()) - 1, filtered_argv.data(), params, LLAMA_EXAMPLE_RESULTS)) {
         return 1;
     }
     if (params.out_file.empty()) {
@@ -87,15 +155,18 @@ int main(int argc, char ** argv) {
     common_init_result_ptr llama_init = common_init_from_params(params);
     struct llama_model   * model = llama_init->model();
     struct llama_context * lctx  = llama_init->context();
-    if (model == nullptr) {
+    if (model == nullptr || lctx == nullptr) {
         LOG_ERR("%s: unable to load model\n", __func__);
         return 1;
     }
     const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
 
     const std::vector<llama_token> tokens_calc = common_tokenize(lctx, params.prompt, true);
-    const std::vector<float> logits_calc = get_logits(model, lctx, tokens_calc);
-    GGML_ASSERT(logits_calc.size() == tokens_calc.size()*n_vocab);
+    LOG_INF("%s: protocol prefill=%zu decode=%u refill=%zu restore_decode=%u\n", __func__, tokens_calc.size(), decode_steps,
+            decode_steps ? tokens_calc.size() : 0, decode_steps ? 1 : 0);
+    const std::vector<float> logits_calc = get_logits(model, lctx, tokens_calc, decode_steps);
+    const size_t n_rows = decode_steps ? 2*tokens_calc.size() + decode_steps + 1 : tokens_calc.size();
+    GGML_ASSERT(logits_calc.size() == n_rows*n_vocab);
 
     struct gguf_init_params gguf_params = {
         /*.no_alloc   =*/ true,
@@ -113,6 +184,9 @@ int main(int argc, char ** argv) {
             };
             gguf_ctx.reset(gguf_init_from_file(params.out_file.c_str(), gguf_params));
         }
+        GGML_ASSERT(gguf_ctx);
+        const int64_t steps_key = gguf_find_key(gguf_ctx.get(), "decode_steps");
+        GGML_ASSERT((steps_key < 0 ? 0 : gguf_get_val_u32(gguf_ctx.get(), steps_key)) == decode_steps);
         const std::string path_model_disk = gguf_get_val_str(gguf_ctx.get(), gguf_find_key(gguf_ctx.get(), "path_model"));
         GGML_ASSERT(path_model_disk == params.model.path); // TODO better checks
 
@@ -121,14 +195,14 @@ int main(int argc, char ** argv) {
             const size_t  offset = gguf_get_data_offset(gguf_ctx.get()) + gguf_get_tensor_offset(gguf_ctx.get(), tid);
             GGML_ASSERT(size == gguf_get_tensor_size(gguf_ctx.get(), tid));
 
-            FILE * file = ggml_fopen(params.out_file.c_str(), "rb");
+            std::unique_ptr<FILE, int (*)(FILE *)> file(ggml_fopen(params.out_file.c_str(), "rb"), fclose);
             if (file == nullptr) {
                 throw std::runtime_error("failed to open results file");
             }
-            if (fseek(file, offset, SEEK_SET) != 0) {
+            if (fseek(file.get(), offset, SEEK_SET) != 0) {
                 throw std::runtime_error("fseek failed");
             }
-            const size_t nbytes_read = fread(dst, 1, size, file);
+            const size_t nbytes_read = fread(dst, 1, size, file.get());
             if (nbytes_read != size) {
                 throw std::runtime_error("fread failed");
             }
@@ -143,8 +217,8 @@ int main(int argc, char ** argv) {
 
         std::vector<float> logits_disk(logits_calc.size());
         load_tensor_data("logits", logits_disk.data(), logits_disk.size()*sizeof(float));
-        const double nmse_val = nmse(logits_disk, logits_calc);
-        LOG_INF("%s: NMSE=%.3e\n", __func__, nmse_val);
+        const double nmse_val = nmse(logits_disk, logits_calc, n_vocab);
+        LOG_INF("%s: worst-token NMSE=%.3e\n", __func__, nmse_val);
 
         if (!std::isfinite(nmse_val) || nmse_val > 1e-6) {
             printf("\033[1;31mFAIL\033[0m\n");
@@ -169,6 +243,7 @@ int main(int argc, char ** argv) {
 
     gguf_context_ptr gguf_ctx(gguf_init_empty());
     gguf_set_val_str(gguf_ctx.get(), "path_model", params.model.path.c_str());
+    gguf_set_val_u32(gguf_ctx.get(), "decode_steps", decode_steps);
     {
         ggml_tensor * t_tokens = ggml_new_tensor_1d(ggml_ctx_calc.get(), GGML_TYPE_I32, tokens_calc.size());
         ggml_set_name(t_tokens, "tokens");
@@ -179,15 +254,10 @@ int main(int argc, char ** argv) {
         gguf_add_tensor(gguf_ctx.get(), t_tokens);
     }
     {
-        ggml_tensor * t_logits = ggml_new_tensor_2d(ggml_ctx_calc.get(), GGML_TYPE_F32, tokens_calc.size(), n_vocab);
+        ggml_tensor * t_logits = ggml_new_tensor_2d(ggml_ctx_calc.get(), GGML_TYPE_F32, n_rows, n_vocab);
         ggml_set_name(t_logits, "logits");
         float * logits_data = ggml_get_data_f32(t_logits);
-        for (uint32_t i = 0; i < tokens_calc.size(); i++) {
-            const float * logits_ith = llama_get_logits_ith(lctx, i);
-            for (uint32_t j = 0; j < n_vocab; j++) {
-                logits_data[i*n_vocab + j] = logits_ith[j];
-            }
-        }
+        std::copy(logits_calc.begin(), logits_calc.end(), logits_data);
         gguf_add_tensor(gguf_ctx.get(), t_logits);
     }
     LOG_INF("%s: writing results to %s...\n", __func__, params.out_file.c_str());

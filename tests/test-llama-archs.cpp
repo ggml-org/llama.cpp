@@ -488,7 +488,7 @@ static std::vector<float> get_logits(
     }
     if (decode_steps) {
         std::vector<uint8_t> state(llama_state_seq_get_size(lctx, 0));
-        if (llama_state_seq_get_data(lctx, state.data(), state.size(), 0) != state.size()) {
+        if (state.empty() || llama_state_seq_get_data(lctx, state.data(), state.size(), 0) != state.size()) {
             throw std::runtime_error("failed to save decode state");
         }
         llama_memory_clear(llama_get_memory(lctx), true);
@@ -864,7 +864,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
                         }
                     }
 
-                    std::unique_ptr<FILE, decltype(&fclose)> file(tmpfile(), fclose);
+                    std::unique_ptr<FILE, int (*)(FILE *)> file(tmpfile(), fclose);
                     // FIXME: when adding a tensor to a gguf_context a copy is made, this changes the pointer which the meta backend
                     //     in turn uses to map the tensors to their simple equivalents - this is fundamentally incompatible
                     if (file != nullptr && llama_model_saver_supports_arch(arch) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
@@ -940,8 +940,8 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
-            auto steps = std::stoul(argv[++i]);
-            if (steps > UINT32_MAX) {
+            auto steps = std::stoll(argv[++i]);
+            if (steps < 0 || steps > UINT32_MAX) {
                 return 1;
             }
             decode_steps = steps;
