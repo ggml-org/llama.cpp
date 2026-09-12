@@ -4078,7 +4078,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format(
             "KV cache data type for K for the draft model\n"
             "allowed values: %s\n"
-            "(default: %s)",
+            "(default: %s)\n"
+            "note: this may increase VRAM usage",
             get_all_kv_cache_types().c_str(),
             ggml_type_name(params.speculative.draft.cache_type_k)
         ),
@@ -4091,7 +4092,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format(
             "KV cache data type for V for the draft model\n"
             "allowed values: %s\n"
-            "(default: %s)",
+            "(default: %s)\n"
+            "note: this may increase VRAM usage",
             get_all_kv_cache_types().c_str(),
             ggml_type_name(params.speculative.draft.cache_type_v)
         ),
