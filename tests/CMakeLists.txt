@@ -144,6 +144,8 @@ if (NOT WIN32)
     )
 endif()
 
+llama_build_and_test(test-tokenizer-invalid-metadata.cpp)
+
 if (LLAMA_LLGUIDANCE)
     llama_build_and_test(test-grammar-llguidance.cpp ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
 endif ()
