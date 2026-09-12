@@ -20,6 +20,10 @@ public:
     // Reject contexts that need streaming; no layout adaptation or conversion fallback is enabled here.
     bool synchronize(size_t active_tokens);
     bool ready(size_t active_tokens) const noexcept;
+    // Ordered one-block path. Hold a binding pin; Q/mask/output and the disjoint workspace lease remain live until return.
+    // Caller supplies padded causal mask values. Initial device adapter supports F16 K/V, head size 256, one sequence.
+    bool compute_one_block(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
+            size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace);
     size_t last_upload_bytes() const noexcept;
     size_t last_upload_calls() const noexcept;
 

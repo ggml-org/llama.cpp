@@ -5,6 +5,7 @@
 
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
+#include "ggml-cuda/kv-stream-partial.cuh"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/add-id.cuh"
 #include "ggml-cuda/arange.cuh"
@@ -6211,6 +6212,7 @@ static bool ggml_backend_cuda_graph_is_captured(ggml_backend_t backend, const vo
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if (strcmp(name, "ggml_backend_kv_stream_partial_ops") == 0) return (void *)ggml_cuda_kv_stream_partial_ops;
     if (strcmp(name, "ggml_backend_cuda_kv_host_buffer_type") == 0) return (void *)ggml_backend_cuda_kv_host_buffer_type;
     if (strcmp(name, "ggml_backend_cuda_kv_host_buffer_register") == 0) return (void *)ggml_backend_cuda_kv_host_buffer_register;
     const bool release_graph = strcmp(name, "ggml_backend_cuda_graph_release") == 0;

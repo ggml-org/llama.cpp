@@ -6,7 +6,7 @@ Last source review: 2026-09-12, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is implemented and validated, awaiting user review and commit. The remainder of milestones 5-8 is planned. The next substage after review is **5.4c: one staged KV block and streamed partial-attention integration**. The new allocation factory is opt-in; no streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is ready for review. The remainder of milestones 5-8 is planned. Current work is **5.4c: one staged KV block and streamed partial-attention integration**. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is ready for review. After the user commits it, proceed to 5.4c.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is ready for review.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -346,8 +346,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.3b | Complete | `15d47eb72` | 14 CPU cases / 150,480 assertions; 15 real-CUDA cases / 150,503 assertions. 19 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck is clean with UVM off/on. Synchronized byte-coherence baseline only. |
 | 5.3c | Complete | `6c724dee1` | 10 CPU cases / 607 assertions; 10 CUDA cases / 609 assertions. 21 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Frozen producer baseline and post-change timings recorded; no server integration. |
 | 5.4a | Complete | `ff4d3bdef` | 12 CPU cases / 131 assertions; 13 CUDA cases / 245 assertions, including mixed K/V and 257-query prefill. 20 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Ordinary all-resident test adapter; production unchanged. |
-| 5.4b | Ready for user review | Uncommitted | 13 cases / 48,614 assertions; 22 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. Ordinary GGML attention comparison, CUDA metadata ABI check, and existing GPU regressions pass. Common format/CPU reference only; no new partial GPU kernel. |
-| 5.4c-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.4b | Complete | `6db00070d` | 13 cases / 48,614 assertions; 22 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. Ordinary GGML attention comparison, CUDA metadata ABI check, and existing GPU regressions pass. Common format/CPU reference only; no new partial GPU kernel. |
+| 5.4c | Ready for review | - | 8 real-CUDA cases / 126 assertions; ordered resident-plus-one-block export and GPU merge, exact leased scratch, masked/dirty tails, malformed-payload atomicity, and UVM-off/on memcheck. 23 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. |
+| 5.4d-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -1669,4 +1670,74 @@ build-device-memory-infra-cuda/bin/test-backend-ops test -b CUDA0 -o SCALE
 
 No new GPU partial/merge execution, GPU overflow diagnostics, asynchronous event ordering, Windows/other accelerator runtime support, TSan, or model throughput/quality qualification is claimed here. Later kernels must implement and test this contract rather than blindly copy the old unguarded empty-row division.
 
-Production services, model/checkpoint/cache data, and compose configuration remain unchanged. After user review and commit, proceed to **5.4c: one explicitly staged KV block and streamed partial-attention integration**, starting with ordered copy/compute.
+Production services, model/checkpoint/cache data, and compose configuration remain unchanged. Stage **5.4c**, documented below, integrates one explicitly staged block with ordered copy/compute.
+
+## Substage 5.4c: one staged block and CUDA partial/merge execution
+
+**Status:** implemented and ready for review; not committed by the implementation agent. This stage follows committed 5.4b (`6db00070d`). It is an opt-in consumer method, not server enablement or a throughput optimization.
+
+### Execution and ownership
+
+`llama_kv_stream_resident::compute_one_block` computes attention over a resident prefix and one nonresident tail block. It does not change the ordinary all-resident attention path or allocate a second full KV cache.
+
+1. Validate both attention descriptions, the complete mask row pitch, tensor bounds, and workspace/pool aliases.
+2. Refresh dirty resident rows through the existing content owner. Retire the cached writer before reusing its ring scratch.
+3. Export resident-prefix partials with the existing CUDA F16 vector kernel.
+4. Copy the live host tail into one bounded packed K/V block at the start of the ring. Zero padded rows so stale NaNs cannot contaminate masked attention.
+5. Export tail partials with the same kernel and the correctly offset, row-strided causal mask.
+6. Rescale and merge on the GPU; normalize once. Publish the staged result only after validation succeeds.
+
+```mermaid
+flowchart LR
+    H["Authoritative host KV"] -->|dirty rows| R["Resident prefix"]
+    H -->|live tail rows| B["One ring block"]
+    R --> A["Two resident partials"]
+    B --> C["Two tail partials"]
+    A --> M["GPU rescale + merge + normalize"]
+    C --> M
+    M --> V["Validate all rows"]
+    V -->|success only| O["Public output"]
+```
+
+The caller holds the binding execution pin and keeps Q, mask, and output alive. The method retains a separate caller-owned partial-workspace lease until all operations complete. The registry extension is backend-neutral; its v1 CUDA adapter is synchronous and must be called outside active capture. Layout/numerical rejection returns false; CUDA execution errors retain the backend's existing error handling.
+
+The ring contains only one staged KV block in this stage. Partial exports, normalized staging output, and the validation flag use a separate explicit device-local lease. This preserves a one-slot minimum ring and makes partial scratch part of caller budgeting, rather than hiding allocations in the CUDA pool. For four rows of width 256, the exact workspace is 20,740 bytes. The common layout helper checks dimensions, alignment, additions, and products before publishing offsets.
+
+The authoritative host tail is uploaded on every call; it is not marked as persistent resident content. This handles updates to the last token without stale ring reuse. Upload statistics count actual host K/V payload bytes, excluding zero fills, merge traffic, and the four-byte validation readback.
+
+### Native kernel integration and numerical contract
+
+The adapter reuses `flash_attn_ext_vec<256,1,F16,F16,false>` with two splits for each range. Split count one is deliberately avoided because it produces already-normalized output. The two exported planes retain the 5.4b row/part/channel layout, and the metadata record is checked against CUDA's `float2`.
+
+One detail found during integration: the native kernel shifts its maximum by `FATTN_KQ_MAX_OFFSET`. It is a valid exponential reference coordinate, not necessarily the literal maximum score. Numerator and normalizer use the same shift, so the existing stable merge remains correct; tests compare actual exported device partials with the CPU merge/normalization reference.
+
+The correctness-first GPU merge uses FP64 intermediates across four contributions. It handles empty/all-masked rows as zero, ignores empty maxima when selecting the common reference, and checks malformed metadata, nonfinite numerators, inconsistent empty parts, and FP32 publication overflow. A separate normalized staging plane prevents partial public-output writes when a later row fails. This baseline intentionally includes synchronization and a four-byte device-to-host validation result; it makes no performance claim.
+
+### TDD and validation
+
+The initial stubs failed ten assertions while the ordinary attention control passed. Additional adversarial tests then exposed a full-mask row-pitch validation gap; the regression test failed before the validation was corrected.
+
+The final real-CUDA suite passes **8 cases / 126 assertions**:
+
+- One-slot ring with 256- and 512-token resident prefixes; tails of 1, 255, and 256 live tokens; query batches of 1, 8, 33, and 257.
+- Independent scalar attention comparison, plus CPU merging of the actual GPU-exported partials.
+- Exact-sized workspace at a nonzero parent offset; rejection of one-byte-short scratch, pool aliases, output/input aliases, unsupported quant pairs, extra tail blocks, oversized metadata, and malformed mask pitch.
+- Fully masked output, initially NaN-filled ring storage, mutable last-row refresh, and exact live-tail upload counts.
+- GPU merge rejection after earlier rows have been computed: invalid mass/maxima/numerators, inconsistent empty records, accumulation overflow, normalization overflow, and unchanged public output. Empty sentinels with large maxima do not dominate valid negative-score contributions.
+
+All **23 focused suites** pass in CPU Debug, CUDA Debug, CPU ASan with leak checking, and CPU UBSan. Existing real-CUDA resident attention passes **13 cases / 245 assertions**, and the four CPU-referenced CUDA SCALE cases pass. Compute Sanitizer memcheck reports **zero errors and zero leaked bytes** for the expanded block suite with UVM disabled and enabled. The new CUDA translation unit also compiles with flash attention disabled; the optional getter returns null in that configuration. That is a translation-unit compatibility check, not a separate full no-FA build/runtime qualification.
+
+```sh
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-block test-kv-stream-resident test-backend-ops -j 20
+build-device-memory-infra-cuda/bin/test-kv-stream-block --cuda
+build-device-memory-infra-cuda/bin/test-kv-stream-resident --cuda
+build-device-memory-infra-cuda/bin/test-backend-ops test -b CUDA0 -o SCALE
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-block --cuda
+GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-block --cuda
+```
+
+### Deliberate boundary
+
+This adapter supports F16/F16 K/V, F32 Q/output, head size 256, one sequence, a supplied padded mask, and no attention sinks, bias, or softcap. Other pairs are rejected, not silently converted. Generic quant dispatch remains **5.4e**. No ROCm/SYCL/OpenCL/Vulkan adapter, asynchronous overlap, multi-block traversal, capture integration, model benchmark, or production-server enablement is claimed.
+
+Production services, model/checkpoint/cache data, and compose configuration remain unchanged. After review and commit, proceed to **5.4d: multiple streamed blocks with bounded ring-slot reuse**. Prefetch overlap and adaptive scheduling remain later stages.
