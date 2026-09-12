@@ -396,7 +396,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         auto schema_info = common_schema_info();
         schema_info.resolve_refs(params);
 
-        // Build parser for each argument, separating required and optional
+        // Object member order is semantically irrelevant. Split the declared
+        // arguments into required and optional sets so the grammar can enforce
+        // presence structurally instead of validating after the fact.
         std::vector<common_peg_parser> required_parsers;
         std::vector<common_peg_parser> optional_parsers;
         for (const auto & [param_name, param_schema] : properties.items()) {
@@ -421,22 +423,27 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
             }
         }
 
-        // Build required arg sequence in definition order
+        // Accept required arguments in any order through permute(), which
+        // generates every ordering while requiring each argument exactly
+        // once -- the same approach as the generic JSON tool path
+        // (common/chat.cpp). The grammar therefore structurally rejects a
+        // call that omits or duplicates a required argument, instead of
+        // accepting it and throwing a bespoke mapper-side error at parse
+        // time. Above COMMON_CHAT_MAX_PERMUTE (6) required args, permute()
+        // falls back to a fixed sequence, matching the JSON tool path's
+        // policy. Keep the ordering of required + optional: optional
+        // arguments follow as a trailing run, in any order, each at most
+        // once.
         common_peg_parser args_seq = p.eps();
-        for (size_t i = 0; i < required_parsers.size(); i++) {
-            if (i > 0) {
-                args_seq = args_seq + p.space();
-            }
-            args_seq = args_seq + required_parsers[i];
+        if (!required_parsers.empty()) {
+            args_seq = args_seq + p.permute("tool-" + name + "-required", required_parsers);
         }
-
-        // Build optional args with flexible ordering
         if (!optional_parsers.empty()) {
             common_peg_parser any_opt = p.choice();
             for (const auto & opt : optional_parsers) {
                 any_opt |= opt;
             }
-            args_seq = args_seq + p.repeat(p.space() + any_opt, 0, -1);
+            args_seq = args_seq + p.zero_or_more(any_opt + p.space());
         }
 
         if (!arguments.start.empty()) {
