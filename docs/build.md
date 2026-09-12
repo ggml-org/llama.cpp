@@ -835,6 +835,72 @@ For build instructions and usage examples, refer to [OPENVINO.md](backend/OPENVI
 
 Check [README.md](./backend/snapdragon/README.md) for target specific build and run info.
 
+## XDNA (AMD Ryzen AI NPU)
+
+The XDNA backend pairs the CPU backend with the NPU found in AMD Ryzen AI processors. It keeps
+all tensors in host memory and, through the normal scheduler splitting, takes over only the
+prompt-processing sized `MUL_MAT`s (batches of `GGML_XDNA_MIN_BATCH` tokens or more, default 32)
+for which it has a precompiled NPU kernel; token generation stays on the CPU. It has been brought
+up on XDNA1 (Phoenix / Hawk Point, e.g. Ryzen 7 8700G) — the generation the vendor LLM stacks skip.
+
+Requirements:
+
+- the AMD NPU driver (which ships the XRT runtime, `xrt_coreutil.dll` / `libxrt_coreutil.so`),
+- precompiled kernels in `ggml/src/ggml-xdna/kernels/` (see the README there; they are built once
+  with the open-source [mlir-aie / IRON](https://github.com/Xilinx/mlir-aie) toolchain).
+
+Build:
+
+```bash
+cmake -B build -DGGML_XDNA=ON
+cmake --build build --config Release
+```
+
+On Windows the import library for `xrt_coreutil.dll` is generated automatically from the driver
+DLL at configure time (`dumpbin`/`lib` from a Visual Studio developer shell); pass
+`-DGGML_XDNA_XRT_LIB=<xrt_coreutil.lib>` to use your own. On Linux XRT is looked up under
+`/opt/xilinx/xrt`. `GGML_XDNA_KERNEL_DIR` (CMake) / `$GGML_XDNA_KERNEL_DIR` (runtime) override the
+kernel location.
+
+Usage notes:
+
+- The backend is picked up automatically as an accelerator device (`XDNA` in `--list-devices`).
+- The CPU backend's weight repacking puts quantized weights into CPU-only buffers that other
+  backends cannot see, so run with `--no-repack` (`-nr`) for the NPU to receive those matmuls;
+  weights in plain host buffers (non-repacked types, `-nr`) are routed to it without further setup.
+- Each matmul the backend receives is split by output features between the NPU, a private Vulkan
+  backend on the integrated GPU (when llama.cpp is built with `GGML_VULKAN=ON` as well; the AMD
+  device is picked automatically, `GGML_XDNA_VK_DEVICE=<n>` overrides) and a private CPU backend,
+  all running at the same time. `GGML_XDNA_NPU_SHARE` / `GGML_XDNA_VK_SHARE` (`0..1`) set the NPU
+  and GPU shares, the CPU takes the rest (defaults 0 / 0.8 / 0.2 with Vulkan, 0.4 / – / 0.6
+  without); `GGML_XDNA_NPU_SHARE=auto` rebalances all shares from the measured times. With a GPU
+  present the NPU only joins products of at least `GGML_XDNA_NPU_MIN_GFLOP` (default 4).
+  Measured on the 8700G (`-nr -ngl 0`, 476-token prompt, best of 2): Qwen3-0.6B Q4_0 — Vulkan
+  worker alone ~670 t/s, Vulkan 0.8 + CPU 0.2 ~715 t/s, CPU only ~390 t/s, every split that
+  includes the NPU 400–540 t/s; gemma-4-E2B Q4_K_M — Vulkan 0.8 + CPU 0.2 ~260 t/s, with the NPU
+  at 0.1 ~160 t/s. The 780M is roughly 10x the XDNA1 at batched GEMM, so next to it the NPU only
+  lengthens each op's critical path; that is why it is off by default when a GPU worker exists.
+  For comparison the whole model on the 780M through llama.cpp's own Vulkan backend
+  (`-ngl 99 -dev Vulkan1`) runs at 2000–3200 t/s (0.6B) / ~530 t/s (E2B): on a UMA APU keep the
+  model GPU-resident whenever it fits and use the XDNA backend for host-resident weights.
+- The Vulkan worker is zero-copy on a UMA GPU: activations and the destination rows are imported
+  in place (`VK_EXT_external_memory_host`) and the GPU writes its rows straight into the ggml
+  tensor; weight slices are copied once into device memory and kept (mmap'd model files cannot
+  be imported), up to `GGML_XDNA_VK_CACHE_MB` (default 8192). `GGML_XDNA_VK_ZERO_COPY=0` forces
+  the plain copy path. Reading back from the 780M's device-local memory is very slow on the
+  current AMD Windows driver (~50 MB/s), which is why the copy path and any GPU→host split
+  boundary cost so much more than the compute itself.
+  Measured on a Ryzen 7 8700G with Qwen3-0.6B Q4_0 (`-nr`, 476-token prompt): NPU only ~300 t/s,
+  CPU only ~390 t/s, CPU+NPU ~440 t/s (repacked CPU-only, which the NPU cannot join yet: ~570 t/s).
+- The scheduler-level combination also works: with `-ngl N` the first N layers live on the Vulkan
+  device and the remaining layers' prompt matmuls go through the XDNA backend (and its workers).
+- `GGML_XDNA_DEBUG=1` logs every `supports_op` decision; `GGML_XDNA_MIN_BATCH=<n>` raises the token
+  threshold (a very large value disables NPU use without rebuilding).
+- The first-generation NPU is a low-power part: its dense bf16 GEMM throughput (~0.2 TFLOPS on 4
+  columns) is below what the 8 Zen 4 cores reach on quantized weights, so expect the CPU+NPU split
+  to trade some prompt-processing speed for offloaded work rather than to beat the CPU outright.
+  `test-backend-ops -b XDNA -o MUL_MAT` verifies the NPU path against the CPU reference.
+
 ---
 ## Notes about GPU-accelerated backends
 

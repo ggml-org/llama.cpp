@@ -195,6 +195,7 @@ option(GGML_BLAS                            "ggml: use BLAS"                    
 set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
                                             "ggml: BLAS library vendor")
 option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             ${GGML_LLAMAFILE_DEFAULT})
+option(GGML_XDNA                            "ggml: use AMD XDNA (Ryzen AI NPU) via XRT"       OFF)
 
 option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)
 option(GGML_MUSA                            "ggml: use MUSA"                                  OFF)
@@ -329,6 +330,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-alloc.h
     include/ggml-backend.h
     include/ggml-blas.h
+    include/ggml-xdna.h
     include/ggml-cann.h
     include/ggml-cpp.h
     include/ggml-cuda.h
