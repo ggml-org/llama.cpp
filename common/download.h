@@ -60,6 +60,7 @@ struct common_download_opts {
     bool download_eagle3  = false;
     bool download_dflash  = false;
     bool download_dspark  = false;
+    bool download_diffusion = false; // resolve diffusion sidecars and text encoder
     common_download_callback * callback = nullptr;
 };
 
@@ -117,5 +118,11 @@ struct common_download_hf_plan {
     hf_cache::hf_file dflash;
     hf_cache::hf_file dspark;
     hf_cache::hf_file preset; // if set, only this file is downloaded
+    // diffusion sidecars
+    hf_cache::hf_file vae;
+    hf_cache::hf_file audio_vae;
+    hf_cache::hf_file text_proj;
+    std::string text_encoder_repo; // default text encoder repo[:tag] of the model family
 };
+
 common_download_hf_plan common_download_get_hf_plan(const common_params_model & model, const common_download_opts & opts);

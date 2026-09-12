@@ -53,14 +53,16 @@ add_library(${TARGET}
     server.cpp
     server-http.cpp
     server-http.h
+    server-mediagen.cpp
+    server-mediagen.h
     server-models.cpp
     server-models.h
 )
 set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(${TARGET} PRIVATE ../mtmd ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
+target_include_directories(${TARGET} PRIVATE ../mtmd ../mediagen ${CMAKE_SOURCE_DIR})
+target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib mediagen ${CMAKE_THREAD_LIBS_INIT})
 
 if (LLAMA_SERVER_PCH)
     target_precompile_headers(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR}/common/common.h)

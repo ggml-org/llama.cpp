@@ -1565,6 +1565,30 @@ Example response:
 }
 ```
 
+### Media generation: `/v1/images/generations`, `/v1/videos`, `/v1/audio/speech`
+
+When the model is a latent diffusion model (e.g. `llama-server -hf unsloth/LTX-2.3-GGUF`, see
+[tools/mediagen/README.md](../mediagen/README.md)) the text endpoints answer with an error and these
+OpenAI-compatible endpoints are served instead:
+
+- `POST /v1/images/generations`: `prompt`, `size` (`WxH`), `seed`, `steps`, `cfg_scale`,
+  `negative_prompt`, `enhance_prompt`. Returns `{"created", "data": [{"b64_json", "revised_prompt"}]}`.
+  With `"stream": true` the response is a stream of server-sent events, `image_generation.progress`
+  (`step`, `total`) followed by `image_generation.completed` (`b64_json`, `revised_prompt`).
+- `POST /v1/videos`: `prompt`, `size`, `seconds` (or `frames`), `fps`, `audio`. Generation is
+  synchronous; the completed video job object is returned with `content_url`.
+- `GET /v1/videos/{id}` and `GET /v1/videos/{id}/content`: the job object and the mp4 (h264 + aac,
+  requires `ffmpeg` in `PATH`; without it the frames and the audio are inlined in the job object as
+  base64 png / wav).
+- `POST /v1/audio/speech`: `input`, `seconds`; returns a wav file.
+
+`GET /v1/models` and `GET /props` report the `image`, `video` and `audio` capabilities.
+
+```shell
+curl http://localhost:8080/v1/images/generations -H "Content-Type: application/json" \
+    -d '{"prompt": "Draw a cat", "size": "512x512"}' | jq -r '.data[0].b64_json' | base64 -d > cat.png
+```
+
 ## Anthropic-compatible API Endpoints
 
 ### POST `/v1/messages`: Anthropic-compatible Messages API
