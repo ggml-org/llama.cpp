@@ -1596,6 +1596,12 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
     tmp.push_back(0);
 
     int ret = llama_decode(ctx, llama_batch_get_one(tmp.data(), tmp.size()));
+    if (ret == 0) {
+        // llama_decode does not wait; async backend errors appear at synchronize
+        llama_synchronize(ctx);
+        llama_memory_clear(mem, true);
+        ret = llama_decode(ctx, llama_batch_get_one(tmp.data(), tmp.size()));
+    }
     if (ret != 0) {
         COM_ERR("llama_decode() failed: %d\n", ret);
         res = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
