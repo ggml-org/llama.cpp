@@ -119,11 +119,19 @@ bool server_http_context::init(const common_params & params) {
         SRV_ERR("%s", "--host requires at least one address\n");
         return false;
     }
+    size_t n_tcp_hosts = 0;
     for (const auto & host : pimpl->hosts) {
         if (host.empty()) {
             SRV_ERR("%s", "--host requires non-empty addresses\n");
             return false;
         }
+        if (!string_ends_with(host, ".sock")) {
+            n_tcp_hosts++;
+        }
+    }
+    if (port == 0 && n_tcp_hosts > 1) {
+        SRV_ERR("%s", "--port 0 is not supported with multiple TCP addresses\n");
+        return false;
     }
     for (size_t i = 0; i < pimpl->hosts.size(); ++i) {
         pimpl->servers.emplace_back();
