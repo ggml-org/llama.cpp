@@ -229,6 +229,22 @@ static void test(void) {
     argv = {"binary_name", "-lm", "hello"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
 
+    {
+        std::string ts_values;
+        for (size_t i = 0; i <= llama_max_devices(); i++) {
+            ts_values += std::to_string(i + 1);
+            if (i < llama_max_devices()) {
+                ts_values += ",";
+            }
+        }
+        common_params ts_params;
+        argv = {"binary_name", "-m", "model.gguf", "-ts", ts_values};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), ts_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "-m", "model.gguf", "--fit-target", ts_values};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), ts_params, LLAMA_EXAMPLE_COMMON));
+    }
+
     printf("test-arg-parser: test valid usage\n\n");
 
     argv = {"binary_name", "-m", "model_file.gguf"};
@@ -293,6 +309,29 @@ static void test(void) {
     argv = {"binary_name", "-lm", "dio"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_DIRECT_IO);
+
+    {
+        std::string ts_values;
+        for (size_t i = 0; i < llama_max_devices(); i++) {
+            ts_values += std::to_string(i + 1);
+            if (i + 1 < llama_max_devices()) {
+                ts_values += ",";
+            }
+        }
+        common_params ts_params;
+        argv = {"binary_name", "-m", "model.gguf", "-ts", ts_values};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), ts_params, LLAMA_EXAMPLE_COMMON));
+        for (size_t i = 0; i < llama_max_devices(); i++) {
+            assert(ts_params.tensor_split[i] == float(i + 1));
+        }
+
+        common_params fit_params;
+        argv = {"binary_name", "-m", "model.gguf", "--fit-target", ts_values};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), fit_params, LLAMA_EXAMPLE_COMMON));
+        for (size_t i = 0; i < llama_max_devices(); i++) {
+            assert(fit_params.fit_params_target[i] == size_t(i + 1) * 1024 * 1024);
+        }
+    }
 
     // multi-value args (CSV)
     argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
