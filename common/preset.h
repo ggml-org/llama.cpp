@@ -63,8 +63,11 @@ struct common_preset_context {
     // used for config files shared by all binaries, where each binary only knows a subset of options
     bool ignore_unknown_keys = false;
 
-    // if only_remote_allowed is true, only accept whitelisted keys
     common_preset_context(llama_example ex);
+
+    // restrict load_from_ini() to the keys a remote (untrusted) preset may set
+    // must be called before loading a preset that was fetched from a remote repo
+    void set_remote_allowed_keys();
 
     // load presets from INI file
     common_presets load_from_ini(const std::string & path, common_preset & global) const;

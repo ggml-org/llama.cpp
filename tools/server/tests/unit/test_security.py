@@ -2,6 +2,7 @@ import pytest
 from openai import OpenAI
 from utils import *
 import threading
+import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 server = ServerPreset.tinyllama2()
@@ -243,3 +244,160 @@ def test_local_media_file(media_path, image_url, success,):
         assert res.status_code == 200
     else:
         assert res.status_code == 400
+
+
+# --- remote preset key allowlist (ref: issue #27857) ---------------------------
+# A preset.ini fetched from a remote repo is untrusted input: it is parsed and
+# rendered into the argv of a child llama-server, so it must only be able to set
+# keys on the allowlist. These tests drive the real -hf flow against a local stub
+# of the HF API, so no network and no remote repository are involved.
+
+REMOTE_PRESET_REPO = "test-user/preset-repo"
+REMOTE_PRESET_COMMIT = "0" * 40
+
+
+def _hf_stub(preset_ini: bytes):
+    repo = REMOTE_PRESET_REPO
+    commit = REMOTE_PRESET_COMMIT
+
+    class HfStubHandler(BaseHTTPRequestHandler):
+        def _body_for(self, path):
+            if path == f"/api/models/{repo}/refs":
+                return json.dumps({"branches": [{"name": "main", "targetCommit": commit}]}).encode()
+            if path == f"/api/models/{repo}/tree/{commit}":
+                return json.dumps([{"type": "file", "path": "preset.ini", "size": len(preset_ini)}]).encode()
+            if path == f"/{repo}/resolve/{commit}/preset.ini":
+                return preset_ini
+            return None
+
+        def _respond(self, body, with_body):
+            if body is None:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            if with_body:
+                self.wfile.write(body)
+
+        def do_HEAD(self):
+            self._respond(self._body_for(self.path.split("?")[0]), False)
+
+        def do_GET(self):
+            self._respond(self._body_for(self.path.split("?")[0]), True)
+
+        def log_message(self, format, *args):
+            pass
+
+    hf = ThreadingHTTPServer(("127.0.0.1", 0), HfStubHandler)
+    threading.Thread(target=hf.serve_forever, daemon=True).start()
+    return hf
+
+
+def _run_server_with_remote_preset(preset_ini: bytes, port: int, wait_for_start: bool):
+    """Start llama-server with -hf pointed at the stub. Returns (started, output, models_json)."""
+    hf = _hf_stub(preset_ini)
+    with tempfile.TemporaryDirectory() as cache_dir:
+        env = {
+            **os.environ,
+            "MODEL_ENDPOINT": f"http://127.0.0.1:{hf.server_port}/",
+            "LLAMA_CACHE": cache_dir,
+        }
+        cmd = [
+            "../../../build/bin/llama-server",
+            "-hf", REMOTE_PRESET_REPO,
+            "--host", "127.0.0.1",
+            "--port", str(port),
+        ]
+        if not wait_for_start:
+            try:
+                proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=30)
+                return False, proc.stdout + proc.stderr, None
+            except subprocess.TimeoutExpired as e:
+                out = (e.stdout or b"").decode(errors="replace") + (e.stderr or b"").decode(errors="replace")
+                return True, out, None
+            finally:
+                hf.shutdown()
+
+        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        models = None
+        try:
+            for _ in range(60):
+                if proc.poll() is not None:
+                    break
+                try:
+                    r = requests.get(f"http://127.0.0.1:{port}/v1/models", timeout=2)
+                    if r.status_code == 200:
+                        models = r.json()
+                        break
+                except Exception:
+                    pass
+                time.sleep(1)
+        finally:
+            proc.terminate()
+            try:
+                out = proc.communicate(timeout=15)[0]
+            except Exception:
+                proc.kill()
+                out = proc.communicate()[0]
+            hf.shutdown()
+        return models is not None, out, models
+
+
+# every key below is a real registered llama-server option that the UNFILTERED
+# local preset path accepts; each is outside the remote allowlist, so on the
+# remote path it must be rejected by the allowlist specifically
+@pytest.mark.parametrize("key, value", [
+    ("mcp-servers-json",   '{"mcpServers":{}}'),
+    ("mcp-servers-config", "/dev/null"),
+    ("webui-mcp-proxy",    "false"),
+    ("host",               "127.0.0.1"),
+    ("port",               "8099"),
+])
+def test_remote_preset_rejects_non_allowlisted_key(key, value):
+    preset_ini = f"version = 1\n\n[*]\n{key} = {value}\n".encode()
+    started, output, _ = _run_server_with_remote_preset(preset_ini, 8081, wait_for_start=False)
+    assert not started, (
+        f"server started with a remote preset that sets '{key}'; "
+        "the remote-preset allowlist did not reject it"
+    )
+    assert f"option '{key}' is not allowed in remote presets" in output, output[-2000:]
+
+
+def test_remote_preset_accepts_allowlisted_key():
+    # batch-size is on the remote allowlist: the preset must load and take effect,
+    # proving the allowlist filters keys rather than rejecting remote presets wholesale
+    preset_ini = (
+        b"version = 1\n\n[remote-model]\n"
+        b"batch-size = 128\n"
+    )
+    started, output, models = _run_server_with_remote_preset(preset_ini, 8082, wait_for_start=True)
+    assert started, f"server did not start with an allowlisted remote preset key: {output[-2000:]}"
+    assert models is not None and models["data"], f"no models listed: {output[-2000:]}"
+    args = models["data"][0]["status"]["args"]
+    assert "--batch-size" in args, args
+    assert args[args.index("--batch-size") + 1] == "128", args
+
+
+def test_local_preset_is_not_filtered():
+    # the local path is operator-authored and must stay unfiltered
+    with tempfile.TemporaryDirectory() as d:
+        ini = os.path.join(d, "preset.ini")
+        with open(ini, "w") as f:
+            f.write('version = 1\n\n[local-model]\nmcp-servers-json = {"mcpServers":{}}\n')
+        server = ServerPreset.tinyllama2()
+        server.api_key = None
+        server.model_hf_repo = None
+        server.model_hf_file = None
+        server.model_file = None
+        server.models_preset = ini
+        server.start()
+        try:
+            res = server.make_request("GET", "/v1/models")
+            assert res.status_code == 200
+            args = res.body["data"][0]["status"]["args"]
+            assert "--mcp-servers-json" in args, args
+        finally:
+            server.stop()
