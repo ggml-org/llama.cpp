@@ -1100,6 +1100,11 @@ static void test_meta_split_preparation() {
     GGML_ASSERT(allocation->get_domain(buft, 1) == &second.buffer_type);
     GGML_ASSERT(ggml_backend_buft_get_alloc_interface(&first.buffer_type) == nullptr);
     GGML_ASSERT(ggml_backend_buft_get_alloc_interface(ggml_backend_cpu_buffer_type()) == nullptr);
+    {
+        ggml_backend_buffer_type_t buffer_types[] = {buft, &first.buffer_type, buft};
+        ggml_gallocr_ptr domains(ggml_gallocr_new_n(buffer_types, 3));
+        GGML_ASSERT(domains && first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
+    }
     auto test_ctx = make_context();
     auto * source = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 8, 6);
     auto * mirror = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 8, 6);

@@ -483,8 +483,20 @@ struct node_alloc {
     struct tensor_alloc src[GGML_MAX_SRC];
 };
 
+struct ggml_gallocr_domain {
+    ggml_backend_buffer_type_t buft;
+    struct ggml_dyn_tallocr * alloc;
+};
+
+struct ggml_gallocr_composite_plan {
+    const struct ggml_backend_buffer_type_alloc_i * iface;
+    struct ggml_gallocr_domain * domains;
+    size_t n_domains;
+};
+
 struct ggml_gallocr_plan {
     struct ggml_dyn_tallocr ** buf_tallocs; // [n_buffers]
+    struct ggml_gallocr_composite_plan ** composites; // [n_buffers], optional
     struct ggml_hash_set hash_set;
     struct hash_node * hash_values; // [hash_set.size]
 
@@ -532,6 +544,36 @@ ggml_gallocr_t ggml_gallocr_new_n(ggml_backend_buffer_type_t * bufts, int n_bufs
             size_t max_size = ggml_backend_buft_get_max_size(bufts[i]);
             galloc->plan.buf_tallocs[i] = ggml_dyn_tallocr_new(alignment, max_size);
         }
+
+        const struct ggml_backend_buffer_type_alloc_i * iface = ggml_backend_buft_get_alloc_interface(bufts[i]);
+        if (iface) {
+            if (!galloc->plan.composites) {
+                galloc->plan.composites = calloc(n_bufs, sizeof(galloc->plan.composites[0]));
+                GGML_ASSERT(galloc->plan.composites);
+            }
+            for (int j = 0; j < i; j++) {
+                if (bufts[i] == bufts[j]) {
+                    galloc->plan.composites[i] = galloc->plan.composites[j];
+                    break;
+                }
+            }
+            if (!galloc->plan.composites[i]) {
+                struct ggml_gallocr_composite_plan * composite = calloc(1, sizeof(*composite));
+                GGML_ASSERT(composite);
+                composite->iface = iface;
+                composite->n_domains = iface->n_domains(bufts[i]);
+                GGML_ASSERT(composite->n_domains && composite->n_domains <= SIZE_MAX/sizeof(composite->domains[0]));
+                composite->domains = calloc(composite->n_domains, sizeof(composite->domains[0]));
+                GGML_ASSERT(composite->domains);
+                for (size_t domain = 0; domain < composite->n_domains; domain++) {
+                    struct ggml_gallocr_domain * physical = &composite->domains[domain];
+                    physical->buft = iface->get_domain(bufts[i], domain);
+                    GGML_ASSERT(!ggml_backend_buft_get_alloc_interface(physical->buft));
+                    physical->alloc = ggml_dyn_tallocr_new(ggml_backend_buft_get_alignment(physical->buft), ggml_backend_buft_get_max_size(physical->buft));
+                }
+                galloc->plan.composites[i] = composite;
+            }
+        }
     }
     galloc->n_buffers = n_bufs;
 
@@ -574,6 +616,23 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
                 ggml_dyn_tallocr_free(galloc->plan.buf_tallocs[i]);
             }
         }
+        if (galloc->plan.composites && galloc->plan.composites[i]) {
+            bool freed = false;
+            for (int j = 0; j < i; j++) {
+                if (galloc->plan.composites[j] == galloc->plan.composites[i]) {
+                    freed = true;
+                    break;
+                }
+            }
+            if (!freed) {
+                struct ggml_gallocr_composite_plan * composite = galloc->plan.composites[i];
+                for (size_t domain = 0; domain < composite->n_domains; domain++) {
+                    ggml_dyn_tallocr_free(composite->domains[domain].alloc);
+                }
+                free(composite->domains);
+                free(composite);
+            }
+        }
     }
 
     ggml_hash_set_free(&galloc->plan.hash_set);
@@ -581,6 +640,7 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
     free(galloc->bufts);
     free(galloc->buffers);
     free(galloc->plan.buf_tallocs);
+    free(galloc->plan.composites);
     free(galloc->plan.node_allocs);
     free(galloc->plan.leaf_allocs);
     free(galloc);
