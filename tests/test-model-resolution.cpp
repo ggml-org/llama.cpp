@@ -1,4 +1,8 @@
-// tests local model discovery and HF model resolution without external network access
+// tests the HF model resolution and the model handler assembly end-to-end on
+// synthetic repo listings: a local httplib server bound to the loopback
+// serves hardcoded HF API responses, so the real client, hf_cache, resolution
+// and CLI parsing run against them without external network access
+// also tests local model discovery using temporary directories
 
 #include "arg.h"
 #include "common.h"
