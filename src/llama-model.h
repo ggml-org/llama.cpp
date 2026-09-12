@@ -706,6 +706,9 @@ struct llama_model {
     // for quantize-stats only
     std::vector<std::pair<std::string, struct ggml_tensor *>> tensors_by_name;
 
+    // for quantized tensor split dither: the layers owning each blk. tensor, keyed by the part of the name after "blk.<il>."
+    std::map<std::string, std::vector<uint32_t>> tensor_split_layers_by_suffix;
+
     // for keeping track of associated LoRA adapters
     std::unordered_set<llama_adapter_lora *> loras;
 

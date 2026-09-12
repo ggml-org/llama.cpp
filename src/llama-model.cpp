@@ -800,6 +800,30 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         }
         const std::vector<std::pair<int64_t, uint32_t>> segments = get_split_segments(split_state.axis, tc.il);
         const std::vector<int64_t> granularity = get_split_granularity(blck_size, tc.il, segments);
+        // dither the choice of quantized split point across the layers sharing this tensor so the per-layer rounding errors
+        // cancel out class-wide; a one-sided floor to the block granularity would bias every tensor down by up to a full quantum
+        int64_t d_rank  = 0;
+        int64_t d_count = 1;
+        if (tensor_name.substr(0, 4) == "blk.") {
+            const std::string suffix    = tensor_name.substr(tensor_name.find('.', 4) + 1);
+            const auto        it_layers = ud->model->tensor_split_layers_by_suffix.find(suffix);
+            if (it_layers != ud->model->tensor_split_layers_by_suffix.end()) {
+                const std::vector<uint32_t> & layers = it_layers->second;
+                d_count                              = 1 + (int64_t) layers.size();
+                d_rank = (int64_t) (std::lower_bound(layers.begin(), layers.end(), tc.il) - layers.begin());
+            }
+        } else if (tensor_name.substr(0, 6) == "cache_") {
+            const bool tc_is_recr = hparams.is_recr(tc.il);
+            const bool tc_is_swa  = hparams.is_swa(tc.il);
+            for (uint32_t il2 = 0; il2 < hparams.n_layer_all; il2++) {
+                if (hparams.is_recr(il2) == tc_is_recr && hparams.is_swa(il2) == tc_is_swa) {
+                    d_count++;
+                    if (il2 < tc.il) {
+                        d_rank++;
+                    }
+                }
+            }
+        }
         for (size_t is = 0; is < segments.size(); is++) {
             const int64_t  ne_s = segments[is].first;
             const uint32_t nr_s = segments[is].second;
@@ -807,10 +831,14 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             int64_t low = 0;
             size_t j = 0;
             for (; j < ud->n_devices - 1; j++) {
-                int64_t high = tensor_split_scan.back() == 0.0f ?
-                    ne_s * (j+1)/ud->n_devices : ne_s * tensor_split_scan[j]/tensor_split_scan.back();
-                if (high % g_s != 0) {
-                    high -= high % g_s;
+                const double  b    = tensor_split_scan.back() == 0.0f ?
+                                         (double) ne_s * (j + 1) / ud->n_devices :
+                                         (double) ne_s * tensor_split_scan[j] / tensor_split_scan.back();
+                const int64_t k0   = (int64_t) (b / g_s);
+                const int64_t cnt  = (int64_t) llround((b - k0 * g_s) * (double) d_count / g_s);
+                int64_t       high = (k0 + (d_rank < cnt ? 1 : 0)) * g_s;
+                if (high > ne_s) {
+                    high = ne_s;
                 }
                 split_state.ne[is*ud->n_devices + (j + tc.rotation) % ud->n_devices] = high - low;
                 low = high;
@@ -1702,6 +1730,26 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
+    }
+
+    // build the per-suffix layer lists used to dither quantized tensor split points across layers (see llama_meta_device_get_split_state)
+    for (const auto & [name, _] : tensors_by_name) {
+        if (name.compare(0, 4, "blk.") != 0) {
+            continue;
+        }
+        const size_t dot = name.find('.', 4);
+        if (dot == std::string::npos || dot == 4) {
+            continue;
+        }
+        const uint32_t il = (uint32_t) std::stoull(name.substr(4, dot));
+        if (il >= hparams.n_layer_all) {
+            continue;
+        }
+        tensor_split_layers_by_suffix[name.substr(dot + 1)].push_back(il);
+    }
+    for (auto & [_, il_layers] : tensor_split_layers_by_suffix) {
+        std::sort(il_layers.begin(), il_layers.end());
+        il_layers.erase(std::unique(il_layers.begin(), il_layers.end()), il_layers.end());
     }
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
