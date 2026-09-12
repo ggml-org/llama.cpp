@@ -27,6 +27,11 @@ GGML_BACKEND_API bool ggml_backend_is_cuda(ggml_backend_t backend);
 // device buffer
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device);
 
+// Device-local storage for bounded arenas; ignores GGML_CUDA_ENABLE_UNIFIED_MEMORY.
+// Uses a GGML device ordinal. Invalid ordinals return NULL; allocation failure has no managed/host fallback.
+// Also available through the CUDA registry as "ggml_backend_cuda_device_buffer_type".
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_cuda_device_buffer_type(int device);
+
 // conduct allreduce operation between devices
 GGML_BACKEND_API bool ggml_backend_cuda_allreduce_tensor(ggml_backend_t * backends, struct ggml_tensor ** tensors, size_t n_backends);
 
