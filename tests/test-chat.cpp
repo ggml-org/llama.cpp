@@ -472,6 +472,12 @@ static common_chat_tool empty_args_tool_no_properties{
     })",
 };
 
+static common_chat_tool empty_args_tool_no_schema{
+    /* .name = */ "empty_args_no_schema",
+    /* .description = */ "A tool that takes no arguments and has no parameters schema",
+    /* .parameters = */ "{}",
+};
+
 static common_chat_tool python_tool{
     /* .name = */ "python",
     /* .description = */ "an ipython interpreter",
@@ -5069,6 +5075,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .enable_thinking(false)
             .tools({ empty_args_tool })
             .expect(simple_assist_msg("", "", "empty_args", "{}"))
+            .run();
+
+        // Tool call with no parameters schema, {} means no arguments
+        tst.test("<tool_call>\n{\"name\": \"empty_args_no_schema\", \"arguments\": {}}</tool_call>")
+            .enable_thinking(false)
+            .tools({ empty_args_tool_no_schema })
+            .expect(simple_assist_msg("", "", "empty_args_no_schema", "{}"))
             .run();
 
         // fake tool call marker in reasoning
