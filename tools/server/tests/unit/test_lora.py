@@ -32,6 +32,66 @@ def test_lora(scale: float, re_content: str):
     assert match_regex(re_content, res.body["content"])
 
 
+def test_lora_init_without_apply_starts_at_zero():
+    global server
+    server.lora_init_without_apply = True
+    server.start()
+    res = server.make_request("GET", "/lora-adapters")
+    assert res.status_code == 200
+    assert len(res.body) >= 1
+    assert all(adapter["scale"] == 0.0 for adapter in res.body)
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "Look in thy glass",
+        "temperature": 0.0,
+        "seed": 42,
+        "cache_prompt": False,
+    })
+    assert res.status_code == 200
+    assert match_regex("(little|girl|three|years|old)+", res.body["content"])
+
+
+def test_lora_empty_list_disables_adapters():
+    global server
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "Look in thy glass",
+        "lora": [],
+        "temperature": 0.0,
+        "seed": 42,
+        "cache_prompt": False,
+    })
+    assert res.status_code == 200
+    assert match_regex("(little|girl|three|years|old)+", res.body["content"])
+
+
+def test_lora_omitted_after_empty_does_not_reuse_cache():
+    global server
+    server.n_slots = 1
+    server.start()
+    prompt = "Look in thy glass"
+    res_off = server.make_request("POST", "/completion", data={
+        "prompt": prompt,
+        "lora": [],
+        "temperature": 0.0,
+        "seed": 42,
+        "cache_prompt": True,
+    })
+    assert res_off.status_code == 200
+    assert match_regex("(little|girl|three|years|old)+", res_off.body["content"])
+
+    # omitted lora restores the global scale-1 adapters; the no-adapter prompt
+    # cache from the previous request must not be reused
+    res_on = server.make_request("POST", "/completion", data={
+        "prompt": prompt,
+        "temperature": 0.0,
+        "seed": 42,
+        "cache_prompt": True,
+    })
+    assert res_on.status_code == 200
+    assert match_regex("(eye|love|glass|sun)+", res_on.body["content"])
+
+
 def test_lora_per_request():
     global server
     server.n_slots = 4

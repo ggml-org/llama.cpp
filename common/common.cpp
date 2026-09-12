@@ -1357,6 +1357,15 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         pimpl->lora.emplace_back(std::move(lora)); // copy to list of loaded adapters
     }
 
+    // --lora-init-without-apply: start at scale 0. The flag is cleared after
+    // the first apply skip in common_init_from_params so sleep/wake keeps
+    // scales from POST /lora-adapters.
+    if (params.lora_init_without_apply) {
+        for (auto & la : params.lora_adapters) {
+            la.scale = 0.0f;
+        }
+    }
+
     // updates params.sampling
     // TODO: fix naming
     common_init_sampler_from_model(model, params.sampling);
@@ -1506,6 +1515,8 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 
     if (!params.lora_init_without_apply) {
         common_set_adapter_lora(lctx, params.lora_adapters);
+    } else {
+        params.lora_init_without_apply = false;
     }
 
     if (params.warmup) {

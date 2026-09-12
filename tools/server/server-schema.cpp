@@ -234,6 +234,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
                 throw std::runtime_error("Error: 'lora' must be an array of objects with 'id' and 'scale' fields");
             }
             ctx.params.lora = parse_lora_request(lora);
+            ctx.params.lora_specified = true;
         }));
 
     // sequence breakers for DRY

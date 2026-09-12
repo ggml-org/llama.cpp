@@ -3788,6 +3788,14 @@ struct test_add_add : public test_case {
         return VARS_TO_STR5(type, type_addend, ne, broadcast, view);
     }
 
+    double max_nmse_err() override {
+        if (type == GGML_TYPE_F16 && type_addend == GGML_TYPE_F16) {
+            // Fused ADDs can keep FP32 intermediates while the CPU rounds each ADD to FP16.
+            return 1e-6;
+        }
+        return test_case::max_nmse_err();
+    }
+
     test_add_add(ggml_type type = GGML_TYPE_F32,
             ggml_type type_addend = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {64, 5, 4, 3},
