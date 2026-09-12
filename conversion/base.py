@@ -1859,7 +1859,7 @@ class TextModel(ModelBase):
             # ref: https://huggingface.co/poolside/Laguna-XS.2
             res = "laguna"
         if chkhsh == "079be25958f51a600a944c6c529381549910befee3970e703cbd2fbb9ea5468f":
-            # ref: https://huggingface.co/fraunhofer-iis/elmod-2.7b-it
+            # ref: https://huggingface.co/fraunhofer-iis/elmod-2.7b-base
             res = "elmod"
 
         if res is None:
