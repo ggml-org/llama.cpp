@@ -1102,3 +1102,383 @@ class DeepseekV4FlashVisionModel(MmprojModel):
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+def _v41_is_prime(n: int) -> bool:
+    """Trial division, deliberately not sympy.
+
+    The reference uses sympy.isprime, but sympy is not a llama.cpp conversion dependency and
+    pulling in a computer algebra system to test primality would be hard to justify. The
+    candidates here sit just above engram_vocab_size, about 16 million, so trial division runs
+    to sqrt(n) which is around 4000 and costs nothing. There are 48 primes to find in total.
+    """
+    if n < 2:
+        return False
+    for p in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37):
+        if n % p == 0:
+            return n == p
+    f = 41
+    while f * f <= n:
+        # 6k +/- 1 wheel, having already cleared the small primes above
+        if n % f == 0 or n % (f + 2) == 0:
+            return False
+        f += 6
+    return True
+
+
+def _v41_find_next_prime(start: int, seen_primes: set[int]) -> int:
+    """The smallest prime above start that has not been handed out yet."""
+    candidate = start + 1
+    while not _v41_is_prime(candidate) or candidate in seen_primes:
+        candidate += 1
+    return candidate
+
+
+def _v41_build_compressed_token_map(tokenizer) -> tuple[list[int], int]:
+    """Map token ids to a compressed id space where normalized tokens collapse together."""
+    from tokenizers import Regex, normalizers
+
+    sentinel = "\ue000"  # private-use char to preserve single spaces
+    normalizer = normalizers.Sequence([
+        normalizers.NFKC(),
+        normalizers.NFD(),
+        normalizers.StripAccents(),
+        normalizers.Lowercase(),
+        normalizers.Replace(Regex(r"[ \t\r\n]+"), " "),
+        normalizers.Replace(Regex(r"^ $"), sentinel),
+        normalizers.Strip(),
+        normalizers.Replace(sentinel, " "),
+    ])
+
+    backend = tokenizer.backend_tokenizer
+    key_to_new: dict[str, int] = {}
+    lookup = [0] * len(tokenizer)
+    for token_id in range(len(tokenizer)):
+        text = backend.decode([token_id], skip_special_tokens=False)
+        if "\ufffd" in text:
+            key = backend.id_to_token(token_id)
+        else:
+            normalized = normalizer.normalize_str(text)
+            key = normalized if normalized else text
+
+        new_id = key_to_new.get(key)
+        if new_id is None:
+            new_id = len(key_to_new)
+            key_to_new[key] = new_id
+        lookup[token_id] = new_id
+
+    return lookup, len(key_to_new)
+
+
+def _v41_compute_hash_multipliers(layer_ids: tuple[int, ...], max_ngram_size: int, tokenizer_vocab_size: int):
+    """Generate odd multipliers for n-gram hashing, one per (layer, lookback)."""
+    import numpy as np
+    import torch
+
+    max_long = np.iinfo(np.int64).max
+    multiplier_bound = max(1, (max_long // tokenizer_vocab_size) // 2)
+    rows = []
+    for layer_id in layer_ids:
+        generator = np.random.default_rng(10007 * layer_id)
+        values = generator.integers(low=0, high=multiplier_bound, size=(max_ngram_size,), dtype=np.int64)
+        rows.append(torch.tensor(values * 2 + 1))
+    return torch.stack(rows)
+
+
+@ModelBase.register("DeepseekV41ForCausalLM")
+@ModelBase.example("deepseek-ai/DeepSeek-V4.1-Flash")
+class DeepseekV41Model(DeepseekV4Model):
+    """DeepSeek V4.1. Subclasses V4 and overrides only where the checkpoint differs.
+
+    See patch_llamacpp_v41.py for the verified list of differences. The important one is the
+    FP8 block size: V4 is [128, 128] and V4.1 is [32, 32], and using the wrong value corrupts
+    every dequantized weight without raising.
+    """
+
+    model_arch = gguf.MODEL_ARCH.DEEPSEEK41
+
+    def _v41_flatten_hparams(self):
+        """Promote the nested text_config to the top level.
+
+        V4.1 nests its text parameters under text_config while the inherited V4 code expects
+        them flat. Overriding load_hparams does not work, because base.__init__ calls
+        ModelBase.load_hparams explicitly rather than through the instance, so the seam is the
+        first consumer of hparams instead, which is index_tensors.
+        """
+        for key, value in (self.hparams.get("text_config") or {}).items():
+            self.hparams.setdefault(key, value)
+        # absent in V4.1; V4 reads it unconditionally
+        self.hparams.setdefault("num_hash_layers", 0)
+
+    def index_tensors(self, remote_hf_model_id=None):
+        self._v41_flatten_hparams()
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        with open(self.dir_model / "config.json", "r", encoding="utf-8") as f:
+            raw = json.load(f)
+
+        # the FP8 scale block size, read rather than assumed
+        qcfg = raw.get("quantization_config") or {}
+        block = qcfg.get("weight_block_size") or [128, 128]
+        self._v41_block_rows = int(block[0])
+        self._v41_block_cols = int(block[1] if len(block) > 1 else block[0])
+        logger.info(
+            "DeepSeek V4.1: fp8 weight_block_size %dx%d, engram layers %s",
+            self._v41_block_rows, self._v41_block_cols,
+            self.hparams.get("engram_layer_ids"),
+        )
+
+        self.block_count = self.hparams["num_hidden_layers"]
+        if self.mtp_only:
+            self.block_count += self.hparams.get("num_nextn_predict_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    @classmethod
+    def filter_tensors(cls, item):
+        name, _ = item
+        # the vision tower and its aligner are exported separately as an mmproj file
+        if name.startswith(("vision.", "aligner.", "image_")):
+            return None
+        return super().filter_tensors(item)
+
+    def dequant_model(self):
+        """Same as V4 but with the block size taken from the checkpoint."""
+        fp8_dtypes = self._float8_dtypes()
+        tensors_to_remove: list[str] = []
+        rows, cols = self._v41_block_rows, self._v41_block_cols
+
+        def dequant_fp8_weight(weight: Tensor, scale: Tensor) -> Tensor:
+            out_features, in_features = weight.shape
+            scale_f = self._e8m0_to_float(scale)
+            scale_f = scale_f.repeat_interleave(rows, 0)[:out_features]
+            scale_f = scale_f.repeat_interleave(cols, 1)[:, :in_features]
+            return weight.float() * scale_f
+
+        for name in list(self.model_tensors.keys()):
+            if not name.endswith(".scale"):
+                continue
+            weight_name = name.removesuffix(".scale") + ".weight"
+            if weight_name not in self.model_tensors:
+                continue
+            weight = self.model_tensors[weight_name]
+            scale = self.model_tensors[name]
+            if weight().dtype not in fp8_dtypes:
+                continue
+            self.model_tensors[weight_name] = lambda w=weight, s=scale: dequant_fp8_weight(w(), s())
+            self._dsv4_fp8_dequantized.add(weight_name)
+            tensors_to_remove.append(name)
+
+        for name in tensors_to_remove:
+            del self.model_tensors[name]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if (engram_ids := hparams.get("engram_layer_ids")) is not None:
+            # These MUST carry the arch prefix, not a literal "deepseek4.". llama.cpp resolves
+            # every LLM_KV_* as "{arch}.{key}", so a hardcoded prefix means the runtime looks up
+            # deepseek41.engram.head_count and finds nothing, on a file that otherwise loads.
+            arch = self.gguf_writer.arch
+            self.gguf_writer.add_uint32(gguf.Keys.Engram.HEAD_COUNT.format(arch=arch), hparams["engram_n_heads"])
+            self.gguf_writer.add_uint32(gguf.Keys.Engram.KEY_LENGTH.format(arch=arch), hparams["engram_head_dim"])
+            self.gguf_writer.add_uint32(gguf.Keys.Engram.MAX_NGRAM_SIZE.format(arch=arch), hparams["engram_max_ngram_size"])
+            self.gguf_writer.add_array(gguf.Keys.Engram.LAYER_IDS.format(arch=arch), engram_ids)
+
+            # Generate and write engram hash constants
+            import numpy as _np
+
+            # A model with engram layers cannot run without these constants, so every step below
+            # raises rather than warns: a file that is missing them loads and then hashes wrong.
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+
+            # Build compressed token map
+            token_map, compressed_vocab_size = _v41_build_compressed_token_map(tokenizer)
+            expected_vocab = hparams.get("engram_compressed_vocab_size")
+            if compressed_vocab_size != expected_vocab:
+                # every multiplier derives from this size, so a mismatch rehashes the whole table
+                raise ValueError(f"compressed vocab size is {compressed_vocab_size}, config says {expected_vocab}")
+
+            # Compute multipliers
+            layer_ids = tuple(engram_ids)
+            multipliers = _v41_compute_hash_multipliers(layer_ids, hparams["engram_max_ngram_size"], compressed_vocab_size)
+
+            # Compute primes and offsets. Every (n-gram size, head) pair gets its own bucket, and
+            # the search starts over at engram_vocab_size - 1 for each n-gram size, so the shared
+            # `seen` set is what keeps the buckets distinct.
+            max_ngram_size = hparams["engram_max_ngram_size"]
+            n_heads = hparams["engram_n_heads"]
+            primes_list, seen_primes = [], set()
+
+            for layer_id in layer_ids:
+                per_ngram = []
+                for ngram_idx in range(max_ngram_size - 1):
+                    current_search = hparams["engram_vocab_size"] - 1
+                    sizes = []
+                    for head_idx in range(n_heads):
+                        current_search = _v41_find_next_prime(current_search, seen_primes)
+                        seen_primes.add(current_search)
+                        sizes.append(current_search)
+                    per_ngram.append(sizes)
+                primes_list.append(per_ngram)
+
+            # [n_engram_layers, max_ngram_size - 1, n_heads]
+            primes_array = _np.array(primes_list, dtype=_np.uint64)
+
+            # each bucket starts where the previous one ended, in that same order flattened
+            offsets_list = []
+            for layer_primes in primes_array:
+                flat_primes = layer_primes.flatten()
+                offsets = _np.cumsum(_np.concatenate(([0], flat_primes[:-1])))
+                offsets_list.append(offsets.reshape(layer_primes.shape))
+            offsets_array = _np.array(offsets_list, dtype=_np.uint64)
+
+            # Write constants to GGUF.
+            # add_array() infers the element type from the first item and maps every Python int to
+            # INT32, which would truncate the multipliers, so pass the element type explicitly and
+            # flatten by hand: a gguf array is one dimensional.
+            def add_u64(key, arr):
+                self.gguf_writer.add_key_value(
+                    key,
+                    [int(x) for x in _np.asarray(arr).reshape(-1)],
+                    gguf.GGUFValueType.ARRAY,
+                    gguf.GGUFValueType.UINT64,
+                )
+
+            add_u64(gguf.Keys.Engram.MULTIPLIERS.format(arch=arch), multipliers.numpy())
+            add_u64(gguf.Keys.Engram.PRIMES.format(arch=arch), primes_array)
+            add_u64(gguf.Keys.Engram.OFFSETS.format(arch=arch), offsets_array)
+            self.gguf_writer.add_key_value(
+                gguf.Keys.Engram.TOKEN_MAP.format(arch=arch),
+                [int(x) for x in token_map],
+                gguf.GGUFValueType.ARRAY,
+                gguf.GGUFValueType.INT32,
+            )
+            # the reference stores the padding token already mapped, so do the same here
+            self.gguf_writer.add_uint32(
+                gguf.Keys.Engram.PAD_ID.format(arch=arch),
+                int(token_map[hparams.get("engram_pad_id", 2)]),
+            )
+            logger.info("Engram constants written: multipliers %s, primes %s, offsets %s, token_map %d",
+                        multipliers.shape, primes_array.shape, offsets_array.shape, len(token_map))
+
+
+    # rows per block when rewriting an engram table; 1M rows is about 1 GB of float32 scratch
+    _V41_ENGRAM_CHUNK_ROWS = 1_000_000
+
+    def _write_engram_table(self, bid: int) -> list[str]:
+        """Quantize one engram table in row blocks, accumulating into a disk-backed memmap.
+
+        The inherited FP8 path cannot be used here. It computes weight.float() * scale over the
+        whole tensor, and one engram table is 384,006,168 x 256, so 98.3 billion elements, which
+        is 393 GB as float32. A run that reaches this tensor collapses from 118 GiB free to 13 GiB
+        and is killed. Every other tensor in the model converts normally.
+
+        The scale layout also differs from the rest of the checkpoint. Linear weights carry a
+        [rows/32, cols/32] scale matching weight_block_size [32, 32], while the engram scale is
+        [rows, 8], which is one scale per 32 columns within a single row. Broadcasting it the way
+        the generic path does would corrupt the table, so it is expanded along columns only.
+
+        Reading is done straight from the safetensors shard rather than through the lazy tensor
+        wrapper, because to_eager materializes the whole tensor before any slicing takes effect.
+        """
+        import json as _json
+        import os as _os
+        import tempfile as _tempfile
+
+        import numpy as _np
+        from safetensors import safe_open as _safe_open
+
+        weight_name = f"layers.{bid}.engram.embed.weight"
+        scale_name = f"layers.{bid}.engram.embed.scale"
+
+        index_path = self.dir_model / "model.safetensors.index.json"
+        with open(index_path, "r", encoding="utf-8") as f:
+            weight_map = _json.load(f)["weight_map"]
+        shard = self.dir_model / weight_map[weight_name]
+
+        qtype = gguf.GGMLQuantizationType.Q8_0
+        block_elems = gguf.GGML_QUANT_SIZES[qtype][0]
+
+        with _safe_open(str(shard), framework="pt") as f:
+            wsl = f.get_slice(weight_name)
+            n_rows, n_cols = (int(x) for x in wsl.get_shape())
+            has_scale = scale_name in f.keys()
+            ssl = f.get_slice(scale_name) if has_scale else None
+            scale_groups = int(ssl.get_shape()[1]) if has_scale else 0
+
+            if n_cols % block_elems:
+                raise ValueError(
+                    f"engram row width {n_cols} is not a multiple of the {qtype.name} block {block_elems}"
+                )
+            if has_scale and n_cols % scale_groups:
+                raise ValueError(
+                    f"engram row width {n_cols} is not divisible by its {scale_groups} scale groups"
+                )
+            per_group = n_cols // scale_groups if has_scale else 0
+
+            row_bytes = int(gguf.quantize(_np.zeros((1, n_cols), dtype=_np.float32), qtype).nbytes)
+            rows_per_chunk = min(int(self._V41_ENGRAM_CHUNK_ROWS), n_rows)
+            n_chunks = (n_rows + rows_per_chunk - 1) // rows_per_chunk
+
+            tmp_dir = _os.environ.get("V41_ENGRAM_TMPDIR") or _tempfile.gettempdir()
+            tmp_path = _os.path.join(tmp_dir, f"engram_{bid}_{qtype.name}.bin")
+            logger.info(
+                "engram layer %d: %d x %d, scale groups %d, %s in %d blocks of %d rows, staging %.1f GB at %s",
+                bid, n_rows, n_cols, scale_groups, qtype.name, n_chunks, rows_per_chunk,
+                n_rows * row_bytes / 1e9, tmp_path,
+            )
+
+            out = _np.memmap(tmp_path, dtype=_np.uint8, mode="w+", shape=(n_rows, row_bytes))
+            for ci, start in enumerate(range(0, n_rows, rows_per_chunk)):
+                stop = min(start + rows_per_chunk, n_rows)
+                chunk = wsl[start:stop, :].float()
+                if has_scale:
+                    s = self._e8m0_to_float(ssl[start:stop, :])
+                    chunk = chunk * s.repeat_interleave(per_group, 1)[:, :n_cols]
+                out[start:stop] = gguf.quantize(
+                    chunk.cpu().numpy().astype(_np.float32), qtype
+                ).reshape(stop - start, row_bytes)
+                del chunk
+                if ci % 25 == 0:
+                    logger.info("  engram layer %d: %d / %d rows", bid, stop, n_rows)
+            out.flush()
+
+        new_name = self.format_tensor_name(gguf.MODEL_TENSOR.ENGRAM_EMBD, bid, ".weight")
+        self.gguf_writer.add_tensor(new_name, out, raw_dtype=qtype)
+        logger.info("engram layer %d: wrote %s as %s", bid, new_name, qtype.name)
+
+        consumed = [weight_name]
+        if has_scale:
+            consumed.append(scale_name)
+        return consumed
+
+    def generate_extra_tensors(self):
+        yield from super().generate_extra_tensors()
+
+        consumed: list[str] = []
+        for bid in (self.hparams.get("engram_layer_ids") or []):
+            if f"layers.{bid}.engram.embed.weight" in self.model_tensors:
+                consumed.extend(self._write_engram_table(int(bid)))
+        for name in consumed:
+            if name in self.model_tensors:
+                del self.model_tensors[name]
+
+    def _map_dsv4_tensor_name(self, name: str, bid):
+        match = re.match(r"layers\.(\d+)\.(.+)$", name)
+        if match is not None:
+            v41_only = {
+                "engram.embed.weight": (gguf.MODEL_TENSOR.ENGRAM_EMBD, ".weight"),
+                "engram.k_weight": (gguf.MODEL_TENSOR.ENGRAM_K, ".weight"),
+                "engram.q_weight": (gguf.MODEL_TENSOR.ENGRAM_Q, ".weight"),
+                "engram.wkv.weight": (gguf.MODEL_TENSOR.ENGRAM_WKV, ".weight"),
+                "attn.indexer.k_norm.weight": (gguf.MODEL_TENSOR.INDEXER_K_NORM, ".weight"),
+                "attn.indexer.wk.weight": (gguf.MODEL_TENSOR.INDEXER_ATTN_K, ".weight"),
+            }
+            tensor_name = match.group(2)
+            if tensor_name in v41_only:
+                return v41_only[tensor_name]
+        return super()._map_dsv4_tensor_name(name, bid)
