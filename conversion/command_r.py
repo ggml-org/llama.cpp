@@ -131,9 +131,9 @@ class Cohere2MoeModel(TextModel):
             is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
             if is_mtp and cls.no_mtp:
                 return None
-            if cls.mtp_only and not is_mtp and name not in (
+            if cls.mtp_only and not is_mtp and (cls.mtp_shared_embd or name not in (
                 "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
-            ):
+            )):
                 return None
 
         return name, gen

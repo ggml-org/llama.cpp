@@ -120,6 +120,7 @@ class ModelBase:
     supports_mtp_export: bool = False
     mtp_only: bool = False
     no_mtp: bool = False
+    mtp_shared_embd: bool = False
 
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
