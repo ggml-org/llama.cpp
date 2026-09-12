@@ -3,7 +3,7 @@
 #include "common.cuh"
 
 
-static __device__ __forceinline__ unsigned int ggml_cuda_cvta_generic_to_shared(void * generic_ptr) {
+static __device__ __forceinline__ unsigned int ggml_cuda_cvta_generic_to_shared(const void * generic_ptr) {
 #ifdef CP_ASYNC_AVAILABLE
     return __cvta_generic_to_shared(generic_ptr);
 #else
