@@ -47,6 +47,8 @@ set(LLAMA_CORE_SOURCES
 add_library(llama
             ../include/llama.h
             ${LLAMA_CORE_SOURCES}
+            llama-context-memory.cpp
+            llama-context-memory.h
             llama-context-workspace.cpp
             llama-context-workspace.h
             llama-memory-executor.cpp

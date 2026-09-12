@@ -4,6 +4,7 @@
 #include "llama-ext.h"
 #include "llama-cparams.h"
 #include "llama-context-workspace.h"
+#include "llama-context-memory.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
 #include "llama-impl.h"
@@ -68,6 +69,9 @@ struct llama_context {
 
     // Return whether at least one scheduler workspace is backed by an arena.
     bool uses_compute_arenas() const;
+
+    // Report whether this context uses serial coordinated workspace ownership.
+    bool uses_memory_coordinator() const;
 
     uint32_t n_ctx()     const;
     uint32_t n_ctx_seq() const;
@@ -371,6 +375,8 @@ private:
     // The scheduler is declared after the arenas and backends so it is destroyed first.
     std::vector<llama_compute_arena_binding> compute_arenas;
     ggml_backend_sched_ptr sched;
+    // Destroy coordinated ownership before the scheduler, including constructor-failure unwinding.
+    std::unique_ptr<llama_context_memory> compute_memory;
 
     llama_compute_reserve_state sched_reserve_state;
 

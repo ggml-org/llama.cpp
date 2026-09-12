@@ -6024,6 +6024,16 @@ static void ggml_backend_cuda_graph_release(ggml_backend_t backend, const void *
 #endif
 }
 
+// Scheduler splits are backend-owned; retire the entire cache only under exclusive backend ownership.
+static void ggml_backend_cuda_graph_release_all(ggml_backend_t backend) {
+    GGML_ASSERT(backend && ggml_backend_is_cuda(backend));
+#ifdef USE_CUDA_GRAPH
+    auto * ctx = static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_set_device(ctx->device);
+    ctx->cuda_graphs.clear();
+#endif
+}
+
 // Inspect without populating the cache or returning a native handle.
 static bool ggml_backend_cuda_graph_is_captured(ggml_backend_t backend, const void * key) {
     GGML_ASSERT(backend && ggml_backend_is_cuda(backend));
@@ -6042,13 +6052,15 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     GGML_UNUSED(reg);
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     const bool release_graph = strcmp(name, "ggml_backend_cuda_graph_release") == 0;
-    if (release_graph || strcmp(name, "ggml_backend_cuda_graph_is_captured") == 0) {
+    const bool release_all = strcmp(name, "ggml_backend_cuda_graph_release_all") == 0;
+    if (release_graph || release_all || strcmp(name, "ggml_backend_cuda_graph_is_captured") == 0) {
         // Experimental stream scheduling metadata is backend-wide, not owned by one graph cache entry.
         static const bool graph_opt = [] {
             const char * env = getenv("GGML_CUDA_GRAPH_OPT");
             return env && atoi(env) == 1;
         }();
         if (graph_opt) return nullptr;
+        if (release_all) return (void *)ggml_backend_cuda_graph_release_all;
         if (release_graph) return (void *)ggml_backend_cuda_graph_release;
         return (void *)ggml_backend_cuda_graph_is_captured;
     }

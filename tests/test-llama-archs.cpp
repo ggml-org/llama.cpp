@@ -567,6 +567,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     }
     if (devs.empty()) {
         GGML_ASSERT(lctx->uses_compute_arenas() != no_alloc);
+        GGML_ASSERT(lctx->uses_memory_coordinator() != no_alloc);
     }
     test_compute_memory_reporting(lctx.get(), no_alloc);
     return std::make_pair(std::move(model), std::move(lctx));
@@ -689,6 +690,23 @@ static bool check_causal_attn_toggle(
     }
 
     return ok;
+}
+
+// Abort a CPU graph, then verify the next request recreates coordinated workspace and remains numerically stable.
+static void test_compute_arena_abort(llama_model * model, llama_context * ctx,
+        const std::vector<llama_token> & tokens, const std::vector<float> & expected) {
+    if (!ctx->uses_memory_coordinator()) return;
+    llama_memory_clear(llama_get_memory(ctx), true);
+    llama_batch batch = llama_batch_init(4, 0, 1);
+    for (int i = 0; i < 4; ++i) common_batch_add(batch, tokens[i], i, {0}, true);
+    llama_set_abort_callback(ctx, [](void *) { return true; }, nullptr);
+    const int result = llama_decode(ctx, batch);
+    llama_set_abort_callback(ctx, nullptr, nullptr);
+    llama_batch_free(batch);
+    GGML_ASSERT(result != 0);
+    llama_memory_clear(llama_get_memory(ctx), true);
+    const auto actual = get_logits(model, ctx, tokens);
+    GGML_ASSERT(nmse(expected, actual) <= 1e-4);
 }
 
 // Run a short prefill followed by one TG1 step and return the resulting logits.
@@ -1114,6 +1132,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     if (logits_cpu.empty()) {
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
+                        if (arch == LLM_ARCH_LLAMA && !moe) {
+                            test_compute_arena_abort(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, logits_cpu);
+                        }
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
                         test_executed = true;
