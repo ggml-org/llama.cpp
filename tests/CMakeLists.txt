@@ -212,6 +212,13 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     )
 
     llama_test(
+        test-llama-archs
+        NAME test-prune-layers-metadata
+        LABEL main
+        ARGS --test-prune-layers "${MODEL_DIR}/prune-layers-input.gguf" "${MODEL_DIR}/prune-layers-output.gguf"
+    )
+
+    llama_test(
         test-recurrent-state-rollback
         LABEL main
         ARGS -m "${MODEL_DIR}/qwen35-dense.gguf"

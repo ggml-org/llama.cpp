@@ -65,7 +65,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
+    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [--test-prune-layers input output] [-h/--help]\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
@@ -79,7 +79,7 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
     return ret;
 }
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const uint32_t n_layer_override = 0) {
     gguf_context_ptr ret(gguf_init_empty());
     llama_model_saver ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -88,7 +88,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     uint32_t n_embd  = 256;
     uint32_t n_head  = 2;
     uint32_t n_ff    = 384;
-    uint32_t n_layer = 2;
+    uint32_t n_layer = n_layer_override > 0 ? n_layer_override : 2;
     if (arch == LLM_ARCH_LLAMA4) {
         n_layer = 4; // hparams.n_no_rope_layer_step is hard-coded to 4
     } else if (arch == LLM_ARCH_GEMMA4) {
@@ -637,6 +637,83 @@ static int save_models(const llm_arch target_arch, const size_t seed, const int 
     return 0;
 }
 
+static int test_prune_layers_metadata(const std::string & path_inp, const std::string & path_out, const size_t seed) {
+    const int32_t prune_layers[] = { 1, -1 };
+
+    gguf_context_ptr gguf_ctx_inp = get_gguf_ctx(LLM_ARCH_LFM2, false, 3);
+    auto model_and_ctx = get_model_and_ctx(gguf_ctx_inp.get(), nullptr, seed, {});
+    llama_model_save_to_file(model_and_ctx.first.get(), path_inp.c_str());
+    model_and_ctx.second.reset();
+    model_and_ctx.first.reset();
+
+    llama_model_quantize_params qparams = llama_model_quantize_default_params();
+    qparams.ftype        = LLAMA_FTYPE_ALL_F32;
+    qparams.only_copy    = true;
+    qparams.prune_layers = prune_layers;
+
+    if (llama_model_quantize(path_inp.c_str(), path_out.c_str(), &qparams) != 0) {
+        fprintf(stderr, "%s: failed to prune model\n", __func__);
+        return 1;
+    }
+
+    gguf_init_params gguf_params = {
+        /*.no_alloc =*/ true,
+        /*.ctx      =*/ nullptr,
+    };
+    gguf_context_ptr gguf_ctx(gguf_init_from_file(path_out.c_str(), gguf_params));
+    if (!gguf_ctx) {
+        fprintf(stderr, "%s: failed to read pruned model metadata\n", __func__);
+        return 1;
+    }
+
+    const LLM_KV llm_kv(LLM_ARCH_LFM2);
+    const int64_t id_block_count = gguf_find_key(gguf_ctx.get(), llm_kv(LLM_KV_BLOCK_COUNT).c_str());
+    const int64_t id_head_count  = gguf_find_key(gguf_ctx.get(), llm_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV).c_str());
+    const int64_t id_recurrent   = gguf_find_key(gguf_ctx.get(), llm_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS).c_str());
+    const int64_t id_ff_length   = gguf_find_key(gguf_ctx.get(), llm_kv(LLM_KV_FEED_FORWARD_LENGTH).c_str());
+    const int64_t id_rope_dims   = gguf_find_key(gguf_ctx.get(), llm_kv(LLM_KV_ROPE_DIMENSION_SECTIONS).c_str());
+
+    GGML_ASSERT(id_block_count >= 0);
+    GGML_ASSERT(gguf_get_kv_type(gguf_ctx.get(), id_block_count) == GGUF_TYPE_UINT32);
+    GGML_ASSERT(gguf_get_val_u32(gguf_ctx.get(), id_block_count) == 2);
+
+    GGML_ASSERT(id_head_count >= 0);
+    GGML_ASSERT(gguf_get_kv_type(gguf_ctx.get(), id_head_count) == GGUF_TYPE_ARRAY);
+    GGML_ASSERT(gguf_get_arr_type(gguf_ctx.get(), id_head_count) == GGUF_TYPE_UINT32);
+    GGML_ASSERT(gguf_get_arr_n(gguf_ctx.get(), id_head_count) == 2);
+    const uint32_t * head_count = (const uint32_t *) gguf_get_arr_data(gguf_ctx.get(), id_head_count);
+    GGML_ASSERT(head_count[0] == 2);
+    GGML_ASSERT(head_count[1] == 2);
+
+    GGML_ASSERT(id_recurrent >= 0);
+    GGML_ASSERT(gguf_get_kv_type(gguf_ctx.get(), id_recurrent) == GGUF_TYPE_ARRAY);
+    GGML_ASSERT(gguf_get_arr_type(gguf_ctx.get(), id_recurrent) == GGUF_TYPE_UINT32);
+    GGML_ASSERT(gguf_get_arr_n(gguf_ctx.get(), id_recurrent) == 2);
+    const uint32_t * recurrent = (const uint32_t *) gguf_get_arr_data(gguf_ctx.get(), id_recurrent);
+    GGML_ASSERT(recurrent[0] == 0);
+    GGML_ASSERT(recurrent[1] == 0);
+
+    GGML_ASSERT(id_ff_length >= 0);
+    GGML_ASSERT(gguf_get_kv_type(gguf_ctx.get(), id_ff_length) == GGUF_TYPE_UINT32);
+    GGML_ASSERT(gguf_get_val_u32(gguf_ctx.get(), id_ff_length) == 384);
+
+    GGML_ASSERT(id_rope_dims >= 0);
+    GGML_ASSERT(gguf_get_kv_type(gguf_ctx.get(), id_rope_dims) == GGUF_TYPE_ARRAY);
+    GGML_ASSERT(gguf_get_arr_n(gguf_ctx.get(), id_rope_dims) == 4);
+
+    GGML_ASSERT(gguf_find_tensor(gguf_ctx.get(), "blk.1.attn_q.weight") >= 0);
+    GGML_ASSERT(gguf_find_tensor(gguf_ctx.get(), "blk.1.shortconv.conv.weight") < 0);
+    GGML_ASSERT(gguf_find_tensor(gguf_ctx.get(), "blk.2.attn_q.weight") < 0);
+
+    llama_model_params model_params = llama_model_default_params();
+    model_params.load_mode = LLAMA_LOAD_MODE_NONE;
+    llama_model_ptr model(llama_model_load_from_file(path_out.c_str(), model_params));
+    GGML_ASSERT(model);
+    GGML_ASSERT(llama_model_n_layer(model.get()) == 2);
+
+    return 0;
+}
+
 static int test_backends(const llm_arch target_arch, const size_t seed, const int verbosity) {
     struct user_data_t {
         struct {
@@ -818,6 +895,8 @@ int main(int argc, char ** argv) {
     llm_arch arch = LLM_ARCH_UNKNOWN;
     size_t seed = rd();
     std::string out;
+    std::string prune_input;
+    std::string prune_output;
 
     int verbosity = LOG_LEVEL_ERROR;
 
@@ -863,10 +942,22 @@ int main(int argc, char ** argv) {
                 return 1;
             }
         }
+        if (strcmp(argv[i], "--test-prune-layers") == 0) {
+            if (i + 2 < argc) {
+                prune_input  = argv[++i];
+                prune_output = argv[++i];
+            } else {
+                usage(argv);
+                return 1;
+            }
+        }
     }
     printf("%s: using seed %zu\n", __func__, seed);
 
     try {
+        if (!prune_input.empty()) {
+            return test_prune_layers_metadata(prune_input, prune_output, seed);
+        }
         if (!out.empty()) {
             return save_models(arch, seed, verbosity, out);
         }
