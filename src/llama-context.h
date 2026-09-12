@@ -365,7 +365,11 @@ private:
     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
     llm_graph_result_ptr gf_res_prev;
+    // separate metadata arenas give alternating MTP shapes stable CUDA graph cache keys
+    llm_graph_result_ptr gf_res_prev_mtp_prefill;
     llm_graph_result_ptr gf_res_reserve;
+
+    llm_graph_result * gf_res_prev_active = nullptr;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
