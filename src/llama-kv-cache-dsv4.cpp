@@ -1912,6 +1912,7 @@ ggml_tensor * llama_kv_cache_dsv4_raw_context::build_input_k_idxs(ggml_context *
 
     ggml_tensor * k_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens);
     ggml_set_input(k_idxs);
+    ggml_set_name(k_idxs, "dsv4_raw_attn_inp_k_idxs");
 
     return k_idxs;
 }

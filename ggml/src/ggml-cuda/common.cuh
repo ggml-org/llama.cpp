@@ -1262,6 +1262,8 @@ struct ggml_tensor_extra_gpu {
 #define USE_CUDA_GRAPH
 #endif
 
+using ggml_cuda_graph_key = std::pair<const void *, int>;
+
 struct ggml_cuda_graph {
 #ifdef USE_CUDA_GRAPH
     ~ggml_cuda_graph() {
@@ -1279,7 +1281,6 @@ struct ggml_cuda_graph {
     bool disable_due_to_gpu_arch = false;
     bool warmup_complete = false;
     uint64_t uid = 0;
-    int64_t last_used_time = 0;
     struct node_properties {
         ggml_tensor node;
         void *   node_src_data_ptrs[GGML_MAX_SRC];
@@ -1293,6 +1294,11 @@ struct ggml_cuda_graph {
         return !(disable_due_to_gpu_arch || disable_cuda_graphs_due_to_env);
     }
 #endif
+};
+
+struct ggml_cuda_graph_cache {
+    int64_t last_used_time = 0;
+    std::array<std::unique_ptr<ggml_cuda_graph>, GGML_SCHED_MAX_COPIES> slots;
 };
 
 struct ggml_cuda_concurrent_event {
@@ -1459,20 +1465,20 @@ struct ggml_backend_cuda_context {
     int curr_stream_no = 0;
 
 #ifdef USE_CUDA_GRAPH
-    // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
-    // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
-    std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
+    // Each graph input slot keeps its own capture and warmup state.
+    std::unordered_map<const void *, ggml_cuda_graph_cache> cuda_graphs;
 
     int64_t last_graph_eviction_sweep = 0;
 
-    ggml_cuda_graph * cuda_graph(const void * first_node_ptr) {
+    ggml_cuda_graph * cuda_graph(ggml_cuda_graph_key key) {
+        GGML_ASSERT(key.second >= 0 && key.second < GGML_SCHED_MAX_COPIES);
         const int64_t time_now = ggml_time_us();
 
         // sweep every 5s, evicting cuda graphs unused for >=10s
         if (time_now - last_graph_eviction_sweep >= 5'000'000) {
             last_graph_eviction_sweep = time_now;
             for (auto it = cuda_graphs.begin(); it != cuda_graphs.end(); ) {
-                if (time_now - it->second->last_used_time >= 10'000'000) {
+                if (time_now - it->second.last_used_time >= 10'000'000) {
                     it = cuda_graphs.erase(it);
                 } else {
                     ++it;
@@ -1480,20 +1486,23 @@ struct ggml_backend_cuda_context {
             }
         }
 
-        auto it = cuda_graphs.find(first_node_ptr);
-        if (it == cuda_graphs.end()) {
-            it = cuda_graphs.emplace(first_node_ptr, std::make_unique<ggml_cuda_graph>()).first;
+        auto & cache = cuda_graphs[key.first];
+        cache.last_used_time = time_now;
+        auto & graph = cache.slots[key.second];
+        if (!graph) {
+            graph = std::make_unique<ggml_cuda_graph>();
         }
-        it->second->last_used_time = time_now;
-        return it->second.get();
+        return graph.get();
     }
 
     // Check if any CUDA graph is enabled for this context (used by kernels that need to know
     // if graphs are in use without having access to the specific graph key)
     bool any_cuda_graph_enabled() const {
-        for (const auto & [key, graph] : cuda_graphs) {
-            if (graph && graph->is_enabled()) {
-                return true;
+        for (const auto & [key, cache] : cuda_graphs) {
+            for (const auto & graph : cache.slots) {
+                if (graph && graph->is_enabled()) {
+                    return true;
+                }
             }
         }
         return false;
@@ -1501,9 +1510,11 @@ struct ggml_backend_cuda_context {
 
     // Check if any CUDA graph has an instance for this context
     bool any_cuda_graph_has_instance() const {
-        for (const auto & [key, graph] : cuda_graphs) {
-            if (graph && graph->instance != nullptr) {
-                return true;
+        for (const auto & [key, cache] : cuda_graphs) {
+            for (const auto & graph : cache.slots) {
+                if (graph && graph->instance != nullptr) {
+                    return true;
+                }
             }
         }
         return false;

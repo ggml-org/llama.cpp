@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h" // for ggml_log_level
+#include "ggml-backend.h"
 
 #include <string>
 #include <type_traits>
@@ -92,6 +93,12 @@ struct buffer_view {
         return data && size > 0;
     }
 };
+
+// see docs/development/backend-scheduler.md
+static inline void llama_host_write(struct ggml_tensor * t) {
+    GGML_ASSERT(ggml_backend_buffer_is_host(t->buffer));
+    ggml_backend_tensor_set_direct(t, 0, ggml_nbytes(t));
+}
 
 void replace_all(std::string & s, const std::string & search, const std::string & replace);
 
