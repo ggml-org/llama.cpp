@@ -43,14 +43,16 @@ class MapleModel(TextModel):
         dtype = tensors[0].dtype
         meta = LazyTorchTensor.meta_with_dtype_and_shape(dtype, shape)
 
-        def stack() -> Tensor:
+        # tensors goes through args, not the closure, so that `func` matches
+        # LazyBase's single-argument shape
+        def stack(ts: list[Tensor]) -> Tensor:
             result = torch.empty(shape, dtype=dtype)
-            for expert_id, tensor in enumerate(tensors):
+            for expert_id, tensor in enumerate(ts):
                 result[expert_id].copy_(LazyTorchTensor.to_eager(tensor))
-            tensors.clear()
+            ts.clear()
             return result
 
-        return cast(torch.Tensor, LazyTorchTensor(meta=meta, args=(), func=stack))
+        return cast(torch.Tensor, LazyTorchTensor(meta=meta, args=(tensors,), func=stack))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "mlp.experts" in name:
