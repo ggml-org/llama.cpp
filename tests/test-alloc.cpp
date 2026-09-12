@@ -1424,6 +1424,17 @@ static void test_meta_materialization(bool relative_addresses) {
         GGML_ASSERT(ggml_backend_buffer_init_tensor(owner.get(), tensor) == GGML_STATUS_SUCCESS);
         GGML_ASSERT(tensor->data == nullptr && ggml_backend_tensor_is_bound(tensor));
     }
+    {
+        auto graph_ctx = make_context();
+        auto * output = ggml_scale(graph_ctx.ctx, split, 0.5f);
+        ggml_set_output(output);
+        ggml_build_forward_expand(graph_ctx.graph, output);
+        ggml_gallocr_ptr galloc(ggml_gallocr_new(ggml_backend_cpu_buffer_type()));
+        GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph_ctx.graph));
+        GGML_ASSERT(split->buffer == owner.get() && split->data == nullptr && ggml_backend_tensor_is_bound(split));
+        GGML_ASSERT(output->buffer != owner.get() && ggml_backend_tensor_is_bound(output));
+        GGML_ASSERT(ggml_gallocr_get_buffer_size(galloc.get(), 0) == ggml_nbytes(output));
+    }
     std::array<float, 48> values;
     for (size_t i = 0; i < values.size(); i++) {
         values[i] = float(i + 1);
@@ -1507,6 +1518,56 @@ static void test_meta_materialization(bool relative_addresses) {
     GGML_ASSERT(first.context->buffers.empty() && second.context->buffers.empty());
 }
 
+static void test_graph_measurement_binding() {
+    for (bool placeholder : {false, true}) {
+        auto backend = dummy_backend_init(64);
+        auto test_ctx = make_context();
+        auto * input = make_input_1d(test_ctx.ctx, 8);
+        ggml_backend_buffer_ptr assigned;
+        if (placeholder) {
+            assigned.reset(ggml_backend_buft_alloc_buffer(&backend.buffer_type, 0));
+            input->buffer = assigned.get();
+        }
+        auto * output = ggml_scale(test_ctx.ctx, input, 2.0f);
+        ggml_set_output(output);
+        ggml_build_forward_expand(test_ctx.graph, output);
+        ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+        std::array<uint8_t, GGML_TENSOR_SIZE> before;
+        std::memcpy(before.data(), input, GGML_TENSOR_SIZE);
+        size_t size = 0;
+        ggml_gallocr_reserve_n_size(galloc.get(), test_ctx.graph, nullptr, nullptr, &size);
+        GGML_ASSERT(size == 32 && backend.context->alloc_calls == 0);
+        GGML_ASSERT(std::memcmp(before.data(), input, GGML_TENSOR_SIZE) == 0);
+        GGML_ASSERT(!ggml_backend_tensor_is_bound(input) && !ggml_backend_tensor_is_bound(output));
+        GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), test_ctx.graph) == !placeholder);
+        if (placeholder) {
+            GGML_ASSERT(input->buffer == assigned.get() && input->data == nullptr);
+            GGML_ASSERT(output->buffer == nullptr && output->data == nullptr);
+        } else {
+            GGML_ASSERT(ggml_backend_tensor_is_bound(input) && ggml_backend_tensor_is_bound(output));
+        }
+        galloc.reset();
+        GGML_ASSERT(backend.context->buffers.empty());
+    }
+}
+
+static void test_graph_init_failure() {
+    for (size_t fail_at : {size_t(1), size_t(2)}) {
+        auto backend = dummy_backend_init(64);
+        backend.context->fail_init = fail_at;
+        auto test_ctx = make_context();
+        auto * input = make_input_1d(test_ctx.ctx, 8);
+        auto * output = ggml_scale(test_ctx.ctx, input, 2.0f);
+        ggml_set_output(output);
+        ggml_build_forward_expand(test_ctx.graph, output);
+        ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+        GGML_ASSERT(!ggml_gallocr_alloc_graph(galloc.get(), test_ctx.graph));
+        GGML_ASSERT(backend.context->init_calls == fail_at);
+        galloc.reset();
+        GGML_ASSERT(backend.context->buffers.empty() && backend.context->free_calls == backend.context->alloc_calls);
+    }
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -1515,6 +1576,8 @@ static void run(const char * name, void (*f)()) {
 }
 
 int main() {
+    run("test_graph_measurement_binding", test_graph_measurement_binding);
+    run("test_graph_init_failure", test_graph_init_failure);
     run("test_meta_materialization", []() { test_meta_materialization(false); });
     run("test_meta_materialization_same_base", []() { test_meta_materialization(true); });
     run("test_meta_split_preparation", test_meta_split_preparation);
