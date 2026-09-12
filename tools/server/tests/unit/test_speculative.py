@@ -203,3 +203,34 @@ def test_multi_requests_parallel(n_slots: int, n_requests: int):
     for res in results:
         assert res.status_code == 200
         assert match_regex("(wise|kind|owl|answer)+", res.body["content"])
+
+
+def test_combined_draft_and_mtp_graceful():
+    # regression: https://github.com/ggml-org/llama.cpp/issues/27839
+    # a combined spec list (external draft + draft-mtp) with a target that has
+    # no MTP layers must not force an MTP context type onto the external draft
+    # model (pre-fix: server dies at load), and must degrade to plain external
+    # drafting (post-fix: combined == draft-only outputs)
+    server.spec_type = "draft-simple,draft-mtp"
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "top_k": 1,
+        "n_predict": 16,
+    })
+    assert res.status_code == 200, res.body
+    assert len(res.body["content"]) > 0
+    tokens_combined = res.body["tokens"]
+    server.stop()
+
+    create_server()  # plain draft-simple baseline
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "top_k": 1,
+        "n_predict": 16,
+    })
+    assert res.status_code == 200, res.body
+    assert tokens_combined == res.body["tokens"]
