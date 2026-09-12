@@ -890,8 +890,10 @@ Usage notes:
   the plain copy path. Reading back from the 780M's device-local memory is very slow on the
   current AMD Windows driver (~50 MB/s), which is why the copy path and any GPU→host split
   boundary cost so much more than the compute itself.
-  Measured on a Ryzen 7 8700G with Qwen3-0.6B Q4_0 (`-nr`, 476-token prompt): NPU only ~300 t/s,
-  CPU only ~390 t/s, CPU+NPU ~440 t/s (repacked CPU-only, which the NPU cannot join yet: ~570 t/s).
+  Measured on a Ryzen 7 8700G (CPU+NPU build, `-nr`, ~476-token prompt, 8 threads, median of 5):
+  Qwen3-0.6B Q4_0 — CPU only 428 t/s, NPU only 311, CPU+NPU 449 at the 0.4 default (474 at 0.5);
+  gemma-4-E2B Q4_K_M — CPU only 116, NPU only 77, CPU+NPU 153 at 0.4 (+32%). The stock repacked
+  CPU path, which the NPU cannot join yet, is still faster (624 / 218 t/s). Decode is unchanged.
 - The scheduler-level combination also works: with `-ngl N` the first N layers live on the Vulkan
   device and the remaining layers' prompt matmuls go through the XDNA backend (and its workers).
 - `GGML_XDNA_DEBUG=1` logs every `supports_op` decision; `GGML_XDNA_MIN_BATCH=<n>` raises the token

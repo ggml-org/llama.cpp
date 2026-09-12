@@ -81,6 +81,9 @@ struct ggml_xdna_kernel {
     xrt::bo         bo_c;
     size_t          n_instr = 0;
 
+    double launch_us = 0.0;   // measured wall time per launch incl. BO syncs (EMA), 0 until known
+    int    n_runs    = 0;
+
     ggml_bf16_t * a_map = nullptr;
     ggml_bf16_t * b_map = nullptr;
     float       * c_map = nullptr;
@@ -262,6 +265,7 @@ static bool ggml_xdna_kernel_load(ggml_xdna_state & st, ggml_xdna_kernel & k) {
 
 // run one block GEMM on the NPU; a_map/b_map must be filled by the caller
 static bool ggml_xdna_kernel_run(ggml_xdna_kernel & k) {
+    const auto t0 = std::chrono::steady_clock::now();
     try {
         k.bo_a.sync(XCL_BO_SYNC_BO_TO_DEVICE);
         k.bo_b.sync(XCL_BO_SYNC_BO_TO_DEVICE);
@@ -281,6 +285,12 @@ static bool ggml_xdna_kernel_run(ggml_xdna_kernel & k) {
             return false;
         }
         k.bo_c.sync(XCL_BO_SYNC_BO_FROM_DEVICE);
+
+        // the first launch after loading includes one-time setup, keep it out of the estimate
+        const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+        if (k.n_runs++ > 0) {
+            k.launch_us = k.launch_us > 0.0 ? 0.9*k.launch_us + 0.1*us : us;
+        }
         return true;
     } catch (const std::exception & e) {
         GGML_LOG_ERROR("%s: XRT error: %s\n", __func__, e.what());
@@ -288,8 +298,20 @@ static bool ggml_xdna_kernel_run(ggml_xdna_kernel & k) {
     }
 }
 
-// pick the kernel that wastes the least padded work for this problem
+// estimated wall time of one launch of k: measured once it has run, otherwise a model fitted
+// on a Ryzen 7 8700G (~0.2 ms fixed dispatch + sync cost, ~200 GMAC/s of block compute; the
+// 512x512x128 block measures ~360 us)
+static double ggml_xdna_kernel_launch_us(const ggml_xdna_kernel & k) {
+    if (k.launch_us > 0.0) {
+        return k.launch_us;
+    }
+    return 200.0 + (double) k.M*k.K*k.N/200.0e3;
+}
+
+// pick the kernel with the least estimated NPU time for this problem; padded work and the
+// fixed per-launch cost both count, so a small block only wins when it saves real work
 static ggml_xdna_kernel * ggml_xdna_select_kernel(ggml_xdna_state & st, int64_t n_feat, int64_t n_k, int64_t n_tok) {
+    std::lock_guard<std::mutex> lock(st.mutex);   // launch_us is updated by running kernels
     ggml_xdna_kernel * best = nullptr;
     double best_cost = 0.0;
     for (auto & k : st.kernels) {
@@ -297,7 +319,7 @@ static ggml_xdna_kernel * ggml_xdna_select_kernel(ggml_xdna_state & st, int64_t 
             continue;
         }
         const double launches = (double) ((n_feat + k.M - 1)/k.M) * ((n_k + k.K - 1)/k.K) * ((n_tok + k.N - 1)/k.N);
-        const double cost = launches * ((double) k.M*k.K*k.N + 8.0e6);   // ~fixed launch overhead in "MACs"
+        const double cost = launches * ggml_xdna_kernel_launch_us(k);
         if (best == nullptr || cost < best_cost) {
             best = &k;
             best_cost = cost;
@@ -967,18 +989,12 @@ static void ggml_backend_xdna_mul_mat(ggml_backend_xdna_context * ctx, struct gg
 
     ggml_xdna_init_shares(ctx);
 
-    // split the output features into consecutive ranges: NPU, Vulkan, CPU. the NPU part is
-    // rounded to whole kernel blocks so no block is padded needlessly.
+    // split the output features into consecutive ranges: NPU, Vulkan, CPU.
     ggml_xdna_state & st = ggml_xdna_get_state();
 
-    // the NPU part is rounded to the smallest kernel block so small shares stay possible, and
-    // an op too small to amortize the NPU's per-launch cost goes to the other workers only
-    int64_t kR = 256;
-    for (const auto & k : st.kernels) {
-        if (!k.broken) {
-            kR = std::min(kR, k.M);
-        }
-    }
+    // the NPU part is rounded to whole blocks of the kernel it will run on - a partial block
+    // costs the NPU as much as a full one - so a small share can round down to nothing on a
+    // small op; an op too small to amortize the launch cost skips the NPU when others exist
     const double gflop = 2.0*n_feat*ne00*ne11/1e9;
     const bool npu_worthwhile = gflop >= ctx->npu_min_gflop || (ctx->vk == nullptr && ctx->cpu == nullptr);
 
@@ -987,9 +1003,11 @@ static void ggml_backend_xdna_mul_mat(ggml_backend_xdna_context * ctx, struct gg
     if (ctx->share[GGML_XDNA_WORKER_NPU] >= 1.0f || (ctx->vk == nullptr && ctx->cpu == nullptr)) {
         n[GGML_XDNA_WORKER_NPU] = n_feat;
     } else if (ctx->share[GGML_XDNA_WORKER_NPU] > 0.0f && npu_worthwhile) {
-        n[GGML_XDNA_WORKER_NPU] = (int64_t) (n_feat*ctx->share[GGML_XDNA_WORKER_NPU] + kR/2) / kR * kR;
-        n[GGML_XDNA_WORKER_NPU] = std::min(n[GGML_XDNA_WORKER_NPU], n_feat);
-        if (n_feat - n[GGML_XDNA_WORKER_NPU] < 64) {
+        const int64_t target = std::max<int64_t>(1, (int64_t) (n_feat*ctx->share[GGML_XDNA_WORKER_NPU]));
+        const ggml_xdna_kernel * kp = ggml_xdna_select_kernel(st, target, ne00, ne11);
+        const int64_t kM = kp ? kp->M : 512;
+        n[GGML_XDNA_WORKER_NPU] = std::min((target + kM/2)/kM*kM, n_feat);
+        if (n[GGML_XDNA_WORKER_NPU] > 0 && n_feat - n[GGML_XDNA_WORKER_NPU] < 64) {
             n[GGML_XDNA_WORKER_NPU] = n_feat;
         }
     }
