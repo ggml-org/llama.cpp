@@ -1063,14 +1063,14 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
         const block_iq1_s * bxi = (const block_iq1_s *) x + kbx0 + i*stride;
 
-        const int       qs_packed = get_int_b2(bxi->qs, kqsx);
-        const uint8_t * qs        = (const uint8_t *) &qs_packed;
+        const int qs_packed = get_int_b2(bxi->qs, kqsx);
 
         const int qh = bxi->qh[kqsx];
 
     #pragma unroll
         for (int l = 0; l < QR1_S/2; ++l) {
-            const int grid = iq1s_grid_gpu[qs[l] | (((qh >> (3*l)) & 0x07) << 8)];
+            // extract the byte via __byte_perm: nvcc 13.2 drops a plain byte mask here and the grid index runs out of range
+            const int grid = iq1s_grid_gpu[__byte_perm(qs_packed, 0, 0x4440 | l) | (((qh >> (3*l)) & 0x07) << 8)];
 
             const int grid0 = (grid >> 0) & 0x0F0F0F0F;
             const int grid1 = (grid >> 4) & 0x0F0F0F0F;
@@ -1253,8 +1253,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
         const block_iq2_s * bxi = (const block_iq2_s *) x + kbx0 + i*stride;
 
-        const int       qs_packed = get_int_b2(bxi->qs, kqsx);
-        const uint8_t * qs        = (const uint8_t *) &qs_packed;
+        const int qs_packed = get_int_b2(bxi->qs, kqsx);
 
         const int qh = bxi->qh[kqsx];
 
@@ -1263,7 +1262,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #pragma unroll
         for (int l = 0; l < QR2_S; ++l) {
-            const int * grid_pos = (const int *)(iq2s_grid + (qs[l] | ((qh << (8-2*l)) & 0x300)));
+            // extract the byte via __byte_perm: nvcc 13.2 drops a plain byte mask here and the grid index runs out of range
+            const int * grid_pos = (const int *)(iq2s_grid + (__byte_perm(qs_packed, 0, 0x4440 | l) | ((qh << (8-2*l)) & 0x300)));
 
             const int signs0 = __vcmpne4(((signs_packed_8[l] & 0x03) << 7) | ((signs_packed_8[l] & 0x0C) << 21), 0x00000000);
             const int signs1 = __vcmpne4(((signs_packed_8[l] & 0x30) << 3) | ((signs_packed_8[l] & 0xC0) << 17), 0x00000000);
@@ -1386,8 +1386,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
         const block_iq3_s * bxi = (const block_iq3_s *) x + kbx0 + i*stride;
 
-        const int2      qs_packed = make_int2(get_int_b2(bxi->qs, 2*kqsx+0), get_int_b2(bxi->qs, 2*kqsx+1));
-        const uint8_t * qs        = (const uint8_t *) &qs_packed;
+        const int2 qs_packed = make_int2(get_int_b2(bxi->qs, 2*kqsx+0), get_int_b2(bxi->qs, 2*kqsx+1));
 
         const int qh = bxi->qh[kqsx];
 
@@ -1396,9 +1395,11 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #pragma unroll
         for (int l = 0; l < QR3_S; ++l) {
+            // extract the byte via __byte_perm: nvcc 13.2 drops a plain byte mask here and the grid index runs out of range
+            const int qsw = l < QR3_S/2 ? qs_packed.x : qs_packed.y;
             const int2 grid_pos = make_int2(
-                iq3s_grid[qs[2*l+0] | ((qh << (8 - 2*l)) & 0x100)],
-                iq3s_grid[qs[2*l+1] | ((qh << (7 - 2*l)) & 0x100)]);
+                iq3s_grid[__byte_perm(qsw, 0, 0x4440 | (2*l & 3)) | ((qh << (8 - 2*l)) & 0x100)],
+                iq3s_grid[__byte_perm(qsw, 0, 0x4441 | (2*l & 3)) | ((qh << (7 - 2*l)) & 0x100)]);
 
             const int signs0 = __vcmpne4(((signs_packed_8[l] & 0x03) << 7) | ((signs_packed_8[l] & 0x0C) << 21), 0x00000000);
             const int signs1 = __vcmpne4(((signs_packed_8[l] & 0x30) << 3) | ((signs_packed_8[l] & 0xC0) << 17), 0x00000000);
