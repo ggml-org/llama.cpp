@@ -61,6 +61,8 @@ add_library(llama
             llama-kv-stream-host.h
             llama-kv-stream-content.cpp
             llama-kv-stream-content.h
+            llama-kv-stream-resident.cpp
+            llama-kv-stream-resident.h
             llama-memory-executor.cpp
             llama-memory-executor.h
             llama-memory-executor-cuda.cpp

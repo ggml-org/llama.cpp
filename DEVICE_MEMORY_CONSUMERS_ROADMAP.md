@@ -6,7 +6,7 @@ Last source review: 2026-09-12, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is implemented and validated, awaiting user review and commit. The remainder of milestones 5-8 is planned. The next substage after review is **5.4a: resident planes and ordinary all-resident attention**, before 5.3c as required by the dependency order. The new allocation factory is opt-in; no streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is implemented and validated, awaiting user review and commit. The remainder of milestones 5-8 is planned. The next substage after review is **5.3c: batched prefill write staging**, after recording the required baseline. The new allocation factory is opt-in; no streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is ready for review. After the user commits it, proceed to 5.4a before 5.3c.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is ready for review. After the user commits it, record a targeted baseline before implementing 5.3c.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -343,8 +343,10 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.2a | Complete | `4717474c3` | 10 CUDA cases / 1,055 assertions per UVM mode; actual device pointer attributes and zero memcheck errors/leaks. 18 CUDA-build and 16 CPU debug/ASan/UBSan suites pass; virtual-device identity and native capture checks pass. Opt-in factory only. |
 | 5.2b | Complete | `0e3d5a0c0` | 15 CPU cases / 3,097 assertions; 16 real-CUDA cases / 3,108 assertions per UVM mode; virtual-device rejection passes. 17 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck reports zero errors/leaks. Binding adapter only. |
 | 5.3a | Complete | `7bfc17ac3` | 8 CPU owner cases / 386 assertions; 9 real-CUDA owner cases / 394 assertions; 5 CUDA pinning cases / 44 assertions. 18 CPU Debug/ASan/UBSan and 22 CUDA-build suites pass; memcheck has zero errors/leaks. Native Windows behavior preserved but not hardware-qualified. |
-| 5.3b | Ready for user review | Uncommitted | 14 CPU cases / 150,480 assertions; 15 real-CUDA cases / 150,503 assertions. 19 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck is clean with UVM off/on. Synchronized byte-coherence baseline only. |
-| 5.3c-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.3b | Complete | `15d47eb72` | 14 CPU cases / 150,480 assertions; 15 real-CUDA cases / 150,503 assertions. 19 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck is clean with UVM off/on. Synchronized byte-coherence baseline only. |
+| 5.3c | Planned | - | Requires 5.4a; preserve a working resident baseline before batched-write optimization. |
+| 5.4a | Ready for user review | Uncommitted | 12 CPU cases / 131 assertions; 13 CUDA cases / 245 assertions, including mixed K/V and 257-query prefill. 20 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Ordinary all-resident test adapter; production unchanged. |
+| 5.4b-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -1392,4 +1394,82 @@ compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-de
 
 No Windows, physical multi-GPU, TSan, asynchronous event ordering, model-output accuracy, or throughput qualification is claimed by this stage. Production services/configuration and existing checkpoint/cache data remain unchanged.
 
-After user review and commit, proceed to **5.4a: resident K/V planes and ordinary all-resident attention using the leased mirror**. This follows the roadmap's explicit dependency order: **5.4a must precede 5.3c**, the batched prefill write optimization.
+Stage **5.4a**, documented below, adds resident planes and ordinary all-resident attention before the 5.3c write optimization, following the roadmap's explicit dependency order.
+
+## Substage 5.4a: leased resident planes and ordinary attention
+
+Added `src/llama-kv-stream-resident.h/.cpp` and `tests/test-kv-stream-resident.cpp`. This native resource object is created through the stage-5.2b binding factory and retains the stage-5.3b content owner. It provides ordinary `GGML_OP_FLASH_ATTN_EXT` nodes over policy-derived resident K/V views. No new attention kernel or production dispatch path is introduced.
+
+The reviewed reference at `d873e5db9` keeps the ring at the front of the pool, computes each resident layer's base from its capacity, and uses token-major head strides. When all required chunks are resident, it avoids streamed partial-attention work. This stage reproduces those storage and ordinary-dispatch properties with leased memory rather than allocating a second KV pool.
+
+### Exact plane binding
+
+The factory checks the cache ID, shape, layer count, fixed budget, backend buffer compatibility, and direct-attention policy. It materializes the initial resident/ring layout from 5.1b. Each layer's K/V offsets come from that layout, including the reserved ring and capacity-sized K plane; they are not copied from the host allocation's layer stride or current live length.
+
+The backing tensors are flat typed roots. This matters for CUDA: allocating a quantized root whose first dimension is merely the head dimension can request additional matrix-row padding. Flat roots naturally satisfy the relevant padding for the supported page geometry. The adapter verifies that the backend's allocation size equals the exact plane size before binding, so it cannot silently consume bytes from V, the next layer, or scratch.
+
+The roots borrow the leased buffer. Graph views expose `[head_dim, padded_keys, kv_heads, 1]` with token stride equal to all heads' encoded row bytes and head stride equal to one encoded row. K and V sizes/strides are independent. The factory constructs only metadata and borrowed bindings; it does not upload, clear, or allocate KV device storage.
+
+### Synchronization and ordinary dispatch
+
+`synchronize(active_tokens)` rejects zero/out-of-host-capacity contexts and any extent whose padded keys exceed a resident plane. It currently uses 256-key padding and requires compatible page geometry. No adaptive repartition or partial-resident fallback is attempted.
+
+Before overwriting resident inputs it synchronizes the backend. On first use it resets mirror bookkeeping, then flushes only dirty runs through synchronous GGML tensor writes into the correct K/V roots. Upload byte/call counters report completed transfers for that attempt. Clean repeated synchronization uploads zero bytes. A changed V row refreshes only that row, not the full page or K plane.
+
+Readiness requires successful synchronization for the requested active length and matching content generation/mirror epoch. Failed validation or copy leaves readiness closed; copy exceptions propagate with admission restored and dirty marks retained for retry. Compatible replacement can refresh existing roots; changed encoding/geometry requires a new binding and is rejected.
+
+`attention()` validates stack descriptors before calling GGML constructors, so malformed Q/mask metadata is rejected before asserting constructors run. It checks the generic attention contract and the actual backend's ordinary attention support, then creates leased K/V views and a standard Flash Attention node. Q, mask, and output workspace remain caller-owned.
+
+The initial interface uses F32 queries, a finite positive scale, no sinks/ALiBi/softcap arguments, and one sequence. A supplied mask must hide padded/future keys; no-mask attention is accepted only when the active length needs no padding. This adapter checks mask metadata, not the device-resident mask values. The caller must gate execution on readiness for the graph's active extent.
+
+Conversion-only configurations, contexts needing streamed pages, and unsupported native type pairs are rejected. They are not silently routed to an unimplemented fallback. Conversion/streamed partial attention remains in its later substages.
+
+### Ownership and graph lifetime
+
+```mermaid
+flowchart LR
+    B["Coarse binding / execution pin"] --> R["Resident native resource"]
+    R --> C["Shared content + host owner"]
+    R --> T["Flat K/V roots in leased buffer"]
+    G["Caller graph context"] --> V["Token-major K/V views"]
+    V --> T
+    G --> Q["Caller Q / mask / output workspace"]
+```
+
+The backend must outlive these native resources. External graphs, including captures, must hold a binding execution pin for their entire usable lifetime and retire their native captures before returning that pin. A separate CUDA executor guard in the tests retains the same lease and retires its graph entries before graph metadata is freed. The outer binding cannot destroy resident roots while an external graph pin remains outstanding.
+
+This is still an owner-thread-only, single-logical-mirror adapter. It is not an automatic scheduler of host mutations, multiple mirrors, graph rebuilds, or producer dependencies. New SET_ROWS producers and server graph integration must respect the existing synchronization and admission contracts.
+
+### TDD and numerical evidence
+
+An ordinary head-major attention control first passed an independent scalar causal-softmax oracle. The resident tests then failed against stubs. Final results are **12 CPU cases / 131 assertions** and **13 CUDA cases / 245 assertions**.
+
+The oracle dequantizes the actual encoded cache values and computes scores/softmax in double precision. It does not assume that quantization preserved the original floats. The same-backend ordinary head-major allocation and leased token-major paths are each compared with this oracle using a maximum absolute error threshold of 1e-3.
+
+Coverage includes:
+
+- F16 CPU/CUDA decode and prefill with 1, 8, 33, and 257 queries, causal masks, GQA, and different attention layers.
+- 129/257-token contexts and 769 active tokens padded to 1,024 keys, exactly filling resident capacity.
+- CUDA Q8_0/Q4_0, Q4_0/Q8_0, and Q5_1/Q4_1 pairs through ordinary and resident paths.
+- Exact policy offsets, no extra quant-root padding, and untouched ring bytes.
+- Dirty-tail numerical changes, one-row V upload accounting, and zero-byte clean refresh.
+- Copy-exception retry, smaller-context replacement without rebinding, mirror reset, stale geometry, malformed queries/masks, insufficient residency, and conversion rejection.
+- External graph pins preventing native destruction and three repeated CUDA dispatches per numerical evaluation through the executor guard.
+
+All **20 focused suites** pass in CPU Debug, CUDA Debug, CPU ASan/leak checking, and CPU UBSan. Compute Sanitizer reports **zero errors and zero bytes leaked** with UVM disabled and enabled. Strict warning checking passes for the new implementation.
+
+The experimental CUDA build originally had `GGML_CUDA_FA_ALL_QUANTS=OFF`, which makes ordinary CUDA attention reject mixed K/V types. It was rebuilt with that option enabled for these tests. This reuses existing CUDA support; it is not a new mixed-quant kernel implementation and did not change production images or flags.
+
+```sh
+cmake --build build-device-memory-infra --target test-kv-stream-resident -j 20
+ctest --test-dir build-device-memory-infra -R '^test-kv-stream-resident$' --output-on-failure
+cmake -S . -B build-device-memory-infra-cuda -DGGML_CUDA_FA_ALL_QUANTS=ON
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-resident -j 20
+build-device-memory-infra-cuda/bin/test-kv-stream-resident --cuda
+GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 build-device-memory-infra-cuda/bin/test-kv-stream-resident --cuda
+compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-resident --cuda
+```
+
+This establishes the first milestone-5 implementation checkpoint for the tested scope: authoritative host state, leased resident mirrors, and correct ordinary all-resident attention execution. It does not establish whole-model quality, long-context throughput, Windows/physical multi-GPU support, or all quant/backend combinations. The CLI/server remains unchanged; streamed attention and asynchronous overlap are not enabled.
+
+After user review and commit, proceed to **5.3c: batched prefill SET_ROWS/write staging**. Before changing that path, capture a targeted timing/transfer baseline from this committed resident implementation, as required for optimization substages. No new checkpoint branch is created automatically.
