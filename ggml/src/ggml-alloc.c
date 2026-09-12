@@ -582,6 +582,11 @@ struct ggml_gallocr_binding_plan {
     bool valid;
 };
 
+struct ggml_gallocr_buffer_sizes {
+    size_t chunks[GGML_VBUFFER_MAX_CHUNKS];
+    size_t peak;
+};
+
 struct ggml_gallocr {
     ggml_backend_buffer_type_t * bufts; // [n_buffers]
     struct vbuffer ** buffers; // [n_buffers]
@@ -589,6 +594,7 @@ struct ggml_gallocr {
     int n_buffers;
     struct ggml_gallocr_plan plan;
     struct ggml_gallocr_binding_plan bindings;
+    struct ggml_gallocr_buffer_sizes ** measured_buffers;
 };
 
 static void ggml_gallocr_binding_plan_free(struct ggml_gallocr_binding_plan * bindings) {
@@ -682,6 +688,9 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
     }
 
     for (int i = 0; i < galloc->n_buffers; i++) {
+        if (galloc->measured_buffers) {
+            free(galloc->measured_buffers[i]);
+        }
         if (galloc->buffers != NULL) {
             // skip if already freed
             bool freed = false;
@@ -737,6 +746,7 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
     free(galloc->bufts);
     free(galloc->buffers);
     free(galloc->composite_buffers);
+    free(galloc->measured_buffers);
     free(galloc->plan.buf_tallocs);
     free(galloc->plan.composites);
     free(galloc->plan.tensors);
@@ -1643,6 +1653,52 @@ void ggml_gallocr_reserve_n_size(
 
 bool ggml_gallocr_reserve_n(ggml_gallocr_t galloc, struct ggml_cgraph * graph, const int * node_buffer_ids, const int * leaf_buffer_ids) {
     return ggml_gallocr_reserve_n_impl(galloc, graph, node_buffer_ids, leaf_buffer_ids, /*no_alloc =*/ false);
+}
+
+void ggml_gallocr_reserve_n_size_reuse(ggml_gallocr_t galloc, struct ggml_cgraph * graph,
+        const int * node_buffer_ids, const int * leaf_buffer_ids, size_t * sizes) {
+    ggml_gallocr_reserve_n_size(galloc, graph, node_buffer_ids, leaf_buffer_ids, sizes);
+    if (!galloc->measured_buffers) {
+        galloc->measured_buffers = calloc(galloc->n_buffers, sizeof(galloc->measured_buffers[0]));
+        GGML_ASSERT(galloc->measured_buffers);
+    }
+    for (int i = 0; i < galloc->n_buffers; i++) {
+        bool shared = false;
+        for (int j = 0; j < i; j++) {
+            shared |= galloc->bufts[j] == galloc->bufts[i];
+        }
+        if (shared) {
+            continue;
+        }
+        struct ggml_gallocr_composite_plan * composite = galloc->plan.composites ? galloc->plan.composites[i] : NULL;
+        size_t n_domains = composite ? composite->n_domains : 1;
+        if (!galloc->measured_buffers[i]) {
+            galloc->measured_buffers[i] = calloc(n_domains, sizeof(galloc->measured_buffers[i][0]));
+            GGML_ASSERT(galloc->measured_buffers[i]);
+        }
+        sizes[i] = 0;
+        for (size_t domain = 0; domain < n_domains; domain++) {
+            struct ggml_dyn_tallocr * alloc = composite ? composite->domains[domain].alloc : galloc->plan.buf_tallocs[i];
+            size_t * capacity = galloc->measured_buffers[i][domain].chunks;
+            bool grows = false;
+            for (int chunk = 0; chunk < alloc->n_chunks; chunk++) {
+                grows |= ggml_dyn_tallocr_max_size(alloc, chunk) > capacity[chunk];
+            }
+            if (!composite && grows) {
+                memset(capacity, 0, sizeof(galloc->measured_buffers[i][domain].chunks));
+            }
+            for (int chunk = 0; chunk < alloc->n_chunks; chunk++) {
+                capacity[chunk] = MAX(capacity[chunk], ggml_dyn_tallocr_max_size(alloc, chunk));
+            }
+            size_t total = 0;
+            for (int chunk = 0; chunk < GGML_VBUFFER_MAX_CHUNKS; chunk++) {
+                total += capacity[chunk];
+            }
+            struct ggml_gallocr_buffer_sizes * measured = &galloc->measured_buffers[i][domain];
+            measured->peak = MAX(measured->peak, total);
+            sizes[i] += measured->peak;
+        }
+    }
 }
 
 bool ggml_gallocr_reserve(ggml_gallocr_t galloc, struct ggml_cgraph *graph) {

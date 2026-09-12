@@ -20,6 +20,7 @@ uint8_t * const alloc_base = (uint8_t *) 16;
 struct dummy_backend_context {
     size_t max_buffer_size = 64;
     size_t alignment       = 8;
+    size_t allocation_overhead = 0;
 
     ggml_backend_buffer_i              buffer_interface;
     ggml_backend_device                device;
@@ -62,6 +63,7 @@ static ggml_backend_buffer_t dummy_backend_buffer_type_alloc_buffer(ggml_backend
     if (++ctx->alloc_calls == ctx->fail_alloc) {
         return nullptr;
     }
+    size += ctx->allocation_overhead;
     ggml_backend_buffer_t & buffer = ctx->buffers.emplace_back();
     buffer                         = ggml_backend_buffer_init(buft, ctx->buffer_interface, ctx, size);
     if (ctx->real_data) {
@@ -667,6 +669,28 @@ static void test_reallocation() {
         GGML_ASSERT(result);
         check_all_allocated(graph);
         GGML_ASSERT(backend.context->allocated_total() == 40);
+    }
+    for (size_t overhead : {size_t(0), size_t(32)}) {
+        auto native = dummy_backend_init(64);
+        native.context->allocation_overhead = overhead;
+        ggml_gallocr_ptr measured(ggml_gallocr_new(&native.buffer_type));
+        ggml_gallocr_ptr actual(ggml_gallocr_new(&native.buffer_type));
+        for (int step = 0; step < 2; step++) {
+            auto graph = make_context();
+            auto * a = make_input_with_size(graph.ctx, step == 0 ? 1024 : 56);
+            auto * b = make_input_with_size(graph.ctx, step == 0 ? 32 : 48);
+            ggml_build_forward_expand(graph.graph, a);
+            ggml_build_forward_expand(graph.graph, b);
+            size_t before = native.context->alloc_calls;
+            size_t size = 0;
+            ggml_gallocr_reserve_n_size_reuse(measured.get(), graph.graph, nullptr, nullptr, &size);
+            GGML_ASSERT(native.context->alloc_calls == before);
+            GGML_ASSERT(ggml_gallocr_reserve(actual.get(), graph.graph));
+            size_t capacity = ggml_gallocr_get_buffer_size(actual.get(), 0);
+            size_t extra = overhead*ggml_gallocr_get_buffer_count(actual.get(), 0, 0);
+            GGML_ASSERT(size == 1056 && capacity == (overhead ? 1120 : step == 0 ? 1056 : 104));
+            GGML_ASSERT(size + extra >= capacity);
+        }
     }
 }
 
@@ -1639,6 +1663,40 @@ static void test_meta_static_multibuffer(bool relative) {
         GGML_ASSERT(iface->get_buffer(allocated.get(), 0, 0)->size == 0);
     }
     GGML_ASSERT(first.context->buffers.empty() && second.context->buffers.empty());
+    {
+        auto weights = make_context();
+        auto * large = ggml_new_tensor_2d(weights.ctx, GGML_TYPE_F32, 16, 3);
+        auto * small = ggml_new_tensor_2d(weights.ctx, GGML_TYPE_F32, 8, 3);
+        ggml_backend_buffer_ptr weight_buffer(ggml_backend_alloc_ctx_tensors_from_buft(weights.ctx, buft));
+        GGML_ASSERT(weight_buffer);
+        ggml_backend_buffer_set_usage(weight_buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        for (bool composite : {false, true}) {
+            auto * type = composite ? buft : &first.buffer_type;
+            ggml_gallocr_ptr measured(ggml_gallocr_new(type));
+            ggml_gallocr_ptr actual(ggml_gallocr_new(type));
+            for (int step = 0; step < 3; step++) {
+                auto graph = make_context();
+                auto * a = ggml_cont(graph.ctx, step == 1 ? small : large);
+                auto * b = ggml_cont(graph.ctx, step == 1 ? large : small);
+                ggml_set_output(a);
+                ggml_set_output(b);
+                ggml_build_forward_expand(graph.graph, a);
+                ggml_build_forward_expand(graph.graph, b);
+                size_t before = first.context->alloc_calls + second.context->alloc_calls;
+                size_t retained = 0, requested = 0;
+                ggml_gallocr_reserve_n_size_reuse(measured.get(), graph.graph, nullptr, nullptr, &retained);
+                ggml_gallocr_reserve_n_size(measured.get(), graph.graph, nullptr, nullptr, &requested);
+                GGML_ASSERT(requested == 288 && retained == size_t(composite && step > 0 ? 320 : 288));
+                GGML_ASSERT(first.context->alloc_calls + second.context->alloc_calls == before);
+                GGML_ASSERT(!a->data && !a->buffer && !b->data && !b->buffer);
+                GGML_ASSERT(ggml_gallocr_get_buffer_size(measured.get(), 0) == 0);
+                GGML_ASSERT(ggml_gallocr_reserve(actual.get(), graph.graph));
+                GGML_ASSERT(ggml_gallocr_get_buffer_size(actual.get(), 0) == retained);
+            }
+        }
+    }
+    GGML_ASSERT(first.context->buffers.empty() && second.context->buffers.empty());
+
 }
 
 static void test_meta_independent_placements(bool relative) {

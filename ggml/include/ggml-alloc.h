@@ -69,6 +69,15 @@ GGML_API bool ggml_gallocr_reserve_n(
     const int * node_buffer_ids,
     const int * leaf_buffer_ids);
 
+// Estimate peak requested capacity across a reservation sequence, including reuse but excluding backend allocation overhead.
+// No physical buffers or bindings are changed. Use a fresh allocator for each independent measurement sequence.
+GGML_API void ggml_gallocr_reserve_n_size_reuse(
+    ggml_gallocr_t galloc,
+    struct ggml_cgraph * graph,
+    const int * node_buffer_ids,
+    const int * leaf_buffer_ids,
+    size_t * sizes);
+
 // automatic reallocation if the topology changes when using a single buffer
 // returns false if using multiple buffers and a re-allocation is needed (call ggml_gallocr_reserve_n first to set the node buffers)
 GGML_API bool ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, struct ggml_cgraph * graph);
