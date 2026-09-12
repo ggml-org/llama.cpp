@@ -1166,6 +1166,28 @@ static void test_meta_split_preparation() {
         ggml_gallocr_ptr domains(ggml_gallocr_new_n(buffer_types, 3));
         GGML_ASSERT(domains && first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
     }
+    {
+        auto * single = ggml_backend_meta_device(devices, 1, [](const ggml_tensor * tensor, void *) {
+            auto axis = std::strcmp(tensor->name, "state") == 0 ? GGML_BACKEND_SPLIT_AXIS_1 : GGML_BACKEND_SPLIT_AXIS_0;
+            return ggml_backend_meta_split_state{axis, {tensor->ne[axis]}, {1}, 1};
+        }, nullptr);
+        auto * single_type = ggml_backend_dev_buffer_type(single);
+        ggml_backend_buffer_ptr assignment(ggml_backend_buft_alloc_buffer(single_type, 0));
+        ggml_backend_buffer_set_usage(assignment.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        auto graph = make_context();
+        auto * input = ggml_new_tensor_2d(graph.ctx, GGML_TYPE_F32, 8, 2);
+        auto * state = ggml_new_tensor_3d(graph.ctx, GGML_TYPE_F32, 3, 8, 2);
+        ggml_set_name(state, "state");
+        input->buffer = state->buffer = assignment.get();
+        auto * tokens = ggml_transpose(graph.ctx, ggml_reshape_3d(graph.ctx, input, 8, 1, 2));
+        auto * joined = ggml_concat(graph.ctx, state, tokens, 0);
+        ggml_build_forward_expand(graph.graph, joined);
+        ggml_gallocr_ptr allocator(ggml_gallocr_new(single_type));
+        size_t size = 0;
+        ggml_gallocr_reserve_n_size(allocator.get(), graph.graph, nullptr, nullptr, &size);
+        GGML_ASSERT(size == 256 && !joined->data && !joined->buffer);
+        GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
+    }
     auto test_ctx = make_context();
     auto * source = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 8, 6);
     auto * mirror = ggml_new_tensor_2d(test_ctx.ctx, GGML_TYPE_F32, 8, 6);

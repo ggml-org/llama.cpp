@@ -1151,7 +1151,18 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     }
 
     if (it == split_ctx.cache.end()) {
-        split_ctx.cache[key].first = calculate_split_state();
+        auto state = calculate_split_state();
+        if (n_bufs == 1 && state.axis >= 0 && state.axis < GGML_MAX_DIMS) {
+            int64_t extent = 0;
+            for (size_t segment = 0; segment < state.n_segments; segment++) {
+                extent += state.ne[segment]*state.nr[segment];
+            }
+            // A single full shard is equivalent to a mirrored tensor.
+            if (extent == tensor->ne[state.axis]) {
+                state = {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+            }
+        }
+        split_ctx.cache[key].first = state;
         memcpy(split_ctx.cache[key].second, tensor, sizeof(split_ctx.cache[key].second));
         if (split_ctx.debug > 0) {
             auto format_ne = [n_bufs](const ggml_backend_meta_split_state & ss) {
