@@ -142,6 +142,26 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                     message(STATUS "ARM detected flags: ${ARM_NATIVE_FLAG}")
                 endif()
 
+                # The detected flags can list an extension (dotprod, i8mm, sve, sme)
+                # on an -march=armv8-a/armv8.1-a base, older than the architecture
+                # version that extension needs. GCC then refuses to inline the
+                # matching ACLE intrinsics ("target specific option mismatch"),
+                # so compilation fails. Raise the base version to match.
+                if ("${ARM_NATIVE_FLAG}" MATCHES "^-march=armv8(\\.[01])?-a")
+                    set(ARM_NATIVE_MIN_ARCH "armv8-a")
+                    if ("${ARM_NATIVE_FLAG}" MATCHES "\\+sme")
+                        set(ARM_NATIVE_MIN_ARCH "armv9.2-a")
+                    elseif ("${ARM_NATIVE_FLAG}" MATCHES "\\+(i8mm|sve2)")
+                        set(ARM_NATIVE_MIN_ARCH "armv8.6-a")
+                    elseif ("${ARM_NATIVE_FLAG}" MATCHES "\\+(dotprod|fp16fml|sve)")
+                        set(ARM_NATIVE_MIN_ARCH "armv8.2-a")
+                    endif()
+                    if (NOT ARM_NATIVE_MIN_ARCH STREQUAL "armv8-a")
+                        string(REGEX REPLACE "^-march=armv8(\\.[01])?-a" "-march=${ARM_NATIVE_MIN_ARCH}" ARM_NATIVE_FLAG "${ARM_NATIVE_FLAG}")
+                        message(STATUS "ARM detected flags need a newer base architecture, using: ${ARM_NATIVE_FLAG}")
+                    endif()
+                endif()
+
                 include(CheckCXXSourceRuns)
 
                 macro(check_arm_feature tag feature code)
