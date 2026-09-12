@@ -881,6 +881,12 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         if (ggml_nelements(tensor) == 0) {
             return {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}, {1}, 1};
         }
+        if (tensor->op == GGML_OP_NONE && tensor->view_src) {
+            const auto * source = tensor->src[0] && tensor->src[0] != tensor ? tensor->src[0] : tensor->view_src;
+            if (ggml_are_same_layout(tensor, source)) {
+                return ggml_backend_meta_get_split_state(split_ctx, source, assume_sync);
+            }
+        }
         if (split_ctx.usage != GGML_BACKEND_BUFFER_USAGE_COMPUTE && tensor->view_src == nullptr) {
             ggml_backend_dev_t dev = ggml_backend_buft_get_device(split_ctx.buft);
             const ggml_backend_meta_device_context * dev_ctx = (const ggml_backend_meta_device_context *) dev->context;

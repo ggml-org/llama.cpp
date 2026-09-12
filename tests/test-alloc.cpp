@@ -1123,6 +1123,10 @@ static void test_meta_split_preparation() {
     auto * scaled_small = ggml_scale(test_ctx.ctx, small, 0.5f);
     scaled_small->flags |= GGML_TENSOR_FLAG_COMPUTE;
     auto * view = ggml_view_2d(test_ctx.ctx, source, 4, 6, source->nb[1], 4*sizeof(float));
+    auto * allocation_view = ggml_view_tensor(test_ctx.ctx, source);
+    auto * allocation_dep = ggml_view_tensor(test_ctx.ctx, segmented);
+    allocation_dep->src[0] = segmented;
+    allocation_dep->src[1] = mirror;
     ggml_backend_buffer_ptr assigned(ggml_backend_buft_alloc_buffer(buft, 0));
     ggml_backend_buffer_set_usage(assigned.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     for (auto * tensor : {source, weight, input, segmented, small}) {
@@ -1180,6 +1184,8 @@ static void test_meta_split_preparation() {
         auto * simple_weight = ggml_backend_meta_preparation_get_tensor(preparation, weight, device);
         auto * simple_mirror = ggml_backend_meta_preparation_get_tensor(preparation, mirror, device);
         auto * simple_small = ggml_backend_meta_preparation_get_tensor(preparation, scaled_small, device);
+        auto * simple_allocation_view = ggml_backend_meta_preparation_get_tensor(preparation, allocation_view, device);
+        auto * simple_allocation_dep = ggml_backend_meta_preparation_get_tensor(preparation, allocation_dep, device);
         GGML_ASSERT(simple_source->ne[1] == (device == 0 ? 2 : 4));
         GGML_ASSERT(ggml_nbytes(simple_source) == (device == 0 ? 64 : 128));
         GGML_ASSERT(simple_scaled->src[0] == simple_source);
@@ -1191,7 +1197,14 @@ static void test_meta_split_preparation() {
         GGML_ASSERT(ggml_nbytes(simple_weight) == (device == 0 ? 72 : 144));
         GGML_ASSERT(ggml_nbytes(simple_mirror) == ggml_nbytes(mirror));
         GGML_ASSERT(bool(simple_small->flags & GGML_TENSOR_FLAG_COMPUTE) == (device != 0));
+        GGML_ASSERT(simple_allocation_view->op == GGML_OP_NONE && simple_allocation_view->view_src == simple_source);
+        GGML_ASSERT(simple_allocation_view->ne[1] == simple_source->ne[1]);
+        GGML_ASSERT(simple_allocation_dep->op == GGML_OP_NONE && simple_allocation_dep->ne[1] == (device == 0 ? 4 : 8));
+        GGML_ASSERT(simple_allocation_dep->src[0] == ggml_backend_meta_preparation_get_tensor(preparation, segmented, device));
+        GGML_ASSERT(simple_allocation_dep->src[1] == simple_mirror);
     }
+    ss = ggml_backend_meta_split_context_get(compute, allocation_dep, true);
+    GGML_ASSERT(ss.n_segments == 2 && ss.ne[0] == 1 && ss.ne[1] == 2 && ss.ne[2] == 3 && ss.ne[3] == 6);
     GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
 
     void * generic = allocation->new_preparation(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 1, nullptr);
