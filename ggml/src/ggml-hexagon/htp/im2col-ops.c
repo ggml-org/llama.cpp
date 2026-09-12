@@ -3,10 +3,11 @@
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
 #include <HAP_farf.h>
-#include <HAP_perf.h>
 #include <hexagon_protos.h>
 #include <hexagon_types.h>
 #include <string.h>
+
+#include "hex-common.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -16,14 +17,19 @@
 #include "hex-dma.h"
 #include "hex-profile.h"
 #include "htp-vtcm.h"
+#include "htp-tensor.h"
 
 struct htp_im2col_context {
     struct htp_ops_context * octx;
+    uint32_t                 patch_base;           // first patch index assigned to this dev
+    uint32_t                 npatches;             // number of patches assigned to this dev
     uint32_t                 npatches_per_thread;  // patches = N*OH*OW (pure-DDR kernel)
 
-    uint32_t pe_rows_per_thread;                   // N*OH rows per worker
-    uint32_t pe_src_row_bytes;                     // one output row's source: IC*KH*IW*4, rounded 256
-    uint32_t pe_dst_row_bytes;                     // one output row's dst: OW*patch_stride*2, rounded 256
+    uint32_t pe_row_base;              // first N*OH row index assigned to this dev (DMA path)
+    uint32_t pe_nrows;                 // number of N*OH rows assigned to this dev (DMA path)
+    uint32_t pe_rows_per_thread;       // N*OH rows per worker
+    uint32_t pe_src_row_bytes;         // one output row's source: IC*KH*IW*4, rounded 256
+    uint32_t pe_dst_row_bytes;         // one output row's dst: OW*patch_stride*2, rounded 256
 
     // Patch-embed DMA path VTCM ping-pong.
     uint8_t * pe_vtcm_src;                         // base of the 2x src buffers region
@@ -58,33 +64,27 @@ static inline void htp_im2col_vtcm_layout_build(struct htp_im2col_vtcm_layout * 
         struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                     \
         struct htp_ops_context *    octx        = ictx->octx;                                             \
         struct htp_thread_trace * restrict tr   = &octx->ctx->trace[ith];                                 \
+        const struct htp_tensor * restrict src0 = octx->src[0];                                           \
         const struct htp_tensor * restrict src1 = octx->src[1];                                           \
         const struct htp_tensor * restrict dst  = octx->dst;                                              \
-        const int32_t  s0                       = octx->op_params[0];                                     \
-        const int32_t  s1                       = octx->op_params[1];                                     \
-        const int32_t  p0                       = octx->op_params[2];                                     \
-        const int32_t  p1                       = octx->op_params[3];                                     \
-        const int32_t  d0                       = octx->op_params[4];                                     \
-        const int32_t  d1                       = octx->op_params[5];                                     \
-        const uint32_t N                        = src1->ne[3];                                            \
-        const uint32_t IC                       = src1->ne[2];                                            \
-        const uint32_t IH                       = src1->ne[1];                                            \
-        const uint32_t IW                       = src1->ne[0];                                            \
-        const uint32_t KH                       = octx->src[0]->ne[1];                                    \
-        const uint32_t KW                       = octx->src[0]->ne[0];                                    \
+        const int32_t s0 = octx->op_params[0], s1 = octx->op_params[1];                                   \
+        const int32_t p0 = octx->op_params[2], p1 = octx->op_params[3];                                   \
+        const int32_t d0 = octx->op_params[4], d1 = octx->op_params[5];                                   \
+        const uint32_t N = src1->ne[3], IC = src1->ne[2], IH = src1->ne[1], IW = src1->ne[0];             \
+        const uint32_t KH                       = src0->ne[1], KW = src0->ne[0];                          \
         const uint32_t OH                       = dst->ne[2];                                             \
         const uint32_t OW                       = dst->ne[1];                                             \
         const uint32_t patch_stride             = IC * KH * KW;                                           \
         const float * restrict src_data         = (const float *) src1->data;                             \
         DST_CTYPE * restrict dst_data           = (DST_CTYPE *) dst->data;                                \
-        const uint32_t npatches                 = N * OH * OW;                                            \
-        const uint32_t patch_start              = ictx->npatches_per_thread * ith;                        \
-        const uint32_t patch_end                = MIN(patch_start + ictx->npatches_per_thread, npatches); \
-        if (patch_start >= patch_end) {                                                                   \
+        const uint32_t patch_end                = ictx->patch_base + ictx->npatches;                      \
+        const uint32_t patch_start              = ictx->patch_base + ictx->npatches_per_thread * ith;     \
+        const uint32_t patch_stop               = MIN(patch_start + ictx->npatches_per_thread, patch_end);\
+        if (patch_start >= patch_stop) {                                                                  \
             return;                                                                                       \
         }                                                                                                 \
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, patch_start);                                   \
-        for (uint32_t p = patch_start; p < patch_end; p++) {                                              \
+        for (uint32_t p = patch_start; p < patch_stop; p++) {                                             \
             const uint32_t iow             = p % OW;                                                      \
             const uint32_t ioh             = (p / OW) % OH;                                               \
             const uint32_t in              = p / (OW * OH);                                               \
@@ -154,10 +154,10 @@ IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, hvx
         uint8_t *      dst_base         = ictx->pe_vtcm_dst + ith * ictx->pe_dst_size_per_thread;                    \
         float *        srcb             = (float *) src_base;                                                        \
         DST_CTYPE *    dstb             = (DST_CTYPE *) dst_base;                                                    \
-        const uint32_t nrows            = N * OH;                                                                    \
+        const uint32_t row_end_max      = ictx->pe_row_base + ictx->pe_nrows;                                        \
         const uint32_t per_thread       = ictx->pe_rows_per_thread;                                                  \
-        const uint32_t row_start        = per_thread * ith;                                                          \
-        const uint32_t row_end          = MIN(row_start + per_thread, nrows);                                        \
+        const uint32_t row_start        = ictx->pe_row_base + per_thread * ith;                                      \
+        const uint32_t row_end          = MIN(row_start + per_thread, row_end_max);                                  \
         if (row_start >= row_end)                                                                                    \
             return;                                                                                                  \
         for (uint32_t r = row_start; r < row_end; r++) {                                                             \
@@ -266,26 +266,55 @@ int op_im2col(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    const uint32_t N         = src1->ne[3];
-    const uint32_t OH        = dst->ne[2];
-    const uint32_t OW        = dst->ne[1];
-    const uint32_t npatches  = N * OH * OW;
-    const uint32_t n_threads = MIN(octx->n_threads, npatches);
-
-    if ((octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) || n_threads == 0) {
+    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
         return HTP_STATUS_OK;
     }
 
+    const uint32_t N             = src1->ne[3];
+    const uint32_t OH            = dst->ne[2];
+    const uint32_t OW            = dst->ne[1];
+    const uint32_t total_patches = N * OH * OW;
+    const uint32_t total_rows    = N * OH;
+
+    uint32_t patch_base = 0;
+    uint32_t npatches   = total_patches;
+    if (octx->ctx->mdev.count > 1) {
+        const uint32_t patch_size = dst->nb[1];
+        const uint32_t patches_per_chunk = (patch_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(patch_size, HEX_L2_LINE_SIZE)) : 1;
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(total_patches, htp_tensor_mdev_data_aligned(dst) ? patches_per_chunk : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        patch_base = range.start;
+        npatches   = range.count;
+    }
+
+    uint32_t row_base = 0;
+    uint32_t nrows    = total_rows;
+    if (octx->ctx->mdev.count > 1) {
+        const uint32_t row_size = dst->nb[2];
+        const uint32_t rows_per_chunk = (row_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(row_size, HEX_L2_LINE_SIZE)) : 1;
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(total_rows, htp_tensor_mdev_data_aligned(dst) ? rows_per_chunk : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        row_base = range.start;
+        nrows    = range.count;
+    }
+
+    if (npatches == 0 && nrows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    const uint32_t n_threads = MIN(octx->n_threads, MAX(npatches, 1));
+
     struct htp_im2col_context ictx = { 0 };
-    ictx.octx                      = octx;
-    ictx.npatches_per_thread       = (npatches + n_threads - 1) / n_threads;
+    ictx.octx                = octx;
+    ictx.patch_base          = patch_base;
+    ictx.npatches            = npatches;
+    ictx.npatches_per_thread = (npatches + n_threads - 1) / n_threads;
 
     // Clean non-overlapping patch-embed -> DMA kernel (if it fits VTCM);
     // everything else (padding/dilation/stride edges) -> pure-DDR kernel.
-    if (im2col_use_patchembed_dma(octx)) {
-        const uint32_t nrows = N * OH;
-        const uint32_t pth   = MIN(octx->n_threads, nrows);
+    if (im2col_use_patchembed_dma(octx) && nrows > 0) {
+        const uint32_t pth = MIN(octx->n_threads, nrows);
         if (pth > 0 && im2col_patchembed_dma_fits(octx, &ictx, pth)) {
+            ictx.pe_row_base        = row_base;
+            ictx.pe_nrows           = nrows;
             ictx.pe_rows_per_thread = (nrows + pth - 1) / pth;
             if (dst->type == HTP_TYPE_F16) {
                 work_queue_run(octx->ctx->work_queue, im2col_patchembed_dma_thread, &ictx, pth);
@@ -295,6 +324,10 @@ int op_im2col(struct htp_ops_context * octx) {
             return HTP_STATUS_OK;
         }
         // else: doesn't fit -> fall through to the pure-DDR kernel below.
+    }
+
+    if (npatches == 0) {
+        return HTP_STATUS_OK;
     }
 
     if (dst->type == HTP_TYPE_F16) {

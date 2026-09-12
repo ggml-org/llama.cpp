@@ -17,6 +17,7 @@
 #include "hex-dma.h"
 #include "hex-profile.h"
 #include "allreduce-ops.h"
+#include "htp-fence.h"
 
 struct htp_allreduce_context {
     struct htp_ops_context * octx;
@@ -242,7 +243,42 @@ DEFINE_ALLREDUCE_THREAD_DMA_2D(add_f32,       float,  hvx_add_f32_aaa, 1, 0)
 DEFINE_ALLREDUCE_THREAD_DMA_2D(add_bcast_f16, __fp16, hvx_add_f16_aaa, 1, 1)
 DEFINE_ALLREDUCE_THREAD_DMA_2D(add_bcast_f32, float,  hvx_add_f32_aaa, 1, 1)
 
+static int validate_allreduce(
+    struct htp_ops_context * octx,
+    const struct htp_allreduce_kernel_params * kparams,
+    uint32_t n_ranks
+) {
+    if (!htp_ops_context_set_n_threads(octx, (uint32_t) kparams->n_threads)) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
+    if (kparams->vtcm_size_per_thread <= 0 || kparams->vtcm_size <= 0) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
+    const bool has_add = (octx->op == HTP_OP_ALLREDUCE_ADD);
+    const size_t n_vtcm_buffers = htp_allreduce_vtcm_buffer_count(
+        n_ranks, octx->n_threads, has_add, kparams->is_row_bcast != 0);
+    const size_t vtcm_size = n_vtcm_buffers * (size_t) kparams->vtcm_size_per_thread;
+    if (vtcm_size != (size_t) kparams->vtcm_size) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+    if (vtcm_size > octx->ctx->vtcm_size) {
+        return HTP_STATUS_VTCM_TOO_SMALL;
+    }
+
+    if (octx->dst->type != HTP_TYPE_F16 && octx->dst->type != HTP_TYPE_F32) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    return HTP_STATUS_OK;
+}
+
 int op_allreduce(struct htp_ops_context * octx) {
+    if (octx->ctx->mdev.count > 1 && octx->ctx->mdev.idx > 0) {
+        return HTP_STATUS_OK;
+    }
+
     const struct htp_allreduce_kernel_params * kparams = (const struct htp_allreduce_kernel_params *) octx->kernel_params;
     const struct htp_tensor * dst = octx->dst;
 
@@ -253,38 +289,53 @@ int op_allreduce(struct htp_ops_context * octx) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    if (dst->type != HTP_TYPE_F16 && dst->type != HTP_TYPE_F32) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
-
-    const uint32_t nelem = dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3];
     const uint32_t fence_seq_entry = (uint32_t) octx->op_params[0];
     const uint32_t fence_seq_exit  = (uint32_t) octx->op_params[1];
+
+    const struct htp_tensor * my_sync = octx->src[n_ranks + rank];
+    atomic_uint * my_fence = (atomic_uint *) (uintptr_t) my_sync->data;
+
+    const int status = validate_allreduce(octx, kparams, n_ranks);
+    if (status != HTP_STATUS_OK) {
+        if (status == HTP_STATUS_NO_SUPPORT) {
+            FARF(ERROR, "ggml-hex: allreduce unsupported type %d : rank %u\n", dst->type, rank);
+        }
+        htp_fence_write(my_fence, fence_seq_exit, status);
+        return status;
+    }
+
+    const bool has_add = (octx->op == HTP_OP_ALLREDUCE_ADD);
+    const uint32_t nelem = dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3];
 
     // 1. Entry Barrier: Synchronize all ranks before reading
     struct htp_thread_trace * tr0 = &octx->ctx->trace[0];
     htp_trace_event_start(tr0, HTP_TRACE_EVT_FENCE, (uint16_t) fence_seq_entry);
 
-    const struct htp_tensor * my_sync = octx->src[n_ranks + rank];
-    atomic_uint * my_fence = (atomic_uint *) my_sync->data;
-
-    atomic_store(&my_fence[0], fence_seq_entry);
-    asm volatile ("syncht" : : : "memory");
-    Q6_dccleaninva_A((void *) my_fence);
+    htp_fence_write(my_fence, fence_seq_entry, octx->status);
 
     for (uint32_t j = 0; j < n_ranks; j++) {
         if (j == rank) continue;
         const struct htp_tensor * peer_sync = octx->src[n_ranks + j];
-        atomic_uint * peer_fence = (atomic_uint *) peer_sync->data;
+        atomic_uint * peer_fence = (atomic_uint *) (uintptr_t) peer_sync->data;
         uint64_t spins = 0;
         while (1) {
-            Q6_dccleaninva_A((void *) peer_fence);
-            uint32_t val = atomic_load(&peer_fence[0]);
-            if (val == fence_seq_entry || val == fence_seq_exit) {
+            uint32_t peer_seq;
+            uint32_t peer_status;
+            htp_fence_read(peer_fence, &peer_seq, &peer_status);
+            if ((int32_t)(peer_seq - fence_seq_entry) >= 0) {
+                if (peer_status > HTP_STATUS_OK) {
+                    FARF(ERROR, "ggml-hex: allreduce entry peer %u failed with status %u\n", j, peer_status);
+                    htp_fence_write(my_fence, fence_seq_exit, peer_status);
+                    htp_trace_event_stop(tr0, HTP_TRACE_EVT_FENCE, (uint16_t) fence_seq_entry);
+                    return peer_status;
+                }
                 break;
             }
             if (++spins > HTP_FENCE_TIMEOUT) {
-                FARF(ERROR, "ggml-hex: allreduce entry fence-wait TIMEOUT: rank %u waiting on %u (fence %p seq %u)\n", rank, j, peer_fence, fence_seq_entry);
+                FARF(ERROR, "ggml-hex: allreduce entry fence-wait TIMEOUT : rank %u waiting on %u fence %p seq 0x%x peer-seq 0x%x\n",
+                     rank, j, peer_fence, fence_seq_entry, peer_seq);
+                htp_fence_write(my_fence, fence_seq_exit, HTP_STATUS_INTERNAL_ERR);
+                htp_trace_event_stop(tr0, HTP_TRACE_EVT_FENCE, (uint16_t) fence_seq_entry);
                 return HTP_STATUS_INTERNAL_ERR;
             }
             hex_pause();
@@ -300,8 +351,6 @@ int op_allreduce(struct htp_ops_context * octx) {
         const uint32_t block_elems          = (uint32_t) kparams->block_elems;
         const uint32_t elems_per_thread     = (uint32_t) kparams->elems_per_thread;
         const uint32_t vtcm_size_per_thread = (uint32_t) kparams->vtcm_size_per_thread;
-
-        const bool has_add = (octx->op == HTP_OP_ALLREDUCE_ADD);
 
         struct htp_allreduce_context actx;
         actx.octx                 = octx;
@@ -339,6 +388,8 @@ int op_allreduce(struct htp_ops_context * octx) {
                 }
                 break;
             default:
+                FARF(ERROR, "ggml-hex: allreduce unsupported kernel %d : rank %u\n", kparams->kernel_type, rank);
+                htp_fence_write(my_fence, fence_seq_exit, HTP_STATUS_NO_SUPPORT);
                 return HTP_STATUS_NO_SUPPORT;
         }
 
@@ -368,23 +419,31 @@ int op_allreduce(struct htp_ops_context * octx) {
     // 4. Exit Barrier: Synchronize all ranks after writing
     htp_trace_event_start(tr0, HTP_TRACE_EVT_FENCE, (uint16_t) fence_seq_exit);
 
-    atomic_store(&my_fence[0], fence_seq_exit);
-    asm volatile ("syncht" : : : "memory");
-    Q6_dccleaninva_A((void *) my_fence);
+    htp_fence_write(my_fence, fence_seq_exit, octx->status);
 
     for (uint32_t j = 0; j < n_ranks; j++) {
         if (j == rank) continue;
         const struct htp_tensor * peer_sync = octx->src[n_ranks + j];
-        atomic_uint * peer_fence = (atomic_uint *) peer_sync->data;
+        atomic_uint * peer_fence = (atomic_uint *) (uintptr_t) peer_sync->data;
         uint64_t spins = 0;
         while (1) {
-            Q6_dccleaninva_A((void *) peer_fence);
-            uint32_t val = atomic_load(&peer_fence[0]);
-            if (val == fence_seq_exit) {
+            uint32_t peer_seq;
+            uint32_t peer_status;
+            htp_fence_read(peer_fence, &peer_seq, &peer_status);
+            if ((int32_t)(peer_seq - fence_seq_exit) >= 0) {
+                if (peer_status > HTP_STATUS_OK) {
+                    FARF(ERROR, "ggml-hex: allreduce exit peer %u failed with status %u\n", j, peer_status);
+                    htp_fence_write(my_fence, fence_seq_exit, peer_status);
+                    htp_trace_event_stop(tr0, HTP_TRACE_EVT_FENCE, (uint16_t) fence_seq_exit);
+                    return peer_status;
+                }
                 break;
             }
             if (++spins > HTP_FENCE_TIMEOUT) {
-                FARF(ERROR, "ggml-hex: allreduce exit fence-wait TIMEOUT: rank %u waiting on %u (fence %p seq %u)\n", rank, j, peer_fence, fence_seq_exit);
+                FARF(ERROR, "ggml-hex: allreduce exit fence-wait TIMEOUT : rank %u waiting on %u fence %p seq 0x%x peer-seq 0x%x\n",
+                     rank, j, peer_fence, fence_seq_exit, peer_seq);
+                htp_fence_write(my_fence, fence_seq_exit, HTP_STATUS_INTERNAL_ERR);
+                htp_trace_event_stop(tr0, HTP_TRACE_EVT_FENCE, (uint16_t) fence_seq_exit);
                 return HTP_STATUS_INTERNAL_ERR;
             }
             hex_pause();
@@ -394,5 +453,5 @@ int op_allreduce(struct htp_ops_context * octx) {
 
     htp_trace_event_stop(tr0, HTP_TRACE_EVT_FENCE, (uint16_t) fence_seq_exit);
 
-    return HTP_STATUS_OK;
+    return octx->status;
 }

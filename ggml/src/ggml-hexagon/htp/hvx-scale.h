@@ -68,30 +68,30 @@ static inline void hvx_scale_f32(uint8_t * restrict dst, const uint8_t * restric
     }
 }
 
-#define hvx_scale_offset_f32_loop_body(dst_type, src_type, vec_store)                \
-    do {                                                                             \
-        dst_type * restrict vdst = (dst_type *) dst;                                 \
-        src_type * restrict vsrc = (src_type *) src;                                 \
-                                                                                     \
-        HVX_Vector vs = hvx_vec_splat_f32(scale);                                    \
-        HVX_Vector vo = hvx_vec_splat_f32(offset);                                   \
-                                                                                     \
-        const uint32_t elem_size = sizeof(float);                                    \
-        const uint32_t epv = 128 / elem_size;                                        \
-        const uint32_t nvec = n / epv;                                               \
-        const uint32_t nloe = n % epv;                                               \
-                                                                                     \
-        uint32_t i = 0;                                                              \
-                                                                                     \
-        _Pragma("unroll(4)")                                                         \
-        for (; i < nvec; ++i) {                                                      \
+#define hvx_scale_offset_f32_loop_body(dst_type, src_type, vec_store)                     \
+    do {                                                                                  \
+        dst_type * restrict vdst = (dst_type *) dst;                                      \
+        src_type * restrict vsrc = (src_type *) src;                                      \
+                                                                                          \
+        HVX_Vector vs = hvx_vec_splat_f32(scale);                                         \
+        HVX_Vector vo = hvx_vec_splat_f32(offset);                                        \
+                                                                                          \
+        const uint32_t elem_size = sizeof(float);                                         \
+        const uint32_t epv = 128 / elem_size;                                             \
+        const uint32_t nvec = n / epv;                                                    \
+        const uint32_t nloe = n % epv;                                                    \
+                                                                                          \
+        uint32_t i = 0;                                                                   \
+                                                                                          \
+        _Pragma("unroll(4)")                                                              \
+        for (; i < nvec; ++i) {                                                           \
             HVX_Vector v = Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs), vo); \
-            vdst[i] = Q6_Vsf_equals_Vqf32(v);                                        \
-        }                                                                            \
-        if (nloe) {                                                                  \
+            vdst[i] = Q6_Vsf_equals_Vqf32(v);                                             \
+        }                                                                                 \
+        if (nloe) {                                                                       \
             HVX_Vector v = Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs), vo); \
-            vec_store((void *) &vdst[i], nloe * elem_size, Q6_Vsf_equals_Vqf32(v));  \
-        }                                                                            \
+            vec_store((void *) &vdst[i], nloe * elem_size, Q6_Vsf_equals_Vqf32(v));       \
+        }                                                                                 \
     } while(0)
 
 static inline void hvx_scale_offset_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale, const float offset) {

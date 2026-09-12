@@ -13,8 +13,9 @@
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
+#include "hex-common.h"
+#include "hex-profile.h"
 #include "htp-ctx.h"
-#include "htp-ops.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
 
@@ -36,6 +37,8 @@ struct htp_binary_context {
 
     uint32_t block_max;
     uint32_t nrows_per_thread;
+    uint32_t total_rows;
+    uint32_t row_start;
     size_t   src0_row_size_aligned;
     size_t   src1_row_size_aligned;
     size_t   dst_row_size_aligned;
@@ -48,27 +51,27 @@ struct htp_binary_context {
     const struct htp_tensor * src0 = octx->src[0]; \
     const struct htp_tensor * src1 = octx->src[1]; \
     const struct htp_tensor * dst  = octx->dst;    \
-                                       \
-    const uint32_t ne00 = src0->ne[0]; \
-    const uint32_t ne01 = src0->ne[1]; \
-    const uint32_t ne02 = src0->ne[2]; \
-    const uint32_t ne03 = src0->ne[3]; \
-                                       \
-    const uint32_t ne10 = src1->ne[0]; \
-    const uint32_t ne11 = src1->ne[1]; \
-    const uint32_t ne12 = src1->ne[2]; \
-    const uint32_t ne13 = src1->ne[3]; \
-                                       \
-    const uint32_t nb01 = src0->nb[1]; \
-    const uint32_t nb02 = src0->nb[2]; \
-    const uint32_t nb03 = src0->nb[3]; \
-                                       \
-    const uint32_t nb11 = src1->nb[1]; \
-    const uint32_t nb12 = src1->nb[2]; \
-    const uint32_t nb13 = src1->nb[3]; \
-                                       \
-    const uint32_t nb1 = dst->nb[1];   \
-    const uint32_t nb2 = dst->nb[2];   \
+                                                   \
+    const uint32_t ne00 = src0->ne[0];             \
+    const uint32_t ne01 = src0->ne[1];             \
+    const uint32_t ne02 = src0->ne[2];             \
+    const uint32_t ne03 = src0->ne[3];             \
+                                                   \
+    const uint32_t ne10 = src1->ne[0];             \
+    const uint32_t ne11 = src1->ne[1];             \
+    const uint32_t ne12 = src1->ne[2];             \
+    const uint32_t ne13 = src1->ne[3];             \
+                                                   \
+    const uint32_t nb01 = src0->nb[1];             \
+    const uint32_t nb02 = src0->nb[2];             \
+    const uint32_t nb03 = src0->nb[3];             \
+                                                   \
+    const uint32_t nb11 = src1->nb[1];             \
+    const uint32_t nb12 = src1->nb[2];             \
+    const uint32_t nb13 = src1->nb[3];             \
+                                                   \
+    const uint32_t nb1 = dst->nb[1];               \
+    const uint32_t nb2 = dst->nb[2];               \
     const uint32_t nb3 = dst->nb[3];
 
 static inline uint32_t calc_block_size(struct htp_binary_context * bctx, uint32_t ir, uint32_t end_row, uint32_t ne01, uint32_t ne02) {
@@ -93,87 +96,87 @@ static inline uint32_t calc_block_size(struct htp_binary_context * bctx, uint32_
 }
 
 // Macro for scalar op switch
-#define COMPUTE_SCALAR_OP(DST, SRC, VAL, TYPE, N) \
-    if(TYPE == HTP_TYPE_F32) { \
-        switch (octx->op) { \
-            case HTP_OP_ADD: hvx_add_scalar_f32_aa(DST, SRC, *(float *)VAL, N); break; \
-            case HTP_OP_SUB: hvx_sub_scalar_f32_aa(DST, SRC, *(float *)VAL, N); break; \
-            case HTP_OP_MUL: hvx_mul_scalar_f32_aa(DST, SRC, *(float *)VAL, N); break; \
+#define COMPUTE_SCALAR_OP(DST, SRC, VAL, TYPE, N)                                               \
+    if(TYPE == HTP_TYPE_F32) {                                                                  \
+        switch (octx->op) {                                                                     \
+            case HTP_OP_ADD: hvx_add_scalar_f32_aa(DST, SRC, *(float *)VAL, N); break;          \
+            case HTP_OP_SUB: hvx_sub_scalar_f32_aa(DST, SRC, *(float *)VAL, N); break;          \
+            case HTP_OP_MUL: hvx_mul_scalar_f32_aa(DST, SRC, *(float *)VAL, N); break;          \
             case HTP_OP_DIV: hvx_mul_scalar_f32_aa(DST, SRC, 1.0f / (*(float *)VAL), N); break; \
-            default: break; \
-        } \
-    } \
-    else { \
-        switch (octx->op) { \
-            case HTP_OP_ADD: hvx_add_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break; \
-            case HTP_OP_SUB: hvx_sub_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break; \
-            case HTP_OP_MUL: hvx_mul_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break; \
-            case HTP_OP_DIV: hvx_div_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break; \
-            default: break; \
-        } \
+            default: break;                                                                     \
+        }                                                                                       \
+    }                                                                                           \
+    else {                                                                                      \
+        switch (octx->op) {                                                                     \
+            case HTP_OP_ADD: hvx_add_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break;       \
+            case HTP_OP_SUB: hvx_sub_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break;       \
+            case HTP_OP_MUL: hvx_mul_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break;       \
+            case HTP_OP_DIV: hvx_div_scalar_f16_aa(DST, SRC, *(_Float16 *)VAL, N); break;       \
+            default: break;                                                                     \
+        }                                                                                       \
     }
 
 // Macro for vector op switch (All Aligned)
-#define COMPUTE_VECTOR_OP_AAA(DST, SRC0, SRC1, TYPE, N) \
-    if(TYPE == HTP_TYPE_F32) { \
-        switch (octx->op) { \
+#define COMPUTE_VECTOR_OP_AAA(DST, SRC0, SRC1, TYPE, N)                  \
+    if(TYPE == HTP_TYPE_F32) {                                           \
+        switch (octx->op) {                                              \
             case HTP_OP_ADD: hvx_add_f32_aaa(DST, SRC0, SRC1, N); break; \
             case HTP_OP_SUB: hvx_sub_f32_aaa(DST, SRC0, SRC1, N); break; \
             case HTP_OP_MUL: hvx_mul_f32_aaa(DST, SRC0, SRC1, N); break; \
             case HTP_OP_DIV: hvx_div_f32_aaa(DST, SRC0, SRC1, N); break; \
-            default: break; \
-        } \
-    } \
-    else { \
-        switch (octx->op) { \
+            default: break;                                              \
+        }                                                                \
+    }                                                                    \
+    else {                                                               \
+        switch (octx->op) {                                              \
             case HTP_OP_ADD: hvx_add_f16_aaa(DST, SRC0, SRC1, N); break; \
             case HTP_OP_SUB: hvx_sub_f16_aaa(DST, SRC0, SRC1, N); break; \
             case HTP_OP_MUL: hvx_mul_f16_aaa(DST, SRC0, SRC1, N); break; \
             case HTP_OP_DIV: hvx_div_f16_aaa(DST, SRC0, SRC1, N); break; \
-            default: break; \
-        } \
+            default: break;                                              \
+        }                                                                \
     }
 
 // Macro for vector op switch (Dst Aligned, Src0 Aligned, Src1 Unaligned)
-#define COMPUTE_VECTOR_OP_AAU(DST, SRC0, SRC1, TYPE, N) \
-    if(TYPE == HTP_TYPE_F32) { \
-        switch (octx->op) { \
+#define COMPUTE_VECTOR_OP_AAU(DST, SRC0, SRC1, TYPE, N)                  \
+    if(TYPE == HTP_TYPE_F32) {                                           \
+        switch (octx->op) {                                              \
             case HTP_OP_ADD: hvx_add_f32_aau(DST, SRC0, SRC1, N); break; \
             case HTP_OP_SUB: hvx_sub_f32_aau(DST, SRC0, SRC1, N); break; \
             case HTP_OP_MUL: hvx_mul_f32_aau(DST, SRC0, SRC1, N); break; \
             case HTP_OP_DIV: hvx_div_f32_aau(DST, SRC0, SRC1, N); break; \
-            default: break; \
-        } \
-    } \
-    else { \
-        switch (octx->op) { \
+            default: break;                                              \
+        }                                                                \
+    }                                                                    \
+    else {                                                               \
+        switch (octx->op) {                                              \
             case HTP_OP_ADD: hvx_add_f16_aau(DST, SRC0, SRC1, N); break; \
             case HTP_OP_SUB: hvx_sub_f16_aau(DST, SRC0, SRC1, N); break; \
             case HTP_OP_MUL: hvx_mul_f16_aau(DST, SRC0, SRC1, N); break; \
             case HTP_OP_DIV: hvx_div_f16_aau(DST, SRC0, SRC1, N); break; \
-            default: break; \
-        } \
+            default: break;                                              \
+        }                                                                \
     }
 
 // Macro for vector op switch (All Unaligned - generic loop used in element repeat)
-#define COMPUTE_VECTOR_OP_UUU(DST, SRC0, SRC1, TYPE, N) \
-    if(TYPE == HTP_TYPE_F32) { \
-        switch (octx->op) { \
+#define COMPUTE_VECTOR_OP_UUU(DST, SRC0, SRC1, TYPE, N)                  \
+    if(TYPE == HTP_TYPE_F32) {                                           \
+        switch (octx->op) {                                              \
             case HTP_OP_ADD: hvx_add_f32_uuu(DST, SRC0, SRC1, N); break; \
             case HTP_OP_SUB: hvx_sub_f32_uuu(DST, SRC0, SRC1, N); break; \
             case HTP_OP_MUL: hvx_mul_f32_uuu(DST, SRC0, SRC1, N); break; \
             case HTP_OP_DIV: hvx_div_f32_uuu(DST, SRC0, SRC1, N); break; \
-            default: break; \
-        } \
-    } \
-    else { \
-        switch (octx->op) { \
+            default: break;                                              \
+        }                                                                \
+    }                                                                    \
+    else {                                                               \
+        switch (octx->op) {                                              \
             case HTP_OP_ADD: hvx_add_f16_uuu(DST, SRC0, SRC1, N); break; \
             case HTP_OP_SUB: hvx_sub_f16_uuu(DST, SRC0, SRC1, N); break; \
             case HTP_OP_MUL: hvx_mul_f16_uuu(DST, SRC0, SRC1, N); break; \
             case HTP_OP_DIV: hvx_div_f16_uuu(DST, SRC0, SRC1, N); break; \
-            default: break; \
-        } \
+            default: break;                                              \
+        }                                                                \
     }
 
 // 1. Scalar src1 (ne10 == 1)
@@ -184,9 +187,8 @@ static void binary_job_scalar(unsigned int nth, unsigned int ith, void * data) {
 
     const uint32_t src0_type = octx->src[0]->type;
     const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
-    const uint32_t total_rows = ne01 * ne02 * ne03;
-    const uint32_t start_row = bctx->nrows_per_thread * ith;
-    const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
+    const uint32_t start_row = bctx->row_start + bctx->nrows_per_thread * ith;
+    const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
 
     FARF(HIGH, "binary-scalar: %d/%d (%u:%u) row-size %u (%u)", ith, nth, start_row, end_row, nb01, bctx->dst_row_size_aligned);
@@ -222,6 +224,8 @@ static void binary_job_scalar(unsigned int nth, unsigned int ith, void * data) {
     }
 
     // Main loop
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+
     for (uint32_t ir = start_row; ir < end_row; ) {
         uint32_t current_block_size = calc_block_size(bctx, ir, end_row, ne01, ne02);
 
@@ -242,12 +246,14 @@ static void binary_job_scalar(unsigned int nth, unsigned int ith, void * data) {
         uint8_t * src1_ptr = (uint8_t *)src1->data + i13 * nb13 + i12 * nb12 + i11 * nb11;
         uint32_t s1_stride = (ne11 == 1) ? 0 : nb11;
 
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
         for (uint32_t r = 0; r < current_block_size; r++) {
             uint8_t * r_src0 = s0_spad + r * bctx->src0_row_size_aligned;
             uint8_t * r_dst  = d_spad + r * bctx->dst_row_size_aligned;
             COMPUTE_SCALAR_OP(r_dst, r_src0, src1_ptr, src0_type, ne00);
             src1_ptr += s1_stride;
         }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
         uint8_t * dst_curr = (uint8_t *)dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
         dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
@@ -266,6 +272,7 @@ static void binary_job_scalar(unsigned int nth, unsigned int ith, void * data) {
         }
         ir += current_block_size;
     }
+
     dma_queue_flush(q);
 }
 
@@ -277,9 +284,8 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
 
     const uint32_t src0_type = octx->src[0]->type;
     const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
-    const uint32_t total_rows = ne01 * ne02 * ne03;
-    const uint32_t start_row = bctx->nrows_per_thread * ith;
-    const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
+    const uint32_t start_row = bctx->row_start + bctx->nrows_per_thread * ith;
+    const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
 
     FARF(HIGH, "binary-same-shape: %d/%d (%u:%u) row-size %u (%u)", ith, nth, start_row, end_row, nb01, bctx->dst_row_size_aligned);
@@ -323,18 +329,22 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
         spad_idx ^= 1;
     }
 
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+
     for (uint32_t ir = start_row; ir < end_row; ) {
         uint32_t current_block_size = calc_block_size(bctx, ir, end_row, ne01, ne02);
         uint8_t * d_spad  = (uint8_t *) dma_queue_pop(q).src;
         uint8_t * s0_spad = (uint8_t *) dma_queue_pop(q).dst;
         uint8_t * s1_spad = (uint8_t *) dma_queue_pop(q).dst;
 
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
         for (uint32_t r = 0; r < current_block_size; r++) {
             uint8_t * r_src0 = s0_spad + r * bctx->src0_row_size_aligned;
             uint8_t * r_src1 = s1_spad + r * bctx->src1_row_size_aligned;
             uint8_t * r_dst  = d_spad  + r * bctx->dst_row_size_aligned;
             COMPUTE_VECTOR_OP_AAA(r_dst, r_src0, r_src1, src0_type, ne00);
         }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
         uint32_t i03, i02, i01, rem;
         i03 = fastdiv(ir, &bctx->src0_dim12_div);
@@ -366,6 +376,7 @@ static void binary_job_vector_same_shape(unsigned int nth, unsigned int ith, voi
         }
         ir += current_block_size;
     }
+
     dma_queue_flush(q);
 }
 
@@ -377,9 +388,8 @@ static void binary_job_vector_row_broadcast(unsigned int nth, unsigned int ith, 
 
     const uint32_t src0_type  = octx->src[0]->type;
     const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
-    const uint32_t total_rows = ne01 * ne02 * ne03;
-    const uint32_t start_row  = bctx->nrows_per_thread * ith;
-    const uint32_t end_row    = MIN(start_row + bctx->nrows_per_thread, total_rows);
+    const uint32_t start_row  = bctx->row_start + bctx->nrows_per_thread * ith;
+    const uint32_t end_row    = MIN(start_row + bctx->nrows_per_thread, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
 
     FARF(HIGH, "binary-row-bcast: %d/%d (%u:%u) row-size %u (%u)", ith, nth, start_row, end_row, nb01, bctx->dst_row_size_aligned);
@@ -416,17 +426,21 @@ static void binary_job_vector_row_broadcast(unsigned int nth, unsigned int ith, 
         spad_idx ^= 1;
     }
 
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+
     for (uint32_t ir = start_row; ir < end_row; ) {
         uint32_t current_block_size = calc_block_size(bctx, ir, end_row, ne01, ne02);
         uint8_t * d_spad  = (uint8_t *) dma_queue_pop(q).src;
         uint8_t * s0_spad = (uint8_t *) dma_queue_pop(q).dst;
 
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
         for (uint32_t r = 0; r < current_block_size; r++) {
             uint8_t * r_src0 = s0_spad + r * bctx->src0_row_size_aligned;
             uint8_t * r_src1 = (uint8_t *)s1_ptr; // Constant
             uint8_t * r_dst  = d_spad + r * bctx->dst_row_size_aligned;
             COMPUTE_VECTOR_OP_AAA(r_dst, r_src0, r_src1, src0_type, ne00);
         }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
         uint32_t i03 = fastdiv(ir, &bctx->src0_dim12_div);
         uint32_t rem = ir - i03 * (ne02 * ne01);
@@ -447,6 +461,7 @@ static void binary_job_vector_row_broadcast(unsigned int nth, unsigned int ith, 
         }
         ir += current_block_size;
     }
+
     dma_queue_flush(q);
 }
 
@@ -458,9 +473,8 @@ static void binary_job_vector_complex(unsigned int nth, unsigned int ith, void *
 
     const uint32_t src0_type = octx->src[0]->type;
     const uint32_t row_size_bytes = (src0_type == HTP_TYPE_F32) ? ne00 * sizeof(float) : ne00 * sizeof(_Float16);
-    const uint32_t total_rows = ne01 * ne02 * ne03;
-    const uint32_t start_row  = bctx->nrows_per_thread * ith;
-    const uint32_t end_row    = MIN(start_row + bctx->nrows_per_thread, total_rows);
+    const uint32_t start_row  = bctx->row_start + bctx->nrows_per_thread * ith;
+    const uint32_t end_row    = MIN(start_row + bctx->nrows_per_thread, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
 
     FARF(HIGH, "binary-complex: %d/%d (%u:%u) row-size %u (%u)", ith, nth, start_row, end_row, nb01, bctx->dst_row_size_aligned);
@@ -493,6 +507,8 @@ static void binary_job_vector_complex(unsigned int nth, unsigned int ith, void *
         spad_idx ^= 1;
     }
 
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+
     for (uint32_t ir = start_row; ir < end_row; ) {
         uint32_t current_block_size = calc_block_size(bctx, ir, end_row, ne01, ne02);
         uint8_t * d_spad = (uint8_t *) dma_queue_pop(q).src;
@@ -503,6 +519,7 @@ static void binary_job_vector_complex(unsigned int nth, unsigned int ith, void *
         uint32_t i02 = fastdiv(rem, &bctx->src0_dim1_div);
         uint32_t i01 = rem - i02 * ne01;
 
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
         for (uint32_t r = 0; r < current_block_size; r++) {
             uint32_t r_i01 = i01 + r;
             uint32_t i13 = fastmodulo(i03, ne13, &bctx->src1_dim3_div);
@@ -516,6 +533,7 @@ static void binary_job_vector_complex(unsigned int nth, unsigned int ith, void *
             // Read src1 from DDR (unaligned)
             COMPUTE_VECTOR_OP_AAU(r_dst, r_src0, r_src1, src0_type, ne00);
         }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
         uint8_t * dst_curr = (uint8_t *)dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
         dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
@@ -532,6 +550,7 @@ static void binary_job_vector_complex(unsigned int nth, unsigned int ith, void *
         }
         ir += current_block_size;
     }
+
     dma_queue_flush(q);
 }
 
@@ -544,9 +563,8 @@ static void binary_job_element_repeat(unsigned int nth, unsigned int ith, void *
     const uint32_t src0_type = octx->src[0]->type;
     const uint32_t elem_size_bytes = (src0_type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
     const uint32_t row_size_bytes = ne00 * elem_size_bytes;;
-    const uint32_t total_rows = ne01 * ne02 * ne03;
-    const uint32_t start_row  = bctx->nrows_per_thread * ith;
-    const uint32_t end_row    = MIN(start_row + bctx->nrows_per_thread, total_rows);
+    const uint32_t start_row  = bctx->row_start + bctx->nrows_per_thread * ith;
+    const uint32_t end_row    = MIN(start_row + bctx->nrows_per_thread, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
 
     uint8_t * src0_spad_base = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
@@ -579,6 +597,8 @@ static void binary_job_element_repeat(unsigned int nth, unsigned int ith, void *
         spad_idx ^= 1;
     }
 
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+
     for (uint32_t ir = start_row; ir < end_row; ) {
         uint32_t current_block_size = calc_block_size(bctx, ir, end_row, ne01, ne02);
         uint8_t * d_spad = (uint8_t *) dma_queue_pop(q).src;
@@ -589,6 +609,7 @@ static void binary_job_element_repeat(unsigned int nth, unsigned int ith, void *
         uint32_t i02 = fastdiv(rem, &bctx->src0_dim1_div);
         uint32_t i01 = rem - i02 * ne01;
 
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
         for (uint32_t r = 0; r < current_block_size; r++) {
             uint32_t r_i01 = i01 + r;
             uint32_t i13 = fastmodulo(i03, ne13, &bctx->src1_dim3_div);
@@ -606,6 +627,7 @@ static void binary_job_element_repeat(unsigned int nth, unsigned int ith, void *
                 COMPUTE_VECTOR_OP_UUU(r_dst + c * elem_size_bytes, r_src0 + c * elem_size_bytes, r_src1_row, src0_type, len);
             }
         }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
         uint8_t * dst_curr = (uint8_t *)dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
         dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
@@ -622,6 +644,7 @@ static void binary_job_element_repeat(unsigned int nth, unsigned int ith, void *
         }
         ir += current_block_size;
     }
+
     dma_queue_flush(q);
 }
 
@@ -650,9 +673,8 @@ static void binary_job_add_id(unsigned int nth, unsigned int ith, void * data) {
     const uint32_t nb2 = dst->nb[2];
     const uint32_t nb3 = dst->nb[3];
 
-    const uint32_t total_rows = ne01 * ne02 * ne03;
-    const uint32_t start_row = bctx->nrows_per_thread * ith;
-    const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, total_rows);
+    const uint32_t start_row = bctx->row_start + bctx->nrows_per_thread * ith;
+    const uint32_t end_row   = MIN(start_row + bctx->nrows_per_thread, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
 
     uint8_t * src0_spad_base = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
@@ -683,6 +705,8 @@ static void binary_job_add_id(unsigned int nth, unsigned int ith, void * data) {
         spad_idx ^= 1;
     }
 
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+
     for (uint32_t ir = start_row; ir < end_row; ) {
         uint32_t current_block_size = calc_block_size(bctx, ir, end_row, ne01, ne02);
         uint8_t * d_spad = (uint8_t *) dma_queue_pop(q).src;
@@ -693,6 +717,7 @@ static void binary_job_add_id(unsigned int nth, unsigned int ith, void * data) {
         uint32_t i02 = fastdiv(rem, &bctx->src0_dim1_div);
         uint32_t i01 = rem - i02 * ne01;
 
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
         for (uint32_t r = 0; r < current_block_size; r++) {
             uint32_t r_i01 = i01 + r; // linear within block since we split at ne01
 
@@ -704,6 +729,7 @@ static void binary_job_add_id(unsigned int nth, unsigned int ith, void * data) {
 
             hvx_add_f32_aau(r_dst, r_src0, r_src1, ne00);
         }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
         uint8_t * dst_curr = (uint8_t *)dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
         dma_queue_push(q, dma_make_ptr(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, ne00 * sizeof(float), current_block_size);
@@ -720,6 +746,7 @@ static void binary_job_add_id(unsigned int nth, unsigned int ith, void * data) {
         }
         ir += current_block_size;
     }
+
     dma_queue_flush(q);
 }
 
@@ -729,14 +756,30 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     const struct htp_tensor * dst  = octx->dst;
 
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
-    const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
 
-    // Use packed row sizes for VTCM allocation
+    // Use packed row sizes for VTCM allocation and alignment
     const uint32_t src0_type = octx->src[0]->type;
     const size_t elem_size = (src0_type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
     const size_t src0_row_size = src0->ne[0] * elem_size;
     const size_t src1_row_size = src1->ne[0] * elem_size;
     const size_t dst_row_size  = dst->ne[0]  * elem_size;
+
+    uint32_t row_start = 0;
+    uint32_t nrows     = src0_nrows;
+
+    if (octx->ctx->mdev.count > 1) {
+        uint32_t rows_per_chunk = 0;
+        htp_tensor_mdev_rows_per_chunk(dst, (uint32_t) elem_size, (uint32_t) dst_row_size, &rows_per_chunk);
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(src0_nrows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        row_start = range.start;
+        nrows     = range.count;
+    }
+
+    if (nrows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    const uint32_t n_threads = octx->n_threads;
 
     size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
     size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
@@ -815,7 +858,9 @@ static int execute_op_binary(struct htp_ops_context * octx) {
 
     struct htp_binary_context bctx;
     bctx.octx                  = octx;
-    bctx.nrows_per_thread      = (src0_nrows + n_threads - 1) / n_threads;
+    bctx.nrows_per_thread      = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
+    bctx.total_rows            = nrows;
+    bctx.row_start             = row_start;
     bctx.block_max             = rows_per_buffer;
     bctx.src0_row_size_aligned = src0_row_size_aligned;
     bctx.src1_row_size_aligned = src1_row_size_aligned;
@@ -850,7 +895,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
         dma_queue_pop(q);
     }
 
-    worker_pool_run_func(octx->ctx->worker_pool, worker_func, &bctx, n_threads);
+    work_queue_run(octx->ctx->work_queue, worker_func, &bctx, n_threads);
 
     return HTP_STATUS_OK;
 }
@@ -870,4 +915,3 @@ int op_binary(struct htp_ops_context * octx) {
 
     return HTP_STATUS_NO_SUPPORT;
 }
-
