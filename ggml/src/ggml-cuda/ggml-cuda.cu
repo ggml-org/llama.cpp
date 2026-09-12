@@ -1356,6 +1356,150 @@ ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
     return &ggml_backend_cuda_buffer_type_host;
 }
 
+
+// Strict mutable KV backing. Unlike the generic host type, pinning failure is not a pageable fallback.
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+struct ggml_cuda_kv_host_context {
+    enum ownership { borrowed, allocated, registered } ownership = borrowed;
+    void * data = nullptr;
+    int device = 0;
+    ggml_backend_buffer_t owner = nullptr;
+
+    // Unregister before releasing the caller-owned allocation; views release neither.
+    ~ggml_cuda_kv_host_context() {
+        if (ownership != borrowed) ggml_cuda_set_device(device);
+        if (ownership == allocated) CUDA_CHECK(cudaFreeHost(data));
+        if (ownership == registered) CUDA_CHECK(cudaHostUnregister(data));
+        ggml_backend_buffer_free(owner);
+    }
+};
+
+// Keep native ownership in a separate context while reusing CPU tensor-copy callbacks.
+static void ggml_backend_cuda_kv_host_free(ggml_backend_buffer_t buffer) {
+    delete static_cast<ggml_cuda_kv_host_context *>(buffer->context);
+}
+// Return the CPU address; a kernel must obtain the mapped device alias separately.
+static void * ggml_backend_cuda_kv_host_base(ggml_backend_buffer_t buffer) {
+    return static_cast<ggml_cuda_kv_host_context *>(buffer->context)->data;
+}
+// Clear only this buffer or view, not the entire registered parent allocation.
+static void ggml_backend_cuda_kv_host_clear(ggml_backend_buffer_t buffer, uint8_t value) {
+    memset(ggml_backend_cuda_kv_host_base(buffer), value, buffer->size);
+}
+static ggml_backend_buffer_t ggml_backend_cuda_kv_host_view(ggml_backend_buffer_t, size_t, size_t);
+
+// The temporary context releases native memory if buffer metadata construction throws.
+static ggml_backend_buffer_t ggml_backend_cuda_kv_host_wrap(
+        ggml_backend_buffer_type_t type, size_t size, std::unique_ptr<ggml_cuda_kv_host_context> context) {
+    auto * buffer = ggml_backend_cpu_buffer_from_ptr(context->data, size);
+    buffer->buft = type;
+    buffer->context = context.release();
+    buffer->iface.free_buffer = ggml_backend_cuda_kv_host_free;
+    buffer->iface.get_base = ggml_backend_cuda_kv_host_base;
+    buffer->iface.clear = ggml_backend_cuda_kv_host_clear;
+    buffer->view_buffer = ggml_backend_cuda_kv_host_view;
+    return buffer;
+}
+
+// Common buffer-view ownership retains the parent; this context borrows its bytes.
+static ggml_backend_buffer_t ggml_backend_cuda_kv_host_view(
+        ggml_backend_buffer_t buffer, size_t offset, size_t size) {
+    auto context = std::make_unique<ggml_cuda_kv_host_context>();
+    auto * parent = static_cast<ggml_cuda_kv_host_context *>(buffer->context);
+    context->data = static_cast<char *>(parent->data) + offset;
+    context->device = parent->device;
+    return ggml_backend_cuda_kv_host_wrap(buffer->buft, size, std::move(context));
+}
+
+// Validate mapping before handing out storage that later kernels may address.
+static bool ggml_backend_cuda_kv_host_mapped(void * data) {
+    void * device_pointer = nullptr;
+    const auto error = cudaHostGetDevicePointer(&device_pointer, data, 0);
+    if (error == cudaSuccess) return device_pointer != nullptr;
+    (void) cudaGetLastError();
+    return false;
+}
+
+// Preserve the reference WDDM workaround: mapped, but never write-combined on native Windows.
+static ggml_backend_buffer_t ggml_backend_cuda_kv_host_alloc(ggml_backend_buffer_type_t type, size_t size) {
+    if (getenv("GGML_CUDA_NO_PINNED")) return nullptr;
+    try {
+        auto context = std::make_unique<ggml_cuda_kv_host_context>();
+        context->device = static_cast<ggml_backend_cuda_buffer_type_context *>(type->context)->device;
+        ggml_cuda_set_device(context->device);
+#ifdef _WIN32
+        const unsigned int flags = cudaHostAllocMapped;
+#else
+        const unsigned int flags = cudaHostAllocMapped | cudaHostAllocWriteCombined;
+#endif
+        const auto error = cudaHostAlloc(&context->data, size, flags);
+        if (error != cudaSuccess) {
+            (void) cudaGetLastError();
+            GGML_LOG_ERROR("%s: pinned KV allocation failed: %s\n", __func__, cudaGetErrorString(error));
+            return nullptr;
+        }
+        context->ownership = ggml_cuda_kv_host_context::allocated;
+        if (!ggml_backend_cuda_kv_host_mapped(context->data)) return nullptr;
+        return ggml_backend_cuda_kv_host_wrap(type, size, std::move(context));
+    } catch (const std::bad_alloc &) {
+        return nullptr;
+    }
+}
+
+// A distinct name callback prevents host storage being mistaken for a CUDA device buffer.
+static const char * ggml_backend_cuda_kv_host_name(ggml_backend_buffer_type_t type) {
+    return static_cast<ggml_backend_cuda_buffer_type_context *>(type->context)->name.c_str();
+}
+// CPU callbacks access the canonical bytes even though the allocation is CUDA-pinned.
+static bool ggml_backend_cuda_kv_host_is_host(ggml_backend_buffer_type_t) { return true; }
+
+// Per-device identity is an explicit mapping contract, not an arena or content identity.
+static ggml_backend_buffer_type_t ggml_backend_cuda_kv_host_buffer_type(int device) {
+    if (device < 0 || device >= ggml_backend_cuda_get_device_count()) return nullptr;
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    static ggml_backend_buffer_type types[GGML_CUDA_MAX_DEVICES];
+    auto & type = types[device];
+    if (!type.context) {
+        type = {
+            {ggml_backend_cuda_kv_host_name, ggml_backend_cuda_kv_host_alloc,
+             ggml_backend_cuda_buffer_type_get_alignment, nullptr, nullptr, ggml_backend_cuda_kv_host_is_host},
+            ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device),
+            new ggml_backend_cuda_buffer_type_context{device, "CUDA" + std::to_string(device) + "_KV_Host", false},
+        };
+    }
+    return &type;
+}
+
+// Only a successful new mutable registration is owned; existing registrations are never adopted.
+static ggml_backend_buffer_t ggml_backend_cuda_kv_host_buffer_register(int device, ggml_backend_buffer_t owner) {
+    auto * type = ggml_backend_cuda_kv_host_buffer_type(device);
+    if (!type || !owner || !ggml_backend_buffer_is_host(owner) || getenv("GGML_CUDA_NO_PINNED")) return nullptr;
+    const size_t size = ggml_backend_buffer_get_size(owner);
+    if (!size) return nullptr;
+    void * data = ggml_backend_buffer_get_base(owner);
+    const auto address = reinterpret_cast<uintptr_t>(data);
+    if (!data || address % ggml_backend_buft_get_alignment(type) || size > UINTPTR_MAX - address) return nullptr;
+    try {
+        auto context = std::make_unique<ggml_cuda_kv_host_context>();
+        context->device = device;
+        context->data = data;
+        ggml_cuda_set_device(device);
+        const auto error = cudaHostRegister(data, size, cudaHostRegisterMapped);
+        if (error != cudaSuccess) {
+            (void) cudaGetLastError();
+            return nullptr;
+        }
+        context->ownership = ggml_cuda_kv_host_context::registered;
+        context->owner = ggml_backend_buffer_retain(owner);
+        if (!ggml_backend_cuda_kv_host_mapped(data)) return nullptr;
+        return ggml_backend_cuda_kv_host_wrap(type, size, std::move(context));
+    } catch (const std::bad_alloc &) {
+        return nullptr;
+    }
+}
+#endif
+
 //static bool ggml_backend_buffer_is_cuda_host(ggml_backend_buffer_t buffer) {
 //    return buffer->buft->iface.get_name == ggml_backend_cuda_host_buffer_type_name;
 //}
@@ -6067,6 +6211,8 @@ static bool ggml_backend_cuda_graph_is_captured(ggml_backend_t backend, const vo
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if (strcmp(name, "ggml_backend_cuda_kv_host_buffer_type") == 0) return (void *)ggml_backend_cuda_kv_host_buffer_type;
+    if (strcmp(name, "ggml_backend_cuda_kv_host_buffer_register") == 0) return (void *)ggml_backend_cuda_kv_host_buffer_register;
     const bool release_graph = strcmp(name, "ggml_backend_cuda_graph_release") == 0;
     const bool release_all = strcmp(name, "ggml_backend_cuda_graph_release_all") == 0;
     if (release_graph || release_all || strcmp(name, "ggml_backend_cuda_graph_is_captured") == 0) {

@@ -6,7 +6,7 @@ Last source review: 2026-09-12, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is implemented and validated, awaiting user review and commit. The remainder of milestones 5-8 is planned. The next substage after review is **5.3a: authoritative host KV storage and pinned-memory lifetime**. The new allocation factory is opt-in; no streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is implemented and validated, awaiting user review and commit. The remainder of milestones 5-8 is planned. The next substage after review is **5.3b: cache writes, dirty rows, mutable tails, and content generations**. The new allocation factory is opt-in; no streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is ready for review. Do not start 5.3a until the user has reviewed and committed it.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is ready for review. Do not start 5.3b until the user has reviewed and committed it.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -341,8 +341,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.1a | Complete | `fe2189418` | 18 cases / 1,205 assertions; 15 focused suites and existing CPU model regressions pass in debug, ASan/leak-checking, and UBSan. Reference production call paths audited; no streaming runtime is enabled. |
 | 5.1b | Complete | `74b400abb` | 20 policy cases / 139,866 assertions; 16 focused suites and existing CPU model regressions pass in debug, ASan/leak-checking, and UBSan. Pure production-derived layout/adaptation policy; no streaming runtime enabled. |
 | 5.2a | Complete | `4717474c3` | 10 CUDA cases / 1,055 assertions per UVM mode; actual device pointer attributes and zero memcheck errors/leaks. 18 CUDA-build and 16 CPU debug/ASan/UBSan suites pass; virtual-device identity and native capture checks pass. Opt-in factory only. |
-| 5.2b | Ready for user review | Uncommitted | 15 CPU cases / 3,097 assertions; 16 real-CUDA cases / 3,108 assertions per UVM mode; virtual-device rejection passes. 17 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck reports zero errors/leaks. Binding adapter only. |
-| 5.3a-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.2b | Complete | `0e3d5a0c0` | 15 CPU cases / 3,097 assertions; 16 real-CUDA cases / 3,108 assertions per UVM mode; virtual-device rejection passes. 17 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck reports zero errors/leaks. Binding adapter only. |
+| 5.3a | Ready for user review | Uncommitted | 8 CPU owner cases / 386 assertions; 9 real-CUDA owner cases / 394 assertions; 5 CUDA pinning cases / 44 assertions. 18 CPU Debug/ASan/UBSan and 22 CUDA-build suites pass; memcheck has zero errors/leaks. Native Windows behavior preserved but not hardware-qualified. |
+| 5.3b-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -1246,4 +1247,74 @@ GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --leak-check
 
 Explicit `--cuda` is required to execute the hardware portion; the default test uses CPU/fake-native lifecycle fixtures. Repeat memcheck with UVM unset for the other mode. No physical multi-GPU, Windows, TSan, long-context throughput, real host-KV storage, or streamed-attention qualification is claimed here.
 
-Production services and configuration remain untouched. After user review and commit, proceed to **5.3a: authoritative host KV storage and pinned-memory lifetime**, preserving the reference Windows allocation behavior.
+Production services and configuration remain untouched. Stage **5.3a**, documented below, adds independent authoritative host storage and pinned-memory lifetime.
+
+## Substage 5.3a: authoritative host storage and strict pinned-memory ownership
+
+Added `src/llama-kv-stream-host.h/.cpp`, the optional CUDA KV-host registry adapters, and dedicated host-owner/backend tests. The owner contains canonical host bytes, not device pool storage or an arena lease. Device-side executables can retain its shared ownership through stage 5.2b without tying host lifetime to an arena generation or device-binding revision.
+
+### Checked storage layout
+
+The owner validates the independent K/V storage/write/attention capability contract before allocation. Context capacity is padded to whole pages with checked arithmetic. Each full-attention execution ordinal has one contiguous K plane followed by an aligned V plane; each layer's stride is aligned separately, including cases where the plane byte counts are not alignment multiples. Aggregate layer storage and alignment additions are overflow-checked.
+
+Creation allocates and zeros the canonical storage span. Import retains an exact-type host buffer and preserves its bytes. Both reject missing/undersized storage and out-of-range address arithmetic; creation also rejects a backend that silently returns a different fallback buffer type.
+
+The allocator request includes at most alignment-minus-one bytes beyond the canonical span so even a host allocator with weaker base alignment can supply aligned planes. `bytes()` reports canonical storage including inter-layer padding, while the backing buffer reports the full allocation. This is host-address alignment slack, not a VRAM safety reserve or a larger device KV pool.
+
+The original context capacity, padded layout, shape, and caller-assigned nonzero cache ID remain with the host owner. Layer lookup returns bounded host pointers without allocating. Raw access is deliberately not yet a dirty-tracking or synchronization API: writes must be serialized against readers/copies until stage 5.3b adds content bookkeeping. Initialization to zero does not mark context tokens logically valid.
+
+### CUDA allocation and registration contracts
+
+The historical runtime at `d873e5db9` uses mapped pinned host allocation, with write-combining omitted under `_WIN32` because mapped write-combined decode writes had faulted under WDDM. The new strict allocator preserves that choice. The existing generic helpers are unchanged: their pageable-allocation fallback and read-only registration policy are not appropriate substitutes for mutable KV backing.
+
+| Storage origin | Admission | Final cleanup |
+| --- | --- | --- |
+| New CUDA KV backing | `cudaHostAllocMapped`; additionally `cudaHostAllocWriteCombined` outside native Windows | `cudaFreeHost` |
+| Caller-owned host buffer | A new writable `cudaHostRegisterMapped` registration; retain the owner | `cudaHostUnregister`, then release owner |
+| Buffer view | Borrow bytes and retain the parent through existing GGML view ownership | Release the view/parent reference; do not independently free/unregister |
+
+The private registry hooks are `ggml_backend_cuda_kv_host_buffer_type(int)` and `ggml_backend_cuda_kv_host_buffer_register(int, ggml_backend_buffer_t)`. Their caller-side resolvers verify device and exact buffer-type identity without linking llama to CUDA. Only the native CUDA adapter is enabled; no HIP/MUSA registration behavior is claimed.
+
+Both allocation and registration fail explicitly when pinning is unavailable or `GGML_CUDA_NO_PINNED` is set. They do not use the generic `GGML_CUDA_REGISTER_HOST` opt-in/read-only path, do not fall back to pageable memory, and do not use UVM. A duplicate/existing registration is rejected without adopting or undoing it. Callers must not externally unregister a successful wrapper, and their owner buffer must keep its bytes alive.
+
+Mapping is checked before publication. Host pointers and mapped GPU aliases are not assumed equal: future CUDA kernels must obtain the device alias rather than blindly use a CPU address. Imported storage inherits the caller's cache policy; this adapter does not add a write-combining hint to registration.
+
+CPU tensor-copy callbacks are reused, with buffer base, clear, view, and destruction callbacks adjusted for the allocation/registration owner. Views clear only their bounded spans. Temporary native ownership handles allocation/registration failure cleanup, and successful registrations release their owner only after unregistering.
+
+### Lifetime separation
+
+```mermaid
+flowchart LR
+    E["Execution pin"] --> N["Native device resources"]
+    N --> H["Shared authoritative host owner"]
+    H --> B["Pinned host buffer"]
+    E --> L["Independent device-region lease"]
+    B --> O["Allocation or retained registered owner"]
+```
+
+The host owner does not capture a particular device lease. A queued native executable must retain the host owner until completion, just as it retains device storage through the execution guard. The tests exercise pending detach with live pins and final release after completion. No implicit device synchronization is added to the host destructor.
+
+### TDD evidence and limitations
+
+The initial host stub failed 86 assertions; CUDA tests separately failed because the strict allocation/registration hooks did not exist. Final results:
+
+- **8 CPU host-owner cases / 386 assertions**, including all 81 pairs of the nine online KV storage types, invalid/overflowing geometry before allocation, injected null/throwing allocators, exact-type fallback rejection, preserved imported contents, non-page-aligned unequal planes, and device-independent lifetime.
+- **9 real-CUDA host-owner cases / 394 assertions**, adding pinned owner integration, registration-adapter import, and retained contents after caller handles are released.
+- **5 CUDA backend cases / 44 assertions**, covering actual mapping flags and GPU writes, retained views, duplicate registration/allocation ownership, re-registration after cleanup, and recoverable impossible-size allocation failure. The separate disabled-pinning process also passes.
+- All **18 focused CPU suites** pass in Debug, ASan with leak checking, and UBSan. All **22 selected CUDA-build suites** pass, including both new pinning modes and the existing device-local/UVM allocator tests.
+- Compute Sanitizer reports zero errors and zero bytes leaked for both the backend and host-owner hardware suites. API-error reporting is disabled only for the backend suite's deliberate OOM/duplicate-registration calls; memory-error and leak detection remain active.
+- All four CPU-referenced CUDA SCALE cases pass. Strict warning checking passes for the host-owner implementation.
+
+```sh
+cmake --build build-device-memory-infra --target test-kv-stream-host -j 20
+ctest --test-dir build-device-memory-infra -R '^test-kv-stream-host$' --output-on-failure
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-host test-cuda-kv-host -j 20
+ctest --test-dir build-device-memory-infra-cuda -R '^test-cuda-kv-host' --output-on-failure
+build-device-memory-infra-cuda/bin/test-kv-stream-host --cuda
+compute-sanitizer --tool memcheck --leak-check full --report-api-errors no --error-exitcode 99 build-device-memory-infra-cuda/bin/test-cuda-kv-host
+compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-host --cuda
+```
+
+The 81-pair tests validate storage geometry, not execution of 81 attention kernels. Native Windows flag selection is preserved and the hardware test has a Windows-specific expectation, but Windows execution was unavailable. Physical multi-GPU, HIP/MUSA/SYCL/Vulkan mapping, TSan, and long-context performance are not qualified here.
+
+Production services, models, and compose configuration remain unchanged. After user review and commit, proceed to **5.3b: cache writes, dirty rows, mutable tails, and content generations**, initially with synchronized mirror updates.
