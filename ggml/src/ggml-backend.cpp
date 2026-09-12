@@ -2133,6 +2133,11 @@ size_t ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backe
     return ggml_gallocr_get_buffer_size(sched->galloc, backend_index);
 }
 
+size_t ggml_backend_sched_get_buffer_count(ggml_backend_sched_t sched, int backend_id, size_t domain) {
+    GGML_ASSERT(sched && backend_id >= 0 && backend_id < sched->n_backends);
+    return ggml_gallocr_get_buffer_count(sched->galloc, backend_id, domain);
+}
+
 void ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_t backend) {
     GGML_ASSERT(sched);
     int backend_index = ggml_backend_sched_backend_id(sched, backend);

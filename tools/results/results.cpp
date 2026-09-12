@@ -6,25 +6,39 @@
 #include "arg.h"
 #include "log.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
 // normalized mean squared error = mse(a, b) / mse(a, 0)
-static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
-    GGML_ASSERT(a.size() == b.size());
-    double mse_a_b = 0.0;
-    double mse_a_0 = 0.0;
-
-    for (size_t i = 0; i < a.size(); i++) {
-        float a_i = a[i];
-        float b_i = b[i];
-
-        mse_a_b += (a_i - b_i) * (a_i - b_i);
-        mse_a_0 += a_i * a_i;
+static double nmse(const std::vector<float> & a, const std::vector<float> & b, size_t row_size = 0) {
+    if (a.empty() || a.size() != b.size()) {
+        return std::numeric_limits<double>::infinity();
     }
-
-    return mse_a_b / mse_a_0;
+    row_size = row_size ? row_size : a.size();
+    if (a.size() % row_size) {
+        return std::numeric_limits<double>::infinity();
+    }
+    double worst = 0.0;
+    for (size_t row = 0; row < a.size(); row += row_size) {
+        double error = 0.0;
+        double energy = 0.0;
+        for (size_t i = row; i < row + row_size; i++) {
+            double x = a[i];
+            double y = b[i];
+            if (!std::isfinite(x) || !std::isfinite(y)) {
+                return std::numeric_limits<double>::infinity();
+            }
+            error += (x - y)*(x - y);
+            energy += x*x;
+        }
+        double value = energy > 0 ? error/energy : error == 0 ? 0 : std::numeric_limits<double>::infinity();
+        worst = std::max(worst, value);
+    }
+    return worst;
 }
 
 static std::vector<float> get_logits(
@@ -132,7 +146,7 @@ int main(int argc, char ** argv) {
         const double nmse_val = nmse(logits_disk, logits_calc);
         LOG_INF("%s: NMSE=%.3e\n", __func__, nmse_val);
 
-        if (nmse_val > 1e-6) {
+        if (!std::isfinite(nmse_val) || nmse_val > 1e-6) {
             printf("\033[1;31mFAIL\033[0m\n");
             return 1;
         }

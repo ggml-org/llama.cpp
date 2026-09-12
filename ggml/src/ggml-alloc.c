@@ -2101,6 +2101,29 @@ bool ggml_gallocr_has_active_bindings(ggml_gallocr_t galloc) {
     return false;
 }
 
+size_t ggml_gallocr_get_buffer_count(ggml_gallocr_t galloc, int buffer_id, size_t domain) {
+    GGML_ASSERT(buffer_id >= 0 && buffer_id < galloc->n_buffers);
+    struct ggml_gallocr_composite_plan * composite = galloc->plan.composites ? galloc->plan.composites[buffer_id] : NULL;
+    if (composite) {
+        GGML_ASSERT(domain < composite->n_domains);
+        struct ggml_gallocr_composite_storage * storage = galloc->composite_buffers[buffer_id];
+        if (storage->owner && !storage->released) {
+            return composite->iface->n_buffers(storage->owner, domain);
+        }
+        size_t count = 0;
+        for (size_t i = 0; i < storage->domains[domain].n_buffers; i++) {
+            count += storage->domains[domain].buffers[i] != NULL;
+        }
+        return count;
+    }
+    GGML_ASSERT(domain == 0);
+    size_t count = 0;
+    for (int i = 0; galloc->buffers[buffer_id] && i < GGML_VBUFFER_MAX_CHUNKS; i++) {
+        count += galloc->buffers[buffer_id]->chunks[i] != NULL;
+    }
+    return count;
+}
+
 size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id) {
     GGML_ASSERT(buffer_id >= 0 && buffer_id < galloc->n_buffers);
 

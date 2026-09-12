@@ -172,6 +172,8 @@ extern "C" {
     };
     GGML_API struct ggml_gallocr_domain_plan_info ggml_gallocr_get_domain_plan_info(
             struct ggml_gallocr * galloc, int buffer_id, size_t domain);
+    GGML_API size_t ggml_gallocr_get_buffer_count(struct ggml_gallocr * galloc, int buffer_id, size_t domain);
+    GGML_API size_t ggml_backend_sched_get_buffer_count(ggml_backend_sched_t sched, int backend_id, size_t domain);
 
     GGML_API struct ggml_backend_meta_preparation * ggml_backend_meta_preparation_new(
             ggml_backend_buffer_type_t buft, enum ggml_backend_buffer_usage usage, size_t max_tensors,

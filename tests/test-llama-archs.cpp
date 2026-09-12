@@ -12,10 +12,13 @@
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <cmath>
+#include <limits>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -23,20 +26,31 @@
 #include <vector>
 
 // normalized mean squared error = mse(a, b) / mse(a, 0)
-static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
-    GGML_ASSERT(a.size() == b.size());
-    double mse_a_b = 0.0;
-    double mse_a_0 = 0.0;
-
-    for (size_t i = 0; i < a.size(); i++) {
-        float a_i = a[i];
-        float b_i = b[i];
-
-        mse_a_b += (a_i - b_i) * (a_i - b_i);
-        mse_a_0 += a_i * a_i;
+static double nmse(const std::vector<float> & a, const std::vector<float> & b, size_t row_size = 0) {
+    if (a.empty() || a.size() != b.size()) {
+        return std::numeric_limits<double>::infinity();
     }
-
-    return mse_a_b / mse_a_0;
+    row_size = row_size ? row_size : a.size();
+    if (a.size() % row_size) {
+        return std::numeric_limits<double>::infinity();
+    }
+    double worst = 0.0;
+    for (size_t row = 0; row < a.size(); row += row_size) {
+        double error = 0.0;
+        double energy = 0.0;
+        for (size_t i = row; i < row + row_size; i++) {
+            double x = a[i];
+            double y = b[i];
+            if (!std::isfinite(x) || !std::isfinite(y)) {
+                return std::numeric_limits<double>::infinity();
+            }
+            error += (x - y)*(x - y);
+            energy += x*x;
+        }
+        double value = energy > 0 ? error/energy : error == 0 ? 0 : std::numeric_limits<double>::infinity();
+        worst = std::max(worst, value);
+    }
+    return worst;
 }
 
 static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
@@ -65,7 +79,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
+    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [--cpu-meta] [--decode-steps N] [--logits-prefix path] [-v N] [-h/--help]\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
@@ -422,36 +436,80 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
 }
 
 static std::vector<float> get_logits(
-        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
+        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false, uint32_t decode_steps = 0) {
     const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
     const uint32_t n_ctx    = llama_n_ctx(lctx);
     const uint32_t n_tokens = tokens.size();
     llama_batch batch = llama_batch_init(n_ctx, 0, 1);
-    GGML_ASSERT(n_tokens <= n_ctx);
+    struct batch_cleanup {
+        llama_batch & batch;
+        ~batch_cleanup() { llama_batch_free(batch); }
+    } cleanup{batch};
+    GGML_ASSERT(n_tokens > 0 && n_tokens < n_ctx && decode_steps < n_ctx - n_tokens);
+    if (decode_steps && encode) {
+        throw std::runtime_error("decode protocol requires a decoder model");
+    }
     for (uint32_t pos = 0; pos < n_tokens; pos++) {
         common_batch_add(batch, tokens[pos], pos, {0}, true);
     }
     batch.n_tokens = n_tokens;
     if (encode) {
         if (llama_encode(lctx, batch)) {
-            llama_batch_free(batch);
             throw std::runtime_error("failed to encode batch");
         }
     }
     if (llama_decode(lctx, batch)) {
-        llama_batch_free(batch);
         throw std::runtime_error("failed to decode batch");
     }
 
     std::vector<float> ret;
-    ret.reserve(n_tokens*n_vocab);
-    for (uint32_t i = 0; i < n_tokens; i++) {
-        const float * logits_ith = llama_get_logits_ith(lctx, i);
-        for (uint32_t j = 0; j < n_vocab; j++) {
-            ret.push_back(logits_ith[j]);
+    const auto append_logits = [&](uint32_t count) {
+        for (uint32_t i = 0; i < count; i++) {
+            const float * logits = llama_get_logits_ith(lctx, i);
+            if (!logits) {
+                throw std::runtime_error("missing logits");
+            }
+            for (uint32_t j = 0; j < n_vocab; j++) {
+                if (!std::isfinite(logits[j])) {
+                    throw std::runtime_error("non-finite logits");
+                }
+                ret.push_back(logits[j]);
+            }
         }
+    };
+    append_logits(n_tokens);
+    for (uint32_t step = 0; step < decode_steps; step++) {
+        common_batch_clear(batch);
+        common_batch_add(batch, tokens[step % n_tokens], n_tokens + step, {0}, true);
+        if (llama_decode(lctx, batch)) {
+            throw std::runtime_error("decode step failed");
+        }
+        append_logits(1);
     }
-    llama_batch_free(batch);
+    if (decode_steps) {
+        std::vector<uint8_t> state(llama_state_seq_get_size(lctx, 0));
+        if (llama_state_seq_get_data(lctx, state.data(), state.size(), 0) != state.size()) {
+            throw std::runtime_error("failed to save decode state");
+        }
+        llama_memory_clear(llama_get_memory(lctx), true);
+        common_batch_clear(batch);
+        for (uint32_t i = 0; i < n_tokens; i++) {
+            common_batch_add(batch, tokens[i], i, {0}, true);
+        }
+        if (llama_decode(lctx, batch)) {
+            throw std::runtime_error("refill failed");
+        }
+        append_logits(n_tokens);
+        if (llama_state_seq_set_data(lctx, state.data(), state.size(), 0) != state.size()) {
+            throw std::runtime_error("failed to restore decode state");
+        }
+        common_batch_clear(batch);
+        common_batch_add(batch, tokens.back(), n_tokens + decode_steps, {0}, true);
+        if (llama_decode(lctx, batch)) {
+            throw std::runtime_error("decode after restore failed");
+        }
+        append_logits(1);
+    }
     return ret;
 }
 
@@ -638,7 +696,7 @@ static int save_models(const llm_arch target_arch, const size_t seed, const int 
     return 0;
 }
 
-static int test_backends(const llm_arch target_arch, const size_t seed, const int verbosity) {
+static int test_backends(const llm_arch target_arch, const size_t seed, const int verbosity, bool cpu_meta, uint32_t decode_steps, const std::string & logits_prefix) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -680,6 +738,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
             const size_t device_count = ggml_backend_dev_count();
             for (size_t i = 0; i < device_count; i++) {
                 ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                if (cpu_meta && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                    continue;
+                }
                 dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{dev}, ggml_backend_dev_description(dev), LLAMA_SPLIT_MODE_LAYER);
                 max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
 
@@ -690,7 +751,13 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
             }
         }
 
-        dev_configs.emplace_back(devices_meta, "Meta", LLAMA_SPLIT_MODE_TENSOR);
+        if (cpu_meta) {
+            auto * cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            GGML_ASSERT(cpu);
+            devices_meta = {cpu, cpu};
+        }
+        dev_configs.emplace_back(devices_meta, cpu_meta ? "Meta(CPU,CPU)" : "Meta", LLAMA_SPLIT_MODE_TENSOR);
+        max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.size());
     }
 
     size_t max_arch_name_length = 0;
@@ -703,6 +770,11 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
     const std::string template_row_res = "%15s %10s|%20s|\n";
 
     bool all_ok = true;
+    size_t checked = 0;
+    size_t meta_checked = 0;
+    if (decode_steps) {
+        printf("Protocol: 128 fixed prefill tokens, %u fixed decode steps, clear/refill, state restore, one final decode. Threshold: worst per-token NMSE <= 1e-6.\n", decode_steps);
+    }
     common_log_flush(common_log_main());
     printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
     printf("|");
@@ -759,21 +831,40 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
                 if (!skip) {
                     if (logits_cpu.empty()) {
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
-                        logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
+                        logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode, decode_steps);
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
                         model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.devs, dc.split_mode, encode);
-                        logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
-                        const double nmse_val = nmse(logits_cpu, logits_dev);
+                        logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode, decode_steps);
+                        if (!logits_prefix.empty()) {
+                            const std::string device_name = dc.split_mode == LLAMA_SPLIT_MODE_TENSOR ? "meta" : ggml_backend_dev_name(dc.devs.front());
+                            const std::string path = logits_prefix + "-" + llm_arch_name(arch) + (moe ? "-moe-" : "-dense-") + device_name + ".bin";
+                            FILE * output = ggml_fopen(path.c_str(), "wb");
+                            if (!output) {
+                                throw std::runtime_error("failed to open logits output");
+                            }
+                            const uint32_t columns = llama_vocab_n_tokens(llama_model_get_vocab(model_and_ctx_dev.first.get()));
+                            const uint64_t count = logits_dev.size();
+                            bool written = fwrite("GGMLLOG1", 1, 8, output) == 8 && fwrite(&columns, sizeof(columns), 1, output) == 1 &&
+                                fwrite(&count, sizeof(count), 1, output) == 1 && fwrite(logits_dev.data(), sizeof(float), count, output) == count;
+                            int closed = fclose(output);
+                            if (!written || closed) {
+                                throw std::runtime_error("failed to write logits output");
+                            }
+                            printf("\nLOGITS %s: %llu values, %u columns\n", path.c_str(), (unsigned long long) count, columns);
+                        }
+                        const double nmse_val = nmse(logits_cpu, logits_dev, decode_steps ? llama_vocab_n_tokens(llama_model_get_vocab(model_and_ctx_cpu.first.get())) : 0);
+                        checked++;
+                        meta_checked += dc.split_mode == LLAMA_SPLIT_MODE_TENSOR;
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
-                        if (nmse_val > 1e-4) {
+                        if (!std::isfinite(nmse_val) || nmse_val > (decode_steps ? 1e-6 : 1e-4)) {
                             all_ok = false;
                             status_nmse = "\033[1;31mFAIL\033[0m";
                         }
                     }
 
-                    FILE * file = tmpfile(); // Can be null on Windows without administrator privileges.
+                    std::unique_ptr<FILE, decltype(&fclose)> file(tmpfile(), fclose);
                     // FIXME: when adding a tensor to a gguf_context a copy is made, this changes the pointer which the meta backend
                     //     in turn uses to map the tensors to their simple equivalents - this is fundamentally incompatible
                     if (file != nullptr && llama_model_saver_supports_arch(arch) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
@@ -781,12 +872,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
                         llama_model_saver ms = llama_model_saver(model_and_ctx_dev.first.get());
                         ms.add_kv_from_model();
                         ms.add_tensors_from_model();
-                        ms.save(file);
-                        rewind(file);
+                        ms.save(file.get());
+                        rewind(file.get());
 
-                        auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, dc.devs, dc.split_mode, encode);
+                        auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file.get(), seed, dc.devs, dc.split_mode, encode);
                         const std::vector<float> logits_roundtrip = get_logits(
-                            model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
+                            model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode, decode_steps);
                         status_roundtrip = "\033[1;32mOK\033[0m";
                         GGML_ASSERT(logits_roundtrip.size() == logits_dev.size());
                         for (size_t i = 0; i < logits_roundtrip.size(); i++) {
@@ -806,10 +897,16 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
         }
     }
     llama_log_set(ud.log_old.callback, ud.log_old.user_data);
-    return all_ok ? 0 : 1;
+    printf("Validated %zu configurations, including %zu meta configurations.\n", checked, meta_checked);
+    return all_ok && checked && (!cpu_meta || meta_checked) ? 0 : 1;
 }
 
 int main(int argc, char ** argv) {
+    GGML_ASSERT(nmse({0.0f}, {0.0f}) == 0.0);
+    GGML_ASSERT(std::isinf(nmse({0.0f}, {1.0f})));
+    GGML_ASSERT(std::isinf(nmse({std::numeric_limits<float>::quiet_NaN()}, {0.0f})));
+    GGML_ASSERT(std::isinf(nmse({std::numeric_limits<float>::infinity()}, {0.0f})));
+    GGML_ASSERT(std::isinf(nmse({}, {})));
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
     common_init();
@@ -819,10 +916,37 @@ int main(int argc, char ** argv) {
     llm_arch arch = LLM_ARCH_UNKNOWN;
     size_t seed = rd();
     std::string out;
+    bool cpu_meta = false;
+    uint32_t decode_steps = 0;
+    std::string logits_prefix;
 
     int verbosity = LOG_LEVEL_ERROR;
 
     for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--logits-prefix") == 0) {
+            if (i + 1 >= argc) {
+                usage(argv);
+                return 1;
+            }
+            logits_prefix = argv[++i];
+            continue;
+        }
+        if (strcmp(argv[i], "--cpu-meta") == 0) {
+            cpu_meta = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--decode-steps") == 0) {
+            if (i + 1 >= argc) {
+                usage(argv);
+                return 1;
+            }
+            auto steps = std::stoul(argv[++i]);
+            if (steps > UINT32_MAX) {
+                return 1;
+            }
+            decode_steps = steps;
+            continue;
+        }
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv);
             return 0;
@@ -871,7 +995,7 @@ int main(int argc, char ** argv) {
         if (!out.empty()) {
             return save_models(arch, seed, verbosity, out);
         }
-        return test_backends(arch, seed, verbosity);
+        return test_backends(arch, seed, verbosity, cpu_meta, decode_steps, logits_prefix);
     } catch (const std::exception & err) {
         fprintf(stderr, "encountered runtime error: %s\n", err.what());
         return -1;

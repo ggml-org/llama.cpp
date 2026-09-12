@@ -10,9 +10,11 @@
 #include <algorithm>
 #include <clocale>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -609,8 +611,12 @@ static bool run_save_load_tests_for_model(const std::string & model_path, const 
 
     if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
         size_t meta_tensors = 0;
+        std::set<ggml_backend_buffer_t> model_buffers;
         for (const auto & item : model->tensors_by_name) {
             const auto * tensor = item.second;
+            if (tensor->buffer) {
+                model_buffers.insert(tensor->buffer);
+            }
             auto * device = tensor->buffer ? ggml_backend_buft_get_device(ggml_backend_buffer_get_type(tensor->buffer)) : nullptr;
             if (device && ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_META) {
                 GGML_ASSERT(tensor->data == nullptr && ggml_backend_tensor_is_bound(tensor));
@@ -619,6 +625,21 @@ static bool run_save_load_tests_for_model(const std::string & model_path, const 
         }
         GGML_ASSERT(meta_tensors > 0);
         LOG_INF("%s: verified %zu addressless model tensor bindings\n", __func__, meta_tensors);
+        size_t static_chunks = 0;
+        bool vulkan = false;
+        for (auto * buffer : model_buffers) {
+            auto * buft = ggml_backend_buffer_get_type(buffer);
+            const auto * allocation = ggml_backend_buft_get_alloc_interface(buft);
+            if (allocation) {
+                for (size_t device = 0; device < allocation->n_domains(buft); device++) {
+                    static_chunks = std::max(static_chunks, allocation->n_buffers(buffer, device));
+                    vulkan |= std::string(ggml_backend_buft_name(allocation->get_domain(buft, device))).find("Vulkan") == 0;
+                }
+            }
+        }
+        LOG_INF("%s: maximum static members per meta domain: %zu\n", __func__, static_chunks);
+        const bool forced_chunks = vulkan && std::getenv("GGML_VK_SUBALLOCATION_BLOCK_SIZE");
+        GGML_ASSERT(!forced_chunks || static_chunks > 1);
 
         auto measured_params = common_model_params_to_llama(params);
         measured_params.no_alloc = true;
@@ -647,12 +668,57 @@ static bool run_save_load_tests_for_model(const std::string & model_path, const 
         };
         auto measured = by_name(llama_get_memory_breakdown(measured_ctx.get()));
         auto allocated = by_name(llama_get_memory_breakdown(allocated_ctx.get()));
+        std::map<ggml_backend_buffer_type_t, size_t> host_overheads;
+        const auto host_overhead = [&](ggml_backend_buffer_type_t buft) {
+            auto found = host_overheads.find(buft);
+            if (found != host_overheads.end()) {
+                return found->second;
+            }
+            size_t overhead = 0;
+            if (buft->iface.alloc_buffer) {
+                ggml_backend_buffer_ptr probe(ggml_backend_buft_alloc_buffer(buft, 1));
+                GGML_ASSERT(probe && ggml_backend_buffer_get_size(probe.get()) >= 1);
+                overhead = ggml_backend_buffer_get_size(probe.get()) - 1;
+            }
+            LOG_INF("%s: %s reports %zu bytes of allocation overhead in the one-byte control\n", __func__, ggml_backend_buft_name(buft), overhead);
+            host_overheads.emplace(buft, overhead);
+            return overhead;
+        };
+        llama_memory_breakdown_data host_extra;
+        for (auto * buffer : model_buffers) {
+            auto * buft = ggml_backend_buffer_get_type(buffer);
+            if (ggml_backend_buft_is_host(buft) && ggml_backend_buffer_get_size(buffer)) {
+                host_extra.model += host_overhead(buft);
+            }
+        }
+        size_t compute_chunks = 0;
+        std::set<ggml_backend_buffer_type_t> seen_types;
+        auto * scheduler = allocated_ctx->get_sched();
+        for (int i = 0; i < ggml_backend_sched_get_n_backends(scheduler); i++) {
+            auto * backend = ggml_backend_sched_get_backend(scheduler, i);
+            auto * buft = ggml_backend_sched_get_buffer_type(scheduler, backend);
+            if (!seen_types.insert(buft).second) {
+                continue;
+            }
+            const auto * allocation = ggml_backend_buft_get_alloc_interface(buft);
+            if (allocation) {
+                for (size_t device = 0; device < allocation->n_domains(buft); device++) {
+                    compute_chunks = std::max(compute_chunks, ggml_backend_sched_get_buffer_count(scheduler, i, device));
+                }
+            } else if (ggml_backend_buft_is_host(buft) && ggml_backend_sched_get_buffer_size(scheduler, backend)) {
+                host_extra.compute += host_overhead(buft)*ggml_backend_sched_get_buffer_count(scheduler, i, 0);
+            }
+        }
+        LOG_INF("%s: maximum compute members per meta domain: %zu; host allocation overhead model=%zu compute=%zu\n",
+                __func__, compute_chunks, host_extra.model, host_extra.compute);
+        GGML_ASSERT(!forced_chunks || compute_chunks > 1);
         GGML_ASSERT(measured.size() == allocated.size());
         for (const auto & item : measured) {
             const auto & expected = allocated.at(item.first);
             LOG_INF("%s: %s no_alloc/actual model=%zu/%zu KV=%zu/%zu compute=%zu/%zu\n", __func__, item.first.c_str(),
                     item.second.model, expected.model, item.second.context, expected.context, item.second.compute, expected.compute);
-            GGML_ASSERT(item.second.model == expected.model && item.second.context == expected.context && item.second.compute == expected.compute);
+            const auto extra = item.first == "Host" ? host_extra : llama_memory_breakdown_data{};
+            GGML_ASSERT(item.second.model + extra.model == expected.model && item.second.context == expected.context && item.second.compute + extra.compute == expected.compute);
         }
     }
 
