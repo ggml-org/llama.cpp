@@ -111,6 +111,16 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                     auto arg_value = schema_info.resolves_to_string(param_schema) ?
                         arg_string :
                         p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", param_schema)) + arg_close;
+                    if (param_schema.contains("enum") && param_schema.at("enum").is_array() &&
+                        !param_schema.at("enum").empty() &&
+                        std::all_of(param_schema.at("enum").begin(), param_schema.at("enum").end(),
+                                    [](const json & value) { return value.is_string(); })) {
+                        auto values = p.choice();
+                        for (const auto & value : param_schema.at("enum")) {
+                            values |= p.literal(value.get<std::string>()) + p.peek(p.literal("\n</parameter>\n"));
+                        }
+                        arg_value = p.tool_arg_string_value(values) + arg_close;
+                    }
 
                     auto arg_rule = p.rule(rule_name, p.tool_arg(arg_open + arg_value));
 
