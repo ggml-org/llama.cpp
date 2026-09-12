@@ -807,6 +807,65 @@ void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     *s = sumf;
 }
 
+void ggml_vec_dot_mxfp8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    assert(n % QK_MXFP8 == 0);
+    static_assert(QK_MXFP8_SUB == QK8_0, "QK_MXFP8_SUB and QK8_0 must be the same");
+
+#if defined(__ARM_NEON)
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_mxfp8 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_MXFP8;
+    const int n_sub = QK_MXFP8 / QK_MXFP8_SUB;
+
+    const uint32x4_t one = vdupq_n_u32(1);
+    const uint32x4_t seven = vdupq_n_u32(7);
+    const uint32x4_t eight = vdupq_n_u32(8);
+    const uint32x4_t mask = vdupq_n_u32(0x7f);
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        for (int s_idx = 0; s_idx < n_sub; ++s_idx) {
+            const block_q8_0 * yb = &y[ib*n_sub + s_idx];
+            int32x4_t sumi = vdupq_n_s32(0);
+
+            for (int i = 0; i < QK_MXFP8_SUB; i += 8) {
+                const uint16x8_t codes16 = vmovl_u8(vld1_u8(x[ib].qs[s_idx] + i));
+                const int16x8_t qy16 = vmovl_s8(vld1_s8(yb->qs + i));
+
+                for (int j = 0; j < 2; ++j) {
+                    const uint32x4_t codes = vmovl_u16(j ? vget_high_u16(codes16) : vget_low_u16(codes16));
+                    const uint32x4_t ax = vandq_u32(codes, mask);
+                    const uint32x4_t exp = vshrq_n_u32(ax, 3);
+                    const uint32x4_t man = vandq_u32(ax, seven);
+                    uint32x4_t mag = vshlq_u32(vaddq_u32(man, eight), vreinterpretq_s32_u32(vsubq_u32(exp, one)));
+                    mag = vbslq_u32(vceqq_u32(exp, vdupq_n_u32(0)), man, mag);
+                    mag = vbicq_u32(mag, vceqq_u32(ax, mask));
+                    const int32x4_t sign = vshrq_n_s32(vreinterpretq_s32_u32(vshlq_n_u32(codes, 24)), 31);
+                    const int32x4_t qx = vsubq_s32(veorq_s32(vreinterpretq_s32_u32(mag), sign), sign);
+                    const int32x4_t qy = vmovl_s16(j ? vget_high_s16(qy16) : vget_low_s16(qy16));
+                    sumi = vmlaq_s32(sumi, qx, qy);
+                }
+            }
+
+            const float d = GGML_CPU_FP16_TO_FP32(yb->d) * GGML_E8M0_TO_FP32(x[ib].e[s_idx]) * (1.0f / 512.0f);
+            sumf += d * vaddvq_s32(sumi);
+        }
+    }
+
+    *s = sumf;
+#else
+    ggml_vec_dot_mxfp8_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
 void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
