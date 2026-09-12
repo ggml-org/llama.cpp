@@ -15,6 +15,8 @@
 #include <limits>
 #include <cstring>
 #include <type_traits>
+#include <chrono>
+#include <thread>
 
 #ifdef _WIN32
 // windows.h defines min and max as macros, which breaks std::min and std::max
