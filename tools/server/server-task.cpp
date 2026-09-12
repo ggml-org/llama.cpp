@@ -60,6 +60,7 @@ json task_params::to_json(bool only_metrics) const {
             {"dry_base",                  sampling.dry_base},
             {"dry_allowed_length",        sampling.dry_allowed_length},
             {"dry_penalty_last_n",        sampling.dry_penalty_last_n},
+            {"dry_sequence_breakers",     sampling.dry_sequence_breakers},
             {"mirostat",                  sampling.mirostat},
             {"mirostat_tau",              sampling.mirostat_tau},
             {"mirostat_eta",              sampling.mirostat_eta},
