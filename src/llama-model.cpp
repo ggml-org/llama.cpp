@@ -3000,7 +3000,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_OPENAI_MOE:
         case LLM_ARCH_HUNYUAN_DENSE:
         case LLM_ARCH_HY_V3:
-        case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_SMALLTHINKER:
         case LLM_ARCH_SEED_OSS:
@@ -3020,6 +3019,9 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_TALKIE:
         case LLM_ARCH_MELLUM:
             return LLAMA_ROPE_TYPE_NEOX;
+
+        case LLM_ARCH_LFM2:
+            return model->hparams.rope_sections[1] > 0 ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_DFLASH:
             // drafts for M-RoPE targets carry rope sections and follow the target's temporal dim

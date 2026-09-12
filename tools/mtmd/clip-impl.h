@@ -502,6 +502,8 @@ enum projector_type {
     PROJECTOR_TYPE_QWEN3TTS_SPKENC,
     PROJECTOR_TYPE_QWEN3TTS_GEN,
     PROJECTOR_TYPE_POCKETTTS_SPKENC,
+    PROJECTOR_TYPE_KANI_SPKENC,
+    PROJECTOR_TYPE_NEMO_NANO_CODEC,
     PROJECTOR_TYPE_POCKETTTS_GEN,
     PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_UNKNOWN,
@@ -567,6 +569,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN3TTS_SPKENC,   "qwen3tts_spkenc"},
     { PROJECTOR_TYPE_QWEN3TTS_GEN,      "qwen3tts_gen"},
     { PROJECTOR_TYPE_POCKETTTS_SPKENC,  "pockettts_spkenc"},
+    { PROJECTOR_TYPE_KANI_SPKENC,      "kani_spkenc"},
+    { PROJECTOR_TYPE_NEMO_NANO_CODEC,   "nemo_nano_codec"},
     { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
 };

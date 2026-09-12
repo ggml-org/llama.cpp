@@ -494,7 +494,7 @@ struct mtmd_context {
     std::string media_marker;
     const int n_embd_text = -1; // -1 means llm context not provided, skip checking this
     const llama_vocab * vocab = nullptr; // can be nullptr if text_model is not provided
-    mtmd_pos_type pos_type;
+    mtmd_pos_type pos_type = MTMD_POS_TYPE_NORMAL;
 
     // these are not token, but strings used to mark the beginning and end of image/audio embeddings
     std::string img_beg;
@@ -583,7 +583,7 @@ struct mtmd_context {
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;
         ctx_gen_a = res.ctx_gen_a;
-        if (!ctx_v && !ctx_a) {
+        if (!ctx_v && !ctx_a && !ctx_gen_a) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
         }
 
@@ -600,7 +600,7 @@ struct mtmd_context {
 
         // since we already validate n_embd of vision and audio mmproj,
         // we can safely assume that they are the same
-        int n_embd_clip = clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a);
+        int n_embd_clip = (ctx_v || ctx_a) ? clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a) : n_embd_text;
         if (n_embd_text > 0 && n_embd_text != n_embd_clip) {
             throw std::runtime_error(string_format(
                 "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
@@ -609,7 +609,8 @@ struct mtmd_context {
         }
         if (ctx_gen_a) {
             int n_embd_gen = clip_n_mmproj_embd(ctx_gen_a);
-            if (n_embd_text > 0 && n_embd_text != n_embd_gen) {
+            if (n_embd_text > 0 && n_embd_text != n_embd_gen &&
+                    clip_get_projector_type(ctx_gen_a) != PROJECTOR_TYPE_NEMO_NANO_CODEC) {
                 throw std::runtime_error(string_format(
                     "mismatch between text model (n_embd = %d) and gen-audio mmproj (n_embd = %d)\n"
                     "hint: you may be using wrong mmproj\n",
@@ -1000,6 +1001,10 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_qwen3tts_spk>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_KANI_SPKENC:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_kani>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_POCKETTTS_SPKENC:
                 {
@@ -1881,6 +1886,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_QWEN3TTS;
             info.sample_rate = 24000;
             break;
+        case PROJECTOR_TYPE_NEMO_NANO_CODEC:
+            info.type = MTMD_GEN_AUDIO_TYPE_NEMO_NANO_CODEC;
+            info.sample_rate = 22050;
+            break;
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             info.type = MTMD_GEN_AUDIO_TYPE_POCKETTTS;
             info.sample_rate = 24000;
@@ -1907,6 +1916,9 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             inp.top_p = 1.0f;
             inp.temp  = 0.9f; // TODO: handle this on graph
             break;
+        case PROJECTOR_TYPE_NEMO_NANO_CODEC:
+            inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+            break;
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             // https://github.com/kyutai-labs/pocket-tts/blob/main/pocket_tts/default_parameters.py
             inp.top_k = 50;
@@ -1927,6 +1939,20 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
     }
 
     *out = {};
+
+    if (clip_get_projector_type(ctx_clip) == PROJECTOR_TYPE_NEMO_NANO_CODEC) {
+        if (inp->type != MTMD_GEN_PROCESS_TYPE_GEN_WAV || !inp->codes || inp->n_codes == 0 ||
+                inp->n_codes % 4 != 0 || inp->n_codes > 4 * 128 || inp->feats || inp->n_feats || inp->state_data || inp->state_size) {
+            LOG_ERR("%s: NeMo Nano Codec requires 1 to 128 frames of four codes, without features or state\n", __func__);
+            return 1;
+        }
+        for (size_t i = 0; i < inp->n_codes; ++i) {
+            if (inp->codes[i] < 0 || inp->codes[i] >= 4032) {
+                LOG_ERR("%s: NeMo Nano Codec code out of range at %zu\n", __func__, i);
+                return 1;
+            }
+        }
+    }
 
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE) {
         const size_t n_embd = (size_t) clip_n_mmproj_embd(ctx_clip);

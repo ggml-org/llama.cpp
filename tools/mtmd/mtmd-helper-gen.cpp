@@ -993,10 +993,257 @@ private:
     std::vector<char> out_buf;
 };
 
+// KaniTTS-2 predicts four offset FSQ codes per frame for NeMo Nano Codec.
+class kani_tts2_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
+public:
+    using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
+
+    void reset() override {
+        prompt.clear();
+        speaker_embd.clear();
+        codes.clear();
+        pcm.clear();
+        wav.clear();
+        pos = 0;
+        first_audio_pos = -1;
+        started = false;
+        stopped = false;
+        ready = false;
+    }
+
+    int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
+        reset();
+        char kind[32];
+        if (llama_model_meta_val_str(model, "lfm2.tts.model", kind, sizeof(kind)) < 0 ||
+                std::strcmp(kind, "kani-tts-2") != 0 || llama_vocab_n_tokens(vocab) != 80538 ||
+                llama_model_rope_type(model) != LLAMA_ROPE_TYPE_MROPE) {
+            LOG_ERR("KaniTTS-2 requires a backbone converted from KaniTTS2ForCausalLM\n");
+            return 1;
+        }
+        if (!inp->prompt || !inp->prompt_len || inp->prompt_len > INT32_MAX - 64) {
+            LOG_ERR("KaniTTS-2 requires text\n");
+            return 1;
+        }
+        if (inp->out_type != MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM && inp->out_type != MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV) {
+            return 1;
+        }
+        std::string lang = inp->lang ? inp->lang : "";
+        if (lang == "en") {
+            lang = "en_us";
+        }
+        if (!lang.empty() && lang != "en_us" && lang != "en_nyork" && lang != "en_oakl" &&
+                lang != "en_glasg" && lang != "en_bost" && lang != "en_scou") {
+            LOG_ERR("KaniTTS-2: unsupported language tag '%s'\n", lang.c_str());
+            return 1;
+        }
+        std::string text(inp->prompt, inp->prompt_len);
+        if (!lang.empty()) {
+            text = lang + ": " + text;
+        }
+        int n = -llama_tokenize(vocab, text.data(), text.size(), nullptr, 0, true, false);
+        if (n <= 0 || n + 3 >= (int) llama_n_ctx_seq(lctx)) {
+            return 1;
+        }
+        prompt.resize(n + 3);
+        prompt[0] = 64403; // start_of_human
+        if (llama_tokenize(vocab, text.data(), text.size(), prompt.data() + 1, n, true, false) != n) {
+            return 1;
+        }
+        prompt[n + 1] = 2; // end_of_text
+        prompt[n + 2] = 64404; // end_of_human
+        if (inp->speaker_ref) {
+            if (!encode_speaker(inp->speaker_ref)) { return 1; }
+            prompt.insert(prompt.begin() + 1, LLAMA_TOKEN_NULL);
+            if (prompt.size() >= llama_n_ctx_seq(lctx)) { return 1; }
+        }
+        seq_id = inp->seq_id;
+        out_type = inp->out_type;
+        if (!llama_memory_seq_rm(llama_get_memory(lctx), seq_id, -1, -1)) {
+            return 1;
+        }
+        if (tok_embd.empty()) {
+            const size_t count = llama_model_get_tok_embd(model, nullptr);
+            if (count != (size_t) n_embd * 80538) {
+                return 1;
+            }
+            tok_embd.resize(count);
+            if (llama_model_get_tok_embd(model, tok_embd.data()) != count) {
+                tok_embd.clear();
+                return 1;
+            }
+        }
+        ready = true;
+        return 0;
+    }
+
+    int32_t step_prompt(int32_t n_batch) override {
+        if (!ready || n_batch <= 0 || prompt.empty()) {
+            return -1;
+        }
+        int n = std::min({n_batch, (int) llama_n_batch(lctx), (int) prompt.size() - pos});
+        if (n > 0 && decode(prompt.data() + pos, n, pos) != 0) {
+            return -1;
+        }
+        return (int) prompt.size() - pos;
+    }
+
+    int32_t step_gen(llama_token sampled, const float *, const float ** h_state_out, bool * out_stop) override {
+        *h_state_out = nullptr;
+        *out_stop = stopped;
+        if (stopped) {
+            return 0;
+        }
+        if (!ready || pos < (int) prompt.size() || sampled < 0 || sampled >= 80538) {
+            return 1;
+        }
+        if (sampled == 64402) { // end_of_speech
+            if (!started || codes.empty() || codes.size() % 4) {
+                LOG_ERR("KaniTTS-2: incomplete audio frame at end of speech\n");
+                return 1;
+            }
+            stopped = *out_stop = true;
+            return 0;
+        }
+        int rope_pos = pos;
+        if (sampled == 64401 && !started) {
+            started = true;
+        } else if (started) {
+            const int code = sampled - 64410 - (int) (codes.size() % 4) * 4032;
+            if (code < 0 || code >= 4032) {
+                LOG_ERR("KaniTTS-2: invalid codebook token %d at offset %zu\n", sampled, codes.size());
+                return 1;
+            }
+            if (first_audio_pos < 0) {
+                first_audio_pos = pos;
+            }
+            rope_pos = first_audio_pos + (int) (codes.size() / 4);
+            codes.push_back(code);
+            pcm.clear();
+            wav.clear();
+        } else if (sampled != 64405) { // start_of_ai
+            LOG_ERR("KaniTTS-2: unexpected token before speech: %d\n", sampled);
+            return 1;
+        }
+        if (decode(&sampled, 1, rope_pos) != 0) {
+            return 1;
+        }
+        *h_state_out = llama_get_embeddings_ith(lctx, -1);
+        return *h_state_out ? 0 : 1;
+    }
+
+    int32_t get_output(int32_t * rate, const char ** data, size_t * len, int64_t * samples) override {
+        if (!ready || codes.empty() || codes.size() % 4) {
+            LOG_ERR("KaniTTS-2: generation ended with an incomplete audio frame; increase -n\n");
+            return 1;
+        }
+        if (pcm.empty()) {
+            // The causal decoder needs at most 28 preceding latent frames.
+            // Use 32 for alignment and decode at most 128 frames per graph.
+            std::vector<float> decoded;
+            const size_t frames = codes.size() / 4;
+            for (size_t offset = 0; offset < frames;) {
+                size_t begin = offset > 32 ? offset - 32 : 0;
+                size_t end = std::min(frames, begin + 128);
+                mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+                inp.codes = codes.data() + begin * 4;
+                inp.n_codes = (end - begin) * 4;
+                mtmd_gen_out out{};
+                if (mtmd_gen_audio_process(mctx, &inp, &out) != 0 || out.n_samples != (end - begin) * 1764) {
+                    return 1;
+                }
+                decoded.insert(decoded.end(), out.audio + (offset - begin) * 1764, out.audio + out.n_samples);
+                offset = end;
+            }
+            pcm = std::move(decoded);
+        }
+        *rate = info.sample_rate;
+        if (samples) {
+            *samples = pcm.size();
+        }
+        if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+            *data = (const char *) pcm.data();
+            *len = pcm.size() * sizeof(float);
+        } else {
+            if (wav.empty() && !write_wav16(wav, pcm, info.sample_rate)) {
+                return 1;
+            }
+            *data = wav.data();
+            *len = wav.size();
+        }
+        return 0;
+    }
+
+private:
+    bool encode_speaker(mtmd_bitmap * bitmap) {
+        if (!mtmd_support_audio(mctx)) {
+            LOG_ERR("KaniTTS-2: mmproj has no speaker encoder; reconvert with speaker_encoder weights\n");
+            return false;
+        }
+        const std::string marker = mtmd_default_marker();
+        mtmd_input_text text{marker.c_str(), marker.size(), false, true};
+        mtmd_input_chunks * chunks = mtmd_input_chunks_init();
+        const mtmd_bitmap * bptr = bitmap;
+        bool ok = mtmd_tokenize(mctx, chunks, &text, &bptr, 1) == 0;
+        if (ok) {
+            ok = false;
+            for (size_t i = 0; i < mtmd_input_chunks_size(chunks); ++i) {
+                const auto * chunk = mtmd_input_chunks_get(chunks, i);
+                if (mtmd_input_chunk_get_type(chunk) != MTMD_INPUT_CHUNK_TYPE_AUDIO) { continue; }
+                if (mtmd_input_chunk_get_n_tokens(chunk) != 1 || mtmd_encode_chunk(mctx, chunk) != 0) { break; }
+                const float * embd = mtmd_get_output_embd(mctx);
+                speaker_embd.assign(embd, embd + n_embd);
+                ok = true;
+                break;
+            }
+        }
+        mtmd_input_chunks_free(chunks);
+        return ok;
+    }
+
+    int decode(const llama_token * tokens, int n, int rope_pos) {
+        if (pos + n > (int) llama_n_ctx_seq(lctx)) {
+            LOG_ERR("KaniTTS-2: context exhausted; increase -c\n");
+            return 1;
+        }
+        std::vector<float> embd((size_t) n * n_embd);
+        for (int i = 0; i < n; ++i) {
+            const float * row = tokens[i] == LLAMA_TOKEN_NULL ? speaker_embd.data() : tok_embd.data() + (size_t) tokens[i] * n_embd;
+            std::copy_n(row, n_embd, embd.data() + (size_t) i * n_embd);
+        }
+        decode_embd_batch batch(embd.data(), n, 4, n_embd);
+        batch.set_position_mrope_1d(pos, seq_id);
+        for (int i = 0; i < n; ++i) {
+            batch.pos[n + i] = rope_pos + i;
+        }
+        batch.logits[n - 1] = true;
+        if (llama_decode(lctx, batch.batch) != 0) {
+            return 1;
+        }
+        pos += n;
+        return 0;
+    }
+
+    llama_seq_id seq_id = 0;
+    int pos = 0;
+    int first_audio_pos = -1;
+    bool started = false;
+    bool stopped = false;
+    bool ready = false;
+    mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    std::vector<llama_token> prompt;
+    std::vector<int32_t> codes;
+    std::vector<float> tok_embd;
+    std::vector<float> speaker_embd;
+    std::vector<float> pcm;
+    std::vector<char> wav;
+};
+
 static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lctx, mtmd_context * mctx) {
     switch (mtmd_gen_audio_get_info(mctx).type) {
         case MTMD_GEN_AUDIO_TYPE_QWEN3TTS:
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new qwen3tts_gen_audio_pipeline(lctx, mctx));
+        case MTMD_GEN_AUDIO_TYPE_NEMO_NANO_CODEC:
+            return std::unique_ptr<mtmd_gen_audio_pipeline>(new kani_tts2_gen_audio_pipeline(lctx, mctx));
         case MTMD_GEN_AUDIO_TYPE_POCKETTTS:
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new pockettts_gen_audio_pipeline(lctx, mctx));
         default:

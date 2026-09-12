@@ -663,6 +663,7 @@ class MODEL_TENSOR(IntEnum):
     HC_HEAD_NORM         = auto() # qwen4exp
     HC_HEAD_DOWN         = auto() # qwen4exp
     HC_HEAD_UP           = auto() # qwen4exp
+    ATTN_ROPE_FREQS      = auto()
     ROPE_FREQS           = auto()
     ROPE_FACTORS_LONG    = auto()
     ROPE_FACTORS_SHORT   = auto()
@@ -1027,6 +1028,11 @@ class MODEL_TENSOR(IntEnum):
     V_MULTI_PROJ_POST_NORM = auto()
 
     # audio (mtmd)
+    A_ENC_POSITION_CONV = auto()
+    A_ENC_ATTN_REL_GATE = auto()
+    A_ENC_ATTN_REL_GATE_CONST = auto()
+    A_ENC_SPK_FC = auto()
+    A_ENC_SPK_FC_NORM = auto()
     A_ENC_EMBD_POS        = auto()
     A_ENC_EMBD_NORM       = auto()
     A_ENC_EMBD_TO_LOGITS  = auto() # lfm2
@@ -1113,6 +1119,16 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_WAV_UP_PW1               = auto() # ConvNeXt pointwise conv 1 (expand)
     A_GEN_WAV_UP_PW2               = auto() # ConvNeXt pointwise conv 2 (project)
     A_GEN_WAV_UP_GAMMA             = auto() # ConvNeXt layer scale
+    A_GEN_WAV_HIFIGAN_CODEBOOK = auto()
+    A_GEN_WAV_HIFIGAN_PRE = auto()
+    A_GEN_WAV_HIFIGAN_POST = auto()
+    A_GEN_WAV_HIFIGAN_POST_ACT = auto()
+    A_GEN_WAV_HIFIGAN_UP_ACT = auto()
+    A_GEN_WAV_HIFIGAN_UP = auto()
+    A_GEN_WAV_HIFIGAN_RES_CONV1 = auto()
+    A_GEN_WAV_HIFIGAN_RES_CONV2 = auto()
+    A_GEN_WAV_HIFIGAN_RES_ACT1 = auto()
+    A_GEN_WAV_HIFIGAN_RES_ACT2 = auto()
     A_GEN_WAV_DAC_ENTRY            = auto() # DAC conv_pre
     A_GEN_WAV_DAC_UP_SNAKE         = auto() # DAC per-block SnakeBeta before the upsample conv
     A_GEN_WAV_DAC_UP_CONV          = auto() # DAC per-block causal ConvTranspose1d
@@ -1416,6 +1432,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.HC_HEAD_NORM:              "output_hc_norm",                 # qwen4exp
     MODEL_TENSOR.HC_HEAD_DOWN:              "output_hc_down",                 # qwen4exp
     MODEL_TENSOR.HC_HEAD_UP:                "output_hc_up",                   # qwen4exp
+    MODEL_TENSOR.ATTN_ROPE_FREQS:           "blk.{bid}.attn_rope_freqs",
     MODEL_TENSOR.ROPE_FREQS:                "rope_freqs",
     MODEL_TENSOR.ROPE_FACTORS_LONG:         "rope_factors_long",
     MODEL_TENSOR.ROPE_FACTORS_SHORT:        "rope_factors_short",
@@ -1779,6 +1796,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
 
     # audio (mtmd)
     # note: all audio tensor names must use prefix "a." or "mm.a."
+    MODEL_TENSOR.A_ENC_POSITION_CONV: "a.position_conv",
+    MODEL_TENSOR.A_ENC_ATTN_REL_GATE: "a.blk.{bid}.attn_rel_gate",
+    MODEL_TENSOR.A_ENC_ATTN_REL_GATE_CONST: "a.blk.{bid}.attn_rel_gate_const",
+    MODEL_TENSOR.A_ENC_SPK_FC: "a.spk_fc.{bid}",
+    MODEL_TENSOR.A_ENC_SPK_FC_NORM: "a.spk_fc.{bid}.norm",
     MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
     MODEL_TENSOR.A_ENC_EMBD_NORM:           "a.position_embd_norm",
     MODEL_TENSOR.A_ENC_EMBD_TO_LOGITS:      "a.embd_to_logits",
@@ -1863,6 +1885,16 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_GEN_WAV_UP_PW1:          "a.gen.wav.up.blk.{bid}.pw1",
     MODEL_TENSOR.A_GEN_WAV_UP_PW2:          "a.gen.wav.up.blk.{bid}.pw2",
     MODEL_TENSOR.A_GEN_WAV_UP_GAMMA:        "a.gen.wav.up.blk.{bid}.gamma",
+    MODEL_TENSOR.A_GEN_WAV_HIFIGAN_CODEBOOK: "a.gen.wav.hifigan.codebook",
+    MODEL_TENSOR.A_GEN_WAV_HIFIGAN_PRE: "a.gen.wav.hifigan.pre",
+    MODEL_TENSOR.A_GEN_WAV_HIFIGAN_POST: "a.gen.wav.hifigan.post",
+    MODEL_TENSOR.A_GEN_WAV_HIFIGAN_POST_ACT: "a.gen.wav.hifigan.post_act",
+    MODEL_TENSOR.A_GEN_WAV_HIFIGAN_UP_ACT: "a.gen.wav.hifigan.up.{bid}.act",
+    MODEL_TENSOR.A_GEN_WAV_HIFIGAN_UP: "a.gen.wav.hifigan.up.{bid}.conv",
+    MODEL_TENSOR.A_GEN_WAV_HIFIGAN_RES_CONV1: "a.gen.wav.hifigan.res.{bid}.conv1",
+    MODEL_TENSOR.A_GEN_WAV_HIFIGAN_RES_CONV2: "a.gen.wav.hifigan.res.{bid}.conv2",
+    MODEL_TENSOR.A_GEN_WAV_HIFIGAN_RES_ACT1: "a.gen.wav.hifigan.res.{bid}.act1",
+    MODEL_TENSOR.A_GEN_WAV_HIFIGAN_RES_ACT2: "a.gen.wav.hifigan.res.{bid}.act2",
     MODEL_TENSOR.A_GEN_WAV_DAC_ENTRY:       "a.gen.wav.dac.entry",
     MODEL_TENSOR.A_GEN_WAV_DAC_UP_SNAKE:    "a.gen.wav.dac.blk.{bid}.snake",
     MODEL_TENSOR.A_GEN_WAV_DAC_UP_CONV:     "a.gen.wav.dac.blk.{bid}.conv",
@@ -2112,6 +2144,11 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_MULTI_PROJ_NORM,
         MODEL_TENSOR.V_MULTI_PROJ_POST_NORM,
         # audio
+        MODEL_TENSOR.A_ENC_POSITION_CONV,
+        MODEL_TENSOR.A_ENC_ATTN_REL_GATE,
+        MODEL_TENSOR.A_ENC_ATTN_REL_GATE_CONST,
+        MODEL_TENSOR.A_ENC_SPK_FC,
+        MODEL_TENSOR.A_ENC_SPK_FC_NORM,
         MODEL_TENSOR.A_ENC_EMBD_POS,
         MODEL_TENSOR.A_ENC_EMBD_NORM,
         MODEL_TENSOR.A_ENC_EMBD_TO_LOGITS,
@@ -2220,6 +2257,16 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_GEN_WAV_UP_PW1,
         MODEL_TENSOR.A_GEN_WAV_UP_PW2,
         MODEL_TENSOR.A_GEN_WAV_UP_GAMMA,
+        MODEL_TENSOR.A_GEN_WAV_HIFIGAN_CODEBOOK,
+        MODEL_TENSOR.A_GEN_WAV_HIFIGAN_PRE,
+        MODEL_TENSOR.A_GEN_WAV_HIFIGAN_POST,
+        MODEL_TENSOR.A_GEN_WAV_HIFIGAN_POST_ACT,
+        MODEL_TENSOR.A_GEN_WAV_HIFIGAN_UP_ACT,
+        MODEL_TENSOR.A_GEN_WAV_HIFIGAN_UP,
+        MODEL_TENSOR.A_GEN_WAV_HIFIGAN_RES_CONV1,
+        MODEL_TENSOR.A_GEN_WAV_HIFIGAN_RES_CONV2,
+        MODEL_TENSOR.A_GEN_WAV_HIFIGAN_RES_ACT1,
+        MODEL_TENSOR.A_GEN_WAV_HIFIGAN_RES_ACT2,
         MODEL_TENSOR.A_GEN_WAV_DAC_ENTRY,
         MODEL_TENSOR.A_GEN_WAV_DAC_UP_SNAKE,
         MODEL_TENSOR.A_GEN_WAV_DAC_UP_CONV,
@@ -4887,6 +4934,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
     ],
     MODEL_ARCH.LFM2: [
+        MODEL_TENSOR.ATTN_ROPE_FREQS,
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.TOKEN_EMBD_NORM,
         MODEL_TENSOR.SHORTCONV_CONV,
@@ -5812,6 +5860,8 @@ class VisionProjectorType:
     QWEN3TTS_SPKENC = "qwen3tts_spkenc" # audio: ECAPA-TDNN speaker encoder
     QWEN3TTS_GEN = "qwen3tts_gen" # audio generation: code_predictor
     POCKETTTS_SPKENC = "pockettts_spkenc" # audio: mimi encoder as voice-prompt encoder
+    KANI_SPKENC = "kani_spkenc" # audio: WavLM speaker encoder
+    NEMO_NANO_CODEC = "nemo_nano_codec" # audio generation: causal HiFiGAN decoder
     POCKETTTS_GEN = "pockettts_gen" # audio generation: flow-matching decoder + mimi decoder
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio

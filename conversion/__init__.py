@@ -148,6 +148,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "LLaMAForCausalLM": "llama",
     "Lfm25AudioTokenizer": "lfm2",
     "Lfm2BidirectionalModel": "lfm2",
+    "KaniTTS2ForCausalLM": "lfm2",
     "Lfm2ForCausalLM": "lfm2",
     "Lfm2Model": "lfm2",
     "Lfm2MoeForCausalLM": "lfm2",
@@ -285,6 +286,8 @@ TEXT_MODEL_MAP: dict[str, str] = {
 
 
 MMPROJ_MODEL_MAP: dict[str, str] = {
+    "KaniTTS2ForCausalLM": "nemo_nano_codec",
+    "NemoNanoCodecModel": "nemo_nano_codec",
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
     "CogVLMForCausalLM": "cogvlm",
     "DeepseekOCR2ForCausalLM": "deepseek",

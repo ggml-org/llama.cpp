@@ -194,3 +194,9 @@ struct mtmd_audio_streaming_istft {
     std::vector<float> ifft_in;
     std::vector<float> ifft_out;
 };
+
+struct mtmd_audio_preprocessor_kani : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_kani(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    void initialize() override {}
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) const override;
+};
