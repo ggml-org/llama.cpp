@@ -3308,7 +3308,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
     add_opt(common_arg(
         {"--host"}, "HOST",
-        string_format("IP addresses to listen on, comma-separated, or UNIX socket paths ending in .sock (default: %s)", params.hostnames[0].c_str()),
+        string_format("IP addresses to listen on, comma-separated, or UNIX socket paths ending in .sock; overlapping addresses result in undefined behavior (default: %s)", params.hostnames[0].c_str()),
         [](common_params & params, const std::string & value) {
             params.hostnames = parse_csv_row(value);
             for (auto & host : params.hostnames) {
