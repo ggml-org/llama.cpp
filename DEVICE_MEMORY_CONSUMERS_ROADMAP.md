@@ -6,7 +6,7 @@ Last source review: 2026-09-12, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is implemented and validated, awaiting user review and commit. The remainder of milestones 5-8 is planned. The next substage after review is **5.4b: partial-attention result and stable merge contract**. The new allocation factory is opt-in; no streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is implemented and validated, awaiting user review and commit. The remainder of milestones 5-8 is planned. The next substage after review is **5.4c: one staged KV block and streamed partial-attention integration**. The new allocation factory is opt-in; no streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is ready for review, with its frozen baseline and comparison recorded below. After the user commits it, proceed to 5.4b.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is ready for review. After the user commits it, proceed to 5.4c.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -344,9 +344,10 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.2b | Complete | `0e3d5a0c0` | 15 CPU cases / 3,097 assertions; 16 real-CUDA cases / 3,108 assertions per UVM mode; virtual-device rejection passes. 17 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck reports zero errors/leaks. Binding adapter only. |
 | 5.3a | Complete | `7bfc17ac3` | 8 CPU owner cases / 386 assertions; 9 real-CUDA owner cases / 394 assertions; 5 CUDA pinning cases / 44 assertions. 18 CPU Debug/ASan/UBSan and 22 CUDA-build suites pass; memcheck has zero errors/leaks. Native Windows behavior preserved but not hardware-qualified. |
 | 5.3b | Complete | `15d47eb72` | 14 CPU cases / 150,480 assertions; 15 real-CUDA cases / 150,503 assertions. 19 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck is clean with UVM off/on. Synchronized byte-coherence baseline only. |
-| 5.3c | Ready for user review | Uncommitted | 10 CPU cases / 607 assertions; 10 CUDA cases / 609 assertions. 21 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Frozen producer baseline and post-change timings recorded; no server integration. |
+| 5.3c | Complete | `6c724dee1` | 10 CPU cases / 607 assertions; 10 CUDA cases / 609 assertions. 21 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Frozen producer baseline and post-change timings recorded; no server integration. |
 | 5.4a | Complete | `ff4d3bdef` | 12 CPU cases / 131 assertions; 13 CUDA cases / 245 assertions, including mixed K/V and 257-query prefill. 20 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Ordinary all-resident test adapter; production unchanged. |
-| 5.4b-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.4b | Ready for user review | Uncommitted | 13 cases / 48,614 assertions; 22 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. Ordinary GGML attention comparison, CUDA metadata ABI check, and existing GPU regressions pass. Common format/CPU reference only; no new partial GPU kernel. |
+| 5.4c-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -1574,4 +1575,98 @@ compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-de
 
 This remains a synchronous, test-only producer boundary, not an in-graph SET_ROWS interception or server integration. The caller must provide completed activation tensors; invoking this nested graph executor inside an active backend capture is not supported. Native Windows, other accelerator backends, physical multi-GPU, TSan, and full-model throughput are unqualified. Producer encoding coverage does not imply native attention support for every tested type.
 
-Production services, model/checkpoint/cache data, and compose configuration remain unchanged. After user review and commit, proceed to **5.4b: partial-attention result and stable merge contract**, before integrating streamed device attention.
+Production services, model/checkpoint/cache data, and compose configuration remain unchanged. Stage **5.4b**, documented below, adds the partial-result and stable merge contract before streamed device integration.
+
+## Substage 5.4b: common partial-attention result and stable merge contract
+
+Added `ggml/src/ggml-kv-stream-partial.h/.cpp` and `tests/test-kv-stream-partial.cpp`. The common GGML layer now defines checked partial-result layout, a host-readable representation, and CPU reference merge/normalization. It does not launch a partial-attention or merge kernel.
+
+### Production reference audit
+
+The reviewed production code is `d873e5db9`: `kv_stream_accumulate_chunk_results`, `kv_stream_normalize_chunk_results`, the vector partial exporter, and the MMA partial exporter. Their representation is an **unnormalized** weighted-value vector plus a maximum and normalization sum, not a normalized attention output for each block.
+
+The older `src/llama-kv-stream-softmax.cpp` helper was also inspected, but not treated as the production implementation. In particular, it rejects empty contributions and does not check every FP32 narrowing result. The new reference explicitly defines those cases.
+
+The CUDA vector kernel divides by its sum and omits partial metadata when its split grid dimension is one. The reference caller restricts vector splits to 2/4/8/16. A future adapter must not feed that single-split ordinary output into this merge contract. The MMA exporter has a distinct explicit partial-output mode and can produce one partial. **One part is valid in the common representation; it is not proof that every kernel exports a partial with a one-split launch.**
+
+Both reviewed producer paths and the production merge use natural-exponential rescaling. Any backend using a different internal exponent convention must convert/export consistent metadata.
+
+### Packed layout and meaning
+
+For each logical row and disjoint contribution, the producer exports:
+
+```text
+m = local maximum in the score's natural-exponential coordinates
+L = sum(exp(score - m))
+U = sum(exp(score - m) * V)       # unnormalized vector
+```
+
+Scores must already include the appropriate scale, causal/padding masks, and supported bias/softcap treatment. The merge cannot infer missing masks or detect duplicated/missing KV contributions. Producers must agree on row identity and supply the intended disjoint coverage.
+
+| Plane | Index | Representation |
+| --- | --- | --- |
+| Numerator | `(row * parts + part) * width + channel` | FP32 |
+| Metadata | `row * parts + part` | `max_logit`, `normalizer`: two FP32 values |
+| Merged accumulator | Same indexing with `parts = 1` | Still unnormalized |
+| Final value | `row * width + channel` | Normalize only after accumulation |
+
+For ordinary single-sequence GGML attention, `row = query * query_heads + head`. The metadata record is eight bytes with eight-byte alignment; size, alignment, and field offsets were checked against the installed CUDA 13.0 `float2` header.
+
+The layout helper checks dimensions, products, alignment rounding, and metadata-tail addition before publishing offsets. Metadata follows the numerator plane at the requested power-of-two alignment, at least eight bytes. Raw views can point to separate planes and provide larger capacities, but only the declared prefix is read. Null, short, misaligned, and address-wrapping views are rejected before dereferencing. These checks do not prove that arbitrary caller-supplied pointers are readable, that device launch dimensions fit a particular kernel, or that the memory is actually allocated.
+
+### Stable accumulation and empty rows
+
+Choose M from **nonempty** contributions, then compute:
+
+```text
+M = max(m_i)
+L = sum(exp(m_i - M) * L_i)
+U = sum(exp(m_i - M) * U_i)
+output = U / L
+```
+
+The same weights rescale both numerator and denominator. Averaging separately normalized block outputs loses their relative mass and is incorrect, especially for unequal blocks.
+
+```mermaid
+flowchart LR
+    P["Partial U, m, L records"] --> V["Validate shapes and finite state"]
+    V --> M["Choose maximum from positive-mass parts"]
+    M --> R["Rescale and sum U and L"]
+    R --> A["One unnormalized accumulator per row"]
+    A --> N["Normalize once; flag zero-mass rows"]
+```
+
+Zero mass is an identity only when its numerator is zero. Finite or negative-infinity empty maxima are accepted, including the reference CUDA finite sentinels, but ignored during maximum selection. Merged empty rows are canonicalized to negative-infinity maximum, zero mass, and zero numerator. This avoids both an empty sentinel dominating a real negative-logit block and `-infinity - -infinity`.
+
+Normalization requires a one-part accumulator. An all-empty/all-masked row produces zero values and an explicit empty flag, rather than dividing zero by zero. A valid zero-valued attention result has the flag clear. This is the new contract's explicit empty-row policy; equivalence to ordinary GGML attention is tested on rows with visible keys, not by assuming ordinary all-masked behavior.
+
+Nonempty metadata and all numerators must be finite, with positive mass. NaN/infinite/negative mass, invalid maxima, and inconsistent empty numerators are rejected with input/row/part diagnostics. FP64 reference intermediates are checked before FP32 publication; representational overflow is rejected even if a final normalized quotient could otherwise be finite. Underflow is allowed. This is a high-precision host reference, not a claim of bitwise equivalence to FP32 GPU summation or every floating-point environment.
+
+Merge inputs may have different part counts but must share row/value dimensions. A previously merged accumulator can be included in the next merge. Temporary outputs make merge and normalization alias-safe and failure-atomic, including failure after some rows have been computed. The CPU reference allocates host vectors and validates payloads; it is not intended as the GPU hot path.
+
+### TDD and validation
+
+The initial stub failed 199 assertions before implementation. The final suite passes **13 cases / 48,614 assertions**:
+
+- 160 partition configurations across row counts 1/6, token counts 1/7/33/257, and value widths 1/7/64/256, including unequal chunks, explicit empty chunks, causal tails, and fully masked rows.
+- Independent unsplit stable-softmax comparison, and a separately executed ordinary GGML F16 attention graph checking query/head output order.
+- Reverse/hierarchical merging with accumulator aliasing, plus 1,024 incremental block merges over 4,096 tokens.
+- Extreme finite maxima, positive subnormal mass, valid zero results, canonical empty rows, and FP32 publication overflow.
+- Checked byte/alignment overflow, prefix capacities, malformed raw views/partials, normalization preconditions, and unchanged output payloads on failure.
+
+Pure reference comparisons use a 2e-5 absolute tolerance; the long incremental FP32-publication case uses 1e-4. The ordinary GGML attention comparison uses 1e-3 to account for its arithmetic path.
+
+All **22 focused suites** pass in CPU Debug, CUDA Debug, CPU ASan/leak checking, and CPU UBSan. Strict warning checking passes for the new common implementation. Existing real-CUDA resident attention regressions pass (**13 cases / 245 assertions**), as do all four CPU-referenced CUDA SCALE cases. The CUDA-header ABI check is a compile-time layout check, not execution of a new partial kernel.
+
+```sh
+cmake --build build-device-memory-infra --target test-kv-stream-partial -j 20
+ctest --test-dir build-device-memory-infra -R '^test-kv-stream-partial$' --output-on-failure
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-partial test-kv-stream-resident test-backend-ops -j 20
+build-device-memory-infra-cuda/bin/test-kv-stream-partial
+build-device-memory-infra-cuda/bin/test-kv-stream-resident --cuda
+build-device-memory-infra-cuda/bin/test-backend-ops test -b CUDA0 -o SCALE
+```
+
+No new GPU partial/merge execution, GPU overflow diagnostics, asynchronous event ordering, Windows/other accelerator runtime support, TSan, or model throughput/quality qualification is claimed here. Later kernels must implement and test this contract rather than blindly copy the old unguarded empty-row division.
+
+Production services, model/checkpoint/cache data, and compose configuration remain unchanged. After user review and commit, proceed to **5.4c: one explicitly staged KV block and streamed partial-attention integration**, starting with ordered copy/compute.

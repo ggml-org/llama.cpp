@@ -204,6 +204,8 @@ add_library(ggml-base
             ggml-backend-memory.h
             ggml-kv-stream.cpp
             ggml-kv-stream.h
+            ggml-kv-stream-partial.cpp
+            ggml-kv-stream-partial.h
             ggml-backend-meta.cpp
             ggml-opt.cpp
             ggml-threading.cpp
