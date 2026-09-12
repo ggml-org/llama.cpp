@@ -10,6 +10,21 @@ void llama_model_qwen3::load_arch_hparams(llama_model_loader & ml) {
         case 64: type = LLM_TYPE_32B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
+
+    // sliding-window attention (optional - absent in standard Qwen3 GGUFs)
+    const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+    if (found_swa && hparams.n_swa > 0) {
+        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+        // try scalar period (uniform interleave); fall back to per-layer bool array
+        uint32_t swa_period = 0;
+        if (ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false)) {
+            hparams.set_swa_pattern(swa_period, true);
+        } else {
+            ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
+        }
+    } else {
+        hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+    }
 }
 
 void llama_model_qwen3::load_arch_tensors(llama_model_loader &) {
@@ -47,10 +62,15 @@ void llama_model_qwen3::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_qwen3::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
+        return std::make_unique<graph<true>>(*this, params);
+    } else {
+        return std::make_unique<graph<false>>(*this, params);
+    }
 }
 
-llama_model_qwen3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+template <bool iswa>
+llama_model_qwen3::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -64,7 +84,13 @@ llama_model_qwen3::graph::graph(const llama_model & model, const llm_graph_param
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn = build_attn_inp_kv();
+    using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
+    inp_attn_type * inp_attn = nullptr;
+    if constexpr (iswa) {
+        inp_attn = build_attn_inp_kv_iswa();
+    } else {
+        inp_attn = build_attn_inp_kv();
+    }
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -149,11 +175,16 @@ llama_model_qwen3::graph::graph(const llama_model & model, const llm_graph_param
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    // skip lm_head in embedding mode with pooling=none (logit tensor is too large for long-context)
+    if (!cparams.embeddings || pooling_type != LLAMA_POOLING_TYPE_NONE) {
+        cur = build_lora_mm(model.output, cur, model.output_s);
 
-    cb(cur, "result_output", -1);
-    res->t_logits = cur;
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
+        ggml_build_forward_expand(gf, cur);
+    }
 }
+
+template struct llama_model_qwen3::graph<false>;
+template struct llama_model_qwen3::graph<true>;
