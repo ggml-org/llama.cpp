@@ -154,6 +154,14 @@ extern "C" {
 
     GGML_API const struct ggml_backend_buffer_type_alloc_i * ggml_backend_buft_get_alloc_interface(ggml_backend_buffer_type_t buft);
 
+    struct ggml_gallocr;
+    struct ggml_gallocr_domain_plan_info {
+        size_t size;
+        size_t n_chunks;
+    };
+    GGML_API struct ggml_gallocr_domain_plan_info ggml_gallocr_get_domain_plan_info(
+            struct ggml_gallocr * galloc, int buffer_id, size_t domain);
+
     GGML_API struct ggml_backend_meta_preparation * ggml_backend_meta_preparation_new(
             ggml_backend_buffer_type_t buft, enum ggml_backend_buffer_usage usage, size_t max_tensors,
             const struct ggml_backend_alloc_source_i * sources);

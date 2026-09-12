@@ -34,6 +34,7 @@ struct dummy_backend_context {
     size_t free_calls = 0;
     size_t init_calls = 0;
     size_t shard_size_queries = 0;
+    bool expand_quantized_add = false;
     size_t fail_alloc = SIZE_MAX;
     size_t fail_init = SIZE_MAX;
 
@@ -1348,7 +1349,7 @@ static void test_meta_split_preparation() {
                 GGML_ASSERT(tensor->data == nullptr && tensor->buffer == nullptr);
                 context->shard_size_queries++;
             }
-            return ggml_nbytes(tensor);
+            return ggml_nbytes(tensor) + (context->expand_quantized_add && tensor->op == GGML_OP_ADD && ggml_is_quantized(tensor->type) ? 64 : 0);
         };
     }
     ggml_gallocr_ptr measured(ggml_gallocr_new(buft));
@@ -1366,6 +1367,10 @@ static void test_meta_split_preparation() {
         size_t required = 0;
         ggml_gallocr_reserve_n_size(measured.get(), graph_ctx.graph, nullptr, nullptr, &required);
         GGML_ASSERT(required == ggml_nbytes(graph_result));
+        auto first_plan = ggml_gallocr_get_domain_plan_info(measured.get(), 0, 0);
+        auto second_plan = ggml_gallocr_get_domain_plan_info(measured.get(), 0, 1);
+        GGML_ASSERT(first_plan.size == 64 && second_plan.size == 128);
+        GGML_ASSERT(first_plan.n_chunks == 1 && second_plan.n_chunks == 1);
         GGML_ASSERT(std::memcmp(source_before.data(), graph_source, GGML_TENSOR_SIZE) == 0);
         GGML_ASSERT(std::memcmp(result_before.data(), graph_result, GGML_TENSOR_SIZE) == 0);
         GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
@@ -1398,6 +1403,59 @@ static void test_meta_split_preparation() {
         GGML_ASSERT(a->buffer == nullptr && b->buffer == nullptr);
     }
     measured.reset();
+    {
+        first.context->max_buffer_size = 96;
+        second.context->max_buffer_size = 160;
+        auto graph_ctx = make_context();
+        auto * source = ggml_new_tensor_2d(graph_ctx.ctx, GGML_TYPE_F32, 8, 6);
+        source->buffer = assigned.get();
+        auto * a = ggml_scale(graph_ctx.ctx, source, 0.5f);
+        auto * view = ggml_view_2d(graph_ctx.ctx, a, 4, 6, a->nb[1], 0);
+        auto * b = ggml_cont(graph_ctx.ctx, view);
+        ggml_set_output(a);
+        ggml_set_output(b);
+        ggml_build_forward_expand(graph_ctx.graph, b);
+        ggml_gallocr_ptr split_plan(ggml_gallocr_new(buft));
+        size_t legacy_size = 0;
+        ggml_gallocr_reserve_n_size(split_plan.get(), graph_ctx.graph, nullptr, nullptr, &legacy_size);
+        auto d0 = ggml_gallocr_get_domain_plan_info(split_plan.get(), 0, 0);
+        auto d1 = ggml_gallocr_get_domain_plan_info(split_plan.get(), 0, 1);
+        GGML_ASSERT(d0.n_chunks == 1 && d0.size == 96);
+        GGML_ASSERT(d1.n_chunks == 2 && d1.size == 192);
+        GGML_ASSERT(!a->buffer && !b->buffer && !view->buffer);
+        first.context->max_buffer_size = second.context->max_buffer_size = 256;
+    }
+    {
+        auto graph_ctx = make_context();
+        auto * source = ggml_new_tensor_2d(graph_ctx.ctx, GGML_TYPE_F32, 8, 6);
+        source->buffer = assigned.get();
+        auto * a = ggml_scale(graph_ctx.ctx, source, 0.5f);
+        auto * b = ggml_scale(graph_ctx.ctx, a, 0.5f);
+        ggml_set_output(b);
+        ggml_build_forward_expand(graph_ctx.graph, b);
+        ggml_gallocr_ptr inplace(ggml_gallocr_new(buft));
+        size_t legacy_size = 0;
+        ggml_gallocr_reserve_n_size(inplace.get(), graph_ctx.graph, nullptr, nullptr, &legacy_size);
+        GGML_ASSERT(ggml_gallocr_get_domain_plan_info(inplace.get(), 0, 0).size == 64);
+        GGML_ASSERT(ggml_gallocr_get_domain_plan_info(inplace.get(), 0, 1).size == 128);
+    }
+    {
+        second.context->expand_quantized_add = true;
+        auto graph_ctx = make_context();
+        auto * source = ggml_new_tensor_2d(graph_ctx.ctx, GGML_TYPE_Q4_0, 96, 6);
+        auto * bias = ggml_new_tensor_2d(graph_ctx.ctx, GGML_TYPE_F32, 96, 6);
+        source->buffer = bias->buffer = assigned.get();
+        auto * a = ggml_cont(graph_ctx.ctx, source);
+        auto * b = ggml_add(graph_ctx.ctx, a, bias);
+        ggml_set_output(b);
+        ggml_build_forward_expand(graph_ctx.graph, b);
+        ggml_gallocr_ptr incompatible(ggml_gallocr_new(buft));
+        size_t legacy_size = 0;
+        ggml_gallocr_reserve_n_size(incompatible.get(), graph_ctx.graph, nullptr, nullptr, &legacy_size);
+        GGML_ASSERT(ggml_gallocr_get_domain_plan_info(incompatible.get(), 0, 0).size == 224);
+        GGML_ASSERT(ggml_gallocr_get_domain_plan_info(incompatible.get(), 0, 1).size == 496);
+        second.context->expand_quantized_add = false;
+    }
     GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
     GGML_ASSERT(first.context->shard_size_queries >= 2 && second.context->shard_size_queries >= 2);
     first.buffer_type.iface.get_alloc_size = nullptr;
