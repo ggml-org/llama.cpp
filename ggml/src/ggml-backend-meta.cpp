@@ -1306,7 +1306,10 @@ static enum ggml_status ggml_backend_meta_prepare_tensor(
             if (!t_ij->view_src) {
                 return GGML_STATUS_FAILED;
             }
-            if (t_ij->view_src != tensor->view_src && t_ij->view_offs > 0 && split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
+            if (ggml_nelements(t_ij) == 0) {
+                // Empty shards have no byte position in their source.
+                t_ij->view_offs = 0;
+            } else if (t_ij->view_src != tensor->view_src && t_ij->view_offs > 0 && split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
                 GGML_ASSERT(tensor->ne[split_dim] != 0);
                 const int split_dim_view_src = ggml_backend_meta_get_split_state(split_ctx, tensor->view_src, /*assume_sync =*/ true).axis;
                 GGML_ASSERT(split_dim_view_src >= 0 && split_dim_view_src < GGML_MAX_DIMS);

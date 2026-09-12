@@ -1561,6 +1561,7 @@ static void test_meta_static_multibuffer(bool relative) {
         tensors.push_back(ggml_new_tensor_2d(ctx.ctx, GGML_TYPE_F32, 8, 6));
     }
     auto * source = tensors.back();
+    auto * empty_tail = ggml_view_1d(ctx.ctx, source, 0, ggml_nbytes(source));
     size_t allocations = first.context->alloc_calls + second.context->alloc_calls;
     GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.ctx, buft) == 3840);
     GGML_ASSERT(first.context->alloc_calls + second.context->alloc_calls == allocations);
@@ -1584,11 +1585,21 @@ static void test_meta_static_multibuffer(bool relative) {
     GGML_ASSERT(!late_view->buffer && !late_view->data);
     GGML_ASSERT(ggml_backend_view_init(late_view) == GGML_STATUS_SUCCESS);
     GGML_ASSERT(late_view->buffer == owner.get() && !late_view->data && ggml_backend_tensor_is_bound(late_view));
+    auto * late_empty_tail = ggml_view_1d(ctx.ctx, source, 0, ggml_nbytes(source));
+    GGML_ASSERT(ggml_backend_view_init(late_empty_tail) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(empty_tail->view_offs == ggml_nbytes(source) && late_empty_tail->view_offs == ggml_nbytes(source));
+    GGML_ASSERT(!empty_tail->data && !late_empty_tail->data);
+    GGML_ASSERT(ggml_backend_tensor_is_bound(empty_tail) && ggml_backend_tensor_is_bound(late_empty_tail));
     auto * inspection = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_ANY, 0, nullptr);
     for (size_t device = 0; device < 2; device++) {
         auto * simple = ggml_backend_meta_preparation_get_tensor(inspection, late_view, device);
         auto * physical = iface->get_buffer(owner.get(), device, device == 0 ? 19 : 9);
         GGML_ASSERT(simple && simple->buffer == physical && simple->view_src->buffer == physical);
+        for (auto * empty_view : {empty_tail, late_empty_tail}) {
+            auto * empty_simple = ggml_backend_meta_preparation_get_tensor(inspection, empty_view, device);
+            GGML_ASSERT(empty_simple && ggml_nelements(empty_simple) == 0 && empty_simple->view_offs == 0);
+            GGML_ASSERT(empty_simple->buffer == physical && empty_simple->data == empty_simple->view_src->data);
+        }
         size_t offset = device == 0 ? 16 : 144;
         GGML_ASSERT(uintptr_t(simple->data) == uintptr_t(ggml_backend_buffer_get_base(physical)) + offset);
         std::vector<float> actual(24);
