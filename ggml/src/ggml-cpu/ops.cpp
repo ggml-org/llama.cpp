@@ -8611,6 +8611,12 @@ void ggml_compute_forward_top_k(
     }
 }
 
+// Per thread scratch in params->wdata: VKQ32[DV], V32[DV], Q_q[DK], KQ[GGML_FA_KQ_BLK], padding.
+// The writer, the split KV dispatcher and the partial reducer must all use this layout.
+static inline int64_t ggml_fa_wdata_per_thread(int64_t DK, int64_t DV) {
+    return DK + 2*DV + GGML_FA_KQ_BLK + CACHE_LINE_SIZE_F32;
+}
+
 static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const ggml_compute_params * params,
         ggml_tensor * dst,
@@ -8707,12 +8713,17 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         float S = 0.0f;      // sum
         float M = -INFINITY; // maximum KQ value
 
-        float       * VKQ32 = (float       *) params->wdata + ith*(1*DK + 2*DV + CACHE_LINE_SIZE_F32); // FP32 VKQ accumulator
+        float       * VKQ32 = (float       *) params->wdata + ith*ggml_fa_wdata_per_thread(DK, DV); // FP32 VKQ accumulator
         float       * V32   =                 (VKQ32 + 1*DV); // (temporary) FP32 V buffer
-        ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
         ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
+        float       * KQ    =                 (VKQ32 + 2*DV + DK); // (temporary) one block of KQ scores
 
-        if (v->type == GGML_TYPE_F16) {
+        // Without a vectorized mixed multiply add, keep the F16 accumulator: converting V per KV position is slower.
+        // VKQ16 aliases the V32 scratch, which an F16 V does not use.
+        const bool use_f16_acc = (v->type == GGML_TYPE_F16) && !GGML_HAS_VEC_MAD_F16_F32;
+        ggml_fp16_t * VKQ16 = (ggml_fp16_t *) V32; // (only when use_f16_acc)
+
+        if (use_f16_acc) {
             memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
         } else {
             memset(VKQ32, 0, DV*sizeof(float));
@@ -8729,68 +8740,119 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const int iv2 = iq2 / rv2;
 
         const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
-        q_to_vec_dot(pq, Q_q, DK);
+
+        // With an F16 K, Q is consumed directly in F32 (see ggml_vec_dot_f16_f32);
+        // otherwise it is converted to K's vec_dot type as usual.
+        const bool q_stays_f32 = GGML_HAS_VEC_DOT_F16_F32 && q->type == GGML_TYPE_F32 && (k->type == GGML_TYPE_F16);
+        if (!q_stays_f32) {
+            q_to_vec_dot(pq, Q_q, DK);
+        }
 
         // online softmax / attention
         // loop over n_kv and n_head_kv
         // ref: https://arxiv.org/pdf/2112.05682.pdf
 
-        for (int64_t ic = ic_start; ic < ic_end; ++ic) {
-            const float mv = mp ? slope*GGML_CPU_FP16_TO_FP32(mp[ic]) : 0.0f;
-            if (mv == -INFINITY) {
-                continue;
+        // Score one KV block at a time, so the accumulator is rescaled at most once per block.
+        for (int64_t ic0 = ic_start; ic0 < ic_end; ic0 += GGML_FA_KQ_BLK) {
+            const int64_t nb = MIN((int64_t) GGML_FA_KQ_BLK, ic_end - ic0);
+
+            float blk_max = -INFINITY;
+
+            // Group four K rows into one dot call. The parallelism is across outputs, never inside a reduction.
+            // KQ[] stores and blk_max run in increasing t, and a group never crosses a block.
+            float blk_mv[GGML_FA_KQ_BLK];
+            if (mp) {
+                for (int64_t t = 0; t < nb; ++t) {
+                    blk_mv[t] = slope*GGML_CPU_FP16_TO_FP32(mp[ic0 + t]);
+                }
+            } else {
+                memset(blk_mv, 0, nb*sizeof(float));
+            }
+            for (int64_t t = 0; t < nb; ) {
+                if (blk_mv[t] == -INFINITY) {
+                    KQ[t] = -INFINITY; // masked out; softmax gives it zero weight
+                    ++t;
+                    continue;
+                }
+
+                const int grp = (GGML_HAS_INTERDOT_X4 && q_stays_f32 && t + 3 < nb &&
+                                 blk_mv[t + 1] != -INFINITY &&
+                                 blk_mv[t + 2] != -INFINITY &&
+                                 blk_mv[t + 3] != -INFINITY) ? 4 : 1;
+
+                float sv[4]; // KQ values, computed ahead
+                const int64_t ic = ic0 + t;
+                if (grp == 4) {
+                    const char * kd0 = (const char *) k->data + ((ic + 0)*nbk1 + ik2*nbk2 + ik3*nbk3);
+                    const char * kd1 = (const char *) k->data + ((ic + 1)*nbk1 + ik2*nbk2 + ik3*nbk3);
+                    const char * kd2 = (const char *) k->data + ((ic + 2)*nbk1 + ik2*nbk2 + ik3*nbk3);
+                    const char * kd3 = (const char *) k->data + ((ic + 3)*nbk1 + ik2*nbk2 + ik3*nbk3);
+                    ggml_vec_dot_f16_f32_x4out(DK, &sv[0], &sv[1], &sv[2], &sv[3],
+                                               (const ggml_fp16_t *) kd0, (const ggml_fp16_t *) kd1,
+                                               (const ggml_fp16_t *) kd2, (const ggml_fp16_t *) kd3, pq);
+                } else {
+                    const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
+                    if (q_stays_f32) {
+                        ggml_vec_dot_f16_f32(DK, &sv[0], (const ggml_fp16_t *) k_data, pq);
+                    } else {
+                        kq_vec_dot(DK, &sv[0], 0, k_data, 0, Q_q, 0, 1);
+                    }
+                }
+
+                for (int j = 0; j < grp; ++j) {   // consumed in ORIGINAL t order
+                    float s = sv[j]; // KQ value
+
+                    s = s*scale; // scale KQ value
+
+                    if (logit_softcap != 0.0f) {
+                        s = logit_softcap*tanhf(s);
+                    }
+
+                    s += blk_mv[t + j]; // apply mask
+
+                    KQ[t + j] = s;
+
+                    if (s > blk_max) {
+                        blk_max = s;
+                    }
+                }
+                t += grp;
             }
 
-            float s; // KQ value
-
-            const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
-            kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
-
-            s = s*scale; // scale KQ value
-
-            if (logit_softcap != 0.0f) {
-                s = logit_softcap*tanhf(s);
+            if (blk_max == -INFINITY) {
+                continue; // every position in this block is masked out
             }
 
-            s += mv; // apply mask
+            if (blk_max > M) {
+                // new maximum: bring the accumulator and the running sum onto it
+                const float ms = expf(M - blk_max);
+                M = blk_max;
 
-            const float Mold = M;
-
-            float ms = 1.0f; // upon new higher max val, scale VKQ and KQ sum with this value
-            float vs = 1.0f; // post-softmax KQ value, expf(s - M)
-
-            const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
-
-            if (v->type == GGML_TYPE_F16) {
-                if (s > M) {
-                    // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
-                    M = s;
-                    ms = expf(Mold - M);
-
-                    // V = V*expf(Mold - M)
+                if (use_f16_acc) {
                     ggml_vec_scale_f16(DV, VKQ16, ms);
                 } else {
-                    // no new maximum, ms == 1.0f, vs != 1.0f
-                    vs = expf(s - M);
-                }
-
-                // V += v*expf(s - M)
-                ggml_vec_mad_f16(DV, VKQ16, (const ggml_fp16_t *) v_data, vs);
-            } else {
-                if (s > M) {
-                    // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
-                    M = s;
-                    ms = expf(Mold - M);
-
-                    // V = V*expf(Mold - M)
                     ggml_vec_scale_f32(DV, VKQ32, ms);
-                } else {
-                    // no new maximum, ms == 1.0f, vs != 1.0f
-                    vs = expf(s - M);
+                }
+                S *= ms;
+            }
+
+            // KQ[t] <- expf(KQ[t] - M), returning sum(KQ)
+            S += (float) ggml_vec_soft_max_f32(nb, KQ, KQ, M);
+
+            for (int64_t t = 0; t < nb; ++t) {
+                const float vs = KQ[t]; // post-softmax KQ value
+                if (vs == 0.0f) {
+                    continue;
                 }
 
+                const char * v_data = ((const char *) v->data + ((ic0 + t)*nbv1 + iv2*nbv2 + iv3*nbv3));
+
                 // V += v*expf(s - M)
-                if (v_to_float) {
+                if (use_f16_acc) {
+                    ggml_vec_mad_f16(DV, VKQ16, (const ggml_fp16_t *) v_data, vs);
+                } else if (v->type == GGML_TYPE_F16 && GGML_HAS_VEC_MAD_F16_F32) {
+                    ggml_vec_mad_f16_f32(DV, VKQ32, (const ggml_fp16_t *) v_data, vs);
+                } else if (v_to_float) {
                     v_to_float(v_data, V32, DV);
                     ggml_vec_mad_f32(DV, VKQ32, V32, vs);
                 } else {
@@ -8798,11 +8860,10 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
                     ggml_vec_mad_f32(DV, VKQ32, (const float *) v_data, vs);
                 }
             }
-
-            S = S*ms + vs; // scale and increment sum with partial sum
         }
 
-        if (v->type == GGML_TYPE_F16) {
+        if (use_f16_acc) {
+            // one conversion for the whole chunk, before sinks and the reduction
             for (int64_t d = 0; d < DV; ++d) {
                 VKQ32[d] = GGML_CPU_FP16_TO_FP32(VKQ16[d]);
             }
@@ -9157,10 +9218,10 @@ static void ggml_flash_attn_ext_reduce_partials(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int64_t wdata_per_thread = DK + 2*DV + CACHE_LINE_SIZE_F32;
+    const int64_t wdata_per_thread = ggml_fa_wdata_per_thread(DK, DV);
     float *       thread_wdata     = (float *) params->wdata + ith * wdata_per_thread;
 
-    const int64_t partials_offset  = nth * (DK + 2*DV + CACHE_LINE_SIZE_F32);
+    const int64_t partials_offset  = nth * ggml_fa_wdata_per_thread(DK, DV);
     const int64_t partial_size     = 2 + DV;
     const float * partials_base    = (const float *) params->wdata + partials_offset;
 
@@ -9264,8 +9325,10 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         const int64_t chunk_size = (nek1 + nth - 1) / nth;
 
         // Partials buffer layout: [q_head][kv_chunk][M, S, VKQ]
+        // Must skip the same per-thread scratch stride that
+        // ggml_compute_forward_flash_attn_ext_f16_one_chunk carves up.
         const int64_t partial_size  = 2 + DV;
-        float *       partials_base = (float *) params->wdata + nth * (DK + 2*DV + CACHE_LINE_SIZE_F32);
+        float *       partials_base = (float *) params->wdata + nth * ggml_fa_wdata_per_thread(DK, DV);
 
         const int64_t ic_start = ith * chunk_size;
         const int64_t ic_end   = std::min(ic_start + chunk_size, nek1);

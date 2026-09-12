@@ -9,6 +9,9 @@
 #define GGML_FA_TILE_Q  64
 #define GGML_FA_TILE_KV 64
 
+// KV block size for the single query (decode) path. The tiled path needs GGML_FA_TILE_Q query rows, so it cannot serve this case.
+#define GGML_FA_KQ_BLK  32
+
 #ifdef __cplusplus
 
 #include <utility>
