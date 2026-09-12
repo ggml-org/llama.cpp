@@ -203,3 +203,40 @@ def test_multi_requests_parallel(n_slots: int, n_requests: int):
     for res in results:
         assert res.status_code == 200
         assert match_regex("(wise|kind|owl|answer)+", res.body["content"])
+
+
+@pytest.mark.skipif(not os.environ.get("LLAMACPP_TEST_MODELFILE"), reason="requires a GGUF with embedded MTP weights")
+@pytest.mark.parametrize("n_slots", [1, 2])
+def test_mtp_output_budget(n_slots, tmp_path, monkeypatch):
+    global server
+    server = ServerProcess()
+    server.model_hf_repo = None
+    server.model_hf_file = None
+    server.model_file = os.environ["LLAMACPP_TEST_MODELFILE"]
+    server.n_ctx = 256 * n_slots
+    server.n_slots = n_slots
+    server.n_threads = 2
+    server.n_batch = 32
+    server.n_ubatch = 32
+    server.spec_type = "draft-mtp"
+    server.spec_draft_n_min = 1
+    server.spec_draft_n_max = 8
+    server.debug = True
+    server.log_path = str(tmp_path / "mtp.log")
+    monkeypatch.setenv("LLAMA_ARG_SPEC_DRAFT_P_MIN", "0")
+    server.start()
+    tasks = [(server.make_request, ("POST", "/completion", {
+        "prompt": "Hello",
+        "n_predict": budget,
+        "temperature": 0.0,
+        "ignore_eos": True,
+        "cache_prompt": False,
+    })) for budget in [3, 10]]
+    responses = parallel_function_calls(tasks)
+    assert all(res.status_code == 200 for res in responses)
+    assert sorted(res.body["tokens_predicted"] for res in responses) == [3, 10]
+    server.stop()
+    with open(server.log_path) as log:
+        text = log.read()
+    assert "draft candidate" in text
+    assert "truncating draft to" not in text
