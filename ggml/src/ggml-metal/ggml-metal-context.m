@@ -139,6 +139,12 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
         res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
 
+        // concurrent dispatch races on non-Apple GPUs (issue #25866)
+        if (res->use_concurrency && props_dev->gpu_family == 0) {
+            GGML_LOG_WARN("%s: concurrent dispatch disabled for non-Apple GPU %s (issue #25866)\n", __func__, props_dev->name);
+            res->use_concurrency = false;
+        }
+
         {
             const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
             res->debug_graph = val ? atoi(val) : 0;
@@ -413,6 +419,12 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
 }
 
 bool ggml_metal_cpy_tensor_async(ggml_metal_t ctx_src, ggml_metal_t ctx_dst, const struct ggml_tensor * src, struct ggml_tensor * dst) {
+    // a private buffer is only accessible by the device that created it;
+    // cross-device copies fall back to the synchronous host staging path
+    if (ctx_src->dev != ctx_dst->dev) {
+        return false;
+    }
+
     @autoreleasepool {
         struct ggml_metal_buffer_id bid_src = ggml_metal_get_buffer_id(src);
         struct ggml_metal_buffer_id bid_dst = ggml_metal_get_buffer_id(dst);

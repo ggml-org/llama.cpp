@@ -303,6 +303,7 @@ void ggml_metal_event_encode_wait  (ggml_metal_event_t ev, ggml_metal_cmd_buf_t 
 
 ggml_metal_device_t ggml_metal_device_init(int device, int n_devices);
 void ggml_metal_device_free(ggml_metal_device_t dev);
+size_t ggml_metal_physical_device_count(void);
 
 ggml_metal_device_t ggml_metal_device_get(int device, int n_devices);
 

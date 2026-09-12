@@ -1014,6 +1014,12 @@ ggml_backend_reg_t ggml_backend_metal_reg(void) {
         const char * env = getenv("GGML_METAL_DEVICES");
         if (env) {
             g_devices = atoi(env);
+        } else {
+            // one device per physical GPU, ordered by VRAM (largest first)
+            g_devices = (int)ggml_metal_physical_device_count();
+            if (g_devices < 1) {
+                g_devices = 1;
+            }
         }
 
         static std::vector<ggml_backend_device_ptr> devs;
