@@ -6,7 +6,7 @@ Last source review: 2026-09-12, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is implemented and validated, awaiting user review and commit. The remainder of milestones 5-8 is planned. The next substage after review is **5.3b: cache writes, dirty rows, mutable tails, and content generations**. The new allocation factory is opt-in; no streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is implemented and validated, awaiting user review and commit. The remainder of milestones 5-8 is planned. The next substage after review is **5.4a: resident planes and ordinary all-resident attention**, before 5.3c as required by the dependency order. The new allocation factory is opt-in; no streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is ready for review. Do not start 5.3b until the user has reviewed and committed it.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is ready for review. After the user commits it, proceed to 5.4a before 5.3c.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -342,8 +342,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.1b | Complete | `74b400abb` | 20 policy cases / 139,866 assertions; 16 focused suites and existing CPU model regressions pass in debug, ASan/leak-checking, and UBSan. Pure production-derived layout/adaptation policy; no streaming runtime enabled. |
 | 5.2a | Complete | `4717474c3` | 10 CUDA cases / 1,055 assertions per UVM mode; actual device pointer attributes and zero memcheck errors/leaks. 18 CUDA-build and 16 CPU debug/ASan/UBSan suites pass; virtual-device identity and native capture checks pass. Opt-in factory only. |
 | 5.2b | Complete | `0e3d5a0c0` | 15 CPU cases / 3,097 assertions; 16 real-CUDA cases / 3,108 assertions per UVM mode; virtual-device rejection passes. 17 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck reports zero errors/leaks. Binding adapter only. |
-| 5.3a | Ready for user review | Uncommitted | 8 CPU owner cases / 386 assertions; 9 real-CUDA owner cases / 394 assertions; 5 CUDA pinning cases / 44 assertions. 18 CPU Debug/ASan/UBSan and 22 CUDA-build suites pass; memcheck has zero errors/leaks. Native Windows behavior preserved but not hardware-qualified. |
-| 5.3b-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.3a | Complete | `7bfc17ac3` | 8 CPU owner cases / 386 assertions; 9 real-CUDA owner cases / 394 assertions; 5 CUDA pinning cases / 44 assertions. 18 CPU Debug/ASan/UBSan and 22 CUDA-build suites pass; memcheck has zero errors/leaks. Native Windows behavior preserved but not hardware-qualified. |
+| 5.3b | Ready for user review | Uncommitted | 14 CPU cases / 150,480 assertions; 15 real-CUDA cases / 150,503 assertions. 19 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck is clean with UVM off/on. Synchronized byte-coherence baseline only. |
+| 5.3c-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -1317,4 +1318,78 @@ compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-de
 
 The 81-pair tests validate storage geometry, not execution of 81 attention kernels. Native Windows flag selection is preserved and the hardware test has a Windows-specific expectation, but Windows execution was unavailable. Physical multi-GPU, HIP/MUSA/SYCL/Vulkan mapping, TSan, and long-context performance are not qualified here.
 
-Production services, models, and compose configuration remain unchanged. After user review and commit, proceed to **5.3b: cache writes, dirty rows, mutable tails, and content generations**, initially with synchronized mirror updates.
+Production services, models, and compose configuration remain unchanged. Stage **5.3b**, documented below, adds writes, dirty rows, mutable tails, and content generations with synchronized mirror updates.
+
+## Substage 5.3b: encoded writes, dirty rows, and content generations
+
+Added `src/llama-kv-stream-content.h/.cpp` and `tests/test-kv-stream-content.cpp`. This is a correctness-first coherence layer over the independent host owner and coarse device binding. It does not add SET_ROWS kernels, graph construction, streamed attention, or asynchronous prefetch.
+
+The reviewed reference distinguishes tracked dirty rows from full invalidation: its direct host set/memset/clear callbacks reset resident metadata and advance the runtime generation. The new layer preserves that distinction while separating content identity from arena placement. Explicit encoded writes dirty only intersecting rows; external restores/replacement invalidate the whole mirror.
+
+### Transactional encoded writes
+
+A write span selects a layer, K or V, and a byte range in that encoded plane. The API neither quantizes floating-point inputs nor interprets partial quant blocks as complete values. It bounds every range against the validated plane layout.
+
+`prepare()` validates the entire batch and snapshots all sources before mutation, including sources aliasing the destination cache. The move-only ticket retains its originating state and content generation. Invalid batches/allocation failures preserve an existing output ticket. Cancellation or destruction releases the snapshot without changing host bytes.
+
+`commit()` rejects cancelled, foreign, or stale tickets. A valid batch applies overlapping patches in input order and advances content generation once. Every token row intersecting a changed byte becomes dirty in that layer/plane; a row includes all KV heads. K and V have independently derived encoded row sizes. Empty batches are no-ops. Large checkpoint restores must use bounded batches because staging duplicates the submitted encoded payload.
+
+Only one tracker may be the mutation authority for a backing allocation. Independent trackers over aliased host bytes are not coherent. Raw writes through existing host pointers must be externally serialized and reported through `invalidate()`; zero-filled storage and dirty marks do not establish logical token validity.
+
+### Compact mirror bookkeeping
+
+The bitmap stores one dirty bit per token row per K/V plane. For 16 attention layers at 262,144 padded tokens this is 1 MiB, rather than a per-row 64-bit generation table. Initial rows are dirty until explicitly copied. Partial-page selections do not force uploads of unrelated rows or another plane.
+
+Updates handle partial first/last bitmap words and skip clean/full words when finding dirty runs. The implementation does not allocate an arena region or a bitmap entry for each page operation. There is still a bitmap scan over requested ranges; no steady-state speedup is claimed without the later runtime benchmarks.
+
+| Event | Content generation | Mirror epoch | Effect |
+| --- | --- | --- | --- |
+| Committed nonempty encoded batch | Advance | Unchanged | Dirty intersecting K/V rows |
+| External completed host change: `invalidate()` | Advance | Unchanged | Dirty all rows; supersede pending writes |
+| Replace backing, even with the same cache ID | Advance | Advance | Prepare fresh bitmap, preserve supplied bytes, reject old tickets |
+| Device rebind/repartition: `reset_mirror()` | Unchanged | Advance | Dirty all rows; pending host writes remain valid |
+
+These counters are independent of arena generations and binding revisions. Counter exhaustion is rejected rather than wrapped. Replacement prepares metadata before publication and releases old backing after the new metadata is consistent.
+
+The tracker represents one logical mirror, not arbitrary ring-slot/page-location coherence. A caller must reset it on every relevant device mapping change, even if pointer values or arena generations match. If replacement changes geometry, the caller must also rebuild or validate the device mapping; replacing a host object does not make an old destination layout compatible. Ring-slot identity and event ordering remain responsibilities of later runtime stages.
+
+### Synchronized mirror update baseline
+
+`flush()` validates all requested ranges before copying and emits contiguous dirty source runs only. The callback receives layer/plane coordinates, source bytes, cache ID, content generation, and mirror epoch. Destination mapping belongs to the adapter. Overlapping requested ranges may repeat copies; callers should supply disjoint ranges when that duplication is unnecessary.
+
+Tracked writes, replacement, invalidation, and reentrant flush are blocked during callbacks. Every callback must finish all accesses before returning or throwing, including its failure path. The actual CUDA test uses synchronous GGML tensor writes. An asynchronous callback that merely enqueues DMA would violate this interface; asynchronous readiness/consumption comes later.
+
+```mermaid
+flowchart LR
+    W["Prepare encoded snapshot"] --> C{"Commit still current?"}
+    C -- Yes --> H["Patch host bytes; dirty affected rows"]
+    C -- "No / cancel" --> U["Host bytes unchanged"]
+    H --> F["Copy selected dirty runs synchronously"]
+    F -- "All succeed" --> A["Acknowledge selected rows"]
+    F -- "Failure / exception" --> R["Keep dirty marks; retry before attention"]
+```
+
+Acknowledgement occurs only after all requested copies succeed. Partial device writes can occur before failure, but all relevant dirty marks are retained; those ranges must not be consumed as a valid mirror until retry succeeds. Readiness does not replace the coordinator's global admission gate. The caller must retain host/device dependencies for any other in-flight compute or mapped-host access.
+
+### TDD and validation
+
+The initial ten cases failed 25 assertions against stubs. The final suite has **14 CPU cases / 150,480 assertions** and **15 real-CUDA cases / 150,503 assertions**.
+
+Coverage includes partial rows across page boundaries, K/V independence, cancelled/moved/stale/foreign tickets, invalid-batch atomicity, aliasing/overlapping writes, empty ranges, same-ID and same-backing replacement/restoration, copy failure/exception, reentrancy, and retained ownership after the tracker owner disappears. An independent row-by-row oracle checks 136 write/flush cycles across four planes and 136 padded rows, including 64-bit word boundaries and failed-copy retries. All 81 online K/V pairs use independent GGML row-size expectations for encoded copy lengths; this is byte-coherence testing, not 81 attention-kernel or model-quality tests.
+
+The CUDA test allocates pinned authoritative host storage and a real device-local arena region, binds it through stage 5.2b, and holds an execution pin across the copies. It compares all canonical bytes after a partial-row patch and after an external restore with unchanged arena generation and binding revision. This is a flat leased test mirror; production resident/ring plane placement and attention integration remain stage 5.4a and later.
+
+All **19 focused suites** pass in CPU Debug, CUDA Debug, CPU ASan/leak checking, and CPU UBSan. Compute Sanitizer reports **zero errors and zero bytes leaked** for the CUDA test with UVM disabled and enabled. Strict warning checking passes for the implementation.
+
+```sh
+cmake --build build-device-memory-infra --target test-kv-stream-content -j 20
+ctest --test-dir build-device-memory-infra -R '^test-kv-stream-content$' --output-on-failure
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-content -j 20
+build-device-memory-infra-cuda/bin/test-kv-stream-content --cuda
+GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 build-device-memory-infra-cuda/bin/test-kv-stream-content --cuda
+compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-content --cuda
+```
+
+No Windows, physical multi-GPU, TSan, asynchronous event ordering, model-output accuracy, or throughput qualification is claimed by this stage. Production services/configuration and existing checkpoint/cache data remain unchanged.
+
+After user review and commit, proceed to **5.4a: resident K/V planes and ordinary all-resident attention using the leased mirror**. This follows the roadmap's explicit dependency order: **5.4a must precede 5.3c**, the batched prefill write optimization.
