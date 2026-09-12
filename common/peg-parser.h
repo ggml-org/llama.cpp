@@ -1,5 +1,6 @@
 #pragma once
 
+#include "json-schema.h"
 #include "json.h"
 
 #include <memory>
@@ -245,7 +246,8 @@ struct common_peg_until_parser {
 struct common_peg_schema_parser {
     common_peg_parser_id child;
     std::string name;
-    std::shared_ptr<common_json> schema;
+    common_chat_schema_document_ptr doc;  // owns node
+    const common_chat_schema * node = nullptr;
 
     // Indicates if the GBNF should accept a raw string that matches the schema.
     bool raw;
@@ -488,8 +490,10 @@ class common_peg_parser_builder {
     // A marker, i.e. text delimited by a pair of <> or []
     common_peg_parser marker();
 
-    // Wraps a parser with JSON schema metadata for grammar generation.
-    // Used internally to convert JSON schemas to GBNF grammar rules.
+    // Wraps a parser with the schema its GBNF is generated from, a node of the document that owns it
+    common_peg_parser schema(const common_peg_parser & p, const std::string & name, common_chat_schema_document_ptr doc, const common_chat_schema & node, bool raw = false);
+
+    // Parses the JSON schema into a document of its own
     common_peg_parser schema(const common_peg_parser & p, const std::string & name, const common_json & schema, bool raw = false);
 
     // Creates a named rule, stores it in the grammar, and returns a ref.

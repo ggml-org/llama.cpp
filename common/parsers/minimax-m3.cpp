@@ -84,29 +84,18 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
             return generation_prompt + reasoning + p.content(p.rest()) + end;
         }
 
-        auto alternatives_of = [](const json & schema) -> std::optional<json> {
-            for (const auto * keyword : { "oneOf", "anyOf" }) {
-                if (schema.contains(keyword) && schema.at(keyword).is_array() && !schema.at(keyword).empty()) {
-                    return schema.at(keyword);
-                }
-            }
-            return std::nullopt;
-        };
-
         auto tool_choice = p.choice();
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
-            auto         params   = function.contains("parameters") ? function.at("parameters") : json::object();
-
-            auto schema_info = common_schema_info();
-            schema_info.resolve_refs(params);
+            auto         params   = common_chat_tool_parameters(function);
+            auto         doc      = std::make_shared<const common_chat_schema_document>(common_chat_schema_from_json(params));
 
             // The template expands argument values recursively in XML (see the to_xml() macro)
-            std::function<common_peg_parser(const json &, const std::string &, const std::string &)> value_of;
-            std::function<common_peg_parser(const json &, const std::string &)>                      members_of;
+            std::function<common_peg_parser(const common_chat_schema &, const std::string &, const std::string &)> value_of;
+            std::function<common_peg_parser(const common_chat_schema_object &, const std::string &)>              members_of;
 
-            auto element_of = [&](const std::string & tag, const json & schema, const std::string & rule_name) {
+            auto element_of = [&](const std::string & tag, const common_chat_schema & schema, const std::string & rule_name) {
                 const std::string close = NS + "</" + tag + ">";
                 return p.rule(rule_name,
                     p.tool_arg(
@@ -117,69 +106,57 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
                         value_of(schema, rule_name, close)));
             };
 
-            value_of = [&](const json & schema,
+            value_of = [&](const common_chat_schema & schema,
                            const std::string & rule_name,
                            const std::string & close) -> common_peg_parser {
                 auto close_tag = p.tool_arg_close(p.literal(close));
 
                 // A string accepts anything, so a union with a string alternative is a string
-                if (schema_info.resolves_to_string(schema)) {
+                if (schema.may_be_string()) {
                     return p.ac(p.tool_arg_string_value(p.until(close)) + close_tag, close);
                 }
 
-                if (auto alternatives = alternatives_of(schema)) {
+                if (schema.kind() == common_chat_schema::KIND_ANY_OF) {
                     std::vector<common_peg_parser> choices;
 
                     size_t index = 0;
-                    for (const auto & alternative : *alternatives) {
+                    for (const auto & alternative : static_cast<const common_chat_schema_any_of &>(schema).children) {
                         const std::string alt_name = rule_name + "-" + std::to_string(index++);
 
                         // There is a risk that this breaks streaming deltas, but that's a risk we
                         // assume to provide tool arg streaming.
-                        choices.push_back(value_of(alternative, alt_name, close));
+                        choices.push_back(value_of(*alternative, alt_name, close));
                     }
 
                     return p.choice(choices);
                 }
 
-                const std::string type = schema.contains("type") && schema.at("type").is_string()
-                                             ? schema.at("type").get<std::string>()
-                                             : "";
-
-                if (type == "object" && schema.contains("properties")) {
-                    return p.tag(mm3::TOOL_ARG_OBJECT, members_of(schema, rule_name)) + p.space() + close_tag;
+                if (schema.kind() == common_chat_schema::KIND_OBJECT) {
+                    const auto & object = static_cast<const common_chat_schema_object &>(schema);
+                    if (!object.properties.empty()) {
+                        return p.tag(mm3::TOOL_ARG_OBJECT, members_of(object, rule_name)) + p.space() + close_tag;
+                    }
                 }
 
-                if (type == "array" && schema.contains("items")) {
+                if (schema.kind() == common_chat_schema::KIND_ARRAY) {
                     const std::string item_close = NS + "</item>";
                     auto item = p.rule(rule_name + "-item",
                         p.tag(mm3::TOOL_ARG_ITEM,
                               p.literal(NS + "<item>") +
-                                  value_of(schema.at("items"), rule_name + "-item", item_close)));
+                                  value_of(*static_cast<const common_chat_schema_array &>(schema).items, rule_name + "-item", item_close)));
                     return p.tag(mm3::TOOL_ARG_ARRAY, p.repeat(p.space() + item, 0, -1)) + p.space() + close_tag;
                 }
 
-                return p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", schema, false)) + close_tag;
+                return p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", doc, schema)) + close_tag;
             };
 
             // Required properties in schema order, then any number of optional ones in any order.
-            members_of = [&](const json & schema, const std::string & rule_prefix) -> common_peg_parser {
-                const auto & props = schema.at("properties");
-
-                std::set<std::string> required;
-                if (schema.contains("required")) {
-                    required = schema.at("required").get<std::set<std::string>>();
-                }
-
+            members_of = [&](const common_chat_schema_object & object, const std::string & rule_prefix) -> common_peg_parser {
                 std::vector<common_peg_parser> required_elements;
                 std::vector<common_peg_parser> optional_elements;
-                for (const auto & [key, key_schema] : props.items()) {
-                    auto element = element_of(key, key_schema, rule_prefix + "-" + key);
-                    if (required.find(key) != required.end()) {
-                        required_elements.push_back(element);
-                    } else {
-                        optional_elements.push_back(element);
-                    }
+                for (const auto & prop : object.properties) {
+                    auto element = element_of(prop.name, *prop.schema, rule_prefix + "-" + prop.name);
+                    (prop.required ? required_elements : optional_elements).push_back(element);
                 }
 
                 common_peg_parser members = p.eps();
@@ -201,8 +178,10 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
                 return members;
             };
 
-            common_peg_parser invoke_body =
-                params.contains("properties") ? members_of(params, "tool-" + name + "-arg") : p.eps();
+            common_peg_parser invoke_body = p.eps();
+            if (doc->root->kind() == common_chat_schema::KIND_OBJECT) {
+                invoke_body = members_of(static_cast<const common_chat_schema_object &>(*doc->root), "tool-" + name + "-arg");
+            }
 
             auto func_parser = p.tool(
                 p.tool_open(p.literal(NS + "<invoke name=\"") +
@@ -238,15 +217,6 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
     if (include_grammar) {
         data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
-                builder.resolve_refs(schema);
-            });
-            if (has_response_format) {
-                auto schema = inputs.json_schema;
-                builder.resolve_refs(schema);
-            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 

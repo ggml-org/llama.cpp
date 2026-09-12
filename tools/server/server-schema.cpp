@@ -257,6 +257,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             if (data.contains("json_schema") && !data.contains("grammar")) {
                 try {
                     auto schema                  = json_value(data, "json_schema", json::object());
+                    if (schema.is_object() && schema.empty()) {
+                        // an empty schema means any object
+                        schema["type"] = "object";
+                    }
                     SRV_DBG("JSON schema: %s\n", schema.dump(2).c_str());
                     std::string grammar_str      = json_schema_to_grammar(schema);
                     SRV_DBG("Converted grammar: %s\n", grammar_str.c_str());

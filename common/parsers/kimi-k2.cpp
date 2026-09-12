@@ -82,7 +82,7 @@ common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & 
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
-            const auto & schema   = function.at("parameters");
+            const auto   schema   = common_chat_tool_parameters(function);
 
             // Match: functions.<name>:<digits>
             // Capture the full call id (functions.<name>:<digits>) using tool_id tag
@@ -116,11 +116,6 @@ common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & 
     if (include_grammar) {
         data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                auto         schema   = function.at("parameters");
-                builder.resolve_refs(schema);
-            });
             parser.build_grammar(builder, data.grammar_lazy);
         });
 

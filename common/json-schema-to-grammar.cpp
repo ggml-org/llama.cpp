@@ -1,5 +1,7 @@
 #include "json-schema-to-grammar.h"
 #include "common.h"
+#include "trie.h"
+#include "unicode.h"
 
 #include <algorithm>
 #include <limits>
@@ -336,17 +338,19 @@ static size_t gbnf_escape_length(const std::string & pattern, size_t pos) {
     return 2 + n_hex;
 }
 
-class common_schema_converter {
+class common_chat_schema_converter {
 private:
-    friend class common_schema_info;
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
-    std::function<json(const std::string &)> _fetch_json;
     bool _dotall;
     std::map<std::string, std::string> _rules;
-    std::unordered_map<std::string, json> _refs;
     std::unordered_set<std::string> _refs_being_resolved;
     std::vector<std::string> _errors;
     std::vector<std::string> _warnings;
+
+    template <typename T>
+    static const T & as(const common_chat_schema & node) {
+        return static_cast<const T &>(node);
+    }
 
     std::string _add_rule(const std::string & name, const std::string & rule) {
         std::string esc_name = regex_replace(name, INVALID_RULE_CHARS_RE, "-");
@@ -363,11 +367,11 @@ private:
         return key;
     }
 
-    std::string _generate_union_rule(const std::string & name, const std::vector<json> & alt_schemas) {
+    std::string _generate_union_rule(const std::string & name, const std::vector<common_chat_schema_ptr> & alt_schemas) {
         std::vector<std::string> rules;
         rules.reserve(alt_schemas.size());
         for (size_t i = 0; i < alt_schemas.size(); i++) {
-            rules.push_back(visit(alt_schemas[i], name + (name.empty() ? "alternative-" : "-") + std::to_string(i)));
+            rules.push_back(visit(*alt_schemas[i], name + (name.empty() ? "alternative-" : "-") + std::to_string(i)));
         }
         return string_join(rules, " | ");
     }
@@ -634,85 +638,68 @@ private:
             -> ["] ( [a] ([l] ([s] ([o] char+ | [^"o] char*) | [^"s] char*) | [n] ([d] char+ | [^"d] char*) | [^"ln] char*) | [^"a] char* )? ["]
     */
     std::string _not_strings(const std::vector<std::string> & strings) {
-
-        struct TrieNode {
-            std::map<char, TrieNode> children;
-            bool is_end_of_string;
-
-            TrieNode() : is_end_of_string(false) {}
-
-            void insert(const std::string & string) {
-                auto *node = this;
-                for (char c : string) {
-                    node = &node->children[c];
-                }
-                node->is_end_of_string = true;
-            }
-        };
-
-        TrieNode trie;
-        for (const auto & s : strings) {
-            trie.insert(s);
-        }
+        common_trie trie(strings);
 
         std::string char_rule = _add_primitive("char", PRIMITIVE_RULES.at("char"));
         std::ostringstream out;
         out << "[\"] ( ";
-        std::function<void(const TrieNode &)> visit = [&](const TrieNode & node) {
-            std::ostringstream rejects;
+        std::function<void(size_t)> visit = [&](size_t idx) {
+            const auto & node = trie.nodes[idx];
+            std::string rejects;
             auto first = true;
-            for (const auto & kv : node.children) {
-                rejects << kv.first;
+            for (const auto & [cpt, child] : node.children) {
+                std::string c = common_unicode_cpt_to_utf8(cpt);
+                rejects += c;
                 if (first) {
                     first = false;
                 } else {
                     out << " | ";
                 }
-                out << "[" << kv.first << "]";
-                if (!kv.second.children.empty()) {
+                out << "[" << c << "]";
+                if (!trie.nodes[child].children.empty()) {
                     out << " (";
-                    visit(kv.second);
+                    visit(child);
                     out << ")";
-                } else if (kv.second.is_end_of_string) {
+                } else {
                     out << " " << char_rule << "+";
                 }
             }
             if (!node.children.empty()) {
-                if (!first) {
-                    out << " | ";
-                }
-                out << "[^\"" << rejects.str() << "] " << char_rule << "*";
+                out << " | [^\"" << rejects << "] " << char_rule << "*";
             }
         };
-        visit(trie);
+        visit(0);
 
         out << " )";
-        if (!trie.is_end_of_string) {
+        if (trie.nodes[0].pattern < 0) {
             out << "?";
         }
         out << " [\"]";
         return out.str();
     }
 
-    std::string _resolve_ref(const std::string & ref) {
-        auto it = ref.find('#');
-        std::string ref_fragment = it != std::string::npos ? ref.substr(it + 1) : ref;
+    std::string _resolve_ref(const common_chat_schema_ref & schema) {
+        auto it = schema.ref.find('#');
+        std::string ref_fragment = it != std::string::npos ? schema.ref.substr(it + 1) : schema.ref;
         static const std::regex nonalphanumeric_regex(R"([^a-zA-Z0-9-]+)");
         std::string ref_name = "ref" + std::regex_replace(ref_fragment, nonalphanumeric_regex, "-");
-        if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(ref) == _refs_being_resolved.end()) {
-            _refs_being_resolved.insert(ref);
-            json resolved = _refs[ref];
-            ref_name = visit(resolved, ref_name);
-            _refs_being_resolved.erase(ref);
+        if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(schema.ref) == _refs_being_resolved.end()) {
+            if (!schema.target) {
+                _errors.push_back("Unresolved $ref " + schema.ref);
+                return "";
+            }
+            _refs_being_resolved.insert(schema.ref);
+            ref_name = visit(*schema.target, ref_name);
+            _refs_being_resolved.erase(schema.ref);
         }
         return ref_name;
     }
 
     std::string _build_object_rule(
-        const std::vector<std::pair<std::string, json>> & properties,
+        const std::vector<std::pair<std::string, const common_chat_schema *>> & properties,
         const std::unordered_set<std::string> & required,
         const std::string & name,
-        const json & additional_properties)
+        const common_chat_schema * additional_properties)
     {
         std::vector<std::string> required_props;
         std::vector<std::string> optional_props;
@@ -722,7 +709,7 @@ private:
             const auto &prop_name = kv.first;
             const auto &prop_schema = kv.second;
 
-            std::string prop_rule_name = visit(prop_schema, name + (name.empty() ? "" : "-") + prop_name);
+            std::string prop_rule_name = visit(*prop_schema, name + (name.empty() ? "" : "-") + prop_name);
             prop_kv_rule_names[prop_name] = _add_rule(
                 name + (name.empty() ? "" : "-") + prop_name + "-kv",
                 format_literal(json(prop_name).dump()) + " space \":\" space " + prop_rule_name
@@ -734,10 +721,10 @@ private:
             }
             prop_names.push_back(prop_name);
         }
-        if ((additional_properties.is_boolean() && additional_properties.get<bool>()) || additional_properties.is_object()) {
+        if (additional_properties) {
             std::string sub_name = name + (name.empty() ? "" : "-") + "additional";
             std::string value_rule =
-                additional_properties.is_object() ? visit(additional_properties, sub_name + "-value")
+                additional_properties->kind() != common_chat_schema::KIND_ANY ? visit(*additional_properties, sub_name + "-value")
                 : _add_primitive("value", PRIMITIVE_RULES.at("value"));
 
             auto key_rule =
@@ -825,267 +812,163 @@ private:
     }
 
 public:
-    common_schema_converter(
-        const std::function<json(const std::string &)> & fetch_json,
-        bool dotall)
-          : _fetch_json(fetch_json), _dotall(dotall)
-    {
+    explicit common_chat_schema_converter(bool dotall) : _dotall(dotall) {
         _rules["space"] = SPACE_RULE;
     }
 
-    void resolve_refs(json & schema, const std::string & url) {
-        /*
-        * Resolves all $ref fields in the given schema, fetching any remote schemas,
-        * replacing each $ref with absolute reference URL and populates _refs with the
-        * respective referenced (sub)schema dictionaries.
-        */
-        std::function<void(json &)> visit_refs = [&](json & n) {
-            if (n.is_array()) {
-                for (auto & x : n) {
-                    visit_refs(x);
-                }
-            } else if (n.is_object()) {
-                if (n.contains("$ref")) {
-                    std::string ref = n["$ref"];
-                    if (_refs.find(ref) == _refs.end()) {
-                        json target;
-                        if (ref.find("https://") == 0) {
-                            std::string base_url = ref.substr(0, ref.find('#'));
-                            auto it = _refs.find(base_url);
-                            if (it != _refs.end()) {
-                                target = it->second;
-                            } else {
-                                // Fetch the referenced schema and resolve its refs
-                                auto referenced = _fetch_json(ref);
-                                resolve_refs(referenced, base_url);
-                                _refs[base_url] = referenced;
-                            }
-                            if (ref.find('#') == std::string::npos || ref.substr(ref.find('#') + 1).empty()) {
-                                return;
-                            }
-                        } else if (ref.find("#/") == 0) {
-                            target = schema;
-                            n["$ref"] = url + ref;
-                            ref = url + ref;
-                        } else {
-                            _errors.push_back("Unsupported ref: " + ref);
-                            return;
-                        }
-                        std::string pointer = ref.substr(ref.find('#') + 1);
-                        std::vector<std::string> tokens = string_split(pointer, "/");
-                        for (size_t i = 1; i < tokens.size(); ++i) {
-                            const std::string& sel = tokens[i];
-                            if (target.is_object() && target.contains(sel)) {
-                                target = target[sel];
-                            } else if (target.is_array()) {
-                                size_t sel_index;
-                                try {
-                                    sel_index = std::stoull(sel);
-                                } catch (const std::invalid_argument & e) {
-                                    sel_index = target.size();
-                                }
-                                if (sel_index >= target.size()) {
-                                    _errors.push_back("Error resolving ref " + ref + ": " + sel + " not in " + target.dump());
-                                    return;
-                                }
-                                target = target[sel_index];
-                            } else {
-                                _errors.push_back("Error resolving ref " + ref + ": " + sel + " not in " + target.dump());
-                                return;
-                            }
-                        }
-                        _refs[ref] = target;
-                    }
-                } else {
-                    for (const auto & kv : n.items()) {
-                        visit_refs(kv.value());
-                    }
-                }
-            }
-        };
-
-        visit_refs(schema);
+    std::string add_schema(const std::string & name, const common_chat_schema & schema) {
+        return visit(schema, name);
     }
 
     static std::string _generate_constant_rule(const json & value) {
         return format_literal(value.dump());
     }
 
-    std::string visit(const json & schema, const std::string & name) {
-        json schema_type = schema.contains("type") ? schema["type"] : json();
-        std::string schema_format = schema.contains("format") ? schema["format"].get<std::string>() : "";
-        std::string rule_name = is_reserved_name(name) ? name + "-" : name.empty() ? "root" : name;
+    std::string _visit_primitive(const std::string & rule_name, const std::string & type) {
+        return _add_primitive(rule_name == "root" ? "root" : type, PRIMITIVE_RULES.at(type));
+    }
 
-        if (schema.contains("$ref")) {
-            return _add_rule(rule_name, _resolve_ref(schema["$ref"]));
-        }
-        if (schema.contains("oneOf") || schema.contains("anyOf")) {
-            const json & alts = schema.contains("oneOf") ? schema.at("oneOf") : schema.at("anyOf");
-            std::vector<json> alt_schemas;
-            for (const auto & alt : alts) {
-                alt_schemas.push_back(alt);
-            }
-            return _add_rule(rule_name, _generate_union_rule(name, alt_schemas));
-        }
-        if (schema_type.is_array()) {
-            std::vector<json> schema_types;
-            for (const auto & t : schema_type) {
-                json schema_copy(schema);
-                schema_copy["type"] = t;
-                schema_types.push_back(schema_copy);
-            }
-            return _add_rule(rule_name, _generate_union_rule(name, schema_types));
-        }
-        if (schema.contains("const")) {
-            return _add_rule(rule_name, _generate_constant_rule(schema["const"]));
-        }
-        if (schema.contains("enum")) {
-            std::vector<std::string> enum_values;
-            for (const auto & v : schema["enum"]) {
-                enum_values.push_back(_generate_constant_rule(v));
-            }
-            return _add_rule(rule_name, "(" + string_join(enum_values, " | ") + ")");
-        }
-        if ((schema_type.is_null() || schema_type == "object")
-                && (schema.contains("properties") ||
-                    (schema.contains("additionalProperties") && schema["additionalProperties"] != true))) {
-            std::unordered_set<std::string> required;
-            if (schema.contains("required") && schema["required"].is_array()) {
-                for (const auto & item : schema["required"]) {
-                    if (item.is_string()) {
-                        required.insert(item.get<std::string>());
+    std::string _visit_all_of(const common_chat_schema_all_of & schema, const std::string & name, const std::string & rule_name) {
+        std::unordered_set<std::string> required;
+        std::vector<std::pair<std::string, const common_chat_schema *>> properties;
+        std::map<std::string, size_t> enum_values;
+        std::function<void(const common_chat_schema &, bool)> add_component = [&](const common_chat_schema & comp, bool is_required) {
+            if (comp.kind() == common_chat_schema::KIND_REF) {
+                if (const auto * target = as<common_chat_schema_ref>(comp).target) {
+                    add_component(*target, is_required);
+                }
+            } else if (comp.kind() == common_chat_schema::KIND_OBJECT) {
+                for (const auto & prop : as<common_chat_schema_object>(comp).properties) {
+                    properties.emplace_back(prop.name, prop.schema.get());
+                    if (is_required) {
+                        required.insert(prop.name);
                     }
                 }
-            }
-            std::vector<std::pair<std::string, json>> properties;
-            if (schema.contains("properties")) {
-                for (const auto & prop : schema["properties"].items()) {
-                    properties.emplace_back(prop.key(), prop.value());
+            } else if (comp.kind() == common_chat_schema::KIND_ENUM) {
+                for (const auto & v : as<common_chat_schema_enum>(comp).values) {
+                    enum_values[_generate_constant_rule(v)] += 1;
                 }
             }
-            return _add_rule(rule_name,
-                _build_object_rule(
-                    properties, required, name,
-                    schema.contains("additionalProperties") ? schema["additionalProperties"] : json()));
+        };
+        for (const auto & child : schema.children) {
+            if (child->kind() == common_chat_schema::KIND_ANY_OF) {
+                for (const auto & alt : as<common_chat_schema_any_of>(*child).children) {
+                    add_component(*alt, false);
+                }
+            } else {
+                add_component(*child, true);
+            }
         }
-        if ((schema_type.is_null() || schema_type == "object" || schema_type == "string") && schema.contains("allOf")) {
-            std::unordered_set<std::string> required;
-            std::vector<std::pair<std::string, json>> properties;
-            std::map<std::string, size_t> enum_values;
-            const std::string& hybrid_name = name;
-            std::function<void(const json &, bool)> add_component = [&](const json & comp_schema, bool is_required) {
-                if (comp_schema.contains("$ref")) {
-                    add_component(_refs[comp_schema["$ref"]], is_required);
-                } else if (comp_schema.contains("properties")) {
-                    for (const auto & prop : comp_schema["properties"].items()) {
-                        properties.emplace_back(prop.key(), prop.value());
-                        if (is_required) {
-                            required.insert(prop.key());
-                        }
-                    }
-                } else if (comp_schema.contains("enum")) {
-                    for (const auto & v : comp_schema["enum"]) {
-                        const auto rule = _generate_constant_rule(v);
-                        if (enum_values.find(rule) == enum_values.end()) {
-                            enum_values[rule] = 0;
-                        }
-                        enum_values[rule] += 1;
-                    }
-                } else {
-                  // todo warning
-                }
-            };
-            for (const auto & t : schema["allOf"]) {
-                if (t.contains("anyOf")) {
-                    for (const auto & tt : t["anyOf"]) {
-                        add_component(tt, false);
-                    }
-                } else {
-                    add_component(t, true);
+        if (!enum_values.empty()) {
+            std::vector<std::string> enum_intersection;
+            for (const auto & p : enum_values) {
+                if (p.second == schema.children.size()) {
+                    enum_intersection.push_back(p.first);
                 }
             }
-            if (!enum_values.empty()) {
-                std::vector<std::string> enum_intersection;
-                for (const auto & p : enum_values) {
-                    if (p.second == schema["allOf"].size()) {
-                        enum_intersection.push_back(p.first);
-                    }
-                }
-                if (!enum_intersection.empty()) {
-                    return _add_rule(rule_name, "(" + string_join(enum_intersection, " | ") + ")");
-                }
+            if (!enum_intersection.empty()) {
+                return _add_rule(rule_name, "(" + string_join(enum_intersection, " | ") + ")");
             }
-            return _add_rule(rule_name, _build_object_rule(properties, required, hybrid_name, json()));
         }
-        if ((schema_type.is_null() || schema_type == "array") && (schema.contains("items") || schema.contains("prefixItems"))) {
-            json items = schema.contains("items") ? schema["items"] : schema["prefixItems"];
-            if (items.is_array()) {
+        return _add_rule(rule_name, _build_object_rule(properties, required, name, nullptr));
+    }
+
+    std::string visit(const common_chat_schema & schema, const std::string & name) {
+        std::string rule_name = is_reserved_name(name) ? name + "-" : name.empty() ? "root" : name;
+        std::string sub_name  = name + (name.empty() ? "" : "-");
+
+        switch (schema.kind()) {
+            case common_chat_schema::KIND_REF:
+                return _add_rule(rule_name, _resolve_ref(as<common_chat_schema_ref>(schema)));
+            case common_chat_schema::KIND_ANY_OF:
+                return _add_rule(rule_name, _generate_union_rule(name, as<common_chat_schema_any_of>(schema).children));
+            case common_chat_schema::KIND_ALL_OF:
+                return _visit_all_of(as<common_chat_schema_all_of>(schema), name, rule_name);
+            case common_chat_schema::KIND_CONST:
+                return _add_rule(rule_name, _generate_constant_rule(as<common_chat_schema_const>(schema).value));
+            case common_chat_schema::KIND_ENUM: {
+                std::vector<std::string> enum_values;
+                for (const auto & v : as<common_chat_schema_enum>(schema).values) {
+                    enum_values.push_back(_generate_constant_rule(v));
+                }
+                return _add_rule(rule_name, "(" + string_join(enum_values, " | ") + ")");
+            }
+            case common_chat_schema::KIND_OBJECT: {
+                const auto & obj = as<common_chat_schema_object>(schema);
+                if (obj.properties.empty() && obj.additional_properties && obj.additional_properties->kind() == common_chat_schema::KIND_ANY) {
+                    return _add_rule(rule_name, _add_primitive("object", PRIMITIVE_RULES.at("object")));
+                }
+                std::vector<std::pair<std::string, const common_chat_schema *>> properties;
+                std::unordered_set<std::string> required;
+                for (const auto & prop : obj.properties) {
+                    properties.emplace_back(prop.name, prop.schema.get());
+                    if (prop.required) {
+                        required.insert(prop.name);
+                    }
+                }
+                return _add_rule(rule_name, _build_object_rule(properties, required, name, obj.additional_properties.get()));
+            }
+            case common_chat_schema::KIND_TUPLE: {
+                const auto & items = as<common_chat_schema_tuple>(schema).items;
                 std::string rule = "\"[\" space ";
                 for (size_t i = 0; i < items.size(); i++) {
                     if (i > 0) {
                         rule += " \",\" space ";
                     }
-                    rule += visit(items[i], name + (name.empty() ? "" : "-") + "tuple-" + std::to_string(i));
+                    rule += visit(*items[i], sub_name + "tuple-" + std::to_string(i));
                 }
                 rule += " space \"]\"";
                 return _add_rule(rule_name, rule);
             }
-            std::string item_rule_name = visit(items, name + (name.empty() ? "" : "-") + "item");
-            int min_items = schema.contains("minItems") ? schema["minItems"].get<int>() : 0;
-            json max_items_json = schema.contains("maxItems") ? schema["maxItems"] : json();
-            int max_items = max_items_json.is_number_integer() ? max_items_json.get<int>() : std::numeric_limits<int>::max();
-
-            return _add_rule(rule_name, "\"[\" space " + build_repetition(item_rule_name, min_items, max_items, "\",\" space") + " space \"]\"");
-        }
-        if ((schema_type.is_null() || schema_type == "string") && schema.contains("pattern")) {
-            return _visit_pattern(schema["pattern"], rule_name);
-        }
-        if ((schema_type.is_null() || schema_type == "string") && std::regex_match(schema_format, std::regex("^uuid[1-5]?$"))) {
-            return _add_primitive(rule_name == "root" ? "root" : schema_format, PRIMITIVE_RULES.at("uuid"));
-        }
-        if ((schema_type.is_null() || schema_type == "string") && STRING_FORMAT_RULES.find(schema_format + "-string") != STRING_FORMAT_RULES.end()) {
-            auto prim_name = schema_format + "-string";
-            return _add_rule(rule_name, _add_primitive(prim_name, STRING_FORMAT_RULES.at(prim_name)));
-        }
-        if (schema_type == "string" && (schema.contains("minLength") || schema.contains("maxLength"))) {
-            std::string char_rule = _add_primitive("char", PRIMITIVE_RULES.at("char"));
-            int min_len = schema.contains("minLength") ? schema["minLength"].get<int>() : 0;
-            int max_len = schema.contains("maxLength") ? schema["maxLength"].get<int>() : std::numeric_limits<int>::max();
-            return _add_rule(rule_name, "\"\\\"\" " + build_repetition(char_rule, min_len, max_len) + " \"\\\"\"");
-        }
-        if (schema_type == "integer" && (schema.contains("minimum") || schema.contains("exclusiveMinimum") || schema.contains("maximum") || schema.contains("exclusiveMaximum"))) {
-            int64_t min_value = std::numeric_limits<int64_t>::min();
-            int64_t max_value = std::numeric_limits<int64_t>::max();
-            if (schema.contains("minimum")) {
-                min_value = schema["minimum"].get<int64_t>();
-            } else if (schema.contains("exclusiveMinimum")) {
-                min_value = schema["exclusiveMinimum"].get<int64_t>() + 1;
+            case common_chat_schema::KIND_ARRAY: {
+                const auto & arr = as<common_chat_schema_array>(schema);
+                if (arr.items->kind() == common_chat_schema::KIND_ANY && arr.min_items == 0 && arr.max_items < 0) {
+                    return _visit_primitive(rule_name, "array");
+                }
+                std::string item_rule_name = visit(*arr.items, sub_name + "item");
+                int max_items = arr.max_items < 0 ? std::numeric_limits<int>::max() : arr.max_items;
+                return _add_rule(rule_name, "\"[\" space " + build_repetition(item_rule_name, arr.min_items, max_items, "\",\" space") + " space \"]\"");
             }
-            if (schema.contains("maximum")) {
-                max_value = schema["maximum"].get<int64_t>();
-            } else if (schema.contains("exclusiveMaximum")) {
-                max_value = schema["exclusiveMaximum"].get<int64_t>() - 1;
+            case common_chat_schema::KIND_STRING: {
+                const auto & str = as<common_chat_schema_string>(schema);
+                if (!str.pattern.empty()) {
+                    return _visit_pattern(str.pattern, rule_name);
+                }
+                if (str.format == common_chat_schema::FORMAT_UUID) {
+                    return _visit_primitive(rule_name, "uuid");
+                }
+                if (str.format != common_chat_schema::FORMAT_NONE) {
+                    std::string prim_name = std::string(str.format == common_chat_schema::FORMAT_DATE ? "date" : str.format == common_chat_schema::FORMAT_TIME ? "time" : "date-time") + "-string";
+                    return _add_rule(rule_name, _add_primitive(prim_name, STRING_FORMAT_RULES.at(prim_name)));
+                }
+                if (str.min_length > 0 || str.max_length >= 0) {
+                    std::string char_rule = _add_primitive("char", PRIMITIVE_RULES.at("char"));
+                    int max_len = str.max_length < 0 ? std::numeric_limits<int>::max() : str.max_length;
+                    return _add_rule(rule_name, "\"\\\"\" " + build_repetition(char_rule, str.min_length, max_len) + " \"\\\"\"");
+                }
+                return _visit_primitive(rule_name, "string");
             }
-            std::stringstream out;
-            out << "(";
-            build_min_max_int(min_value, max_value, out);
-            out << ")";
-            return _add_rule(rule_name, out.str());
+            case common_chat_schema::KIND_INTEGER: {
+                const auto & i = as<common_chat_schema_integer>(schema);
+                if (i.minimum == std::numeric_limits<int64_t>::min() && i.maximum == std::numeric_limits<int64_t>::max()) {
+                    return _visit_primitive(rule_name, "integer");
+                }
+                std::stringstream out;
+                out << "(";
+                build_min_max_int(i.minimum, i.maximum, out);
+                out << ")";
+                return _add_rule(rule_name, out.str());
+            }
+            case common_chat_schema::KIND_NUMBER:
+                return _visit_primitive(rule_name, "number");
+            case common_chat_schema::KIND_BOOLEAN:
+                return _visit_primitive(rule_name, "boolean");
+            case common_chat_schema::KIND_NULL:
+                return _visit_primitive(rule_name, "null");
+            case common_chat_schema::KIND_ANY:
+                return _add_rule(rule_name, _add_primitive("value", PRIMITIVE_RULES.at("value")));
         }
-        if (schema.empty() || schema_type == "object") {
-            return _add_rule(rule_name, _add_primitive("object", PRIMITIVE_RULES.at("object")));
-        }
-        if (schema_type.is_null() && schema.is_object()) {
-            // No type constraint and no recognized structural keywords (e.g. {"description": "..."}).
-            // Per JSON Schema semantics this is equivalent to {} and accepts any value.
-            return _add_rule(rule_name, _add_primitive("value", PRIMITIVE_RULES.at("value")));
-        }
-        if (!schema_type.is_string() || PRIMITIVE_RULES.find(schema_type.get<std::string>()) == PRIMITIVE_RULES.end()) {
-            _errors.push_back("Unrecognized schema: " + schema.dump());
-            return "";
-        }
-        // TODO: support minimum, maximum, exclusiveMinimum, exclusiveMaximum at least for zero
-        return _add_primitive(rule_name == "root" ? "root" : schema_type.get<std::string>(), PRIMITIVE_RULES.at(schema_type.get<std::string>()));
+        return "";
     }
 
     void check_errors() {
@@ -1106,134 +989,6 @@ public:
     }
 };
 
-// common_schema_info implementation (pimpl)
-
-common_schema_info::common_schema_info()
-    : impl_(std::make_unique<common_schema_converter>(
-        [](const std::string &) { return json(); },
-        false)) {}
-
-common_schema_info::~common_schema_info() = default;
-
-common_schema_info::common_schema_info(common_schema_info &&) noexcept = default;
-common_schema_info & common_schema_info::operator=(common_schema_info &&) noexcept = default;
-
-void common_schema_info::resolve_refs(common_json & schema) {
-    impl_->resolve_refs(schema, "");
-}
-
-// Determines if a JSON schema can resolve to a string type through any path.
-// Some models emit raw string values rather than JSON-encoded strings for string parameters.
-// If any branch of the schema (via oneOf, anyOf, $ref, etc.) permits a string, this returns
-// true, allowing callers to handle the value as a raw string for simplicity.
-bool common_schema_info::resolves_to_string(const common_json & schema) {
-    std::unordered_set<std::string> visited_refs;
-
-    std::function<bool(const json &)> check = [&](const json & s) -> bool {
-        if (!s.is_object()) {
-            return false;
-        }
-
-        // Handle $ref
-        if (s.contains("$ref")) {
-            const std::string & ref = s["$ref"];
-            if (visited_refs.find(ref) != visited_refs.end()) {
-                // Circular reference, assume not a string to be safe
-                return false;
-            }
-            visited_refs.insert(ref);
-            auto it = impl_->_refs.find(ref);
-            if (it != impl_->_refs.end()) {
-                return check(it->second);
-            }
-            return false;
-        }
-
-        // Check type field
-        if (s.contains("type")) {
-            const json & schema_type = s["type"];
-            if (schema_type.is_string()) {
-                if (schema_type == "string") {
-                    return true;
-                }
-            } else if (schema_type.is_array()) {
-                // Type can be an array like ["string", "null"]
-                for (const auto & t : schema_type) {
-                    if (t == "string") {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // Check oneOf/anyOf - if any alternative can be a string
-        if (s.contains("oneOf")) {
-            for (const auto & alt : s["oneOf"]) {
-                if (check(alt)) {
-                    return true;
-                }
-            }
-        }
-        if (s.contains("anyOf")) {
-            for (const auto & alt : s["anyOf"]) {
-                if (check(alt)) {
-                    return true;
-                }
-            }
-        }
-
-        // Check allOf - all components must be compatible with string type
-        if (s.contains("allOf")) {
-            bool all_string = true;
-            for (const auto & component : s["allOf"]) {
-                if (!check(component)) {
-                    all_string = false;
-                    break;
-                }
-            }
-            if (all_string) {
-                return true;
-            }
-        }
-
-        // Check const - if the constant value is a string
-        if (s.contains("const")) {
-            if (s["const"].is_string()) {
-                return true;
-            }
-        }
-
-        // Check enum - if any enum value is a string
-        if (s.contains("enum")) {
-            for (const auto & val : s["enum"]) {
-                if (val.is_string()) {
-                    return true;
-                }
-            }
-        }
-
-        // String-specific keywords imply string type
-        if (s.contains("pattern") || s.contains("minLength") || s.contains("maxLength")) {
-            return true;
-        }
-
-        // Check format - many formats imply string
-        if (s.contains("format")) {
-            const std::string & fmt = s["format"];
-            if (fmt == "date" || fmt == "time" || fmt == "date-time" ||
-                fmt == "uri" || fmt == "email" || fmt == "hostname" ||
-                fmt == "ipv4" || fmt == "ipv6" || fmt == "uuid" ||
-                fmt.find("uuid") == 0) {
-                return true;
-            }
-        }
-
-        return false;
-    };
-
-    return check(schema);
-}
-
 std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) {
 #ifdef LLAMA_USE_LLGUIDANCE
     if (!force_gbnf) {
@@ -1242,25 +997,29 @@ std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) 
 #else
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
-    return build_grammar([&](const common_grammar_builder & callbacks) {
-        auto copy = schema;
-        callbacks.resolve_refs(copy);
-        callbacks.add_schema("", copy);
-    });
+    try {
+        return json_schema_to_grammar(common_chat_schema_from_json(schema));
+    } catch (const std::runtime_error & e) {
+        throw std::invalid_argument(std::string("JSON schema conversion failed:\n") + e.what());
+    }
+}
+
+std::string json_schema_to_grammar(const common_chat_schema_document & schema) {
+    common_chat_schema_converter converter(false);
+    converter.visit(*schema.root, "");
+    converter.check_errors();
+    return converter.format_grammar();
 }
 
 std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options) {
-    common_schema_converter converter([&](const std::string &) { return json(); }, options.dotall);
+    common_chat_schema_converter converter(options.dotall);
     common_grammar_builder builder {
         /* .add_rule = */ [&](const std::string & name, const std::string & rule) {
             return converter._add_rule(name, rule);
         },
-        /* .add_schema = */ [&](const std::string & name, const common_json & schema) {
-            return converter.visit(schema, name == "root" ? "" : name);
+        /* .add_schema = */ [&](const std::string & name, const common_chat_schema & schema) {
+            return converter.add_schema(name == "root" ? "" : name, schema);
         },
-        /* .resolve_refs = */ [&](common_json & schema) {
-            converter.resolve_refs(schema, "");
-        }
     };
     cb(builder);
     converter.check_errors();
