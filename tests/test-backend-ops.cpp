@@ -10602,7 +10602,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 320, 512, 576 }) {
         for (int hsv : { 40, 64, 72, 80, 96, 128, 192, 256, 512 }) {
-            if (hsk != 192 && hsk != 320 && hsk != 576 && hsk != hsv) continue;
+            if (hsk != 96 && hsk != 192 && hsk != 320 && hsk != 576 && hsk != hsv) continue;
+            if (hsk ==  96 && (hsv !=  64 && hsv !=  96)) continue; // MiniCPM3
             if (hsk == 192 && (hsv != 128 && hsv != 192)) continue;
             if (hsk == 576 && hsv != 512) continue; // DeepSeek MLA
             if (hsk == 320 && hsv != 256) continue; // Mistral4 MLA
@@ -11493,7 +11494,7 @@ static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
     }
 
     struct shape_t { int dk, dv; };
-    const shape_t   shapes[] = { { 128, 128 }, { 576, 512 } };  // mainstream head size + MLA shared K/V view
+    const shape_t   shapes[] = { { 128, 128 }, { 96, 64 }, { 576, 512 } };  // mainstream head size + MiniCPM3 (NE=4 only) + MLA shared K/V view
     const int       ne01_pts[] = { 1, 3 };                      // decode, and padded rows for Q=2 and Q=4
     const int       ne11_pts[] = { 512, 4097 };                 // nsg=1, and nsg>=2 together with kvpad
     const ggml_type types[]    = { GGML_TYPE_F16, GGML_TYPE_Q4_0 };
