@@ -1,10 +1,13 @@
 #include "llama-kv-stream-resident.h"
 #include "ggml-cpp.h"
+#include "llama-kv-stream-writer.h"
 
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <utility>
+
+
 
 struct llama_kv_stream_resident::implementation {
     llama_kv_stream_binding_view binding;
@@ -16,7 +19,9 @@ struct llama_kv_stream_resident::implementation {
     std::vector<llama_kv_stream_rows> ranges;
     size_t active = 0, bytes = 0, calls = 0;
     uint64_t generation = 0, epoch = 0;
-    bool initialized = false, valid = false, busy = false;
+    bool initialized = false, valid = false, busy = false, poisoned = false;
+    std::unique_ptr<llama_kv_stream_writer> writer;
+    llama_kv_stream_write_stats write_stats;
 
     // Storage encoding must match the fixed device layout; replacement alone cannot change it.
     bool compatible() const {
@@ -30,7 +35,7 @@ struct llama_kv_stream_resident::implementation {
 
     // Ordinary CUDA attention needs padded keys, but every padded row must remain resident.
     bool extent(size_t tokens, size_t & padded) const {
-        if (!compatible() || !tokens || tokens > content->host()->config().context_tokens || tokens > size_t(INT32_MAX) - 255) return false;
+        if (poisoned || !compatible() || !tokens || tokens > content->host()->config().context_tokens || tokens > size_t(INT32_MAX) - 255) return false;
         padded = (tokens + 255)/256*256;
         for (const auto & entry : layout.layers) if (padded > entry.planes.tokens) return false;
         return padded <= content->host()->layout().tokens;
@@ -178,4 +183,85 @@ ggml_tensor * llama_kv_stream_resident::attention(ggml_context * context, uint32
     auto * out = ggml_flash_attn_ext(context, q, kt, vt, mask, scale, 0, 0);
     ggml_flash_attn_ext_set_prec(out, GGML_PREC_F32);
     return out;
+}
+
+// Reconfiguration touches only the ring, but any old writer capture must retire before its scratch is reused.
+bool llama_kv_stream_resident::configure_writes(size_t maximum) {
+    auto & s = *impl;
+    if (s.busy || s.poisoned || !s.compatible() || !maximum) return false;
+    s.busy = true;
+    struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
+    ggml_backend_synchronize(s.backend);
+    s.writer.reset();
+    s.write_stats = {};
+    s.writer = llama_kv_stream_writer::create(s.backend, s.binding.buffer, s.layout.ring.bytes, s.binding.config.shape, maximum);
+    return bool(s.writer);
+}
+
+// Publish host bytes atomically after all tiled generation completes; completed D2D tiles need no H2D refresh.
+bool llama_kv_stream_resident::write_rows(uint32_t layer, ggml_kv_stream_operand operand, size_t first, const ggml_tensor * source) {
+    auto & s = *impl;
+    s.write_stats = {};
+    const bool value = operand == ggml_kv_stream_operand::v;
+    if (s.busy || s.poisoned || !s.writer || !s.compatible() || layer >= s.roots.size() ||
+            (operand != ggml_kv_stream_operand::k && !value) || !s.writer->accepts(source, value)) return false;
+    const size_t rows = size_t(source->ne[1]);
+    const auto host = s.content->host();
+    if (first > host->config().context_tokens || rows > host->config().context_tokens - first ||
+            first > s.layout.layers[layer].planes.tokens || rows > s.layout.layers[layer].planes.tokens - first) return false;
+    s.busy = true; s.valid = false;
+    struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
+    // SET_ROWS queues behind earlier backend work; each tile drains before any resident overwrite.
+    if (!s.initialized) {
+        if (!s.content->reset_mirror()) return false;
+        s.initialized = true;
+    }
+    const size_t stride = value ? host->layout().v_token_bytes : host->layout().k_token_bytes;
+    const size_t width = size_t(value ? s.binding.config.shape.head_dim_v : s.binding.config.shape.head_dim_k)*size_t(s.binding.config.shape.heads);
+    bool touched = false, generation_started = false;
+    // If speculative mirror publication fails, the unchanged authoritative bytes must overwrite it on retry.
+    auto rollback = [&] {
+        if (touched && !s.content->reset_mirror()) s.poisoned = true;
+    };
+    try {
+        const std::vector<llama_kv_stream_rows> acknowledge{{layer, operand, first, rows}};
+        const std::function<bool(const llama_kv_stream_copy_span &)> already_copied = [&](const auto & span) {
+            return span.rows.layer == layer && span.rows.operand == operand && span.rows.first >= first &&
+                span.rows.first - first <= rows && span.rows.count <= rows - (span.rows.first - first);
+        };
+        llama_kv_stream_write write;
+        const bool generated = s.content->prepare_generated({{layer, operand, first*stride, nullptr, rows*stride}},
+            [&](const auto &, void * payload) {
+                generation_started = true;
+                return s.writer->generate(source, value, payload, [&](const ggml_tensor * stage, size_t offset, size_t count) {
+                    ggml_tensor src = *stage, dst = *stage;
+                    src.ne[0] = dst.ne[0] = int64_t(width*count);
+                    src.ne[1] = src.ne[2] = src.ne[3] = dst.ne[1] = dst.ne[2] = dst.ne[3] = 1;
+                    src.nb[1] = src.nb[2] = src.nb[3] = dst.nb[1] = dst.nb[2] = dst.nb[3] = count*stride;
+                    auto * root = value ? s.roots[layer].second : s.roots[layer].first;
+                    dst.data = static_cast<char *>(root->data) + (first + offset)*stride;
+                    touched = true;
+                    ggml_backend_tensor_copy_async(s.backend, s.backend, &src, &dst);
+                    return true;
+                });
+            }, write);
+        s.write_stats = generation_started ? s.writer->stats() : llama_kv_stream_write_stats{};
+        if (!generated || !s.content->commit(write)) { rollback(); return false; }
+        if (!s.content->flush(acknowledge, already_copied)) { rollback(); return false; }
+        return true;
+    } catch (...) {
+        s.write_stats = generation_started ? s.writer->stats() : llama_kv_stream_write_stats{};
+        rollback();
+        throw;
+    }
+}
+
+// Expose exact submitted tile/copy counts and configured scratch bounds for tests and diagnostics.
+llama_kv_stream_write_stats llama_kv_stream_resident::last_write_stats() const noexcept { return impl->write_stats; }
+
+// Drop the single cached graph/source reference before a caller reclaims prefill input workspace.
+void llama_kv_stream_resident::release_write_workspace() {
+    if (impl->busy) return;
+    ggml_backend_synchronize(impl->backend);
+    impl->writer.reset();
 }

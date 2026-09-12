@@ -70,6 +70,10 @@ public:
     // Reject cancelled, foreign, or stale snapshots; successful nonempty commit advances content generation once.
     bool commit(llama_kv_stream_write & write);
 
+    // Fill a private ticket synchronously (span.data must be null). Failed generation never publishes host bytes.
+    bool prepare_generated(const std::vector<llama_kv_stream_write_span> & spans,
+            const std::function<bool(const llama_kv_stream_write_span &, void *)> & fill, llama_kv_stream_write & output) const;
+
     // Preserve new backing bytes but invalidate all mirror rows and outstanding writes, even for the same cache ID.
     bool replace(std::shared_ptr<llama_kv_stream_host> host);
     // Report externally completed host changes; no logical token validity is inferred.
@@ -86,4 +90,6 @@ public:
 
 private:
     std::shared_ptr<llama_kv_stream_content_state> state;
+    bool prepare_internal(const std::vector<llama_kv_stream_write_span> & spans, llama_kv_stream_write & output,
+            const std::function<bool(const llama_kv_stream_write_span &, void *)> * fill) const;
 };

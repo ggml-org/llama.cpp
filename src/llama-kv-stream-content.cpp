@@ -5,6 +5,12 @@
 #include <stdexcept>
 #include <utility>
 
+// Publish a generated ticket only after all synchronous fills complete successfully.
+bool llama_kv_stream_content::prepare_generated(const std::vector<llama_kv_stream_write_span> & spans,
+        const std::function<bool(const llama_kv_stream_write_span &, void *)> & fill, llama_kv_stream_write & output) const {
+    return fill && prepare_internal(spans, output, &fill);
+}
+
 struct llama_kv_stream_content_state {
     std::shared_ptr<llama_kv_stream_host> host;
     std::vector<uint64_t> dirty;
@@ -108,6 +114,12 @@ bool llama_kv_stream_content::dirty(const llama_kv_stream_rows & rows, bool & ou
 
 // Validate the entire batch and snapshot sources before changing the caller's pending ticket.
 bool llama_kv_stream_content::prepare(const std::vector<llama_kv_stream_write_span> & spans, llama_kv_stream_write & output) const {
+    return prepare_internal(spans, output, nullptr);
+}
+
+// Both CPU snapshots and generated payloads share validation, ownership, and atomic publication.
+bool llama_kv_stream_content::prepare_internal(const std::vector<llama_kv_stream_write_span> & spans, llama_kv_stream_write & output,
+        const std::function<bool(const llama_kv_stream_write_span &, void *)> * fill) const {
     if (state->busy) return false;
     state->busy = true;
     content_operation operation{state->busy};
@@ -117,7 +129,7 @@ bool llama_kv_stream_content::prepare(const std::vector<llama_kv_stream_write_sp
         for (const auto & span : spans) {
             if (!plane_valid(*state, span.layer, span.operand)) return false;
             const size_t bytes = span.operand == ggml_kv_stream_operand::k ? state->host->layout().k_bytes : state->host->layout().v_bytes;
-            if (span.offset > bytes || span.bytes > bytes - span.offset || (span.bytes && !span.data) ||
+            if (span.offset > bytes || span.bytes > bytes - span.offset || (span.bytes && !span.data && !fill) || (fill && span.data) ||
                     span.bytes > next.bytes.max_size() - total) return false;
             total += span.bytes;
         }
@@ -127,7 +139,11 @@ bool llama_kv_stream_content::prepare(const std::vector<llama_kv_stream_write_sp
         size_t begin = 0;
         for (const auto & span : spans) {
             if (!span.bytes) continue;
-            std::memcpy(next.bytes.data() + begin, span.data, span.bytes);
+            if (fill) {
+                if (!(*fill)(span, next.bytes.data() + begin)) return false;
+            } else {
+                std::memcpy(next.bytes.data() + begin, span.data, span.bytes);
+            }
             next.parts.push_back({span.layer, span.operand, span.offset, begin, span.bytes});
             begin += span.bytes;
         }

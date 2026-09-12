@@ -6,7 +6,7 @@ Last source review: 2026-09-12, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is implemented and validated, awaiting user review and commit. The remainder of milestones 5-8 is planned. The next substage after review is **5.3c: batched prefill write staging**, after recording the required baseline. The new allocation factory is opt-in; no streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is implemented and validated, awaiting user review and commit. The remainder of milestones 5-8 is planned. The next substage after review is **5.4b: partial-attention result and stable merge contract**. The new allocation factory is opt-in; no streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is ready for review. After the user commits it, record a targeted baseline before implementing 5.3c.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is ready for review, with its frozen baseline and comparison recorded below. After the user commits it, proceed to 5.4b.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -344,8 +344,8 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.2b | Complete | `0e3d5a0c0` | 15 CPU cases / 3,097 assertions; 16 real-CUDA cases / 3,108 assertions per UVM mode; virtual-device rejection passes. 17 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck reports zero errors/leaks. Binding adapter only. |
 | 5.3a | Complete | `7bfc17ac3` | 8 CPU owner cases / 386 assertions; 9 real-CUDA owner cases / 394 assertions; 5 CUDA pinning cases / 44 assertions. 18 CPU Debug/ASan/UBSan and 22 CUDA-build suites pass; memcheck has zero errors/leaks. Native Windows behavior preserved but not hardware-qualified. |
 | 5.3b | Complete | `15d47eb72` | 14 CPU cases / 150,480 assertions; 15 real-CUDA cases / 150,503 assertions. 19 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck is clean with UVM off/on. Synchronized byte-coherence baseline only. |
-| 5.3c | Planned | - | Requires 5.4a; preserve a working resident baseline before batched-write optimization. |
-| 5.4a | Ready for user review | Uncommitted | 12 CPU cases / 131 assertions; 13 CUDA cases / 245 assertions, including mixed K/V and 257-query prefill. 20 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Ordinary all-resident test adapter; production unchanged. |
+| 5.3c | Ready for user review | Uncommitted | 10 CPU cases / 607 assertions; 10 CUDA cases / 609 assertions. 21 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Frozen producer baseline and post-change timings recorded; no server integration. |
+| 5.4a | Complete | `ff4d3bdef` | 12 CPU cases / 131 assertions; 13 CUDA cases / 245 assertions, including mixed K/V and 257-query prefill. 20 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Ordinary all-resident test adapter; production unchanged. |
 | 5.4b-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
@@ -1472,4 +1472,106 @@ compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-de
 
 This establishes the first milestone-5 implementation checkpoint for the tested scope: authoritative host state, leased resident mirrors, and correct ordinary all-resident attention execution. It does not establish whole-model quality, long-context throughput, Windows/physical multi-GPU support, or all quant/backend combinations. The CLI/server remains unchanged; streamed attention and asynchronous overlap are not enabled.
 
-After user review and commit, proceed to **5.3c: batched prefill SET_ROWS/write staging**. Before changing that path, capture a targeted timing/transfer baseline from this committed resident implementation, as required for optimization substages. No new checkpoint branch is created automatically.
+Stage **5.3c**, documented below, adds bounded batched SET_ROWS/write staging after capturing the required ff4d3bdef baseline. No new checkpoint branch is created automatically.
+
+## Substage 5.3c: bounded batched SET_ROWS production
+
+Added `src/llama-kv-stream-writer.h/.cpp`, resident writer configuration/publication methods, generated transactional payload support, and `tests/test-kv-stream-writer.cpp`. No CUDA quantization kernel was modified.
+
+The production reference at `d873e5db9` quantizes a consecutive row range into GPU scratch, then copies the encoded batch to authoritative host storage and, when available, its resident mirror. The new implementation uses ordinary `GGML_OP_SET_ROWS` with relative indices `0..tile_rows-1` to achieve that contiguous staging without a new destination-base variant of the quantization kernel. The host/resident destination offset is applied separately.
+
+### Frozen baseline before library changes
+
+A benchmark harness was added and run against committed library code **ff4d3bdef**, before changing `src/` or GGML library code. Both controls use the same ordinary GPU SET_ROWS quantization:
+
+- Coalesced control: one encoded D2H download, existing content prepare/commit, then resident H2D refresh.
+- Row-wise control: one D2H download per encoded row, followed by the same batched host commit and coalesced resident refresh.
+
+This is a synthetic K-plane producer benchmark, not a model prefill/decode benchmark. Fixed parameters: RTX 5070 Ti, F32 source already on GPU, head dimension 256, four KV heads, Q8_0 K / Q4_0 V, one cache layer, context capacity 1,024, pool **6,815,744 bytes**, UVM disabled, CUDA FA all-quants test build enabled. Each mode uses 10 warmups and 100 measured calls; source pointer and shape remain stable. Setup, initial input/index uploads, graph construction warmup, and producer-source changes are excluded. Production was not stopped, so these are indicative local timings, not isolated latency guarantees.
+
+Frozen ff4d3bdef results, in microseconds:
+
+| Rows | Encoded bytes | Coalesced median / p95 | Row-wise median / p95 |
+| --- | --- | --- | --- |
+| 32 | 34,816 | 35.844 / 44.649 | 168.303 / 191.261 |
+| 256 | 278,528 | 78.674 / 92.751 | 1,174.280 / 1,240.520 |
+| 512 | 557,056 | 135.893 / 150.588 | 2,342.680 / 2,408.150 |
+
+These controls transferred the encoded byte count once D2H and once H2D. Row-wise D2H call counts were 32/256/512; coalesced D2H and H2D each used one call.
+
+### Scratch, source, and cache contracts
+
+`configure_writes(max_batch_rows)` takes the caller's physical micro-batch ceiling (for example, ub), not a hardcoded 256-row limit. It places encoded scratch and aligned I64 relative indices in the already-leased unused ring region. Actual backend quantized allocation padding is included when choosing capacity. If the configured batch is larger than the ring tile capacity, generation uses multiple tiles; it never enlarges the device pool.
+
+The initial writer admits completed dense F32 `[head_dim * heads, rows]` sources and consecutive destination rows within both host and resident capacity. It rejects wrong devices/layouts, oversized batches, invalid layer/operand/ranges, and unsupported SET_ROWS dispatch. Sparse/duplicate indices, F16 sources, and writes beyond resident capacity are not silently reinterpreted as this fast path; callers must retain a supported baseline or later adapter path.
+
+Each source is represented by an independent data-only leaf alias. Building the quantization graph must not traverse and recompute the original model graph. A regression test gives the completed source producer metadata and verifies that its existing values are used unchanged.
+
+One cached writer graph bounds metadata and retained-source ownership. Shape/type/source changes replace that graph rather than accumulating variants. `release_write_workspace()` retires it and releases its retained input buffer before a future phase transition reclaims prefill workspace. It does not free the KV pool. Callers must coordinate any source-workspace leases and invoke this hook while quiescent; this stage is not yet registered with the phase-transition/server graph consumer.
+
+Reported device scratch covers encoded staging plus relative indices. The private host payload is bounded by the configured physical batch and encoded row size. Source activation storage, metadata, CUDA graph/driver allocations, and the authoritative cache are separate from those counters. The test source/control buffers are present in all benchmark modes. No VRAM safety reserve or additional KV device allocation is introduced.
+
+### Ordered production and atomic host publication
+
+`prepare_generated()` shares the existing transaction validation and ownership machinery, but lets a synchronous producer fill private ticket bytes directly. Input data pointers must be null. Failure preserves existing tickets and authoritative host bytes; cancellation discards the generated payload.
+
+For each tile, SET_ROWS, D2H download, and D2D resident publication are ordered on the existing backend stream. The tile drains before scratch reuse and before the generated callback can return. The API therefore remains synchronous even though its copy submissions use async backend calls. This does not implement a dedicated copy stream, cross-layer lookahead, or the later producer/consumer event pipeline.
+
+The host payload is cacheable transaction storage, followed by a CPU copy at commit. Unlike the reference's direct D2H into authoritative host bytes, this retains the 5.3b atomic/cancellable host-publication contract. No redundant H2D refresh is needed for rows already published D2D.
+
+```mermaid
+flowchart LR
+    S["Completed GPU source"] --> Q["SET_ROWS into ring scratch"]
+    Q --> H["D2H into private ticket"]
+    H --> D["D2D into resident destination"]
+    D --> W["Drain tile before scratch reuse"]
+    W --> N{"More tiles?"}
+    N -- Yes --> Q
+    N -- No --> C["Commit complete host payload"]
+    C --> A["Acknowledge completed mirror rows"]
+```
+
+D2D writes are speculative until the complete host batch commits. If a later tile fails, all queued accesses are drained before the private payload is freed. Host bytes remain unchanged before commit, resident readiness stays closed, and mirror bookkeeping is invalidated so the next synchronization restores canonical bytes. If mirror invalidation cannot advance its epoch, the resident object stays poisoned and requires rebinding. Post-commit acknowledgement failure also leaves the mirror invalid rather than admitting stale attention.
+
+The caller holds a binding pin and source ownership until return, then calls `synchronize(active_tokens)` before attention. Other dirty/padded rows can still require synchronization uploads; zero H2D applies to the completed D2D row ranges, not every possible cache state. Failure counters are diagnostic, not a complete hardware trace of partially submitted operations.
+
+### Measured optimization and regression check
+
+The first staged version improved 256/512-row writes but was about 5% slower at 32 rows. Removing an upfront drain reduced that overhead, but a small difference remained. The final refinement queues the quantization and both transfers behind one tile completion wait. A queued-reader test confirms that earlier backend work reads old resident values before they are overwritten.
+
+Post-refinement measurements, same parameters, in microseconds:
+
+| Rows | Coalesced median / p95 | Staged median / p95 | Interpretation |
+| --- | --- | --- | --- |
+| 32 | 35.835 / 42.798 | 35.417 / 36.656 | Roughly equal at this scale |
+| 256 | 78.372 / 85.047 | 67.769 / 71.013 | About 14% lower median |
+| 512 | 135.248 / 147.735 | 125.124 / 128.811 | About 7-8% lower median |
+
+The contemporaneous row-wise medians were 167.558, 1,176.490, and 2,345.490 microseconds. Staged calls in this ample-ring benchmark used one quantization graph submission, one D2H copy, one D2D copy, and **zero H2D refresh bytes/calls**. A tight ring can require multiple tiles and submissions. Counts describe explicit encoded transfers, not driver-internal PCIe packets or UVM migrations.
+
+The existing coalesced control remained close to its frozen baseline. These figures do not establish full-model prefill gains, cold/source-changing graph costs, every quant's performance, or improvement at every batch size.
+
+### TDD and qualification
+
+The original producer control passed before new library code was added. Generated-ticket and staged-writer tests then failed against stubs. Final results: **10 CPU cases / 607 assertions** and **10 CUDA cases / 609 assertions**.
+
+Coverage includes all nine online destination encodings across six K/V pairs, both planes, and batches of 1, 7, 256, 257, and 512 rows; encoded output is compared byte-for-byte with ordinary SET_ROWS on the same backend. Tests also cover scratch bounds/reuse, smaller final tiles, invalid input/configuration, content-generation preservation, queued-reader ordering, source-graph isolation, and explicit cached-source release.
+
+A failure injected after the second tile's real copy verifies that queued DMA completes before ticket teardown, host data stays unchanged, and the mirror is restored from canonical bytes before retry. The CPU test targets its actual host-copy callback; the CUDA test targets the queued native copy hook.
+
+All **21 focused suites** pass in CPU/CUDA Debug and CPU ASan/leak checking/UBSan. CUDA memcheck reports **zero errors and zero bytes leaked** with UVM disabled and enabled. Strict warning checking passes for the writer, resident adapter, and content implementation. No quantization kernel or ordinary SET_ROWS operator was changed.
+
+```sh
+cmake --build build-device-memory-infra --target test-kv-stream-writer -j 20
+ctest --test-dir build-device-memory-infra -R '^test-kv-stream-writer$' --output-on-failure
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-writer -j 20
+build-device-memory-infra-cuda/bin/test-kv-stream-writer --cuda
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-writer --bench
+compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-writer --cuda
+```
+
+`--bench-baseline` runs only the row-wise/coalesced controls; `--bench` includes the staged implementation. The frozen measurements above preserve the pre-change reference independently of later recompilation.
+
+This remains a synchronous, test-only producer boundary, not an in-graph SET_ROWS interception or server integration. The caller must provide completed activation tensors; invoking this nested graph executor inside an active backend capture is not supported. Native Windows, other accelerator backends, physical multi-GPU, TSan, and full-model throughput are unqualified. Producer encoding coverage does not imply native attention support for every tested type.
+
+Production services, model/checkpoint/cache data, and compose configuration remain unchanged. After user review and commit, proceed to **5.4b: partial-attention result and stable merge contract**, before integrating streamed device attention.
