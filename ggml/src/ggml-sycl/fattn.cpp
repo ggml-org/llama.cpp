@@ -378,6 +378,11 @@ bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst) {
     return ggml_sycl_get_best_fattn_kernel(device, dst) != BEST_FATTN_KERNEL_NONE;
 }
 
+bool ggml_sycl_flash_attn_ext_uses_library(int device, const ggml_tensor * dst) {
+    const best_fattn_kernel kernel = ggml_sycl_get_best_fattn_kernel(device, dst);
+    return kernel == BEST_FATTN_KERNEL_ONEDNN || kernel == BEST_FATTN_KERNEL_MKL;
+}
+
 static uintptr_t ggml_sycl_fattn_reserve_halves(ggml_sycl_fattn_extra & extra, size_t n_halves) {
     if (n_halves == 0) {
         return 0;

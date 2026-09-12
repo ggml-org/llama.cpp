@@ -17,6 +17,8 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
 
 #include "base.hpp"
 #include "dpct/helper.hpp"
@@ -233,6 +235,10 @@ struct sycl_device_info {
     sycl_hw_info hw_info;
     optimize_feature opt_feature;
     bool    usm_system_support; // support for USM system allocations
+#ifdef GGML_SYCL_GRAPH
+    bool    graph_support;        // command graphs can be recorded and replayed
+    bool    graph_update_support; // a finalized command graph can be updated
+#endif
 };
 
 
@@ -333,6 +339,33 @@ struct mmid_row_mapping {
 };
 
 namespace sycl_ex = sycl::ext::oneapi::experimental;
+
+#ifdef GGML_SYCL_GRAPH
+struct ggml_sycl_graph {
+    // src data/ne/nb are kept next to the node copy: the scheduler can hand back the same src
+    // pointer with different contents or shape, see https://github.com/ggml-org/llama.cpp/pull/21736
+    struct node_properties {
+        ggml_tensor node;
+        void *      node_src_data_ptrs[GGML_MAX_SRC];
+        int64_t     node_src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+        size_t      node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+    };
+
+    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    std::vector<node_properties> node_props;
+    bool     warmup_complete = false;
+    uint64_t uid             = 0;
+    int64_t  last_used_time  = 0;
+
+    // result of check_graph_compatibility() and graph_needs_reorder(), and the uid they were made for
+    bool     compatible     = false;
+    bool     needs_reorder  = true;
+    uint64_t compatible_uid = 0;
+};
+
+static_assert(std::is_trivial<ggml_sycl_graph::node_properties>::value, "node_properties must be trivial");
+#endif
+
 struct ggml_backend_sycl_context {
     int device;
     std::string name;
@@ -460,7 +493,34 @@ struct ggml_backend_sycl_context {
     }
 
 #ifdef GGML_SYCL_GRAPH
-    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    // Map from first node pointer to graph - allows multiple graphs per context when the
+    // computation is split across CPU/GPU (e.g. with --n-cpu-moe)
+    std::unordered_map<const void *, std::unique_ptr<ggml_sycl_graph>> sycl_graphs;
+
+    int64_t last_graph_eviction_sweep = 0;
+
+    ggml_sycl_graph * sycl_graph(const void * first_node_ptr) {
+        const int64_t time_now = ggml_time_us();
+
+        // sweep every 5s, evicting graphs unused for >=10s
+        if (time_now - last_graph_eviction_sweep >= 5'000'000) {
+            last_graph_eviction_sweep = time_now;
+            for (auto it = sycl_graphs.begin(); it != sycl_graphs.end(); ) {
+                if (time_now - it->second->last_used_time >= 10'000'000) {
+                    it = sycl_graphs.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        auto it = sycl_graphs.find(first_node_ptr);
+        if (it == sycl_graphs.end()) {
+            it = sycl_graphs.emplace(first_node_ptr, std::make_unique<ggml_sycl_graph>()).first;
+        }
+        it->second->last_used_time = time_now;
+        return it->second.get();
+    }
 #endif
 
     ggml_sycl_pool & host_pool(int device) {
