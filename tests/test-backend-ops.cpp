@@ -10040,6 +10040,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // gpt-oss issue with Vulkan mmq_id
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
+    // more than 256 experts (hoisted row-id path, e.g. Qwen3.8-Flash-Next with 512 experts)
+    for (int n : {1, 5, 64, 300}) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_IQ3_S,  GGML_TYPE_F32, 512, 10, false, 128, n, 512));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_0,   GGML_TYPE_F32, 512, 10, false, 256, n, 128));
+    }
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
 
     // multiple blocks per row: exercises the block-stride loop and the

@@ -30,9 +30,14 @@ layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
 layout (binding = 0) readonly buffer A {uint data_a[];};
 layout (binding = 1) writeonly buffer D {uint data_d[];};
 
-shared uint vals[BLOCK_SIZE];
-shared uint offsets[BLOCK_SIZE];
-shared uint cursors[BLOCK_SIZE];
+// Upper bound on n_experts for the hoisted row-id path. Must match the limit in
+// ggml_vk_mul_mat_id_q_f16 (hoist_row_ids). The non-hoisted reduction below only
+// needs BLOCK_SIZE entries.
+#define MAX_EXPERTS 512
+
+shared uint vals[MAX_EXPERTS];
+shared uint offsets[MAX_EXPERTS];
+shared uint cursors[MAX_EXPERTS];
 
 // data_d layout when p.hoist_row_ids is set:
 //   [0,              n_experts)   per-expert row count
@@ -46,8 +51,8 @@ void main() {
     const uint tid = gl_LocalInvocationID.x;
 
     if (p.hoist_row_ids != 0) {
-        if (tid < p.n_experts) {
-            vals[tid] = 0;
+        for (uint e = tid; e < p.n_experts; e += BLOCK_SIZE) {
+            vals[e] = 0;
         }
         barrier();
 
