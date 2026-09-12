@@ -428,8 +428,12 @@ struct ggml_backend_meta_split_context {
         debug = value ? atoi(value) : 0;
     }
 
+    bool is_replaced(ggml_backend_buffer_t buffer) const {
+        return buffer && (buffer == sources.replaced_buffer || (sources.is_replaced && sources.is_replaced(sources.context, buffer)));
+    }
+
     ggml_backend_buffer_type_t source_buft(const ggml_tensor * tensor, ggml_backend_buffer_usage & source_usage) const {
-        if (tensor->buffer && tensor->buffer != sources.replaced_buffer) {
+        if (tensor->buffer && !is_replaced(tensor->buffer)) {
             source_usage = tensor->buffer->usage;
             return ggml_backend_buffer_get_type(tensor->buffer);
         }
@@ -537,7 +541,7 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     }
     if (source_buft) {
         GGML_ASSERT(source_buft == split_ctx.buft || ggml_backend_meta_device_supports_buft(ggml_backend_buft_get_device(split_ctx.buft), source_buft));
-        if (tensor->buffer != split_ctx.sources.replaced_buffer && ggml_backend_buffer_is_meta(tensor->buffer)) {
+        if (!split_ctx.is_replaced(tensor->buffer) && ggml_backend_buffer_is_meta(tensor->buffer)) {
             auto * source_ctx = static_cast<ggml_backend_meta_buffer_context *>(tensor->buffer->context);
             if (&source_ctx->split != &split_ctx) {
                 return ggml_backend_meta_get_split_state(source_ctx->split, tensor, assume_sync);
@@ -1260,7 +1264,8 @@ static ggml_tensor * ggml_backend_meta_find_simple_tensor(
     if (it != stc.simple_tensors.end()) {
         return it->second[device];
     }
-    bool replaced = tensor->buffer && tensor->buffer == sources.replaced_buffer;
+    bool replaced = tensor->buffer && (tensor->buffer == sources.replaced_buffer ||
+        (sources.is_replaced && sources.is_replaced(sources.context, tensor->buffer)));
     if (!replaced && ggml_backend_buffer_is_meta(tensor->buffer)) {
         return ggml_backend_tensor_is_bound(tensor) ? ggml_backend_meta_buffer_simple_tensor(tensor, device) : nullptr;
     }
@@ -2321,6 +2326,7 @@ struct ggml_backend_meta_context {
     size_t                      max_subgraphs = 0;
     size_t                      n_subgraphs   = 0;
     uint64_t                    uid           = 0;
+    std::vector<std::tuple<const ggml_tensor *, ggml_backend_buffer_t, const void *, uint64_t>> bindings;
 
     void *                               comm_ctx       = nullptr;
     ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
@@ -2486,8 +2492,29 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     const size_t n_backends = ggml_backend_meta_n_backends(backend);
     ggml_backend_meta_context * backend_ctx = (ggml_backend_meta_context *) backend->context;
 
-    // If the previous cgraph had a defined UID it can be used to skip rebuilding the subgraphs per simple backend.
-    const bool needs_rebuild = (cgraph->uid == 0) || (cgraph->uid != backend_ctx->uid);
+    decltype(backend_ctx->bindings) bindings;
+    auto record_binding = [&](const ggml_tensor * tensor) {
+        if (!tensor) {
+            return true;
+        }
+        if (!ggml_backend_tensor_is_bound(tensor)) {
+            return false;
+        }
+        bindings.emplace_back(tensor, tensor->buffer, tensor->data, ggml_backend_meta_binding_generation(tensor));
+        return true;
+    };
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const auto * tensor = cgraph->nodes[i];
+        if (!record_binding(tensor) || !record_binding(tensor->view_src)) {
+            return GGML_STATUS_FAILED;
+        }
+        for (const auto * source : tensor->src) {
+            if (!record_binding(source)) {
+                return GGML_STATUS_FAILED;
+            }
+        }
+    }
+    const bool needs_rebuild = cgraph->uid == 0 || cgraph->uid != backend_ctx->uid || bindings != backend_ctx->bindings;
 
     bool max_nnodes_raised = false;
     if (cgraph->n_nodes > backend_ctx->max_nnodes) {
@@ -2803,6 +2830,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 cgraph_ij->uid = ggml_graph_next_uid();
             }
         }
+        backend_ctx->bindings = std::move(bindings);
     }
 
     size_t iga = 0; // i graph aux

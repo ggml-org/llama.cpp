@@ -42,6 +42,8 @@ GGML_API enum ggml_status    ggml_tallocr_alloc(struct ggml_tallocr * talloc, st
 // special tensor flags for use with the graph allocator:
 //   ggml_set_input(): all input tensors are allocated at the beginning of the graph in non-overlapping addresses
 //   ggml_set_output(): output tensors are never freed and never overwritten
+// Quiesce backend work before replacing graph bindings, reserving physical buffers, or freeing the allocator.
+// Size-only reservation does not retire bindings or change physical storage.
 
 typedef struct ggml_gallocr * ggml_gallocr_t;
 

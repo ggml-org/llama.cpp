@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-    #define GGML_BACKEND_API_VERSION 5
+    #define GGML_BACKEND_API_VERSION 6
 
     //
     // Backend buffer type
@@ -133,6 +133,8 @@ extern "C" {
         void * context;
         // Treat this owner's tensors as unbound while preparing its replacement.
         ggml_backend_buffer_t replaced_buffer;
+        // Optional: replace several owners in the same graph preparation.
+        bool (*is_replaced)(void * context, ggml_backend_buffer_t buffer);
     };
 
     struct ggml_backend_buffer_type_alloc_i {
@@ -155,6 +157,7 @@ extern "C" {
     GGML_API const struct ggml_backend_buffer_type_alloc_i * ggml_backend_buft_get_alloc_interface(ggml_backend_buffer_type_t buft);
 
     struct ggml_gallocr;
+    GGML_API bool ggml_gallocr_has_active_bindings(struct ggml_gallocr * galloc);
     struct ggml_gallocr_domain_plan_info {
         size_t size;
         size_t n_chunks;
