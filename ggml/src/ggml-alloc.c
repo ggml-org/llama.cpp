@@ -780,15 +780,12 @@ static bool ggml_gallocr_owns_buffer(ggml_gallocr_t galloc, ggml_backend_buffer_
     return false;
 }
 
-static bool ggml_gallocr_is_external(ggml_gallocr_t galloc, const struct ggml_tensor * tensor) {
-    if (ggml_gallocr_owns_buffer(galloc, tensor->buffer)) {
-        return false;
+static inline bool ggml_gallocr_is_external(ggml_gallocr_t galloc, const struct ggml_tensor * tensor) {
+    if (!tensor->buffer) {
+        return tensor->data && (!tensor->view_src || !tensor->view_src->buffer ||
+            !ggml_backend_buft_get_alloc_interface(tensor->view_src->buffer->buft));
     }
-    if (!tensor->buffer && tensor->view_src && tensor->view_src->buffer &&
-            ggml_backend_buft_get_alloc_interface(tensor->view_src->buffer->buft)) {
-        return false;
-    }
-    return tensor->buffer || ggml_backend_tensor_is_bound(tensor);
+    return !ggml_gallocr_owns_buffer(galloc, tensor->buffer);
 }
 
 static struct ggml_gallocr_tensor_requirement * ggml_gallocr_requirement(ggml_gallocr_t galloc, const struct ggml_tensor * tensor) {
@@ -1652,17 +1649,24 @@ bool ggml_gallocr_reserve(ggml_gallocr_t galloc, struct ggml_cgraph *graph) {
     return ggml_gallocr_reserve_n(galloc, graph, NULL, NULL);
 }
 
-static enum ggml_status ggml_gallocr_init_tensor(ggml_gallocr_t galloc, struct ggml_tensor * tensor, struct tensor_alloc * tensor_alloc) {
+static bool ggml_gallocr_tensor_is_bound(const struct ggml_tensor * tensor) {
+    if (!tensor->buffer) {
+        return tensor->data != NULL;
+    }
+    return (tensor->data && !tensor->buffer->binding) || ggml_backend_tensor_is_bound(tensor);
+}
+
+static inline enum ggml_status ggml_gallocr_init_tensor(ggml_gallocr_t galloc, struct ggml_tensor * tensor, struct tensor_alloc * tensor_alloc) {
     if (tensor->view_src) {
         if (tensor->buffer || !tensor->view_src->buffer) {
-            return ggml_backend_tensor_is_bound(tensor) ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
+            return ggml_gallocr_tensor_is_bound(tensor) ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
         }
-        if (!ggml_backend_tensor_is_bound(tensor->view_src)) {
+        if (!ggml_gallocr_tensor_is_bound(tensor->view_src)) {
             return GGML_STATUS_FAILED;
         }
         return ggml_backend_view_init(tensor);
     }
-    if (ggml_backend_tensor_is_bound(tensor)) {
+    if (ggml_gallocr_tensor_is_bound(tensor)) {
         return GGML_STATUS_SUCCESS;
     }
     int buffer_id = tensor_alloc->buffer_id;
@@ -1670,7 +1674,7 @@ static enum ggml_status ggml_gallocr_init_tensor(ggml_gallocr_t galloc, struct g
         return GGML_STATUS_FAILED;
     }
     GGML_ASSERT(tensor_alloc->addr.offset != SIZE_MAX);
-    GGML_ASSERT(ggml_backend_buft_get_alloc_size(galloc->bufts[buffer_id], tensor) <= tensor_alloc->size_max);
+    assert(ggml_backend_buft_get_alloc_size(galloc->bufts[buffer_id], tensor) <= tensor_alloc->size_max);
     return ggml_vbuffer_tensor_alloc(galloc->buffers[buffer_id], tensor, tensor_alloc->addr);
 }
 
