@@ -6,10 +6,11 @@
 #include "fattn.cuh"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+// one list per group of ncols1 queries: a column is selected if any query of the group can see it
 __launch_bounds__(256, 1)
 static __global__ void flash_attn_mask_to_sparse_indices(
-        const half * mask_ptr, int32_t * indices_ptr, const int ne30, const int n_kv_max,
-        const int64_t s31, const int64_t s33) {
+        const half * mask_ptr, int32_t * indices_ptr, int32_t * counts_ptr, const int ne30, const int n_queries,
+        const int ncols1, const int n_kv_max, const int64_t s31, const int64_t s33) {
     ggml_cuda_pdl_sync();
 
     constexpr int values_per_lane = 8;
@@ -17,10 +18,13 @@ static __global__ void flash_attn_mask_to_sparse_indices(
     const int warp     = tid / WARP_SIZE;
     const int lane     = tid % WARP_SIZE;
     const int sequence = blockIdx.y;
-    const int query    = blockIdx.x;
+    const int group    = blockIdx.x;
 
-    const half * mask = mask_ptr + sequence*s33 + query*s31;
-    int32_t * indices = indices_ptr + (int64_t(sequence)*gridDim.x + query)*n_kv_max;
+    const int q0 = group*ncols1;
+    const int q1 = min(q0 + ncols1, n_queries);
+
+    const half * mask = mask_ptr + sequence*s33 + q0*s31;
+    int32_t * indices = indices_ptr + (int64_t(sequence)*gridDim.x + group)*n_kv_max;
 
     __shared__ int warp_offsets[256/WARP_SIZE];
     __shared__ int row_count;
@@ -37,7 +41,10 @@ static __global__ void flash_attn_mask_to_sparse_indices(
 #pragma unroll
         for (int item = 0; item < values_per_lane; ++item) {
             const int i = i0 + (warp*values_per_lane + item)*WARP_SIZE + lane;
-            const bool selected = i < ne30 && isfinite(__half2float(mask[i]));
+            bool selected = false;
+            for (int q = 0; q < q1 - q0 && !selected; ++q) {
+                selected = i < ne30 && isfinite(__half2float(mask[q*s31 + i]));
+            }
             selected_warp[item] = __ballot_sync(0xFFFFFFFF, selected);
             warp_count += __popc(selected_warp[item]);
         }
@@ -78,9 +85,12 @@ static __global__ void flash_attn_mask_to_sparse_indices(
         __syncthreads();
     }
 
-    const int count = row_count;
+    const int count = min(row_count, n_kv_max);
     for (int i = count + tid; i < n_kv_max; i += blockDim.x) {
         indices[i] = -1;
+    }
+    if (tid == 0) {
+        counts_ptr[int64_t(sequence)*gridDim.x + group] = count;
     }
     __syncthreads();
 
@@ -90,31 +100,30 @@ static __global__ void flash_attn_mask_to_sparse_indices(
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 void ggml_cuda_flash_attn_ext_compact_mask(
-        const ggml_tensor * mask, int32_t * indices, int32_t n_kv_max, cudaStream_t stream) {
+        const ggml_tensor * mask, int32_t * indices, int32_t * counts, int32_t n_queries, int32_t ncols1, int32_t n_kv_max, cudaStream_t stream) {
 #if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
-    GGML_UNUSED_VARS(mask, indices, n_kv_max, stream);
+    GGML_UNUSED_VARS(mask, indices, counts, n_queries, ncols1, n_kv_max, stream);
     GGML_ABORT("sparse flash attention is only supported on NVIDIA CUDA");
 #else
     const int64_t s31 = mask->nb[1] / sizeof(half);
     const int64_t s33 = mask->nb[3] / sizeof(half);
-    const dim3 blocks_num(mask->ne[1], mask->ne[3], 1);
+    const dim3 blocks_num((n_queries + ncols1 - 1)/ncols1, mask->ne[3], 1);
     const dim3 block_dim(256, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params(blocks_num, block_dim, 0, stream);
     ggml_cuda_kernel_launch(flash_attn_mask_to_sparse_indices, launch_params,
-        (const half *) mask->data, indices, int(mask->ne[0]), n_kv_max, s31, s33);
+        (const half *) mask->data, indices, counts, int(mask->ne[0]), n_queries, ncols1, n_kv_max, s31, s33);
     CUDA_CHECK(cudaGetLastError());
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
-bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_tensor * dst, const int ncols1) {
 #if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
-    GGML_UNUSED_VARS(ctx, dst);
+    GGML_UNUSED_VARS(cc, dst, ncols1);
     return false;
 #else
     const ggml_tensor * Q    = dst->src[0];
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * mask = dst->src[3];
-    const int cc = ggml_cuda_info().devices[ctx.device].cc;
 
     float max_bias = 0.0f;
     float logit_softcap = 0.0f;
@@ -122,10 +131,13 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ggml_backend_cuda_context
     memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
 
     const int32_t n_kv_max = ggml_get_op_params_i32(dst, 4);
+
+    const int64_t n_gather = (ncols1 == 1 ? Q->ne[1] : ncols1) * (int64_t) n_kv_max;
+
     return GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) &&
         mask != nullptr && n_kv_max > 0 && max_bias == 0.0f && logit_softcap == 0.0f &&
         mask->ne[0] == K->ne[1] && mask->ne[1] >= Q->ne[1] && mask->ne[2] == 1 &&
-        K->ne[1] >= std::max<int64_t>(4096, 2LL*n_kv_max);
+        K->ne[1] >= std::max<int64_t>(4096, 2*n_gather);
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
@@ -136,7 +148,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     if constexpr (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, 1, ncols2)) {
-        if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ctx, dst)) {
+        if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 1)) {
             ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 1, ncols2>(ctx, dst);
             return;
         }
@@ -614,7 +626,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
         if (can_use_vector_kernel) {
             if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
-                if (cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] == 1 && Q->ne[3] == 1 && !(gqa_ratio > 4 && K->ne[1] >= 8192)) {
+                // the sparse gather exists only in the MMA kernel: (DKQ, DV, 1, 8) with GQA > 4
+                const bool sparse_decode = gqa_opt_applies && gqa_ratio > 4 &&
+                    ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(K->ne[0], V->ne[0], 1, 8) &&
+                    ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 1);
+                if (cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] == 1 && Q->ne[3] == 1 && !(gqa_ratio > 4 && K->ne[1] >= 8192) && !sparse_decode) {
                     return BEST_FATTN_KERNEL_VEC;
                 }
             } else {
