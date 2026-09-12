@@ -314,6 +314,12 @@ endif()
 # TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
 llama_build(test-backend-ops.cpp)
 
+if (BUILD_SHARED_LIBS)
+    llama_build_and_test(test-llama-mmap.cpp ${PROJECT_SOURCE_DIR}/src/llama-impl.cpp ${PROJECT_SOURCE_DIR}/src/llama-mmap.cpp)
+    target_compile_definitions(test-llama-mmap PRIVATE LLAMA_BUILD)
+else()
+    llama_build_and_test(test-llama-mmap.cpp)
+endif()
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
