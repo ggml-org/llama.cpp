@@ -39,7 +39,13 @@ typedef void (* fattn_kernel_t)(
                             const int32_t nb11, const int32_t nb12, const int64_t nb13,
                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
-                            const int32_t nb31, const int32_t nb32, const int64_t nb33);
+                            const int32_t nb31, const int32_t nb32, const int64_t nb33,
+        const int kv_q8);
+
+// the mma kernel dequantizes q8_0 K/V in the tile loaders, so no f16 staging copy is needed
+static inline bool ggml_cuda_fattn_kv_q8_native(const ggml_tensor * KV) {
+    return KV->type == GGML_TYPE_Q8_0 && KV->ne[0] % QK8_0 == 0;
+}
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -1229,6 +1235,10 @@ void launch_fattn(
     // TODO other tensor dimensions after removal of WMMA kernel:
     const uint3 ne01 = init_fastdiv_values(Q->ne[1]);
 
+    // bit 0: K is q8_0 read natively by the kernel, bit 1: V is q8_0 read natively
+    const int kv_q8 = ((!need_f16_K && ggml_cuda_fattn_kv_q8_native(K)) ? 1 : 0)
+                    | ((!need_f16_V && ggml_cuda_fattn_kv_q8_native(V)) ? 2 : 0);
+
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
     // bisect hack (revert me)
@@ -1255,7 +1265,8 @@ void launch_fattn(
         K->ne[0], n_kv, K->ne[2], K->ne[3], nb11, nb12, nb13,
         nb21, nb22, nb23,
         mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
-        mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
+        mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0,
+        kv_q8
     );
     CUDA_CHECK(cudaGetLastError());
 
