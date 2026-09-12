@@ -101,6 +101,40 @@ static void test(void) {
         assert(draft.n_outputs_max_per_seq == 1);
     }
 
+    // ngram-cache keeps per-sequence state across requests; begin() must reset it
+    {
+        common_params_speculative spec;
+        spec.types = { COMMON_SPECULATIVE_TYPE_NGRAM_CACHE };
+
+        common_speculative_ptr drafter(common_speculative_init(spec, 1));
+        assert(drafter != nullptr);
+
+        // request 1: ingest (104, 105, 106) -> 107 into the context cache
+        llama_tokens prompt1 = { 101, 102, 103, 104, 105, 106 };
+        common_speculative_begin(drafter.get(), 0, prompt1);
+
+        llama_tokens result1;
+        auto & dp = common_speculative_get_draft_params(drafter.get(), 0);
+        dp.drafting = true;
+        dp.prompt   = &prompt1;
+        dp.id_last  = 107;
+        dp.result   = &result1;
+        common_speculative_draft(drafter.get());
+
+        // request 2: same seq_id, ending n-gram only exists in request 1's cache, so stale state drafts 107
+        llama_tokens prompt2 = { 100, 104, 105 };
+        common_speculative_begin(drafter.get(), 0, prompt2);
+
+        llama_tokens result2;
+        dp.drafting = true;
+        dp.prompt   = &prompt2;
+        dp.id_last  = 106;
+        dp.result   = &result2;
+        common_speculative_draft(drafter.get());
+
+        assert(result2.empty());
+    }
+
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
         try {
