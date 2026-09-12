@@ -81,10 +81,22 @@ int main(int argc, char ** argv) {
     t.test("ordinary_control_still_matches_reference", [&](testing & t) {
         fixture f(backend.get(), cuda); evaluate(t, f, false, 1, 257, 8);
     });
+    t.test("idle_placement_validation_and_zero_resident_metadata", [&](testing & t) {
+        fixture f(backend.get(),cuda);
+        f.policy.pool_bytes = f.policy.pool_bytes/16*3; f.policy.initial_ring_slots = 1;
+        llama_kv_stream_policy_state placement;
+        GGML_ASSERT(llama_kv_stream_policy_initialize(f.policy,placement).status == llama_kv_stream_policy_status::success);
+        auto invalid = placement; invalid.ring_slots = UINT32_MAX;
+        t.assert_true(!f.attach(&invalid));
+        t.assert_true(!f.binding->ready());
+        placement.resident_pages_per_layer = 0; placement.ring_slots = placement.budget.pages;
+        t.assert_true(f.attach(&placement));
+        t.assert_true(!f.resident->synchronize(257));
+    });
     if (!cuda) return t.summary();
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get()));
     auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_kv_stream_partial_ops"));
-    t.test("native_partial_hooks_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version == 1); });
+    t.test("native_partial_hooks_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version == 2 && get()->fold && get()->clear); });
     if (!get || !get()) return t.summary();
     t.test("resident_plus_one_block_matches_attention_and_partial_contract", [&](testing & t) {
         for (size_t pages : {size_t(3),size_t(5)}) {
@@ -118,6 +130,119 @@ int main(int argc, char ** argv) {
                 close_values(t, normalized.value, actual, 1e-5f);
             }
         }
+    });
+    t.test("multi_wave_traversal_wraps_slots_and_keeps_scratch_bounded", [&](testing & t) {
+        for (size_t slots : {size_t(1),size_t(2),size_t(3)}) {
+            fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,2305);
+            f.policy.pool_bytes = f.policy.pool_bytes/16*(2+slots); f.policy.initial_ring_slots = slots;
+            f.policy.fixed_ring = true;
+            if (!t.assert_true(f.attach())) continue;
+            auto pin = f.binding->acquire();
+            for (size_t active : {size_t(513),size_t(2048),size_t(2305),size_t(769)}) {
+                block_inputs input(f,active,8);
+                ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(32,256,layout);
+                block_workspace workspace(f,layout.bytes);
+                auto * raw = ggml_new_tensor_1d(input.context.get(),GGML_TYPE_I8,int64_t(f.policy.pool_bytes));
+                auto * buffer = ggml_backend_memory_lease_buffer(f.lease.get());
+                GGML_ASSERT(ggml_backend_tensor_alloc(buffer,raw,ggml_backend_buffer_get_base(buffer)) == GGML_STATUS_SUCCESS);
+                ggml_kv_stream_layout page, ring;
+                ggml_kv_stream_layout_make(f.policy.shape,256,page);
+                ggml_kv_stream_layout_make(f.policy.shape,slots*256,ring);
+                for (uint32_t layer : {0u,1u}) {
+                    if (!t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,active,1.0f/16,workspace.lease.get()))) continue;
+                    close_values(t,oracle(f,layer,active,8,input.qdata),input.read(),1e-3f);
+                    llama_kv_stream_host_layer host; GGML_ASSERT(f.host->layer(layer,host));
+                    const size_t blocks = (input.padded-256)/256;
+                    for (size_t slot = 0; slot < std::min(slots,blocks); ++slot) {
+                        const size_t block = slot+(blocks-1-slot)/slots*slots;
+                        const size_t first = 256+block*256, live = std::min(size_t(256),active-first);
+                        for (bool value : {false,true}) {
+                            const size_t bytes = value ? page.v_bytes : page.k_bytes;
+                            const size_t stride = value ? page.v_token_bytes : page.k_token_bytes;
+                            std::vector<uint8_t> actual(bytes), expected(bytes,0);
+                            std::memcpy(expected.data(),static_cast<const char *>(value ? host.v : host.k)+first*stride,live*stride);
+                            ggml_backend_tensor_get(raw,actual.data(),(value ? ring.v_offset : 0)+slot*bytes,bytes);
+                            t.assert_true(actual == expected);
+                        }
+                    }
+                    // The second layer call has no dirty resident bytes left.
+                    if (layer == 1) t.assert_equal((active-256)*(f.host->layout().k_token_bytes+f.host->layout().v_token_bytes),f.resident->last_upload_bytes());
+                }
+            }
+        }
+    });
+    t.test("wide_queries_consume_each_slot_before_reuse_without_extra_uploads", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,2305);
+        f.policy.pool_bytes = f.policy.pool_bytes/16*3; f.policy.initial_ring_slots = 1;
+        if (!t.assert_true(f.attach())) return;
+        auto pin = f.binding->acquire();
+        t.assert_true(f.resident->synchronize(256));
+        for (size_t queries : {size_t(1),size_t(33),size_t(257)}) {
+            block_inputs input(f,1537,queries);
+            ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(queries*4,256,layout);
+            block_workspace workspace(f,layout.bytes);
+            if (!t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,1537,1.0f/16,workspace.lease.get()))) continue;
+            close_values(t,oracle(f,0,1537,queries,input.qdata),input.read(),1e-3f);
+            t.assert_equal(size_t(12),f.resident->last_upload_calls());
+            t.assert_equal(size_t(1281)*(f.host->layout().k_token_bytes+f.host->layout().v_token_bytes),f.resident->last_upload_bytes());
+        }
+    });
+    t.test("concentrated_and_zero_resident_placements_match_attention", [&](testing & t) {
+        for (size_t slots : {size_t(1),size_t(2),size_t(4)}) {
+            fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,2305);
+            f.policy.pool_bytes = f.policy.pool_bytes/16*8; f.policy.initial_ring_slots = slots; f.policy.fixed_ring = true;
+            llama_kv_stream_policy_state placement;
+            GGML_ASSERT(llama_kv_stream_policy_initialize(f.policy,placement).status == llama_kv_stream_policy_status::success);
+            placement.decode_active_pages = 4;
+            llama_kv_stream_policy_layout policy_layout;
+            t.assert_true(llama_kv_stream_policy_layout_make(f.policy,placement,1024,policy_layout).status == llama_kv_stream_policy_status::success);
+            if (!t.assert_true(f.attach(&placement))) continue;
+            auto pin = f.binding->acquire();
+            for (size_t active : {size_t(1023),size_t(2305),size_t(257)}) {
+                block_inputs input(f,active,33);
+                ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(132,256,layout);
+                block_workspace workspace(f,layout.bytes);
+                for (uint32_t layer : {0u,1u}) {
+                    if (!t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,active,1.0f/16,workspace.lease.get()))) continue;
+                    close_values(t,oracle(f,layer,active,33,input.qdata),input.read(),1e-3f);
+                }
+            }
+        }
+        fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,2305);
+        f.policy.pool_bytes = f.policy.pool_bytes/16*3; f.policy.initial_ring_slots = 1; f.policy.fixed_ring = true;
+        llama_kv_stream_policy_state placement;
+        GGML_ASSERT(llama_kv_stream_policy_initialize(f.policy,placement).status == llama_kv_stream_policy_status::success);
+        placement.resident_pages_per_layer = 0; placement.ring_slots = placement.budget.pages;
+        if (!t.assert_true(f.attach(&placement))) return;
+        auto pin = f.binding->acquire();
+        block_inputs input(f,2305,1);
+        ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(4,256,layout);
+        block_workspace workspace(f,layout.bytes);
+        t.assert_true(!f.resident->synchronize(2305));
+        if (t.assert_true(f.resident->compute_streamed(1,input.q,input.mask,input.output,2305,1.0f/16,workspace.lease.get()))) {
+            close_values(t,oracle(f,1,2305,1,input.qdata),input.read(),1e-3f);
+            t.assert_equal(size_t(2305)*(f.host->layout().k_token_bytes+f.host->layout().v_token_bytes),f.resident->last_upload_bytes());
+        }
+    });
+    t.test("late_block_failure_preserves_output_and_retry_resets_accumulator", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,2305);
+        f.policy.pool_bytes = f.policy.pool_bytes/16*3; f.policy.initial_ring_slots = 1;
+        if (!t.assert_true(f.attach())) return;
+        auto pin = f.binding->acquire();
+        block_inputs input(f,2305,1);
+        ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(4,256,layout);
+        block_workspace workspace(f,layout.bytes);
+        std::vector<ggml_fp16_t> row(512,ggml_fp32_to_fp16(NAN));
+        llama_kv_stream_write write;
+        t.assert_true(f.content->prepare({{1,ggml_kv_stream_operand::v,2304*row.size()*2,row.data(),row.size()*2}},write));
+        t.assert_true(f.content->commit(write));
+        t.assert_true(!f.resident->compute_streamed(1,input.q,input.mask,input.output,2305,1.0f/16,workspace.lease.get()));
+        auto actual = input.read(); t.assert_true(std::all_of(actual.begin(),actual.end(),[](float x){return x == -77;}));
+        std::fill(row.begin(),row.end(),ggml_fp32_to_fp16(2));
+        t.assert_true(f.content->prepare({{1,ggml_kv_stream_operand::v,2304*row.size()*2,row.data(),row.size()*2}},write));
+        t.assert_true(f.content->commit(write));
+        if (t.assert_true(f.resident->compute_streamed(1,input.q,input.mask,input.output,2305,1.0f/16,workspace.lease.get())))
+            close_values(t,oracle(f,1,2305,1,input.qdata),input.read(),1e-3f);
     });
     t.test("invalid_workspace_or_extra_block_preserves_output", [&](testing & t) {
         fixture f(backend.get(), true); f.policy.pool_bytes = f.policy.pool_bytes/16*3; f.policy.initial_ring_slots = 1;
@@ -210,6 +335,9 @@ int main(int argc, char ** argv) {
             upload();
             t.assert_true(!get()->merge(backend.get(),input.output,wb));
             t.assert_true(input.read() == sentinel);
+            upload();
+            t.assert_true(get()->fold(backend.get(),input.output,wb) == (problem == 8));
+            t.assert_true(input.read() == sentinel);
         }
         // Empty sentinels must not dominate a real, very negative maximum.
         seed();
@@ -219,6 +347,53 @@ int main(int argc, char ** argv) {
         }
         upload(); t.assert_true(get()->merge(backend.get(),input.output,wb));
         close_values(t,std::vector<float>(1024,2),input.read(),1e-6f);
+    });
+    t.test("incremental_device_folding_matches_reference_without_early_normalization", [&](testing & t) {
+        fixture f(backend.get(),true);
+        block_inputs input(f,257,1);
+        ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(4,256,layout);
+        block_workspace workspace(f,layout.bytes);
+        auto * wb = ggml_backend_memory_lease_buffer(workspace.lease.get());
+        auto * raw = ggml_new_tensor_1d(input.context.get(),GGML_TYPE_I8,int64_t(layout.bytes));
+        GGML_ASSERT(ggml_backend_tensor_alloc(wb,raw,ggml_backend_buffer_get_base(wb)) == GGML_STATUS_SUCCESS);
+        ggml_kv_stream_partial_batch part, accumulator;
+        part.rows = 4; part.parts = 2; part.width = 256;
+        part.numerator.resize(layout.partial.elements); part.meta.resize(layout.partial.entries);
+        accumulator = part;
+        t.assert_true(get()->clear(backend.get(),input.output,wb,false));
+        for (size_t step = 0; step < 37; ++step) {
+            for (size_t row = 0; row < 4; ++row) for (size_t p = 0; p < 2; ++p) {
+                const size_t index = row*2+p;
+                const float mass = step%5 == 0 ? 0 : float(step+p+1)/8;
+                part.meta[index] = {float(int(step*17%201)-100),mass};
+                for (size_t c = 0; c < 256; ++c) part.numerator[index*256+c] = mass*.25f*std::sin(float(c+step+row+p));
+            }
+            ggml_backend_tensor_set(raw,part.numerator.data(),layout.second_offset,layout.partial.numerator_bytes);
+            ggml_backend_tensor_set(raw,part.meta.data(),layout.second_offset+layout.partial.meta_offset,layout.partial.meta_bytes);
+            t.assert_true(ggml_kv_stream_partial_merge({accumulator.view(),part.view()},accumulator).status == ggml_kv_stream_partial_status::success);
+            if (!t.assert_true(get()->fold(backend.get(),input.output,wb))) return;
+            auto untouched = input.read();
+            t.assert_true(std::all_of(untouched.begin(),untouched.end(),[](float x){return x == -77;}));
+        }
+        t.assert_true(get()->clear(backend.get(),input.output,wb,true));
+        t.assert_true(get()->merge(backend.get(),input.output,wb));
+        ggml_kv_stream_partial_value expected;
+        t.assert_true(ggml_kv_stream_partial_normalize(accumulator.view(),expected).status == ggml_kv_stream_partial_status::success);
+        close_values(t,expected.value,input.read(),2e-6f);
+        // A representable unnormalized accumulator may have an overflowing intermediate quotient.
+        // A later contribution can make final normalization representable; fold must not normalize early.
+        std::fill(part.numerator.begin(),part.numerator.end(),1);
+        std::fill(part.meta.begin(),part.meta.end(),ggml_kv_stream_partial_meta{0,std::numeric_limits<float>::denorm_min()});
+        t.assert_true(get()->clear(backend.get(),input.output,wb,false));
+        ggml_backend_tensor_set(raw,part.numerator.data(),layout.second_offset,layout.partial.numerator_bytes);
+        ggml_backend_tensor_set(raw,part.meta.data(),layout.second_offset+layout.partial.meta_offset,layout.partial.meta_bytes);
+        t.assert_true(get()->fold(backend.get(),input.output,wb));
+        std::fill(part.numerator.begin(),part.numerator.end(),0);
+        std::fill(part.meta.begin(),part.meta.end(),ggml_kv_stream_partial_meta{0,1});
+        ggml_backend_tensor_set(raw,part.numerator.data(),layout.second_offset,layout.partial.numerator_bytes);
+        ggml_backend_tensor_set(raw,part.meta.data(),layout.second_offset+layout.partial.meta_offset,layout.partial.meta_bytes);
+        t.assert_true(get()->merge(backend.get(),input.output,wb));
+        close_values(t,std::vector<float>(1024,1),input.read(),1e-6f);
     });
     t.test("masked_row_and_mutable_tail_are_safe", [&](testing & t) {
         fixture f(backend.get(), true); f.policy.pool_bytes = f.policy.pool_bytes/16*3; f.policy.initial_ring_slots = 1;

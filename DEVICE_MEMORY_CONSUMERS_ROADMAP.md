@@ -6,7 +6,7 @@ Last source review: 2026-09-12, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is ready for review. The remainder of milestones 5-8 is planned. Current work is **5.4c: one staged KV block and streamed partial-attention integration**. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is ready for review. The remainder of milestones 5-8 is planned. Current work is **5.4d: bounded multi-block traversal**. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is ready for review.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is committed at `28e7999a0`. Stage 5.4d is ready for review.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -347,8 +347,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.3c | Complete | `6c724dee1` | 10 CPU cases / 607 assertions; 10 CUDA cases / 609 assertions. 21 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Frozen producer baseline and post-change timings recorded; no server integration. |
 | 5.4a | Complete | `ff4d3bdef` | 12 CPU cases / 131 assertions; 13 CUDA cases / 245 assertions, including mixed K/V and 257-query prefill. 20 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Ordinary all-resident test adapter; production unchanged. |
 | 5.4b | Complete | `6db00070d` | 13 cases / 48,614 assertions; 22 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. Ordinary GGML attention comparison, CUDA metadata ABI check, and existing GPU regressions pass. Common format/CPU reference only; no new partial GPU kernel. |
-| 5.4c | Ready for review | - | 8 real-CUDA cases / 126 assertions; ordered resident-plus-one-block export and GPU merge, exact leased scratch, masked/dirty tails, malformed-payload atomicity, and UVM-off/on memcheck. 23 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. |
-| 5.4d-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.4c | Complete | `28e7999a0` | 8 real-CUDA cases / 126 assertions; ordered resident-plus-one-block export and GPU merge, exact leased scratch, masked/dirty tails, malformed-payload atomicity, and UVM-off/on memcheck. 23 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. |
+| 5.4d | Ready for review | - | 14 real-CUDA cases / 542 assertions; multi-wave ring reuse, concentrated/zero-resident layouts, incremental GPU folding, and late-block failure recovery. 23 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; UVM-off/on memcheck clean. Merge-only racecheck clean; inherited vector-kernel warnings recorded below. |
+| 5.4e-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -1674,7 +1675,7 @@ Production services, model/checkpoint/cache data, and compose configuration rema
 
 ## Substage 5.4c: one staged block and CUDA partial/merge execution
 
-**Status:** implemented and ready for review; not committed by the implementation agent. This stage follows committed 5.4b (`6db00070d`). It is an opt-in consumer method, not server enablement or a throughput optimization.
+**Status:** committed at `28e7999a0`, following 5.4b (`6db00070d`). It is an opt-in consumer method, not server enablement or a throughput optimization.
 
 ### Execution and ownership
 
@@ -1740,4 +1741,74 @@ GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --leak-check
 
 This adapter supports F16/F16 K/V, F32 Q/output, head size 256, one sequence, a supplied padded mask, and no attention sinks, bias, or softcap. Other pairs are rejected, not silently converted. Generic quant dispatch remains **5.4e**. No ROCm/SYCL/OpenCL/Vulkan adapter, asynchronous overlap, multi-block traversal, capture integration, model benchmark, or production-server enablement is claimed.
 
-Production services, model/checkpoint/cache data, and compose configuration remain unchanged. After review and commit, proceed to **5.4d: multiple streamed blocks with bounded ring-slot reuse**. Prefetch overlap and adaptive scheduling remain later stages.
+Production services, model/checkpoint/cache data, and compose configuration remain unchanged. Stage **5.4d**, documented below, extends this baseline to bounded multi-block traversal.
+
+## Substage 5.4d: bounded multi-block traversal and incremental accumulation
+
+**Status:** implemented and ready for review; not committed by the implementation agent. This stage follows committed 5.4c (`28e7999a0`).
+
+### Bounded storage and ordered execution
+
+`compute_streamed` traverses any number of nonresident blocks. It uses the selected layer's actual capacity, rounded active extent, and the existing policy's ring slot count. A layer can be fully resident, partially resident, or entirely streamed. The earlier `compute_one_block` remains a narrow admission wrapper over this implementation.
+
+Ring storage now follows the complete policy-derived planes: all K slots first, then the aligned V plane. Slot `i` selects `i * page.k_bytes` in K and `ring.v_offset + i * page.v_bytes` in V. It does not treat each slot as a packed K+V record; this preserves contiguous same-operand storage for later batched copies.
+
+Blocks use `block_index % ring_slots`. Each native attention call completes all query work before returning, and each intermediate fold completes before the next block is admitted. Consequently a wrapped slot cannot be overwritten while a query still reads it. This is a synchronous correctness baseline, not an asynchronous prefetch queue.
+
+The backend extension is version 2, appending empty-initialization and unnormalized-fold operations. After an intermediate block, the first export holds one accumulated `(m,L,U)` record per row plus an empty second split. The second export is overwritten by the next block. Only the last block triggers normalization and publication. Both exports and staging output retain the exact 5.4c workspace layout: scratch depends on query rows and head width, not context length, number of blocks, or ring size.
+
+```mermaid
+flowchart LR
+    P["Resident partials or empty state"] --> A["Unnormalized accumulator"]
+    H["Next authoritative host block"] --> S["Slot = block modulo ring size"]
+    S --> C["Complete attention for every query"]
+    C --> T["Reusable two-split export"]
+    T --> F["Stable fold into accumulator"]
+    A --> F
+    F -->|more blocks| H
+    F -->|last block: normalize and validate| O["Publish output"]
+```
+
+The implementation always uploads the live tail bytes for this invocation and clears padded rows in the last slot. It does not retain a cross-request ring content cache. Tests inspect the final bytes of each used K/V slot, not just output numerics, and verify that H2D volume does not multiply with query batch width.
+
+### Placement and ownership
+
+The idle factory accepts an optional validated policy snapshot. This makes concentrated placement executable without introducing live repartitioning. Capacities are fixed until the owner constructs another executable; evaluating a shorter or longer active context does not reinterpret those capacities or implicitly change the policy.
+
+Zero-capacity layers keep tensor metadata but allocate no resident tensor storage. Resident refresh uses `min(active_padded_tokens, layer_capacity)` independently for each layer. The existing all-resident synchronization API still rejects a context that does not fit every layer. Policy startup minima remain unchanged; ring-only execution is tested using a valid post-adaptation snapshot rather than weakening initial admission.
+
+This snapshot is local to the executable. It is not a publication of live policy changes into the binding or transition coordinator; that integration remains later work. Binding pins, retained workspace leases, backend completion, and cached-writer retirement retain the 5.4c ownership rules. Intermediate fold failure may invalidate scratch but never publishes public output; a retry reinitializes it from resident data or an empty contribution.
+
+### Numerical hardening found by TDD
+
+The initial multi-block stub failed 24 assertions. The expanded tests then exercised incremental folds whose intermediate normalized quotient would overflow even though their unnormalized values remain representable and later normalization succeeds. Folding must not normalize early.
+
+These tests exposed fast-math `cvt.ftz.f64.f32` instructions in the emitted CUDA PTX: tiny positive FP32 masses were being flushed to zero during promotion. The merge adapter now uses explicit non-FTZ conversion instructions for widening inputs and rounding published FP32 accumulators/results. The native attention kernel's fast-math compilation is unchanged. This preserves the reference contract for subnormal payloads and avoids mistaking a positive-mass contribution for an empty one.
+
+### Validation and remaining caveat
+
+The final real-CUDA suite passes **14 cases / 542 assertions**, including:
+
+- One, two, and three ring slots with more blocks than slots, repeated wraparound, exact slot payload checks, partial final blocks, and sequential execution of different layers/context lengths.
+- Concentrated placements with unequal per-layer capacities, fully resident layers, zero-resident layers, and an entirely streamed fixed layout.
+- Query batches of 1, 33, and 257 over multiple waves. Six tail blocks always use twelve K/V uploads, independent of query count.
+- Independent scalar attention comparison and 37 incremental GPU folds compared with the CPU partial-result reference.
+- Empty contributions, extreme reference coordinates, subnormal mass, malformed intermediate payloads, overflowing accumulators, deferred normalization, final-block failure, and successful retry without stale accumulator state.
+- CPU-testable placement validation, rejection of inconsistent snapshots, and zero-resident metadata construction.
+
+All **23 focused suites** pass in CPU Debug, CUDA Debug, CPU ASan/leak checking, and CPU UBSan. Existing real-CUDA resident attention passes **13 cases / 245 assertions**, the writer suite passes **10 cases / 609 assertions**, and all four CPU-referenced CUDA SCALE cases pass. UVM-disabled and UVM-enabled memcheck runs report **zero errors and zero leaked bytes**.
+
+The isolated changed merge kernel passes racecheck with **zero hazards, errors, or warnings**. The unfiltered suite reports **19 vector-attention warning groups, zero errors**; the existing resident/ordinary-attention control also reports warnings in the unchanged `flash_attn_ext_vec` kernel (**36 groups, zero errors**). This is not a clean whole-suite racecheck result, nor proof that those inherited warnings are harmless. The vector-kernel warning needs separate investigation before broad kernel/performance qualification; no native attention-kernel synchronization change is included in this stage.
+
+```sh
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-block test-kv-stream-resident test-kv-stream-writer test-backend-ops -j 20
+build-device-memory-infra-cuda/bin/test-kv-stream-block --cuda
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-block --cuda
+GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-block --cuda
+compute-sanitizer --tool racecheck --kernel-name kns=merge_kernel --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-block --cuda
+compute-sanitizer --tool racecheck --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-resident --cuda
+```
+
+No asynchronous overlap, cross-layer prefetch queue, live policy transition, server enablement, throughput improvement, or broader backend/quant support is claimed. The device adapter remains F16/F16, head size 256, one sequence, a supplied padded mask, and no sinks/bias/softcap. Production services, compose files, models, and checkpoints remain unchanged.
+
+After review and commit, proceed to **5.4e: supported quant dispatch and bounded F16 conversion fallback through the generic layout contract**. Dedicated copy-stream/event overlap remains **5.4f**.

@@ -13,8 +13,10 @@ struct llama_kv_stream_write_stats {
 class llama_kv_stream_resident : public llama_memory_executable {
 public:
     ~llama_kv_stream_resident() override;
+    // Optional validated placement selects an idle layout; no live repartition or policy publication occurs here.
     static std::unique_ptr<llama_kv_stream_resident> create(const llama_kv_stream_binding_view & binding,
-            std::shared_ptr<llama_kv_stream_content> content, ggml_backend_t backend);
+            std::shared_ptr<llama_kv_stream_content> content, ggml_backend_t backend,
+            const llama_kv_stream_policy_state * placement = nullptr);
 
     // Drain prior backend work, then upload dirty rows into the fixed policy-derived resident planes.
     // Reject contexts that need streaming; no layout adaptation or conversion fallback is enabled here.
@@ -23,6 +25,9 @@ public:
     // Ordered one-block path. Hold a binding pin; Q/mask/output and the disjoint workspace lease remain live until return.
     // Caller supplies padded causal mask values. Initial device adapter supports F16 K/V, head size 256, one sequence.
     bool compute_one_block(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
+            size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace);
+    // Ordered traversal over any number of tail blocks; scratch stays bounded by the same workspace layout.
+    bool compute_streamed(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
             size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace);
     size_t last_upload_bytes() const noexcept;
     size_t last_upload_calls() const noexcept;

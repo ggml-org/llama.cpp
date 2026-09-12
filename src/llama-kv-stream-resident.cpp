@@ -34,6 +34,27 @@ struct llama_kv_stream_resident::implementation {
             a.head_dim_v == b.head_dim_v && a.heads == b.heads && a.page_tokens == b.page_tokens && a.alignment == b.alignment;
     }
 
+    // Refresh only the capacity assigned to each layer; concentrated layouts may assign zero rows.
+    bool refresh(size_t padded) {
+        bytes = calls = 0;
+        ggml_backend_synchronize(backend);
+        if (!initialized) {
+            if (!content->reset_mirror()) return false;
+            initialized = true;
+        }
+        for (auto & range : ranges) range.count = std::min(padded, layout.layers[range.layer].planes.tokens);
+        if (!content->flush(ranges, [&](const llama_kv_stream_copy_span & span) {
+            const bool value = span.rows.operand == ggml_kv_stream_operand::v;
+            const auto & planes = layout.layers[span.rows.layer].planes;
+            const size_t stride = value ? planes.v_token_bytes : planes.k_token_bytes;
+            auto * root = value ? roots[span.rows.layer].second : roots[span.rows.layer].first;
+            ggml_backend_tensor_set(root, span.data, span.rows.first*stride, span.bytes);
+            bytes += span.bytes; ++calls;
+            return true;
+        })) return false;
+        return true;
+    }
+
     // Ordinary CUDA attention needs padded keys, but every padded row must remain resident.
     bool extent(size_t tokens, size_t & padded) const {
         if (poisoned || !compatible() || !tokens || tokens > content->host()->config().context_tokens || tokens > size_t(INT32_MAX) - 255) return false;
@@ -63,7 +84,8 @@ llama_kv_stream_resident::~llama_kv_stream_resident() = default;
 
 // Construct only metadata and borrowed tensor bindings; do not copy or clear device memory in the factory.
 std::unique_ptr<llama_kv_stream_resident> llama_kv_stream_resident::create(
-        const llama_kv_stream_binding_view & binding, std::shared_ptr<llama_kv_stream_content> content, ggml_backend_t backend) {
+        const llama_kv_stream_binding_view & binding, std::shared_ptr<llama_kv_stream_content> content, ggml_backend_t backend,
+        const llama_kv_stream_policy_state * placement) {
     if (!content || !backend || !binding.buffer || !binding.base || binding.capacity != binding.config.pool_bytes ||
             binding.capacity > ggml_backend_buffer_get_size(binding.buffer) ||
             binding.base != ggml_backend_buffer_get_base(binding.buffer) ||
@@ -77,8 +99,11 @@ std::unique_ptr<llama_kv_stream_resident> llama_kv_stream_resident::create(
         result->impl = std::make_unique<implementation>();
         auto & s = *result->impl;
         s.binding = binding; s.content = std::move(content); s.backend = backend;
-        if (!s.compatible() || llama_kv_stream_policy_layout_make(binding.config, binding.initial_policy, 0, s.layout).status !=
-                llama_kv_stream_policy_status::success) return {};
+        if (placement) s.binding.initial_policy = *placement;
+        const auto & state = s.binding.initial_policy;
+        if (size_t(state.decode_active_pages) > SIZE_MAX/size_t(shape.page_tokens)) return {};
+        if (!s.compatible() || llama_kv_stream_policy_layout_make(binding.config, state,
+                size_t(state.decode_active_pages)*size_t(shape.page_tokens), s.layout).status != llama_kv_stream_policy_status::success) return {};
         const size_t layers = s.layout.layers.size();
         if (layers > (SIZE_MAX/ggml_tensor_overhead() - 3)/2) return {};
         s.context.reset(ggml_init({(2*layers + 3)*ggml_tensor_overhead(), nullptr, true}));
@@ -96,6 +121,7 @@ std::unique_ptr<llama_kv_stream_resident> llama_kv_stream_resident::create(
                 const size_t elements = entry.planes.tokens*size_t(shape.heads)*dim;
                 // Flat roots naturally satisfy quantized matrix padding without adding bytes between the K/V planes.
                 roots[value] = ggml_new_tensor_1d(s.context.get(), type, int64_t(elements));
+                if (!bytes) continue;
                 if (ggml_nbytes(roots[value]) != bytes ||
                         ggml_backend_buffer_get_alloc_size(binding.buffer, roots[value]) != bytes) return {};
                 const size_t offset = entry.offset + (value ? entry.planes.v_offset : 0);
@@ -115,7 +141,7 @@ std::unique_ptr<llama_kv_stream_resident> llama_kv_stream_resident::create(
             if (s.page.tokens > size_t(INT64_MAX)/size_t(shape.heads)/dim) return {};
             s.stage[value] = ggml_new_tensor_1d(s.context.get(), type, int64_t(s.page.tokens*size_t(shape.heads)*dim));
             if (ggml_backend_buffer_get_alloc_size(binding.buffer,s.stage[value]) != bytes ||
-                    ggml_backend_tensor_alloc(binding.buffer,s.stage[value],static_cast<char *>(binding.base)+(value ? s.page.v_offset : 0)) != GGML_STATUS_SUCCESS) return {};
+                    ggml_backend_tensor_alloc(binding.buffer,s.stage[value],static_cast<char *>(binding.base)+(value ? s.layout.ring.v_offset : 0)) != GGML_STATUS_SUCCESS) return {};
         }
         return result;
     } catch (const std::bad_alloc &) {
@@ -132,21 +158,7 @@ bool llama_kv_stream_resident::synchronize(size_t active_tokens) {
     if (!s.extent(active_tokens, padded)) return false;
     s.busy = true;
     struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
-    ggml_backend_synchronize(s.backend);
-    if (!s.initialized) {
-        if (!s.content->reset_mirror()) return false;
-        s.initialized = true;
-    }
-    for (auto & range : s.ranges) range.count = padded;
-    if (!s.content->flush(s.ranges, [&](const llama_kv_stream_copy_span & span) {
-        const bool value = span.rows.operand == ggml_kv_stream_operand::v;
-        const auto & planes = s.layout.layers[span.rows.layer].planes;
-        const size_t stride = value ? planes.v_token_bytes : planes.k_token_bytes;
-        auto * root = value ? s.roots[span.rows.layer].second : s.roots[span.rows.layer].first;
-        ggml_backend_tensor_set(root, span.data, span.rows.first*stride, span.bytes);
-        s.bytes += span.bytes; ++s.calls;
-        return true;
-    })) return false;
+    if (!s.refresh(padded)) return false;
     s.active = active_tokens;
     s.generation = s.content->generation();
     s.epoch = s.content->mirror_epoch();
@@ -268,24 +280,35 @@ bool llama_kv_stream_resident::write_rows(uint32_t layer, ggml_kv_stream_operand
     }
 }
 
-// Keep the resident prefix and one staged tail separate until their unnormalized results are merged.
+// Keep the previous one-block admission boundary while sharing the traversal implementation.
 bool llama_kv_stream_resident::compute_one_block(uint32_t layer, ggml_tensor * q, ggml_tensor * mask,
+        ggml_tensor * output, size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace) {
+    if (layer >= impl->layout.layers.size()) return false;
+    const size_t prefix = impl->layout.layers[layer].planes.tokens;
+    if (active_tokens <= prefix || active_tokens-prefix > impl->page.tokens) return false;
+    return compute_streamed(layer,q,mask,output,active_tokens,scale,workspace);
+}
+
+// Traverse resident and streamed ranges with one reusable export and an unnormalized accumulator.
+bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q, ggml_tensor * mask,
         ggml_tensor * output, size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace) {
     auto & s = *impl;
     if (s.busy || s.poisoned || !s.compatible() || layer >= s.roots.size() || !q || !mask || !output ||
             !workspace || !std::isfinite(scale) || scale <= 0 || active_tokens > size_t(INT32_MAX)-255 ||
             active_tokens > s.content->host()->config().context_tokens || q->ne[1] <= 0 || q->ne[2] <= 0 ||
             q->ne[1] > INT32_MAX/512/q->ne[2]) return false;
-    const size_t prefix = s.layout.layers[layer].planes.tokens;
-    if (active_tokens <= prefix || active_tokens-prefix > s.page.tokens) return false;
-    const size_t padded = (active_tokens+255)/256*256, tail = padded-prefix, live = active_tokens-prefix;
-    if (padded > s.content->host()->layout().tokens || tail > s.page.tokens || mask->ne[0] < int64_t(padded) ||
+    if (!active_tokens) return false;
+    const size_t padded = (active_tokens+255)/256*256;
+    const size_t prefix = std::min(padded,s.layout.layers[layer].planes.tokens);
+    const size_t slots = s.binding.initial_policy.ring_slots;
+    if (!slots || slots > s.layout.ring.bytes/s.page.bytes) return false;
+    if (padded > s.content->host()->layout().tokens || mask->ne[0] < int64_t(padded) ||
             mask->type != GGML_TYPE_F16 || !mask->data || mask->nb[0] != sizeof(ggml_fp16_t) ||
             mask->ne[0] > INT32_MAX || mask->nb[1] < size_t(mask->ne[0])*sizeof(ggml_fp16_t)) return false;
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(s.backend));
     auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
     const auto * ops = get ? get() : nullptr;
-    if (!ops || ops->version != 1 || !ops->supports || !ops->partial || !ops->merge) return false;
+    if (!ops || ops->version < 2 || !ops->supports || !ops->partial || !ops->merge || !ops->fold || !ops->clear) return false;
     ggml_kv_stream_block_layout work;
     if (ggml_kv_stream_block_layout_make(size_t(q->ne[1])*size_t(q->ne[2]),size_t(output->ne[0]),work).status !=
             ggml_kv_stream_partial_status::success) return false;
@@ -303,50 +326,64 @@ bool llama_kv_stream_resident::compute_one_block(uint32_t layer, ggml_tensor * q
         return a < b+nb && b < a+na;
     };
     if (overlaps(scratch,region.size,pool,s.binding.capacity)) return false;
-    auto k = s.descriptor(layer,false,prefix), v = s.descriptor(layer,true,prefix);
-    auto kt = k, vt = v;
-    kt.data = s.stage[0]->data; vt.data = s.stage[1]->data;
-    kt.ne[1] = vt.ne[1] = int64_t(tail);
-    kt.nb[3] = s.page.k_bytes; vt.nb[3] = s.page.v_bytes;
-    auto ma = *mask, mb = *mask;
-    ma.ne[0] = int64_t(prefix); mb.ne[0] = int64_t(tail);
-    if (uintptr_t(mask->data) > UINTPTR_MAX-prefix*sizeof(ggml_fp16_t)) return false;
-    mb.data = reinterpret_cast<void *>(uintptr_t(mask->data)+prefix*sizeof(ggml_fp16_t));
-    ggml_tensor first = *output, second = *output;
-    for (auto * op : {&first,&second}) {
-        op->op = GGML_OP_FLASH_ATTN_EXT;
-        std::memset(op->src,0,sizeof(op->src));
-        std::memset(op->op_params,0,sizeof(op->op_params));
-        std::memcpy(op->op_params,&scale,sizeof(scale));
-        ggml_flash_attn_ext_set_prec(op,GGML_PREC_F32);
-        op->src[0] = q;
-    }
-    first.src[1] = &k; first.src[2] = &v; first.src[3] = &ma;
-    second.src[1] = &kt; second.src[2] = &vt; second.src[3] = &mb;
-    if (!ops->supports(s.backend,&first) || !ops->supports(s.backend,&second)) return false;
-    // Backend validation above checks shape/stride arithmetic; reject aliases with the entire KV pool too.
+    ggml_tensor k, v, slice, op;
+    // Each slot selects one page from the separate contiguous ring K and V planes.
+    const auto describe = [&](size_t first, size_t count, size_t slot, bool resident) {
+        k = s.descriptor(layer,false,count); v = s.descriptor(layer,true,count);
+        if (!resident) {
+            k.buffer = v.buffer = s.binding.buffer;
+            k.data = static_cast<char *>(s.stage[0]->data)+slot*s.page.k_bytes;
+            v.data = static_cast<char *>(s.stage[1]->data)+slot*s.page.v_bytes;
+            k.nb[3] = s.page.k_bytes; v.nb[3] = s.page.v_bytes;
+        }
+        slice = *mask; slice.ne[0] = int64_t(count);
+        if (uintptr_t(mask->data) > UINTPTR_MAX-first*sizeof(ggml_fp16_t)) return false;
+        slice.data = reinterpret_cast<void *>(uintptr_t(mask->data)+first*sizeof(ggml_fp16_t));
+        op = *output; op.op = GGML_OP_FLASH_ATTN_EXT;
+        std::memset(op.src,0,sizeof(op.src)); std::memset(op.op_params,0,sizeof(op.op_params));
+        std::memcpy(op.op_params,&scale,sizeof(scale)); ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
+        op.src[0] = q; op.src[1] = &k; op.src[2] = &v; op.src[3] = &slice;
+        return ops->supports(s.backend,&op);
+    };
+    if (prefix && !describe(0,prefix,0,true)) return false;
+    for (size_t first = prefix, block = 0; first < padded; first += s.page.tokens, ++block)
+        if (!describe(first,std::min(s.page.tokens,padded-first),block%slots,false)) return false;
+    // Backend validation checks shape arithmetic; also exclude aliases with unused pool/lease bytes.
     for (auto * tensor : {q,mask,output}) {
         const auto data = uintptr_t(tensor->data);
         const size_t bytes = ggml_nbytes(tensor);
         if (data > UINTPTR_MAX-bytes || overlaps(data,bytes,scratch,region.size) ||
                 overlaps(data,bytes,pool,s.binding.capacity)) return false;
     }
-    if (!synchronize(prefix)) return false;
     release_write_workspace();
     s.busy = true; s.valid = false;
     struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
-    if (!ops->partial(s.backend,&first,wb,false)) return false;
+    if (!s.refresh(padded)) return false;
+    if (prefix) {
+        if (!describe(0,prefix,0,true) || !ops->partial(s.backend,&op,wb,false)) return false;
+    } else if (!ops->clear(s.backend,output,wb,false)) return false;
     llama_kv_stream_host_layer host;
     if (!s.content->host()->layer(layer,host)) return false;
-    for (int value = 0; value < 2; ++value) {
-        const size_t stride = value ? s.page.v_token_bytes : s.page.k_token_bytes;
-        const auto * source = static_cast<const char *>(value ? host.v : host.k);
-        // Padding must be finite even under a masked score; old ring contents may contain NaNs.
-        if (tail > live) ggml_backend_tensor_memset(s.stage[value],0,live*stride,(tail-live)*stride);
-        ggml_backend_tensor_set(s.stage[value],source+prefix*stride,0,live*stride);
-        s.bytes += live*stride; ++s.calls;
+    for (size_t first = prefix, block = 0; first < padded; first += s.page.tokens, ++block) {
+        const size_t count = std::min(s.page.tokens,padded-first);
+        const size_t live = std::min(count,active_tokens-first);
+        const size_t slot = block%slots;
+        // The previous partial and fold completed synchronously before this slot can be overwritten.
+        if (!describe(first,count,slot,false)) return false;
+        for (int value = 0; value < 2; ++value) {
+            auto staged = *s.stage[value];
+            staged.data = static_cast<char *>(staged.data)+slot*(value ? s.page.v_bytes : s.page.k_bytes);
+            const size_t stride = value ? s.page.v_token_bytes : s.page.k_token_bytes;
+            const auto * source = static_cast<const char *>(value ? host.v : host.k);
+            if (count > live) ggml_backend_tensor_memset(&staged,0,live*stride,(count-live)*stride);
+            ggml_backend_tensor_set(&staged,source+first*stride,0,live*stride);
+            s.bytes += live*stride; ++s.calls;
+        }
+        if (!ops->partial(s.backend,&op,wb,true)) return false;
+        if (first+count == padded) return ops->merge(s.backend,output,wb);
+        if (!ops->fold(s.backend,output,wb)) return false;
     }
-    return ops->partial(s.backend,&second,wb,true) && ops->merge(s.backend,output,wb);
+    return ops->clear(s.backend,output,wb,true) && ops->merge(s.backend,output,wb);
 }
 
 // Expose exact submitted tile/copy counts and configured scratch bounds for tests and diagnostics.

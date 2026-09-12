@@ -104,25 +104,39 @@ static bool partial(ggml_backend_t backend, const ggml_tensor * op, ggml_backend
     return true;
 }
 
-// Validate all four contributions and stage normalized values; never write the public output here.
-__global__ void merge_kernel(const float * a, const float2 * am, const float * b, const float2 * bm,
-        float * values, unsigned * status) {
+// The surrounding attention TU uses fast math; preserve subnormal contract payloads across conversion.
+static __device__ __forceinline__ double widen(float value) {
+    double result;
+    asm("cvt.f64.f32 %0, %1;" : "=d"(result) : "f"(value));
+    return result;
+}
+// Explicit rounding also prevents fast-math publication from flushing a valid FP32 accumulator to zero.
+static __device__ __forceinline__ float narrow(double value) {
+    float result;
+    asm("cvt.rn.f32.f64 %0, %1;" : "=f"(result) : "d"(value));
+    return result;
+}
+
+// Validate all four contributions and fold or stage normalized values; never write public output here.
+__global__ void merge_kernel(float * a, float2 * am, const float * b, const float2 * bm,
+        float * values, unsigned * status, bool fold) {
     const size_t row = blockIdx.x;
     const size_t channel = threadIdx.x;
-    __shared__ double weights[4], mass[4], total;
+    __shared__ double weights[4], mass[4], total, reference;
     if (channel == 0) {
         const float2 meta[4] = {am[2*row],am[2*row+1],bm[2*row],bm[2*row+1]};
         double maximum = -INFINITY;
         bool valid = true;
         for (int i = 0; i < 4; ++i) {
-            const double m = meta[i].x, l = meta[i].y;
+            const double m = widen(meta[i].x), l = widen(meta[i].y);
             valid &= isfinite(l) && l >= 0 && (isfinite(m) || (l == 0 && m == -INFINITY));
             if (l > 0) maximum = fmax(maximum,m);
             mass[i] = l;
         }
+        reference = maximum;
         total = 0;
         for (int i = 0; i < 4; ++i) {
-            weights[i] = mass[i] > 0 ? exp(double(meta[i].x)-maximum) : 0;
+            weights[i] = mass[i] > 0 ? exp(widen(meta[i].x)-maximum) : 0;
             total += mass[i]*weights[i];
         }
         if (!valid || !isfinite(total) || total > FLT_MAX) atomicOr(status,1u);
@@ -132,16 +146,28 @@ __global__ void merge_kernel(const float * a, const float2 * am, const float * b
     double numerator = 0;
     bool valid = true;
     for (int i = 0; i < 4; ++i) {
-        valid &= isfinite(u[i]) && (mass[i] != 0 || u[i] == 0);
-        numerator += double(u[i])*weights[i];
+        const double term = widen(u[i]);
+        valid &= isfinite(term) && (mass[i] != 0 || term == 0);
+        numerator += term*weights[i];
     }
-    const double value = total > 0 ? numerator/total : 0;
+    const double value = fold ? numerator : (total > 0 ? numerator/total : 0);
     if (!valid || !isfinite(numerator) || fabs(numerator) > FLT_MAX || !isfinite(value) || fabs(value) > FLT_MAX) atomicOr(status,1u);
-    values[row*256+channel] = float(value);
+    if (fold) {
+        a[2*row*256+channel] = narrow(numerator);
+        a[(2*row+1)*256+channel] = 0;
+        // All lanes must finish reading the old split before its metadata is replaced.
+        __syncthreads();
+        if (channel == 0) {
+            am[2*row] = make_float2(narrow(reference),narrow(total));
+            am[2*row+1] = make_float2(-INFINITY,0);
+        }
+    } else {
+        values[row*256+channel] = narrow(value);
+    }
 }
 
-// Publish only after device-wide validation of this result; the four-byte status copy is deliberate in v1.
-static bool merge(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buffer_t buffer) {
+// Share checked workspace handling between publication, incremental folding, and empty initialization.
+static bool combine(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buffer_t buffer, int action) {
     if (!output || output->type != GGML_TYPE_F32 || output->ne[0] != 256 || output->ne[1] <= 0 ||
             output->ne[2] <= 0 || output->ne[1] > INT32_MAX || output->ne[2] > INT32_MAX/512/output->ne[1] ||
             output->ne[3] != 1 || !ggml_is_contiguous(output)) return false;
@@ -151,27 +177,45 @@ static bool merge(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buf
     auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
     ggml_cuda_set_device(ctx.device);
     auto * raw = static_cast<char *>(ggml_backend_buffer_get_base(buffer));
+    if (action >= 2) {
+        CUDA_CHECK(cudaMemsetAsync(raw+(action == 3 ? layout.second_offset : 0),0,layout.partial.bytes,ctx.stream()));
+        CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
+        return true;
+    }
     auto * flag = reinterpret_cast<unsigned *>(raw+layout.status_offset);
     CUDA_CHECK(cudaMemsetAsync(flag,0,sizeof(unsigned),ctx.stream()));
     merge_kernel<<<unsigned(layout.partial.rows),256,0,ctx.stream()>>>(
         (float *)raw, (float2 *)(raw+layout.partial.meta_offset),
         (float *)(raw+layout.second_offset), (float2 *)(raw+layout.second_offset+layout.partial.meta_offset),
-        (float *)(raw+layout.value_offset), flag);
+        (float *)(raw+layout.value_offset), flag, action == 1);
     CUDA_CHECK(cudaGetLastError());
     unsigned status;
     CUDA_CHECK(cudaMemcpyAsync(&status,flag,sizeof(status),cudaMemcpyDeviceToHost,ctx.stream()));
     CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
     if (status) return false;
+    if (action == 1) return true;
     CUDA_CHECK(cudaMemcpyAsync(output->data,raw+layout.value_offset,layout.value_bytes,cudaMemcpyDeviceToDevice,ctx.stream()));
     CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
     return true;
+}
+// Only this operation publishes normalized values to the caller's output.
+static bool merge(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buffer_t buffer) {
+    return combine(backend,output,buffer,0);
+}
+// Keep an unnormalized accumulator in the first export; no context-sized scratch growth.
+static bool fold(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buffer_t buffer) {
+    return combine(backend,output,buffer,1);
+}
+// Zero mass and numerator encode an empty contribution regardless of its finite reference value.
+static bool clear(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buffer_t buffer, bool second) {
+    return combine(backend,output,buffer,second ? 3 : 2);
 }
 } // namespace
 
 // Keep CUDA details behind the backend-neutral registry contract.
 const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
     static_assert(sizeof(float2) == sizeof(ggml_kv_stream_partial_meta), "partial metadata ABI");
-    static const ggml_kv_stream_partial_ops ops{1,supports,partial,merge};
+    static const ggml_kv_stream_partial_ops ops{2,supports,partial,merge,fold,clear};
 #ifdef GGML_CUDA_NO_FA
     GGML_UNUSED(ops);
     return nullptr;

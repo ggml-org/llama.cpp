@@ -44,9 +44,9 @@ struct fixture {
     std::unique_ptr<llama_kv_stream_binding> binding;
     llama_kv_stream_resident * resident = nullptr;
     // The unused ring remains at the front; active resident planes must use policy offsets, not a flat host copy.
-    fixture(ggml_backend_t backend, bool cuda, ggml_type k = GGML_TYPE_F16, ggml_type v = GGML_TYPE_F16) : backend(backend), cuda(cuda) {
+    fixture(ggml_backend_t backend, bool cuda, ggml_type k = GGML_TYPE_F16, ggml_type v = GGML_TYPE_F16, size_t context = 769) : backend(backend), cuda(cuda) {
         llama_kv_stream_host_config c{37, {k, v, 256, 256, 2, 256, 128},
-            {{k, true, true, true, true}, {v, true, true, true, true}, true, true}, 769, 2};
+            {{k, true, true, true, true}, {v, true, true, true, true}, true, true}, context, 2};
         auto * dev = ggml_backend_get_device(backend);
         auto * host_type = cuda ? llama_kv_stream_host_buffer_type(dev) : ggml_backend_cpu_buffer_type();
         auto * device_type = cuda ? llama_kv_stream_device_buffer_type(dev) : ggml_backend_cpu_buffer_type();
@@ -66,9 +66,9 @@ struct fixture {
         lease.reset(ggml_backend_memory_arena_acquire(arena.get(), 9));
         binding = std::make_unique<llama_kv_stream_binding>(c.cache_id, device_type);
     }
-    bool attach() {
+    bool attach(const llama_kv_stream_policy_state * placement = nullptr) {
         return binding->bind(lease.get(), policy, [&](const auto & view) {
-            auto result = llama_kv_stream_resident::create(view, content, backend);
+            auto result = llama_kv_stream_resident::create(view, content, backend, placement);
             resident = result.get();
             return result;
         });
