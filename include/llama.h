@@ -441,6 +441,7 @@ extern "C" {
         bool pure;                                                  // quantize all tensors to the default type
         bool keep_split;                                            // quantize to the same number of shards
         bool dry_run;                                               // calculate and show the final quantization size without performing quantization
+        bool no_fallback;                                           // prevent substituting a compatible type for tensors with incompatible shapes, exit with non-zero
         const struct llama_model_imatrix_data * imatrix;            // pointer to importance matrix data
         const struct llama_model_kv_override * kv_overrides;        // pointer to kv overrides
         const struct llama_model_tensor_override * tt_overrides;    // pointer to tensor overrides
