@@ -219,25 +219,27 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 item.at("type") == "reasoning") {
                 // #responses_create-input-input_item_list-item-reasoning
 
-                if (!exists_and_is_array(item, "content")) {
-                    throw std::invalid_argument("item['content'] is not an array");
-                }
-                if (item.at("content").empty()) {
-                    throw std::invalid_argument("item['content'] is empty");
-                }
-                if (!exists_and_is_string(item.at("content")[0], "text")) {
-                    throw std::invalid_argument("item['content']['text'] is not a string");
-                }
+                if (item.contains("content") && !item.at("content").is_null()) {
+                    if (!item.at("content").is_array()) {
+                        throw std::invalid_argument("item['content'] is not an array");
+                    }
+                    if (item.at("content").empty()) {
+                        throw std::invalid_argument("item['content'] is empty");
+                    }
+                    if (!exists_and_is_string(item.at("content")[0], "text")) {
+                        throw std::invalid_argument("item['content']['text'] is not a string");
+                    }
 
-                if (merge_prev) {
-                    auto & prev_msg = chatcmpl_messages.back();
-                    prev_msg["reasoning_content"] = item.at("content")[0].at("text");
-                } else {
-                    chatcmpl_messages.push_back(json {
-                        {"role", "assistant"},
-                        {"content", json::array()},
-                        {"reasoning_content", item.at("content")[0].at("text")},
-                    });
+                    if (merge_prev) {
+                        auto & prev_msg = chatcmpl_messages.back();
+                        prev_msg["reasoning_content"] = item.at("content")[0].at("text");
+                    } else {
+                        chatcmpl_messages.push_back(json {
+                            {"role", "assistant"},
+                            {"content", json::array()},
+                            {"reasoning_content", item.at("content")[0].at("text")},
+                        });
+                    }
                 }
             } else {
                 throw std::invalid_argument("Cannot determine type of 'item'");
