@@ -7,10 +7,17 @@
 		DialogExportSettings
 	} from '$lib/components/app';
 	import SettingsGroup from '$lib/components/app/settings/SettingsGroup.svelte';
-	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '$lib/enums';
+	import { MEMORY_EXPORT_FILENAME_PREFIX } from '$lib/constants';
+	import {
+		ConversationSelectionMode,
+		FileExtensionText,
+		HtmlInputType,
+		MimeTypeApplication
+	} from '$lib/enums';
 	import { ConversationTransferService } from '$lib/services';
+	import { MemoryService } from '$lib/services/memory.service';
 	import { conversationsStore, settingsStore } from '$lib/stores';
-	import { createMessageCountMap } from '$lib/utils';
+	import { createMessageCountMap, downloadResourceContent } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { toast } from 'svelte-sonner';
 
@@ -29,6 +36,7 @@
 
 	// Delete functionality state
 	let showDeleteDialog = $state(false);
+	let showMemoryDeleteDialog = $state(false);
 
 	// Settings import/export state
 	let showSettingsExportSummary = $state(false);
@@ -70,6 +78,69 @@
 		showSettingsExportDialog = false;
 	}
 
+	function memoryEntryNoun(count: number) {
+		return count === 1 ? 'entry' : 'entries';
+	}
+
+	async function handleMemoryExport() {
+		try {
+			const data = await MemoryService.exportEntries();
+
+			if (data.entries.length === 0) {
+				toast.info('No memory entries to export');
+
+				return;
+			}
+
+			downloadResourceContent(
+				JSON.stringify(data, null, 2),
+				MimeTypeApplication.JSON,
+				`${MEMORY_EXPORT_FILENAME_PREFIX}${new Date().toISOString().split('T')[0]}.json`
+			);
+
+			toast.success(
+				`Exported ${data.entries.length} memory ${memoryEntryNoun(data.entries.length)}`
+			);
+		} catch (err) {
+			console.error('Failed to export memory:', err);
+			toast.error('Failed to export memory');
+		}
+	}
+
+	function handleMemoryImport() {
+		try {
+			const input = document.createElement('input');
+
+			input.type = HtmlInputType.FILE;
+			input.accept = FileExtensionText.JSON;
+
+			input.onchange = async (e) => {
+				const file = (e.target as HTMLInputElement)?.files?.[0];
+
+				if (!file) return;
+
+				try {
+					const data = JSON.parse(await file.text());
+					const { imported, skipped } = await MemoryService.importEntries(data);
+
+					if (skipped > 0) {
+						toast.info(`Skipped ${skipped} ${memoryEntryNoun(skipped)} already in memory`);
+					}
+
+					toast.success(`Imported ${imported} memory ${memoryEntryNoun(imported)}`);
+				} catch (err) {
+					console.error('Failed to import memory:', err);
+					toast.error(err instanceof Error ? err.message : 'Failed to import memory');
+				}
+			};
+
+			input.click();
+		} catch (err) {
+			console.error('Failed to open file picker:', err);
+			toast.error('Failed to open file picker');
+		}
+	}
+
 	function handleSettingsImport() {
 		try {
 			const input = document.createElement('input');
@@ -108,6 +179,39 @@
 			console.error('Failed to open file picker:', err);
 			toast.error('Failed to open file picker');
 		}
+	}
+
+	async function handleMemoryDeleteAllClick() {
+		try {
+			const entries = await MemoryService.listEntries();
+
+			if (entries.length === 0) {
+				toast.info('No memory entries to delete');
+
+				return;
+			}
+
+			showMemoryDeleteDialog = true;
+		} catch (err) {
+			console.error('Failed to load memory entries for deletion:', err);
+			toast.error('Failed to load memory entries');
+		}
+	}
+
+	async function handleMemoryDeleteAllConfirm() {
+		try {
+			await MemoryService.clearEntries();
+
+			showMemoryDeleteDialog = false;
+			toast.success('Memory cleared');
+		} catch (err) {
+			console.error('Failed to delete memory entries:', err);
+			toast.error('Failed to delete memory entries');
+		}
+	}
+
+	function handleMemoryDeleteAllCancel() {
+		showMemoryDeleteDialog = false;
 	}
 
 	async function handleExportClick() {
@@ -289,6 +393,35 @@
 		/>
 	</SettingsGroup>
 
+	<SettingsGroup title="Memory">
+		<SettingsChatImportExportSection
+			title="Export"
+			description="Download your memory entries as a JSON file."
+			IconComponent={Download}
+			buttonText="Export memory"
+			onclick={handleMemoryExport}
+		/>
+
+		<SettingsChatImportExportSection
+			title="Import"
+			description="Import memory entries from a previously exported JSON file. An entry already in memory is left untouched."
+			IconComponent={Upload}
+			buttonText="Import memory"
+			onclick={handleMemoryImport}
+		/>
+
+		<SettingsChatImportExportSection
+			title="Delete All"
+			description="Permanently delete all memory entries. This action cannot be undone. Consider exporting your memory first if you want to keep a backup."
+			IconComponent={Trash2}
+			buttonText="Delete all memory"
+			onclick={handleMemoryDeleteAllClick}
+			titleClass="text-destructive"
+			buttonVariant="destructive"
+			buttonClass="text-destructive-foreground justify-start justify-self-start bg-destructive hover:bg-destructive/80 md:w-auto"
+		/>
+	</SettingsGroup>
+
 	<SettingsGroup title="Settings">
 		<SettingsChatImportExportSection
 			IconComponent={Download}
@@ -345,4 +478,16 @@
 	onConfirm={handleDeleteAllConfirm}
 	title="Delete all conversations"
 	variant="destructive"
+/>
+
+<DialogConfirmation
+	bind:open={showMemoryDeleteDialog}
+	title="Delete all memory"
+	description="Are you sure you want to delete all memory entries? This action cannot be undone and will permanently remove everything the model has memorized."
+	confirmText="Delete All"
+	cancelText="Cancel"
+	variant="destructive"
+	icon={Trash2}
+	onConfirm={handleMemoryDeleteAllConfirm}
+	onCancel={handleMemoryDeleteAllCancel}
 />

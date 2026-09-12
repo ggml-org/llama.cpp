@@ -35,6 +35,10 @@ export const SETTINGS_KEYS = {
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
 	// MCP
 	MCP_SERVERS: 'mcpServers',
+	// Memory
+	MEMORY_ENABLED: 'memoryEnabled',
+	MEMORY_ENTRY_LIMIT_BYTES: 'memoryEntryLimitBytes',
+	MEMORY_GROUPS: 'memoryGroups',
 	MENTION_SEARCH_MAX_DEPTH: 'mentionSearchMaxDepth',
 	MIN_P: 'min_p',
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',

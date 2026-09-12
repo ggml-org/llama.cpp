@@ -9,6 +9,7 @@
 
 import {
 	Braces,
+	Brain,
 	Clock,
 	Eye,
 	FilePen,
@@ -26,6 +27,21 @@ export const TOOL_UI: Readonly<Record<BuiltInTool, ToolUiEntry>> = {
 	[BuiltInTool.BROWSER_GET_DATETIME]: {
 		icon: Clock,
 		label: 'Current time',
+		source: ToolSource.BROWSER
+	},
+	[BuiltInTool.BROWSER_MEMORY_DROP]: {
+		icon: Brain,
+		label: 'Forget memory',
+		source: ToolSource.BROWSER
+	},
+	[BuiltInTool.BROWSER_MEMORY_OPEN]: {
+		icon: Brain,
+		label: 'Open memory',
+		source: ToolSource.BROWSER
+	},
+	[BuiltInTool.BROWSER_MEMORY_WRITE]: {
+		icon: Brain,
+		label: 'Write memory',
 		source: ToolSource.BROWSER
 	},
 	[BuiltInTool.BROWSER_READ_MEDIA]: { icon: Eye, label: 'Read media', source: ToolSource.BROWSER },

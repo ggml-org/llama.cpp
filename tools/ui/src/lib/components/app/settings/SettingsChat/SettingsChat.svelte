@@ -4,6 +4,7 @@
 		SettingsChatDesktopSidebar,
 		SettingsChatFields,
 		SettingsChatImportExportTab,
+		SettingsChatMemoryEntries,
 		SettingsChatMobileHeader,
 		SettingsChatToolsTab,
 		SettingsFooter
@@ -13,7 +14,8 @@
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
 		SETTINGS_CHAT_SECTIONS,
-		SETTINGS_SECTION_SLUGS
+		SETTINGS_SECTION_SLUGS,
+		SETTINGS_SECTION_TITLES
 	} from '$lib/constants';
 	import { ColorMode } from '$lib/enums/ui.enums';
 	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
@@ -167,6 +169,10 @@
 										Reload app
 									</Button>
 								</div>
+							{/if}
+
+							{#if currentSection.title === SETTINGS_SECTION_TITLES.MEMORY}
+								<SettingsChatMemoryEntries />
 							{/if}
 						</div>
 					{/if}
