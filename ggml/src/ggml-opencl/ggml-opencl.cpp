@@ -1220,6 +1220,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemv_f32_f32_mc;  // multi-column (small-N) f32 GEMV for spec/MTP verify
     cl_kernel kernel_mul_mm_f16_f32_l4_lm;
     cl_kernel kernel_mul_mm_f16_f32_l4_lm_n8;
+    cl_kernel kernel_mul_mm_f16_f32_skinny;
     cl_kernel kernel_mul_mm_q1_0_f32_l4_lm;
     cl_kernel kernel_mul_mm_q4_0_f32_l4_lm;
     cl_kernel kernel_mul_mm_q4_1_f32_l4_lm;
@@ -3793,6 +3794,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_mul_mm_f16_f32_l4_lm = clCreateKernel(backend_ctx->program_mul_mm_f16_f32_l4_lm, "kernel_mul_mm_f16_f32_l4_lm", &err), err));
+        CL_CHECK((backend_ctx->kernel_mul_mm_f16_f32_skinny = clCreateKernel(backend_ctx->program_mul_mm_f16_f32_l4_lm, "kernel_mul_mm_f16_f32_skinny", &err), err));
 
         const std::string narrow_opts = compile_opts + " -DBN=8 -DTN=1 -DKERNEL_NAME_LM=kernel_mul_mm_f16_f32_l4_lm_n8";
         backend_ctx->program_mul_mm_f16_f32_l4_lm_n8 =
@@ -32001,6 +32003,31 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                     return;
                 }
 #endif
+                if (ne11 >= 2 && ne11 <= 10 && ne00 >= 256 && ne01 >= 64 &&
+                    ne00 % 64 == 0 && ne02 == 1 && ne03 == 1 && ne12 == 1 && ne13 == 1 &&
+                    ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
+                    (offset0 & 7) == 0 && (offset1 & 15) == 0) {
+                    cl_kernel skinny = backend_ctx->kernel_mul_mm_f16_f32_skinny;
+                    const int stride_a = ne00;
+                    const int stride_b = ne00;
+                    const int stride_d = ne01;
+                    CL_CHECK(clSetKernelArg(skinny,  0, sizeof(cl_mem),   &extra0->data_device));
+                    CL_CHECK(clSetKernelArg(skinny,  1, sizeof(cl_ulong), &offset0));
+                    CL_CHECK(clSetKernelArg(skinny,  2, sizeof(cl_mem),   &extra1->data_device));
+                    CL_CHECK(clSetKernelArg(skinny,  3, sizeof(cl_ulong), &offset1));
+                    CL_CHECK(clSetKernelArg(skinny,  4, sizeof(cl_mem),   &extrad->data_device));
+                    CL_CHECK(clSetKernelArg(skinny,  5, sizeof(cl_ulong), &offsetd));
+                    CL_CHECK(clSetKernelArg(skinny,  6, sizeof(int),      &ne00));
+                    CL_CHECK(clSetKernelArg(skinny,  7, sizeof(int),      &ne01));
+                    CL_CHECK(clSetKernelArg(skinny,  8, sizeof(int),      &ne11));
+                    CL_CHECK(clSetKernelArg(skinny,  9, sizeof(int),      &stride_a));
+                    CL_CHECK(clSetKernelArg(skinny, 10, sizeof(int),      &stride_b));
+                    CL_CHECK(clSetKernelArg(skinny, 11, sizeof(int),      &stride_d));
+                    size_t global_work_size[] = { (size_t) CEIL_DIV(ne01, 16) * 64, 1, 1 };
+                    size_t local_work_size[]  = { 64, 1, 1 };
+                    backend_ctx->enqueue_ndrange_kernel(skinny, 3, global_work_size, local_work_size, dst);
+                    return;
+                }
                 static const char * mm_narrow_n_env = getenv("GGML_OPENCL_MM_NARROW_N");
                 const bool use_narrow_n = (mm_narrow_n_env == nullptr || mm_narrow_n_env[0] != '0') && ne11 >= 2 && ne11 <= 8;
                 kernel = use_narrow_n ? backend_ctx->kernel_mul_mm_f16_f32_l4_lm_n8 : backend_ctx->kernel_mul_mm_f16_f32_l4_lm;
