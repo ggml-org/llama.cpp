@@ -1168,9 +1168,9 @@ static enum ggml_status alloc_tensor_range(struct ggml_context * ctx,
 
     for (struct ggml_tensor * t = first; t != last; t = ggml_get_next_tensor(ctx, t)) {
         enum ggml_status status = GGML_STATUS_SUCCESS;
-        if (t->data == NULL) {
+        if (!ggml_backend_tensor_is_bound(t)) {
             if (t->view_src == NULL) {
-                status = ggml_tallocr_alloc(&tallocr, t);
+                status = t->buffer ? GGML_STATUS_FAILED : ggml_tallocr_alloc(&tallocr, t);
             } else if (t->buffer == NULL) {
                 status = ggml_backend_view_init(t);
             }
@@ -1205,7 +1205,7 @@ static enum ggml_status ggml_backend_alloc_ctx_tensors_from_buft_impl(
     struct ggml_tensor * first = ggml_get_first_tensor(ctx);
     for (struct ggml_tensor * t = first; t != NULL; t = ggml_get_next_tensor(ctx, t)) {
         size_t this_size = 0;
-        if (t->data == NULL && t->view_src == NULL) {
+        if (!ggml_backend_tensor_is_bound(t) && t->view_src == NULL) {
             this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
         }
 
@@ -1238,6 +1238,16 @@ static enum ggml_status ggml_backend_alloc_ctx_tensors_from_buft_impl(
 
     if (no_alloc) {
         return GGML_STATUS_SUCCESS;
+    }
+
+    for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->view_src && !t->buffer && t->view_src->buffer) {
+            enum ggml_status status = ggml_backend_tensor_is_bound(t->view_src) ? ggml_backend_view_init(t) : GGML_STATUS_FAILED;
+            if (status != GGML_STATUS_SUCCESS) {
+                ggml_backend_buffer_set_free(buffers);
+                return status;
+            }
+        }
     }
 
     if (buffers->n_buffers == 0) {

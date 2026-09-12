@@ -1056,6 +1056,13 @@ static void test_context_buffer_set_borrowed_view() {
     ggml_backend_buffer_set_free(&buffers);
     GGML_ASSERT(backend.context->buffers.size() == 1 && backend.context->buffers[0] == source_buffer.get());
     GGML_ASSERT(ggml_backend_buffer_get_size(source_buffer.get()) == 32);
+    auto view_ctx = make_context();
+    auto * only_view = ggml_view_1d(view_ctx.ctx, source, 4, sizeof(float));
+    GGML_ASSERT(only_view->buffer == nullptr);
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(view_ctx.ctx, &backend.buffer_type) == 0);
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_set(view_ctx.ctx, &backend.buffer_type, &buffers) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(buffers.n_buffers == 0 && only_view->buffer == source_buffer.get());
+    GGML_ASSERT(backend.context->buffers.size() == 1);
 }
 
 static void test_meta_split_preparation() {
@@ -1425,6 +1432,19 @@ static void test_meta_materialization(bool relative_addresses) {
         GGML_ASSERT(tensor->data == nullptr && ggml_backend_tensor_is_bound(tensor));
     }
     {
+        auto * cpu_buft = ggml_backend_cpu_buffer_type();
+        size_t expected = GGML_PAD(ggml_nbytes(raw), ggml_backend_buft_get_alignment(cpu_buft));
+        GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(test_ctx.ctx, cpu_buft) == expected);
+        ggml_backend_buffer_set physical = {};
+        GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_set(test_ctx.ctx, cpu_buft, &physical) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(physical.n_buffers == 1 && raw->buffer == physical.buffers[0]);
+        for (auto * tensor : {split, mirror, view}) {
+            GGML_ASSERT(tensor->data == nullptr && tensor->buffer == owner.get() && ggml_backend_tensor_is_bound(tensor));
+        }
+        ggml_backend_buffer_set_free(&physical);
+        GGML_ASSERT(first.context->free_calls == 0 && second.context->free_calls == 0);
+    }
+    {
         auto graph_ctx = make_context();
         auto * output = ggml_scale(graph_ctx.ctx, split, 0.5f);
         ggml_set_output(output);
@@ -1448,6 +1468,15 @@ static void test_meta_materialization(bool relative_addresses) {
     std::array<float, 4> view_values;
     ggml_backend_tensor_get(view, view_values.data(), 0, sizeof(view_values));
     GGML_ASSERT(std::equal(view_values.begin(), view_values.end(), values.begin() + 8));
+    {
+        auto view_ctx = make_context();
+        auto * only_view = ggml_view_1d(view_ctx.ctx, mirror, 4, 4*sizeof(float));
+        ggml_backend_buffer_set physical = {};
+        GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_set(view_ctx.ctx, ggml_backend_cpu_buffer_type(), &physical) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(physical.n_buffers == 0 && only_view->buffer == owner.get() && only_view->data == nullptr);
+        ggml_backend_tensor_get(only_view, view_values.data(), 0, sizeof(view_values));
+        GGML_ASSERT(std::equal(view_values.begin(), view_values.end(), values.begin() + 4));
+    }
 
     auto * external = ggml_view_1d(test_ctx.ctx, mirror, 4, 16*sizeof(float));
     GGML_ASSERT(ggml_backend_view_init(external) == GGML_STATUS_SUCCESS);
