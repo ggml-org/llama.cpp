@@ -1300,7 +1300,14 @@ private:
             SLT_TRC(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
 
             slot.callback_on_release = [this](int id_slot) {
-                queue_tasks.pop_deferred_task(id_slot);
+                // holding a slot only pays off if its cache is worth reusing
+                const int min_prompt_tokens = 10;
+
+                const server_slot * slot_ptr = get_slot_by_id(id_slot);
+                const bool has_significant_prompt = slot_ptr && slot_ptr->prompt.n_tokens() >= min_prompt_tokens;
+                const bool should_linger = has_significant_prompt && params_base.slot_linger_ms > 0;
+
+                queue_tasks.pop_deferred_with_linger(id_slot, params_base.slot_linger_ms, should_linger);
             };
 
             slot.callback_on_reset = [this](const server_slot & slot) {
@@ -1705,6 +1712,9 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
+        // Cancel linger if this slot was waiting for an in-window arrival
+        queue_tasks.cancel_linger_if_active(slot.id);
+
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
             auto task_loras = construct_lora_list(task.params.lora);
