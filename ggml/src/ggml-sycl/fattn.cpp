@@ -19,7 +19,7 @@
 #include "fattn-vec.hpp"
 #include "fattn.hpp"
 #include "fattn-onednn.hpp"
-
+#include "fattn-sparse.hpp"
 
 #define FATTN_VEC_CASE(D, type_K, type_V)                                                                        \
     {                                                                                                            \
@@ -275,6 +275,11 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
 
 void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_set_device(ctx.device);
+
+    // sparse nodes are gathered down to n_kv_max rows and re-dispatched here
+    if (ggml_sycl_flash_attn_ext_sparse(ctx, dst)) {
+        return;
+    }
 
     // n_kv watchdog: log when n_kv differs from the last FA call with
     // the same D — helps detect cache-truncation issues.
