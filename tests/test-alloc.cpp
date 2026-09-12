@@ -961,6 +961,9 @@ static void test_meta_buffer_type_lifetime() {
     GGML_ASSERT(ggml_backend_buft_get_alignment(buft) == 8);
     GGML_ASSERT(ggml_backend_buft_get_device(buft) == meta);
     GGML_ASSERT(!ggml_backend_buft_is_host(buft));
+    size_t physical_allocations = backend.context->alloc_calls;
+    GGML_ASSERT(ggml_backend_buft_alloc_buffer(buft, 64) == nullptr);
+    GGML_ASSERT(backend.context->alloc_calls == physical_allocations);
     auto ctx = make_context();
     ggml_new_tensor_1d(ctx.ctx, GGML_TYPE_F32, 8);
     GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.ctx, buft) == 32);
@@ -970,6 +973,10 @@ static void test_meta_buffer_type_lifetime() {
 
     auto * empty = ggml_new_tensor_1d(ctx.ctx, GGML_TYPE_F32, 0);
     ggml_backend_buffer_ptr assignment(ggml_backend_buft_alloc_buffer(buft, 0));
+    GGML_ASSERT(ggml_backend_tensor_alloc(assignment.get(), empty, nullptr) == GGML_STATUS_FAILED);
+    ggml_tallocr raw = ggml_tallocr_new(assignment.get());
+    GGML_ASSERT(ggml_tallocr_alloc(&raw, empty) == GGML_STATUS_FAILED);
+    GGML_ASSERT(!empty->data && !empty->buffer);
     empty->buffer = assignment.get();
     GGML_ASSERT(empty->data == nullptr && !ggml_backend_tensor_is_bound(empty));
     auto * allocation = ggml_backend_buft_get_alloc_interface(buft);

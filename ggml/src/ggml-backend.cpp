@@ -2169,16 +2169,16 @@ enum ggml_status ggml_backend_view_init(struct ggml_tensor * tensor) {
 
 enum ggml_status ggml_backend_tensor_alloc(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, void * addr) {
     GGML_ASSERT(tensor);
-    if (buffer->binding) {
+    if (buffer->binding || ggml_backend_buft_get_alloc_interface(buffer->buft)) {
         return GGML_STATUS_FAILED;
     }
     GGML_ASSERT(tensor->buffer == NULL);
     GGML_ASSERT(tensor->data == NULL);
     GGML_ASSERT(tensor->view_src == NULL);
-    GGML_ASSERT(addr >= ggml_backend_buffer_get_base(buffer));
-    GGML_ASSERT(ggml_backend_buffer_is_meta(buffer) ||
-        (char *) addr + ggml_backend_buffer_get_alloc_size(buffer, tensor) <=
-        (char *) ggml_backend_buffer_get_base(buffer) + ggml_backend_buffer_get_size(buffer));
+    uintptr_t base = (uintptr_t) ggml_backend_buffer_get_base(buffer);
+    GGML_ASSERT((uintptr_t) addr >= base);
+    size_t offset = (uintptr_t) addr - base;
+    GGML_ASSERT(offset <= buffer->size && ggml_backend_buffer_get_alloc_size(buffer, tensor) <= buffer->size - offset);
 
     tensor->buffer = buffer;
     tensor->data = addr;

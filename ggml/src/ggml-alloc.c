@@ -74,7 +74,7 @@ struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer) {
 }
 
 enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor) {
-    if (talloc->buffer->binding) {
+    if (talloc->buffer->binding || ggml_backend_buft_get_alloc_interface(talloc->buffer->buft)) {
         return GGML_STATUS_FAILED;
     }
     size_t size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);
@@ -86,7 +86,8 @@ enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_te
         GGML_ABORT("not enough space in the buffer");
     }
 
-    void * addr = (char *)ggml_backend_buffer_get_base(talloc->buffer) + talloc->offset;
+    void * base = ggml_backend_buffer_get_base(talloc->buffer);
+    void * addr = base ? (char *) base + talloc->offset : NULL;
     talloc->offset += size;
 
     assert(((uintptr_t)addr % talloc->alignment) == 0);
