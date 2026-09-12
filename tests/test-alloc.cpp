@@ -33,6 +33,7 @@ struct dummy_backend_context {
     size_t alloc_calls = 0;
     size_t free_calls = 0;
     size_t init_calls = 0;
+    size_t shard_size_queries = 0;
     size_t fail_alloc = SIZE_MAX;
     size_t fail_init = SIZE_MAX;
 
@@ -1339,6 +1340,69 @@ static void test_meta_split_preparation() {
     ggml_backend_meta_preparation_free(source_preparation);
     GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
 
+    for (auto * backend : {&first, &second}) {
+        backend->context->shard_size_queries = 0;
+        backend->buffer_type.iface.get_alloc_size = [](ggml_backend_buffer_type_t type, const ggml_tensor * tensor) {
+            auto * context = static_cast<dummy_backend_context *>(type->context);
+            if (std::strcmp(tensor->name, "graph_shard") == 0 && (tensor->ne[1] == 2 || tensor->ne[1] == 4)) {
+                GGML_ASSERT(tensor->data == nullptr && tensor->buffer == nullptr);
+                context->shard_size_queries++;
+            }
+            return ggml_nbytes(tensor);
+        };
+    }
+    ggml_gallocr_ptr measured(ggml_gallocr_new(buft));
+    for (int pass = 0; pass < 2; pass++) {
+        auto graph_ctx = make_context();
+        auto * graph_source = ggml_new_tensor_2d(graph_ctx.ctx, GGML_TYPE_F32, 8, 6);
+        graph_source->buffer = assigned.get();
+        auto * graph_result = ggml_scale(graph_ctx.ctx, graph_source, 0.5f);
+        ggml_set_name(graph_result, "graph_shard");
+        ggml_set_output(graph_result);
+        ggml_build_forward_expand(graph_ctx.graph, graph_result);
+        std::array<uint8_t, GGML_TENSOR_SIZE> source_before, result_before;
+        std::memcpy(source_before.data(), graph_source, GGML_TENSOR_SIZE);
+        std::memcpy(result_before.data(), graph_result, GGML_TENSOR_SIZE);
+        size_t required = 0;
+        ggml_gallocr_reserve_n_size(measured.get(), graph_ctx.graph, nullptr, nullptr, &required);
+        GGML_ASSERT(required == ggml_nbytes(graph_result));
+        GGML_ASSERT(std::memcmp(source_before.data(), graph_source, GGML_TENSOR_SIZE) == 0);
+        GGML_ASSERT(std::memcmp(result_before.data(), graph_result, GGML_TENSOR_SIZE) == 0);
+        GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
+    }
+    {
+        auto graph_ctx = make_context();
+        auto * native_source = ggml_new_tensor_2d(graph_ctx.ctx, GGML_TYPE_F32, 8, 6);
+        ggml_set_output(native_source);
+        auto * result = ggml_scale(graph_ctx.ctx, native_source, 0.5f);
+        ggml_build_forward_expand(graph_ctx.graph, result);
+        ggml_backend_buffer_type_t types[] = {buft, &first.buffer_type};
+        ggml_gallocr_ptr mixed(ggml_gallocr_new_n(types, 2));
+        int nodes[] = {0};
+        int leafs[] = {1};
+        size_t sizes[2] = {};
+        ggml_gallocr_reserve_n_size(mixed.get(), graph_ctx.graph, nodes, leafs, sizes);
+        GGML_ASSERT(sizes[0] == 192 && sizes[1] == 192);
+        GGML_ASSERT(native_source->buffer == nullptr && result->buffer == nullptr);
+    }
+    {
+        auto graph_ctx = make_context();
+        auto * a = ggml_new_tensor_2d(graph_ctx.ctx, GGML_TYPE_F32, 8, 6);
+        auto * b = ggml_scale(graph_ctx.ctx, a, 0.5f);
+        a->op = GGML_OP_SCALE;
+        a->src[0] = b;
+        graph_ctx.graph->n_nodes = 2;
+        graph_ctx.graph->nodes[0] = a;
+        graph_ctx.graph->nodes[1] = b;
+        GGML_ASSERT(!ggml_gallocr_reserve(measured.get(), graph_ctx.graph));
+        GGML_ASSERT(a->buffer == nullptr && b->buffer == nullptr);
+    }
+    measured.reset();
+    GGML_ASSERT(first.context->alloc_calls == 0 && second.context->alloc_calls == 0);
+    GGML_ASSERT(first.context->shard_size_queries >= 2 && second.context->shard_size_queries >= 2);
+    first.buffer_type.iface.get_alloc_size = nullptr;
+    second.buffer_type.iface.get_alloc_size = nullptr;
+
     auto bound_ctx = make_context();
     auto * bound = ggml_new_tensor_2d(bound_ctx.ctx, GGML_TYPE_F32, 8, 6);
     auto * bound_view = ggml_view_2d(bound_ctx.ctx, bound, 4, 6, bound->nb[1], 4*sizeof(float));
@@ -1347,6 +1411,17 @@ static void test_meta_split_preparation() {
     GGML_ASSERT(first.context->buffers.size() == 1 && second.context->buffers.size() == 1);
     GGML_ASSERT(ggml_backend_buffer_get_size(first.context->buffers[0]) == 64);
     GGML_ASSERT(ggml_backend_buffer_get_size(second.context->buffers[0]) == 128);
+    auto * legacy_view = ggml_view_2d(bound_ctx.ctx, bound, 4, 6, bound->nb[1], 4*sizeof(float));
+    GGML_ASSERT(legacy_view->data != nullptr && legacy_view->buffer == nullptr);
+    auto * legacy_preparation = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 1, nullptr);
+    GGML_ASSERT(legacy_preparation);
+    GGML_ASSERT(ggml_backend_meta_preparation_tensor(legacy_preparation, legacy_view) == GGML_STATUS_SUCCESS);
+    for (size_t device = 0; device < 2; device++) {
+        auto * simple = ggml_backend_meta_preparation_get_tensor(legacy_preparation, legacy_view, device);
+        GGML_ASSERT(simple != legacy_view && simple->data == nullptr && simple->buffer == nullptr);
+        GGML_ASSERT(simple->ne[1] == (device == 0 ? 2 : 4));
+    }
+    ggml_backend_meta_preparation_free(legacy_preparation);
     source_ctx.preparation = nullptr;
     source_ctx.source = nullptr;
     auto * bound_preparation = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 0, &sources);

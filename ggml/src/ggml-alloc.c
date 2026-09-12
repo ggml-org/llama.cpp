@@ -488,15 +488,44 @@ struct ggml_gallocr_domain {
     struct ggml_dyn_tallocr * alloc;
 };
 
+struct ggml_gallocr_graph;
+
 struct ggml_gallocr_composite_plan {
     const struct ggml_backend_buffer_type_alloc_i * iface;
     struct ggml_gallocr_domain * domains;
     size_t n_domains;
+    struct ggml_gallocr_graph * graph;
+    void * preparation;
+};
+
+struct ggml_gallocr_tensor_requirement {
+    int buffer_id;
+    int src[GGML_MAX_SRC];
+    int view_src;
+    size_t view_offs;
+    size_t first_shard;
+    size_t n_shards;
+    bool external;
+};
+
+struct ggml_gallocr_shard_requirement {
+    int64_t ne[GGML_MAX_DIMS];
+    size_t nb[GGML_MAX_DIMS];
+    size_t size;
+    size_t view_offs;
+    int flags;
 };
 
 struct ggml_gallocr_plan {
     struct ggml_dyn_tallocr ** buf_tallocs; // [n_buffers]
     struct ggml_gallocr_composite_plan ** composites; // [n_buffers], optional
+    struct ggml_gallocr_tensor_requirement * tensors;
+    struct ggml_gallocr_shard_requirement * shards;
+    int * node_ids;
+    int * leaf_ids;
+    size_t n_tensors;
+    size_t n_shards;
+    bool valid;
     struct ggml_hash_set hash_set;
     struct hash_node * hash_values; // [hash_set.size]
 
@@ -641,6 +670,10 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
     free(galloc->buffers);
     free(galloc->plan.buf_tallocs);
     free(galloc->plan.composites);
+    free(galloc->plan.tensors);
+    free(galloc->plan.shards);
+    free(galloc->plan.node_ids);
+    free(galloc->plan.leaf_ids);
     free(galloc->plan.node_allocs);
     free(galloc->plan.leaf_allocs);
     free(galloc);
@@ -786,10 +819,6 @@ static int get_node_buffer_id(const int * node_buffer_ids, int i) {
 }
 
 static void ggml_gallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgraph * graph, const int * node_buffer_ids, const int * leaf_buffer_ids) {
-    // clear hash tables
-    ggml_hash_set_reset(&galloc->plan.hash_set);
-    memset(galloc->plan.hash_values, 0, sizeof(struct hash_node) * galloc->plan.hash_set.size);
-
     // allocate leafs
     // these may be tensors that the application is not using in the graph, but may still want to allocate for other purposes
     for (int i = 0; i < graph->n_leafs; i++) {
@@ -892,11 +921,228 @@ static void ggml_gallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
     }
 }
 
+struct ggml_gallocr_graph {
+    ggml_gallocr_t galloc;
+    struct ggml_tensor ** tensors;
+    int * hash_ids;
+    uint8_t * state;
+    bool * declared;
+    size_t count;
+};
+
+static int ggml_gallocr_graph_tensor_id(struct ggml_gallocr_graph * graph, struct ggml_tensor * tensor, int buffer_id) {
+    if (buffer_id < 0 || buffer_id >= graph->galloc->n_buffers) {
+        return -1;
+    }
+    struct ggml_hash_set * hash = &graph->galloc->plan.hash_set;
+    size_t slot = ggml_hash_find(hash, tensor);
+    if (slot == GGML_HASHSET_FULL) {
+        return -1;
+    }
+    if (!graph->hash_ids[slot]) {
+        GGML_ASSERT(graph->count < hash->size && graph->count < INT_MAX);
+        ggml_hash_find_or_insert(hash, tensor);
+        int id = (int) graph->count++;
+        graph->hash_ids[slot] = id + 1;
+        graph->tensors[id] = tensor;
+        graph->galloc->plan.tensors[id].buffer_id = buffer_id;
+    }
+    return graph->hash_ids[slot] - 1;
+}
+
+static ggml_backend_buffer_type_t ggml_gallocr_source_buft(void * context, const struct ggml_tensor * tensor, enum ggml_backend_buffer_usage * usage) {
+    struct ggml_gallocr_composite_plan * composite = context;
+    struct ggml_gallocr_graph * graph = composite->graph;
+    size_t slot = ggml_hash_find(&graph->galloc->plan.hash_set, tensor);
+    GGML_ASSERT(slot != GGML_HASHSET_FULL && graph->hash_ids[slot]);
+    int id = graph->hash_ids[slot] - 1;
+    *usage = GGML_BACKEND_BUFFER_USAGE_COMPUTE;
+    return graph->galloc->bufts[graph->galloc->plan.tensors[id].buffer_id];
+}
+
+static struct ggml_tensor * ggml_gallocr_source_tensor(void * context, const struct ggml_tensor * tensor, size_t device) {
+    struct ggml_gallocr_composite_plan * composite = context;
+    struct ggml_gallocr_graph * graph = composite->graph;
+    size_t slot = ggml_hash_find(&graph->galloc->plan.hash_set, tensor);
+    GGML_ASSERT(slot != GGML_HASHSET_FULL && graph->hash_ids[slot]);
+    int id = graph->hash_ids[slot] - 1;
+    int buffer_id = graph->galloc->plan.tensors[id].buffer_id;
+    struct ggml_gallocr_composite_plan * source = graph->galloc->plan.composites[buffer_id];
+    if (!source || source == composite || !source->preparation || device >= source->n_domains) {
+        return NULL;
+    }
+    return source->iface->get_tensor(source->preparation, tensor, device);
+}
+
+static bool ggml_gallocr_prepare_source(struct ggml_gallocr_composite_plan * composite, const struct ggml_tensor * tensor) {
+    if (!tensor || composite->iface->get_tensor(composite->preparation, tensor, 0)) {
+        return true;
+    }
+    if (!ggml_gallocr_prepare_source(composite, tensor->view_src)) {
+        return false;
+    }
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        if (tensor->src[i] != tensor && !ggml_gallocr_prepare_source(composite, tensor->src[i])) {
+            return false;
+        }
+    }
+    return composite->iface->prepare_tensor(composite->preparation, tensor) == GGML_STATUS_SUCCESS;
+}
+
+static bool ggml_gallocr_prepare_graph_tensor(struct ggml_gallocr_graph * graph, int id) {
+    if (graph->state[id]) {
+        return graph->state[id] == 2;
+    }
+    graph->state[id] = 1;
+    struct ggml_tensor * tensor = graph->tensors[id];
+    struct ggml_gallocr_tensor_requirement * requirement = &graph->galloc->plan.tensors[id];
+    requirement->external = ggml_gallocr_is_external(tensor);
+    requirement->view_offs = tensor->view_offs;
+    requirement->view_src = -1;
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        requirement->src[i] = -1;
+    }
+    if (graph->declared[id] || !ggml_backend_tensor_is_bound(tensor)) {
+        if (tensor->view_src) {
+            requirement->view_src = ggml_gallocr_graph_tensor_id(graph, tensor->view_src, requirement->buffer_id);
+            if (requirement->view_src < 0 || !ggml_gallocr_prepare_graph_tensor(graph, requirement->view_src)) {
+                return false;
+            }
+        }
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            if (!tensor->src[i]) {
+                continue;
+            }
+            requirement->src[i] = ggml_gallocr_graph_tensor_id(graph, tensor->src[i], requirement->buffer_id);
+            if (requirement->src[i] < 0 || (tensor->src[i] != tensor && !ggml_gallocr_prepare_graph_tensor(graph, requirement->src[i]))) {
+                return false;
+            }
+        }
+    }
+    struct ggml_gallocr_composite_plan * composite = graph->galloc->plan.composites[requirement->buffer_id];
+    if (composite && !ggml_gallocr_prepare_source(composite, tensor)) {
+        return false;
+    }
+    graph->state[id] = 2;
+    return true;
+}
+
+static bool ggml_gallocr_prepare_graph(ggml_gallocr_t galloc, struct ggml_cgraph * cgraph, const int * node_buffer_ids, const int * leaf_buffer_ids) {
+    struct ggml_gallocr_plan * plan = &galloc->plan;
+    size_t capacity = plan->hash_set.size;
+    struct ggml_gallocr_graph graph = { .galloc = galloc };
+    graph.tensors = calloc(capacity, sizeof(graph.tensors[0]));
+    graph.hash_ids = calloc(capacity, sizeof(graph.hash_ids[0]));
+    graph.state = calloc(capacity, sizeof(graph.state[0]));
+    graph.declared = calloc(capacity, sizeof(graph.declared[0]));
+    GGML_ASSERT(graph.tensors && graph.hash_ids && graph.state && graph.declared);
+    free(plan->tensors);
+    free(plan->shards);
+    free(plan->node_ids);
+    free(plan->leaf_ids);
+    plan->tensors = calloc(capacity, sizeof(plan->tensors[0]));
+    plan->shards = NULL;
+    plan->node_ids = calloc(MAX(1, cgraph->n_nodes), sizeof(plan->node_ids[0]));
+    plan->leaf_ids = calloc(MAX(1, cgraph->n_leafs), sizeof(plan->leaf_ids[0]));
+    plan->n_tensors = plan->n_shards = 0;
+    GGML_ASSERT(plan->tensors && plan->node_ids && plan->leaf_ids);
+    bool result = false;
+    for (int i = 0; i < cgraph->n_leafs; i++) {
+        int buffer_id = get_node_buffer_id(leaf_buffer_ids, i);
+        int id = ggml_gallocr_graph_tensor_id(&graph, cgraph->leafs[i], buffer_id);
+        if (id < 0) {
+            goto cleanup;
+        }
+        plan->leaf_ids[i] = id;
+        plan->tensors[id].buffer_id = buffer_id;
+        graph.declared[id] = true;
+    }
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        int buffer_id = get_node_buffer_id(node_buffer_ids, i);
+        int id = ggml_gallocr_graph_tensor_id(&graph, cgraph->nodes[i], buffer_id);
+        if (id < 0) {
+            goto cleanup;
+        }
+        plan->node_ids[i] = id;
+        plan->tensors[id].buffer_id = buffer_id;
+        graph.declared[id] = true;
+    }
+    for (int i = 0; i < galloc->n_buffers; i++) {
+        struct ggml_gallocr_composite_plan * composite = plan->composites[i];
+        if (!composite || composite->preparation) {
+            continue;
+        }
+        struct ggml_backend_alloc_source_i sources = {ggml_gallocr_source_buft, ggml_gallocr_source_tensor, composite, NULL};
+        composite->graph = &graph;
+        composite->preparation = composite->iface->new_preparation(galloc->bufts[i], GGML_BACKEND_BUFFER_USAGE_COMPUTE, capacity, &sources);
+        if (!composite->preparation) {
+            goto cleanup;
+        }
+    }
+    for (size_t i = 0; i < graph.count; i++) {
+        if (!ggml_gallocr_prepare_graph_tensor(&graph, (int) i)) {
+            goto cleanup;
+        }
+    }
+    for (size_t i = 0; i < graph.count; i++) {
+        struct ggml_gallocr_tensor_requirement * requirement = &plan->tensors[i];
+        struct ggml_gallocr_composite_plan * composite = plan->composites[requirement->buffer_id];
+        requirement->first_shard = plan->n_shards;
+        requirement->n_shards = composite ? composite->n_domains : 0;
+        if (requirement->n_shards > SIZE_MAX/sizeof(plan->shards[0]) - plan->n_shards) {
+            goto cleanup;
+        }
+        plan->n_shards += requirement->n_shards;
+    }
+    plan->shards = calloc(MAX((size_t) 1, plan->n_shards), sizeof(plan->shards[0]));
+    GGML_ASSERT(plan->shards);
+    for (size_t i = 0; i < graph.count; i++) {
+        struct ggml_gallocr_tensor_requirement * requirement = &plan->tensors[i];
+        struct ggml_gallocr_composite_plan * composite = plan->composites[requirement->buffer_id];
+        for (size_t device = 0; device < requirement->n_shards; device++) {
+            struct ggml_tensor * simple = composite->iface->get_tensor(composite->preparation, graph.tensors[i], device);
+            if (!simple) {
+                goto cleanup;
+            }
+            struct ggml_gallocr_shard_requirement * shard = &plan->shards[requirement->first_shard + device];
+            memcpy(shard->ne, simple->ne, sizeof(shard->ne));
+            memcpy(shard->nb, simple->nb, sizeof(shard->nb));
+            shard->view_offs = simple->view_offs;
+            shard->flags = simple->flags;
+            shard->size = simple->view_src ? 0 : ggml_backend_buft_get_alloc_size(composite->domains[device].buft, simple);
+        }
+    }
+    plan->n_tensors = graph.count;
+    result = true;
+cleanup:
+    for (int i = 0; i < galloc->n_buffers; i++) {
+        struct ggml_gallocr_composite_plan * composite = plan->composites[i];
+        if (composite) {
+            if (composite->preparation) {
+                composite->iface->free_preparation(composite->preparation);
+            }
+            composite->preparation = NULL;
+            composite->graph = NULL;
+        }
+    }
+    free(graph.tensors);
+    free(graph.hash_ids);
+    free(graph.state);
+    free(graph.declared);
+    if (!result) {
+        plan->n_tensors = plan->n_shards = 0;
+    }
+    return result;
+}
+
 static bool ggml_gallocr_reserve_plan(
         ggml_gallocr_t galloc, struct ggml_cgraph * graph, const int * node_buffer_ids, const int * leaf_buffer_ids) {
-    size_t min_hash_size = graph->n_nodes + graph->n_leafs;
+    size_t min_hash_size = MAX((size_t) 1, (size_t) graph->n_nodes + graph->n_leafs);
     // add 25% margin to avoid hash collisions
     min_hash_size += min_hash_size / 4;
+    if (galloc->plan.composites) {
+        min_hash_size = MAX(min_hash_size, 2*((size_t) graph->n_nodes + graph->n_leafs) + GGML_MAX_SRC);
+    }
 
     // initialize hash table
     if (galloc->plan.hash_set.size < min_hash_size) {
@@ -907,6 +1153,15 @@ static bool ggml_gallocr_reserve_plan(
         free(galloc->plan.hash_values);
         galloc->plan.hash_values = malloc(sizeof(struct hash_node) * galloc->plan.hash_set.size);
         GGML_ASSERT(galloc->plan.hash_values != NULL);
+    }
+
+    ggml_hash_set_reset(&galloc->plan.hash_set);
+    memset(galloc->plan.hash_values, 0, sizeof(struct hash_node) * galloc->plan.hash_set.size);
+    galloc->plan.valid = false;
+    if (galloc->plan.composites && !ggml_gallocr_prepare_graph(galloc, graph, node_buffer_ids, leaf_buffer_ids)) {
+        ggml_hash_set_reset(&galloc->plan.hash_set);
+        memset(galloc->plan.hash_set.keys, 0, galloc->plan.hash_set.size*sizeof(galloc->plan.hash_set.keys[0]));
+        return false;
     }
 
     // reset allocators
@@ -971,6 +1226,14 @@ static bool ggml_gallocr_reserve_plan(
         }
     }
 
+    ggml_hash_set_reset(&galloc->plan.hash_set);
+    memset(galloc->plan.hash_set.keys, 0, galloc->plan.hash_set.size*sizeof(galloc->plan.hash_set.keys[0]));
+#ifdef GGML_ALLOCATOR_DEBUG
+    for (int i = 0; i < galloc->n_buffers; i++) {
+        memset(galloc->plan.buf_tallocs[i]->allocated_tensors, 0, sizeof(galloc->plan.buf_tallocs[i]->allocated_tensors));
+    }
+#endif
+    galloc->plan.valid = true;
     return true;
 }
 
@@ -1081,6 +1344,9 @@ static bool ggml_gallocr_node_needs_realloc(ggml_gallocr_t galloc, struct ggml_t
 }
 
 static bool ggml_gallocr_needs_realloc(ggml_gallocr_t galloc, struct ggml_cgraph * graph) {
+    if (!galloc->plan.valid) {
+        return true;
+    }
     for (int i = 0; i < galloc->n_buffers; i++) {
         if (!galloc->buffers[i]) {
             return true;

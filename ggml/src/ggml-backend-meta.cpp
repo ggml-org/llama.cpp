@@ -517,6 +517,11 @@ static struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct 
     return it->second[index];
 }
 
+static bool ggml_backend_meta_tensor_has_native_data(const ggml_tensor * tensor) {
+    return !tensor->buffer && tensor->data &&
+        (!tensor->view_src || !tensor->view_src->buffer || !ggml_backend_buft_is_meta(tensor->view_src->buffer->buft));
+}
+
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync);
 
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
@@ -527,7 +532,7 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     GGML_ASSERT(tensor);
     ggml_backend_buffer_usage source_usage = split_ctx.usage;
     auto * source_buft = split_ctx.source_buft(tensor, source_usage);
-    if ((!tensor->buffer && tensor->data) || (source_buft && !ggml_backend_buft_is_meta(source_buft))) {
+    if (ggml_backend_meta_tensor_has_native_data(tensor) || (source_buft && !ggml_backend_buft_is_meta(source_buft))) {
         return {ggml_nelements(tensor) == 0 ? GGML_BACKEND_SPLIT_AXIS_UNKNOWN : GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
     }
     if (source_buft) {
@@ -1260,7 +1265,7 @@ static ggml_tensor * ggml_backend_meta_find_simple_tensor(
         return ggml_backend_tensor_is_bound(tensor) ? ggml_backend_meta_buffer_simple_tensor(tensor, device) : nullptr;
     }
     if (!replaced && ((tensor->buffer && !ggml_backend_buft_is_meta(ggml_backend_buffer_get_type(tensor->buffer))) ||
-            (!tensor->buffer && tensor->data))) {
+            ggml_backend_meta_tensor_has_native_data(tensor))) {
         return const_cast<ggml_tensor *>(tensor);
     }
     if (sources.get_tensor) {
