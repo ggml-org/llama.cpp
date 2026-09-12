@@ -17,6 +17,79 @@
 #include <cstdio>  // for GGML_ASSERT
 
 #include "repack.h"
+#ifdef GGML_CPU_Q4KP
+#include "q4kp/q4kp_kernel.h"
+#include "q4kp/q4kp_runtime.h"
+#include "q4kp/q4kp_vnni_kernel.h"
+#include "q4kp/q4kp_wide_kernel.h"
+#include <atomic>
+#include <cstdlib>
+
+// CPU-only process-local layout. The GGUF and allocation size stay unchanged.
+static std::atomic<uint64_t> q4kp_tensors{0}, q4kp_bytes{0}, q4kp_calls{0};
+// The mode is fixed before the first tensor is packed.
+static int q4kp_mode() {
+    static const int mode = []() {
+        const char *value = std::getenv("GGML_Q4KP");
+        if (!value || !*value || std::strcmp(value, "off") == 0) { return 0; }
+        if (std::strcmp(value, "p6") == 0) { return 1; }
+        if (std::strcmp(value, "vnni") == 0) {
+            if (q4kp_vnni_supported()) { return 2; }
+            GGML_LOG_WARN("GGML_Q4KP: VNNI unavailable; using P6\n");
+            return 1;
+        }
+        if (std::strcmp(value, "wide") == 0) {
+            if (q4kp_wide_supported()) { return 3; }
+            const int fallback = q4kp_vnni_supported() ? 2 : 1;
+            GGML_LOG_WARN("GGML_Q4KP: wide unavailable; using %s\n", fallback == 2 ? "VNNI" : "P6");
+            return fallback;
+        }
+        GGML_LOG_WARN("GGML_Q4KP: unknown mode; experiment disabled\n");
+        return 0;
+    }();
+    return mode;
+}
+extern "C" int q4kp_runtime_enabled(void) { return q4kp_mode() != 0; }
+static void q4kp_dispatch_gemv(int n, float *s, size_t bs, const void *x, const void *y, int nr, int nc) {
+    switch (q4kp_mode()) {
+        case 3: q4kp_wide_gemv(n, s, bs, x, y, nr, nc); break;
+        case 2: q4kp_vnni_gemv(n, s, bs, x, y, nr, nc); break;
+        default: q4kp_gemv(n, s, bs, x, y, nr, nc); break;
+    }
+}
+extern "C" uint64_t q4kp_runtime_stat(int index) {
+    if(index==0)return q4kp_tensors.load(std::memory_order_relaxed);
+    if(index==1)return q4kp_bytes.load(std::memory_order_relaxed);
+    if(index==2)return q4kp_calls.load(std::memory_order_relaxed);
+    return 0; // index 3: additional allocation bytes, always zero.
+}
+static bool q4kp_eligible(const ggml_tensor *t) {
+    return q4kp_runtime_enabled() && __builtin_cpu_supports("bmi2") &&
+        ggml_cpu_has_avx2() && ggml_cpu_has_fma() && ggml_cpu_has_f16c() &&
+        t->view_src==nullptr && ggml_is_contiguous(t) &&
+        t->type==GGML_TYPE_Q4_K && ggml_n_dims(t)==2 &&
+        t->ne[0]%QK_K==0 && t->ne[1]%8==0;
+}
+static const ggml_tensor *q4kp_owner(const ggml_tensor *t) {
+    while(t->view_src)t=t->view_src;
+    return t;
+}
+static bool q4kp_compatible_view(const ggml_tensor *t) {
+    const auto *owner=q4kp_owner(t);
+    size_t offset=0;
+    for(auto *p=t;p->view_src;p=p->view_src) {
+        if(p->view_offs>SIZE_MAX-offset)return false;
+        offset+=p->view_offs;
+    }
+    const size_t group=owner->nb[1]*8, owner_bytes=ggml_nbytes(owner);
+    return t->type==GGML_TYPE_Q4_K && ggml_n_dims(t)==2 &&
+        ggml_is_contiguous(t) && t->ne[0]==owner->ne[0] && t->ne[1]%8==0 &&
+        t->nb[1]==owner->nb[1] && group && offset%group==0 &&
+        offset<=owner_bytes && ggml_nbytes(t)<=owner_bytes-offset;
+}
+
+#endif
+
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic ignored "-Woverlength-strings"
@@ -4155,7 +4228,7 @@ class tensor_traits_base : public ggml::cpu::tensor_traits {
     virtual int repack(struct ggml_tensor * t, const void * data, size_t data_size) = 0;
 };
 
-template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE> class tensor_traits : public tensor_traits_base {
+template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE, bool Q4KP = false> class tensor_traits : public tensor_traits_base {
 
     bool work_size(int /* n_threads */, const struct ggml_tensor * op, size_t & size) override {
         // not realy a GGML_TYPE_Q8_0 but same size.
@@ -4187,6 +4260,13 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
     }
 
     bool compute_forward(struct ggml_compute_params * params, struct ggml_tensor * op) override {
+#ifdef GGML_CPU_Q4KP
+        if constexpr (Q4KP) {
+            GGML_ASSERT(op->op==GGML_OP_MUL_MAT && q4kp_compatible_view(op->src[0]));
+            // One count per matrix operation, not an atomic increment per row chunk.
+            if(params->ith==0)q4kp_calls.fetch_add(1,std::memory_order_relaxed);
+        }
+#endif
         switch (op->op) {
             case GGML_OP_MUL_MAT:
                 forward_mul_mat(params, op);
@@ -4239,11 +4319,23 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
         // If there are more than three rows in src1, use gemm; otherwise, use gemv.
         if (nrows > 3) {
+#ifdef GGML_CPU_Q4KP
+        if constexpr (Q4KP) {
+                q4kp_gemm(ne00,(float *)dst_ptr+src0_start,nb1/nb0,
+                    src0_ptr+src0_start*nb01,src1_ptr,nrows-(nrows%4),ncols);
+            } else
+#endif
             gemm<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00, (float *) (dst_ptr) + src0_start, nb1 / nb0,
                                                              src0_ptr + src0_start * nb01, src1_ptr,
                                                              nrows - (nrows % 4), ncols);
         }
         for (int iter = nrows - (nrows % 4); iter < nrows; iter++) {
+#ifdef GGML_CPU_Q4KP
+        if constexpr (Q4KP) {
+                q4kp_dispatch_gemv(ne00,(float *)(dst_ptr+iter*nb1)+src0_start,ne01,
+                    src0_ptr+src0_start*nb01,src1_ptr+src1_col_stride*iter,1,ncols);
+            } else
+#endif
             gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00, (float *) (dst_ptr + (iter * nb1)) + src0_start,
                                                              ne01, src0_ptr + src0_start * nb01,
                                                              src1_ptr + (src1_col_stride * iter), 1 /* nrows */, ncols);
@@ -4519,13 +4611,41 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
     int repack(struct ggml_tensor * t, const void * data, size_t data_size) override {
         GGML_LOG_DEBUG("%s: repack tensor %s with %s_%dx%d\n", __func__, t->name, ggml_type_name(t->type),
                        (int) NB_COLS, (int) INTER_SIZE);
-        return ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+        int result=ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+#ifdef GGML_CPU_Q4KP
+        if constexpr (Q4KP) {
+            GGML_ASSERT(!t->view_src && q4kp_eligible(t));
+            if(result==0)result=q4kp_recode(t->data,data_size);
+            if(result==0) {
+                q4kp_tensors.fetch_add(1,std::memory_order_relaxed);
+                q4kp_bytes.fetch_add(data_size/1152*96,std::memory_order_relaxed);
+            }
+        }
+#endif
+        return result;
     }
 };
 
 }  // namespace ggml::cpu::repack
 
+#ifdef GGML_CPU_Q4KP
+static const ggml::cpu::tensor_traits *q4kp_trait() {
+    static const ggml::cpu::repack::tensor_traits<block_q4_K,8,8,GGML_TYPE_Q8_K,true> trait;
+    return &trait;
+}
+static bool q4kp_has_layout(const ggml_tensor *t) {
+    const auto *owner=q4kp_owner(t);
+    return owner->buffer && owner->buffer->buft==ggml_backend_cpu_repack_buffer_type() &&
+        owner->extra==q4kp_trait();
+}
+#endif
 static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(const struct ggml_tensor * cur) {
+#ifdef GGML_CPU_Q4KP
+    // A view inherits its owner's actual encoding, never the current mode alone.
+    if(q4kp_has_layout(cur))return q4kp_compatible_view(cur)?q4kp_trait():nullptr;
+    if(q4kp_eligible(cur))return q4kp_trait();
+#endif
+
     // instance for Q4
     static const ggml::cpu::repack::tensor_traits<block_q4_0, 4, 4, GGML_TYPE_Q8_0> q4_0_4x4_q8_0;
     static const ggml::cpu::repack::tensor_traits<block_q4_0, 8, 4, GGML_TYPE_Q8_0> q4_0_4x8_q8_0;
@@ -4724,6 +4844,13 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
 }
 
 static enum ggml_status ggml_backend_cpu_repack_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
+#ifdef GGML_CPU_Q4KP
+    if(tensor->view_src && q4kp_has_layout(tensor) && !q4kp_compatible_view(tensor)) {
+        // Refuse incompatible views before any standard-layout reader can run.
+        GGML_LOG_ERROR("Q4KP: incompatible view %s\n",tensor->name);
+        return GGML_STATUS_FAILED;
+    }
+#endif
     tensor->extra = (void *) const_cast<ggml::cpu::tensor_traits *>(ggml_repack_get_optimal_repack_type(tensor));
 
     GGML_UNUSED(buffer);

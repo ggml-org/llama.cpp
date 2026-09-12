@@ -1,3 +1,16 @@
+option(GGML_CPU_Q4KP "ggml: experimental lossless Q4_K P6/VNNI execution layout" OFF)
+if (GGML_CPU_Q4KP)
+    if (NOT GGML_SYSTEM_ARCH STREQUAL "x86" OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
+        MSVC OR NOT CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang)$")
+        message(FATAL_ERROR "Q4KP requires an x86-64 GCC-compatible compiler")
+    endif()
+    if (GGML_NATIVE OR GGML_CPU_ALL_VARIANTS OR GGML_BACKEND_DL OR BUILD_SHARED_LIBS OR
+        NOT GGML_AVX2 OR NOT GGML_BMI2 OR NOT GGML_FMA OR NOT GGML_F16C OR GGML_AVX512 OR
+        GGML_AVX_VNNI OR GGML_AVX512_VNNI OR GGML_AVX512_VBMI OR GGML_AVX512_BF16)
+        message(FATAL_ERROR "Q4KP requires the static AVX2 configuration in examples/q4kp/README.md")
+    endif()
+endif()
+
 function(ggml_add_cpu_backend_features cpu_name arch)
     # The feature detection code is compiled as a separate target so that
     # it can be built without the architecture flags
@@ -55,6 +68,14 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/ops.h
         ggml-cpu/ops.cpp
         )
+
+    if (GGML_CPU_Q4KP)
+        list(APPEND GGML_CPU_SOURCES
+            ggml-cpu/q4kp/q4kp_kernel.cpp
+            ggml-cpu/q4kp/q4kp_vnni_kernel.cpp
+            ggml-cpu/q4kp/q4kp_wide_kernel.cpp)
+        target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_CPU_Q4KP)
+    endif()
 
     target_compile_features(${GGML_CPU_NAME} PRIVATE c_std_11 cxx_std_17)
     target_include_directories(${GGML_CPU_NAME} PRIVATE . ggml-cpu)

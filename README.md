@@ -1,5 +1,7 @@
 # llama.cpp
 
+Fork experiment: [Q4_K P6 / VNNI CPU kernels](examples/q4kp/README.md) - opt-in build, unchanged GGUF files, synthetic correctness tests and maintenance notes.
+
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
 <div align="center">

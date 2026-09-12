@@ -306,3 +306,8 @@ configure_file(cmake/llama.pc.in
 
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+
+if (GGML_CPU_Q4KP AND LLAMA_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(examples/q4kp)
+endif()
