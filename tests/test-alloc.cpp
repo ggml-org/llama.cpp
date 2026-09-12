@@ -1254,6 +1254,7 @@ static void test_meta_split_preparation() {
                 ggml_backend_meta_preparation_get_tensor(ctx->preparation, tensor, device) : nullptr;
         },
         &source_ctx,
+        nullptr,
     };
     auto * resolved = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 3, &sources);
     GGML_ASSERT(resolved);
@@ -1417,6 +1418,11 @@ static void test_meta_materialization(bool relative_addresses) {
     GGML_ASSERT(domains[0].buffers == nullptr && domains[0].n_buffers == 0);
     GGML_ASSERT(domains[1].buffers == nullptr && domains[1].n_buffers == 0);
     GGML_ASSERT(ggml_backend_buffer_get_size(owner.get()) == 752);
+    for (size_t device = 0; device < 2; device++) {
+        GGML_ASSERT(allocation->n_buffers(owner.get(), device) == 2);
+        GGML_ASSERT(ggml_backend_buffer_get_size(allocation->get_buffer(owner.get(), device, 0)) == (device == 0 ? 80 : 160));
+        GGML_ASSERT(ggml_backend_buffer_get_size(allocation->get_buffer(owner.get(), device, 1)) == 256);
+    }
     GGML_ASSERT(ggml_backend_buffer_get_base(owner.get()) == nullptr);
     GGML_ASSERT(ggml_backend_buffer_get_usage(saved_buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     GGML_ASSERT(split->buffer == nullptr && mirror->buffer == nullptr && view->buffer == nullptr);
@@ -1532,17 +1538,66 @@ static void test_meta_materialization(bool relative_addresses) {
     GGML_ASSERT(ggml_backend_tensor_is_bound(dependent) && ggml_backend_tensor_is_bound(mirror));
     GGML_ASSERT(first.context->free_calls == 0 && second.context->free_calls == 0);
     ggml_backend_buffer_clear(owner.get(), 0);
+    ggml_backend_alloc_source_i replacing = {};
+    replacing.replaced_buffer = owner.get();
+    void * replacement = allocation->new_preparation(buft, GGML_BACKEND_BUFFER_USAGE_WEIGHTS, 3, &replacing);
+    GGML_ASSERT(replacement);
+    for (auto * tensor : {split, mirror, view}) {
+        GGML_ASSERT(allocation->prepare_tensor(replacement, tensor) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(tensor->buffer == owner.get() && ggml_backend_tensor_is_bound(tensor));
+        for (size_t device = 0; device < 2; device++) {
+            auto * simple = allocation->get_tensor(replacement, tensor, device);
+            GGML_ASSERT(simple && simple->buffer == nullptr && simple->data == nullptr);
+        }
+    }
+    allocation->free_preparation(replacement);
     for (auto * backend : {&first, &second}) {
         for (const auto & bytes : backend->context->data) {
             GGML_ASSERT(std::all_of(bytes.second.begin(), bytes.second.end(), [](uint8_t value) { return value == 0; }));
         }
     }
-    ggml_backend_buffer_reset(owner.get());
+    ggml_backend_buffer_set invalid_result[2] = {};
+    invalid_result[1].n_buffers = 1;
+    GGML_ASSERT(allocation->release_buffers(owner.get(), invalid_result, 2) == GGML_STATUS_FAILED);
+    GGML_ASSERT(allocation->release_buffers(owner.get(), domains, 1) == GGML_STATUS_FAILED);
+    GGML_ASSERT(ggml_backend_tensor_is_bound(mirror) && ggml_backend_buffer_get_size(owner.get()) == 752);
+    GGML_ASSERT(allocation->release_buffers(owner.get(), domains, 2) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_buffer_get_size(owner.get()) == 0);
+    GGML_ASSERT(allocation->n_buffers(owner.get(), 0) == 0 && allocation->n_buffers(owner.get(), 1) == 0);
+    GGML_ASSERT(domains[0].n_buffers == 2 && domains[1].n_buffers == 2);
     GGML_ASSERT(!ggml_backend_tensor_is_bound(mirror) && !ggml_backend_tensor_is_bound(external));
     GGML_ASSERT(!ggml_backend_tensor_is_bound(dependent));
     GGML_ASSERT(ggml_backend_buffer_init_tensor(dependent_owner.get(), dependent) == GGML_STATUS_FAILED);
     dependent_owner.reset();
     owner.reset();
+    GGML_ASSERT(first.context->free_calls == 0 && second.context->free_calls == 0);
+    auto reused_ctx = make_context();
+    auto * reused_split = ggml_new_tensor_2d(reused_ctx.ctx, GGML_TYPE_F32, 8, 6);
+    auto * reused_mirror = ggml_new_tensor_2d(reused_ctx.ctx, GGML_TYPE_F32, 8, 6);
+    ggml_set_name(reused_mirror, "mirror");
+    void * reused_preparation = allocation->new_preparation(buft, GGML_BACKEND_BUFFER_USAGE_WEIGHTS, 2, nullptr);
+    GGML_ASSERT(reused_preparation);
+    for (auto * tensor : {reused_split, reused_mirror}) {
+        GGML_ASSERT(allocation->prepare_tensor(reused_preparation, tensor) == GGML_STATUS_SUCCESS);
+    }
+    for (size_t device = 0; device < 2; device++) {
+        for (size_t chunk = 0; chunk < 2; chunk++) {
+            auto * tensor = allocation->get_tensor(reused_preparation, chunk == 0 ? reused_split : reused_mirror, device);
+            auto * buffer = domains[device].buffers[chunk];
+            GGML_ASSERT(ggml_backend_tensor_alloc(buffer, tensor, ggml_backend_buffer_get_base(buffer)) == GGML_STATUS_SUCCESS);
+        }
+    }
+    ggml_backend_buffer_ptr reused_owner(allocation->materialize(reused_preparation, domains, 2));
+    GGML_ASSERT(reused_owner && ggml_backend_buffer_get_size(reused_owner.get()) == 752);
+    for (auto * tensor : {reused_split, reused_mirror}) {
+        GGML_ASSERT(ggml_backend_buffer_init_tensor(reused_owner.get(), tensor) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(tensor->data == nullptr && ggml_backend_tensor_is_bound(tensor));
+        ggml_backend_tensor_set(tensor, values.data(), 0, sizeof(values));
+        ggml_backend_tensor_get(tensor, result.data(), 0, sizeof(result));
+        GGML_ASSERT(result == values);
+    }
+    GGML_ASSERT(first.context->alloc_calls == 2 && second.context->alloc_calls == 2);
+    reused_owner.reset();
     GGML_ASSERT(first.context->free_calls == 2 && second.context->free_calls == 2);
     GGML_ASSERT(first.context->buffers.empty() && second.context->buffers.empty());
 }

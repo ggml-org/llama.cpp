@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-    #define GGML_BACKEND_API_VERSION 4
+    #define GGML_BACKEND_API_VERSION 5
 
     //
     // Backend buffer type
@@ -131,6 +131,8 @@ extern "C" {
         // Borrow descriptors from another preparation; return NULL for an unprepared tensor.
         struct ggml_tensor * (*get_tensor)(void * context, const struct ggml_tensor * tensor, size_t device);
         void * context;
+        // Treat this owner's tensors as unbound while preparing its replacement.
+        ggml_backend_buffer_t replaced_buffer;
     };
 
     struct ggml_backend_buffer_type_alloc_i {
@@ -144,6 +146,10 @@ extern "C" {
         // Takes prepared, physically bound descriptors and owned buffer sets; consumes both only on success.
         // The returned owner's init_tensor publishes logical bindings. A NULL callback means materialization is unsupported.
         ggml_backend_buffer_t (*materialize)(void * preparation, struct ggml_backend_buffer_set * domains, size_t n_domains);
+        size_t (*n_buffers)(ggml_backend_buffer_t owner, size_t domain);
+        ggml_backend_buffer_t (*get_buffer)(ggml_backend_buffer_t owner, size_t domain, size_t chunk);
+        // Empty result sets only. Success retires the old bindings and transfers physical ownership to the caller.
+        enum ggml_status (*release_buffers)(ggml_backend_buffer_t owner, struct ggml_backend_buffer_set * domains, size_t n_domains);
     };
 
     GGML_API const struct ggml_backend_buffer_type_alloc_i * ggml_backend_buft_get_alloc_interface(ggml_backend_buffer_type_t buft);

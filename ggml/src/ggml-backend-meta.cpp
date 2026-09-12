@@ -429,7 +429,7 @@ struct ggml_backend_meta_split_context {
     }
 
     ggml_backend_buffer_type_t source_buft(const ggml_tensor * tensor, ggml_backend_buffer_usage & source_usage) const {
-        if (tensor->buffer) {
+        if (tensor->buffer && tensor->buffer != sources.replaced_buffer) {
             source_usage = tensor->buffer->usage;
             return ggml_backend_buffer_get_type(tensor->buffer);
         }
@@ -456,10 +456,10 @@ struct ggml_backend_meta_buffer_context {
     ggml_backend_meta_simple_tensor_container stc_compute[2];
     int stc_compute_index      = 0;
     int stc_compute_index_next = 0;
+    std::map<const ggml_tensor *, ggml_backend_meta_simple_tensor_container> external_views;
     std::vector<ggml_backend_buffer_ptr> bufs;
     std::vector<size_t> domain_ends;
     std::map<const ggml_tensor *, ggml_backend_meta_tensor_binding> bindings;
-    std::map<const ggml_tensor *, ggml_backend_meta_simple_tensor_container> external_views;
     bool planned = false;
     bool retired = false;
 
@@ -532,7 +532,7 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     }
     if (source_buft) {
         GGML_ASSERT(source_buft == split_ctx.buft || ggml_backend_meta_device_supports_buft(ggml_backend_buft_get_device(split_ctx.buft), source_buft));
-        if (ggml_backend_buffer_is_meta(tensor->buffer)) {
+        if (tensor->buffer != split_ctx.sources.replaced_buffer && ggml_backend_buffer_is_meta(tensor->buffer)) {
             auto * source_ctx = static_cast<ggml_backend_meta_buffer_context *>(tensor->buffer->context);
             if (&source_ctx->split != &split_ctx) {
                 return ggml_backend_meta_get_split_state(source_ctx->split, tensor, assume_sync);
@@ -1249,11 +1249,12 @@ static ggml_tensor * ggml_backend_meta_find_simple_tensor(
     if (it != stc.simple_tensors.end()) {
         return it->second[device];
     }
-    if (ggml_backend_buffer_is_meta(tensor->buffer)) {
+    bool replaced = tensor->buffer && tensor->buffer == sources.replaced_buffer;
+    if (!replaced && ggml_backend_buffer_is_meta(tensor->buffer)) {
         return ggml_backend_tensor_is_bound(tensor) ? ggml_backend_meta_buffer_simple_tensor(tensor, device) : nullptr;
     }
-    if ((tensor->buffer && !ggml_backend_buft_is_meta(ggml_backend_buffer_get_type(tensor->buffer))) ||
-            (!tensor->buffer && tensor->data)) {
+    if (!replaced && ((tensor->buffer && !ggml_backend_buft_is_meta(ggml_backend_buffer_get_type(tensor->buffer))) ||
+            (!tensor->buffer && tensor->data))) {
         return const_cast<ggml_tensor *>(tensor);
     }
     if (sources.get_tensor) {
@@ -1261,7 +1262,7 @@ static ggml_tensor * ggml_backend_meta_find_simple_tensor(
             return result;
         }
     }
-    if (!tensor->buffer && sources.get_buft) {
+    if ((!tensor->buffer || replaced) && sources.get_buft) {
         auto usage = GGML_BACKEND_BUFFER_USAGE_ANY;
         auto * buft = sources.get_buft(sources.context, tensor, &usage);
         if (buft && !ggml_backend_buft_is_meta(buft)) {
@@ -1487,6 +1488,9 @@ ggml_tensor * ggml_backend_meta_preparation_get_tensor(
 }
 
 static ggml_backend_buffer_t ggml_backend_meta_materialize(void * preparation, ggml_backend_buffer_set * domains, size_t n_domains);
+static size_t ggml_backend_meta_n_physical_buffers(ggml_backend_buffer_t owner, size_t domain);
+static ggml_backend_buffer_t ggml_backend_meta_physical_buffer(ggml_backend_buffer_t owner, size_t domain, size_t chunk);
+static ggml_status ggml_backend_meta_release_buffers(ggml_backend_buffer_t owner, ggml_backend_buffer_set * domains, size_t n_domains);
 
 static const ggml_backend_buffer_type_alloc_i * ggml_backend_meta_buffer_type_get_alloc_interface(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
@@ -1507,6 +1511,9 @@ static const ggml_backend_buffer_type_alloc_i * ggml_backend_meta_buffer_type_ge
             return ggml_backend_meta_preparation_get_tensor(static_cast<ggml_backend_meta_preparation *>(preparation), tensor, domain);
         },
         /* .materialize      = */ ggml_backend_meta_materialize,
+        /* .n_buffers        = */ ggml_backend_meta_n_physical_buffers,
+        /* .get_buffer       = */ ggml_backend_meta_physical_buffer,
+        /* .release_buffers  = */ ggml_backend_meta_release_buffers,
     };
     return &iface;
 }
@@ -2119,6 +2126,65 @@ void ggml_backend_meta_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_
             ggml_backend_buffer_set_usage(buf_ctx->bufs[i].get(), usage);
         }
     }
+}
+
+static size_t ggml_backend_meta_n_physical_buffers(ggml_backend_buffer_t owner, size_t domain) {
+    GGML_ASSERT(ggml_backend_buffer_is_meta(owner));
+    auto * ctx = static_cast<ggml_backend_meta_buffer_context *>(owner->context);
+    GGML_ASSERT(ctx->planned && domain < ctx->domain_ends.size());
+    size_t first = domain == 0 ? 0 : ctx->domain_ends[domain - 1];
+    return ctx->domain_ends[domain] - first;
+}
+
+static ggml_backend_buffer_t ggml_backend_meta_physical_buffer(ggml_backend_buffer_t owner, size_t domain, size_t chunk) {
+    GGML_ASSERT(ggml_backend_buffer_is_meta(owner));
+    auto * ctx = static_cast<ggml_backend_meta_buffer_context *>(owner->context);
+    GGML_ASSERT(chunk < ggml_backend_meta_n_physical_buffers(owner, domain));
+    size_t first = domain == 0 ? 0 : ctx->domain_ends[domain - 1];
+    return ctx->bufs[first + chunk].get();
+}
+
+static ggml_status ggml_backend_meta_release_buffers(ggml_backend_buffer_t owner, ggml_backend_buffer_set * domains, size_t n_domains) {
+    if (!ggml_backend_buffer_is_meta(owner)) {
+        return GGML_STATUS_FAILED;
+    }
+    auto * ctx = static_cast<ggml_backend_meta_buffer_context *>(owner->context);
+    if (!ctx->planned || !domains || n_domains != ctx->domain_ends.size()) {
+        return GGML_STATUS_FAILED;
+    }
+    for (size_t domain = 0; domain < n_domains; domain++) {
+        if (domains[domain].buffers || domains[domain].n_buffers) {
+            return GGML_STATUS_FAILED;
+        }
+    }
+    for (size_t domain = 0; domain < n_domains; domain++) {
+        size_t count = ggml_backend_meta_n_physical_buffers(owner, domain);
+        if (count == 0) {
+            continue;
+        }
+        if (count <= SIZE_MAX/sizeof(ggml_backend_buffer_t)) {
+            domains[domain].buffers = static_cast<ggml_backend_buffer_t *>(malloc(count*sizeof(ggml_backend_buffer_t)));
+        }
+        if (!domains[domain].buffers) {
+            for (size_t i = 0; i < domain; i++) {
+                free(domains[i].buffers);
+                domains[i] = {};
+            }
+            return GGML_STATUS_ALLOC_FAILED;
+        }
+        domains[domain].n_buffers = count;
+    }
+    ggml_backend_buffer_reset(owner);
+    size_t index = 0;
+    for (size_t domain = 0; domain < n_domains; domain++) {
+        for (size_t chunk = 0; chunk < domains[domain].n_buffers; chunk++) {
+            domains[domain].buffers[chunk] = ctx->bufs[index++].release();
+        }
+    }
+    ctx->bufs.clear();
+    std::fill(ctx->domain_ends.begin(), ctx->domain_ends.end(), 0);
+    owner->size = 0;
+    return GGML_STATUS_SUCCESS;
 }
 
 static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
