@@ -20,8 +20,8 @@ class server_http_context::Impl {
 public:
     std::vector<std::unique_ptr<httplib::Server>> servers;
     std::vector<std::string> hosts;
-    std::vector<std::thread> threads;
-    std::unique_ptr<httplib::ThreadPool> pool;
+    std::vector<std::thread> threads; // one thread per listener
+    std::unique_ptr<httplib::ThreadPool> pool; // single pool shared among all listeners
     int n_threads_http = 0;
 };
 
@@ -495,23 +495,14 @@ bool server_http_context::start() {
 
     // Keep the existing fixed and dynamic worker budget across all sockets.
     pimpl->pool = std::make_unique<httplib::ThreadPool>(pimpl->n_threads_http, pimpl->n_threads_http + 1024);
-    for (const auto & srv : pimpl->servers) {
-        std::promise<bool> started;
-        auto ready = started.get_future();
-        pimpl->threads.emplace_back([this, srv = srv.get(), started = std::move(started)]() mutable {
-            bool listening = false;
-            srv->set_start_handler([&] {
-                listening = true;
-                started.set_value(true);
-            });
+    for (size_t i = 0; i < pimpl->servers.size(); ++i) {
+        const auto & srv = pimpl->servers[i];
+        pimpl->threads.emplace_back([srv = srv.get()] {
             srv->listen_after_bind();
-            srv->set_start_handler(nullptr);
-            if (!listening) {
-                started.set_value(false);
-            }
-            stop();
         });
-        if (!ready.get()) {
+        srv->wait_until_ready();
+        if (!srv->is_running()) {
+            SRV_ERR("couldn't start HTTP listener on %s\n", listening_addresses[i].c_str());
             stop();
             join();
             return false;
