@@ -374,18 +374,26 @@ static wgpu::Buffer ggml_webgpu_tensor_buf(const ggml_tensor * tensor) {
     return ctx->buffer;
 }
 
+// Binding offset for a tensor: the largest aligned offset at or before the tensor whose
+// distance to the tensor is a whole number of type blocks, so shaders can index the
+// misalignment in elements even for block quantized types.
+static size_t ggml_webgpu_tensor_align_offset(const ggml_tensor * t, size_t alignment) {
+    const size_t offset    = ggml_webgpu_tensor_offset(t);
+    const size_t type_size = ggml_type_size(t->type);
+    size_t       aligned   = offset & ~(alignment - 1);
+    while ((offset - aligned) % type_size != 0) {
+        GGML_ASSERT(aligned >= alignment);
+        aligned -= alignment;
+    }
+    return aligned;
+}
+
 static size_t ggml_webgpu_tensor_misalignment(const ggml_tensor * t, size_t alignment) {
-    size_t offset = ggml_webgpu_tensor_offset(t);
-    return offset & (alignment - 1);
+    return ggml_webgpu_tensor_offset(t) - ggml_webgpu_tensor_align_offset(t, alignment);
 }
 
 static size_t ggml_webgpu_tensor_misalignment(webgpu_context & ctx, const ggml_tensor * t) {
     return ggml_webgpu_tensor_misalignment(t, ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment);
-}
-
-static size_t ggml_webgpu_tensor_align_offset(const ggml_tensor * t, size_t alignment) {
-    size_t offset = ggml_webgpu_tensor_offset(t);
-    return offset & ~(alignment - 1);
 }
 
 static size_t ggml_webgpu_tensor_align_offset(webgpu_context & ctx, const ggml_tensor * t) {
