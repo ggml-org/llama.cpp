@@ -372,7 +372,7 @@ static void ggml_compute_forward_dup_bytes(
     if (ggml_is_contiguous(dst)) {
         size_t id = 0;
         char * dst_ptr = (char *) dst->data;
-        const size_t rs = ne00 * type_size;
+        const size_t rs = ggml_row_size(src0->type, ne00);
 
         if (nb00 == type_size) {
             // src0 is contiguous on first dimension, copy by rows
@@ -390,12 +390,15 @@ static void ggml_compute_forward_dup_bytes(
         } else {
             //printf("%s: this is not optimal - fix me\n", __func__);
 
+            // number of blocks in a row
+            const int64_t nk00 = ne00 / ggml_blck_size(src0->type);
+
             for (int64_t i03 = 0; i03 < ne03; i03++) {
                 for (int64_t i02 = 0; i02 < ne02; i02++) {
                     id += rs * ir0;
                     for (int64_t i01 = ir0; i01 < ir1; i01++) {
-                        for (int64_t i00 = 0; i00 < ne00; i00++) {
-                            const char * src0_ptr = (char *) src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03;
+                        for (int64_t k00 = 0; k00 < nk00; k00++) {
+                            const char * src0_ptr = (char *) src0->data + k00*nb00 + i01*nb01 + i02*nb02 + i03*nb03;
                             memcpy(dst_ptr + id, src0_ptr, type_size);
 
                             id += type_size;
