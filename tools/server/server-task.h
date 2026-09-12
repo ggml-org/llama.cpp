@@ -610,9 +610,10 @@ struct server_prompt_cache_state {
 };
 
 struct server_prompt_cache {
-    server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
+    server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens, bool limit_tokens_per_entry) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
         this->limit_tokens = limit_tokens;
+        this->limit_tokens_per_entry = limit_tokens_per_entry;
     }
 
     std::list<server_prompt_cache_state> states;
@@ -622,6 +623,8 @@ struct server_prompt_cache {
 
     // in tokens, 0 = no limit
     size_t limit_tokens = 0;
+    // if true, limit_tokens applies independently to each cache entry
+    bool limit_tokens_per_entry = false;
 
     size_t size() const;
 
