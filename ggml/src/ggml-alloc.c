@@ -570,6 +570,7 @@ ggml_gallocr_t ggml_gallocr_new_n(ggml_backend_buffer_type_t * bufts, int n_bufs
     for (int i = 0; i < n_bufs; i++) {
         galloc->bufts[i] = bufts[i];
         galloc->buffers[i] = NULL;
+        const struct ggml_backend_buffer_type_alloc_i * iface = ggml_backend_buft_get_alloc_interface(bufts[i]);
 
         // check if the same buffer type is used multiple times and reuse the same allocator
         for (int j = 0; j < i; j++) {
@@ -579,13 +580,12 @@ ggml_gallocr_t ggml_gallocr_new_n(ggml_backend_buffer_type_t * bufts, int n_bufs
             }
         }
 
-        if (galloc->plan.buf_tallocs[i] == NULL) {
+        if (!iface && galloc->plan.buf_tallocs[i] == NULL) {
             size_t alignment = ggml_backend_buft_get_alignment(bufts[i]);
             size_t max_size = ggml_backend_buft_get_max_size(bufts[i]);
             galloc->plan.buf_tallocs[i] = ggml_dyn_tallocr_new(alignment, max_size);
         }
 
-        const struct ggml_backend_buffer_type_alloc_i * iface = ggml_backend_buft_get_alloc_interface(bufts[i]);
         if (iface) {
             if (!galloc->plan.composites) {
                 galloc->plan.composites = calloc(n_bufs, sizeof(galloc->plan.composites[0]));
@@ -650,7 +650,7 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
                 ggml_vbuffer_free(galloc->buffers[i]);
             }
         }
-        if (galloc->plan.buf_tallocs != NULL) {
+        if (galloc->plan.buf_tallocs && galloc->plan.buf_tallocs[i]) {
             // skip if already freed
             bool freed = false;
             for (int j = 0; j < i; j++) {
@@ -809,6 +809,9 @@ static bool ggml_gallocr_is_allocated(ggml_gallocr_t galloc, struct ggml_tensor 
 static void ggml_gallocr_free_extra_space(ggml_gallocr_t galloc, struct ggml_tensor * node, struct ggml_tensor * parent) {
     struct hash_node * hn = ggml_gallocr_hash_get(galloc, node);
     struct hash_node * p_hn = ggml_gallocr_hash_get(galloc, parent);
+    if (!galloc->plan.buf_tallocs[hn->buffer_id]) {
+        return;
+    }
 
     size_t parent_size = ggml_backend_buft_get_alloc_size(galloc->bufts[p_hn->buffer_id], parent);
     size_t node_size = ggml_backend_buft_get_alloc_size(galloc->bufts[hn->buffer_id], node);
@@ -899,10 +902,9 @@ static void ggml_gallocr_allocate_node(ggml_gallocr_t galloc, struct ggml_tensor
         }
         // allocate tensor from the buffer
         struct ggml_dyn_tallocr * alloc = galloc->plan.buf_tallocs[buffer_id];
-        ggml_backend_buffer_type_t buft = galloc->bufts[buffer_id];
-        size_t size = ggml_backend_buft_get_alloc_size(buft, node);
         hn->buffer_id = buffer_id;
-        hn->addr = ggml_dyn_tallocr_alloc(alloc, size, node);
+        hn->addr = alloc ? ggml_dyn_tallocr_alloc(alloc, ggml_backend_buft_get_alloc_size(galloc->bufts[buffer_id], node), node) :
+            GGML_BUFFER_ADDRESS_INVALID;
         ggml_gallocr_allocate_shards(galloc, node, NULL);
     }
 }
@@ -925,6 +927,8 @@ static void ggml_gallocr_free_node(ggml_gallocr_t galloc, struct ggml_tensor * n
 #endif
             ggml_dyn_tallocr_free_bytes(composite->domains[i].alloc, shard->addr, shard->size);
         }
+        hn->allocated = false;
+        return;
     }
     int buffer_id = hn->buffer_id;
     struct ggml_dyn_tallocr * alloc = galloc->plan.buf_tallocs[buffer_id];
@@ -1299,49 +1303,7 @@ cleanup:
     return result;
 }
 
-static bool ggml_gallocr_reserve_plan(
-        ggml_gallocr_t galloc, struct ggml_cgraph * graph, const int * node_buffer_ids, const int * leaf_buffer_ids, struct ggml_gallocr_graph * retained) {
-    size_t min_hash_size = MAX((size_t) 1, (size_t) graph->n_nodes + graph->n_leafs);
-    // add 25% margin to avoid hash collisions
-    min_hash_size += min_hash_size / 4;
-    if (galloc->plan.composites) {
-        min_hash_size = MAX(min_hash_size, 2*((size_t) graph->n_nodes + graph->n_leafs) + GGML_MAX_SRC);
-    }
-
-    // initialize hash table
-    if (galloc->plan.hash_set.size < min_hash_size) {
-        ggml_hash_set_free(&galloc->plan.hash_set);
-        galloc->plan.hash_set = ggml_hash_set_new(min_hash_size);
-        GGML_ASSERT(galloc->plan.hash_set.keys != NULL);
-
-        free(galloc->plan.hash_values);
-        galloc->plan.hash_values = malloc(sizeof(struct hash_node) * galloc->plan.hash_set.size);
-        GGML_ASSERT(galloc->plan.hash_values != NULL);
-    }
-
-    ggml_hash_set_reset(&galloc->plan.hash_set);
-    memset(galloc->plan.hash_values, 0, sizeof(struct hash_node) * galloc->plan.hash_set.size);
-    galloc->plan.valid = false;
-    if (galloc->plan.composites && !ggml_gallocr_prepare_graph(galloc, graph, node_buffer_ids, leaf_buffer_ids, retained)) {
-        ggml_hash_set_reset(&galloc->plan.hash_set);
-        memset(galloc->plan.hash_set.keys, 0, galloc->plan.hash_set.size*sizeof(galloc->plan.hash_set.keys[0]));
-        return false;
-    }
-
-    // reset allocators
-    for (int i = 0; i < galloc->n_buffers; i++) {
-        ggml_dyn_tallocr_reset(galloc->plan.buf_tallocs[i]);
-        struct ggml_gallocr_composite_plan * composite = galloc->plan.composites ? galloc->plan.composites[i] : NULL;
-        if (composite) {
-            for (size_t domain = 0; domain < composite->n_domains; domain++) {
-                ggml_dyn_tallocr_reset(composite->domains[domain].alloc);
-            }
-        }
-    }
-
-    // allocate in hash table
-    ggml_gallocr_alloc_graph_impl(galloc, graph, node_buffer_ids, leaf_buffer_ids);
-
+static void ggml_gallocr_record_native_plan(ggml_gallocr_t galloc, struct ggml_cgraph * graph) {
     // set the node_allocs from the hash table
     if (galloc->plan.n_nodes < graph->n_nodes) {
         free(galloc->plan.node_allocs);
@@ -1396,6 +1358,60 @@ static bool ggml_gallocr_reserve_plan(
         }
     }
 
+}
+
+static bool ggml_gallocr_reserve_plan(
+        ggml_gallocr_t galloc, struct ggml_cgraph * graph, const int * node_buffer_ids, const int * leaf_buffer_ids, struct ggml_gallocr_graph * retained) {
+    size_t min_hash_size = MAX((size_t) 1, (size_t) graph->n_nodes + graph->n_leafs);
+    // add 25% margin to avoid hash collisions
+    min_hash_size += min_hash_size / 4;
+    if (galloc->plan.composites) {
+        min_hash_size = MAX(min_hash_size, 2*((size_t) graph->n_nodes + graph->n_leafs) + GGML_MAX_SRC);
+    }
+
+    // initialize hash table
+    if (galloc->plan.hash_set.size < min_hash_size) {
+        ggml_hash_set_free(&galloc->plan.hash_set);
+        galloc->plan.hash_set = ggml_hash_set_new(min_hash_size);
+        GGML_ASSERT(galloc->plan.hash_set.keys != NULL);
+
+        free(galloc->plan.hash_values);
+        galloc->plan.hash_values = malloc(sizeof(struct hash_node) * galloc->plan.hash_set.size);
+        GGML_ASSERT(galloc->plan.hash_values != NULL);
+    }
+
+    ggml_hash_set_reset(&galloc->plan.hash_set);
+    memset(galloc->plan.hash_values, 0, sizeof(struct hash_node) * galloc->plan.hash_set.size);
+    galloc->plan.valid = false;
+    if (galloc->plan.composites && !ggml_gallocr_prepare_graph(galloc, graph, node_buffer_ids, leaf_buffer_ids, retained)) {
+        ggml_hash_set_reset(&galloc->plan.hash_set);
+        memset(galloc->plan.hash_set.keys, 0, galloc->plan.hash_set.size*sizeof(galloc->plan.hash_set.keys[0]));
+        return false;
+    }
+
+    // reset allocators
+    for (int i = 0; i < galloc->n_buffers; i++) {
+        if (galloc->plan.buf_tallocs[i]) {
+            ggml_dyn_tallocr_reset(galloc->plan.buf_tallocs[i]);
+        }
+        struct ggml_gallocr_composite_plan * composite = galloc->plan.composites ? galloc->plan.composites[i] : NULL;
+        if (composite) {
+            for (size_t domain = 0; domain < composite->n_domains; domain++) {
+                ggml_dyn_tallocr_reset(composite->domains[domain].alloc);
+            }
+        }
+    }
+
+    // allocate in hash table
+    ggml_gallocr_alloc_graph_impl(galloc, graph, node_buffer_ids, leaf_buffer_ids);
+
+    if (!galloc->plan.composites) {
+        ggml_gallocr_record_native_plan(galloc, graph);
+    } else {
+        galloc->plan.n_nodes = graph->n_nodes;
+        galloc->plan.n_leafs = graph->n_leafs;
+    }
+
     if (galloc->plan.composites) {
         for (size_t slot = 0; slot < galloc->plan.hash_set.size; slot++) {
             if (!galloc->plan.hash_ids[slot]) {
@@ -1415,7 +1431,9 @@ static bool ggml_gallocr_reserve_plan(
     }
 #ifdef GGML_ALLOCATOR_DEBUG
     for (int i = 0; i < galloc->n_buffers; i++) {
-        memset(galloc->plan.buf_tallocs[i]->allocated_tensors, 0, sizeof(galloc->plan.buf_tallocs[i]->allocated_tensors));
+        if (galloc->plan.buf_tallocs[i]) {
+            memset(galloc->plan.buf_tallocs[i]->allocated_tensors, 0, sizeof(galloc->plan.buf_tallocs[i]->allocated_tensors));
+        }
         struct ggml_gallocr_composite_plan * composite = galloc->plan.composites ? galloc->plan.composites[i] : NULL;
         if (composite) {
             for (size_t domain = 0; domain < composite->n_domains; domain++) {

@@ -1357,7 +1357,8 @@ static void test_meta_split_preparation() {
         backend->context->shard_size_queries = 0;
         backend->buffer_type.iface.get_alloc_size = [](ggml_backend_buffer_type_t type, const ggml_tensor * tensor) {
             auto * context = static_cast<dummy_backend_context *>(type->context);
-            if (std::strcmp(tensor->name, "graph_shard") == 0 && (tensor->ne[1] == 2 || tensor->ne[1] == 4)) {
+            if (std::strcmp(tensor->name, "graph_shard") == 0) {
+                GGML_ASSERT(tensor->ne[1] == 2 || tensor->ne[1] == 4);
                 GGML_ASSERT(tensor->data == nullptr && tensor->buffer == nullptr);
                 context->shard_size_queries++;
             }
