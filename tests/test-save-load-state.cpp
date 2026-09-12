@@ -2,6 +2,8 @@
 #include "common.h"
 #include "log.h"
 #include "llama-cpp.h"
+#include "../src/llama-model.h"
+#include "../src/llama-ext.h"
 
 #include <algorithm>
 #include <clocale>
@@ -294,6 +296,18 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
 
+    if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+        size_t meta_kv = 0;
+        for (const auto & item : llama_get_memory_breakdown(ctx.get())) {
+            auto * device = ggml_backend_buft_get_device(item.first);
+            if (device && ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_META) {
+                meta_kv += item.second.context;
+            }
+        }
+        GGML_ASSERT(meta_kv > 0);
+        LOG_INF("%s: verified %zu bytes of meta KV storage\n", __func__, meta_kv);
+    }
+
     auto sparams = llama_sampler_chain_default_params();
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
@@ -321,12 +335,14 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
     // Migrate KV cache from seq 0 to seq 1 (on-device path)
     {
         std::vector<uint8_t> seq_store(llama_state_seq_get_size_ext(ctx.get(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE));
-        const size_t ncopy = llama_state_seq_get_data_ext(ctx.get(), seq_store.data(), seq_store.size(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
-        if (ncopy != seq_store.size()) {
-            LOG_ERR("\n%s: seq copy data length %zd does not match expected length %zd\n", __func__, ncopy, seq_store.size());
-            return false;
+        for (int save = 0; save < 3; save++) {
+            const size_t ncopy = llama_state_seq_get_data_ext(ctx.get(), seq_store.data(), seq_store.size(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+            if (ncopy != seq_store.size()) {
+                LOG_ERR("\n%s: seq copy data length %zd does not match expected length %zd\n", __func__, ncopy, seq_store.size());
+                return false;
+            }
         }
-        LOG_TRC("%s: seq 0 copied, %zd bytes\n", __func__, ncopy);
+        LOG_INF("%s: seq 0 saved on device three times, %zu bytes\n", __func__, seq_store.size());
 
         llama_memory_clear(llama_get_memory(ctx.get()), true);
         LOG_TRC("%s: kv cache cleared\n", __func__);
@@ -444,6 +460,18 @@ static bool test_seq_cp_scatter(struct llama_model * model, const struct common_
         return false;
     }
 
+    if (on_device) {
+        if (!get_seq_state(1, flags, state_save)) {
+            return false;
+        }
+        llama_memory_clear(llama_get_memory(ctx.get()), true);
+        if (llama_state_seq_set_data_ext(ctx.get(), state_save.data(), state_save.size(), 1, flags) != state_save.size() ||
+                !get_seq_state(1, LLAMA_STATE_SEQ_FLAGS_NONE, state_after) || state_before != state_after) {
+            LOG_ERR("%s: saving the restored scatter state changed its contents\n", __func__);
+            return false;
+        }
+    }
+
     LOG("\nPASS\n");
     return true;
 }
@@ -523,6 +551,20 @@ static bool run_save_load_tests_for_model(const std::string & model_path, const 
     }
 
     GGML_ASSERT(llama_init->context() == nullptr);
+
+    if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+        size_t meta_tensors = 0;
+        for (const auto & item : model->tensors_by_name) {
+            const auto * tensor = item.second;
+            auto * device = tensor->buffer ? ggml_backend_buft_get_device(ggml_backend_buffer_get_type(tensor->buffer)) : nullptr;
+            if (device && ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_META) {
+                GGML_ASSERT(tensor->data == nullptr && ggml_backend_tensor_is_bound(tensor));
+                meta_tensors++;
+            }
+        }
+        GGML_ASSERT(meta_tensors > 0);
+        LOG_INF("%s: verified %zu addressless model tensor bindings\n", __func__, meta_tensors);
+    }
 
     // Tokenize prompt or generate random tokens
     llama_tokens tokens;
@@ -609,10 +651,13 @@ int main(int argc, char ** argv) {
 
     // extract our own --models DIR option before handing the rest to the common arg parser
     std::string models_dir;
+    bool cpu_meta = false;
     std::vector<char *> filtered_argv;
     filtered_argv.push_back(argv[0]);
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--models") == 0) {
+        if (strcmp(argv[i], "--cpu-meta") == 0) {
+            cpu_meta = true;
+        } else if (strcmp(argv[i], "--models") == 0) {
             if (i + 1 >= argc) {
                 LOG_ERR("%s: --models requires a directory argument\n", __func__);
                 return 1;
@@ -646,6 +691,17 @@ int main(int argc, char ** argv) {
     }
 
     ggml_backend_load_all();
+
+    if (cpu_meta) {
+        auto * cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        if (!cpu) {
+            LOG_ERR("%s: --cpu-meta requires the CPU backend\n", __func__);
+            return 1;
+        }
+        params.devices = {cpu, cpu, nullptr};
+        params.split_mode = LLAMA_SPLIT_MODE_TENSOR;
+        params.n_gpu_layers = 999;
+    }
 
     if (!models_dir.empty()) {
         // run the suite over every dummy model in the directory

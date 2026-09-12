@@ -1630,6 +1630,116 @@ static void test_meta_static_multibuffer(bool relative) {
     GGML_ASSERT(first.context->buffers.empty() && second.context->buffers.empty());
 }
 
+static void test_context_capacity_reuse(bool composite, bool relative) {
+    static auto first = dummy_backend_init(128);
+    static auto second = dummy_backend_init(128);
+    for (auto * backend : {&first, &second}) {
+        backend->context->real_data = true;
+        backend->context->relative_addresses = relative;
+        backend->context->buffer_type = &backend->buffer_type;
+        backend->context->device.iface.get_buffer_type = test_device_buffer_type;
+        backend->context->device.iface.get_name = [](ggml_backend_dev_t) { return "state_member"; };
+        backend->context->device.iface.get_description = [](ggml_backend_dev_t) { return "state capacity member"; };
+    }
+    ggml_backend_dev_t devices[] = {&first.context->device, &second.context->device};
+    auto * meta = ggml_backend_meta_device(devices, 2, [](const ggml_tensor * tensor, void *) {
+        if (std::strcmp(tensor->name, "mirror") == 0) {
+            return ggml_backend_meta_split_state{GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+        }
+        ggml_backend_meta_split_state split{GGML_BACKEND_SPLIT_AXIS_0, {0}, {1}, 1};
+        split.ne[0] = tensor->ne[0]/2;
+        split.ne[1] = tensor->ne[0] - split.ne[0];
+        return split;
+    }, nullptr);
+    auto * buft = composite ? ggml_backend_dev_buffer_type(meta) : &first.buffer_type;
+    auto * iface = ggml_backend_buft_get_alloc_interface(buft);
+    auto source_ctx = make_context();
+    auto * source = ggml_new_tensor_1d(source_ctx.ctx, GGML_TYPE_F32, 128);
+    ggml_set_name(source, "mirror");
+    ggml_backend_buffer_ptr source_buffer(ggml_backend_alloc_ctx_tensors_from_buft(source_ctx.ctx, buft));
+    GGML_ASSERT(source_buffer);
+    std::vector<float> values(128);
+    for (size_t i = 0; i < values.size(); i++) {
+        values[i] = float(i + 1);
+    }
+    ggml_backend_tensor_set(source, values.data(), 0, ggml_nbytes(source));
+    size_t initial_allocations = first.context->alloc_calls + second.context->alloc_calls;
+    ggml_backend_buffer_t state = nullptr;
+    std::array<ggml_backend_buffer_t, 2> initial_members = {};
+    const int counts[][2] = {{32, 32}, {48, 16}, {16, 48}, {48, 48}, {16, 48}};
+    const int starts[][2] = {{0, 32}, {4, 52}, {8, 24}, {0, 48}, {12, 28}};
+    for (int pass = 0; pass < 5; pass++) {
+        auto ctx = make_context();
+        ggml_tensor * views[2];
+        ggml_tensor * copies[2];
+        for (int i = 0; i < 2; i++) {
+            views[i] = ggml_view_1d(ctx.ctx, source, counts[pass][i], starts[pass][i]*sizeof(float));
+            copies[i] = ggml_new_tensor_1d(ctx.ctx, GGML_TYPE_F32, counts[pass][i]);
+        }
+        GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_reuse(ctx.ctx, buft, &state) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(state);
+        if (composite) {
+            GGML_ASSERT(ggml_backend_buffer_get_size(state) == (pass < 3 ? 256 : 448));
+            for (size_t device = 0; device < 2; device++) {
+                if (pass == 0) {
+                    initial_members[device] = iface->get_buffer(state, device, 0);
+                }
+                GGML_ASSERT(iface->get_buffer(state, device, 0) == initial_members[device]);
+                GGML_ASSERT(iface->n_buffers(state, device) == size_t(pass < 3 ? 1 : 2));
+            }
+            GGML_ASSERT(first.context->alloc_calls + second.context->alloc_calls == initial_allocations + (pass < 3 ? 2 : 4));
+        }
+        for (int i = 0; i < 2; i++) {
+            GGML_ASSERT(ggml_backend_tensor_is_bound(views[i]) && ggml_backend_tensor_is_bound(copies[i]));
+            GGML_ASSERT(composite ? !views[i]->data && !copies[i]->data : views[i]->data && copies[i]->data);
+            ggml_backend_tensor_copy(views[i], copies[i]);
+            std::vector<float> actual(counts[pass][i]);
+            ggml_backend_tensor_get(copies[i], actual.data(), 0, ggml_nbytes(copies[i]));
+            GGML_ASSERT(std::equal(actual.begin(), actual.end(), values.begin() + starts[pass][i]));
+        }
+        if (composite && pass == 1) {
+            auto * inspection = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_ANY, 0, nullptr);
+            for (size_t device = 0; device < 2; device++) {
+                auto * simple = ggml_backend_meta_preparation_get_tensor(inspection, copies[1], device);
+                auto * physical = iface->get_buffer(state, device, 0);
+                GGML_ASSERT(simple->buffer == physical);
+                GGML_ASSERT(uintptr_t(simple->data) - uintptr_t(ggml_backend_buffer_get_base(physical)) == 96);
+            }
+            ggml_backend_meta_preparation_free(inspection);
+        }
+    }
+    ggml_backend_buffer_free(state);
+    for (bool fail_init : {false, true}) {
+        auto original_ctx = make_context();
+        ggml_new_tensor_1d(original_ctx.ctx, GGML_TYPE_F32, 16);
+        state = nullptr;
+        GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_reuse(original_ctx.ctx, buft, &state) == GGML_STATUS_SUCCESS);
+        auto replacement = make_context();
+        auto * tensor = ggml_new_tensor_1d(replacement.ctx, GGML_TYPE_F32, 64);
+        auto * context = composite ? second.context.get() : first.context.get();
+        if (fail_init) {
+            context->fail_init = context->init_calls + 1;
+        } else {
+            context->fail_alloc = context->alloc_calls + 1;
+        }
+        auto status = ggml_backend_alloc_ctx_tensors_from_buft_reuse(replacement.ctx, buft, &state);
+        GGML_ASSERT(status == (fail_init ? GGML_STATUS_FAILED : GGML_STATUS_ALLOC_FAILED));
+        if (composite) {
+            GGML_ASSERT(!tensor->buffer && !tensor->data);
+        }
+        context->fail_init = context->fail_alloc = SIZE_MAX;
+        ggml_backend_buffer_free(state);
+    }
+    auto empty = make_context();
+    auto * zero = ggml_new_tensor_1d(empty.ctx, GGML_TYPE_F32, 0);
+    state = nullptr;
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_reuse(empty.ctx, buft, &state) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(state && state->size == 0 && ggml_backend_tensor_is_bound(zero));
+    ggml_backend_buffer_free(state);
+    source_buffer.reset();
+    GGML_ASSERT(first.context->buffers.empty() && second.context->buffers.empty());
+}
+
 static ggml_status test_meta_graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     auto * context = static_cast<dummy_backend_context *>(backend->context);
     context->pending_compute = true;
@@ -2346,6 +2456,10 @@ int main() {
     run("test_meta_split_preparation", test_meta_split_preparation);
     run("test_meta_static_multibuffer", [] { test_meta_static_multibuffer(false); });
     run("test_meta_static_multibuffer_same_base", [] { test_meta_static_multibuffer(true); });
+    run("test_context_capacity_reuse", [] { test_context_capacity_reuse(false, false); });
+    run("test_context_capacity_reuse_same_base", [] { test_context_capacity_reuse(false, true); });
+    run("test_meta_context_capacity_reuse", [] { test_context_capacity_reuse(true, false); });
+    run("test_meta_context_capacity_reuse_same_base", [] { test_context_capacity_reuse(true, true); });
     run("test_meta_graph_materialization", [] { test_meta_graph_materialization(false); });
     run("test_meta_graph_materialization_same_base", [] { test_meta_graph_materialization(true); });
     run("test_context_buffer_sets", test_context_buffer_sets);

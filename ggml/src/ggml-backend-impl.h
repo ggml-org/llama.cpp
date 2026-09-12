@@ -107,9 +107,12 @@ extern "C" {
     // Physical types and an empty result set only. On failure, the result is empty and ctx must be discarded.
     GGML_API enum ggml_status ggml_backend_alloc_ctx_tensors_from_buft_set(
             struct ggml_context * ctx, ggml_backend_buffer_type_t buft, struct ggml_backend_buffer_set * buffers);
+    GGML_API enum ggml_status ggml_backend_alloc_ctx_tensors_from_buft_set_reuse(
+            struct ggml_context * ctx, ggml_backend_buffer_type_t buft, struct ggml_backend_buffer_set * buffers);
 
     GGML_API ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers);
     GGML_API bool                  ggml_backend_buffer_is_multi_buffer(ggml_backend_buffer_t buffer);
+    GGML_API void                  ggml_backend_multi_buffer_release_buffers(ggml_backend_buffer_t buffer, struct ggml_backend_buffer_set * buffers);
     GGML_API void                  ggml_backend_multi_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage);
     GGML_API void                  ggml_backend_meta_buffer_set_usage (ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage);
 
@@ -185,6 +188,8 @@ extern "C" {
 
     GGML_API size_t ggml_backend_meta_alloc_ctx_tensors_from_buft_size(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
     GGML_API struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
+    GGML_API enum ggml_status ggml_backend_meta_alloc_ctx_tensors_from_buft_reuse(
+            struct ggml_context * ctx, ggml_backend_buffer_type_t buft, ggml_backend_buffer_t * buffer);
 
     //
     // Backend (stream)

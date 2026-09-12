@@ -2129,14 +2129,16 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
 }
 
 static std::unique_ptr<ggml_backend_meta_preparation> ggml_backend_meta_prepare_context(
-        ggml_context * ctx, ggml_backend_buffer_type_t buft) {
+        ggml_context * ctx, ggml_backend_buffer_type_t buft, ggml_backend_buffer_t replaced = nullptr) {
     GGML_ASSERT(ggml_get_no_alloc(ctx));
     size_t count = 0;
     for (auto * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
         count++;
     }
+    ggml_backend_alloc_source_i sources = {};
+    sources.replaced_buffer = replaced;
     std::unique_ptr<ggml_backend_meta_preparation> prepared(
-        ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_ANY, count, nullptr));
+        ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_ANY, count, &sources));
     if (!prepared) {
         return nullptr;
     }
@@ -2161,10 +2163,14 @@ size_t ggml_backend_meta_alloc_ctx_tensors_from_buft_size(ggml_context * ctx, gg
     return size;
 }
 
-struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) try {
-    auto prepared = ggml_backend_meta_prepare_context(ctx, buft);
-    if (!prepared || prepared->tensors.simple_tensors.empty()) {
-        return nullptr;
+enum ggml_status ggml_backend_meta_alloc_ctx_tensors_from_buft_reuse(
+        ggml_context * ctx, ggml_backend_buffer_type_t buft, ggml_backend_buffer_t * buffer) try {
+    auto prepared = ggml_backend_meta_prepare_context(ctx, buft, *buffer);
+    if (!prepared) {
+        return GGML_STATUS_FAILED;
+    }
+    if (prepared->tensors.simple_tensors.empty()) {
+        return GGML_STATUS_SUCCESS;
     }
     struct buffer_sets {
         std::vector<ggml_backend_buffer_set> values;
@@ -2176,40 +2182,17 @@ struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struc
         }
     } storage(prepared->tensors.ctxs.size());
     auto & domains = storage.values;
-    for (size_t device = 0; device < domains.size(); device++) {
-        auto * simple_ctx = prepared->tensors.ctxs[device].get();
-        auto * simple_buft = ggml_backend_meta_buft_simple_buft(buft, device);
-        auto & buffers = domains[device];
-        if (ggml_backend_alloc_ctx_tensors_from_buft_set(simple_ctx, simple_buft, &buffers) != GGML_STATUS_SUCCESS) {
-            return nullptr;
+    if (*buffer && ggml_backend_buffer_is_meta(*buffer)) {
+        ggml_status status = ggml_backend_meta_release_buffers(*buffer, domains.data(), domains.size());
+        if (status != GGML_STATUS_SUCCESS) {
+            return status;
         }
-        for (auto * tensor = ggml_get_first_tensor(simple_ctx); tensor; tensor = ggml_get_next_tensor(simple_ctx, tensor)) {
-            if (ggml_backend_tensor_is_bound(tensor)) {
-                continue;
-            }
-            ggml_status status;
-            if (tensor->view_src) {
-                status = ggml_backend_view_init(tensor);
-            } else {
-                if (ggml_nelements(tensor) != 0) {
-                    return nullptr;
-                }
-                if (buffers.n_buffers == 0) {
-                    buffers.buffers = static_cast<ggml_backend_buffer_t *>(calloc(1, sizeof(ggml_backend_buffer_t)));
-                    if (!buffers.buffers) {
-                        return nullptr;
-                    }
-                    buffers.n_buffers = 1;
-                    buffers.buffers[0] = ggml_backend_buft_alloc_buffer(simple_buft, 0);
-                    if (!buffers.buffers[0]) {
-                        return nullptr;
-                    }
-                }
-                status = ggml_backend_tensor_alloc(buffers.buffers[0], tensor, ggml_backend_buffer_get_base(buffers.buffers[0]));
-            }
-            if (status != GGML_STATUS_SUCCESS) {
-                return nullptr;
-            }
+    }
+    for (size_t device = 0; device < domains.size(); device++) {
+        ggml_status status = ggml_backend_alloc_ctx_tensors_from_buft_set_reuse(
+            prepared->tensors.ctxs[device].get(), ggml_backend_meta_buft_simple_buft(buft, device), &domains[device]);
+        if (status != GGML_STATUS_SUCCESS) {
+            return status;
         }
     }
     struct original_binding {
@@ -2225,22 +2208,34 @@ struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struc
     }
     ggml_backend_buffer_ptr owner(ggml_backend_meta_materialize(prepared.get(), domains.data(), domains.size()));
     if (!owner) {
-        return nullptr;
+        return GGML_STATUS_FAILED;
     }
     prepared.release();
     for (const auto & original : originals) {
         original.tensor->data = nullptr;
-        if (ggml_backend_buffer_init_tensor(owner.get(), original.tensor) != GGML_STATUS_SUCCESS) {
+        ggml_status status = ggml_backend_buffer_init_tensor(owner.get(), original.tensor);
+        if (status != GGML_STATUS_SUCCESS) {
             for (const auto & previous : originals) {
                 previous.tensor->buffer = previous.buffer;
                 previous.tensor->data = previous.data;
             }
-            return nullptr;
+            return status;
         }
     }
-    return owner.release();
+    ggml_backend_buffer_free(*buffer);
+    *buffer = owner.release();
+    return GGML_STATUS_SUCCESS;
 } catch (const std::bad_alloc &) {
-    return nullptr;
+    return GGML_STATUS_ALLOC_FAILED;
+}
+
+struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
+    ggml_backend_buffer_t buffer = nullptr;
+    if (ggml_backend_meta_alloc_ctx_tensors_from_buft_reuse(ctx, buft, &buffer) != GGML_STATUS_SUCCESS) {
+        ggml_backend_buffer_free(buffer);
+        return nullptr;
+    }
+    return buffer;
 }
 
 //

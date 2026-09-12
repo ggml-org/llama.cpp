@@ -2604,7 +2604,6 @@ public:
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
 
-        // save the write for later during destruction
         winfos.push_back({tensor, ptr, size, offset});
 
         ptr += size;
@@ -2737,7 +2736,7 @@ public:
     llama_io_write_device(uint8_t * p, size_t len, llama_memory_buffers & mbufs) : ptr(p), buf_size(len), mbufs(mbufs)  {
     }
 
-    ~llama_io_write_device() {
+    void finish() {
         llama_memory_buffers mbufs_new;
 
         for (const auto & winfo : winfos) {
@@ -2786,7 +2785,8 @@ public:
                     auto * org0 = mbuf_cur.org[i];
                     auto * org1 = mbuf.org[i];
 
-                    if (!ggml_are_same_shape(org0, org1)) {
+                    if (org0->type != org1->type || !ggml_are_same_shape(org0, org1) ||
+                            memcmp(org0->nb, org1->nb, sizeof(org0->nb)) || org0->data != org1->data || org0->buffer != org1->view_src->buffer) {
                         need_alloc = true;
                         break;
                     }
@@ -2799,29 +2799,14 @@ public:
             }
 
             if (need_alloc) {
-                if (!can_reuse_buffer || mbuf_cur.total_size != mbuf.total_size) {
-                    mbuf_cur = std::move(mbuf);
-
-                    mbuf_cur.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(mbuf_cur.ctx.get(), buft));
-
-                    LLAMA_LOG_INFO("%s: allocated '%s' buffer %.3f MiB\n", __func__, ggml_backend_buft_name(buft), mbuf.total_size/1024.0/1024.0);
-                } else {
-                    //LLAMA_LOG_INFO("%s: reallocating tensors in '%s' buffer %.3f MiB\n", __func__, ggml_backend_buft_name(buft), mbuf.total_size/1024.0/1024.0);
-
-                    // save the old buffer and allocate the new tensors in it
-                    auto buf = std::move(mbuf_cur.buf);
-
-                    mbuf_cur = std::move(mbuf);
-
-                    ggml_tallocr talloc = ggml_tallocr_new(buf.get());
-
-                    for (size_t i = 0; i < mbuf_cur.org.size(); ++i) {
-                        ggml_backend_view_init(mbuf_cur.org[i]);
-                        ggml_tallocr_alloc(&talloc, mbuf_cur.cpy[i]);
-                    }
-
-                    mbuf_cur.buf = std::move(buf);
+                auto * buffer = mbuf_cur.buf.release();
+                const auto status = ggml_backend_alloc_ctx_tensors_from_buft_reuse(mbuf.ctx.get(), buft, &buffer);
+                if (status != GGML_STATUS_SUCCESS) {
+                    mbuf_cur.buf.reset(buffer);
+                    throw std::runtime_error("failed to allocate state tensor bindings");
                 }
+                mbuf.buf.reset(buffer);
+                mbuf_cur = std::move(mbuf);
             }
 
             for (size_t i = 0; i < mbuf_cur.org.size(); ++i) {
@@ -2870,7 +2855,7 @@ public:
     llama_io_read_device(const uint8_t * p, size_t len, const llama_memory_buffers & mbufs) : ptr(p), buf_size(len), mbufs(mbufs) {
     }
 
-    ~llama_io_read_device() {
+    void finish() {
         llama_memory_buffers mbufs_new;
 
         for (const auto & rinfo : rinfos) {
@@ -2901,10 +2886,15 @@ public:
 
             mbuf.org.push_back(ggml_view_1d(mbuf.ctx.get(), rinfo.tensor, n, rinfo.offset));
 
-            ggml_backend_view_init(mbuf.org.back());
         }
 
         for (auto & [buft, mbuf] : mbufs_new) {
+            ggml_backend_buffer_t buffer = nullptr;
+            const auto status = ggml_backend_alloc_ctx_tensors_from_buft_reuse(mbuf.ctx.get(), buft, &buffer);
+            mbuf.buf.reset(buffer);
+            if (status != GGML_STATUS_SUCCESS) {
+                throw std::runtime_error("failed to initialize state destination views");
+            }
             const auto & mbuf_cur = mbufs.at(buft);
 
             if (!mbuf_cur.buf || mbuf_cur.total_size != mbuf.total_size) {
@@ -2941,7 +2931,9 @@ public:
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
-            ggml_context * ctx_scratch = ggml_init(params_scratch);
+            ggml_context_ptr ctx_scratch(ggml_init(params_scratch));
+            std::vector<std::pair<ggml_tensor *, ggml_tensor *>> copies;
+            copies.reserve(mbuf_cur.cpy.size() + mbuf.org.size());
 
             size_t src_pos  = 0;
             size_t dst_pos  = 0;
@@ -2965,12 +2957,9 @@ public:
                 const size_t   el   = ggml_element_size(src_t);
                 const int64_t n_el = (int64_t) (n_copy / el);
 
-                auto * src_v = ggml_view_1d(ctx_scratch, src_t, n_el, src_off);
-                ggml_backend_view_init(src_v);
-                auto * dst_v = ggml_view_1d(ctx_scratch, dst_t, n_el, dst_off);
-                ggml_backend_view_init(dst_v);
-
-                ggml_backend_tensor_copy(src_v, dst_v);
+                auto * src_v = ggml_view_1d(ctx_scratch.get(), src_t, n_el, src_off);
+                auto * dst_v = ggml_view_1d(ctx_scratch.get(), dst_t, n_el, dst_off);
+                copies.emplace_back(src_v, dst_v);
 
                 src_pos += n_copy;
                 dst_pos += n_copy;
@@ -2994,7 +2983,15 @@ public:
                 GGML_ASSERT(ggml_nbytes(mbuf.org[i]) == 0);
             }
 
-            ggml_free(ctx_scratch);
+            ggml_backend_buffer_t scratch_buffer = nullptr;
+            const auto scratch_status = ggml_backend_alloc_ctx_tensors_from_buft_reuse(ctx_scratch.get(), buft, &scratch_buffer);
+            ggml_backend_buffer_ptr scratch_owner(scratch_buffer);
+            if (scratch_status != GGML_STATUS_SUCCESS) {
+                throw std::runtime_error("failed to initialize state copy views");
+            }
+            for (const auto & copy : copies) {
+                ggml_backend_tensor_copy(copy.first, copy.second);
+            }
         }
 
         GGML_ASSERT(buf_size == 0);
@@ -3011,7 +3008,6 @@ public:
     }
 
     void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
-        // save for later during destruction
         rinfos.push_back({tensor, ptr, size, offset});
     }
 
@@ -3092,7 +3088,11 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
         io->write(&io_magic, sizeof(io_magic));
         io->write(&seq_id, sizeof(seq_id));
 
-        return state_seq_write_data(*io, seq_id, flags);
+        const size_t result = state_seq_write_data(*io, seq_id, flags);
+        if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
+            static_cast<llama_io_write_device *>(io.get())->finish();
+        }
+        return result;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error saving state: %s\n", __func__, err.what());
         return 0;
@@ -3131,7 +3131,11 @@ size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * sr
         llama_seq_id seq_id_read;
         io->read(&seq_id_read, sizeof(seq_id_read));
 
-        return state_seq_read_data(*io, seq_id, flags);
+        const size_t result = state_seq_read_data(*io, seq_id, flags);
+        if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
+            static_cast<llama_io_read_device *>(io.get())->finish();
+        }
+        return result;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading state: %s\n", __func__, err.what());
         return 0;

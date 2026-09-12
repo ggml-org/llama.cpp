@@ -83,6 +83,12 @@ GGML_API size_t                       ggml_backend_alloc_ctx_tensors_from_buft_s
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors(struct ggml_context * ctx, ggml_backend_t backend);
 
+// Bind a new context using optional owned capacity in *buffer. The caller quiesces backend work first.
+// On success, *buffer owns the result. On failure it remains owned but may be NULL or retired; discard ctx.
+// Sources borrowed by ctx must not depend on storage being replaced.
+GGML_API enum ggml_status ggml_backend_alloc_ctx_tensors_from_buft_reuse(
+        struct ggml_context * ctx, ggml_backend_buffer_type_t buft, ggml_backend_buffer_t * buffer);
+
 #ifdef  __cplusplus
 }
 #endif
