@@ -1630,6 +1630,98 @@ static void test_meta_static_multibuffer(bool relative) {
     GGML_ASSERT(first.context->buffers.empty() && second.context->buffers.empty());
 }
 
+static void test_meta_independent_placements(bool relative) {
+    static auto first = dummy_backend_init(512);
+    static auto second = dummy_backend_init(512);
+    for (auto * backend : {&first, &second}) {
+        backend->context->real_data = true;
+        backend->context->relative_addresses = relative;
+        backend->context->buffer_type = &backend->buffer_type;
+        backend->context->device.iface.get_buffer_type = test_device_buffer_type;
+        backend->context->device.iface.get_name = [](ggml_backend_dev_t) { return "placement_member"; };
+        backend->context->device.iface.get_description = [](ggml_backend_dev_t) { return "independent placement member"; };
+    }
+    ggml_backend_dev_t devices[] = {&first.context->device, &second.context->device};
+    auto * meta = ggml_backend_meta_device(devices, 2, [](const ggml_tensor * tensor, void *) {
+        bool reverse = std::strcmp(tensor->name, "B") == 0;
+        return ggml_backend_meta_split_state{GGML_BACKEND_SPLIT_AXIS_0, {reverse ? 8 : 24, reverse ? 24 : 8}, {1}, 1};
+    }, nullptr);
+    auto * buft = ggml_backend_dev_buffer_type(meta);
+    auto weights = make_context();
+    auto * a = ggml_new_tensor_1d(weights.ctx, GGML_TYPE_F32, 32);
+    auto * b = ggml_new_tensor_1d(weights.ctx, GGML_TYPE_F32, 32);
+    ggml_set_name(a, "A");
+    ggml_set_name(b, "B");
+    ggml_backend_buffer_ptr storage(ggml_backend_alloc_ctx_tensors_from_buft(weights.ctx, buft));
+    GGML_ASSERT(storage);
+    std::vector<float> values_a(32), values_b(32), actual(32);
+    for (size_t i = 0; i < 32; i++) {
+        values_a[i] = float(i + 1);
+        values_b[i] = float(i + 101);
+    }
+    ggml_backend_tensor_set(a, values_a.data(), 0, ggml_nbytes(a));
+    ggml_backend_tensor_set(b, values_b.data(), 0, ggml_nbytes(b));
+    auto ctx = make_context();
+    auto * result_a = ggml_scale(ctx.ctx, a, 2.0f);
+    auto * result_b = ggml_scale(ctx.ctx, b, 3.0f);
+    ggml_set_output(result_a);
+    ggml_set_output(result_b);
+    ggml_build_forward_expand(ctx.graph, result_a);
+    ggml_build_forward_expand(ctx.graph, result_b);
+    ggml_gallocr_ptr allocator(ggml_gallocr_new(buft));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(allocator.get(), ctx.graph));
+    GGML_ASSERT(ggml_gallocr_get_buffer_size(allocator.get(), 0) == 256);
+    auto * inspection = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 0, nullptr);
+    for (size_t device = 0; device < 2; device++) {
+        auto * shard_a = ggml_backend_meta_preparation_get_tensor(inspection, result_a, device);
+        auto * shard_b = ggml_backend_meta_preparation_get_tensor(inspection, result_b, device);
+        GGML_ASSERT(shard_a->buffer == shard_b->buffer && shard_a->buffer->size == 128);
+        GGML_ASSERT(shard_a->data == ggml_backend_buffer_get_base(shard_a->buffer));
+        GGML_ASSERT(uintptr_t(shard_b->data) - uintptr_t(shard_a->data) == (device == 0 ? 96 : 32));
+        GGML_ASSERT(ggml_nbytes(shard_a) == (device == 0 ? 96 : 32));
+        GGML_ASSERT(ggml_nbytes(shard_b) == (device == 0 ? 32 : 96));
+    }
+    ggml_backend_meta_preparation_free(inspection);
+    ggml_backend_tensor_set(result_a, values_a.data(), 0, ggml_nbytes(result_a));
+    ggml_backend_tensor_set(result_b, values_b.data(), 0, ggml_nbytes(result_b));
+    ggml_backend_tensor_get(result_a, actual.data(), 0, ggml_nbytes(result_a));
+    GGML_ASSERT(actual == values_a);
+    ggml_backend_tensor_get(result_b, actual.data(), 0, ggml_nbytes(result_b));
+    GGML_ASSERT(actual == values_b);
+    ggml_backend_ptr cpu(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    auto copy = ggml_backend_graph_copy(cpu.get(), ctx.graph);
+    GGML_ASSERT(copy.buffer && copy.graph->n_nodes == 2);
+    GGML_ASSERT(ggml_backend_graph_compute(cpu.get(), copy.graph) == GGML_STATUS_SUCCESS);
+    for (int i = 0; i < 2; i++) {
+        ggml_backend_tensor_get(copy.graph->nodes[i], actual.data(), 0, actual.size()*sizeof(float));
+        for (size_t j = 0; j < actual.size(); j++) {
+            GGML_ASSERT(actual[j] == (i == 0 ? 2.0f*values_a[j] : 3.0f*values_b[j]));
+        }
+    }
+    ggml_backend_graph_copy_free(copy);
+
+    auto second_ctx = make_context();
+    auto * second_view = ggml_view_tensor(second_ctx.ctx, a);
+    auto * second_result = ggml_scale(second_ctx.ctx, second_view, 3.0f);
+    ggml_build_forward_expand(second_ctx.graph, second_result);
+    ggml_gallocr_ptr second_allocator(ggml_gallocr_new(buft));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(second_allocator.get(), second_ctx.graph));
+    auto * second_owner = second_result->buffer;
+    uint64_t second_generation = ggml_backend_tensor_binding_generation(second_result);
+    float new_scale = 4.0f;
+    std::memcpy(result_a->op_params, &new_scale, sizeof(new_scale));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(allocator.get(), ctx.graph));
+    GGML_ASSERT(second_result->buffer == second_owner && ggml_backend_tensor_binding_generation(second_result) == second_generation);
+    GGML_ASSERT(ggml_backend_tensor_is_bound(second_view) && second_view->data == nullptr);
+    auto second_copy = ggml_backend_graph_copy(cpu.get(), second_ctx.graph);
+    GGML_ASSERT(second_copy.buffer && ggml_backend_graph_compute(cpu.get(), second_copy.graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_tensor_get(second_copy.graph->nodes[second_copy.graph->n_nodes - 1], actual.data(), 0, actual.size()*sizeof(float));
+    for (size_t i = 0; i < actual.size(); i++) {
+        GGML_ASSERT(actual[i] == 3.0f*values_a[i]);
+    }
+    ggml_backend_graph_copy_free(second_copy);
+}
+
 static void test_context_capacity_reuse(bool composite, bool relative) {
     static auto first = dummy_backend_init(128);
     static auto second = dummy_backend_init(128);
@@ -2456,6 +2548,8 @@ int main() {
     run("test_meta_split_preparation", test_meta_split_preparation);
     run("test_meta_static_multibuffer", [] { test_meta_static_multibuffer(false); });
     run("test_meta_static_multibuffer_same_base", [] { test_meta_static_multibuffer(true); });
+    run("test_meta_independent_placements", [] { test_meta_independent_placements(false); });
+    run("test_meta_independent_placements_same_base", [] { test_meta_independent_placements(true); });
     run("test_context_capacity_reuse", [] { test_context_capacity_reuse(false, false); });
     run("test_context_capacity_reuse_same_base", [] { test_context_capacity_reuse(false, true); });
     run("test_meta_context_capacity_reuse", [] { test_context_capacity_reuse(true, false); });

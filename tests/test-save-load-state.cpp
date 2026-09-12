@@ -4,9 +4,12 @@
 #include "llama-cpp.h"
 #include "../src/llama-model.h"
 #include "../src/llama-ext.h"
+#include "../src/llama-context.h"
+#include "../ggml/src/ggml-backend-impl.h"
 
 #include <algorithm>
 #include <clocale>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <random>
@@ -30,9 +33,25 @@ struct llama_batch_ptr {
     const llama_batch & get() const { return batch; }
 };
 
+static bool logits_are_finite(llama_context * ctx) {
+    const auto * logits = llama_get_logits_ith(ctx, -1);
+    int32_t count = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+    for (int32_t i = 0; i < count; i++) {
+        if (!logits || !std::isfinite(logits[i])) {
+            LOG_ERR("%s: missing or non-finite logits\n", __func__);
+            return false;
+        }
+    }
+    return true;
+}
+
 static llama_tokens generate_tokens(llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id) {
     llama_tokens result;
     llama_batch_ptr batch(1, 0, 1);
+
+    if (!logits_are_finite(ctx)) {
+        return {};
+    }
 
     for (int i = 0; i < n_predict; i++) {
         auto next_token = llama_sampler_sample(smpl, ctx, -1);
@@ -45,6 +64,9 @@ static llama_tokens generate_tokens(llama_context * ctx, llama_sampler * smpl, i
 
         if (llama_decode(ctx, batch.get())) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
+            return {};
+        }
+        if (!logits_are_finite(ctx)) {
             return {};
         }
         n_past++;
@@ -335,11 +357,44 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
     // Migrate KV cache from seq 0 to seq 1 (on-device path)
     {
         std::vector<uint8_t> seq_store(llama_state_seq_get_size_ext(ctx.get(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE));
+        std::vector<ggml_backend_buffer_t> previous_members;
+        std::vector<uint64_t> previous_generations;
         for (int save = 0; save < 3; save++) {
             const size_t ncopy = llama_state_seq_get_data_ext(ctx.get(), seq_store.data(), seq_store.size(), 0, LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
             if (ncopy != seq_store.size()) {
                 LOG_ERR("\n%s: seq copy data length %zd does not match expected length %zd\n", __func__, ncopy, seq_store.size());
                 return false;
+            }
+            if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+                std::vector<ggml_backend_buffer_t> members;
+                std::vector<uint64_t> generations;
+                for (const auto & item : ctx->state_buffers(0)) {
+                    const auto * allocation = ggml_backend_buft_get_alloc_interface(item.first);
+                    if (!allocation) {
+                        continue;
+                    }
+                    auto * owner = item.second.buf.get();
+                    for (size_t device = 0; device < allocation->n_domains(item.first); device++) {
+                        for (size_t chunk = 0; chunk < allocation->n_buffers(owner, device); chunk++) {
+                            members.push_back(allocation->get_buffer(owner, device, chunk));
+                        }
+                    }
+                    for (const auto * tensor : item.second.cpy) {
+                        GGML_ASSERT(!tensor->data && ggml_backend_tensor_is_bound(tensor));
+                        generations.push_back(ggml_backend_tensor_binding_generation(tensor));
+                        GGML_ASSERT(generations.back() != 0);
+                    }
+                }
+                GGML_ASSERT(!members.empty() && !generations.empty());
+                if (save > 0) {
+                    GGML_ASSERT(members == previous_members && generations.size() == previous_generations.size());
+                    for (size_t i = 0; i < generations.size(); i++) {
+                        GGML_ASSERT(generations[i] != previous_generations[i]);
+                    }
+                    LOG_INF("%s: reused %zu state members with %zu new binding generations\n", __func__, members.size(), generations.size());
+                }
+                previous_members = std::move(members);
+                previous_generations = std::move(generations);
             }
         }
         LOG_INF("%s: seq 0 saved on device three times, %zu bytes\n", __func__, seq_store.size());
@@ -564,6 +619,41 @@ static bool run_save_load_tests_for_model(const std::string & model_path, const 
         }
         GGML_ASSERT(meta_tensors > 0);
         LOG_INF("%s: verified %zu addressless model tensor bindings\n", __func__, meta_tensors);
+
+        auto measured_params = common_model_params_to_llama(params);
+        measured_params.no_alloc = true;
+        measured_params.load_mode = LLAMA_LOAD_MODE_NONE;
+        llama_model_ptr measured_model(llama_model_load_from_file(model_path.c_str(), measured_params));
+        GGML_ASSERT(measured_model);
+        for (const auto & item : measured_model->tensors_by_name) {
+            GGML_ASSERT(item.second->data == nullptr);
+            if (ggml_nelements(item.second) != 0) {
+                GGML_ASSERT(!ggml_backend_tensor_is_bound(item.second));
+            }
+        }
+        auto context_params = common_context_params_to_llama(params);
+        llama_context_ptr measured_ctx(llama_init_from_model(measured_model.get(), context_params));
+        llama_context_ptr allocated_ctx(llama_init_from_model(model, context_params));
+        GGML_ASSERT(measured_ctx && allocated_ctx);
+        const auto by_name = [](const llama_memory_breakdown & memory) {
+            std::map<std::string, llama_memory_breakdown_data> result;
+            for (const auto & item : memory) {
+                auto & row = result[ggml_backend_buft_is_host(item.first) ? "Host" : ggml_backend_buft_name(item.first)];
+                row.model += item.second.model;
+                row.context += item.second.context;
+                row.compute += item.second.compute;
+            }
+            return result;
+        };
+        auto measured = by_name(llama_get_memory_breakdown(measured_ctx.get()));
+        auto allocated = by_name(llama_get_memory_breakdown(allocated_ctx.get()));
+        GGML_ASSERT(measured.size() == allocated.size());
+        for (const auto & item : measured) {
+            const auto & expected = allocated.at(item.first);
+            LOG_INF("%s: %s no_alloc/actual model=%zu/%zu KV=%zu/%zu compute=%zu/%zu\n", __func__, item.first.c_str(),
+                    item.second.model, expected.model, item.second.context, expected.context, item.second.compute, expected.compute);
+            GGML_ASSERT(item.second.model == expected.model && item.second.context == expected.context && item.second.compute == expected.compute);
+        }
     }
 
     // Tokenize prompt or generate random tokens
