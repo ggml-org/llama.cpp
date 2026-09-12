@@ -280,7 +280,7 @@ static std::unordered_map<char, std::string> GRAMMAR_LITERAL_ESCAPES = {
 static const int MAX_PATTERN_DEPTH = 100;
 
 static std::unordered_set<char> NON_LITERAL_SET = {'|', '.', '(', ')', '[', ']', '{', '}', '*', '+', '?', '^', '$'};
-static std::unordered_set<char> ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = {'^', '$', '.', '[', ']', '(', ')', '|', '{', '}', '*', '+', '?'};
+static std::unordered_set<char> ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = {'^', '$', '.', '[', ']', '(', ')', '|', '{', '}', '*', '+', '?', '/'};
 
 static std::string replacePattern(const std::string & input, const std::regex & regex, const std::function<std::string(const std::smatch  &)> & replacement) {
     std::smatch match;
@@ -495,6 +495,11 @@ private:
                     i++;
                     while (i < length && sub_pattern[i] != ']') {
                         if (sub_pattern[i] == '\\') {
+                            if (i + 1 < length && sub_pattern[i + 1] == '/') {
+                                square_brackets += '/';
+                                i += 2;
+                                continue;
+                            }
                             auto escape_length = gbnf_escape_length(sub_pattern, i);
                             if (escape_length == 0) {
                                 throw unsupported_pattern("unsupported escape in character class: " + sub_pattern.substr(i, 2));
