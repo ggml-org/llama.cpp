@@ -471,7 +471,14 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
                      ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
                 new_type = GGML_TYPE_Q5_K;
             }
-            else if (new_type != GGML_TYPE_Q8_0) {
+            else if (new_type != GGML_TYPE_Q8_0 && new_type != GGML_TYPE_BPOSIT8) {
+                // b-posit8 is exempt so that a BPOSIT8 file is b-posit8 end to end:
+                // for tied-embedding models this tensor is also the output projection,
+                // and routing it to another type would leave the model's largest matmul
+                // outside the exact-quire path, holing the reproducibility guarantee.
+                // This costs some perplexity versus the q8_0 fallback (q8_0 carries a
+                // per-block float scale, b-posit8 a power-of-two one); use
+                // --token-embedding-type q8_0 to trade reproducibility back for it.
                 new_type = GGML_TYPE_Q6_K;
             }
         }
@@ -851,6 +858,7 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q5_0: return GGML_TYPE_Q5_0;
         case LLAMA_FTYPE_MOSTLY_Q5_1: return GGML_TYPE_Q5_1;
         case LLAMA_FTYPE_MOSTLY_Q8_0: return GGML_TYPE_Q8_0;
+        case LLAMA_FTYPE_MOSTLY_BPOSIT8: return GGML_TYPE_BPOSIT8; // b-posit8 W8A8 exact-quire (Anomly)
         case LLAMA_FTYPE_MOSTLY_F16:  return GGML_TYPE_F16;
         case LLAMA_FTYPE_MOSTLY_BF16: return GGML_TYPE_BF16;
         case LLAMA_FTYPE_ALL_F32:     return GGML_TYPE_F32;

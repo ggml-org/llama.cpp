@@ -865,6 +865,26 @@ static __device__ __forceinline__ float vec_dot_q8_0_q8_1(
     return vec_dot_q8_0_q8_1_impl<float, VDR_Q8_0_Q8_1_MMVQ>(v, u, bq8_0->d, __low2half(bq8_1->ds));
 }
 
+// b-posit8 W8A8 (Anomly) x q8_1: the lattice values are floats (not int8), so this is a float
+// dot of decoded weights against the int8 activations, scaled by the block's 2^scale_exp and d_y.
+#define VDR_BPOSIT8_Q8_1_MMVQ 2
+static __device__ __forceinline__ float vec_dot_bposit8_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_bposit8 * bx = (const block_bposit8 *) vbq + kbx;
+
+    const uint8_t * qs = bx->qs + 4*iqs;                        // codes (byte-aligned: the block is 33 bytes)
+    const int8_t  * u8 = (const int8_t *) bq8_1->qs + 4*iqs;    // int8 activations
+
+    float sumf = 0.0f;
+#pragma unroll
+    for (int i = 0; i < 4*VDR_BPOSIT8_Q8_1_MMVQ; ++i) {
+        sumf += bp8_lut_f[qs[i]] * (float) u8[i];
+    }
+
+    return sumf * ldexpf(1.0f, (int) bx->scale_exp) * __low2float(bq8_1->ds);
+}
+
 static __device__ __forceinline__ float vec_dot_q2_K_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 

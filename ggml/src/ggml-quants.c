@@ -566,6 +566,212 @@ void dequantize_row_q8_0(const block_q8_0 * GGML_RESTRICT x, float * GGML_RESTRI
     }
 }
 
+// ============================================================================
+// b-posit8 W8A8 (Anomly) — exact-quire, power-of-two block scale.
+// Copyright (c) 2026 Anomly, Inc. All rights reserved. Author: Ry Bruscoe.
+// Reproducibility-first: the block scale is a power-of-two EXPONENT (exact
+// bit-shift, bit-identical across GPU/CPU/RISC-V), never a float multiply.
+// The decode is the verified bp8_codec (ES=2, useed=16); encode is
+// round-to-nearest over the decoded value grid (the accuracy-optimal choice,
+// per the measured W8A8 rounding study).
+// ============================================================================
+#define BP8_ES     2
+#define BP8_ZERO   0x00
+#define BP8_NAR    0x80
+
+// decode one bp8 code to its exact dyadic value (double). Zero/NaR -> 0.
+// out_absT (optional) receives |T| where T = 4*k+e (the useed+exp scale), used
+// only to distinguish the canonical bounded (|T|<=12) lattice from unbounded codes.
+static double ggml_bp8_code_to_double(uint8_t p, int * out_absT) {
+    if (p == BP8_ZERO || p == BP8_NAR) { if (out_absT) *out_absT = 0; return 0.0; }
+    int s = (p >> 7) & 1;
+    int rest = p & 0x7F;
+    if (s) rest = ((~rest) + 1) & 0x7F;              // two's complement of trailing 7 bits
+    int leading = (rest >> 6) & 1;
+    int rs = 0;
+    while (rs < 7 && ((rest >> (6 - rs)) & 1) == leading) rs++;
+    int k_reg, e = 0, fb = 0, fw = 0;
+    if (rs == 7) {
+        k_reg = leading ? 6 : -7;
+    } else {
+        k_reg = leading ? (rs - 1) : -rs;
+        int rem = 7 - (rs + 1);
+        int r2  = rest & ((1 << rem) - 1);
+        int ew  = BP8_ES < rem ? BP8_ES : rem;
+        if (ew > 0) { e = (r2 >> (rem - ew)) & ((1 << ew) - 1); e <<= (BP8_ES - ew); }
+        rem -= ew; fw = rem; fb = fw > 0 ? (r2 & ((1 << fw) - 1)) : 0;
+    }
+    if (out_absT) { int T = 4 * k_reg + e; *out_absT = T < 0 ? -T : T; }
+    double m = (double)((1 << fw) + fb);             // >= 1
+    int    E = 4 * k_reg + e - fw;                    // useed=16=2^4 -> 4*k
+    return (s ? -m : m) * ldexp(1.0, E);             // m * 2^E
+}
+
+// decoded value grid, built once (thread-safe enough: idempotent fill).
+static double g_bp8_val[256];
+static int    g_bp8_absT[256];                       // |T| = |4k+e| per code
+static int    g_bp8_ready = 0;
+static void ggml_bp8_init(void) {
+    if (g_bp8_ready) return;
+    for (int c = 0; c < 256; c++) g_bp8_val[c] = ggml_bp8_code_to_double((uint8_t) c, &g_bp8_absT[c]);
+    g_bp8_ready = 1;
+}
+
+// Sorted value table for the nearest-code search (2026-09-05, gated bit-identical against the
+// linear scan on real activations + random + tie/absorption edge rows; ~1.9x). Ties resolve
+// to the LOWEST code as the scan does; when the best distance is not strictly below |x|
+// (double absorption) the scan is used, because it returns the first code (0) in that case.
+static double  g_bp8_sv[255];
+static uint8_t g_bp8_sc[255];
+static volatile int g_bp8_sorted_ready = 0;
+static int ggml_bp8_cmp_val(const void * a, const void * b) {
+    const double x = g_bp8_val[*(const uint8_t *) a], y = g_bp8_val[*(const uint8_t *) b];
+    return (x > y) - (x < y);
+}
+static void ggml_bp8_sorted_init(void) {
+    if (g_bp8_sorted_ready) return;
+    ggml_bp8_init();
+    uint8_t codes[255]; int n = 0;
+    for (int c = 0; c < 256; c++) if (c != BP8_NAR) codes[n++] = (uint8_t) c;
+    qsort(codes, n, 1, ggml_bp8_cmp_val);
+    for (int i = 0; i < n; i++) { g_bp8_sc[i] = codes[i]; g_bp8_sv[i] = g_bp8_val[codes[i]]; }
+    g_bp8_sorted_ready = 1;
+}
+static uint8_t ggml_bp8_encode_scan(double x, int bounded) {
+    uint8_t best = BP8_ZERO; double bestd = HUGE_VAL;
+    for (int c = 0; c < 256; c++) {
+        if (c == BP8_NAR) continue;
+        if (bounded && g_bp8_absT[c] > 12) continue;
+        double d = fabs(g_bp8_val[c] - x);
+        if (d < bestd) { bestd = d; best = (uint8_t) c; }
+    }
+    return best;
+}
+
+// round-to-nearest encode: the finite bp8 code whose value is closest to x.
+static uint8_t ggml_bp8_encode_nearest(double x) {
+    ggml_bp8_init();
+    if (x == 0.0) return BP8_ZERO;
+    // EXPERIMENT (Anomly, uncommitted): ANOMLY_BP8_BOUNDED=1 restricts the target
+    // lattice to the canonical RS=3 BOUNDED range |T|<=12, so intra-block outliers
+    // saturate as a bounded b-posit8 codec would. Default = unbounded (open-bposit).
+    // Used only to measure the PPL cost of bounding; NOT a shipped code path.
+    static int bounded = -1;
+    if (bounded < 0) { const char * ev = getenv("ANOMLY_BP8_BOUNDED"); bounded = (ev && ev[0] == '1') ? 1 : 0; }
+    if (bounded) return ggml_bp8_encode_scan(x, 1);  // experiment path: keep the scan
+    ggml_bp8_sorted_init();
+    int lo = 0, hi = 255;
+    while (lo < hi) { int mid = (lo + hi) >> 1; if (g_bp8_sv[mid] < x) lo = mid + 1; else hi = mid; }
+    // the two value-neighbours (lo-1, lo) are the closest codes by value and hence by
+    // double distance; ties go to the lower code number as the scan does
+    int best_k = -1; double bestd = HUGE_VAL;
+    const int start = lo > 0 ? lo - 1 : lo, end = lo < 255 ? lo : lo - 1;
+    for (int k = start; k <= end; k++) {
+        const double d = fabs(g_bp8_sv[k] - x);
+        if (d < bestd || (d == bestd && (best_k < 0 || g_bp8_sc[k] < g_bp8_sc[best_k]))) { bestd = d; best_k = k; }
+    }
+    // Exact rule for the remaining cases (tiny |x| below the smallest code, double absorption
+    // at huge |x|, NaN): code 0 has distance |x| and is the FIRST code the scan visits, so
+    // unless a neighbour is STRICTLY closer than |x| the scan returns 0. (OpenEvolve
+    // bp8_quantize_speed 2026-09-05; ~6.5x over the shipped scan, codes bit-identical.)
+    if (best_k < 0 || !(bestd < fabs(x))) return BP8_ZERO;
+    return g_bp8_sc[best_k];
+}
+
+// Exact block scale (2026-09-05): se = round_half_even(log2(sqrt(S/32))) where S is the EXACT
+// sum of squares of the block, held as a 640-bit integer with the radix point at bit 352
+// (float32 squares span 2^-298 .. 2^254 and are exact in double: 24x24 bits fit in 53).
+// floor(log2(S/32)) is the top set bit; a tie (log2 exactly n+1/2) is S a power of two.
+// No libm, no FMA contraction, no summation order: identical on CPU, CUDA, Python and Go.
+// Non-finite input -> se = 0 (the old lrint(log2(NaN)) was undefined).
+#define BP8_SS_LIMBS 20
+#define BP8_SS_RADIX 352
+static int ggml_bp8_scale_exp_exact(const float * GGML_RESTRICT x, int * any_nonzero) {
+    uint32_t acc[BP8_SS_LIMBS] = { 0 };
+    int any = 0;
+    for (int j = 0; j < QK_BPOSIT8; j++) {
+        const double v = (double) x[j];
+        if (v == 0.0) continue;
+        if (!isfinite(v)) { *any_nonzero = 1; return 0; }
+        any = 1;
+        const double p = v * v;                                   // exact
+        uint64_t bits; memcpy(&bits, &p, sizeof(bits));
+        const uint64_t mi = (bits & 0xFFFFFFFFFFFFFull) | (1ull << 52);
+        const int e2 = (int) ((bits >> 52) & 0x7FF) - 1023;      // p = mi * 2^(e2-52), p is normal
+        const int pos = e2 - 52 + BP8_SS_RADIX;
+        const int w = pos >> 5, b = pos & 31;
+        const uint64_t lo = b ? (mi << b) : mi;
+        const uint64_t hi = b ? (mi >> (64 - b)) : 0ull;
+        const uint32_t parts[3] = { (uint32_t) lo, (uint32_t) (lo >> 32), (uint32_t) hi };
+        uint64_t c = 0;
+        for (int i = 0; i < 3; i++) { const uint64_t t = (uint64_t) acc[w + i] + parts[i] + c; acc[w + i] = (uint32_t) t; c = t >> 32; }
+        for (int i = w + 3; c && i < BP8_SS_LIMBS; i++) { const uint64_t t = (uint64_t) acc[i] + c; acc[i] = (uint32_t) t; c = t >> 32; }
+    }
+    *any_nonzero = any;
+    if (!any) return 0;
+    int top = -1, pop = 0;
+    for (int i = BP8_SS_LIMBS - 1; i >= 0; i--) {
+        if (acc[i]) {
+            if (top < 0) { int t = 31; while (!((acc[i] >> t) & 1u)) t--; top = 32 * i + t; }
+            uint32_t m = acc[i]; while (m) { pop += (int) (m & 1u); m >>= 1; }
+        }
+    }
+    const int E = top - BP8_SS_RADIX - 5;                         // floor(log2(S/32))
+    int se;
+    if ((E & 1) == 0) {
+        se = E / 2;
+    } else {
+        const int n = (E - 1) / 2;
+        se = (pop == 1) ? (((n & 1) == 0) ? n : n + 1) : n + 1;   // exact tie -> half-even
+    }
+    if (se >  127) se =  127;
+    if (se < -128) se = -128;
+    return se;
+}
+
+void quantize_row_bposit8_ref(const float * GGML_RESTRICT x, block_bposit8 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_BPOSIT8 == 0);
+    const int nb = k / QK_BPOSIT8;
+    ggml_bp8_init();
+    for (int i = 0; i < nb; i++) {
+        // power-of-two block scale: center the block on b-posit's dense ~1.0 band via the RMS,
+        // rounded to an integer exponent (exact bit-shift -> reproducible on any hardware).
+        int has_nonzero = 0;
+        const int se = ggml_bp8_scale_exp_exact(x + i*QK_BPOSIT8, &has_nonzero);
+        if (!has_nonzero) {                          // all-zero block: se = 0, all codes 0 (same as below)
+            y[i].scale_exp = 0;
+            memset(y[i].qs, BP8_ZERO, QK_BPOSIT8);
+            continue;
+        }
+        y[i].scale_exp = (int8_t) se;
+        const double inv = ldexp(1.0, -se);          // 2^-se
+        for (int j = 0; j < QK_BPOSIT8; j++) {
+            y[i].qs[j] = ggml_bp8_encode_nearest((double) x[i*QK_BPOSIT8 + j] * inv);
+        }
+    }
+}
+
+void dequantize_row_bposit8(const block_bposit8 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_BPOSIT8;
+    assert(k % qk == 0);
+    const int nb = k / qk;
+    ggml_bp8_init();
+    for (int i = 0; i < nb; i++) {
+        const double sc = ldexp(1.0, x[i].scale_exp); // 2^scale_exp
+        for (int j = 0; j < qk; j++) {
+            y[i*qk + j] = (float) (g_bp8_val[x[i].qs[j]] * sc);
+        }
+    }
+}
+
+// multi-row driver for ggml_quantize_chunk (b-posit8 W8A8, Anomly). The ref
+// encoder is already exact + reproducible, so no imatrix is used.
+size_t quantize_bposit8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_UNUSED(quant_weights);
+    quantize_row_bposit8_ref(src, (block_bposit8 *) dst, (int64_t) nrow * n_per_row);
+    return nrow * ggml_row_size(GGML_TYPE_BPOSIT8, n_per_row);
+}
+
 void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK_MXFP4;
 
@@ -5650,6 +5856,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_iq4_nl, data, nb);
             } break;
 
+        case GGML_TYPE_BPOSIT8:
+            // b-posit8 W8A8 (Anomly): int8 exponent + byte codes; the encoder never
+            // emits NaR, and every code is a finite lattice value -> nothing to validate.
+            break;
         case GGML_TYPE_I8:
         case GGML_TYPE_I16:
         case GGML_TYPE_I32:

@@ -5669,6 +5669,7 @@ class GGMLQuantizationType(IntEnum):
     NVFP4   = 40
     Q1_0    = 41
     Q2_0    = 42
+    BPOSIT8 = 43  # b-posit8 W8A8 exact-quire (Anomly)
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -5834,6 +5835,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.Q5_0:    (32, 2 + 4 + 16),
     GGMLQuantizationType.Q5_1:    (32, 2 + 2 + 4 + 16),
     GGMLQuantizationType.Q8_0:    (32, 2 + 32),
+    GGMLQuantizationType.BPOSIT8: (32, 1 + 32),  # int8 scale_exp + 32 b-posit8 codes (Anomly)
     GGMLQuantizationType.Q8_1:    (32, 4 + 4 + 32),
     GGMLQuantizationType.Q2_K:    (256, 2 + 2 + QK_K // 16 + QK_K // 4),
     GGMLQuantizationType.Q3_K:    (256, 2 + QK_K // 4 + QK_K // 8 + 12),

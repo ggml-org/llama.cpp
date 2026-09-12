@@ -1039,6 +1039,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_Q8_0> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_BPOSIT8> {   // b-posit8 (Anomly): 32 codes per block, one byte each
+    static constexpr int qk = QK_BPOSIT8;
+    static constexpr int qr = 1;
+    static constexpr int qi = QK_BPOSIT8 / 4;
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_MXFP4> {
     static constexpr int qk = QK_MXFP4;
     static constexpr int qr = QR_MXFP4;

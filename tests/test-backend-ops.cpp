@@ -8818,6 +8818,7 @@ struct test_falcon : public test_llm {
 // ## Section 3: GGML Op Test Instantiation ##
 // ###########################################
 static const ggml_type all_types[] = {
+    GGML_TYPE_BPOSIT8,
     GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16,
     GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,
     GGML_TYPE_Q5_0, GGML_TYPE_Q5_1,
