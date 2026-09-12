@@ -41,5 +41,5 @@ The following will use add_subdirectory to include llama.cpp in a cmake project
 and is intended to simulate projects that build llama.cpp in this way.
 
 ```console
-$ USE_SUBDIR=ON ./build.sh 
+$ USE_SUBDIR=ON ./build.sh
 ```
