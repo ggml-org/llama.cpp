@@ -1,12 +1,3 @@
-ARG ONEAPI_VERSION=2025.3.3-0-devel-ubuntu24.04
-ARG BUILD_DATE=N/A
-ARG APP_VERSION=N/A
-ARG APP_REVISION=N/A
-
-## Build Image
-
-ARG NODE_VERSION=24
-
 FROM docker.io/node:$NODE_VERSION AS web
 
 ARG APP_VERSION
@@ -21,7 +12,30 @@ RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 
 FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 
+ARG ONEAPI_VERSION=2025.3.3-0-devel-ubuntu24.04
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+
+## Build Image
+
+ARG NODE_VERSION=24
+
+ARG GGML_SYCL_F16=OFF
+RUN apt-get update \
+    && apt-get install -y \
+        git \
+        libssl-dev
+
+ARG CCACHE_ENABLED="false"
+RUN if $CCACHE_ENABLED; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            ccache; \
+    fi
+
 ARG GGML_SYCL_F16=ON
+
 ARG LEVEL_ZERO_VERSION=1.28.2
 ARG LEVEL_ZERO_UBUNTU_VERSION=u24.04
 RUN apt-get update && \
@@ -35,17 +49,25 @@ RUN apt-get update && \
 WORKDIR /app
 
 COPY . .
-
 COPY --from=web /app/tools/ui/dist tools/ui/dist
 
-RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    if [ "${GGML_SYCL_F16}" = "ON" ]; then \>>>>>>> master
         echo "GGML_SYCL_F16 is set" \
         && export OPT_SYCL_F16="-DGGML_SYCL_F16=ON" \
         && export SYCL_PROGRAM_COMPILE_OPTIONS="-cl-fp32-correctly-rounded-divide-sqrt"; \
     fi && \
-    echo "Building with dynamic libs" && \
-    cmake -B build -DGGML_NATIVE=OFF -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DLLAMA_BUILD_TESTS=OFF ${OPT_SYCL_F16} && \
-    cmake --build build --config Release -j$(nproc)
+    echo "Building with dynamic libs" \
+    && cmake -B build \
+      -DGGML_NATIVE=OFF \
+      -DGGML_SYCL=ON \
+      -DCMAKE_C_COMPILER=icx \
+      -DCMAKE_CXX_COMPILER=icpx \
+      -DGGML_BACKEND_DL=ON \
+      -DGGML_CPU_ALL_VARIANTS=ON \
+      -DLLAMA_BUILD_TESTS=OFF \
+      ${OPT_SYCL_F16} \
+    && cmake --build build --config Release -j$(nproc)
 
 RUN mkdir -p /app/lib && \
     find build -name "*.so*" -exec cp -P {} /app/lib \;

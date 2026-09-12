@@ -43,8 +43,8 @@ FROM docker.io/ubuntu:${UBUNTU_VERSION} AS build
 ARG http_proxy
 ARG https_proxy
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
         ca-certificates \
         gnupg \
         wget \
@@ -57,37 +57,42 @@ RUN apt-get update && \
         ocl-icd-opencl-dev \
         opencl-headers \
         opencl-clhpp-headers \
-        intel-opencl-icd && \
-    rm -rf /var/lib/apt/lists/*
+        intel-opencl-icd \
+    && rm -rf /var/lib/apt/lists/*
 
 # OpenVINO toolkit and GPU/NPU drivers are cached via BuildKit cache mounts to avoid re-downloading on rebuilds.
 # Install OpenVINO for Ubuntu 24.04.
 ARG OPENVINO_VERSION_MAJOR
 ARG OPENVINO_VERSION_FULL
 RUN --mount=type=cache,target=/var/cache/openvino,sharing=locked \
-    mkdir -p /opt/intel && \
-    TGZ=/var/cache/openvino/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz && \
-    if [ ! -f "$TGZ" ]; then \
-        wget -O "$TGZ" https://storage.openvinotoolkit.org/repositories/openvino/packages/${OPENVINO_VERSION_MAJOR}/linux/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz; \
-    fi && \
-    tar -xf "$TGZ" -C /opt/intel/ && \
-    mv /opt/intel/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64 /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} && \
-    cd /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} && \
-    echo "Y" | ./install_dependencies/install_openvino_dependencies.sh && \
-    cd - && \
-    ln -s /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} /opt/intel/openvino
+    mkdir -p /opt/intel \
+    && wget https://storage.openvinotoolkit.org/repositories/openvino/packages/${OPENVINO_VERSION_MAJOR}/linux/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz \
+    && tar -xf openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz \
+    && mv openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64 /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} \
+    && cd /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} \
+    && echo "Y" | ./install_dependencies/install_openvino_dependencies.sh \
+    && cd - \
+    && ln -s /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} /opt/intel/openvino
 
-ENV OpenVINO_DIR=/opt/intel/openvino
+    
+ARG CCACHE_ENABLED="false"
+RUN if $CCACHE_ENABLED; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            ccache \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 WORKDIR /app
-
+    
 COPY . .
-
 COPY --from=web /app/tools/ui/dist tools/ui/dist
 
 # Build Stage
-RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
-    cmake -B build/ReleaseOV -G Ninja \
+ENV OpenVINO_DIR=/opt/intel/openvino
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    bash -c "source ${OpenVINO_DIR}/setupvars.sh \
+    && cmake -B build/ReleaseOV -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DLLAMA_BUILD_TESTS=OFF \
         -DGGML_NATIVE=OFF \
