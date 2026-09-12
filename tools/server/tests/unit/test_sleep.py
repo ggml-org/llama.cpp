@@ -1,4 +1,5 @@
 import pytest
+import re
 import time
 from utils import *
 
@@ -125,3 +126,36 @@ def test_server_sleep_metrics_buckets():
     assert res.status_code == 200
     assert is_sleeping(server) == False
     assert get_metric(fetch_metrics(server), "predicted_tokens_seconds") == 0
+
+
+def test_server_sleep_mmproj_memory_target(tmp_path):
+    global server
+    server = ServerPreset.tinygemma3()
+    server.sleep_idle_seconds = 1
+    server.debug = True
+    server.log_path = str(tmp_path / "mmproj-memory-target.log")
+    server.start()
+
+    with open(server.log_path) as f:
+        previous_log = f.read()
+    assert "[mtmd] adding " in previous_log, "cold load did not add an mmproj margin"
+    target_pattern = re.compile(
+        r"(?:will leave \d+ >= |cannot meet free memory target of |free vs\. target of\s+)(\d+)")
+    cold_targets = target_pattern.findall(previous_log)
+    assert cold_targets, "cold load did not report a free memory target"
+
+    for _ in range(3):
+        wait_for_sleep(server)
+        res = server.make_request("POST", "/completion", data={
+            "n_predict": 1,
+            "prompt": "Hello",
+        })
+        assert res.status_code == 200
+
+        with open(server.log_path) as f:
+            log = f.read()
+        resume_log = log[len(previous_log):]
+        targets = target_pattern.findall(resume_log)
+        assert targets == cold_targets, f"free memory target changed across resume: {cold_targets} vs {targets}"
+        assert "[mtmd] adding " not in resume_log, "mmproj margin was added again on resume"
+        previous_log = log
