@@ -1,0 +1,413 @@
+#include "../src/llama-kv-stream-policy.h"
+#include "testing.h"
+
+#include <cmath>
+#include <limits>
+
+using status = llama_kv_stream_policy_status;
+
+static llama_kv_stream_policy_config config(uint32_t pages, uint32_t layers = 16, bool conversion = false) {
+    llama_kv_stream_policy_config c;
+    c.shape = {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 256, 256, 4, 256, 128};
+    c.capabilities = {{GGML_TYPE_Q8_0, true, true, true, true}, {GGML_TYPE_Q4_0, true, true, true, true}, !conversion, true};
+    c.pool_bytes = size_t(pages)*425984 + (conversion ? 1048576 : 0);
+    c.layers = layers;
+    return c;
+}
+
+static bool start(testing & t, const llama_kv_stream_policy_config & c, llama_kv_stream_policy_state & state) {
+    return t.assert_true(llama_kv_stream_policy_initialize(c, state).status == status::success);
+}
+
+static llama_kv_stream_policy_observation observe(uint32_t pages, uint32_t queries = 1) {
+    llama_kv_stream_policy_observation o;
+    o.active_tokens = size_t(pages)*256;
+    o.query_tokens = queries;
+    return o;
+}
+
+// Start at an existing decode boundary so feedback, rather than decode entry, controls adaptation.
+static void seed(llama_kv_stream_policy_state & state, uint32_t active) {
+    state.decode_active_pages = active;
+    state.feedback_initialized = true;
+    state.feedback_epoch = 7;
+}
+static void feedback(llama_kv_stream_policy_observation & o, const llama_kv_stream_policy_state & s,
+        uint64_t misses, double busy, uint32_t peak = 0) {
+    o.feedback = {true, 7, s.samples + 100, s.misses + misses, busy, peak};
+}
+
+// Independent descending oracle retained from the production decision rule, used only on small budgets.
+static uint32_t reference_target(uint32_t pool, uint32_t layers, uint32_t active, uint32_t minimum, double ratio) {
+    const uint32_t maximum = std::min(active, (pool - minimum)/layers);
+    for (uint32_t r = maximum;; --r) {
+        if (active == r || double(pool - r*layers) >= ratio*double(active - r)) return r;
+        if (r == 0) return 0;
+    }
+}
+
+int main() {
+    testing t;
+    t.test("startup_uses_all_pages_after_conversion_reservation", [](testing & t) {
+        auto c = config(160, 16, true); c.pool_bytes += 13;
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        t.assert_equal(uint32_t(160), s.budget.pages);
+        t.assert_equal(uint32_t(9), s.resident_pages_per_layer);
+        t.assert_equal(uint32_t(16), s.ring_slots);
+        t.assert_equal(uint32_t(16), s.budget.minimum_ring_slots);
+        t.assert_equal(size_t(1048576), s.budget.page.conversion.bytes);
+        t.assert_equal(size_t(13), s.budget.unused_bytes);
+        t.assert_equal(size_t(160)*425984, s.budget.conversion_offset);
+    });
+
+    t.test("exact_minimum_pool_and_invalid_inputs_are_transactional", [](testing & t) {
+        auto c = config(17);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        t.assert_equal(uint32_t(1), s.resident_pages_per_layer);
+        t.assert_equal(uint32_t(1), s.ring_slots);
+        for (int bad = 0; bad < 6; ++bad) {
+            auto invalid = c;
+            if (bad == 0) --invalid.pool_bytes;
+            if (bad == 1) invalid.layers = 0;
+            if (bad == 2) invalid.initial_ring_slots = 2;
+            if (bad == 3) invalid.overlap_ratio = std::numeric_limits<double>::quiet_NaN();
+            if (bad == 4) invalid.grow_evaluations = 0;
+            if (bad == 5) invalid.cooldown_evaluations = 0;
+            s.ring_slots = 77;
+            t.assert_true(llama_kv_stream_policy_initialize(invalid, s).status != status::success);
+            t.assert_equal(uint32_t(77), s.ring_slots);
+        }
+    });
+
+    t.test("short_context_keeps_capacity_without_repartition_churn", [](testing & t) {
+        auto c = config(6971);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        s.starved = 10; s.overprovisioned = 10;
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, observe(1), d).status == status::success);
+        t.assert_true(!d.partition_changed && !d.layout_changed);
+        t.assert_equal(uint32_t(435), d.next.resident_pages_per_layer);
+        t.assert_equal(uint32_t(0), d.next.starved);
+        llama_kv_stream_policy_layout layout;
+        t.assert_true(llama_kv_stream_policy_layout_make(c, d.next, 1, layout).status == status::success);
+        if (!t.assert_true(layout.layers.size() == 16)) return;
+        t.assert_equal(uint32_t(435), layout.layers[0].capacity_pages);
+        t.assert_equal(uint32_t(1), layout.layers[0].resident_live_pages);
+        t.assert_equal(uint32_t(0), layout.layers[0].streamed_pages);
+    });
+
+    t.test("decode_entry_selects_reference_overlap_before_feedback", [](testing & t) {
+        auto c = config(6971);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        s.evaluations_since_repartition = 0;
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, observe(673), d).status == status::success);
+        t.assert_equal(uint32_t(418), d.next.resident_pages_per_layer);
+        t.assert_equal(uint32_t(283), d.next.ring_slots);
+        t.assert_true(d.partition_changed && d.layout_changed && !d.feedback_used);
+        t.assert_equal(uint32_t(0), d.next.evaluations_since_repartition);
+    });
+
+    t.test("concentration_respects_layer_capacity_and_spreads_splits", [](testing & t) {
+        auto c = config(160);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, observe(12), d).status == status::success);
+        t.assert_true(!d.partition_changed && d.layout_changed);
+        llama_kv_stream_policy_layout layout;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(c, d.next, 12*256, layout).status == status::success)) return;
+        for (size_t i = 0; i < layout.layers.size(); ++i) {
+            t.assert_equal(i % 4 == 0 ? uint32_t(0) : uint32_t(12), layout.layers[i].capacity_pages);
+        }
+        auto prefill = observe(12, 64);
+        t.assert_true(llama_kv_stream_policy_step(c, d.next, prefill, d).status == status::success);
+        t.assert_equal(uint32_t(0), d.next.decode_active_pages);
+    });
+
+    t.test("fixed_tiny_ring_uses_multiple_waves", [](testing & t) {
+        auto c = config(33); c.initial_ring_slots = 1; c.fixed_ring = true;
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, observe(5), d).status == status::success);
+        t.assert_true(!d.partition_changed);
+        llama_kv_stream_policy_layout layout;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(c, d.next, 5*256, layout).status == status::success)) return;
+        for (const auto & layer : layout.layers) {
+            t.assert_equal(uint32_t(2), layer.capacity_pages);
+            t.assert_equal(uint32_t(3), layer.streamed_pages);
+            t.assert_equal(uint32_t(3), layer.waves);
+        }
+    });
+
+    t.test("unreachable_overlap_can_demote_to_zero_residency", [](testing & t) {
+        auto c = config(39);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, observe(65), d).status == status::success);
+        t.assert_equal(uint32_t(0), d.next.resident_pages_per_layer);
+        t.assert_equal(uint32_t(39), d.next.ring_slots);
+        llama_kv_stream_policy_layout layout;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(c, d.next, 65*256, layout).status == status::success)) return;
+        t.assert_equal(uint32_t(2), layout.layers[0].waves);
+    });
+
+    t.test("feedback_growth_cooldown_and_promotion_match_reference", [](testing & t) {
+        auto c = config(160);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        seed(s, 12); s.starved = 2; s.evaluations_since_repartition = 2;
+        auto o = observe(12); feedback(o, s, 12, .7);
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_true(!d.partition_changed);
+        t.assert_equal(uint32_t(3), d.next.starved);
+        s = d.next; s.evaluations_since_repartition = 64; feedback(o, s, 12, .7);
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_equal(uint32_t(8), d.next.resident_pages_per_layer);
+        t.assert_equal(uint32_t(32), d.next.ring_slots);
+        s = d.next; s.overprovisioned = 7; s.evaluations_since_repartition = 64;
+        feedback(o, s, 0, .25, 0);
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_equal(uint32_t(9), d.next.resident_pages_per_layer);
+        t.assert_equal(uint32_t(16), d.next.ring_slots);
+    });
+
+    t.test("saturation_blocks_extra_demotion_but_overgrown_ring_heals", [](testing & t) {
+        auto c = config(7010);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        seed(s, 716); s.resident_pages_per_layer = 416; s.ring_slots = 354; s.starved = 10;
+        auto o = observe(716); feedback(o, s, 10, .8, s.ring_slots);
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_true(!d.partition_changed);
+        s.resident_pages_per_layer = 368; s.ring_slots = 1122;
+        feedback(o, s, 10, .8, s.ring_slots);
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_equal(uint32_t(416), d.next.resident_pages_per_layer);
+        t.assert_equal(uint32_t(354), d.next.ring_slots);
+    });
+
+    t.test("feedback_epoch_reset_and_repeated_samples_do_not_train", [](testing & t) {
+        auto c = config(160);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        seed(s, 12); s.samples = 100; s.misses = 10; s.starved = 2;
+        auto o = observe(12); o.feedback = {true, 8, 200, 20, .7, 16};
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_true(d.feedback_reset && !d.feedback_used && !d.partition_changed);
+        t.assert_equal(uint32_t(0), d.next.starved);
+        s = d.next;
+        o.feedback.samples += 100; o.feedback.misses += 10;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_true(d.feedback_used);
+        t.assert_equal(uint32_t(1), d.next.starved);
+        s = d.next;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_true(!d.feedback_used);
+        t.assert_equal(uint32_t(1), d.next.starved);
+        o.feedback.samples = 2; o.feedback.misses = 1;
+        t.assert_true(llama_kv_stream_policy_step(c, d.next, o, d).status == status::success);
+        t.assert_true(d.feedback_reset && !d.feedback_used);
+    });
+
+    t.test("bad_feedback_is_ignored_and_hysteresis_counters_saturate", [](testing & t) {
+        auto c = config(160);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        seed(s, 12); s.starved = UINT32_MAX; s.evaluations_since_repartition = 0;
+        auto o = observe(12); feedback(o, s, 10, .7);
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_equal(UINT32_MAX, d.next.starved);
+        t.assert_true(!d.partition_changed);
+        o.feedback.copy_busy_ratio = std::numeric_limits<double>::infinity();
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_true(d.feedback_reset && !d.feedback_used);
+        t.assert_equal(uint32_t(0), d.next.starved);
+    });
+
+    t.test("small_layouts_conserve_pages_and_bound_every_plane", [](testing & t) {
+        for (uint32_t layers = 1; layers <= 6; ++layers) for (uint32_t extra = 1; extra <= 20; ++extra) {
+            auto c = config(layers + extra, layers);
+            llama_kv_stream_policy_state s;
+            if (!start(t, c, s)) return;
+            for (uint32_t active = 0; active <= 16; ++active) for (uint32_t q : {1, 64}) {
+                llama_kv_stream_policy_decision d;
+                if (!t.assert_true(llama_kv_stream_policy_step(c, s, observe(active, q), d).status == status::success)) return;
+                llama_kv_stream_policy_layout layout;
+                if (!t.assert_true(llama_kv_stream_policy_layout_make(c, d.next, size_t(active)*256, layout).status == status::success)) return;
+                // Independent forward assignment from the production formula; do not reuse the inverse lookup.
+                std::vector<uint32_t> expected(layers, d.next.resident_pages_per_layer);
+                if (d.next.decode_active_pages) {
+                    const uint64_t deficit = uint64_t(active - d.next.resident_pages_per_layer)*layers;
+                    const uint64_t by_ring = (deficit + d.next.ring_slots - 1)/d.next.ring_slots;
+                    const uint64_t by_active = (deficit + active - 1)/active;
+                    const uint32_t splits = uint32_t(std::max(std::min(uint64_t(layers), by_ring), by_active));
+                    expected.assign(layers, active);
+                    for (uint32_t split = 0; split < splits; ++split) {
+                        expected[size_t(split)*layers/splits] -= uint32_t(deficit/splits + (split < deficit % splits));
+                    }
+                }
+                bool addresses_changed = d.next.ring_slots != s.ring_slots;
+                size_t ordinal = 0;
+                uint64_t capacity = d.next.ring_slots, live = 0;
+                size_t offset = layout.ring.bytes;
+                for (const auto & layer : layout.layers) {
+                    t.assert_equal(expected[ordinal++], layer.capacity_pages);
+                    addresses_changed = addresses_changed || layer.capacity_pages != s.resident_pages_per_layer;
+                    t.assert_equal(offset, layer.offset);
+                    t.assert_true(layer.planes.v_offset >= layer.planes.k_bytes);
+                    t.assert_true(layer.offset + layer.planes.bytes <= layout.conversion_offset);
+                    offset += layer.planes.bytes;
+                    capacity += layer.capacity_pages;
+                    live += layer.resident_live_pages + layer.streamed_pages;
+                    t.assert_equal(active, layer.resident_live_pages + layer.streamed_pages);
+                    if (layer.streamed_pages) {
+                        t.assert_true(uint64_t(layer.waves)*d.next.ring_slots >= layer.streamed_pages);
+                        t.assert_true(uint64_t(layer.waves - 1)*d.next.ring_slots < layer.streamed_pages);
+                    } else t.assert_equal(uint32_t(0), layer.waves);
+                }
+                t.assert_true(d.layout_changed == addresses_changed);
+                t.assert_equal(uint64_t(layers + extra), capacity);
+                t.assert_equal(uint64_t(layers)*active, live);
+                t.assert_equal(layout.conversion_offset, offset);
+                t.assert_equal(c.pool_bytes, offset + layout.conversion_bytes + layout.unused_bytes);
+            }
+        }
+    });
+
+    t.test("overlap_target_matches_descending_oracle", [](testing & t) {
+        for (uint32_t layers = 1; layers <= 8; ++layers) for (uint32_t extra = 1; extra <= 12; ++extra) {
+            auto c = config(layers + extra, layers);
+            llama_kv_stream_policy_state s;
+            if (!start(t, c, s)) return;
+            for (uint32_t gap = 1; gap <= 12; ++gap) for (double ratio : {.5, 1.0, 1.1, 2.0, 8.0, 1e300}) {
+                c.overlap_ratio = ratio;
+                const uint32_t active = s.resident_pages_per_layer + gap;
+                llama_kv_stream_policy_decision d;
+                if (!t.assert_true(llama_kv_stream_policy_step(c, s, observe(active), d).status == status::success)) return;
+                t.assert_equal(reference_target(s.budget.pages, layers, active, s.budget.minimum_ring_slots, ratio),
+                    d.next.resident_pages_per_layer);
+            }
+        }
+    });
+
+    t.test("very_large_target_does_not_scan_billions_of_pages", [](testing & t) {
+        if (sizeof(size_t) < 8) return;
+        auto c = config(1, 1);
+        c.shape = {GGML_TYPE_F16, GGML_TYPE_F16, 64, 64, 1, 1, 128};
+        c.capabilities = {{GGML_TYPE_F16, true, true, true, true}, {GGML_TYPE_F16, true, true, true, true}, true, true};
+        c.pool_bytes = size_t(UINT32_MAX)*256;
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        llama_kv_stream_policy_observation o; o.active_tokens = UINT32_MAX;
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_equal(uint32_t(0), d.next.resident_pages_per_layer);
+        t.assert_equal(UINT32_MAX, d.next.ring_slots);
+    });
+
+    t.test("corrupt_state_and_changed_budget_preserve_output", [](testing & t) {
+        auto c = config(160);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        llama_kv_stream_policy_decision d; d.next.ring_slots = 77;
+        ++s.ring_slots;
+        t.assert_true(llama_kv_stream_policy_step(c, s, observe(12), d).status == status::invalid_state);
+        t.assert_equal(uint32_t(77), d.next.ring_slots);
+        --s.ring_slots; c.pool_bytes += 128;
+        t.assert_true(llama_kv_stream_policy_step(c, s, observe(12), d).status == status::invalid_state);
+        t.assert_equal(uint32_t(77), d.next.ring_slots);
+    });
+
+    t.test("quant_pairs_change_bytes_not_page_policy", [](testing & t) {
+        for (auto k : {GGML_TYPE_Q4_0, GGML_TYPE_Q5_0, GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_F32})
+            for (auto v : {GGML_TYPE_Q4_0, GGML_TYPE_Q5_0, GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_F32}) {
+                auto c = config(160);
+                c.shape.type_k = k; c.shape.type_v = v;
+                c.capabilities = {{k, true, true, k != GGML_TYPE_F32, true},
+                                  {v, true, true, v != GGML_TYPE_F32, true}, true, true};
+                ggml_kv_stream_execution page;
+                if (!t.assert_true(ggml_kv_stream_resolve(c.shape, c.capabilities, 256, page).status == ggml_kv_stream_status::success)) return;
+                c.pool_bytes = 160*page.storage.bytes + page.conversion.bytes;
+                llama_kv_stream_policy_state s;
+                if (!start(t, c, s)) return;
+                t.assert_equal(uint32_t(9), s.resident_pages_per_layer);
+                t.assert_equal(uint32_t(16), s.ring_slots);
+                llama_kv_stream_policy_layout layout;
+                t.assert_true(llama_kv_stream_policy_layout_make(c, s, 256, layout).status == status::success);
+                t.assert_equal(c.pool_bytes, layout.conversion_offset + layout.conversion_bytes);
+            }
+    });
+
+    t.test("phase_cutoff_and_active_page_rounding_are_explicit", [](testing & t) {
+        auto c = config(160);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        llama_kv_stream_policy_decision d;
+        auto o = observe(12, 32);
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_equal(uint32_t(12), d.next.decode_active_pages);
+        o.query_tokens = 33;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_equal(uint32_t(0), d.next.decode_active_pages);
+        o = observe(12); ++o.active_tokens;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_equal(uint32_t(13), d.next.decode_active_pages);
+        o.query_tokens = 0;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::invalid_observation);
+    });
+
+    t.test("impossible_feedback_deltas_reset_without_repartition", [](testing & t) {
+        auto c = config(160);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        seed(s, 12); s.samples = 100; s.misses = 10; s.starved = 2;
+        auto o = observe(12); o.feedback = {true, 7, 110, 50, .2, 0};
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_true(d.feedback_reset && !d.feedback_used && !d.partition_changed);
+        t.assert_equal(uint32_t(0), d.next.starved);
+        o.feedback.samples = 10; o.feedback.misses = 11;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_true(!d.next.feedback_initialized && d.feedback_reset);
+    });
+
+    t.test("nonlinear_page_padding_and_stale_decode_extent_are_rejected", [](testing & t) {
+        auto c = config(160);
+        c.shape = {GGML_TYPE_F16, GGML_TYPE_F16, 1, 1, 1, 1, 128};
+        c.capabilities = {{GGML_TYPE_F16, true, true, true, true}, {GGML_TYPE_F16, true, true, true, true}, true, true};
+        llama_kv_stream_policy_state s;
+        t.assert_true(llama_kv_stream_policy_initialize(c, s).status == status::geometry_error);
+        c = config(160);
+        if (!start(t, c, s)) return;
+        seed(s, 12);
+        llama_kv_stream_policy_layout layout; layout.unused_bytes = 77;
+        t.assert_true(llama_kv_stream_policy_layout_make(c, s, 13*256, layout).status == status::invalid_observation);
+        t.assert_equal(size_t(77), layout.unused_bytes);
+    });
+
+
+    t.test("geometric_overlap_deficit_grows_even_when_copy_is_saturated", [](testing & t) {
+        auto c = config(630);
+        llama_kv_stream_policy_state s;
+        if (!start(t, c, s)) return;
+        seed(s, 257); s.starved = 2;
+        auto o = observe(257); feedback(o, s, 40, .99, s.ring_slots);
+        llama_kv_stream_policy_decision d;
+        t.assert_true(llama_kv_stream_policy_step(c, s, o, d).status == status::success);
+        t.assert_equal(uint32_t(23), d.next.resident_pages_per_layer);
+        t.assert_equal(uint32_t(262), d.next.ring_slots);
+    });
+
+    return t.summary();
+}

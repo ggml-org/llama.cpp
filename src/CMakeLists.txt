@@ -53,6 +53,8 @@ add_library(llama
             llama-context-workspace.h
             llama-kv-stream-config.cpp
             llama-kv-stream-config.h
+            llama-kv-stream-policy.cpp
+            llama-kv-stream-policy.h
             llama-memory-executor.cpp
             llama-memory-executor.h
             llama-memory-executor-cuda.cpp
