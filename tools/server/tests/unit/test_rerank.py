@@ -41,6 +41,43 @@ def test_rerank():
     assert least_relevant["index"] == 3
 
 
+@pytest.mark.parametrize("kv_unified", [False, True])
+def test_rerank_does_not_save_idle_slot_to_prompt_cache(kv_unified, tmp_path):
+    global server
+    server.n_slots = 2
+    server.cache_ram = 100
+    server.kv_unified = kv_unified
+    server.server_slots = True
+    server.debug = True
+    server.log_path = str(tmp_path / "server.log")
+    server.start()
+
+    res = server.make_request("POST", "/rerank", data={
+        "query": "first query",
+        "documents": ["first document", "second document"],
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/rerank", data={
+        "query": "second query",
+        "documents": ["third document with a different length"],
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("GET", "/slots")
+    assert res.status_code == 200
+    n_slots_with_prompt = sum(slot.get("n_prompt_tokens", 0) > 0 for slot in res.body)
+    assert n_slots_with_prompt == (1 if kv_unified else 2)
+
+    server.stop()
+
+    with open(server.log_path) as log_file:
+        log = log_file.read()
+
+    assert "__TEST_TAG_CACHE_IDLE_SLOTS_ENABLED__" in log
+    assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log
+
+
 def test_rerank_tei_format():
     global server
     server.start()
