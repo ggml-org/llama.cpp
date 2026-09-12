@@ -59,7 +59,7 @@ a wide range of hardware - locally and in the cloud.
 - AVX, AVX2, AVX512 and AMX support for x86 architectures
 - RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
 - 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
-- Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
+- Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP, Moore Threads GPUs via MUSA, and MetaX GPUs via MACA)
 - Vulkan and SYCL backend support
 - CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
 
@@ -76,6 +76,7 @@ The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-or
 | [HIP](docs/build.md#hip) | AMD GPU |
 | [Hexagon](docs/backend/snapdragon/README.md) | Snapdragon |
 | [IBM zDNN](docs/backend/zDNN.md) | IBM Z & LinuxONE |
+| [MACA](docs/backend/MACA.md) | MetaX GPU |
 | [MUSA](docs/build.md#musa) | Moore Threads GPU |
 | [Metal](docs/build.md#metal-build) | Apple Silicon |
 | [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
