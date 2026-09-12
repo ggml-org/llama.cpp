@@ -454,6 +454,50 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
 }
 #endif
 
+#if defined(DATA_A_IQ3_S)
+// 1-byte loads for IQ3_S blocks (110 bytes)
+void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+    const uint ib_k  = ib / 8;
+    const uint ib32  = ib % 8;
+    const uint ib4   = ib32 * 8 + iqs;
+
+    const uint qs = data_a[ib_k].qs[ib4];
+    const uint qh = data_a[ib_k].qh[ib32];
+
+    // grid holds 4 values of 1..15, one per byte
+    const ivec4 vals = ivec4(unpack8(iq3s_grid[qs | ((qh << (8 - iqs)) & 256)]));
+
+    // one sign bit per value, negate with (v ^ -s) - -s to avoid branches
+    const uint sign = data_a[ib_k].signs[ib32 * 4 + iqs / 2] >> ((iqs & 1) * 4);
+    const ivec4 m = -(ivec4(sign, sign >> 1, sign >> 2, sign >> 3) & 1);
+
+    buf_a[buf_ib].qs[iqs] = pack32(i8vec4((vals ^ m) - m));
+
+    if (iqs == 0) {
+        const uint scale = data_a[ib_k].scales[ib32 / 2];
+
+        buf_a[buf_ib].d = FLOAT_TYPE(float(data_a[ib_k].d) * float(1 + 2 * ((scale >> (4 * (ib32 & 1))) & 0xF)));
+    }
+}
+
+void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
+    cache_a[reg_ib].d = buf_a[buf_ib].d;
+
+    [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
+        cache_a[reg_ib].qs[iqs] = buf_a[buf_ib].qs[iqs];
+    }
+}
+
+ACC_TYPE mmq_dot_product(const uint ib_a) {
+    int32_t q_sum = 0;
+    [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
+        q_sum += dotPacked4x8EXT(cache_a[ib_a].qs[iqs], cache_b.qs[iqs]);
+    }
+
+    return ACC_TYPE(float(cache_a[ib_a].d) * float(cache_b.ds.x) * float(q_sum));
+}
+#endif
+
 void block_b_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const bool is_in_bounds) {
     if (is_in_bounds) {
         const uint ib_outer = ib / 4;
