@@ -25,20 +25,30 @@ public:
     int n_threads_http = 0;
 };
 
-// Each listener owns a queue adapter. The context drains the shared pool after all listeners stop.
 class server_http_task_queue : public httplib::TaskQueue {
     httplib::ThreadPool & pool;
 public:
     explicit server_http_task_queue(httplib::ThreadPool & pool) : pool(pool) {}
     bool enqueue(std::function<void()> fn) override { return pool.enqueue(std::move(fn)); }
-    void shutdown() override {}
+    // note: must call join() to drain the pool
+    void shutdown() override { /* no-op */ }
 };
 
 server_http_context::server_http_context()
     : pimpl(std::make_unique<Impl>())
 {}
 
-server_http_context::~server_http_context() = default;
+server_http_context::~server_http_context() {
+    // just in case any exit paths that forget to call join()
+    try {
+        stop();
+        join();
+    } catch (const std::exception & e) {
+        SRV_ERR("failed to stop HTTP server: %s\n", e.what());
+    } catch (...) {
+        SRV_ERR("%s", "failed to stop HTTP server\n");
+    }
+}
 
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip logging requests that are regularly sent, to avoid log spam
@@ -493,7 +503,8 @@ bool server_http_context::start() {
                                               : string_format("%s://%s:%d", is_ssl ? "https" : "http", common_http_format_host(host).c_str(), port));
     }
 
-    // Keep the existing fixed and dynamic worker budget across all sockets.
+    // n_threads_http fixed threads (always alive), plus up to 1024 dynamic threads destroyed after each request
+    // ref: https://github.com/yhirose/cpp-httplib/pull/2368
     pimpl->pool = std::make_unique<httplib::ThreadPool>(pimpl->n_threads_http, pimpl->n_threads_http + 1024);
     for (size_t i = 0; i < pimpl->servers.size(); ++i) {
         const auto & srv = pimpl->servers[i];
