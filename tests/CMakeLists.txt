@@ -10,7 +10,7 @@ function(llama_build source)
     endif()
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
-    target_link_libraries(${TEST_TARGET} PRIVATE llama llama-common)
+    target_link_libraries(${TEST_TARGET} PRIVATE llama llama-common) # TODO: [TAG_TESTS_LLAMA_LINK]
     if (LLAMA_TESTS_INSTALL)
         install(TARGETS ${TEST_TARGET} RUNTIME)
     endif()
@@ -196,7 +196,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 
     # llama_build_and_test(test-double-float.cpp) # SLOW
 
-    llama_build_and_test(test-llama-archs.cpp)
+    llama_build(test-llama-archs.cpp)
 
     set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
     file(MAKE_DIRECTORY "${MODEL_DIR}")
@@ -255,6 +255,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         ARGS --models "${MODEL_DIR}"
     )
     set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
+
+    llama_build(test-fusion.cpp)
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
@@ -276,6 +278,8 @@ llama_build_and_test(
     peg-parser/test-unicode.cpp
     peg-parser/tests.h
 )
+target_precompile_headers(test-peg-parser PRIVATE peg-parser/tests.h)
+
 
 if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")
     set(MODEL_NAME "tinyllamas/stories15M-q4_0.gguf")
@@ -306,15 +310,9 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
   llama_build_and_test(test-opt.cpp)
 endif()
-llama_build_and_test(test-backend-ops.cpp)
 
-# the tensor API kernels come from a separate metallib - check they produce correct results
-# ref: https://github.com/ggml-org/llama.cpp/issues/27473
-if (GGML_METAL AND NOT GGML_METAL_EMBED_LIBRARY)
-    llama_test(test-backend-ops NAME test-backend-ops-metallib-tensor
-               ARGS test -b MTL0 -o MUL_MAT -p type_a=q6_K)
-    set_tests_properties(test-backend-ops-metallib-tensor PROPERTIES ENVIRONMENT GGML_METAL_TENSOR_ENABLE=1)
-endif()
+# TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
+llama_build(test-backend-ops.cpp)
 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")

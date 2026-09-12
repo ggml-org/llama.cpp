@@ -1133,12 +1133,21 @@ void launch_fattn(
 
     dim3 blocks_num;
     if (stream_k) {
-        // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
-        const int max_blocks = max_blocks_per_sm*nsm;
-        const int tiles_nwaves = (ntiles_dst + max_blocks - 1) / max_blocks;
-        const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
+        auto should_use_stream_k = [](const int cc, const int ntiles_dst, const int max_blocks, const int DKQ) {
+            const int tiles_nwaves             = (ntiles_dst + max_blocks - 1) / max_blocks;
+            const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
 
-        const bool use_stream_k = cc >= GGML_CUDA_CC_ADA_LOVELACE || amd_wmma_available(cc) || tiles_efficiency_percent < 75;
+            if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_ADA_LOVELACE) {
+                return true;
+            }
+            if (amd_wmma_available(cc) && DKQ == 64) {
+                return true; // TODO better configuration
+            }
+            return tiles_efficiency_percent < 75;
+        };
+
+        const int  max_blocks   = max_blocks_per_sm*nsm;
+        const bool use_stream_k = should_use_stream_k(cc, ntiles_dst, max_blocks, Q->ne[0]);
 
         blocks_num.x = ntiles_dst;
         blocks_num.y = 1;

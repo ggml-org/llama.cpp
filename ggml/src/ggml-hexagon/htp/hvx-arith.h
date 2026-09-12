@@ -16,25 +16,25 @@
 #define UNUSED(x) (void)(x)
 
 #define hvx_arith_loop_body(dst_type, src0_type, src1_type, elem_size, vec_store, vec_op) \
-    do {                                                                       \
-        dst_type * vdst  = (dst_type *) dst;                                   \
-        src0_type * vsrc0 = (src0_type *) src0;                                \
-        src1_type * vsrc1 = (src1_type *) src1;                                \
-                                                                               \
-        const uint32_t epv  = 128 / (elem_size);                               \
-        const uint32_t nvec = n / epv;                                         \
-        const uint32_t nloe = n % epv;                                         \
-                                                                               \
-        uint32_t i = 0;                                                        \
-                                                                               \
-        _Pragma("unroll(4)")                                                   \
-        for (; i < nvec; i++) {                                                \
-            vdst[i] = vec_op(vsrc0[i], vsrc1[i]);                              \
-        }                                                                      \
-        if (nloe) {                                                            \
-            HVX_Vector v = vec_op(vsrc0[i], vsrc1[i]);                         \
-            vec_store((void *) &vdst[i], nloe * (elem_size), v);               \
-        }                                                                      \
+    do {                                                                                  \
+        dst_type * vdst  = (dst_type *) dst;                                              \
+        src0_type * vsrc0 = (src0_type *) src0;                                           \
+        src1_type * vsrc1 = (src1_type *) src1;                                           \
+                                                                                          \
+        const uint32_t epv  = 128 / (elem_size);                                          \
+        const uint32_t nvec = n / epv;                                                    \
+        const uint32_t nloe = n % epv;                                                    \
+                                                                                          \
+        uint32_t i = 0;                                                                   \
+                                                                                          \
+        _Pragma("unroll(4)")                                                              \
+        for (; i < nvec; i++) {                                                           \
+            vdst[i] = vec_op(vsrc0[i], vsrc1[i]);                                         \
+        }                                                                                 \
+        if (nloe) {                                                                       \
+            HVX_Vector v = vec_op(vsrc0[i], vsrc1[i]);                                    \
+            vec_store((void *) &vdst[i], nloe * (elem_size), v);                          \
+        }                                                                                 \
     } while(0)
 
 #if __HVX_ARCH__ < 79
@@ -56,43 +56,43 @@
 #define HVX_OP_MUL_F16(a, b) hvx_vec_mul_f16_f16(a, b)
 
 // Generic macro to define alignment permutations for an op
-#define DEFINE_HVX_BINARY_OP_VARIANTS(OP_NAME, OP_MACRO, ELEM_TYPE) \
-static inline void OP_NAME##_aaa(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
-    assert((uintptr_t) dst % 128 == 0); \
-    assert((uintptr_t) src0 % 128 == 0); \
-    assert((uintptr_t) src1 % 128 == 0); \
-    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO); \
-} \
-static inline void OP_NAME##_aau(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
-    assert((uintptr_t) dst % 128 == 0); \
-    assert((uintptr_t) src0 % 128 == 0); \
-    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO); \
-} \
-static inline void OP_NAME##_aua(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
-    assert((uintptr_t) dst % 128 == 0); \
-    assert((uintptr_t) src1 % 128 == 0); \
-    hvx_arith_loop_body(HVX_Vector, HVX_UVector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO); \
-} \
-static inline void OP_NAME##_auu(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
-    assert((uintptr_t) dst % 128 == 0); \
-    hvx_arith_loop_body(HVX_Vector, HVX_UVector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO); \
-} \
-static inline void OP_NAME##_uaa(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
-    assert((uintptr_t) src0 % 128 == 0); \
-    assert((uintptr_t) src1 % 128 == 0); \
-    hvx_arith_loop_body(HVX_UVector, HVX_Vector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO); \
-} \
-static inline void OP_NAME##_uau(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
-    assert((uintptr_t) src0 % 128 == 0); \
-    hvx_arith_loop_body(HVX_UVector, HVX_Vector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO); \
-} \
-static inline void OP_NAME##_uua(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
-    assert((uintptr_t) src1 % 128 == 0); \
-    hvx_arith_loop_body(HVX_UVector, HVX_UVector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO); \
-} \
-static inline void OP_NAME##_uuu(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
+#define DEFINE_HVX_BINARY_OP_VARIANTS(OP_NAME, OP_MACRO, ELEM_TYPE)                                           \
+static inline void OP_NAME##_aaa(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {     \
+    assert((uintptr_t) dst % 128 == 0);                                                                       \
+    assert((uintptr_t) src0 % 128 == 0);                                                                      \
+    assert((uintptr_t) src1 % 128 == 0);                                                                      \
+    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO);    \
+}                                                                                                             \
+static inline void OP_NAME##_aau(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {     \
+    assert((uintptr_t) dst % 128 == 0);                                                                       \
+    assert((uintptr_t) src0 % 128 == 0);                                                                      \
+    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO);   \
+}                                                                                                             \
+static inline void OP_NAME##_aua(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {     \
+    assert((uintptr_t) dst % 128 == 0);                                                                       \
+    assert((uintptr_t) src1 % 128 == 0);                                                                      \
+    hvx_arith_loop_body(HVX_Vector, HVX_UVector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO);   \
+}                                                                                                             \
+static inline void OP_NAME##_auu(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {     \
+    assert((uintptr_t) dst % 128 == 0);                                                                       \
+    hvx_arith_loop_body(HVX_Vector, HVX_UVector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO);  \
+}                                                                                                             \
+static inline void OP_NAME##_uaa(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {     \
+    assert((uintptr_t) src0 % 128 == 0);                                                                      \
+    assert((uintptr_t) src1 % 128 == 0);                                                                      \
+    hvx_arith_loop_body(HVX_UVector, HVX_Vector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO);   \
+}                                                                                                             \
+static inline void OP_NAME##_uau(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {     \
+    assert((uintptr_t) src0 % 128 == 0);                                                                      \
+    hvx_arith_loop_body(HVX_UVector, HVX_Vector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO);  \
+}                                                                                                             \
+static inline void OP_NAME##_uua(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {     \
+    assert((uintptr_t) src1 % 128 == 0);                                                                      \
+    hvx_arith_loop_body(HVX_UVector, HVX_UVector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO);  \
+}                                                                                                             \
+static inline void OP_NAME##_uuu(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {     \
     hvx_arith_loop_body(HVX_UVector, HVX_UVector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO); \
-} \
+}                                                                                                             \
 
 DEFINE_HVX_BINARY_OP_VARIANTS(hvx_add_f32, HVX_OP_ADD_F32, float)
 DEFINE_HVX_BINARY_OP_VARIANTS(hvx_sub_f32, HVX_OP_SUB_F32, float)
@@ -103,25 +103,25 @@ DEFINE_HVX_BINARY_OP_VARIANTS(hvx_sub_f16, HVX_OP_SUB_F16, _Float16)
 DEFINE_HVX_BINARY_OP_VARIANTS(hvx_mul_f16, HVX_OP_MUL_F16, _Float16)
 
 // Dispatcher logic
-#define HVX_BINARY_DISPATCHER(OP_NAME) \
+#define HVX_BINARY_DISPATCHER(OP_NAME)                                                                                                       \
 static inline void OP_NAME(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint32_t num_elems) { \
-    if (hex_is_aligned((void *) dst, 128)) { \
-        if (hex_is_aligned((void *) src0, 128)) { \
-            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_aaa(dst, src0, src1, num_elems); \
-            else                                    OP_NAME##_aau(dst, src0, src1, num_elems); \
-        } else { \
-            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_aua(dst, src0, src1, num_elems); \
-            else                                    OP_NAME##_auu(dst, src0, src1, num_elems); \
-        } \
-    } else { \
-        if (hex_is_aligned((void *) src0, 128)) { \
-            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_uaa(dst, src0, src1, num_elems); \
-            else                                    OP_NAME##_uau(dst, src0, src1, num_elems); \
-        } else { \
-            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_uua(dst, src0, src1, num_elems); \
-            else                                    OP_NAME##_uuu(dst, src0, src1, num_elems); \
-        } \
-    } \
+    if (hex_is_aligned((void *) dst, 128)) {                                                                                                 \
+        if (hex_is_aligned((void *) src0, 128)) {                                                                                            \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_aaa(dst, src0, src1, num_elems);                                               \
+            else                                    OP_NAME##_aau(dst, src0, src1, num_elems);                                               \
+        } else {                                                                                                                             \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_aua(dst, src0, src1, num_elems);                                               \
+            else                                    OP_NAME##_auu(dst, src0, src1, num_elems);                                               \
+        }                                                                                                                                    \
+    } else {                                                                                                                                 \
+        if (hex_is_aligned((void *) src0, 128)) {                                                                                            \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_uaa(dst, src0, src1, num_elems);                                               \
+            else                                    OP_NAME##_uau(dst, src0, src1, num_elems);                                               \
+        } else {                                                                                                                             \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_uua(dst, src0, src1, num_elems);                                               \
+            else                                    OP_NAME##_uuu(dst, src0, src1, num_elems);                                               \
+        }                                                                                                                                    \
+    }                                                                                                                                        \
 }
 
 HVX_BINARY_DISPATCHER(hvx_add_f32)
@@ -166,44 +166,44 @@ static inline void hvx_mul_mul_f32_aa(uint8_t * restrict dst, const uint8_t * re
 
 // Scalar Operations
 
-#define hvx_scalar_loop_body(dst_type, src_type, elem_size, vec_store, scalar_op_macro)   \
-    do {                                                                       \
-        dst_type * restrict vdst = (dst_type *) dst;                           \
-        src_type * restrict vsrc = (src_type *) src;                           \
-                                                                               \
-        const uint32_t epv  = 128 / (elem_size);                               \
-        const uint32_t nvec = n / epv;                                         \
-        const uint32_t nloe = n % epv;                                         \
-                                                                               \
-        uint32_t i = 0;                                                        \
-                                                                               \
-        _Pragma("unroll(4)")                                                   \
-        for (; i < nvec; i++) {                                                \
-            HVX_Vector v = vsrc[i];                                            \
-            vdst[i] = scalar_op_macro(v);                                      \
-        }                                                                      \
-        if (nloe) {                                                            \
-            HVX_Vector v = vsrc[i];                                            \
-            v = scalar_op_macro(v);                                            \
-            vec_store((void *) &vdst[i], nloe * (elem_size), v);               \
-        }                                                                      \
+#define hvx_scalar_loop_body(dst_type, src_type, elem_size, vec_store, scalar_op_macro) \
+    do {                                                                                \
+        dst_type * restrict vdst = (dst_type *) dst;                                    \
+        src_type * restrict vsrc = (src_type *) src;                                    \
+                                                                                        \
+        const uint32_t epv  = 128 / (elem_size);                                        \
+        const uint32_t nvec = n / epv;                                                  \
+        const uint32_t nloe = n % epv;                                                  \
+                                                                                        \
+        uint32_t i = 0;                                                                 \
+                                                                                        \
+        _Pragma("unroll(4)")                                                            \
+        for (; i < nvec; i++) {                                                         \
+            HVX_Vector v = vsrc[i];                                                     \
+            vdst[i] = scalar_op_macro(v);                                               \
+        }                                                                               \
+        if (nloe) {                                                                     \
+            HVX_Vector v = vsrc[i];                                                     \
+            v = scalar_op_macro(v);                                                     \
+            vec_store((void *) &vdst[i], nloe * (elem_size), v);                        \
+        }                                                                               \
     } while(0)
 
-#define HVX_OP_ADD_SCALAR_F32(v) \
-    ({ \
+#define HVX_OP_ADD_SCALAR_F32(v)                                   \
+    ({                                                             \
         const HVX_VectorPred pred_inf = Q6_Q_vcmp_eq_VwVw(inf, v); \
-        HVX_Vector out = HVX_OP_ADD_F32(v, val_vec); \
-        Q6_V_vmux_QVV(pred_inf, inf, out); \
+        HVX_Vector out = HVX_OP_ADD_F32(v, val_vec);               \
+        Q6_V_vmux_QVV(pred_inf, inf, out);                         \
     })
 
 #define HVX_OP_MUL_SCALAR_F32(v) HVX_OP_MUL_F32(v, val_vec)
 #define HVX_OP_SUB_SCALAR_F32(v) HVX_OP_SUB_F32(v, val_vec)
 
-#define HVX_OP_ADD_SCALAR_F16(v) \
-    ({ \
+#define HVX_OP_ADD_SCALAR_F16(v)                                   \
+    ({                                                             \
         const HVX_VectorPred pred_inf = Q6_Q_vcmp_eq_VhVh(inf, v); \
-        HVX_Vector out = HVX_OP_ADD_F16(v, val_vec); \
-        Q6_V_vmux_QVV(pred_inf, inf, out); \
+        HVX_Vector out = HVX_OP_ADD_F16(v, val_vec);               \
+        Q6_V_vmux_QVV(pred_inf, inf, out);                         \
     })
 
 #define HVX_OP_MUL_SCALAR_F16(v) HVX_OP_MUL_F16(v, val_vec)
@@ -212,31 +212,31 @@ static inline void hvx_mul_mul_f32_aa(uint8_t * restrict dst, const uint8_t * re
 // Scalar Variants
 
 // Generic macro to define alignment permutations for an op
-#define DEFINE_HVX_BINARY_SCALAR_OP_VARIANTS(OP_NAME, OP_MACRO, SPLAT_MACRO, ELEM_TYPE) \
+#define DEFINE_HVX_BINARY_SCALAR_OP_VARIANTS(OP_NAME, OP_MACRO, SPLAT_MACRO, ELEM_TYPE)                                  \
 static inline void OP_NAME##_aa(uint8_t * restrict dst, const uint8_t * restrict src, const ELEM_TYPE val, uint32_t n) { \
-    const HVX_Vector val_vec = SPLAT_MACRO(val); \
-    const HVX_Vector inf = SPLAT_MACRO((ELEM_TYPE)INFINITY); UNUSED(inf); \
-    assert((uintptr_t) dst % 128 == 0); \
-    assert((uintptr_t) src % 128 == 0); \
-    hvx_scalar_loop_body(HVX_Vector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO); \
-} \
+    const HVX_Vector val_vec = SPLAT_MACRO(val);                                                                         \
+    const HVX_Vector inf = SPLAT_MACRO((ELEM_TYPE)INFINITY); UNUSED(inf);                                                \
+    assert((uintptr_t) dst % 128 == 0);                                                                                  \
+    assert((uintptr_t) src % 128 == 0);                                                                                  \
+    hvx_scalar_loop_body(HVX_Vector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO);                          \
+}                                                                                                                        \
 static inline void OP_NAME##_au(uint8_t * restrict dst, const uint8_t * restrict src, const ELEM_TYPE val, uint32_t n) { \
-    const HVX_Vector val_vec = SPLAT_MACRO(val); \
-    const HVX_Vector inf = SPLAT_MACRO((ELEM_TYPE)INFINITY); UNUSED(inf); \
-    assert((uintptr_t) dst % 128 == 0); \
-    hvx_scalar_loop_body(HVX_Vector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO); \
-} \
+    const HVX_Vector val_vec = SPLAT_MACRO(val);                                                                         \
+    const HVX_Vector inf = SPLAT_MACRO((ELEM_TYPE)INFINITY); UNUSED(inf);                                                \
+    assert((uintptr_t) dst % 128 == 0);                                                                                  \
+    hvx_scalar_loop_body(HVX_Vector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO);                         \
+}                                                                                                                        \
 static inline void OP_NAME##_ua(uint8_t * restrict dst, const uint8_t * restrict src, const ELEM_TYPE val, uint32_t n) { \
-    const HVX_Vector val_vec = SPLAT_MACRO(val); \
-    const HVX_Vector inf = SPLAT_MACRO((ELEM_TYPE)INFINITY); UNUSED(inf); \
-    assert((uintptr_t) src % 128 == 0); \
-    hvx_scalar_loop_body(HVX_UVector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO); \
-} \
+    const HVX_Vector val_vec = SPLAT_MACRO(val);                                                                         \
+    const HVX_Vector inf = SPLAT_MACRO((ELEM_TYPE)INFINITY); UNUSED(inf);                                                \
+    assert((uintptr_t) src % 128 == 0);                                                                                  \
+    hvx_scalar_loop_body(HVX_UVector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO);                         \
+}                                                                                                                        \
 static inline void OP_NAME##_uu(uint8_t * restrict dst, const uint8_t * restrict src, const ELEM_TYPE val, uint32_t n) { \
-    const HVX_Vector val_vec = SPLAT_MACRO(val); \
-    const HVX_Vector inf = SPLAT_MACRO((ELEM_TYPE)INFINITY); UNUSED(inf); \
-    hvx_scalar_loop_body(HVX_UVector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO); \
-} \
+    const HVX_Vector val_vec = SPLAT_MACRO(val);                                                                         \
+    const HVX_Vector inf = SPLAT_MACRO((ELEM_TYPE)INFINITY); UNUSED(inf);                                                \
+    hvx_scalar_loop_body(HVX_UVector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO);                        \
+}                                                                                                                        \
 
 DEFINE_HVX_BINARY_SCALAR_OP_VARIANTS(hvx_add_scalar_f32, HVX_OP_ADD_SCALAR_F32, hvx_vec_splat_f32, float)
 DEFINE_HVX_BINARY_SCALAR_OP_VARIANTS(hvx_sub_scalar_f32, HVX_OP_SUB_SCALAR_F32, hvx_vec_splat_f32, float)
@@ -247,17 +247,17 @@ DEFINE_HVX_BINARY_SCALAR_OP_VARIANTS(hvx_sub_scalar_f16, HVX_OP_SUB_SCALAR_F16, 
 DEFINE_HVX_BINARY_SCALAR_OP_VARIANTS(hvx_mul_scalar_f16, HVX_OP_MUL_SCALAR_F16, hvx_vec_splat_f16, _Float16)
 
 // Dispatcher logic
-#define HVX_BINARY_SCALAR_DISPATCHER(OP_NAME, ELEM_TYPE) \
+#define HVX_BINARY_SCALAR_DISPATCHER(OP_NAME, ELEM_TYPE)                                                                          \
 static inline void OP_NAME(uint8_t * restrict dst, const uint8_t * restrict src, const ELEM_TYPE val, const uint32_t num_elems) { \
-    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src, 128)) { \
-        OP_NAME##_aa(dst, src, val, num_elems); \
-    } else if (hex_is_aligned((void *) dst, 128)) { \
-        OP_NAME##_au(dst, src, val, num_elems); \
-    } else if (hex_is_aligned((void *) src, 128)) { \
-        OP_NAME##_ua(dst, src, val, num_elems); \
-    } else { \
-        OP_NAME##_uu(dst, src, val, num_elems); \
-    } \
+    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src, 128)) {                                                 \
+        OP_NAME##_aa(dst, src, val, num_elems);                                                                                   \
+    } else if (hex_is_aligned((void *) dst, 128)) {                                                                               \
+        OP_NAME##_au(dst, src, val, num_elems);                                                                                   \
+    } else if (hex_is_aligned((void *) src, 128)) {                                                                               \
+        OP_NAME##_ua(dst, src, val, num_elems);                                                                                   \
+    } else {                                                                                                                      \
+        OP_NAME##_uu(dst, src, val, num_elems);                                                                                   \
+    }                                                                                                                             \
 }
 
 HVX_BINARY_SCALAR_DISPATCHER(hvx_add_scalar_f32, float)
@@ -350,12 +350,12 @@ static inline void hvx_max_scalar_f32(uint8_t * restrict dst, const uint8_t * re
 
 // CLAMP Scalar variants
 
-#define HVX_OP_CLAMP_SCALAR(v) \
-    ({ \
+#define HVX_OP_CLAMP_SCALAR(v)                                           \
+    ({                                                                   \
         HVX_VectorPred pred_cap_right = Q6_Q_vcmp_gt_VsfVsf(v, max_vec); \
         HVX_VectorPred pred_cap_left  = Q6_Q_vcmp_gt_VsfVsf(min_vec, v); \
-        HVX_Vector tmp = Q6_V_vmux_QVV(pred_cap_right, max_vec, v); \
-        Q6_V_vmux_QVV(pred_cap_left, min_vec, tmp); \
+        HVX_Vector tmp = Q6_V_vmux_QVV(pred_cap_right, max_vec, v);      \
+        Q6_V_vmux_QVV(pred_cap_left, min_vec, tmp);                      \
     })
 
 static inline void hvx_clamp_scalar_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const float min, const float max, uint32_t n) {

@@ -101,8 +101,6 @@ jobs:
 
       - name: Test
         id: cmake_test
-        # skip run in Debug - very slow
-        if: ${{ matrix.sanitizer != 'UNDEFINED' }}
         run: |
           cd build
           ctest -L main -E tokenizer --verbose --timeout 900

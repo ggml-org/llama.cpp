@@ -4006,16 +4006,17 @@ static void ggml_backend_webgpu_request_adapter(wgpu::Instance & instance, wgpu:
     options.nextInChain                   = &adapterTogglesDesc;
 #endif
 
-    instance.WaitAny(instance.RequestAdapter(
-                         &options, wgpu::CallbackMode::AllowSpontaneous,
-                         [&adapter](wgpu::RequestAdapterStatus status, wgpu::Adapter _adapter, const char * message) {
-                             if (status != wgpu::RequestAdapterStatus::Success) {
-                                 GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
-                                 return;
-                             }
-                             adapter = std::move(_adapter);
-                         }),
-                     UINT64_MAX);
+    instance.WaitAny(
+        instance.RequestAdapter(
+            &options, wgpu::CallbackMode::AllowSpontaneous,
+            [&adapter](wgpu::RequestAdapterStatus status, wgpu::Adapter _adapter, wgpu::StringView message) {
+                if (status != wgpu::RequestAdapterStatus::Success) {
+                    GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", std::string(message).c_str());
+                    return;
+                }
+                adapter = std::move(_adapter);
+            }),
+        UINT64_MAX);
 }
 
 static void create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {

@@ -68,7 +68,7 @@ jobs:
 
       - name: Fetch emdawnwebgpu
         run: |
-          DAWN_TAG="v20260317.182325"
+          DAWN_TAG="v20260908.214631"
           EMDAWN_PKG="emdawnwebgpu_pkg-${DAWN_TAG}.zip"
           echo "Downloading ${EMDAWN_PKG}"
           curl -L -o emdawn.zip \
