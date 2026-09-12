@@ -54,6 +54,10 @@ namespace autoparser {
 struct generation_params {
     json                                  messages;
     json                                  tools;
+    // Subset of `tools` that is rendered into the prompt. Null means "render
+    // all of them"; it differs from `tools` only when some of them set
+    // defer_loading. The grammar is always built from the full `tools`.
+    json                                  tools_visible;
     common_chat_tool_choice               tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
     json                                  json_schema;
     bool                                  parallel_tool_calls = true;
