@@ -202,6 +202,62 @@ cudaStream_t stream) {
     ggml_cuda_kernel_launch(cpy_scalar_contiguous<src_t, dst_t>, launch_params, cx, cdst, ne);
 }
 
+#if defined(GGML_USE_HIP)
+// Type-agnostic contiguous byte copy, used on HIP instead of a device-to-device
+// cudaMemcpyAsync. See ggml_cuda_cpy() for why. Being type-agnostic matters:
+// the same-type contiguous case also covers quantized types, which have no
+// per-type kernel below and would otherwise hit the GGML_ABORT.
+template<typename T>
+static __global__ void cpy_bytes_contiguous(const char * cx, char * cdst, const int64_t n) {
+    const int64_t i = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= n) {
+        return;
+    }
+
+    ggml_cuda_pdl_sync();
+    ((T *) cdst)[i] = ((const T *) cx)[i];
+}
+
+static void ggml_cpy_bytes_contiguous_cuda(
+    const char * cx, char * cdst, const int64_t nbytes, cudaStream_t stream) {
+
+    // Use 16-byte accesses when both pointers and the length allow it; ggml's
+    // device allocations are at least 256-byte aligned, so this is the norm.
+    const bool aligned16 = (nbytes % 16 == 0) &&
+                           ((uintptr_t) cx   % 16 == 0) &&
+                           ((uintptr_t) cdst % 16 == 0);
+
+    const int64_t n = aligned16 ? nbytes/16 : nbytes;
+    const int64_t num_blocks = (n + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
+    GGML_ASSERT(num_blocks <= INT_MAX);
+
+    const ggml_cuda_kernel_launch_params launch_params =
+        ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream);
+
+    if (aligned16) {
+        ggml_cuda_kernel_launch(cpy_bytes_contiguous<uint4>, launch_params, cx, cdst, n);
+    } else {
+        ggml_cuda_kernel_launch(cpy_bytes_contiguous<char>, launch_params, cx, cdst, n);
+    }
+}
+
+// Copies at or below this size are done with a kernel on the compute queue
+// rather than by SDMA. Override with GGML_CUDA_CPY_D2D_KERNEL_MAX (bytes);
+// 0 restores the previous behaviour of always using cudaMemcpyAsync.
+//
+// SDMA remains the better engine for bulk transfers, hence the threshold.
+static size_t ggml_cuda_cpy_d2d_kernel_max() {
+    static const size_t max_bytes = []() -> size_t {
+        const char * env = getenv("GGML_CUDA_CPY_D2D_KERNEL_MAX");
+        // Treat an empty value as unset, so that clearing the variable to ""
+        // does not silently parse as 0 and disable this path.
+        return (env && *env) ? (size_t) strtoull(env, nullptr, 10) : (size_t) 16*1024*1024;
+    }();
+    return max_bytes;
+}
+#endif // GGML_USE_HIP
+
 template<typename src_t, typename dst_t, bool transposed = false>
 static void ggml_cpy_scalar_cuda(
     const char * cx, char * cdst, const int64_t ne,
@@ -470,6 +526,23 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
             CUDA_CHECK(mudnnMemcpyAsync(ctx, src1, src0));
         } else
 #endif // GGML_USE_MUSA && GGML_MUSA_MUDNN_COPY
+#if defined(GGML_USE_HIP)
+        // On ROCm a device-to-device cudaMemcpyAsync is dispatched to the SDMA
+        // engine, which lives on a separate queue that does not overlap compute.
+        // Every such copy therefore costs a queue handoff plus a driver barrier
+        // that flushes and invalidates L2, which is far more expensive than an
+        // ordinary in-queue barrier.
+        //
+        // Recurrent models (Mamba/Mamba2/RWKV and hybrids) copy their state once
+        // per layer per token, so this dominates their decode. Dense models
+        // barely take this path and are unaffected.
+        //
+        // SDMA is still the right engine for bulk transfers, so only small copies
+        // are redirected.
+        if ((size_t) ggml_nbytes(src0) <= ggml_cuda_cpy_d2d_kernel_max()) {
+            ggml_cpy_bytes_contiguous_cuda(src0_ddc, src1_ddc, ggml_nbytes(src0), main_stream);
+        } else
+#endif // GGML_USE_HIP
         {
             CUDA_CHECK(cudaMemcpyAsync(src1_ddc, src0_ddc, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, main_stream));
         }
