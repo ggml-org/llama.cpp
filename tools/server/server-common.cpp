@@ -900,6 +900,80 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
     return prompt_tokens;
 }
 
+// Replace invalid UTF-8 sequences in text[from..] with U+FFFD. Models can emit
+// corrupted multi-byte tokens (e.g. one flipped byte inside an emoji); without
+// this, the accumulated generation text stays invalid forever and every
+// downstream consumer (chat parsing, JSON serialization) fails on the whole
+// response. A trailing incomplete multi-byte sequence is preserved because it
+// may complete with the next token; when finalize is set (end of generation)
+// it is dropped, as it was never sent to the client.
+// This mirrors how vLLM's incremental detokenizer recovers from invalid UTF-8
+// output (vllm-project/vllm#17448).
+void sanitize_invalid_utf8(std::string & text, size_t from, bool finalize) {
+    const size_t start = std::min(from, text.size());
+    bool        modified = false;
+    bool        keep_tail = true;
+    std::string out;
+
+    size_t i = start;
+    while (i < text.size()) {
+        const unsigned char c = (unsigned char) text[i];
+        size_t len = 0;
+        if ((c & 0x80) == 0x00) {
+            len = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            len = 4;
+        }
+
+        bool valid = len > 0 && i + len <= text.size();
+        if (valid) {
+            for (size_t k = 1; k < len; k++) {
+                if (((unsigned char) text[i + k] & 0xC0) != 0x80) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+
+        if (valid) {
+            if (modified) {
+                out += text.substr(i, len);
+            }
+            i += len;
+            continue;
+        }
+
+        // trailing incomplete sequence: never sent; keep it (it may complete
+        // with the next token), or drop it at end of generation
+        if (len > 0 && i + len > text.size()) {
+            if (finalize) {
+                keep_tail = false;
+            }
+            break;
+        }
+
+        if (!modified) {
+            out   = text.substr(0, i);
+            modified = true;
+        }
+        out += "\xEF\xBF\xBD";
+        i += 1;
+    }
+
+    if (modified) {
+        if (keep_tail && i < text.size()) {
+            out += text.substr(i);  // trailing incomplete sequence
+        }
+        text = std::move(out);
+    } else if (!keep_tail) {
+        text.resize(i);  // drop a dangling incomplete sequence, nothing else changed
+    }
+}
+
 size_t validate_utf8(const std::string& text) {
     size_t len = text.size();
     if (len == 0) return 0;

@@ -1836,6 +1836,9 @@ private:
         slot.sampled = result.tok;
 
         slot.generated_text += token_str;
+        // a corrupted multi-byte token must not poison the accumulated text:
+        // every downstream parse and JSON encoding would fail on it
+        sanitize_invalid_utf8(slot.generated_text, slot.n_sent_text, /* finalize */ false);
         if (slot.task->params.return_tokens) {
             slot.generated_tokens.push_back(result.tok);
         }
@@ -2087,6 +2090,10 @@ private:
     }
 
     void send_final_response(server_slot & slot) {
+        // end of generation: drop any dangling incomplete multi-byte sequence
+        // (it was never sent to the client)
+        sanitize_invalid_utf8(slot.generated_text, slot.n_sent_text, /* finalize */ true);
+
         auto res = std::make_unique<server_task_result_cmpl_final>();
 
         res->id      = slot.task->id;
