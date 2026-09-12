@@ -187,6 +187,27 @@ static const std::vector<std::string> dspark_dflash = {
     "dspark-model-Q8_0.gguf",
 };
 
+// primary quants with a mid-name role keyword and unrelated GGUF files
+static const std::vector<std::string> midname = {
+    "model-abliterated-IQ2_M-custom.gguf",
+    "model-abliterated-IQ2_M.gguf",
+    "model-abliterated-imatrix-cpu.gguf",
+    "model-abliterated-mtp-IQ4_NL-mixed.gguf",
+    "model-abliterated-mtp-IQ4_NL.gguf",
+    "model-abliterated-mtp-Q4_K_M.gguf",
+    "model-abliterated-mtp-Q6_K-mixed.gguf",
+    "model-abliterated-mtp-Q6_K.gguf",
+    "model-abliterated-mtp-Q8_0.gguf",
+    "model-abliterated-mtp-f16.gguf",
+    "mmproj-model.gguf",
+};
+
+// a sharded primary with an infix role keyword
+static const std::vector<std::string> midname_split = {
+    "Q4_K_M/model-mtp-Q4_K_M-00001-of-00002.gguf",
+    "Q4_K_M/model-mtp-Q4_K_M-00002-of-00002.gguf",
+};
+
 //
 // table-driven plan resolution through the real entry point,
 // each case replayed on multiple deterministic reorderings of the listing,
@@ -283,6 +304,27 @@ static const plan_case plan_cases[] = {
     {"spark tag sidecar", spark, "test/repo:BF16", "", true, false,
      "", {},
      "", "", "", "", "dspark-model-BF16.gguf"},
+
+    // preserve first-match tag semantics: Q6_K also matches Q6_K-mixed
+    {"midname explicit tag", midname, "test/repo:Q6_K", "", false, true,
+     "model-abliterated-mtp-Q6_K-mixed.gguf", {"model-abliterated-mtp-Q6_K-mixed.gguf"},
+     "", "", "", "", ""},
+
+    // apply the default quant preference to infix role names
+    {"midname default", midname, "test/repo", "", false, false,
+     "model-abliterated-mtp-Q4_K_M.gguf", {"model-abliterated-mtp-Q4_K_M.gguf"},
+     "", "", "", "", ""},
+
+    // strict primary candidates retain precedence over ambiguous mid-name files
+    {"midname strict tier", midname, "test/repo:IQ2_M", "", false, true,
+     "model-abliterated-IQ2_M-custom.gguf", {"model-abliterated-IQ2_M-custom.gguf"},
+     "", "", "", "", ""},
+
+    {"midname split", midname_split, "test/repo:Q4_K_M", "", false, false,
+     "Q4_K_M/model-mtp-Q4_K_M-00001-of-00002.gguf",
+     {"Q4_K_M/model-mtp-Q4_K_M-00001-of-00002.gguf",
+      "Q4_K_M/model-mtp-Q4_K_M-00002-of-00002.gguf"},
+     "", "", "", "", ""},
 };
 
 static void check_plan(const plan_case & c) {
@@ -373,6 +415,7 @@ static void test_task_assembly() {
     g_repos["test/pair"]   = dspark_dflash;
     g_repos["test/small"]  = {"draft-model-Q4_K_M.gguf"};
     g_repos["test/preset"] = {"preset.ini", "model-Q8_0.gguf"};
+    g_repos["test/midname"] = midname;
 
     {
         // plain -hf wires the model and its mmproj, nothing speculative
@@ -381,6 +424,12 @@ static void test_task_assembly() {
         REQUIRE_EQ(params.model.path,  cached("test/main", "model-Q8_0.gguf"));
         REQUIRE_EQ(params.mmproj.path, cached("test/main", "mmproj-model-Q8_0.gguf"));
         REQUIRE(params.speculative.draft.mparams.path.empty());
+    }
+    {
+        // resolve an infix role name through CLI parsing and handler assembly
+        common_params params;
+        assemble({"server", "-hf", "test/midname:Q6_K", "--no-mmproj"}, params);
+        REQUIRE_EQ(params.model.path, cached("test/midname", "model-abliterated-mtp-Q6_K-mixed.gguf"));
     }
     {
         // --no-mmproj disables the mmproj discovery
