@@ -2119,9 +2119,16 @@ common_control_vector_data common_control_vector_load(const std::vector<common_c
     return result;
 }
 
+int64_t common_opt_dataset_ndata(size_t n_tokens, int64_t n_ctx, int64_t stride) {
+    // use signed arithmetic: n_tokens is size_t, and subtracting a larger value would
+    // silently wrap to a huge unsigned number (underflow) when the training text is
+    // shorter than the context size, producing an invalid dataset size
+    return ((int64_t) n_tokens - n_ctx - 1) / stride;
+}
+
 ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std::vector<llama_token> & tokens, int64_t stride) {
     const int64_t ne_datapoint = llama_n_ctx(ctx);
-    const int64_t ndata        = (tokens.size() - ne_datapoint - 1) / stride;
+    const int64_t ndata        = common_opt_dataset_ndata(tokens.size(), ne_datapoint, stride);
     ggml_opt_dataset_t result = ggml_opt_dataset_init(
         GGML_TYPE_I32, GGML_TYPE_I32, ne_datapoint, ne_datapoint, ndata, /*ndata_shard =*/ 1);
 
