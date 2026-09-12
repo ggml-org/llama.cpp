@@ -133,6 +133,10 @@ public:
 
     bool get_can_shift() const override;
 
+    void set_ref_latch_enabled(bool value) {
+        ref_latch_enabled = value;
+    }
+
     void clear(bool data) override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
@@ -287,6 +291,14 @@ private:
 
     // this is the SWA type of the cache - not to be confused with the model SWA type
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
+
+    // R-SWA per-seq prefix length L_m (-1 = unlatched -> full causal mask); latched at the
+    // prefill->decode boundary in apply_ubatch, read by set_input_kq_mask.
+    std::array<llama_pos, LLAMA_MAX_SEQ> n_ref;
+
+    // multi-output decode (speculative) breaks the single-token boundary inference,
+    // so the context disables the latch there -> full causal
+    bool ref_latch_enabled = true;
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;

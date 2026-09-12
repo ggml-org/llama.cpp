@@ -14,6 +14,12 @@ void llama_model_deepseek2ocr::load_arch_hparams(llama_model_loader & ml) {
         hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX;
     }
 
+    // Unlimited-OCR sets sliding_window -> R-SWA
+    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+    if (hparams.n_swa > 0) {
+        hparams.swa_type = LLAMA_SWA_TYPE_REFERENCE;
+    }
+
     switch (hparams.n_layer()) {
         case 12: type = LLM_TYPE_3B; break;
         default: type = LLM_TYPE_UNKNOWN;
