@@ -2228,64 +2228,119 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
     return ggml_backend_buffer_init(buft, ggml_backend_meta_buffer_iface, buf_ctx, max_size);
 }
 
-struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
-    const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
-
-    constexpr size_t compute_headroom = 16; // Maximum number of views per statically allocated tensor that can be created between evals.
-    const ggml_init_params params_static = {
-        /*.mem_size   =*/ ggml_get_mem_size(ctx),
-        /*.mem_buffer =*/ nullptr,
-        /*.no_alloc   =*/ true,
-    };
-    const ggml_init_params params_compute = {
-        /*.mem_size   =*/ compute_headroom*ggml_get_mem_size(ctx),
-        /*.mem_buffer =*/ nullptr,
-        /*.no_alloc   =*/ true,
-    };
-    ggml_backend_meta_simple_tensor_container stc_static   (params_static,  n_simple_bufts);
-    ggml_backend_meta_simple_tensor_container stc_compute_0(params_compute, n_simple_bufts);
-    ggml_backend_meta_simple_tensor_container stc_compute_1(params_compute, n_simple_bufts);
-
-    std::vector<ggml_backend_buffer_t> bufs(n_simple_bufts, nullptr);
-    ggml_backend_meta_buffer_context * meta_buf_ctx = new ggml_backend_meta_buffer_context(buft, stc_static, stc_compute_0, stc_compute_1, bufs);
-
-    ggml_backend_buffer_t meta_buf = ggml_backend_buffer_init(buft, ggml_backend_meta_buffer_iface, meta_buf_ctx, 0);
-    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
-        t->buffer = meta_buf;
-        if (ggml_backend_meta_buffer_init_tensor_impl(meta_buf_ctx->stc_static, t) != GGML_STATUS_SUCCESS) {
-            ggml_backend_buffer_free(meta_buf);
+static std::unique_ptr<ggml_backend_meta_preparation> ggml_backend_meta_prepare_context(
+        ggml_context * ctx, ggml_backend_buffer_type_t buft) {
+    GGML_ASSERT(ggml_get_no_alloc(ctx));
+    size_t count = 0;
+    for (auto * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
+        count++;
+    }
+    std::unique_ptr<ggml_backend_meta_preparation> prepared(
+        ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_ANY, count, nullptr));
+    if (!prepared) {
+        return nullptr;
+    }
+    for (auto * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
+        if (ggml_backend_meta_preparation_tensor(prepared.get(), tensor) != GGML_STATUS_SUCCESS) {
             return nullptr;
         }
-        t->data = (void *) 0x2000000000000000; // FIXME
     }
-    for (size_t i = 0; i < n_simple_bufts; i++) {
-        ggml_context * ctx = meta_buf_ctx->stc_static.ctxs[i].get();
-        ggml_backend_buffer_type_t simple_buft = ggml_backend_meta_buft_simple_buft(buft, i);
+    return prepared;
+}
 
-        // If a ggml_context only has zero-sized tensors, ggml_backend_alloc_ctx_tensors_from_buft returns NULL.
-        // For those edge cases, allocate a dummy buffer instead.
-        bool any_nonzero_slice = false;
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
-            if (ggml_nelements(t) != 0) {
-                any_nonzero_slice = true;
-                break;
+size_t ggml_backend_meta_alloc_ctx_tensors_from_buft_size(ggml_context * ctx, ggml_backend_buffer_type_t buft) {
+    auto prepared = ggml_backend_meta_prepare_context(ctx, buft);
+    GGML_ASSERT(prepared);
+    size_t size = 0;
+    for (size_t device = 0; device < prepared->tensors.ctxs.size(); device++) {
+        size_t domain_size = ggml_backend_alloc_ctx_tensors_from_buft_size(
+            prepared->tensors.ctxs[device].get(), ggml_backend_meta_buft_simple_buft(buft, device));
+        GGML_ASSERT(domain_size <= SIZE_MAX - size);
+        size += domain_size;
+    }
+    return size;
+}
+
+struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) try {
+    auto prepared = ggml_backend_meta_prepare_context(ctx, buft);
+    if (!prepared || prepared->tensors.simple_tensors.empty()) {
+        return nullptr;
+    }
+    struct buffer_sets {
+        std::vector<ggml_backend_buffer_set> values;
+        explicit buffer_sets(size_t count) : values(count) {}
+        ~buffer_sets() {
+            for (auto & buffers : values) {
+                ggml_backend_buffer_set_free(&buffers);
             }
         }
-        if (any_nonzero_slice) {
-            meta_buf_ctx->bufs[i].reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx, simple_buft));
-        } else {
-            meta_buf_ctx->bufs[i].reset(ggml_backend_buft_alloc_buffer(simple_buft, 0));
-            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
-                t->buffer = meta_buf_ctx->bufs[i].get();
-            }
-        }
-        if (!meta_buf_ctx->bufs[i]) {
-            ggml_backend_buffer_free(meta_buf);
+    } storage(prepared->tensors.ctxs.size());
+    auto & domains = storage.values;
+    for (size_t device = 0; device < domains.size(); device++) {
+        auto * simple_ctx = prepared->tensors.ctxs[device].get();
+        auto * simple_buft = ggml_backend_meta_buft_simple_buft(buft, device);
+        auto & buffers = domains[device];
+        if (ggml_backend_alloc_ctx_tensors_from_buft_set(simple_ctx, simple_buft, &buffers) != GGML_STATUS_SUCCESS) {
             return nullptr;
         }
-        meta_buf->size = std::max(meta_buf->size, ggml_backend_buffer_get_size(meta_buf_ctx->bufs[i].get()));
+        for (auto * tensor = ggml_get_first_tensor(simple_ctx); tensor; tensor = ggml_get_next_tensor(simple_ctx, tensor)) {
+            if (ggml_backend_tensor_is_bound(tensor)) {
+                continue;
+            }
+            ggml_status status;
+            if (tensor->view_src) {
+                status = ggml_backend_view_init(tensor);
+            } else {
+                if (ggml_nelements(tensor) != 0) {
+                    return nullptr;
+                }
+                if (buffers.n_buffers == 0) {
+                    buffers.buffers = static_cast<ggml_backend_buffer_t *>(calloc(1, sizeof(ggml_backend_buffer_t)));
+                    if (!buffers.buffers) {
+                        return nullptr;
+                    }
+                    buffers.n_buffers = 1;
+                    buffers.buffers[0] = ggml_backend_buft_alloc_buffer(simple_buft, 0);
+                    if (!buffers.buffers[0]) {
+                        return nullptr;
+                    }
+                }
+                status = ggml_backend_tensor_alloc(buffers.buffers[0], tensor, ggml_backend_buffer_get_base(buffers.buffers[0]));
+            }
+            if (status != GGML_STATUS_SUCCESS) {
+                return nullptr;
+            }
+        }
     }
-    return meta_buf;
+    struct original_binding {
+        ggml_tensor * tensor;
+        ggml_backend_buffer_t buffer;
+        void * data;
+    };
+    std::vector<original_binding> originals;
+    for (auto * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
+        if (prepared->tensors.simple_tensors.count(tensor)) {
+            originals.push_back({tensor, tensor->buffer, tensor->data});
+        }
+    }
+    ggml_backend_buffer_ptr owner(ggml_backend_meta_materialize(prepared.get(), domains.data(), domains.size()));
+    if (!owner) {
+        return nullptr;
+    }
+    prepared.release();
+    for (const auto & original : originals) {
+        original.tensor->data = nullptr;
+        if (ggml_backend_buffer_init_tensor(owner.get(), original.tensor) != GGML_STATUS_SUCCESS) {
+            for (const auto & previous : originals) {
+                previous.tensor->buffer = previous.buffer;
+                previous.tensor->data = previous.data;
+            }
+            return nullptr;
+        }
+    }
+    return owner.release();
+} catch (const std::bad_alloc &) {
+    return nullptr;
 }
 
 //

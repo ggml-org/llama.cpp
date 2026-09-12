@@ -2774,9 +2774,10 @@ public:
         for (auto & [buft, mbuf] : mbufs_new) {
             auto & mbuf_cur = mbufs[buft];
 
+            const bool can_reuse_buffer = mbuf_cur.buf && ggml_backend_buffer_get_base(mbuf_cur.buf.get());
             bool need_alloc = false;
 
-            need_alloc = need_alloc || (!mbuf_cur.buf);
+            need_alloc = need_alloc || !can_reuse_buffer;
             need_alloc = need_alloc || (mbuf_cur.org.size() != mbuf.org.size());
             need_alloc = need_alloc || (mbuf_cur.total_size != mbuf.total_size);
 
@@ -2798,7 +2799,7 @@ public:
             }
 
             if (need_alloc) {
-                if (!mbuf_cur.buf || mbuf_cur.total_size != mbuf.total_size) {
+                if (!can_reuse_buffer || mbuf_cur.total_size != mbuf.total_size) {
                     mbuf_cur = std::move(mbuf);
 
                     mbuf_cur.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(mbuf_cur.ctx.get(), buft));

@@ -2090,6 +2090,9 @@ enum ggml_status ggml_backend_alloc_ctx_tensors_from_buft_set(
 }
 
 size_t ggml_backend_alloc_ctx_tensors_from_buft_size(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
+    if (ggml_backend_buft_is_meta(buft)) {
+        return ggml_backend_meta_alloc_ctx_tensors_from_buft_size(ctx, buft);
+    }
     size_t nbytes_total = 0;
     struct ggml_backend_buffer_set buffers = { NULL, 0 };
     enum ggml_status status = ggml_backend_alloc_ctx_tensors_from_buft_impl(ctx, buft, &nbytes_total, true, &buffers);

@@ -1474,17 +1474,17 @@ static void test_meta_split_preparation() {
     GGML_ASSERT(first.context->buffers.size() == 1 && second.context->buffers.size() == 1);
     GGML_ASSERT(ggml_backend_buffer_get_size(first.context->buffers[0]) == 64);
     GGML_ASSERT(ggml_backend_buffer_get_size(second.context->buffers[0]) == 128);
-    auto * legacy_view = ggml_view_2d(bound_ctx.ctx, bound, 4, 6, bound->nb[1], 4*sizeof(float));
-    GGML_ASSERT(legacy_view->data != nullptr && legacy_view->buffer == nullptr);
-    auto * legacy_preparation = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 1, nullptr);
-    GGML_ASSERT(legacy_preparation);
-    GGML_ASSERT(ggml_backend_meta_preparation_tensor(legacy_preparation, legacy_view) == GGML_STATUS_SUCCESS);
+    auto * unbound_view = ggml_view_2d(bound_ctx.ctx, bound, 4, 6, bound->nb[1], 4*sizeof(float));
+    GGML_ASSERT(unbound_view->data == nullptr && unbound_view->buffer == nullptr);
+    auto * view_preparation = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 1, nullptr);
+    GGML_ASSERT(view_preparation);
+    GGML_ASSERT(ggml_backend_meta_preparation_tensor(view_preparation, unbound_view) == GGML_STATUS_SUCCESS);
     for (size_t device = 0; device < 2; device++) {
-        auto * simple = ggml_backend_meta_preparation_get_tensor(legacy_preparation, legacy_view, device);
-        GGML_ASSERT(simple != legacy_view && simple->data == nullptr && simple->buffer == nullptr);
+        auto * simple = ggml_backend_meta_preparation_get_tensor(view_preparation, unbound_view, device);
+        GGML_ASSERT(simple != unbound_view && simple->data == nullptr && simple->buffer == nullptr);
         GGML_ASSERT(simple->ne[1] == (device == 0 ? 2 : 4));
     }
-    ggml_backend_meta_preparation_free(legacy_preparation);
+    ggml_backend_meta_preparation_free(view_preparation);
     source_ctx.preparation = nullptr;
     source_ctx.source = nullptr;
     auto * bound_preparation = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_COMPUTE, 0, &sources);
@@ -1509,19 +1509,117 @@ static void test_meta_split_preparation() {
     GGML_ASSERT(first.context->buffers.size() == 1 && second.context->buffers.size() == 1);
     for (bool fail_init : {false, true}) {
         auto failed_ctx = make_context();
-        ggml_new_tensor_2d(failed_ctx.ctx, GGML_TYPE_F32, 8, 6);
+        auto * failed_tensor = ggml_new_tensor_2d(failed_ctx.ctx, GGML_TYPE_F32, 8, 6);
+        std::array<uint8_t, GGML_TENSOR_SIZE> failed_before;
+        std::memcpy(failed_before.data(), failed_tensor, GGML_TENSOR_SIZE);
         if (fail_init) {
             second.context->fail_init = second.context->init_calls + 1;
         } else {
             second.context->fail_alloc = second.context->alloc_calls + 1;
         }
         GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft(failed_ctx.ctx, buft) == nullptr);
+        GGML_ASSERT(std::memcmp(failed_before.data(), failed_tensor, GGML_TENSOR_SIZE) == 0);
         GGML_ASSERT(first.context->buffers.size() == 1 && second.context->buffers.size() == 1);
         second.context->fail_init = SIZE_MAX;
         second.context->fail_alloc = SIZE_MAX;
     }
     ggml_backend_meta_split_context_free(compute);
     ggml_backend_meta_split_context_free(weights);
+}
+
+static void test_meta_static_multibuffer(bool relative) {
+    static auto first = dummy_backend_init(64);
+    static auto second = dummy_backend_init(256);
+    for (auto * backend : {&first, &second}) {
+        backend->context->real_data = true;
+        backend->context->relative_addresses = relative;
+        backend->context->buffer_type = &backend->buffer_type;
+        backend->context->device.iface.get_buffer_type = test_device_buffer_type;
+        backend->context->device.iface.get_name = [](ggml_backend_dev_t) { return "static_member"; };
+        backend->context->device.iface.get_description = [](ggml_backend_dev_t) { return "static packing member"; };
+    }
+    ggml_backend_dev_t devices[] = {&first.context->device, &second.context->device};
+    auto * meta = ggml_backend_meta_device(devices, 2, [](const ggml_tensor * tensor, void *) {
+        ggml_backend_meta_split_state result{GGML_BACKEND_SPLIT_AXIS_1, {0}, {1}, 1};
+        result.ne[0] = tensor->ne[1]/3;
+        result.ne[1] = tensor->ne[1] - result.ne[0];
+        return result;
+    }, nullptr);
+    auto * buft = ggml_backend_dev_buffer_type(meta);
+    auto * iface = ggml_backend_buft_get_alloc_interface(buft);
+    auto ctx = make_context();
+    std::vector<ggml_tensor *> tensors;
+    for (int i = 0; i < 20; i++) {
+        tensors.push_back(ggml_new_tensor_2d(ctx.ctx, GGML_TYPE_F32, 8, 6));
+    }
+    auto * source = tensors.back();
+    size_t allocations = first.context->alloc_calls + second.context->alloc_calls;
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.ctx, buft) == 3840);
+    GGML_ASSERT(first.context->alloc_calls + second.context->alloc_calls == allocations);
+    for (auto * tensor : tensors) {
+        GGML_ASSERT(!tensor->data && !tensor->buffer);
+    }
+    ggml_backend_buffer_ptr owner(ggml_backend_alloc_ctx_tensors_from_buft(ctx.ctx, buft));
+    GGML_ASSERT(owner && owner->size == 3840 && ggml_backend_buffer_get_base(owner.get()) == nullptr);
+    GGML_ASSERT(iface->n_buffers(owner.get(), 0) == 20 && iface->n_buffers(owner.get(), 1) == 10);
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.ctx, buft) == 0);
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft(ctx.ctx, buft) == nullptr);
+    for (size_t i = 0; i < tensors.size(); i++) {
+        auto * tensor = tensors[i];
+        GGML_ASSERT(tensor->buffer == owner.get() && !tensor->data && ggml_backend_tensor_is_bound(tensor));
+        std::vector<float> values(48, float(i + 1)), actual(48);
+        ggml_backend_tensor_set(tensor, values.data(), 0, ggml_nbytes(tensor));
+        ggml_backend_tensor_get(tensor, actual.data(), 0, ggml_nbytes(tensor));
+        GGML_ASSERT(values == actual);
+    }
+    auto * late_view = ggml_view_2d(ctx.ctx, source, 4, 6, source->nb[1], 4*sizeof(float));
+    GGML_ASSERT(!late_view->buffer && !late_view->data);
+    GGML_ASSERT(ggml_backend_view_init(late_view) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(late_view->buffer == owner.get() && !late_view->data && ggml_backend_tensor_is_bound(late_view));
+    auto * inspection = ggml_backend_meta_preparation_new(buft, GGML_BACKEND_BUFFER_USAGE_ANY, 0, nullptr);
+    for (size_t device = 0; device < 2; device++) {
+        auto * simple = ggml_backend_meta_preparation_get_tensor(inspection, late_view, device);
+        auto * physical = iface->get_buffer(owner.get(), device, device == 0 ? 19 : 9);
+        GGML_ASSERT(simple && simple->buffer == physical && simple->view_src->buffer == physical);
+        size_t offset = device == 0 ? 16 : 144;
+        GGML_ASSERT(uintptr_t(simple->data) == uintptr_t(ggml_backend_buffer_get_base(physical)) + offset);
+        std::vector<float> actual(24);
+        ggml_backend_tensor_get_2d(simple, actual.data(), 0, 4*sizeof(float), simple->ne[1], simple->nb[1], 4*sizeof(float));
+        for (int i = 0; i < simple->ne[1]*4; i++) {
+            GGML_ASSERT(actual[i] == 20.0f);
+        }
+    }
+    ggml_backend_meta_preparation_free(inspection);
+    {
+        auto views = make_context();
+        auto * view = ggml_view_2d(views.ctx, source, 4, 6, source->nb[1], 4*sizeof(float));
+        allocations = first.context->alloc_calls + second.context->alloc_calls;
+        GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(views.ctx, buft) == 0);
+        ggml_backend_buffer_ptr borrowed(ggml_backend_alloc_ctx_tensors_from_buft(views.ctx, buft));
+        GGML_ASSERT(borrowed && borrowed->size == 0 && view->buffer == borrowed.get());
+        GGML_ASSERT(!view->data && ggml_backend_tensor_is_bound(view));
+        GGML_ASSERT(first.context->alloc_calls + second.context->alloc_calls == allocations);
+        ggml_backend_buffer_clear(borrowed.get(), 0);
+        std::vector<float> actual(48);
+        ggml_backend_tensor_get(source, actual.data(), 0, ggml_nbytes(source));
+        GGML_ASSERT(std::all_of(actual.begin(), actual.end(), [](float value) { return value == 20.0f; }));
+        ggml_backend_buffer_reset(borrowed.get());
+        GGML_ASSERT(!ggml_backend_tensor_is_bound(view) && ggml_backend_tensor_is_bound(source));
+    }
+    owner.reset();
+    GGML_ASSERT(first.context->buffers.empty() && second.context->buffers.empty());
+    for (int rows : {0, 1}) {
+        auto empty = make_context();
+        auto * tensor = ggml_new_tensor_2d(empty.ctx, GGML_TYPE_F32, 8, rows);
+        auto * view = ggml_view_tensor(empty.ctx, tensor);
+        GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(empty.ctx, buft) == size_t(rows*32));
+        ggml_backend_buffer_ptr allocated(ggml_backend_alloc_ctx_tensors_from_buft(empty.ctx, buft));
+        GGML_ASSERT(allocated && allocated->size == size_t(rows*32));
+        GGML_ASSERT(ggml_backend_tensor_is_bound(tensor) && ggml_backend_tensor_is_bound(view));
+        GGML_ASSERT(!tensor->data && !view->data);
+        GGML_ASSERT(iface->get_buffer(allocated.get(), 0, 0)->size == 0);
+    }
+    GGML_ASSERT(first.context->buffers.empty() && second.context->buffers.empty());
 }
 
 static ggml_status test_meta_graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
@@ -2118,6 +2216,8 @@ int main() {
     run("test_meta_materialization", []() { test_meta_materialization(false); });
     run("test_meta_materialization_same_base", []() { test_meta_materialization(true); });
     run("test_meta_split_preparation", test_meta_split_preparation);
+    run("test_meta_static_multibuffer", [] { test_meta_static_multibuffer(false); });
+    run("test_meta_static_multibuffer_same_base", [] { test_meta_static_multibuffer(true); });
     run("test_meta_graph_materialization", [] { test_meta_graph_materialization(false); });
     run("test_meta_graph_materialization_same_base", [] { test_meta_graph_materialization(true); });
     run("test_context_buffer_sets", test_context_buffer_sets);
