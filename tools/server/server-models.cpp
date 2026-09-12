@@ -1129,7 +1129,8 @@ void server_models::load(const std::string & name, const load_options & opts) {
     // exceeding models_max. Without this, the window between unload_lru()
     // releasing its lock and this lock_guard acquiring allows multiple
     // threads to each observe capacity and all proceed to load.
-    if (base_params.models_max > 0) {
+    // Download workers do not use models_max slots.
+    if (opts.mode == SERVER_CHILD_MODE_NORMAL && base_params.models_max > 0) {
         size_t count_active = 0;
         for (const auto & m : mapping) {
             if (m.second.meta.is_running()) {

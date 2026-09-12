@@ -540,12 +540,16 @@ def _wait_for_sse_event(collected: list, event_type: str, model: str, timeout: i
 
 
 def test_router_download_model():
-    """Case 1: download a model, verify SSE events and GET /models."""
+    """Case 1: download a model at the model limit, verify SSE events and GET /models."""
     global server
+    server.models_max = 1
     server.start()
 
     # Ensure the model is not present before we start
     server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")
+
+    # A download worker must not consume or evict a model slot
+    _load_model_and_wait(MODEL_B, timeout=120)
 
     sse_events: list = []
     stop = threading.Event()
@@ -580,6 +584,7 @@ def test_router_download_model():
     # Model should now appear in GET /models
     ids = _get_model_ids(is_reload=False)
     assert MODEL_DOWNLOAD_ID in ids, f"{MODEL_DOWNLOAD_ID} not found in /models after download"
+    assert _get_model_status(MODEL_B) == "loaded"
 
 
 def test_router_delete_model():
