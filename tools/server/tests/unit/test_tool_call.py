@@ -318,6 +318,24 @@ def test_completion_without_tool_call_fast(template_name: str, n_predict: int, t
     do_test_completion_without_tool_call(server, n_predict, tools, tool_choice, stream=stream == CompletionMode.STREAMED)
 
 
+@pytest.mark.parametrize("tool_choice,tools", [
+    ({"type": "function", "function": {"name": "unknown_tool"}}, [TEST_TOOL]),
+    ({"type": "function", "function": {"name": "test"}},         []),
+    ({"type": "function"},                                       [TEST_TOOL]),
+])
+def test_named_tool_choice_is_validated(tool_choice: dict, tools: list[dict]):
+    global server
+    server.jinja = True
+    server.start()
+    res = server.make_request("POST", "/v1/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "Write an example"}],
+        "tools": tools,
+        "tool_choice": tool_choice,
+    })
+    assert res.status_code == 400, f'Expected 400, got {res.status_code}: {res.body}'
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
 @pytest.mark.parametrize("template_name,n_predict,tools,tool_choice", [
