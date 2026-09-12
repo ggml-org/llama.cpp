@@ -122,6 +122,10 @@ inline const char * extra_quant_type_name(ExtraQuantType t) {
         return "Q8_0_32";
     case ExtraQuantType::Q8_1_C:
         return "Q8_1_C";
+    case ExtraQuantType::Q4_0_64:
+        return "Q4_0_64";
+    case ExtraQuantType::Q4_1_64:
+        return "Q4_1_64";
     default:
         return "unknown";
     }
@@ -166,6 +170,12 @@ void quantize_q8_1(const float * x,
                    int64_t k,
                    int64_t qk,
                    int64_t block_offset = 0);
+void quantize_q4_1_asym(const float * x,
+                        ov::Tensor & weights_arr,
+                        ov::Tensor & scales_arr,
+                        ov::Tensor & zp_arr,
+                        int64_t k,
+                        int64_t qk);
 void quantize_q8_0(const float * x,
                    ov::Tensor & weights_arr,
                    ov::Tensor & scales_arr,

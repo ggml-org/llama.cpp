@@ -31,6 +31,7 @@ void ggml_openvino_device_config::init() {
         // String values (use ggml_openvino_getenv_str)
         "GGML_OPENVINO_DEVICE",
         "GGML_OPENVINO_CACHE_DIR",
+        "GGML_OPENVINO_SPILL_DIR",
         "GGML_OPENVINO_DEBUG_NODE",
         "GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR",
         "GGML_OPENVINO_NPU_COMPILE_CONFIG",
@@ -56,6 +57,9 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_RELEASE_WEIGHTS",
         "GGML_OPENVINO_REDUCE_COMPILE_MEM",
         "GGML_OPENVINO_LOG_UNSUPPORTED_OPS",
+        "GGML_OPENVINO_LOG_SWA_LAYERS",
+        "GGML_OPENVINO_REQUANT_KQUANT",
+        "GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT",
     };
 
     for (const char * const & env_var : env_var_names) {
@@ -263,9 +267,81 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     if (ggml_openvino_is_npu()) {
         return ExtraQuantType::Q4_0_128;
     }
+    // By default Q6_K/Q5_K are requantized to Q8_0_C, which *inflates* 6- and 5-bit weights to 8
+    // while the rest of the model stays at 4 bits, and Q4_K keeps its native group-32 layout
+    // (an f16 scale plus an f16 zero point per 32 weights = 0.125 B/weight of metadata).
+    // Decode of a large model is bandwidth-bound, so both cost throughput.
+    //
+    // GGML_OPENVINO_REQUANT_KQUANT selects a 4-bit target instead. Names are
+    // q4_<sym|asym><group>[_all]: <sym|asym> says whether a per-group zero point is kept, <group>
+    // is the group size, and the _all suffix sends Q4_K down the same path (without it only
+    // Q6_K/Q5_K are touched):
+    //   q4_sym128      Q6_K/Q5_K -> Q4_0_128 (u4, group 128, symmetric)
+    //   q4_sym128_all  and Q4_K too -- drops Q4_K's per-32 zero point, which costs some accuracy
+    //   q4_asym64_all  Q6_K/Q5_K and Q4_K -> Q4_1_64 (u4, group 64, asymmetric) -- most of the
+    //                  metadata saving while keeping a real zero point
+    //   native         no requantization at all (keep Q6_K/Q5_K as they are)
+    //
+    // The asymmetric target is only offered in its _all form: leaving Q4_K at its native group 32
+    // while Q6_K/Q5_K move to group 64 gives the Q/K/V projections different group counts, and the
+    // GPU plugin's FullyConnectedHorizontalFusion concatenates their scale constants, which then
+    // fails shape inference. Requantizing all three keeps the group size uniform.
+    const char * rq = ggml_openvino_getenv_str("GGML_OPENVINO_REQUANT_KQUANT");
+    auto is_opt = [rq](const char * name) {
+        return rq && strcmp(rq, name) == 0;
+    };
+    const bool sym128 = is_opt("q4_sym128");
+    const bool sym128_all = is_opt("q4_sym128_all");
+    const bool asym64_all = is_opt("q4_asym64_all");
+
+    if (tensor->type == GGML_TYPE_Q4_K) {
+        if (sym128_all) {
+            return ExtraQuantType::Q4_0_128;
+        }
+        if (asym64_all) {
+            return ExtraQuantType::Q4_1_64;
+        }
+    }
+    // MoE expert weights (3D, ne[2] = n_expert) stored as Q5_1/Q8_0 are the expert-side
+    // equivalent of Q6_K/Q5_K: kept at 8 bits by default while the rest of the model is at 4
+    // (gemma-4 26B-A4B keeps its down projection there). Send them to 4 bits under the same
+    // option, at group 64 rather than 128: the down expert has k=704, which 64 divides
+    // (704/64 = 11) and 128 does not.
+    if (tensor->ne[2] > 1 && (tensor->type == GGML_TYPE_Q5_1 || tensor->type == GGML_TYPE_Q8_0)) {
+        if (sym128 || sym128_all) {
+            return ExtraQuantType::Q4_0_64;
+        }
+        if (asym64_all) {
+            return ExtraQuantType::Q4_1_64;
+        }
+        // TODO: temporary workaround for a known OpenVINO GPU-plugin bug -- remove once the
+        // plugin computes grouped 8-bit GatherMatmulCompressed correctly. This costs accuracy
+        // (5/8-bit -> 4-bit) on any model it applies to, so it must not outlive the bug.
+        //
+        // On GPU these would otherwise stay in their native *grouped 8-bit* layout, which the GPU
+        // plugin's GatherMatmulCompressed computes incorrectly -- gemma-4 26B-A4B (whose down
+        // projection is Q5_1) produces garbage, while the same graph is correct on CPU. It is
+        // specific to grouped 8 bit: the gate/up experts are grouped u4 *with* a zero point and
+        // are fine, and Qwen3.5 / granite are fine because their Q5_K/Q6_K down projections
+        // already requantize to per-channel Q8_0_C (grouped=0). Sending these to grouped 4 bit
+        // avoids the broken layout and restores correct output.
+        // Opt out with GGML_OPENVINO_REQUANT_KQUANT=native.
+        if (ggml_openvino_get_device_name() == "GPU" && !is_opt("native")) {
+            return ExtraQuantType::Q4_0_64;
+        }
+    }
     switch (tensor->type) {
     case GGML_TYPE_Q6_K:
     case GGML_TYPE_Q5_K:
+        if (sym128 || sym128_all) {
+            return ExtraQuantType::Q4_0_128;
+        }
+        if (asym64_all) {
+            return ExtraQuantType::Q4_1_64;
+        }
+        if (is_opt("native")) {
+            return std::nullopt;
+        }
         return ExtraQuantType::Q8_0_C;
     default:
         return std::nullopt;
@@ -329,6 +405,16 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
         case ExtraQuantType::Q4_0_128:
             layout.is_u4 = true;
             layout.weights_per_block = 128;
+            layout.is_symmetric = true;
+            break;
+        case ExtraQuantType::Q4_1_64:
+            layout.is_u4 = true;
+            layout.weights_per_block = 64;
+            layout.is_symmetric = false;
+            break;
+        case ExtraQuantType::Q4_0_64:
+            layout.is_u4 = true;
+            layout.weights_per_block = 64;
             layout.is_symmetric = true;
             break;
         case ExtraQuantType::Q4_0_C:

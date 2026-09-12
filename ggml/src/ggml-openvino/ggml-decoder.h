@@ -21,18 +21,28 @@ struct ModelParams {
     int ctx_per_seq_swa = -1;
     int n_seq = 1;
     int n_heads_kv = -1;
+    // Per-layer KV head count. gemma-4 12B interleaves 8 x 256 sliding layers with 1 x 512
+    // full-attention layers, so no single scalar describes every layer. Keyed by layer, not by
+    // layer TYPE, because the SWA classification depends on the context size (extents tie at a
+    // small -c) while the head count does not.
+    std::map<int, int> n_heads_kv_per_layer;
     int head_size = -1;
     int state_size = -1;  // for SSM molels, eg qwen35
-    int32_t rope_params[15];
+    int32_t rope_params[16];
     bool mixed_rope_params = false;
+    bool is_cacheless_attn = false;
     std::vector<int> swa_layers;
+    // The sliding-window mask tensor, identified in compute_llm_params() by grouping attention
+    // layers on the mask they consume. Only used to tell the two masks apart when naming OV
+    // parameters -- both carry the same tensor name. Null when the graph has a single mask.
+    const ggml_tensor * swa_mask = nullptr;
 
     std::vector<std::string> kv_names;
     size_t kv_buffer_ctx_id = 0;
 
     bool same_rope_params(const ModelParams & other) const {
         return mixed_rope_params == other.mixed_rope_params &&
-               memcmp(rope_params, other.rope_params, sizeof(int32_t) * 15) == 0;
+               memcmp(rope_params, other.rope_params, sizeof(int32_t) * 16) == 0;
     }
 
     bool can_reuse_dynamically(const ModelParams & other) const { return same_rope_params(other); }
@@ -48,6 +58,11 @@ struct ComputeParams {
     int attention_size = -1;
     int attention_size_swa = -1;
     int attention_size_static = -1;  // encoder/cross-attn KV fill level (whisper)
+    // Sliding window width, read back from the band of ggml's own SWA mask. ggml never passes
+    // n_swa down to a backend, but fill_mask() bakes it into the mask contents, so the widest
+    // unmasked row recovers it. Shorter than n_swa while the sequence is still short, which is
+    // harmless: every causal pair is inside the window then anyway.
+    int swa_window = -1;
     int input_len = -1;
     int token_len_per_seq = -1;
     int past_kv_len = -1;
@@ -96,8 +111,12 @@ struct ComputeParams {
     // models use a fixed end-anchored offset in the translator.
 };
 
+// defined below; declared here because GgmlOvDecoder uses it inline
+std::optional<int> extract_layer_from_name(const std::string & name);
+
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
 public:
+    static std::string get_tensor_name(const ggml_cgraph * cgraph, const ggml_tensor * tensor);
     struct NodeInfo {
         ggml_tensor * node;
         std::string node_name;
@@ -250,6 +269,21 @@ public:
                m_model_params.swa_layers.end();
     }
 
+    // KV head count for one layer. Sliding and full layers can differ (gemma-4 12B), so callers
+    // that reinterpret a KV buffer must use this and not the model-level n_heads_kv.
+    int get_n_heads_kv_for_layer(int layer) const {
+        auto it = m_model_params.n_heads_kv_per_layer.find(layer);
+        return it != m_model_params.n_heads_kv_per_layer.end() ? it->second : m_model_params.n_heads_kv;
+    }
+
+    // Same, for a KV cache tensor: its layer comes from the leaf name (cache_k_l<N>).
+    int get_n_heads_kv_for_tensor(const ggml_tensor * kv_tensor) const {
+        if (auto layer = extract_layer_from_name(std::string(kv_tensor->name)); layer.has_value()) {
+            return get_n_heads_kv_for_layer(layer.value());
+        }
+        return m_model_params.n_heads_kv;
+    }
+
     int get_past_kv_len() const { return m_compute_params.past_kv_len; }
 
     int get_input_len() const { return m_compute_params.input_len; }
@@ -340,6 +374,12 @@ public:
                (op->op == GGML_OP_SOFT_MAX && tensor == op->src[1]);
     }
 
+    inline static bool is_inp_mean(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_MUL_MAT && tensor == op->src[1] && tensor->op == GGML_OP_NONE &&
+               (tensor->flags & GGML_TENSOR_FLAG_INPUT) && tensor->type == GGML_TYPE_F32 &&
+               op->src[0] != nullptr && op->src[0]->op != GGML_OP_NONE;
+    }
+
     inline static bool is_rope_freqs_weight(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_ROPE && tensor == op->src[2];
     }
@@ -353,8 +393,19 @@ public:
                (op != nullptr && op->op == GGML_OP_SET_ROWS && op->src[2] == tensor);
     }
 
+    inline static bool is_conv_state_writeback(const ggml_tensor * node) {
+        return node->op == GGML_OP_CPY && node->view_src != nullptr && is_kvcache(node->view_src, nullptr) &&
+               node->src[0] != nullptr && node->src[0]->op == GGML_OP_VIEW && node->src[0]->src[0] != nullptr &&
+               node->src[0]->src[0]->op == GGML_OP_CONCAT && node->src[1] != nullptr &&
+               node->src[1]->op == GGML_OP_VIEW && node->src[1]->view_src == node->view_src;
+    }
+
     inline static bool is_kv_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_SET_ROWS && op->src[1] == tensor;
+    }
+
+    bool is_swa_mask(const ggml_tensor * tensor) const {
+        return m_model_params.swa_mask != nullptr && tensor == m_model_params.swa_mask;
     }
 
     inline static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
@@ -375,8 +426,22 @@ public:
         if (is_inp_emb(tensor, op)) {
             return "embd";
         }
-        if (is_stateful() && is_inp_mask(tensor, op)) {
-            return std::string(tensor->name).find("swa") == std::string::npos ? "self_kq_mask" : "self_kq_mask_swa";
+        if (is_inp_mask(tensor, op)) {
+            // Give the two attention masks distinct OV parameter names.
+            //
+            // An interleaved-SWA model builds one full-attention mask and one sliding-window mask,
+            // but build_attn_inp_kq_mask() names them identically, so keying a parameter off
+            // tensor->name alone makes the second mask OVERWRITE the first in m_model_inputs: both
+            // attention types then read a single parameter, and the windowed layers silently run
+            // against an unbanded mask. Disambiguate using the SWA layer set computed in
+            // compute_llm_params(), which classifies by mask tensor identity rather than by name.
+            //
+            // When no SWA layer was found there is only one mask in play, so the plain name is
+            // correct and no _swa parameter is created.
+            if (m_model_params.swa_layers.empty()) {
+                return "self_kq_mask";
+            }
+            return is_swa_mask(tensor) ? "self_kq_mask_swa" : "self_kq_mask";
         }
         return tensor->name;
     }
