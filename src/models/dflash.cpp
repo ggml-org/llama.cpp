@@ -139,8 +139,12 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
             throw std::runtime_error("DFlash2 hidden size is too small for the selector lattice");
         }
 
-        dflash_selector_prev   = create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_PREV,   "weight"), { rank, n_vocab }, 0);
-        dflash_selector_next   = create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_NEXT,   "weight"), { rank, n_vocab }, 0);
+        // Under tensor parallelism the lm_head is split along the vocabulary, which the
+        // in-graph selector cannot consume, so DFlash2 ranks on the CPU and reads these tables
+        // straight from the GGUF file; otherwise the in-graph selector uses them in the model
+        const bool use_cpu_selector = params.split_mode == LLAMA_SPLIT_MODE_TENSOR;
+        dflash_selector_prev   = create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_PREV,   "weight"), { rank, n_vocab }, use_cpu_selector ? TENSOR_SKIP : 0);
+        dflash_selector_next   = create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_NEXT,   "weight"), { rank, n_vocab }, use_cpu_selector ? TENSOR_SKIP : 0);
         dflash_selector_hidden = create_tensor(tn(LLM_TENSOR_DFLASH_SELECTOR_HIDDEN, "weight"), { n_embd, rank }, 0);
 
         LLAMA_LOG_INFO("%s: DFlash2 conv kernel = %u, group = %u, selector rank = %u, top-k = %u\n", __func__,
@@ -470,8 +474,11 @@ static ggml_tensor * build_dflash2_conv(
     return result;
 }
 
-// DFlash2 selector: top-k candidates per block position plus the pairwise
-// transition scores, packed into the nextn output slot for the CPU-side walk.
+// DFlash2 selector (no tensor parallelism): top-k candidates per block position plus the
+// pairwise transition scores, packed into the nextn output slot for the CPU-side walk.
+// Under tensor parallelism the lm_head is split, so the same candidate math runs on the host
+// via load_dflash2_selector()/build_dflash2_selector_cpu() in common/speculative.cpp;
+// keep the two implementations in sync.
 static void build_dflash2_selector(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens) {
     ggml_context * ctx0 = g.ctx0;
     auto         & res  = g.res;
@@ -769,6 +776,13 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     res->t_embd = cur;
 
+    // DFlash2 under tensor parallelism ranks on the CPU from the gathered lm_head output, so
+    // the decoder hidden states ride the nextn slot; without tensor parallelism the in-graph
+    // selector packs its lattice there instead (see below)
+    if (model.dflash_selector_hidden && model.split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
+        res->t_h_nextn = cur;
+    }
+
     // lm_head from the target model (shared via ctx_other)
     auto * output   = model.output;
     auto * output_s = model.output_s;
@@ -782,8 +796,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     cur = build_lora_mm(output, cur, output_s);
 
-    // DFlash2 feeds these logits to the selector, so they need the target's output
-    // transforms; DFlash1 and DSpark read them through the sampler instead
+    // DFlash2 feeds these logits to its candidate selector (in-graph or on the CPU after
+    // gathering), so they need the target's output transforms; DFlash1 and DSpark read them
+    // through the sampler instead
     if (model.dflash_selector_hidden) {
         if (hparams.f_logit_scale != 0.0f) {
             cur = ggml_scale(ctx0, cur, hparams.f_logit_scale);
@@ -820,7 +835,8 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         build_dspark_markov_head(*this, model, inp_tokens);
     }
 
-    if (model.dflash_selector_hidden) {
+    // DFlash2 ranks its candidates in-graph when the lm_head is not split along the vocabulary
+    if (model.dflash_selector_hidden && model.split_mode() != LLAMA_SPLIT_MODE_TENSOR) {
         build_dflash2_selector(*this, model, inp_tokens);
     }
 }
