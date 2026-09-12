@@ -117,6 +117,10 @@ kernel void kernel_mul_mv_id_mxfp4_f32_flat(
     int r1 = get_group_id(1);
 
     int first_row = (r0 * N_SG_MXFP4 + get_sub_group_id()) * N_R0_MXFP4;
+    // The x-grid is padded to whole subgroup row-groups, so the tail subgroups hold
+    // first_row >= ne0 and the unguarded fetches below would read past src0. Slide the
+    // window back; the rows it repeats are stored identically by the subgroup that owns them.
+    first_row = min(first_row, max(ne0 - N_R0_MXFP4, 0));
 
     uint offset_src0 = first_row*nb01;
     offset_src0 /= 17; // 17 = sizeof(block_mxfp4)

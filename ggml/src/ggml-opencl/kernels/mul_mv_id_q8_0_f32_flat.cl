@@ -95,6 +95,10 @@ kernel void kernel_mul_mv_id_q8_0_f32_flat(
     int r1 = get_group_id(1);
 
     int first_row = (r0*N_SG_Q8_0 + get_sub_group_id()) * N_R0_Q8_0;
+    // The x-grid is padded to whole subgroup row-groups, so the tail subgroups hold
+    // first_row >= ne01 and the unguarded fetches below would read past src0. Slide the
+    // window back; the rows it repeats are stored identically by the subgroup that owns them.
+    first_row = min(first_row, max(ne01 - N_R0_Q8_0, 0));
 
     ulong offset_src1 = r1*nb11;
     global float * y  = (global float *) (src1_cur + offset_src1);

@@ -90,6 +90,10 @@ kernel void kernel_mul_mv_q5_K_f32(
     int r1 = get_group_id(1);
     int im = get_group_id(2);
     int first_row = (r0 * N_SIMDGROUP + get_sub_group_id()) * N_DST;
+    // The x-grid is padded to whole subgroup row-groups, so the tail subgroups hold
+    // first_row >= ne01 and the unguarded fetches below would read past src0. Slide the
+    // window back; the rows it repeats are stored identically by the subgroup that owns them.
+    first_row = min(first_row, max(ne01 - N_DST, 0));
 
     int i12 = im%ne12;
     int i13 = im/ne12;

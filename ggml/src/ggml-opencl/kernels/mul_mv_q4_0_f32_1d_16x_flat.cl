@@ -121,6 +121,10 @@ inline void mul_mat_q_n_f32_1d_16x_flat(
     // Currently with llama2 7B, im is always 0.
     // TODO: how to handle im/gqa*(nb*ne0)?
     int first_row = (r0 * N_SIMDGROUP + get_sub_group_id()) * N_DST;
+    // The x-grid is padded to whole subgroup row-groups, so the tail subgroups hold
+    // first_row >= ne01 and the unguarded fetches below would read past src0. Slide the
+    // window back; the rows it repeats are stored identically by the subgroup that owns them.
+    first_row = min(first_row, max(ne01 - N_DST, 0));
 
     int i12 = im%ne12;
     int i13 = im/ne12;

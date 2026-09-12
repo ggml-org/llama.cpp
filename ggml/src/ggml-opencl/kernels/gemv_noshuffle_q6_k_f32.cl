@@ -219,26 +219,30 @@ kernel void kernel_gemv_noshuffle_q6_K_f32(
     float2  total_sum = 0.0f;
 
     int line_stride_a = ne01 / 2;
+    // The x-grid is padded to a whole wave, so the tail lanes hold a row past the packed
+    // weight and only the stores below are guarded. Clamp the row every fetch reads; the
+    // lanes stay active, which the sub_group ops in the dequant macros require.
+    int gid_s = min(gid, line_stride_a - 1);
     int block_stride_a = NSUBGROUPS * ne01;
 
     for (int k = grp; k < nb; k += NSUBGROUPS) {
-        reg_d = src0_d[gid + k/8 * line_stride_a];
-        reg_s = as_char4(src0_s[gid + k * line_stride_a]);
+        reg_d = src0_d[gid_s + k/8 * line_stride_a];
+        reg_s = as_char4(src0_s[gid_s + k * line_stride_a]);
 
         if (slid < 4) {
             reg_b.s0123 = read_imagef(src1, 0 + slid*2 + k*8);
             reg_b.s4567 = read_imagef(src1, 1 + slid*2 + k*8);
         }
 
-        reg_a_l.s0 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*0).x;
-        reg_a_l.s1 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*1).x;
-        reg_a_l.s2 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*2).x;
-        reg_a_l.s3 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*3).x;
+        reg_a_l.s0 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*0).x;
+        reg_a_l.s1 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*1).x;
+        reg_a_l.s2 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*2).x;
+        reg_a_l.s3 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*3).x;
 
-        reg_a_h.s0 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*0).x);
-        reg_a_h.s1 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*1).x);
-        reg_a_h.s2 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*2).x);
-        reg_a_h.s3 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*3).x);
+        reg_a_h.s0 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*0).x);
+        reg_a_h.s1 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*1).x);
+        reg_a_h.s2 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*2).x);
+        reg_a_h.s3 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*3).x);
 
 #ifdef VECTOR_SUB_GROUP_BROADCAT
         dequantize_block_acc_bcast_8_hi(total_sum, as_ushort8(reg_a_l), as_uchar8(reg_a_h), reg_d, reg_s, reg_b);
@@ -246,15 +250,15 @@ kernel void kernel_gemv_noshuffle_q6_K_f32(
         dequantize_block_acc_bcast_1_hi(total_sum, as_ushort8(reg_a_l), as_uchar8(reg_a_h), reg_d, reg_s, reg_b);
 #endif // VECTOR_SUB_GROUP_BROADCAT
 
-        reg_a_l.s0 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*4).x;
-        reg_a_l.s1 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*5).x;
-        reg_a_l.s2 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*6).x;
-        reg_a_l.s3 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*7).x;
+        reg_a_l.s0 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*4).x;
+        reg_a_l.s1 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*5).x;
+        reg_a_l.s2 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*6).x;
+        reg_a_l.s3 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*7).x;
 
-        reg_a_h.s0 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*4).x);
-        reg_a_h.s1 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*5).x);
-        reg_a_h.s2 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*6).x);
-        reg_a_h.s3 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*7).x);
+        reg_a_h.s0 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*4).x);
+        reg_a_h.s1 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*5).x);
+        reg_a_h.s2 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*6).x);
+        reg_a_h.s3 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*7).x);
 
 #ifdef VECTOR_SUB_GROUP_BROADCAT
         dequantize_block_acc_bcast_8_lo(total_sum, as_ushort8(reg_a_l), as_uchar8(reg_a_h), reg_d, reg_s, reg_b);
@@ -323,6 +327,10 @@ kernel void kernel_gemv_noshuffle_q6_K_f32_mc3(
 
     int nb = ne00 / 32;
     int line_stride_a  = ne01 / 2;
+    // The x-grid is padded to a whole wave, so the tail lanes hold a row past the packed
+    // weight and only the stores below are guarded. Clamp the row every fetch reads; the
+    // lanes stay active, which the sub_group ops in the dequant macros require.
+    int gid_s = min(gid, line_stride_a - 1);
     int block_stride_a = NSUBGROUPS * ne01;
     int COL_STRIDE     = ne00 / 4;   // float4 pixels per activation column
 
@@ -335,27 +343,27 @@ kernel void kernel_gemv_noshuffle_q6_K_f32_mc3(
     float2  ts0 = 0.0f, ts1 = 0.0f, ts2 = 0.0f;
 
     for (int k = grp; k < nb; k += NSUBGROUPS) {
-        reg_d = src0_d[gid + k/8 * line_stride_a];
-        reg_s = as_char4(src0_s[gid + k * line_stride_a]);
+        reg_d = src0_d[gid_s + k/8 * line_stride_a];
+        reg_s = as_char4(src0_s[gid_s + k * line_stride_a]);
 
         // weights loaded ONCE (hi: blocks 0-3, lo: blocks 4-7), reused x3 cols
-        ql_hi.s0 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*0).x;
-        ql_hi.s1 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*1).x;
-        ql_hi.s2 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*2).x;
-        ql_hi.s3 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*3).x;
-        qh_hi.s0 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*0).x);
-        qh_hi.s1 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*1).x);
-        qh_hi.s2 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*2).x);
-        qh_hi.s3 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*3).x);
+        ql_hi.s0 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*0).x;
+        ql_hi.s1 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*1).x;
+        ql_hi.s2 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*2).x;
+        ql_hi.s3 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*3).x;
+        qh_hi.s0 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*0).x);
+        qh_hi.s1 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*1).x);
+        qh_hi.s2 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*2).x);
+        qh_hi.s3 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*3).x);
 
-        ql_lo.s0 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*4).x;
-        ql_lo.s1 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*5).x;
-        ql_lo.s2 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*6).x;
-        ql_lo.s3 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*7).x;
-        qh_lo.s0 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*4).x);
-        qh_lo.s1 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*5).x);
-        qh_lo.s2 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*6).x);
-        qh_lo.s3 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*7).x);
+        ql_lo.s0 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*4).x;
+        ql_lo.s1 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*5).x;
+        ql_lo.s2 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*6).x;
+        ql_lo.s3 = read_imageui(src0_ql, gid_s + k*block_stride_a + line_stride_a*7).x;
+        qh_lo.s0 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*4).x);
+        qh_lo.s1 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*5).x);
+        qh_lo.s2 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*6).x);
+        qh_lo.s3 = as_ushort(read_imageh(src0_qh, gid_s + k*block_stride_a + line_stride_a*7).x);
 
         // Per-column: load only this column's activation (single reg_b live) ->
         // 1/3 the activation register pressure, cutting the private-mem spill.
