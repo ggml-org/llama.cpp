@@ -141,7 +141,8 @@ bool ggml_backend_tensor_is_bound(const struct ggml_tensor * tensor) {
     if (buffer && buffer->binding) {
         return buffer->binding->is_bound(buffer, tensor);
     }
-    return tensor->data != NULL || (buffer && buffer->size == 0 && ggml_nelements(tensor) == 0);
+    return tensor->data != NULL || (buffer && buffer->size == 0 && ggml_nelements(tensor) == 0 &&
+        !ggml_backend_buft_get_alloc_interface(buffer->buft));
 }
 
 static ggml_backend_buffer_t ggml_backend_tensor_buffer(const ggml_tensor * tensor) {

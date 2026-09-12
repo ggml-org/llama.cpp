@@ -961,6 +961,30 @@ static void test_meta_buffer_type_lifetime() {
     ggml_backend_buffer_set buffers{};
     GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_set(ctx.ctx, buft, &buffers) == GGML_STATUS_FAILED);
     GGML_ASSERT(buffers.buffers == nullptr && buffers.n_buffers == 0);
+
+    auto * empty = ggml_new_tensor_1d(ctx.ctx, GGML_TYPE_F32, 0);
+    ggml_backend_buffer_ptr assignment(ggml_backend_buft_alloc_buffer(buft, 0));
+    empty->buffer = assignment.get();
+    GGML_ASSERT(empty->data == nullptr && !ggml_backend_tensor_is_bound(empty));
+    auto * allocation = ggml_backend_buft_get_alloc_interface(buft);
+    void * preparation = allocation->new_preparation(buft, GGML_BACKEND_BUFFER_USAGE_WEIGHTS, 1, nullptr);
+    GGML_ASSERT(preparation);
+    GGML_ASSERT(allocation->prepare_tensor(preparation, empty) == GGML_STATUS_SUCCESS);
+    auto * simple = allocation->get_tensor(preparation, empty, 0);
+    buffers.buffers = static_cast<ggml_backend_buffer_t *>(malloc(sizeof(ggml_backend_buffer_t)));
+    GGML_ASSERT(buffers.buffers);
+    buffers.n_buffers = 1;
+    buffers.buffers[0] = ggml_backend_buft_alloc_buffer(allocation->get_domain(buft, 0), 0);
+    simple->buffer = buffers.buffers[0];
+    GGML_ASSERT(ggml_backend_buffer_init_tensor(simple->buffer, simple) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(simple->data == nullptr && ggml_backend_tensor_is_bound(simple));
+    ggml_backend_buffer_ptr owner(allocation->materialize(preparation, &buffers, 1));
+    GGML_ASSERT(owner && ggml_backend_buffer_get_size(owner.get()) == 0);
+    GGML_ASSERT(ggml_backend_buffer_init_tensor(owner.get(), empty) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(empty->data == nullptr && ggml_backend_tensor_is_bound(empty));
+    auto * empty_view = ggml_view_1d(ctx.ctx, empty, 0, 0);
+    GGML_ASSERT(ggml_backend_view_init(empty_view) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(empty_view->data == nullptr && ggml_backend_tensor_is_bound(empty_view));
 }
 
 static void test_context_buffer_sets() {
