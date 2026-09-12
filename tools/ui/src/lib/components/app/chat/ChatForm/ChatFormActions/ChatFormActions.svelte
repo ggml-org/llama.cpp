@@ -13,17 +13,17 @@
 	import { setChatFormActionsContext } from '$lib/contexts';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
-	import { chatStore, conversationsStore, settingsStore } from '$lib/stores';
+	import { chatStore, conversationsStore, modelsStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
 		canSend?: boolean;
-		canSubmit?: boolean;
 		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
 		isReasoning?: boolean;
 		isRecording?: boolean;
+		isTranscribing?: boolean;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
@@ -36,12 +36,12 @@
 
 	let {
 		canSend = false,
-		canSubmit = false,
 		class: className = '',
 		disabled = false,
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
+		isTranscribing = false,
 		onFileUpload,
 		onMcpSettingsClick,
 		onMicClick,
@@ -64,8 +64,13 @@
 	let hasAudioAttachments = $derived(
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
+	// text-only active model: mic input is transcribed by another loaded audio model
+	let transcriptionModelId = $derived(hasAudioModality ? null : modelsStore.transcriptionModelId);
+	// keep the button while a recording or transcription is still in flight so it can be stopped
 	let shouldShowRecordButton = $derived(
-		hasAudioModality && !canSubmit && !hasAudioAttachments && currentConfig.autoMicOnEmpty
+		(hasAudioModality || transcriptionModelId !== null) &&
+			currentConfig.autoMicOnEmpty &&
+			(isRecording || isTranscribing || (!canSend && !hasAudioAttachments))
 	);
 
 	let selectorModelRef: ChatFormActionModels | undefined = $state(undefined);
@@ -192,7 +197,7 @@
 		</Button>
 	{/if}
 
-	{#if isLoading && !canSubmit}
+	{#if isLoading}
 		<Button
 			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
 			onclick={onStop}
@@ -206,7 +211,16 @@
 			/>
 		</Button>
 	{:else if shouldShowRecordButton}
-		<ChatFormActionRecord {disabled} {hasAudioModality} {isLoading} {isRecording} {onMicClick} />
+		<ChatFormActionRecord
+			{disabled}
+			{isLoading}
+			{isRecording}
+			{isTranscribing}
+			{onMicClick}
+			transcriptionModelName={transcriptionModelId
+				? modelsStore.toDisplayName(transcriptionModelId)
+				: null}
+		/>
 	{:else}
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}

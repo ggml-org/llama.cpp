@@ -1367,6 +1367,34 @@ export class ChatService {
 		}
 	}
 
+	/**
+	 * Transcribe an audio file via /v1/audio/transcriptions.
+	 * In ROUTER mode, `model` targets a loaded audio-capable model.
+	 */
+	static async transcribeAudio(file: File, model?: string | null): Promise<string> {
+		const formData = new FormData();
+
+		formData.append('file', file);
+
+		if (model) formData.append('model', model);
+
+		const res = await fetch(API_CHAT.TRANSCRIPTIONS, {
+			body: formData,
+			headers: getAuthHeaders(),
+			method: 'POST'
+		});
+
+		if (!res.ok) {
+			const data = await res.json().catch(() => null);
+
+			throw new Error(data?.error?.message ?? `Transcription failed with status ${res.status}`);
+		}
+
+		const data = await res.json();
+
+		return typeof data?.text === 'string' ? data.text : '';
+	}
+
 	// build the replay route url for a stream identity, from is the resume byte offset, omitted
 	// for the cancel route
 	private static buildStreamUrl(streamId: string, from?: number): string {
