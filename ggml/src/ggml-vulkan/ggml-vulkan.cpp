@@ -11218,7 +11218,9 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     uint32_t workgroups_y = (uint32_t)neq2;
     uint32_t workgroups_z = (uint32_t)neq3;
 
-    const bool f32acc = !ctx->device->fp16 || dst->op_params[3] == GGML_PREC_F32 || k->type == GGML_TYPE_BF16;
+    const ggml_prec fa_prec = ggml_prec(dst->op_params[3]);
+    const bool f32acc = !ctx->device->fp16 || k->type == GGML_TYPE_BF16 ||
+        (fa_prec != GGML_PREC_UNDEFINED && fa_prec <= GGML_PREC_F32);
 
     // dequant K/V once into an f16 scratch, reordered KV layout so FA can read without a stride
     auto is_dense_kv_cache = [](const ggml_tensor * t) {

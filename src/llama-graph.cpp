@@ -1514,8 +1514,14 @@ ggml_tensor * llm_graph_context::build_cvec(
 ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur,
-          ggml_tensor * w_s) const {
+          ggml_tensor * w_s,
+        enum ggml_prec   prec) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
+
+    if (prec != GGML_PREC_UNDEFINED) {
+        // Set precision on the base MUL_MAT before an optional scale/LoRA attachment changes the root op.
+        ggml_prec_set_acc(res, prec);
+    }
 
     if (w_s) {
         res = ggml_mul(ctx0, res, w_s);
