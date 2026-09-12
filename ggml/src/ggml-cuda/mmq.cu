@@ -307,6 +307,25 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         return false;
     }
 
+    // Workaround for IQ MMQ producing incorrect results on Blackwell (sm_120),
+    // see https://github.com/ggml-org/llama.cpp/issues/21371.
+    // Fall back to cuBLAS for IQ types; keep MMQ for K-quants.
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_BLACKWELL) {
+        switch (type) {
+            case GGML_TYPE_IQ1_S:
+            case GGML_TYPE_IQ2_XXS:
+            case GGML_TYPE_IQ2_XS:
+            case GGML_TYPE_IQ2_S:
+            case GGML_TYPE_IQ3_XXS:
+            case GGML_TYPE_IQ3_S:
+            case GGML_TYPE_IQ4_XS:
+            case GGML_TYPE_IQ4_NL:
+                return false;
+            default:
+                break;
+        }
+    }
+
     // MMQ tiles require at least 48 KiB per-block shared memory; fall back to BLAS otherwise.
     {
         const int    id    = ggml_cuda_get_device();
