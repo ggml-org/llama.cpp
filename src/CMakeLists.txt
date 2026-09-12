@@ -53,6 +53,8 @@ add_library(llama
             llama-memory-executor.h
             llama-memory-executor-cuda.cpp
             llama-memory-executor-cuda.h
+            llama-memory-workspace.cpp
+            llama-memory-workspace.h
             llama-memory-transition.cpp
             llama-memory-transition.h
             llama-memory-layout.cpp
