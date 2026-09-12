@@ -143,6 +143,11 @@ bool server_http_context::init(const common_params & params) {
     });
 
     srv->set_error_handler([](const httplib::Request &, httplib::Response & res) {
+        // a provider-backed response (e.g. proxied from a child server) already
+        // carries its error body; set_content() on top would conflict with it
+        if (res.content_provider_) {
+            return;
+        }
         if (res.status == 404) {
             res.set_content(
                 safe_json_to_str(json {
