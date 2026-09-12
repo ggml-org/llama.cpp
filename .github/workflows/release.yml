@@ -310,6 +310,160 @@ jobs:
         with:
           key: release-${{ matrix.os }}-vulkan
 
+  ubuntu-cuda:
+    name: ubuntu-cuda (${{ matrix.label }}, ${{ matrix.build }})
+    needs: [check-release, ui-build]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
+    strategy:
+      matrix:
+        include:
+          # label = short version used in artifact names / release body
+          # cuda  = full container image tag
+          - build: 'x64'
+            os: ubuntu-24.04
+            cuda: '12.8.2'
+            label: '12.8'
+            defines: '-DGGML_CUDA_CUB_3DOT2=ON'
+          - build: 'x64'
+            os: ubuntu-24.04
+            cuda: '13.3.1'
+            label: '13.3'
+            defines: ''
+          - build: 'arm64'
+            os: ubuntu-24.04-arm
+            cuda: '13.3.1'
+            label: '13.3'
+            defines: ''
+
+    runs-on: ${{ matrix.os }}
+    container: nvidia/cuda:${{ matrix.cuda }}-devel-ubuntu24.04
+
+    permissions:
+      actions: write
+
+    steps:
+      # the container has no git; install it before checkout so that a real git
+      # repository is created (the get-tag-name action and the build both need it)
+      - name: Install git
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # checkout runs as the host user; in-container steps run as root, so git
+      # refuses to touch a repo it does not own. Mark the workspace as safe.
+      # use the env var: the github.workspace context holds the HOST path,
+      # GITHUB_WORKSPACE the container path
+      - name: Git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Download UI build
+        uses: actions/download-artifact@v7
+        with:
+          name: llama-ui.zip
+          path: tools/ui/dist
+
+      - name: Dependencies
+        id: depends
+        # container jobs default to sh (dash); need bash for the [[ ]] below
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake ninja-build curl libssl-dev jq python3-venv
+          # the container ships GCC 13, which does not know the 'sme' march
+          # feature used by the armv9.2 CPU variant of GGML_CPU_ALL_VARIANTS
+          if [[ "${{ matrix.build }}" == "arm64" ]]; then
+            apt-get install -y --no-install-recommends gcc-14 g++-14
+            echo "CC=gcc-14" >> "$GITHUB_ENV"
+            echo "CXX=g++-14" >> "$GITHUB_ENV"
+          fi
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          key: release-ubuntu-${{ matrix.os }}-cuda-${{ matrix.label }}-${{ matrix.build }}
+          evict-old-files: 1d
+          max-size: "1G"
+
+      - name: Build
+        id: cmake_build
+        # no CMAKE_CUDA_ARCHITECTURES: use the broad default arch set from
+        # ggml/src/ggml-cuda/CMakeLists.txt so the release binary covers many GPUs
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_CUDA=ON \
+            ${{ env.CMAKE_ARGS }} ${{ matrix.defines }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+          name: llama-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+
+      # ship the CUDA runtime libraries the backend links against, mirroring
+      # the windows-cuda cudart zip - extract next to the binaries ($ORIGIN rpath)
+      # NCCL is redistributed here, so its license must accompany the binary
+      # - fetch it from the NVIDIA/nccl tag matching the installed version
+      - name: Pack CUDA runtime
+        id: pack_cuda_runtime
+        run: |
+          major="${{ matrix.label }}"
+          major="${major%%.*}"
+          mkdir -p ./cudart
+          # libnccl ships in the apt triplet dir, not under /usr/local/cuda
+          so="$(find /usr -name libnccl.so.2 | head -n1)"
+          # cp -L dereferences the SONAME symlinks into plain files, so the
+          # tarball holds exactly 4 files with no versioned duplicates
+          cp -L /usr/local/cuda/lib64/libcudart.so.${major} ./cudart/
+          cp -L /usr/local/cuda/lib64/libcublas.so.${major} ./cudart/
+          cp -L /usr/local/cuda/lib64/libcublasLt.so.${major} ./cudart/
+          cp -L "${so}" ./cudart/
+          # license: derive the NCCL version from the installed nccl.h and
+          # fetch LICENSE.txt from the matching tag - no fallback, a missing
+          # license must fail the release build
+          hdr="$(dirname "${so}")/../../include/nccl.h"
+          ver="$(grep -oE '#define NCCL_(MAJOR|MINOR|PATCH) [0-9]+' "$hdr" \
+                 | awk '{printf "%s.", $3}' | sed 's/.$//')"
+          tag="v${ver}-1"
+          echo "installed NCCL version: ${ver} (tag ${tag})"
+          curl -fsSL --retry 3 --retry-delay 2 -o ./cudart/LICENSE.nccl.txt \
+               "https://raw.githubusercontent.com/NVIDIA/nccl/${tag}/LICENSE.txt"
+          test -s ./cudart/LICENSE.nccl.txt
+          tar -czvf cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz --transform "s,^\.,cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}," -C ./cudart .
+
+      - name: Upload CUDA runtime
+        uses: actions/upload-artifact@v6
+        with:
+          path: cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+          name: cudart-llama-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-${{ matrix.os }}-cuda-${{ matrix.label }}-${{ matrix.build }}
+
   android-arm64:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
@@ -1572,6 +1726,7 @@ jobs:
       - ubuntu-24-rocm
       - ubuntu-cpu
       - ubuntu-vulkan
+      - ubuntu-cuda
       - ubuntu-24-openvino
       - ubuntu-24-sycl
       - android-arm64
@@ -1703,6 +1858,9 @@ jobs:
             - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
             - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
+            - [Ubuntu x64 (CUDA 12)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-12.8-x64.tar.gz) - [CUDA 12.8 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-12.8-x64.tar.gz)
+            - [Ubuntu x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-x64.tar.gz) - [CUDA 13.3 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-x64.tar.gz)
+            - [Ubuntu arm64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-arm64.tar.gz) - [CUDA 13.3 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-arm64.tar.gz)
             - [Ubuntu x64 (ROCm 10.0)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-10.0-x64.tar.gz)
             - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
             - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)
