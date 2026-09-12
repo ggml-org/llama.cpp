@@ -1,0 +1,274 @@
+// Defines GGML's block_q8_1_x4 physical-layout accessors and packs contiguous
+// F32 activations into that layout. Four logical 32-element Q8_1 blocks share
+// one 144-byte physical group:
+//
+//   struct block_q8_1_x4 {
+//     f16 ds[4][2];   // per-block (scale, quantized_sum * scale)
+//     i32 qs[4][8];   // four signed i8 values per packed word
+//   };
+config.decl @ggml.quantize_q8_1_x4.group_capacity : %value: index where [range(%value, 1, 524288)]
+
+// Loads one logical 32-element Q8_1 block from the four-way physical packing.
+// `row_byte_base` addresses the first x4 group for one activation row.
+func.def inline @ggml_q8_1_x4_block(%q8_input: buffer, %row_byte_base: offset, %q8_block: index) -> (vector<32xi8>, f32, f32) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %group_bytes = index.constant 144 : offset
+  %payload_byte_add = index.constant 16 : offset
+  %group = index.div %q8_block, %c4 : index
+  %inner0 = index.rem %q8_block, %c4 : index
+  %inner = index.assume %inner0 [range(%inner0, 0, 3)] : index
+  %group_byte_add = index.scale %group, %group_bytes : index, offset -> offset
+  %group_byte_base = index.add %row_byte_base, %group_byte_add : offset
+  %payload_byte_base = index.add %group_byte_base, %payload_byte_add : offset
+  %ds_view = buffer.view %q8_input[%group_byte_base] : buffer -> view<8xf16>
+  %payload_view = buffer.view %q8_input[%payload_byte_base] : buffer -> view<32xi32>
+  %d_index = index.mul %inner, %c2 : index
+  %s_index = index.add %d_index, %c1 : index
+  %word_index = index.mul %inner, %c8 : index
+  %d_f16 = view.load %ds_view[%d_index] : view<8xf16> -> f16
+  %s_f16 = view.load %ds_view[%s_index] : view<8xf16> -> f16
+  %words = vector.load %payload_view[%word_index] : view<32xi32> -> vector<8xi32>
+  %values = vector.bitcast %words : vector<8xi32> to vector<32xi8>
+  %d = scalar.extf %d_f16 : f16 to f32
+  %s = scalar.extf %s_f16 : f16 to f32
+  func.return %values, %d, %s : vector<32xi8>, f32, f32
+}
+
+// Loads one packed four-value word and its block scale. Dot-product kernels
+// use this narrower form so a lane does not load the other seven words owned
+// by its subgroup peers.
+func.def inline @ggml_q8_1_x4_word(%q8_input: buffer, %row_byte_base: offset, %q8_block: index, %word_in_block: index) -> (vector<4xi8>, f32) {
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %group_bytes = index.constant 144 : offset
+  %payload_byte_add = index.constant 16 : offset
+  %group = index.div %q8_block, %c4 : index
+  %inner0 = index.rem %q8_block, %c4 : index
+  %inner = index.assume %inner0 [range(%inner0, 0, 3)] : index
+  %word0 = index.assume %word_in_block [range(%word_in_block, 0, 7)] : index
+  %group_byte_add = index.scale %group, %group_bytes : index, offset -> offset
+  %group_byte_base = index.add %row_byte_base, %group_byte_add : offset
+  %payload_byte_base = index.add %group_byte_base, %payload_byte_add : offset
+  %ds_view = buffer.view %q8_input[%group_byte_base] : buffer -> view<8xf16>
+  %payload_view = buffer.view %q8_input[%payload_byte_base] : buffer -> view<32xi32>
+  %d_index = index.mul %inner, %c2 : index
+  %inner_word_base = index.mul %inner, %c8 : index
+  %word_index = index.add %inner_word_base, %word0 : index
+  %d_f16 = view.load %ds_view[%d_index] : view<8xf16> -> f16
+  %packed = vector.load %payload_view[%word_index] : view<32xi32> -> vector<1xi32>
+  %values = vector.bitcast %packed : vector<1xi32> to vector<4xi8>
+  %d = scalar.extf %d_f16 : f16 to f32
+  func.return %values, %d : vector<4xi8>, f32
+}
+
+// Packs one explicit physical group. Callers provide the complete physical
+// group domain and an in-range ordinal, and guarantee that one complete
+// 32-lane wave executes after all 128 source values are visible. The uniform
+// publication predicate suppresses only destination writes so every lane still
+// reaches the workgroup barriers.
+func.template<ggml.quantize_q8_1_x4.group_body> device @ggml_quantize_q8_1_x4_group_body(%publish_output: i1, %group_count0: index, %group0: index, %input: buffer, %output: buffer) {
+  %group_count, %group = index.assume %group_count0, %group0 [range(%group_count0, 1, 524288), lt(%group0, %group_count0)] : index, index
+  %lane = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c32 = index.constant 32 : index
+  %c128 = index.constant 128 : index
+  %group_bytes = index.constant 144 : offset
+  %payload_byte_add = index.constant 16 : offset
+  %scratch_d_byte_add = index.constant 128 : offset
+  %scratch_bytes = index.constant 144 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c1_f32 = scalar.constant 1.0 : f32
+  %c127 = scalar.constant 127.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %launched_element_count = index.mul %group_count, %c128 : index
+  %block_in_group0 = index.div %lane, %c8 : index
+  %block_in_group = index.assume %block_in_group0 [range(%block_in_group0, 0, 3)] : index
+  %word_in_block0 = index.rem %lane, %c8 : index
+  %word_in_block = index.assume %word_in_block0 [range(%word_in_block0, 0, 7)] : index
+  %group_element_base = index.mul %group, %c128 : index
+  %block_element_add = index.mul %block_in_group, %c32 : index
+  %block_word_add = index.mul %block_in_group, %c8 : index
+  %word_element_add = index.mul %word_in_block, %c4 : index
+  %input_block_base = index.add %group_element_base, %block_element_add : index
+  %input_index = index.add %input_block_base, %word_element_add : index
+  %input_noalias, %output_noalias = buffer.assume.noalias %input, %output : buffer, buffer
+  %input_view = buffer.view %input_noalias[%c0_offset] : buffer -> view<[%launched_element_count]xf32>
+  %input_values = vector.load %input_view[%input_index] : view<[%launched_element_count]xf32> -> vector<4xf32>
+  %absolute_values = vector.absf %input_values : vector<4xf32>
+  %thread_max = vector.reduce<maxnumf> %absolute_values, %c0_f32 : vector<4xf32>, f32
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<32xf32>
+  %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<4xf32>
+  view.store %thread_max, %scratch_values[%lane] : f32, view<32xf32>
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %is_cohort_leader = index.cmp eq, %word_in_block, %c0 : index
+  scf.if %is_cohort_leader {
+    %cohort_base = index.mul %block_in_group, %c8 : index
+    %cohort_maxima = vector.load %scratch_values[%cohort_base] : view<32xf32> -> vector<8xf32>
+    %amax = vector.reduce<maxnumf> %cohort_maxima, %c0_f32 : vector<8xf32>, f32
+    %d = scalar.divf %amax, %c127 : f32
+    view.store %d, %scratch_d[%block_in_group] : f32, view<4xf32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %d = view.load %scratch_d[%block_in_group] : view<4xf32> -> f32
+  %d_nonzero = scalar.cmpf one, %d, %c0_f32 : f32
+  %d_inverse = scf.if %d_nonzero -> (f32) {
+    %inverse = scalar.divf %c1_f32, %d : f32
+    scf.yield %inverse : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %d_inverse_vector = vector.splat %d_inverse : vector<4xf32>
+  %scaled_values = vector.mulf %input_values, %d_inverse_vector : vector<4xf32>
+  %rounded_values = vector.roundf %scaled_values : vector<4xf32>
+  %quantized_values = vector.fptosi %rounded_values : vector<4xf32> to vector<4xi8>
+  %packed_word = vector.bitcast %quantized_values : vector<4xi8> to vector<1xi32>
+  %group_byte_offset = index.scale %group, %group_bytes : index, offset -> offset
+  %payload_byte_offset = index.add %group_byte_offset, %payload_byte_add : offset
+  %group_ds = buffer.view %output_noalias[%group_byte_offset] : buffer -> view<8xf16>
+  %group_qs = buffer.view %output_noalias[%payload_byte_offset] : buffer -> view<32xi32>
+  %packed_word_index0 = index.add %block_word_add, %word_in_block : index
+  %packed_word_index = index.assume %packed_word_index0 [range(%packed_word_index0, 0, 31)] : index
+  scf.if %publish_output {
+    vector.store %packed_word, %group_qs[%packed_word_index] : vector<1xi32>, view<32xi32>
+  }
+  %thread_sum = vector.reduce<addf> %rounded_values, %c0_f32 : vector<4xf32>, f32
+  view.store %thread_sum, %scratch_values[%lane] : f32, view<32xf32>
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %publishes_metadata = scalar.andi %is_cohort_leader, %publish_output : i1
+  scf.if %publishes_metadata {
+    %cohort_base = index.mul %block_in_group, %c8 : index
+    %cohort_sums = vector.load %scratch_values[%cohort_base] : view<32xf32> -> vector<8xf32>
+    %quantized_sum = vector.reduce<addf> %cohort_sums, %c0_f32 : vector<8xf32>, f32
+    %s = scalar.mulf %quantized_sum, %d : f32
+    %d_f16 = scalar.fptrunc %d : f32 to f16
+    %s_f16 = scalar.fptrunc %s : f32 to f16
+    %ds_index = index.mul %block_in_group, %c2 : index
+    view.store %d_f16, %group_ds[%ds_index] : f16, view<8xf16>
+    %s_index = index.add %ds_index, %c1 : index
+    view.store %s_f16, %group_ds[%s_index] : f16, view<8xf16>
+  }
+  func.return
+}
+
+// A 32-lane workgroup owns one physical group. Each eight-lane cohort loads
+// four values, computes one Q8_1 block, and writes disjoint metadata and packed
+// words. The LDS reductions make the independent eight-lane cohorts explicit.
+kernel.def @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) {
+  %group_capacity = config.get @ggml.quantize_q8_1_x4.group_capacity : index
+  %unit = index.constant 1 : index
+  %workgroup_size = index.constant 32 : index
+  kernel.launch.config workgroups(%group_capacity, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer) {
+  %group_capacity = config.get @ggml.quantize_q8_1_x4.group_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %bounded_input_size = index.assume %input_size [range(%input_size, 128, 32768), mul(%input_size, 128)] : index
+  %elements_per_group = index.constant 128 : index
+  %c0 = index.constant 0 : index
+  %element_count = index.mul %bounded_token_count, %bounded_input_size : index
+  %group_count0 = index.div %element_count, %elements_per_group : index
+  %group_count = index.assume %group_count0 [range(%group_count0, 1, 524288), le(%group_count0, %group_capacity)] : index
+  %group0 = kernel.workgroup.id<x> : index
+  %valid_group = index.cmp ult, %group0, %group_count : index
+  %safe_group = scf.select %valid_group, %group0, %c0 : index
+  %group = index.assume %safe_group [lt(%safe_group, %group_count)] : index
+  func.apply<ggml.quantize_q8_1_x4.group_body>(%valid_group, %group_count, %group, %input, %output) : (i1, index, index, buffer, buffer)
+  kernel.return
+}
+
+// This check-only inspector keeps the production packer ABI exact while
+// exposing packed words and heterogeneous metadata as comparable tensors.
+kernel.def @ggml_q8_1_x4_inspect_one_group() {
+  %unit = index.constant 1 : index
+  %workgroup_size = index.constant 32 : index
+  kernel.launch.config workgroups(%unit, %unit, %unit) workgroup_size(%workgroup_size, %unit, %unit) : index
+} launch(%packed: buffer, %words: buffer, %d_values: buffer, %s_values: buffer) {
+  %lane = kernel.workitem.id<x> : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %payload_offset = index.constant 16 : offset
+  %c0_offset = index.constant 0 : offset
+  %packed_ds = buffer.view %packed[%c0_offset] : buffer -> view<8xf16>
+  %packed_words = buffer.view %packed[%payload_offset] : buffer -> view<32xi32>
+  %word_output = buffer.view %words[%c0_offset] : buffer -> view<32xi32>
+  %d_output = buffer.view %d_values[%c0_offset] : buffer -> view<4xf32>
+  %s_output = buffer.view %s_values[%c0_offset] : buffer -> view<4xf32>
+  %word = view.load %packed_words[%lane] : view<32xi32> -> i32
+  view.store %word, %word_output[%lane] : i32, view<32xi32>
+  %is_metadata_lane = index.cmp ult, %lane, %c4 : index
+  scf.if %is_metadata_lane {
+    %ds_index = index.mul %lane, %c2 : index
+    %s_index = index.add %ds_index, %c1 : index
+    %d_f16 = view.load %packed_ds[%ds_index] : view<8xf16> -> f16
+    %s_f16 = view.load %packed_ds[%s_index] : view<8xf16> -> f16
+    %d = scalar.extf %d_f16 : f16 to f32
+    %s = scalar.extf %s_f16 : f16 to f32
+    view.store %d, %d_output[%lane] : f32, view<4xf32>
+    view.store %s, %s_output[%lane] : f32, view<4xf32>
+  }
+  kernel.return
+}
+
+check.case public @ggml_quantize_q8_1_x4_f32_nonzero_case {
+  %token_count = check.literal value(1) : index
+  %input_size = check.literal value(128) : index
+  %positive_input = check.generate.fill value(1.0) : tensor<128xf32>
+  %negative_input = check.generate.fill value(-1.0) : tensor<128xf32>
+  %positive_packed = check.generate.fill value(0) : tensor<144xi8>
+  %negative_packed = check.generate.fill value(0) : tensor<144xi8>
+  %positive_words = check.generate.fill value(0) : tensor<32xi32>
+  %negative_words = check.generate.fill value(0) : tensor<32xi32>
+  %positive_d = check.generate.fill value(0.0) : tensor<4xf32>
+  %negative_d = check.generate.fill value(0.0) : tensor<4xf32>
+  %positive_s = check.generate.fill value(0.0) : tensor<4xf32>
+  %negative_s = check.generate.fill value(0.0) : tensor<4xf32>
+  %expected_positive_words = check.generate.fill value(2139062143) : tensor<32xi32>
+  %expected_negative_words = check.generate.fill value(-2122219135) : tensor<32xi32>
+  %expected_d = check.generate.fill value(0.00787353515625) : tensor<4xf32>
+  %expected_positive_s = check.generate.fill value(32.0) : tensor<4xf32>
+  %expected_negative_s = check.generate.fill value(-32.0) : tensor<4xf32>
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %positive_input, %positive_packed) : [index, index](index, index, tensor<128xf32>, tensor<144xi8>)
+  kernel.launch @ggml_q8_1_x4_inspect_one_group(%positive_packed, %positive_words, %positive_d, %positive_s) : (tensor<144xi8>, tensor<32xi32>, tensor<4xf32>, tensor<4xf32>)
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %negative_input, %negative_packed) : [index, index](index, index, tensor<128xf32>, tensor<144xi8>)
+  kernel.launch @ggml_q8_1_x4_inspect_one_group(%negative_packed, %negative_words, %negative_d, %negative_s) : (tensor<144xi8>, tensor<32xi32>, tensor<4xf32>, tensor<4xf32>)
+  check.expect.equal actual(%positive_words) expected(%expected_positive_words) : tensor<32xi32>
+  check.expect.equal actual(%negative_words) expected(%expected_negative_words) : tensor<32xi32>
+  check.expect.close actual(%positive_d) expected(%expected_d) atol(0.0) rtol(0.0) nan(same) : tensor<4xf32>
+  check.expect.close actual(%negative_d) expected(%expected_d) atol(0.0) rtol(0.0) nan(same) : tensor<4xf32>
+  check.expect.close actual(%positive_s) expected(%expected_positive_s) atol(0.0) rtol(0.0) nan(same) : tensor<4xf32>
+  check.expect.close actual(%negative_s) expected(%expected_negative_s) atol(0.0) rtol(0.0) nan(same) : tensor<4xf32>
+  check.return
+}
+
+check.case public @ggml_quantize_q8_1_x4_f32_benchmark_case {
+  %token_count = check.param.choice values([1, 4, 8, 17, 32, 63, 128, 129, 512]) name("token_count") : index
+  %input_size = check.literal value(2048) : index
+  %input = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
+  %packed = check.generate.fill value(1) : tensor<[%token_count]x2304xi8>
+  %expected = check.generate.fill value(0) : tensor<[%token_count]x2304xi8>
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %input, %packed) : [index, index](index, index, tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2304xi8>)
+  check.expect.equal actual(%packed) expected(%expected) : tensor<[%token_count]x2304xi8>
+  check.return
+}
+
+check.benchmark<@ggml_quantize_q8_1_x4_f32_nonzero_case> @ggml_quantize_q8_1_x4_f32_small
+
+check.benchmark<@ggml_quantize_q8_1_x4_f32_benchmark_case> @ggml_quantize_q8_1_x4_f32_decode {token_count = 1}
+
+check.benchmark<@ggml_quantize_q8_1_x4_f32_benchmark_case> @ggml_quantize_q8_1_x4_f32_small_batch_8 {token_count = 8}
+
+check.benchmark<@ggml_quantize_q8_1_x4_f32_benchmark_case> @ggml_quantize_q8_1_x4_f32_prefill_32 {token_count = 32}
+
+check.benchmark<@ggml_quantize_q8_1_x4_f32_benchmark_case> @ggml_quantize_q8_1_x4_f32_prefill_128 {token_count = 128}
+
+check.benchmark<@ggml_quantize_q8_1_x4_f32_benchmark_case> @ggml_quantize_q8_1_x4_f32_prefill_512 {token_count = 512}

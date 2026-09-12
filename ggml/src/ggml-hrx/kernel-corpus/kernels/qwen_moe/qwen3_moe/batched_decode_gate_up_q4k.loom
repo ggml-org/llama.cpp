@@ -1,0 +1,315 @@
+// Expert-grouped batched-decode gate/up consumers for raw GGUF Q4_K weights.
+//
+// The assignment producer owns routing and publishes expert-contiguous
+// assignment ordinals plus aligned descriptors. This file owns row-count
+// schedules that consume those descriptors without inspecting route IDs. The
+// first provider is exact M_e=2: each wave reuses one expert/channel weight
+// row across two independently quantized activation rows and scatters the
+// fused SwiGLU results back to their original [token][route] assignments.
+config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 32, 512), mul(%value, 32)]
+
+config.decl @qwen3_moe.router.route_count : %value: index where [range(%value, 1, 32)]
+
+config.decl @qwen3_moe.routed_gate_up.input_size : %value: index where [range(%value, 512, 32768), mul(%value, 512)]
+
+config.decl @qwen3_moe.routed_gate_up.expert_count : %value: index where [range(%value, 1, 512)]
+
+config.decl @qwen3_moe.routed_gate_up.route_count : %value: index where [range(%value, 1, 8)]
+
+config.decl @qwen3_moe.routed_gate_up.output_size : %value: index where [range(%value, 1, 4096)]
+
+config.decl @qwen3_moe.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+// Static fallback capacity for the exact-two-row queue. Device-side indirect
+// launch replaces this upper bound with the producer's exact queue count.
+config.decl @qwen3_moe.batched_decode.rows2_descriptor_capacity : %value: index where [range(%value, 1, 512)]
+
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+
+func.decl @qwen3_moe_q4k_chunk_pair_global(%weight: buffer, %row_byte_base: offset, %q4_block: index, %q4_group_pair: index, %q4_half: index, %header_words: vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32)
+
+func.decl @qwen3_moe_q4k_q8_1_dot(%q4_values: vector<16xi8>, %d_scale: f32, %dmin_scale: f32, %q8_values: vector<16xi8>, %q8_d: f32, %q8_s: f32) -> (f32)
+
+func.decl @qwen3_moe_unpack_batched_decode_expert_descriptor(%descriptor: vector<4xi32>) -> (index, index, index)
+
+kernel.decl @qwen3_moe_build_batched_decode_expert_dispatch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index) launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %route_ids: buffer, %assignment_ordinals: buffer, %queue_counts: buffer, %queue_descriptors: buffer)
+
+kernel.decl @qwen3_moe_routed_gate_up_swiglu_q4k_q8(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index) launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %output_size: index, %q8_input: buffer, %route_ids: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer)
+
+// Contracts one expert/channel Q4_K row against two independently quantized
+// activation rows. Splitting gate and up into separate contractions keeps each
+// recurrence small while preserving the important invariant: every weight
+// byte loaded by this helper contributes to both rows.
+func.def inline @qwen3_moe_batched_decode_q4k_rows2_lane(%input_size: index, %weight: buffer, %q8_input: buffer, %weight_row_byte_base: offset, %q8_row0_byte_base: offset, %q8_row1_byte_base: offset, %lane: index) -> (f32, f32) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c1023 = index.constant 1023 : index
+  %c1024 = index.constant 1024 : index
+  %q4_block_bytes = index.constant 144 : offset
+  %q8_group_bytes = index.constant 144 : offset
+  %q8_payload_byte_add = index.constant 16 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %q4_block_count = index.div %input_size, %c256 : index
+  %q8_group_count = index.div %input_size, %c128 : index
+  %padded_input_size = index.add %input_size, %c1023 : index
+  %iteration_count = index.div %padded_input_size, %c1024 : index
+  %q4_group_pair0 = index.div %lane, %c2 : index
+  %q4_group_pair1 = index.rem %q4_group_pair0, %c4 : index
+  %q4_group_pair = index.assume %q4_group_pair1 [range(%q4_group_pair1, 0, 3)] : index
+  %q4_half0 = index.rem %lane, %c2 : index
+  %q4_half = index.assume %q4_half0 [range(%q4_half0, 0, 1)] : index
+  %lane_q4_block = index.div %lane, %c8 : index
+  %q8_group_in_block0 = index.div %q4_group_pair, %c2 : index
+  %q8_group_in_block = index.assume %q8_group_in_block0 [range(%q8_group_in_block0, 0, 1)] : index
+  %pair_in_q8_group0 = index.rem %q4_group_pair, %c2 : index
+  %pair_in_q8_group = index.assume %pair_in_q8_group0 [range(%pair_in_q8_group0, 0, 1)] : index
+  %q8_low_inner_block0 = index.mul %pair_in_q8_group, %c2 : index
+  %q8_low_inner_block = index.assume %q8_low_inner_block0 [range(%q8_low_inner_block0, 0, 2)] : index
+  %q8_high_inner_block0 = index.add %q8_low_inner_block, %c1 : index
+  %q8_high_inner_block = index.assume %q8_high_inner_block0 [range(%q8_high_inner_block0, 1, 3)] : index
+  %q8_half_word_add = index.mul %q4_half, %c4 : index
+  %q8_low_inner_word_base = index.mul %q8_low_inner_block, %c8 : index
+  %q8_low_word_index0 = index.add %q8_low_inner_word_base, %q8_half_word_add : index
+  %q8_low_word_index = index.assume %q8_low_word_index0 [range(%q8_low_word_index0, 0, 20)] : index
+  %q8_high_inner_word_base = index.mul %q8_high_inner_block, %c8 : index
+  %q8_high_word_index0 = index.add %q8_high_inner_word_base, %q8_half_word_add : index
+  %q8_high_word_index = index.assume %q8_high_word_index0 [range(%q8_high_word_index0, 8, 28)] : index
+  %q8_low_ds_index0 = index.mul %q8_low_inner_block, %c2 : index
+  %q8_low_ds_index = index.assume %q8_low_ds_index0 [range(%q8_low_ds_index0, 0, 4)] : index
+
+  %row0_acc, %row1_acc = scf.for %iteration = [%c0 to %iteration_count step %c1](%row0_iter = %c0_f32 : f32, %row1_iter = %c0_f32 : f32) -> (f32, f32) unroll {
+    %iteration_q4_block = index.mul %iteration, %c4 : index
+    %q4_block0 = index.add %iteration_q4_block, %lane_q4_block : index
+    %valid_q4_block = index.cmp ult, %q4_block0, %q4_block_count : index
+    %row0_contribution, %row1_contribution = scf.if %valid_q4_block -> (f32, f32) {
+      %q4_block, %bounded_q4_block_count = index.assume %q4_block0, %q4_block_count [lt(%q4_block0, %q4_block_count)] : index, index
+      %q8_block_group_base = index.mul %q4_block, %c2 : index
+      %q8_group0 = index.add %q8_block_group_base, %q8_group_in_block : index
+      %q8_group, %bounded_q8_group_count = index.assume %q8_group0, %q8_group_count [lt(%q8_group0, %q8_group_count)] : index, index
+      %q8_group_byte_add = index.scale %q8_group, %q8_group_bytes : index, offset -> offset
+      %q8_group0_byte_base = index.add %q8_row0_byte_base, %q8_group_byte_add : offset
+      %q8_group1_byte_base = index.add %q8_row1_byte_base, %q8_group_byte_add : offset
+      %q8_payload0_byte_base = index.add %q8_group0_byte_base, %q8_payload_byte_add : offset
+      %q8_payload1_byte_base = index.add %q8_group1_byte_base, %q8_payload_byte_add : offset
+      %q8_ds0_view = buffer.view %q8_input[%q8_group0_byte_base] : buffer -> view<8xf16>
+      %q8_ds1_view = buffer.view %q8_input[%q8_group1_byte_base] : buffer -> view<8xf16>
+      %q8_words0_view = buffer.view %q8_input[%q8_payload0_byte_base] : buffer -> view<32xi32>
+      %q8_words1_view = buffer.view %q8_input[%q8_payload1_byte_base] : buffer -> view<32xi32>
+      %q8_ds0 = vector.load %q8_ds0_view[%q8_low_ds_index] : view<8xf16> -> vector<4xf16>
+      %q8_ds1 = vector.load %q8_ds1_view[%q8_low_ds_index] : view<8xf16> -> vector<4xf16>
+      %q8_low_d0_f16 = vector.extract %q8_ds0[0] : vector<4xf16> -> f16
+      %q8_low_s0_f16 = vector.extract %q8_ds0[1] : vector<4xf16> -> f16
+      %q8_high_d0_f16 = vector.extract %q8_ds0[2] : vector<4xf16> -> f16
+      %q8_high_s0_f16 = vector.extract %q8_ds0[3] : vector<4xf16> -> f16
+      %q8_low_d1_f16 = vector.extract %q8_ds1[0] : vector<4xf16> -> f16
+      %q8_low_s1_f16 = vector.extract %q8_ds1[1] : vector<4xf16> -> f16
+      %q8_high_d1_f16 = vector.extract %q8_ds1[2] : vector<4xf16> -> f16
+      %q8_high_s1_f16 = vector.extract %q8_ds1[3] : vector<4xf16> -> f16
+      %q8_low_d0 = scalar.extf %q8_low_d0_f16 : f16 to f32
+      %q8_low_s0 = scalar.extf %q8_low_s0_f16 : f16 to f32
+      %q8_high_d0 = scalar.extf %q8_high_d0_f16 : f16 to f32
+      %q8_high_s0 = scalar.extf %q8_high_s0_f16 : f16 to f32
+      %q8_low_d1 = scalar.extf %q8_low_d1_f16 : f16 to f32
+      %q8_low_s1 = scalar.extf %q8_low_s1_f16 : f16 to f32
+      %q8_high_d1 = scalar.extf %q8_high_d1_f16 : f16 to f32
+      %q8_high_s1 = scalar.extf %q8_high_s1_f16 : f16 to f32
+      %q8_low_words0 = vector.load %q8_words0_view[%q8_low_word_index] : view<32xi32> -> vector<4xi32>
+      %q8_high_words0 = vector.load %q8_words0_view[%q8_high_word_index] : view<32xi32> -> vector<4xi32>
+      %q8_low_words1 = vector.load %q8_words1_view[%q8_low_word_index] : view<32xi32> -> vector<4xi32>
+      %q8_high_words1 = vector.load %q8_words1_view[%q8_high_word_index] : view<32xi32> -> vector<4xi32>
+      %q8_low_values0 = vector.bitcast %q8_low_words0 : vector<4xi32> to vector<16xi8>
+      %q8_high_values0 = vector.bitcast %q8_high_words0 : vector<4xi32> to vector<16xi8>
+      %q8_low_values1 = vector.bitcast %q8_low_words1 : vector<4xi32> to vector<16xi8>
+      %q8_high_values1 = vector.bitcast %q8_high_words1 : vector<4xi32> to vector<16xi8>
+      %q4_block_byte_add = index.scale %q4_block, %q4_block_bytes : index, offset -> offset
+      %q4_block_byte_base = index.add %weight_row_byte_base, %q4_block_byte_add : offset
+      %header_view = buffer.view %weight[%q4_block_byte_base] : buffer -> view<4xi32>
+      %header_words = vector.load %header_view[0] : view<4xi32> -> vector<4xi32>
+      %q4_low, %low_d_scale, %low_dmin_scale, %q4_high, %high_d_scale, %high_dmin_scale = func.call @qwen3_moe_q4k_chunk_pair_global(%weight, %weight_row_byte_base, %q4_block, %q4_group_pair, %q4_half, %header_words) : (buffer, offset, index, index, index, vector<4xi32>) -> (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32)
+      %row0_low = func.call @qwen3_moe_q4k_q8_1_dot(%q4_low, %low_d_scale, %low_dmin_scale, %q8_low_values0, %q8_low_d0, %q8_low_s0) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
+      %row0_high = func.call @qwen3_moe_q4k_q8_1_dot(%q4_high, %high_d_scale, %high_dmin_scale, %q8_high_values0, %q8_high_d0, %q8_high_s0) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
+      %row1_low = func.call @qwen3_moe_q4k_q8_1_dot(%q4_low, %low_d_scale, %low_dmin_scale, %q8_low_values1, %q8_low_d1, %q8_low_s1) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
+      %row1_high = func.call @qwen3_moe_q4k_q8_1_dot(%q4_high, %high_d_scale, %high_dmin_scale, %q8_high_values1, %q8_high_d1, %q8_high_s1) : (vector<16xi8>, f32, f32, vector<16xi8>, f32, f32) -> (f32)
+      %row0_pair = scalar.addf %row0_low, %row0_high : f32
+      %row1_pair = scalar.addf %row1_low, %row1_high : f32
+      scf.yield %row0_pair, %row1_pair : f32, f32
+    } else {
+      scf.yield %c0_f32, %c0_f32 : f32, f32
+    }
+    %row0_next = scalar.addf %row0_iter, %row0_contribution : f32
+    %row1_next = scalar.addf %row1_iter, %row1_contribution : f32
+    scf.yield %row0_next, %row1_next : f32, f32
+  }
+  func.return %row0_acc, %row1_acc : f32, f32
+}
+
+amdgpu.target<gfx11-generic> @qwen3_moe_batched_decode_gate_up_gfx11_wave32 {subgroup_size = 32}
+
+// Processes the exact-two-row descriptor queue. The static launch covers a
+// config-derived safe descriptor capacity and guards inactive workgroups. A
+// composed device launcher instead supplies the exact descriptor count as
+// both launch geometry and an ABI fact.
+kernel.def target(@qwen3_moe_batched_decode_gate_up_gfx11_wave32) @qwen3_moe_batched_decode_gate_up_q4k_rows2(%descriptor_count: index, %queue_ordinal: index, %token_count: index, %route_count: index, %expert_count: index, %output_size: index) {
+  %configured_output_size = config.get @qwen3_moe.routed_gate_up.output_size : index
+  %descriptor_capacity = config.get @qwen3_moe.batched_decode.rows2_descriptor_capacity : index
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %workgroup_size = index.constant 128 : index
+  %padded_output_size = index.add %configured_output_size, %c3 : index
+  %channel_workgroup_count = index.div %padded_output_size, %c4 : index
+  kernel.launch.config workgroups(%channel_workgroup_count, %descriptor_capacity, %c1) workgroup_size(%workgroup_size, %c1, %c1) : index
+} launch(%descriptor_count: index, %queue_ordinal: index, %token_count: index, %route_count: index, %expert_count: index, %output_size: index, %queue_descriptors: buffer, %assignment_ordinals: buffer, %q8_input: buffer, %gate_weight: buffer, %up_weight: buffer, %output: buffer) {
+  %configured_token_capacity0 = config.get @qwen3_moe.workload.token_capacity : index
+  %bounded_token_count, %configured_token_capacity = index.assume %token_count, %configured_token_capacity0 [range(%token_count, 1, 2048), eq(%token_count, %configured_token_capacity0)] : index, index
+  %configured_route_count0 = config.get @qwen3_moe.router.route_count : index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 32), eq(%route_count, %configured_route_count0)] : index, index
+  %configured_expert_count0 = config.get @qwen3_moe.router.expert_count : index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 32, 512), eq(%expert_count, %configured_expert_count0)] : index, index
+  %configured_weight_expert_count0 = config.get @qwen3_moe.routed_gate_up.expert_count : index
+  %configured_weight_expert_count, %model_expert_count = index.assume %configured_weight_expert_count0, %configured_expert_count [eq(%configured_weight_expert_count0, %configured_expert_count)] : index, index
+  %configured_output_size0 = config.get @qwen3_moe.routed_gate_up.output_size : index
+  %bounded_output_size, %configured_output_size = index.assume %output_size, %configured_output_size0 [range(%output_size, 1, 4096), eq(%output_size, %configured_output_size0)] : index, index
+  %bounded_queue_ordinal = index.assume %queue_ordinal [range(%queue_ordinal, 0, 3)] : index
+  %input_size = config.get @qwen3_moe.routed_gate_up.input_size : index
+  %descriptor_ordinal0 = kernel.workgroup.id<y> : index
+  %channel_workgroup = kernel.workgroup.id<x> : index
+  %subgroup = kernel.subgroup.id : index
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c1_byte = index.constant 1 : offset
+  %q4_block_bytes = index.constant 144 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_offset = index.constant 0 : offset
+  %assignment_count = index.mul %bounded_token_count, %configured_route_count : index
+  %assignment_capacity = index.mul %configured_token_capacity, %configured_route_count : index
+  %assignment_limited_descriptor_capacity0 = index.div %assignment_capacity, %c2 : index
+  %descriptor_capacity0 = index.min %configured_expert_count, %assignment_limited_descriptor_capacity0 : index
+  %configured_descriptor_capacity0 = config.get @qwen3_moe.batched_decode.rows2_descriptor_capacity : index
+  %descriptor_capacity, %configured_descriptor_capacity = index.assume %descriptor_capacity0, %configured_descriptor_capacity0 [range(%descriptor_capacity0, 1, 512), eq(%descriptor_capacity0, %configured_descriptor_capacity0)] : index, index
+  %bounded_descriptor_count, %queue_descriptor_capacity = index.assume %descriptor_count, %configured_descriptor_capacity [range(%descriptor_count, 1, 512), le(%descriptor_count, %configured_descriptor_capacity)] : index, index
+  %valid_descriptor = index.cmp ult, %descriptor_ordinal0, %bounded_descriptor_count : index
+  %safe_descriptor_ordinal0 = scf.select %valid_descriptor, %descriptor_ordinal0, %c0 : index
+  %descriptor_ordinal, %launch_descriptor_count = index.assume %safe_descriptor_ordinal0, %bounded_descriptor_count [lt(%safe_descriptor_ordinal0, %bounded_descriptor_count)] : index, index
+  %q4_block_count = index.div %input_size, %c256 : index
+  %weight_row_bytes = index.mul %q4_block_count, %q4_block_bytes : index
+  %weight_expert_bytes = index.mul %bounded_output_size, %weight_row_bytes : index
+  %q8_group_count = index.div %input_size, %c128 : index
+  %q8_bytes_per_token = index.mul %q8_group_count, %q4_block_bytes : index
+  %queue_descriptors_noalias, %assignment_ordinals_noalias, %q8_noalias, %gate_noalias, %up_noalias, %output_noalias = buffer.assume.noalias %queue_descriptors, %assignment_ordinals, %q8_input, %gate_weight, %up_weight, %output : buffer, buffer, buffer, buffer, buffer, buffer
+  %queue_descriptor_view = buffer.view %queue_descriptors_noalias[%c0_offset] : buffer -> view<4x[%configured_expert_count]x4xi32>
+  %assignment_view = buffer.view %assignment_ordinals_noalias[%c0_offset] : buffer -> view<[%assignment_count]xi32>
+  %output_view = buffer.view %output_noalias[%c0_offset] : buffer -> view<[%assignment_count]x[%bounded_output_size]xf32>
+  %descriptor = vector.load %queue_descriptor_view[%bounded_queue_ordinal, %descriptor_ordinal, 0] : view<4x[%configured_expert_count]x4xi32> -> vector<4xi32>
+  %expert, %assignment_base0, %row_count0 = func.call @qwen3_moe_unpack_batched_decode_expert_descriptor(%descriptor) : (vector<4xi32>) -> (index, index, index)
+  %assignment_base, %consumer_assignment_count = index.assume %assignment_base0, %assignment_count [lt(%assignment_base0, %assignment_count)] : index, index
+  %row_count = index.assume %row_count0 [range(%row_count0, 2, 2)] : index
+  %assignment1_ordinal0 = index.add %assignment_base, %c1 : index
+  %assignment1_ordinal, %pair_assignment_count = index.assume %assignment1_ordinal0, %assignment_count [lt(%assignment1_ordinal0, %assignment_count)] : index, index
+  %assignment0_i32 = view.load %assignment_view[%assignment_base] : view<[%assignment_count]xi32> -> i32
+  %assignment1_i32 = view.load %assignment_view[%assignment1_ordinal] : view<[%assignment_count]xi32> -> i32
+  %assignment0_index0 = index.cast %assignment0_i32 : i32 to index
+  %assignment1_index0 = index.cast %assignment1_i32 : i32 to index
+  %assignment0, %assignment1, %routed_assignment_count = index.assume %assignment0_index0, %assignment1_index0, %assignment_count [range(%assignment0_index0, 0, 65535), range(%assignment1_index0, 0, 65535), lt(%assignment0_index0, %assignment_count), lt(%assignment1_index0, %assignment_count)] : index, index, index
+  %token0_index0 = index.div %assignment0, %configured_route_count : index
+  %token1_index0 = index.div %assignment1, %configured_route_count : index
+  %token0, %token1, %q8_token_count = index.assume %token0_index0, %token1_index0, %bounded_token_count [lt(%token0_index0, %bounded_token_count), lt(%token1_index0, %bounded_token_count)] : index, index, index
+  %channel_base = index.mul %channel_workgroup, %c4 : index
+  %channel0 = index.add %channel_base, %subgroup : index
+  %valid_channel = index.cmp ult, %channel0, %bounded_output_size : index
+  %safe_channel0 = scf.select %valid_channel, %channel0, %c0 : index
+  %channel, %weight_output_size = index.assume %safe_channel0, %bounded_output_size [lt(%safe_channel0, %bounded_output_size)] : index, index
+  %expert_byte_base = index.mul %expert, %weight_expert_bytes : index
+  %channel_byte_add = index.mul %channel, %weight_row_bytes : index
+  %row_byte_index = index.add %expert_byte_base, %channel_byte_add : index
+  %row_byte_base = index.scale %row_byte_index, %c1_byte : index, offset -> offset
+  %q8_token0_byte_index = index.mul %token0, %q8_bytes_per_token : index
+  %q8_token1_byte_index = index.mul %token1, %q8_bytes_per_token : index
+  %q8_token0_byte_base = index.scale %q8_token0_byte_index, %c1_byte : index, offset -> offset
+  %q8_token1_byte_base = index.scale %q8_token1_byte_index, %c1_byte : index, offset -> offset
+  %gate0_acc, %gate1_acc = func.call @qwen3_moe_batched_decode_q4k_rows2_lane(%input_size, %gate_noalias, %q8_noalias, %row_byte_base, %q8_token0_byte_base, %q8_token1_byte_base, %lane) : (index, buffer, buffer, offset, offset, offset, index) -> (f32, f32)
+  %up0_acc, %up1_acc = func.call @qwen3_moe_batched_decode_q4k_rows2_lane(%input_size, %up_noalias, %q8_noalias, %row_byte_base, %q8_token0_byte_base, %q8_token1_byte_base, %lane) : (index, buffer, buffer, offset, offset, offset, index) -> (f32, f32)
+  %gate0_dot = kernel.subgroup.reduce<addf> %gate0_acc : f32
+  %up0_dot = kernel.subgroup.reduce<addf> %up0_acc : f32
+  %gate1_dot = kernel.subgroup.reduce<addf> %gate1_acc : f32
+  %up1_dot = kernel.subgroup.reduce<addf> %up1_acc : f32
+  %lane_i32 = index.cast %lane : index to i32
+  %is_lane_zero = scalar.cmpi eq, %lane_i32, %c0_i32 : i32
+  %valid_channel_descriptor = scalar.andi %valid_channel, %valid_descriptor : i1
+  %writes_output = scalar.andi %valid_channel_descriptor, %is_lane_zero : i1
+  scf.if %writes_output {
+    %gate0_silu = scalar.siluf %gate0_dot : f32
+    %gate1_silu = scalar.siluf %gate1_dot : f32
+    %result0 = scalar.mulf %gate0_silu, %up0_dot : f32
+    %result1 = scalar.mulf %gate1_silu, %up1_dot : f32
+    view.store %result0, %output_view[%assignment0, %channel] : f32, view<[%assignment_count]x[%bounded_output_size]xf32>
+    view.store %result1, %output_view[%assignment1, %channel] : f32, view<[%assignment_count]x[%bounded_output_size]xf32>
+  }
+  kernel.return
+}
+
+// Two identical top-8 route rows produce eight exact-two-row descriptors.
+// The direct route-centric provider remains the numerical oracle.
+check.case public @qwen3_moe_batched_decode_gate_up_q4k_rows2_differential_case {
+  %descriptor_count = check.literal value(8) : index
+  %queue_ordinal = check.literal value(1) : index
+  %token_count = check.literal value(2) : index
+  %input_size = check.literal value(512) : index
+  %route_count = check.literal value(8) : index
+  %route_stride = check.literal value(8) : index
+  %expert_count = check.literal value(32) : index
+  %output_size = check.literal value(32) : index
+  %input = check.generate.iota offset(-0.5) step(0.001953125) period(1024) : tensor<2x512xf32>
+  %q8_input = check.generate.fill value(0) : tensor<2x576xi8>
+  %route_ids = check.generate.iota offset(0) step(1) period(8) : tensor<2x8xi32>
+  %assignment_ordinals = check.generate.fill value(-1) : tensor<16xi32>
+  %queue_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %queue_descriptors = check.generate.fill value(-1) : tensor<4x32x4xi32>
+  %gate_weight = check.generate.iota offset(-72) step(1) period(144) : tensor<32x32x2x144xi8>
+  %up_weight = check.generate.iota offset(-71) step(1) period(144) : tensor<32x32x2x144xi8>
+  %expected = check.generate.fill value(0.0) : tensor<2x8x32xf32>
+  %actual = check.generate.fill value(1.0) : tensor<2x8x32xf32>
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %input_size](%token_count, %input_size, %input, %q8_input) : [index, index](index, index, tensor<2x512xf32>, tensor<2x576xi8>)
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %assignment_ordinals, %queue_counts, %queue_descriptors) : [index, index, index, index](index, index, index, index, tensor<2x8xi32>, tensor<16xi32>, tensor<4xi32>, tensor<4x32x4xi32>)
+  kernel.launch @qwen3_moe_routed_gate_up_swiglu_q4k_q8[%token_count, %route_count, %route_stride, %expert_count, %output_size](%token_count, %route_count, %route_stride, %expert_count, %output_size, %q8_input, %route_ids, %gate_weight, %up_weight, %expected) : [index, index, index, index, index](index, index, index, index, index, tensor<2x576xi8>, tensor<2x8xi32>, tensor<32x32x2x144xi8>, tensor<32x32x2x144xi8>, tensor<2x8x32xf32>)
+  kernel.launch @qwen3_moe_batched_decode_gate_up_q4k_rows2[%descriptor_count, %queue_ordinal, %token_count, %route_count, %expert_count, %output_size](%descriptor_count, %queue_ordinal, %token_count, %route_count, %expert_count, %output_size, %queue_descriptors, %assignment_ordinals, %q8_input, %gate_weight, %up_weight, %actual) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<4x32x4xi32>, tensor<16xi32>, tensor<2x576xi8>, tensor<32x32x2x144xi8>, tensor<32x32x2x144xi8>, tensor<2x8x32xf32>)
+  check.expect.close actual(%actual) expected(%expected) atol(0.25) rtol(9.9999999999999995e-07) nan(same) : tensor<2x8x32xf32>
+  check.return
+}
+
+// Production dimensions with a uniform two-row-per-expert distribution.
+// Timing includes the assignment producer so the row schedule cannot hide its
+// routing preparation cost.
+check.case public @qwen3_moe_batched_decode_gate_up_q4k_rows2_benchmark_case {
+  %descriptor_count = check.literal value(64) : index
+  %queue_ordinal = check.literal value(1) : index
+  %token_count = check.literal value(16) : index
+  %route_count = check.literal value(8) : index
+  %route_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %output_size = check.literal value(768) : index
+  %q8_input = check.generate.fill value(0) : tensor<16x2304xi8>
+  %route_ids = check.generate.iota offset(0) step(1) period(64) : tensor<16x8xi32>
+  %assignment_ordinals = check.generate.fill value(-1) : tensor<128xi32>
+  %queue_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %queue_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  %gate_weight = check.generate.fill value(0) : tensor<128x768x8x144xi8>
+  %up_weight = check.generate.fill value(0) : tensor<128x768x8x144xi8>
+  %output = check.generate.fill value(1.0) : tensor<16x8x768xf32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %assignment_ordinals, %queue_counts, %queue_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  kernel.launch @qwen3_moe_batched_decode_gate_up_q4k_rows2[%descriptor_count, %queue_ordinal, %token_count, %route_count, %expert_count, %output_size](%descriptor_count, %queue_ordinal, %token_count, %route_count, %expert_count, %output_size, %queue_descriptors, %assignment_ordinals, %q8_input, %gate_weight, %up_weight, %output) : [index, index, index, index, index, index](index, index, index, index, index, index, tensor<4x128x4xi32>, tensor<128xi32>, tensor<16x2304xi8>, tensor<128x768x8x144xi8>, tensor<128x768x8x144xi8>, tensor<16x8x768xf32>)
+  check.return
+}
+
+check.benchmark<@qwen3_moe_batched_decode_gate_up_q4k_rows2_benchmark_case> @qwen3_moe_batched_decode_gate_up_q4k_rows2_benchmark

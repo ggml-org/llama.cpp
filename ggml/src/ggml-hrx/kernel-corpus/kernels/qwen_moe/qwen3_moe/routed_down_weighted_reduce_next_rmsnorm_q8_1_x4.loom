@@ -1,0 +1,269 @@
+// Fused grouped-prefill routed residual reduction, next-layer RMSNorm, and
+// GGML Q8_1 x4 publication.
+//
+// One 256-workitem workgroup, comprising eight wave32 subgroups, owns one
+// complete 2048-channel token row. Each workitem retains eight adjacent
+// residual results across the RMS reduction, updates hidden state, and
+// quantizes the learned-weight normalized values directly into the physical
+// row consumed by quantized QKV. This is the interlayer producer for the
+// quantized attention schedule; no F32 normalized row is materialized.
+//
+// Four neighboring workitems own one logical 32-element Q8_1 block. Each
+// workitem contributes two packed four-value words. LDS preserves the same
+// eight-word max and sum reduction order as the standalone GGML packer so the
+// fused and decomposed paths produce identical metadata and payload bytes.
+amdgpu.target<gfx11-generic> @qwen3_moe_routed_down_next_norm_q8_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+
+config.decl @qwen3_moe.model.rms_epsilon : f32
+
+config.decl @qwen3_moe.routed_down.route_count : %value: index where [range(%value, 1, 8)]
+
+config.decl @qwen3_moe.routed_down.output_size : %value: index where [range(%value, 1, 4096)]
+
+config.decl @qwen3_moe.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+kernel.decl @qwen3_moe_routed_down_weighted_reduce_f16_f32(%token_count: index) launch(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer)
+
+kernel.decl @qwen3_moe_rmsnorm_f32(%token_count: index) launch(%token_count: index, %input: buffer, %weight: buffer, %output: buffer)
+
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+
+kernel.def target(@qwen3_moe_routed_down_next_norm_q8_gfx11_wave32) @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4(%token_count: index) {
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%token_capacity, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %route_weights: buffer, %routed_output: buffer, %hidden_state: buffer, %next_norm_weight: buffer, %next_projection_input: buffer) {
+  %route_count0 = config.get @qwen3_moe.routed_down.route_count : index
+  %output_size0 = config.get @qwen3_moe.routed_down.output_size : index
+  %hidden_size0 = config.get @qwen3_moe.model.hidden_size : index
+  %epsilon = config.get @qwen3_moe.model.rms_epsilon : f32
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %route_count = index.assume %route_count0 [range(%route_count0, 8, 8)] : index
+  %output_size, %hidden_size = index.assume %output_size0, %hidden_size0 [range(%output_size0, 2048, 2048), range(%hidden_size0, 2048, 2048), eq(%output_size0, %hidden_size0)] : index, index
+  %token0 = kernel.workgroup.id<x> : index
+  %workitem0 = kernel.workitem.id<x> : index
+  %workitem = index.assume %workitem0 [range(%workitem0, 0, 255)] : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %group_bytes = index.constant 144 : offset
+  %payload_byte_add = index.constant 16 : offset
+  %scratch_d_byte_add = index.constant 2048 : offset
+  %scratch_bytes = index.constant 2304 : offset
+  %c0_offset = index.constant 0 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c1_f32 = scalar.constant 1.0 : f32
+  %c127 = scalar.constant 127.0 : f32
+  %c0_f32x8 = vector.constant 0.0 : vector<8xf32>
+  %active_token = index.cmp ult, %token0, %bounded_token_count : index
+  %safe_token0 = scf.select %active_token, %token0, %c0 : index
+  %token, %launch_token_count = index.assume %safe_token0, %bounded_token_count [lt(%safe_token0, %bounded_token_count)] : index, index
+  %hidden_size_i32 = index.cast %hidden_size : index to i32
+  %hidden_size_f32 = scalar.sitofp %hidden_size_i32 : i32 to f32
+  %assignment_count = index.mul %launch_token_count, %route_count : index
+  %physical_group_count = index.div %hidden_size, %c128 : index
+  %row_bytes = index.scale %physical_group_count, %group_bytes : index, offset -> offset
+  %token_output_byte_base = index.scale %token, %row_bytes : index, offset -> offset
+  %route_weights_noalias, %routed_output_noalias, %hidden_state_noalias, %next_norm_weight_noalias, %next_projection_input_noalias = buffer.assume.noalias %route_weights, %routed_output, %hidden_state, %next_norm_weight, %next_projection_input : buffer, buffer, buffer, buffer, buffer
+  %route_weights_view = buffer.view %route_weights_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%route_count]xf32>
+  %routed_output_view = buffer.view %routed_output_noalias[%c0_offset] : buffer -> view<[%assignment_count]x[%output_size]xf16>
+  %hidden_state_view = buffer.view %hidden_state_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%hidden_size]xf32>
+  %next_norm_weight_view = buffer.view %next_norm_weight_noalias[%c0_offset] : buffer -> view<[%hidden_size]xf32>
+  %scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_values = buffer.view %scratch[%c0_offset] : buffer -> view<512xf32>
+  %scratch_d = buffer.view %scratch[%scratch_d_byte_add] : buffer -> view<64xf32>
+  // The token predicate is workgroup-uniform, keeping every RMSNorm and Q8_1
+  // barrier either active for the whole workgroup or skipped by all workitems.
+  scf.if %active_token {
+    %channel = index.mul %workitem, %c8 : index
+    %weighted_sum = scf.for %route = [%c0 to %route_count step %c1](%sum = %c0_f32x8 : vector<8xf32>) -> (vector<8xf32>) unroll {
+      %assignment = index.madd %token, %route_count, %route : index
+      %routed_f16 = vector.load %routed_output_view[%assignment, %channel] : view<[%assignment_count]x[%output_size]xf16> -> vector<8xf16>
+      %routed = vector.extf %routed_f16 : vector<8xf16> to vector<8xf32>
+      %route_weight = view.load %route_weights_view[%token, %route] : view<[%launch_token_count]x[%route_count]xf32> -> f32
+      %route_weight_x8 = vector.splat %route_weight : vector<8xf32>
+      %weighted = vector.mulf %routed, %route_weight_x8 : vector<8xf32>
+      %next = vector.addf %sum, %weighted : vector<8xf32>
+      scf.yield %next : vector<8xf32>
+    }
+    %residual = vector.load %hidden_state_view[%token, %channel] : view<[%launch_token_count]x[%hidden_size]xf32> -> vector<8xf32>
+    %result = vector.addf %residual, %weighted_sum : vector<8xf32>
+    %squares = vector.mulf<reassoc|nnan|ninf|nsz> %result, %result : vector<8xf32>
+    %thread_sum = vector.reduce<addf, reassoc|nnan|ninf|nsz> %squares, %c0_f32 : vector<8xf32>, f32
+    %subgroup_sum = kernel.subgroup.reduce<addf> %thread_sum : f32
+
+    %is_subgroup_leader = index.cmp eq, %lane, %c0 : index
+    scf.if %is_subgroup_leader {
+      view.store %subgroup_sum, %scratch_values[%subgroup] : f32, view<512xf32>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %is_reduction_subgroup = index.cmp eq, %subgroup, %c0 : index
+    %is_reduction_lane = index.cmp ult, %lane, %c8 : index
+    %loads_subgroup_sum = scalar.andi %is_reduction_subgroup, %is_reduction_lane : i1
+    %subgroup_partial = scf.if %loads_subgroup_sum -> (f32) {
+      %value = view.load %scratch_values[%lane] : view<512xf32> -> f32
+      scf.yield %value : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    %row_sum = kernel.subgroup.reduce<addf> %subgroup_partial : f32
+    %writes_scale = scalar.andi %is_reduction_subgroup, %is_subgroup_leader : i1
+    scf.if %writes_scale {
+      %mean = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %row_sum, %hidden_size_f32 : f32
+      %biased_mean = scalar.addf<reassoc|nnan|ninf|nsz> %mean, %epsilon : f32
+      %scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %biased_mean : f32
+      view.store %scale, %scratch_values[%c0] : f32, view<512xf32>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+
+    %row_scale = view.load %scratch_values[%c0] : view<512xf32> -> f32
+    // All waves must capture the row scale before scratch is reused for the
+    // independent Q8 block reductions.
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %row_scale_vector = vector.splat %row_scale : vector<8xf32>
+    %learned_weight = vector.load %next_norm_weight_view[%channel] : view<[%hidden_size]xf32> -> vector<8xf32>
+    %normalized0 = vector.mulf<reassoc|nnan|ninf|nsz> %result, %row_scale_vector : vector<8xf32>
+    %normalized = vector.mulf<reassoc|nnan|ninf|nsz> %normalized0, %learned_weight : vector<8xf32>
+    vector.store %result, %hidden_state_view[%token, %channel] : vector<8xf32>, view<[%launch_token_count]x[%hidden_size]xf32>
+
+    %low_values = vector.slice %normalized[0] : vector<8xf32> -> vector<4xf32>
+    %high_values = vector.slice %normalized[4] : vector<8xf32> -> vector<4xf32>
+    %low_absolute_values = vector.absf %low_values : vector<4xf32>
+    %high_absolute_values = vector.absf %high_values : vector<4xf32>
+    %low_max = vector.reduce<maxnumf> %low_absolute_values, %c0_f32 : vector<4xf32>, f32
+    %high_max = vector.reduce<maxnumf> %high_absolute_values, %c0_f32 : vector<4xf32>, f32
+    %partial_base = index.mul %workitem, %c2 : index
+    %partial_high = index.add %partial_base, %c1 : index
+    view.store %low_max, %scratch_values[%partial_base] : f32, view<512xf32>
+    view.store %high_max, %scratch_values[%partial_high] : f32, view<512xf32>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+
+    %block_in_row = index.div %workitem, %c4 : index
+    %workitem_in_block = index.rem %workitem, %c4 : index
+    %is_block_leader = index.cmp eq, %workitem_in_block, %c0 : index
+    scf.if %is_block_leader {
+      %block_partial_base = index.mul %block_in_row, %c8 : index
+      %block_maxima = vector.load %scratch_values[%block_partial_base] : view<512xf32> -> vector<8xf32>
+      %amax = vector.reduce<maxnumf> %block_maxima, %c0_f32 : vector<8xf32>, f32
+      %d = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %amax, %c127 : f32
+      view.store %d, %scratch_d[%block_in_row] : f32, view<64xf32>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+
+    %d = view.load %scratch_d[%block_in_row] : view<64xf32> -> f32
+    %d_nonzero = scalar.cmpf one, %d, %c0_f32 : f32
+    %d_inverse = scf.if %d_nonzero -> (f32) {
+      %inverse = scalar.divf<reassoc|nnan|ninf|nsz|arcp> %c1_f32, %d : f32
+      scf.yield %inverse : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    %d_inverse_vector = vector.splat %d_inverse : vector<8xf32>
+    %scaled_values = vector.mulf %normalized, %d_inverse_vector : vector<8xf32>
+    %rounded_values = vector.roundf %scaled_values : vector<8xf32>
+    %quantized_values = vector.fptosi %rounded_values : vector<8xf32> to vector<8xi8>
+    %packed_words = vector.bitcast %quantized_values : vector<8xi8> to vector<2xi32>
+    %physical_group = index.div %block_in_row, %c4 : index
+    %block_in_group = index.rem %block_in_row, %c4 : index
+    %group_byte_add = index.scale %physical_group, %group_bytes : index, offset -> offset
+    %group_byte_offset = index.add %token_output_byte_base, %group_byte_add : offset
+    %payload_byte_offset = index.add %group_byte_offset, %payload_byte_add : offset
+    %group_ds = buffer.view %next_projection_input_noalias[%group_byte_offset] : buffer -> view<8xf16>
+    %group_qs = buffer.view %next_projection_input_noalias[%payload_byte_offset] : buffer -> view<32xi32>
+    %block_word_base = index.mul %block_in_group, %c8 : index
+    %workitem_word_add = index.mul %workitem_in_block, %c2 : index
+    %packed_word_index0 = index.add %block_word_base, %workitem_word_add : index
+    %packed_word_index = index.assume %packed_word_index0 [range(%packed_word_index0, 0, 31)] : index
+    vector.store %packed_words, %group_qs[%packed_word_index] : vector<2xi32>, view<32xi32>
+
+    %low_rounded_values = vector.slice %rounded_values[0] : vector<8xf32> -> vector<4xf32>
+    %high_rounded_values = vector.slice %rounded_values[4] : vector<8xf32> -> vector<4xf32>
+    %low_quantized_sum = vector.reduce<addf> %low_rounded_values, %c0_f32 : vector<4xf32>, f32
+    %high_quantized_sum = vector.reduce<addf> %high_rounded_values, %c0_f32 : vector<4xf32>, f32
+    view.store %low_quantized_sum, %scratch_values[%partial_base] : f32, view<512xf32>
+    view.store %high_quantized_sum, %scratch_values[%partial_high] : f32, view<512xf32>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.if %is_block_leader {
+      %block_partial_base = index.mul %block_in_row, %c8 : index
+      %block_sums = vector.load %scratch_values[%block_partial_base] : view<512xf32> -> vector<8xf32>
+      %quantized_sum = vector.reduce<addf> %block_sums, %c0_f32 : vector<8xf32>, f32
+      %s = scalar.mulf<reassoc|nnan|ninf|nsz> %quantized_sum, %d : f32
+      %d_f16 = scalar.fptrunc %d : f32 to f16
+      %s_f16 = scalar.fptrunc %s : f32 to f16
+      %ds_index = index.mul %block_in_group, %c2 : index
+      %s_index = index.add %ds_index, %c1 : index
+      view.store %d_f16, %group_ds[%ds_index] : f16, view<8xf16>
+      view.store %s_f16, %group_ds[%s_index] : f16, view<8xf16>
+    }
+  }
+  kernel.return
+}
+
+// Fourteen independent token rows lock the complete interlayer contract. The
+// fused producer must match ordinary weighted reduction for hidden state and
+// RMSNorm followed by the generic GGML packer for every Q8 metadata and
+// payload byte.
+check.case public @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_differential_case {
+  %token_count = check.literal value(14) : index
+  %hidden_size = check.literal value(2048) : index
+  %route_weights = check.generate.iota offset(0.03125) step(0.015625) period(8) : tensor<14x8xf32>
+  %routed_seed = check.param.seed base(5858425849430430008) count(1) : i64
+  %routed_output = check.generate.random.uniform seed(%routed_seed) range(-0.5 to 0.5) : tensor<14x8x2048xf16>
+  %expected_hidden_state = check.generate.iota offset(-0.5) step(0.0078125) period(31) : tensor<14x2048xf32>
+  %actual_hidden_state = check.generate.iota offset(-0.5) step(0.0078125) period(31) : tensor<14x2048xf32>
+  %next_norm_weight = check.generate.iota offset(0.5) step(0.0078125) period(29) : tensor<2048xf32>
+  %normalized = check.generate.fill value(0.0) : tensor<14x2048xf32>
+  %expected_q8 = check.generate.fill value(0) : tensor<14x2304xi8>
+  %actual_q8 = check.generate.fill value(1) : tensor<14x2304xi8>
+  kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %routed_output, %expected_hidden_state) : [index](index, tensor<14x8xf32>, tensor<14x8x2048xf16>, tensor<14x2048xf32>)
+  kernel.launch @qwen3_moe_rmsnorm_f32[%token_count](%token_count, %expected_hidden_state, %next_norm_weight, %normalized) : [index](index, tensor<14x2048xf32>, tensor<2048xf32>, tensor<14x2048xf32>)
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %normalized, %expected_q8) : [index, index](index, index, tensor<14x2048xf32>, tensor<14x2304xi8>)
+  kernel.launch @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4[%token_count](%token_count, %route_weights, %routed_output, %actual_hidden_state, %next_norm_weight, %actual_q8) : [index](index, tensor<14x8xf32>, tensor<14x8x2048xf16>, tensor<14x2048xf32>, tensor<2048xf32>, tensor<14x2304xi8>)
+  check.expect.close actual(%actual_hidden_state) expected(%expected_hidden_state) atol(0.0001) rtol(0.0001) nan(same) : tensor<14x2048xf32>
+  check.expect.equal actual(%actual_q8) expected(%expected_q8) : tensor<14x2304xi8>
+  check.return
+}
+
+check.case public @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_fused_benchmark_case {
+  %token_count = check.param.choice values([14, 32, 128, 512]) name("token_count") : index
+  %route_weights = check.generate.fill value(0.125) : tensor<[%token_count]x8xf32>
+  %routed_output = check.generate.fill value(0.0) : tensor<[%token_count]x8x2048xf16>
+  %hidden_state = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
+  %next_norm_weight = check.generate.fill value(1.0) : tensor<2048xf32>
+  %next_projection_input = check.generate.fill value(0) : tensor<[%token_count]x2304xi8>
+  kernel.launch @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4[%token_count](%token_count, %route_weights, %routed_output, %hidden_state, %next_norm_weight, %next_projection_input) : [index](index, tensor<[%token_count]x8xf32>, tensor<[%token_count]x8x2048xf16>, tensor<[%token_count]x2048xf32>, tensor<2048xf32>, tensor<[%token_count]x2304xi8>)
+  check.return
+}
+
+check.case public @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_composed_benchmark_case {
+  %token_count = check.param.choice values([14, 32, 128, 512]) name("token_count") : index
+  %hidden_size = check.literal value(2048) : index
+  %route_weights = check.generate.fill value(0.125) : tensor<[%token_count]x8xf32>
+  %routed_output = check.generate.fill value(0.0) : tensor<[%token_count]x8x2048xf16>
+  %hidden_state = check.generate.fill value(1.0) : tensor<[%token_count]x2048xf32>
+  %next_norm_weight = check.generate.fill value(1.0) : tensor<2048xf32>
+  %normalized = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
+  %next_projection_input = check.generate.fill value(0) : tensor<[%token_count]x2304xi8>
+  kernel.launch @qwen3_moe_routed_down_weighted_reduce_f16_f32[%token_count](%token_count, %route_weights, %routed_output, %hidden_state) : [index](index, tensor<[%token_count]x8xf32>, tensor<[%token_count]x8x2048xf16>, tensor<[%token_count]x2048xf32>)
+  kernel.launch @qwen3_moe_rmsnorm_f32[%token_count](%token_count, %hidden_state, %next_norm_weight, %normalized) : [index](index, tensor<[%token_count]x2048xf32>, tensor<2048xf32>, tensor<[%token_count]x2048xf32>)
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %normalized, %next_projection_input) : [index, index](index, index, tensor<[%token_count]x2048xf32>, tensor<[%token_count]x2304xi8>)
+  check.return
+}
+
+check.benchmark<@qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_fused_benchmark_case> @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_fused_prefill_14 {token_count = 14}
+
+check.benchmark<@qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_fused_benchmark_case> @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_fused_prefill_512 {token_count = 512}
+
+check.benchmark<@qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_composed_benchmark_case> @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_composed_prefill_14 {token_count = 14}
+
+check.benchmark<@qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_composed_benchmark_case> @qwen3_moe_routed_down_weighted_reduce_next_rmsnorm_q8_1_x4_composed_prefill_512 {token_count = 512}

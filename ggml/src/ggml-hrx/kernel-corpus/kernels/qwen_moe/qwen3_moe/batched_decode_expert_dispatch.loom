@@ -1,0 +1,498 @@
+// Builds the GPU-resident expert work queues used by batched decode.
+//
+// One lane owns each configured expert, counts its assignments, and uses
+// workgroup scans to assign deterministic compact offsets. Three configured
+// row-count limits classify active experts into four target-selected schedule
+// queues. The resulting counts are suitable for device-side indirect launch;
+// route identities never cross the host boundary.
+//
+// assignment_ordinals is expert-contiguous. Each ordinal is the original
+// flattened [token][route] position, so consumers can recover token and route
+// with division and remainder by the configured route count and scatter
+// results directly into the established compact routed-output layout.
+//
+// queue_descriptors is physically [4][expert_count][4xi32]. Each naturally
+// aligned descriptor contains the expert ordinal, assignment base, row count,
+// and a reserved zero field. The b128 representation keeps the ABI independent
+// of model geometry while giving consumers one native-width descriptor load.
+config.decl @qwen3_moe.router.expert_count : %value: index where [range(%value, 32, 512), mul(%value, 32)]
+
+config.decl @qwen3_moe.router.route_count : %value: index where [range(%value, 1, 32)]
+
+config.decl @qwen3_moe.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+config.decl @qwen3_moe.batched_decode.schedule0_row_limit : %value: index where [range(%value, 1, 2048)]
+
+config.decl @qwen3_moe.batched_decode.schedule1_row_limit : %value: index where [range(%value, 1, 2048)]
+
+config.decl @qwen3_moe.batched_decode.schedule2_row_limit : %value: index where [range(%value, 1, 2048)]
+
+amdgpu.target<gfx11-generic> @qwen3_moe_batched_decode_dispatch_gfx11_wave32 {subgroup_size = 32}
+
+// Decodes the stable batched-decode expert descriptor representation.
+func.def inline @qwen3_moe_unpack_batched_decode_expert_descriptor(%descriptor: vector<4xi32>) -> (index, index, index) {
+  %configured_expert_count = config.get @qwen3_moe.router.expert_count : index
+  %configured_route_count = config.get @qwen3_moe.router.route_count : index
+  %configured_token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %assignment_capacity = index.mul %configured_token_capacity, %configured_route_count : index
+  %expert_i32 = vector.extract %descriptor[0] : vector<4xi32> -> i32
+  %assignment_base_i32 = vector.extract %descriptor[1] : vector<4xi32> -> i32
+  %row_count_i32 = vector.extract %descriptor[2] : vector<4xi32> -> i32
+  %expert0 = index.cast %expert_i32 : i32 to index
+  %expert, %descriptor_expert_count = index.assume %expert0, %configured_expert_count [range(%expert0, 0, 511), lt(%expert0, %configured_expert_count)] : index, index
+  %assignment_base0 = index.cast %assignment_base_i32 : i32 to index
+  %assignment_base, %descriptor_assignment_capacity = index.assume %assignment_base0, %assignment_capacity [range(%assignment_base0, 0, 65535), lt(%assignment_base0, %assignment_capacity)] : index, index
+  %row_count0 = index.cast %row_count_i32 : i32 to index
+  %row_count, %descriptor_token_capacity = index.assume %row_count0, %configured_token_capacity [range(%row_count0, 1, 2048), le(%row_count0, %configured_token_capacity)] : index, index
+  func.return %expert, %assignment_base, %row_count : index, index, index
+}
+
+kernel.def target(@qwen3_moe_batched_decode_dispatch_gfx11_wave32) @qwen3_moe_build_batched_decode_expert_dispatch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index) {
+  %configured_expert_count = config.get @qwen3_moe.router.expert_count : index
+  %c1 = index.constant 1 : index
+  kernel.launch.config workgroups(%c1, %c1, %c1) workgroup_size(%configured_expert_count, %c1, %c1) : index
+} launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %route_ids: buffer, %assignment_ordinals: buffer, %queue_counts: buffer, %queue_descriptors: buffer) {
+  %configured_token_capacity0 = config.get @qwen3_moe.workload.token_capacity : index
+  %bounded_token_count, %configured_token_capacity = index.assume %token_count, %configured_token_capacity0 [range(%token_count, 1, 2048), le(%token_count, %configured_token_capacity0)] : index, index
+  %configured_route_count0 = config.get @qwen3_moe.router.route_count : index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 32), eq(%route_count, %configured_route_count0)] : index, index
+  %bounded_route_stride, %route_row_width = index.assume %route_stride, %bounded_route_count [range(%route_stride, 1, 512), le(%bounded_route_count, %route_stride)] : index, index
+  %configured_expert_count0 = config.get @qwen3_moe.router.expert_count : index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 32, 512), eq(%expert_count, %configured_expert_count0)] : index, index
+  %schedule0_row_limit0 = config.get @qwen3_moe.batched_decode.schedule0_row_limit : index
+  %schedule1_row_limit0 = config.get @qwen3_moe.batched_decode.schedule1_row_limit : index
+  %schedule2_row_limit0 = config.get @qwen3_moe.batched_decode.schedule2_row_limit : index
+  %schedule0_row_limit, %schedule1_row_limit, %schedule2_row_limit = index.assume %schedule0_row_limit0, %schedule1_row_limit0, %schedule2_row_limit0 [lt(%schedule0_row_limit0, %schedule1_row_limit0), lt(%schedule1_row_limit0, %schedule2_row_limit0)] : index, index, index
+  %lane0 = kernel.workitem.id<x> : index
+  %expert, %launch_expert_count = index.assume %lane0, %bounded_expert_count [lt(%lane0, %bounded_expert_count)] : index, index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c0_offset = index.constant 0 : offset
+  %assignment_count = index.mul %bounded_token_count, %configured_route_count : index
+  %route_ids_noalias, %assignment_ordinals_noalias, %queue_counts_noalias, %queue_descriptors_noalias = buffer.assume.noalias %route_ids, %assignment_ordinals, %queue_counts, %queue_descriptors : buffer, buffer, buffer, buffer
+  %route_view = buffer.view %route_ids_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_route_stride]xi32>
+  %assignment_view = buffer.view %assignment_ordinals_noalias[%c0_offset] : buffer -> view<[%assignment_count]xi32>
+  %queue_count_view = buffer.view %queue_counts_noalias[%c0_offset] : buffer -> view<4xi32>
+  %queue_descriptor_view = buffer.view %queue_descriptors_noalias[%c0_offset] : buffer -> view<4x[%configured_expert_count]x4xi32>
+  %expert_i32 = index.cast %expert : index to i32
+
+  // Every lane walks the same tiny, cache-resident route plane. The serial
+  // comparisons are substantially cheaper than a host-visible sort or atomics
+  // and make one lane the sole owner of each expert's count.
+  %expert_assignment_count = scf.for %assignment = [%c0 to %assignment_count step %c1](%matched_count = %c0_i32 : i32) -> (i32) {
+    %token0 = index.div %assignment, %configured_route_count : index
+    %route0 = index.rem %assignment, %configured_route_count : index
+    %token, %route_token_count = index.assume %token0, %bounded_token_count [lt(%token0, %bounded_token_count)] : index, index
+    %route, %route_row_stride = index.assume %route0, %bounded_route_stride [lt(%route0, %bounded_route_stride)] : index, index
+    %route_expert_i32 = view.load %route_view[%token, %route] : view<[%bounded_token_count]x[%bounded_route_stride]xi32> -> i32
+    %matches = scalar.cmpi eq, %route_expert_i32, %expert_i32 : i32
+    %match_increment = scf.select %matches, %c1_i32, %c0_i32 : i32
+    %next_matched_count = scalar.addi %matched_count, %match_increment : i32
+    scf.yield %next_matched_count : i32
+  }
+
+  %expert_assignment_base_i32 = kernel.workgroup.scan<addi> %expert_assignment_count {direction = forward, mode = exclusive} : i32
+
+  // A second pass publishes stable original assignment ordinals into the
+  // expert-contiguous permutation. This metadata remains cache-resident for
+  // practical decode batches.
+  %published_count = scf.for %assignment = [%c0 to %assignment_count step %c1](%matched_count = %c0_i32 : i32) -> (i32) {
+    %token0 = index.div %assignment, %configured_route_count : index
+    %route0 = index.rem %assignment, %configured_route_count : index
+    %token, %route_token_count = index.assume %token0, %bounded_token_count [lt(%token0, %bounded_token_count)] : index, index
+    %route, %route_row_stride = index.assume %route0, %bounded_route_stride [lt(%route0, %bounded_route_stride)] : index, index
+    %route_expert_i32 = view.load %route_view[%token, %route] : view<[%bounded_token_count]x[%bounded_route_stride]xi32> -> i32
+    %matches = scalar.cmpi eq, %route_expert_i32, %expert_i32 : i32
+    scf.if %matches {
+      %compact_ordinal_i32 = scalar.addi %expert_assignment_base_i32, %matched_count : i32
+      %compact_ordinal0 = index.cast %compact_ordinal_i32 : i32 to index
+      %bounded_compact_ordinal, %bounded_assignment_count = index.assume %compact_ordinal0, %assignment_count [range(%compact_ordinal0, 0, 65535), lt(%compact_ordinal0, %assignment_count)] : index, index
+      %assignment_i32 = index.cast %assignment : index to i32
+      view.store %assignment_i32, %assignment_view[%bounded_compact_ordinal] : i32, view<[%assignment_count]xi32>
+    }
+    %match_increment = scf.select %matches, %c1_i32, %c0_i32 : i32
+    %next_matched_count = scalar.addi %matched_count, %match_increment : i32
+    scf.yield %next_matched_count : i32
+  }
+
+  // Top-k route IDs are unique within a token, so one expert owns at most the
+  // configured token capacity. Target-selected row limits partition that
+  // range without changing this producer or its ABI.
+  %published_count0 = index.cast %published_count : i32 to index
+  %published_row_count, %published_token_capacity = index.assume %published_count0, %configured_token_capacity [range(%published_count0, 0, 2048), le(%published_count0, %configured_token_capacity)] : index, index
+  %has_assignments = index.cmp ugt, %published_row_count, %c0 : index
+  %at_most_schedule0 = index.cmp ule, %published_row_count, %schedule0_row_limit : index
+  %above_schedule0 = index.cmp ugt, %published_row_count, %schedule0_row_limit : index
+  %at_most_schedule1 = index.cmp ule, %published_row_count, %schedule1_row_limit : index
+  %above_schedule1 = index.cmp ugt, %published_row_count, %schedule1_row_limit : index
+  %at_most_schedule2 = index.cmp ule, %published_row_count, %schedule2_row_limit : index
+  %is_schedule0 = scalar.andi %has_assignments, %at_most_schedule0 : i1
+  %is_schedule1 = scalar.andi %above_schedule0, %at_most_schedule1 : i1
+  %is_schedule2 = scalar.andi %above_schedule1, %at_most_schedule2 : i1
+  %is_schedule3 = index.cmp ugt, %published_row_count, %schedule2_row_limit : index
+  %schedule0_i32 = scf.select %is_schedule0, %c1_i32, %c0_i32 : i32
+  %schedule1_i32 = scf.select %is_schedule1, %c1_i32, %c0_i32 : i32
+  %schedule2_i32 = scf.select %is_schedule2, %c1_i32, %c0_i32 : i32
+  %schedule3_i32 = scf.select %is_schedule3, %c1_i32, %c0_i32 : i32
+
+  %schedule0_ordinal_i32 = kernel.workgroup.scan<addi> %schedule0_i32 {direction = forward, mode = exclusive} : i32
+  %schedule1_ordinal_i32 = kernel.workgroup.scan<addi> %schedule1_i32 {direction = forward, mode = exclusive} : i32
+  %schedule2_ordinal_i32 = kernel.workgroup.scan<addi> %schedule2_i32 {direction = forward, mode = exclusive} : i32
+  %schedule3_ordinal_i32 = kernel.workgroup.scan<addi> %schedule3_i32 {direction = forward, mode = exclusive} : i32
+  %schedule0_count = kernel.workgroup.reduce<addi> %schedule0_i32 : i32
+  %schedule1_count = kernel.workgroup.reduce<addi> %schedule1_i32 : i32
+  %schedule2_count = kernel.workgroup.reduce<addi> %schedule2_i32 : i32
+  %schedule3_count = kernel.workgroup.reduce<addi> %schedule3_i32 : i32
+  %descriptor = vector.from_elements %expert_i32, %expert_assignment_base_i32, %published_count, %c0_i32 : vector<4xi32>
+
+  // Inactive lanes use ordinal zero so every physical origin is in bounds;
+  // the vector masks suppress their stores. This keeps the descriptor write a
+  // native b128 operation without placing it inside divergent control flow.
+  %safe_schedule0_ordinal_i32 = scf.select %is_schedule0, %schedule0_ordinal_i32, %c0_i32 : i32
+  %schedule0_ordinal0 = index.cast %safe_schedule0_ordinal_i32 : i32 to index
+  %schedule0_ordinal, %schedule0_queue_capacity = index.assume %schedule0_ordinal0, %configured_expert_count [range(%schedule0_ordinal0, 0, 511), lt(%schedule0_ordinal0, %configured_expert_count)] : index, index
+  %schedule0_mask = vector.splat %is_schedule0 : vector<4xi1>
+  vector.store.mask %descriptor, %queue_descriptor_view[0, %schedule0_ordinal, 0], %schedule0_mask : vector<4xi32>, view<4x[%configured_expert_count]x4xi32>, vector<4xi1>
+  %safe_schedule1_ordinal_i32 = scf.select %is_schedule1, %schedule1_ordinal_i32, %c0_i32 : i32
+  %schedule1_ordinal0 = index.cast %safe_schedule1_ordinal_i32 : i32 to index
+  %schedule1_ordinal, %schedule1_queue_capacity = index.assume %schedule1_ordinal0, %configured_expert_count [range(%schedule1_ordinal0, 0, 511), lt(%schedule1_ordinal0, %configured_expert_count)] : index, index
+  %schedule1_mask = vector.splat %is_schedule1 : vector<4xi1>
+  vector.store.mask %descriptor, %queue_descriptor_view[1, %schedule1_ordinal, 0], %schedule1_mask : vector<4xi32>, view<4x[%configured_expert_count]x4xi32>, vector<4xi1>
+  %safe_schedule2_ordinal_i32 = scf.select %is_schedule2, %schedule2_ordinal_i32, %c0_i32 : i32
+  %schedule2_ordinal0 = index.cast %safe_schedule2_ordinal_i32 : i32 to index
+  %schedule2_ordinal, %schedule2_queue_capacity = index.assume %schedule2_ordinal0, %configured_expert_count [range(%schedule2_ordinal0, 0, 511), lt(%schedule2_ordinal0, %configured_expert_count)] : index, index
+  %schedule2_mask = vector.splat %is_schedule2 : vector<4xi1>
+  vector.store.mask %descriptor, %queue_descriptor_view[2, %schedule2_ordinal, 0], %schedule2_mask : vector<4xi32>, view<4x[%configured_expert_count]x4xi32>, vector<4xi1>
+  %safe_schedule3_ordinal_i32 = scf.select %is_schedule3, %schedule3_ordinal_i32, %c0_i32 : i32
+  %schedule3_ordinal0 = index.cast %safe_schedule3_ordinal_i32 : i32 to index
+  %schedule3_ordinal, %schedule3_queue_capacity = index.assume %schedule3_ordinal0, %configured_expert_count [range(%schedule3_ordinal0, 0, 511), lt(%schedule3_ordinal0, %configured_expert_count)] : index, index
+  %schedule3_mask = vector.splat %is_schedule3 : vector<4xi1>
+  vector.store.mask %descriptor, %queue_descriptor_view[3, %schedule3_ordinal, 0], %schedule3_mask : vector<4xi32>, view<4x[%configured_expert_count]x4xi32>, vector<4xi1>
+
+  %is_lane_zero = index.cmp eq, %expert, %c0 : index
+  scf.if %is_lane_zero {
+    view.store %schedule0_count, %queue_count_view[0] : i32, view<4xi32>
+    view.store %schedule1_count, %queue_count_view[1] : i32, view<4xi32>
+    view.store %schedule2_count, %queue_count_view[2] : i32, view<4xi32>
+    view.store %schedule3_count, %queue_count_view[3] : i32, view<4xi32>
+  }
+  kernel.return
+}
+
+// Serial specification oracle for exact differential tests. Its ownership and
+// control flow deliberately differ from the parallel scan implementation:
+// one workitem visits experts in order and carries all compact offsets and
+// queue tails explicitly.
+kernel.def target(@qwen3_moe_batched_decode_dispatch_gfx11_wave32) @qwen3_moe_build_batched_decode_expert_dispatch_reference(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index) {
+  %c1 = index.constant 1 : index
+  kernel.launch.config workgroups(%c1, %c1, %c1) workgroup_size(%c1, %c1, %c1) : index
+} launch(%token_count: index, %route_count: index, %route_stride: index, %expert_count: index, %route_ids: buffer, %assignment_ordinals: buffer, %queue_counts: buffer, %queue_descriptors: buffer) {
+  %configured_token_capacity0 = config.get @qwen3_moe.workload.token_capacity : index
+  %bounded_token_count, %configured_token_capacity = index.assume %token_count, %configured_token_capacity0 [range(%token_count, 1, 2048), le(%token_count, %configured_token_capacity0)] : index, index
+  %configured_route_count0 = config.get @qwen3_moe.router.route_count : index
+  %bounded_route_count, %configured_route_count = index.assume %route_count, %configured_route_count0 [range(%route_count, 1, 32), eq(%route_count, %configured_route_count0)] : index, index
+  %bounded_route_stride, %route_row_width = index.assume %route_stride, %bounded_route_count [range(%route_stride, 1, 512), le(%bounded_route_count, %route_stride)] : index, index
+  %configured_expert_count0 = config.get @qwen3_moe.router.expert_count : index
+  %bounded_expert_count, %configured_expert_count = index.assume %expert_count, %configured_expert_count0 [range(%expert_count, 32, 512), eq(%expert_count, %configured_expert_count0)] : index, index
+  %schedule0_row_limit0 = config.get @qwen3_moe.batched_decode.schedule0_row_limit : index
+  %schedule1_row_limit0 = config.get @qwen3_moe.batched_decode.schedule1_row_limit : index
+  %schedule2_row_limit0 = config.get @qwen3_moe.batched_decode.schedule2_row_limit : index
+  %schedule0_row_limit, %schedule1_row_limit, %schedule2_row_limit = index.assume %schedule0_row_limit0, %schedule1_row_limit0, %schedule2_row_limit0 [lt(%schedule0_row_limit0, %schedule1_row_limit0), lt(%schedule1_row_limit0, %schedule2_row_limit0)] : index, index, index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c1_i32 = scalar.constant 1 : i32
+  %c0_offset = index.constant 0 : offset
+  %assignment_count = index.mul %bounded_token_count, %configured_route_count : index
+  %route_ids_noalias, %assignment_ordinals_noalias, %queue_counts_noalias, %queue_descriptors_noalias = buffer.assume.noalias %route_ids, %assignment_ordinals, %queue_counts, %queue_descriptors : buffer, buffer, buffer, buffer
+  %route_view = buffer.view %route_ids_noalias[%c0_offset] : buffer -> view<[%bounded_token_count]x[%bounded_route_stride]xi32>
+  %assignment_view = buffer.view %assignment_ordinals_noalias[%c0_offset] : buffer -> view<[%assignment_count]xi32>
+  %queue_count_view = buffer.view %queue_counts_noalias[%c0_offset] : buffer -> view<4xi32>
+  %queue_descriptor_view = buffer.view %queue_descriptors_noalias[%c0_offset] : buffer -> view<4x[%configured_expert_count]x4xi32>
+
+  %final_assignment_base, %final_schedule0_count, %final_schedule1_count, %final_schedule2_count, %final_schedule3_count = scf.for %expert = [%c0 to %bounded_expert_count step %c1](%assignment_base = %c0_i32 : i32, %schedule0_count = %c0_i32 : i32, %schedule1_count = %c0_i32 : i32, %schedule2_count = %c0_i32 : i32, %schedule3_count = %c0_i32 : i32) -> (i32, i32, i32, i32, i32) {
+    %expert_i32 = index.cast %expert : index to i32
+    %expert_assignment_count = scf.for %assignment = [%c0 to %assignment_count step %c1](%matched_count = %c0_i32 : i32) -> (i32) {
+      %token0 = index.div %assignment, %configured_route_count : index
+      %route0 = index.rem %assignment, %configured_route_count : index
+      %token, %route_token_count = index.assume %token0, %bounded_token_count [lt(%token0, %bounded_token_count)] : index, index
+      %route, %route_row_stride = index.assume %route0, %bounded_route_stride [lt(%route0, %bounded_route_stride)] : index, index
+      %route_expert_i32 = view.load %route_view[%token, %route] : view<[%bounded_token_count]x[%bounded_route_stride]xi32> -> i32
+      %matches = scalar.cmpi eq, %route_expert_i32, %expert_i32 : i32
+      scf.if %matches {
+        %compact_ordinal_i32 = scalar.addi %assignment_base, %matched_count : i32
+        %compact_ordinal0 = index.cast %compact_ordinal_i32 : i32 to index
+        %bounded_compact_ordinal, %bounded_assignment_count = index.assume %compact_ordinal0, %assignment_count [range(%compact_ordinal0, 0, 65535), lt(%compact_ordinal0, %assignment_count)] : index, index
+        %assignment_i32 = index.cast %assignment : index to i32
+        view.store %assignment_i32, %assignment_view[%bounded_compact_ordinal] : i32, view<[%assignment_count]xi32>
+      }
+      %match_increment = scf.select %matches, %c1_i32, %c0_i32 : i32
+      %next_matched_count = scalar.addi %matched_count, %match_increment : i32
+      scf.yield %next_matched_count : i32
+    }
+
+    %expert_assignment_count0 = index.cast %expert_assignment_count : i32 to index
+    %expert_row_count, %expert_token_capacity = index.assume %expert_assignment_count0, %configured_token_capacity [range(%expert_assignment_count0, 0, 2048), le(%expert_assignment_count0, %configured_token_capacity)] : index, index
+    %has_assignments = index.cmp ugt, %expert_row_count, %c0 : index
+    %at_most_schedule0 = index.cmp ule, %expert_row_count, %schedule0_row_limit : index
+    %above_schedule0 = index.cmp ugt, %expert_row_count, %schedule0_row_limit : index
+    %at_most_schedule1 = index.cmp ule, %expert_row_count, %schedule1_row_limit : index
+    %above_schedule1 = index.cmp ugt, %expert_row_count, %schedule1_row_limit : index
+    %at_most_schedule2 = index.cmp ule, %expert_row_count, %schedule2_row_limit : index
+    %is_schedule0 = scalar.andi %has_assignments, %at_most_schedule0 : i1
+    %is_schedule1 = scalar.andi %above_schedule0, %at_most_schedule1 : i1
+    %is_schedule2 = scalar.andi %above_schedule1, %at_most_schedule2 : i1
+    %is_schedule3 = index.cmp ugt, %expert_row_count, %schedule2_row_limit : index
+    %descriptor = vector.from_elements %expert_i32, %assignment_base, %expert_assignment_count, %c0_i32 : vector<4xi32>
+
+    // The scalar oracle retains its loop-carried queue tails. Masked b128
+    // stores express conditional publication without divergent branch regions,
+    // while safe ordinal zero keeps inactive physical origins in bounds.
+    %safe_schedule0_count = scf.select %is_schedule0, %schedule0_count, %c0_i32 : i32
+    %schedule0_ordinal0 = index.cast %safe_schedule0_count : i32 to index
+    %schedule0_ordinal, %schedule0_capacity = index.assume %schedule0_ordinal0, %configured_expert_count [range(%schedule0_ordinal0, 0, 511), lt(%schedule0_ordinal0, %configured_expert_count)] : index, index
+    %schedule0_mask = vector.splat %is_schedule0 : vector<4xi1>
+    vector.store.mask %descriptor, %queue_descriptor_view[0, %schedule0_ordinal, 0], %schedule0_mask : vector<4xi32>, view<4x[%configured_expert_count]x4xi32>, vector<4xi1>
+    %safe_schedule1_count = scf.select %is_schedule1, %schedule1_count, %c0_i32 : i32
+    %schedule1_ordinal0 = index.cast %safe_schedule1_count : i32 to index
+    %schedule1_ordinal, %schedule1_capacity = index.assume %schedule1_ordinal0, %configured_expert_count [range(%schedule1_ordinal0, 0, 511), lt(%schedule1_ordinal0, %configured_expert_count)] : index, index
+    %schedule1_mask = vector.splat %is_schedule1 : vector<4xi1>
+    vector.store.mask %descriptor, %queue_descriptor_view[1, %schedule1_ordinal, 0], %schedule1_mask : vector<4xi32>, view<4x[%configured_expert_count]x4xi32>, vector<4xi1>
+    %safe_schedule2_count = scf.select %is_schedule2, %schedule2_count, %c0_i32 : i32
+    %schedule2_ordinal0 = index.cast %safe_schedule2_count : i32 to index
+    %schedule2_ordinal, %schedule2_capacity = index.assume %schedule2_ordinal0, %configured_expert_count [range(%schedule2_ordinal0, 0, 511), lt(%schedule2_ordinal0, %configured_expert_count)] : index, index
+    %schedule2_mask = vector.splat %is_schedule2 : vector<4xi1>
+    vector.store.mask %descriptor, %queue_descriptor_view[2, %schedule2_ordinal, 0], %schedule2_mask : vector<4xi32>, view<4x[%configured_expert_count]x4xi32>, vector<4xi1>
+    %safe_schedule3_count = scf.select %is_schedule3, %schedule3_count, %c0_i32 : i32
+    %schedule3_ordinal0 = index.cast %safe_schedule3_count : i32 to index
+    %schedule3_ordinal, %schedule3_capacity = index.assume %schedule3_ordinal0, %configured_expert_count [range(%schedule3_ordinal0, 0, 511), lt(%schedule3_ordinal0, %configured_expert_count)] : index, index
+    %schedule3_mask = vector.splat %is_schedule3 : vector<4xi1>
+    vector.store.mask %descriptor, %queue_descriptor_view[3, %schedule3_ordinal, 0], %schedule3_mask : vector<4xi32>, view<4x[%configured_expert_count]x4xi32>, vector<4xi1>
+
+    %schedule0_increment = scf.select %is_schedule0, %c1_i32, %c0_i32 : i32
+    %schedule1_increment = scf.select %is_schedule1, %c1_i32, %c0_i32 : i32
+    %schedule2_increment = scf.select %is_schedule2, %c1_i32, %c0_i32 : i32
+    %schedule3_increment = scf.select %is_schedule3, %c1_i32, %c0_i32 : i32
+    %next_assignment_base = scalar.addi %assignment_base, %expert_assignment_count : i32
+    %next_schedule0_count = scalar.addi %schedule0_count, %schedule0_increment : i32
+    %next_schedule1_count = scalar.addi %schedule1_count, %schedule1_increment : i32
+    %next_schedule2_count = scalar.addi %schedule2_count, %schedule2_increment : i32
+    %next_schedule3_count = scalar.addi %schedule3_count, %schedule3_increment : i32
+    scf.yield %next_assignment_base, %next_schedule0_count, %next_schedule1_count, %next_schedule2_count, %next_schedule3_count : i32, i32, i32, i32, i32
+  }
+
+  view.store %final_schedule0_count, %queue_count_view[0] : i32, view<4xi32>
+  view.store %final_schedule1_count, %queue_count_view[1] : i32, view<4xi32>
+  view.store %final_schedule2_count, %queue_count_view[2] : i32, view<4xi32>
+  view.store %final_schedule3_count, %queue_count_view[3] : i32, view<4xi32>
+  kernel.return
+}
+
+check.case public @qwen3_moe_batched_decode_expert_dispatch_singleton_case {
+  %token_count = check.literal value(16) : index
+  %route_count = check.literal value(8) : index
+  %route_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %route_ids = check.generate.iota offset(0) step(1) period(128) : tensor<16x8xi32>
+  %actual_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %actual_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %actual_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  %expected_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %expected_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %expected_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %actual_assignments, %actual_counts, %actual_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch_reference[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expected_assignments, %expected_counts, %expected_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  check.expect.equal actual(%actual_assignments) expected(%expected_assignments) : tensor<128xi32>
+  check.expect.equal actual(%actual_counts) expected(%expected_counts) : tensor<4xi32>
+  check.expect.equal actual(%actual_descriptors) expected(%expected_descriptors) : tensor<4x128x4xi32>
+  check.return
+}
+
+check.case public @qwen3_moe_batched_decode_expert_dispatch_pair_case {
+  %token_count = check.literal value(16) : index
+  %route_count = check.literal value(8) : index
+  %route_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %route_ids = check.generate.iota offset(0) step(1) period(64) : tensor<16x8xi32>
+  %actual_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %actual_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %actual_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  %expected_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %expected_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %expected_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %actual_assignments, %actual_counts, %actual_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch_reference[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expected_assignments, %expected_counts, %expected_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  check.expect.equal actual(%actual_assignments) expected(%expected_assignments) : tensor<128xi32>
+  check.expect.equal actual(%actual_counts) expected(%expected_counts) : tensor<4xi32>
+  check.expect.equal actual(%actual_descriptors) expected(%expected_descriptors) : tensor<4x128x4xi32>
+  check.return
+}
+
+check.case public @qwen3_moe_batched_decode_expert_dispatch_three_row_case {
+  %token_count = check.literal value(16) : index
+  %route_count = check.literal value(8) : index
+  %route_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %route_ids = check.generate.iota offset(0) step(1) period(43) : tensor<16x8xi32>
+  %actual_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %actual_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %actual_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  %expected_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %expected_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %expected_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %actual_assignments, %actual_counts, %actual_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch_reference[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expected_assignments, %expected_counts, %expected_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  check.expect.equal actual(%actual_assignments) expected(%expected_assignments) : tensor<128xi32>
+  check.expect.equal actual(%actual_counts) expected(%expected_counts) : tensor<4xi32>
+  check.expect.equal actual(%actual_descriptors) expected(%expected_descriptors) : tensor<4x128x4xi32>
+  check.return
+}
+
+check.case public @qwen3_moe_batched_decode_expert_dispatch_four_row_case {
+  %token_count = check.literal value(16) : index
+  %route_count = check.literal value(8) : index
+  %route_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %route_ids = check.generate.iota offset(0) step(1) period(32) : tensor<16x8xi32>
+  %actual_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %actual_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %actual_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  %expected_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %expected_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %expected_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %actual_assignments, %actual_counts, %actual_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch_reference[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expected_assignments, %expected_counts, %expected_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  check.expect.equal actual(%actual_assignments) expected(%expected_assignments) : tensor<128xi32>
+  check.expect.equal actual(%actual_counts) expected(%expected_counts) : tensor<4xi32>
+  check.expect.equal actual(%actual_descriptors) expected(%expected_descriptors) : tensor<4x128x4xi32>
+  check.return
+}
+
+check.case public @qwen3_moe_batched_decode_expert_dispatch_five_to_six_row_case {
+  %token_count = check.literal value(16) : index
+  %route_count = check.literal value(8) : index
+  %route_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %route_ids = check.generate.iota offset(0) step(1) period(25) : tensor<16x8xi32>
+  %actual_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %actual_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %actual_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  %expected_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %expected_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %expected_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %actual_assignments, %actual_counts, %actual_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch_reference[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expected_assignments, %expected_counts, %expected_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  check.expect.equal actual(%actual_assignments) expected(%expected_assignments) : tensor<128xi32>
+  check.expect.equal actual(%actual_counts) expected(%expected_counts) : tensor<4xi32>
+  check.expect.equal actual(%actual_descriptors) expected(%expected_descriptors) : tensor<4x128x4xi32>
+  check.return
+}
+
+check.case public @qwen3_moe_batched_decode_expert_dispatch_fourteen_to_fifteen_row_case {
+  %token_count = check.literal value(16) : index
+  %route_count = check.literal value(8) : index
+  %route_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %route_ids = check.generate.iota offset(0) step(1) period(9) : tensor<16x8xi32>
+  %actual_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %actual_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %actual_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  %expected_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %expected_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %expected_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %actual_assignments, %actual_counts, %actual_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch_reference[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expected_assignments, %expected_counts, %expected_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  check.expect.equal actual(%actual_assignments) expected(%expected_assignments) : tensor<128xi32>
+  check.expect.equal actual(%actual_counts) expected(%expected_counts) : tensor<4xi32>
+  check.expect.equal actual(%actual_descriptors) expected(%expected_descriptors) : tensor<4x128x4xi32>
+  check.return
+}
+
+check.case public @qwen3_moe_batched_decode_expert_dispatch_coherent_case {
+  %token_count = check.literal value(16) : index
+  %route_count = check.literal value(8) : index
+  %route_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %route_ids = check.generate.iota offset(0) step(1) period(8) : tensor<16x8xi32>
+  %actual_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %actual_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %actual_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  %expected_assignments = check.generate.fill value(-1) : tensor<128xi32>
+  %expected_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %expected_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %actual_assignments, %actual_counts, %actual_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch_reference[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expected_assignments, %expected_counts, %expected_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  check.expect.equal actual(%actual_assignments) expected(%expected_assignments) : tensor<128xi32>
+  check.expect.equal actual(%actual_counts) expected(%expected_counts) : tensor<4xi32>
+  check.expect.equal actual(%actual_descriptors) expected(%expected_descriptors) : tensor<4x128x4xi32>
+  check.return
+}
+
+// A second model geometry proves that expert, route, batch, descriptor, and
+// schedule boundaries are configuration rather than Qwen3-30B constants.
+check.case public @qwen3_moe_batched_decode_expert_dispatch_configurable_geometry_case {
+  %token_count = check.literal value(8) : index
+  %route_count = check.literal value(4) : index
+  %route_stride = check.literal value(4) : index
+  %expert_count = check.literal value(32) : index
+  %route_ids = check.generate.iota offset(0) step(1) period(13) : tensor<8x4xi32>
+  %actual_assignments = check.generate.fill value(-1) : tensor<32xi32>
+  %actual_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %actual_descriptors = check.generate.fill value(-1) : tensor<4x32x4xi32>
+  %expected_assignments = check.generate.fill value(-1) : tensor<32xi32>
+  %expected_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %expected_descriptors = check.generate.fill value(-1) : tensor<4x32x4xi32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %actual_assignments, %actual_counts, %actual_descriptors) : [index, index, index, index](index, index, index, index, tensor<8x4xi32>, tensor<32xi32>, tensor<4xi32>, tensor<4x32x4xi32>)
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch_reference[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %expected_assignments, %expected_counts, %expected_descriptors) : [index, index, index, index](index, index, index, index, tensor<8x4xi32>, tensor<32xi32>, tensor<4xi32>, tensor<4x32x4xi32>)
+  check.expect.equal actual(%actual_assignments) expected(%expected_assignments) : tensor<32xi32>
+  check.expect.equal actual(%actual_counts) expected(%expected_counts) : tensor<4xi32>
+  check.expect.equal actual(%actual_descriptors) expected(%expected_descriptors) : tensor<4x32x4xi32>
+  check.return
+}
+
+check.case public @qwen3_moe_batched_decode_expert_dispatch_diverse_benchmark_case {
+  %token_count = check.literal value(16) : index
+  %route_count = check.literal value(8) : index
+  %route_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %route_ids = check.generate.iota offset(0) step(1) period(128) : tensor<16x8xi32>
+  %assignment_ordinals = check.generate.fill value(-1) : tensor<128xi32>
+  %queue_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %queue_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %assignment_ordinals, %queue_counts, %queue_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  check.return
+}
+
+check.case public @qwen3_moe_batched_decode_expert_dispatch_coherent_benchmark_case {
+  %token_count = check.literal value(16) : index
+  %route_count = check.literal value(8) : index
+  %route_stride = check.literal value(8) : index
+  %expert_count = check.literal value(128) : index
+  %route_ids = check.generate.iota offset(0) step(1) period(8) : tensor<16x8xi32>
+  %assignment_ordinals = check.generate.fill value(-1) : tensor<128xi32>
+  %queue_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %queue_descriptors = check.generate.fill value(-1) : tensor<4x128x4xi32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %assignment_ordinals, %queue_counts, %queue_descriptors) : [index, index, index, index](index, index, index, index, tensor<16x8xi32>, tensor<128xi32>, tensor<4xi32>, tensor<4x128x4xi32>)
+  check.return
+}
+
+check.case public @qwen3_moe_batched_decode_expert_dispatch_configurable_benchmark_case {
+  %token_count = check.literal value(8) : index
+  %route_count = check.literal value(4) : index
+  %route_stride = check.literal value(4) : index
+  %expert_count = check.literal value(32) : index
+  %route_ids = check.generate.iota offset(0) step(1) period(13) : tensor<8x4xi32>
+  %assignment_ordinals = check.generate.fill value(-1) : tensor<32xi32>
+  %queue_counts = check.generate.fill value(-1) : tensor<4xi32>
+  %queue_descriptors = check.generate.fill value(-1) : tensor<4x32x4xi32>
+  kernel.launch @qwen3_moe_build_batched_decode_expert_dispatch[%token_count, %route_count, %route_stride, %expert_count](%token_count, %route_count, %route_stride, %expert_count, %route_ids, %assignment_ordinals, %queue_counts, %queue_descriptors) : [index, index, index, index](index, index, index, index, tensor<8x4xi32>, tensor<32xi32>, tensor<4xi32>, tensor<4x32x4xi32>)
+  check.return
+}
+
+check.benchmark<@qwen3_moe_batched_decode_expert_dispatch_diverse_benchmark_case> @qwen3_moe_batched_decode_expert_dispatch_diverse
+
+check.benchmark<@qwen3_moe_batched_decode_expert_dispatch_coherent_benchmark_case> @qwen3_moe_batched_decode_expert_dispatch_coherent
+
+check.benchmark<@qwen3_moe_batched_decode_expert_dispatch_configurable_benchmark_case> @qwen3_moe_batched_decode_expert_dispatch_configurable

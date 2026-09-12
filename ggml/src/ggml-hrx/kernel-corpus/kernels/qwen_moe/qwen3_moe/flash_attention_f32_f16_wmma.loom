@@ -1,0 +1,870 @@
+// Qwen3 MoE grouped-query FlashAttention for the F32-query/F16-cache path.
+//
+// One four-wave workgroup computes 16 query rows for one query head against
+// 64 KV rows at a time. The ownership changes mirror the cooperative-matrix
+// schedule used by llama.cpp's Vulkan CM1 kernel:
+//
+//   1. All workitems stage a scaled 16x128 F16 query tile.
+//   2. Each wave computes one 16x16 QK score slice.
+//   3. Scores cross LDS so each wave can normalize four complete query rows.
+//   4. F16 probabilities cross LDS for four P*V WMMA steps.
+//   5. Each active lane retains one four-channel F16 packet for each of its
+//      four query rows across subsequent 64-row KV blocks.
+//
+// K and V remain in the row-major llama.cpp cache layout
+// [KV token][KV head][128]. Their aligned F16 fragments load directly from
+// global memory; there is no expanded or repacked persistent allocation. QK
+// and the online-softmax statistics remain F32, while the P*V accumulation and
+// carried output match the Vulkan oracle's F16 policy.
+amdgpu.target<gfx11-generic> @qwen3_moe_attention_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @qwen3_moe.attention.query_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @qwen3_moe.attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
+
+// Bounds the context copied by the test-only row-extraction kernel below.
+config.decl @qwen3_moe.attention.test.context_capacity : %value: index where [range(%value, 1, 32768)]
+
+kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_f32_f16_wmma(%query_token_count: index, %key_value_token_count: index) {
+  %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
+  %c1 = index.constant 1 : index
+  %c15 = index.constant 15 : index
+  %c16 = index.constant 16 : index
+  %c256 = index.constant 256 : index
+  %padded_query_token_count = index.add %query_token_count, %c15 : index
+  %query_tile_count = index.div %padded_query_token_count, %c16 : index
+  kernel.launch.config workgroups(%query_tile_count, %query_head_count, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%query_token_count: index, %key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %output: buffer) where [range(%query_token_count, 1, 2048)] {
+  %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
+  %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
+  %key_value_head_count = config.get @qwen3_moe.attention.key_value_head_count : index
+  %query_tile = kernel.workgroup.id<x> : index
+  %query_head0 = kernel.workgroup.id<y> : index
+  %query_head, %launch_query_head_count = index.assume %query_head0, %query_head_count [lt(%query_head0, %query_head_count)] : index, index
+  %workitem = kernel.workitem.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 3)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c15 = index.constant 15 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %query_stage_bytes = index.constant 4352 : offset
+  %score_stage_bytes = index.constant 6144 : offset
+  %probability_stage_bytes = index.constant 3072 : offset
+  %product_stage_bytes = index.constant 2048 : offset
+  %tail_key_value_stage_capacity = index.constant 8192 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %negative_large = scalar.constant -1e+30 : f32
+  %head_size_f32 = scalar.constant 128.0 : f32
+  %attention_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %head_size_f32 : f32
+  %c0_f16 = scalar.constant 0.0 : f16
+  %c1_f32 = scalar.constant 1.0 : f32
+  %output_zero0 = vector.constant 0.0 : vector<4xf16>
+  %output_zero1 = vector.constant 0.0 : vector<4xf16>
+  %output_zero2 = vector.constant 0.0 : vector<4xf16>
+  %output_zero3 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x8 = vector.constant 0.0 : vector<8xf16>
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %negative_f32x4 = vector.constant -1e+30 : vector<4xf32>
+  %m = index.constant 16 : index
+  %n = index.constant 16 : index
+  %k = index.constant 16 : index
+  %query_heads_per_key_value_head = index.div %query_head_count, %key_value_head_count : index
+  %key_value_head = index.div %query_head, %query_heads_per_key_value_head : index
+  %key_value_width = index.mul %key_value_head_count, %c128 : index
+  %key_value_head_base = index.mul %key_value_head, %c128 : index
+  %query_origin = index.mul %query_tile, %c16 : index
+  %full_key_value_block_count = index.div %bounded_key_value_token_count, %c64 : index
+  %full_key_value_token_count0 = index.mul %full_key_value_block_count, %c64 : index
+  %full_key_value_token_count = index.assume %full_key_value_token_count0 [range(%full_key_value_token_count0, 0, 32768), mul(%full_key_value_token_count0, 64)] : index
+  %tail_key_value_token_count = index.sub %bounded_key_value_token_count, %full_key_value_token_count : index
+  %has_key_value_tail = index.cmp ne, %tail_key_value_token_count, %c0 : index
+  %tail_key_value_stage_bytes = scf.select %has_key_value_tail, %tail_key_value_stage_capacity, %c0_offset : offset
+  %subgroup_score_column = index.mul %subgroup, %c16 : index
+  %subgroup_query_row = index.mul %subgroup, %c4 : index
+  %query_row0 = index.add %subgroup_query_row, %c0 : index
+  %query_row1 = index.add %subgroup_query_row, %c1 : index
+  %query_row2 = index.add %subgroup_query_row, %c2 : index
+  %query_row3 = index.add %subgroup_query_row, %c3 : index
+  %query_token0 = index.add %query_origin, %query_row0 : index
+  %query_token1 = index.add %query_origin, %query_row1 : index
+  %query_token2 = index.add %query_origin, %query_row2 : index
+  %query_token3 = index.add %query_origin, %query_row3 : index
+  %query_valid0 = index.cmp ult, %query_token0, %query_token_count : index
+  %query_valid1 = index.cmp ult, %query_token1, %query_token_count : index
+  %query_valid2 = index.cmp ult, %query_token2, %query_token_count : index
+  %query_valid3 = index.cmp ult, %query_token3, %query_token_count : index
+  %query_valid = vector.from_elements %query_valid0, %query_valid1, %query_valid2, %query_valid3 : vector<4xi1>
+  %subgroup_product_channel = index.mul %subgroup, %c16 : index
+  %lane_output_tile = index.div %lane, %c16 : index
+  %lane_product_channel0 = index.rem %lane, %c16 : index
+  %lane_product_channel = index.mul %lane_product_channel0, %c4 : index
+  %lane_output_channel = index.mul %lane, %c4 : index
+  %lane_has_output = index.cmp ult, %lane, %c32 : index
+  // The padded LDS rows mirror the Vulkan oracle's ownership changes. Q uses
+  // eight spare F16 columns after its 128 channels. Score and probability
+  // transpose to key-major rows with eight spare columns after 16 queries.
+  // These strides avoid the bank pattern produced by dense transposed rows.
+  %query_transposed_layout = encoding.layout.strided [1, 136] : encoding<layout>
+  %probability_transposed_layout = encoding.layout.strided [1, 24] : encoding<layout>
+  %query_noalias, %key_noalias, %value_noalias, %mask_noalias, %output_noalias = buffer.assume.noalias %query, %key, %value, %mask, %output : buffer, buffer, buffer, buffer, buffer
+  %query_aligned = buffer.assume.alignment %query_noalias {minimum_alignment = 16} : buffer
+  %key_aligned = buffer.assume.alignment %key_noalias {minimum_alignment = 16} : buffer
+  %value_aligned = buffer.assume.alignment %value_noalias {minimum_alignment = 16} : buffer
+  %mask_aligned = buffer.assume.alignment %mask_noalias {minimum_alignment = 16} : buffer
+  %output_aligned = buffer.assume.alignment %output_noalias {minimum_alignment = 16} : buffer
+  %query_view = buffer.view %query_aligned[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x128xf32>
+  %key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_value_width]xf16>
+  %value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_value_width]xf16>
+  %mask_view = buffer.view %mask_aligned[%c0_offset] : buffer -> view<[%query_token_count]x[%bounded_key_value_token_count]xf16>
+  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_token_count]x[%query_head_count]x128xf32>
+  %query_stage = buffer.alloca<workgroup> align(16) %query_stage_bytes : buffer
+  %score_stage = buffer.alloca<workgroup> align(16) %score_stage_bytes : buffer
+  %probability_stage = buffer.alloca<workgroup> align(16) %probability_stage_bytes : buffer
+  %product_stage = buffer.alloca<workgroup> align(16) %product_stage_bytes : buffer
+  %tail_key_value_stage = buffer.alloca<workgroup> align(16) %tail_key_value_stage_bytes : buffer
+  %query_stage_view = buffer.view %query_stage[%c0_offset] : buffer -> view<16x136xf16>
+  %query_transposed_view = buffer.view %query_stage[%c0_offset] : buffer -> view<128x16xf16, %query_transposed_layout>
+  %score_stage_view = buffer.view %score_stage[%c0_offset] : buffer -> view<64x24xf32>
+  %mask_summary_view = buffer.view %score_stage[%c0_offset] : buffer -> view<4xf32>
+  %probability_stage_view = buffer.view %probability_stage[%c0_offset] : buffer -> view<16x64xf16, %probability_transposed_layout>
+  %product_stage_view = buffer.view %product_stage[%c0_offset] : buffer -> view<16x64xf16>
+  %tail_key_value_stage_view = buffer.view %tail_key_value_stage[%c0_offset] : buffer -> view<32x128xf16>
+  // Scale and truncate Q exactly once. The Vulkan reference does this before
+  // entering its KV loop, making QK a native F16 WMMA while retaining F32
+  // accumulation.
+  scf.for %load_iteration = [%c0 to %c8 step %c1] unroll {
+    %linear = index.madd %load_iteration, %c256, %workitem : index
+    %local_query_row = index.div %linear, %c128 : index
+    %query_channel = index.rem %linear, %c128 : index
+    %query_token = index.add %query_origin, %local_query_row : index
+    %query_valid_load = index.cmp ult, %query_token, %query_token_count : index
+    %query_value = scf.if %query_valid_load -> (f16) {
+      %loaded = view.load %query_view[%query_token, %query_head, %query_channel] : view<[%query_token_count]x[%query_head_count]x128xf32> -> f32
+      %scaled = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %loaded, %attention_scale : f32
+      %truncated = scalar.fptrunc %scaled : f32 to f16
+      scf.yield %truncated : f16
+    } else {
+      scf.yield %c0_f16 : f16
+    }
+    view.store %query_value, %query_stage_view[%local_query_row, %query_channel] : f16, view<16x136xf16>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %full_max, %full_sum, %full_output0, %full_output1, %full_output2, %full_output3 = scf.for %key_origin = [%c0 to %full_key_value_token_count step %c64](%current_max = %negative_f32x4 : vector<4xf32>, %current_sum = %c0_f32x4 : vector<4xf32>, %current_output0 = %output_zero0 : vector<4xf16>, %current_output1 = %output_zero1 : vector<4xf16>, %current_output2 = %output_zero2 : vector<4xf16>, %current_output3 = %output_zero3 : vector<4xf16>) -> (vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+    // Cache the complete 16x64 mask tile before QK. Causal masks leave future
+    // KV blocks entirely at negative infinity; reducing the cached tile lets
+    // the workgroup skip QK, softmax, and P*V for those blocks. This mirrors
+    // the Vulkan oracle without requiring its auxiliary compact mask buffer.
+    %key_token0 = index.add %key_origin, %lane : index
+    %key_token = index.assume %key_token0 [lt(%key_token0, %bounded_key_value_token_count)] : index
+    %mask0 = scf.if %query_valid0 -> (f16) {
+      %value = view.load %mask_view[%query_token0, %key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      scf.yield %value : f16
+    } else {
+      scf.yield %c0_f16 : f16
+    }
+    %mask1 = scf.if %query_valid1 -> (f16) {
+      %value = view.load %mask_view[%query_token1, %key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      scf.yield %value : f16
+    } else {
+      scf.yield %c0_f16 : f16
+    }
+    %mask2 = scf.if %query_valid2 -> (f16) {
+      %value = view.load %mask_view[%query_token2, %key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      scf.yield %value : f16
+    } else {
+      scf.yield %c0_f16 : f16
+    }
+    %mask3 = scf.if %query_valid3 -> (f16) {
+      %value = view.load %mask_view[%query_token3, %key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      scf.yield %value : f16
+    } else {
+      scf.yield %c0_f16 : f16
+    }
+    %mask_f16 = vector.from_elements %mask0, %mask1, %mask2, %mask3 : vector<4xf16>
+    %mask_summary_f32 = vector.extf %mask_f16 : vector<4xf16> to vector<4xf32>
+    %effective_mask = vector.select %query_valid, %mask_summary_f32, %negative_f32x4 : vector<4xf32>
+    %lane_mask_maximum = vector.reduce<maxnumf> %effective_mask, %negative_large : vector<4xf32>, f32
+    %subgroup_mask_maximum = kernel.subgroup.reduce<maxnumf> %lane_mask_maximum : f32
+    %is_subgroup_leader = index.cmp eq, %lane, %c0 : index
+    scf.if %is_subgroup_leader {
+      view.store %subgroup_mask_maximum, %mask_summary_view[%subgroup] : f32, view<4xf32>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %subgroup_mask_maxima = vector.load %mask_summary_view[%c0] : view<4xf32> -> vector<4xf32>
+    %workgroup_mask_maximum = vector.reduce<maxnumf> %subgroup_mask_maxima, %negative_large : vector<4xf32>, f32
+    %block_has_attention = scalar.cmpf ogt, %workgroup_mask_maximum, %negative_large : f32
+    %next_block_max, %next_block_sum, %next_block_output0, %next_block_output1, %next_block_output2, %next_block_output3 = scf.if %block_has_attention -> (vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+      // Four independent wave-level WMMAs produce a 16x64 score tile.
+      %score_key_origin0 = index.add %key_origin, %subgroup_score_column : index
+      %last_full_key_tile_start = index.sub %bounded_key_value_token_count, %c15 : index
+      %score_key_origin = index.assume %score_key_origin0 [lt(%score_key_origin0, %last_full_key_tile_start)] : index
+      %score_init_values = vector.constant 0.0 : vector<4xf32>
+      %score_init = vector.fragment<init> %score_init_values shape [%m, %n] : vector<4xf32>
+      %score_fragment = scf.for %head_tile = [%c0 to %c128 step %c16](%score_accumulator = %score_init : vector<4xf32>) -> (vector<4xf32>) unroll schedule(recurrence) {
+        %key_channel = index.add %key_value_head_base, %head_tile : index
+        %key_fragment = vector.fragment.load<lhs> %key_view[%score_key_origin, %key_channel] shape [%m, %k] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> vector<16xf16>
+        %query_fragment = vector.fragment.load<rhs> %query_transposed_view[%head_tile, %c0] shape [%k, %n] : view<128x16xf16, %query_transposed_layout> -> vector<16xf16>
+        %next_score_accumulator = vector.mma %key_fragment, %query_fragment, %score_accumulator : vector<16xf16>, vector<16xf16>, vector<4xf32>
+        scf.yield %next_score_accumulator : vector<4xf32>
+      }
+      vector.fragment.store<result> %score_fragment, %score_stage_view[%subgroup_score_column, %c0] shape [%m, %n] : vector<4xf32>, view<64x24xf32>
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      // LDS transposes ownership from one 16-column score slice per wave to
+      // four complete query rows per wave. Every lane contributes one key
+      // column to each of those rows.
+      %raw_score0 = view.load %score_stage_view[%lane, %query_row0] : view<64x24xf32> -> f32
+      %raw_score1 = view.load %score_stage_view[%lane, %query_row1] : view<64x24xf32> -> f32
+      %raw_score2 = view.load %score_stage_view[%lane, %query_row2] : view<64x24xf32> -> f32
+      %raw_score3 = view.load %score_stage_view[%lane, %query_row3] : view<64x24xf32> -> f32
+      %mask_f32 = vector.extf %mask_f16 : vector<4xf16> to vector<4xf32>
+      %raw_scores = vector.from_elements %raw_score0, %raw_score1, %raw_score2, %raw_score3 : vector<4xf32>
+      %masked_scores0 = vector.addf<reassoc|nnan|nsz> %raw_scores, %mask_f32 : vector<4xf32>
+      %masked_scores = vector.select %query_valid, %masked_scores0, %negative_f32x4 : vector<4xf32>
+      %block_max = kernel.subgroup.reduce<maxnumf> %masked_scores : vector<4xf32>
+      %next_max = vector.maxnumf %current_max, %block_max : vector<4xf32>
+      %score_delta = vector.subf<reassoc|nnan|nsz> %masked_scores, %next_max : vector<4xf32>
+      %raw_probability = vector.expf<afn> %score_delta : vector<4xf32>
+      %probability = vector.select %query_valid, %raw_probability, %c0_f32x4 : vector<4xf32>
+      %block_sum = kernel.subgroup.reduce<addf> %probability : vector<4xf32>
+      %old_delta = vector.subf<reassoc|nnan|ninf|nsz> %current_max, %next_max : vector<4xf32>
+      %old_scale = vector.expf<afn> %old_delta : vector<4xf32>
+      %scaled_current_sum = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_sum, %old_scale : vector<4xf32>
+      %next_sum = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_sum, %block_sum : vector<4xf32>
+      %probability_f16 = vector.fptrunc %probability : vector<4xf32> to vector<4xf16>
+      %probability0 = vector.extract %probability_f16[0] : vector<4xf16> -> f16
+      %probability1 = vector.extract %probability_f16[1] : vector<4xf16> -> f16
+      %probability2 = vector.extract %probability_f16[2] : vector<4xf16> -> f16
+      %probability3 = vector.extract %probability_f16[3] : vector<4xf16> -> f16
+      view.store %probability0, %probability_stage_view[%query_row0, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+      view.store %probability1, %probability_stage_view[%query_row1, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+      view.store %probability2, %probability_stage_view[%query_row2, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+      view.store %probability3, %probability_stage_view[%query_row3, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      // Match the Vulkan CM1 ownership schedule by computing two sequential
+      // 64-channel output tiles. This keeps one P*V accumulator live per wave
+      // and reuses a 2 KiB exchange tile instead of retaining both halves.
+      %old_scale_f16 = vector.fptrunc %old_scale : vector<4xf32> to vector<4xf16>
+      %old_scale0_scalar = vector.extract %old_scale_f16[0] : vector<4xf16> -> f16
+      %old_scale1_scalar = vector.extract %old_scale_f16[1] : vector<4xf16> -> f16
+      %old_scale2_scalar = vector.extract %old_scale_f16[2] : vector<4xf16> -> f16
+      %old_scale3_scalar = vector.extract %old_scale_f16[3] : vector<4xf16> -> f16
+      %old_scale0 = vector.splat %old_scale0_scalar : vector<4xf16>
+      %old_scale1 = vector.splat %old_scale1_scalar : vector<4xf16>
+      %old_scale2 = vector.splat %old_scale2_scalar : vector<4xf16>
+      %old_scale3 = vector.splat %old_scale3_scalar : vector<4xf16>
+      %scaled_current_output0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output0, %old_scale0 : vector<4xf16>
+      %scaled_current_output1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output1, %old_scale1 : vector<4xf16>
+      %scaled_current_output2 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output2, %old_scale2 : vector<4xf16>
+      %scaled_current_output3 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output3, %old_scale3 : vector<4xf16>
+      %next_output0, %next_output1, %next_output2, %next_output3 = scf.for %output_tile = [%c0 to %c2 step %c1](%tile_output0 = %scaled_current_output0 : vector<4xf16>, %tile_output1 = %scaled_current_output1 : vector<4xf16>, %tile_output2 = %scaled_current_output2 : vector<4xf16>, %tile_output3 = %scaled_current_output3 : vector<4xf16>) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) unroll {
+        %output_tile_channel = index.mul %output_tile, %c64 : index
+        %value_channel0 = index.add %key_value_head_base, %output_tile_channel : index
+        %value_channel = index.add %value_channel0, %subgroup_product_channel : index
+        %product_init = vector.fragment<init> %c0_f16x8 shape [%m, %n] : vector<8xf16>
+        %product_fragment = scf.for %key_tile = [%c0 to %c64 step %c16](%product_accumulator = %product_init : vector<8xf16>) -> (vector<8xf16>) unroll schedule(recurrence) {
+          %value_token0 = index.add %key_origin, %key_tile : index
+          %value_token = index.assume %value_token0 [lt(%value_token0, %last_full_key_tile_start)] : index
+          %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_transposed_layout> -> vector<16xf16>
+          %value_fragment = vector.fragment.load<rhs> %value_view[%value_token, %value_channel] shape [%k, %n] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> vector<16xf16>
+          %next_product_accumulator = vector.mma %probability_fragment, %value_fragment, %product_accumulator : vector<16xf16>, vector<16xf16>, vector<8xf16>
+          scf.yield %next_product_accumulator : vector<8xf16>
+        }
+        vector.fragment.store<result> %product_fragment, %product_stage_view[%c0, %subgroup_product_channel] shape [%m, %n] : vector<8xf16>, view<16x64xf16>
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        %owns_output_tile = index.cmp eq, %lane_output_tile, %output_tile : index
+        %updated_output0, %updated_output1, %updated_output2, %updated_output3 = scf.if %owns_output_tile -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+          %block_output0 = vector.load %product_stage_view[%query_row0, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %block_output1 = vector.load %product_stage_view[%query_row1, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %block_output2 = vector.load %product_stage_view[%query_row2, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %block_output3 = vector.load %product_stage_view[%query_row3, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %updated_tile_output0 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output0, %block_output0 : vector<4xf16>
+          %updated_tile_output1 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output1, %block_output1 : vector<4xf16>
+          %updated_tile_output2 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output2, %block_output2 : vector<4xf16>
+          %updated_tile_output3 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output3, %block_output3 : vector<4xf16>
+          scf.yield %updated_tile_output0, %updated_tile_output1, %updated_tile_output2, %updated_tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+        } else {
+          scf.yield %tile_output0, %tile_output1, %tile_output2, %tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+        }
+        // Complete every read before the next output tile overwrites LDS.
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        scf.yield %updated_output0, %updated_output1, %updated_output2, %updated_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+      }
+      scf.yield %next_max, %next_sum, %next_output0, %next_output1, %next_output2, %next_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+    } else {
+      scf.yield %current_max, %current_sum, %current_output0, %current_output1, %current_output2, %current_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+    }
+    scf.yield %next_block_max, %next_block_sum, %next_block_output0, %next_block_output1, %next_block_output2, %next_block_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+  }
+  // A masked 32-row tile handles the final 1-63 KV rows with the same WMMA
+  // fragments as the aligned path. K and V are staged separately into product
+  // scratch, so every padded element is initialized and no physical padding is
+  // required of the caller. Each tile rounds probabilities to F16 before P*V.
+  %tail_score_wave = index.cmp ult, %subgroup, %c2 : index
+  %final_max, %final_sum, %final_output0, %final_output1, %final_output2, %final_output3 = scf.for %tail_key_origin = [%full_key_value_token_count to %bounded_key_value_token_count step %c32](%current_max = %full_max : vector<4xf32>, %current_sum = %full_sum : vector<4xf32>, %current_output0 = %full_output0 : vector<4xf16>, %current_output1 = %full_output1 : vector<4xf16>, %current_output2 = %full_output2 : vector<4xf16>, %current_output3 = %full_output3 : vector<4xf16>) -> (vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+    %tail_remaining = index.sub %bounded_key_value_token_count, %tail_key_origin : index
+    %tail_key_count = index.min %tail_remaining, %c32 : index
+    // Cooperatively stage one K tile, explicitly zeroing the padded rows.
+    scf.for %load_iteration = [%c0 to %c16 step %c1] unroll {
+      %linear = index.madd %load_iteration, %c256, %workitem : index
+      %tail_key_row = index.div %linear, %c128 : index
+      %tail_key_channel = index.rem %linear, %c128 : index
+      %tail_key_valid = index.cmp ult, %tail_key_row, %tail_key_count : index
+      %tail_key_value = scf.if %tail_key_valid -> (f16) {
+        %tail_key_token0 = index.add %tail_key_origin, %tail_key_row : index
+        %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
+        %global_key_channel = index.add %key_value_head_base, %tail_key_channel : index
+        %loaded = view.load %key_view[%tail_key_token, %global_key_channel] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> f16
+        scf.yield %loaded : f16
+      } else {
+        scf.yield %c0_f16 : f16
+      }
+      view.store %tail_key_value, %tail_key_value_stage_view[%tail_key_row, %tail_key_channel] : f16, view<32x128xf16>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    // Waves zero and one compute the two 16-column QK fragments in this tile.
+    scf.if %tail_score_wave {
+      %tail_score_subgroup = index.assume %subgroup [range(%subgroup, 0, 1)] : index
+      %tail_score_column = index.mul %tail_score_subgroup, %c16 : index
+      %tail_score_init_values = vector.constant 0.0 : vector<4xf32>
+      %tail_score_init = vector.fragment<init> %tail_score_init_values shape [%m, %n] : vector<4xf32>
+      %tail_score_fragment = scf.for %head_tile = [%c0 to %c128 step %c16](%score_accumulator = %tail_score_init : vector<4xf32>) -> (vector<4xf32>) unroll {
+        %key_fragment = vector.fragment.load<lhs> %tail_key_value_stage_view[%tail_score_column, %head_tile] shape [%m, %k] : view<32x128xf16> -> vector<16xf16>
+        %query_fragment = vector.fragment.load<rhs> %query_transposed_view[%head_tile, %c0] shape [%k, %n] : view<128x16xf16, %query_transposed_layout> -> vector<16xf16>
+        %next_score_accumulator = vector.mma %key_fragment, %query_fragment, %score_accumulator : vector<16xf16>, vector<16xf16>, vector<4xf32>
+        scf.yield %next_score_accumulator : vector<4xf32>
+      }
+      vector.fragment.store<result> %tail_score_fragment, %score_stage_view[%tail_score_column, %c0] shape [%m, %n] : vector<4xf32>, view<64x24xf32>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    // LDS changes ownership from the QK wave to four query-row waves. Lanes
+    // beyond the logical tail never read the score or mask buffers.
+    %tail_lane_valid = index.cmp ult, %lane, %tail_key_count : index
+    %tail_valid0 = scalar.andi %tail_lane_valid, %query_valid0 : i1
+    %tail_valid1 = scalar.andi %tail_lane_valid, %query_valid1 : i1
+    %tail_valid2 = scalar.andi %tail_lane_valid, %query_valid2 : i1
+    %tail_valid3 = scalar.andi %tail_lane_valid, %query_valid3 : i1
+    %tail_valid = vector.from_elements %tail_valid0, %tail_valid1, %tail_valid2, %tail_valid3 : vector<4xi1>
+    %tail_key_token0 = index.add %tail_key_origin, %lane : index
+    %masked_score0 = scf.if %tail_valid0 -> (f32) {
+      %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
+      %raw_score = view.load %score_stage_view[%lane, %query_row0] : view<64x24xf32> -> f32
+      %mask_f16 = view.load %mask_view[%query_token0, %tail_key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f32 = scalar.extf %mask_f16 : f16 to f32
+      %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_score1 = scf.if %tail_valid1 -> (f32) {
+      %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
+      %raw_score = view.load %score_stage_view[%lane, %query_row1] : view<64x24xf32> -> f32
+      %mask_f16 = view.load %mask_view[%query_token1, %tail_key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f32 = scalar.extf %mask_f16 : f16 to f32
+      %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_score2 = scf.if %tail_valid2 -> (f32) {
+      %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
+      %raw_score = view.load %score_stage_view[%lane, %query_row2] : view<64x24xf32> -> f32
+      %mask_f16 = view.load %mask_view[%query_token2, %tail_key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f32 = scalar.extf %mask_f16 : f16 to f32
+      %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_score3 = scf.if %tail_valid3 -> (f32) {
+      %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
+      %raw_score = view.load %score_stage_view[%lane, %query_row3] : view<64x24xf32> -> f32
+      %mask_f16 = view.load %mask_view[%query_token3, %tail_key_token] : view<[%query_token_count]x[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f32 = scalar.extf %mask_f16 : f16 to f32
+      %score = scalar.addf<reassoc|nnan|nsz> %raw_score, %mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_scores = vector.from_elements %masked_score0, %masked_score1, %masked_score2, %masked_score3 : vector<4xf32>
+    %block_max = kernel.subgroup.reduce<maxnumf> %masked_scores : vector<4xf32>
+    %next_max = vector.maxnumf %current_max, %block_max : vector<4xf32>
+    %score_delta = vector.subf<reassoc|nnan|nsz> %masked_scores, %next_max : vector<4xf32>
+    %raw_probability = vector.expf<afn> %score_delta : vector<4xf32>
+    %probability = vector.select %tail_valid, %raw_probability, %c0_f32x4 : vector<4xf32>
+    %block_sum = kernel.subgroup.reduce<addf> %probability : vector<4xf32>
+    %old_delta = vector.subf<reassoc|nnan|ninf|nsz> %current_max, %next_max : vector<4xf32>
+    %old_scale = vector.expf<afn> %old_delta : vector<4xf32>
+    %scaled_current_sum = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_sum, %old_scale : vector<4xf32>
+    %next_sum = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_sum, %block_sum : vector<4xf32>
+    %probability_f16 = vector.fptrunc %probability : vector<4xf32> to vector<4xf16>
+    %probability0 = vector.extract %probability_f16[0] : vector<4xf16> -> f16
+    %probability1 = vector.extract %probability_f16[1] : vector<4xf16> -> f16
+    %probability2 = vector.extract %probability_f16[2] : vector<4xf16> -> f16
+    %probability3 = vector.extract %probability_f16[3] : vector<4xf16> -> f16
+    view.store %probability0, %probability_stage_view[%query_row0, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    view.store %probability1, %probability_stage_view[%query_row1, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    view.store %probability2, %probability_stage_view[%query_row2, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    view.store %probability3, %probability_stage_view[%query_row3, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    // Reuse product scratch for V after every probability is resident in its
+    // disjoint LDS tile.
+    scf.for %load_iteration = [%c0 to %c16 step %c1] unroll {
+      %linear = index.madd %load_iteration, %c256, %workitem : index
+      %tail_value_row = index.div %linear, %c128 : index
+      %tail_value_channel = index.rem %linear, %c128 : index
+      %tail_value_valid = index.cmp ult, %tail_value_row, %tail_key_count : index
+      %tail_value = scf.if %tail_value_valid -> (f16) {
+        %tail_value_token0 = index.add %tail_key_origin, %tail_value_row : index
+        %tail_value_token = index.assume %tail_value_token0 [lt(%tail_value_token0, %bounded_key_value_token_count)] : index
+        %global_value_channel = index.add %key_value_head_base, %tail_value_channel : index
+        %loaded = view.load %value_view[%tail_value_token, %global_value_channel] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> f16
+        scf.yield %loaded : f16
+      } else {
+        scf.yield %c0_f16 : f16
+      }
+      view.store %tail_value, %tail_key_value_stage_view[%tail_value_row, %tail_value_channel] : f16, view<32x128xf16>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    // Keep tail V staging separate from the 2 KiB product exchange, then use
+    // the same two 64-channel phases as the aligned path.
+    %old_scale_f16 = vector.fptrunc %old_scale : vector<4xf32> to vector<4xf16>
+    %old_scale0_scalar = vector.extract %old_scale_f16[0] : vector<4xf16> -> f16
+    %old_scale1_scalar = vector.extract %old_scale_f16[1] : vector<4xf16> -> f16
+    %old_scale2_scalar = vector.extract %old_scale_f16[2] : vector<4xf16> -> f16
+    %old_scale3_scalar = vector.extract %old_scale_f16[3] : vector<4xf16> -> f16
+    %old_scale0 = vector.splat %old_scale0_scalar : vector<4xf16>
+    %old_scale1 = vector.splat %old_scale1_scalar : vector<4xf16>
+    %old_scale2 = vector.splat %old_scale2_scalar : vector<4xf16>
+    %old_scale3 = vector.splat %old_scale3_scalar : vector<4xf16>
+    %scaled_current_output0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output0, %old_scale0 : vector<4xf16>
+    %scaled_current_output1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output1, %old_scale1 : vector<4xf16>
+    %scaled_current_output2 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output2, %old_scale2 : vector<4xf16>
+    %scaled_current_output3 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output3, %old_scale3 : vector<4xf16>
+    %next_output0, %next_output1, %next_output2, %next_output3 = scf.for %output_tile = [%c0 to %c2 step %c1](%tile_output0 = %scaled_current_output0 : vector<4xf16>, %tile_output1 = %scaled_current_output1 : vector<4xf16>, %tile_output2 = %scaled_current_output2 : vector<4xf16>, %tile_output3 = %scaled_current_output3 : vector<4xf16>) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) unroll {
+      %output_tile_channel = index.mul %output_tile, %c64 : index
+      %value_channel = index.add %output_tile_channel, %subgroup_product_channel : index
+      %tail_product_init = vector.fragment<init> %c0_f16x8 shape [%m, %n] : vector<8xf16>
+      %tail_product_fragment = scf.for %key_tile = [%c0 to %c32 step %c16](%product_accumulator = %tail_product_init : vector<8xf16>) -> (vector<8xf16>) unroll {
+        %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_transposed_layout> -> vector<16xf16>
+        %value_fragment = vector.fragment.load<rhs> %tail_key_value_stage_view[%key_tile, %value_channel] shape [%k, %n] : view<32x128xf16> -> vector<16xf16>
+        %next_product_accumulator = vector.mma %probability_fragment, %value_fragment, %product_accumulator : vector<16xf16>, vector<16xf16>, vector<8xf16>
+        scf.yield %next_product_accumulator : vector<8xf16>
+      }
+      vector.fragment.store<result> %tail_product_fragment, %product_stage_view[%c0, %subgroup_product_channel] shape [%m, %n] : vector<8xf16>, view<16x64xf16>
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      %owns_output_tile = index.cmp eq, %lane_output_tile, %output_tile : index
+      %updated_output0, %updated_output1, %updated_output2, %updated_output3 = scf.if %owns_output_tile -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+        %block_output0 = vector.load %product_stage_view[%query_row0, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+        %block_output1 = vector.load %product_stage_view[%query_row1, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+        %block_output2 = vector.load %product_stage_view[%query_row2, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+        %block_output3 = vector.load %product_stage_view[%query_row3, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+        %updated_tile_output0 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output0, %block_output0 : vector<4xf16>
+        %updated_tile_output1 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output1, %block_output1 : vector<4xf16>
+        %updated_tile_output2 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output2, %block_output2 : vector<4xf16>
+        %updated_tile_output3 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output3, %block_output3 : vector<4xf16>
+        scf.yield %updated_tile_output0, %updated_tile_output1, %updated_tile_output2, %updated_tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+      } else {
+        scf.yield %tile_output0, %tile_output1, %tile_output2, %tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      scf.yield %updated_output0, %updated_output1, %updated_output2, %updated_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+    }
+    scf.yield %next_max, %next_sum, %next_output0, %next_output1, %next_output2, %next_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+  }
+  // Normalize and publish the lane-owned packets. Query-tail rows never
+  // participate in the output store.
+  scf.if %lane_has_output {
+    %sum0_scalar = vector.extract %final_sum[0] : vector<4xf32> -> f32
+    %sum1_scalar = vector.extract %final_sum[1] : vector<4xf32> -> f32
+    %sum2_scalar = vector.extract %final_sum[2] : vector<4xf32> -> f32
+    %sum3_scalar = vector.extract %final_sum[3] : vector<4xf32> -> f32
+    %inverse_sum0_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum0_scalar : f32
+    %inverse_sum1_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum1_scalar : f32
+    %inverse_sum2_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum2_scalar : f32
+    %inverse_sum3_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum3_scalar : f32
+    %inverse_sum0_f16 = scalar.fptrunc %inverse_sum0_f32 : f32 to f16
+    %inverse_sum1_f16 = scalar.fptrunc %inverse_sum1_f32 : f32 to f16
+    %inverse_sum2_f16 = scalar.fptrunc %inverse_sum2_f32 : f32 to f16
+    %inverse_sum3_f16 = scalar.fptrunc %inverse_sum3_f32 : f32 to f16
+    %inverse_sum0 = vector.splat %inverse_sum0_f16 : vector<4xf16>
+    %inverse_sum1 = vector.splat %inverse_sum1_f16 : vector<4xf16>
+    %inverse_sum2 = vector.splat %inverse_sum2_f16 : vector<4xf16>
+    %inverse_sum3 = vector.splat %inverse_sum3_f16 : vector<4xf16>
+    %normalized0_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output0, %inverse_sum0 : vector<4xf16>
+    %normalized1_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output1, %inverse_sum1 : vector<4xf16>
+    %normalized2_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output2, %inverse_sum2 : vector<4xf16>
+    %normalized3_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output3, %inverse_sum3 : vector<4xf16>
+    %normalized0 = vector.extf %normalized0_f16 : vector<4xf16> to vector<4xf32>
+    %normalized1 = vector.extf %normalized1_f16 : vector<4xf16> to vector<4xf32>
+    %normalized2 = vector.extf %normalized2_f16 : vector<4xf16> to vector<4xf32>
+    %normalized3 = vector.extf %normalized3_f16 : vector<4xf16> to vector<4xf32>
+    scf.if %query_valid0 {
+      vector.store %normalized0, %output_view[%query_token0, %query_head, %lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x128xf32>
+    }
+    scf.if %query_valid1 {
+      vector.store %normalized1, %output_view[%query_token1, %query_head, %lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x128xf32>
+    }
+    scf.if %query_valid2 {
+      vector.store %normalized2, %output_view[%query_token2, %query_head, %lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x128xf32>
+    }
+    scf.if %query_valid3 {
+      vector.store %normalized3, %output_view[%query_token3, %query_head, %lane_output_channel] : vector<4xf32>, view<[%query_token_count]x[%query_head_count]x128xf32>
+    }
+  }
+  kernel.return
+}
+
+// Test-only causal-mask construction for the production 14-token witness.
+// Finite F16 minima retain exact zero probabilities without requiring infinity
+// support from synthetic tensor generators. Selective linking drops this
+// helper from production roots.
+kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_test_make_causal_mask() {
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%c1, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%mask: buffer) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c14 = index.constant 14 : index
+  %c196 = index.constant 196 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_f16 = scalar.constant 0.0 : f16
+  %negative_f16 = scalar.constant -65504.0 : f16
+  %workitem = kernel.workitem.id<x> : index
+  %in_bounds = index.cmp ult, %workitem, %c196 : index
+  %mask_noalias = buffer.assume.noalias %mask : buffer
+  %mask_view = buffer.view %mask_noalias[%c0_offset] : buffer -> view<14x14xf16>
+  scf.if %in_bounds {
+    %row = index.div %workitem, %c14 : index
+    %column = index.rem %workitem, %c14 : index
+    %row_limit = index.add %row, %c1 : index
+    %is_visible = index.cmp ult, %column, %row_limit : index
+    %value = scf.select %is_visible, %c0_f16, %negative_f16 : f16
+    view.store %value, %mask_view[%row, %column] : f16, view<14x14xf16>
+  }
+  kernel.return
+}
+
+// Test-only row extraction for comparing one multirow attention dispatch with
+// independent one-row dispatches over identical data. Selective linking drops
+// this helper from production roots.
+kernel.def target(@qwen3_moe_attention_gfx11_wave64) @qwen3_moe_flash_attention_test_extract_row(%query_token_count: index, %context_count: index, %source_row: index) {
+  %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
+  %context_capacity = config.get @qwen3_moe.attention.test.context_capacity : index
+  %c128 = index.constant 128 : index
+  %c255 = index.constant 255 : index
+  %c256 = index.constant 256 : index
+  %c1 = index.constant 1 : index
+  %query_element_count = index.mul %query_head_count, %c128 : index
+  %element_count = index.add %query_element_count, %context_capacity : index
+  %padded_element_count = index.add %element_count, %c255 : index
+  %workgroup_count = index.div %padded_element_count, %c256 : index
+  kernel.launch.config workgroups(%workgroup_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%query_token_count: index, %context_count: index, %source_row: index, %source_query: buffer, %source_mask: buffer, %target_query: buffer, %target_mask: buffer) {
+  %c0 = index.constant 0 : index
+  %c0_offset = index.constant 0 : offset
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
+  %context_capacity = config.get @qwen3_moe.attention.test.context_capacity : index
+  %bounded_query_token_count = index.assume %query_token_count [range(%query_token_count, 1, 2048)] : index
+  %bounded_context_count = index.assume %context_count [range(%context_count, 1, 32768), le(%context_count, %context_capacity)] : index
+  %bounded_source_row, %source_query_token_count = index.assume %source_row, %bounded_query_token_count [range(%source_row, 0, 2047), lt(%source_row, %bounded_query_token_count)] : index, index
+  %workgroup = kernel.workgroup.id<x> : index
+  %workitem = kernel.workitem.id<x> : index
+  %linear = index.madd %workgroup, %c256, %workitem : index
+  %query_element_count = index.mul %query_head_count, %c128 : index
+  %element_count = index.add %query_element_count, %bounded_context_count : index
+  %in_bounds = index.cmp ult, %linear, %element_count : index
+  %source_query_noalias, %source_mask_noalias, %target_query_noalias, %target_mask_noalias = buffer.assume.noalias %source_query, %source_mask, %target_query, %target_mask : buffer, buffer, buffer, buffer
+  %source_query_view = buffer.view %source_query_noalias[%c0_offset] : buffer -> view<[%source_query_token_count]x[%query_head_count]x128xf32>
+  %source_mask_view = buffer.view %source_mask_noalias[%c0_offset] : buffer -> view<[%source_query_token_count]x[%bounded_context_count]xf16>
+  %target_query_view = buffer.view %target_query_noalias[%c0_offset] : buffer -> view<1x[%query_head_count]x128xf32>
+  %target_mask_view = buffer.view %target_mask_noalias[%c0_offset] : buffer -> view<1x[%bounded_context_count]xf16>
+  scf.if %in_bounds {
+    %is_query_element = index.cmp ult, %linear, %query_element_count : index
+    scf.if %is_query_element {
+      %query_head = index.div %linear, %c128 : index
+      %query_channel = index.rem %linear, %c128 : index
+      %value = view.load %source_query_view[%bounded_source_row, %query_head, %query_channel] : view<[%source_query_token_count]x[%query_head_count]x128xf32> -> f32
+      view.store %value, %target_query_view[%c0, %query_head, %query_channel] : f32, view<1x[%query_head_count]x128xf32>
+    } else {
+      %mask_column = index.sub %linear, %query_element_count : index
+      %value = view.load %source_mask_view[%bounded_source_row, %mask_column] : view<[%source_query_token_count]x[%bounded_context_count]xf16> -> f16
+      view.store %value, %target_mask_view[%c0, %mask_column] : f16, view<1x[%bounded_context_count]xf16>
+    }
+  }
+  kernel.return
+}
+
+// The mask selects the first KV row exactly. QK, F16 probability conversion,
+// GQA addressing, and the P*V path all execute, while the expected result is
+// the first V row and remains auditable as an iota.
+check.case public @qwen3_moe_flash_attention_f32_f16_wmma_selected_row_case {
+  %query_token_count = check.literal value(1) : index
+  %key_value_token_count = check.literal value(64) : index
+  %query = check.generate.fill value(1.0) : tensor<1x1x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<64x1x128xf16>
+  %value = check.generate.iota offset(0.0) step(0.125) : tensor<64x1x128xf16>
+  %mask = check.generate.iota offset(0.0) step(-10000.0) : tensor<1x64xf16>
+  %output = check.generate.fill value(-1.0) : tensor<1x1x128xf32>
+  %expected = check.generate.iota offset(0.0) step(0.125) : tensor<1x1x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<1x1x128xf32>, tensor<64x1x128xf16>, tensor<64x1x128xf16>, tensor<1x64xf16>, tensor<1x1x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>
+  check.return
+}
+
+// Four query rows select four distinct KV rows. The 33-element mask period
+// maps row-major index row*32+column to zero exactly when row == column for
+// rows zero through three. The expected output is therefore the first four
+// rows of V, preserving an auditable iota while distinguishing every component
+// in the four-row per-wave ownership path.
+check.case public @qwen3_moe_flash_attention_f32_f16_wmma_multirow_selected_case {
+  %query_token_count = check.literal value(4) : index
+  %key_value_token_count = check.literal value(32) : index
+  %query = check.generate.fill value(1.0) : tensor<4x1x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<32x1x128xf16>
+  %value = check.generate.iota offset(0.0) step(0.125) : tensor<32x1x128xf16>
+  %mask = check.generate.iota offset(0.0) step(-10000.0) period(33) : tensor<4x32xf16>
+  %output = check.generate.fill value(-1.0) : tensor<4x1x128xf32>
+  %expected = check.generate.iota offset(0.0) step(0.125) : tensor<4x1x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<4x1x128xf32>, tensor<32x1x128xf16>, tensor<32x1x128xf16>, tensor<4x32xf16>, tensor<4x1x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<4x1x128xf32>
+  check.return
+}
+
+// A unit mask step gives every row the same geometric softmax distribution,
+// shifted to begin at the row-matched KV entry. Values advance by 1/4096, so
+// each KV row adds exactly 1/32 and the infinite-series weighted row offset is
+// 1/(32*(e-1)). Terms that wrap at period 33 are below F16 significance. This
+// exercises four independent online-softmax and P*V states while retaining a
+// compact closed-form expected iota.
+check.case public @qwen3_moe_flash_attention_f32_f16_wmma_multirow_online_case {
+  %query_token_count = check.literal value(4) : index
+  %key_value_token_count = check.literal value(32) : index
+  %query = check.generate.fill value(1.0) : tensor<4x1x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<32x1x128xf16>
+  %value = check.generate.iota offset(0.0) step(0.000244140625) : tensor<32x1x128xf16>
+  %mask = check.generate.iota offset(0.0) step(-1.0) period(33) : tensor<4x32xf16>
+  %output = check.generate.fill value(-1.0) : tensor<4x1x128xf32>
+  %expected = check.generate.iota offset(0.01818677224124075) step(0.000244140625) : tensor<4x1x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<4x1x128xf32>, tensor<32x1x128xf16>, tensor<32x1x128xf16>, tensor<4x32xf16>, tensor<4x1x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<4x1x128xf32>
+  check.return
+}
+
+// Compare the first four rows of one fourteen-row launch with four one-row
+// launches over identical, nonuniform data and the production causal mask.
+// Fourteen rows retain the exact dynamic dense-row stride, ownership, and
+// query-validity pressure, while the one-row path is the proven containment.
+// Row extraction only reshapes bindings and performs no attention arithmetic.
+check.case public @qwen3_moe_flash_attention_f32_f16_wmma_multirow_differential_case {
+  %query_token_count = check.literal value(14) : index
+  %c1 = check.literal value(1) : index
+  %key_value_token_count = check.literal value(14) : index
+  %row0 = check.literal value(0) : index
+  %row1 = check.literal value(1) : index
+  %row2 = check.literal value(2) : index
+  %row3 = check.literal value(3) : index
+  %query_seed = check.param.seed base(0x514d4f4551554552) count(1) : i64
+  %key_seed = check.param.seed base(0x514d4f454b455931) count(1) : i64
+  %value_seed = check.param.seed base(0x514d4f4556414c31) count(1) : i64
+  %query = check.generate.random.uniform seed(%query_seed) range(-1.0 to 1.0) : tensor<14x32x128xf32>
+  %key = check.generate.random.uniform seed(%key_seed) range(-1.0 to 1.0) : tensor<14x4x128xf16>
+  %value = check.generate.random.uniform seed(%value_seed) range(-1.0 to 1.0) : tensor<14x4x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<14x14xf16>
+  %actual = check.generate.fill value(-1.0) : tensor<14x32x128xf32>
+  %row_query = check.generate.fill value(0.0) : tensor<1x32x128xf32>
+  %row_mask = check.generate.fill value(0.0) : tensor<1x14xf16>
+  %expected0 = check.generate.fill value(0.0) : tensor<1x32x128xf32>
+  %expected1 = check.generate.fill value(0.0) : tensor<1x32x128xf32>
+  %expected2 = check.generate.fill value(0.0) : tensor<1x32x128xf32>
+  %expected3 = check.generate.fill value(0.0) : tensor<1x32x128xf32>
+  %actual0 = check.generate.fill value(-1.0) : tensor<1x32x128xf32>
+  %actual1 = check.generate.fill value(-1.0) : tensor<1x32x128xf32>
+  %actual2 = check.generate.fill value(-1.0) : tensor<1x32x128xf32>
+  %actual3 = check.generate.fill value(-1.0) : tensor<1x32x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_test_make_causal_mask(%mask) : (tensor<14x14xf16>)
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %actual) : [index, index](index, index, tensor<14x32x128xf32>, tensor<14x4x128xf16>, tensor<14x4x128xf16>, tensor<14x14xf16>, tensor<14x32x128xf32>)
+  kernel.launch @qwen3_moe_flash_attention_test_extract_row[%query_token_count, %key_value_token_count, %row0](%query_token_count, %key_value_token_count, %row0, %query, %mask, %row_query, %row_mask) : [index, index, index](index, index, index, tensor<14x32x128xf32>, tensor<14x14xf16>, tensor<1x32x128xf32>, tensor<1x14xf16>)
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%c1, %key_value_token_count](%c1, %key_value_token_count, %row_query, %key, %value, %row_mask, %expected0) : [index, index](index, index, tensor<1x32x128xf32>, tensor<14x4x128xf16>, tensor<14x4x128xf16>, tensor<1x14xf16>, tensor<1x32x128xf32>)
+  kernel.launch @qwen3_moe_flash_attention_test_extract_row[%query_token_count, %key_value_token_count, %row0](%query_token_count, %key_value_token_count, %row0, %actual, %mask, %actual0, %row_mask) : [index, index, index](index, index, index, tensor<14x32x128xf32>, tensor<14x14xf16>, tensor<1x32x128xf32>, tensor<1x14xf16>)
+  kernel.launch @qwen3_moe_flash_attention_test_extract_row[%query_token_count, %key_value_token_count, %row1](%query_token_count, %key_value_token_count, %row1, %query, %mask, %row_query, %row_mask) : [index, index, index](index, index, index, tensor<14x32x128xf32>, tensor<14x14xf16>, tensor<1x32x128xf32>, tensor<1x14xf16>)
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%c1, %key_value_token_count](%c1, %key_value_token_count, %row_query, %key, %value, %row_mask, %expected1) : [index, index](index, index, tensor<1x32x128xf32>, tensor<14x4x128xf16>, tensor<14x4x128xf16>, tensor<1x14xf16>, tensor<1x32x128xf32>)
+  kernel.launch @qwen3_moe_flash_attention_test_extract_row[%query_token_count, %key_value_token_count, %row1](%query_token_count, %key_value_token_count, %row1, %actual, %mask, %actual1, %row_mask) : [index, index, index](index, index, index, tensor<14x32x128xf32>, tensor<14x14xf16>, tensor<1x32x128xf32>, tensor<1x14xf16>)
+  kernel.launch @qwen3_moe_flash_attention_test_extract_row[%query_token_count, %key_value_token_count, %row2](%query_token_count, %key_value_token_count, %row2, %query, %mask, %row_query, %row_mask) : [index, index, index](index, index, index, tensor<14x32x128xf32>, tensor<14x14xf16>, tensor<1x32x128xf32>, tensor<1x14xf16>)
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%c1, %key_value_token_count](%c1, %key_value_token_count, %row_query, %key, %value, %row_mask, %expected2) : [index, index](index, index, tensor<1x32x128xf32>, tensor<14x4x128xf16>, tensor<14x4x128xf16>, tensor<1x14xf16>, tensor<1x32x128xf32>)
+  kernel.launch @qwen3_moe_flash_attention_test_extract_row[%query_token_count, %key_value_token_count, %row2](%query_token_count, %key_value_token_count, %row2, %actual, %mask, %actual2, %row_mask) : [index, index, index](index, index, index, tensor<14x32x128xf32>, tensor<14x14xf16>, tensor<1x32x128xf32>, tensor<1x14xf16>)
+  kernel.launch @qwen3_moe_flash_attention_test_extract_row[%query_token_count, %key_value_token_count, %row3](%query_token_count, %key_value_token_count, %row3, %query, %mask, %row_query, %row_mask) : [index, index, index](index, index, index, tensor<14x32x128xf32>, tensor<14x14xf16>, tensor<1x32x128xf32>, tensor<1x14xf16>)
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%c1, %key_value_token_count](%c1, %key_value_token_count, %row_query, %key, %value, %row_mask, %expected3) : [index, index](index, index, tensor<1x32x128xf32>, tensor<14x4x128xf16>, tensor<14x4x128xf16>, tensor<1x14xf16>, tensor<1x32x128xf32>)
+  kernel.launch @qwen3_moe_flash_attention_test_extract_row[%query_token_count, %key_value_token_count, %row3](%query_token_count, %key_value_token_count, %row3, %actual, %mask, %actual3, %row_mask) : [index, index, index](index, index, index, tensor<14x32x128xf32>, tensor<14x14xf16>, tensor<1x32x128xf32>, tensor<1x14xf16>)
+  check.expect.close actual(%actual0) expected(%expected0) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>
+  check.expect.close actual(%actual1) expected(%expected1) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>
+  check.expect.close actual(%actual2) expected(%expected2) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>
+  check.expect.close actual(%actual3) expected(%expected3) atol(0.001) rtol(0.001) nan(same) : tensor<1x32x128xf32>
+  check.return
+}
+
+// Seventeen rows force a partial second query tile. Equal scores and constant
+// values make every valid output exactly two while still exercising online
+// normalization and the query-tail guards.
+check.case public @qwen3_moe_flash_attention_f32_f16_wmma_query_tail_case {
+  %query_token_count = check.literal value(17) : index
+  %key_value_token_count = check.literal value(64) : index
+  %query = check.generate.fill value(1.0) : tensor<17x1x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<64x1x128xf16>
+  %value = check.generate.fill value(2.0) : tensor<64x1x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<17x64xf16>
+  %output = check.generate.fill value(-1.0) : tensor<17x1x128xf32>
+  %expected = check.generate.fill value(2.0) : tensor<17x1x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<17x1x128xf32>, tensor<64x1x128xf16>, tensor<64x1x128xf16>, tensor<17x64xf16>, tensor<17x1x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<17x1x128xf32>
+  check.return
+}
+
+// Sixty-five KV rows force one masked cleanup tile after a full WMMA block.
+// The mask selects only that final row, whose iota values begin at 1024, so
+// omitting the cleanup path cannot accidentally satisfy the check.
+check.case public @qwen3_moe_flash_attention_f32_f16_wmma_key_value_tail_case {
+  %query_token_count = check.literal value(1) : index
+  %key_value_token_count = check.literal value(65) : index
+  %query = check.generate.fill value(1.0) : tensor<1x1x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<65x1x128xf16>
+  %value = check.generate.iota offset(0.0) step(0.125) : tensor<65x1x128xf16>
+  %mask = check.generate.iota offset(-64000.0) step(1000.0) : tensor<1x65xf16>
+  %output = check.generate.fill value(-1.0) : tensor<1x1x128xf32>
+  %expected = check.generate.iota offset(1024.0) step(0.125) : tensor<1x1x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<1x1x128xf32>, tensor<65x1x128xf16>, tensor<65x1x128xf16>, tensor<1x65xf16>, tensor<1x1x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>
+  check.return
+}
+
+// The first 64-row block contains the selected value while every mask in the
+// second block rounds to negative infinity. This preserves a finite online
+// softmax state while exercising the workgroup-wide block-pruning path.
+check.case public @qwen3_moe_flash_attention_f32_f16_wmma_pruned_block_case {
+  %query_token_count = check.literal value(1) : index
+  %key_value_token_count = check.literal value(128) : index
+  %query = check.generate.fill value(1.0) : tensor<1x1x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<128x1x128xf16>
+  %value = check.generate.iota offset(0.0) step(0.125) : tensor<128x1x128xf16>
+  %mask = check.generate.iota offset(0.0) step(-2000.0) : tensor<1x128xf16>
+  %output = check.generate.fill value(-1.0) : tensor<1x1x128xf32>
+  %expected = check.generate.iota offset(0.0) step(0.125) : tensor<1x1x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<1x1x128xf32>, tensor<128x1x128xf16>, tensor<128x1x128xf16>, tensor<1x128xf16>, tensor<1x1x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x1x128xf32>
+  check.return
+}
+
+check.case public @qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case {
+  %query_token_count = check.param.choice values([1, 32, 64, 128, 192, 255, 256, 257, 384, 511, 512, 513, 768, 1023, 1024, 1025, 1280, 1536, 1792, 2048]) name("query_token_count") : index
+  %key_value_token_count = check.param.choice values([64, 128, 192, 255, 256, 257, 384, 511, 512, 513, 768, 1023, 1024, 1025, 1280, 1536, 1792, 2048, 32768]) name("key_value_token_count") : index
+  %query = check.generate.fill value(0.0) : tensor<[%query_token_count]x32x128xf32>
+  %key = check.generate.fill value(0.0) : tensor<[%key_value_token_count]x4x128xf16>
+  %value = check.generate.fill value(0.0) : tensor<[%key_value_token_count]x4x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<[%query_token_count]x[%key_value_token_count]xf16>
+  %output = check.generate.fill value(1.0) : tensor<[%query_token_count]x32x128xf32>
+  %expected = check.generate.fill value(0.0) : tensor<[%query_token_count]x32x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<[%query_token_count]x32x128xf32>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%query_token_count]x[%key_value_token_count]xf16>, tensor<[%query_token_count]x32x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<[%query_token_count]x32x128xf32>
+  check.return
+}
+
+// Four finite 64-row blocks followed by four negative-infinity blocks model
+// the aggregate computed/pruned work ratio of 512-token causal prefill while
+// keeping every workgroup's path identical for a stable microbenchmark.
+check.case public @qwen3_moe_flash_attention_f32_f16_wmma_pruned_half_benchmark_case {
+  %query_token_count = check.literal value(512) : index
+  %key_value_token_count = check.literal value(512) : index
+  %query = check.generate.fill value(0.0) : tensor<512x32x128xf32>
+  %key = check.generate.fill value(0.0) : tensor<512x4x128xf16>
+  %value = check.generate.fill value(0.0) : tensor<512x4x128xf16>
+  %mask = check.generate.iota offset(0.0) step(-300.0) period(512) : tensor<512x512xf16>
+  %output = check.generate.fill value(1.0) : tensor<512x32x128xf32>
+  %expected = check.generate.fill value(0.0) : tensor<512x32x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_f32_f16_wmma[%query_token_count, %key_value_token_count](%query_token_count, %key_value_token_count, %query, %key, %value, %mask, %output) : [index, index](index, index, tensor<512x32x128xf32>, tensor<512x4x128xf16>, tensor<512x4x128xf16>, tensor<512x512xf16>, tensor<512x32x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<512x32x128xf32>
+  check.return
+}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_selected_row_case> @qwen3_moe_flash_attention_f32_f16_wmma_selected_row
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_query_tail_case> @qwen3_moe_flash_attention_f32_f16_wmma_query_tail
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_key_value_tail_case> @qwen3_moe_flash_attention_f32_f16_wmma_key_value_tail
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_pruned_block_case> @qwen3_moe_flash_attention_f32_f16_wmma_pruned_block
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_pruned_half_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_prefill_512_pruned_half
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_decode_256 {key_value_token_count = 256, query_token_count = 1}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_decode_2048 {key_value_token_count = 2048, query_token_count = 1}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_decode_32768 {key_value_token_count = 32768, query_token_count = 1}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_prefill_32 {key_value_token_count = 256, query_token_count = 32}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_prefill_128 {key_value_token_count = 256, query_token_count = 128}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_prefill_512 {key_value_token_count = 512, query_token_count = 512}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_prefill_512_context_1024 {key_value_token_count = 1024, query_token_count = 512}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_prefill_512_context_1536 {key_value_token_count = 1536, query_token_count = 512}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_prefill_512_context_2048 {key_value_token_count = 2048, query_token_count = 512}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_prefill_1024 {key_value_token_count = 1024, query_token_count = 1024}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_prefill_2048 {key_value_token_count = 2048, query_token_count = 2048}
+
+// These aligned and boundary-adjacent self-attention shapes expose launch or
+// tail cliffs that a powers-of-two-only benchmark would hide. They are
+// measurement witnesses for one shape-specialized kernel, not routing buckets.
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_64 {key_value_token_count = 64, query_token_count = 64}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_128 {key_value_token_count = 128, query_token_count = 128}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_192 {key_value_token_count = 192, query_token_count = 192}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_255 {key_value_token_count = 255, query_token_count = 255}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_256 {key_value_token_count = 256, query_token_count = 256}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_257 {key_value_token_count = 257, query_token_count = 257}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_384 {key_value_token_count = 384, query_token_count = 384}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_511 {key_value_token_count = 511, query_token_count = 511}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_512 {key_value_token_count = 512, query_token_count = 512}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_513 {key_value_token_count = 513, query_token_count = 513}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_768 {key_value_token_count = 768, query_token_count = 768}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_1023 {key_value_token_count = 1023, query_token_count = 1023}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_1024 {key_value_token_count = 1024, query_token_count = 1024}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_1025 {key_value_token_count = 1025, query_token_count = 1025}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_1280 {key_value_token_count = 1280, query_token_count = 1280}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_1536 {key_value_token_count = 1536, query_token_count = 1536}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_1792 {key_value_token_count = 1792, query_token_count = 1792}
+
+check.benchmark<@qwen3_moe_flash_attention_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_f32_f16_wmma_self_2048 {key_value_token_count = 2048, query_token_count = 2048}

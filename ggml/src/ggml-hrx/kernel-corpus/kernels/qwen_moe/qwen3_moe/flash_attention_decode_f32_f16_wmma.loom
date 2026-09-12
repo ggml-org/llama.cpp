@@ -1,0 +1,690 @@
+// Qwen3 MoE grouped-query decode FlashAttention.
+//
+// One or two four-wave workgroups compute up to 16 query heads that share one
+// KV head. Each workgroup walks the exact KV length in 64-row blocks while
+// carrying online-softmax max, sum, and output state in registers. With two
+// output partitions, each workgroup owns one disjoint 64-channel output half;
+// this duplicates QK work but exposes more parallelism without publishing
+// partial softmax state. The ownership changes mirror the cooperative-matrix
+// schedule used by llama.cpp's Vulkan CM1 kernel:
+//
+//   1. All workitems stage a scaled 16x128 F16 GQA-head tile.
+//   2. Each wave computes one 16x16 QK score slice.
+//   3. Scores cross LDS so each wave can normalize four complete query heads.
+//   4. F16 probabilities cross LDS for four P*V WMMA steps.
+//   5. Each active lane retains one four-channel F16 packet for each of its
+//      four query heads across subsequent KV blocks.
+//
+// K and V remain in the row-major llama.cpp cache layout
+// [KV token][KV head][128]. Their aligned F16 fragments load directly from
+// global memory; there is no expanded or repacked persistent allocation. QK
+// and the online-softmax statistics remain F32, while the P*V accumulation and
+// carried output match the Vulkan oracle's F16 policy. Unlike the split-K
+// fallback, this kernel never publishes partial tensors or completion atomics.
+amdgpu.target<gfx11-generic> @qwen3_moe_attention_decode_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @qwen3_moe.attention.query_head_count : %value: index where [range(%value, 1, 64)]
+
+config.decl @qwen3_moe.attention.key_value_head_count : %value: index where [range(%value, 1, 64)]
+
+// Number of independent 64-channel output partitions per KV head. One avoids
+// redundant QK work; two exposes more workgroups for short decode contexts.
+config.decl @qwen3_moe.attention.decode.output_partition_count : %value: index where [range(%value, 1, 2)]
+
+kernel.def target(@qwen3_moe_attention_decode_gfx11_wave64) @qwen3_moe_flash_attention_decode_f32_f16_wmma(%key_value_token_count: index) {
+  %key_value_head_count = config.get @qwen3_moe.attention.key_value_head_count : index
+  %output_partition_count = config.get @qwen3_moe.attention.decode.output_partition_count : index
+  %c1 = index.constant 1 : index
+  %c256 = index.constant 256 : index
+  %workgroup_count = index.mul %key_value_head_count, %output_partition_count : index
+  kernel.launch.config workgroups(%workgroup_count, %c1, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %output: buffer) {
+  %bounded_key_value_token_count = index.assume %key_value_token_count [range(%key_value_token_count, 1, 32768)] : index
+  %query_head_count = config.get @qwen3_moe.attention.query_head_count : index
+  %key_value_head_count = config.get @qwen3_moe.attention.key_value_head_count : index
+  %output_partition_count = config.get @qwen3_moe.attention.decode.output_partition_count : index
+  %workgroup_x0 = kernel.workgroup.id<x> : index
+  %workgroup_count0 = index.mul %key_value_head_count, %output_partition_count : index
+  %workgroup_x, %workgroup_count = index.assume %workgroup_x0, %workgroup_count0 [lt(%workgroup_x0, %workgroup_count0)] : index, index
+  %key_value_head0 = index.div %workgroup_x, %output_partition_count : index
+  %key_value_head = index.assume %key_value_head0 [range(%key_value_head0, 0, 63)] : index
+  %output_partition = index.rem %workgroup_x, %output_partition_count : index
+  %workitem = kernel.workitem.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 3)] : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c15 = index.constant 15 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c256 = index.constant 256 : index
+  %c0_offset = index.constant 0 : offset
+  %query_stage_bytes = index.constant 4352 : offset
+  %score_stage_bytes = index.constant 6144 : offset
+  %probability_stage_bytes = index.constant 3072 : offset
+  %product_stage_bytes = index.constant 2048 : offset
+  %tail_key_value_stage_capacity = index.constant 8192 : offset
+  %c0_f32 = scalar.constant 0.0 : f32
+  %negative_large = scalar.constant -1e+30 : f32
+  %head_size_f32 = scalar.constant 128.0 : f32
+  %attention_scale = scalar.rsqrtf<nnan|ninf|nsz|afn> %head_size_f32 : f32
+  %c0_f16 = scalar.constant 0.0 : f16
+  %c1_f32 = scalar.constant 1.0 : f32
+  %output_zero0 = vector.constant 0.0 : vector<4xf16>
+  %output_zero1 = vector.constant 0.0 : vector<4xf16>
+  %output_zero2 = vector.constant 0.0 : vector<4xf16>
+  %output_zero3 = vector.constant 0.0 : vector<4xf16>
+  %c0_f16x8 = vector.constant 0.0 : vector<8xf16>
+  %c0_f32x4 = vector.constant 0.0 : vector<4xf32>
+  %negative_f32x4 = vector.constant -1e+30 : vector<4xf32>
+  %m = index.constant 16 : index
+  %n = index.constant 16 : index
+  %k = index.constant 16 : index
+  %query_heads_per_key_value_head0 = index.div %query_head_count, %key_value_head_count : index
+  %query_heads_per_key_value_head = index.assume %query_heads_per_key_value_head0 [range(%query_heads_per_key_value_head0, 1, 16)] : index
+  %query_head_base = index.mul %key_value_head, %query_heads_per_key_value_head : index
+  %key_value_width = index.mul %key_value_head_count, %c128 : index
+  %key_value_head_base = index.mul %key_value_head, %c128 : index
+  %full_key_value_block_count = index.div %bounded_key_value_token_count, %c64 : index
+  %full_key_value_token_count0 = index.mul %full_key_value_block_count, %c64 : index
+  %full_key_value_token_count = index.assume %full_key_value_token_count0 [range(%full_key_value_token_count0, 0, 32768), mul(%full_key_value_token_count0, 64)] : index
+  %tail_key_value_token_count = index.sub %bounded_key_value_token_count, %full_key_value_token_count : index
+  %has_key_value_tail = index.cmp ne, %tail_key_value_token_count, %c0 : index
+  %has_single_key_value_tail = index.cmp eq, %tail_key_value_token_count, %c1 : index
+  %tail_key_value_stage_bytes = scf.select %has_key_value_tail, %tail_key_value_stage_capacity, %c0_offset : offset
+  %subgroup_score_column = index.mul %subgroup, %c16 : index
+  %subgroup_query_row = index.mul %subgroup, %c4 : index
+  %query_row0 = index.add %subgroup_query_row, %c0 : index
+  %query_row1 = index.add %subgroup_query_row, %c1 : index
+  %query_row2 = index.add %subgroup_query_row, %c2 : index
+  %query_row3 = index.add %subgroup_query_row, %c3 : index
+  %query_head0 = index.add %query_head_base, %query_row0 : index
+  %query_head1 = index.add %query_head_base, %query_row1 : index
+  %query_head2 = index.add %query_head_base, %query_row2 : index
+  %query_head3 = index.add %query_head_base, %query_row3 : index
+  %query_valid0 = index.cmp ult, %query_head0, %query_head_count : index
+  %query_valid1 = index.cmp ult, %query_head1, %query_head_count : index
+  %query_valid2 = index.cmp ult, %query_head2, %query_head_count : index
+  %query_valid3 = index.cmp ult, %query_head3, %query_head_count : index
+  %query_valid = vector.from_elements %query_valid0, %query_valid1, %query_valid2, %query_valid3 : vector<4xi1>
+  %subgroup_product_channel = index.mul %subgroup, %c16 : index
+  %lane_output_tile = index.div %lane, %c16 : index
+  %output_tile_count = index.div %c2, %output_partition_count : index
+  %output_tile_end = index.add %output_partition, %output_tile_count : index
+  %lane_product_channel0 = index.rem %lane, %c16 : index
+  %lane_product_channel = index.mul %lane_product_channel0, %c4 : index
+  %lane_output_channel = index.mul %lane, %c4 : index
+  %lane_output_at_or_after_partition = index.cmp uge, %lane_output_tile, %output_partition : index
+  %lane_output_before_end = index.cmp ult, %lane_output_tile, %output_tile_end : index
+  %lane_has_output = scalar.andi %lane_output_at_or_after_partition, %lane_output_before_end : i1
+  // The padded LDS rows mirror the Vulkan oracle's ownership changes. Q uses
+  // eight spare F16 columns after its 128 channels. Score and probability
+  // transpose to key-major rows with eight spare columns after 16 queries.
+  // These strides avoid the bank pattern produced by dense transposed rows.
+  %query_transposed_layout = encoding.layout.strided [1, 136] : encoding<layout>
+  %probability_transposed_layout = encoding.layout.strided [1, 24] : encoding<layout>
+  %query_noalias, %key_noalias, %value_noalias, %mask_noalias, %output_noalias = buffer.assume.noalias %query, %key, %value, %mask, %output : buffer, buffer, buffer, buffer, buffer
+  %query_aligned = buffer.assume.alignment %query_noalias {minimum_alignment = 16} : buffer
+  %key_aligned = buffer.assume.alignment %key_noalias {minimum_alignment = 16} : buffer
+  %value_aligned = buffer.assume.alignment %value_noalias {minimum_alignment = 16} : buffer
+  %mask_aligned = buffer.assume.alignment %mask_noalias {minimum_alignment = 16} : buffer
+  %output_aligned = buffer.assume.alignment %output_noalias {minimum_alignment = 16} : buffer
+  %query_view = buffer.view %query_aligned[%c0_offset] : buffer -> view<[%query_head_count]x128xf32>
+  %key_view = buffer.view %key_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_value_width]xf16>
+  %value_view = buffer.view %value_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]x[%key_value_width]xf16>
+  %mask_view = buffer.view %mask_aligned[%c0_offset] : buffer -> view<[%bounded_key_value_token_count]xf16>
+  %output_view = buffer.view %output_aligned[%c0_offset] : buffer -> view<[%query_head_count]x128xf32>
+  %query_stage = buffer.alloca<workgroup> align(16) %query_stage_bytes : buffer
+  %score_stage = buffer.alloca<workgroup> align(16) %score_stage_bytes : buffer
+  %probability_stage = buffer.alloca<workgroup> align(16) %probability_stage_bytes : buffer
+  %product_stage = buffer.alloca<workgroup> align(16) %product_stage_bytes : buffer
+  %tail_key_value_stage = buffer.alloca<workgroup> align(16) %tail_key_value_stage_bytes : buffer
+  %query_stage_view = buffer.view %query_stage[%c0_offset] : buffer -> view<16x136xf16>
+  %query_transposed_view = buffer.view %query_stage[%c0_offset] : buffer -> view<128x16xf16, %query_transposed_layout>
+  %score_stage_view = buffer.view %score_stage[%c0_offset] : buffer -> view<64x24xf32>
+  %probability_stage_view = buffer.view %probability_stage[%c0_offset] : buffer -> view<16x64xf16, %probability_transposed_layout>
+  %product_stage_view = buffer.view %product_stage[%c0_offset] : buffer -> view<16x64xf16>
+  %tail_key_value_stage_view = buffer.view %tail_key_value_stage[%c0_offset] : buffer -> view<32x128xf16>
+  // Scale and truncate Q exactly once. The Vulkan reference does this before
+  // entering its KV loop, making QK a native F16 WMMA while retaining F32
+  // accumulation.
+  scf.for %load_iteration = [%c0 to %c8 step %c1] unroll {
+    %linear = index.madd %load_iteration, %c256, %workitem : index
+    %local_query_row = index.div %linear, %c128 : index
+    %query_channel = index.rem %linear, %c128 : index
+    %local_query_head = index.add %query_head_base, %local_query_row : index
+    %query_valid_load = index.cmp ult, %local_query_head, %query_head_count : index
+    %query_value = scf.if %query_valid_load -> (f16) {
+      %loaded = view.load %query_view[%local_query_head, %query_channel] : view<[%query_head_count]x128xf32> -> f32
+      %scaled = scalar.mulf<reassoc|nnan|ninf|nsz|contract> %loaded, %attention_scale : f32
+      %truncated = scalar.fptrunc %scaled : f32 to f16
+      scf.yield %truncated : f16
+    } else {
+      scf.yield %c0_f16 : f16
+    }
+    view.store %query_value, %query_stage_view[%local_query_row, %query_channel] : f16, view<16x136xf16>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  %full_max, %full_sum, %full_output0, %full_output1, %full_output2, %full_output3 = scf.for %key_origin = [%c0 to %full_key_value_token_count step %c64](%current_max = %negative_f32x4 : vector<4xf32>, %current_sum = %c0_f32x4 : vector<4xf32>, %current_output0 = %output_zero0 : vector<4xf16>, %current_output1 = %output_zero1 : vector<4xf16>, %current_output2 = %output_zero2 : vector<4xf16>, %current_output3 = %output_zero3 : vector<4xf16>) -> (vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+    // Four independent wave-level WMMAs produce a 16x64 score tile.
+    %score_key_origin0 = index.add %key_origin, %subgroup_score_column : index
+    %last_full_key_tile_start = index.sub %bounded_key_value_token_count, %c15 : index
+    %score_key_origin = index.assume %score_key_origin0 [lt(%score_key_origin0, %last_full_key_tile_start)] : index
+    %score_init_values = vector.constant 0.0 : vector<4xf32>
+    %score_init = vector.fragment<init> %score_init_values shape [%m, %n] : vector<4xf32>
+    %score_fragment = scf.for %head_tile = [%c0 to %c128 step %c16](%score_accumulator = %score_init : vector<4xf32>) -> (vector<4xf32>) unroll {
+      %key_channel = index.add %key_value_head_base, %head_tile : index
+      %key_fragment = vector.fragment.load<lhs> %key_view[%score_key_origin, %key_channel] shape [%m, %k] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> vector<16xf16>
+      %query_fragment = vector.fragment.load<rhs> %query_transposed_view[%head_tile, %c0] shape [%k, %n] : view<128x16xf16, %query_transposed_layout> -> vector<16xf16>
+      %next_score_accumulator = vector.mma %key_fragment, %query_fragment, %score_accumulator : vector<16xf16>, vector<16xf16>, vector<4xf32>
+      scf.yield %next_score_accumulator : vector<4xf32>
+    }
+    vector.fragment.store<result> %score_fragment, %score_stage_view[%subgroup_score_column, %c0] shape [%m, %n] : vector<4xf32>, view<64x24xf32>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    // LDS transposes ownership from one 16-column score slice per wave to
+    // four complete query rows per wave. Every lane contributes one key
+    // column to each of those rows.
+    %key_token0 = index.add %key_origin, %lane : index
+    %key_token = index.assume %key_token0 [lt(%key_token0, %bounded_key_value_token_count)] : index
+    %raw_score0 = view.load %score_stage_view[%lane, %query_row0] : view<64x24xf32> -> f32
+    %raw_score1 = view.load %score_stage_view[%lane, %query_row1] : view<64x24xf32> -> f32
+    %raw_score2 = view.load %score_stage_view[%lane, %query_row2] : view<64x24xf32> -> f32
+    %raw_score3 = view.load %score_stage_view[%lane, %query_row3] : view<64x24xf32> -> f32
+    %mask_f16 = view.load %mask_view[%key_token] : view<[%bounded_key_value_token_count]xf16> -> f16
+    %mask_f32 = scalar.extf %mask_f16 : f16 to f32
+    %masked_score0 = scf.if %query_valid0 -> (f32) {
+      %score = scalar.addf<reassoc|nnan|ninf|nsz> %raw_score0, %mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_score1 = scf.if %query_valid1 -> (f32) {
+      %score = scalar.addf<reassoc|nnan|ninf|nsz> %raw_score1, %mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_score2 = scf.if %query_valid2 -> (f32) {
+      %score = scalar.addf<reassoc|nnan|ninf|nsz> %raw_score2, %mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_score3 = scf.if %query_valid3 -> (f32) {
+      %score = scalar.addf<reassoc|nnan|ninf|nsz> %raw_score3, %mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_scores = vector.from_elements %masked_score0, %masked_score1, %masked_score2, %masked_score3 : vector<4xf32>
+    %block_max = kernel.subgroup.reduce<maxnumf> %masked_scores : vector<4xf32>
+    %next_max = vector.maxnumf %current_max, %block_max : vector<4xf32>
+    %score_delta = vector.subf<reassoc|nnan|ninf|nsz> %masked_scores, %next_max : vector<4xf32>
+    %raw_probability = vector.expf<afn> %score_delta : vector<4xf32>
+    %probability = vector.select %query_valid, %raw_probability, %c0_f32x4 : vector<4xf32>
+    %block_sum = kernel.subgroup.reduce<addf> %probability : vector<4xf32>
+    %old_delta = vector.subf<reassoc|nnan|ninf|nsz> %current_max, %next_max : vector<4xf32>
+    %old_scale = vector.expf<afn> %old_delta : vector<4xf32>
+    %scaled_current_sum = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_sum, %old_scale : vector<4xf32>
+    %next_sum = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_sum, %block_sum : vector<4xf32>
+    %probability_f16 = vector.fptrunc %probability : vector<4xf32> to vector<4xf16>
+    %probability0 = vector.extract %probability_f16[0] : vector<4xf16> -> f16
+    %probability1 = vector.extract %probability_f16[1] : vector<4xf16> -> f16
+    %probability2 = vector.extract %probability_f16[2] : vector<4xf16> -> f16
+    %probability3 = vector.extract %probability_f16[3] : vector<4xf16> -> f16
+    view.store %probability0, %probability_stage_view[%query_row0, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    view.store %probability1, %probability_stage_view[%query_row1, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    view.store %probability2, %probability_stage_view[%query_row2, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    view.store %probability3, %probability_stage_view[%query_row3, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    // Match the Vulkan CM1 ownership schedule by computing two sequential
+    // 64-channel output tiles. This keeps one P*V accumulator live per wave
+    // and reuses a 2 KiB exchange tile instead of retaining both halves.
+    %old_scale_f16 = vector.fptrunc %old_scale : vector<4xf32> to vector<4xf16>
+    %old_scale0_scalar = vector.extract %old_scale_f16[0] : vector<4xf16> -> f16
+    %old_scale1_scalar = vector.extract %old_scale_f16[1] : vector<4xf16> -> f16
+    %old_scale2_scalar = vector.extract %old_scale_f16[2] : vector<4xf16> -> f16
+    %old_scale3_scalar = vector.extract %old_scale_f16[3] : vector<4xf16> -> f16
+    %old_scale0 = vector.splat %old_scale0_scalar : vector<4xf16>
+    %old_scale1 = vector.splat %old_scale1_scalar : vector<4xf16>
+    %old_scale2 = vector.splat %old_scale2_scalar : vector<4xf16>
+    %old_scale3 = vector.splat %old_scale3_scalar : vector<4xf16>
+    %scaled_current_output0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output0, %old_scale0 : vector<4xf16>
+    %scaled_current_output1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output1, %old_scale1 : vector<4xf16>
+    %scaled_current_output2 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output2, %old_scale2 : vector<4xf16>
+    %scaled_current_output3 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output3, %old_scale3 : vector<4xf16>
+    %next_output0, %next_output1, %next_output2, %next_output3 = scf.for %output_tile = [%c0 to %c2 step %c1](%tile_output0 = %scaled_current_output0 : vector<4xf16>, %tile_output1 = %scaled_current_output1 : vector<4xf16>, %tile_output2 = %scaled_current_output2 : vector<4xf16>, %tile_output3 = %scaled_current_output3 : vector<4xf16>) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) unroll {
+      %tile_at_or_after_partition = index.cmp uge, %output_tile, %output_partition : index
+      %tile_before_partition_end = index.cmp ult, %output_tile, %output_tile_end : index
+      %tile_selected = scalar.andi %tile_at_or_after_partition, %tile_before_partition_end : i1
+      %updated_output0, %updated_output1, %updated_output2, %updated_output3 = scf.if %tile_selected -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+        %output_tile_channel = index.mul %output_tile, %c64 : index
+        %value_channel0 = index.add %key_value_head_base, %output_tile_channel : index
+        %value_channel = index.add %value_channel0, %subgroup_product_channel : index
+        %product_init = vector.fragment<init> %c0_f16x8 shape [%m, %n] : vector<8xf16>
+        %product_fragment = scf.for %key_tile = [%c0 to %c64 step %c16](%product_accumulator = %product_init : vector<8xf16>) -> (vector<8xf16>) unroll {
+          %value_token0 = index.add %key_origin, %key_tile : index
+          %value_token = index.assume %value_token0 [lt(%value_token0, %last_full_key_tile_start)] : index
+          %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_transposed_layout> -> vector<16xf16>
+          %value_fragment = vector.fragment.load<rhs> %value_view[%value_token, %value_channel] shape [%k, %n] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> vector<16xf16>
+          %next_product_accumulator = vector.mma %probability_fragment, %value_fragment, %product_accumulator : vector<16xf16>, vector<16xf16>, vector<8xf16>
+          scf.yield %next_product_accumulator : vector<8xf16>
+        }
+        vector.fragment.store<result> %product_fragment, %product_stage_view[%c0, %subgroup_product_channel] shape [%m, %n] : vector<8xf16>, view<16x64xf16>
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        %owns_output_tile = index.cmp eq, %lane_output_tile, %output_tile : index
+        %next_tile_output0, %next_tile_output1, %next_tile_output2, %next_tile_output3 = scf.if %owns_output_tile -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+          %block_output0 = vector.load %product_stage_view[%query_row0, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %block_output1 = vector.load %product_stage_view[%query_row1, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %block_output2 = vector.load %product_stage_view[%query_row2, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %block_output3 = vector.load %product_stage_view[%query_row3, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %next_tile_output0 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output0, %block_output0 : vector<4xf16>
+          %next_tile_output1 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output1, %block_output1 : vector<4xf16>
+          %next_tile_output2 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output2, %block_output2 : vector<4xf16>
+          %next_tile_output3 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output3, %block_output3 : vector<4xf16>
+          scf.yield %next_tile_output0, %next_tile_output1, %next_tile_output2, %next_tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+        } else {
+          scf.yield %tile_output0, %tile_output1, %tile_output2, %tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+        }
+        // Complete every read before another output tile overwrites LDS.
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        scf.yield %next_tile_output0, %next_tile_output1, %next_tile_output2, %next_tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+      } else {
+        scf.yield %tile_output0, %tile_output1, %tile_output2, %tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+      }
+      scf.yield %updated_output0, %updated_output1, %updated_output2, %updated_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+    }
+    scf.yield %next_max, %next_sum, %next_output0, %next_output1, %next_output2, %next_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+  }
+  // A single trailing KV row is cheaper as a native wave reduction and direct
+  // V update. Skip the general WMMA tail loop for that exact JIT-specialized
+  // shape; larger tails continue through the masked 32-row schedule below.
+  %wmma_tail_start = scf.select %has_single_key_value_tail, %bounded_key_value_token_count, %full_key_value_token_count : index
+  %tail_score_wave = index.cmp ult, %subgroup, %c2 : index
+  %wmma_tail_max, %wmma_tail_sum, %wmma_tail_output0, %wmma_tail_output1, %wmma_tail_output2, %wmma_tail_output3 = scf.for %tail_key_origin = [%wmma_tail_start to %bounded_key_value_token_count step %c32](%current_max = %full_max : vector<4xf32>, %current_sum = %full_sum : vector<4xf32>, %current_output0 = %full_output0 : vector<4xf16>, %current_output1 = %full_output1 : vector<4xf16>, %current_output2 = %full_output2 : vector<4xf16>, %current_output3 = %full_output3 : vector<4xf16>) -> (vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+    %tail_remaining = index.sub %bounded_key_value_token_count, %tail_key_origin : index
+    %tail_key_count = index.min %tail_remaining, %c32 : index
+    // Cooperatively stage one K tile, explicitly zeroing the padded rows.
+    scf.for %load_iteration = [%c0 to %c16 step %c1] unroll {
+      %linear = index.madd %load_iteration, %c256, %workitem : index
+      %tail_key_row = index.div %linear, %c128 : index
+      %tail_key_channel = index.rem %linear, %c128 : index
+      %tail_key_valid = index.cmp ult, %tail_key_row, %tail_key_count : index
+      %tail_key_value = scf.if %tail_key_valid -> (f16) {
+        %tail_key_token0 = index.add %tail_key_origin, %tail_key_row : index
+        %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
+        %global_key_channel = index.add %key_value_head_base, %tail_key_channel : index
+        %loaded = view.load %key_view[%tail_key_token, %global_key_channel] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> f16
+        scf.yield %loaded : f16
+      } else {
+        scf.yield %c0_f16 : f16
+      }
+      view.store %tail_key_value, %tail_key_value_stage_view[%tail_key_row, %tail_key_channel] : f16, view<32x128xf16>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    // Waves zero and one compute the two 16-column QK fragments in this tile.
+    scf.if %tail_score_wave {
+      %tail_score_subgroup = index.assume %subgroup [range(%subgroup, 0, 1)] : index
+      %tail_score_column = index.mul %tail_score_subgroup, %c16 : index
+      %tail_score_init_values = vector.constant 0.0 : vector<4xf32>
+      %tail_score_init = vector.fragment<init> %tail_score_init_values shape [%m, %n] : vector<4xf32>
+      %tail_score_fragment = scf.for %head_tile = [%c0 to %c128 step %c16](%score_accumulator = %tail_score_init : vector<4xf32>) -> (vector<4xf32>) unroll {
+        %key_fragment = vector.fragment.load<lhs> %tail_key_value_stage_view[%tail_score_column, %head_tile] shape [%m, %k] : view<32x128xf16> -> vector<16xf16>
+        %query_fragment = vector.fragment.load<rhs> %query_transposed_view[%head_tile, %c0] shape [%k, %n] : view<128x16xf16, %query_transposed_layout> -> vector<16xf16>
+        %next_score_accumulator = vector.mma %key_fragment, %query_fragment, %score_accumulator : vector<16xf16>, vector<16xf16>, vector<4xf32>
+        scf.yield %next_score_accumulator : vector<4xf32>
+      }
+      vector.fragment.store<result> %tail_score_fragment, %score_stage_view[%tail_score_column, %c0] shape [%m, %n] : vector<4xf32>, view<64x24xf32>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    // LDS changes ownership from the QK wave to four query-row waves. Lanes
+    // beyond the logical tail never read the score or mask buffers.
+    %tail_lane_valid = index.cmp ult, %lane, %tail_key_count : index
+    %tail_valid0 = scalar.andi %tail_lane_valid, %query_valid0 : i1
+    %tail_valid1 = scalar.andi %tail_lane_valid, %query_valid1 : i1
+    %tail_valid2 = scalar.andi %tail_lane_valid, %query_valid2 : i1
+    %tail_valid3 = scalar.andi %tail_lane_valid, %query_valid3 : i1
+    %tail_valid = vector.from_elements %tail_valid0, %tail_valid1, %tail_valid2, %tail_valid3 : vector<4xi1>
+    %tail_key_token0 = index.add %tail_key_origin, %lane : index
+    %tail_mask_f32 = scf.if %tail_lane_valid -> (f32) {
+      %tail_key_token = index.assume %tail_key_token0 [lt(%tail_key_token0, %bounded_key_value_token_count)] : index
+      %mask_f16 = view.load %mask_view[%tail_key_token] : view<[%bounded_key_value_token_count]xf16> -> f16
+      %mask_f32 = scalar.extf %mask_f16 : f16 to f32
+      scf.yield %mask_f32 : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    %masked_score0 = scf.if %tail_valid0 -> (f32) {
+      %raw_score = view.load %score_stage_view[%lane, %query_row0] : view<64x24xf32> -> f32
+      %score = scalar.addf<reassoc|nnan|ninf|nsz> %raw_score, %tail_mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_score1 = scf.if %tail_valid1 -> (f32) {
+      %raw_score = view.load %score_stage_view[%lane, %query_row1] : view<64x24xf32> -> f32
+      %score = scalar.addf<reassoc|nnan|ninf|nsz> %raw_score, %tail_mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_score2 = scf.if %tail_valid2 -> (f32) {
+      %raw_score = view.load %score_stage_view[%lane, %query_row2] : view<64x24xf32> -> f32
+      %score = scalar.addf<reassoc|nnan|ninf|nsz> %raw_score, %tail_mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_score3 = scf.if %tail_valid3 -> (f32) {
+      %raw_score = view.load %score_stage_view[%lane, %query_row3] : view<64x24xf32> -> f32
+      %score = scalar.addf<reassoc|nnan|ninf|nsz> %raw_score, %tail_mask_f32 : f32
+      scf.yield %score : f32
+    } else {
+      scf.yield %negative_large : f32
+    }
+    %masked_scores = vector.from_elements %masked_score0, %masked_score1, %masked_score2, %masked_score3 : vector<4xf32>
+    %block_max = kernel.subgroup.reduce<maxnumf> %masked_scores : vector<4xf32>
+    %next_max = vector.maxnumf %current_max, %block_max : vector<4xf32>
+    %score_delta = vector.subf<reassoc|nnan|ninf|nsz> %masked_scores, %next_max : vector<4xf32>
+    %raw_probability = vector.expf<afn> %score_delta : vector<4xf32>
+    %probability = vector.select %tail_valid, %raw_probability, %c0_f32x4 : vector<4xf32>
+    %block_sum = kernel.subgroup.reduce<addf> %probability : vector<4xf32>
+    %old_delta = vector.subf<reassoc|nnan|ninf|nsz> %current_max, %next_max : vector<4xf32>
+    %old_scale = vector.expf<afn> %old_delta : vector<4xf32>
+    %scaled_current_sum = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_sum, %old_scale : vector<4xf32>
+    %next_sum = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_sum, %block_sum : vector<4xf32>
+    %probability_f16 = vector.fptrunc %probability : vector<4xf32> to vector<4xf16>
+    %probability0 = vector.extract %probability_f16[0] : vector<4xf16> -> f16
+    %probability1 = vector.extract %probability_f16[1] : vector<4xf16> -> f16
+    %probability2 = vector.extract %probability_f16[2] : vector<4xf16> -> f16
+    %probability3 = vector.extract %probability_f16[3] : vector<4xf16> -> f16
+    view.store %probability0, %probability_stage_view[%query_row0, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    view.store %probability1, %probability_stage_view[%query_row1, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    view.store %probability2, %probability_stage_view[%query_row2, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    view.store %probability3, %probability_stage_view[%query_row3, %lane] : f16, view<16x64xf16, %probability_transposed_layout>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    // Reuse product scratch for V after every probability is resident in its
+    // disjoint LDS tile.
+    scf.for %load_iteration = [%c0 to %c16 step %c1] unroll {
+      %linear = index.madd %load_iteration, %c256, %workitem : index
+      %tail_value_row = index.div %linear, %c128 : index
+      %tail_value_channel = index.rem %linear, %c128 : index
+      %tail_value_valid = index.cmp ult, %tail_value_row, %tail_key_count : index
+      %tail_value = scf.if %tail_value_valid -> (f16) {
+        %tail_value_token0 = index.add %tail_key_origin, %tail_value_row : index
+        %tail_value_token = index.assume %tail_value_token0 [lt(%tail_value_token0, %bounded_key_value_token_count)] : index
+        %global_value_channel = index.add %key_value_head_base, %tail_value_channel : index
+        %loaded = view.load %value_view[%tail_value_token, %global_value_channel] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> f16
+        scf.yield %loaded : f16
+      } else {
+        scf.yield %c0_f16 : f16
+      }
+      view.store %tail_value, %tail_key_value_stage_view[%tail_value_row, %tail_value_channel] : f16, view<32x128xf16>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    // Keep tail V staging separate from the 2 KiB product exchange, then use
+    // the same two 64-channel phases as the aligned path.
+    %old_scale_f16 = vector.fptrunc %old_scale : vector<4xf32> to vector<4xf16>
+    %old_scale0_scalar = vector.extract %old_scale_f16[0] : vector<4xf16> -> f16
+    %old_scale1_scalar = vector.extract %old_scale_f16[1] : vector<4xf16> -> f16
+    %old_scale2_scalar = vector.extract %old_scale_f16[2] : vector<4xf16> -> f16
+    %old_scale3_scalar = vector.extract %old_scale_f16[3] : vector<4xf16> -> f16
+    %old_scale0 = vector.splat %old_scale0_scalar : vector<4xf16>
+    %old_scale1 = vector.splat %old_scale1_scalar : vector<4xf16>
+    %old_scale2 = vector.splat %old_scale2_scalar : vector<4xf16>
+    %old_scale3 = vector.splat %old_scale3_scalar : vector<4xf16>
+    %scaled_current_output0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output0, %old_scale0 : vector<4xf16>
+    %scaled_current_output1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output1, %old_scale1 : vector<4xf16>
+    %scaled_current_output2 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output2, %old_scale2 : vector<4xf16>
+    %scaled_current_output3 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %current_output3, %old_scale3 : vector<4xf16>
+    %next_output0, %next_output1, %next_output2, %next_output3 = scf.for %output_tile = [%c0 to %c2 step %c1](%tile_output0 = %scaled_current_output0 : vector<4xf16>, %tile_output1 = %scaled_current_output1 : vector<4xf16>, %tile_output2 = %scaled_current_output2 : vector<4xf16>, %tile_output3 = %scaled_current_output3 : vector<4xf16>) -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) unroll {
+      %tile_at_or_after_partition = index.cmp uge, %output_tile, %output_partition : index
+      %tile_before_partition_end = index.cmp ult, %output_tile, %output_tile_end : index
+      %tile_selected = scalar.andi %tile_at_or_after_partition, %tile_before_partition_end : i1
+      %updated_output0, %updated_output1, %updated_output2, %updated_output3 = scf.if %tile_selected -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+        %output_tile_channel = index.mul %output_tile, %c64 : index
+        %value_channel = index.add %output_tile_channel, %subgroup_product_channel : index
+        %tail_product_init = vector.fragment<init> %c0_f16x8 shape [%m, %n] : vector<8xf16>
+        %tail_product_fragment = scf.for %key_tile = [%c0 to %c32 step %c16](%product_accumulator = %tail_product_init : vector<8xf16>) -> (vector<8xf16>) unroll {
+          %probability_fragment = vector.fragment.load<lhs> %probability_stage_view[%c0, %key_tile] shape [%m, %k] : view<16x64xf16, %probability_transposed_layout> -> vector<16xf16>
+          %value_fragment = vector.fragment.load<rhs> %tail_key_value_stage_view[%key_tile, %value_channel] shape [%k, %n] : view<32x128xf16> -> vector<16xf16>
+          %next_product_accumulator = vector.mma %probability_fragment, %value_fragment, %product_accumulator : vector<16xf16>, vector<16xf16>, vector<8xf16>
+          scf.yield %next_product_accumulator : vector<8xf16>
+        }
+        vector.fragment.store<result> %tail_product_fragment, %product_stage_view[%c0, %subgroup_product_channel] shape [%m, %n] : vector<8xf16>, view<16x64xf16>
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        %owns_output_tile = index.cmp eq, %lane_output_tile, %output_tile : index
+        %next_tile_output0, %next_tile_output1, %next_tile_output2, %next_tile_output3 = scf.if %owns_output_tile -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+          %block_output0 = vector.load %product_stage_view[%query_row0, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %block_output1 = vector.load %product_stage_view[%query_row1, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %block_output2 = vector.load %product_stage_view[%query_row2, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %block_output3 = vector.load %product_stage_view[%query_row3, %lane_product_channel] : view<16x64xf16> -> vector<4xf16>
+          %next_tile_output0 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output0, %block_output0 : vector<4xf16>
+          %next_tile_output1 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output1, %block_output1 : vector<4xf16>
+          %next_tile_output2 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output2, %block_output2 : vector<4xf16>
+          %next_tile_output3 = vector.addf<reassoc|nnan|ninf|nsz> %tile_output3, %block_output3 : vector<4xf16>
+          scf.yield %next_tile_output0, %next_tile_output1, %next_tile_output2, %next_tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+        } else {
+          scf.yield %tile_output0, %tile_output1, %tile_output2, %tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+        }
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        scf.yield %next_tile_output0, %next_tile_output1, %next_tile_output2, %next_tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+      } else {
+        scf.yield %tile_output0, %tile_output1, %tile_output2, %tile_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+      }
+      scf.yield %updated_output0, %updated_output1, %updated_output2, %updated_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+    }
+    scf.yield %next_max, %next_sum, %next_output0, %next_output1, %next_output2, %next_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+  }
+  %final_max, %final_sum, %final_output0, %final_output1, %final_output2, %final_output3 = scf.if %has_single_key_value_tail -> (vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+    %single_tail_token = index.assume %full_key_value_token_count [lt(%full_key_value_token_count, %bounded_key_value_token_count)] : index
+    %single_tail_channel = index.mul %lane, %c2 : index
+    %single_tail_key_channel = index.add %key_value_head_base, %single_tail_channel : index
+    %key_pair_f16 = vector.load %key_view[%single_tail_token, %single_tail_key_channel] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> vector<2xf16>
+    %query_pair0_f16 = vector.load %query_stage_view[%query_row0, %single_tail_channel] : view<16x136xf16> -> vector<2xf16>
+    %query_pair1_f16 = vector.load %query_stage_view[%query_row1, %single_tail_channel] : view<16x136xf16> -> vector<2xf16>
+    %query_pair2_f16 = vector.load %query_stage_view[%query_row2, %single_tail_channel] : view<16x136xf16> -> vector<2xf16>
+    %query_pair3_f16 = vector.load %query_stage_view[%query_row3, %single_tail_channel] : view<16x136xf16> -> vector<2xf16>
+    %key_pair = vector.extf %key_pair_f16 : vector<2xf16> to vector<2xf32>
+    %query_pair0 = vector.extf %query_pair0_f16 : vector<2xf16> to vector<2xf32>
+    %query_pair1 = vector.extf %query_pair1_f16 : vector<2xf16> to vector<2xf32>
+    %query_pair2 = vector.extf %query_pair2_f16 : vector<2xf16> to vector<2xf32>
+    %query_pair3 = vector.extf %query_pair3_f16 : vector<2xf16> to vector<2xf32>
+    %product_pair0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %query_pair0, %key_pair : vector<2xf32>
+    %product_pair1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %query_pair1, %key_pair : vector<2xf32>
+    %product_pair2 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %query_pair2, %key_pair : vector<2xf32>
+    %product_pair3 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %query_pair3, %key_pair : vector<2xf32>
+    %partial_score0 = vector.reduce<addf> %product_pair0, %c0_f32 : vector<2xf32>, f32
+    %partial_score1 = vector.reduce<addf> %product_pair1, %c0_f32 : vector<2xf32>, f32
+    %partial_score2 = vector.reduce<addf> %product_pair2, %c0_f32 : vector<2xf32>, f32
+    %partial_score3 = vector.reduce<addf> %product_pair3, %c0_f32 : vector<2xf32>, f32
+    %partial_scores = vector.from_elements %partial_score0, %partial_score1, %partial_score2, %partial_score3 : vector<4xf32>
+    %reduced_scores = kernel.subgroup.reduce<addf> %partial_scores : vector<4xf32>
+    %mask_f16 = view.load %mask_view[%single_tail_token] : view<[%bounded_key_value_token_count]xf16> -> f16
+    %mask_f32 = scalar.extf %mask_f16 : f16 to f32
+    %mask_vector = vector.splat %mask_f32 : vector<4xf32>
+    %raw_scores = vector.addf<reassoc|nnan|ninf|nsz> %reduced_scores, %mask_vector : vector<4xf32>
+    %masked_scores = vector.select %query_valid, %raw_scores, %negative_f32x4 : vector<4xf32>
+    %next_max = vector.maxnumf %wmma_tail_max, %masked_scores : vector<4xf32>
+    %score_delta = vector.subf<reassoc|nnan|ninf|nsz> %masked_scores, %next_max : vector<4xf32>
+    %raw_probability = vector.expf<afn> %score_delta : vector<4xf32>
+    %probability = vector.select %query_valid, %raw_probability, %c0_f32x4 : vector<4xf32>
+    %old_delta = vector.subf<reassoc|nnan|ninf|nsz> %wmma_tail_max, %next_max : vector<4xf32>
+    %old_scale = vector.expf<afn> %old_delta : vector<4xf32>
+    %scaled_current_sum = vector.mulf<reassoc|nnan|ninf|nsz|contract> %wmma_tail_sum, %old_scale : vector<4xf32>
+    %next_sum = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_sum, %probability : vector<4xf32>
+    %next_output0, %next_output1, %next_output2, %next_output3 = scf.if %lane_has_output -> (vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>) {
+      %output_packet_channel = index.assume %lane_output_channel [range(%lane_output_channel, 0, 124), mul(%lane_output_channel, 4)] : index
+      %value_channel = index.add %key_value_head_base, %output_packet_channel : index
+      %value_packet = vector.load %value_view[%single_tail_token, %value_channel] : view<[%bounded_key_value_token_count]x[%key_value_width]xf16> -> vector<4xf16>
+      %old_scale_f16 = vector.fptrunc %old_scale : vector<4xf32> to vector<4xf16>
+      %probability_f16 = vector.fptrunc %probability : vector<4xf32> to vector<4xf16>
+      %old_scale0_scalar = vector.extract %old_scale_f16[0] : vector<4xf16> -> f16
+      %old_scale1_scalar = vector.extract %old_scale_f16[1] : vector<4xf16> -> f16
+      %old_scale2_scalar = vector.extract %old_scale_f16[2] : vector<4xf16> -> f16
+      %old_scale3_scalar = vector.extract %old_scale_f16[3] : vector<4xf16> -> f16
+      %probability0_scalar = vector.extract %probability_f16[0] : vector<4xf16> -> f16
+      %probability1_scalar = vector.extract %probability_f16[1] : vector<4xf16> -> f16
+      %probability2_scalar = vector.extract %probability_f16[2] : vector<4xf16> -> f16
+      %probability3_scalar = vector.extract %probability_f16[3] : vector<4xf16> -> f16
+      %old_scale0 = vector.splat %old_scale0_scalar : vector<4xf16>
+      %old_scale1 = vector.splat %old_scale1_scalar : vector<4xf16>
+      %old_scale2 = vector.splat %old_scale2_scalar : vector<4xf16>
+      %old_scale3 = vector.splat %old_scale3_scalar : vector<4xf16>
+      %probability0 = vector.splat %probability0_scalar : vector<4xf16>
+      %probability1 = vector.splat %probability1_scalar : vector<4xf16>
+      %probability2 = vector.splat %probability2_scalar : vector<4xf16>
+      %probability3 = vector.splat %probability3_scalar : vector<4xf16>
+      %scaled_current_output0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %wmma_tail_output0, %old_scale0 : vector<4xf16>
+      %scaled_current_output1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %wmma_tail_output1, %old_scale1 : vector<4xf16>
+      %scaled_current_output2 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %wmma_tail_output2, %old_scale2 : vector<4xf16>
+      %scaled_current_output3 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %wmma_tail_output3, %old_scale3 : vector<4xf16>
+      %tail_output0 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %value_packet, %probability0 : vector<4xf16>
+      %tail_output1 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %value_packet, %probability1 : vector<4xf16>
+      %tail_output2 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %value_packet, %probability2 : vector<4xf16>
+      %tail_output3 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %value_packet, %probability3 : vector<4xf16>
+      %updated_output0 = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_output0, %tail_output0 : vector<4xf16>
+      %updated_output1 = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_output1, %tail_output1 : vector<4xf16>
+      %updated_output2 = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_output2, %tail_output2 : vector<4xf16>
+      %updated_output3 = vector.addf<reassoc|nnan|ninf|nsz> %scaled_current_output3, %tail_output3 : vector<4xf16>
+      scf.yield %updated_output0, %updated_output1, %updated_output2, %updated_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+    } else {
+      scf.yield %wmma_tail_output0, %wmma_tail_output1, %wmma_tail_output2, %wmma_tail_output3 : vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+    }
+    scf.yield %next_max, %next_sum, %next_output0, %next_output1, %next_output2, %next_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+  } else {
+    scf.yield %wmma_tail_max, %wmma_tail_sum, %wmma_tail_output0, %wmma_tail_output1, %wmma_tail_output2, %wmma_tail_output3 : vector<4xf32>, vector<4xf32>, vector<4xf16>, vector<4xf16>, vector<4xf16>, vector<4xf16>
+  }
+  // Normalize and publish the lane-owned packets. Query-tail rows never
+  // participate in the output store.
+  scf.if %lane_has_output {
+    %output_packet_channel = index.assume %lane_output_channel [range(%lane_output_channel, 0, 124), mul(%lane_output_channel, 4)] : index
+    %sum0_scalar = vector.extract %final_sum[0] : vector<4xf32> -> f32
+    %sum1_scalar = vector.extract %final_sum[1] : vector<4xf32> -> f32
+    %sum2_scalar = vector.extract %final_sum[2] : vector<4xf32> -> f32
+    %sum3_scalar = vector.extract %final_sum[3] : vector<4xf32> -> f32
+    %inverse_sum0_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum0_scalar : f32
+    %inverse_sum1_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum1_scalar : f32
+    %inverse_sum2_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum2_scalar : f32
+    %inverse_sum3_f32 = scalar.divf<nnan|ninf|nsz|arcp> %c1_f32, %sum3_scalar : f32
+    %inverse_sum0_f16 = scalar.fptrunc %inverse_sum0_f32 : f32 to f16
+    %inverse_sum1_f16 = scalar.fptrunc %inverse_sum1_f32 : f32 to f16
+    %inverse_sum2_f16 = scalar.fptrunc %inverse_sum2_f32 : f32 to f16
+    %inverse_sum3_f16 = scalar.fptrunc %inverse_sum3_f32 : f32 to f16
+    %inverse_sum0 = vector.splat %inverse_sum0_f16 : vector<4xf16>
+    %inverse_sum1 = vector.splat %inverse_sum1_f16 : vector<4xf16>
+    %inverse_sum2 = vector.splat %inverse_sum2_f16 : vector<4xf16>
+    %inverse_sum3 = vector.splat %inverse_sum3_f16 : vector<4xf16>
+    %normalized0_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output0, %inverse_sum0 : vector<4xf16>
+    %normalized1_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output1, %inverse_sum1 : vector<4xf16>
+    %normalized2_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output2, %inverse_sum2 : vector<4xf16>
+    %normalized3_f16 = vector.mulf<reassoc|nnan|ninf|nsz|contract> %final_output3, %inverse_sum3 : vector<4xf16>
+    %normalized0 = vector.extf %normalized0_f16 : vector<4xf16> to vector<4xf32>
+    %normalized1 = vector.extf %normalized1_f16 : vector<4xf16> to vector<4xf32>
+    %normalized2 = vector.extf %normalized2_f16 : vector<4xf16> to vector<4xf32>
+    %normalized3 = vector.extf %normalized3_f16 : vector<4xf16> to vector<4xf32>
+    scf.if %query_valid0 {
+      vector.store %normalized0, %output_view[%query_head0, %output_packet_channel] : vector<4xf32>, view<[%query_head_count]x128xf32>
+    }
+    scf.if %query_valid1 {
+      vector.store %normalized1, %output_view[%query_head1, %output_packet_channel] : vector<4xf32>, view<[%query_head_count]x128xf32>
+    }
+    scf.if %query_valid2 {
+      vector.store %normalized2, %output_view[%query_head2, %output_packet_channel] : vector<4xf32>, view<[%query_head_count]x128xf32>
+    }
+    scf.if %query_valid3 {
+      vector.store %normalized3, %output_view[%query_head3, %output_packet_channel] : vector<4xf32>, view<[%query_head_count]x128xf32>
+    }
+  }
+  kernel.return
+}
+
+// The mask selects the first KV row exactly. QK, F16 probability conversion,
+// and P*V all execute, while the expected result remains an auditable iota.
+check.case public @qwen3_moe_flash_attention_decode_f32_f16_wmma_selected_row_case {
+  %key_value_token_count = check.literal value(64) : index
+  %query = check.generate.fill value(1.0) : tensor<1x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<64x1x128xf16>
+  %value = check.generate.iota offset(0.0) step(0.125) : tensor<64x1x128xf16>
+  %mask = check.generate.iota offset(0.0) step(-10000.0) : tensor<64xf16>
+  %output = check.generate.fill value(-1.0) : tensor<1x128xf32>
+  %expected = check.generate.iota offset(0.0) step(0.125) : tensor<1x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_decode_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %output) : [index](index, tensor<1x128xf32>, tensor<64x1x128xf16>, tensor<64x1x128xf16>, tensor<64xf16>, tensor<1x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x128xf32>
+  check.return
+}
+
+// Thirty-two query heads share four KV heads in the production GQA ratio.
+// Equal scores and constant values make every output exactly two while all
+// head-group addressing and output ownership execute.
+check.case public @qwen3_moe_flash_attention_decode_f32_f16_wmma_gqa_case {
+  %key_value_token_count = check.literal value(128) : index
+  %query = check.generate.fill value(1.0) : tensor<32x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<128x4x128xf16>
+  %value = check.generate.fill value(2.0) : tensor<128x4x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<128xf16>
+  %output = check.generate.fill value(-1.0) : tensor<32x128xf32>
+  %expected = check.generate.fill value(2.0) : tensor<32x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_decode_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %output) : [index](index, tensor<32x128xf32>, tensor<128x4x128xf16>, tensor<128x4x128xf16>, tensor<128xf16>, tensor<32x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<32x128xf32>
+  check.return
+}
+
+// Sixty-five KV rows force one masked cleanup tile after a full WMMA block.
+// The mask selects only that final row, whose iota values begin at 1024.
+check.case public @qwen3_moe_flash_attention_decode_f32_f16_wmma_tail_case {
+  %key_value_token_count = check.literal value(65) : index
+  %query = check.generate.fill value(1.0) : tensor<1x128xf32>
+  %key = check.generate.fill value(1.0) : tensor<65x1x128xf16>
+  %value = check.generate.iota offset(0.0) step(0.125) : tensor<65x1x128xf16>
+  %mask = check.generate.iota offset(-64000.0) step(1000.0) : tensor<65xf16>
+  %output = check.generate.fill value(-1.0) : tensor<1x128xf32>
+  %expected = check.generate.iota offset(1024.0) step(0.125) : tensor<1x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_decode_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %output) : [index](index, tensor<1x128xf32>, tensor<65x1x128xf16>, tensor<65x1x128xf16>, tensor<65xf16>, tensor<1x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.001) rtol(0.001) nan(same) : tensor<1x128xf32>
+  check.return
+}
+
+check.case public @qwen3_moe_flash_attention_decode_f32_f16_wmma_benchmark_case {
+  %key_value_token_count = check.param.choice values([64, 65, 128, 256, 512, 768, 1024, 1280, 2048]) name("key_value_token_count") : index
+  %query = check.generate.fill value(0.0) : tensor<32x128xf32>
+  %key = check.generate.fill value(0.0) : tensor<[%key_value_token_count]x4x128xf16>
+  %value = check.generate.fill value(0.0) : tensor<[%key_value_token_count]x4x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<[%key_value_token_count]xf16>
+  %output = check.generate.fill value(1.0) : tensor<32x128xf32>
+  %expected = check.generate.fill value(0.0) : tensor<32x128xf32>
+  kernel.launch @qwen3_moe_flash_attention_decode_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value, %mask, %output) : [index](index, tensor<32x128xf32>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]x4x128xf16>, tensor<[%key_value_token_count]xf16>, tensor<32x128xf32>)
+  check.expect.close actual(%output) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<32x128xf32>
+  check.return
+}
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_selected_row_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_selected_row
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_gqa_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_gqa
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_tail_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_tail
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_decode_64 {key_value_token_count = 64}
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_decode_65 {key_value_token_count = 65}
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_decode_128 {key_value_token_count = 128}
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_decode_256 {key_value_token_count = 256}
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_decode_512 {key_value_token_count = 512}
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_decode_768 {key_value_token_count = 768}
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_decode_1024 {key_value_token_count = 1024}
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_decode_1280 {key_value_token_count = 1280}
+
+check.benchmark<@qwen3_moe_flash_attention_decode_f32_f16_wmma_benchmark_case> @qwen3_moe_flash_attention_decode_f32_f16_wmma_decode_2048 {key_value_token_count = 2048}

@@ -1,0 +1,113 @@
+// Test-only differentials for fused decode-attention Q8 publication. The
+// production kernels remain the actual providers; this module contributes only
+// reference packing, masked metadata setup, and comparison cases.
+target.decl @qwen3_moe_decode_split_gfx11_wave64
+
+kernel.decl target(@qwen3_moe_decode_split_gfx11_wave64) @qwen3_moe_flash_attention_decode_split_f32_f16_wmma(%key_value_token_count: index) launch(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer)
+
+kernel.decl target(@qwen3_moe_decode_split_gfx11_wave64) @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_next_q8(%key_value_token_count: index) launch(%key_value_token_count: index, %query: buffer, %key: buffer, %value: buffer, %mask: buffer, %partial_max: buffer, %partial_sum: buffer, %partial_output: buffer, %completion_counter: buffer, %output: buffer, %next_q8_output: buffer)
+
+// Publishes the canonical reference Q8_1 x4 layout for one 4096-element row.
+kernel.def @qwen3_moe_flash_attention_decode_split_quantize_reference_4096() {
+  %c1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  kernel.launch.config workgroups(%c32, %c1, %c1) workgroup_size(%c32, %c1, %c1) : index
+} launch(%input: buffer, %output: buffer) {
+  %publish_output = scalar.constant true : i1
+  %group_count = index.constant 32 : index
+  %group = kernel.workgroup.id<x> : index
+  func.apply<ggml.quantize_q8_1_x4.group_body>(%publish_output, %group_count, %group, %input, %output) : (i1, index, index, buffer, buffer)
+  kernel.return
+}
+
+// Isolates the new publication phase for access-sanitized coverage without
+// inflating the complete fused attention kernel beyond a short branch's range.
+kernel.def target(@qwen3_moe_decode_split_gfx11_wave64) @qwen3_moe_flash_attention_decode_split_pack_completed_q8_test() {
+  %c1 = index.constant 1 : index
+  %c4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  kernel.launch.config workgroups(%c1, %c4, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%input: buffer, %output: buffer) {
+  %key_value_head = kernel.workgroup.id<y> : index
+  func.apply<qwen3_moe.attention.decode_split.pack_completed_q8>(%key_value_head, %input, %output) : (index, buffer, buffer)
+  kernel.return
+}
+
+// Models the request-owned Decode-513 mask inside its 576-row capacity class.
+kernel.def @qwen3_moe_flash_attention_decode_split_mask_513_of_576() {
+  %c1 = index.constant 1 : index
+  %c64 = index.constant 64 : index
+  kernel.launch.config workgroups(%c1, %c1, %c1) workgroup_size(%c64, %c1, %c1) : index
+} launch(%mask: buffer) {
+  %workitem = kernel.workitem.id<x> : index
+  %c63 = index.constant 63 : index
+  %c513 = index.constant 513 : index
+  %c0 = index.constant 0 : index
+  %c0_offset = index.constant 0 : offset
+  %negative_large = scalar.constant -1e+30 : f32
+  %negative_infinity = scalar.fptrunc %negative_large : f32 to f16
+  %valid = index.cmp ult, %workitem, %c63 : index
+  %row0 = index.add %c513, %workitem : index
+  %row = scf.select %valid, %row0, %c0 : index
+  %mask_view = buffer.view %mask[%c0_offset] : buffer -> view<576xf16>
+  scf.if %valid {
+    view.store %negative_infinity, %mask_view[%row] : f16, view<576xf16>
+  }
+  kernel.return
+}
+
+// The fused producer must match the ordinary attention export followed by the
+// canonical GGML packer for every F32 value and every packed byte. Two value
+// tensors reuse both paths' partials and completion counters, making counter
+// reset and stale-publication failures observable.
+check.case public @qwen3_moe_flash_attention_decode_split_next_q8_capacity_576_differential_case {
+  %key_value_token_count = check.literal value(576) : index
+  %query_seed = check.param.seed base(0x514d4f4551465138) count(1) : i64
+  %key_seed = check.param.seed base(0x514d4f454b465138) count(1) : i64
+  %value_seed0 = check.param.seed base(0x514d4f4556465130) count(1) : i64
+  %value_seed1 = check.param.seed base(0x514d4f4556465131) count(1) : i64
+  %query = check.generate.random.uniform seed(%query_seed) range(-1.0 to 1.0) : tensor<32x128xf32>
+  %key = check.generate.random.uniform seed(%key_seed) range(-1.0 to 1.0) : tensor<576x4x128xf16>
+  %value0 = check.generate.random.uniform seed(%value_seed0) range(-1.0 to 1.0) : tensor<576x4x128xf16>
+  %value1 = check.generate.random.uniform seed(%value_seed1) range(-1.0 to 1.0) : tensor<576x4x128xf16>
+  %mask = check.generate.fill value(0.0) : tensor<576xf16>
+  %reference_partial_max = check.generate.fill value(-1.0) : tensor<4x9x16xf32>
+  %reference_partial_sum = check.generate.fill value(-1.0) : tensor<4x9x16xf32>
+  %reference_partial_output = check.generate.fill value(-1.0) : tensor<4x9x16x128xf16>
+  %reference_counter = check.generate.fill value(0) : tensor<4xi32>
+  %actual_partial_max = check.generate.fill value(-1.0) : tensor<4x9x16xf32>
+  %actual_partial_sum = check.generate.fill value(-1.0) : tensor<4x9x16xf32>
+  %actual_partial_output = check.generate.fill value(-1.0) : tensor<4x9x16x128xf16>
+  %actual_counter = check.generate.fill value(0) : tensor<4xi32>
+  %reference_output0 = check.generate.fill value(-1.0) : tensor<32x128xf32>
+  %reference_output1 = check.generate.fill value(-1.0) : tensor<32x128xf32>
+  %actual_output0 = check.generate.fill value(-2.0) : tensor<32x128xf32>
+  %actual_output1 = check.generate.fill value(-2.0) : tensor<32x128xf32>
+  %reference_q8_0 = check.generate.fill value(0) : tensor<4608xi8>
+  %reference_q8_1 = check.generate.fill value(0) : tensor<4608xi8>
+  %actual_q8_0 = check.generate.fill value(1) : tensor<4608xi8>
+  %actual_q8_1 = check.generate.fill value(1) : tensor<4608xi8>
+  kernel.launch @qwen3_moe_flash_attention_decode_split_mask_513_of_576(%mask) : (tensor<576xf16>)
+  kernel.launch @qwen3_moe_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value0, %mask, %reference_partial_max, %reference_partial_sum, %reference_partial_output, %reference_counter, %reference_output0) : [index](index, tensor<32x128xf32>, tensor<576x4x128xf16>, tensor<576x4x128xf16>, tensor<576xf16>, tensor<4x9x16xf32>, tensor<4x9x16xf32>, tensor<4x9x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
+  kernel.launch @qwen3_moe_flash_attention_decode_split_quantize_reference_4096(%reference_output0, %reference_q8_0) : (tensor<32x128xf32>, tensor<4608xi8>)
+  kernel.launch @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_next_q8[%key_value_token_count](%key_value_token_count, %query, %key, %value0, %mask, %actual_partial_max, %actual_partial_sum, %actual_partial_output, %actual_counter, %actual_output0, %actual_q8_0) : [index](index, tensor<32x128xf32>, tensor<576x4x128xf16>, tensor<576x4x128xf16>, tensor<576xf16>, tensor<4x9x16xf32>, tensor<4x9x16xf32>, tensor<4x9x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>, tensor<4608xi8>)
+  kernel.launch @qwen3_moe_flash_attention_decode_split_f32_f16_wmma[%key_value_token_count](%key_value_token_count, %query, %key, %value1, %mask, %reference_partial_max, %reference_partial_sum, %reference_partial_output, %reference_counter, %reference_output1) : [index](index, tensor<32x128xf32>, tensor<576x4x128xf16>, tensor<576x4x128xf16>, tensor<576xf16>, tensor<4x9x16xf32>, tensor<4x9x16xf32>, tensor<4x9x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>)
+  kernel.launch @qwen3_moe_flash_attention_decode_split_quantize_reference_4096(%reference_output1, %reference_q8_1) : (tensor<32x128xf32>, tensor<4608xi8>)
+  kernel.launch @qwen3_moe_flash_attention_decode_split_f32_f16_wmma_next_q8[%key_value_token_count](%key_value_token_count, %query, %key, %value1, %mask, %actual_partial_max, %actual_partial_sum, %actual_partial_output, %actual_counter, %actual_output1, %actual_q8_1) : [index](index, tensor<32x128xf32>, tensor<576x4x128xf16>, tensor<576x4x128xf16>, tensor<576xf16>, tensor<4x9x16xf32>, tensor<4x9x16xf32>, tensor<4x9x16x128xf16>, tensor<4xi32>, tensor<32x128xf32>, tensor<4608xi8>)
+  check.expect.equal actual(%actual_output0) expected(%reference_output0) : tensor<32x128xf32>
+  check.expect.equal actual(%actual_q8_0) expected(%reference_q8_0) : tensor<4608xi8>
+  check.expect.equal actual(%actual_output1) expected(%reference_output1) : tensor<32x128xf32>
+  check.expect.equal actual(%actual_q8_1) expected(%reference_q8_1) : tensor<4608xi8>
+  check.return
+}
+
+check.case public @qwen3_moe_flash_attention_decode_split_pack_completed_q8_differential_case {
+  %input_seed = check.param.seed base(0x514d4f4550385138) count(1) : i64
+  %input = check.generate.random.uniform seed(%input_seed) range(-1.0 to 1.0) : tensor<32x128xf32>
+  %reference = check.generate.fill value(0) : tensor<4608xi8>
+  %actual = check.generate.fill value(1) : tensor<4608xi8>
+  kernel.launch @qwen3_moe_flash_attention_decode_split_quantize_reference_4096(%input, %reference) : (tensor<32x128xf32>, tensor<4608xi8>)
+  kernel.launch @qwen3_moe_flash_attention_decode_split_pack_completed_q8_test(%input, %actual) : (tensor<32x128xf32>, tensor<4608xi8>)
+  check.expect.equal actual(%actual) expected(%reference) : tensor<4608xi8>
+  check.return
+}
