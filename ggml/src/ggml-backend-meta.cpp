@@ -449,8 +449,14 @@ struct ggml_backend_meta_buffer_context {
     int stc_compute_index      = 0;
     int stc_compute_index_next = 0;
     std::vector<ggml_backend_buffer_ptr> bufs;
+    std::vector<size_t> domain_ends;
+    std::map<const ggml_tensor *, bool> bindings;
+    bool planned = false;
+    bool retired = false;
 
     ggml_backend_meta_split_context split;
+
+    explicit ggml_backend_meta_buffer_context(ggml_backend_buffer_type_t buft) : split(buft, GGML_BACKEND_BUFFER_USAGE_ANY) {}
 
     ggml_backend_meta_buffer_context(
             ggml_backend_buffer_type_t buft,
@@ -482,21 +488,13 @@ static void ggml_backend_meta_buffer_free_buffer(ggml_backend_buffer_t buffer) {
 
 static size_t ggml_backend_meta_buffer_n_bufs(ggml_backend_buffer_t meta_buf) {
     GGML_ASSERT(ggml_backend_buffer_is_meta(meta_buf));
-    ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) meta_buf->context;
-    return buf_ctx->bufs.size();
-}
-
-static ggml_backend_buffer_t ggml_backend_meta_buffer_simple_buffer(ggml_backend_buffer_t meta_buf, size_t index) {
-    GGML_ASSERT(ggml_backend_buffer_is_meta(meta_buf));
-    ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) meta_buf->context;
-    GGML_ASSERT(index < buf_ctx->bufs.size());
-    return buf_ctx->bufs[index].get();
+    return ggml_backend_meta_buft_n_bufts(meta_buf->buft);
 }
 
 static struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct ggml_tensor * tensor, size_t index) {
     GGML_ASSERT(ggml_backend_buffer_is_meta(tensor->buffer));
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
-    GGML_ASSERT(index < buf_ctx->bufs.size());
+    GGML_ASSERT(index < ggml_backend_meta_buffer_n_bufs(tensor->buffer));
 
     ggml_backend_meta_simple_tensor_container & stc = buf_ctx->get_simple_tensor_container(tensor);
     auto it = stc.simple_tensors.find(tensor);
@@ -1475,6 +1473,8 @@ ggml_tensor * ggml_backend_meta_preparation_get_tensor(
         ggml_backend_meta_find_simple_tensor(preparation->tensors, tensor, device, preparation->split.sources);
 }
 
+static ggml_backend_buffer_t ggml_backend_meta_materialize(void * preparation, ggml_backend_buffer_set * domains, size_t n_domains);
+
 static const ggml_backend_buffer_type_alloc_i * ggml_backend_meta_buffer_type_get_alloc_interface(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
     static const ggml_backend_buffer_type_alloc_i iface = {
@@ -1493,7 +1493,7 @@ static const ggml_backend_buffer_type_alloc_i * ggml_backend_meta_buffer_type_ge
         /* .get_tensor       = */ [](void * preparation, const ggml_tensor * tensor, size_t domain) {
             return ggml_backend_meta_preparation_get_tensor(static_cast<ggml_backend_meta_preparation *>(preparation), tensor, domain);
         },
-        /* .materialize      = */ nullptr,
+        /* .materialize      = */ ggml_backend_meta_materialize,
     };
     return &iface;
 }
@@ -1871,17 +1871,20 @@ static void ggml_backend_meta_buffer_get_tensor(ggml_backend_buffer_t buffer, co
 }
 
 static void ggml_backend_meta_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
-    const size_t n_buffers = ggml_backend_meta_buffer_n_bufs(buffer);
-    for (size_t i = 0; i < n_buffers; i++) {
-        ggml_backend_buffer_clear(ggml_backend_meta_buffer_simple_buffer(buffer, i), value);
+    auto * ctx = static_cast<ggml_backend_meta_buffer_context *>(buffer->context);
+    for (const auto & physical : ctx->bufs) {
+        ggml_backend_buffer_clear(physical.get(), value);
     }
 }
 
 static void ggml_backend_meta_buffer_reset(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(ggml_backend_buffer_is_meta(buffer));
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) buffer->context;
+    if (buf_ctx->planned) {
+        buf_ctx->retired = true;
+    }
     for (size_t i = 0; i < buf_ctx->bufs.size(); i++) {
-        ggml_backend_buffer_reset(ggml_backend_meta_buffer_simple_buffer(buffer, i));
+        ggml_backend_buffer_reset(buf_ctx->bufs[i].get());
     }
 }
 
@@ -1901,6 +1904,101 @@ static const ggml_backend_buffer_i ggml_backend_meta_buffer_iface = {
 
 bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf) {
     return buf != nullptr && buf->iface.free_buffer == ggml_backend_meta_buffer_iface.free_buffer;
+}
+
+static bool ggml_backend_meta_binding_is_bound(ggml_backend_buffer_t buffer, const ggml_tensor * tensor) {
+    auto * ctx = static_cast<ggml_backend_meta_buffer_context *>(buffer->context);
+    auto it = ctx->bindings.find(tensor);
+    return !ctx->retired && tensor->buffer == buffer && it != ctx->bindings.end() && it->second;
+}
+
+static ggml_status ggml_backend_meta_binding_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+    auto * ctx = static_cast<ggml_backend_meta_buffer_context *>(buffer->context);
+    auto it = ctx->bindings.find(tensor);
+    if (ctx->retired || it == ctx->bindings.end() || tensor->data ||
+            (tensor->buffer && tensor->buffer != buffer && ggml_backend_tensor_is_bound(tensor))) {
+        return GGML_STATUS_FAILED;
+    }
+    tensor->buffer = buffer;
+    tensor->data = nullptr;
+    it->second = true;
+    return GGML_STATUS_SUCCESS;
+}
+
+static ggml_backend_buffer_t ggml_backend_meta_materialize(void * preparation, ggml_backend_buffer_set * domains, size_t n_domains) {
+    auto * prepared = static_cast<ggml_backend_meta_preparation *>(preparation);
+    if (!prepared || prepared->failed || n_domains != prepared->tensors.ctxs.size() || !domains) {
+        return nullptr;
+    }
+    try {
+        auto ctx = std::make_unique<ggml_backend_meta_buffer_context>(prepared->split.buft);
+        std::set<ggml_backend_buffer_t> owned;
+        size_t size = 0;
+        for (size_t domain = 0; domain < n_domains; domain++) {
+            const auto & buffers = domains[domain];
+            if (buffers.n_buffers && !buffers.buffers) {
+                return nullptr;
+            }
+            for (size_t i = 0; i < buffers.n_buffers; i++) {
+                auto * buffer = buffers.buffers[i];
+                if (!buffer || buffer->buft != ggml_backend_meta_buft_simple_buft(prepared->split.buft, domain) ||
+                        buffer->binding || ggml_backend_buffer_is_multi_buffer(buffer) || !owned.insert(buffer).second ||
+                        buffer->size > SIZE_MAX - size) {
+                    return nullptr;
+                }
+                size += buffer->size;
+            }
+            ctx->domain_ends.push_back(owned.size());
+            for (const auto & entry : prepared->tensors.simple_tensors) {
+                auto * tensor = entry.second[domain];
+                if (!tensor->buffer || !ggml_backend_tensor_is_bound(tensor)) {
+                    return nullptr;
+                }
+                if (tensor->view_src) {
+                    if (tensor->buffer != tensor->view_src->buffer ||
+                            tensor->view_offs > ggml_nbytes(tensor->view_src) ||
+                            ggml_nbytes(tensor) > ggml_nbytes(tensor->view_src) - tensor->view_offs) {
+                        return nullptr;
+                    }
+                } else if (!buffers.n_buffers ||
+                        std::find(buffers.buffers, buffers.buffers + buffers.n_buffers, tensor->buffer) == buffers.buffers + buffers.n_buffers) {
+                    return nullptr;
+                }
+            }
+        }
+        for (const auto & entry : prepared->tensors.simple_tensors) {
+            ctx->bindings.emplace(entry.first, false);
+        }
+        ctx->bufs.reserve(owned.size());
+        auto iface = ggml_backend_meta_buffer_iface;
+        iface.get_base = nullptr;
+        iface.init_tensor = ggml_backend_meta_binding_init_tensor;
+        static const ggml_backend_buffer_binding_i binding = {
+            ggml_backend_meta_binding_is_bound,
+            ggml_backend_meta_binding_init_tensor,
+        };
+        ggml_backend_buffer_ptr owner(ggml_backend_buffer_init(prepared->split.buft, iface, ctx.get(), size));
+        auto * materialized = ctx.release();
+        owner->binding = &binding;
+        owner->usage = prepared->split.usage;
+        materialized->planned = true;
+        materialized->stc_static = std::move(prepared->tensors);
+        materialized->split = std::move(prepared->split);
+        materialized->split.sources = {};
+        for (size_t domain = 0; domain < n_domains; domain++) {
+            auto & buffers = domains[domain];
+            for (size_t i = 0; i < buffers.n_buffers; i++) {
+                ggml_backend_buffer_set_usage(buffers.buffers[i], owner->usage);
+                materialized->bufs.emplace_back(buffers.buffers[i]);
+            }
+            free(buffers.buffers);
+            buffers = {};
+        }
+        delete prepared;
+        return owner.release();
+    } catch (const std::bad_alloc &) {
+        return nullptr;
+    }
 }
 
 void ggml_backend_meta_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage) {

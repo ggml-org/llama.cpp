@@ -74,6 +74,9 @@ struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer) {
 }
 
 enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor) {
+    if (talloc->buffer->binding) {
+        return GGML_STATUS_FAILED;
+    }
     size_t size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);
     size = GGML_PAD(size, talloc->alignment);
 
