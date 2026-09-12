@@ -143,8 +143,13 @@ template <int SUBBLK, bool HAS_MIN, int BIAS>
 void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                          int i0, int j0, float * buf, int buf_stride);
 
-// If this architecture requires repacking of src1 int8 weights, do so and return true.
-// Otherwise, return false and driver will fill as natural [row][k] contiguous rows.
-bool tiled_repack_src1_codes(const block_q8_K * const * rows,
-                             int n_rows, tiled_tile_src1 * tile, int kblk);
+// Interleave the natural [row][256] src1 codes in-place into the VNNI
+// group-local [kg][row][4] layout. No-op on non-VNNI builds.
+void tiled_repack_src1_codes(tiled_tile_src1 * tile);
+
+// Interleave one 16-row x 64-k chunk of src1 q8 codes into the VNNI [g][row][4] layout.
+// rows[r] points to the qs field (256 bytes) of row r's block_q8_K at the desired kblk.
+// c selects the chunk (0..3) within the 64-int32 qs field (int32s [c*16, c*16+16)).
+// out receives 1024 bytes in [k-group][row][4] layout (dpbusd-ready).
+void tiled_repack_16x16(const int8_t * const * rows, int c, uint8_t * out);
 

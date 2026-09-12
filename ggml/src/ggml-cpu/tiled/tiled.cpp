@@ -448,18 +448,17 @@ static void tiled_unpack_src0(const block_iq1_m * rows, int64_t row_stride, int 
 static void tiled_unpack_src1_q8_K(const block_q8_K * const * rows, int n_rows, tiled_tile_src1 * tile,
                                    int kblk) {
     GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
-    // codes: use kernel-specific packing if provided, otherwise natural [row][k] fill
-    if (!tiled_repack_src1_codes(rows, n_rows, tile, kblk)) {
     const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
-        for (int r = 0; r < n_padded; r++) {
-            if (r < n_rows) {
-                memcpy(&tile->q[r * TILED_TILE_K], rows[r][kblk].qs, TILED_TILE_K);
-            } else {
-                memset(&tile->q[r * TILED_TILE_K], 0, TILED_TILE_K);
-            }
+    // natural [row][k] fill, zero-pad ragged tail
+    for (int r = 0; r < n_padded; r++) {
+        if (r < n_rows) {
+            memcpy(&tile->q[r * TILED_TILE_K], rows[r][kblk].qs, TILED_TILE_K);
+        } else {
+            memset(&tile->q[r * TILED_TILE_K], 0, TILED_TILE_K);
         }
     }
-    const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
+    // ISA-specific interleave (in-place, no-op on non-VNNI)
+    tiled_repack_src1_codes(tile);
     // d and bsums (ISA-independent)
     for (int r = 0; r < n_padded; r++) {
         if (r < n_rows) {

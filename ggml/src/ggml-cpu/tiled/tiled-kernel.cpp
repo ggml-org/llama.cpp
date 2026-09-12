@@ -116,7 +116,7 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
 #endif
         for (int g = 0; g < NG; g++) {
             const int kg = s * NG + g;
-            const __m512i codes = _mm512_load_si512((const __m512i *) &src1.q[kg * TILED_TILE_ROWS * 4 + j0 * 4]);
+            const __m512i codes = _mm512_load_si512((const __m512i *) &src1.q[(j0 / TILED_MICRO) * (TILED_MICRO * TILED_TILE_K) + kg * (TILED_MICRO * 4)]);
             for (int t = 0; t < NUM_ROWS; t++) {
                 const uint32_t u4 = *(const uint32_t *) &src0.q[(i0 + t) * TILED_TILE_K + kg * 4];
                 const __m512i u4b = _mm512_set1_epi32((int) u4);
@@ -475,92 +475,113 @@ template void tiled_run_microtile<16, true, 0>(const tiled_tile_src0 & src0, con
 static_assert(sizeof(block_q8_K) == 292 && offsetof(block_q8_K, qs) == 4,
               "block_q8_K layout changed, fix the src1 repack");
 
-// VNNI: the dpbusd kernel reads src1 codes in [k/4][row][4] order (one 512-bit
-// load covers 16 rows x 4 k). Load one k-slab's codes as 16 rows of 16 int32s,
-// transpose in registers, store as 16 rows of 16 int32s into the tile.
+// VNNI: interleave the natural [row][256] codes in-place into group-local
+// [kg][row][4] layout. Each 16-row group is self-contained in 4KB.
+// The butterfly reads all 16 rows into registers before any store (safe for
+// one chunk), but cross-chunk overlap within the 4KB group requires a temp.
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
 
-bool tiled_repack_src1_codes(const block_q8_K * const * rows, int n_rows,
-                             tiled_tile_src1 * tile, int kblk) {
-    GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
+void tiled_repack_src1_codes(tiled_tile_src1 * tile) {
+    alignas(64) uint8_t grp_src[TILED_MICRO * TILED_TILE_K];
+    alignas(64) uint8_t grp_dst[1024];
 
-    for (int r0 = 0; r0 < n_rows; r0 += TILED_MICRO) {
-        const int n = MIN(n_rows - r0, TILED_MICRO);
+    const int8_t * rp[TILED_MICRO];
+    for (int r = 0; r < TILED_MICRO; r++) {
+        rp[r] = (const int8_t *) &grp_src[r * TILED_TILE_K];
+    }
 
-        // 4 chunks of 16 int32s (64 int32s total = 256 bytes = qs size)
+    for (int grp = 0; grp < TILED_TILE_ROWS / TILED_MICRO; grp++) {
+        uint8_t * base = (uint8_t *) &tile->q[grp * (TILED_MICRO * TILED_TILE_K)];
+        memcpy(grp_src, base, TILED_MICRO * TILED_TILE_K);
         for (int c = 0; c < 4; c++) {
-            __m512i v[16];
-            for (int r = 0; r < TILED_MICRO; r++) {
-                if (r < n) {
-                    v[r] = _mm512_loadu_si512((const void *) ((const int32_t *) rows[r0 + r][kblk].qs + c * 16));
-                } else {
-                    v[r] = _mm512_setzero_si512();
-                }
-            }
+            tiled_repack_16x16(rp, c, grp_dst);
+            memcpy(base + c * 1024, grp_dst, 1024);
+        }
+    }
+}
+#else
+void tiled_repack_src1_codes(tiled_tile_src1 * tile) {
+    GGML_UNUSED(tile);
+}
+#endif
 
-            // 16x16 int32 transpose, 4 butterfly phases
-            // Phase 1: 1-element interleave, pairs (0,1), (2,3), ..., (14,15)
-            {
-                const __m512i idx_a = _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
-                const __m512i idx_b = _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
-                for (int i = 0; i < 16; i += 2) {
-                    __m512i a = v[i], b = v[i+1];
-                    v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
-                    v[i+1] = _mm512_permutex2var_epi32(a, idx_b, b);
-                }
-            }
-            // Phase 2: 2-element interleave, pairs (0,2), (1,3), (4,6), (5,7), ...
-            {
-                const __m512i idx_a = _mm512_setr_epi32(0, 1, 16, 17, 4, 5, 20, 21, 8, 9, 24, 25, 12, 13, 28, 29);
-                const __m512i idx_b = _mm512_setr_epi32(2, 3, 18, 19, 6, 7, 22, 23, 10, 11, 26, 27, 14, 15, 30, 31);
-                for (int i = 0; i < 16; i += 4) {
-                    __m512i a = v[i],   b = v[i+2];
-                    v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
-                    v[i+2] = _mm512_permutex2var_epi32(a, idx_b, b);
-                    a = v[i+1], b = v[i+3];
-                    v[i+1] = _mm512_permutex2var_epi32(a, idx_a, b);
-                    v[i+3] = _mm512_permutex2var_epi32(a, idx_b, b);
-                }
-            }
-            // Phase 3: 4-element interleave, pairs (0,4), (1,5), ..., (7,11), (8,12), ...
-            {
-                const __m512i idx_a = _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
-                const __m512i idx_b = _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
-                for (int i = 0; i < 16; i += 8) {
-                    for (int j = 0; j < 4; j++) {
-                        __m512i a = v[i+j], b = v[i+4+j];
-                        v[i+j]   = _mm512_permutex2var_epi32(a, idx_a, b);
-                        v[i+4+j] = _mm512_permutex2var_epi32(a, idx_b, b);
-                    }
-                }
-            }
-            // Phase 4: 8-element interleave, pairs (0,8), (1,9), ..., (7,15)
-            {
-                const __m512i idx_a = _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
-                const __m512i idx_b = _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
-                for (int i = 0; i < 8; i++) {
-                    __m512i a = v[i], b = v[i+8];
-                    v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
-                    v[i+8] = _mm512_permutex2var_epi32(a, idx_b, b);
-                }
-            }
+// Interleave one 16-row x 64-k chunk of src1 q8 codes into [g][row][4] layout.
+// rows[r] points to the qs field (256 bytes) of row r at the desired kblk.
+// c selects the chunk (0..3): int32s [c*16, c*16+16) of the 64-int32 qs field.
+// out receives 1024 bytes: 16 k-groups of 16 rows x 4 bytes (dpbusd-ready).
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
+void tiled_repack_16x16(const int8_t * const * rows, int c, uint8_t * out) {
+    __m512i v[16];
+    for (int r = 0; r < 16; r++) {
+        v[r] = _mm512_loadu_si512((const void *) ((const int32_t *) rows[r] + c * 16));
+    }
 
-            // store: v[g] holds 16 int32s for k-group (c*16+col_order[g]), rows r0..r0+15
-            // the butterfly produces columns in a fixed permuted order
-            static const int col_order[16] = {0, 8, 1, 9, 4, 12, 5, 13, 2, 10, 3, 11, 6, 14, 7, 15};
-            for (int g = 0; g < 16; g++) {
-                _mm512_store_si512((void *) (tile->q + ((c * 16 + col_order[g]) * TILED_TILE_ROWS + r0) * 4), v[g]);
+    // 16x16 int32 transpose, 4 butterfly phases
+    // Phase 1: 1-element interleave, pairs (0,1), (2,3), ..., (14,15)
+    {
+        const __m512i idx_a = _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+        const __m512i idx_b = _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+        for (int i = 0; i < 16; i += 2) {
+            __m512i a = v[i], b = v[i+1];
+            v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
+            v[i+1] = _mm512_permutex2var_epi32(a, idx_b, b);
+        }
+    }
+    // Phase 2: 2-element interleave, pairs (0,2), (1,3), (4,6), (5,7), ...
+    {
+        const __m512i idx_a = _mm512_setr_epi32(0, 1, 16, 17, 4, 5, 20, 21, 8, 9, 24, 25, 12, 13, 28, 29);
+        const __m512i idx_b = _mm512_setr_epi32(2, 3, 18, 19, 6, 7, 22, 23, 10, 11, 26, 27, 14, 15, 30, 31);
+        for (int i = 0; i < 16; i += 4) {
+            __m512i a = v[i],   b = v[i+2];
+            v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
+            v[i+2] = _mm512_permutex2var_epi32(a, idx_b, b);
+            a = v[i+1], b = v[i+3];
+            v[i+1] = _mm512_permutex2var_epi32(a, idx_a, b);
+            v[i+3] = _mm512_permutex2var_epi32(a, idx_b, b);
+        }
+    }
+    // Phase 3: 4-element interleave, pairs (0,4), (1,5), ..., (7,11), (8,12), ...
+    {
+        const __m512i idx_a = _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+        const __m512i idx_b = _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+        for (int i = 0; i < 16; i += 8) {
+            for (int j = 0; j < 4; j++) {
+                __m512i a = v[i+j], b = v[i+4+j];
+                v[i+j]   = _mm512_permutex2var_epi32(a, idx_a, b);
+                v[i+4+j] = _mm512_permutex2var_epi32(a, idx_b, b);
             }
         }
     }
-    return true;
+    // Phase 4: 8-element interleave, pairs (0,8), (1,9), ..., (7,15)
+    {
+        const __m512i idx_a = _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+        const __m512i idx_b = _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
+        for (int i = 0; i < 8; i++) {
+            __m512i a = v[i], b = v[i+8];
+            v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
+            v[i+8] = _mm512_permutex2var_epi32(a, idx_b, b);
+        }
+    }
+
+    // store: v[g] holds 16 int32s for k-group col_order[g], rows 0..15
+    static const int col_order[16] = {0, 8, 1, 9, 4, 12, 5, 13, 2, 10, 3, 11, 6, 14, 7, 15};
+    for (int g = 0; g < 16; g++) {
+        _mm512_store_si512((void *) (out + col_order[g] * 64), v[g]);
+    }
 }
 #else
-bool tiled_repack_src1_codes(const block_q8_K * const * rows, int n_rows,
-                             tiled_tile_src1 * tile, int kblk) {
-    GGML_UNUSED(rows); GGML_UNUSED(n_rows);
-    GGML_UNUSED(tile); GGML_UNUSED(kblk);
-    return false;
+void tiled_repack_16x16(const int8_t * const * rows, int c, uint8_t * out) {
+    // scalar: out[g][r*4..r*4+3] = rows[r][c*64 + g*4 + 0..3]
+    for (int g = 0; g < 16; g++) {
+        for (int r = 0; r < 16; r++) {
+            uint8_t * p = out + g * 64 + r * 4;
+            const uint8_t * s = (const uint8_t *) rows[r] + c * 64 + g * 4;
+            p[0] = s[0];
+            p[1] = s[1];
+            p[2] = s[2];
+            p[3] = s[3];
+        }
+    }
 }
 #endif
 
