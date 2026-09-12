@@ -2,6 +2,7 @@
 
 #include "ggml-backend.h"
 #include "ggml-kv-stream-partial.h"
+#include "ggml-kv-stream.h"
 
 // Two two-split partials, a normalized staging output, and a device validation flag.
 struct ggml_kv_stream_block_layout {
@@ -24,5 +25,10 @@ struct ggml_kv_stream_partial_ops {
     bool (*fold)(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buffer_t workspace);
     // Set one export to empty, including both splits; never touches public output.
     bool (*clear)(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buffer_t workspace, bool second);
+    // Version 3: query the compiled native path, actual online writer, and F16 converter before planning storage.
+    ggml_kv_stream_capabilities (*capabilities)(ggml_backend_t backend, int32_t key, int32_t value);
+    bool (*supports_conversion)(ggml_backend_t backend, const ggml_tensor * source, const ggml_tensor * destination);
+    // Caller supplies a disjoint, bounded F16 plane; this operation does not allocate device scratch.
+    bool (*convert)(ggml_backend_t backend, const ggml_tensor * source, ggml_tensor * destination);
 };
 using ggml_kv_stream_partial_ops_get = const ggml_kv_stream_partial_ops * (*)();

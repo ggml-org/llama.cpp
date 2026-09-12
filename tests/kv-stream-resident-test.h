@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../src/llama-kv-stream-resident.h"
+#include "../ggml/src/ggml-kv-stream-device.h"
 #include "../src/llama-memory-executor-cuda.h"
 #include "ggml-alloc.h"
 #include "ggml-cpp.h"
@@ -44,10 +45,16 @@ struct fixture {
     std::unique_ptr<llama_kv_stream_binding> binding;
     llama_kv_stream_resident * resident = nullptr;
     // The unused ring remains at the front; active resident planes must use policy offsets, not a flat host copy.
-    fixture(ggml_backend_t backend, bool cuda, ggml_type k = GGML_TYPE_F16, ggml_type v = GGML_TYPE_F16, size_t context = 769) : backend(backend), cuda(cuda) {
+    fixture(ggml_backend_t backend, bool cuda, ggml_type k = GGML_TYPE_F16, ggml_type v = GGML_TYPE_F16, size_t context = 769, bool fallback = false) : backend(backend), cuda(cuda) {
         llama_kv_stream_host_config c{37, {k, v, 256, 256, 2, 256, 128},
             {{k, true, true, true, true}, {v, true, true, true, true}, true, true}, context, 2};
         auto * dev = ggml_backend_get_device(backend);
+        if (cuda) {
+            auto * reg = ggml_backend_dev_backend_reg(dev);
+            auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
+            if (get && get() && get()->version >= 3) c.capabilities = get()->capabilities(backend,k,v);
+        }
+        if (fallback) c.capabilities.direct_pair = false;
         auto * host_type = cuda ? llama_kv_stream_host_buffer_type(dev) : ggml_backend_cpu_buffer_type();
         auto * device_type = cuda ? llama_kv_stream_device_buffer_type(dev) : ggml_backend_cpu_buffer_type();
         GGML_ASSERT(host_type && device_type);
@@ -56,7 +63,9 @@ struct fixture {
         populate(host);
         content = std::make_shared<llama_kv_stream_content>(host);
         ggml_kv_stream_layout page; GGML_ASSERT(ggml_kv_stream_layout_make(c.shape, 256, page).status == ggml_kv_stream_status::success);
-        policy.shape = c.shape; policy.capabilities = c.capabilities; policy.layers = c.layers; policy.pool_bytes = page.bytes*16;
+        ggml_kv_stream_execution execution;
+        GGML_ASSERT(ggml_kv_stream_resolve(c.shape,c.capabilities,256,execution).status == ggml_kv_stream_status::success);
+        policy.shape = c.shape; policy.capabilities = c.capabilities; policy.layers = c.layers; policy.pool_bytes = page.bytes*16+execution.conversion.bytes;
         arena.reset(ggml_backend_memory_arena_new(device_type, policy.pool_bytes + 256));
         GGML_ASSERT(arena && ggml_backend_memory_arena_begin(arena.get(), 0));
         auto base = reinterpret_cast<uintptr_t>(ggml_backend_buffer_get_base(ggml_backend_memory_arena_parent(arena.get())));
@@ -85,6 +94,7 @@ static std::vector<float> unpack(const fixture & f, uint32_t layer, bool value) 
     llama_kv_stream_host_layer planes; f.host->layer(layer, planes);
     auto * source = static_cast<const uint8_t *>(value ? planes.v : planes.k);
     std::vector<float> result(rows*dim);
+    if (type == GGML_TYPE_F32) { std::memcpy(result.data(),source,result.size()*sizeof(float)); return result; }
     auto convert = ggml_get_type_traits(type)->to_float;
     GGML_ASSERT(convert);
     for (size_t row = 0; row < rows; ++row) convert(source + row*stride, result.data() + row*dim, int64_t(dim));

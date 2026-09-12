@@ -16,7 +16,9 @@ struct llama_kv_stream_resident::implementation {
     llama_kv_stream_policy_layout layout;
     std::vector<std::pair<ggml_tensor *, ggml_tensor *>> roots;
     ggml_tensor * stage[2] = {};
-    ggml_kv_stream_layout page;
+    ggml_kv_stream_layout page, conversion;
+    ggml_tensor * converted[2] = {};
+    bool fallback = false;
     std::vector<llama_kv_stream_rows> ranges;
     size_t active = 0, bytes = 0, calls = 0;
     uint64_t generation = 0, epoch = 0;
@@ -89,8 +91,7 @@ std::unique_ptr<llama_kv_stream_resident> llama_kv_stream_resident::create(
     if (!content || !backend || !binding.buffer || !binding.base || binding.capacity != binding.config.pool_bytes ||
             binding.capacity > ggml_backend_buffer_get_size(binding.buffer) ||
             binding.base != ggml_backend_buffer_get_base(binding.buffer) ||
-            !ggml_backend_supports_buft(backend, ggml_backend_buffer_get_type(binding.buffer)) ||
-            binding.initial_policy.budget.page.attention != ggml_kv_stream_attention::direct) return {};
+            !ggml_backend_supports_buft(backend, ggml_backend_buffer_get_type(binding.buffer))) return {};
     const auto & shape = binding.config.shape;
     if (shape.page_tokens <= 0 || shape.page_tokens % 256 || shape.head_dim_k > INT32_MAX ||
             shape.head_dim_v > INT32_MAX || shape.heads > INT32_MAX) return {};
@@ -104,9 +105,22 @@ std::unique_ptr<llama_kv_stream_resident> llama_kv_stream_resident::create(
         if (size_t(state.decode_active_pages) > SIZE_MAX/size_t(shape.page_tokens)) return {};
         if (!s.compatible() || llama_kv_stream_policy_layout_make(binding.config, state,
                 size_t(state.decode_active_pages)*size_t(shape.page_tokens), s.layout).status != llama_kv_stream_policy_status::success) return {};
+        s.fallback = state.budget.page.attention == ggml_kv_stream_attention::f16;
+        s.conversion = state.budget.page.conversion;
+        auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
+        const auto * ops = get ? get() : nullptr;
+        if (s.fallback && (!ops || ops->version < 3 || !ops->capabilities || !ops->supports_conversion || !ops->convert)) return {};
+        if (ops && ops->version >= 3 && ops->capabilities) {
+            auto actual = ops->capabilities(backend,shape.type_k,shape.type_v);
+            if (s.fallback) actual.direct_pair = false;
+            ggml_kv_stream_execution execution;
+            if (ggml_kv_stream_resolve(shape,actual,size_t(shape.page_tokens),execution).status != ggml_kv_stream_status::success ||
+                    execution.attention != state.budget.page.attention) return {};
+        }
         const size_t layers = s.layout.layers.size();
-        if (layers > (SIZE_MAX/ggml_tensor_overhead() - 3)/2) return {};
-        s.context.reset(ggml_init({(2*layers + 3)*ggml_tensor_overhead(), nullptr, true}));
+        if (layers > (SIZE_MAX/ggml_tensor_overhead() - 5)/2) return {};
+        s.context.reset(ggml_init({(2*layers + 5)*ggml_tensor_overhead(), nullptr, true}));
         if (!s.context) return {};
         s.roots.reserve(layers);
         s.ranges.reserve(2*layers);
@@ -142,6 +156,15 @@ std::unique_ptr<llama_kv_stream_resident> llama_kv_stream_resident::create(
             s.stage[value] = ggml_new_tensor_1d(s.context.get(), type, int64_t(s.page.tokens*size_t(shape.heads)*dim));
             if (ggml_backend_buffer_get_alloc_size(binding.buffer,s.stage[value]) != bytes ||
                     ggml_backend_tensor_alloc(binding.buffer,s.stage[value],static_cast<char *>(binding.base)+(value ? s.layout.ring.v_offset : 0)) != GGML_STATUS_SUCCESS) return {};
+        }
+        if (s.fallback) for (int value = 0; value < 2; ++value) {
+            const size_t bytes = value ? s.conversion.v_bytes : s.conversion.k_bytes;
+            const size_t offset = s.layout.conversion_offset+(value ? s.conversion.v_offset : 0);
+            if (s.conversion.bytes != s.layout.conversion_bytes || offset > binding.capacity ||
+                    bytes > binding.capacity-offset || bytes/sizeof(ggml_fp16_t) > size_t(INT64_MAX)) return {};
+            s.converted[value] = ggml_new_tensor_1d(s.context.get(),GGML_TYPE_F16,int64_t(bytes/sizeof(ggml_fp16_t)));
+            if (ggml_backend_buffer_get_alloc_size(binding.buffer,s.converted[value]) != bytes ||
+                    ggml_backend_tensor_alloc(binding.buffer,s.converted[value],static_cast<char *>(binding.base)+offset) != GGML_STATUS_SUCCESS) return {};
         }
         return result;
     } catch (const std::bad_alloc &) {
@@ -326,7 +349,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         return a < b+nb && b < a+na;
     };
     if (overlaps(scratch,region.size,pool,s.binding.capacity)) return false;
-    ggml_tensor k, v, slice, op;
+    ggml_tensor k, v, ck, cv, slice, op;
     // Each slot selects one page from the separate contiguous ring K and V planes.
     const auto describe = [&](size_t first, size_t count, size_t slot, bool resident) {
         k = s.descriptor(layer,false,count); v = s.descriptor(layer,true,count);
@@ -335,6 +358,22 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
             k.data = static_cast<char *>(s.stage[0]->data)+slot*s.page.k_bytes;
             v.data = static_cast<char *>(s.stage[1]->data)+slot*s.page.v_bytes;
             k.nb[3] = s.page.k_bytes; v.nb[3] = s.page.v_bytes;
+        } else {
+            k.data = static_cast<char *>(k.data)+first*s.page.k_token_bytes;
+            v.data = static_cast<char *>(v.data)+first*s.page.v_token_bytes;
+        }
+        if (s.fallback) {
+            if (count > s.conversion.tokens) return false;
+            ck = *s.converted[0]; cv = *s.converted[1];
+            for (auto item : {std::pair{&ck,false},std::pair{&cv,true}}) {
+                auto * tensor = item.first;
+                tensor->ne[0] = item.second ? s.binding.config.shape.head_dim_v : s.binding.config.shape.head_dim_k;
+                tensor->ne[1] = int64_t(count); tensor->ne[2] = s.binding.config.shape.heads; tensor->ne[3] = 1;
+                tensor->nb[1] = item.second ? s.conversion.v_token_bytes : s.conversion.k_token_bytes;
+                tensor->nb[2] = item.second ? s.conversion.v_row_bytes : s.conversion.k_row_bytes;
+                tensor->nb[3] = item.second ? s.conversion.v_bytes : s.conversion.k_bytes;
+            }
+            if (!ops->supports_conversion(s.backend,&k,&ck) || !ops->supports_conversion(s.backend,&v,&cv)) return false;
         }
         slice = *mask; slice.ne[0] = int64_t(count);
         if (uintptr_t(mask->data) > UINTPTR_MAX-first*sizeof(ggml_fp16_t)) return false;
@@ -342,10 +381,12 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         op = *output; op.op = GGML_OP_FLASH_ATTN_EXT;
         std::memset(op.src,0,sizeof(op.src)); std::memset(op.op_params,0,sizeof(op.op_params));
         std::memcpy(op.op_params,&scale,sizeof(scale)); ggml_flash_attn_ext_set_prec(&op,GGML_PREC_F32);
-        op.src[0] = q; op.src[1] = &k; op.src[2] = &v; op.src[3] = &slice;
+        op.src[0] = q; op.src[1] = s.fallback ? &ck : &k; op.src[2] = s.fallback ? &cv : &v; op.src[3] = &slice;
         return ops->supports(s.backend,&op);
     };
-    if (prefix && !describe(0,prefix,0,true)) return false;
+    const size_t resident_chunk = s.fallback ? s.page.tokens : prefix;
+    for (size_t first = 0; first < prefix; first += resident_chunk)
+        if (!describe(first,std::min(resident_chunk,prefix-first),0,true)) return false;
     for (size_t first = prefix, block = 0; first < padded; first += s.page.tokens, ++block)
         if (!describe(first,std::min(s.page.tokens,padded-first),block%slots,false)) return false;
     // Backend validation checks shape arithmetic; also exclude aliases with unused pool/lease bytes.
@@ -359,9 +400,20 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     s.busy = true; s.valid = false;
     struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
     if (!s.refresh(padded)) return false;
-    if (prefix) {
+    const auto convert_inputs = [&] {
+        return !s.fallback || (ops->convert(s.backend,&k,&ck) && ops->convert(s.backend,&v,&cv));
+    };
+    if (prefix && !s.fallback) {
         if (!describe(0,prefix,0,true) || !ops->partial(s.backend,&op,wb,false)) return false;
-    } else if (!ops->clear(s.backend,output,wb,false)) return false;
+    } else {
+        if (!ops->clear(s.backend,output,wb,false)) return false;
+        for (size_t first = 0; first < prefix; first += resident_chunk) {
+            if (!describe(first,std::min(resident_chunk,prefix-first),0,true) || !convert_inputs() ||
+                    !ops->partial(s.backend,&op,wb,true)) return false;
+            if (first+std::min(resident_chunk,prefix-first) == padded) return ops->merge(s.backend,output,wb);
+            if (!ops->fold(s.backend,output,wb)) return false;
+        }
+    }
     llama_kv_stream_host_layer host;
     if (!s.content->host()->layer(layer,host)) return false;
     for (size_t first = prefix, block = 0; first < padded; first += s.page.tokens, ++block) {
@@ -379,7 +431,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
             ggml_backend_tensor_set(&staged,source+first*stride,0,live*stride);
             s.bytes += live*stride; ++s.calls;
         }
-        if (!ops->partial(s.backend,&op,wb,true)) return false;
+        if (!convert_inputs() || !ops->partial(s.backend,&op,wb,true)) return false;
         if (first+count == padded) return ops->merge(s.backend,output,wb);
         if (!ops->fold(s.backend,output,wb)) return false;
     }

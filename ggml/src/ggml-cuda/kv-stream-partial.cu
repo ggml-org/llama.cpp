@@ -1,6 +1,7 @@
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #include "kv-stream-partial.cuh"
-#include "fattn-vec.cuh"
+#include "kv-stream-dispatch.cuh"
+#include "convert.cuh"
 #include "../ggml-backend-impl.h"
 #include "../ggml-kv-stream.h"
 
@@ -15,17 +16,20 @@ struct span { uintptr_t begin = 0, end = 0; };
 static bool tensor_span(ggml_backend_t backend, const ggml_tensor * t, span & out) {
     if (!t || !t->data || !t->buffer || !ggml_backend_supports_buft(backend, ggml_backend_buffer_get_type(t->buffer)) ||
             ggml_backend_buffer_is_host(t->buffer)) return false;
+    if (t->type < 0 || t->type >= GGML_TYPE_COUNT || ggml_blck_size(t->type) <= 0 || ggml_type_size(t->type) == 0 ||
+            t->ne[0] <= 0 || t->ne[0] % ggml_blck_size(t->type)) return false;
     size_t bytes = ggml_type_size(t->type);
     for (int i = 0; i < 4; ++i) {
-        if (t->ne[i] <= 0 || t->ne[i] > INT32_MAX || t->nb[i] > INT32_MAX ||
-                size_t(t->ne[i]-1) > (SIZE_MAX-bytes)/(t->nb[i] ? t->nb[i] : 1)) return false;
-        bytes += size_t(t->ne[i]-1)*t->nb[i];
+        if (t->ne[i] <= 0 || t->ne[i] > INT32_MAX || t->nb[i] > INT32_MAX) return false;
+        const size_t elements = size_t(t->ne[i])/(i == 0 ? size_t(ggml_blck_size(t->type)) : 1);
+        if (elements-1 > (SIZE_MAX-bytes)/(t->nb[i] ? t->nb[i] : 1)) return false;
+        bytes += (elements-1)*t->nb[i];
     }
     const auto base = uintptr_t(ggml_backend_buffer_get_base(t->buffer));
     const auto data = uintptr_t(t->data);
     const size_t capacity = ggml_backend_buffer_get_size(t->buffer);
     if (data < base || data-base > capacity || bytes > capacity-(data-base) || data > UINTPTR_MAX-bytes ||
-            data % ggml_type_size(t->type)) return false;
+            data % (t->type == GGML_TYPE_F32 ? 4 : 2)) return false;
     out = {data, data+bytes};
     return true;
 }
@@ -33,18 +37,54 @@ static bool tensor_span(ggml_backend_t backend, const ggml_tensor * t, span & ou
 // Compare touched ranges, not owning buffers: independent tensors may share one allocation.
 static bool overlap(span a, span b) { return a.begin < b.end && b.begin < a.end; }
 
-// The first adapter admits F16, head size 256, one sequence, and no sinks/bias/softcap.
+// Query the same SET_ROWS admission used by the backend; storage alone does not imply a usable KV cache.
+static ggml_kv_stream_capabilities capabilities(ggml_backend_t backend, int32_t key, int32_t value) {
+    ggml_kv_stream_capabilities caps;
+    caps.k.type = key; caps.v.type = value;
+    if (!backend || !ggml_backend_is_cuda(backend)) return caps;
+    auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_set_device(ctx.device);
+    for (auto * side : {&caps.k,&caps.v}) {
+        ggml_kv_stream_layout layout;
+        if (ggml_kv_stream_layout_make({side->type,side->type,256,256,1,256,128},256,layout).status != ggml_kv_stream_status::success) continue;
+        side->storage = true;
+        auto type = ggml_type(side->type);
+        ggml_tensor source = {}, index = {}, destination = {};
+        source.type = GGML_TYPE_F32; index.type = GGML_TYPE_I64; destination.type = type;
+        for (int i = 0; i < 4; ++i) {
+            source.ne[i] = index.ne[i] = destination.ne[i] = 1;
+            source.nb[i] = i ? 256*sizeof(float) : sizeof(float);
+            index.nb[i] = sizeof(int64_t);
+            destination.nb[i] = i == 0 ? ggml_type_size(type) : (i == 1 ? layout.k_row_bytes : layout.k_bytes);
+        }
+        source.ne[0] = destination.ne[0] = destination.ne[1] = 256;
+        ggml_tensor write = destination;
+        write.op = GGML_OP_SET_ROWS; write.src[0] = &source; write.src[1] = &index; write.src[2] = &destination;
+        side->online_write = ggml_backend_supports_op(backend,&write);
+        side->direct_attention = (side == &caps.k ? ggml_cuda_kv_stream_kernel(type,GGML_TYPE_F16) :
+            ggml_cuda_kv_stream_kernel(GGML_TYPE_F16,type)) || ggml_cuda_kv_stream_kernel(type,type);
+        side->convert_f16 = type == GGML_TYPE_F16 || ggml_get_to_fp16_cuda(type);
+    }
+    if (caps.k.storage && caps.v.storage) caps.direct_pair = ggml_cuda_kv_stream_kernel(ggml_type(key),ggml_type(value));
+    caps.f16_attention = ggml_cuda_kv_stream_kernel(GGML_TYPE_F16,GGML_TYPE_F16);
+    return caps;
+}
+
+// Admit only compiled native pairs with head size 256, one sequence, and no sinks/bias/softcap.
 static bool supports(ggml_backend_t backend, const ggml_tensor * op) {
     if (!backend || !ggml_backend_is_cuda(backend) || !op || op->op != GGML_OP_FLASH_ATTN_EXT) return false;
     const auto * q = op->src[0], * k = op->src[1], * v = op->src[2], * mask = op->src[3];
-    if (!q || !k || !v || !mask || q->type != GGML_TYPE_F32 || k->type != GGML_TYPE_F16 ||
-            v->type != GGML_TYPE_F16 || mask->type != GGML_TYPE_F16 || op->type != GGML_TYPE_F32 ||
+    if (!q || !k || !v || !mask || q->type != GGML_TYPE_F32 ||
+            mask->type != GGML_TYPE_F16 || op->type != GGML_TYPE_F32 ||
             mask->ne[2] != 1 || mask->ne[3] != 1 || mask->nb[0] != 2 ||
             k->ne[1] <= 0 || k->ne[1] > INT32_MAX || mask->nb[1] < size_t(k->ne[1])*2 || mask->nb[1]%2) return false;
+    const auto caps = capabilities(backend,k->type,v->type);
+    if (!caps.direct_pair) return false;
     span ranges[5];
     const ggml_tensor * tensors[] = {q,k,v,mask,op};
     for (int i = 0; i < 5; ++i) if (!tensor_span(backend, tensors[i], ranges[i])) return false;
     for (int i = 0; i < 4; ++i) if (overlap(ranges[i], ranges[4])) return false;
+    for (int i = 0; i < 3; ++i) if (ranges[i].begin%16 || tensors[i]->nb[1]%16 || tensors[i]->nb[2]%16) return false;
     if (q->ne[2] > 65535 || q->ne[1] > INT32_MAX/512/q->ne[2]) return false;
     float params[3]; std::memcpy(params, op->op_params, sizeof(params));
     if (!std::isfinite(params[0]) || params[0] <= 0 || params[1] != 0 || params[2] != 0) return false;
@@ -55,9 +95,45 @@ static bool supports(ggml_backend_t backend, const ggml_tensor * op) {
         packed.nb[i] = packed.nb[i-1]*size_t(packed.ne[i-1]);
     }
     auto logical = *op; logical.src[3] = &packed;
-    const ggml_kv_stream_capabilities caps{{GGML_TYPE_F16,true,true,true,false}, {GGML_TYPE_F16,true,true,true,false},true,false};
+
     ggml_kv_stream_execution execution;
     return ggml_kv_stream_attention_validate(&logical, {256,256,256,256,128}, caps, size_t(k->ne[1]), execution).status == ggml_kv_stream_status::success;
+}
+
+// Conversion operates on contiguous token-major planes, independently of their logical head/token axes.
+static bool supports_conversion(ggml_backend_t backend, const ggml_tensor * source, const ggml_tensor * destination) {
+    if (!source || !destination || destination->type != GGML_TYPE_F16 || source->ne[0] != 256 || source->ne[3] != 1) return false;
+    const auto caps = capabilities(backend,source->type,source->type);
+    if (!caps.k.online_write || !caps.k.convert_f16) return false;
+    span src, dst;
+    if (!tensor_span(backend,source,src) || !tensor_span(backend,destination,dst) ||
+            overlap(src,dst) || src.begin%16 || dst.begin%16) return false;
+    for (int i = 0; i < 4; ++i) if (source->ne[i] != destination->ne[i]) return false;
+    for (const auto * tensor : {source,destination}) {
+        ggml_kv_stream_layout layout;
+        if (ggml_kv_stream_layout_make({tensor->type,tensor->type,256,256,tensor->ne[2],256,128},
+                size_t(tensor->ne[1]),layout).status != ggml_kv_stream_status::success ||
+                tensor->nb[0] != ggml_type_size(tensor->type) || tensor->nb[1] != layout.k_token_bytes ||
+                tensor->nb[2] != layout.k_row_bytes) return false;
+    }
+    // Existing converter launchers use signed element counts in their grid calculations.
+    return source->ne[1] <= INT32_MAX/256/source->ne[2];
+}
+
+// Reuse the backend's converter without graph allocation, pool scratch, or host round trips.
+static bool convert(ggml_backend_t backend, const ggml_tensor * source, ggml_tensor * destination) {
+    if (!supports_conversion(backend,source,destination)) return false;
+    auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_set_device(ctx.device);
+    const int64_t elements = source->ne[0]*source->ne[1]*source->ne[2];
+    if (source->type == GGML_TYPE_F16) {
+        CUDA_CHECK(cudaMemcpyAsync(destination->data,source->data,size_t(elements)*sizeof(half),cudaMemcpyDeviceToDevice,ctx.stream()));
+    } else {
+        ggml_get_to_fp16_cuda(source->type)(source->data,static_cast<half *>(destination->data),elements,ctx.stream());
+        CUDA_CHECK(cudaGetLastError());
+    }
+    CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
+    return true;
 }
 
 // Workspace is an explicit device allocation with no alias of any participating tensor.
@@ -89,7 +165,7 @@ static bool partial(ggml_backend_t backend, const ggml_tensor * op, ggml_backend
     const auto * q = op->src[0], * k = op->src[1], * v = op->src[2], * m = op->src[3];
     float scale; std::memcpy(&scale, op->op_params, sizeof(scale));
     const ggml_cuda_kernel_launch_params launch({unsigned(q->ne[1]),2,unsigned(q->ne[2])}, {32,4,1}, 0, ctx.stream());
-    ggml_cuda_kernel_launch(flash_attn_ext_vec<256,1,GGML_TYPE_F16,GGML_TYPE_F16,false>, launch,
+    ggml_cuda_kernel_launch(ggml_cuda_kv_stream_kernel(k->type,v->type), launch,
         (const char *)q->data, (const char *)k->data, (const char *)v->data, (const char *)m->data,
         (const char *)nullptr, (const int *)nullptr, (float *)scratch, (float2 *)(scratch+layout.partial.meta_offset),
         scale, 0.0f, 1.0f, 1.0f, uint32_t(1), 0.0f,
@@ -215,7 +291,7 @@ static bool clear(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buf
 // Keep CUDA details behind the backend-neutral registry contract.
 const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
     static_assert(sizeof(float2) == sizeof(ggml_kv_stream_partial_meta), "partial metadata ABI");
-    static const ggml_kv_stream_partial_ops ops{2,supports,partial,merge,fold,clear};
+    static const ggml_kv_stream_partial_ops ops{3,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert};
 #ifdef GGML_CUDA_NO_FA
     GGML_UNUSED(ops);
     return nullptr;

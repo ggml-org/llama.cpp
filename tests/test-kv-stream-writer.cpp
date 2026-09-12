@@ -1,4 +1,5 @@
 #include "../src/llama-kv-stream-resident.h"
+#include "../ggml/src/ggml-kv-stream-device.h"
 #include "../src/llama-memory-executor-cuda.h"
 #include "ggml-alloc.h"
 #include "ggml-cpp.h"
@@ -31,6 +32,11 @@ struct writer_fixture {
         llama_kv_stream_host_config c{91, {k, v, 256, 256, 4, 256, 128},
             {{k, true, true, true, true}, {v, true, true, true, true}, true, true}, 1024, 1};
         auto * device = ggml_backend_get_device(backend);
+        if (cuda) {
+            auto * reg = ggml_backend_dev_backend_reg(device);
+            auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
+            if (get && get() && get()->version >= 3) c.capabilities = get()->capabilities(backend,k,v);
+        }
         auto * ht = cuda ? llama_kv_stream_host_buffer_type(device) : ggml_backend_cpu_buffer_type();
         auto * dt = cuda ? llama_kv_stream_device_buffer_type(device) : ggml_backend_cpu_buffer_type();
         GGML_ASSERT(ht && dt);
@@ -38,7 +44,9 @@ struct writer_fixture {
         content = std::make_shared<llama_kv_stream_content>(host);
         ggml_kv_stream_layout page; GGML_ASSERT(ggml_kv_stream_layout_make(c.shape, 256, page).status == ggml_kv_stream_status::success);
         policy.shape = c.shape; policy.capabilities = c.capabilities; policy.layers = 1;
-        policy.pool_bytes = page.bytes*(tiny ? 8 : 16); policy.initial_ring_slots = tiny ? 1 : 0;
+        ggml_kv_stream_execution execution;
+        GGML_ASSERT(ggml_kv_stream_resolve(c.shape,c.capabilities,256,execution).status == ggml_kv_stream_status::success);
+        policy.pool_bytes = page.bytes*(tiny ? 8 : 16)+execution.conversion.bytes; policy.initial_ring_slots = tiny ? 1 : 0;
         arena.reset(ggml_backend_memory_arena_new(dt, policy.pool_bytes + 256)); GGML_ASSERT(arena);
         const auto base = reinterpret_cast<uintptr_t>(ggml_backend_buffer_get_base(ggml_backend_memory_arena_parent(arena.get())));
         GGML_ASSERT(ggml_backend_memory_arena_begin(arena.get(), 0));

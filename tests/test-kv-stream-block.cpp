@@ -96,8 +96,126 @@ int main(int argc, char ** argv) {
     if (!cuda) return t.summary();
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get()));
     auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_kv_stream_partial_ops"));
-    t.test("native_partial_hooks_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version == 2 && get()->fold && get()->clear); });
+    t.test("native_partial_hooks_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version == 3 && get()->fold && get()->clear && get()->capabilities && get()->convert); });
     if (!get || !get()) return t.summary();
+    t.test("capabilities_exclude_read_only_weight_quants_before_pool_planning", [&](testing & t) {
+        size_t writable = 0, native = 0, fallback = 0;
+        for (int type = 0; type < GGML_TYPE_COUNT; ++type) {
+            const auto caps = get()->capabilities(backend.get(),type,type);
+            writable += caps.k.online_write;
+        }
+        t.assert_equal(size_t(9),writable);
+        const ggml_type types[] = {GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q8_0,GGML_TYPE_F32,GGML_TYPE_IQ4_NL};
+        for (auto k : types) for (auto v : types) {
+            const auto caps = get()->capabilities(backend.get(),k,v);
+            ggml_kv_stream_execution execution;
+            t.assert_true(ggml_kv_stream_resolve({k,v,256,256,2,256,128},caps,256,execution).status == ggml_kv_stream_status::success);
+            if (execution.attention == ggml_kv_stream_attention::direct) { ++native; t.assert_equal(size_t(0),execution.conversion.bytes); }
+            else { ++fallback; t.assert_equal(size_t(524288),execution.conversion.bytes); }
+        }
+        t.out << "native pairs = " << native << ", fallback pairs = " << fallback << '\n';
+        t.assert_equal(size_t(81),native+fallback);
+        for (int type : {-1,INT32_MAX,int(GGML_TYPE_Q8_1),int(GGML_TYPE_Q2_K)}) {
+            const auto caps = get()->capabilities(backend.get(),type,GGML_TYPE_F16);
+            ggml_kv_stream_execution execution;
+            t.assert_true(ggml_kv_stream_resolve({type,GGML_TYPE_F16,256,256,2,256,128},caps,256,execution).status != ggml_kv_stream_status::success);
+        }
+    });
+    t.test("fabricated_native_support_cannot_bypass_conversion_budget", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_IQ4_NL,GGML_TYPE_F32);
+        const auto actual = f.policy.capabilities;
+        ggml_kv_stream_execution execution;
+        GGML_ASSERT(ggml_kv_stream_resolve(f.policy.shape,actual,256,execution).status == ggml_kv_stream_status::success);
+        f.policy.capabilities.direct_pair = f.policy.capabilities.k.direct_attention = f.policy.capabilities.v.direct_attention = true;
+        f.policy.pool_bytes = execution.storage.bytes*3; f.policy.initial_ring_slots = 1;
+        t.assert_true(!f.attach());
+        t.assert_true(!f.binding->ready());
+        f.policy.capabilities = actual;
+        f.policy.pool_bytes += execution.conversion.bytes;
+        t.assert_true(f.attach());
+    });
+    t.test("conversion_plane_bounds_aliases_and_values", [&](testing & t) {
+        for (auto type : {GGML_TYPE_F32,GGML_TYPE_BF16,GGML_TYPE_Q8_0,GGML_TYPE_Q4_1,GGML_TYPE_IQ4_NL}) {
+            fixture f(backend.get(),true,type,type);
+            ggml_context_ptr context(ggml_init({65536,nullptr,true}));
+            auto * root = ggml_new_tensor_1d(context.get(),type,256*256*2);
+            ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(context.get(),backend.get()));
+            ggml_kv_stream_layout encoded, half;
+            ggml_kv_stream_layout_make(f.policy.shape,256,encoded);
+            ggml_kv_stream_layout_make({GGML_TYPE_F16,GGML_TYPE_F16,256,256,2,256,128},256,half);
+            llama_kv_stream_host_layer host; GGML_ASSERT(f.host->layer(0,host));
+            ggml_backend_tensor_set(root,host.k,0,encoded.k_bytes);
+            ggml_tensor source = *root;
+            source.ne[0] = 256; source.ne[1] = 256; source.ne[2] = 2; source.ne[3] = 1;
+            source.nb[1] = encoded.k_token_bytes; source.nb[2] = encoded.k_row_bytes; source.nb[3] = encoded.k_bytes;
+            block_workspace exact(f,half.k_bytes), short_plane(f,half.k_bytes-1);
+            ggml_tensor output = source; output.type = GGML_TYPE_F16; output.nb[0] = 2;
+            output.nb[1] = half.k_token_bytes; output.nb[2] = half.k_row_bytes; output.nb[3] = half.k_bytes;
+            output.buffer = ggml_backend_memory_lease_buffer(exact.lease.get()); output.data = ggml_backend_buffer_get_base(output.buffer);
+            t.assert_true(get()->supports_conversion(backend.get(),&source,&output));
+            if (t.assert_true(get()->convert(backend.get(),&source,&output))) {
+                std::vector<ggml_fp16_t> values(256*256*2);
+                ggml_backend_tensor_get(&output,values.data(),0,half.k_bytes);
+                auto reference = unpack(f,0,false);
+                for (size_t i = 0; i < values.size(); ++i)
+                    if (!t.assert_equal(ggml_fp32_to_fp16(reference[i]),values[i])) break;
+            }
+            auto malformed = output;
+            malformed.buffer = ggml_backend_memory_lease_buffer(short_plane.lease.get()); malformed.data = ggml_backend_buffer_get_base(malformed.buffer);
+            t.assert_true(!get()->convert(backend.get(),&source,&malformed));
+            malformed = output; malformed.buffer = source.buffer; malformed.data = source.data;
+            t.assert_true(!get()->convert(backend.get(),&source,&malformed));
+            malformed = output; malformed.data = static_cast<char *>(output.data)+2;
+            t.assert_true(!get()->convert(backend.get(),&source,&malformed));
+            malformed = output; malformed.nb[1] += 16;
+            t.assert_true(!get()->convert(backend.get(),&source,&malformed));
+        }
+    });
+    t.test("quant_pairs_stream_with_derived_plane_sizes", [&](testing & t) {
+        const ggml_type types[] = {GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q8_0,GGML_TYPE_F32,GGML_TYPE_IQ4_NL};
+        for (auto k : types) for (auto v : types) for (bool forced : {false,true}) {
+            t.out << ggml_type_name(k) << "/" << ggml_type_name(v) << (forced ? " forced fallback" : " selected path") << '\n';
+            fixture f(backend.get(),true,k,v,1025,forced);
+            ggml_kv_stream_execution execution;
+            GGML_ASSERT(ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,execution).status == ggml_kv_stream_status::success);
+            f.policy.pool_bytes = execution.storage.bytes*3+execution.conversion.bytes; f.policy.initial_ring_slots = 1;
+            if (!t.assert_true(f.attach())) continue;
+            auto pin = f.binding->acquire();
+            block_inputs input(f,1025,8);
+            ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(32,256,layout);
+            block_workspace workspace(f,layout.bytes);
+            if (t.assert_true(f.resident->compute_streamed(1,input.q,input.mask,input.output,1025,1.0f/16,workspace.lease.get())))
+                close_values(t,oracle(f,1,1025,8,input.qdata),input.read(),2e-4f);
+        }
+    });
+    t.test("bounded_f16_fallback_handles_resident_and_streamed_pages", [&](testing & t) {
+        for (auto pair : {std::pair{GGML_TYPE_F32,GGML_TYPE_IQ4_NL},std::pair{GGML_TYPE_IQ4_NL,GGML_TYPE_F32},
+                          std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_F16,GGML_TYPE_BF16}}) {
+            fixture f(backend.get(),true,pair.first,pair.second,1537,true);
+            ggml_kv_stream_execution execution;
+            GGML_ASSERT(ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,execution).status == ggml_kv_stream_status::success);
+            f.policy.pool_bytes = execution.storage.bytes*5+execution.conversion.bytes; f.policy.initial_ring_slots = 1;
+            if (!t.assert_true(f.attach())) continue;
+            auto pin = f.binding->acquire();
+            for (size_t active : {size_t(257),size_t(1537)}) {
+                block_inputs input(f,active,33);
+                ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(132,256,layout);
+                block_workspace workspace(f,layout.bytes);
+                if (t.assert_true(f.resident->compute_streamed(1,input.q,input.mask,input.output,active,1.0f/16,workspace.lease.get())))
+                    close_values(t,oracle(f,1,active,33,input.qdata),input.read(),2e-4f);
+                if (get()->capabilities(backend.get(),pair.first,pair.second).direct_pair) {
+                    fixture native(backend.get(),true,pair.first,pair.second,1537);
+                    native.policy.pool_bytes = execution.storage.bytes*5; native.policy.initial_ring_slots = 1;
+                    if (!t.assert_true(native.attach())) continue;
+                    auto native_pin = native.binding->acquire();
+                    block_inputs other(native,active,33);
+                    block_workspace native_workspace(native,layout.bytes);
+                    if (t.assert_true(native.resident->compute_streamed(1,other.q,other.mask,other.output,active,1.0f/16,native_workspace.lease.get())))
+                        close_values(t,input.read(),other.read(),2e-4f);
+                }
+            }
+        }
+    });
     t.test("resident_plus_one_block_matches_attention_and_partial_contract", [&](testing & t) {
         for (size_t pages : {size_t(3),size_t(5)}) {
             fixture f(backend.get(), true);
@@ -282,10 +400,11 @@ int main(int argc, char ** argv) {
         t.assert_true(!f.resident->compute_one_block(2,input.q,input.mask,input.output,257,1.0f/16,workspace.lease.get()));
         auto actual = input.read();
         t.assert_true(std::all_of(actual.begin(),actual.end(),[](float x){return x == -77;}));
-        fixture quant(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0);
-        quant.policy.pool_bytes = quant.policy.pool_bytes/16*3; quant.policy.initial_ring_slots = 1;
-        if (t.assert_true(quant.attach()))
-            t.assert_true(!quant.resident->compute_one_block(0,input.q,input.mask,input.output,257,1.0f/16,workspace.lease.get()));
+        const auto caps = get()->capabilities(backend.get(),GGML_TYPE_Q2_K,GGML_TYPE_Q4_0);
+        t.assert_true(!caps.k.online_write);
+        ggml_kv_stream_execution execution;
+        t.assert_true(ggml_kv_stream_resolve({GGML_TYPE_Q2_K,GGML_TYPE_Q4_0,256,256,2,256,128},caps,256,execution).status ==
+            ggml_kv_stream_status::unsupported_write);
     });
     t.test("device_merge_validates_payload_before_publication", [&](testing & t) {
         fixture f(backend.get(),true);

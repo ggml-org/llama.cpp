@@ -81,7 +81,14 @@ int main(int argc, char ** argv) {
         t.assert_true(!small.resident->synchronize(257) && !small.resident->ready(256));
         fixture conversion(backend.get(), cuda);
         conversion.policy.capabilities.direct_pair = false;
-        t.assert_true(!conversion.attach());
+        t.assert_true(conversion.attach() == cuda);
+        if (cuda && conversion.resident) {
+            ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+            auto * q = ggml_new_tensor_3d(ctx.get(),GGML_TYPE_F32,256,1,4);
+            auto * mask = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F16,256,1);
+            // Conversion belongs to the bounded path, never to an unbudgeted ordinary graph.
+            t.assert_true(conversion.resident->attention(ctx.get(),0,q,mask,256,1.0f/16) == nullptr);
+        }
     });
     t.test("malformed_q_and_mask_reject_before_ggml_assertions", [&](testing & t) {
         fixture f(backend.get(), cuda);

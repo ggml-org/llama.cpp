@@ -1,0 +1,29 @@
+#include "ggml-cuda/kv-stream-dispatch.cuh"
+#include "ggml-cuda/fattn-vec.cuh"
+
+// One translation unit per key type keeps native-pair compilation parallel and bounded.
+fattn_kernel_t ggml_cuda_kv_stream_kernel_@KV_STREAM_KEY@(ggml_type value) {
+#ifdef GGML_CUDA_NO_FA
+    GGML_UNUSED(value);
+    return nullptr;
+#elif defined(GGML_CUDA_FA_ALL_QUANTS)
+    switch (value) {
+#define KV_STREAM_VALUE(V) case GGML_TYPE_##V: return flash_attn_ext_vec<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_##V,false>;
+        KV_STREAM_VALUE(F16)
+        KV_STREAM_VALUE(BF16)
+        KV_STREAM_VALUE(Q4_0)
+        KV_STREAM_VALUE(Q4_1)
+        KV_STREAM_VALUE(Q5_0)
+        KV_STREAM_VALUE(Q5_1)
+        KV_STREAM_VALUE(Q8_0)
+#undef KV_STREAM_VALUE
+        default: return nullptr;
+    }
+#elif @KV_STREAM_DEFAULT_NATIVE@
+    if (value == GGML_TYPE_@KV_STREAM_KEY@) return flash_attn_ext_vec<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_@KV_STREAM_KEY@,false>;
+    return nullptr;
+#else
+    GGML_UNUSED(value);
+    return nullptr;
+#endif
+}

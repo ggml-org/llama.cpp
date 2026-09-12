@@ -19,11 +19,11 @@ public:
             const llama_kv_stream_policy_state * placement = nullptr);
 
     // Drain prior backend work, then upload dirty rows into the fixed policy-derived resident planes.
-    // Reject contexts that need streaming; no layout adaptation or conversion fallback is enabled here.
+    // Reject contexts that exceed resident capacity; this refresh copies encoded bytes without conversion or repartition.
     bool synchronize(size_t active_tokens);
     bool ready(size_t active_tokens) const noexcept;
     // Ordered one-block path. Hold a binding pin; Q/mask/output and the disjoint workspace lease remain live until return.
-    // Caller supplies padded causal mask values. Initial device adapter supports F16 K/V, head size 256, one sequence.
+    // Caller supplies padded causal mask values. Query backend capabilities before planning native or converted K/V.
     bool compute_one_block(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
             size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace);
     // Ordered traversal over any number of tail blocks; scratch stays bounded by the same workspace layout.

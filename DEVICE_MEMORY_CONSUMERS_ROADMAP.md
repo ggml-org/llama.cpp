@@ -6,7 +6,7 @@ Last source review: 2026-09-12, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is ready for review. The remainder of milestones 5-8 is planned. Current work is **5.4d: bounded multi-block traversal**. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is ready for review. The remainder of milestones 5-8 is planned. Current work is **5.4e: generic quant dispatch and bounded F16 fallback**. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is committed at `28e7999a0`. Stage 5.4d is ready for review.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is committed at `28e7999a0`. Stage 5.4d is committed at `59591b6da`. Stage 5.4e is ready for review.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -348,8 +348,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.4a | Complete | `ff4d3bdef` | 12 CPU cases / 131 assertions; 13 CUDA cases / 245 assertions, including mixed K/V and 257-query prefill. 20 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; CUDA memcheck clean with UVM off/on. Ordinary all-resident test adapter; production unchanged. |
 | 5.4b | Complete | `6db00070d` | 13 cases / 48,614 assertions; 22 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. Ordinary GGML attention comparison, CUDA metadata ABI check, and existing GPU regressions pass. Common format/CPU reference only; no new partial GPU kernel. |
 | 5.4c | Complete | `28e7999a0` | 8 real-CUDA cases / 126 assertions; ordered resident-plus-one-block export and GPU merge, exact leased scratch, masked/dirty tails, malformed-payload atomicity, and UVM-off/on memcheck. 23 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. |
-| 5.4d | Ready for review | - | 14 real-CUDA cases / 542 assertions; multi-wave ring reuse, concentrated/zero-resident layouts, incremental GPU folding, and late-block failure recovery. 23 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; UVM-off/on memcheck clean. Merge-only racecheck clean; inherited vector-kernel warnings recorded below. |
-| 5.4e-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.4d | Complete | `59591b6da` | 14 real-CUDA cases / 542 assertions; multi-wave ring reuse, concentrated/zero-resident layouts, incremental GPU folding, and late-block failure recovery. 23 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; UVM-off/on memcheck clean. Merge-only racecheck clean; inherited vector-kernel warnings recorded below. |
+| 5.4e | Ready for review | - | 81 writable K/V pairs via selected native/fallback paths, plus all 81 forced through bounded F16 fallback; 19 CUDA cases / 656,795 assertions. Exact conversion bounds/values, capability admission, and native/fallback comparisons. 23 focused suites pass in four configurations; GPU memcheck and reduced-build probes recorded below. |
+| 5.4f-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -1745,7 +1746,7 @@ Production services, model/checkpoint/cache data, and compose configuration rema
 
 ## Substage 5.4d: bounded multi-block traversal and incremental accumulation
 
-**Status:** implemented and ready for review; not committed by the implementation agent. This stage follows committed 5.4c (`28e7999a0`).
+**Status:** committed at `59591b6da`, following 5.4c (`28e7999a0`).
 
 ### Bounded storage and ordered execution
 
@@ -1811,4 +1812,75 @@ compute-sanitizer --tool racecheck --error-exitcode 99 build-device-memory-infra
 
 No asynchronous overlap, cross-layer prefetch queue, live policy transition, server enablement, throughput improvement, or broader backend/quant support is claimed. The device adapter remains F16/F16, head size 256, one sequence, a supplied padded mask, and no sinks/bias/softcap. Production services, compose files, models, and checkpoints remain unchanged.
 
-After review and commit, proceed to **5.4e: supported quant dispatch and bounded F16 conversion fallback through the generic layout contract**. Dedicated copy-stream/event overlap remains **5.4f**.
+Stage **5.4e**, documented below, adds supported quant dispatch and bounded F16 conversion. Dedicated copy-stream/event overlap remains **5.4f**.
+
+## Substage 5.4e: generic quant dispatch and bounded F16 fallback
+
+**Status:** implemented and ready for review; not committed by the implementation agent. This stage follows committed 5.4d (`59591b6da`).
+
+### Capability admission and compiled dispatch
+
+Version 3 of the optional backend extension adds capability discovery and validated, synchronous conversion into caller-supplied F16 planes. Query the backend before resolving the execution path and planning the pool. The capability query checks storage geometry, the actual CUDA SET_ROWS admission, compiled native kernel availability, and the existing F16 converter. A GGUF weight format having a dequantizer does not mean it supports online KV writes.
+
+The current CUDA writer admits nine cache storage types: **F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, IQ4_NL**. All 81 ordered K/V combinations can use the native or bounded-conversion path in the tested build. K and V are selected independently; there is no special Q8_0/Q4_0 allocation or dispatch path.
+
+| Build configuration | Native pairs | Other writable pairs |
+| --- | --- | --- |
+| FA enabled, `GGML_CUDA_FA_ALL_QUANTS=ON` | All 49 combinations of F16/BF16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 | 32 pairs use bounded F16 conversion |
+| FA enabled, all-quants option OFF | F16/F16, BF16/BF16, Q4_0/Q4_0, Q8_0/Q8_0 | 77 pairs resolve to bounded F16 conversion |
+| FA disabled | No streamed attention kernels | Optional adapter getter returns null |
+
+Seven generated translation units, one per K type, expose the existing head-256, one-column vector kernel for compiled V types. This keeps compilation parallel without modifying the stock attention kernel, stock generated instances, or ordinary dispatch. Reduced-build guards omit unavailable instantiations entirely; a probe caught an NVCC discarded-branch template warning, which was fixed with preprocessor guards rather than suppressing diagnostics.
+
+Cache planning still uses `ggml_kv_stream_resolve` and the quant-aware policy layout. The idle factory verifies the proposed path against actual backend capabilities before constructing tensor bindings. It rejects a fabricated native declaration for a fallback-only pair instead of silently using conversion space that the caller did not budget. Unknown, auxiliary, and non-writable weight-only types remain rejected.
+
+### Memory layout and bounded execution
+
+| Path | Resident and ring storage | Conversion storage | Partial workspace |
+| --- | --- | --- | --- |
+| Native | Original K/V encodings, with independent row/plane sizes | None | Existing caller-owned, query-sized lease |
+| F16 fallback | Original K/V encodings, with independent row/plane sizes | One F16 K page and one F16 V page inside the pool's reserved conversion range | Same layout as native |
+
+The device range validator now counts quant blocks along dimension zero, not scalar elements, and checks the alignment needed by vectorized accesses. K/V allocation, copy offsets, slot strides, and conversion destinations remain derived independently from the common geometry.
+
+Fallback uses the existing CUDA converters, or D2D copying for an already-F16 operand. It does not allocate a conversion graph, use the CUDA temporary pool, or round-trip KV through the CPU. Converted values are consumed before that one-page workspace is reused.
+
+Resident prefixes also become page-sized attention spans on the fallback path. Converting the whole prefix would violate the fixed conversion quota even if the encoded prefix fits in VRAM. Each converted resident/streamed page exports partials into the existing bounded accumulator, and normalization occurs only once at the end. Native resident spans retain the previous direct path.
+
+For the test geometry (head dimensions 256, two KV heads, 256 tokens per page), the conversion quota is exactly **524,288 bytes**, regardless of context length or ring size. This number is a test expectation, not an allocation constant in the implementation. The quota is included in `pool_bytes` and reserved before splitting the remaining encoded page budget.
+
+Fallback explicitly rounds/dequantizes values to F16. It is not bitwise equivalent to native attention and does not preserve the full exponent range of F32/BF16; the existing partial/merge checks reject invalid resulting numerical state. The ordinary attention API still refuses a policy requiring conversion, preventing accidental unbudgeted whole-context conversion through that API.
+
+### TDD and validation
+
+The initial matrix failed **52 assertions**: 48 newly requested native pairs and four fallback cases. The implementation fixed the F16-only admission, block-aware span validation, and missing bounded conversion path. Legacy tests that assumed fallback binding was unavailable were updated to verify the new admission boundary; the writer fixture now discovers actual capabilities and reserves conversion space rather than advertising every pair as native.
+
+The final real-CUDA suite passes **19 cases / 656,795 assertions**:
+
+- All 81 writable K/V pairs through the discovered path: 49 native and 32 converted in the all-quants build.
+- The same 81 pairs forced through fallback, including one-slot ring reuse and a partial last page.
+- Multi-page resident-prefix conversion, streamed-tail conversion, and direct-versus-fallback attention comparisons.
+- Exact-size and one-byte-short F16 destination planes; alias, alignment, and stride rejection.
+- 655,360 converted values checked against CPU F16 rounding for F32, BF16, Q8_0, Q4_1, and IQ4_NL sources.
+- Invalid/auxiliary/non-writable type rejection and prevention of fabricated native capability bypassing the conversion quota.
+- Existing concentrated placement, wide-query, dirty-tail, failure-atomicity, and incremental-merge regressions.
+
+Attention comparisons use a **2e-4 absolute tolerance** for the new quant matrix and native/fallback comparisons; native quantized-K kernels may quantize Q differently from the scalar reference. Conversion-value checks compare encoded F16 values directly. These are deterministic correctness tests, not model perplexity, long-response quality, or throughput qualification.
+
+All **23 focused suites** pass in CPU Debug, CUDA Debug, CPU ASan/leak checking, and CPU UBSan. The existing real-CUDA resident suite passes **13 cases / 246 assertions**, the writer suite **10 cases / 609 assertions**, and the four CPU-referenced CUDA SCALE cases pass. Full GPU memcheck runs with UVM off and on report **zero errors and zero leaked bytes**.
+
+Standalone compiled dispatch probes check all 49 native-table entries with all-quants disabled (four available pairs) and FA disabled (zero pairs). These are dispatch compilation/link/execution checks, not full alternate-flag llama-server builds. The main all-quants build separately exercises every pair through conversion. The inherited vector-kernel racecheck warnings recorded in 5.4d remain unresolved; this stage makes no whole-kernel race-clean claim.
+
+```sh
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-block test-kv-stream-resident test-kv-stream-writer test-backend-ops -j 20
+build-device-memory-infra-cuda/bin/test-kv-stream-block --cuda
+build-device-memory-infra-cuda/bin/test-kv-stream-resident --cuda
+build-device-memory-infra-cuda/bin/test-kv-stream-writer --cuda
+build-device-memory-infra-cuda/bin/test-backend-ops test -b CUDA0 -o SCALE
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-block --cuda
+GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-block --cuda
+```
+
+The streamed device adapter still requires head size 256, one sequence, a supplied padded mask, and no sinks/bias/softcap. No new accelerator backend, live repartition, asynchronous overlap, server enablement, or model benchmark is included. Production services, compose configuration, models, checkpoints, and caches remain unchanged.
+
+After review and commit, proceed to **5.4f: dedicated copy stream and producer-ready/final-consumer events**. The synchronous baseline remains the correctness control for overlap work.
