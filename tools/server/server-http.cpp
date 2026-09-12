@@ -115,16 +115,8 @@ bool server_http_context::init(const common_params & params) {
     }
 
     pimpl->hosts = params.hostnames;
-    if (pimpl->hosts.empty()) {
-        SRV_ERR("%s", "--host requires at least one address\n");
-        return false;
-    }
     size_t n_tcp_hosts = 0;
     for (const auto & host : pimpl->hosts) {
-        if (host.empty()) {
-            SRV_ERR("%s", "--host requires non-empty addresses\n");
-            return false;
-        }
         if (!string_ends_with(host, ".sock")) {
             n_tcp_hosts++;
         }
