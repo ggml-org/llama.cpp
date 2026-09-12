@@ -151,6 +151,11 @@ endif()
 target_link_libraries(${TARGET} PUBLIC  llama-common-base)
 target_link_libraries(${TARGET} PRIVATE cpp-httplib)
 
+if (CMAKE_SYSTEM_NAME MATCHES "AIX")
+    # AIX's flock() function comes from libbsd.a
+    target_link_libraries(${TARGET} PRIVATE -lbsd)
+endif()
+
 if (LLAMA_LLGUIDANCE)
     include(ExternalProject)
     set(LLGUIDANCE_SRC ${CMAKE_BINARY_DIR}/llguidance/source)

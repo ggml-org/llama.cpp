@@ -8,6 +8,8 @@
 #include "json.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -35,11 +37,15 @@
 #endif
 #endif
 
-// isatty
+// isatty, file lock
 #if defined(_WIN32)
 #include <io.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #else
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/file.h>
 #endif
 
 //
@@ -203,12 +209,136 @@ public:
     ProgressBar & operator=(const ProgressBar &) = delete;
 };
 
+// exclusive lock + progress record shared between processes that download the same file
+// for example, 2 processes A and B download the same file:
+// A acquires the lock and starts downloading, writing progress to a new file
+// B tries to acquire the lock, fails, and reads the progress file to show progress
+// if A fails, B should also fail (for simplicity)
+struct download_lock {
+    static constexpr size_t record_size = 64;
+
+    int  fd     = -1;
+    bool locked = false;
+
+    explicit download_lock(const std::string & path) {
+#if defined(_WIN32)
+        fd = _open(path.c_str(), _O_RDWR | _O_CREAT | _O_BINARY | _O_NOINHERIT, _S_IREAD | _S_IWRITE);
+#else
+        fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+#endif
+        if (fd < 0) {
+            LOG_WRN("%s: cannot open lock file: %s\n", __func__, path.c_str());
+        }
+    }
+
+    ~download_lock() {
+        close();
+    }
+
+#if defined(_WIN32)
+    // on windows, other processes cannot read a locked range, so lock one byte far beyond the record
+    static OVERLAPPED lock_range() {
+        OVERLAPPED ov = {};
+        ov.Offset = 0x40000000;
+        return ov;
+    }
+
+    HANDLE handle() const {
+        return (HANDLE) _get_osfhandle(fd);
+    }
+#endif
+
+    // returns false only if another process holds the lock
+    // if locking is not supported, continue without lock
+    bool try_lock() {
+        if (fd < 0) {
+            return true;
+        }
+#if defined(_WIN32)
+        OVERLAPPED ov = lock_range();
+        locked = LockFileEx(handle(), LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &ov);
+        if (!locked && GetLastError() == ERROR_LOCK_VIOLATION) {
+            return false;
+        }
+#else
+        locked = flock(fd, LOCK_EX | LOCK_NB) == 0;
+        if (!locked && errno == EWOULDBLOCK) {
+            return false;
+        }
+#endif
+        if (!locked) {
+            LOG_WRN("%s: file locking is not supported, parallel downloads of the same file are not protected\n", __func__);
+        }
+        return true;
+    }
+
+    void close() {
+        if (fd < 0) {
+            return;
+        }
+#if defined(_WIN32)
+        if (locked) {
+            OVERLAPPED ov = lock_range();
+            UnlockFileEx(handle(), 0, 1, 0, &ov);
+        }
+        _close(fd);
+#else
+        if (locked) {
+            flock(fd, LOCK_UN);
+        }
+        ::close(fd);
+#endif
+        fd     = -1;
+        locked = false;
+    }
+
+    // fixed-size record, so a shorter value does not leave stale digits behind
+    void write_progress(size_t downloaded, size_t total) {
+        if (!locked) {
+            return;
+        }
+        std::string rec = string_format("D %zu %zu", downloaded, total);
+        rec.resize(record_size, ' ');
+#if defined(_WIN32)
+        _lseek(fd, 0, SEEK_SET);
+        _write(fd, rec.data(), (unsigned) rec.size());
+#else
+        lseek(fd, 0, SEEK_SET);
+        ssize_t n = write(fd, rec.data(), rec.size());
+        (void) n;
+#endif
+    }
+
+    bool read_progress(size_t & downloaded, size_t & total) {
+        if (fd < 0) {
+            return false;
+        }
+        char buf[record_size + 1];
+#if defined(_WIN32)
+        _lseek(fd, 0, SEEK_SET);
+        int n = _read(fd, buf, record_size);
+#else
+        lseek(fd, 0, SEEK_SET);
+        int n = (int) read(fd, buf, record_size);
+#endif
+        if (n <= 0) {
+            return false;
+        }
+        buf[n] = 0;
+        return sscanf(buf, "D %zu %zu", &downloaded, &total) == 2;
+    }
+
+    download_lock(const download_lock &) = delete;
+    download_lock & operator=(const download_lock &) = delete;
+};
+
 static bool common_pull_file(httplib::Client & cli,
                              const std::string & resolve_path,
                              const std::string & path_tmp,
                              bool supports_ranges,
                              common_download_progress & p,
-                             common_download_callback * callback) {
+                             common_download_callback * callback,
+                             download_lock & lock) {
     std::ofstream ofs(path_tmp, std::ios::binary | std::ios::app);
     if (!ofs.is_open()) {
         LOG_ERR("%s: error opening local file for writing: %s\n", __func__, path_tmp.c_str());
@@ -253,6 +383,7 @@ static bool common_pull_file(httplib::Client & cli,
             progress_step += len;
 
             if (progress_step >= p.total / 1000 || p.downloaded == p.total) {
+                lock.write_progress(p.downloaded, p.total);
                 if (callback) {
                     callback->on_update(p);
                     if (callback->is_cancelled()) {
@@ -367,10 +498,35 @@ static int common_download_file_single_online(const std::string & url,
 
     bool success = false;
     const std::string path_temporary = path + ".downloadInProgress";
+    const std::string path_progress  = path + ".downloadCurrProgress";
     int delay = retry_delay_seconds;
 
     if (opts.callback) {
         opts.callback->on_start(p);
+    }
+
+    download_lock lock(path_progress);
+    if (!lock.try_lock()) {
+        LOG_INF("%s: another process is downloading %s, waiting for it to finish...\n", __func__, path.c_str());
+        while (!lock.try_lock()) {
+            if (opts.callback && opts.callback->is_cancelled()) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (lock.read_progress(p.downloaded, p.total) && opts.callback) {
+                opts.callback->on_update(p);
+            }
+        }
+        // the other process is done (or died): the result is the final file, or nothing
+        success = std::filesystem::exists(path);
+        if (opts.callback) {
+            opts.callback->on_done(p, success);
+        }
+        if (!success) {
+            LOG_ERR("%s: download failed in the other process\n", __func__);
+            return -1;
+        }
+        return head->status;
     }
 
     for (int i = 0; i < max_attempts; ++i) {
@@ -400,7 +556,7 @@ static int common_download_file_single_online(const std::string & url,
                 __func__, common_http_show_masked_url(parts).c_str(),
                 path_temporary.c_str(), etag.c_str());
 
-        if (common_pull_file(cli, parts.path, path_temporary, supports_ranges, p, opts.callback)) {
+        if (common_pull_file(cli, parts.path, path_temporary, supports_ranges, p, opts.callback, lock)) {
             if (std::rename(path_temporary.c_str(), path.c_str()) != 0) {
                 LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
                 break;
@@ -426,6 +582,10 @@ static int common_download_file_single_online(const std::string & url,
         LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
         return -1; // max attempts reached
     }
+
+    // only the process that downloaded removes the lock file, and only when the final file is in place
+    lock.close();
+    remove(path_progress.c_str());
 
     return head->status;
 }
