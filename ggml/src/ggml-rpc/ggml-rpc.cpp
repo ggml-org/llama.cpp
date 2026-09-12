@@ -1460,12 +1460,27 @@ bool rpc_server::get_cached_file(uint64_t hash, std::vector<uint8_t> & data) {
     if (!fs::exists(cache_file, ec)) {
         return false;
     }
-    std::ifstream ifs(cache_file, std::ios::binary);
-    ifs.seekg(0, std::ios::end);
-    size_t size = ifs.tellg();
-    ifs.seekg(0, std::ios::beg);
+    // read with C stdio instead of std::ifstream: on MSVC, ifstream::read() of a large block
+    // goes through the small filebuf buffer and tops out at ~250 MB/s even from page cache
+    size_t size = fs::file_size(cache_file, ec);
+    if (ec) {
+        return false;
+    }
+#ifdef _WIN32
+    FILE * f = _wfopen(cache_file.c_str(), L"rb");
+#else
+    FILE * f = fopen(cache_file.c_str(), "rb");
+#endif
+    if (!f) {
+        return false;
+    }
     data.resize(size);
-    ifs.read((char *)data.data(), size);
+    size_t n = fread(data.data(), 1, size, f);
+    fclose(f);
+    if (n != size) {
+        data.clear();
+        return false;
+    }
     return true;
 }
 
