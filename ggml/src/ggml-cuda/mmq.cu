@@ -245,10 +245,12 @@ void ggml_cuda_mul_mat_q(
     const int64_t s13 = ne12*s12;
 
     // Each expert only sees ne12*n_expert_used/ne02 tokens on average.
-    // On RDNA3 and RDNA4 it is faster to pick the tile size against this value instead of ne12.
+    // On RDNA3, RDNA4 and CDNA it is faster to pick the tile size against the values below instead of ne12.
     int64_t ncols_opt = ne12;
     if (GGML_CUDA_CC_IS_RDNA3_0(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
         ncols_opt = (ne12*n_expert_used + ne02 - 1) / ne02;
+    } else if (GGML_CUDA_CC_IS_CDNA(cc)) {
+        ncols_opt = std::min((4*ne12*n_expert_used + 3*ne02 - 1) / (3*ne02), (int64_t)64);
     }
 
     // Note that ne02 is used instead of ne12 because the number of y channels determines the z dimension of the CUDA grid.
