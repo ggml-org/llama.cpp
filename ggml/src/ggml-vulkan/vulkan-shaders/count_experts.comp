@@ -21,6 +21,9 @@ layout (push_constant) uniform parameter
     uint32_t hoist_row_ids;
     uint32_t ne00mp;
     uint32_t ne00L;
+    uint32_t ne0_dst;
+    uint32_t stride_dst;
+    uint32_t batch_stride_dst;
 } p;
 
 #define BLOCK_SIZE 256
@@ -29,10 +32,32 @@ layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer A {uint data_a[];};
 layout (binding = 1) writeonly buffer D {uint data_d[];};
+layout (binding = 2) writeonly buffer DST {float data_dst[];};
 
 shared uint vals[BLOCK_SIZE];
 shared uint offsets[BLOCK_SIZE];
 shared uint cursors[BLOCK_SIZE];
+
+// the matmul writes only the rows that an expert owns, so zero the rows of the skipped slots
+// each workgroup takes a strided share of the slots
+void zero_skipped_rows() {
+    const uint num_elements = p.ne00 * p.ne01;
+    const uint tid = gl_LocalInvocationID.x;
+
+    for (uint idx = gl_WorkGroupID.x; idx < num_elements; idx += gl_NumWorkGroups.x) {
+        const uint i01 = fastdiv(idx, p.ne00mp, p.ne00L);
+        const uint i00 = idx - i01 * p.ne00;
+
+        if (int(data_a[p.a_offset + i01 * p.nb01 + i00 * p.nb00]) != -1) {
+            continue;
+        }
+
+        const uint d_off = i00 * p.stride_dst + i01 * p.batch_stride_dst;
+        for (uint i = tid; i < p.ne0_dst; i += BLOCK_SIZE) {
+            data_dst[d_off + i] = 0.0f;
+        }
+    }
+}
 
 // data_d layout when p.hoist_row_ids is set:
 //   [0,              n_experts)   per-expert row count
@@ -108,6 +133,7 @@ void main() {
                 data_d[2 * p.n_experts + 1 + offsets[expert] + row] = packed_row_id;
             }
         }
+        zero_skipped_rows();
         return;
     }
 
@@ -132,4 +158,6 @@ void main() {
     if (tid == 0) {
         data_d[expert_id] = vals[0];
     }
+
+    zero_skipped_rows();
 }

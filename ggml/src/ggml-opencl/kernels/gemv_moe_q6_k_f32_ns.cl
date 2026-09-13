@@ -45,6 +45,9 @@ __kernel void kernel_gemv_moe_q6_k_f32_ns(
     uint i11 = i20 % ne11;
 
     uint expert_id = src2[i20];
+    if ((int)expert_id == -1) { // skipped slot, the dst row is zeroed by kernel_moe_zero_dst
+        return;
+    }
 
     int num_superblocks = ne00 / QK_K;
     int num_subblocks = ne00 / 32;  // 8 sub-blocks of 32 per super-block

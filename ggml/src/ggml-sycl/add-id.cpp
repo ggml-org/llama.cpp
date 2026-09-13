@@ -26,6 +26,15 @@ static void add_id_kernel(
   float* dst_row = (float*)((char*)dst + i1 * nb1 + i2 * nb2);
   const float* src0_row =
       (const float*)((const char*)src0 + i1 * nb01 + i2 * nb02);
+
+  if (i11 == -1) { // skipped slot, add nothing
+    for (int64_t i0 = item_ct1.get_local_id(2); i0 < ne0;
+         i0 += item_ct1.get_local_range(2)) {
+      dst_row[i0] = src0_row[i0];
+    }
+    return;
+  }
+
   const float* src1_row = (const float*)((const char*)src1 + i11 * nb11);
 
   for (int64_t i0 = item_ct1.get_local_id(2); i0 < ne0;

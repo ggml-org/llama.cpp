@@ -743,12 +743,17 @@ static void ggml_compute_forward_add_id_f32(
         // src1 indices
         const int i11 = *(int32_t *) ((char *) src2->data + i1*nb20 + i2*nb21);
 
-        GGML_ASSERT(i11 >= 0 && i11 < ne11);
+        GGML_ASSERT(i11 == -1 || (i11 >= 0 && i11 < ne11));
 
-        ggml_vec_add_f32(ne0,
-                (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 ),
-                (float *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01),
-                (float *) ((char *) src1->data + i11*nb11));
+        float       * dst_row  = (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 );
+        const float * src0_row = (float *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
+
+        if (i11 == -1) {
+            memcpy(dst_row, src0_row, ne0*sizeof(float));
+            continue;
+        }
+
+        ggml_vec_add_f32(ne0, dst_row, src0_row, (float *) ((char *) src1->data + i11*nb11));
     }
 }
 

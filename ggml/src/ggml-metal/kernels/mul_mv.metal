@@ -3299,7 +3299,8 @@ kernel void kernel_mul_mv_id(
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiitg[[thread_index_in_threadgroup]],
         ushort tiisg[[thread_index_in_simdgroup]],
-        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+        ushort sgitg[[simdgroup_index_in_threadgroup]],
+        ushort3 ntg [[threads_per_threadgroup]]) {
     const int iid1 = tgpig.z/args.nei0;
     const int idx  = tgpig.z%args.nei0;
 
@@ -3313,10 +3314,19 @@ kernel void kernel_mul_mv_id(
     const int64_t i1 = idx;
     const int64_t i2 = i12;
 
+    device char * dst_cur = dst + (i1*args.ne0 + i2*args.ne1*args.ne0)*sizeof(float);
+
+    if (i02 == -1) {
+        device float * dst_f32 = (device float *) dst_cur;
+        const ushort nth = ntg.x*ntg.y*ntg.z;
+        for (int i0 = tiitg; i0 < args.ne0; i0 += nth) {
+            dst_f32[i0] = 0.0f;
+        }
+        return;
+    }
+
     device const char * src0_cur = src0s + i02*args.nb02;
     device const char * src1_cur = src1  + i11*args.nb11 + i12*args.nb12;
-
-    device char * dst_cur = dst + (i1*args.ne0 + i2*args.ne1*args.ne0)*sizeof(float);
 
     ggml_metal_kargs_mul_mv args0 = {
         /*.ne00 =*/ args.ne00,

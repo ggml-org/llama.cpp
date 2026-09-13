@@ -4458,7 +4458,12 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                     const int32_t i02 =
                         *(const int32_t *) ((const char *) ids->data + iid1 * ids->nb[1] + id * ids->nb[0]);
 
-                    GGML_ASSERT(i02 >= 0 && i02 < n_as);
+                    GGML_ASSERT(i02 == -1 || (i02 >= 0 && i02 < n_as));
+
+                    if (i02 == -1) {
+                        memset((char *) dst->data + id*nb1 + iid1*nb2, 0, ne0*sizeof(float));
+                        continue;
+                    }
 
                     MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = { id, iid1 };
                     matrix_row_counts[i02] += 1;

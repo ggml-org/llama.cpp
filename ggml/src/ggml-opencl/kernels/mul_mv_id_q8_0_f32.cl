@@ -73,6 +73,9 @@ kernel void kernel_mul_mv_id_q8_0_f32(
     int idx  = get_group_id(2)%ne20;
 
     int i02 = ((global int *) (src2 + iid1*nb21))[idx];
+    if (i02 == -1) { // skipped slot, the dst row is zeroed by kernel_moe_zero_dst
+        return;
+    }
 
     int i11_ = idx % ne11;
     int i12_ = iid1;

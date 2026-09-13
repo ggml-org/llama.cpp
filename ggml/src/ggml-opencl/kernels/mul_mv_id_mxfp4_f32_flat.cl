@@ -101,6 +101,9 @@ kernel void kernel_mul_mv_id_mxfp4_f32_flat(
     const int idx  = get_group_id(2) % ne20;
 
     uint i02 = ((global uint *) (src2 + offset2 + iid1 * nb21))[idx];
+    if ((int)i02 == -1) { // skipped slot, the dst row is zeroed by kernel_moe_zero_dst
+        return;
+    }
 
     int i11 = idx % ne11;
 
