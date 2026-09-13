@@ -113,6 +113,8 @@ public:
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
         const  layer_share_cb & share,
+        // full-size SWA cache: masked cells are retained, so they can be saved in the seq state
+                     bool   swa_full = false,
         // a model can hold more than one cache, so the tensor names have to stay unique
                  const char *   name_tag = "");
 
@@ -269,6 +271,9 @@ private:
 
     // SWA
     const uint32_t n_swa = 0;
+
+    // full-size SWA cache: never evicts SWA-masked cells (see llama_kv_cache_iswa)
+    const bool swa_full = false;
 
     // env: LLAMA_ATTN_ROT_DISABLE
     bool attn_rot_k = false;
