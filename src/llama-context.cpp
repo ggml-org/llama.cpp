@@ -1256,7 +1256,7 @@ void llama_context::set_causal_attn(bool value) {
 
     cparams.causal_attn = value;
 
-    // no scheduler reserve needed because causal_attn only changes the values written to the KQ mask, not any shapes
+    // no scheduler reserve needed because graph shapes must not depend on causal_attn, a flip only rebuilds the graph
     //sched_need_reserve = true;
 }
 
