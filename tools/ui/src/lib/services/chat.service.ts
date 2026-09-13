@@ -42,6 +42,7 @@ import type {
 	ApiStreamSession
 } from '$lib/types/api';
 import { isAbortError } from '$lib/utils/abort';
+import { apiUrl } from '$lib/utils/api-base';
 import { ApiError } from '$lib/utils/api-fetch';
 import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
@@ -88,7 +89,7 @@ export class ChatService {
 	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
 		try {
 			const url = model ? `${API_SLOTS.LIST}?model=${encodeURIComponent(model)}` : API_SLOTS.LIST;
-			const res = await fetch(url, { signal });
+			const res = await fetch(apiUrl(url), { signal });
 
 			if (!res.ok) return true;
 
@@ -781,7 +782,7 @@ export class ChatService {
 	 * conv::model identity when a model was bound at POST time.
 	 */
 	static async lookupStreamSessions(conversationIds: string[]): Promise<ApiStreamSession[]> {
-		const resp = await fetch(API_STREAM.LOOKUP, {
+		const resp = await fetch(apiUrl(API_STREAM.LOOKUP), {
 			body: JSON.stringify({ conversation_ids: conversationIds }),
 			headers: getJsonHeaders(),
 			method: 'POST'
@@ -869,7 +870,7 @@ export class ChatService {
 		}
 
 		try {
-			await fetch(API_CHAT.COMPLETIONS, {
+			await fetch(apiUrl(API_CHAT.COMPLETIONS), {
 				body: JSON.stringify(requestBody),
 				headers: getJsonHeaders(),
 				method: 'POST',
@@ -1230,7 +1231,7 @@ export class ChatService {
 				ChatService.saveStreamState(conversationId, 0, options.model ?? null);
 			}
 
-			const response = await fetch(API_CHAT.COMPLETIONS, {
+			const response = await fetch(apiUrl(API_CHAT.COMPLETIONS), {
 				body: JSON.stringify(requestBody),
 				headers,
 				method: 'POST',
@@ -1342,7 +1343,7 @@ export class ChatService {
 		if (model) body.model = model;
 
 		try {
-			const res = await fetch(API_CHAT.CONTROL, {
+			const res = await fetch(apiUrl(API_CHAT.CONTROL), {
 				body: JSON.stringify(body),
 				headers: getJsonHeaders(),
 				method: 'POST'
@@ -1373,7 +1374,7 @@ export class ChatService {
 		const query = `${STREAM_QUERY_PARAMS.CONV_ID}=${encodeURIComponent(streamId)}`;
 		const offset = from === undefined ? '' : `&${STREAM_QUERY_PARAMS.FROM}=${from}`;
 
-		return `${API_STREAM.BASE}?${query}${offset}`;
+		return apiUrl(`${API_STREAM.BASE}?${query}${offset}`);
 	}
 
 	/**

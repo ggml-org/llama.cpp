@@ -5,11 +5,10 @@
  * No reactive state; consumed by toolsStore.
  */
 
-import { base } from '$app/paths';
 import { API_TOOLS, HEADERS } from '$lib/constants';
 import { ToolResponseField } from '$lib/enums';
 import type { ServerToolInfo, ToolExecutionResult } from '$lib/types';
-import { apiFetch } from '$lib/utils';
+import { apiFetch, apiUrl } from '$lib/utils';
 import { getJsonHeaders } from '$lib/utils/api-headers';
 import { parseSseJsonStream, type SseJsonEvent } from '$lib/utils/sse';
 
@@ -108,7 +107,7 @@ export class ToolsService {
 
 		if (cwd) headers[HEADERS.X_TOOL_CWD_HEADER] = cwd;
 
-		const response = await fetch(`${base}${API_TOOLS.EXECUTE}`, {
+		const response = await fetch(apiUrl(API_TOOLS.EXECUTE), {
 			body: JSON.stringify({ params, stream: true, tool: toolName }),
 			headers,
 			method: 'POST',
