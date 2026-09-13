@@ -9,6 +9,7 @@ from .base import MmprojModel, ModelBase, TextModel, gguf
 
 
 @ModelBase.register("UltravoxModel")
+@ModelBase.example("fixie-ai/ultravox-v0_5-llama-3_2-1b")
 class UltravoxModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA # dummy
 
@@ -18,6 +19,7 @@ class UltravoxModel(TextModel):
 
 
 @ModelBase.register("GlmasrModel")
+@ModelBase.example("zai-org/GLM-ASR-Nano-2512")
 class GlmASRWhisperEncoderModel(MmprojModel):
     has_vision_encoder = False
     has_audio_encoder = True
@@ -82,6 +84,7 @@ class GlmASRWhisperEncoderModel(MmprojModel):
 
 
 @ModelBase.register("Qwen2AudioForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen2-Audio-7B-Instruct")
 class WhisperEncoderModel(MmprojModel):
     has_vision_encoder = False # no vision encoder
     has_audio_encoder = True
@@ -123,6 +126,7 @@ class WhisperEncoderModel(MmprojModel):
 
 
 @ModelBase.register("UltravoxModel")
+@ModelBase.example("fixie-ai/ultravox-v0_5-llama-3_2-1b")
 class UltravoxWhisperEncoderModel(WhisperEncoderModel):
     has_vision_encoder = False # no vision encoder
     has_audio_encoder = True
@@ -134,6 +138,7 @@ class UltravoxWhisperEncoderModel(WhisperEncoderModel):
 
 
 @ModelBase.register("MERaLiON2ForConditionalGeneration")
+@ModelBase.example("MERaLiON/MERaLiON-2-3B")
 class MERaLiONWhisperEncoderModel(WhisperEncoderModel):
     has_vision_encoder = False
     has_audio_encoder = True
@@ -180,6 +185,7 @@ class MERaLiONWhisperEncoderModel(WhisperEncoderModel):
 
 
 @ModelBase.register("VoxtralForConditionalGeneration")
+@ModelBase.example("mistralai/Voxtral-Mini-3B-2507")
 class VoxtralWhisperEncoderModel(WhisperEncoderModel):
     has_vision_encoder = False # no vision encoder
     has_audio_encoder = True
@@ -191,6 +197,7 @@ class VoxtralWhisperEncoderModel(WhisperEncoderModel):
 
 
 @ModelBase.register("AudioFlamingo3ForConditionalGeneration")
+@ModelBase.example("nvidia/audio-flamingo-3-hf")
 class AudioFlamingo3WhisperEncoderModel(WhisperEncoderModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()

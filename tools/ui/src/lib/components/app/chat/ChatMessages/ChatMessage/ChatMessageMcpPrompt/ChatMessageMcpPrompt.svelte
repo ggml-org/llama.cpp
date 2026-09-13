@@ -4,47 +4,20 @@
 		ChatMessageEditForm,
 		ChatMessageMcpPromptContent
 	} from '$lib/components/app';
-	import { getMessageEditContext } from '$lib/contexts';
-	import { MessageRole, McpPromptVariant } from '$lib/enums';
+	import { getChatMessageEditContext } from '$lib/contexts';
+	import { McpPromptVariant, MessageRole } from '$lib/enums';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
 		mcpPrompt: DatabaseMessageExtraMcpPrompt;
-		siblingInfo?: ChatMessageSiblingInfo | null;
-		showDeleteDialog: boolean;
-		deletionInfo: {
-			totalCount: number;
-			userMessages: number;
-			assistantMessages: number;
-			messageTypes: string[];
-		} | null;
-		onCopy: () => void;
-		onEdit: () => void;
-		onDelete: () => void;
-		onConfirmDelete: () => void;
-		onNavigateToSibling?: (siblingId: string) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
 	}
 
-	let {
-		class: className = '',
-		message,
-		mcpPrompt,
-		siblingInfo = null,
-		showDeleteDialog,
-		deletionInfo,
-		onCopy,
-		onEdit,
-		onDelete,
-		onConfirmDelete,
-		onNavigateToSibling,
-		onShowDeleteDialogChange
-	}: Props = $props();
+	let { class: className = '', mcpPrompt, message }: Props = $props();
 
 	// Get edit context
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 </script>
 
 <div
@@ -56,27 +29,14 @@
 		<ChatMessageEditForm />
 	{:else}
 		<ChatMessageMcpPromptContent
+			class="w-full max-w-[80%]"
 			prompt={mcpPrompt}
 			variant={McpPromptVariant.MESSAGE}
-			class="w-full max-w-[80%]"
 		/>
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons
-					actionsPosition="right"
-					{deletionInfo}
-					justify="end"
-					{onConfirmDelete}
-					{onCopy}
-					{onDelete}
-					{onEdit}
-					{onNavigateToSibling}
-					{onShowDeleteDialogChange}
-					{siblingInfo}
-					{showDeleteDialog}
-					role={MessageRole.USER}
-				/>
+				<ChatMessageActionIcons actionsPosition="right" justify="end" role={MessageRole.USER} />
 			</div>
 		{/if}
 	{/if}

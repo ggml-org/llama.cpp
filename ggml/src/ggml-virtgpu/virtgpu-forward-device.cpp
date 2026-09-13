@@ -144,7 +144,8 @@ void apir_device_get_props(virtgpu * gpu,
                            bool *    async,
                            bool *    host_buffer,
                            bool *    buffer_from_host_ptr,
-                           bool *    events) {
+                           bool *    events,
+                           bool *    mmap_support) {
     apir_encoder *        encoder;
     apir_decoder *        decoder;
     ApirForwardReturnCode ret;
@@ -157,6 +158,7 @@ void apir_device_get_props(virtgpu * gpu,
     apir_decode_bool_t(decoder, host_buffer);
     apir_decode_bool_t(decoder, buffer_from_host_ptr);
     apir_decode_bool_t(decoder, events);
+    apir_decode_bool_t(decoder, mmap_support);
 
     remote_call_finish(gpu, encoder, decoder);
 

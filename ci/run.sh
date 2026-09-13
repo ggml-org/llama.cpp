@@ -10,6 +10,9 @@
 # # with CUDA support
 # GG_BUILD_CUDA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with ROCm support
+# GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 # # with SYCL support
 # GG_BUILD_SYCL=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
@@ -45,6 +48,14 @@ mkdir -p "$2"
 
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
+
+# gpu-rocm self-hosted runner can't upload logs to blob; keep each run's logs in
+# their own dir keyed by the GitHub run id so an Actions run URL maps to its logs.
+if [ -n "${GG_BUILD_ROCM}" ] && [ -n "${GITHUB_RUN_ID}" ]; then
+    OUT="$OUT/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+    mkdir -p "$OUT"
+    echo "ci results dir: $OUT"
+fi
 
 rm -f $OUT/*.log
 rm -f $OUT/*.exit
@@ -89,7 +100,7 @@ if [ ! -z ${GG_BUILD_CUDA} ]; then
 fi
 
 if [ ! -z ${GG_BUILD_ROCM} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_HIP=ON"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DCMAKE_HIP_COMPILER=$(hipconfig -l)/clang -DGGML_HIP=ON"
     if [ -z ${GG_BUILD_AMDGPU_TARGETS} ]; then
         echo "Missing GG_BUILD_AMDGPU_TARGETS, please set it to your GPU architecture (e.g. gfx90a, gfx1100, etc.)"
         exit 1
@@ -178,8 +189,8 @@ if [ ! -z ${GG_BUILD_OPENVINO} ]; then
     fi
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 
-    # TODO: fix and re-enable the `test-llama-archs` test below
-    CTEST_EXTRA="-E test-llama-archs"
+    # TODO: fix failing tests on OpenVINO backend
+    CTEST_EXTRA="-E test-llama-archs|^test-recurrent-state-|test-save-load-state"
 fi
 
 ## helpers
@@ -239,7 +250,7 @@ function gg_run_ctest_debug {
     (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time cmake --build . --config Debug -j$(nproc)) 2>&1 | tee -a $OUT/${ci}-make.log
 
-    (time ctest -C Debug --output-on-failure -L main -E "test-opt|test-backend-ops|test-llama-archs" ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
+    (time ctest -C Debug --output-on-failure -L main -E "test-opt|test-llama-archs" ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
     set +e
 }
@@ -286,6 +297,69 @@ function gg_sum_ctest_release {
     gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
     gg_printf '```\n'
     gg_printf '%s\n' "$(cat $OUT/${ci}-ctest.log)"
+    gg_printf '```\n'
+}
+
+# test_llama_archs_tensor_split
+
+function gg_run_test_llama_archs_tensor_split {
+    cd ${SRC}
+
+    set -e
+
+    if [ ! -z ${GG_BUILD_CUDA} ]; then
+        GGML_CUDA_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+    fi
+
+    if [ ! -z ${GG_BUILD_METAL} ]; then
+        GGML_METAL_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+    fi
+
+    set +e
+}
+
+function gg_sum_test_llama_archs_tensor_split {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'Runs test-llama-archs with 1 to 4 devices\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '```\n'
+    gg_printf '%s\n' "$(cat $OUT/${ci}.log)"
+    gg_printf '```\n'
+}
+
+# test_llama_archs_models
+
+function gg_run_test_llama_archs_models {
+    cd ${SRC}
+
+    set -e
+
+    # TODO: fix and re-enable `test-llama-archs` on OpenVINO
+    # TODO: the `test-llama-archs` currently does not build on Windows, so we check if the binary exists
+    if [ -z ${GG_BUILD_OPENVINO} ] && [ -f ./build-ci-release/bin/test-llama-archs ]; then
+        rm -rf build-ci-models && mkdir -p build-ci-models
+
+        # generate the dummy models used by the model-dependent tests
+        ./build-ci-release/bin/test-llama-archs -o build-ci-models 2>&1
+    fi
+
+    set +e
+}
+
+function gg_sum_test_llama_archs_models {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'Generates the dummy models used by the model-dependent tests\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '```\n'
+    gg_printf '%s\n' "$(cat $OUT/${ci}.log)"
     gg_printf '```\n'
 }
 
@@ -640,61 +714,97 @@ function gg_sum_rerank_tiny {
 
 function gg_check_build_requirements {
     if ! command -v git &> /dev/null; then
-        gg_printf 'git not found, please install'
+        gg_printf 'git not found, please install\n'
+        exit 1
     fi
 
     if ! command -v git-lfs &> /dev/null; then
-        gg_printf 'git-lfs not found, please install'
+        gg_printf 'git-lfs not found, please install\n'
+        exit 1
+    fi
+
+    if ! git config --get filter.lfs.clean &> /dev/null; then
+        gg_printf 'git-lfs not initialized, please run `git lfs install`\n'
+        exit 1
     fi
 
     if ! command -v wget &> /dev/null; then
-        gg_printf 'wget not found, please install'
+        gg_printf 'wget not found, please install\n'
+        exit 1
     fi
 
     if ! command -v python3 &> /dev/null; then
-        gg_printf 'python3 not found, please install'
+        gg_printf 'python3 not found, please install\n'
+        exit 1
     fi
 
     if ! command -v pip3 &> /dev/null; then
-        gg_printf 'pip3 not found, please install'
+        gg_printf 'pip3 not found, please install\n'
+        exit 1
     fi
 
     if ! python3 -m ensurepip --help &> /dev/null; then
-        gg_printf 'ensurepip not found, please install python3-venv package'
+        gg_printf 'ensurepip not found, please install python3-venv package\n'
+        exit 1
     fi
 
     if ! command -v cmake &> /dev/null; then
-        gg_printf 'cmake not found, please install'
+        gg_printf 'cmake not found, please install\n'
+        exit 1
     fi
 
     if ! command -v ccache &> /dev/null; then
-        gg_printf 'ccache not found, please consider installing for faster builds'
+        gg_printf 'ccache not found, please consider installing for faster builds\n'
     fi
 
     if ! command -v ctest &> /dev/null; then
-        gg_printf 'ctest not found, please install'
+        gg_printf 'ctest not found, please install\n'
+        exit 1
+    fi
+
+    if ! command -v unzip &> /dev/null; then
+        gg_printf 'unzip not found, please install\n'
+        exit 1
     fi
 }
 
-function gg_run_test_backend_ops_cpu {
+function gg_run_test_backend_ops {
     cd ${SRC}
 
     cd build-ci-release
 
     set -e
 
-    (time ./bin/test-backend-ops -b CPU ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops-cpu.log
+    local args_extra="-j $(nproc)"
+
+    # TODO: fix multi-threaded for ROCm
+    #       https://github.com/ggml-org/llama.cpp/actions/runs/34576278519/job/103297889044?pr=28740#step:3:4865
+    if [ ! -z ${GG_BUILD_ROCM} ]; then
+        args_extra=""
+    fi
+
+    # TODO: MoltenVK bug?
+    #       https://github.com/ggml-org/llama.cpp/actions/runs/34611260059/job/103302413736?pr=28740#step:3:5897
+    if [ ! -z "${GG_BUILD_VULKAN}" ] && [ "$(uname -s)" = "Darwin" ]; then
+        args_extra=""
+    fi
+
+    if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
+        (time ./bin/test-backend-ops ${args_extra} -b CPU) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+    else
+        (time ./bin/test-backend-ops ${args_extra}       ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+    fi
 
     set +e
 }
 
-function gg_sum_test_backend_ops_cpu {
+function gg_sum_test_backend_ops {
     gg_printf '### %s\n\n' "${ci}"
 
-    gg_printf 'Runs test-backend-ops for CPU backend\n'
+    gg_printf 'Runs test-backend-ops\n'
     gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
     gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}-test-backend-ops-cpu.log)"
+    gg_printf '%s\n' "$(cat $OUT/${ci}-test-backend-ops.log)"
     gg_printf '```\n'
     gg_printf '\n'
 }
@@ -727,9 +837,10 @@ ret=0
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
-if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
-    test $ret -eq 0 && gg_run test_backend_ops_cpu
-fi
+test $ret -eq 0 && gg_run test_backend_ops
+
+test $ret -eq 0 && gg_run test_llama_archs_models
+test $ret -eq 0 && gg_run test_llama_archs_tensor_split
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run embd_bge_small

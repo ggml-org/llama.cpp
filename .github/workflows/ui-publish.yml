@@ -37,7 +37,7 @@ jobs:
       - name: Download UI build artifact
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
 
       - name: Create distribution archive

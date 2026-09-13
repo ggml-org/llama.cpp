@@ -18,14 +18,19 @@
 #  include <unistd.h>
 #endif
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <optional>
 
 #ifdef GGML_RPC_RDMA
 #  include <infiniband/verbs.h>
+#  include <array>
 #  include <time.h>
 #  ifndef _WIN32
 #    include <poll.h>
+#  endif
+#  ifdef GGML_RPC_RDMA_APPLE
+#    include "transport-apple.h"
 #  endif
 #endif // GGML_RPC_RDMA
 
@@ -42,10 +47,13 @@ static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
     do { if (RPC_DEBUG) GGML_LOG_DEBUG(__VA_ARGS__); } while (0)
 
 #ifdef GGML_RPC_RDMA
-static constexpr size_t RDMA_CHUNK    = 256 * 1024;   // 256 KiB per send/recv (fits default 8 MiB memlock)
-static constexpr int    RDMA_RX_DEPTH = 24;            // pre-posted recv ring: 24 × 256 KiB = 6 MiB
 static constexpr size_t RDMA_GID_SIZE = 16;            // RoCE GID / IB GID is always 16 bytes
 using rdma_gid_t = std::array<uint8_t, RDMA_GID_SIZE>;
+#endif // GGML_RPC_RDMA
+
+#if defined(GGML_RPC_RDMA) && !defined(GGML_RPC_RDMA_APPLE)
+static constexpr size_t RDMA_CHUNK    = 256 * 1024;   // 256 KiB per send/recv (fits default 8 MiB memlock)
+static constexpr int    RDMA_RX_DEPTH = 24;            // pre-posted recv ring: 24 × 256 KiB = 6 MiB
 
 struct rdma_conn {
     struct ibv_context * ctx = nullptr;
@@ -111,27 +119,33 @@ struct rdma_caps {
 
 static_assert(sizeof(rdma_caps) == RPC_CONN_CAPS_SIZE, "rdma_caps must match conn_caps size");
 
-#endif // GGML_RPC_RDMA
+#endif // GGML_RPC_RDMA && !GGML_RPC_RDMA_APPLE
 
 struct socket_t::impl {
     impl(sockfd_t fd) : use_rdma(false), fd(fd) {}
     ~impl();
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
+    bool flush();
     void get_caps(uint8_t * local_caps);
     void update_caps(const uint8_t * remote_caps);
 
 #ifdef GGML_RPC_RDMA
-    bool tcp_peer_closed();
     std::optional<rdma_gid_t> rdma_build_target_gid();
+
+#  ifdef GGML_RPC_RDMA_APPLE
+    std::unique_ptr<apple_rdma> rdma;
+#  else
     bool rdma_probe();
-    bool rdma_activate(uint32_t remote_qpn, uint32_t remote_psn, const uint8_t * remote_gid);
-    bool rdma_poll(struct ibv_cq * cq, struct ibv_wc * wc);
     bool rdma_send(const void * data, size_t size);
     bool rdma_recv(void * data, size_t size);
+    bool tcp_peer_closed();
+    bool rdma_activate(uint32_t remote_qpn, uint32_t remote_psn, const uint8_t * remote_gid);
+    bool rdma_poll(struct ibv_cq * cq, struct ibv_wc * wc);
 
     std::unique_ptr<rdma_conn> rdma;
     rdma_local_info            rdma_local = {};
+#  endif
 #endif // GGML_RPC_RDMA
     bool     use_rdma;
     sockfd_t fd;
@@ -150,17 +164,6 @@ socket_t::impl::~impl() {
 }
 
 #ifdef GGML_RPC_RDMA
-
-bool socket_t::impl::tcp_peer_closed() {
-    if (fd < 0) return false;
-#ifndef _WIN32
-    struct pollfd pfd = { fd, POLLIN | POLLRDHUP, 0 };
-    int r = poll(&pfd, 1, 0);
-    return r > 0 && (pfd.revents & (POLLHUP | POLLERR | POLLRDHUP));
-#else
-    return false;
-#endif
-}
 
 // Build a RoCE GID-shaped 16-byte target from a TCP socket's local address.
 // Used to match the socket's local IP against the kernel's GID table so that
@@ -189,6 +192,19 @@ std::optional<rdma_gid_t> socket_t::impl::rdma_build_target_gid() {
         return target;
     }
     return std::nullopt;
+}
+
+#ifndef GGML_RPC_RDMA_APPLE
+
+bool socket_t::impl::tcp_peer_closed() {
+    if (fd < 0) return false;
+#ifndef _WIN32
+    struct pollfd pfd = { fd, POLLIN | POLLRDHUP, 0 };
+    int r = poll(&pfd, 1, 0);
+    return r > 0 && (pfd.revents & (POLLHUP | POLLERR | POLLRDHUP));
+#else
+    return false;
+#endif
 }
 
 bool socket_t::impl::rdma_probe() {
@@ -457,10 +473,16 @@ bool socket_t::impl::rdma_recv(void * data, size_t size) {
     return true;
 }
 
+#endif // !GGML_RPC_RDMA_APPLE (Linux RC transport)
+
 #endif // GGML_RPC_RDMA
 
 bool socket_t::impl::send_data(const void * data, size_t size) {
-#ifdef GGML_RPC_RDMA
+#ifdef GGML_RPC_RDMA_APPLE
+    if (use_rdma) {
+        return rdma->send(data, size);
+    }
+#elif defined(GGML_RPC_RDMA)
     if (use_rdma) {
         return rdma_send(data, size);
     }
@@ -480,7 +502,11 @@ bool socket_t::impl::send_data(const void * data, size_t size) {
 }
 
 bool socket_t::impl::recv_data(void * data, size_t size) {
-#ifdef GGML_RPC_RDMA
+#ifdef GGML_RPC_RDMA_APPLE
+    if (use_rdma) {
+        return rdma->recv(data, size);
+    }
+#elif defined(GGML_RPC_RDMA)
     if (use_rdma) {
         return rdma_recv(data, size);
     }
@@ -506,6 +532,15 @@ bool socket_t::impl::recv_data(void * data, size_t size) {
 void socket_t::impl::get_caps(uint8_t * local_caps) {
     memset(local_caps, 0, RPC_CONN_CAPS_SIZE);
 #ifdef GGML_RPC_RDMA
+    if (std::getenv("GGML_RPC_NO_RDMA")) {
+        return;
+    }
+#  ifdef GGML_RPC_RDMA_APPLE
+    auto target_gid = rdma_build_target_gid();
+    if (target_gid) {
+        rdma = apple_rdma::probe(fd, target_gid->data(), local_caps);
+    }
+#  else
     rdma_local = {};
     if (rdma_probe()) {
         rdma_caps rc = {};
@@ -516,21 +551,30 @@ void socket_t::impl::get_caps(uint8_t * local_caps) {
     } else {
         rdma.reset();
     }
+#  endif
 #endif // GGML_RPC_RDMA
 }
 
 void socket_t::impl::update_caps(const uint8_t * remote_caps) {
 #ifdef GGML_RPC_RDMA
-    if (!rdma) {
-        return;
+    // a peer that has no RDMA advertises all-zero caps and takes no further part
+    // in the negotiation, so drop to TCP without reporting a failure
+    bool remote_rdma = false;
+    for (size_t i = 0; i < RPC_CONN_CAPS_SIZE; i++) {
+        remote_rdma |= remote_caps[i] != 0;
     }
-    rdma_caps rc = {};
-    memcpy(&rc, remote_caps, sizeof(rc));
-    if (rc.qpn == 0) {
+    if (!rdma || !remote_rdma) {
         rdma.reset();
         return;
     }
-    if (rdma_activate(rc.qpn, rc.psn, rc.gid)) {
+#  ifdef GGML_RPC_RDMA_APPLE
+    bool activated = rdma->activate(remote_caps);
+#  else
+    rdma_caps rc = {};
+    memcpy(&rc, remote_caps, sizeof(rc));
+    bool activated = rdma_activate(rc.qpn, rc.psn, rc.gid);
+#  endif
+    if (activated) {
         use_rdma = true;
     } else {
         GGML_LOG_ERROR("RDMA activate failed, staying on TCP\n");
@@ -541,6 +585,14 @@ void socket_t::impl::update_caps(const uint8_t * remote_caps) {
 #endif // GGML_RPC_RDMA
 }
 
+bool socket_t::impl::flush() {
+#ifdef GGML_RPC_RDMA_APPLE
+    if (use_rdma) {
+        return rdma->flush();
+    }
+#endif
+    return true;
+}
 
 /////////////////////////////////////////////////////////////////////////////
 
@@ -554,6 +606,10 @@ bool socket_t::send_data(const void * data, size_t size) {
 
 bool socket_t::recv_data(void * data, size_t size) {
     return pimpl->recv_data(data, size);
+}
+
+bool socket_t::flush() {
+    return pimpl->flush();
 }
 
 void socket_t::get_caps(uint8_t * local_caps) {

@@ -121,26 +121,26 @@ void main() {
         const uint buf_ib = r * qf_stride + d / 8;
         const uint buf_iqs = d % 8;
 
-        FLOAT_TYPEV4 vals = is_in_bounds ? FLOAT_TYPEV4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale) : FLOAT_TYPEV4(0.0f);
-        const FLOAT_TYPEV4 abs_vals = abs(vals);
+        vec4 vals = is_in_bounds ? data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale : vec4(0.0f);
+        const vec4 abs_vals = abs(vals);
 
-        const FLOAT_TYPE thread_max = max(max(abs_vals.x, abs_vals.y), max(abs_vals.z, abs_vals.w));
-        const FLOAT_TYPE amax = subgroupClusteredMax(thread_max, 8);
-        const FLOAT_TYPE qd = amax / FLOAT_TYPE(127.0);
-        const FLOAT_TYPE qd_inv = qd != FLOAT_TYPE(0.0) ? FLOAT_TYPE(1.0) / qd : FLOAT_TYPE(0.0);
+        const float thread_max = max(max(abs_vals.x, abs_vals.y), max(abs_vals.z, abs_vals.w));
+        const float amax = subgroupClusteredMax(thread_max, 8);
+        const float qd = amax / 127.0f;
+        const float qd_inv = qd != 0.0f ? 1.0f / qd : 0.0f;
         vals = round(vals * qd_inv);
 
         Qf[buf_ib].qs[buf_iqs] = pack32(i8vec4(vals));
 
         // Q8_0 K only needs (qd, _); the asymmetric Q4_*/Q5_* family also stores
         // the row-sum scaled by qd, used in k_dot_correction.
-        if (FaTypeK == FA_TYPE_Q8_0) {
+        if (FaTypeK == GGML_TYPE_Q8_0) {
             if (buf_iqs == 0) {
-                Qf[buf_ib].ds = FLOAT_TYPEV2(qd, 0.0);
+                Qf[buf_ib].ds = FLOAT_TYPEV2(qd, 0.0f);
             }
         } else {
-            const FLOAT_TYPE thread_sum = vals.x + vals.y + vals.z + vals.w;
-            const FLOAT_TYPE sum = subgroupClusteredAdd(thread_sum, 8);
+            const float thread_sum = vals.x + vals.y + vals.z + vals.w;
+            const float sum = subgroupClusteredAdd(thread_sum, 8);
 
             if (buf_iqs == 0) {
                 Qf[buf_ib].ds = FLOAT_TYPEV2(qd, sum * qd);
@@ -367,7 +367,7 @@ void main() {
                 // Q4_*/Q5_* take the block-8 fast path when one step covers a full
                 // block; Q8_0 always goes through the per-int get_k_qs* helpers
                 // (its qs is byte-packed, not nibble-packed).
-                const bool block8_fast = (d_per_step == 8) && (FaTypeK != FA_TYPE_Q8_0);
+                const bool block8_fast = (d_per_step == 8) && (FaTypeK != GGML_TYPE_Q8_0);
 
                 if (SHMEM_STAGING != 0) {
                     const uint k_block_idx = (d_tid * (HSK_per_thread / 4) + d_block) / 8;
@@ -375,7 +375,7 @@ void main() {
                     k_dm = ACC_TYPEV2(kblocksh[buf_ib].dm);
 
                     if (block8_fast) {
-                        const bool has_qh = (FaTypeK == FA_TYPE_Q5_0) || (FaTypeK == FA_TYPE_Q5_1);
+                        const bool has_qh = (FaTypeK == GGML_TYPE_Q5_0) || (FaTypeK == GGML_TYPE_Q5_1);
                         [[unroll]] for (uint32_t d = 0; d < 4; d++) {
                             uint vui = kblocksh[buf_ib].qs[d];
                             k_quants[d    ] = int32_t( vui       & 0x0F0F0F0F);

@@ -1,12 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
 	colorizeFaviconSvg,
 	padFaviconSvg,
 	writeThemeFavicons
 } from '../../scripts/favicon-colorize';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const SOURCE_SVG = [
 	'<svg xmlns="http://www.w3.org/2000/svg">',
@@ -19,6 +19,7 @@ const SOURCE_SVG = [
 describe('colorizeFaviconSvg', () => {
 	it('substitutes every currentColor occurrence for the light variant', () => {
 		const { light } = colorizeFaviconSvg(SOURCE_SVG, '#111111', '#fafafa');
+
 		expect(light.match(/currentColor/g)).toBeNull();
 		expect(light).toContain('fill="#111111"');
 		expect(light).toContain('<circle fill="#111111"/>');
@@ -26,34 +27,39 @@ describe('colorizeFaviconSvg', () => {
 
 	it('substitutes every currentColor occurrence for the dark variant', () => {
 		const { dark } = colorizeFaviconSvg(SOURCE_SVG, '#111111', '#fafafa');
+
 		expect(dark.match(/currentColor/g)).toBeNull();
 		expect(dark).toContain('fill="#fafafa"');
 		expect(dark).toContain('<circle fill="#fafafa"/>');
 	});
 
 	it('leaves non-currentColor colors untouched in both variants', () => {
-		const { light, dark } = colorizeFaviconSvg(SOURCE_SVG, '#111111', '#fafafa');
+		const { dark, light } = colorizeFaviconSvg(SOURCE_SVG, '#111111', '#fafafa');
+
 		expect(light).toContain('fill="#ff00aa"');
 		expect(dark).toContain('fill="#ff00aa"');
 	});
 
 	it('does not alter any other part of the SVG', () => {
-		const { light, dark } = colorizeFaviconSvg(SOURCE_SVG, '#111111', '#fafafa');
+		const { dark, light } = colorizeFaviconSvg(SOURCE_SVG, '#111111', '#fafafa');
 		const stripColors = (s: string) =>
 			s.replaceAll('#111111', '').replaceAll('#fafafa', '').replaceAll('currentColor', '');
 		const expected = stripColors(SOURCE_SVG);
+
 		expect(stripColors(light)).toBe(expected);
 		expect(stripColors(dark)).toBe(expected);
 	});
 
 	it('returns the same SVG for light and dark when called with the same color', () => {
 		const result = colorizeFaviconSvg(SOURCE_SVG, '#abcdef', '#abcdef');
+
 		expect(result.light).toBe(result.dark);
 	});
 
 	it('returns the source unchanged when given a color that does not appear (no currentColor in source)', () => {
 		const plain = '<svg><path fill="#000"/></svg>';
-		const { light, dark } = colorizeFaviconSvg(plain, '#111111', '#fafafa');
+		const { dark, light } = colorizeFaviconSvg(plain, '#111111', '#fafafa');
+
 		expect(light).toBe(plain);
 		expect(dark).toBe(plain);
 	});
@@ -67,6 +73,7 @@ describe('padFaviconSvg', () => {
 
 	it('wraps inner content in a translate-then-scale group that matches padding', () => {
 		const padded = padFaviconSvg(SIZED_SVG, 0.05);
+
 		// scale = 1 - 0.05 = 0.95
 		// translate = (0.05 * 512) / 2 = 12.8 on each axis
 		expect(padded).toContain('transform="translate(12.8 12.8) scale(0.95)"');
@@ -77,6 +84,7 @@ describe('padFaviconSvg', () => {
 
 	it('preserves the outer <svg> tag attributes', () => {
 		const padded = padFaviconSvg(SIZED_SVG, 0.1);
+
 		expect(padded.startsWith('<svg width="512" height="512" viewBox="0 0 512 512"')).toBe(true);
 	});
 
@@ -92,17 +100,20 @@ describe('padFaviconSvg', () => {
 
 	it('returns the input unchanged when no viewBox is present', () => {
 		const noViewBox = '<svg width="32" height="32"><path d="M0 0Z"/></svg>';
+
 		expect(padFaviconSvg(noViewBox, 0.1)).toBe(noViewBox);
 	});
 
 	it('returns the input unchanged when viewBox values are not finite numbers', () => {
 		const bad = '<svg viewBox="auto auto 0 0"><path/></svg>';
+
 		expect(padFaviconSvg(bad, 0.1)).toBe(bad);
 	});
 
 	it('tolerates a non-square viewBox', () => {
 		const wide = '<svg viewBox="0 0 100 50"><rect/></svg>';
 		const padded = padFaviconSvg(wide, 0.1);
+
 		// scale 0.9, translate (5, 2.5)
 		expect(padded).toContain('transform="translate(5 2.5) scale(0.9)"');
 	});
@@ -121,27 +132,29 @@ describe('writeThemeFavicons', () => {
 	});
 
 	afterEach(() => {
-		rmSync(tmpDir, { recursive: true, force: true });
+		rmSync(tmpDir, { force: true, recursive: true });
 	});
 
 	function setupSource() {
 		const sourcePath = join(tmpDir, 'logo.svg');
+
 		writeFileSync(sourcePath, LOGO);
+
 		return {
-			sourcePath,
+			darkPath: join(tmpDir, 'favicon-dark.svg'),
 			lightPath: join(tmpDir, 'favicon.svg'),
-			darkPath: join(tmpDir, 'favicon-dark.svg')
+			sourcePath
 		};
 	}
 
 	it('writes colorized, un-padded favicons without modifying the source', () => {
-		const { sourcePath, lightPath, darkPath } = setupSource();
+		const { darkPath, lightPath, sourcePath } = setupSource();
 		const before = readFileSync(sourcePath, 'utf-8');
 
 		writeThemeFavicons('#abcdef', '#012345', {
-			sourcePath,
+			darkOutPath: darkPath,
 			lightOutPath: lightPath,
-			darkOutPath: darkPath
+			sourcePath
 		});
 
 		const lightOut = readFileSync(lightPath, 'utf-8');
@@ -162,17 +175,17 @@ describe('writeThemeFavicons', () => {
 	});
 
 	it('writes colorized favicons wrapped in a padding <g transform>...</g>', () => {
-		const { sourcePath, lightPath, darkPath } = setupSource();
+		const { darkPath, lightPath, sourcePath } = setupSource();
 		// mirror the production wiring: PWA_ASSET_GENERATOR.FAVICON_PADDING
 		const padding = 0.04;
 		// scale = 1 - 0.04 = 0.96; translate = (0.04 * 512) / 2 = 10.24
 		const expectedTransform = 'transform="translate(10.24 10.24) scale(0.96)"';
 
 		writeThemeFavicons('#111111', '#fafafa', {
-			sourcePath,
-			lightOutPath: lightPath,
 			darkOutPath: darkPath,
-			padding
+			lightOutPath: lightPath,
+			padding,
+			sourcePath
 		});
 
 		const lightOut = readFileSync(lightPath, 'utf-8');

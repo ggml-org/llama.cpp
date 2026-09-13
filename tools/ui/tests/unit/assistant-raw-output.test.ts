@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { AgenticSectionType } from '$lib/enums';
 import { REASONING_TAGS } from '$lib/constants';
-import { buildAssistantRawOutput, type AgenticSection } from '$lib/utils/agentic';
+import { AgenticSectionType } from '$lib/enums';
+import type { AgenticSection } from '$lib/types/agentic';
+import { buildAssistantRawOutput } from '$lib/utils/agentic';
+import { describe, expect, it } from 'vitest';
 
 function makeSection(
 	overrides: Partial<AgenticSection> & { type: AgenticSectionType }
@@ -18,26 +19,29 @@ describe('buildAssistantRawOutput', () => {
 	});
 
 	it('formats a reasoning section with a single newline between tags and content', () => {
-		const sections = [makeSection({ type: AgenticSectionType.REASONING, content: 'thinking...' })];
+		const sections = [makeSection({ content: 'thinking...', type: AgenticSectionType.REASONING })];
+
 		expect(buildAssistantRawOutput(sections)).toBe(
 			`${REASONING_TAGS.START}\nthinking...${REASONING_TAGS.END}`
 		);
 	});
 
 	it('formats a text section as-is', () => {
-		const sections = [makeSection({ type: AgenticSectionType.TEXT, content: 'Hello' })];
+		const sections = [makeSection({ content: 'Hello', type: AgenticSectionType.TEXT })];
+
 		expect(buildAssistantRawOutput(sections)).toBe('Hello');
 	});
 
 	it('formats a tool call with JSON args and no result label', () => {
 		const sections = [
 			makeSection({
-				type: AgenticSectionType.TOOL_CALL,
-				toolName: 'read_file',
 				toolArgs: JSON.stringify({ path: '/tmp/file.txt' }),
-				toolResult: 'file contents'
+				toolName: 'read_file',
+				toolResult: 'file contents',
+				type: AgenticSectionType.TOOL_CALL
 			})
 		];
+
 		expect(buildAssistantRawOutput(sections)).toBe(
 			[
 				'{',
@@ -55,21 +59,23 @@ describe('buildAssistantRawOutput', () => {
 
 	it('joins multiple sections with double newlines', () => {
 		const sections = [
-			makeSection({ type: AgenticSectionType.TEXT, content: 'Hello' }),
-			makeSection({ type: AgenticSectionType.TOOL_CALL, toolName: 'noop' })
+			makeSection({ content: 'Hello', type: AgenticSectionType.TEXT }),
+			makeSection({ toolName: 'noop', type: AgenticSectionType.TOOL_CALL })
 		];
+
 		expect(buildAssistantRawOutput(sections)).toBe('Hello\n\n{\n  "name": "noop"\n}');
 	});
 
 	it('falls back to raw string args when JSON parsing fails', () => {
 		const sections = [
 			makeSection({
-				type: AgenticSectionType.TOOL_CALL,
-				toolName: 'broken',
 				toolArgs: '{not json',
-				toolResult: 'result'
+				toolName: 'broken',
+				toolResult: 'result',
+				type: AgenticSectionType.TOOL_CALL
 			})
 		];
+
 		expect(buildAssistantRawOutput(sections)).toBe(
 			['{', '  "name": "broken",', '  "arguments": "{not json"', '}', '', '', 'result'].join('\n')
 		);

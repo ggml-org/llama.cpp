@@ -215,7 +215,7 @@ def run_mtmd_cli(spec: "ModelSpec", model_path, mmproj_path, image_path, bin_pat
             "--dry-multiplier", "0.8",
             "--dry-base", "1.75",
             "--dry-allowed-length", "2",
-            "--dry-penalty-last-n", "-1",
+            "--dry-penalty-last-n", "64",
             "--dry-sequence-breaker", "none",
         ]
     if spec.n_ctx is not None:

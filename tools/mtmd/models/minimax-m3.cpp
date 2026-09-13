@@ -2,30 +2,22 @@
 
 ggml_tensor * clip_graph_minimax_m3::apply_rope(
         ggml_tensor * x, ggml_tensor * pos_h, ggml_tensor * pos_w) {
-    const int64_t Hn  = x->ne[1];
-    const int64_t P   = x->ne[2];
-    const size_t  es  = ggml_element_size(x);
-    const int     dh  = (int) x->ne[0];
-    const int     axd = 2 * ((2 * (dh / 2) / 3) / 2);
+    const int dh  = (int) x->ne[0];
+    const int axd = 2 * ((2 * (dh / 2) / 3) / 2);
 
-    GGML_ASSERT(x->nb[0] == es);
     GGML_ASSERT(3 * axd <= dh);
 
     const float th  = hparams.rope_theta;
 
     // layout of x is [t, h, w, pad]
     // t is unrotated, h and w are rotated, pad is unrotated
-    // note: everything from n_dims onward untouched, so w and pad are rotated in one call.
-    auto sl = [&](int off, int n) {
-        return ggml_cont(ctx0, ggml_view_3d(ctx0, x, n, Hn, P, x->nb[1], x->nb[2], (size_t) off * es));
-    };
-    ggml_tensor * t = sl(0,       axd);
-    ggml_tensor * h = sl(axd,     axd);
-    ggml_tensor * w = sl(2 * axd, dh - 2 * axd); // w + pad
+    x = ggml_rope_ext(ctx0, x, pos_h, nullptr, axd, GGML_ROPE_TYPE_NEOX, 0, th, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+    x = ggml_rope_set_offset(x, axd);
 
-    h = ggml_rope_ext(ctx0, h, pos_h, nullptr, axd, GGML_ROPE_TYPE_NEOX, 0, th, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-    w = ggml_rope_ext(ctx0, w, pos_w, nullptr, axd, GGML_ROPE_TYPE_NEOX, 0, th, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-    return ggml_concat(ctx0, ggml_concat(ctx0, t, h, 0), w, 0);
+    x = ggml_rope_ext(ctx0, x, pos_w, nullptr, axd, GGML_ROPE_TYPE_NEOX, 0, th, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+    x = ggml_rope_set_offset(x, 2 * axd);
+
+    return x;
 }
 
 ggml_cgraph * clip_graph_minimax_m3::build() {

@@ -76,6 +76,7 @@
 void ggml_cann_repeat(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 void ggml_cann_swiglu(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+void ggml_cann_swiglu_clamp(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 void ggml_cann_geglu(ggml_backend_cann_context & ctx, ggml_tensor * dst, int64_t approximate);
 
 /**

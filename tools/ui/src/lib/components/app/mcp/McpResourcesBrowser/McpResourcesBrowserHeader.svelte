@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { RefreshCw, Loader2 } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { Loader2, RefreshCw } from '@lucide/svelte';
 	import { SearchInput } from '$lib/components/app/forms';
+	import { Button } from '$lib/components/ui/button';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 
 	interface Props {
 		isLoading: boolean;
@@ -17,18 +17,18 @@
 <div class="flex flex-col gap-2">
 	<div class="mb-2 flex items-center gap-4">
 		<SearchInput
+			onInput={(value) => onSearch?.(value)}
 			placeholder="Search resources..."
 			value={searchQuery}
-			onInput={(value) => onSearch?.(value)}
 		/>
 
 		<Button
-			variant="ghost"
-			size="sm"
 			class="h-8 w-8 p-0"
-			onclick={onRefresh}
 			disabled={isLoading}
+			onclick={onRefresh}
+			size="sm"
 			title="Refresh resources"
+			variant="ghost"
 		>
 			{#if isLoading}
 				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin" />

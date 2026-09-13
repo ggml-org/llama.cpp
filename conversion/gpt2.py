@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("GPT2LMHeadModel")
+@ModelBase.example("openai-community/gpt2")
 class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
 
@@ -38,6 +39,7 @@ class GPT2Model(TextModel):
 
 
 @ModelBase.register("RuGPT3XLForCausalLM")
+@ModelBase.example("evilfreelancer/ruGPT3XL")
 class RuGPT3XLModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
 

@@ -48,7 +48,11 @@ echo "org/repo: $org_repo"
 
 meta=$(curl -sSLf -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$org_repo/pulls/$PR")
 
-url_remote=$(echo "$meta" | jq -r '.head.repo.clone_url')
+if [[ $url_origin =~ ^git@ ]]; then
+    url_remote=$(echo "$meta" | jq -r '.head.repo.ssh_url')
+else
+    url_remote=$(echo "$meta" | jq -r '.head.repo.clone_url')
+fi
 head_ref=$(echo "$meta" | jq -r '.head.ref')
 
 echo "url:      $url_remote"

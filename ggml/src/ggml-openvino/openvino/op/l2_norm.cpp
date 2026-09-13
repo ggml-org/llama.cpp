@@ -8,7 +8,9 @@
 #include <openvino/op/maximum.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/reduce_sum.hpp>
+#include <openvino/op/reshape.hpp>
 #include <openvino/op/sqrt.hpp>
+#include <openvino/op/squeeze.hpp>
 
 namespace ov {
 namespace frontend {
@@ -19,6 +21,21 @@ OutputVector translate_l2_norm(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
     auto input_node = process_view_input_new(context, 0);
+
+    if (context.get_op_case() == 1) {
+        // 92: [   128,    16,     1,     2] VIEW                 q_conv-1
+        //      [  6144,     1,     2,     1]            0: UNARY       conv_output_silu-1
+        // 93: [   128,    16,     1,     2] L2_NORM              q_conv_predelta-1
+        //      [   128,    16,     1,     2]            0: VIEW        q_conv-1
+        auto output_shape = context.get_output_shape().to_shape();
+        input_node = process_view_input(context, 0, output_shape[2] * output_shape[3]);
+        input_node =
+            std::make_shared<ov::op::v0::Squeeze>(input_node, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+
+        std::vector<int64_t> reshape_pattern = {0, 0, (int64_t) output_shape[2], (int64_t) output_shape[3]};
+        input_node = std::make_shared<ov::op::v1::Reshape>(
+            input_node, ov::op::v0::Constant::create(ov::element::i64, {4}, reshape_pattern), true);
+    }
 
     auto squared = std::make_shared<ov::op::v1::Multiply>(input_node, input_node);
 

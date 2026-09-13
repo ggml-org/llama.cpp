@@ -42,7 +42,10 @@ void argsort(bool needs_bounds_check, const uint row) {
         [[unroll]] for (int u = 0; u < WG_UNROLL_FACTOR; ++u) {
             uint c = u*BLOCK_SIZE + col;
             if (c < p.ncols_padded) {
-                ivec2 v = ivec2(c, floatBitsToInt(data_a[row_offset + c]));
+                ivec2 v = ivec2(c, 0);
+                if (!needs_bounds_check || c < p.ncols) {
+                    v.y = floatBitsToInt(data_a[row_offset + c]);
+                }
                 tmp_idx[idx_offset + c] = v;
             }
         }

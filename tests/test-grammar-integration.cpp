@@ -7,13 +7,13 @@
 #include "../src/unicode.h"
 #include "../src/llama-grammar.h"
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <cassert>
 #include <string>
 #include <vector>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static llama_grammar * build_grammar_with_root(const std::string & grammar_str, const char * grammar_root) {
     return llama_grammar_init_impl(nullptr, grammar_str.c_str(), grammar_root, false, nullptr, 0, nullptr, 0);
@@ -918,7 +918,7 @@ static void test_json_schema() {
     // Otherwise, this test structure is the same.
 
     test_schema(
-        "empty schema (object)",
+        "empty schema (any value)",
         // Schema
         R"""(
             {}
@@ -927,14 +927,16 @@ static void test_json_schema() {
         {
             R"""({})""",
             R"""({"foo": "bar"})""",
-        },
-        // Failing strings
-        {
-            "",
             "[]",
             "null",
             R"""("")""",
             "true",
+        },
+        // Failing strings
+        {
+            "",
+            R"""({"foo"})""",
+            "foo",
         }
     );
 

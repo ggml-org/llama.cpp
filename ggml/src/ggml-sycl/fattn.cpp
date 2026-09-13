@@ -104,7 +104,6 @@ enum best_fattn_kernel {
 
 
 static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
-    GGML_UNUSED(device);
 #ifndef SYCL_FLASH_ATTN
     GGML_UNUSED(dst);
     return BEST_FATTN_KERNEL_NONE;
@@ -147,14 +146,13 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // Set GGML_SYCL_ENABLE_MKL_FA=0 to force TILE/VEC path for A/B testing.
     // Example: GGML_SYCL_ENABLE_MKL_FA=0 llama-cli -m model.gguf -fa -ngl 99 ...
     // Note: MKL GEMM calls are incompatible with SYCL graph capture replay.
-    static int mkl_enable = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
     // MKL is validated for the mainstream GQA envelope: grouped-query
     // (gqa_ratio >= 2), head_dim a multiple of 64 in [64,512] with matching
     // K/V head size, mask, no sinks/ALiBi/softcap. Gemma's global layers use
     // head_dim 512, so the cap must include it. Head sizes not a multiple of
     // 64 (72/80/96), MHA (gqa_ratio == 1), and MLA (DKQ != DV, e.g. 576/512)
     // fall through to TILE/VEC; see follow-up work.
-    if (mkl_enable == 1 && mask && !sinks && gqa_ratio >= 2 &&
+    if (g_ggml_sycl_enable_mkl_fa == 1 && mask && !sinks && gqa_ratio >= 2 &&
         Q->ne[0] >= 64 && Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 &&
         Q->ne[0] == V->ne[0] &&
         Q->ne[1] >= 32 && K->ne[1] >= 1024 &&
@@ -263,6 +261,11 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
             }
         } else {
             if (Q->ne[1] <= 2) {
+                // TILE is faster for quantized KV decode on Xe2 (BMG); keep VEC on untested archs
+                const gpu_arch arch = ggml_sycl_info().devices[device].hw_info.arch;
+                if (arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31) {
+                    return BEST_FATTN_KERNEL_TILE;
+                }
                 return BEST_FATTN_KERNEL_VEC;
             }
         }
@@ -373,4 +376,77 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
 bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst) {
     return ggml_sycl_get_best_fattn_kernel(device, dst) != BEST_FATTN_KERNEL_NONE;
+}
+
+static uintptr_t ggml_sycl_fattn_reserve_halves(ggml_sycl_fattn_extra & extra, size_t n_halves) {
+    if (n_halves == 0) {
+        return 0;
+    }
+    extra.end = GGML_PAD(extra.end, SYCL_BUFFER_ALIGNMENT);
+    const uintptr_t block = extra.end;
+    extra.end += n_halves * sizeof(sycl::half);
+    return block;
+}
+
+ggml_sycl_fattn_extra ggml_sycl_fattn_get_extra(const ggml_tensor * dst) {
+    ggml_sycl_fattn_extra extra;
+
+    extra.end = (uintptr_t) dst->data + ggml_nbytes(dst);
+
+    if (dst->op != GGML_OP_FLASH_ATTN_EXT) {
+        return extra;
+    }
+
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+    if (!Q || !K || !V) {
+        return extra;
+    }
+
+    const int64_t d = K->ne[0];
+    const int64_t H = Q->ne[2];
+    const int64_t q = Q->ne[1];
+
+    // calculate the worst-case memory consumption across all kernels
+    const bool onednn_supported = ggml_sycl_flash_attn_ext_onednn_supported(dst, /* use_shape_limit */ false);
+
+    const bool tile_needs_K = K->type != GGML_TYPE_F16;
+    const bool tile_needs_V = V->type != GGML_TYPE_F16;
+
+    const bool V_is_K_view = V->view_src &&
+        (V->view_src == K || (V->view_src == K->view_src && V->view_offs == K->view_offs));
+
+    size_t need_K = 0, need_V = 0, need_Q = 0, need_out = 0, need_scale = 0;
+    if (onednn_supported) {
+        need_Q     = (size_t) H * q * d;
+        need_out   = (size_t) H * q * d;
+        need_scale = 1;
+        // an f16 cache is bound in place, so it needs no staging copy
+        if (!ggml_sycl_fattn_onednn_binds_kv(K, V)) {
+            need_K = (size_t) ggml_nelements(K);
+            need_V = (size_t) ggml_nelements(V);
+        }
+    }
+    if (tile_needs_K) {
+        need_K = std::max(need_K, (size_t) ggml_nelements(K));
+    }
+    if (tile_needs_V) {
+        need_V = std::max(need_V, (size_t) ggml_nelements(V));
+    }
+
+    extra.Q_buffer_ptr = ggml_sycl_fattn_reserve_halves(extra, need_Q);
+    extra.K_buffer_ptr = ggml_sycl_fattn_reserve_halves(extra, need_K);
+    extra.V_buffer_ptr = (V_is_K_view && !onednn_supported && need_V)
+                       ? extra.K_buffer_ptr
+                       : ggml_sycl_fattn_reserve_halves(extra, need_V);
+    extra.scale_buffer_ptr = ggml_sycl_fattn_reserve_halves(extra, need_scale);
+    extra.out_buffer_ptr   = ggml_sycl_fattn_reserve_halves(extra, need_out);
+
+    return extra;
+}
+
+size_t ggml_sycl_flash_attn_ext_get_alloc_size(const ggml_tensor * dst) {
+    const ggml_sycl_fattn_extra extra = ggml_sycl_fattn_get_extra(dst);
+    return (size_t) (extra.end - (uintptr_t) dst->data);
 }

@@ -19,6 +19,8 @@ jobs:
         run: |
           cargo binstall komac@2.16.0 -y
 
+      # TODO: This should later be updated to publish releases instead of
+      # development release builds.
       - name: Find latest release
         id: find_latest_release
         uses: actions/github-script@v8

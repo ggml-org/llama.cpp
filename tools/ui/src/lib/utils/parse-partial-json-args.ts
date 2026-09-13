@@ -7,13 +7,11 @@ const JSON_OBJECT_OPEN = '{';
 const JSON_OBJECT_CLOSE = '}';
 const JSON_ARRAY_OPEN = '[';
 const JSON_ARRAY_CLOSE = ']';
-
 // Trailing punctuation to strip before re-closing a partial object/array.
 // Matches an optional trailing comma plus any trailing whitespace; lets
 // us re-emit a syntactically-valid JSON document without an orphaned
 // comma when the model cut off mid-key.
 const TRAILING_JSON_PUNCTUATION_REGEX = /,?\s*$/;
-
 /** Bounded cache for parsePartialJsonArgs results. */
 const PARTIAL_JSON_CACHE_MAX_SIZE = 32;
 const partialJsonCache = new Map<string, Record<string, unknown> | null>();
@@ -22,6 +20,7 @@ function cacheResult(input: string, result: Record<string, unknown> | null): voi
 	if (partialJsonCache.size >= PARTIAL_JSON_CACHE_MAX_SIZE) {
 		partialJsonCache.delete(partialJsonCache.keys().next().value!);
 	}
+
 	partialJsonCache.set(input, result);
 }
 
@@ -32,12 +31,14 @@ function cacheResult(input: string, result: Record<string, unknown> | null): voi
 // render during streaming even when toolArgs hasn't changed.
 export function parsePartialJsonArgs(toolArgsString: string): Record<string, unknown> | null {
 	const cached = partialJsonCache.get(toolArgsString);
+
 	if (cached !== undefined) return cached;
 
 	let result: Record<string, unknown> | null;
 
 	try {
 		const parsed: unknown = JSON.parse(toolArgsString);
+
 		result =
 			parsed && typeof parsed === 'object' && !Array.isArray(parsed)
 				? (parsed as Record<string, unknown>)
@@ -47,6 +48,7 @@ export function parsePartialJsonArgs(toolArgsString: string): Record<string, unk
 	}
 
 	cacheResult(toolArgsString, result);
+
 	return result;
 }
 
@@ -54,41 +56,55 @@ export function parsePartialJsonArgs(toolArgsString: string): Record<string, unk
 function scanPartialJson(toolArgsString: string): Record<string, unknown> | null {
 	let inString = false;
 	let escape = false;
+
 	const stack: ('{' | '[')[] = [];
 
 	for (let i = 0; i < toolArgsString.length; i++) {
 		const ch = toolArgsString[i];
+
 		if (escape) {
 			escape = false;
+
 			continue;
 		}
+
 		if (ch === JSON_BACKSLASH && inString) {
 			escape = true;
+
 			continue;
 		}
+
 		if (ch === JSON_QUOTE) {
 			inString = !inString;
+
 			continue;
 		}
+
 		if (inString) continue;
+
 		if (ch === JSON_OBJECT_OPEN) stack.push(JSON_OBJECT_OPEN);
 		else if (ch === JSON_OBJECT_CLOSE) {
 			if (stack.length === 0 || stack[stack.length - 1] !== JSON_OBJECT_OPEN) return null;
+
 			stack.pop();
 		} else if (ch === JSON_ARRAY_OPEN) stack.push(JSON_ARRAY_OPEN);
 		else if (ch === JSON_ARRAY_CLOSE) {
 			if (stack.length === 0 || stack[stack.length - 1] !== JSON_ARRAY_OPEN) return null;
+
 			stack.pop();
 		}
 	}
 
 	let completed = toolArgsString;
+
 	if (escape) {
 		// Dangling escape at end of partial JSON: escape the trailing
 		// backslash as a literal so we can close the string cleanly.
 		completed += JSON_BACKSLASH;
 	}
+
 	if (inString) completed += JSON_QUOTE;
+
 	if (!inString) completed = completed.replace(TRAILING_JSON_PUNCTUATION_REGEX, '');
 
 	// Close in reverse nesting order: innermost container first.
@@ -98,6 +114,7 @@ function scanPartialJson(toolArgsString: string): Record<string, unknown> | null
 
 	try {
 		const parsed: unknown = JSON.parse(completed);
+
 		return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
 			? (parsed as Record<string, unknown>)
 			: null;

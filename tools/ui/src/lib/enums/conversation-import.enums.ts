@@ -4,6 +4,6 @@
  * message record belongs to it.
  */
 export enum SessionRecordType {
-	SESSION = 'session',
-	MESSAGE = 'message'
+	MESSAGE = 'message',
+	SESSION = 'session'
 }

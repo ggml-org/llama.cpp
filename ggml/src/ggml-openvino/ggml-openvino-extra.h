@@ -96,8 +96,21 @@ const std::string & ggml_openvino_get_device_name();
 const char * ggml_openvino_getenv_str(const char * var, const char * default_value = nullptr);
 int ggml_openvino_getenv_int(const char * var, int default_value = 0);
 
+// Memory optimization toggles. GGML_OPENVINO_MEMORY_OPTIMIZE is an umbrella
+// switch; the fine-grained env vars still override it when explicitly set.
+bool ggml_openvino_reduce_compile_mem_enabled();
+bool ggml_openvino_release_weights_enabled(const std::string & device);
+
 // Check if running on NPU
 bool ggml_openvino_is_npu();
+
+// Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS, GPU only).
+// register: record a host weight buffer (idempotent per data pointer).
+// release:  madvise(MADV_DONTNEED) all registered buffers, dropping their RSS.
+// released: true once release has run (used to fail-fast on post-release recompile).
+void ggml_openvino_register_weight_buffer(void * data, size_t size);
+void ggml_openvino_release_weight_buffers();
+bool ggml_openvino_weight_buffers_released();
 
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
 std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant = false);

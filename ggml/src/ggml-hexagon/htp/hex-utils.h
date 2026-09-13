@@ -45,11 +45,15 @@ static inline void hex_l2fetch_block(const void * addr, size_t size) {
 static inline void hex_l2flush(void * addr, size_t size) {
     const uint32_t s = ((uint32_t) addr) & ~(HEX_L2_LINE_SIZE - 1);
     const uint32_t e = (((uint32_t) addr) + size + HEX_L2_LINE_SIZE - 1) & ~(HEX_L2_LINE_SIZE - 1);
-    for (uint32_t i = s; i < e; i += HEX_L2_BLOCK_SIZE) {
-        Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 0);
-        Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 1);
-        Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 2);
-        Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 3);
+    const uint32_t eb = s + ((e - s) & ~(HEX_L2_BLOCK_SIZE - 1));
+    for (uint32_t i = s; i < eb; i += HEX_L2_BLOCK_SIZE) {
+        Q6_dccleaninva_A((void *) (i + HEX_L2_LINE_SIZE * 0));
+        Q6_dccleaninva_A((void *) (i + HEX_L2_LINE_SIZE * 1));
+        Q6_dccleaninva_A((void *) (i + HEX_L2_LINE_SIZE * 2));
+        Q6_dccleaninva_A((void *) (i + HEX_L2_LINE_SIZE * 3));
+    }
+    for (uint32_t i = eb; i < e; i += HEX_L2_LINE_SIZE) {
+        Q6_dccleaninva_A((void *) i);
     }
 }
 

@@ -1,10 +1,10 @@
 import { AttachmentType, FileTypeCategory, SpecialFileType } from '$lib/enums';
-import { getFileTypeCategory, getFileTypeCategoryByExtension, isImageFile } from '$lib/utils';
 import type {
 	AttachmentDisplayItemsOptions,
 	ChatAttachmentDisplayItem,
 	ChatUploadedFile
 } from '$lib/types';
+import { getFileTypeCategory, getFileTypeCategoryByExtension, isImageFile } from '$lib/utils';
 
 /**
  * Check if a display item represents an MCP prompt
@@ -14,9 +14,11 @@ export function isMcpPrompt(item: ChatAttachmentDisplayItem): boolean {
 	if (item.attachment?.type === AttachmentType.MCP_PROMPT) {
 		return true;
 	}
+
 	if (item.uploadedFile?.type === SpecialFileType.MCP_PROMPT && item.uploadedFile.mcpPrompt) {
 		return true;
 	}
+
 	return false;
 }
 
@@ -47,21 +49,21 @@ function getUploadedFileCategory(file: ChatUploadedFile): FileTypeCategory | nul
 export function getAttachmentDisplayItems(
 	options: AttachmentDisplayItemsOptions
 ): ChatAttachmentDisplayItem[] {
-	const { uploadedFiles = [], attachments = [] } = options;
+	const { attachments = [], uploadedFiles = [] } = options;
 	const items: ChatAttachmentDisplayItem[] = [];
 
 	// Add uploaded files (ChatForm)
 	for (const file of uploadedFiles) {
 		items.push({
 			id: file.id,
-			name: file.name,
-			size: file.size,
-			preview: file.preview,
 			isImage: getUploadedFileCategory(file) === FileTypeCategory.IMAGE,
 			isLoading: file.isLoading,
 			loadError: file.loadError,
-			uploadedFile: file,
-			textContent: file.textContent
+			name: file.name,
+			preview: file.preview,
+			size: file.size,
+			textContent: file.textContent,
+			uploadedFile: file
 		});
 	}
 
@@ -70,13 +72,13 @@ export function getAttachmentDisplayItems(
 		const isImage = isImageFile(attachment);
 
 		items.push({
-			id: `attachment-${index}`,
-			name: attachment.name,
-			size: 'size' in attachment ? attachment.size : undefined,
-			preview: isImage && 'base64Url' in attachment ? attachment.base64Url : undefined,
-			isImage,
 			attachment,
 			attachmentIndex: index,
+			id: `attachment-${index}`,
+			isImage,
+			name: attachment.name,
+			preview: isImage && 'base64Url' in attachment ? attachment.base64Url : undefined,
+			size: 'size' in attachment ? attachment.size : undefined,
 			textContent: 'content' in attachment ? attachment.content : undefined
 		});
 	}

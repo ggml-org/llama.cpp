@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { parseCwdMessage } from '$lib/utils';
-	import type { DatabaseMessage } from '$lib/types';
 	import ChatMessageCwdChange from './ChatMessageCwdChange.svelte';
+	import type { DatabaseMessage } from '$lib/types';
+	import { parseCwdMessage } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -17,7 +17,7 @@
 </script>
 
 {#if isCwdChange}
-	<ChatMessageCwdChange {message} class={className} />
+	<ChatMessageCwdChange class={className} {message} />
 {:else}
 	<span class="text-muted-foreground block text-sm {className}">{message.content}</span>
 {/if}

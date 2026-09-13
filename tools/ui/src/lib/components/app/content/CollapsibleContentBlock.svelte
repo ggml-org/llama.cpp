@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { cn } from '$lib/components/ui/utils';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 
@@ -21,17 +21,17 @@
 	}
 
 	let {
-		open = $bindable(false),
+		children,
 		class: className = '',
 		icon: IconComponent,
 		iconClass = ICON_CLASS_DEFAULT,
 		iconUrl = null,
-		title = '',
-		titleSnippet,
-		subtitle,
-		shimmerTitle = false,
 		onToggle,
-		children
+		open = $bindable(false),
+		shimmerTitle = false,
+		subtitle,
+		title = '',
+		titleSnippet
 	}: Props = $props();
 
 	function hideBrokenIcon(event: Event) {
@@ -40,12 +40,12 @@
 </script>
 
 <Collapsible.Root
-	{open}
+	class={cn('group/collapsible', 'my-0!', className)}
 	onOpenChange={(value) => {
 		open = value;
 		onToggle?.();
 	}}
-	class={cn('group/collapsible', 'my-0!', className)}
+	{open}
 >
 	<Collapsible.Trigger
 		class={cn(
@@ -56,10 +56,10 @@
 		<div class="flex min-w-0 items-start gap-2 text-muted-foreground">
 			{#if iconUrl}
 				<img
-					src={iconUrl}
 					alt=""
 					class={cn('shrink-0 rounded-sm  mt-0.75', iconClass)}
 					onerror={hideBrokenIcon}
+					src={iconUrl}
 				/>
 			{:else if IconComponent}
 				<IconComponent class={cn('shrink-0 text-muted-foreground/60 mt-0.75', iconClass)} />

@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstring>
+#include <cstdlib>
 #include <forward_list>
 #include <limits>
 #include <map>
@@ -318,10 +319,19 @@ struct llm_tokenizer_bpe : llm_tokenizer {
             case LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM:
             case LLAMA_VOCAB_PRE_TYPE_HUNYUAN_DENSE:
             case LLAMA_VOCAB_PRE_TYPE_JOYAI_LLM:
+            case LLAMA_VOCAB_PRE_TYPE_HY_V4:
                 regex_exprs = {
                     "\\p{N}{1,3}",
                     "[一-龥぀-ゟ゠-ヿ]+",
                     "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\r\n]*|\\s*[\r\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
+            case LLAMA_VOCAB_PRE_TYPE_SPARK2_5:
+                regex_exprs = {
+                    "\\p{N}{1,3}",
+                    "[一-龥぀-ゟ゠-ヿ]+",
+                    "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+|[\r\n]|\\s+(?!\\S)|\\s+",
+                    "\\p{N}",
                 };
                 break;
             case LLAMA_VOCAB_PRE_TYPE_YOUTU:
@@ -1989,6 +1999,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 // Kimi-K2 doesn't need merges, skip
                 LLAMA_LOG_INFO("%s: Kimi-K2 tokenizer detected, skipping BPE merges\n", __func__);
             } else {
+                if (gguf_get_kv_type(ctx, merges_keyidx) != GGUF_TYPE_ARRAY ||
+                    gguf_get_arr_type(ctx, merges_keyidx) != GGUF_TYPE_STRING) {
+                    throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_MERGES).c_str()));
+                }
                 const int n_merges = gguf_get_arr_n(ctx, merges_keyidx);
                 for (int i = 0; i < n_merges; i++) {
                     const std::string word = gguf_get_arr_str(ctx, merges_keyidx, i);
@@ -2028,8 +2042,13 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
             const int precompiled_charsmap_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str());
             if (precompiled_charsmap_keyidx != -1) {
+                if (gguf_get_kv_type(ctx, precompiled_charsmap_keyidx) != GGUF_TYPE_ARRAY) {
+                    throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str()));
+                }
                 const gguf_type pc_type = gguf_get_arr_type(ctx, precompiled_charsmap_keyidx);
-                GGML_ASSERT(pc_type == GGUF_TYPE_INT8 || pc_type == GGUF_TYPE_UINT8);
+                if (pc_type != GGUF_TYPE_INT8 && pc_type != GGUF_TYPE_UINT8) {
+                    throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str()));
+                }
 
                 const size_t n_precompiled_charsmap = gguf_get_arr_n(ctx, precompiled_charsmap_keyidx);
                 const char * pc = (const char *) gguf_get_arr_data(ctx, precompiled_charsmap_keyidx);
@@ -2081,6 +2100,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 throw std::runtime_error("cannot find tokenizer merges in model file\n");
             }
             {
+                if (gguf_get_kv_type(ctx, merges_keyidx) != GGUF_TYPE_ARRAY ||
+                    gguf_get_arr_type(ctx, merges_keyidx) != GGUF_TYPE_STRING) {
+                    throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_MERGES).c_str()));
+                }
                 const int n_merges = gguf_get_arr_n(ctx, merges_keyidx);
                 for (int i = 0; i < n_merges; i++) {
                     const std::string word = gguf_get_arr_str(ctx, merges_keyidx, i);
@@ -2155,6 +2178,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                     tokenizer_pre == "deepseek-v3") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM;
+                clean_spaces = false;
+            } else if (
+                    tokenizer_pre == "spark2_5") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_SPARK2_5;
                 clean_spaces = false;
             } else if (
                     tokenizer_pre == "youtu") {
@@ -2338,6 +2365,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_HUNYUAN_DENSE;
                 clean_spaces = false;
             } else if (
+                tokenizer_pre == "hy_v4") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_HY_V4;
+                clean_spaces = false;
+            } else if (
                 tokenizer_pre == "joyai-llm") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_JOYAI_LLM;
                 clean_spaces = false;
@@ -2407,21 +2438,41 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         throw std::runtime_error("cannot find tokenizer vocab in model file\n");
     }
 
+    if (gguf_get_kv_type(ctx, token_idx) != GGUF_TYPE_ARRAY ||
+        gguf_get_arr_type(ctx, token_idx) != GGUF_TYPE_STRING) {
+        throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_LIST).c_str()));
+    }
+
     const uint32_t n_tokens = gguf_get_arr_n(ctx, token_idx);
 
     const float * scores = nullptr;
+    const int * iscores = nullptr;
     const int score_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SCORES).c_str());
     if (score_idx != -1) {
+        const gguf_type kv_type = gguf_get_kv_type(ctx, score_idx);
+        const gguf_type arr_type = kv_type == GGUF_TYPE_ARRAY ? gguf_get_arr_type(ctx, score_idx) : GGUF_TYPE_COUNT;
+        if (arr_type != GGUF_TYPE_INT32 &&
+            arr_type != GGUF_TYPE_FLOAT32) {
+            throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_SCORES).c_str()));
+        }
         const uint32_t n_scores = gguf_get_arr_n(ctx, score_idx);
         if (n_scores < n_tokens) {
             throw std::runtime_error("Index out of array bounds for scores (" + std::to_string(n_scores) + " < " + std::to_string(n_tokens) + ")\n");
         }
-        scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
+        if (arr_type == GGUF_TYPE_INT32) {
+            iscores = (const int *) gguf_get_arr_data(ctx, score_idx);
+        } else {
+            scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
+        }
     }
 
     const int * toktypes = nullptr;
     const int toktype_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_TOKEN_TYPE).c_str());
     if (toktype_idx != -1) {
+        if (gguf_get_kv_type(ctx, toktype_idx) != GGUF_TYPE_ARRAY ||
+            gguf_get_arr_type(ctx, toktype_idx) != GGUF_TYPE_INT32) {
+            throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_TOKEN_TYPE).c_str()));
+        }
         const uint32_t n_toktypes = gguf_get_arr_n(ctx, toktype_idx);
         if (n_toktypes < n_tokens) {
             throw std::runtime_error("Index out of array bounds for toktypes (" + std::to_string(n_toktypes) + " < " + std::to_string(n_tokens) + ")\n");
@@ -2443,7 +2494,13 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
         auto & token_data = id_to_token[i];
         token_data.text  = std::move(word);
-        token_data.score = scores ? scores[i] : 0.0f;
+        if (scores) {
+            token_data.score = scores[i];
+        } else if (iscores) {
+            token_data.score = static_cast<float>(iscores[i]);
+        } else {
+            token_data.score = 0.0f;
+        }
         token_data.attr  = LLAMA_TOKEN_ATTR_NORMAL;
 
         if (toktypes) {  //TODO: remove, required until per token attributes are available from GGUF file
@@ -2584,6 +2641,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         {
             const int suppress_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SUPPRESS_TOKENS).c_str());
             if (suppress_idx != -1) {
+                if (gguf_get_kv_type(ctx, suppress_idx) != GGUF_TYPE_ARRAY ||
+                    gguf_get_arr_type(ctx, suppress_idx) != GGUF_TYPE_INT32) {
+                    throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_SUPPRESS_TOKENS).c_str()));
+                }
                 const int n = gguf_get_arr_n(ctx, suppress_idx);
                 const int32_t * data = (const int32_t *) gguf_get_arr_data(ctx, suppress_idx);
                 // drop out-of-range ids

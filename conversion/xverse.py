@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("XverseForCausalLM")
+@ModelBase.example("xverse/XVERSE-7B")
 class XverseModel(TextModel):
     model_arch = gguf.MODEL_ARCH.XVERSE
 

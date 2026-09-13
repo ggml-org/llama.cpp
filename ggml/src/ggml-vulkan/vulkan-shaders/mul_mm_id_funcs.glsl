@@ -71,4 +71,19 @@ void load_row_ids(uint expert_idx, bool nei0_is_pow2, uint ic) {
     barrier();
 }
 #endif // MUL_MAT_ID_USE_SUBGROUPS
+
+void load_row_ids_hoisted(uint expert_idx, uint ic) {
+    _ne1 = uint(data_expert_count[expert_idx]);
+
+    const uint tile_begin = ic * BN;
+    const uint tile_count = tile_begin < _ne1 ? min(BN, _ne1 - tile_begin) : 0;
+    const uint expert_offset = uint(data_expert_count[p.n_experts + expert_idx]);
+    const uint row_ids_offset = 2 * p.n_experts + 1 + expert_offset + tile_begin;
+
+    for (uint i = gl_LocalInvocationIndex; i < tile_count; i += BLOCK_SIZE) {
+        const uint packed_row_id = uint(data_expert_count[row_ids_offset + i]);
+        row_ids[i] = u16vec2(packed_row_id & 0xffffu, packed_row_id >> 16);
+    }
+    barrier();
+}
 #endif // MUL_MAT_ID

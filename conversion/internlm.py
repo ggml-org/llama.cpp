@@ -14,6 +14,7 @@ from .llama import LlamaModel
 
 
 @ModelBase.register("InternLM2ForCausalLM")
+@ModelBase.example("internlm/internlm2-chat-7b")
 class InternLM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.INTERNLM2
 
@@ -170,6 +171,7 @@ class InternLM2Model(TextModel):
 
 
 @ModelBase.register("InternLM3ForCausalLM")
+@ModelBase.example("internlm/internlm3-8b-instruct")
 class InternLM3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
 

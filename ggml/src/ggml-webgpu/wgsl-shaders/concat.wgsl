@@ -18,7 +18,6 @@ struct Params {
     ne0: u32,
     ne1: u32,
     ne2: u32,
-    ne3: u32,
 
     dim: u32,
     src0_nedim: u32

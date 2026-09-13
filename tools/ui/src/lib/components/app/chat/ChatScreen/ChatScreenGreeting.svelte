@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { serverStore } from '$lib/stores/server.svelte';
+	import { serverStore } from '$lib/stores';
 
 	interface Props {
 		isEmpty: boolean;

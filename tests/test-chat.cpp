@@ -19,12 +19,12 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
-#include <nlohmann/json.hpp>
+#include "json.h"
 #include <set>
 #include <stdexcept>
 #include <string>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static std::ostream & operator<<(std::ostream & os, const common_chat_msg_diff & diff) {
     os << "{ content_delta: " << diff.content_delta << "; ";
@@ -472,6 +472,12 @@ static common_chat_tool empty_args_tool_no_properties{
     })",
 };
 
+static common_chat_tool empty_args_tool_no_schema{
+    /* .name = */ "empty_args_no_schema",
+    /* .description = */ "A tool that takes no arguments and has no parameters schema",
+    /* .parameters = */ "{}",
+};
+
 static common_chat_tool python_tool{
     /* .name = */ "python",
     /* .description = */ "an ipython interpreter",
@@ -837,6 +843,25 @@ static common_chat_tool nullable_int_tool{
             }
         },
         "required": ["count"]
+    })",
+};
+
+static common_chat_tool string_union_tool{
+    /* .name = */ "set_union",
+    /* .description = */ "Set values whose types are unions with string",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": ["string", "object"],
+                "description": "A string or object value"
+            },
+            "amount": {
+                "type": ["string", "integer"],
+                "description": "A string or integer value"
+            }
+        },
+        "required": ["value", "amount"]
     })",
 };
 
@@ -3799,6 +3824,46 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
+        // nullable string given null - parses as JSON null, not the string "null"
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_nullable_str>\n"
+               "<parameter=name>\nnull\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ nullable_string_tool })
+            .expect_tool_calls({
+                { "set_nullable_str", R"({"name": null})", {} },
+            })
+            .run();
+
+        // unions with string - JSON values of the other types are typed, everything else is a string
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_union>\n"
+               "<parameter=value>\n{\"a\": 1}\n</parameter>\n"
+               "<parameter=amount>\n2 dollars\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ string_union_tool })
+            .expect_tool_calls({
+                { "set_union", R"({"value": {"a": 1}, "amount": "2 dollars"})", {} },
+            })
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=set_union>\n"
+               "<parameter=value>\n{not valid json\n</parameter>\n"
+               "<parameter=amount>\n42\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ string_union_tool })
+            .expect_tool_calls({
+                { "set_union", R"({"value": "{not valid json", "amount": 42})", {} },
+            })
+            .run();
+
         // enum without explicit type key - should infer string from enum values
         tst.test(
                "<tool_call>\n"
@@ -4405,6 +4470,100 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // Spark2.5 uses tagged arguments with forced-open thinking.
+    {
+        auto tst = peg_tester("models/templates/Spark2.5.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .expect(message_assist)
+            .expect_reconstruction()
+            .run();
+
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "<tool_call>special_function"
+               "<arg_key>arg1</arg_key><arg_value>1</arg_value>"
+               "</tool_call>")
+            .enable_thinking(false)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "I'm\nthinking</think>"
+               "<tool_call>special_function"
+               "<arg_key>arg1</arg_key><arg_value>1</arg_value>"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "<tool_call>special_function"
+               "<arg_key>arg1</arg_key><arg_value>1</arg_value>"
+               "</tool_call>"
+               "<tool_call>special_function_with_opt"
+               "<arg_key>arg1</arg_key><arg_value>1</arg_value>"
+               "<arg_key>arg2</arg_key><arg_value>2</arg_value>"
+               "</tool_call>")
+            .enable_thinking(false)
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "Preparing updates."
+               "<tool_call>magic_int"
+               "<arg_key>ref</arg_key><arg_value>42</arg_value>"
+               "<arg_key>name</arg_key><arg_value>上海</arg_value>"
+               "</tool_call>"
+               "<tool_call>amount"
+               "<arg_key>orig</arg_key><arg_value>2.5</arg_value>"
+               "</tool_call>"
+               "<tool_call>toggle"
+               "<arg_key>enabled</arg_key><arg_value>true</arg_value>"
+               "</tool_call>"
+               "<tool_call>set_config"
+               "<arg_key>config</arg_key><arg_value>{\"source\": \"spark\", \"options\": {\"strict\": true}}</arg_value>"
+               "</tool_call>"
+               "<tool_call>nested_args"
+               "<arg_key>tags</arg_key><arg_value>[\"alpha\", \"测试\"]</arg_value>"
+               "<arg_key>entries</arg_key><arg_value>[{\"id\": 1, \"label\": \"first\"}, {\"id\": 2, \"label\": \"第二\"}]</arg_value>"
+               "</tool_call>"
+               "<tool_call>empty_args"
+               "</tool_call>")
+            .enable_thinking(false)
+            .parallel_tool_calls(true)
+            .tools({ magic_int_tool, amount_tool, toggle_tool, config_tool, nested_args_tool, empty_args_tool })
+            .expect_content("Preparing updates.")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": 42, "name": "上海"})", {} },
+                { "amount", R"({"orig": 2.5})", {} },
+                { "toggle", R"({"enabled": true})", {} },
+                { "set_config", R"({"config": {"source": "spark", "options": {"strict": true}}})", {} },
+                { "nested_args", R"({"tags": ["alpha", "测试"], "entries": [{"id": 1, "label": "first"}, {"id": 2, "label": "第二"}]})", {} },
+                { "empty_args", "{}", {} },
+            })
+            .expect_reconstruction()
+            .run();
+    }
+
     // Verify the throw path produces a readable error message, not std::out_of_range.
     // #20424 introduced effective_input = generation_prompt + input, but the throw
     // uses input.substr(result.end) where result.end is in effective_input space.
@@ -4460,6 +4619,109 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             GGML_ASSERT(!got_out_of_range && "throw path crashed with out_of_range (input.substr in effective_input space)");
             GGML_ASSERT(got_runtime_error  && "throw path should produce std::runtime_error with parse position");
         }
+    }
+
+    // Kimi-K3 tests - custom parser
+    // Unique feature: XTML tags built from <|open|>/<|close|>/<|sep|>, and a
+    // generation prompt that leaves the think section already open.
+    {
+        auto tst = peg_tester("models/templates/Kimi-K3.jinja", detailed_debug);
+
+        // Content only. The response section is explicit even with no reasoning.
+        tst.test("<|open|>response<|sep|>Hello, world!\nWhat's up?<|close|>response<|sep|>"
+                 "<|close|>message<|sep|>")
+            .expect(message_assist)
+            .run();
+
+        // Reasoning with no opening tag - the generation prompt already opened it
+        tst.test("I'm thinking about this<|close|>think<|sep|>"
+                 "<|open|>response<|sep|>Hello, world!\nWhat's up?<|close|>response<|sep|>"
+                 "<|close|>message<|sep|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("Hello, world!\nWhat's up?", "I'm thinking about this"))
+            .run();
+
+        // Prose that mentions the tag names must survive intact.
+        tst.test("<|open|>response<|sep|>Use the response tag, then message the handler."
+                 "<|close|>response<|sep|><|close|>message<|sep|>")
+            .expect(simple_assist_msg("Use the response tag, then message the handler."))
+            .run();
+
+        // Truncated mid-reasoning (hit the token budget): keep the reasoning.
+        tst.test("I was still thinking when the budget ran out")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("I was still thinking when the budget ran out")
+            .run();
+
+        // Single tool call, one argument.
+        tst.test("<|open|>response<|sep|><|close|>response<|sep|>"
+                 "<|open|>tools<|sep|>"
+                 "<|open|>call tool=\"special_function\" index=\"1\"<|sep|>"
+                 "<|open|>argument key=\"arg1\" type=\"number\"<|sep|>1<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|><|close|>tools<|sep|><|close|>message<|sep|>")
+            .tools({ special_function_tool })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1":1})", "" },
+            })
+            .run();
+
+        // Tool call preceded by reasoning (no opening think tag) and content.
+        tst.test("I should call it<|close|>think<|sep|>"
+                 "<|open|>response<|sep|>On it.<|close|>response<|sep|>"
+                 "<|open|>tools<|sep|>"
+                 "<|open|>call tool=\"special_function\" index=\"1\"<|sep|>"
+                 "<|open|>argument key=\"arg1\" type=\"number\"<|sep|>1<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|><|close|>tools<|sep|><|close|>message<|sep|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(simple_assist_msg("On it.", "I should call it", "special_function",
+                                      R"({"arg1":1})", ""))
+            .run();
+
+        // Multiple typed arguments: values must come back as JSON numbers, not strings
+        tst.test("<|open|>response<|sep|><|close|>response<|sep|>"
+                 "<|open|>tools<|sep|>"
+                 "<|open|>call tool=\"special_function_with_opt\" index=\"1\"<|sep|>"
+                 "<|open|>argument key=\"arg1\" type=\"number\"<|sep|>1<|close|>argument<|sep|>"
+                 "<|open|>argument key=\"arg2\" type=\"number\"<|sep|>2<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|><|close|>tools<|sep|><|close|>message<|sep|>")
+            .tools({ special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function_with_opt", R"({"arg1":1,"arg2":2})", "" },
+            })
+            .run();
+
+        // Parallel tool calls in one <|open|>tools<|sep|> section.
+        tst.test("<|open|>response<|sep|><|close|>response<|sep|>"
+                 "<|open|>tools<|sep|>"
+                 "<|open|>call tool=\"special_function\" index=\"1\"<|sep|>"
+                 "<|open|>argument key=\"arg1\" type=\"number\"<|sep|>1<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|>"
+                 "<|open|>call tool=\"special_function_with_opt\" index=\"2\"<|sep|>"
+                 "<|open|>argument key=\"arg1\" type=\"number\"<|sep|>1<|close|>argument<|sep|>"
+                 "<|open|>argument key=\"arg2\" type=\"number\"<|sep|>2<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|><|close|>tools<|sep|><|close|>message<|sep|>")
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1":1})", "" },
+                { "special_function_with_opt", R"({"arg1":1,"arg2":2})", "" },
+            })
+            .run();
+
+        // String-typed argument keeps its literal text (no JSON coercion).
+        tst.test("<|open|>response<|sep|><|close|>response<|sep|>"
+                 "<|open|>tools<|sep|>"
+                 "<|open|>call tool=\"python\" index=\"1\"<|sep|>"
+                 "<|open|>argument key=\"code\" type=\"string\"<|sep|>print('hey')"
+                 "<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|><|close|>tools<|sep|><|close|>message<|sep|>")
+            .tools({ python_tool })
+            .expect_tool_calls({
+                // custom delimiter: the payload itself contains )"
+                { "python", R"JSON({"code":"print('hey')"})JSON", "" },
+            })
+            .run();
     }
 
     // Kimi-K2-Thinking tests - custom parser
@@ -4618,7 +4880,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Real life test - execute_command
         tst.test("<|tool_call_begin|>functions.execute_command:0<|tool_call_argument_begin|>{\"command\": \"ls -lah\""
-            ", \"cwd\": \"/home/jarvis/development/exllamav3\", \"timeout\": 10}")
+            ", \"cwd\": \"/home/user/development/exllamav3\", \"timeout\": 10}")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .parallel_tool_calls(true)
             .tools({
@@ -4648,7 +4910,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             expect_tool_calls({
                 {
                     "execute_command",
-                    R"({"command": "ls -lah", "cwd": "/home/jarvis/development/exllamav3", "timeout": 10})",
+                    R"({"command": "ls -lah", "cwd": "/home/user/development/exllamav3", "timeout": 10})",
                     "functions.execute_command:0"
                 }
             })
@@ -4872,6 +5134,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .enable_thinking(false)
             .tools({ empty_args_tool })
             .expect(simple_assist_msg("", "", "empty_args", "{}"))
+            .run();
+
+        // Tool call with no parameters schema, {} means no arguments
+        tst.test("<tool_call>\n{\"name\": \"empty_args_no_schema\", \"arguments\": {}}</tool_call>")
+            .enable_thinking(false)
+            .tools({ empty_args_tool_no_schema })
+            .expect(simple_assist_msg("", "", "empty_args_no_schema", "{}"))
             .run();
 
         // fake tool call marker in reasoning
@@ -5840,6 +6109,52 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .add_generation_prompt(false)
             .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
             .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
+
+    // Muse Glimmer format tests
+    {
+        auto tst = peg_tester("models/templates/muse-glimmer.jinja", detailed_debug);
+
+        const std::string call_markup =
+            "<atem:function_calls>\n"
+            "<atem:invoke name=\"special_function\">\n"
+            "<atem:parameter name=\"arg1\">1</atem:parameter>\n"
+            "</atem:invoke>\n"
+            "</atem:function_calls>";
+
+        // A plain answer is unaffected
+        tst.test(" to=user<|message|>Hello, world!\nWhat's up?<|eot|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        // "Inform then act": the model answers the user and calls a tool in ONE generation,
+        // closing the answer with <|eom|>. The answer must stop there rather than swallow it.
+        tst.test(" to=user<|message|>Hello, world!\nWhat's up?<|eom|>"
+                 "<|start|>assistant to=special_function<|message|>" +
+                 call_markup)
+            .tools({ special_function_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_with_content_and_tool_call("Hello, world!\nWhat's up?", "special_function",
+                                                       "{\"arg1\":1}"))
+            .run();
+
+        // Markup quoted in an answer has no preceding <|eom|>, so it stays content instead of
+        // becoming an invocation the user never asked for
+        tst.test(" to=user<|message|>You invoke it like this:\n" + call_markup + "<|eot|>")
+            .tools({ special_function_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_content("You invoke it like this:\n" + call_markup)
+            .run();
+
+        // Tool markup inside the analysis channel is reasoning, not a call
+        tst.test(" to=self<|message|>I could use " + call_markup + " here<|eom|>"
+                 "<|start|>assistant to=user<|message|>Hello!<|eot|>")
+            .tools({ special_function_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("I could use " + call_markup + " here")
+            .expect_content("Hello!")
             .run();
     }
 
@@ -6909,6 +7224,24 @@ static void test_reasoning_budget_message_per_request() {
     }
 }
 
+static void test_reasoning_effort_caps() {
+    LOG_DBG("%s\n", __func__);
+
+    auto assert_supports_effort = [](const std::string & path, bool expected) {
+        auto tmpls = read_templates(path);
+        assert_equals(expected, common_chat_templates_get_caps(tmpls.get()).at("supports_reasoning_effort"));
+    };
+
+    assert_supports_effort("models/templates/deepseek-ai-DeepSeek-V4.jinja", true);
+    assert_supports_effort("models/templates/muse-glimmer.jinja", true);
+    assert_supports_effort("models/templates/tencent-Hy3.jinja", true);
+    assert_supports_effort("models/templates/openai-gpt-oss-120b.jinja", true);
+    assert_supports_effort("models/templates/upstage-Solar-Open-100B.jinja", true);
+    assert_supports_effort("models/templates/Cohere2MoE.jinja", true);
+    assert_supports_effort("models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja", false);
+    assert_supports_effort("models/templates/Qwen-Qwen3-0.6B.jinja", false);
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -7068,6 +7401,7 @@ int main(int argc, char ** argv) {
         test_deepseek_v4_thinking_retention();
         test_deepseek_v4_tool_result_ordering();
         test_template_generation_prompt();
+        test_reasoning_effort_caps();
         test_reasoning_budget_tokens_per_request();
         test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);

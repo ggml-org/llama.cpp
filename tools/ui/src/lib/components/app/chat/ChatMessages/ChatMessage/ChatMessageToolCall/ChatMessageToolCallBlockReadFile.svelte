@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { SyntaxHighlightedCode } from '$lib/components/app';
-	import { DEFAULT_LANGUAGE, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
-	import { type AgenticSection } from '$lib/utils';
 	import { parseReadFileMeta } from './parsers/read-file';
 	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { SyntaxHighlightedCode } from '$lib/components/app';
+	import { CODE_BLOCK, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
+	import type { AgenticSection } from '$lib/types';
 
 	interface Props {
 		section: AgenticSection;
@@ -12,15 +12,17 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, onToggle }: Props = $props();
+	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const readFileMeta = $derived(parseReadFileMeta(section));
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={readFileMeta} {onToggle}>
+<ToolCallBlock {isStreaming} meta={readFileMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
 		<span class="text-muted-foreground">Read file </span>
+
 		<span class="font-mono">{readFileMeta?.fileName}</span>
+
 		{#if readFileMeta?.lineRange}
 			<span class="text-muted-foreground"
 				>&nbsp;(lines {readFileMeta.lineRange.start}-{readFileMeta.lineRange.end})</span
@@ -32,7 +34,7 @@
 		{#if section.toolResult}
 			<SyntaxHighlightedCode
 				code={section.toolResult}
-				language={readFileMeta?.language ?? DEFAULT_LANGUAGE}
+				language={readFileMeta?.language ?? CODE_BLOCK.DEFAULT_LANGUAGE}
 				maxHeight={MAX_HEIGHT_CODE_BLOCK}
 			/>
 		{:else}

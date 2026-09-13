@@ -124,9 +124,9 @@ note_timeout_if_triggered() {
 
 completion_extra_args() {
   case "$1" in
-    cpu) echo "--device none --ctx-size 128 -no-cnv -n 32 --seed 42 --batch-size 128" ;;
-    gpu) echo "--device GPUOpenCL --ctx-size 128 -no-cnv -n 32 --seed 42 --ubatch-size 512" ;;
-    npu) echo "--device HTP0 --ctx-size 128 -no-cnv -n 32 --seed 42 --ubatch-size 1024" ;;
+    cpu) echo "--device none --ctx-size 2048 -no-cnv -n 32 --seed 42" ;;
+    gpu) echo "--device GPUOpenCL --ctx-size 2048 -no-cnv -n 32 --seed 42" ;;
+    npu) echo "--device HTP0 --ctx-size 2048 -no-cnv -n 32 --seed 42 --ubatch-size 1024" ;;
   esac
 }
 
@@ -161,12 +161,14 @@ run_bench_case() {
   local ndev=${parts[0]} device=${parts[1]}
   local log_suffix=$(backend_log_name "$name")
   local log="$LOG_DIR/llama_bench_${log_suffix}.log"
+  local ubatch_arg=""
+  [ "$name" = "npu" ] && ubatch_arg="--ubatch-size 1024"
   echo "=== [bench:$name] llama-bench --device $device (NDEV=$ndev) ==="
   timeout 600 env GGML_HEXAGON_NDEV=$ndev ./bin/llama-bench \
       -m "$MODEL_PATH" \
       --device "$device" \
       -ngl 99 \
-      --batch-size 128 \
+      $ubatch_arg \
       -t 4 \
       -p 128 \
       -n 32 \

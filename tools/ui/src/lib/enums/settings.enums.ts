@@ -2,26 +2,26 @@
  * Parameter source - indicates whether a parameter uses default or custom value
  */
 export enum ParameterSource {
-	DEFAULT = 'default',
-	CUSTOM = 'custom'
+	CUSTOM = 'custom',
+	DEFAULT = 'default'
 }
 
 /**
  * Syncable parameter type - data types for parameters that can be synced with server
  */
 export enum SyncableParameterType {
+	BOOLEAN = 'boolean',
 	NUMBER = 'number',
-	STRING = 'string',
-	BOOLEAN = 'boolean'
+	STRING = 'string'
 }
 
 /**
  * Settings field type - defines the input type for settings fields
  */
 export enum SettingsFieldType {
-	INPUT = 'input',
-	TEXTAREA = 'textarea',
 	CHECKBOX = 'checkbox',
+	INPUT = 'input',
+	RADIO = 'radio',
 	SELECT = 'select',
-	RADIO = 'radio'
+	TEXTAREA = 'textarea'
 }

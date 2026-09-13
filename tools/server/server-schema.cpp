@@ -124,8 +124,8 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Dynamic temperature exponent, controls how entropy maps to temperature"));
 
     add((new field_num("repeat_last_n", params.sampling.penalty_last_n))
-        ->set_hard_limits(-1, INT32_MAX)
-        ->set_desc("Last n tokens to consider for penalizing repetition (0 = disabled, -1 = ctx-size)"));
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("Last n tokens to consider for penalizing repetition (0 = disabled)"));
 
     add((new field_num("repeat_penalty", params.sampling.penalty_repeat))
         ->set_desc("Control the repetition of token sequences in the generated text (1.0 = disabled)"));
@@ -151,8 +151,8 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Tokens that extend repetition beyond this length receive exponentially increasing penalty: multiplier * base ^ (sequence_length - allowed_length)"));
 
     add((new field_num("dry_penalty_last_n", params.sampling.dry_penalty_last_n))
-        ->set_hard_limits(-1, INT32_MAX)
-        ->set_desc("How many tokens to scan for repetitions (0 = disabled, -1 = context size)"));
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("How many tokens to scan for repetitions (0 = disabled)"));
 
     add((new field_num("mirostat", params.sampling.mirostat))
         ->set_limits(0, 2)
@@ -257,6 +257,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             if (data.contains("json_schema") && !data.contains("grammar")) {
                 try {
                     auto schema                  = json_value(data, "json_schema", json::object());
+                    if (schema.is_object() && schema.empty()) {
+                        // an empty schema means any object
+                        schema["type"] = "object";
+                    }
                     SRV_DBG("JSON schema: %s\n", schema.dump(2).c_str());
                     std::string grammar_str      = json_schema_to_grammar(schema);
                     SRV_DBG("Converted grammar: %s\n", grammar_str.c_str());
@@ -503,7 +507,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             const auto & samplers = data.at("samplers");
             if (samplers.is_array()) {
-                ctx.params.sampling.samplers = common_sampler_types_from_names(samplers);
+                ctx.params.sampling.samplers = common_sampler_types_from_names(samplers.get<std::vector<std::string>>());
             } else if (samplers.is_string()) {
                 ctx.params.sampling.samplers = common_sampler_types_from_chars(samplers.get<std::string>());
             }
@@ -515,12 +519,11 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
 task_params eval_llama_cmpl_schema(
                 const llama_vocab * vocab,
                 const common_params & params_base,
-                const int n_ctx_slot,
                 const std::vector<llama_logit_bias> & logit_bias_eog,
                 const json & data) {
     task_params params;
 
-    // Sampling parameter defaults are loaded from the global server context (but individual requests can still them)
+    // Sampling parameter defaults are loaded from the global server context (but individual requests can still override them)
     params.sampling      = params_base.sampling;
     params.speculative   = params_base.speculative;
     params.n_keep        = params_base.n_keep;
@@ -549,15 +552,6 @@ task_params eval_llama_cmpl_schema(
 
     // post-processing
     {
-        if (params.sampling.penalty_last_n == -1) {
-            // note: should be the slot's context and not the full context, but it's ok
-            params.sampling.penalty_last_n = n_ctx_slot;
-        }
-
-        if (params.sampling.dry_penalty_last_n == -1) {
-            params.sampling.dry_penalty_last_n = n_ctx_slot;
-        }
-
         // if "reasoning_format" is not provided, its handler will not be called, we will need to handle it here
         auto reasoning_format = params.chat_parser_params.reasoning_format;
         params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
@@ -590,8 +584,7 @@ static void handle_with_catch(const char * name, std::function<void()> func) {
 
 // treat a null value as absent so clients can send null to request the server default
 static bool has_value(const json & data, const char * n) {
-    auto it = data.find(n);
-    return it != data.end() && !it->is_null();
+    return data.contains(n) && !data.at(n).is_null();
 }
 
 template <typename T>

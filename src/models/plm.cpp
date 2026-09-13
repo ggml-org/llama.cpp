@@ -81,19 +81,9 @@ llama_model_plm::graph::graph(const llama_model & model, const llm_graph_params 
             q = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
             cb(q, "q", il);
 
-            // split into {n_head * n_embd_head_qk_nope, n_tokens}
-            ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k()),
-                    ggml_row_size(q->type, hparams.n_embd_head_k() * n_head),
-                    0);
-            cb(q_nope, "q_nope", il);
-
-            // and {n_head * n_embd_head_qk_rope, n_tokens}
-            ggml_tensor * q_pe = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k()),
-                    ggml_row_size(q->type, hparams.n_embd_head_k() * n_head),
-                    ggml_row_size(q->type, n_embd_head_qk_nope));
-            cb(q_pe, "q_pe", il);
+            // {n_embd_head_k, n_head, n_tokens}, RoPE is applied to the trailing dims only
+            q = ggml_reshape_3d(ctx0, q, hparams.n_embd_head_k(), n_head, n_tokens);
+            cb(q, "q", il);
 
             // {n_embd, kv_lora_rank + n_embd_head_qk_rope} * {n_embd, n_tokens} -> {kv_lora_rank + n_embd_head_qk_rope, n_tokens}
             ggml_tensor * kv_pe_compresseed = ggml_mul_mat(ctx0, model.layers[il].wkv_a_mqa, cur);
@@ -143,12 +133,13 @@ llama_model_plm::graph::graph(const llama_model & model, const llm_graph_params 
                     0);
             cb(v_states, "v_states", il);
 
-            q_pe = ggml_rope_ext(
-                    ctx0, q_pe, inp_pos, nullptr,
+            q = ggml_rope_ext(
+                    ctx0, q, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                     );
-            cb(q_pe, "q_pe", il);
+            q = ggml_rope_set_offset(q, n_embd_head_qk_nope);
+            cb(q, "q_rope", il);
 
             // shared RoPE key
             k_pe = ggml_rope_ext(
@@ -158,10 +149,11 @@ llama_model_plm::graph::graph(const llama_model & model, const llm_graph_params 
                     );
             cb(k_pe, "k_pe", il);
 
-            ggml_tensor * q_states = ggml_concat(ctx0, q_nope, q_pe, 0);
+            ggml_tensor * q_states = q;
             cb(q_states, "q_states", il);
 
-            ggml_tensor * k_states = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_pe, q_pe), 0);
+            ggml_tensor * k_states = ggml_concat(ctx0, k_nope,
+                    ggml_repeat_4d(ctx0, k_pe, n_embd_head_qk_rope, n_head, n_tokens, 1), 0);
             cb(k_states, "k_states", il);
 
             cur = build_attn(inp_attn,

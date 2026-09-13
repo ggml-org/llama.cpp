@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { settingsStore, config } from '$lib/stores/settings.svelte';
+import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 import { serverStore } from '$lib/stores/server.svelte';
-import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants/storage';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 function mockProps(uiSettings: Record<string, string | number | boolean>) {
 	Object.defineProperty(serverStore, 'props', {
@@ -21,11 +21,11 @@ describe('server ui_settings application semantics', () => {
 
 	it('applies the admin defaults once for a new user', () => {
 		settingsStore.initialize();
-		mockProps({ theme: 'dark', apiKey: '' });
+		mockProps({ apiKey: '', theme: 'dark' });
 
 		settingsStore.syncWithServerDefaults();
 
-		expect(config().theme).toBe('dark');
+		expect(settingsStore.config.theme).toBe('dark');
 	});
 
 	it('never reapplies on later loads: the user config diverges freely', () => {
@@ -35,27 +35,41 @@ describe('server ui_settings application semantics', () => {
 
 		// simulated F5: config now exists in localStorage
 		settingsStore.initialize();
-		mockProps({ theme: 'dark', apiKey: '' });
+		mockProps({ apiKey: '', theme: 'dark' });
 
 		settingsStore.syncWithServerDefaults();
 		settingsStore.syncWithServerDefaults();
 
-		expect(config().theme).toBe('light');
-		expect(config().apiKey).toBe('sk-user-key');
+		expect(settingsStore.config.theme).toBe('light');
+		expect(settingsStore.config.apiKey).toBe('sk-user-key');
 		const stored = JSON.parse(localStorage.getItem(CONFIG_LOCALSTORAGE_KEY) ?? '{}');
+
 		expect(stored.apiKey).toBe('sk-user-key');
+	});
+
+	it('keeps a value the user sets before the baseline is reachable', () => {
+		settingsStore.initialize();
+		// the splash is the only way in when the server runs with --api-key,
+		// so the first user write lands before the first successful /props
+		settingsStore.updateConfig('apiKey', 'sk-user-key');
+		mockProps({ apiKey: 'admin-placeholder', theme: 'dark' });
+
+		settingsStore.syncWithServerDefaults();
+
+		expect(settingsStore.config.apiKey).toBe('sk-user-key');
+		expect(settingsStore.config.theme).toBe('dark');
 	});
 
 	it('Reset to Default reapplies the full baseline, api key included', () => {
 		settingsStore.initialize();
 		settingsStore.updateConfig('theme', 'light');
 		settingsStore.updateConfig('apiKey', 'sk-user-key');
-		mockProps({ theme: 'dark', apiKey: '' });
+		mockProps({ apiKey: '', theme: 'dark' });
 
 		settingsStore.forceSyncWithServerDefaults();
 
-		expect(config().theme).toBe('dark');
-		expect(config().apiKey).toBe('');
+		expect(settingsStore.config.theme).toBe('dark');
+		expect(settingsStore.config.apiKey).toBe('');
 	});
 });
 

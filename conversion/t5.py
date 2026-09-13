@@ -16,6 +16,7 @@ from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
 @ModelBase.register("MT5ForConditionalGeneration")
 @ModelBase.register("UMT5ForConditionalGeneration")
 @ModelBase.register("UMT5Model")
+@ModelBase.example("google-t5/t5-small", "google/flan-t5-small", "google/umt5-small")
 class T5Model(TextModel):
     model_arch = gguf.MODEL_ARCH.T5
 
@@ -153,6 +154,7 @@ class T5Model(TextModel):
 
 
 @ModelBase.register("T5EncoderModel")
+@ModelBase.example("sentence-transformers/sentence-t5-base")
 class T5EncoderModel(TextModel):
     model_arch = gguf.MODEL_ARCH.T5ENCODER
 

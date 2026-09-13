@@ -10,7 +10,7 @@ function(llama_build source)
     endif()
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
-    target_link_libraries(${TEST_TARGET} PRIVATE llama llama-common)
+    target_link_libraries(${TEST_TARGET} PRIVATE llama llama-common) # TODO: [TAG_TESTS_LLAMA_LINK]
     if (LLAMA_TESTS_INSTALL)
         install(TARGETS ${TEST_TARGET} RUNTIME)
     endif()
@@ -149,9 +149,11 @@ if (LLAMA_LLGUIDANCE)
 endif ()
 
 llama_build(test-recurrent-state-rollback.cpp)
+llama_build(test-save-load-state.cpp)
 
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+    llama_build_and_test(test-unicode.cpp)
     llama_build_and_test(test-sampling.cpp)
     llama_build_and_test(test-reasoning-budget.cpp)
     llama_build_and_test(test-grammar-parser.cpp)
@@ -161,11 +163,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
     target_link_libraries(test-chat PRIVATE server-context)
-    # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
-    if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
-        llama_build_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
-        target_include_directories(test-json-schema-to-grammar PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
-    endif()
+    llama_build_and_test(test-json-schema-to-grammar.cpp)
 
     if (NOT GGML_BACKEND_DL)
         llama_build(test-quantize-stats.cpp)
@@ -194,7 +192,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 
     # llama_build_and_test(test-double-float.cpp) # SLOW
 
-    llama_build_and_test(test-llama-archs.cpp)
+    llama_build(test-llama-archs.cpp)
 
     set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
     file(MAKE_DIRECTORY "${MODEL_DIR}")
@@ -217,13 +215,54 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
+
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-nemotron-h
+        LABEL main
+        ARGS -m "${MODEL_DIR}/nemotron_h-dense.gguf"
+    )
+    set_tests_properties(test-recurrent-state-rollback-nemotron-h PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-dsv4
+        LABEL main
+        ARGS -m "${MODEL_DIR}/deepseek4-moe.gguf"
+    )
+    set_tests_properties(test-recurrent-state-rollback-dsv4 PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-kimi-k3
+        LABEL main
+        ARGS -m "${MODEL_DIR}/kimi-k3-moe.gguf"
+    )
+    set_tests_properties(test-recurrent-state-rollback-kimi-k3 PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
+
+    # Test state save/load functionality across all architectures, using the generated dummy models
+    llama_test(
+        test-save-load-state
+        LABEL main
+        ARGS --models "${MODEL_DIR}"
+    )
+    set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
+
+    llama_build(test-fusion.cpp)
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
 llama_build_and_test(test-jinja.cpp)
 llama_test(test-jinja NAME test-jinja-py ARGS -py LABEL python)
+llama_build_and_test(test-json-schema.cpp)
 llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 llama_build_and_test(test-chat-template.cpp)
+# debug tool for chat template differential analysis (not registered as a test, run it manually)
+llama_build(test-chat-analysis.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build_and_test(
     test-peg-parser.cpp
@@ -236,6 +275,8 @@ llama_build_and_test(
     peg-parser/test-unicode.cpp
     peg-parser/tests.h
 )
+target_precompile_headers(test-peg-parser PRIVATE peg-parser/tests.h)
+
 
 if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")
     set(MODEL_NAME "tinyllamas/stories15M-q4_0.gguf")
@@ -266,7 +307,9 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
   llama_build_and_test(test-opt.cpp)
 endif()
-llama_build_and_test(test-backend-ops.cpp)
+
+# TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
+llama_build(test-backend-ops.cpp)
 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
@@ -276,10 +319,6 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 # Requires a model, uses same args pattern as test-thread-safety
 llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED test-download-model)
-
-# Test state save/load functionality
-llama_build_and_test(test-save-load-state.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
-set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 if (APPLE)
     llama_build(test-rset-release.cpp)
@@ -299,6 +338,9 @@ set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)
 target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
 unset(LLAMA_TEST_NAME)
+
+llama_build_and_test(test-mtmd-impl.cpp)
+target_link_libraries(test-mtmd-impl PRIVATE mtmd)
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)

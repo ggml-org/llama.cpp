@@ -146,6 +146,74 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
 //===================================== Dot products =================================
 
+void ggml_vec_dot_q1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK1_0;  // 128
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q1_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+#if defined(__VXE__) || defined(__VXE2__)
+    float32x4_t v_sumf = vec_splats(0.0f);
+
+    const uint8x16_t v_zero = vec_splats((uint8_t)0x00);  // zero
+    const uint8x16_t v_bias = vec_splats((uint8_t)0x80);  // bias from signed to unsigned
+                                                          // v ^ 0x80 == v + 128
+
+    const uint8x16_t v_idx = (const uint8x16_t){ 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1 };
+    const uint8x16_t v_bit = (const uint8x16_t){ 1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128 };
+
+    for (int i = 0; i < nb; ++i) {
+        const uint8x16_t  v_x  = vec_xl(0, (const uint8_t *)x[i].qs);
+        const float32x4_t v_xd = vec_splats(GGML_CPU_FP16_TO_FP32(x[i].d));
+
+        for (int k = 0; k < 4; ++k) {
+            // sub-block k holds elements 32k .. 32k+31
+            const block_q8_0 * GGML_RESTRICT yb = &y[i*4 + k];
+            const float32x4_t v_yd = vec_splats(GGML_CPU_FP16_TO_FP32(yb->d));
+
+            const uint8x16_t v_xrl = vec_perm(v_x, v_x, vec_add(v_idx, vec_splats((uint8_t)(k*4 + 0))));
+            const uint8x16_t v_xrh = vec_perm(v_x, v_x, vec_add(v_idx, vec_splats((uint8_t)(k*4 + 2))));
+
+            // isolate each lane's bit, then set all ones where that bit is clear, the -d case
+            const int8x16_t v_ml = (int8x16_t)vec_cmpeq(vec_and(v_xrl, v_bit), v_zero);
+            const int8x16_t v_mh = (int8x16_t)vec_cmpeq(vec_and(v_xrh, v_bit), v_zero);
+
+            const int8x16_t v_yl = vec_xl(0,       (const int8_t *)yb->qs);
+            const int8x16_t v_yh = vec_xl(QK8_0/2, (const int8_t *)yb->qs);
+
+            // weights are only +1 or -1, so negate y
+            const int8x16_t v_ysl = vec_sub(vec_xor(v_yl, v_ml), v_ml);
+            const int8x16_t v_ysh = vec_sub(vec_xor(v_yh, v_mh), v_mh);
+
+            // bias to unsigned, then vec_sum4 adds each group of 4 bytes into one word
+            const uint32x4_t v_p = vec_add(vec_sum4(vec_xor((uint8x16_t)v_ysl, v_bias), v_zero),
+                                           vec_sum4(vec_xor((uint8x16_t)v_ysh, v_bias), v_zero));
+
+            // each word summed 8 biased bytes, so take back 8 * 128
+            const int32x4_t v_xy = vec_sub((int32x4_t)v_p, vec_splats((int32_t)1024));
+
+            // apply both block scales and add into the running total
+            v_sumf = vec_madd(vec_float(v_xy), vec_mul(v_xd, v_yd), v_sumf);
+        }
+    }
+
+    *s = vec_hsum_f32x4(v_sumf);
+#else
+    UNUSED(nb);
+    UNUSED(x);
+    UNUSED(y);
+    ggml_vec_dot_q1_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
 void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -636,7 +704,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const float32x4_t v_xyf = vec_float(v_xy);
 
         const float32x4_t v_d = vec_splats(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d));
-        const float32x4_t v_acc = vec_madd(v_xyf, v_d, v_acc);
+        const float32x4_t v_acc = vec_madd(v_xyf, v_d, vec_splats(0.0f));
 
         sumf += vec_hsum_f32x4(v_acc) + summs;
     }
