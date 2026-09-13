@@ -573,6 +573,14 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
         return false;
     }
 
+    // A/B switch with the iqp panel (see iqp.h); read per op so the bench can flip it
+    // within a process. Decline when the switch asks for iqp
+    if (const char * const mm_path = getenv("GGML_CPU_MM_PATH")) {
+        if (strcmp(mm_path, "iqp") == 0) {
+            return false;
+        }
+    }
+
     // repack-buffer weights hold a repacked layout, let that kernel handle
     if (src0->extra != NULL) {
         return false;
