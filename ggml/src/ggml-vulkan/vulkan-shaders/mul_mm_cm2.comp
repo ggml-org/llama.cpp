@@ -63,6 +63,10 @@ uint mm_quant_k() {
 }
 #endif
 
+#ifndef MUL_MAT_ID
+layout (constant_id = 15) const bool stream_k = false;
+#endif
+
 layout (push_constant) uniform parameter
 {
     uint M;
@@ -93,6 +97,17 @@ layout (push_constant) uniform parameter
     uint broadcast3;
     // N dimension for the B matrix can be >= p.N
     uint padded_N;
+    uint k_units_per_tile;
+    uint work_units_per_group;
+    uint groups_with_extra_unit;
+    uint k_units_mp;
+    uint blocks_m_mp;
+    uint blocks_n_mp;
+    uint ne12_mp;
+    uint broadcast2_mp;
+    uint broadcast3_mp;
+    uint div_Ls0;
+    uint div_Ls1;
 #endif
 } p;
 
@@ -104,6 +119,9 @@ layout (binding = 0) readonly buffer A {uint8_t data_a[];};
 #endif
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
 layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
+#ifndef MUL_MAT_ID
+layout (binding = 3) writeonly buffer S {D_TYPE data_s[];};
+#endif
 #if defined(MUL_MAT_ID) && defined(GGML_VULKAN_COOPMAT2_DECODE_VECTOR)
 layout (binding = 1) readonly buffer B4 {B_TYPEV4 data_b_v4[];};
 #endif
@@ -328,9 +346,19 @@ void load_row_ids_hoisted(uint expert_idx, uint ic) {
 
 void main() {
     const uint tid = gl_LocalInvocationIndex;
-    const uint ic = gl_WorkGroupID.y;
+#ifndef MUL_MAT_ID
+    const uint group_idx = gl_WorkGroupID.x;
+    uint stream_k_work_unit;
+    uint stream_k_work_unit_end;
 
-#ifdef MUL_MAT_ID
+    if (stream_k) {
+        // A work unit covers 256 consecutive K elements of one output tile.
+        // Work units are flattened as [K unit, M tile, N tile, batch].
+        stream_k_work_unit = group_idx * p.work_units_per_group + min(group_idx, p.groups_with_extra_unit);
+        stream_k_work_unit_end = stream_k_work_unit + p.work_units_per_group + uint(group_idx < p.groups_with_extra_unit);
+    }
+#else
+    const uint ic = gl_WorkGroupID.y;
     const uint expert_idx = gl_WorkGroupID.z;
     if (ic * BN >= data_expert_count[expert_idx]) {
         return;
@@ -349,20 +377,43 @@ void main() {
 #endif
 
 #ifndef MUL_MAT_ID
-    const uint batch_idx = gl_WorkGroupID.z + p.base_work_group_z;
+    do {
+    uint stream_k_tile_k_unit;
+    uint stream_k_tile_k_units;
+    uint ir;
+    uint ic;
+    uint batch_idx;
+    uint ik;
 
-    const uint i13 = batch_idx / p.ne12;
-    const uint i12 = batch_idx % p.ne12;
+    if (stream_k) {
+        // The 256-element granularity does not split any supported quant block.
+        const uint tile_idx = fastdiv(stream_k_work_unit, p.k_units_mp, fastdiv_L(p.div_Ls0, 0));
+        stream_k_tile_k_unit = stream_k_work_unit - tile_idx * p.k_units_per_tile;
+        stream_k_tile_k_units = min(stream_k_work_unit_end - stream_k_work_unit, p.k_units_per_tile - stream_k_tile_k_unit);
 
-    const uint i03 = i13 / p.broadcast3;
-    const uint i02 = i12 / p.broadcast2;
+        const uint blocks_m = p.M / BM;
+        const uint blocks_n = p.N / BN;
+        const uint outer_tile = fastdiv(tile_idx, p.blocks_m_mp, fastdiv_L(p.div_Ls0, 1));
+        ir = tile_idx - outer_tile * blocks_m;
+        batch_idx = fastdiv(outer_tile, p.blocks_n_mp, fastdiv_L(p.div_Ls0, 2));
+        ic = outer_tile - batch_idx * blocks_n;
+    } else {
+        const uint blocks_m = (p.M + BM - 1) / BM;
+        ic = gl_WorkGroupID.y;
+        batch_idx = gl_WorkGroupID.z + p.base_work_group_z;
+        ir = group_idx % blocks_m;
+        ik = group_idx / blocks_m;
+    }
 
+    const uint i13 = fastdiv(batch_idx, p.ne12_mp, fastdiv_L(p.div_Ls1, 0));
+    const uint i12 = batch_idx - i13 * p.ne12;
+    const uint i03 = fastdiv(i13, p.broadcast3_mp, fastdiv_L(p.div_Ls1, 2));
+    const uint i02 = fastdiv(i12, p.broadcast2_mp, fastdiv_L(p.div_Ls1, 1));
     const uint batch_idx_a = i03 * p.ne02 + i02;
-#endif
-
+#else
     const uint blocks_m = (p.M + BM - 1) / BM;
     const uint ir = gl_WorkGroupID.x % blocks_m;
-    const uint ik = gl_WorkGroupID.x / blocks_m;
+#endif
 
 #ifdef MUL_MAT_ID
     if (p.hoist_row_ids != 0) {
@@ -378,11 +429,18 @@ void main() {
 #endif
 
 #ifdef MUL_MAT_ID
-    uint start_k = 0;
+    const uint start_k = 0;
     const uint end_k = p.K;
 #else
-    uint start_k = ik * p.k_split;
-    const uint end_k = min(p.K, (ik + 1) * p.k_split);
+    uint start_k;
+    uint end_k;
+    if (stream_k) {
+        start_k = stream_k_tile_k_unit * 256;
+        end_k = (stream_k_tile_k_unit + stream_k_tile_k_units) * 256;
+    } else {
+        start_k = ik * p.k_split;
+        end_k = min(p.K, (ik + 1) * p.k_split);
+    }
 #endif
 
 #ifdef MULMAT_QUANT
@@ -397,7 +455,10 @@ void main() {
 #else
     uint pos_a = batch_idx_a * (p.batch_stride_a / qk);
     uint pos_b = batch_idx * p.batch_stride_b;
-    uint pos_d = batch_idx * p.batch_stride_d + ik * p.batch_stride_d * p.num_batches;
+    uint pos_d = batch_idx * p.batch_stride_d;
+    if (!stream_k) {
+        pos_d += ik * p.batch_stride_d * p.num_batches;
+    }
 #endif
 
 #ifdef MULMAT_QUANT
@@ -460,12 +521,15 @@ void main() {
     const uint UNROLL_K = (qk == 256) ? 256 : (BK * 8);
     const uint unroll_count = UNROLL_K / BK;
 
-    // Detect a fast path where all loads are entirely in bounds and no clamping is required
-    if ((ir + 1) * BM <= p.M && (ic + 1) * BN <= p.padded_N && (start_k % START_ALIGN_K) == 0 && (end_k % BK) == 0 &&
+    bool fast_path = stream_k;
+    if (!stream_k) {
+        fast_path = (ir + 1) * BM <= p.M && (ic + 1) * BN <= p.padded_N && (start_k % START_ALIGN_K) == 0 && (end_k % BK) == 0 &&
 #if !defined(MULMAT_QUANT) && QUANT_K == 1
-        (stride_a % 8) == 0 &&
+                    (stride_a % 8) == 0 &&
 #endif
-        (stride_b % 8) == 0) {
+                    (stride_b % 8) == 0;
+    }
+    if (fast_path) {
         // Hint to the compiler that values are aligned (want 16B alignment)
         start_k &= ~(START_ALIGN_K-1);
         stride_b &= ~7;
@@ -483,7 +547,7 @@ void main() {
         // The fetches and stores are pipelined to hide the latency.
         fetch_scales(ir * BM, pos_a, stride_a, start_k, tid, true);
 
-        if (enable_smaller_matrices && ic * BN + BNover4 >= p.N) {
+        if (!stream_k && enable_smaller_matrices && ic * BN + BNover4 >= p.N) {
             coopmat<ACC_TYPE, gl_ScopeWorkgroup, BM, BNover4, gl_MatrixUseAccumulator> sum = coopmat<ACC_TYPE, gl_ScopeWorkgroup, BM, BNover4, gl_MatrixUseAccumulator>(0.0);
             for (uint i = 0; i < k_iters; ++i) {
 
@@ -526,7 +590,7 @@ void main() {
 
             coopMatStoreTensorNV(mat_d, data_d, pos_d, sliceTensorLayoutNV(tensorLayoutD, ic * BN, BNover4, ir * BM, BM), tensorViewTranspose);
             return;
-        } else if (enable_smaller_matrices && ic * BN + BNover2 >= p.N) {
+        } else if (!stream_k && enable_smaller_matrices && ic * BN + BNover2 >= p.N) {
             coopmat<ACC_TYPE, gl_ScopeWorkgroup, BM, BNover2, gl_MatrixUseAccumulator> sum = coopmat<ACC_TYPE, gl_ScopeWorkgroup, BM, BNover2, gl_MatrixUseAccumulator>(0.0);
             for (uint i = 0; i < k_iters; ++i) {
 
@@ -611,8 +675,18 @@ void main() {
 
             coopmat<D_TYPE, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator> mat_d = coopmat<D_TYPE, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator>(sum);
 
-            coopMatStoreTensorNV(mat_d, data_d, pos_d, sliceTensorLayoutNV(tensorLayoutD, ic * BN, BN, ir * BM, BM), tensorViewTranspose);
-            return;
+            if (stream_k) {
+                if (stream_k_tile_k_unit + stream_k_tile_k_units != p.k_units_per_tile) {
+                    tensorLayoutNV<2> tensorLayoutS = createTensorLayoutNV(2);
+                    tensorLayoutS = setTensorLayoutDimensionNV(tensorLayoutS, BN, BM);
+                    tensorLayoutS = setTensorLayoutStrideNV(tensorLayoutS, BM, 1);
+                    coopMatStoreTensorNV(mat_d, data_s, group_idx * BM * BN, tensorLayoutS, tensorViewTranspose);
+                } else {
+                    coopMatStoreTensorNV(mat_d, data_d, pos_d, sliceTensorLayoutNV(tensorLayoutD, ic * BN, BN, ir * BM, BM), tensorViewTranspose);
+                }
+            } else {
+                coopMatStoreTensorNV(mat_d, data_d, pos_d, sliceTensorLayoutNV(tensorLayoutD, ic * BN, BN, ir * BM, BM), tensorViewTranspose);
+            }
         }
     } else
 #endif // !defined(MUL_MAT_ID)
@@ -776,4 +850,10 @@ void main() {
         coopMatStoreTensorNV(mat_d, data_d, pos_d, sliceTensorLayoutNV(tensorLayoutD, ic * BN, BN, ir * BM, BM), tensorViewTranspose);
 #endif
     }
+#ifndef MUL_MAT_ID
+    if (stream_k) {
+        stream_k_work_unit += stream_k_tile_k_units;
+    }
+    } while (stream_k && stream_k_work_unit < stream_k_work_unit_end);
+#endif
 }
