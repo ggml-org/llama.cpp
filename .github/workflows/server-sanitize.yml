@@ -116,7 +116,6 @@ jobs:
         run: |
           source .venv/bin/activate
           cd tools/server/tests
-          export ${{ matrix.extra_args }}
           PYTEST_WORKERS=1 ./tests.sh
 
       - name: Slow tests
@@ -125,5 +124,4 @@ jobs:
         run: |
           source .venv/bin/activate
           cd tools/server/tests
-          export ${{ matrix.extra_args }}
           PYTEST_WORKERS=1 SLOW_TESTS=1 ./tests.sh
