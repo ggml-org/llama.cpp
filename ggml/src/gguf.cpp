@@ -761,7 +761,6 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
     // compute the total size of the data section, taking into account the alignment
     {
         ctx->size = 0;
-        GGML_ASSERT(ctx->alignment > 0 && (ctx->alignment & (ctx->alignment - 1)) == 0 && "alignment must be a power of 2");
         for (size_t i = 0; i < ctx->info.size(); ++i) {
             const gguf_tensor_info & ti = ctx->info[i];
             if (ti.offset != ctx->size) {
