@@ -468,7 +468,10 @@ static std::filesystem::path get_server_exec_path() {
 static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
     preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
-    preset.unset_option("LLAMA_API_KEY");
+    // note: LLAMA_API_KEY is deliberately kept here so that child instances
+    // spawned by the router re-validate against the same key union the router
+    // accepts (--api-key and --api-key-file); the /api/models preset rendering
+    // masks it separately.
     preset.unset_option("LLAMA_ARG_MODELS_DIR");
     preset.unset_option("LLAMA_ARG_MODELS_MAX");
     preset.unset_option("LLAMA_ARG_MODELS_PRESET");
@@ -2028,6 +2031,8 @@ void server_models_routes::init_routes() {
             if (!meta.preset.name.empty()) {
                 common_preset preset_copy = meta.preset;
                 unset_reserved_args(preset_copy, false);
+                // don't render the API key into the preset shown to clients
+                preset_copy.unset_option("LLAMA_API_KEY");
                 preset_copy.unset_option("LLAMA_ARG_HOST");
                 preset_copy.unset_option("LLAMA_ARG_PORT");
                 preset_copy.unset_option("LLAMA_ARG_ALIAS");
