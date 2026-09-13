@@ -118,6 +118,7 @@ models = [
     {"name": "jais",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/core42/jais-13b", },
     {"name": "jais-2",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/inceptionai/Jais-2-8B-Chat", },
     {"name": "t5",               "tokt": TOKENIZER_TYPE.UGM, "repo": "https://huggingface.co/google-t5/t5-small", },
+    {"name": "mt5",              "tokt": TOKENIZER_TYPE.UGM, "repo": "https://huggingface.co/google/mt5-small", },
     {"name": "codeshell",        "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/WisdomShell/CodeShell-7B", },
     {"name": "tekken",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/mistralai/Mistral-Nemo-Base-2407", },
     {"name": "smollm",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/HuggingFaceTB/SmolLM-135M", },
@@ -302,7 +303,7 @@ for model in [*pre_computed_hashes, *all_models]:
 
         try:
             logger.info(f"Loading tokenizer from {f'models/tokenizers/{name}'}...")
-            if name == "t5":
+            if name in ("t5", "mt5"):
                 tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
             else:
                 tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
@@ -462,7 +463,7 @@ for model in models:
 
     # create the tokenizer
     try:
-        if name == "t5":
+        if name in ("t5", "mt5"):
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
         else:
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
