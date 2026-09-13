@@ -381,7 +381,6 @@ static bool ggml_cuda_is_aligned(const ggml_tensor * tensor, const size_t alignm
            tensor->nb[3] % alignment == 0;
 }
 
-// If the tensor is a temporary compute buffer, clear any potential padding past ggml_nbytes().
 static void ggml_cuda_clear_padding(const ggml_tensor * tensor, cudaStream_t stream) {
     if (ggml_backend_buffer_get_usage(tensor->buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
         return;

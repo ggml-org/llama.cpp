@@ -1833,7 +1833,6 @@ static bool ggml_cuda_mul_mat_q_gate_up_swiglu_matches(
 
     const int cc        = ggml_cuda_info().devices[device].cc;
     const int warp_size = ggml_cuda_info().devices[device].warp_size;
-    // Only replace matrix multiplications that ggml_cuda_mul_mat would have sent to MMQ.
     if (!GGML_CUDA_CC_IS_NVIDIA(cc) || !turing_mma_available(cc) || !cp_async_available(cc) ||
             ggml_cuda_should_use_mmvf(GGML_TYPE_Q4_K, cc, x_up->ne, x_up->nb, y->ne[1]) ||
             ggml_cuda_should_use_mmf(GGML_TYPE_Q4_K, cc, warp_size, x_up->ne, x_up->nb, y->ne[1], false) ||

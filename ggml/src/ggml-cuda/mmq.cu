@@ -144,7 +144,6 @@ static void ggml_cuda_mul_mat_q_impl(
     const size_t y_values_per_block = use_native_fp4 ? QK_FP4_MMQ            : QK8_1_MMQ;
 
     if (!ids) {
-        // The fused path needs the Q8_1 tail sized for its largest J.
         int64_t J_padding = ggml_cuda_mmq_get_J_max(src0->type, fallback, cc, ne11);
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         if (gate) {

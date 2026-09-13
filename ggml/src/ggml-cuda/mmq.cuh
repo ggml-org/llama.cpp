@@ -524,7 +524,6 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
 }
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-// Fused dense Q4_K gate + up MMQ with the SwiGLU applied in the epilogue (F32 output), needs int8 MMA and cp.async.
 static constexpr int GGML_CUDA_MMQ_GATE_UP_SWIGLU_J_MAX = 64;
 static constexpr int GGML_CUDA_MMQ_GATE_UP_SWIGLU_I     = 64;
 
@@ -562,7 +561,6 @@ static constexpr __device__ int ggml_cuda_mmq_gate_up_swiglu_get_I(ggml_type typ
     return ggml_cuda_mmq_gate_up_swiglu_get_config(type, J, fallback).I;
 }
 
-// dst = up * silu(gate) for the accumulator tiles of this warp.
 template<ggml_type type, int J, bool fallback>
 static __device__ __forceinline__ void ggml_cuda_mmq_write_back_swiglu_mma(
         const float * __restrict__ up, const float * __restrict__ gate,
@@ -1019,8 +1017,6 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #ifdef GGML_CUDA_MMQ_GATE_UP_SWIGLU_AVAILABLE
-// Loads one Q4_K tile into the layout of ggml_cuda_mmq_load_tiles_q4_K using 8 and 16 byte vector loads.
-// The lane to row order +0, +2, +1, +3 makes the 8 byte shared memory stores of each half-warp bank-conflict-free.
 template <ggml_type type, int J, bool fallback>
 static __device__ __forceinline__ void mmq_gate_up_swiglu_load_x(
         const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
@@ -1041,7 +1037,9 @@ static __device__ __forceinline__ void mmq_gate_up_swiglu_load_x(
     const int row_off   = (threadIdx.x / 16) + 2*((threadIdx.x / 8) % 2);
     const int q         = threadIdx.x % 8;
 
-    // Same placement as ggml_cuda_mmq_load_tiles_q4_K: int txi -> x_qs[16*(txi/8) + txi%8], high nibbles at +8.
+    // Same placement as ggml_cuda_mmq_load_tiles_q4_K:
+    // low nibbles:  x_qs[16*(txi/8) + txi%8]
+    // high nibbles: x_qs[16*(txi/8) + txi%8 + 8]
 #pragma unroll
     for (int g = 0; g < ngroups; ++g) {
         const int i  = warp_row0 + 4*g + row_off;
@@ -1062,7 +1060,6 @@ static __device__ __forceinline__ void mmq_gate_up_swiglu_load_x(
     const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + il*stride;
     const int4 hdr = *(const int4 *) bxi;
 
-    // Register form of unpack_scales_q45_K for ksc (scales) and ksc + 2 (mins).
     const int ksc = threadIdx.x % 2;
     const int s0  = hdr.y;
     const int s1  = hdr.z;
@@ -1081,7 +1078,6 @@ static __device__ __forceinline__ void mmq_gate_up_swiglu_load_x(
     }
 }
 
-// cp.async copy of the two Q8_1 half tiles of one K slab.
 template <int J, int nwarps, int warp_size>
 static __device__ __forceinline__ void mmq_gate_up_swiglu_copy_y(
         const int * __restrict__ by0, const int ncols_y, int * __restrict__ tile_y0) {
