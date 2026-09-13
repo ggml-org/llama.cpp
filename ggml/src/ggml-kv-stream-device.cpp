@@ -1,5 +1,13 @@
 #include "ggml-kv-stream-device.h"
 
+// Reject the entire shape before publishing offsets, including overflow beyond the selected tile.
+bool ggml_kv_stream_query_tile_make(size_t queries, size_t heads, size_t first, ggml_kv_stream_query_tile & output) {
+    if (!heads || first >= queries || queries > SIZE_MAX/heads) return false;
+    const size_t count = queries-first < 256 ? queries-first : 256;
+    output = {count,first*heads,count*heads};
+    return true;
+}
+
 // Keep both exports and the normalized staging plane aligned; publish only a complete layout.
 ggml_kv_stream_partial_result ggml_kv_stream_block_layout_make(size_t rows, size_t width, ggml_kv_stream_block_layout & output) {
     ggml_kv_stream_block_layout next;

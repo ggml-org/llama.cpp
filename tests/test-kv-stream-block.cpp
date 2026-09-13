@@ -1,8 +1,33 @@
 #include "kv-stream-block-test.h"
+#include <array>
 
 int main(int argc, char ** argv) {
     const bool cuda = argc > 1 && std::strcmp(argv[1], "--cuda") == 0;
     testing t;
+    t.test("query_tiles_cover_rows_once_and_reject_overflow", [](testing & t) {
+        for (size_t queries : {size_t(1),size_t(255),size_t(256),size_t(257),size_t(511),size_t(512),size_t(1025)}) {
+            size_t covered = 0, calls = 0;
+            while (covered < queries) {
+                ggml_kv_stream_query_tile tile;
+                if (!t.assert_true(ggml_kv_stream_query_tile_make(queries,4,covered,tile))) break;
+                t.assert_equal(covered*4,tile.first_row);
+                t.assert_equal(std::min(size_t(256),queries-covered),tile.queries);
+                t.assert_equal(tile.queries*4,tile.rows);
+                covered += tile.queries; ++calls;
+            }
+            t.assert_equal(queries,covered);
+            t.assert_equal((queries+255)/256,calls);
+        }
+        ggml_kv_stream_query_tile tile{7,8,9};
+        for (auto args : {std::array<size_t,3>{0,4,0},{1,0,0},{1,4,1},{1,4,SIZE_MAX},{SIZE_MAX,4,0}}) {
+            t.assert_true(!ggml_kv_stream_query_tile_make(args[0],args[1],args[2],tile));
+            t.assert_equal(size_t(7),tile.queries);
+            t.assert_equal(size_t(8),tile.first_row);
+            t.assert_equal(size_t(9),tile.rows);
+        }
+        t.assert_true(ggml_kv_stream_query_tile_make(SIZE_MAX/4,4,SIZE_MAX/4-1,tile));
+        t.assert_equal(size_t(1),tile.queries);
+    });
     t.test("checked_one_block_workspace_layout", [](testing & t) {
         ggml_kv_stream_block_layout layout;
         t.assert_true(ggml_kv_stream_block_layout_make(4, 256, layout).status == ggml_kv_stream_partial_status::success);

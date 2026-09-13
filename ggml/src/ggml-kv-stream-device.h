@@ -12,12 +12,20 @@ struct ggml_kv_stream_block_layout {
 GGML_API ggml_kv_stream_partial_result ggml_kv_stream_block_layout_make(
         size_t rows, size_t width, ggml_kv_stream_block_layout & output);
 
+struct ggml_kv_stream_query_tile {
+    size_t queries = 0, first_row = 0, rows = 0;
+};
+// Bound each launch to 256 queries; row offsets address the full-batch accumulator.
+GGML_API bool ggml_kv_stream_query_tile_make(
+        size_t queries, size_t heads, size_t first, ggml_kv_stream_query_tile & output);
+
 // Optional registry extension "ggml_backend_kv_stream_partial_ops". All calls complete before returning.
 // Getter may return null when disabled. Call outside active capture; CUDA execution errors follow backend error handling.
 // All tensor/workspace buffers belong to the backend; workspace must not overlap inputs or public output.
 struct ggml_kv_stream_partial_ops {
     uint32_t version;
     bool (*supports)(ggml_backend_t backend, const ggml_tensor * attention);
+    // All query tiles finish before return; encoded K/V or conversion planes must remain valid until then.
     bool (*partial)(ggml_backend_t backend, const ggml_tensor * attention, ggml_backend_buffer_t workspace, bool second);
     // Validate on device and publish output only on success; failure preserves the public output bytes.
     bool (*merge)(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buffer_t workspace);

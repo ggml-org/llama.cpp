@@ -164,18 +164,25 @@ static bool partial(ggml_backend_t backend, const ggml_tensor * op, ggml_backend
     auto * scratch = static_cast<char *>(ggml_backend_buffer_get_base(buffer)) + (second ? layout.second_offset : 0);
     const auto * q = op->src[0], * k = op->src[1], * v = op->src[2], * m = op->src[3];
     float scale; std::memcpy(&scale, op->op_params, sizeof(scale));
-    const ggml_cuda_kernel_launch_params launch({unsigned(q->ne[1]),2,unsigned(q->ne[2])}, {32,4,1}, 0, ctx.stream());
-    ggml_cuda_kernel_launch(ggml_cuda_kv_stream_kernel(k->type,v->type), launch,
-        (const char *)q->data, (const char *)k->data, (const char *)v->data, (const char *)m->data,
-        (const char *)nullptr, (const int *)nullptr, (float *)scratch, (float2 *)(scratch+layout.partial.meta_offset),
-        scale, 0.0f, 1.0f, 1.0f, uint32_t(1), 0.0f,
-        int32_t(q->ne[0]), init_fastdiv_values(q->ne[1]), int32_t(q->ne[2]), int32_t(1),
-        int32_t(q->nb[1]), int32_t(q->nb[2]), int32_t(q->nb[3]),
-        int32_t(k->ne[0]), int32_t(k->ne[1]), int32_t(k->ne[2]), int32_t(1),
-        int32_t(k->nb[1]), int32_t(k->nb[2]), int64_t(k->nb[3]),
-        int32_t(v->nb[1]), int32_t(v->nb[2]), int64_t(v->nb[3]),
-        int32_t(m->ne[1]), int32_t(1), int32_t(1), int32_t(m->nb[1]), int32_t(m->nb[2]), int64_t(m->nb[3]));
-    CUDA_CHECK(cudaGetLastError());
+    for (size_t first = 0; first < size_t(q->ne[1]);) {
+        ggml_kv_stream_query_tile tile;
+        GGML_ASSERT(ggml_kv_stream_query_tile_make(size_t(q->ne[1]),size_t(q->ne[2]),first,tile));
+        const ggml_cuda_kernel_launch_params launch({unsigned(tile.queries),2,unsigned(q->ne[2])}, {32,4,1}, 0, ctx.stream());
+        ggml_cuda_kernel_launch(ggml_cuda_kv_stream_kernel(k->type,v->type), launch,
+            (const char *)q->data+first*q->nb[1], (const char *)k->data, (const char *)v->data, (const char *)m->data+first*m->nb[1],
+            (const char *)nullptr, (const int *)nullptr, (float *)scratch+tile.first_row*2*256,
+            (float2 *)(scratch+layout.partial.meta_offset)+tile.first_row*2,
+            scale, 0.0f, 1.0f, 1.0f, uint32_t(1), 0.0f,
+            int32_t(q->ne[0]), init_fastdiv_values(tile.queries), int32_t(q->ne[2]), int32_t(1),
+            int32_t(q->nb[1]), int32_t(q->nb[2]), int32_t(q->nb[3]),
+            int32_t(k->ne[0]), int32_t(k->ne[1]), int32_t(k->ne[2]), int32_t(1),
+            int32_t(k->nb[1]), int32_t(k->nb[2]), int64_t(k->nb[3]),
+            int32_t(v->nb[1]), int32_t(v->nb[2]), int64_t(v->nb[3]),
+            int32_t(m->ne[1]), int32_t(1), int32_t(1), int32_t(m->nb[1]), int32_t(m->nb[2]), int64_t(m->nb[3]));
+        CUDA_CHECK(cudaGetLastError());
+        first += tile.queries;
+    }
+    // One completion fence covers every reader of this K/V span, including a partial final tile.
     CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
     return true;
 }

@@ -30,8 +30,9 @@ struct delayed_event {
 #endif
 
 // Fixed synthetic attention cases, not model/server token throughput.
-static int benchmark(ggml_backend_t backend, bool overlap, size_t span_pages, size_t slots, bool fallback) {
-    for (size_t active : {size_t(1025),size_t(8193),size_t(32769)}) for (size_t queries : {size_t(1),size_t(33)}) {
+static int benchmark(ggml_backend_t backend, bool overlap, size_t span_pages, size_t slots, bool fallback, bool wide) {
+    const std::vector<size_t> query_counts = wide ? std::vector<size_t>{256,512,1025} : std::vector<size_t>{1,33};
+    for (size_t active : {size_t(1025),size_t(8193),size_t(32769)}) for (size_t queries : query_counts) {
         fixture f(backend,true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,fallback);
         ggml_kv_stream_execution page;
         GGML_ASSERT(ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page).status == ggml_kv_stream_status::success);
@@ -57,10 +58,11 @@ static int benchmark(ggml_backend_t backend, bool overlap, size_t span_pages, si
 }
 
 int main(int argc, char ** argv) {
+    const bool wide = argc > 1 && std::strcmp(argv[1],"--bench-wide") == 0;
     const bool ordered = argc > 1 && std::strcmp(argv[1],"--bench-ordered") == 0;
     const bool spans = argc > 1 && std::strcmp(argv[1],"--bench-span") == 0;
     const bool fallback = argc > 1 && std::strcmp(argv[1],"--bench-fallback") == 0;
-    const bool bench = ordered || spans || fallback || (argc > 1 && std::strcmp(argv[1],"--bench") == 0);
+    const bool bench = wide || ordered || spans || fallback || (argc > 1 && std::strcmp(argv[1],"--bench") == 0);
     const bool cuda = bench || (argc > 1 && std::strcmp(argv[1],"--cuda") == 0);
     ggml_backend_ptr backend;
     if (cuda) {
@@ -71,7 +73,7 @@ int main(int argc, char ** argv) {
         const size_t span_pages = argc > 2 ? std::strtoull(argv[2],nullptr,10) : (spans ? 2 : 1);
         const size_t slots = argc > 3 ? std::strtoull(argv[3],nullptr,10) : 2;
         if (!span_pages || !slots || slots > 14 || argc > 4) return 2;
-        return benchmark(backend.get(),!ordered,span_pages,slots,fallback);
+        return benchmark(backend.get(),!ordered,span_pages,slots,fallback,wide);
     }
     testing t;
     t.test("contiguous_spans_stop_at_wrap_and_admission_is_atomic", [](testing & t) {
@@ -119,6 +121,90 @@ int main(int argc, char ** argv) {
         auto get = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
         t.test("copy_events_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version >= 2 && get()->enqueue_span && get()->stats); });
         if (!get || !get()) return t.summary();
+        t.test("wide_microbatches_share_uploads_and_preserve_final_tile_readers", [&](testing & t) {
+            for (bool fallback : {false,true}) for (bool token_major : {false,true}) {
+                fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,2049,fallback);
+                ggml_kv_stream_execution page; ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page);
+                f.policy.pool_bytes = page.storage.bytes*5+page.conversion.bytes; f.policy.initial_ring_slots = 3;
+                if (!t.assert_true(f.attach())) continue;
+                auto pin = f.binding->acquire();
+                for (size_t queries : {size_t(255),size_t(256),size_t(257),size_t(511),size_t(512),size_t(1025)}) {
+                    block_inputs input(f,2049,queries);
+                    if (token_major) {
+                        std::vector<float> packed(input.qdata.size());
+                        for (size_t q = 0; q < queries; ++q) for (size_t h = 0; h < 4; ++h)
+                            std::copy_n(input.qdata.data()+(h*queries+q)*256,256,packed.data()+(q*4+h)*256);
+                        ggml_backend_tensor_set(input.q,packed.data(),0,packed.size()*sizeof(float));
+                        input.q->nb[1] = 4*256*sizeof(float); input.q->nb[2] = 256*sizeof(float);
+                    }
+                    ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(queries*4,256,layout);
+                    block_workspace workspace(f,layout.bytes);
+                    t.assert_true(f.resident->synchronize(256));
+                    if (!t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,2))) continue;
+                    const auto actual = input.read();
+                    if (queries == 1025) for (size_t index : {size_t(255),size_t(256),size_t(1024)}) {
+                        std::vector<float> query(4*256), values(4*256);
+                        for (size_t head = 0; head < 4; ++head)
+                            std::copy_n(input.qdata.data()+(head*queries+index)*256,256,query.data()+head*256);
+                        std::copy_n(actual.data()+index*4*256,values.size(),values.data());
+                        close_values(t,oracle(f,0,2049-queries+index+1,1,query),values,1e-3f);
+                    }
+                    const size_t bytes = f.resident->last_upload_bytes(), calls = f.resident->last_upload_calls();
+                    t.assert_equal(size_t(1793)*(page.storage.k_token_bytes+page.storage.v_token_bytes),bytes);
+                    t.assert_equal(size_t(10),calls);
+                    t.assert_equal(fallback ? size_t(9) : size_t(6),f.resident->last_attention_calls());
+                    // Independent <=128-query calls exercise different boundaries and one launch each.
+                    for (size_t first = 0; first < queries; first += 128) {
+                        const size_t count = std::min(size_t(128),queries-first);
+                        auto q = *input.q, mask = *input.mask, output = *input.output;
+                        q.data = static_cast<char *>(q.data)+first*q.nb[1]; q.ne[1] = int64_t(count);
+                        mask.data = static_cast<char *>(mask.data)+first*mask.nb[1]; mask.ne[1] = int64_t(count);
+                        mask.nb[2] = mask.nb[3] = count*mask.nb[1];
+                        output.data = static_cast<char *>(output.data)+first*output.nb[2]; output.ne[2] = int64_t(count);
+                        output.nb[3] = count*output.nb[2];
+                        t.assert_true(f.resident->compute_streamed(0,&q,&mask,&output,2049,1.0f/16,workspace.lease.get(),false,2));
+                    }
+                    close_values(t,actual,input.read(),1e-6f);
+                    // Reusing one ring across two layers must not overwrite the last query tile.
+                    t.assert_true(f.resident->begin_sequence({0,1},2049,2));
+                    t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,2));
+                    close_values(t,actual,input.read(),1e-6f);
+                    t.assert_true(f.resident->compute_streamed(1,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,2));
+                    auto second = input.read();
+                    t.assert_true(!f.resident->sequence_active());
+                    t.assert_true(f.resident->compute_streamed(1,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),false,2));
+                    close_values(t,second,input.read(),1e-6f);
+                }
+            }
+        });
+        t.test("late_query_failure_preserves_all_output_and_drains_sequence", [&](testing & t) {
+            for (bool fallback : {false,true}) {
+                fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,1025,fallback);
+                ggml_kv_stream_execution page; ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page);
+                f.policy.pool_bytes = page.storage.bytes*5+page.conversion.bytes; f.policy.initial_ring_slots = 3;
+                if (!t.assert_true(f.attach())) continue;
+                auto pin = f.binding->acquire();
+                block_inputs input(f,1025,513);
+                ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(513*4,256,layout);
+                block_workspace workspace(f,layout.bytes), short_workspace(f,layout.bytes-1);
+                t.assert_true(!f.resident->compute_streamed(0,input.q,input.mask,input.output,1025,1.0f/16,short_workspace.lease.get(),true,2));
+                const auto before = input.read();
+                // Only the final query is invalid, after two valid complete tiles.
+                std::vector<float> row(256,NAN);
+                for (size_t head = 0; head < 4; ++head)
+                    ggml_backend_tensor_set(input.q,row.data(),(head*513+512)*256*sizeof(float),row.size()*sizeof(float));
+                t.assert_true(f.resident->begin_sequence({0,1},1025,2));
+                t.assert_true(!f.resident->compute_streamed(0,input.q,input.mask,input.output,1025,1.0f/16,workspace.lease.get(),true,2));
+                t.assert_true(before == input.read() && !f.resident->sequence_active());
+                ggml_backend_tensor_set(input.q,input.qdata.data(),0,input.qdata.size()*sizeof(float));
+                t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,1025,1.0f/16,workspace.lease.get(),true,2));
+                std::vector<ggml_fp16_t> masked(input.padded*input.queries,ggml_fp32_to_fp16(-INFINITY));
+                ggml_backend_tensor_set(input.mask,masked.data(),0,masked.size()*sizeof(ggml_fp16_t));
+                t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,1025,1.0f/16,workspace.lease.get(),true,2));
+                const auto empty = input.read();
+                t.assert_true(std::all_of(empty.begin(),empty.end(),[](float x) { return x == 0; }));
+            }
+        });
         t.test("batched_spans_preserve_values_and_reduce_copy_calls", [&](testing & t) {
             for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_IQ4_NL,GGML_TYPE_F32}})
             for (size_t slots : {size_t(3),size_t(5)}) for (bool overlap : {false,true})
