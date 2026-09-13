@@ -15,6 +15,10 @@ struct llama_kv_stream_prefetch_stats {
     bool demand_ready = false;
 };
 struct ggml_kv_stream_copy_feedback;
+struct llama_kv_stream_feedback_context {
+    uint32_t query_tokens = 0;
+    bool decode = false;
+};
 
 // Idle native resources owned by the coarse binding; backend and external graph contexts must outlive their users.
 // Hold a binding execution pin for the entire lifetime of any graph referencing these planes, including captures.
@@ -38,14 +42,17 @@ public:
     // Current-layer work completes before return; a sequence may retain future KV copies. Host backing must be pinned.
     // A positive span ceiling groups physical neighbors without increasing ring or conversion storage.
     bool compute_streamed(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
-            size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace, bool overlap = false, size_t span_pages = 1);
+            size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace, bool overlap = false,
+            size_t span_pages = 1, bool decode_feedback = false);
     size_t last_upload_bytes() const noexcept;
     size_t last_upload_calls() const noexcept;
     // Successful partial-attention submissions in the last started streamed execution.
     size_t last_attention_calls() const noexcept;
     // Hold the binding pin until completion/cancel. Only publish_sequence_tail may mutate host content meanwhile.
     // Default stable_tokens declares a fully ready snapshot; online producers must pass the immutable prefix explicitly.
-    bool begin_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages = 1, size_t stable_tokens = SIZE_MAX);
+    // Declare both decode intent and query count before prefetch starts. Unknown phase and single-token prompts stay unprofiled.
+    bool begin_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages = 1,
+            size_t stable_tokens = SIZE_MAX, llama_kv_stream_feedback_context feedback = {});
     bool publish_sequence_tail(const std::vector<llama_kv_stream_write_span> & spans);
     // An invalid or failed layer call cancels outstanding prefetch; the final valid layer ends the sequence.
     void cancel_sequence();
@@ -56,11 +63,12 @@ public:
     // Opt-in diagnostics and span trials. Change only while idle; no KV storage is resized here.
     bool configure_feedback(bool enable, size_t bounded_span_pages = 32);
     size_t suggested_span_pages() const noexcept;
+    // Poll completed snapshots without waiting; the latest successful run may still be pending.
     llama_kv_stream_feedback feedback() const noexcept;
     ggml_kv_stream_copy_feedback copy_feedback() const noexcept;
-    // Read-only proposal. Caller must accept the device layout before publishing decision.next.
+    // Read-only proposal. Decode feedback requires explicit intent; accept device layout before publishing decision.next.
     bool recommend_policy(const llama_kv_stream_policy_state & previous, size_t active_tokens,
-            uint32_t query_tokens, llama_kv_stream_policy_decision & decision) const;
+            uint32_t query_tokens, llama_kv_stream_policy_decision & decision, bool decode_feedback = false) const;
 
     // Configure a physical-batch ceiling. Quantization scratch and indices borrow the unused ring region.
     bool configure_writes(size_t max_batch_rows);

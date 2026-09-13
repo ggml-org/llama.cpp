@@ -76,6 +76,36 @@ int main(int argc, char ** argv) {
         return benchmark(backend.get(),!ordered,span_pages,slots,fallback,wide);
     }
     testing t;
+    t.test("feedback_slots_never_overwrite_uncollected_windows", [](testing & t) {
+        ggml_kv_stream_feedback_slots slots;
+        t.assert_true(slots.begin());
+        const size_t first = slots.current();
+        t.assert_true(first < slots.capacity && slots.latest_id() == 1);
+        t.assert_true(!slots.begin());
+        t.assert_equal(first,slots.seal());
+        t.assert_true(slots.begin());
+        const size_t second = slots.current();
+        t.assert_true(second != first && slots.latest_id() == 2);
+        t.assert_equal(second,slots.seal());
+        t.assert_true(slots.begin());
+        t.assert_equal(slots.none,slots.current());
+        t.assert_equal(uint64_t(0),slots.latest_id());
+        t.assert_equal(slots.none,slots.seal());
+        t.assert_true(!slots.retire(second));
+        t.assert_equal(uint64_t(1),slots.id(first));
+        t.assert_true(slots.retire(first));
+        t.assert_true(slots.begin());
+        t.assert_equal(first,slots.current());
+        t.assert_equal(uint64_t(3),slots.latest_id());
+        t.assert_equal(first,slots.seal());
+        t.assert_equal(second,slots.oldest());
+        t.assert_true(slots.retire(second) && slots.retire(first));
+        t.assert_equal(slots.none,slots.oldest());
+        ggml_kv_stream_feedback_slots exhausted(UINT64_MAX);
+        t.assert_true(exhausted.begin());
+        t.assert_equal(exhausted.none,exhausted.current());
+        t.assert_equal(uint64_t(0),exhausted.latest_id());
+    });
     t.test("contiguous_spans_stop_at_wrap_and_admission_is_atomic", [](testing & t) {
         t.assert_equal(size_t(3),ggml_kv_stream_contiguous_pages(0,11,5,3));
         t.assert_equal(size_t(2),ggml_kv_stream_contiguous_pages(3,11,5,3));
@@ -122,7 +152,7 @@ int main(int argc, char ** argv) {
         t.test("copy_events_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version >= 2 && get()->enqueue_span && get()->stats); });
         if (!get || !get()) return t.summary();
         t.test("copy_feedback_extension_is_available", [&](testing & t) {
-            t.assert_true(get()->version >= 4);
+            t.assert_true(get()->version >= 7);
         });
         t.test("wide_microbatches_share_uploads_and_preserve_final_tile_readers", [&](testing & t) {
             for (bool fallback : {false,true}) for (bool token_major : {false,true}) {
@@ -379,7 +409,9 @@ int main(int argc, char ** argv) {
                 t.assert_equal(uint64_t(10),measured.samples);
                 t.assert_equal(uint64_t(0),measured.misses);
                 t.assert_equal(ops->stats(queue.get()).bytes,measured.bytes);
-                t.assert_equal(measured.bytes,measured.timed_bytes);
+                ggml_kv_stream_layout first_upload;
+                t.assert_true(ggml_kv_stream_layout_make(f.policy.shape,512,first_upload).status == ggml_kv_stream_status::success);
+                t.assert_equal(first_upload.bytes,measured.timed_bytes);
                 t.assert_equal(size_t(3),measured.peak_slots);
                 t.assert_true(measured.copy_ms >= 0 && measured.elapsed_ms > 0 && measured.instrumentation_bytes >= 5*sizeof(uint64_t));
                 ops->drain(queue.get());
@@ -387,6 +419,155 @@ int main(int argc, char ** argv) {
             }
             t.assert_true(ops->measure(queue.get(),false));
             t.assert_true(!ops->feedback(queue.get()).available);
+        });
+        t.test("deferred_feedback_preserves_two_windows_and_skips_measurement_when_full", [&](testing & t) {
+            if (!t.assert_true(ops->version >= 5 && ops->poll_feedback && ops->feedback_id)) return;
+            fixture f(backend.get(),true);
+            auto * device = ggml_backend_memory_lease_buffer(f.lease.get());
+            std::unique_ptr<void,void(*)(void*)> queue(ops->create(backend.get(),device,f.host->buffer(),f.policy.shape,1),ops->free);
+            if (!t.assert_true(bool(queue) && ops->measure(queue.get(),true))) return;
+            llama_kv_stream_host_layer host; f.host->layer(0,host);
+            ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+            auto copy = [&] {
+                t.assert_true(ops->enqueue(queue.get(),0,host.k,host.v,256,256));
+                t.assert_true(ops->acquire(queue.get(),0));
+                ggml_backend_synchronize(backend.get());
+                t.assert_true(ops->release_completed(queue.get(),0));
+            };
+            ggml_kv_stream_copy_snapshot sentinel; sentinel.id = 99; sentinel.value.bytes = 123;
+            t.assert_true(!ops->poll_feedback(queue.get(),&sentinel));
+            t.assert_true(sentinel.id == 99 && sentinel.value.bytes == 123);
+            std::array<double,2> elapsed_upper{};
+            for (size_t run = 1; run <= 2; ++run) {
+                const auto start = std::chrono::steady_clock::now();
+                t.assert_true(ops->begin(queue.get()));
+                t.assert_equal(uint64_t(run),ops->feedback_id(queue.get()));
+                for (size_t i = 0; i < run; ++i) copy();
+                ops->drain(queue.get()); // Do not consume either completed snapshot yet.
+                elapsed_upper[run-1] = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            t.assert_true(ops->begin(queue.get()));
+            t.assert_equal(uint64_t(0),ops->feedback_id(queue.get()));
+            for (size_t run = 1; run <= 2; ++run) {
+                ggml_kv_stream_copy_snapshot result;
+                const auto deadline = std::chrono::steady_clock::now()+std::chrono::seconds(5);
+                while (!ops->poll_feedback(queue.get(),&result) && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+                t.assert_equal(uint64_t(run),result.id);
+                t.assert_true(result.value.available && result.value.samples == run && result.value.misses <= run);
+                t.assert_equal(run*page.bytes,result.value.bytes);
+                t.assert_equal(page.bytes,result.value.timed_bytes);
+                t.assert_true(result.value.elapsed_ms <= elapsed_upper[run-1]); // Polling delay is not compute/copy time.
+            }
+            copy(); ops->drain(queue.get());
+            t.assert_equal(page.bytes,ops->stats(queue.get()).bytes); // Inference still copied its data.
+            t.assert_true(!ops->poll_feedback(queue.get(),&sentinel) && sentinel.id == 99);
+            t.assert_true(ops->begin(queue.get()));
+            t.assert_equal(uint64_t(3),ops->feedback_id(queue.get()));
+            copy(); ops->drain(queue.get());
+            const auto legacy = ops->feedback(queue.get());
+            t.assert_true(legacy.available && legacy.samples == 1);
+            t.assert_true(!ops->poll_feedback(queue.get(),&sentinel)); // Legacy getter consumed the same snapshot.
+            t.assert_true(ops->begin(queue.get())); copy(); ops->drain(queue.get());
+            t.assert_true(ops->measure(queue.get(),false)); // Retire pending DMA before freeing host/device diagnostics.
+            t.assert_true(!ops->poll_feedback(queue.get(),&sentinel));
+        });
+        t.test("feedback_eligibility_does_not_change_transfers", [&](testing & t) {
+            if (!t.assert_true(ops->version >= 6)) return;
+            fixture f(backend.get(),true);
+            auto * device = ggml_backend_memory_lease_buffer(f.lease.get());
+            std::unique_ptr<void,void(*)(void*)> queue(ops->create(backend.get(),device,f.host->buffer(),f.policy.shape,3),ops->free);
+            if (!t.assert_true(bool(queue) && ops->measure(queue.get(),true))) return;
+            llama_kv_stream_host_layer host; f.host->layer(0,host);
+            const size_t stride = f.host->layout().k_token_bytes+f.host->layout().v_token_bytes;
+            for (bool profile : {false,true}) {
+                t.assert_true(ops->begin_with_feedback(queue.get(),profile));
+                t.assert_true(ops->enqueue_span_with_feedback(queue.get(),0,host.k,host.v,1,256,false));
+                t.assert_true(ops->enqueue_span_with_feedback(queue.get(),1,host.k,host.v,512,512,true));
+                t.assert_true(ops->acquire_span(queue.get(),0,1) && ops->acquire_span(queue.get(),1,2));
+                ggml_backend_synchronize(backend.get());
+                for (size_t slot = 0; slot < 3; ++slot) t.assert_true(ops->release_completed(queue.get(),slot));
+                ops->drain(queue.get());
+                t.assert_equal(size_t(513)*stride,ops->stats(queue.get()).bytes);
+                const auto measured = ops->feedback(queue.get());
+                t.assert_true(measured.available == profile);
+                if (profile) {
+                    t.assert_equal(uint64_t(1),measured.samples);
+                    t.assert_equal(size_t(512)*stride,measured.timed_bytes);
+                } else t.assert_equal(uint64_t(0),ops->feedback_id(queue.get()));
+            }
+        });
+        t.test("one_deadline_per_upload_survives_partial_consumption_and_marker_reuse", [&](testing & t) {
+            for (size_t first : {size_t(0),size_t(1)}) {
+                fixture f(backend.get(),true);
+                auto * device = ggml_backend_memory_lease_buffer(f.lease.get());
+                std::unique_ptr<void,void(*)(void*)> queue(ops->create(backend.get(),device,f.host->buffer(),f.policy.shape,2),ops->free);
+                if (!t.assert_true(bool(queue) && ops->measure(queue.get(),true) && ops->begin(queue.get()))) continue;
+                llama_kv_stream_host_layer host; f.host->layer(0,host);
+                ggml_kv_stream_layout page, ring;
+                ggml_kv_stream_layout_make(f.policy.shape,256,page); ggml_kv_stream_layout_make(f.policy.shape,512,ring);
+                auto wait_ready = [&](size_t slot) {
+                    const auto deadline = std::chrono::steady_clock::now()+std::chrono::seconds(5);
+                    while (!ops->ready(queue.get(),slot) && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+                    t.assert_true(ops->ready(queue.get(),slot));
+                };
+                t.assert_true(ops->enqueue_span(queue.get(),0,host.k,host.v,512,512));
+                wait_ready(1);
+                t.assert_true(ops->acquire(queue.get(),first));
+                ggml_backend_synchronize(backend.get()); t.assert_true(ops->release_completed(queue.get(),first));
+                t.assert_true(ops->enqueue(queue.get(),first,static_cast<const char *>(host.k)+2*page.k_bytes,
+                    static_cast<const char *>(host.v)+2*page.v_bytes,256,256));
+                wait_ready(first);
+                t.assert_true(ops->acquire(queue.get(),1-first));
+                t.assert_true(ops->acquire(queue.get(),first));
+                ggml_backend_synchronize(backend.get());
+                for (size_t slot = 0; slot < 2; ++slot) t.assert_true(ops->release_completed(queue.get(),slot));
+                ops->drain(queue.get());
+                const auto measured = ops->feedback(queue.get());
+                t.assert_equal(uint64_t(2),measured.samples);
+                t.assert_equal(uint64_t(0),measured.misses);
+                for (size_t slot = 0; slot < 2; ++slot) for (bool value : {false,true}) {
+                    const size_t bytes = value ? page.v_bytes : page.k_bytes;
+                    std::vector<uint8_t> actual(bytes);
+                    auto * data = static_cast<char *>(ggml_backend_buffer_get_base(device))+(value ? ring.v_offset : 0)+slot*bytes;
+                    t.assert_true(cudaMemcpy(actual.data(),data,bytes,cudaMemcpyDeviceToHost) == cudaSuccess);
+                    const auto * expected = static_cast<const char *>(value ? host.v : host.k)+(slot == first ? 2 : slot)*bytes;
+                    t.assert_true(!std::memcmp(actual.data(),expected,bytes));
+                }
+            }
+        });
+        t.test("one_timing_sample_counts_live_bytes_and_resets_after_empty_runs", [&](testing & t) {
+            if (!t.assert_true(ops->version >= 4)) return;
+            for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_F16,GGML_TYPE_F16},
+                              std::pair{GGML_TYPE_IQ4_NL,GGML_TYPE_F32}}) {
+                fixture f(backend.get(),true,pair.first,pair.second);
+                const auto stride = f.host->layout().k_token_bytes+f.host->layout().v_token_bytes;
+                auto * device = ggml_backend_memory_lease_buffer(f.lease.get());
+                std::unique_ptr<void,void(*)(void*)> queue(ops->create(backend.get(),device,f.host->buffer(),f.policy.shape,3),ops->free);
+                if (!t.assert_true(bool(queue) && ops->measure(queue.get(),true))) continue;
+                llama_kv_stream_host_layer host; f.host->layer(0,host);
+                for (bool tail_first : {true,false}) {
+                    t.assert_true(ops->begin(queue.get()));
+                    ops->drain(queue.get());
+                    auto empty = ops->feedback(queue.get());
+                    t.assert_true(empty.available && empty.samples == 0 && empty.timed_bytes == 0 && empty.copy_ms == 0);
+                    t.assert_true(ops->begin(queue.get()));
+                    t.assert_true(!ops->enqueue(queue.get(),0,nullptr,host.v,1,256));
+                    const size_t first_slot = tail_first ? 2 : 1, second_slot = 0;
+                    t.assert_true(ops->enqueue_span(queue.get(),first_slot,host.k,host.v,tail_first ? 1 : 512,tail_first ? 256 : 512));
+                    t.assert_true(ops->enqueue_span(queue.get(),second_slot,host.k,host.v,tail_first ? 512 : 1,tail_first ? 512 : 256));
+                    t.assert_true(ops->acquire_span(queue.get(),first_slot,tail_first ? 1 : 2));
+                    t.assert_true(ops->acquire_span(queue.get(),second_slot,tail_first ? 2 : 1));
+                    ggml_backend_synchronize(backend.get());
+                    for (size_t slot = 0; slot < 3; ++slot) t.assert_true(ops->release_completed(queue.get(),slot));
+                    ops->drain(queue.get());
+                    auto measured = ops->feedback(queue.get());
+                    t.assert_true(measured.available && measured.samples == 2 && measured.misses <= 2);
+                    t.assert_equal(size_t(513)*stride,measured.bytes);
+                    t.assert_equal((tail_first ? size_t(1) : size_t(512))*stride,measured.timed_bytes);
+                    t.assert_true(measured.copy_ms >= 0 && measured.elapsed_ms > 0);
+                }
+            }
         });
         t.test("large_transfers_report_actual_gpu_deadlines", [&](testing & t) {
             if (!t.assert_true(ops->version >= 4)) return;
@@ -411,6 +592,7 @@ int main(int argc, char ** argv) {
             const auto result = ops->feedback(queue.get());
             t.assert_true(result.available && result.samples == 3 && result.misses <= 3);
             t.assert_equal(3*plane.bytes,result.bytes);
+            t.assert_equal(plane.bytes,result.timed_bytes);
             // Scheduling can make any transfer ready before demand; missing is an observation, not a forced outcome.
             t.out << "Large-transfer GPU deadlines: " << result.misses << '/' << result.samples << " missed\n";
         });

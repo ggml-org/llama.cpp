@@ -5,12 +5,53 @@
 #include <iomanip>
 #include <thread>
 
+// Tests may wait explicitly; production feedback accessors never wait for a fresh snapshot.
+static bool wait_feedback(llama_kv_stream_resident & resident, uint64_t samples) {
+    const auto deadline = std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    do {
+        const auto value = resident.feedback();
+        if (value.available && value.samples >= samples) return true;
+        std::this_thread::yield();
+    } while (std::chrono::steady_clock::now() < deadline);
+    return false;
+}
+
+// Withhold completion delivery without holding the GPU; exercise backpressure and stale-result rejection deterministically.
+struct feedback_delivery_gate {
+    using lookup = void * (*)(ggml_backend_reg_t,const char *);
+    inline static lookup previous = nullptr;
+    inline static const ggml_kv_stream_copy_ops * base = nullptr;
+    inline static ggml_kv_stream_copy_ops replacement{};
+    inline static bool blocked = false, legacy_called = false;
+    inline static uint64_t delivered = 0;
+    inline static size_t drains = 0;
+    ggml_backend_reg_t reg;
+    explicit feedback_delivery_gate(ggml_backend_t backend) : reg(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend))) {
+        const auto get = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
+        GGML_ASSERT(get && get() && get()->version >= 5);
+        base = get(); replacement = *base; blocked = true; legacy_called = false; delivered = 0; drains = 0;
+        replacement.poll_feedback = [](void * handle, ggml_kv_stream_copy_snapshot * output) {
+            if (blocked || !base->poll_feedback(handle,output)) return false;
+            ++delivered; return true;
+        };
+        replacement.feedback = [](void * handle) { legacy_called = true; return base->feedback(handle); };
+        replacement.drain = [](void * handle) { ++drains; base->drain(handle); };
+        previous = reg->iface.get_proc_address;
+        reg->iface.get_proc_address = [](ggml_backend_reg_t reg, const char * name) -> void * {
+            if (!std::strcmp(name,"ggml_backend_kv_stream_copy_ops"))
+                return reinterpret_cast<void *>(+[]() -> const ggml_kv_stream_copy_ops * { return &replacement; });
+            return previous(reg,name);
+        };
+    }
+    ~feedback_delivery_gate() { reg->iface.get_proc_address = previous; }
+};
+
 // Eight attention consumers with fixed synthetic Q; this is not a model/server benchmark.
-static int benchmark(ggml_backend_t backend, bool sequence, bool measured) {
+static int benchmark(ggml_backend_t backend, bool sequence, bool measured, bool fallback) {
     for (size_t active : {size_t(257),size_t(2049),size_t(8193)}) for (size_t queries : {size_t(1),size_t(33)}) {
-        fixture f(backend,true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,false,8);
+        fixture f(backend,true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,fallback,8);
         ggml_kv_stream_execution page; ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page);
-        f.policy.pool_bytes = page.storage.bytes*16; f.policy.initial_ring_slots = 8;
+        f.policy.pool_bytes = page.storage.bytes*16+page.conversion.bytes; f.policy.initial_ring_slots = 8;
         GGML_ASSERT(f.attach()); auto pin = f.binding->acquire();
         if (measured) GGML_ASSERT(f.resident->configure_feedback(true,2));
         block_inputs input(f,active,queries);
@@ -21,7 +62,7 @@ static int benchmark(ggml_backend_t backend, bool sequence, bool measured) {
         for (size_t sample = 0; sample < 23; ++sample) {
             bytes = calls = 0;
             auto start = std::chrono::steady_clock::now();
-            if (sequence) GGML_ASSERT(f.resident->begin_sequence({0,1,2,3,4,5,6,7},active,2));
+            if (sequence) GGML_ASSERT(f.resident->begin_sequence({0,1,2,3,4,5,6,7},active,2,SIZE_MAX,{uint32_t(queries),queries == 1}));
             for (uint32_t layer = 0; layer < 8; ++layer) {
                 GGML_ASSERT(f.resident->compute_streamed(layer,input.q,input.mask,input.output,active,1.0f/16,workspace.lease.get(),true,2));
                 bytes += f.resident->last_upload_bytes(); calls += f.resident->last_upload_calls();
@@ -30,6 +71,12 @@ static int benchmark(ggml_backend_t backend, bool sequence, bool measured) {
             if (sample >= 3) times.push_back(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count());
         }
         std::sort(times.begin(),times.end());
+        // Outside the timed region: a speedup is not valid if it silently skipped measured windows.
+        if (measured && queries == 1) {
+            const uint64_t samples = calls/2;
+            GGML_ASSERT(wait_feedback(*f.resident,uint64_t(23)*samples));
+            GGML_ASSERT(f.resident->feedback().samples == uint64_t(23)*samples);
+        } else if (measured) GGML_ASSERT(!f.resident->feedback().available);
         double sum = 0; for (float value : input.read()) sum += value;
         std::cout << std::setprecision(10) << "BENCH," << active << ',' << queries << ',' << (times[9]+times[10])/2 << ',' << bytes << ',' << calls << ',' << sum << '\n';
     }
@@ -37,14 +84,15 @@ static int benchmark(ggml_backend_t backend, bool sequence, bool measured) {
 }
 
 int main(int argc, char ** argv) {
-    const bool measured = argc > 1 && std::strcmp(argv[1],"--bench-feedback") == 0;
+    const bool fallback = argc > 1 && std::strcmp(argv[1],"--bench-feedback-fallback") == 0;
+    const bool measured = fallback || (argc > 1 && std::strcmp(argv[1],"--bench-feedback") == 0);
     const bool sequence = measured || (argc > 1 && std::strcmp(argv[1],"--bench-sequence") == 0);
     const bool bench = sequence || (argc > 1 && std::strcmp(argv[1],"--bench") == 0);
     const bool cuda = bench || (argc > 1 && std::strcmp(argv[1],"--cuda") == 0);
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
-    if (bench) return benchmark(backend.get(),sequence,measured);
+    if (bench) return benchmark(backend.get(),sequence,measured,fallback);
     testing t;
     if (cuda) t.test("completed_runtime_feedback_is_consumable_without_publishing_a_layout", [&](testing & t) {
         uint64_t previous_instance_epoch = 0;
@@ -60,14 +108,16 @@ int main(int argc, char ** argv) {
             t.assert_true(f.resident->configure_feedback(true,1));
             t.assert_true(!f.resident->feedback().available);
             auto run = [&] {
-                t.assert_true(f.resident->begin_sequence({0,1},2049,2));
+                const uint64_t before = f.resident->feedback().samples;
+                t.assert_true(f.resident->begin_sequence({0,1},2049,2,SIZE_MAX,{1,true}));
                 t.assert_true(!f.resident->configure_feedback(false));
                 for (uint32_t layer : {0u,1u})
                     t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,2));
+                t.assert_true(wait_feedback(*f.resident,before+f.resident->sequence_stats().copy_calls/2));
                 const auto raw = f.resident->copy_feedback();
                 t.out << "GPU deadline samples/misses: " << raw.samples << '/' << raw.misses << '\n';
                 t.assert_true(raw.available && raw.misses <= raw.samples && raw.samples > 0);
-                t.assert_equal(fallback ? uint64_t(16) : uint64_t(f.resident->sequence_stats().copy_calls/2),raw.samples);
+                t.assert_equal(uint64_t(f.resident->sequence_stats().copy_calls/2),raw.samples);
                 t.assert_true(raw.timed_bytes > 0 && raw.timed_bytes <= raw.bytes);
                 t.assert_true(f.resident->feedback().copy_busy_ratio >= 0 && f.resident->feedback().copy_busy_ratio <= 1);
                 return input.read();
@@ -80,43 +130,138 @@ int main(int argc, char ** argv) {
             t.assert_equal(first.samples*2,f.resident->feedback().samples);
             llama_kv_stream_policy_state state; llama_kv_stream_policy_initialize(f.policy,state);
             llama_kv_stream_policy_decision proposal;
-            t.assert_true(f.resident->recommend_policy(state,2049,1,proposal));
+            t.assert_true(f.resident->recommend_policy(state,2049,1,proposal,true));
             t.assert_true(proposal.feedback_reset && !proposal.feedback_used);
             t.assert_true(state.ring_slots == 3); // proposal has not altered the accepted runtime layout
+            t.assert_true(f.resident->recommend_policy(state,2049,1,proposal));
+            t.assert_true(!proposal.feedback_reset && !proposal.feedback_used); // A one-token prompt cannot borrow decode feedback.
             t.assert_true(f.resident->recommend_policy(state,2049,33,proposal));
             t.assert_true(!proposal.feedback_reset && !proposal.feedback_used);
-            t.assert_true(f.resident->begin_sequence({0,1},2049,2));
+            t.assert_true(f.resident->begin_sequence({0,1},2049,2,SIZE_MAX,{1,true}));
             t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,2));
             f.resident->cancel_sequence(); t.assert_true(!f.resident->feedback().available);
             run(); t.assert_true(f.resident->feedback().epoch != first.epoch);
             t.assert_true(f.content->invalidate()); t.assert_true(!f.resident->feedback().available);
             run();
-            t.assert_true(f.resident->begin_sequence({0,1},256,2));
+            t.assert_true(f.resident->begin_sequence({0,1},256,2,SIZE_MAX,{1,true}));
             for (uint32_t layer : {0u,1u})
                 t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,256,1.0f/16,workspace.lease.get(),true,2));
             t.assert_true(!f.resident->feedback().available); // no streamed work is not a light-copy sample
             // Explicit span 2 is not a trial candidate here; matching suggested spans drive the trials.
             for (size_t trial = 0; trial < 34; ++trial) {
+                const uint64_t before = f.resident->feedback().samples;
                 const size_t span = f.resident->suggested_span_pages();
                 t.assert_true(span == 1 || span == 3);
                 if (trial == 17) t.assert_equal(size_t(1),span);
-                t.assert_true(f.resident->begin_sequence({0,1},2049,span));
+                t.assert_true(f.resident->begin_sequence({0,1},2049,span,SIZE_MAX,{1,true}));
                 for (uint32_t layer : {0u,1u})
                     t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,span));
+                t.assert_true(wait_feedback(*f.resident,before+f.resident->sequence_stats().copy_calls/2));
             }
             close_values(t,expected,input.read(),1e-6f);
             // An error in the last layer must not train a partially successful sequence.
-            t.assert_true(f.resident->begin_sequence({0,1},2049,2));
+            t.assert_true(f.resident->begin_sequence({0,1},2049,2,SIZE_MAX,{1,true}));
             t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,2));
             t.assert_true(!f.resident->compute_streamed(1,input.q,input.mask,input.output,2049,0,workspace.lease.get(),true,2));
             t.assert_true(!f.resident->feedback().available);
             // Standalone overlap has the same completed-window contract.
-            t.assert_true(f.resident->compute_streamed(1,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,2));
-            t.assert_true(f.resident->feedback().available);
+            t.assert_true(f.resident->compute_streamed(1,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,2,true));
+            t.assert_true(wait_feedback(*f.resident,1));
             t.assert_true(f.resident->configure_feedback(false));
             t.assert_true(!f.resident->feedback().available);
             t.assert_true(f.resident->compute_streamed(1,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,2));
             close_values(t,expected,input.read(),1e-6f);
+        }
+    });
+    if (cuda) t.test("withheld_feedback_does_not_block_execution_or_train_after_cancellation", [&](testing & t) {
+        feedback_delivery_gate gate(backend.get());
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,2049);
+        ggml_kv_stream_execution page; ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page);
+        f.policy.pool_bytes = page.storage.bytes*5; f.policy.initial_ring_slots = 3;
+        if (!t.assert_true(f.attach())) return;
+        auto pin = f.binding->acquire();
+        block_inputs input(f,2049,1);
+        ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(4,256,layout);
+        block_workspace workspace(f,layout.bytes);
+        t.assert_true(f.resident->configure_feedback(true,1));
+        auto run = [&](size_t span = 2) {
+            t.assert_true(f.resident->begin_sequence({0,1},2049,span,SIZE_MAX,{1,true}));
+            for (uint32_t layer : {0u,1u})
+                t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,span));
+        };
+        run(); const auto expected = input.read();
+        const uint64_t samples = f.resident->sequence_stats().copy_calls/2;
+        run(); run(); // Two snapshots retained; the third run must still generate correct output.
+        close_values(t,expected,input.read(),1e-6f);
+        t.assert_true(!f.resident->feedback().available && !gate.legacy_called);
+        gate.blocked = false;
+        t.assert_true(wait_feedback(*f.resident,2*samples));
+        t.assert_equal(2*samples,f.resident->feedback().samples);
+        const auto epoch = f.resident->feedback().epoch;
+        gate.blocked = true;
+        run();
+        t.assert_true(f.resident->begin_sequence({0,1},2049,2,SIZE_MAX,{1,true}));
+        t.assert_true(!f.resident->compute_streamed(0,input.q,input.mask,input.output,2049,0,workspace.lease.get(),true,2));
+        gate.blocked = false;
+        // Discard completed old windows; neither the prior success nor the failure can enter the new epoch.
+        const auto deadline = std::chrono::steady_clock::now()+std::chrono::seconds(5);
+        bool clean = true;
+        while (gate.delivered < 4 && std::chrono::steady_clock::now() < deadline) {
+            clean &= !f.resident->feedback().available; std::this_thread::yield();
+        }
+        t.assert_true(clean);
+        t.assert_equal(uint64_t(4),gate.delivered);
+        run(); t.assert_true(wait_feedback(*f.resident,samples));
+        t.assert_equal(samples,f.resident->feedback().samples);
+        t.assert_true(f.resident->feedback().epoch != epoch && !gate.legacy_called);
+        close_values(t,expected,input.read(),1e-6f);
+        // Delayed reports retain the span that produced them, not the most recently submitted span.
+        uint64_t needed = f.resident->feedback().samples;
+        gate.blocked = true;
+        run(3); needed += f.resident->sequence_stats().copy_calls/2;
+        run(1); needed += f.resident->sequence_stats().copy_calls/2;
+        gate.blocked = false;
+        t.assert_true(wait_feedback(*f.resident,needed));
+        for (int trial = 0; trial < 16; ++trial) {
+            run(3); needed += f.resident->sequence_stats().copy_calls/2;
+            t.assert_true(wait_feedback(*f.resident,needed));
+        }
+        t.assert_equal(size_t(1),f.resident->suggested_span_pages());
+        gate.drains = 0;
+        t.assert_true(f.resident->compute_streamed(1,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,2,true));
+        t.assert_equal(size_t(1),gate.drains);
+    });
+    if (cuda) t.test("only_declared_decode_and_prefetchable_history_train_feedback", [&](testing & t) {
+        for (bool fallback : {false,true}) {
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769,fallback);
+            ggml_kv_stream_execution page; ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page);
+            f.policy.pool_bytes = page.storage.bytes*5+page.conversion.bytes; f.policy.initial_ring_slots = 3;
+            if (!t.assert_true(f.attach())) continue;
+            auto pin = f.binding->acquire();
+            t.assert_true(f.resident->configure_feedback(true,1));
+            block_inputs decode(f,769,1), tail(f,257,1), prefill(f,769,33);
+            ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(33*4,256,layout);
+            block_workspace workspace(f,layout.bytes);
+            auto run = [&](block_inputs & input, size_t stable, llama_kv_stream_feedback_context feedback) {
+                t.assert_true(f.resident->begin_sequence({0,1},input.active,2,stable,feedback));
+                for (uint32_t layer : {0u,1u})
+                    t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,input.active,1.0f/16,workspace.lease.get(),true,2));
+            };
+            run(decode,512,{1,true});
+            t.assert_true(wait_feedback(*f.resident,2));
+            t.assert_equal(uint64_t(2),f.resident->feedback().samples);
+            const auto raw = f.resident->copy_feedback();
+            t.assert_equal(size_t(256)*(page.storage.k_token_bytes+page.storage.v_token_bytes),raw.timed_bytes);
+            t.assert_equal(size_t(2*513)*(page.storage.k_token_bytes+page.storage.v_token_bytes),raw.bytes);
+            auto expected = decode.read();
+            run(tail,256,{1,true}); t.assert_true(!f.resident->feedback().available);
+            run(prefill,769,{33,false}); t.assert_true(!f.resident->feedback().available);
+            run(decode,769,{}); t.assert_true(!f.resident->feedback().available); // Unknown phase stays unprofiled.
+            run(decode,769,{1,false}); t.assert_true(!f.resident->feedback().available); // Single-token prompt is not decode.
+            close_values(t,expected,decode.read(),1e-6f);
+            t.assert_true(f.resident->begin_sequence({0,1},769,2,769,{33,true}));
+            t.assert_true(!f.resident->compute_streamed(0,decode.q,decode.mask,decode.output,769,1.0f/16,workspace.lease.get(),true,2));
+            t.assert_true(!f.resident->sequence_active());
         }
     });
     t.test("bounded_reservations_preserve_order_despite_deferred_readiness", [](testing & t) {

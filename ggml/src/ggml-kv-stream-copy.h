@@ -3,6 +3,7 @@
 #include "ggml-kv-stream.h"
 #include <vector>
 #include <algorithm>
+#include <array>
 
 // Clamp a logical run to both the physical ring boundary and the caller's span ceiling.
 inline size_t ggml_kv_stream_contiguous_pages(size_t block, size_t blocks, size_t slots, size_t limit) {
@@ -50,11 +51,59 @@ struct ggml_kv_stream_copy_feedback {
     bool available = false;
     uint64_t samples = 0, misses = 0;
     size_t bytes = 0, timed_bytes = 0, peak_slots = 0, instrumentation_bytes = 0;
-    // Completed copy-stream intervals exclude dependency waits; elapsed_ms is the whole host run window.
+    // The first eligible upload's copy interval excludes dependency waits; timed_bytes counts live payload, not padding.
+    // elapsed_ms is the whole host run window. Version 7 samples each eligible upload batch at its first consumption.
     double copy_ms = 0, elapsed_ms = 0;
 };
 
-// Optional registry "ggml_backend_kv_stream_copy_ops". Calls enqueue work except drain/free.
+struct ggml_kv_stream_copy_snapshot {
+    uint64_t id = 0;
+    ggml_kv_stream_copy_feedback value;
+};
+
+// Owner-thread snapshot admission, not a GPU fence. Uncollected slots are never overwritten.
+class ggml_kv_stream_feedback_slots {
+public:
+    static constexpr size_t capacity = 2, none = SIZE_MAX;
+    explicit ggml_kv_stream_feedback_slots(uint64_t counter = 0) : counter(counter) {}
+    // Exhaustion skips measurement, not inference; zero identifies an unmeasured run.
+    bool begin(bool eligible = true) {
+        if (active) return false;
+        active = true; selected = none; latest = 0;
+        if (eligible && counter != UINT64_MAX) for (size_t i = 0; i < capacity; ++i) if (!slots[i].id) {
+            selected = i; latest = ++counter; slots[i].id = latest; break;
+        }
+        return true;
+    }
+    size_t current() const { return active ? selected : none; }
+    uint64_t latest_id() const { return latest; }
+    uint64_t id(size_t i) const { return i < capacity ? slots[i].id : 0; }
+    size_t seal() {
+        if (!active) return none;
+        active = false;
+        if (selected != none) slots[selected].pending = true;
+        return selected;
+    }
+    size_t oldest() const {
+        size_t result = none;
+        for (size_t i = 0; i < capacity; ++i) if (slots[i].pending &&
+                (result == none || slots[i].id < slots[result].id)) result = i;
+        return result;
+    }
+    // Retire only after the backend established completion and copied the result to its caller.
+    bool retire(size_t i) {
+        if (i == none || i != oldest()) return false;
+        slots[i] = {}; return true;
+    }
+private:
+    struct slot { uint64_t id = 0; bool pending = false; };
+    std::array<slot,capacity> slots{};
+    uint64_t counter = 0, latest = 0;
+    size_t selected = none;
+    bool active = false;
+};
+
+// Optional registry "ggml_backend_kv_stream_copy_ops". Copy calls enqueue work; drain/free and idle reconfiguration may wait.
 // Caller holds the device lease/pin and immutable host content until drain; backend outlives the handle.
 // Owner-thread only and outside active CUDA capture; ready() is observation, not a host-content lifetime fence.
 struct ggml_kv_stream_copy_ops {
@@ -78,9 +127,18 @@ struct ggml_kv_stream_copy_ops {
     bool (*release_completed)(void *, size_t slot);
     // Version 4: opt-in measurement may allocate bounded diagnostic storage; change only while idle.
     bool (*measure)(void *, bool enable);
-    // One GPU deadline sample for the whole consumed span, before its mandatory ready-event waits.
+    // Acquire a consumed span before its mandatory ready-event waits. Version 7 probes its upload batch only once.
     bool (*acquire_span)(void *, size_t first_slot, size_t count);
-    // Available only after drain; cancellation may expose diagnostics, but must not train runtime policy.
+    // Legacy completed getter; may wait for counter readback after drain. New consumers use poll_feedback.
     ggml_kv_stream_copy_feedback (*feedback)(void *);
+    // Version 5: current/latest run identity, or zero when measurement was skipped due to backpressure.
+    uint64_t (*feedback_id)(void *);
+    // Single-consumer FIFO: at most feedback_slots::capacity uncollected snapshots; each poll retires one.
+    // Nonblocking, valid also during a later run. False leaves output unchanged.
+    bool (*poll_feedback)(void *, ggml_kv_stream_copy_snapshot *);
+    // Version 6: owner declares whether this run and each upload are useful prefetch-quality samples.
+    bool (*begin_with_feedback)(void *, bool eligible);
+    bool (*enqueue_span_with_feedback)(void *, size_t first_slot, const void * k, const void * v,
+                                      size_t live_tokens, size_t padded_tokens, bool eligible);
 };
 using ggml_kv_stream_copy_ops_get = const ggml_kv_stream_copy_ops * (*)();
