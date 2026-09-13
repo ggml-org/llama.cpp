@@ -6,6 +6,7 @@ General:
 - PR and commit titles format: `<module> : <title>`. Lookup recents for examples
 - Don't try to build or run the code unless you are explicitly asked to do so
 - Use the `gh` CLI tool when querying PRs, issues, or other GitHub resources
+- When [MODEL] is needed, first try to get it from the `PI_MODEL_NAME` env var before asking the user
 
 Coding:
 - When in doubt, always refer to the CONTRIBUTING.md file of the project
@@ -20,7 +21,7 @@ Pull requests (PRs):
 - Don't explicitly wrap lines in the PR description (each paragraph and bullet is a single line)
 - When creating a pull request, look for the repository's PR template and follow it
 - For the AI usage disclosure section, write "YES. pi:llama.cpp/[MODEL]"
-- Ask the user to tell you what model was used and write it in place of [MODEL]
+- If `PI_MODEL_NAME` env var is not set, ask the user to tell you what model was used and write it in place of [MODEL]
 - Always create the pull requests in draft mode
 
 Commits:
