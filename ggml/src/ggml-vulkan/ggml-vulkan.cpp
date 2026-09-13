@@ -10723,8 +10723,8 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
                                            uint32_t(hoist_row_ids),
                                            0, 0,
                                            (uint32_t)ne01,
-                                           (uint32_t)ne01,
-                                           (uint32_t)(ne20*ne21) };
+                                           (uint32_t)(dst->nb[1] / sizeof(float)),
+                                           (uint32_t)(dst->nb[2] / sizeof(float)) };
         init_pushconst_fastdiv(pc);
         ggml_vk_dispatch_pipeline(ctx, subctx, count_experts,
             { vk_subbuffer{ d_ids, ids_buf_offset, ids_sz }, expert_count_buf, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, pc,
