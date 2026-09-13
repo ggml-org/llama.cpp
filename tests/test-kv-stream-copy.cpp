@@ -121,6 +121,9 @@ int main(int argc, char ** argv) {
         auto get = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
         t.test("copy_events_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version >= 2 && get()->enqueue_span && get()->stats); });
         if (!get || !get()) return t.summary();
+        t.test("copy_feedback_extension_is_available", [&](testing & t) {
+            t.assert_true(get()->version >= 4);
+        });
         t.test("wide_microbatches_share_uploads_and_preserve_final_tile_readers", [&](testing & t) {
             for (bool fallback : {false,true}) for (bool token_major : {false,true}) {
                 fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,2049,fallback);
@@ -340,6 +343,77 @@ int main(int argc, char ** argv) {
         });
 #ifdef KV_COPY_CUDA_TEST
         const auto * ops = get();
+        t.test("gpu_deadline_samples_each_span_and_resets_reused_tickets", [&](testing & t) {
+            if (!t.assert_true(ops->version >= 4 && ops->measure && ops->acquire_span && ops->feedback)) return;
+            fixture f(backend.get(),true);
+            auto * device = ggml_backend_memory_lease_buffer(f.lease.get());
+            std::unique_ptr<void,void(*)(void*)> queue(ops->create(backend.get(),device,f.host->buffer(),f.policy.shape,3),ops->free);
+            if (!t.assert_true(bool(queue))) return;
+            llama_kv_stream_host_layer host; f.host->layer(0,host);
+            t.assert_true(!ops->feedback(queue.get()).available);
+            t.assert_true(ops->measure(queue.get(),true));
+            for (int epoch = 0; epoch < 2; ++epoch) {
+                t.assert_true(ops->begin(queue.get()));
+                t.assert_true(!ops->measure(queue.get(),false));
+                for (int round = 0; round < 5; ++round) {
+                    // Hold consumer execution after the producer fence; copies can become ready meanwhile.
+                    delayed_event gate(backend.get()); gate.arm(backend.get());
+                    t.assert_true(ops->enqueue_span(queue.get(),0,host.k,host.v,512,512));
+                    t.assert_true(ops->enqueue(queue.get(),2,host.k,host.v,256,256));
+                    const auto deadline = std::chrono::steady_clock::now()+std::chrono::seconds(5);
+                    while ((!ops->ready(queue.get(),1) || !ops->ready(queue.get(),2)) && std::chrono::steady_clock::now() < deadline)
+                        std::this_thread::yield();
+                    const bool ready = ops->ready(queue.get(),1) && ops->ready(queue.get(),2);
+                    t.assert_true(ready);
+                    t.assert_true(!ops->acquire_span(queue.get(),0,3)); // separate uploads have separate tickets
+                    t.assert_true(!ops->acquire_span(queue.get(),0,0));
+                    t.assert_true(ops->acquire_span(queue.get(),0,2));
+                    t.assert_true(ops->acquire_span(queue.get(),2,1));
+                    t.assert_true(!ops->feedback(queue.get()).available);
+                    gate.open(); ggml_backend_synchronize(backend.get());
+                    for (size_t slot = 0; slot < 3; ++slot) t.assert_true(ops->release_completed(queue.get(),slot));
+                }
+                ops->drain(queue.get());
+                auto measured = ops->feedback(queue.get());
+                t.assert_true(measured.available);
+                t.assert_equal(uint64_t(10),measured.samples);
+                t.assert_equal(uint64_t(0),measured.misses);
+                t.assert_equal(ops->stats(queue.get()).bytes,measured.bytes);
+                t.assert_equal(measured.bytes,measured.timed_bytes);
+                t.assert_equal(size_t(3),measured.peak_slots);
+                t.assert_true(measured.copy_ms >= 0 && measured.elapsed_ms > 0 && measured.instrumentation_bytes >= 5*sizeof(uint64_t));
+                ops->drain(queue.get());
+                t.assert_equal(measured.elapsed_ms,ops->feedback(queue.get()).elapsed_ms);
+            }
+            t.assert_true(ops->measure(queue.get(),false));
+            t.assert_true(!ops->feedback(queue.get()).available);
+        });
+        t.test("large_transfers_report_actual_gpu_deadlines", [&](testing & t) {
+            if (!t.assert_true(ops->version >= 4)) return;
+            auto * dev = ggml_backend_get_device(backend.get());
+            const ggml_kv_stream_shape shape{GGML_TYPE_F16,GGML_TYPE_F16,256,256,2,131072,128};
+            ggml_kv_stream_layout plane;
+            t.assert_true(ggml_kv_stream_layout_make(shape,131072,plane).status == ggml_kv_stream_status::success);
+            ggml_backend_buffer_ptr device(ggml_backend_buft_alloc_buffer(llama_kv_stream_device_buffer_type(dev),plane.bytes));
+            ggml_backend_buffer_ptr host(ggml_backend_buft_alloc_buffer(llama_kv_stream_host_buffer_type(dev),plane.bytes));
+            if (!t.assert_true(bool(device) && bool(host))) return;
+            ggml_backend_buffer_clear(host.get(),0);
+            auto * base = static_cast<char *>(ggml_backend_buffer_get_base(host.get()));
+            std::unique_ptr<void,void(*)(void*)> queue(ops->create(backend.get(),device.get(),host.get(),shape,1),ops->free);
+            if (!t.assert_true(bool(queue) && ops->measure(queue.get(),true) && ops->begin(queue.get()))) return;
+            for (int run = 0; run < 3; ++run) {
+                t.assert_true(ops->enqueue(queue.get(),0,base,base+plane.v_offset,131072,131072));
+                t.assert_true(ops->acquire_span(queue.get(),0,1));
+                ggml_backend_synchronize(backend.get());
+                t.assert_true(ops->release_completed(queue.get(),0));
+            }
+            ops->drain(queue.get());
+            const auto result = ops->feedback(queue.get());
+            t.assert_true(result.available && result.samples == 3 && result.misses <= 3);
+            t.assert_equal(3*plane.bytes,result.bytes);
+            // Scheduling can make any transfer ready before demand; missing is an observation, not a forced outcome.
+            t.out << "Large-transfer GPU deadlines: " << result.misses << '/' << result.samples << " missed\n";
+        });
         t.test("completed_consumer_release_is_explicit", [&](testing & t) {
             if (!t.assert_true(ops->version >= 3 && ops->release_completed)) return;
             fixture f(backend.get(),true);

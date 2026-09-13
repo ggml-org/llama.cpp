@@ -6,7 +6,7 @@ Last source review: 2026-09-13, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`. The remainder of milestones 5-8 is planned. Current work is **5.4i: wide micro-batch query tiling**, ready for review. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`. The remainder of milestones 5-8 is planned. Current work is **5.4j: runtime feedback and span tuning**, ready for review. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is committed at `28e7999a0`. Stage 5.4d is committed at `59591b6da`. Stage 5.4e is committed at `a92107200`. Stage 5.4f is committed at `d48a1faa8`. Stage 5.4g is committed at `f069590ef`. Stage 5.4h is committed at `5887c18a0`. Stage 5.4i is ready for review.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is committed at `28e7999a0`. Stage 5.4d is committed at `59591b6da`. Stage 5.4e is committed at `a92107200`. Stage 5.4f is committed at `d48a1faa8`. Stage 5.4g is committed at `f069590ef`. Stage 5.4h is committed at `5887c18a0`. Stage 5.4i is committed at `6f98b1276`. Stage 5.4j is ready for review.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -353,8 +353,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.4f | Complete | `d48a1faa8` | Opt-in within-layer copy overlap; 8 CUDA cases / 1,565 assertions, all 81 pairs bitwise match ordered execution. Producer/consumer gates, cancellation, retained backing and host replacement pass. 24 focused Debug/CUDA-build/ASan/UBSan suites and GPU memcheck pass; targeted host-state TSan passes, broader TSan caveat below. Synthetic latency comparison retained. |
 | 5.4g | Complete | `f069590ef` | Contiguous native attention and two-copy K/V batches; 12 CUDA cases / 2,290 assertions. All 81 pairs, arbitrary span ceilings, wrap boundaries, batch-wide event fences and failure recovery pass. 24 focused suites and GPU memcheck pass; targeted host TSan passes. Native latency gains and fallback tradeoffs recorded below. |
 | 5.4h | Committed | 5887c18a0 | Bounded cross-layer FIFO reservations and explicit tail publication; 11 CUDA cases / 2,395 assertions. All 81 pairs, more-than-three-layer lookahead, out-of-order readiness, concentrated placement and cancellation pass. 25 focused suites, UVM-off/on memcheck and targeted host TSan pass. Mixed latency results and producer-integration limits recorded below. |
-| 5.4i | Ready for review | - | Bounded query launches inside each K/V span; 20 CUDA block cases / 656,887 assertions and 15 CUDA copy cases / 2,826 assertions. 25 focused suites pass in CPU/CUDA Debug, ASan and UBSan; UVM-off/on memcheck and targeted host TSan pass. Single-launch baseline preserved within measurement noise; wider-launch overhead and limitations documented below. |
-| 5.4j-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.4i | Committed | 6f98b1276 | Bounded query launches inside each K/V span; 20 CUDA block cases / 656,887 assertions and 15 CUDA copy cases / 2,826 assertions. 25 focused suites pass in CPU/CUDA Debug, ASan and UBSan; UVM-off/on memcheck and targeted host TSan pass. Single-launch baseline preserved within measurement noise; wider-launch overhead and limitations documented below. |
+| 5.4j | Ready for review | - | Opt-in GPU deadline probes, bounded sampled copy timing, process-unique feedback epochs, read-only policy proposals, and measured span trials. CUDA copy 18 cases / 2,978 assertions; runtime prefetch 12 / 2,803. Four 25-suite host matrices, targeted TSan, UVM-off/on copy memcheck and runtime memcheck pass. Default latency within about 1%; instrumentation costs 6-9% in the synthetic check. |
+| 5.4k-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -2200,4 +2201,97 @@ compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-de
 GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-copy --cuda
 ```
 
-After review and commit, proceed to **5.4j: per-span readiness misses, copy timing feedback, and span tuning**. No server opt-in, capture replay, live repartition, or backend port is added here.
+Stage **5.4j**, documented below, adds opt-in feedback and span trials. No server opt-in, capture replay, live repartition, or backend port was added in 5.4i.
+
+## Substage 5.4j: runtime feedback and measured span selection
+
+The optional copy extension is now version 4. Existing callers retain their uninstrumented execution path. `configure_feedback(true, bounded_span_pages)` enables the new diagnostics while idle; the bounded candidate defaults to 32 pages and is clamped to the existing ring size. Disabling feedback frees its diagnostic allocation/events and clears its learning history. No KV storage is resized.
+
+### GPU deadlines and copy timing
+
+Each measured `acquire_span` submits one small probe on the consuming GPU stream, immediately before that span's mandatory ready-event waits. The probe checks **every page** in the consumed span. A sample is a consumed span, and a miss means at least one of its pages had not published the expected ready ticket when the probe executed. Fallback samples at the encoded-page/conversion boundary; native attention samples once for its combined span, not once per query tile.
+
+The copy stream publishes a monotonically increasing ticket after both encoded planes and padding complete. Tickets distinguish successive occupants of a reused slot, avoiding a stale ready bit or a racing reset. Atomic ticket operations make the probe/publication access well-defined. Ticket observation never grants ownership: ready-event waits, final-reader ordering, and lease retention still establish correctness. Probing itself has overhead and can change the timing being observed.
+
+```mermaid
+sequenceDiagram
+    participant H as Owner thread
+    participant C as Copy stream
+    participant G as Compute stream
+    H->>C: Enqueue K/V span after prior consumer
+    C->>C: Timed copy interval, then publish ticket
+    H->>G: Probe every page's expected ticket
+    G->>G: Increment sample; miss if any ticket is absent
+    G->>C: Wait on the mandatory ready events
+    G->>G: Consume encoded span or convert it
+    G->>H: Complete final reader
+    H->>H: Drain completed window, validate feedback
+```
+
+Measurement uses an explicit device-local diagnostic buffer requested at `8 * (ring_slots + 2)` bytes plus two timing events per ring slot. These resources are **outside the KV lease** and exist only when opted in; backend/driver allocation granularity and event overhead are additional implementation costs. The report exposes the buffer's reported allocation size. KV page geometry, weights, resident/ring grants, and conversion storage are unchanged.
+
+Timing samples are bounded by ring size, not context length. Start/end events bracket copy-stream service after dependency waits, including K/V submissions and finite tail padding. Completed event pairs are harvested before reuse or at drain. If a timing pair is still pending, that upload is not sampled rather than blocking the stream or allocating an unbounded event list. Actual copied bytes and sampled bytes are reported separately.
+
+The pure feedback adapter calculates:
+
+`copy_busy_ratio = min(1, (sampled_copy_ms / copy_window_elapsed_ms) * (copied_bytes / sampled_bytes))`
+
+This is a sampled/extrapolated **copy-stream interval ratio**, not physical copy-engine occupancy, PCIe throughput divided by 64 GB/s, or a measure of UVM migration. The denominator is the host window from copy-run begin through drain; the numerator excludes producer/final-consumer waits but can include command scheduling gaps. With full sample coverage no extrapolation is needed. Invalid, absent, nonfinite, zero-duration, inconsistent, or overflowing observations do not become light-load feedback.
+
+Reports are unavailable while a run is active and are collected only after GPU completion. Cancellation can produce backend diagnostics, but the consumer discards them for learning. Readiness inspection via `sequence_stats()` remains a separate observation, not the GPU deadline counter.
+
+### Policy proposals and span trials
+
+Successful standalone overlap calls and complete cross-layer sequences feed cumulative sample/miss counters into the existing pure policy type. The runtime supplies process-unique feedback epochs so recreation cannot accidentally continue another instance's counters. Unknown content generation/mirror changes, page-extent changes, different query counts or layer orders, cancellation, failures, and runs with no streamed work reset learning. Authorized sequence-tail publications remain valid within their running window. Mixed query counts across one sequence do not train a timing trial. Cache-write continuity is intentionally conservative until the real producer bridge in 5.5a can identify authorized append history.
+
+`recommend_policy(previous, active_tokens, query_tokens, decision)` connects completed feedback to `llama_kv_stream_policy_step`. It rejects in-flight recommendations and excludes old-context/query feedback. It does **not** publish `decision.next`, advance the caller's accepted cursor, or move device pointers. The existing pure policy retains its cooldown, hysteresis, saturation guard, and one-balanced-round feedback growth bound. A caller must accept the corresponding device layout before accepting a proposal; this stage does not implement live repartition or bypass the later context integration.
+
+`suggested_span_pages()` exposes the timing trial's candidate. Callers explicitly pass it to the next `begin_sequence`/`compute_streamed`; explicit spans and the existing one-page default remain available. The tuner compares full-ring against bounded spans using whole successful execution latency, including validation/planning/refresh and all supplied layers. It uses one warmup and 16 measured samples per candidate, requires a 0.5% gain to choose the bounded candidate, and learns only TG1 samples matching the candidate actually being tested. No duplicate candidate is trained when the ring already fits the bounded ceiling. This is a resettable two-candidate heuristic, not a proof of globally optimal spans at every context.
+
+### TDD and review findings
+
+- The version-4 capability test first failed against version 3. Pure feedback/tuner tests then failed before their helper existed and passed after implementation.
+- GPU tests cover queued-versus-completed reports, every-span sample counts, invalid/mixed-ticket admission, repeated slot reuse, reset/drain idempotence, and disabled measurement. A delayed compute gate proves that host submission timing is not used as the deadline: completed copies report zero misses when the GPU finally consumes them.
+- A separate 256 MiB transfer test observed **3/3 GPU deadline misses** on this machine. The assertion permits zero misses on a different schedule: missing a deadline is an observed condition, not an outcome that every GPU must exhibit.
+- The cold gated test exposed first-use CUDA kernel loading synchronizing behind a held gate. Diagnostic kernels are now resolved during idle measurement setup. The gated case intentionally runs before the large-transfer case so an earlier measured launch cannot hide that regression.
+- Native and fallback session tests cover successful cumulative feedback, actual full-ring/bounded trials, read-only policy proposals, no-streamed-work reset, stale query rejection, unknown cache invalidation, cancellation, a failed final layer, and standalone overlap.
+- A new behavioral test caught identical feedback epochs in two separate runtime instances. Runtime reset IDs now come from a relaxed atomic identity counter; policy/tuning arithmetic remains backend-neutral and locally owned.
+
+Final validation:
+
+- All 25 focused suites pass in CPU Debug, CUDA-build Debug, ASan, and UBSan. The default CTest runs exercise host contracts; the following results are separate real-GPU runs.
+- CUDA copy/deadline suite: 18 cases / 2,978 assertions. CUDA prefetch/runtime suite: 12 cases / 2,803 assertions.
+- CUDA block attention: 20 cases / 656,887 assertions; resident mirror: 13 / 246; writer: 10 / 609. CPU-reference CUDA SCALE passes all four comparisons.
+- Compute Sanitizer memcheck passes the cold-load copy/deadline suite with UVM off and on, plus the final runtime-feedback suite: zero errors and zero leaked bytes in each run.
+- Targeted TSan policy/tuner: 22 cases / 139,910 assertions; host prefetch planner: 3 / 1,121, using process-local `setarch x86_64 -R`. Previously documented broader TSan and native-attention racecheck limitations are not claimed resolved.
+- `git diff --check` passes. Only this stage's source, tests, and roadmap are staged for user review; unrelated README/documentation/benchmark work is preserved.
+
+### Targeted comparison
+
+Baseline was captured at **6f98b1276** using the existing eight-layer Q8_0/Q4_0 synthetic benchmark, span ceiling 2, ring size 8, UVM disabled, three warmups and 20 measured runs. The post-change measurements keep that explicit span fixed to isolate instrumentation cost; they are not an adaptive-winner or real-model speedup claim.
+
+| Active tokens | Queries | Before ms | Feedback off ms | Feedback on ms |
+| ---: | ---: | ---: | ---: | ---: |
+| 257 | 1 | 0.4531 | 0.4519 | 0.4912 |
+| 257 | 33 | 0.5866 | 0.5903 | 0.6294 |
+| 2,049 | 1 | 1.4138 | 1.4258 | 1.5549 |
+| 2,049 | 33 | 1.9731 | 1.9733 | 2.0879 |
+| 8,193 | 1 | 5.2346 | 5.2480 | 5.6624 |
+| 8,193 | 33 | 7.2059 | 7.1888 | 7.6243 |
+
+The uninstrumented cases remain within about 1% of the prior stage. Enabling every-span probes and timing adds approximately **6-9%** in this Debug synthetic benchmark, so instrumentation remains opt-in. The probes, readiness publications, timing events, and completed counter readback are real costs; no automatic production performance gain is claimed. GPU timings ran separately from sanitizer work and are not clock-locked.
+
+Payloads remain **6,656 / 11,934,208 / 52,828,672 bytes** in **16 / 64 / 256 K/V uploads**, and output checksums agree. Diagnostic counter traffic is not counted as K/V payload traffic.
+
+```sh
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-policy test-kv-stream-copy test-kv-stream-prefetch -j 20
+build-device-memory-infra-cuda/bin/test-kv-stream-policy
+build-device-memory-infra-cuda/bin/test-kv-stream-copy --cuda
+build-device-memory-infra-cuda/bin/test-kv-stream-prefetch --cuda
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-prefetch --bench-sequence
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-prefetch --bench-feedback
+compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-copy --cuda
+GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-copy --cuda
+```
+
+After review and commit, proceed to **5.4k: capture eligibility, invalidation, and resident replay**. Server enablement and accepted live-layout transitions remain later integration work. Production services, compose files, models, checkpoints and prompt caches are unchanged.

@@ -17,6 +17,7 @@ public:
     explicit ggml_kv_stream_copy_state(size_t slots) : slots(slots,phase::empty) {}
     // A new run starts only after the previous run has drained.
     bool begin() { if (active || slots.empty()) return false; active = true; return true; }
+    bool running() const { return active; }
     bool can_queue(size_t i) const { return active && i < slots.size() && (slots[i] == phase::empty || slots[i] == phase::released); }
     // Validate the entire physical run before changing any slot's ownership.
     bool can_queue_span(size_t first, size_t count) const {
@@ -45,6 +46,14 @@ private:
 
 struct ggml_kv_stream_copy_stats { size_t bytes = 0, calls = 0; };
 
+struct ggml_kv_stream_copy_feedback {
+    bool available = false;
+    uint64_t samples = 0, misses = 0;
+    size_t bytes = 0, timed_bytes = 0, peak_slots = 0, instrumentation_bytes = 0;
+    // Completed copy-stream intervals exclude dependency waits; elapsed_ms is the whole host run window.
+    double copy_ms = 0, elapsed_ms = 0;
+};
+
 // Optional registry "ggml_backend_kv_stream_copy_ops". Calls enqueue work except drain/free.
 // Caller holds the device lease/pin and immutable host content until drain; backend outlives the handle.
 // Owner-thread only and outside active CUDA capture; ready() is observation, not a host-content lifetime fence.
@@ -67,5 +76,11 @@ struct ggml_kv_stream_copy_ops {
     ggml_kv_stream_copy_stats (*stats)(void *);
     // Version 3: caller has already synchronized every encoded-slot reader; no queued consumer fence is needed.
     bool (*release_completed)(void *, size_t slot);
+    // Version 4: opt-in measurement may allocate bounded diagnostic storage; change only while idle.
+    bool (*measure)(void *, bool enable);
+    // One GPU deadline sample for the whole consumed span, before its mandatory ready-event waits.
+    bool (*acquire_span)(void *, size_t first_slot, size_t count);
+    // Available only after drain; cancellation may expose diagnostics, but must not train runtime policy.
+    ggml_kv_stream_copy_feedback (*feedback)(void *);
 };
 using ggml_kv_stream_copy_ops_get = const ggml_kv_stream_copy_ops * (*)();

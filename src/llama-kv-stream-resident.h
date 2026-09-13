@@ -14,6 +14,7 @@ struct llama_kv_stream_prefetch_stats {
     size_t ready_pages = 0;
     bool demand_ready = false;
 };
+struct ggml_kv_stream_copy_feedback;
 
 // Idle native resources owned by the coarse binding; backend and external graph contexts must outlive their users.
 // Hold a binding execution pin for the entire lifetime of any graph referencing these planes, including captures.
@@ -51,6 +52,15 @@ public:
     bool sequence_active() const noexcept;
     // Readiness is an observation, not a storage-lifetime fence; distance is measured in the supplied layer order.
     llama_kv_stream_prefetch_stats sequence_stats() const noexcept;
+
+    // Opt-in diagnostics and span trials. Change only while idle; no KV storage is resized here.
+    bool configure_feedback(bool enable, size_t bounded_span_pages = 32);
+    size_t suggested_span_pages() const noexcept;
+    llama_kv_stream_feedback feedback() const noexcept;
+    ggml_kv_stream_copy_feedback copy_feedback() const noexcept;
+    // Read-only proposal. Caller must accept the device layout before publishing decision.next.
+    bool recommend_policy(const llama_kv_stream_policy_state & previous, size_t active_tokens,
+            uint32_t query_tokens, llama_kv_stream_policy_decision & decision) const;
 
     // Configure a physical-batch ceiling. Quantization scratch and indices borrow the unused ring region.
     bool configure_writes(size_t max_batch_rows);

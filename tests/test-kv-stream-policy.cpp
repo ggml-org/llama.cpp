@@ -1,4 +1,5 @@
 #include "../src/llama-kv-stream-policy.h"
+#include "../src/llama-kv-stream-feedback.h"
 #include "testing.h"
 
 #include <cmath>
@@ -48,6 +49,50 @@ static uint32_t reference_target(uint32_t pool, uint32_t layers, uint32_t active
 
 int main() {
     testing t;
+    t.test("runtime_feedback_units_continuity_and_policy_hysteresis", [](testing & t) {
+        llama_kv_stream_feedback_window window;
+        ggml_kv_stream_copy_feedback sample;
+        sample.available = true; sample.samples = 100; sample.misses = 10;
+        sample.bytes = 1000; sample.timed_bytes = 500; sample.copy_ms = 2; sample.elapsed_ms = 10; sample.peak_slots = 16;
+        t.assert_true(window.add(sample));
+        t.assert_true(std::abs(window.snapshot().copy_busy_ratio-.4) < 1e-12);
+        auto c = config(160); llama_kv_stream_policy_state s; start(t,c,s); seed(s,12);
+        s.feedback_epoch = window.snapshot().epoch;
+        for (int i = 0; i < 3; ++i) {
+            if (i) t.assert_true(window.add(sample));
+            auto o = observe(12); o.feedback = window.snapshot();
+            llama_kv_stream_policy_decision d;
+            t.assert_true(llama_kv_stream_policy_step(c,s,o,d).status == status::success);
+            t.assert_true(d.feedback_used);
+            t.assert_true(d.partition_changed == (i == 2)); s = d.next;
+        }
+        t.assert_equal(uint32_t(8),s.resident_pages_per_layer);
+        t.assert_equal(uint32_t(32),s.ring_slots);
+        const auto before = window.snapshot();
+        sample.timed_bytes = sample.bytes+1;
+        t.assert_true(!window.add(sample)); t.assert_equal(before.samples,window.snapshot().samples);
+        sample.timed_bytes = 500; sample.copy_ms = NAN; t.assert_true(!window.add(sample));
+        sample.copy_ms = 2; sample.misses = 101; t.assert_true(!window.add(sample));
+        sample.misses = 10; sample.timed_bytes = 0; t.assert_true(!window.add(sample));
+        sample.timed_bytes = 500; sample.elapsed_ms = 0; t.assert_true(!window.add(sample));
+        sample.elapsed_ms = 10; sample.copy_ms = 100;
+        t.assert_true(window.add(sample)); t.assert_equal(1.0,window.snapshot().copy_busy_ratio);
+        sample.samples = UINT64_MAX; t.assert_true(!window.add(sample));
+        window.reset(); t.assert_true(!window.snapshot().available && before.epoch != window.snapshot().epoch);
+    });
+    t.test("span_trials_require_matching_samples_and_a_measurable_gain", [](testing & t) {
+        for (double bounded : {8.0,9.99,12.0}) {
+            llama_kv_stream_span_tuner tuner(2);
+            tuner.observe(NAN,false); tuner.observe(1,true);
+            t.assert_true(!tuner.selected() && !tuner.bounded());
+            for (int i = 0; i < 3; ++i) tuner.observe(10,false);
+            t.assert_true(tuner.bounded() && !tuner.selected());
+            for (int i = 0; i < 3; ++i) tuner.observe(bounded,true);
+            t.assert_true(tuner.selected()); t.assert_true(tuner.bounded() == (bounded == 8));
+            tuner.observe(0.01,!tuner.bounded()); t.assert_true(tuner.bounded() == (bounded == 8));
+            tuner.reset(); t.assert_true(!tuner.selected() && !tuner.bounded());
+        }
+    });
     t.test("startup_uses_all_pages_after_conversion_reservation", [](testing & t) {
         auto c = config(160, 16, true); c.pool_bytes += 13;
         llama_kv_stream_policy_state s;

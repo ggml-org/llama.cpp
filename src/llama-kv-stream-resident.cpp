@@ -4,11 +4,17 @@
 #include "../ggml/src/ggml-kv-stream-device.h"
 #include "../ggml/src/ggml-kv-stream-copy.h"
 #include "llama-kv-stream-prefetch.h"
+#include "llama-kv-stream-feedback.h"
 
 #include <cmath>
+#include <chrono>
+#include <atomic>
 #include <cstring>
 #include <limits>
 #include <utility>
+
+// Binding recreation must not make a new counter history look like an earlier runtime's history.
+static std::atomic<uint64_t> next_feedback_epoch{1};
 
 struct llama_kv_stream_resident::implementation {
     llama_kv_stream_binding_view binding;
@@ -37,13 +43,46 @@ struct llama_kv_stream_resident::implementation {
         std::vector<uint8_t> resident_dirty;
         size_t active = 0, padded = 0, span = 0, stable = 0, next = 0;
         uint64_t generation = 0, epoch = 0;
-        bool started = false;
+        bool started = false, feedback_valid = true;
         llama_kv_stream_prefetch_stats stats;
     };
     std::unique_ptr<prefetch_sequence> sequence;
     llama_kv_stream_prefetch_stats finished_sequence;
+    bool measuring = false;
+    size_t bounded_span = 32, feedback_pages = 0;
+    uint32_t feedback_queries = 0;
+    uint64_t feedback_generation = 0, feedback_epoch = 0;
+    std::vector<uint32_t> feedback_layers;
+    llama_kv_stream_feedback_window window;
+    llama_kv_stream_span_tuner tuner;
+    ggml_kv_stream_copy_feedback last_feedback;
+    std::chrono::steady_clock::time_point run_started;
     // Destroy the copy queue before tensor metadata and authoritative host storage.
     std::unique_ptr<void,void(*)(void*)> copies{nullptr,nullptr};
+
+    // Discard both counter continuity and timing trials after unknown content or execution changes.
+    void reset_feedback() {
+        window.reset(next_feedback_epoch.fetch_add(1,std::memory_order_relaxed)); tuner.reset(); last_feedback = {};
+        feedback_generation = feedback_epoch = 0;
+    }
+    void prepare_feedback(size_t tokens, uint32_t queries, const std::vector<uint32_t> & layers) {
+        if (!measuring) return;
+        const size_t pages = (tokens-1)/page.tokens+1;
+        if (feedback_generation != content->generation() || feedback_epoch != content->mirror_epoch() ||
+                pages != feedback_pages || queries != feedback_queries || layers != feedback_layers) reset_feedback();
+        feedback_pages = pages; feedback_queries = queries; feedback_layers = layers;
+        feedback_generation = content->generation(); feedback_epoch = content->mirror_epoch();
+    }
+    // Only successful complete executions train the policy or end-to-end span trials.
+    void record_feedback(size_t span) {
+        if (!measuring) return;
+        last_feedback = copy_ops->feedback(copies.get());
+        if (!window.add(last_feedback)) { reset_feedback(); return; }
+        const size_t slots = binding.initial_policy.ring_slots, bounded = std::min(slots,bounded_span);
+        if (feedback_queries == 1 && bounded < slots && (span == bounded || span >= slots))
+            tuner.observe(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-run_started).count(),span == bounded);
+        feedback_generation = content->generation(); feedback_epoch = content->mirror_epoch();
+    }
 
     // Reuse event resources only while their retained host allocation still matches the cache.
     bool ensure_copies(size_t slots) {
@@ -55,6 +94,8 @@ struct llama_kv_stream_resident::implementation {
         if (!copy_ops || copy_ops->version < 2 || !copy_ops->enqueue_span || !copy_ops->stats) return false;
         copies = decltype(copies)(copy_ops->create(backend,binding.buffer,content->host()->buffer(),binding.config.shape,slots),copy_ops->free);
         if (!copies) return false;
+        if (measuring && (copy_ops->version < 4 || !copy_ops->measure || !copy_ops->acquire_span || !copy_ops->feedback ||
+                !copy_ops->measure(copies.get(),true))) { copies.reset(); return false; }
         copy_host = content->host()->buffer(); return true;
     }
 
@@ -94,13 +135,17 @@ struct llama_kv_stream_resident::implementation {
     }
 
     // Retire pending DMA before releasing the logical session, including failure/cancellation.
-    void stop_sequence() {
+    void stop_sequence(bool success = false) {
         if (!sequence) return;
         finished_sequence = sequence->stats;
         if (sequence->started) {
             copy_ops->drain(copies.get());
             const auto copied = copy_ops->stats(copies.get());
             finished_sequence.copy_bytes = copied.bytes; finished_sequence.copy_calls = copied.calls;
+        }
+        if (measuring) {
+            if (success && sequence->started && sequence->feedback_valid) record_feedback(sequence->span);
+            else reset_feedback();
         }
         finished_sequence.pending_pages = 0;
         if (copies && copy_host != content->host()->buffer()) { copies.reset(); copy_host = nullptr; }
@@ -166,6 +211,37 @@ struct llama_kv_stream_resident::implementation {
     }
 };
 
+// Reuse the existing optional copy adapter; enabling diagnostics does not alter default spans.
+bool llama_kv_stream_resident::configure_feedback(bool enable, size_t bounded) {
+    auto & s = *impl;
+    if (s.busy || s.sequence || !bounded) return false;
+    if (enable && (!s.ensure_copies(s.binding.initial_policy.ring_slots) || s.copy_ops->version < 4 ||
+            !s.copy_ops->measure || !s.copy_ops->feedback || !s.copy_ops->acquire_span)) return false;
+    if (s.copies && s.copy_ops->version >= 4 && !s.copy_ops->measure(s.copies.get(),enable)) return false;
+    s.measuring = enable; s.bounded_span = bounded; s.reset_feedback();
+    return true;
+}
+size_t llama_kv_stream_resident::suggested_span_pages() const noexcept {
+    const auto & s = *impl;
+    return s.tuner.bounded() ? std::min(size_t(s.binding.initial_policy.ring_slots),s.bounded_span) : s.binding.initial_policy.ring_slots;
+}
+llama_kv_stream_feedback llama_kv_stream_resident::feedback() const noexcept {
+    const auto & s = *impl;
+    if (!s.measuring || s.busy || s.sequence || s.feedback_generation != s.content->generation() || s.feedback_epoch != s.content->mirror_epoch()) return {};
+    return s.window.snapshot();
+}
+ggml_kv_stream_copy_feedback llama_kv_stream_resident::copy_feedback() const noexcept {
+    return feedback().available ? impl->last_feedback : ggml_kv_stream_copy_feedback{};
+}
+// Reading feedback never advances the accepted policy cursor or changes device addresses.
+bool llama_kv_stream_resident::recommend_policy(const llama_kv_stream_policy_state & previous, size_t tokens,
+        uint32_t queries, llama_kv_stream_policy_decision & decision) const {
+    if (impl->busy || impl->sequence) return false;
+    const bool same = tokens && (tokens-1)/impl->page.tokens+1 == impl->feedback_pages && queries == impl->feedback_queries;
+    return llama_kv_stream_policy_step(impl->binding.config,previous,
+            {tokens,queries,same ? feedback() : llama_kv_stream_feedback{}},decision).status == llama_kv_stream_policy_status::success;
+}
+
 // External captures must be retired before their binding execution pins are returned.
 llama_kv_stream_resident::~llama_kv_stream_resident() = default;
 
@@ -174,6 +250,7 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
     auto & s = *impl;
     if (s.busy || s.sequence || s.poisoned || !s.compatible() || layers.empty() || layers.size() > s.layout.layers.size() || !active || !span ||
             active > size_t(INT32_MAX)-255 || active > s.content->host()->config().context_tokens) return false;
+    if (s.measuring) s.run_started = std::chrono::steady_clock::now();
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(s.backend));
     auto partial_ops = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
     auto copy_ops = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
@@ -481,6 +558,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     auto & s = *impl;
     if (s.busy) return false; // Reentrant rejection must not cancel the outer call's session.
     const bool cross = bool(s.sequence);
+    if (!cross && s.measuring) s.run_started = std::chrono::steady_clock::now();
     struct session_guard {
         implementation & s; bool enabled, keep = false;
         ~session_guard() { if (enabled && !keep) s.stop_sequence(); }
@@ -578,7 +656,11 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     }
     if (!cross) release_write_workspace();
     s.busy = true; s.valid = false;
-    struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
+    bool succeeded = false;
+    struct guard {
+        implementation & s; bool & succeeded; bool cross;
+        ~guard() { s.busy = false; if (!cross && !succeeded && s.measuring) s.reset_feedback(); }
+    } operation{s,succeeded,cross};
     if (!cross) {
         if (!s.refresh(padded)) return false;
     } else {
@@ -591,6 +673,11 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     }
     llama_kv_stream_host_layer host;
     if (!s.content->host()->layer(layer,host)) return false;
+    if (s.measuring) {
+        if (!cross) s.prepare_feedback(active_tokens,uint32_t(q->ne[1]),{layer});
+        else if (s.sequence->next == 0) s.prepare_feedback(active_tokens,uint32_t(q->ne[1]),s.sequence->layers);
+        else if (s.feedback_queries != uint32_t(q->ne[1])) s.sequence->feedback_valid = false;
+    }
     s.attention_calls = 0;
     const auto partial = [&](bool second) {
         if (!ops->partial(s.backend,&op,wb,second)) return false;
@@ -601,9 +688,13 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         if (cross && s.sequence->plan.front() && s.sequence->plan.front()->layer == s.sequence->next) return false;
         if (!ops->merge(s.backend,output,wb)) return false;
         if (cross) {
-            if (++s.sequence->next == s.sequence->layers.size()) s.stop_sequence();
+            if (++s.sequence->next == s.sequence->layers.size()) s.stop_sequence(true);
             session_call.keep = true;
+        } else if (s.measuring) {
+            if (overlap && prefix < padded) { s.copy_ops->drain(s.copies.get()); s.record_feedback(span_pages); }
+            else s.reset_feedback();
         }
+        succeeded = true;
         return true;
     };
     const bool prefetch = overlap && prefix < padded;
@@ -672,8 +763,12 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
             const size_t token = first+offset*s.page.tokens;
             const size_t tokens = std::min(consumed*s.page.tokens,padded-token);
             if (!describe(token,tokens,slot+offset,false)) return false;
-            if (prefetch) for (size_t i = 0; i < consumed; ++i)
-                if (!s.copy_ops->acquire(s.copies.get(),slot+offset+i)) return false;
+            if (prefetch) {
+                if (s.measuring) {
+                    if (!s.copy_ops->acquire_span(s.copies.get(),slot+offset,consumed)) return false;
+                } else for (size_t i = 0; i < consumed; ++i)
+                    if (!s.copy_ops->acquire(s.copies.get(),slot+offset+i)) return false;
+            }
             if (!convert_inputs()) return false;
             const auto recycle = [&] {
                 for (size_t i = 0; i < consumed; ++i) {
