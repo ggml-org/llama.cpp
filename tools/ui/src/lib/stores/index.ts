@@ -37,6 +37,9 @@ export { conversationsStore } from './conversations/index.svelte';
 // MCP
 export { mcpStore } from './mcp/index.svelte';
 
+// BACKENDS
+export { backendsStore } from './backends.svelte';
+
 // MODELS
 export { modelsStore } from './models/index.svelte';
 
