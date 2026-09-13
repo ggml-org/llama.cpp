@@ -1,0 +1,56 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+layout(constant_id = 0) const uint BLOCK_SIZE = 128;
+
+layout (binding = 0) readonly buffer M {float16_t data_m[];};
+layout (binding = 1) writeonly buffer I {int32_t data_i[];};
+
+layout (push_constant) uniform parameter {
+    uint KV;
+    uint nem1;
+    uint nem2;
+    uint nbm1;
+    uint nbm2;
+    uint nbm3;
+    uint n_kv_max;
+} p;
+
+shared uint count;
+
+// One workgroup per mask row: compact finite-mask KV positions into a per-row
+// index list of length n_kv_max, -1 padded. Order is irrelevant, so use an atomic.
+void main() {
+    const uint i1 = gl_WorkGroupID.x;
+    const uint i2 = gl_WorkGroupID.y;
+    const uint i3 = gl_WorkGroupID.z;
+    const uint tid = gl_LocalInvocationID.x;
+
+    if (tid == 0) {
+        count = 0;
+    }
+    barrier();
+
+    const uint m_base   = i3 * p.nbm3 + i2 * p.nbm2 + i1 * p.nbm1;
+    const uint out_base = ((i3 * p.nem2 + i2) * p.nem1 + i1) * p.n_kv_max;
+
+    for (uint k = tid; k < p.KV; k += gl_WorkGroupSize.x) {
+        const float v = float(data_m[m_base + k]);
+        if (!isinf(v) && !isnan(v)) {
+            const uint slot = atomicAdd(count, 1u);
+            if (slot < p.n_kv_max) {
+                data_i[out_base + slot] = int32_t(k);
+            }
+        }
+    }
+    barrier();
+
+    const uint c = min(count, p.n_kv_max);
+    for (uint s = c + tid; s < p.n_kv_max; s += gl_WorkGroupSize.x) {
+        data_i[out_base + s] = int32_t(-1);
+    }
+}
