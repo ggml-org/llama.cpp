@@ -5,6 +5,9 @@
 
 struct common_speculative;
 
+// return the default speculative decoding configuration
+common_params_speculative common_speculative_default_config();
+
 // comma separated list the provided types
 std::string common_speculative_type_name_str(const std::vector<enum common_speculative_type> & types);
 
