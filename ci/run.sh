@@ -775,7 +775,11 @@ function gg_run_test_backend_ops {
 
     set -e
 
-    local args_extra="-j $(nproc)"
+    local n_jobs=$(nproc)
+    if [ "${n_jobs}" -gt 2 ]; then
+        n_jobs=2
+    fi
+    local args_extra="-j ${n_jobs}"
 
     # TODO: fix multi-threaded for ROCm
     #       https://github.com/ggml-org/llama.cpp/actions/runs/34576278519/job/103297889044?pr=28740#step:3:4865
@@ -789,10 +793,11 @@ function gg_run_test_backend_ops {
         args_extra=""
     fi
 
+    # TODO: reduce the test-backend-ops timeout to 1800s
     if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
-        (time ./bin/test-backend-ops ${args_extra} -b CPU) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+        (time timeout 3600 ./bin/test-backend-ops ${args_extra} -b CPU) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
     else
-        (time ./bin/test-backend-ops ${args_extra}       ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+        (time timeout 3600 ./bin/test-backend-ops ${args_extra}       ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
     fi
 
     set +e
