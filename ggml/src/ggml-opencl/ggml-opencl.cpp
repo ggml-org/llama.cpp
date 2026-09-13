@@ -24494,33 +24494,15 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     // dp4a (int8) prefill GEMM variant
                     static const char * q4_0_moe_dp4a_env = getenv("GGML_OPENCL_Q4_0_MOE_DP4A");
 
-                    // The prebuilt kernel-lib GEMM is tuned for prefill-sized work, but it was
-                    // selected whenever it was loaded, and its presence also disabled the dp4a GEMM
-                    // for every shape. A speculative-decode verify step reaches this path at a
-                    // handful of tokens, and so does every short prefill chunk; both ran a
-                    // prefill-tuned kernel. Gate it on size instead.
-                    //
-                    // The size is the total routing count, ne20*ne21 (n_expert_used * n_tokens) -
-                    // the quantity max_post_router_tile, and so the GEMM's N, is derived from. Not
-                    // ne11: for mul_mat_id src1 is [n_embd, n_expert_used, n_tokens], so ne11 is
-                    // n_expert_used (or 1 for the down projection) and does not move with the batch.
-                    //
-                    // Measured on Adreno X2-90 by sweeping the physical batch with the kernel lib
-                    // loaded and only the threshold moving, dp4a relative to the prebuilt kernel
-                    // (pp512 t/s, gemma-4-26B-A4B-QAT-Q4_0 and Qwen3-30B-A3B-Q4_0):
-                    //
-                    //   routings    32    64   128   256   512  1024  2048   4096
-                    //   26B       +26%  +17%  +18%  +16%  +12%   +6%   +1%  -2.5%
-                    //   30B       +31%  +18%  +16%  +14%  +12%   +7%   +1%  -0.8%
-                    //
-                    // The prebuilt kernel leads only at a full 512-token ubatch, so keep it exactly
-                    // there. GGML_OPENCL_MOE_BIN_MIN_ROUTINGS overrides the threshold.
+                    // It turns out that the prebuilt kernel only outperforms the dp4a variant (on X2-90)
+                    // at very large routing counts, so we gate its use accordingly using moe_bin_min,
+                    // which can be overridden via the GGML_OPENCL_MOE_BIN_MIN_ROUTINGS environment variable.
+                    // The routing count is ne20 * ne21 (n_expert_used * n_tokens).
                     static const char * moe_bin_min_env = getenv("GGML_OPENCL_MOE_BIN_MIN_ROUTINGS");
                     const int  moe_bin_min   = moe_bin_min_env ? atoi(moe_bin_min_env) : 4096;
+
+                    // whether bin kernels are available
                     const bool bin_available = backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin != nullptr;
-                    // A dp4a kernel-lib GEMM outranks the plain kernel-lib one (upstream rule,
-                    // added with kernel_gemm_moe_q4_0_q8_1_dp4a_bin): where it exists, the plain
-                    // prebuilt kernel must not be the reason dp4a is declined, at any size.
                     const bool dp4a_bin_available = backend_ctx->kernel_gemm_moe_q4_0_q8_1_dp4a_bin != nullptr;
 
                     bool use_moe_dp4a = q4_0_moe_dp4a_env

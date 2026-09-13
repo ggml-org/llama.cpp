@@ -22,9 +22,7 @@ kernel void kernel_moe_reorder_b(
 
     // Padded slots need not be written at all. The MoE GEMMs accumulate per output
     // column and scatter only the real columns, so whatever sits in a padded slot
-    // never reaches dst -- verified by filling them with 1e30 and re-running
-    // test-backend-ops MUL_MAT_ID (383 OK / 0 FAIL, unchanged), against a positive
-    // control that poisons the real gather too and fails 188 of 383.
+    // never reaches dst
     if (router_idx == 0xFFFFFFFF) {
         return;
     }
