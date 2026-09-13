@@ -130,6 +130,13 @@ if (ANDROID)
     target_compile_options(mtmd PRIVATE -Wno-missing-prototypes)
 endif()
 
+# MSVC defines _M_X64 for ARM64EC, so miniaudio.h takes its x64 path.
+# ARM64EC does not support AVX types.
+string(TOLOWER "${CMAKE_GENERATOR_PLATFORM}" MTMD_GENERATOR_PLATFORM_LWR)
+if (MSVC AND MTMD_GENERATOR_PLATFORM_LWR STREQUAL "arm64ec")
+    target_compile_definitions(mtmd PRIVATE MA_NO_AVX2)
+endif()
+
 if (TARGET BUILD_INFO)
     add_dependencies(mtmd        BUILD_INFO)
     add_dependencies(mtmd-helper BUILD_INFO)
