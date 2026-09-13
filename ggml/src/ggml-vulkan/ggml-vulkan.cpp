@@ -333,6 +333,7 @@ static void ggml_vk_print_device_lost_info(const vk_device& device);
 struct vk_queue_handle {
     vk::Queue queue;
     vk_device_ref device;
+    std::mutex * device_submit_mutex = nullptr;
     virtual void submit(vk::ArrayProxy<const vk::SubmitInfo> submits, vk::Fence fence) = 0;
     virtual void lock()   {}   // no-op by default (internally synchronized case)
     virtual void unlock() {}
@@ -342,6 +343,11 @@ struct vk_queue_handle {
 struct vk_queue_handle_synchronized : vk_queue_handle {
     std::mutex mutex;
     void submit(vk::ArrayProxy<const vk::SubmitInfo> submits, vk::Fence fence) override {
+        // Workaround for NVIDIA driver bug
+        std::unique_lock<std::mutex> device_guard;
+        if (device_submit_mutex) {
+            device_guard = std::unique_lock<std::mutex>(*device_submit_mutex);
+        }
         std::lock_guard<std::mutex> guard(mutex);
         try {
             queue.submit(submits, fence);
@@ -356,9 +362,14 @@ struct vk_queue_handle_synchronized : vk_queue_handle {
     void unlock() override { mutex.unlock(); }
 };
 
+// Driver guarantees internal synchronization via VK_KHR_internally_synchronized_queues
 struct vk_queue_handle_unsynchronized : vk_queue_handle {
     void submit(vk::ArrayProxy<const vk::SubmitInfo> submits, vk::Fence fence) override {
-        // Driver guarantees internal synchronization via VK_KHR_internally_synchronized_queues
+        // Workaround for NVIDIA driver bug
+        std::unique_lock<std::mutex> device_guard;
+        if (device_submit_mutex) {
+            device_guard = std::unique_lock<std::mutex>(*device_submit_mutex);
+        }
         try {
             queue.submit(submits, fence);
         } catch (vk::DeviceLostError &) {
@@ -835,6 +846,7 @@ static bool ggml_vk_lightning_indexer_k_type_supported(ggml_type type) {
 
 struct vk_device_struct {
     std::recursive_mutex mutex;
+    std::mutex queue_submit_mutex;
     mutable std::shared_mutex pinned_memory_mutex;
 
     // Guards compile_pending, all_pipelines, and the dynamic pipeline maps
@@ -3520,6 +3532,10 @@ static std::unique_ptr<vk_queue> ggml_vk_create_queue(vk_device& device, uint32_
 
     h->queue = device->device.getQueue2(queue_info2);
     h->device = device;
+    // Avoid concurrent submissions on NVIDIA due to driver bug.
+    if (device->vendor_id == VK_VENDOR_ID_NVIDIA) {
+        h->device_submit_mutex = &device->queue_submit_mutex;
+    }
     q->handle = h;
 
     q->cmd_pool.init(device, q.get());
