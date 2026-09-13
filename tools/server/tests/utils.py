@@ -52,7 +52,6 @@ class ServerProcess:
     debug: bool = False
     server_port: int = 8080
     server_host: str = "127.0.0.1"
-    server_listen_hosts: List[str] | None = None
     model_hf_repo: str | None = "ggml-org/models"
     model_hf_file: str | None = "tinyllamas/stories260K.gguf"
     model_alias: str = "tinyllama-2"
@@ -163,8 +162,7 @@ class ServerProcess:
             "--seed",
             self.seed,
         ]
-        hosts = self.server_listen_hosts if self.server_listen_hosts is not None else [self.server_host]
-        server_args.extend(["--host", ",".join(hosts)])
+        server_args.extend(["--host", self.server_host])
         if self.offline:
             server_args.append("--offline")
         if self.model_file:
@@ -366,6 +364,11 @@ class ServerProcess:
         if hasattr(self, '_log') and self._log != sys.stdout:
             self._log.close()
 
+    def make_url(self, path: str, host: str | None = None) -> str:
+        if host is None:
+            host = self.server_host.split(",")[0].strip()
+        return f"http://{host}:{self.server_port}{path}"
+
     def make_request(
         self,
         method: str,
@@ -373,8 +376,9 @@ class ServerProcess:
         data: dict | Any | None = None,
         headers: dict | None = None,
         timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+        host: str | None = None,
     ) -> ServerResponse:
-        url = f"http://{self.server_host}:{self.server_port}{path}"
+        url = self.make_url(path, host)
         parse_body = False
         if method == "GET":
             response = requests.get(url, headers=headers, timeout=timeout)
@@ -408,8 +412,9 @@ class ServerProcess:
         path: str,
         data: dict | None = None,
         headers: dict | None = None,
+        host: str | None = None,
     ) -> Iterator[dict]:
-        url = f"http://{self.server_host}:{self.server_port}{path}"
+        url = self.make_url(path, host)
         if method == "POST":
             response = requests.post(url, headers=headers, json=data, stream=True)
         else:
