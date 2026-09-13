@@ -125,6 +125,43 @@ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict
             actual_arguments = json.loads(actual_arguments)
         assert argument_key in actual_arguments, f"tool arguments: {actual_arguments}, expected: {argument_key}"
 
+
+def test_logprobs_with_tools_stream():
+    # Regression: `logprobs` used to be rejected with tools + stream, while the
+    # equivalent `n_probs` parameter was allowed. Both must behave the same.
+    # https://github.com/ggml-org/llama.cpp/issues/28478
+    global server
+    server.jinja = True
+    server.start()
+    res = server.make_any_request("POST", "/v1/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [
+            {"role": "user", "content": "Write an example"},
+        ],
+        "tools": [TEST_TOOL],
+        "stream": True,
+        "logprobs": True,
+        "top_logprobs": 2,
+    })
+    assert res["choices"][0]["message"]["role"] == "assistant", f"Unexpected response: {res}"
+
+
+def test_logprobs_with_tools_no_stream():
+    global server
+    server.jinja = True
+    server.start()
+    res = server.make_any_request("POST", "/v1/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [
+            {"role": "user", "content": "Write an example"},
+        ],
+        "tools": [TEST_TOOL],
+        "stream": False,
+        "logprobs": True,
+        "top_logprobs": 2,
+    })
+    assert res["choices"][0]["message"]["role"] == "assistant", f"Unexpected response: {res}"
+
 # PR #22654: commented out since we're now allowing content before tool calls in tool_call: required, so we can't force this
 # in the tiny model just by using the grammar
 #

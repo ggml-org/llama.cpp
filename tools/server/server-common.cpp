@@ -1403,9 +1403,8 @@ json oaicompat_chat_params_parse(
     // Handle "logprobs" field
     // TODO: The response format of this option is not yet OAI-compatible, but seems like no one really using it; We may need to fix it in the future
     if (json_value(body, "logprobs", false)) {
-        if (has_tools && stream) {
-            throw std::invalid_argument("logprobs is not supported with tools + stream");
-        }
+        // n_probs is allowed with tools + stream, so logprobs (which maps to the
+        // same parameter) is allowed as well
         llama_params["n_probs"] = json_value(body, "top_logprobs", 20);
     } else if (body.contains("top_logprobs") && !body.at("top_logprobs").is_null()) {
         throw std::invalid_argument("top_logprobs requires logprobs to be set to true");
