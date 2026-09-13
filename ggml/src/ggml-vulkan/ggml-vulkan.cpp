@@ -11058,11 +11058,22 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     }
 }
 
-static bool ggml_vk_use_mul_mat_vec_id(const struct ggml_cgraph * cgraph, int node_idx) {
+static bool ggml_vk_use_mul_mat_vec_id(const ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph, int node_idx) {
     ggml_tensor * dst = cgraph->nodes[node_idx];
     ggml_tensor * src0 = dst->src[0];
     ggml_tensor * src2 = dst->src[2];
-    return (src2->ne[1] <= 8) && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type));
+
+    bool use_vec_id = src2->ne[1] <= 8;
+    if (!ctx->device->coopmat2) {
+        // Tiled mul_mat_id is slow at low batch without coopmat2; keep the
+        // vector path while the routed density is low.
+        const int64_t n_tokens  = src2->ne[1];
+        const int64_t n_per_tok = src2->ne[0];
+        const int64_t n_experts = src0->ne[2];
+        use_vec_id = (n_tokens * n_per_tok <= 2 * n_experts) && (n_tokens <= 64);
+    }
+
+    return use_vec_id && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type));
 }
 
 static void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx) {
@@ -11071,7 +11082,7 @@ static void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx
     ggml_tensor * src1 = dst->src[1];
     ggml_tensor * src2 = dst->src[2];
     VK_LOG_DEBUG("ggml_vk_mul_mat_id(" << src0 << ", " << src1 << ", " << src2 << ", " << dst << ")");
-    if (ggml_vk_use_mul_mat_vec_id(cgraph, node_idx)) {
+    if (ggml_vk_use_mul_mat_vec_id(ctx, cgraph, node_idx)) {
         ggml_vk_mul_mat_vec_id_q_f16(ctx, subctx, cgraph, node_idx);
     } else {
         ggml_vk_mul_mat_id_q_f16(ctx, subctx, src0, src1, src2, dst);
@@ -17422,7 +17433,7 @@ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct g
             return false;
         }
         // mat-vec only
-        if (!ggml_vk_use_mul_mat_vec_id(cgraph, node_idx)) {
+        if (!ggml_vk_use_mul_mat_vec_id(ctx, cgraph, node_idx)) {
             return false;
         }
         // shaders assume the types match
@@ -17457,7 +17468,7 @@ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct g
             return false;
         }
         // mat-vec only
-        if (!ggml_vk_use_mul_mat_vec_id(cgraph, node_idx)) {
+        if (!ggml_vk_use_mul_mat_vec_id(ctx, cgraph, node_idx)) {
             return false;
         }
         // shaders assume the types match
