@@ -1999,6 +1999,65 @@ static void test_convert_responses_to_chatcmpl() {
 
         assert_equals(false, result.contains("tools"));
     }
+
+    // Assistant message items may omit type (defaults to "message")
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "role": "assistant",
+                    "content": "hello"
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "hello"
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": "hi"
+                }
+            ]
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals((size_t)2, result.at("messages").size());
+        const auto & msg0 = result.at("messages")[0];
+        assert_equals(std::string("assistant"), msg0.at("role").get<std::string>());
+        assert_equals((size_t)2, msg0.at("content").size());
+        assert_equals(std::string("hello"), msg0.at("content")[0].at("text").get<std::string>());
+        assert_equals(std::string("hello"), msg0.at("content")[1].at("text").get<std::string>());
+        const auto & msg1 = result.at("messages")[1];
+        assert_equals(std::string("user"), msg1.at("role").get<std::string>());
+    }
+
+    // Reasoning items with only summary (or empty content) are skipped
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "encrypted_content": "abc"
+                },
+                {
+                    "role": "user",
+                    "content": "hi"
+                }
+            ]
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals((size_t)1, result.at("messages").size());
+        assert_equals(std::string("user"), result.at("messages")[0].at("role").get<std::string>());
+    }
 }
 
 // Shared LFM2 parser cases - all variants use one output format and parser
