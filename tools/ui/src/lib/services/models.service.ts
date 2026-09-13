@@ -6,7 +6,6 @@
  * modelsStore and its status manager.
  */
 
-import { base } from '$app/paths';
 import { API_MODELS, MODEL_ID, type ModelSidecar, SIDECAR_TOKENS } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
@@ -14,6 +13,7 @@ import {
 	apiDelete,
 	apiFetch,
 	apiPost,
+	apiUrl,
 	extractSseDataPayload,
 	normalizeModelName,
 	sidecarFromFileToken,
@@ -345,7 +345,7 @@ export class ModelsService {
 
 		while (!signal.aborted) {
 			try {
-				const response = await fetch(`${base}${API_MODELS.SSE}`, {
+				const response = await fetch(apiUrl(API_MODELS.SSE), {
 					headers: getAuthHeaders(),
 					signal
 				});

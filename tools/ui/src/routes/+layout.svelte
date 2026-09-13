@@ -2,7 +2,6 @@
 	import '../app.css';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
@@ -31,6 +30,7 @@
 		versionStore
 	} from '$lib/stores';
 	import { initStores } from '$lib/stores/init';
+	import { apiUrl } from '$lib/utils/api-base';
 	import { ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
@@ -167,7 +167,7 @@
 					[HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKey.trim()}`
 				};
 
-				fetch(`${base}/props`, { headers })
+				fetch(apiUrl('/props'), { headers })
 					.then((response) => {
 						if (response.status === 401 || response.status === 403) {
 							window.location.reload();

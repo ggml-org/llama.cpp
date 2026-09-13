@@ -1,6 +1,6 @@
+import { apiUrl } from './api-base';
 import { getAuthHeaders, getJsonHeaders } from './api-headers';
-import { base } from '$app/paths';
-import { API_ABSOLUTE_URL_PROTOCOLS, ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants';
+import { ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants';
 
 /**
  * API Fetch Utilities
@@ -62,8 +62,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 	const { authOnly = false, headers: customHeaders, ...fetchOptions } = options;
 	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
 	const headers = { ...baseHeaders, ...customHeaders };
-	// absolute URLs with an allowed protocol pass through untouched; relative paths get the base prefix
-	const url = API_ABSOLUTE_URL_PROTOCOLS.some((p) => path.startsWith(p)) ? path : `${base}${path}`;
+	const url = apiUrl(path);
 
 	let response;
 
@@ -106,7 +105,7 @@ export async function apiFetchWithParams<T>(
 	params: Record<string, string>,
 	options: ApiFetchOptions = {}
 ): Promise<T> {
-	const url = new URL(basePath, window.location.href);
+	const url = new URL(apiUrl(basePath), window.location.href);
 
 	for (const [key, value] of Object.entries(params)) {
 		if (value !== undefined && value !== null) {

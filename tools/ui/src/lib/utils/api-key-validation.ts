@@ -1,9 +1,9 @@
 import { error } from '@sveltejs/kit';
 import { browser } from '$app/environment';
-import { base } from '$app/paths';
 import { HEADERS } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { apiUrl } from '$lib/utils/api-base';
 
 /**
  * Validates API key by making a request to the server props endpoint
@@ -28,7 +28,7 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 			headers[HEADERS.AUTHORIZATION] = `${HEADERS.BEARER}${apiKey}`;
 		}
 
-		const response = await fetch(`${base}/props`, { headers });
+		const response = await fetch(apiUrl('/props'), { headers });
 
 		if (!response.ok) {
 			if (response.status === 401 || response.status === 403) {
