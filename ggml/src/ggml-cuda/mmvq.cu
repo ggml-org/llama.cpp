@@ -365,6 +365,33 @@ bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
                 return ne11 <= MMVQ_MAX_BATCH_SIZE;
         }
     }
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+        switch (type) {
+            case GGML_TYPE_Q4_K:
+            case GGML_TYPE_Q5_K:
+                return ne11 <= 2;
+            case GGML_TYPE_Q3_K:
+            case GGML_TYPE_Q6_K:
+                return ne11 <= 3;
+            case GGML_TYPE_Q8_0:
+            case GGML_TYPE_Q2_K:
+                return ne11 <= 4;
+            case GGML_TYPE_Q4_1:
+            case GGML_TYPE_Q5_1:
+            case GGML_TYPE_MXFP4:
+            case GGML_TYPE_IQ4_NL:
+            case GGML_TYPE_IQ3_XXS:
+                return ne11 <= 5;
+            case GGML_TYPE_Q4_0:
+            case GGML_TYPE_Q5_0:
+            case GGML_TYPE_IQ3_S:
+            case GGML_TYPE_IQ4_XS:
+            case GGML_TYPE_IQ1_S:
+                return ne11 <= 6;
+            default:
+                return ne11 <= MMVQ_MAX_BATCH_SIZE;
+        }
+    }
     if (GGML_CUDA_CC_IS_CDNA(cc)) {
         if (GGML_CUDA_CC_IS_CDNA1(cc)) {
             switch (type) {
