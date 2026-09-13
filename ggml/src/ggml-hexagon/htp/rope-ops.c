@@ -80,6 +80,8 @@ struct htp_rope_context {
     size_t dst_row_stride;
     size_t src0_row_size_aligned;
     uint32_t src0_nrows;
+    uint32_t row_start;
+    uint32_t nrows;
 
     struct fastdiv_values div_ne2_ne1;
     struct fastdiv_values div_ne1;
@@ -539,11 +541,11 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
 
     htp_rope_preamble;
 
-    const uint32_t src0_nrows = rctx->src0_nrows;
+    const uint32_t src0_nrows = rctx->nrows;
     const uint32_t src0_nrows_per_thread = rctx->src0_nrows_per_thread;
 
-    const uint32_t src0_start_row = src0_nrows_per_thread * ith;
-    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
+    const uint32_t src0_start_row = rctx->row_start + src0_nrows_per_thread * ith;
+    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, rctx->row_start + src0_nrows);
 
     // no work for this thread
     if (src0_start_row >= src0_end_row) {
@@ -706,8 +708,31 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     }
 
     const struct htp_rope_kernel_params * kparams = (const struct htp_rope_kernel_params *) octx->kernel_params;
-    assert(kparams->n_threads > 0);
+    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
     assert(octx->ctx->vtcm_size >= kparams->vtcm_size);
+
+    const uint32_t total_rows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const size_t dst_data_row_size = dst->ne[0] * sizeof(float);
+
+    uint32_t row_start = 0;
+    uint32_t nrows     = total_rows;
+
+    if (octx->ctx->mdev.count > 1) {
+        uint32_t rows_per_chunk = 0;
+        htp_tensor_mdev_rows_per_chunk(dst, sizeof(float), (uint32_t) dst_data_row_size, &rows_per_chunk);
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
+            total_rows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        row_start = range.start;
+        nrows     = range.count;
+    }
+
+    if (nrows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    const uint32_t n_threads = octx->n_threads;
 
     const uint32_t ne0 = dst->ne[0];
     const size_t src0_row_size   = src0->ne[0] * sizeof(float);
@@ -752,15 +777,17 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     rctx.dst_row_stride        = dst_row_stride;
     rctx.src0_row_size_aligned = kparams->src0_row_size_aligned;
 
-    rctx.src0_nrows            = kparams->src0_nrows;
-    rctx.src0_nrows_per_thread = kparams->src0_nrows_per_thread;
+    rctx.src0_nrows            = nrows;
+    rctx.nrows                 = nrows;
+    rctx.row_start             = row_start;
+    rctx.src0_nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
     rctx.div_ne2_ne1           = kparams->div_ne2_ne1;
     rctx.div_ne1               = kparams->div_ne1;
 
     FARF(HIGH, "rope-f32 n-rows %u n-dims %d ne0 %u ext-factor %.6f theta-scale %.6f attn-factor %.6f\n", rctx.src0_nrows, rctx.n_dims, ne0,
          rctx.ext_factor, rctx.theta_scale, rctx.attn_factor);
 
-    work_queue_run(octx->ctx->work_queue, rope_job_f32, &rctx, kparams->n_threads);
+    work_queue_run(octx->ctx->work_queue, rope_job_f32, &rctx, n_threads);
 
     return err;
 }

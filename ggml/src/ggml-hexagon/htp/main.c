@@ -34,6 +34,7 @@
 #include "work-queue.h"
 #include "hex-profile.h"
 #include "allreduce-ops.h"
+#include "htp-fence.h"
 
 #define HMX_QUEUE_CAPACITY     16
 #define HMX_QUEUE_STACK_SIZE   16384
@@ -710,22 +711,43 @@ static inline void profile_stop(uint32_t mode, struct profile_data * d) {
 static int op_fence(struct htp_ops_context * octx) {
     struct htp_context *ctx = octx->ctx;
     struct htp_thread_trace * tr = &ctx->trace[0];
-    const uint32_t seq = (uint32_t) octx->op_params[0];
+    const uint32_t seq  = (uint32_t) octx->op_params[0];
+    const uint32_t mode = (uint32_t) octx->op_params[1];
 
     htp_trace_event_start(tr, HTP_TRACE_EVT_FENCE, (uint16_t) seq);
 
     const struct htp_tensor * sync = octx->src[0];
-    atomic_uint * sync_fence = (atomic_uint *) sync->data;
+    atomic_uint * sync_fence = (atomic_uint *) (uintptr_t) sync->data;
+
+    if (mode == 1) {
+        htp_flush_dirty_ranges(ctx);
+
+        htp_mdev_group_barrier(octx);
+
+        if (ctx->mdev.idx == 0) {
+            htp_fence_write(sync_fence, seq, octx->status);
+        }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_FENCE, (uint16_t) seq);
+        FARF(HIGH, "ggml-hex: sync-signal : fence %p seq 0x%x status %d\n", sync_fence, seq, octx->status);
+        return octx->status;
+    }
+
+    int status = HTP_STATUS_OK;
     uint64_t spins = 0;
     while (1) {
-        Q6_dccleaninva_A((void *) sync_fence);
-        asm volatile ("syncht" : : : "memory");
-        uint32_t val = atomic_load(&sync_fence[0]);
-        if ((int32_t)(val - seq) >= 0) {
+        uint32_t sync_seq;
+        uint32_t sync_status;
+        htp_fence_read(sync_fence, &sync_seq, &sync_status);
+        if ((int32_t)(sync_seq - seq) >= 0) {
+            if (sync_status > HTP_STATUS_OK) {
+                FARF(ERROR, "ggml-hex: sync-wait peer failed with status %u : fence %p seq 0x%x\n", sync_status, sync_fence, seq);
+                status = sync_status;
+            }
             break;
         }
         if (++spins > HTP_FENCE_TIMEOUT) {
-            FARF(ERROR, "ggml-hex: sync-wait TIMEOUT : fence %p spins %llu seq %u\n", sync_fence, spins, seq);
+            FARF(ERROR, "ggml-hex: sync-wait TIMEOUT : fence %p spins %llu seq 0x%x\n", sync_fence, spins, seq);
+            status = HTP_STATUS_INTERNAL_ERR;
             break;
         }
         hex_pause();
@@ -733,12 +755,27 @@ static int op_fence(struct htp_ops_context * octx) {
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_FENCE, (uint16_t) seq);
 
-    FARF(HIGH, "ggml-hex: sync-done : fence %p spins %llu seq %u\n", sync_fence, spins, seq);
+    FARF(HIGH, "ggml-hex: sync-done : fence %p spins %llu seq 0x%x\n", sync_fence, spins, seq);
+    return status;
+}
+
+static int op_mdev_group(struct htp_ops_context * octx) {
+    struct htp_context * ctx = octx->ctx;
+    const struct htp_tensor * sync = octx->src[0];
+    ctx->mdev.idx   = (uint16_t) octx->op_params[0];
+    ctx->mdev.count = (uint16_t) sync->ne[1];
+    if (ctx->mdev.count > 1) {
+        ctx->mdev.count_div = init_fastdiv_values(ctx->mdev.count);
+        ctx->mdev.fence_base = (uint8_t *) sync->data;
+    }
     return HTP_STATUS_OK;
 }
 
 static int execute_op(struct htp_ops_context * octx) {
     switch (octx->op) {
+        case HTP_OP_MDEV_GROUP:
+            return op_mdev_group(octx);
+
         case HTP_OP_FENCE:
             return op_fence(octx);
 
@@ -812,6 +849,7 @@ static int execute_op(struct htp_ops_context * octx) {
             return op_sum_rows(octx);
 
         case HTP_OP_CPY:
+        case HTP_OP_CPY_FENCE:
             return op_cpy(octx);
 
         case HTP_OP_REPEAT:
@@ -855,7 +893,7 @@ static int execute_op(struct htp_ops_context * octx) {
     }
 
     FARF(ERROR, "Unknown Op %u", octx->op);
-    return -1;
+    return HTP_STATUS_NO_SUPPORT;
 }
 
 static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct htp_buf_desc *b) {
@@ -984,11 +1022,19 @@ static void prep_tensors(struct htp_context *ctx, struct htp_buf_desc *bufs, str
     }
 }
 
-static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, uint32_t idx, struct htp_op_desc * op) {
-    memcpy(octx->op_params, op->params, sizeof(octx->op_params));
+static void mdev_group_init(struct htp_context * ctx, const struct htp_opbatch_req * req) {
+    memset(&ctx->mdev, 0, sizeof(ctx->mdev));
+    ctx->mdev.fence_seq = (uint32_t)((req->seq & 0xfffff) << 12);
+}
+
+static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs, uint32_t n_bufs,
+                       struct htp_tensor * tens, uint32_t idx, struct htp_op_desc * op) {
+    memcpy(octx->op_params,     op->params, sizeof(octx->op_params));
     memcpy(octx->kernel_params, op->kernel_params, sizeof(octx->kernel_params));
-    octx->flags = op->flags;
-    octx->op    = op->opcode;
+    octx->flags         = op->flags;
+    octx->op            = op->opcode;
+    octx->n_threads     = octx->ctx->n_threads;
+    octx->n_threads_div = octx->ctx->n_threads_div;
 
     FARF(HIGH, "proc-op #%u: opcode %u flags 0x%x", idx, octx->op, octx->flags);
 
@@ -1027,9 +1073,13 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
     }
 
+    htp_tensor_dirty_all(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS);
+
+    htp_mdev_group_barrier(octx);
+
     int status = execute_op(octx);
 
-    htp_tensor_dirty_all(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS);
+    htp_ops_context_set_status(octx, status);
 
     octx->src0_spad.src = NULL;
     octx->src1_spad.src = NULL;
@@ -1037,7 +1087,7 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
     octx->src3_spad.src = NULL;
     octx->dst_spad.src  = NULL;
 
-    return status;
+    return octx->status;
 }
 
 static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_req * req, const struct dspqueue_buffer * dbuf) {
@@ -1059,7 +1109,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
         return;
     }
 
-    FARF(HIGH, "processing opbatch #%u: n-bufs %u n-tensors %u n-ops %u n-traces %u : m-size %u b-size %u t-size %u o-size %u", req->id,
+    FARF(HIGH, "processing opbatch #%llu: n-bufs %u n-tensors %u n-ops %u n-traces %u : m-size %u b-size %u t-size %u o-size %u", (unsigned long long) req->seq,
             n_bufs, n_tens, n_ops, req->n_traces, dbuf->size, b_size, t_size, o_size);
 
     // Setup descriptor pointers
@@ -1096,8 +1146,11 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
 
     struct htp_ops_context *octx = &ctx->octx;
     memset(octx, 0, sizeof(*octx));
-    octx->n_threads = ctx->n_threads;
-    octx->ctx       = ctx;
+    octx->n_threads     = ctx->n_threads;
+    octx->n_threads_div = ctx->n_threads_div;
+    octx->ctx           = ctx;
+
+    mdev_group_init(ctx, req);
 
     work_queue_wakeup(ctx->work_queue);
     if (ctx->hmx_queue) {
@@ -1105,14 +1158,17 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     }
 
     int op_status = HTP_STATUS_OK;
-    for (uint32_t i = 0; i < n_ops && op_status == HTP_STATUS_OK; i++) {
+    octx->status  = HTP_STATUS_OK;
+    for (uint32_t i = 0; i < n_ops; i++) {
         struct profile_data prof;
 
         profile_start(ctx->profiler, &prof);
 
-        op_status = proc_op_req(octx, tens, i, &ops[i]);
+        op_status = proc_op_req(octx, bufs, n_bufs, tens, i, &ops[i]);
 
         profile_stop(ctx->profiler, &prof);
+
+        htp_ops_context_set_status(octx, op_status);
 
         if (ctx->profiler) {
             pds[i].opcode = ops[i].opcode;
@@ -1136,19 +1192,20 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
     htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
 
+    htp_mdev_group_barrier(octx);
+
     profile_stop(HTP_PROF_BASIC, &batch_prof);
 
     struct htp_opbatch_rsp rsp;
     memset(&rsp, 0, sizeof(rsp));
-    rsp.id           = req->id;
-    rsp.status       = op_status;
+    rsp.seq          = req->seq;
+    rsp.status       = octx->status;
     rsp.n_bufs       = n_bufs;
     rsp.n_tensors    = n_tens;
     rsp.n_ops        = n_ops;
     rsp.usecs        = batch_prof.usecs;
     rsp.cycles_start = batch_prof.cycles_start;
     rsp.cycles_stop  = batch_prof.cycles_stop;
-    rsp.seq          = req->seq;
 
     if (ctx->profiler == HTP_PROF_TRACE) {
         for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {

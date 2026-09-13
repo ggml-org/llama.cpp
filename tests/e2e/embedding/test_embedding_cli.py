@@ -1,7 +1,13 @@
+import hashlib
 import json
 import math
 import os
+import ssl
 import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -20,18 +26,44 @@ DELIVER_MIN_ABS = 1e-3
 PROMPT_A = "hello world"
 PROMPT_B = "completely different text"
 
+HF_REPO = "ggml-org/embeddinggemma-300M-qat-q4_0-GGUF"
+HF_FILE = "embeddinggemma-300M-qat-Q4_0.gguf"
+HF_REV = "8dd0ca2a66a8f14470acb0e2a71f801afbc5fb73"
+EXPECTED_SHA256 = "50d28e22432a148f6f8a86eab3700f92add5d1f54baf7790675a2a4dadbccf26"
+DOWNLOAD_URL = f"https://huggingface.co/{HF_REPO}/resolve/{HF_REV}/{HF_FILE}"
+FIXTURE_NAME = f"embeddinggemma-300M-qat-Q4_0-{HF_REV}-{EXPECTED_SHA256}.gguf"
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
-EXE = REPO_ROOT / ("build/bin/llama-embedding.exe" if os.name == "nt" else "build/bin/llama-embedding")
 _CACHE = os.environ.get("LLAMA_CACHE", "tmp")
 CACHE_DIR = _CACHE if os.path.isabs(_CACHE) else str(REPO_ROOT / _CACHE)
 DEFAULT_ENV = {**os.environ, "LLAMA_CACHE": CACHE_DIR}
-SMALL_CTX = 16
 TEST_CTX = 1024
-RUN_TIMEOUT = 90
+# One CLI load+embed is ~1s locally; 30s covers slow runners without hiding hangs.
+RUN_TIMEOUT = 30
+ACQUIRE_ATTEMPTS = 3
+ACQUIRE_TIMEOUT = 120
+RETRYABLE_HTTP = {408, 429, 500, 502, 503, 504}
+
+
+def default_fixture_path() -> Path:
+    return Path(CACHE_DIR) / FIXTURE_NAME
+
+
+def _resolve_override(override: str) -> Path:
+    # EMBEDDING_EXE and EMBEDDING_MODEL: expand ~ and resolve against the calling
+    # Python process cwd (not run_cmd's cwd=REPO_ROOT) before exists checks
+    # and before building subprocess argv. Pass those absolute paths through.
+    return Path(override).expanduser().resolve()
 
 
 def resolve_exe() -> Path:
-    exe = EXE
+    override = os.environ.get("EMBEDDING_EXE")
+    if override:
+        exe = _resolve_override(override)
+        if not exe.exists():
+            raise FileNotFoundError(f"EMBEDDING_EXE not found: {exe}")
+        return exe
+    exe = REPO_ROOT / ("build/bin/llama-embedding.exe" if os.name == "nt" else "build/bin/llama-embedding")
     if not exe.exists() and os.name == "nt":
         alt = REPO_ROOT / "build/bin/Release/llama-embedding.exe"
         if alt.exists():
@@ -41,19 +73,122 @@ def resolve_exe() -> Path:
     return exe
 
 
-def hf_params_default():
-    return {
-        "hf_repo": "ggml-org/embeddinggemma-300M-qat-q4_0-GGUF",
-        "hf_file": "embeddinggemma-300M-qat-Q4_0.gguf",
-    }
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def build_cmd(*, exe: Path, params: dict, fmt: str, prompt: str, ctx: int, extra=None) -> list:
+def verify_model(path: Path) -> Path:
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"embedding fixture missing: {path}\n"
+            f"Run: python tests/e2e/embedding/test_embedding_cli.py\n"
+            f"Or set EMBEDDING_MODEL to a verified {HF_FILE} (rev {HF_REV})."
+        )
+    got = sha256_file(path)
+    if got != EXPECTED_SHA256:
+        raise AssertionError(
+            f"embedding fixture checksum mismatch for {path}:\n"
+            f"  got      {got}\n"
+            f"  expected {EXPECTED_SHA256}\n"
+            f"Reacquire this dedicated fixture (rev {HF_REV}); do not change the expected hash."
+        )
+    return path
+
+
+def _download_to(tmp_path: Path) -> None:
+    tmp_path.parent.mkdir(parents=True, exist_ok=True)
+    if tmp_path.exists():
+        tmp_path.unlink()
+    # Public pinned fixture: never attach ambient HF tokens (they would follow redirects).
+    req = urllib.request.Request(DOWNLOAD_URL, headers={"User-Agent": "llama.cpp-embedding-cli-tests"})
+    with urllib.request.urlopen(req, timeout=ACQUIRE_TIMEOUT) as resp:
+        expected_len = resp.headers.get("Content-Length")
+        n_expect = int(expected_len) if expected_len and expected_len.isdigit() else None
+        written = 0
+        with open(tmp_path, "wb") as fh:
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                written += len(chunk)
+    if n_expect is not None and written != n_expect:
+        raise urllib.error.URLError(f"incomplete download: {written} bytes, expected {n_expect}")
+    if written == 0:
+        raise urllib.error.URLError(f"empty download from {DOWNLOAD_URL}")
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in RETRYABLE_HTTP
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        if isinstance(reason, BaseException):
+            return _is_retryable(reason)
+        msg = str(reason) if reason is not None else str(exc)
+        return msg.startswith("incomplete download:") or msg.startswith("empty download from ")
+    if isinstance(exc, TimeoutError):
+        return True
+    if isinstance(exc, ConnectionError):
+        return True
+    if isinstance(exc, ssl.SSLError):
+        return False
+    return False
+
+
+def acquire_model(dest: Path) -> Path:
+    dest = dest.resolve()
+    if dest.exists():
+        try:
+            return verify_model(dest)
+        except AssertionError:
+            dest.unlink()
+    last_err = None
+    tmp_path = dest.with_name(dest.name + ".partial")
+    for attempt in range(1, ACQUIRE_ATTEMPTS + 1):
+        try:
+            _download_to(tmp_path)
+            got = sha256_file(tmp_path)
+            if got != EXPECTED_SHA256:
+                tmp_path.unlink(missing_ok=True)
+                last_err = AssertionError(
+                    f"downloaded fixture checksum mismatch (attempt {attempt}/{ACQUIRE_ATTEMPTS}):\n"
+                    f"  got      {got}\n"
+                    f"  expected {EXPECTED_SHA256}"
+                )
+                if attempt < ACQUIRE_ATTEMPTS:
+                    time.sleep(3)
+                    continue
+                raise last_err
+            os.replace(tmp_path, dest)
+            return verify_model(dest)
+        except Exception as exc:
+            last_err = exc
+            if tmp_path.exists():
+                tmp_path.unlink()
+            if isinstance(exc, AssertionError) or not _is_retryable(exc) or attempt >= ACQUIRE_ATTEMPTS:
+                raise
+            time.sleep(3)
+    raise last_err
+
+
+def resolve_model_path() -> Path:
+    override = os.environ.get("EMBEDDING_MODEL")
+    if override:
+        return _resolve_override(override)
+    return default_fixture_path()
+
+
+def build_cmd(*, exe: Path, model_path: Path, fmt: str, prompt: str, ctx: int, extra=None) -> list:
     assert fmt in {"raw", "json"}, f"unsupported fmt={fmt}"
     cmd = [
         str(exe),
-        "-hfr", params["hf_repo"],
-        "-hff", params["hf_file"],
+        "-m", str(model_path),
+        "--offline",
         "-p", prompt,
         "--pooling", "mean",
         "--embd-normalize", "2",
@@ -62,6 +197,7 @@ def build_cmd(*, exe: Path, params: dict, fmt: str, prompt: str, ctx: int, extra
         "--n-gpu-layers", "0",
         "--no-op-offload",
         "--ctx-size", str(ctx),
+        "--no-warmup",
     ]
     if extra:
         cmd.extend(extra)
@@ -103,7 +239,11 @@ def parse_raw_rows(out: str) -> list:
 
 
 def parse_json(out: str) -> dict:
-    obj = json.loads(out)
+    try:
+        obj = json.loads(out)
+    except json.JSONDecodeError as exc:
+        head = out.splitlines()[0][:120] if out.strip() else "<empty>"
+        raise AssertionError(f"JSON stdout is not a JSON object: {head!r}") from exc
     assert isinstance(obj, dict), f"JSON root must be an object, got {type(obj).__name__}"
     assert "data" in obj and isinstance(obj["data"], list), "JSON missing data list"
     return obj
@@ -143,19 +283,15 @@ def check_vec(name: str, vec: list) -> None:
 
 @pytest.fixture(scope="session")
 def embedding_model():
-    exe = resolve_exe()
-    params = hf_params_default()
-    cmd = build_cmd(
-        exe=exe, params=params, fmt="json", prompt="ok",
-        ctx=SMALL_CTX, extra=["--no-warmup"],
-    )
-    run_cmd(cmd)
-    return params
+    path = verify_model(resolve_model_path())
+    return {"model_path": str(path)}
 
 
 def run_embedding(prompt: str, *, fmt: str, params: dict, ctx: int = TEST_CTX) -> str:
     exe = resolve_exe()
-    cmd = build_cmd(exe=exe, params=params, fmt=fmt, prompt=prompt, ctx=ctx, extra=["--no-warmup"])
+    model_path = Path(params["model_path"]).expanduser().resolve()
+    cmd = build_cmd(exe=exe, model_path=model_path, fmt=fmt, prompt=prompt, ctx=ctx)
+    assert "-hfr" not in cmd and "-hff" not in cmd
     return run_cmd(cmd)
 
 
@@ -212,3 +348,8 @@ def test_multiline_prompt_order(embedding_model):
     d_rev0 = maxabs(raw_batch[0], b_raw)
     d_rev1 = maxabs(raw_batch[1], a_raw)
     assert not (d_rev0 <= BATCH_ABS_TOL and d_rev1 <= BATCH_ABS_TOL), "batch rows match A/B reversed"
+
+
+if __name__ == "__main__":
+    path = acquire_model(default_fixture_path())
+    sys.stdout.write(str(path) + "\n")

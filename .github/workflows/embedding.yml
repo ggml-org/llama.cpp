@@ -1,10 +1,12 @@
-# Embedding CLI build and tests
+# Embedding CLI build and tests (Linux CPU).
+# Timeouts: acquire step 10m (265MiB download); pytest --timeout=60 per test
+# (multiline runs 6 CLI loads; one CLI RUN_TIMEOUT=30s); job 30m.
 name: Embedding CLI
 
 on:
     workflow_dispatch:
     push:
-        branches: [master, feature/**]
+        branches: [master]
         paths:
             - '.github/workflows/embedding.yml'
             - 'examples/**'
@@ -29,33 +31,27 @@ on:
 jobs:
     embedding-cli-tests-linux:
         runs-on: ubuntu-latest
+        timeout-minutes: 30
         env:
-            LLAMA_CACHE: tmp   # stable path for cache
-            EMBD_TEST_DEBUG: "1"
+            LLAMA_CACHE: tmp
 
         steps:
-            - uses: actions/checkout@v4
-              with: { fetch-depth: 0 }
+            - uses: actions/checkout@v6
 
-            - name: Restore model cache
+            - name: Restore fixture cache
               uses: actions/cache@v4
               with:
-                  path: |
-                      ~/.cache/llama.cpp
-                      tmp
-                  key: hf-${{ runner.os }}-embeddinggemma-300M-q4_0-v1
-                  restore-keys: |
-                      hf-${{ runner.os }}-
-                      hf-
+                  path: tmp/embeddinggemma-300M-qat-Q4_0-8dd0ca2a66a8f14470acb0e2a71f801afbc5fb73-50d28e22432a148f6f8a86eab3700f92add5d1f54baf7790675a2a4dadbccf26.gguf
+                  key: embedding-cli-${{ runner.os }}-8dd0ca2a-50d28e22432a148f6f8a86eab3700f92add5d1f54baf7790675a2a4dadbccf26
 
             - name: Install system deps
               run: |
                   sudo apt-get update
                   sudo apt-get -y install \
-                    build-essential cmake curl libcurl4-openssl-dev python3-pip
+                    build-essential cmake libssl-dev python3-pip
 
             - name: Set up Python
-              uses: actions/setup-python@v5
+              uses: actions/setup-python@v6
               with: { python-version: '3.11' }
 
             - name: Install Python deps
@@ -66,30 +62,19 @@ jobs:
                   cmake -B build -DCMAKE_BUILD_TYPE=Release
                   cmake --build build --target llama-embedding -j $(nproc)
 
-            - name: Pre-download tiny model (retry x3 on network)
+            - name: Acquire embedding fixture
+              timeout-minutes: 10
               run: |
-                  set -e
-                  tries=0
-                  until ./build/bin/llama-embedding \
-                      -hfr ggml-org/embeddinggemma-300M-qat-q4_0-GGUF \
-                      -hff embeddinggemma-300M-qat-Q4_0.gguf \
-                      -p "ok" \
-                      --ctx-size 16 --embd-output-format json --no-warmup --threads 1 --n-gpu-layers 0 --no-op-offload; do
-                    tries=$((tries+1))
-                    if [ $tries -ge 3 ]; then
-                      echo "Pre-download failed after $tries attempts"
-                      exit 1
-                    fi
-                    echo "Retrying download ($tries/3)..."
-                    sleep 3
-                  done
+                  MODEL=$(python tests/e2e/embedding/test_embedding_cli.py)
+                  echo "EMBEDDING_MODEL=$MODEL" >> "$GITHUB_ENV"
+                  echo "Acquired $MODEL"
 
-            - name: Run embedding tests (30s per-test cap)
+            - name: Run embedding tests
               shell: bash
               run: |
                   set -o pipefail
                   pytest -v tests/e2e/embedding \
-                  --timeout=30 \
+                  --timeout=60 \
                   --durations=10 \
                   --junitxml=pytest-report.xml | tee pytest-output.txt
 
@@ -101,123 +86,3 @@ jobs:
                   path: |
                       pytest-output.txt
                       pytest-report.xml
-
-            - name: Save model cache
-              if: always()
-              uses: actions/cache@v4
-              with:
-                  path: |
-                      ~/.cache/llama.cpp
-                      tmp
-                  key: hf-${{ runner.os }}-embeddinggemma-300M-q4_0-v1
-
-    embedding-cli-tests-windows:
-        runs-on: windows-latest
-        continue-on-error: true
-        env:
-            LLAMA_CACHE: tmp
-            EMBD_TEST_DEBUG: "1"
-
-        steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-python@v5
-              with: { python-version: '3.11' }
-
-            # --- vcpkg plain bootstrap (no actions, no submodules) ---
-            - name: Bootstrap vcpkg
-              shell: pwsh
-              run: |
-                  $env:VCPKG_ROOT = "$env:RUNNER_TEMP\vcpkg"
-                  git clone https://github.com/microsoft/vcpkg $env:VCPKG_ROOT
-                  & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
-                  echo "VCPKG_ROOT=$env:VCPKG_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-            - name: Install curl with OpenSSL via vcpkg
-              shell: pwsh
-              run: |
-                  & "$env:VCPKG_ROOT\vcpkg.exe" install curl[openssl]:x64-windows
-
-            - name: Restore model cache
-              uses: actions/cache@v4
-              with:
-                  path: |
-                      $HOME/.cache/llama.cpp
-                      tmp
-                  key: hf-${{ runner.os }}-embeddinggemma-300M-q4_0-v1
-                  restore-keys: |
-                      hf-${{ runner.os }}-
-                      hf-
-
-            - name: Install Python deps
-              run: pip install pytest
-
-            - name: Configure & Build (Release)
-              shell: pwsh
-              run: |
-                  cmake -B build -DCMAKE_BUILD_TYPE=Release `
-                    -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
-                  cmake --build build --target llama-embedding --config Release -j 2
-
-            - name: Pre-download tiny model (retry x3)
-              shell: bash
-              run: |
-                  set -e
-                  tries=0
-                  until ./build/bin/Release/llama-embedding.exe \
-                    -hfr ggml-org/embeddinggemma-300M-qat-q4_0-GGUF \
-                    -hff embeddinggemma-300M-qat-Q4_0.gguf \
-                    -p "ok" \
-                    --ctx-size 16 --embd-output-format json --no-warmup --threads 1 --n-gpu-layers 0 --no-op-offload; do
-                    tries=$((tries+1))
-                    if [ $tries -ge 3 ]; then
-                      echo "Pre-download failed after $tries attempts"; exit 1
-                    fi
-                    echo "Retrying download ($tries/3)..."; sleep 3
-                  done
-
-            - name: Run smoke tests
-              shell: bash
-              run: |
-                  pytest -q tests/e2e/embedding -k raw_vs_json_consistency
-
-
-
-    embedding-cli-tests-macos:
-        runs-on: macos-latest
-        continue-on-error: true
-        env:
-            LLAMA_CACHE: tmp
-            EMBD_TEST_DEBUG: "1"
-        steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-python@v5
-              with: { python-version: '3.11' }
-
-            - name: Install Python deps
-              run: pip install pytest
-
-            - name: Build
-              run: |
-                  cmake -B build -DCMAKE_BUILD_TYPE=Release
-                  cmake --build build --target llama-embedding -j 3
-
-            - name: Pre-download tiny model (retry x3)
-              run: |
-                  set -e
-                  tries=0
-                  until ./build/bin/llama-embedding \
-                    -hfr ggml-org/embeddinggemma-300M-qat-q4_0-GGUF \
-                    -hff embeddinggemma-300M-qat-Q4_0.gguf \
-                    -p "ok" \
-                    --ctx-size 16 --embd-output-format json --no-warmup --threads 1 --n-gpu-layers 0 --no-op-offload; do
-                    tries=$((tries+1))
-                    if [ $tries -ge 3 ]; then
-                      echo "Pre-download failed after $tries attempts"; exit 1
-                    fi
-                    echo "Retrying download ($tries/3)..."; sleep 3
-                  done
-
-            - name: Warm cache & run a tiny smoke
-              run: |
-                  ./build/bin/llama-embedding --help >/dev/null 2>&1
-                  pytest -q tests/e2e/embedding -k raw_vs_json_consistency

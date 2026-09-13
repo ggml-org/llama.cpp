@@ -1,5 +1,6 @@
 #include "fit.h"
 
+#include "json.h"
 #include "log.h"
 
 #include "../src/llama-ext.h"
@@ -915,6 +916,9 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
 
     std::vector<std::array<std::string, 9>> table_data;
     table_data.reserve(devices.size());
+
+    // same data as the table below, for --log-jsonl consumers
+    common_json rows = common_json::array();
     const std::string template_header = "%s: | %s | %s   %s    %s   %s   %s   %s    %s |\n";
     const std::string template_gpu    = "%s: | %s | %s = %s + (%s = %s + %s + %s) + %s |\n";
     const std::string template_other  = "%s: | %s | %s   %s    %s = %s + %s + %s    %s |\n";
@@ -989,6 +993,19 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb.context / MiB),
             std::to_string(mb.compute / MiB),
             std::to_string(unaccounted / static_cast<int64_t>(MiB))});
+
+        rows.push_back({
+            {"kind",        "device"},
+            {"name",        name},
+            {"description", desc},
+            {"total",       total / MiB},
+            {"free",        free / MiB},
+            {"self",        self / MiB},
+            {"model",       mb.model / MiB},
+            {"context",     mb.context / MiB},
+            {"compute",     mb.compute / MiB},
+            {"unaccounted", unaccounted / static_cast<int64_t>(MiB)},
+        });
     }
 
     // print memory breakdown for host:
@@ -1004,6 +1021,15 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb_host.context / MiB),
             std::to_string(mb_host.compute / MiB),
             ""}); // unaccounted
+
+        rows.push_back({
+            {"kind",    "host"},
+            {"name",    "Host"},
+            {"self",    self / MiB},
+            {"model",   mb_host.model / MiB},
+            {"context", mb_host.context / MiB},
+            {"compute", mb_host.compute / MiB},
+        });
     }
 
     // print memory breakdown for all remaining buffer types:
@@ -1025,6 +1051,16 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb.context / MiB),
             std::to_string(mb.compute / MiB),
             ""}); // unaccounted
+
+        rows.push_back({
+            {"kind",    "buffer_type"},
+            {"name",    name},
+            {"self",    self / MiB},
+            {"model",   mb.model / MiB},
+            {"context", mb.context / MiB},
+            {"compute", mb.compute / MiB},
+        });
+
         seen_buffer_types.insert(buft);
     }
 
@@ -1042,6 +1078,11 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
             __func__, td[1].c_str(), td[2].c_str(), td[3].c_str(), td[4].c_str(), td[5].c_str(),
             td[6].c_str(), td[7].c_str(), td[8].c_str());
     }
+
+    LOG_JSON("fit_memory_breakdown", common_json({
+        {"unit", "MiB"},
+        {"rows", rows},
+    }));
 }
 
 void common_fit_print(

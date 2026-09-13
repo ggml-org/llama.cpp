@@ -520,7 +520,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     elseif (GGML_SYSTEM_ARCH STREQUAL "s390x")
         message(STATUS "s390x detected")
         list(APPEND GGML_CPU_SOURCES
-            ggml-cpu/arch/s390/quants.c)
+            ggml-cpu/arch/s390/quants.c
+            ggml-cpu/arch/s390/repack.cpp
+            )
 
         # for native compilation
         if (GGML_NATIVE)
@@ -672,6 +674,12 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     target_sources(${GGML_CPU_NAME} PRIVATE ${GGML_CPU_SOURCES})
     target_compile_options(${GGML_CPU_NAME} PRIVATE ${ARCH_FLAGS})
     target_compile_definitions(${GGML_CPU_NAME} PRIVATE ${ARCH_DEFINITIONS})
+
+    if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND NOT GGML_SYSTEM_ARCH STREQUAL "x86")
+        message(STATUS "Skipping PCH for ${GGML_CPU_NAME}: GCC PCH is only enabled for x86 (arch: ${GGML_SYSTEM_ARCH})")
+    else()
+        target_precompile_headers(${GGML_CPU_NAME} PRIVATE ggml-impl.h)
+    endif()
 
     if (EMSCRIPTEN)
         set_target_properties(${GGML_CPU_NAME} PROPERTIES COMPILE_FLAGS "-msimd128")

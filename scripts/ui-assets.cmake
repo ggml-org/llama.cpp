@@ -21,6 +21,7 @@ set(DIST_DIR     "${UI_BINARY_DIR}/dist")
 set(SRC_DIST_DIR "${UI_SOURCE_DIR}/dist")
 set(WORK_DIR     "${UI_BINARY_DIR}/ui-src")
 set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
+set(EMBED_STAMP  "${UI_BINARY_DIR}/.ui-embed.sha256")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
 set(UI_H         "${UI_BINARY_DIR}/ui.h")
 
@@ -141,9 +142,59 @@ function(ui_validate_assets files in_dir)
 endfunction()
 
 # Generate ui.cpp/ui.h embedding every file of ${dist_dir} (empty table when
-# it has no index.html). When LLAMA_UI_GZIP is enabled, assets are compressed
-# first and served pre-gzipped (llama_ui_use_gzip()).
+# it has no index.html), gzip-compressed when LLAMA_UI_GZIP is enabled.
 function(emit_files dist_dir)
+    set(UI_TEMPLATE_DIR "${LLAMA_SOURCE_DIR}/tools/ui")
+
+    # Collect the asset list once and reuse it for the fingerprint,
+    # validation, compression and embedding.
+    set(assets "")
+    if(EXISTS "${dist_dir}/index.html")
+        file(GLOB_RECURSE assets
+            LIST_DIRECTORIES false
+            RELATIVE "${dist_dir}"
+            "${dist_dir}/*")
+        list(FILTER assets EXCLUDE REGEX "^_gzip/")
+        list(SORT assets)
+    endif()
+
+    if(LLAMA_UI_GZIP AND NOT DEFINED ENV{SOURCE_DATE_EPOCH})
+        # Zero the gzip header timestamp so identical inputs give identical
+        # bytes (and therefore stable ETags) on every machine.
+        set(ENV{SOURCE_DATE_EPOCH} 0)
+    endif()
+
+    # Fingerprint of every input that determines ui.cpp/ui.h: compression
+    # settings, the asset tree (names + SHA-256) and this script + templates.
+    set(fp "${LLAMA_UI_GZIP}|$ENV{SOURCE_DATE_EPOCH}|${CMAKE_VERSION}\n")
+    foreach(f ${assets})
+        file(SHA256 "${dist_dir}/${f}" h)
+        string(APPEND fp "${f} ${h}\n")
+    endforeach()
+    foreach(g
+            "${CMAKE_CURRENT_FUNCTION_LIST_FILE}"
+            "${UI_TEMPLATE_DIR}/ui.h.in"
+            "${UI_TEMPLATE_DIR}/ui.cpp.in")
+        file(SHA256 "${g}" h)
+        string(APPEND fp "gen ${h}\n")
+    endforeach()
+    string(SHA256 fingerprint "${fp}")
+
+    if(EXISTS "${EMBED_STAMP}" AND EXISTS "${UI_CPP}" AND EXISTS "${UI_H}")
+        file(READ "${EMBED_STAMP}" fp_saved)
+        string(STRIP "${fp_saved}" fp_saved)
+        if(fp_saved STREQUAL "${fingerprint}")
+            message(STATUS "UI: assets unchanged, skipping embedding")
+            return()
+        endif()
+    endif()
+
+    # Drop the old stamp up front so a crash mid-generation cannot leave
+    # outputs and stamp out of sync.
+    file(REMOVE "${EMBED_STAMP}")
+
+    ui_validate_assets("${assets}" "${dist_dir}")
+
     set(embed_dir "${dist_dir}")
     set(use_gzip FALSE)
 
@@ -156,21 +207,11 @@ function(emit_files dist_dir)
         endif()
         if(LLAMA_UI_GZIP)
             # Compress every asset into a parallel _gzip/ tree under the build
-            # directory (never write into the source or dist tree); the
-            # structure stays the same: /abc/def --> /_gzip/abc/def.
-            # FORMAT raw produces a bare gzip stream (no archive container)
-            # that can be served with Content-Encoding: gzip. SOURCE_DATE_EPOCH
-            # zeroes the header timestamp so identical inputs give identical
-            # bytes (and therefore stable ETags) on every machine.
-            if(NOT DEFINED ENV{SOURCE_DATE_EPOCH})
-                set(ENV{SOURCE_DATE_EPOCH} 0)
-            endif()
+            # directory, served with Content-Encoding: gzip.
             set(gzip_root "${UI_BINARY_DIR}/ui-gzip")
             set(gzip_dir  "${gzip_root}/_gzip")
             file(REMOVE_RECURSE "${gzip_root}")
-            file(GLOB_RECURSE all_files RELATIVE "${dist_dir}" "${dist_dir}/*")
-            list(FILTER all_files EXCLUDE REGEX "^_gzip/")
-            foreach(f ${all_files})
+            foreach(f IN LISTS assets)
                 get_filename_component(asset_path "${dist_dir}/${f}" REALPATH)
                 get_filename_component(dst_dir "${gzip_dir}/${f}" DIRECTORY)
                 file(MAKE_DIRECTORY "${dst_dir}")
@@ -187,21 +228,10 @@ function(emit_files dist_dir)
         endif()
     endif()
 
-    set(assets "")
-    if(EXISTS "${embed_dir}/index.html")
-        file(GLOB_RECURSE assets RELATIVE "${embed_dir}" "${embed_dir}/*")
-        list(FILTER assets EXCLUDE REGEX "^_gzip/")
-        list(SORT assets)
-        ui_validate_assets("${assets}" "${embed_dir}")
-    endif()
-
     list(LENGTH assets n_assets)
 
-    # Only the per-asset data arrays and table rows are built here; all
-    # static C++ lives in the ui.h.in / ui.cpp.in templates. configure_file
-    # rewrites an output only when its contents change, so the library is
-    # not recompiled needlessly. @ONLY keeps ${...} in the content literal;
-    # mime types come from a fixed list.
+    # Per-asset arrays and table rows go into the ui.h.in / ui.cpp.in templates;
+    # configure_file only rewrites on content change, avoiding needless recompiles.
     set(ASSET_ARRAYS "")
     set(ASSET_TABLE "")
     set(idx 0)
@@ -235,9 +265,11 @@ function(emit_files dist_dir)
         set(USE_GZIP true)
     endif()
 
-    set(UI_TEMPLATE_DIR "${LLAMA_SOURCE_DIR}/tools/ui")
     configure_file("${UI_TEMPLATE_DIR}/ui.h.in"   "${UI_H}"   @ONLY)
     configure_file("${UI_TEMPLATE_DIR}/ui.cpp.in" "${UI_CPP}" @ONLY)
+
+    # Write the embed stamp last, after both generated files succeeded.
+    file(WRITE "${EMBED_STAMP}" "${fingerprint}")
     message(STATUS "UI: embedded ${n_assets} assets")
 endfunction()
 
@@ -419,16 +451,8 @@ function(hf_download version out_var out_resolved)
 
         message(STATUS "UI: downloading from ${resolved}: ${base}/dist.tar.gz")
 
-        file(DOWNLOAD "${base}/dist.tar.gz?download=true" "${archive}"
-            STATUS status TIMEOUT 300 ${auth_headers}
-        )
-        list(GET status 0 rc)
-        if(NOT rc EQUAL 0)
-            list(GET status 1 errmsg)
-            message(STATUS "UI: download dist.tar.gz from ${resolved} failed: ${errmsg}")
-            continue()
-        endif()
-
+        # Fetch the checksum first: when the archive we already have matches
+        # it, the expensive download is skipped and only extraction repeats.
         file(DOWNLOAD "${base}/dist.tar.gz.sha256?download=true" "${archive}.sha256"
             STATUS status TIMEOUT 30 ${auth_headers}
         )
@@ -439,17 +463,44 @@ function(hf_download version out_var out_resolved)
             continue()
         endif()
 
-        # Validate sha256 checkums
+        # Validate the sha256 checksum: reject anything that is not a full
+        # 64-hex-digit digest before touching the archive.
         file(READ "${archive}.sha256" expected)
         string(REGEX MATCH "^[0-9a-fA-F]+" expected "${expected}")
         string(TOLOWER "${expected}" expected)
-        file(SHA256 "${archive}" actual)
-        if("${expected}" STREQUAL "" OR NOT "${actual}" STREQUAL "${expected}")
-            message(STATUS "UI: checksum mismatch for dist.tar.gz from ${resolved}")
+        string(LENGTH "${expected}" expected_len)
+        if(NOT expected_len EQUAL 64)
+            message(STATUS "UI: invalid checksum from ${resolved}")
             continue()
         endif()
 
-        # Clear DIST_DIR to remove stale files first
+        set(actual "")
+        if(EXISTS "${archive}")
+            file(SHA256 "${archive}" actual)
+        endif()
+
+        if("${actual}" STREQUAL "${expected}")
+            message(STATUS "UI: local dist.tar.gz matches checksum from ${resolved}, skipping download")
+        else()
+            file(DOWNLOAD "${base}/dist.tar.gz?download=true" "${archive}"
+                STATUS status TIMEOUT 300 ${auth_headers}
+            )
+            list(GET status 0 rc)
+            if(NOT rc EQUAL 0)
+                list(GET status 1 errmsg)
+                message(STATUS "UI: download dist.tar.gz from ${resolved} failed: ${errmsg}")
+                continue()
+            endif()
+
+            file(SHA256 "${archive}" actual)
+            if(NOT "${actual}" STREQUAL "${expected}")
+                message(STATUS "UI: checksum mismatch for dist.tar.gz from ${resolved}")
+                continue()
+            endif()
+        endif()
+
+        # Remove the stamp with the dist tree it describes, together.
+        file(REMOVE "${STAMP_FILE}")
         file(REMOVE_RECURSE "${DIST_DIR}")
 
         file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${DIST_DIR}")
@@ -495,27 +546,27 @@ endif()
 if(NOT provisioned AND HF_ENABLED)
     resolve_version(VERSION)
 
+    # Stamp a successful HF download: records bucket + requested version and
+    # lets later steps distinguish downloaded assets from locally built ones.
+    set(stamp_key "${HF_BUCKET}|${VERSION}")
+
     set(stamp_ok FALSE)
-    if(EXISTS "${STAMP_FILE}" AND NOT "${VERSION}" STREQUAL "")
+    if(EXISTS "${STAMP_FILE}" AND EXISTS "${DIST_DIR}/index.html" AND NOT "${VERSION}" STREQUAL "")
         file(READ "${STAMP_FILE}" stamped)
         string(STRIP "${stamped}" stamped)
-        if("${stamped}" STREQUAL "${VERSION}")
+        if(stamped STREQUAL "${stamp_key}")
             set(stamp_ok TRUE)
         endif()
     endif()
 
-    set(have_assets FALSE)
-    if(EXISTS "${DIST_DIR}/index.html")
-        set(have_assets TRUE)
-    endif()
-    if(stamp_ok AND have_assets)
-        message(STATUS "UI: HF stamp '${stamped}' matches version, skipping HF fetch")
+    if(stamp_ok)
+        message(STATUS "UI: HF stamp matches '${stamp_key}', skipping HF fetch")
         set(provisioned TRUE)
     else()
         hf_download("${VERSION}" HF_OK HF_RESOLVED)
         if(HF_OK)
-            file(WRITE "${STAMP_FILE}" "${HF_RESOLVED}")
-            message(STATUS "UI: HF download succeeded, stamp updated (${HF_RESOLVED})")
+            file(WRITE "${STAMP_FILE}" "${stamp_key}")
+            message(STATUS "UI: HF download succeeded, stamp updated (${stamp_key}, resolved: ${HF_RESOLVED})")
             set(provisioned TRUE)
         else()
             message(STATUS "UI: HF download failed")

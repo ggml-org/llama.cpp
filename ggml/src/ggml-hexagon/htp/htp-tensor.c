@@ -20,7 +20,7 @@ struct l2flush_range {
 
 struct l2flush_multi_task {
     struct htp_thread_trace * trace;
-    struct l2flush_range      ranges[HTP_OP_MAX_INPUTS];
+    struct l2flush_range      ranges[HTP_MAX_DIRTY_RANGES];
     uint32_t                  n_ranges;
     uint32_t                  total_blocks;
     uint32_t                  blocks_per_thread;
@@ -73,6 +73,27 @@ static void l2flush_multi_worker(unsigned int n, unsigned int i, void * data) {
     htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, gb_first);
 }
 
+static void merge_dirty_ranges(struct htp_context * ctx) {
+    for (uint32_t i = 0; i < HTP_MAX_DIRTY_RANGES; i++) {
+        struct htp_dirty_range * r = &ctx->dirty_ranges[i];
+        if (!r->start) continue;
+
+        for (uint32_t j = 0; j < HTP_MAX_DIRTY_RANGES;) {
+            struct htp_dirty_range * s = &ctx->dirty_ranges[j];
+            if (i == j || !s->start || r->end < s->start || s->end < r->start) {
+                j++;
+                continue;
+            }
+
+            r->start = MIN(r->start, s->start);
+            r->end   = MAX(r->end, s->end);
+            s->start = 0;
+            s->end   = 0;
+            j = 0;
+        }
+    }
+}
+
 void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
     const struct htp_tensor * pending[HTP_OP_MAX_OUTPUTS];
     uint32_t n_pending = 0;
@@ -80,11 +101,6 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
     for (uint32_t i = 0; i < n; i++) {
         const struct htp_tensor * t = tensors[i];
         if (!t || (t->flags & (HTP_TENSOR_WEIGHT | HTP_TENSOR_FENCE))) {
-            continue;
-        }
-
-        if (t->size <= HEX_L2_FLUSH_IL_THRESHOLD) {
-            hex_l2flush((void *) (uintptr_t) t->data, t->size);
             continue;
         }
 
@@ -110,6 +126,8 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
         }
     }
 
+    merge_dirty_ranges(ctx);
+
     if (n_pending == 0) {
         return;
     }
@@ -132,8 +150,8 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
             struct htp_dirty_range * r = &ctx->dirty_ranges[idx];
             r->start = pending[i]->data;
             r->end   = pending[i]->data + pending[i]->size;
-            r->bi    = pending[i]->bi;
         }
+        merge_dirty_ranges(ctx);
         return;
     }
 
@@ -151,12 +169,12 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
             struct htp_dirty_range * r = &ctx->dirty_ranges[i];
             r->start = pending[i]->data;
             r->end   = pending[i]->data + pending[i]->size;
-            r->bi    = pending[i]->bi;
         }
+        merge_dirty_ranges(ctx);
         return;
     }
 
-    if (total_evict_size > HEX_L2_FLUSH_WQ_THRESHOLD && ctx->n_threads > 1 && n_evict <= HTP_OP_MAX_INPUTS) {
+    if (total_evict_size > HEX_L2_FLUSH_WQ_THRESHOLD && ctx->n_threads > 1 && n_evict <= HTP_MAX_DIRTY_RANGES) {
         struct l2flush_multi_task task;
         task.trace    = ctx->trace;
         task.n_ranges = n_evict;
@@ -195,7 +213,6 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
         struct htp_dirty_range * r = &ctx->dirty_ranges[idx];
         r->start = pending[i]->data;
         r->end   = pending[i]->data + pending[i]->size;
-        r->bi    = pending[i]->bi;
     }
 
     for (uint32_t i = 0; i < n_empty; i++) {
@@ -203,8 +220,9 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
         struct htp_dirty_range * r = &ctx->dirty_ranges[idx];
         r->start = pending[n_evict + i]->data;
         r->end   = pending[n_evict + i]->data + pending[n_evict + i]->size;
-        r->bi    = pending[n_evict + i]->bi;
     }
+
+    merge_dirty_ranges(ctx);
 }
 
 static void make_tensor_clean(struct htp_context * ctx, const struct htp_tensor * t) {
@@ -242,15 +260,77 @@ static inline bool is_tensor_dirty(struct htp_context * ctx, const struct htp_te
     return false;
 }
 
+static void flush_dirty_ranges(struct htp_context * ctx, const struct htp_dirty_range * ranges, uint32_t n_ranges, uint64_t total_dirty) {
+    if (total_dirty >= HEX_L2_FLUSH_WQ_THRESHOLD && ctx->n_threads > 1) {
+        struct l2flush_multi_task task;
+        task.trace    = ctx->trace;
+        task.n_ranges = n_ranges;
+
+        uint32_t block_acc = 0;
+        for (uint32_t i = 0; i < n_ranges; i++) {
+            const struct htp_dirty_range * r = &ranges[i];
+            struct l2flush_range * rg = &task.ranges[i];
+            rg->start = hex_align_down((size_t) r->start, HEX_L2_LINE_SIZE);
+            rg->end   = hex_align_up((size_t) r->end, HEX_L2_LINE_SIZE);
+            rg->block_first = block_acc;
+            rg->n_blocks = (rg->end - rg->start + HEX_L2_BLOCK_SIZE - 1) / HEX_L2_BLOCK_SIZE;
+            block_acc += rg->n_blocks;
+        }
+
+        task.total_blocks      = block_acc;
+        task.blocks_per_thread = fastdiv(block_acc + ctx->n_threads - 1, &ctx->n_threads_div);
+
+        work_queue_run(ctx->work_queue, l2flush_multi_worker, &task, ctx->n_threads);
+    } else {
+        struct htp_thread_trace * tr = &ctx->trace[0];
+        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, 0);
+        for (uint32_t i = 0; i < n_ranges; i++) {
+            const struct htp_dirty_range * r = &ranges[i];
+            hex_l2flush((void *) (uintptr_t) r->start, r->end - r->start);
+        }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, 0);
+    }
+}
+
+void htp_flush_dirty_ranges(struct htp_context * ctx) {
+    struct htp_dirty_range ranges[HTP_MAX_DIRTY_RANGES];
+    uint32_t n_ranges = 0;
+    uint64_t total_dirty = 0;
+
+    for (uint32_t i = 0; i < HTP_MAX_DIRTY_RANGES; i++) {
+        const struct htp_dirty_range * r = &ctx->dirty_ranges[i];
+        if (!r->start) {
+            continue;
+        }
+        ranges[n_ranges++] = *r;
+        total_dirty += r->end - r->start;
+    }
+
+    if (total_dirty == 0) {
+        return;
+    }
+
+    if (total_dirty > HEX_L2_FLUSH_ALL_THRESHOLD) {
+        flush_all_dcache(ctx);
+        return;
+    }
+
+    flush_dirty_ranges(ctx, ranges, n_ranges, total_dirty);
+    memset(ctx->dirty_ranges, 0, sizeof(ctx->dirty_ranges));
+}
+
 void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
     const struct htp_tensor * dirty_tensors[HTP_OP_MAX_INPUTS];
+    struct htp_dirty_range ranges[HTP_OP_MAX_INPUTS];
     uint32_t n_dirty = 0;
     uint64_t total_dirty = 0;
 
     for (uint32_t i = 0; i < n; i++) {
         const struct htp_tensor * t = tensors[i];
-        if (t && !(t->flags & (HTP_TENSOR_WEIGHT | HTP_TENSOR_FENCE)) && is_tensor_dirty(ctx, t)) {
+        if (t && is_tensor_dirty(ctx, t)) {
             dirty_tensors[n_dirty++] = t;
+            ranges[n_dirty - 1].start = t->data;
+            ranges[n_dirty - 1].end   = t->data + t->size;
             total_dirty += t->size;
         }
     }
@@ -264,37 +344,8 @@ void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * co
         return;
     }
 
-    if (total_dirty >= HEX_L2_FLUSH_WQ_THRESHOLD && ctx->n_threads > 1) {
-        struct l2flush_multi_task task;
-        task.trace    = ctx->trace;
-        task.n_ranges = 0;
-
-        uint32_t block_acc = 0;
-        for (uint32_t i = 0; i < n_dirty; i++) {
-            const struct htp_tensor * t = dirty_tensors[i];
-            make_tensor_clean(ctx, t);
-
-            struct l2flush_range * rg = &task.ranges[task.n_ranges++];
-            rg->start = hex_align_down((size_t) t->data, HEX_L2_LINE_SIZE);
-            rg->end   = hex_align_up((size_t) t->data + t->size, HEX_L2_LINE_SIZE);
-            rg->block_first = block_acc;
-            rg->n_blocks = (rg->end - rg->start + HEX_L2_BLOCK_SIZE - 1) / HEX_L2_BLOCK_SIZE;
-            block_acc += rg->n_blocks;
-        }
-
-        task.total_blocks      = block_acc;
-        task.blocks_per_thread = fastdiv(block_acc + ctx->n_threads - 1, &ctx->n_threads_div);
-
-        work_queue_run(ctx->work_queue, l2flush_multi_worker, &task, ctx->n_threads);
-        return;
-    }
-
-    struct htp_thread_trace * tr = &ctx->trace[0];
+    flush_dirty_ranges(ctx, ranges, n_dirty, total_dirty);
     for (uint32_t i = 0; i < n_dirty; i++) {
-        const struct htp_tensor * t = dirty_tensors[i];
-        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
-        hex_l2flush((void *) (uintptr_t) t->data, t->size);
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
-        make_tensor_clean(ctx, t);
+        make_tensor_clean(ctx, dirty_tensors[i]);
     }
 }
