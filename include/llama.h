@@ -407,6 +407,12 @@ extern "C" {
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
 
+        // mindcontrol-port of --prefetch-experts-slots: MoE expert H2D staging slots.
+        // 0 = off (no memory overhead); >=2 enables full-tensor lookahead prefetch of
+        // host-resident (ncmoe) expert weights during prefill (GPU staging cost = slots
+        // * max expert tensor). Decode is unaffected.
+        int prefetch_experts_slots;  // set via llama_context_default_params() / llama_context_from_params
+
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
         // note: the samplers must be sampler chains (i.e. use llama_sampler_chain_init)
