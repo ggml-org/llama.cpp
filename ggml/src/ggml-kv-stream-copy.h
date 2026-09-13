@@ -2,6 +2,13 @@
 #include "ggml-backend.h"
 #include "ggml-kv-stream.h"
 #include <vector>
+#include <algorithm>
+
+// Clamp a logical run to both the physical ring boundary and the caller's span ceiling.
+inline size_t ggml_kv_stream_contiguous_pages(size_t block, size_t blocks, size_t slots, size_t limit) {
+    if (block >= blocks || !slots || !limit) return 0;
+    return std::min({blocks-block,slots-block%slots,limit});
+}
 
 // Owner-thread bookkeeping only; GPU completion is established by backend events, not these states.
 class ggml_kv_stream_copy_state {
@@ -11,6 +18,17 @@ public:
     // A new run starts only after the previous run has drained.
     bool begin() { if (active || slots.empty()) return false; active = true; return true; }
     bool can_queue(size_t i) const { return active && i < slots.size() && (slots[i] == phase::empty || slots[i] == phase::released); }
+    // Validate the entire physical run before changing any slot's ownership.
+    bool can_queue_span(size_t first, size_t count) const {
+        if (!active || !count || first >= slots.size() || count > slots.size()-first) return false;
+        for (size_t i = 0; i < count; ++i) if (!can_queue(first+i)) return false;
+        return true;
+    }
+    bool queue_span(size_t first, size_t count) {
+        if (!can_queue_span(first,count)) return false;
+        for (size_t i = 0; i < count; ++i) slots[first+i] = phase::queued;
+        return true;
+    }
     bool recycled(size_t i) const { return active && i < slots.size() && slots[i] == phase::released; }
     bool waiting(size_t i) const { return active && i < slots.size() && slots[i] == phase::queued; }
     bool held(size_t i) const { return active && i < slots.size() && slots[i] == phase::acquired; }
@@ -24,6 +42,8 @@ private:
     std::vector<phase> slots;
     bool active = false;
 };
+
+struct ggml_kv_stream_copy_stats { size_t bytes = 0, calls = 0; };
 
 // Optional registry "ggml_backend_kv_stream_copy_ops". Calls enqueue work except drain/free.
 // Caller holds the device lease/pin and immutable host content until drain; backend outlives the handle.
@@ -41,5 +61,9 @@ struct ggml_kv_stream_copy_ops {
     // Cancellation abandons unconsumed slots only after already-submitted work completes.
     void (*drain)(void *);
     void (*free)(void *);
+    // Version 2: one contiguous K transfer and one V transfer; never crosses the physical ring boundary.
+    bool (*enqueue_span)(void *, size_t first_slot, const void * k, const void * v, size_t live_tokens, size_t padded_tokens);
+    // Actual submitted payload bytes and memcpy calls, excluding padding fills; reset by begin().
+    ggml_kv_stream_copy_stats (*stats)(void *);
 };
 using ggml_kv_stream_copy_ops_get = const ggml_kv_stream_copy_ops * (*)();

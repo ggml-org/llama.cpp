@@ -22,6 +22,7 @@ struct llama_kv_stream_resident::implementation {
     bool fallback = false;
     std::vector<llama_kv_stream_rows> ranges;
     size_t active = 0, bytes = 0, calls = 0;
+    size_t attention_calls = 0;
     uint64_t generation = 0, epoch = 0;
     bool initialized = false, valid = false, busy = false, poisoned = false;
     std::unique_ptr<llama_kv_stream_writer> writer;
@@ -202,6 +203,7 @@ bool llama_kv_stream_resident::ready(size_t active_tokens) const noexcept {
 // Report completed uploads in the last synchronization attempt, not PCIe utilization.
 size_t llama_kv_stream_resident::last_upload_bytes() const noexcept { return impl->bytes; }
 size_t llama_kv_stream_resident::last_upload_calls() const noexcept { return impl->calls; }
+size_t llama_kv_stream_resident::last_attention_calls() const noexcept { return impl->attention_calls; }
 
 // Validate stack descriptors before GGML constructors can assert on malformed attention metadata.
 ggml_tensor * llama_kv_stream_resident::attention(ggml_context * context, uint32_t layer, ggml_tensor * q,
@@ -319,7 +321,7 @@ bool llama_kv_stream_resident::compute_one_block(uint32_t layer, ggml_tensor * q
 
 // Traverse resident and streamed ranges with one reusable export and an unnormalized accumulator.
 bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q, ggml_tensor * mask,
-        ggml_tensor * output, size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace, bool overlap) {
+        ggml_tensor * output, size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace, bool overlap, size_t span_pages) {
     auto & s = *impl;
     if (s.busy || s.poisoned || !s.compatible() || layer >= s.roots.size() || !q || !mask || !output ||
             !workspace || !std::isfinite(scale) || scale <= 0 || active_tokens > size_t(INT32_MAX)-255 ||
@@ -329,7 +331,9 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     const size_t padded = (active_tokens+255)/256*256;
     const size_t prefix = std::min(padded,s.layout.layers[layer].planes.tokens);
     const size_t slots = s.binding.initial_policy.ring_slots;
-    if (!slots || slots > s.layout.ring.bytes/s.page.bytes) return false;
+    if (!slots || !span_pages || slots > s.layout.ring.bytes/s.page.bytes) return false;
+    const size_t blocks = (padded-prefix)/s.page.tokens + ((padded-prefix)%s.page.tokens != 0);
+    const auto width = [&](size_t block) { return ggml_kv_stream_contiguous_pages(block,blocks,slots,span_pages); };
     if (padded > s.content->host()->layout().tokens || mask->ne[0] < int64_t(padded) ||
             mask->type != GGML_TYPE_F16 || !mask->data || mask->nb[0] != sizeof(ggml_fp16_t) ||
             mask->ne[0] > INT32_MAX || mask->nb[1] < size_t(mask->ne[0])*sizeof(ggml_fp16_t)) return false;
@@ -392,8 +396,14 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     const size_t resident_chunk = s.fallback ? s.page.tokens : prefix;
     for (size_t first = 0; first < prefix; first += resident_chunk)
         if (!describe(first,std::min(resident_chunk,prefix-first),0,true)) return false;
-    for (size_t first = prefix, block = 0; first < padded; first += s.page.tokens, ++block)
-        if (!describe(first,std::min(s.page.tokens,padded-first),block%slots,false)) return false;
+    for (size_t block = 0; block < blocks; block += width(block)) {
+        const size_t pages = width(block);
+        for (size_t offset = 0; offset < pages; offset += s.fallback ? 1 : pages) {
+            const size_t first = prefix+(block+offset)*s.page.tokens;
+            const size_t count = std::min((s.fallback ? 1 : pages)*s.page.tokens,padded-first);
+            if (!describe(first,count,block%slots+offset,false)) return false;
+        }
+    }
     // Backend validation checks shape arithmetic; also exclude aliases with unused pool/lease bytes.
     for (auto * tensor : {q,mask,output}) {
         const auto data = uintptr_t(tensor->data);
@@ -407,6 +417,12 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     if (!s.refresh(padded)) return false;
     llama_kv_stream_host_layer host;
     if (!s.content->host()->layer(layer,host)) return false;
+    s.attention_calls = 0;
+    const auto partial = [&](bool second) {
+        if (!ops->partial(s.backend,&op,wb,second)) return false;
+        ++s.attention_calls;
+        return true;
+    };
     const bool prefetch = overlap && prefix < padded;
     struct copy_guard {
         const ggml_kv_stream_copy_ops * ops = nullptr;
@@ -419,7 +435,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         if (!s.copies) {
             auto get_copy = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
             s.copy_ops = get_copy ? get_copy() : nullptr;
-            if (!s.copy_ops || s.copy_ops->version != 1) return false;
+            if (!s.copy_ops || s.copy_ops->version < 2 || !s.copy_ops->enqueue_span) return false;
             s.copies = decltype(s.copies)(s.copy_ops->create(s.backend,s.binding.buffer,s.content->host()->buffer(),s.binding.config.shape,slots),s.copy_ops->free);
             if (!s.copies) return false;
             s.copy_host = s.content->host()->buffer();
@@ -427,57 +443,67 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         if (!s.copy_ops->begin(s.copies.get())) return false;
         copying.ops = s.copy_ops; copying.queue = s.copies.get();
     }
-    const size_t blocks = (padded-prefix)/s.page.tokens + ((padded-prefix)%s.page.tokens != 0);
     const auto enqueue = [&](size_t block) {
         const size_t first = prefix+block*s.page.tokens;
-        const size_t count = std::min(s.page.tokens,padded-first), live = std::min(count,active_tokens-first);
-        if (!s.copy_ops->enqueue(s.copies.get(),block%slots,
+        const size_t count = std::min(width(block)*s.page.tokens,padded-first), live = std::min(count,active_tokens-first);
+        if (!s.copy_ops->enqueue_span(s.copies.get(),block%slots,
                 static_cast<const char *>(host.k)+first*s.page.k_token_bytes,
                 static_cast<const char *>(host.v)+first*s.page.v_token_bytes,live,count)) return false;
         s.bytes += live*(s.page.k_token_bytes+s.page.v_token_bytes); s.calls += 2;
         return true;
     };
-    if (prefetch) for (size_t block = 0; block < std::min(slots,blocks); ++block) if (!enqueue(block)) return false;
+    if (prefetch) for (size_t block = 0; block < std::min(slots,blocks); block += width(block)) if (!enqueue(block)) return false;
     const auto convert_inputs = [&] {
         return !s.fallback || (ops->convert(s.backend,&k,&ck) && ops->convert(s.backend,&v,&cv));
     };
     if (prefix && !s.fallback) {
-        if (!describe(0,prefix,0,true) || !ops->partial(s.backend,&op,wb,false)) return false;
+        if (!describe(0,prefix,0,true) || !partial(false)) return false;
     } else {
         if (!ops->clear(s.backend,output,wb,false)) return false;
         for (size_t first = 0; first < prefix; first += resident_chunk) {
             if (!describe(first,std::min(resident_chunk,prefix-first),0,true) || !convert_inputs() ||
-                    !ops->partial(s.backend,&op,wb,true)) return false;
+                    !partial(true)) return false;
             if (first+std::min(resident_chunk,prefix-first) == padded) return ops->merge(s.backend,output,wb);
             if (!ops->fold(s.backend,output,wb)) return false;
         }
     }
-    for (size_t first = prefix, block = 0; first < padded; first += s.page.tokens, ++block) {
-        const size_t count = std::min(s.page.tokens,padded-first);
+    for (size_t block = 0; block < blocks; block += width(block)) {
+        const size_t pages = width(block), first = prefix+block*s.page.tokens;
+        const size_t count = std::min(pages*s.page.tokens,padded-first);
         const size_t live = std::min(count,active_tokens-first);
         const size_t slot = block%slots;
-        // Wait on this slot's producer, not the entire copy stream or later lookahead slots.
-        if (!describe(first,count,slot,false)) return false;
-        if (prefetch && !s.copy_ops->acquire(s.copies.get(),slot)) return false;
         if (!prefetch) for (int value = 0; value < 2; ++value) {
             auto staged = *s.stage[value];
             staged.data = static_cast<char *>(staged.data)+slot*(value ? s.page.v_bytes : s.page.k_bytes);
+            staged.ne[0] = int64_t(count)*s.binding.config.shape.heads*(value ? s.binding.config.shape.head_dim_v : s.binding.config.shape.head_dim_k);
+            staged.nb[1] = staged.nb[2] = staged.nb[3] = ggml_row_size(staged.type,staged.ne[0]);
             const size_t stride = value ? s.page.v_token_bytes : s.page.k_token_bytes;
             const auto * source = static_cast<const char *>(value ? host.v : host.k);
             if (count > live) ggml_backend_tensor_memset(&staged,0,live*stride,(count-live)*stride);
             ggml_backend_tensor_set(&staged,source+first*stride,0,live*stride);
             s.bytes += live*stride; ++s.calls;
         }
-        if (!convert_inputs()) return false;
-        const auto recycle = [&] {
-            return s.copy_ops->release(s.copies.get(),slot) && (block+slots >= blocks || enqueue(block+slots));
-        };
-        // Conversion is the last encoded-slot reader in fallback mode; native attention reads it directly.
-        if (prefetch && s.fallback && !recycle()) return false;
-        if (!ops->partial(s.backend,&op,wb,true)) return false;
-        if (prefetch && !s.fallback && !recycle()) return false;
-        if (first+count == padded) return ops->merge(s.backend,output,wb);
-        if (!ops->fold(s.backend,output,wb)) return false;
+        // Fallback shares the batched transfer, but never grows its one-page conversion workspace.
+        for (size_t offset = 0; offset < pages; offset += s.fallback ? 1 : pages) {
+            const size_t consumed = s.fallback ? 1 : pages;
+            const size_t token = first+offset*s.page.tokens;
+            const size_t tokens = std::min(consumed*s.page.tokens,padded-token);
+            if (!describe(token,tokens,slot+offset,false)) return false;
+            if (prefetch) for (size_t i = 0; i < consumed; ++i)
+                if (!s.copy_ops->acquire(s.copies.get(),slot+offset+i)) return false;
+            if (!convert_inputs()) return false;
+            const auto recycle = [&] {
+                for (size_t i = 0; i < consumed; ++i)
+                    if (!s.copy_ops->release(s.copies.get(),slot+offset+i)) return false;
+                // A contiguous DMA must wait for the complete destination run to become reusable.
+                return offset+consumed != pages || block+slots >= blocks || enqueue(block+slots);
+            };
+            if (prefetch && s.fallback && !recycle()) return false;
+            if (!partial(true)) return false;
+            if (prefetch && !s.fallback && !recycle()) return false;
+            if (token+tokens == padded) return ops->merge(s.backend,output,wb);
+            if (!ops->fold(s.backend,output,wb)) return false;
+        }
     }
     return ops->clear(s.backend,output,wb,true) && ops->merge(s.backend,output,wb);
 }

@@ -28,10 +28,13 @@ public:
             size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace);
     // Traversal over any number of tail blocks; optional overlap retains the ordered correctness control.
     // The call still completes before returning; overlap requires pinned host backing.
+    // A positive span ceiling groups physical neighbors without increasing ring or conversion storage.
     bool compute_streamed(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
-            size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace, bool overlap = false);
+            size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace, bool overlap = false, size_t span_pages = 1);
     size_t last_upload_bytes() const noexcept;
     size_t last_upload_calls() const noexcept;
+    // Successful partial-attention submissions in the last started streamed execution.
+    size_t last_attention_calls() const noexcept;
 
     // Configure a physical-batch ceiling. Quantization scratch and indices borrow the unused ring region.
     bool configure_writes(size_t max_batch_rows);

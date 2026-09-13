@@ -30,12 +30,12 @@ struct delayed_event {
 #endif
 
 // Fixed synthetic attention cases, not model/server token throughput.
-static int benchmark(ggml_backend_t backend, bool overlap) {
+static int benchmark(ggml_backend_t backend, bool overlap, size_t span_pages, size_t slots, bool fallback) {
     for (size_t active : {size_t(1025),size_t(8193),size_t(32769)}) for (size_t queries : {size_t(1),size_t(33)}) {
-        fixture f(backend,true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active);
+        fixture f(backend,true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,fallback);
         ggml_kv_stream_execution page;
         GGML_ASSERT(ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page).status == ggml_kv_stream_status::success);
-        f.policy.pool_bytes = page.storage.bytes*4+page.conversion.bytes; f.policy.initial_ring_slots = 2;
+        f.policy.pool_bytes = page.storage.bytes*(slots+2)+page.conversion.bytes; f.policy.initial_ring_slots = slots;
         GGML_ASSERT(f.attach()); auto pin = f.binding->acquire();
         block_inputs input(f,active,queries);
         ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(queries*4,256,layout);
@@ -43,29 +43,54 @@ static int benchmark(ggml_backend_t backend, bool overlap) {
         std::vector<double> times;
         for (size_t i = 0; i < 23; ++i) {
             const auto begin = std::chrono::steady_clock::now();
-            GGML_ASSERT(f.resident->compute_streamed(0,input.q,input.mask,input.output,active,1.0f/16,workspace.lease.get(),overlap));
+            GGML_ASSERT(f.resident->compute_streamed(0,input.q,input.mask,input.output,active,1.0f/16,workspace.lease.get(),overlap,span_pages));
             const double ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count();
             if (i >= 3) times.push_back(ms);
         }
         std::sort(times.begin(),times.end());
         double sum = 0; for (float value : input.read()) sum += value;
         std::cout << std::setprecision(10) << "BENCH," << active << ',' << queries << ',' << (times[9]+times[10])/2
-                  << ',' << f.resident->last_upload_bytes() << ',' << f.resident->last_upload_calls() << ',' << sum << '\n';
+                  << ',' << f.resident->last_upload_bytes() << ',' << f.resident->last_upload_calls() << ',' << sum
+                  << ',' << f.resident->last_attention_calls() << '\n';
     }
     return 0;
 }
 
 int main(int argc, char ** argv) {
     const bool ordered = argc > 1 && std::strcmp(argv[1],"--bench-ordered") == 0;
-    const bool bench = ordered || (argc > 1 && std::strcmp(argv[1],"--bench") == 0);
+    const bool spans = argc > 1 && std::strcmp(argv[1],"--bench-span") == 0;
+    const bool fallback = argc > 1 && std::strcmp(argv[1],"--bench-fallback") == 0;
+    const bool bench = ordered || spans || fallback || (argc > 1 && std::strcmp(argv[1],"--bench") == 0);
     const bool cuda = bench || (argc > 1 && std::strcmp(argv[1],"--cuda") == 0);
     ggml_backend_ptr backend;
     if (cuda) {
         ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
         backend.reset(ggml_backend_dev_init(dev,nullptr));
     } else backend.reset(ggml_backend_cpu_init());
-    if (bench) return benchmark(backend.get(),!ordered);
+    if (bench) {
+        const size_t span_pages = argc > 2 ? std::strtoull(argv[2],nullptr,10) : (spans ? 2 : 1);
+        const size_t slots = argc > 3 ? std::strtoull(argv[3],nullptr,10) : 2;
+        if (!span_pages || !slots || slots > 14 || argc > 4) return 2;
+        return benchmark(backend.get(),!ordered,span_pages,slots,fallback);
+    }
     testing t;
+    t.test("contiguous_spans_stop_at_wrap_and_admission_is_atomic", [](testing & t) {
+        t.assert_equal(size_t(3),ggml_kv_stream_contiguous_pages(0,11,5,3));
+        t.assert_equal(size_t(2),ggml_kv_stream_contiguous_pages(3,11,5,3));
+        t.assert_equal(size_t(1),ggml_kv_stream_contiguous_pages(10,11,5,3));
+        t.assert_equal(size_t(0),ggml_kv_stream_contiguous_pages(11,11,5,3));
+        t.assert_equal(size_t(0),ggml_kv_stream_contiguous_pages(0,11,0,3));
+        t.assert_equal(size_t(0),ggml_kv_stream_contiguous_pages(0,11,5,0));
+        t.assert_equal(size_t(2),ggml_kv_stream_contiguous_pages(SIZE_MAX-2,SIZE_MAX,SIZE_MAX,SIZE_MAX));
+        ggml_kv_stream_copy_state state(5);
+        t.assert_true(state.begin() && state.queue(2));
+        t.assert_true(!state.queue_span(0,3));
+        t.assert_true(state.can_queue(0) && state.can_queue(1));
+        t.assert_true(!state.queue_span(4,2) && !state.queue_span(0,0));
+        t.assert_true(state.acquire(2) && state.release(2));
+        t.assert_true(state.queue_span(0,3));
+        t.assert_true(state.waiting(0) && state.waiting(1) && state.waiting(2));
+    });
     t.test("slot_state_rejects_early_reuse_and_resets_after_drain", [](testing & t) {
         ggml_kv_stream_copy_state state(2), zero(0);
         t.assert_true(!zero.begin());
@@ -92,8 +117,37 @@ int main(int argc, char ** argv) {
     if (cuda) {
         auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get()));
         auto get = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
-        t.test("copy_events_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version == 1); });
+        t.test("copy_events_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version == 2 && get()->enqueue_span && get()->stats); });
         if (!get || !get()) return t.summary();
+        t.test("batched_spans_preserve_values_and_reduce_copy_calls", [&](testing & t) {
+            for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_IQ4_NL,GGML_TYPE_F32}})
+            for (size_t slots : {size_t(3),size_t(5)}) for (bool overlap : {false,true})
+            for (size_t limit : {size_t(2),size_t(3),SIZE_MAX}) {
+                fixture f(backend.get(),true,pair.first,pair.second,2561);
+                ggml_kv_stream_execution page; ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page);
+                f.policy.pool_bytes = page.storage.bytes*(2+slots)+page.conversion.bytes; f.policy.initial_ring_slots = slots;
+                if (!t.assert_true(f.attach())) continue;
+                auto pin = f.binding->acquire();
+                block_inputs input(f,2561,33);
+                ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(132,256,layout);
+                block_workspace workspace(f,layout.bytes);
+                t.assert_true(f.resident->synchronize(256));
+                t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,2561,1.0f/16,workspace.lease.get(),overlap,1));
+                auto expected = input.read();
+                const size_t before = f.resident->last_upload_calls();
+                t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,2561,1.0f/16,workspace.lease.get(),overlap,limit));
+                close_values(t,expected,input.read(),1e-6f);
+                size_t calls = 0;
+                for (size_t block = 0; block < 10;) {
+                    const size_t count = std::min({limit,slots-block%slots,size_t(10)-block});
+                    block += count; calls += 2;
+                }
+                t.assert_equal(calls,f.resident->last_upload_calls());
+                t.assert_equal(size_t(1)+(f.policy.capabilities.direct_pair ? calls/2 : 10),f.resident->last_attention_calls());
+                t.assert_true(f.resident->last_upload_calls() < before);
+                t.assert_equal(size_t(2305)*(page.storage.k_token_bytes+page.storage.v_token_bytes),f.resident->last_upload_bytes());
+            }
+        });
         t.test("overlap_matches_ordered_for_native_and_fallback_waves", [&](testing & t) {
             for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_IQ4_NL,GGML_TYPE_F32}})
             for (size_t slots : {size_t(1),size_t(2),size_t(3)}) for (size_t queries : {size_t(1),size_t(33),size_t(257)}) {
@@ -145,6 +199,37 @@ int main(int argc, char ** argv) {
             t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true));
             t.assert_true(expected == input.read());
         });
+        t.test("failed_subspan_drains_and_retries_without_publishing_partial_output", [&](testing & t) {
+            for (auto value : {GGML_TYPE_F16,GGML_TYPE_F32}) {
+                fixture f(backend.get(),true,GGML_TYPE_F16,value,2049);
+                ggml_kv_stream_execution page; ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,page);
+                f.policy.pool_bytes = page.storage.bytes*5+page.conversion.bytes; f.policy.initial_ring_slots = 3;
+                if (!t.assert_true(f.attach())) continue;
+                auto pin = f.binding->acquire();
+                block_inputs input(f,2049,8);
+                ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(32,256,layout);
+                block_workspace workspace(f,layout.bytes);
+                t.assert_true(!f.resident->compute_streamed(0,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,0));
+                for (size_t token : {size_t(300),size_t(2048)}) {
+                    auto before = input.read();
+                    std::vector<float> row(512,NAN); std::vector<uint8_t> encoded(page.storage.v_token_bytes);
+                    ggml_quantize_chunk(value,row.data(),encoded.data(),0,2,256,nullptr);
+                    llama_kv_stream_write write;
+                    t.assert_true(f.content->prepare({{0,ggml_kv_stream_operand::v,token*encoded.size(),encoded.data(),encoded.size()}},write));
+                    t.assert_true(f.content->commit(write));
+                    t.assert_true(!f.resident->compute_streamed(0,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,3));
+                    t.assert_true(before == input.read());
+                    std::fill(row.begin(),row.end(),2);
+                    ggml_quantize_chunk(value,row.data(),encoded.data(),0,2,256,nullptr);
+                    t.assert_true(f.content->prepare({{0,ggml_kv_stream_operand::v,token*encoded.size(),encoded.data(),encoded.size()}},write));
+                    t.assert_true(f.content->commit(write));
+                    t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),false,1));
+                    auto expected = input.read();
+                    t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,2049,1.0f/16,workspace.lease.get(),true,3));
+                    close_values(t,expected,input.read(),1e-6f);
+                }
+            }
+        });
         t.test("all_writable_pairs_match_with_two_slot_prefetch", [&](testing & t) {
             const ggml_type types[] = {GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q8_0,GGML_TYPE_F32,GGML_TYPE_IQ4_NL};
             for (auto key : types) for (auto value : types) {
@@ -161,10 +246,59 @@ int main(int argc, char ** argv) {
                 if (!t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,1025,1.0f/16,workspace.lease.get(),true))) continue;
                 t.assert_true(expected == input.read());
                 t.assert_equal(size_t(769)*(page.storage.k_token_bytes+page.storage.v_token_bytes),f.resident->last_upload_bytes());
+                t.assert_true(f.resident->compute_streamed(0,input.q,input.mask,input.output,1025,1.0f/16,workspace.lease.get(),true,2));
+                close_values(t,expected,input.read(),1e-6f);
+                t.assert_equal(size_t(4),f.resident->last_upload_calls());
+                t.assert_equal(size_t(769)*(page.storage.k_token_bytes+page.storage.v_token_bytes),f.resident->last_upload_bytes());
             }
         });
 #ifdef KV_COPY_CUDA_TEST
         const auto * ops = get();
+        t.test("batched_dma_waits_for_every_consumer_and_counts_actual_transfers", [&](testing & t) {
+            fixture f(backend.get(),true);
+            ggml_kv_stream_layout page,ring;
+            ggml_kv_stream_layout_make(f.policy.shape,256,page); ggml_kv_stream_layout_make(f.policy.shape,512,ring);
+            auto * device = ggml_backend_memory_lease_buffer(f.lease.get());
+            std::unique_ptr<void,void(*)(void*)> queue(ops->create(backend.get(),device,f.host->buffer(),f.policy.shape,2),ops->free);
+            if (!t.assert_true(bool(queue))) return;
+            ggml_context_ptr context(ggml_init({65536,nullptr,true}));
+            auto * raw = ggml_new_tensor_1d(context.get(),GGML_TYPE_I8,int64_t(ring.bytes));
+            GGML_ASSERT(ggml_backend_tensor_alloc(device,raw,ggml_backend_buffer_get_base(device)) == GGML_STATUS_SUCCESS);
+            ggml_backend_buffer_ptr sink(ggml_backend_buft_alloc_buffer(llama_kv_stream_host_buffer_type(ggml_backend_get_device(backend.get())),2*ring.k_bytes));
+            auto * out = static_cast<uint8_t *>(ggml_backend_buffer_get_base(sink.get()));
+            llama_kv_stream_host_layer host; f.host->layer(0,host);
+            delayed_event last_consumer(backend.get());
+            t.assert_true(ops->begin(queue.get()));
+            t.assert_true(!ops->enqueue_span(queue.get(),1,host.k,host.v,512,512));
+            t.assert_equal(size_t(0),ops->stats(queue.get()).calls);
+            t.assert_true(ops->enqueue_span(queue.get(),0,host.k,host.v,512,512));
+            t.assert_equal(size_t(2),ops->stats(queue.get()).calls);
+            t.assert_true(!ops->enqueue_span(queue.get(),0,host.k,host.v,512,512));
+            t.assert_true(ops->acquire(queue.get(),0));
+            ggml_backend_tensor_get_async(backend.get(),raw,out,0,page.k_bytes);
+            t.assert_true(ops->release(queue.get(),0));
+            t.assert_true(ops->acquire(queue.get(),1));
+            last_consumer.arm(backend.get());
+            ggml_backend_tensor_get_async(backend.get(),raw,out+page.k_bytes,page.k_bytes,page.k_bytes);
+            t.assert_true(ops->release(queue.get(),1));
+            auto * next_k = static_cast<char *>(host.k)+ring.k_bytes;
+            auto * next_v = static_cast<char *>(host.v)+ring.v_bytes;
+            t.assert_true(ops->enqueue_span(queue.get(),0,next_k,next_v,257,512));
+            t.assert_true(!ops->ready(queue.get(),0) && !ops->ready(queue.get(),1));
+            t.assert_equal(size_t(4),ops->stats(queue.get()).calls);
+            t.assert_equal(size_t(769)*(page.k_token_bytes+page.v_token_bytes),ops->stats(queue.get()).bytes);
+            last_consumer.open();
+            t.assert_true(ops->acquire(queue.get(),0) && ops->acquire(queue.get(),1));
+            ggml_backend_tensor_get_async(backend.get(),raw,out+ring.k_bytes,0,ring.k_bytes);
+            t.assert_true(ops->release(queue.get(),0) && ops->release(queue.get(),1));
+            ops->drain(queue.get());
+            t.assert_true(std::memcmp(out,host.k,ring.k_bytes) == 0);
+            t.assert_true(std::memcmp(out+ring.k_bytes,next_k,257*page.k_token_bytes) == 0);
+            t.assert_true(std::all_of(out+ring.k_bytes+257*page.k_token_bytes,out+2*ring.k_bytes,[](uint8_t x){return x == 0;}));
+            t.assert_true(ops->begin(queue.get()));
+            t.assert_equal(size_t(0),ops->stats(queue.get()).bytes);
+            ops->drain(queue.get());
+        });
         t.test("invalid_storage_and_out_of_range_sources_do_not_queue", [&](testing & t) {
             fixture f(backend.get(),true);
             auto * device = ggml_backend_memory_lease_buffer(f.lease.get());

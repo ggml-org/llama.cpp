@@ -10,6 +10,7 @@ struct copy_queue {
     ggml_backend_buffer_t device = nullptr, host = nullptr;
     ggml_kv_stream_layout page, ring;
     ggml_kv_stream_copy_state state;
+    ggml_kv_stream_copy_stats statistics;
     cudaStream_t stream = nullptr;
     cudaEvent_t producer = nullptr;
     std::vector<cudaEvent_t> ready, consumed;
@@ -79,28 +80,44 @@ static bool begin(void * handle) {
     cudaStreamCaptureStatus status;
     CUDA_CHECK(cudaStreamIsCapturing(q.context->stream(),&status));
     if (status != cudaStreamCaptureStatusNone || !q.state.begin()) return false;
+    q.statistics = {};
     CUDA_CHECK(cudaEventRecord(q.producer,q.context->stream()));
     CUDA_CHECK(cudaStreamWaitEvent(q.stream,q.producer,0));
     return true;
 }
 
 // Queue independent K/V copies and finite tail padding after the previous final consumer retires.
-static bool enqueue(void * handle, size_t slot, const void * k, const void * v, size_t live, size_t padded) {
+static bool enqueue_span(void * handle, size_t slot, const void * k, const void * v, size_t live, size_t padded) {
     if (!handle) return false;
     auto & q = *static_cast<copy_queue *>(handle);
-    if (!q.state.can_queue(slot) || !live || live > padded || padded > q.page.tokens ||
+    if (!live || live > padded || padded > q.ring.tokens) return false;
+    const size_t count = padded/q.page.tokens+(padded%q.page.tokens != 0);
+    if (!q.state.can_queue_span(slot,count) ||
             !source_range(q,k,live*q.page.k_token_bytes) || !source_range(q,v,live*q.page.v_token_bytes)) return false;
     ggml_cuda_set_device(q.context->device);
-    if (q.state.recycled(slot)) CUDA_CHECK(cudaStreamWaitEvent(q.stream,q.consumed[slot],0));
+    for (size_t i = 0; i < count; ++i)
+        if (q.state.recycled(slot+i)) CUDA_CHECK(cudaStreamWaitEvent(q.stream,q.consumed[slot+i],0));
     auto * base = static_cast<char *>(ggml_backend_buffer_get_base(q.device));
     for (int value = 0; value < 2; ++value) {
         const size_t stride = value ? q.page.v_token_bytes : q.page.k_token_bytes;
         const size_t offset = value ? q.ring.v_offset+slot*q.page.v_bytes : slot*q.page.k_bytes;
         CUDA_CHECK(cudaMemcpyAsync(base+offset,value ? v : k,live*stride,cudaMemcpyHostToDevice,q.stream));
+        q.statistics.bytes += live*stride; ++q.statistics.calls;
         if (padded > live) CUDA_CHECK(cudaMemsetAsync(base+offset+live*stride,0,(padded-live)*stride,q.stream));
     }
-    CUDA_CHECK(cudaEventRecord(q.ready[slot],q.stream));
-    return q.state.queue(slot);
+    for (size_t i = 0; i < count; ++i) CUDA_CHECK(cudaEventRecord(q.ready[slot+i],q.stream));
+    return q.state.queue_span(slot,count);
+}
+
+// Keep v1's one-slot admission boundary for existing callers.
+static bool enqueue(void * handle, size_t slot, const void * k, const void * v, size_t live, size_t padded) {
+    if (!handle || padded > static_cast<copy_queue *>(handle)->page.tokens) return false;
+    return enqueue_span(handle,slot,k,v,live,padded);
+}
+
+// Report actual DMA submissions, not an inferred count from the consumer's plan.
+static ggml_kv_stream_copy_stats stats(void * handle) {
+    return handle ? static_cast<copy_queue *>(handle)->statistics : ggml_kv_stream_copy_stats{};
 }
 
 // Observation does not transfer ownership or replace the compute stream's mandatory event wait.
@@ -149,7 +166,7 @@ static void destroy(void * handle) { delete static_cast<copy_queue *>(handle); }
 
 // Expose the CUDA adapter through an opaque, backend-neutral ownership contract.
 const ggml_kv_stream_copy_ops * ggml_cuda_kv_stream_copy_ops() {
-    static const ggml_kv_stream_copy_ops ops{1,create,begin,enqueue,ready,acquire,release,drain,destroy};
+    static const ggml_kv_stream_copy_ops ops{2,create,begin,enqueue,ready,acquire,release,drain,destroy,enqueue_span,stats};
     return &ops;
 }
 #endif

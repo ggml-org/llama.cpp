@@ -6,7 +6,7 @@ Last source review: 2026-09-12, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is ready for review. The remainder of milestones 5-8 is planned. Current work is **5.4f: copy-stream overlap and event-driven slot reuse**. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is ready for review. The remainder of milestones 5-8 is planned. Current work is **5.4g: contiguous attention spans and batched K/V uploads**. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is committed at `28e7999a0`. Stage 5.4d is committed at `59591b6da`. Stage 5.4e is committed at `a92107200`. Stage 5.4f is ready for review.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is committed at `28e7999a0`. Stage 5.4d is committed at `59591b6da`. Stage 5.4e is committed at `a92107200`. Stage 5.4f is committed at `d48a1faa8`. Stage 5.4g is ready for review.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -350,8 +350,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.4c | Complete | `28e7999a0` | 8 real-CUDA cases / 126 assertions; ordered resident-plus-one-block export and GPU merge, exact leased scratch, masked/dirty tails, malformed-payload atomicity, and UVM-off/on memcheck. 23 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. |
 | 5.4d | Complete | `59591b6da` | 14 real-CUDA cases / 542 assertions; multi-wave ring reuse, concentrated/zero-resident layouts, incremental GPU folding, and late-block failure recovery. 23 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; UVM-off/on memcheck clean. Merge-only racecheck clean; inherited vector-kernel warnings recorded below. |
 | 5.4e | Complete | `a92107200` | 81 writable K/V pairs via selected native/fallback paths, plus all 81 forced through bounded F16 fallback; 19 CUDA cases / 656,795 assertions. Exact conversion bounds/values, capability admission, and native/fallback comparisons. 23 focused suites pass in four configurations; GPU memcheck and reduced-build probes recorded below. |
-| 5.4f | Ready for review | - | Opt-in within-layer copy overlap; 8 CUDA cases / 1,565 assertions, all 81 pairs bitwise match ordered execution. Producer/consumer gates, cancellation, retained backing and host replacement pass. 24 focused Debug/CUDA-build/ASan/UBSan suites and GPU memcheck pass; targeted host-state TSan passes, broader TSan caveat below. Synthetic latency comparison retained. |
-| 5.4g-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.4f | Complete | `d48a1faa8` | Opt-in within-layer copy overlap; 8 CUDA cases / 1,565 assertions, all 81 pairs bitwise match ordered execution. Producer/consumer gates, cancellation, retained backing and host replacement pass. 24 focused Debug/CUDA-build/ASan/UBSan suites and GPU memcheck pass; targeted host-state TSan passes, broader TSan caveat below. Synthetic latency comparison retained. |
+| 5.4g | Ready for review | - | Contiguous native attention and two-copy K/V batches; 12 CUDA cases / 2,290 assertions. All 81 pairs, arbitrary span ceilings, wrap boundaries, batch-wide event fences and failure recovery pass. 24 focused suites and GPU memcheck pass; targeted host TSan passes. Native latency gains and fallback tradeoffs recorded below. |
+| 5.4h-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -1888,7 +1889,7 @@ Stage **5.4f**, documented below, adds copy-stream overlap. The synchronous base
 
 ## Substage 5.4f: dedicated copy stream and event-driven slot reuse
 
-**Status:** implemented and ready for review; not committed by the implementation agent. This stage follows committed 5.4e (`a92107200`).
+**Status:** committed at `d48a1faa8`, following 5.4e (`a92107200`).
 
 ### Execution boundary
 
@@ -1962,4 +1963,80 @@ setarch x86_64 -R build-device-memory-infra-tsan/bin/test-kv-stream-copy
 
 No Windows/other-accelerator runtime qualification, allocation-failure injection for every driver event/stream call, live repartition, cross-layer scheduling, server cancellation, or production throughput claim is included. Production services, compose configuration, models, checkpoints, and caches remain unchanged.
 
-After review and commit, proceed to **5.4g: contiguous attention spans and batched K/V uploads**. Cross-layer bounded lookahead remains **5.4h**.
+Stage **5.4g**, documented below, adds contiguous spans and batched uploads. Cross-layer bounded lookahead remains **5.4h**.
+
+## Substage 5.4g: contiguous attention spans and batched K/V uploads
+
+**Status:** implemented and ready for review; not committed by the implementation agent. This stage follows committed 5.4f (`d48a1faa8`).
+
+### Span selection and bounded memory
+
+The streamed consumer now accepts a positive `span_pages` ceiling, defaulting to **one**. A pure helper clamps each span to the remaining logical pages, the physical end of the ring, and that ceiling. A request wider than the ring is safely clamped; zero is rejected. There is no power-of-two requirement or implicit pool enlargement.
+
+For a five-slot ring with a three-page ceiling, the physical groups repeat as `[0,1,2]`, `[3,4]`, then wrap to `[0,1,2]`. The last logical group may be shorter. This same grouping is used for admission, transfer, attention, and refill, so an uneven ring does not create mismatched ownership boundaries.
+
+The backend copy extension is version 2. `enqueue_span` validates every covered slot and both complete source ranges before submitting any operation. It waits for each covered slot's previous final consumer, sends **one contiguous K copy and one contiguous V copy**, fills only the padded tail, then records readiness for every covered slot. The v1 single-page enqueue entry retains its original admission boundary. A batch never crosses the physical ring end or combines K and V into an interleaved record.
+
+Slot admission is atomic: a busy member or an invalid range leaves every slot unchanged. A released prefix is not enough to submit a DMA batch whose remaining destination slots still have readers. Refilling a group therefore waits until all its members are reusable; this is a batching tradeoff, not a promise of immediate one-page refill at every span width.
+
+### Native attention and F16 fallback
+
+Native attention consumes a contiguous span in one partial-attention call. The existing vector kernel accepts its runtime key length, so no new span-specific kernels or attention mathematics are introduced. Stable accumulation and final normalization retain the existing bounded workspace.
+
+Fallback shares the batched encoded K/V transfer but converts and computes **one page at a time**. Its one-page F16 conversion quota is unchanged. Each encoded page's final consumer remains its conversion; the next batch can be submitted after the group's final conversion, while subsequent attention reads the separate F16 planes. Ordered and overlapped copy modes both support spans.
+
+Changing native partition boundaries changes floating-point reduction order. Tests use a 1e-6 absolute comparison with the qualified page control rather than asserting bitwise identity. This is not a full-model quality/perplexity qualification.
+
+The copy adapter exposes actual submitted payload bytes and CUDA memcpy-call counts, excluding padding fills. The consumer exposes completed partial-attention call counts. These distinguish fewer transfer submissions from fewer compute submissions; they are not PCIe packet counts, measured bandwidth, or copy-engine utilization.
+
+### TDD and validation
+
+The initial span/helper stubs failed **14 assertions**. The final copy/span suite passes **12 CUDA cases / 2,290 assertions**, covering:
+
+- Checked wrap/ceiling arithmetic, including SIZE_MAX boundaries, zero limits, and atomic rejection of partly busy spans.
+- Three- and five-slot rings with ceilings of two, three, and SIZE_MAX; partial final groups and multiple waves in ordered and overlapped modes.
+- All 81 writable K/V pairs through two-page spans, compared with page-at-a-time results and unchanged payload bytes.
+- Fewer native partial-attention calls, while fallback retains page-sized compute and its existing conversion quota.
+- A deliberately delayed consumer of the last slot in a batch. The next batch cannot overwrite either slot early, and old/new payloads and padding are checked separately.
+- Actual backend copy counts, invalid wrapping batches, intermediate/final numerical failure, unchanged public output, and successful retry after draining partially consumed batches.
+- Existing producer fences, retained backing, host replacement, cancellation, and wide-query regressions.
+
+All **24 focused suites** pass in CPU Debug, CUDA-build Debug, CPU ASan/leak checking, and CPU UBSan. Targeted host-state TSan passes **922 assertions** with process-local ASLR disabled. GPU memcheck reports **zero errors and zero leaked bytes** with UVM disabled and enabled. Existing GPU controls also pass: block attention **19 cases / 656,795 assertions**, resident attention **13 / 246**, writer **10 / 609**, and four CPU-referenced CUDA SCALE cases.
+
+The broader TSan startup/CPU-OpenMP issues and inherited vector-kernel racecheck warnings recorded in earlier stages remain unresolved. No clean whole-repository TSan or whole-kernel racecheck claim is made here.
+
+### Targeted performance comparison
+
+The pre-change control was captured at `d48a1faa8`. Tests use the same synthetic Q8_0/Q4_0 setup as 5.4f, with UVM off, three warmups, and twenty measured calls per point. Comparisons below use matched pool/ring sizes. These are attention-call medians, not llama-server token throughput.
+
+| Active tokens | Query rows | Pre-change page ms | Post-change page ms (two runs) | Two-page span ms (two runs) |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,025 | 1 | 0.1500 | 0.1542-0.1555 | 0.0995-0.1010 |
+| 1,025 | 33 | 0.2103 | 0.2086-0.2140 | 0.1390-0.1390 |
+| 8,193 | 1 | 1.1385 | 1.1082-1.1416 | 0.6670-0.6691 |
+| 8,193 | 33 | 1.3997 | 1.4012-1.4305 | 0.9045-0.9057 |
+| 32,769 | 1 | 4.3615 | 4.3591-4.3681 | 2.6077-2.6161 |
+| 32,769 | 33 | 5.4885 | 5.4590-5.4741 | 3.5408-3.5420 |
+
+With two ring slots, native two-page spans reduce observed latency by roughly **33-41%** relative to the pre-change page control. Copy calls fall from **8/64/256 to 4/32/128**, and partial-attention calls from **5/33/129 to 3/17/65**. Payload bytes remain **639,808 / 6,603,584 / 27,050,816**. Small checksum differences are expected from the changed native reduction partition; numerical tests pass the stated tolerance.
+
+A separate matched five-slot comparison with a three-page ceiling also improves every sampled native point. At 32,769 tokens, page versus span medians are **4.3607 -> 2.2061 ms** for one query and **5.5138 -> 3.1202 ms** for 33 queries. Copy calls fall from 256 to 102, and partial calls from 129 to 52; physical wrap prevents treating every group as three pages.
+
+**Fallback is not a universal speedup.** Forced Q8_0/Q4_0-to-F16 tests halve copy calls but leave partial-attention counts at 5/33/129, with two converters per page as before. Two-slot results are broadly flat, with small improvements and regressions across runs; the long 33-query case is about 1% slower with batching. A five-slot probe also shows mixed results, including approximately 4% slower at that point. Batching delays refill until a whole group is reusable and does not remove fallback compute submissions; these results are consistent with that tradeoff, but are not an isolated GPU timing attribution for every difference. Larger copy batches are therefore not recommended automatically for fallback. The one-page default preserves the established behavior; measured span selection remains 5.4j.
+
+```sh
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-copy -j 20
+build-device-memory-infra-cuda/bin/test-kv-stream-copy --cuda
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-copy --bench
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-copy --bench-span
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-copy --bench 1 5
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-copy --bench-span 3 5
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-copy --bench-fallback 1 2
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-copy --bench-fallback 2 2
+compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-copy --cuda
+setarch x86_64 -R build-device-memory-infra-tsan/bin/test-kv-stream-copy
+```
+
+The benchmark accepts optional span ceiling and ring-slot count after its mode and appends the attention-call count after the original checksum column. Pool budgeting, conversion storage, head/sequence restrictions, and production configuration are unchanged. No automatic tuning, cross-layer queue, live repartition, new backend, or server enablement is included.
+
+After review and commit, proceed to **5.4h: the actual cross-layer prefetch queue with bounded lookahead and safe immediate slot reuse**.
