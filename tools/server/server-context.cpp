@@ -1017,9 +1017,7 @@ private:
 
         const bool has_mmproj = !params.mmproj.path.empty();
         const bool has_draft = params.speculative.has_dft();
-        const bool spec_mtp = std::find(params_base.speculative.types.begin(),
-                                        params_base.speculative.types.end(),
-                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
+        const bool spec_mtp = params_base.speculative.has_mtp();
         const bool has_spec = has_draft || spec_mtp;
 
         if (callback_state) {
@@ -3934,7 +3932,12 @@ private:
                             SLT_INF(slot, "accepted %2zu/%2zu draft tokens (restore checkpoint)\n", accepted.size() - 1, slot.spec_draft.size());
                         }
 
-                        // partial acceptance is not supported by the context -> truncate the draft and restore the state
+                        // partial acceptance is not supported by the context -> truncate the draft and restore the state.
+                        // the accepted prefix is not committed here: it is replayed and re-verified next round, whose
+                        // accept() would carry the stale draft count of this round. report the partial acceptance now
+                        // via accept_partial - only the adaptive MTP controller consumes it
+                        common_speculative_accept_partial(spec.get(), slot.id, accepted.size() - 1);
+
                         slot.spec_is_replay = true;
                         slot.spec_draft = std::move(accepted);
 
