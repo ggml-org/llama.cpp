@@ -8,9 +8,11 @@
  */
 
 // API utilities
+export { apiUrl, getBackend, getBackendBaseUrl, type BackendsSnapshot } from './api-base';
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
 export { ApiError, apiDelete, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
+export { createLocalBackend, parseBackendsSettings } from './backend';
 
 // Attachment utilities
 export { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from './attachment-display';

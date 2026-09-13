@@ -188,6 +188,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				key: SETTINGS_KEYS.MAX_IMAGE_RESOLUTION,
 				label: 'Maximum image resolution (megapixels)',
 				type: SettingsFieldType.INPUT
+			},
+			{
+				defaultValue: '[]',
+				help: 'Configure external API backends as a JSON list. The local backend is always available.',
+				key: SETTINGS_KEYS.BACKENDS,
+				label: 'Backends',
+				standaloneField: false,
+				type: SettingsFieldType.INPUT
 			}
 		],
 		slug: SETTINGS_SECTION_SLUGS.GENERAL,
