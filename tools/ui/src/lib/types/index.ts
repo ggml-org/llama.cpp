@@ -35,6 +35,9 @@ export type {
 	ApiStreamSession
 } from './api';
 
+// Backend types
+export type { Backend, BackendProtocol } from './backend';
+
 // HuggingFace types
 export type {
 	HfCatalogBuild,
