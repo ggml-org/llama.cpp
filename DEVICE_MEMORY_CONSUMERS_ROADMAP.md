@@ -6,7 +6,7 @@ Last source review: 2026-09-13, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The remainder of milestones 5-8 is planned. The combined **5.4j.1-5.4j.4 optimization bundle** is ready for review and one user commit. Next is 5.4k after that review. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`. **5.4k** is ready for review; after its user commit, next is **5.5a**. The remainder of milestones 5-8 is planned. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -359,11 +359,12 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.4h | Committed | 5887c18a0 | Bounded cross-layer FIFO reservations and explicit tail publication; 11 CUDA cases / 2,395 assertions. All 81 pairs, more-than-three-layer lookahead, out-of-order readiness, concentrated placement and cancellation pass. 25 focused suites, UVM-off/on memcheck and targeted host TSan pass. Mixed latency results and producer-integration limits recorded below. |
 | 5.4i | Committed | 6f98b1276 | Bounded query launches inside each K/V span; 20 CUDA block cases / 656,887 assertions and 15 CUDA copy cases / 2,826 assertions. 25 focused suites pass in CPU/CUDA Debug, ASan and UBSan; UVM-off/on memcheck and targeted host TSan pass. Single-launch baseline preserved within measurement noise; wider-launch overhead and limitations documented below. |
 | 5.4j | Committed | 17b92d321 | Opt-in GPU deadline probes, bounded sampled copy timing, process-unique feedback epochs, read-only policy proposals, and measured span trials. CUDA copy 18 cases / 2,978 assertions; runtime prefetch 12 / 2,803. Four 25-suite host matrices, targeted TSan, UVM-off/on copy memcheck and runtime memcheck pass. Default latency within about 1%; instrumentation costs 6-9% in the synthetic check. |
-| 5.4j.1 | Ready for review | - | One first-upload timing sample and two additional timing events per execution; every deadline probe retained. CUDA copy 19 cases / 3,075 assertions, runtime prefetch 12 / 2,803, four 25-suite host matrices and GPU memory checks pass. Instrumented latency improved 2.3-4.1% in the first pass; repeat results and residual overhead are recorded below. |
-| 5.4j.2 | Ready for review | - | Two bounded deferred counter snapshots, run identity, nonblocking polling, and no measurement-only wait. User requested one combined commit for 5.4j.1-5.4j.4. |
-| 5.4j.3 | Ready for review | - | Explicit decode intent/query count and immutable-history eligibility; unknown phase, prefill, one-token prompts, and producer-constrained tails do not train prefetch feedback. |
-| 5.4j.4 | Ready for review | - | One marker/probe per eligible upload batch, with safe partial consumption and first-slot reuse. Full bundle: four 25-suite matrices, CUDA copy 23 / 3,211, runtime-prefetch 14 / 3,048, targeted TSan and CUDA memory checks pass. |
-| 5.4k-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.4j.1 | Committed | 5ee09b7e1 | One first-upload timing sample and two additional timing events per execution; every deadline probe retained. CUDA copy 19 cases / 3,075 assertions, runtime prefetch 12 / 2,803, four 25-suite host matrices and GPU memory checks pass. Instrumented latency improved 2.3-4.1% in the first pass; repeat results and residual overhead are recorded below. |
+| 5.4j.2 | Committed | 5ee09b7e1 | Two bounded deferred counter snapshots, run identity, nonblocking polling, and no measurement-only wait. User requested one combined commit for 5.4j.1-5.4j.4. |
+| 5.4j.3 | Committed | 5ee09b7e1 | Explicit decode intent/query count and immutable-history eligibility; unknown phase, prefill, one-token prompts, and producer-constrained tails do not train prefetch feedback. |
+| 5.4j.4 | Committed | 5ee09b7e1 | One marker/probe per eligible upload batch, with safe partial consumption and first-slot reuse. Full bundle: four 25-suite matrices, CUDA copy 23 / 3,211, runtime-prefetch 14 / 3,048, targeted TSan and CUDA memory checks pass. |
+| 5.4k | Ready for review | - | KV-aware resident replay over the existing CUDA executor; retained native roots and leases, fixed metadata admission, streamed-epoch invalidation, and active-capture rejection. 13 CUDA cases / 166 assertions; four 26-suite matrices, graph-disabled checks, targeted host TSan and UVM-off/on CUDA memcheck pass. Scope and measured guard cost below. |
+| 5.5a-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -2508,3 +2509,64 @@ The user requested one combined review/commit for **5.4j.1-5.4j.4**. After this 
 - Targeted TSan passes snapshot/copy admission (3 / 946), host prefetch planning (3 / 1,121), and policy/tuning (22 / 139,910), using process-local `setarch x86_64 -R`. This does not resolve or claim coverage of previously documented broader TSan/native-kernel racecheck limitations.
 - The first-upload timing change provides the clearest instrumented latency saving; prefill filtering removes profiling work from non-decode execution. Deferred collection and batch-level probes establish the intended low-interference contracts, but their individual timings are flat or mixed. The bundle does not make profiling free or prove full-model speedup.
 - `git diff --check` passes. All four follow-ups are staged together for the user's commit; unrelated README/documentation/benchmark changes remain unstaged. No commit or push was created by the assistant.
+
+## Substage 5.4k: resident capture eligibility and invalidation
+
+This stage adds `llama_kv_stream_cuda_executor`, a KV-aware admission layer over the existing stage-4 `llama_memory_cuda_executor`. It reuses that executor's native CUDA graph cache, queued-execution pins, failure handling, and retirement ordering. It does not introduce another native cache or enable the production server path.
+
+### Ownership and admission
+
+- Bind only native, fully resident, TG1-shaped attention. Converted KV, multi-query prefill and streamed graphs remain outside this capture path. The entire bound resident consumer must fit its resident allocation, not just one layer.
+- Move an authentic KV binding execution pin only after successful admission. Retain every supplied lease, including the explicit KV lease and all mutable graph workspace leases. Read-only, non-view WEIGHTS buffers may be unleased; retain their backing buffer handles separately.
+- KV storage is read-only inside the captured graph. Producer writes and resident synchronization remain outside it. Reject writable outputs that overlap any byte of the KV region, including through a different buffer-view handle.
+- Require attention K/V views to reference this consumer's actual native root tensors. Equal physical addresses and shapes do not prove metadata ownership: two consumers can bind the same lease but own different root tensors.
+- The caller must keep the backend and fixed graph/context/tensor metadata alive. The retained binding pin owns resident root metadata; buffer retention does not own arbitrary caller-created tensor metadata. All submissions for one graph key must use this wrapper.
+
+### Replay and retirement
+
+Admission records buffer identity, binding revision, residency revision, host-mirror epoch and padded token extent. Before each replay, check these values plus graph node/leaf identity and tensor pointers, shapes, strides, operations, sources and view metadata. Tensor names and backend-owned `extra` fields are not replay keys.
+
+Synchronized value updates at the same padded extent can reuse the graph. Exact context growth within that extent also works when the caller updates the mask contents. Dirty host data temporarily rejects replay without destroying the capture; after resident synchronization, it can replay again. A new padded extent, host replacement/reset, pointer/topology change or streamed epoch retires the old capture before releasing dependencies. Streaming followed by a return to the original resident extent cannot resurrect the old capture. An unrelated arena commit does not invalidate an unchanged persistent lease merely because the arena generation increased.
+
+The backend exposes an internal active-capture query, including when automatic CUDA graphs are disabled. Host-driven resident updates, streaming entry points and raw partial/convert/combine submissions reject active capture before they allocate or synchronize. Rejection leaves the enclosing capture usable. Ordinary graph-disabled CUDA execution remains available through the same ownership path; the previously unsupported `GGML_CUDA_GRAPH_OPT=1` mode remains rejected. These are owner-thread APIs, not a concurrent scheduler.
+
+Logical invalidation may leave a native cache entry allocated until replay admission or explicit retirement observes it. Leases stay pinned in that interval, so its addresses cannot be reassigned. `ready()` describes eligibility; `is_captured()` only describes native cache presence.
+
+### TDD and qualification
+
+The initial backend-hook test failed before implementation. Expanded tests then exposed two separate admission bugs: an alias handle concealed a write into KV storage, and an authentic pin for a second consumer did not own the first consumer's tensor roots. Each regression was observed failing before its fix, then passed with the implementation corrected.
+
+- Capture suite: 13 cases / 166 assertions on CUDA, also passing with automatic graphs disabled. Coverage includes changed payloads, same-page growth, dirty data, wrong/missing owners and leases, aliased writes, same-address/different-owner roots, streaming-return invalidation, host replacement, padded extent changes, persistent leases, raw weight retention, queued replay and native retirement. Numerical results are checked against the CPU attention oracle.
+- Compute Sanitizer memcheck: all capture cases pass with UVM off and on, with zero errors and zero leaked bytes. These tests qualify lifecycle/address safety, not a claim that all CUDA kernels are race-free.
+- All 26 focused suites pass in CPU Debug, CUDA-build Debug, ASan and UBSan. Default CTest covers host contracts; actual GPU execution is checked separately.
+- GPU regressions pass: resident 13 / 246; writer 10 / 609; block attention 20 / 656,887; copy 23 / 3,211; prefetch 14 / 3,048; reused CUDA executor 10 / 226, including failure after submission. CUDA SCALE passes all four CPU-reference comparisons.
+- Targeted CPU TSan passes the unsupported-backend capture contract (1 / 4) and common executor ownership (16 / 176), using process-local `setarch x86_64 -R`. This does not expand coverage to CUDA execution or resolve the broader TSan/native racecheck limitations documented earlier.
+
+### Performance qualification
+
+RTX 5070 Ti, Q8_0/Q4_0, 256 active tokens, five warmups and 50 measured synchronized replays. Values are median milliseconds. Control and guarded runs use the same leased attention graphs; the control is the existing generic CUDA executor.
+
+| Attention layers | Control | KV-guarded replay | Additional time |
+| ---: | ---: | ---: | ---: |
+| 1 | 0.012986 | 0.013631 | 0.645 us |
+| 8 | 0.068074 | 0.068995 | 0.921 us |
+| 16 | 0.130349 | 0.131805 | 1.456 us |
+
+The checks are not free: approximately 5% on the smallest synthetic graph and 1-1.4% on the larger graphs in this run. This is not a full-model token/s estimate. Graph identity checks use contiguous metadata comparisons only when the struct layout has no padding, with a portable field-wise fallback otherwise. Checksums match the control. The committed-head pre-change control was 0.012968 / 0.068178 / 0.130180 ms, consistent with the post-change control above.
+
+The existing streaming benchmark (`test-kv-stream-prefetch --bench-feedback`) also retains its prior transfer counts and checksums:
+
+| Active tokens | Queries | Committed 5ee09b7e1 | After capture guards |
+| ---: | ---: | ---: | ---: |
+| 257 | 1 | 0.475754 | 0.477224 |
+| 257 | 33 | 0.588761 | 0.586714 |
+| 2,049 | 1 | 1.484998 | 1.485597 |
+| 2,049 | 33 | 1.968067 | 1.965638 |
+| 8,193 | 1 | 5.499386 | 5.473363 |
+| 8,193 | 33 | 7.202582 | 7.201057 |
+
+These differences are within about 0.5%; no material streaming regression or general speedup is established. H2D bytes remain 6,656 / 11,934,208 / 52,828,672 in 16 / 64 / 256 submissions. Capture-state queries are kept out of repeated partial-capability preflight; actual submission entry points still enforce capture safety.
+
+Reproduce the new checks with `build-device-memory-infra-cuda/bin/test-kv-stream-capture --cuda`; use `GGML_CUDA_DISABLE_GRAPHS=1` with `--cuda --no-graphs` for eager execution, and `GGML_CUDA_GRAPH_OPT=1` with `--cuda --unsupported` for the unsupported-mode contract. The replay comparison uses `--bench` and `--bench-guarded`. Local validation logs are `/tmp/kv-54k-*.log` and are not repository artifacts.
+
+After user review and commit, proceed to **5.5a: opt-in text-context integration, serial execution gating and hybrid recurrent-state preservation**. Full-model producer/writeback wiring remains there; this stage does not claim a captured complete decode graph. No production service, compose configuration, model, checkpoint or prompt cache was changed. Task files are staged for the user; unrelated README/documentation/benchmark edits remain untouched, and no commit or push was created.

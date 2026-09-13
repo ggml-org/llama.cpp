@@ -19,6 +19,11 @@ struct llama_kv_stream_feedback_context {
     uint32_t query_tokens = 0;
     bool decode = false;
 };
+struct llama_kv_stream_capture_stamp {
+    ggml_backend_buffer_t buffer = nullptr;
+    uint64_t binding_revision = 0, residency_revision = 0, mirror_epoch = 0;
+    size_t padded_tokens = 0;
+};
 
 // Idle native resources owned by the coarse binding; backend and external graph contexts must outlive their users.
 // Hold a binding execution pin for the entire lifetime of any graph referencing these planes, including captures.
@@ -34,6 +39,9 @@ public:
     // Reject contexts that exceed resident capacity; this refresh copies encoded bytes without conversion or repartition.
     bool synchronize(size_t active_tokens);
     bool ready(size_t active_tokens) const noexcept;
+    // Capture identity excludes ordinary data writes and live-length changes within one padded page extent.
+    bool capture_state(ggml_backend_t backend, size_t active_tokens, llama_kv_stream_capture_stamp & output) const;
+    bool capture_attention(const ggml_tensor * attention, size_t active_tokens) const;
     // Ordered one-block path. Hold a binding pin; Q/mask/output and the disjoint workspace lease remain live until return.
     // Caller supplies padded causal mask values. Query backend capabilities before planning native or converted K/V.
     bool compute_one_block(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,

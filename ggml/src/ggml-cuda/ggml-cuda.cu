@@ -6173,6 +6173,18 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
 }
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+// Available even when GGML's automatic graph cache is disabled.
+static bool ggml_backend_cuda_graph_is_capturing(ggml_backend_t backend) {
+    GGML_ASSERT(backend && ggml_backend_is_cuda(backend));
+    auto * ctx = static_cast<ggml_backend_cuda_context *>(backend->context);
+    const auto stream = ctx->streams[ctx->device][ctx->curr_stream_no];
+    if (!stream) return false;
+    ggml_cuda_set_device(ctx->device);
+    cudaStreamCaptureStatus status;
+    CUDA_CHECK(cudaStreamIsCapturing(stream,&status));
+    return status != cudaStreamCaptureStatusNone;
+}
+
 // The caller has drained this backend and still retains every captured dependency.
 static void ggml_backend_cuda_graph_release(ggml_backend_t backend, const void * key) {
     GGML_ASSERT(backend && ggml_backend_is_cuda(backend));
@@ -6212,6 +6224,7 @@ static bool ggml_backend_cuda_graph_is_captured(ggml_backend_t backend, const vo
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if (strcmp(name,"ggml_backend_cuda_graph_is_capturing") == 0) return (void *)ggml_backend_cuda_graph_is_capturing;
     if (strcmp(name, "ggml_backend_kv_stream_partial_ops") == 0) return (void *)ggml_cuda_kv_stream_partial_ops;
     if (strcmp(name, "ggml_backend_kv_stream_copy_ops") == 0) return (void *)ggml_cuda_kv_stream_copy_ops;
     if (strcmp(name, "ggml_backend_cuda_kv_host_buffer_type") == 0) return (void *)ggml_backend_cuda_kv_host_buffer_type;

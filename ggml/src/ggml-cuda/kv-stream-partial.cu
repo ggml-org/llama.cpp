@@ -10,6 +10,18 @@
 #include <cstring>
 
 namespace {
+// Host-driven partials cannot allocate or synchronize inside a capture.
+static bool capture_active(ggml_backend_t backend) {
+    if (!backend || !ggml_backend_is_cuda(backend)) return false;
+    auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
+    const auto stream = ctx.streams[ctx.device][ctx.curr_stream_no];
+    if (!stream) return false;
+    ggml_cuda_set_device(ctx.device);
+    cudaStreamCaptureStatus status;
+    CUDA_CHECK(cudaStreamIsCapturing(stream,&status));
+    return status != cudaStreamCaptureStatusNone;
+}
+
 struct span { uintptr_t begin = 0, end = 0; };
 
 // Check the touched tensor range before interpreting a borrowed device pointer.
@@ -122,7 +134,7 @@ static bool supports_conversion(ggml_backend_t backend, const ggml_tensor * sour
 
 // Reuse the backend's converter without graph allocation, pool scratch, or host round trips.
 static bool convert(ggml_backend_t backend, const ggml_tensor * source, ggml_tensor * destination) {
-    if (!supports_conversion(backend,source,destination)) return false;
+    if (capture_active(backend) || !supports_conversion(backend,source,destination)) return false;
     auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
     ggml_cuda_set_device(ctx.device);
     const int64_t elements = source->ne[0]*source->ne[1]*source->ne[2];
@@ -155,7 +167,7 @@ static bool workspace_valid(ggml_backend_t backend, ggml_backend_buffer_t buffer
 
 // Export two native vector splits. A shifted maximum remains a valid common (m,L,U) coordinate.
 static bool partial(ggml_backend_t backend, const ggml_tensor * op, ggml_backend_buffer_t buffer, bool second) {
-    if (!supports(backend, op)) return false;
+    if (capture_active(backend) || !supports(backend, op)) return false;
     ggml_kv_stream_block_layout layout;
     if (ggml_kv_stream_block_layout_make(size_t(op->ne[1])*size_t(op->ne[2]), 256, layout).status != ggml_kv_stream_partial_status::success ||
             !workspace_valid(backend,buffer,layout,op,true)) return false;
@@ -251,6 +263,7 @@ __global__ void merge_kernel(float * a, float2 * am, const float * b, const floa
 
 // Share checked workspace handling between publication, incremental folding, and empty initialization.
 static bool combine(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buffer_t buffer, int action) {
+    if (capture_active(backend)) return false;
     if (!output || output->type != GGML_TYPE_F32 || output->ne[0] != 256 || output->ne[1] <= 0 ||
             output->ne[2] <= 0 || output->ne[1] > INT32_MAX || output->ne[2] > INT32_MAX/512/output->ne[1] ||
             output->ne[3] != 1 || !ggml_is_contiguous(output)) return false;
