@@ -157,8 +157,8 @@ struct clip_ctx {
 
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
-    ggml_backend_buffer_ptr buf;
-
+    std::vector<ggml_backend_buffer_ptr> bufs;
+    bool use_extra_bufts = true;
 
     int max_nodes = 8192;
     ggml_backend_sched_ptr sched;
@@ -206,6 +206,8 @@ struct clip_ctx {
             backend = backend_cpu;
             LOG_INF("%s: CLIP using CPU backend\n", __func__);
         }
+
+        use_extra_bufts = ctx_params.use_extra_bufts;
 
         if (ctx_params.image_min_tokens > 0) {
             model.hparams.custom_image_min_tokens = ctx_params.image_min_tokens;
@@ -1149,6 +1151,85 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
     builder->n_batch = imgs.entries.size();
 
     return builder;
+}
+
+static ggml_backend_buffer_type_t * clip_get_extra_bufts(ggml_backend_dev_t dev) {
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    ggml_backend_dev_get_extra_bufts_t get_extra_bufts =
+        (ggml_backend_dev_get_extra_bufts_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_get_extra_bufts");
+    if (get_extra_bufts) {
+        return get_extra_bufts(dev);
+    }
+    return nullptr;
+}
+
+struct clip_weight_ops {
+    std::vector<ggml_tensor *> ops;
+    // Views assume the original data layout and cannot be repacked on extra buffer types like CPU_REPACK
+    bool used_via_view = false;
+};
+
+static std::map<ggml_tensor *, clip_weight_ops> clip_collect_weight_ops(ggml_context * ctx_data, ggml_cgraph * gf) {
+    std::map<ggml_tensor *, clip_weight_ops> w_ops_map;
+    std::unordered_set<ggml_tensor *> weights;
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx_data); t; t = ggml_get_next_tensor(ctx_data, t)) {
+        weights.insert(t);
+    }
+    for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
+        ggml_tensor * node = ggml_graph_node(gf, i);
+        for (int s = 0; s < GGML_MAX_SRC; s++) {
+            ggml_tensor * src = node->src[s];
+            if (!src) {
+                continue;
+            }
+            // resolve views to the tensor owning the storage
+            ggml_tensor * root = src;
+            while (root->view_src) {
+                root = root->view_src;
+            }
+            if (weights.count(root) == 0) {
+                continue;
+            }
+            if (src != root) {
+                w_ops_map[root].used_via_view = true;
+            } else {
+                w_ops_map[root].ops.push_back(node);
+            }
+        }
+    }
+    return w_ops_map;
+}
+
+static bool clip_weight_buft_supported(ggml_tensor * w, const clip_weight_ops & wops, ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev) {
+    if (wops.used_via_view || wops.ops.empty()) {
+        return false;
+    }
+    // TODO: temporary fix, repack kernels assert on 4D batched activations but
+    // ggml_backend_dev_supports_op does not report it. Fix in the backend first.
+    for (ggml_tensor * op : wops.ops) {
+        if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_MUL_MAT_ID) && op->src[1] && op->src[1]->ne[3] > 1) {
+            return false;
+        }
+    }
+    GGML_ASSERT(w->buffer == nullptr);
+    ggml_backend_buffer_ptr buf { ggml_backend_buft_alloc_buffer(buft, 0) };
+    if (!buf) {
+        return false;
+    }
+
+    // supports_op checks the buffer type of op
+    // temporarily attach a zero-size buffer of the qtype to the weights
+    w->buffer = buf.get();
+    bool supported = true;
+    for (ggml_tensor * op : wops.ops) {
+        if (!ggml_backend_dev_supports_op(dev, op)) {
+            supported = false;
+            break;
+        }
+    }
+    w->buffer = nullptr;
+
+    return supported;
 }
 
 //
@@ -3598,14 +3679,103 @@ struct clip_model_loader {
 
             // alloc memory and offload data
             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
-            ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
-            ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            std::map<ggml_backend_buffer_type_t, std::vector<ggml_tensor *>> extra_tensors;
+            ggml_backend_dev_t dev = ggml_backend_get_device(ctx_clip.backend);
+            // GEN_AUDIO graph variants depend on runtime parameters, skip converting weights to extra bufts
+            const bool can_build_graph = model.modality == CLIP_MODALITY_VISION ||
+                                         model.modality == CLIP_MODALITY_AUDIO;
+            // Deepseekocr merge image tiles into the batch dimension, so the dummy graph
+            // doesn't match the real ne[3] and repacked weights would hit an assertion
+            const bool supported_proj = model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR &&
+                                        model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR2;
+            const bool repack_supported = can_build_graph && supported_proj;
+            if (dev) {
+                const bool is_cpu = ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
+                if (ctx_clip.use_extra_bufts && is_cpu && repack_supported) {
+                    ggml_backend_buffer_type_t * extra_bufts = clip_get_extra_bufts(dev);
+                    if (extra_bufts && *extra_bufts) {
+                        try {
+                            // build a dummy graph to find the ops that consume each weight
+                            ctx_clip.buf_compute_meta.resize(ctx_clip.max_nodes * ggml_tensor_overhead() + ggml_graph_overhead());
+                            const auto batch = get_dummy_batch(ctx_clip, /* verbose */ false);
+                            ggml_cgraph * gf = clip_get_graph_builder(&ctx_clip, batch)->build();
+                            const auto w_ops_map = clip_collect_weight_ops(ctx_clip.ctx_data.get(), gf);
+                            for (const auto & i : w_ops_map) {
+                                const auto & w = i.first;
+                                const auto & wops = i.second;
+                                for (ggml_backend_buffer_type_t * it = extra_bufts; *it; ++it) {
+                                    ggml_backend_buffer_type_t extra_buft = *it;
+                                    // Only CPU_REPACK validated, KleidiAI showed numerical drift, others untested
+                                    if (strcmp(ggml_backend_buft_name(extra_buft), "CPU_REPACK") != 0) {
+                                        continue;
+                                    }
+                                    if (clip_weight_buft_supported(w, wops, extra_buft, dev)) {
+                                        extra_tensors[extra_buft].push_back(w);
+                                        break;
+                                    }
+                                }
+                            }
+                        } catch (const std::exception & e) {
+                            LOG_WRN(
+                                "%s: failed to select extra buffer types for CPU_REPACK, falling back to the default buffer type, %s\n",
+                                __func__, e.what());
+                            extra_tensors.clear();
+                        }
+                    }
+                }
+            }
+            // Allocate one grouped buffer per extra buffer type and place its selected weights in it
+            for (const auto & group : extra_tensors) {
+                ggml_backend_buffer_type_t cur_buft = group.first;
+                const auto & tensors = group.second;
+                const size_t align = ggml_backend_buft_get_alignment(cur_buft);
+                size_t total = 0;
+                size_t total_nbytes = 0;
+                for (ggml_tensor * t : tensors) {
+                    total += GGML_PAD(ggml_backend_buft_get_alloc_size(cur_buft, t), align);
+                    total_nbytes += ggml_nbytes(t);
+                }
+                ggml_backend_buffer_ptr cur_buf { ggml_backend_buft_alloc_buffer(cur_buft, total) };
+                if (!cur_buf) {
+                    LOG_WRN("%s: failed to allocate %s buffer, using default buffer type\n", __func__,
+                            ggml_backend_buft_name(cur_buft));
+                    continue;
+                }
+                // the weight memory counter assumed ggml_nbytes, account for the actual allocated size
+                ctx_clip.mem_usage[dev] += total - total_nbytes;
+                ggml_backend_buffer_set_usage(cur_buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                ggml_tallocr talloc = ggml_tallocr_new(cur_buf.get());
+                for (ggml_tensor * t : tensors) {
+                    if (ggml_tallocr_alloc(&talloc, t) != GGML_STATUS_SUCCESS) {
+                        throw std::runtime_error(string_format("%s: failed to allocate tensor %s in %s buffer\n",
+                                                               __func__, t->name, ggml_backend_buft_name(cur_buft)));
+                    }
+                }
+                LOG_INF("%s: %10s buffer size = %8.2f MiB (%zu tensors)\n", __func__, ggml_backend_buft_name(cur_buft),
+                        total / 1024.0 / 1024.0, tensors.size());
+                ctx_clip.bufs.emplace_back(std::move(cur_buf));
+            }
+
+            if (ggml_backend_alloc_ctx_tensors_from_buft_size(ctx_clip.ctx_data.get(), buft) > 0) {
+                ggml_backend_buffer_ptr buf { ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft) };
+                if (!buf) {
+                    throw std::runtime_error(
+                        string_format("%s: unable to allocate %s buffer\n", __func__, ggml_backend_buft_name(buft)));
+                }
+                ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                ctx_clip.bufs.emplace_back(std::move(buf));
+            }
             // read the weight from file
             if (!ctx_clip.no_alloc) {
                 size_t data_loaded = 0;
                 for (auto & t : tensors_to_load) {
                     ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
                     GGML_ASSERT(cur && "tensor not found in ctx_data");
+                    size_t num_bytes = ggml_nbytes(cur);
+                    if (num_bytes == 0) {
+                        continue;
+                    }
+                    GGML_ASSERT(cur->buffer && "tensor not allocated");
                     auto it_off = tensor_offset.find(t->name);
                     GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
                     const size_t offset = it_off->second;
@@ -3613,12 +3783,11 @@ struct clip_model_loader {
                     if (!fin) {
                         throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
                     }
-                    size_t num_bytes = ggml_nbytes(cur);
-                    if (ggml_backend_buft_is_host(buft)) {
-                        // for the CPU and Metal backend, we can read directly into the tensor
+                    if (ggml_backend_buffer_is_host(cur->buffer)) {
+                        // host buffers (e.g. CPU and Metal) can be read into directly
                         fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
                     } else {
-                        // read into a temporary buffer first, then copy to device memory
+                        // read into a temporary buffer first, then copy/convert the layout to device memory
                         read_buf.resize(num_bytes);
                         fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
                         ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
@@ -3655,7 +3824,7 @@ struct clip_model_loader {
         std::vector<support_info_op> ops;
     };
 
-    static clip_image_f32_batch get_dummy_batch(clip_ctx & ctx_clip) {
+    static clip_image_f32_batch get_dummy_batch(clip_ctx & ctx_clip, bool verbose = true) {
         // create a fake batch
         const auto & hparams = ctx_clip.model.hparams;
         clip_image_f32_batch batch;
@@ -3663,7 +3832,9 @@ struct clip_model_loader {
         if (ctx_clip.model.modality == CLIP_MODALITY_VISION) {
             const int sz = hparams.warmup_image_size;
             img.set_size({sz, sz}, false, false);
-            LOG_INF("%s: warmup with image size = %d x %d\n", __func__, sz, sz);
+            if (verbose) {
+                LOG_INF("%s: warmup with image size = %d x %d\n", __func__, sz, sz);
+            }
         } else {
             // GEMMA4UA uses n_mel_bins as a raw-waveform frame size (640), not a mel-bin count,
             // so the [1, 256] bound only applies to FFT-based models.
@@ -3672,7 +3843,9 @@ struct clip_model_loader {
                 throw std::runtime_error(string_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
             }
             img.set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
-            LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
+            if (verbose) {
+                LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
+            }
         }
         batch.entries.push_back(img);
         return batch;

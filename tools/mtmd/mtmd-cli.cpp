@@ -161,6 +161,7 @@ struct mtmd_cli_context {
         mparams.n_threads        = params.cpuparams.n_threads;
         mparams.flash_attn_type  = params.flash_attn_type;
         mparams.warmup           = params.warmup;
+        mparams.use_extra_bufts  = !params.no_extra_bufts;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
         if (std::getenv("MTMD_DEBUG_GRAPH") != nullptr) {
