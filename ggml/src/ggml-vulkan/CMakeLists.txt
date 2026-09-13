@@ -7,6 +7,7 @@ if (POLICY CMP0147)
 endif()
 
 find_package(Vulkan COMPONENTS glslc REQUIRED)
+option(GGML_VULKAN_HYBRID "Experimental blocking oneDNN attention bridge (Windows)" OFF)
 
 if (DEFINED ENV{VULKAN_SDK})
     list(APPEND CMAKE_PREFIX_PATH "$ENV{VULKAN_SDK}")
@@ -65,6 +66,14 @@ if (Vulkan_FOUND)
                             )
 
     set(VULKAN_SHADER_GEN_CMAKE_ARGS "")
+
+    if (GGML_VULKAN_HYBRID)
+        if (NOT WIN32)
+            message(FATAL_ERROR "GGML_VULKAN_HYBRID POC requires Windows")
+        endif()
+        target_sources(ggml-vulkan PRIVATE ggml-vulkan-hybrid.cpp)
+        target_compile_definitions(ggml-vulkan PRIVATE GGML_VULKAN_HYBRID)
+    endif()
 
     # Test all shader extensions
     test_shader_extension_support(

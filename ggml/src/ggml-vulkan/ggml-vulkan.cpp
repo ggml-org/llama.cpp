@@ -1,4 +1,7 @@
 #include "ggml-vulkan.h"
+#ifdef GGML_VULKAN_HYBRID
+#include "ggml-vulkan-hybrid.h"
+#endif
 #include <vulkan/vulkan_core.h>
 #if defined(GGML_VULKAN_RUN_TESTS) || defined(GGML_VULKAN_CHECK_RESULTS)
 #include <chrono>
@@ -18226,6 +18229,24 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         if (first_node_in_batch) {
             submit_node_idx = i;
         }
+
+#ifdef GGML_VULKAN_HYBRID
+        if (!vk_perf_logger_enabled && ggml_vk_hybrid_supported(cgraph->nodes[i])) {
+            if (!first_node_in_batch) {
+                vk_context flush_ctx = ggml_vk_get_compute_ctx(ctx);
+                ggml_vk_ctx_end(flush_ctx);
+                flush_ctx->exit_tensor_idx = -1;
+                ctx->compute_ctx.reset();
+                ggml_vk_compute_forward(ctx, cgraph, cgraph->nodes[submit_node_idx], submit_node_idx, false);
+                submit_after(submit_node_idx, i - 1);
+            }
+            ggml_vk_synchronize(ctx);
+            submit_node_idx = i;
+            if (ggml_vk_hybrid_try(cgraph->nodes[i])) {
+                continue;
+            }
+        }
+#endif
 
         {
             auto node_flops = ggml_vk_get_node_flops(cgraph->nodes[i]);
