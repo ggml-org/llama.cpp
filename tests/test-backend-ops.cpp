@@ -2024,17 +2024,18 @@ struct test_unary : public test_case {
     const ggml_unary_op op;
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
-    int v; // view (1 : non-contiguous a)
+    int v; // view (1: padded rows, 2: offset, 4: permuted outer dimensions)
+    const bool inplace;
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne_a, v);
+        return VARS_TO_STR3(type, ne_a, v) + (inplace ? ",inplace=1" : "");
     }
 
     test_unary(ggml_unary_op op,
             ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {128, 2, 2, 2},
-            int v = 0)
-        : op(op), type(type), ne_a(ne_a), v(v) {}
+            int v = 0, bool inplace = false)
+        : op(op), type(type), ne_a(ne_a), v(v), inplace(inplace) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const bool grad_supported = op == GGML_UNARY_OP_ABS || op == GGML_UNARY_OP_SGN || op == GGML_UNARY_OP_NEG ||
@@ -2054,7 +2055,8 @@ struct test_unary : public test_case {
             }
             ggml_set_name(a, "a");
 
-            a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
+            const size_t offset = (v & 2) ? a->nb[0] + a->nb[1] + a->nb[2] + a->nb[3] : 0;
+            a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], offset);
             ggml_set_name(a, "view_of_a");
         } else {
             a = ggml_new_tensor(ctx, type, 4, ne_a.data());
@@ -2064,7 +2066,12 @@ struct test_unary : public test_case {
             ggml_set_name(a, "a");
         }
 
-        ggml_tensor * out = ggml_unary(ctx, a, op);
+        if (v & 4) {
+            a = ggml_permute(ctx, a, 0, 2, 3, 1);
+            ggml_set_name(a, "permuted_a");
+        }
+
+        ggml_tensor * out = inplace ? ggml_unary_inplace(ctx, a, op) : ggml_unary(ctx, a, op);
         ggml_set_name(out, "out");
 
         return out;
@@ -8887,6 +8894,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+        for (bool inplace : {false, true}) {
+            test_cases.emplace_back(new test_unary(GGML_UNARY_OP_ABS, type, {257, 3, 2, 2}, 3, inplace));
+            test_cases.emplace_back(new test_unary(GGML_UNARY_OP_ABS, type, {5, 7, 11, 3}, 7, inplace));
+        }
+    }
+
     // fused relu + sqr (squared ReLU)
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
         test_cases.emplace_back(new test_relu_sqr(type, { 128, 2, 2, 2 }));
@@ -10932,6 +10946,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+
+    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+        for (int v : {0, 1}) {
+            test_cases.emplace_back(new test_unary(GGML_UNARY_OP_ABS, type, {4096, 16, 2, 2}, v));
+        }
+    }
 
     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
     // note: same bytes either way, so a backend that indexes them differently shows it here
