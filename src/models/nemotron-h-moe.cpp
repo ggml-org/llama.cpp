@@ -97,11 +97,17 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     cb(cur, "mtp_attn_post_norm", il);
 
     {
+        ggml_tensor * inp_latent = cur;
+
+        if (layer.ffn_latent_down) {
+            inp_latent = ggml_mul_mat(ctx0, layer.ffn_latent_down, cur);
+        }
+
         ggml_tensor * router_logits = build_lora_mm(layer.ffn_gate_inp, cur);
         cb(router_logits, "mtp_ffn_moe_logits", il);
 
         ggml_tensor * moe_out =
-            build_moe_ffn(cur,
+            build_moe_ffn(inp_latent,
                 layer.ffn_gate_inp,
                 layer.ffn_up_exps,
                 nullptr, // no gate
@@ -117,6 +123,10 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
                 nullptr, // no gate
                 layer.ffn_down_exps_s);
         cb(moe_out, "mtp_ffn_moe_out", il);
+
+        if (layer.ffn_latent_up) {
+            moe_out = ggml_mul_mat(ctx0, layer.ffn_latent_up, moe_out);
+        }
 
         ggml_tensor * ffn_shexp = build_ffn(cur,
                 layer.ffn_up_shexp,   NULL, layer.ffn_up_shexp_s,
