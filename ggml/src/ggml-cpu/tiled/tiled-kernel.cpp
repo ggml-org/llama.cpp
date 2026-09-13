@@ -170,119 +170,10 @@ static void tiled_run_micro_vnni_16x8(const tiled_tile_src0 & src0, const tiled_
     }
 }
 
-// no-fly VNNI kernel: on-the-fly interleave via tiled_repack_16x16 per 64-k chunk
-template <int SUBBLK, bool HAS_MIN, int BIAS>
-static void tiled_run_micro_vnni_16x8_nofly(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                            int i0, int j0, int n_cols, float * buf, int buf_stride) {
-    constexpr int NB = TILED_TILE_K / SUBBLK;
-    constexpr int NS = SUBBLK / 16;
-    constexpr int NG = SUBBLK / 4;
-    constexpr int NUM_COLS = 8;
-    constexpr int SUB_PER_CHUNK = 64 / SUBBLK;
-
-    if (n_cols == 0) return;
-
-    __m512i s1_acc[NUM_COLS];
-    for (int t = 0; t < n_cols; t++) { s1_acc[t] = _mm512_setzero_si512(); }
-    __m512i s2_acc[NUM_COLS];
-    if constexpr (HAS_MIN) {
-        for (int t = 0; t < n_cols; t++) { s2_acc[t] = _mm512_setzero_si512(); }
-    }
-
-    // row pointers for the butterfly (natural [row][256] layout)
-    const int8_t * rp[TILED_MICRO];
-    for (int r = 0; r < TILED_MICRO; r++) {
-        rp[r] = (const int8_t *) &src0.q[(i0 + r) * TILED_TILE_K];
-    }
-
-    alignas(64) uint8_t sb[1024];
-
-    for (int c = 0; c < 4; c++) {
-        // build interleaved 64-k chunk on stack
-        tiled_repack_16x16(rp, c, sb);
-
-        for (int sc = 0; sc < SUB_PER_CHUNK; sc++) {
-            const int s = c * SUB_PER_CHUNK + sc;
-
-            __m512i acc16[NUM_COLS];
-            for (int t = 0; t < n_cols; t++) { acc16[t] = _mm512_setzero_si512(); }
-
-            // bsums for correction
-            __m512i src0_bsums_16 = _mm512_load_si512((const __m512i *) &src0.bsums[s * NS * TILED_TILE_ROWS + i0]);
-            for (int u = 1; u < NS; u++) {
-                src0_bsums_16 = _mm512_add_epi32(src0_bsums_16, _mm512_load_si512((const __m512i *) &src0.bsums[(s * NS + u) * TILED_TILE_ROWS + i0]));
-            }
-            __m512i bias_16 = _mm512_mullo_epi32(src0_bsums_16, _mm512_set1_epi32(128));
-
-            // dpbusd: NG groups from stack buffer
-            for (int g = 0; g < NG; g++) {
-                const int kg = s * NG + g;
-                const int g_local = sc * NG + g;
-                const __m512i src0_512 = _mm512_load_si512((const __m512i *) &sb[g_local * 64]);
-                for (int t = 0; t < n_cols; t++) {
-                    const uint32_t s1_u4 = *(const uint32_t *) &src1.q[(j0 + t) * TILED_TILE_K + kg * 4];
-                    const __m512i s1_bcast = _mm512_set1_epi32((int) s1_u4);
-                    acc16[t] = _mm512_dpbusd_epi32(acc16[t], s1_bcast, src0_512);
-                }
-            }
-
-            // correction
-            const __m512i scales_16 = _mm512_load_si512((const __m512i *) &src0.scales_t[s * TILED_TILE_ROWS + i0]);
-            for (int t = 0; t < n_cols; t++) {
-                s1_acc[t] = _mm512_add_epi32(s1_acc[t], _mm512_mullo_epi32(_mm512_sub_epi32(acc16[t], bias_16), scales_16));
-            }
-        }
-    }
-
-    // s2_acc += mins * src1_bsums (HAS_MIN only)
-    if constexpr (HAS_MIN) {
-        for (int s = 0; s < NB; s++) {
-            int32_t s1_bsums[NUM_COLS];
-            for (int t = 0; t < n_cols; t++) {
-                int32_t sum = 0;
-                for (int u = 0; u < NS; u++) { sum += src1.bsums[(s * NS + u) * TILED_TILE_ROWS + j0 + t]; }
-                s1_bsums[t] = sum;
-            }
-            const __m512i mins_16 = _mm512_load_si512((const __m512i *) &src0.mins_t[s * TILED_TILE_ROWS + i0]);
-            for (int t = 0; t < n_cols; t++) {
-                s2_acc[t] = _mm512_add_epi32(s2_acc[t], _mm512_mullo_epi32(mins_16, _mm512_set1_epi32(s1_bsums[t])));
-            }
-        }
-    }
-
-    // epilogue: buf is [col][row], so each col's 16 rows are contiguous (64B store)
-    const __m512 d0_vec = _mm512_load_ps(&src0.d[i0]);
-    if constexpr (HAS_MIN) {
-        const __m512 dmin_vec = _mm512_load_ps(&src0.dmin[i0]);
-        for (int t = 0; t < n_cols; t++) {
-            __m512 f1 = _mm512_cvtepi32_ps(s1_acc[t]);
-            __m512 result = _mm512_mul_ps(f1, d0_vec);
-            __m512 f2 = _mm512_cvtepi32_ps(s2_acc[t]);
-            result = _mm512_fnmadd_ps(dmin_vec, f2, result);
-            float * p = &buf[(j0 + t) * buf_stride + i0];
-            _mm512_store_ps(p, _mm512_add_ps(_mm512_load_ps(p), _mm512_mul_ps(result, _mm512_set1_ps(src1.d[j0 + t]))));
-        }
-    } else {
-        for (int t = 0; t < n_cols; t++) {
-            __m512 f1 = _mm512_cvtepi32_ps(s1_acc[t]);
-            __m512 result = _mm512_mul_ps(f1, d0_vec);
-            float * p = &buf[(j0 + t) * buf_stride + i0];
-            _mm512_store_ps(p, _mm512_add_ps(_mm512_load_ps(p), _mm512_mul_ps(result, _mm512_set1_ps(src1.d[j0 + t]))));
-        }
-    }
-}
-
 // 16x16 microtile split into 16xCOLS passes over src1 cols j0..j0+15
 template <int SUBBLK, bool HAS_MIN, int BIAS>
 static void tiled_run_microtile_vnni(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                          int i0, int j0, int n_cols, float * buf, int buf_stride) {
-#if TILED_NO_FLY
-    // 16-wide window as two 16x8 passes; each pass gets its valid col count (0 = skip)
-    const int nc1 = n_cols < 8 ? n_cols : 8;
-    const int nc2 = n_cols > 8 ? n_cols - 8 : 0;
-    tiled_run_micro_vnni_16x8_nofly<SUBBLK, HAS_MIN, BIAS>(src0, src1, i0, j0,     nc1, buf, buf_stride);
-    tiled_run_micro_vnni_16x8_nofly<SUBBLK, HAS_MIN, BIAS>(src0, src1, i0, j0 + 8, nc2, buf, buf_stride);
-#else
     // SUBBLK=32 uses 4-col passes: at 8 cols GCC emits a home/active register ping-pong
     // for the dpbusd accumulators (35-39% vec-copy); 4 cols keeps them in dedicated regs.
     // SUBBLK=16 stays at 8 cols (already clean; 4 cols would 4x the per-kg src0 loads).
@@ -292,7 +183,6 @@ static void tiled_run_microtile_vnni(const tiled_tile_src0 & src0, const tiled_t
         if (nc == COLS) tiled_run_micro_vnni_16x8<SUBBLK, HAS_MIN, BIAS, true , COLS>(src0, src1, i0, j0 + c, nc, buf, buf_stride);
         else            tiled_run_micro_vnni_16x8<SUBBLK, HAS_MIN, BIAS, false, COLS>(src0, src1, i0, j0 + c, nc, buf, buf_stride);
     }
-#endif
 }
 
 #endif // __AVX512VNNI__ && __AVX512VL__
@@ -626,7 +516,6 @@ void tiled_repack_src0_group(tiled_tile_src0 * tile, int grp, int nb) {
             tile->mins_t[s * TILED_TILE_ROWS + r] = tile->mins[r * nb + s];
         }
     }
-#if !TILED_NO_FLY
     // interleave codes for this group
     alignas(64) uint8_t grp_src[TILED_MICRO * TILED_TILE_K];
     alignas(64) uint8_t grp_dst[1024];
@@ -640,29 +529,11 @@ void tiled_repack_src0_group(tiled_tile_src0 * tile, int grp, int nb) {
         tiled_repack_16x16(rp, c, grp_dst);
         memcpy(base + c * 1024, grp_dst, 1024);
     }
-#endif
 }
 #else
 void tiled_repack_src0_group(tiled_tile_src0 * tile, int grp, int nb) {
     GGML_UNUSED(tile);
     GGML_UNUSED(grp);
-    GGML_UNUSED(nb);
-}
-#endif
-
-// no-fly repack: only transpose scales/mins, skip code interleave
-#if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-void tiled_repack_src0_nofly(tiled_tile_src0 * tile, int nb) {
-    for (int s = 0; s < nb; s++) {
-        for (int r = 0; r < TILED_TILE_ROWS; r++) {
-            tile->scales_t[s * TILED_TILE_ROWS + r] = tile->scales[r * nb + s];
-            tile->mins_t[s * TILED_TILE_ROWS + r] = tile->mins[r * nb + s];
-        }
-    }
-}
-#else
-void tiled_repack_src0_nofly(tiled_tile_src0 * tile, int nb) {
-    GGML_UNUSED(tile);
     GGML_UNUSED(nb);
 }
 #endif
