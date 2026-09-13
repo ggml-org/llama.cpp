@@ -39,6 +39,11 @@ struct llama_memory_buffer {
 
 using llama_memory_buffers = std::map<ggml_backend_buffer_type_t, llama_memory_buffer>;
 
+enum llama_state_seq_file_type : uint32_t {
+    LLAMA_STATE_SEQ_FILE_TYPE_TOKENS = 0,
+    LLAMA_STATE_SEQ_FILE_TYPE_DATA   = 1,
+};
+
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
     llama_context(
@@ -168,17 +173,19 @@ struct llama_context {
                 size_t   n_token_count);
 
     size_t state_seq_load_file(
-          llama_seq_id   seq_id,
-            const char * filepath,
-           llama_token * tokens_out,
-                size_t   n_token_capacity,
-                size_t * n_token_count_out);
+                 llama_seq_id   seq_id,
+                   const char * filepath,
+    llama_state_seq_file_type   type,
+                      uint8_t * data_out,
+                       size_t   data_capacity,
+                       size_t * data_size_out);
 
     size_t state_seq_save_file(
-          llama_seq_id   seq_id,
-            const char * filepath,
-     const llama_token * tokens,
-                size_t   n_token_count);
+                 llama_seq_id   seq_id,
+                   const char * filepath,
+    llama_state_seq_file_type   type,
+                const uint8_t * data,
+                       size_t   data_size);
 
     //
     // perf
