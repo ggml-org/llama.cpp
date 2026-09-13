@@ -1,8 +1,10 @@
 #include "llama-impl.h"
 
+#include "ggml-backend.h"
 #include "gguf.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <climits>
 #include <cstdarg>
@@ -64,6 +66,15 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
     (void) user_data;
     fputs(text, stderr);
     fflush(stderr);
+}
+
+void llama_clear_tensor_data(ggml_tensor * t, size_t offset, size_t size) {
+    static const std::vector<uint8_t> zeros(1024*1024, 0);
+
+    // not all backend buffers implement ggml_backend_tensor_memset(), so write zeros instead
+    for (size_t ofs = 0; ofs < size; ofs += zeros.size()) {
+        ggml_backend_tensor_set(t, zeros.data(), offset + ofs, std::min(size - ofs, zeros.size()));
+    }
 }
 
 void replace_all(std::string & s, const std::string & search, const std::string & replace) {
