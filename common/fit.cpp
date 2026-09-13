@@ -562,20 +562,24 @@ static void common_params_fit_impl(
         mparams.tensor_split = tensor_split;
 
         size_t itbo = 0;
+        auto push_override = [&](const char * pattern, ggml_backend_buffer_type_t buft) {
+            if (itbo + 1 >= ntbo) {
+                tensor_buft_overrides[itbo].pattern = nullptr;
+                tensor_buft_overrides[itbo].buft    = nullptr;
+                itbo++;
+                mparams.tensor_buft_overrides = tensor_buft_overrides;
+                throw common_params_fit_exception("llama_max_tensor_buft_overrides() == "
+                    + std::to_string(ntbo) + " is insufficient for model");
+            }
+            tensor_buft_overrides[itbo].pattern = pattern;
+            tensor_buft_overrides[itbo].buft    = buft;
+            itbo++;
+        };
         for (size_t id = 0; id < nd; id++) {
             il0 += ngl_per_device[id].n_full();
             for (uint32_t il = il0; il < il0 + ngl_per_device[id].n_part; il++) {
-                if (itbo + 1 >= ntbo) {
-                    tensor_buft_overrides[itbo].pattern = nullptr;
-                    tensor_buft_overrides[itbo].buft    = nullptr;
-                    itbo++;
-                    mparams.tensor_buft_overrides = tensor_buft_overrides;
-                    throw common_params_fit_exception("llama_max_tensor_buft_overrides() == "
-                        + std::to_string(ntbo) + " is insufficient for model");
-                }
-                tensor_buft_overrides[itbo].pattern = get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE);
-                tensor_buft_overrides[itbo].buft = il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type();
-                itbo++;
+                push_override(get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE),
+                    il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type());
             }
             il0 += ngl_per_device[id].n_part;
         }
@@ -613,7 +617,7 @@ static void common_params_fit_impl(
         return ret;
     };
 
-    int64_t global_surplus_cpu_moe = 0;
+    int64_t global_surplus_partial = 0;
     if (hp_nex > 0) {
         const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate_up|gate)_(ch|)exps"; // matches all MoE tensors
         ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
@@ -622,21 +626,21 @@ static void common_params_fit_impl(
         mparams->tensor_buft_overrides = tensor_buft_overrides;
 
         LOG_TRC("%s: getting device memory data with all MoE tensors moved to system memory:\n", __func__);
-        dmds_t dmds_cpu_moe = common_get_device_memory_data_impl(
+        dmds_t dmds_partial = common_get_device_memory_data_impl(
             path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
-        add_extra_memory(dmds_cpu_moe);
+        add_extra_memory(dmds_partial);
 
         for (size_t id = 0; id < nd; id++) {
-            global_surplus_cpu_moe += dmds_cpu_moe[id].free;
-            global_surplus_cpu_moe -= int64_t(dmds_cpu_moe[id].mb.total()) + margins[id];
+            global_surplus_partial += dmds_partial[id].free;
+            global_surplus_partial -= int64_t(dmds_partial[id].mb.total()) + margins[id];
         }
 
-        if (global_surplus_cpu_moe > 0) {
+        if (global_surplus_partial > 0) {
             LOG_TRC("%s: with only dense weights in device memory there is a total surplus of %" PRId64 " MiB\n",
-                __func__, global_surplus_cpu_moe/MiB);
+                __func__, global_surplus_partial/MiB);
         } else {
             LOG_TRC("%s: with only dense weights in device memory there is still a total deficit of %" PRId64 " MiB\n",
-                __func__, -global_surplus_cpu_moe/MiB);
+                __func__, -global_surplus_partial/MiB);
         }
 
         // reset
@@ -670,7 +674,7 @@ static void common_params_fit_impl(
     if (hp_nex == 0) {
         LOG_TRC("%s: filling dense layers back-to-front:\n", __func__);
     } else {
-        LOG_TRC("%s: filling dense-only layers back-to-front:\n", __func__);
+        LOG_TRC("%s: filling partial layers back-to-front:\n", __func__);
     }
     for (int id = nd - 1; id >= 0; id--) {
         uint32_t n_unassigned = hp_ngl + 1;
@@ -727,14 +731,14 @@ static void common_params_fit_impl(
             "%s:   - %s: %2" PRIu32 " layers, %6" PRId64 " MiB used, %6" PRId64 " MiB free\n",
             __func__, dev_names[id].c_str(), ngl_per_device[id].n_layer, mem[id]/MiB, projected_margin/MiB);
     }
-    if (hp_nex == 0 || global_surplus_cpu_moe <= 0) {
+    if (hp_nex == 0 || global_surplus_partial <= 0) {
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
         return;
     }
 
     // step 4: for a MoE model where all dense tensors fit,
-    //     convert the dense-only layers in the back to full layers in the front until all devices are full
-    // essentially the same procedure as for the dense-only layers except front-to-back
+    //     convert the partial layers in the back to full layers in the front until all devices are full
+    // essentially the same procedure as for the partial layers except front-to-back
     // also, try fitting at least part of one more layer to reduce waste for "small" GPUs with e.g. 24 GiB VRAM
 
     size_t id_dense_start = nd;
@@ -747,7 +751,7 @@ static void common_params_fit_impl(
     }
     assert(id_dense_start < nd);
 
-    LOG_TRC("%s: converting dense-only layers to full layers and filling them front-to-back with overflow to next device/system memory:\n", __func__);
+    LOG_TRC("%s: converting partial layers to full layers and filling them front-to-back with overflow to next device/system memory:\n", __func__);
     for (size_t id = 0; id <= id_dense_start && id_dense_start < nd; id++) {
         std::vector<ngl_t> ngl_per_device_high = ngl_per_device;
         for (size_t jd = id_dense_start; jd < nd; jd++) {
@@ -865,7 +869,7 @@ static void common_params_fit_impl(
             __func__, dev_names[id].c_str(), ngl_per_device[id].n_layer, ngl_per_device[id].n_part, mem[id]/MiB, projected_margin/MiB);
     }
 
-    // print info for devices that were not changed during the conversion from dense only to full layers:
+    // print info for devices that were not changed during the conversion from partial to full layers:
     for (size_t id = id_dense_start + 1; id < nd; id++) {
         const int64_t projected_margin = dmds_full[id].free - mem[id];
         LOG_TRC(
