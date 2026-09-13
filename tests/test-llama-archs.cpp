@@ -455,6 +455,74 @@ static std::vector<float> get_logits(
     return ret;
 }
 
+static bool test_state_rotation(const size_t seed) {
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_LLAMA, false);
+    llama_model_params model_params = llama_model_default_params();
+    model_params.progress_callback = silent_model_load_progress;
+
+    size_t tmp = seed;
+    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tmp, model_params));
+    if (!model) {
+        LOG_ERR("%s: failed to create llama model\n", __func__);
+        return false;
+    }
+
+    const std::string attn_rot_disable = common_get_env("LLAMA_ATTN_ROT_DISABLE");
+    const auto make_context = [&](ggml_type type_k, ggml_type type_v, bool disable_rotation) {
+        common_set_env("LLAMA_ATTN_ROT_DISABLE", disable_rotation ? "1" : "0");
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.n_ctx = 32;
+        ctx_params.n_batch = 1;
+        ctx_params.n_ubatch = 1;
+        ctx_params.type_k = type_k;
+        ctx_params.type_v = type_v;
+        ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        return llama_context_ptr(llama_init_from_model(model.get(), ctx_params));
+    };
+
+    bool success = true;
+    for (const auto & types : { std::pair{GGML_TYPE_Q8_0, GGML_TYPE_F16}, std::pair{GGML_TYPE_F16, GGML_TYPE_Q8_0} }) {
+        auto src = make_context(types.first, types.second, false);
+        if (!src) {
+            LOG_ERR("%s: failed to create source context\n", __func__);
+            success = false;
+            break;
+        }
+
+        llama_token token = 0;
+        if (llama_decode(src.get(), llama_batch_get_one(&token, 1))) {
+            LOG_ERR("%s: failed to decode token\n", __func__);
+            success = false;
+            break;
+        }
+
+        std::vector<uint8_t> state(llama_state_seq_get_size(src.get(), 0));
+        if (llama_state_seq_get_data(src.get(), state.data(), state.size(), 0) != state.size()) {
+            LOG_ERR("%s: failed to save sequence state\n", __func__);
+            success = false;
+            break;
+        }
+
+        auto matching = make_context(types.first, types.second, false);
+        if (!matching || llama_state_seq_set_data(matching.get(), state.data(), state.size(), 0) != state.size()) {
+            LOG_ERR("%s: failed to restore matching rotation\n", __func__);
+            success = false;
+            break;
+        }
+
+        auto mismatched = make_context(types.first, types.second, true);
+        if (!mismatched || llama_state_seq_set_data(mismatched.get(), state.data(), state.size(), 0) != 0) {
+            LOG_ERR("%s: restored incompatible rotation\n", __func__);
+            success = false;
+            break;
+        }
+    }
+    common_set_env("LLAMA_ATTN_ROT_DISABLE", attn_rot_disable);
+
+    printf("State rotation: %s\n", success ? "OK" : "FAIL");
+    return success;
+}
+
 static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_LLAMA4:
@@ -701,7 +769,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
     const std::string template_row_cfg = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%6s|";
     const std::string template_row_res = "%15s %10s|%20s|\n";
 
-    bool all_ok = true;
+    bool all_ok = (target_arch != LLM_ARCH_UNKNOWN && target_arch != LLM_ARCH_LLAMA) || test_state_rotation(seed);
     common_log_flush(common_log_main());
     printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
     printf("|");
