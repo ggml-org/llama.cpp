@@ -3,6 +3,7 @@
 #include "llama-kv-stream-writer.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
 #include "../ggml/src/ggml-kv-stream-copy.h"
+#include "llama-kv-stream-prefetch.h"
 
 #include <cmath>
 #include <cstring>
@@ -21,6 +22,7 @@ struct llama_kv_stream_resident::implementation {
     ggml_tensor * converted[2] = {};
     bool fallback = false;
     std::vector<llama_kv_stream_rows> ranges;
+    std::vector<llama_kv_stream_rows> layer_ranges{{0,ggml_kv_stream_operand::k,0,0},{0,ggml_kv_stream_operand::v,0,0}};
     size_t active = 0, bytes = 0, calls = 0;
     size_t attention_calls = 0;
     uint64_t generation = 0, epoch = 0;
@@ -29,8 +31,81 @@ struct llama_kv_stream_resident::implementation {
     llama_kv_stream_write_stats write_stats;
     const ggml_kv_stream_copy_ops * copy_ops = nullptr;
     ggml_backend_buffer_t copy_host = nullptr;
+    struct prefetch_sequence {
+        llama_kv_stream_prefetch_plan plan;
+        std::vector<uint32_t> layers;
+        std::vector<uint8_t> resident_dirty;
+        size_t active = 0, padded = 0, span = 0, stable = 0, next = 0;
+        uint64_t generation = 0, epoch = 0;
+        bool started = false;
+        llama_kv_stream_prefetch_stats stats;
+    };
+    std::unique_ptr<prefetch_sequence> sequence;
+    llama_kv_stream_prefetch_stats finished_sequence;
     // Destroy the copy queue before tensor metadata and authoritative host storage.
     std::unique_ptr<void,void(*)(void*)> copies{nullptr,nullptr};
+
+    // Reuse event resources only while their retained host allocation still matches the cache.
+    bool ensure_copies(size_t slots) {
+        if (copies && copy_host != content->host()->buffer()) { copies.reset(); copy_host = nullptr; }
+        if (copies) return true;
+        auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        auto get = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
+        copy_ops = get ? get() : nullptr;
+        if (!copy_ops || copy_ops->version < 2 || !copy_ops->enqueue_span || !copy_ops->stats) return false;
+        copies = decltype(copies)(copy_ops->create(backend,binding.buffer,content->host()->buffer(),binding.config.shape,slots),copy_ops->free);
+        if (!copies) return false;
+        copy_host = content->host()->buffer(); return true;
+    }
+
+    // Unknown cache mutations invalidate queued snapshots; authorized tail writes update these tokens.
+    bool sequence_valid() const {
+        return sequence && sequence->generation == content->generation() && sequence->epoch == content->mirror_epoch();
+    }
+
+    // Fill free physical slots in demand order, but do not copy an unready mutable tail.
+    bool fill_sequence(bool newly_ready = false) {
+        auto & seq = *sequence;
+        const auto submit = [&](size_t index) {
+            const auto & r = *seq.plan.request(index);
+            if (r.submitted || !seq.plan.can_submit(r)) return true;
+            if (!seq.started) {
+                if (!ensure_copies(binding.initial_policy.ring_slots) || !copy_ops->begin(copies.get())) return false;
+                seq.started = true;
+            }
+            llama_kv_stream_host_layer host;
+            if (!content->host()->layer(seq.layers[r.layer],host)) return false;
+            const size_t live = std::min(r.tokens,seq.active-r.first);
+            if (!copy_ops->enqueue_span(copies.get(),r.slot,
+                    static_cast<const char *>(host.k)+r.first*page.k_token_bytes,
+                    static_cast<const char *>(host.v)+r.first*page.v_token_bytes,live,r.tokens)) return false;
+            if (!seq.plan.mark_submitted(index)) return false;
+            seq.stats.max_layer_distance = std::max(seq.stats.max_layer_distance,r.layer-seq.next);
+            return true;
+        };
+        // Only layer entry changes readiness of existing reservations; refill checks only newly added requests.
+        if (newly_ready) for (size_t i = 0; i < seq.plan.pending(); ++i) if (!submit(i)) return false;
+        llama_kv_stream_prefetch_request r;
+        while (seq.plan.reserve(r)) {
+            seq.stats.peak_pages = std::max(seq.stats.peak_pages,seq.plan.used());
+            if (!submit(seq.plan.pending()-1)) return false;
+        }
+        return true;
+    }
+
+    // Retire pending DMA before releasing the logical session, including failure/cancellation.
+    void stop_sequence() {
+        if (!sequence) return;
+        finished_sequence = sequence->stats;
+        if (sequence->started) {
+            copy_ops->drain(copies.get());
+            const auto copied = copy_ops->stats(copies.get());
+            finished_sequence.copy_bytes = copied.bytes; finished_sequence.copy_calls = copied.calls;
+        }
+        finished_sequence.pending_pages = 0;
+        if (copies && copy_host != content->host()->buffer()) { copies.reset(); copy_host = nullptr; }
+        sequence.reset();
+    }
 
     // Storage encoding must match the fixed device layout; replacement alone cannot change it.
     bool compatible() const {
@@ -43,15 +118,19 @@ struct llama_kv_stream_resident::implementation {
     }
 
     // Refresh only the capacity assigned to each layer; concentrated layouts may assign zero rows.
-    bool refresh(size_t padded) {
+    bool refresh(size_t padded, uint32_t only_layer = UINT32_MAX) {
         bytes = calls = 0;
         ggml_backend_synchronize(backend);
         if (!initialized) {
             if (!content->reset_mirror()) return false;
             initialized = true;
         }
-        for (auto & range : ranges) range.count = std::min(padded, layout.layers[range.layer].planes.tokens);
-        if (!content->flush(ranges, [&](const llama_kv_stream_copy_span & span) {
+        auto & selected = only_layer == UINT32_MAX ? ranges : layer_ranges;
+        for (auto & range : selected) {
+            if (only_layer != UINT32_MAX) range.layer = only_layer;
+            range.count = std::min(padded, layout.layers[range.layer].planes.tokens);
+        }
+        if (!content->flush(selected, [&](const llama_kv_stream_copy_span & span) {
             const bool value = span.rows.operand == ggml_kv_stream_operand::v;
             const auto & planes = layout.layers[span.rows.layer].planes;
             const size_t stride = value ? planes.v_token_bytes : planes.k_token_bytes;
@@ -89,6 +168,83 @@ struct llama_kv_stream_resident::implementation {
 
 // External captures must be retired before their binding execution pins are returned.
 llama_kv_stream_resident::~llama_kv_stream_resident() = default;
+
+// Establish a serial execution order and the host prefix that is already immutable for every layer.
+bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & layers, size_t active, size_t span, size_t stable) {
+    auto & s = *impl;
+    if (s.busy || s.sequence || s.poisoned || !s.compatible() || layers.empty() || layers.size() > s.layout.layers.size() || !active || !span ||
+            active > size_t(INT32_MAX)-255 || active > s.content->host()->config().context_tokens) return false;
+    auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(s.backend));
+    auto partial_ops = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
+    auto copy_ops = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
+    if (!partial_ops || !partial_ops() || !copy_ops || !copy_ops() || copy_ops()->version < 2) return false;
+    if (stable == SIZE_MAX) stable = active;
+    if (stable > active) return false;
+    try {
+        auto seq = std::make_unique<implementation::prefetch_sequence>();
+        seq->layers = layers; seq->resident_dirty.resize(layers.size(),false);
+        seq->active = active; seq->padded = (active+255)/256*256; seq->span = span; seq->stable = stable;
+        std::vector<size_t> prefixes;
+        for (size_t i = 0; i < layers.size(); ++i) {
+            if (layers[i] >= s.layout.layers.size() || std::find(layers.begin(),layers.begin()+i,layers[i]) != layers.begin()+i) return false;
+            prefixes.push_back(std::min(seq->padded,s.layout.layers[layers[i]].planes.tokens));
+        }
+        if (!seq->plan.start(prefixes,active,seq->padded,s.page.tokens,s.binding.initial_policy.ring_slots,span,stable)) return false;
+        release_write_workspace();
+        s.busy = true; s.valid = false;
+        struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
+        if (!s.refresh(seq->padded)) return false;
+        seq->generation = s.content->generation(); seq->epoch = s.content->mirror_epoch();
+        s.sequence = std::move(seq);
+        if (!s.fill_sequence()) { s.stop_sequence(); return false; }
+        return true;
+    } catch (const std::bad_alloc &) { s.stop_sequence(); return false; }
+}
+
+// Only unconsumed tail rows may change while stable historical spans are in flight.
+bool llama_kv_stream_resident::publish_sequence_tail(const std::vector<llama_kv_stream_write_span> & spans) {
+    auto & s = *impl;
+    if (s.busy || !s.sequence) return false;
+    if (!s.sequence_valid()) { s.stop_sequence(); return false; }
+    const auto & seq = *s.sequence;
+    for (const auto & span : spans) {
+        const auto found = std::find(seq.layers.begin()+seq.next,seq.layers.end(),span.layer);
+        if (found == seq.layers.end() || !span.data || !span.bytes ||
+                (span.operand != ggml_kv_stream_operand::k && span.operand != ggml_kv_stream_operand::v)) return false;
+        const size_t stride = span.operand == ggml_kv_stream_operand::k ? s.page.k_token_bytes : s.page.v_token_bytes;
+        if (span.offset%stride || span.bytes%stride || span.offset/stride < seq.stable ||
+                span.offset/stride > seq.active || span.bytes/stride > seq.active-span.offset/stride) return false;
+    }
+    llama_kv_stream_write write;
+    if (!s.content->prepare(spans,write) || !s.content->commit(write)) return false;
+    for (const auto & span : spans) {
+        const size_t index = size_t(std::find(seq.layers.begin()+seq.next,seq.layers.end(),span.layer)-seq.layers.begin());
+        const size_t stride = span.operand == ggml_kv_stream_operand::k ? s.page.k_token_bytes : s.page.v_token_bytes;
+        if (span.offset/stride < s.layout.layers[span.layer].planes.tokens) s.sequence->resident_dirty[index] = true;
+    }
+    s.sequence->generation = s.content->generation(); s.sequence->epoch = s.content->mirror_epoch(); s.valid = false;
+    return true;
+}
+
+// Caller may cancel only between owner-thread layer calls.
+void llama_kv_stream_resident::cancel_sequence() { if (!impl->busy) impl->stop_sequence(); }
+bool llama_kv_stream_resident::sequence_active() const noexcept { return bool(impl->sequence); }
+llama_kv_stream_prefetch_stats llama_kv_stream_resident::sequence_stats() const noexcept {
+    const auto & s = *impl;
+    if (!s.sequence) return s.finished_sequence;
+    auto result = s.sequence->stats; result.pending_pages = s.sequence->plan.used();
+    if (s.sequence->started) {
+        auto copy = s.copy_ops->stats(s.copies.get()); result.copy_bytes = copy.bytes; result.copy_calls = copy.calls;
+        for (size_t i = 0; i < s.sequence->plan.pending(); ++i) {
+            const auto * r = s.sequence->plan.request(i);
+            if (!r->submitted) continue;
+            for (size_t page = 0; page < r->pages; ++page) result.ready_pages += s.copy_ops->ready(s.copies.get(),r->slot+page);
+        }
+        const auto * front = s.sequence->plan.front();
+        result.demand_ready = front && front->submitted && s.copy_ops->ready(s.copies.get(),front->slot);
+    }
+    return result;
+}
 
 // Construct only metadata and borrowed tensor bindings; do not copy or clear device memory in the factory.
 std::unique_ptr<llama_kv_stream_resident> llama_kv_stream_resident::create(
@@ -181,7 +337,7 @@ std::unique_ptr<llama_kv_stream_resident> llama_kv_stream_resident::create(
 // Complete older attention before overwriting its inputs; acknowledgement follows completed synchronous copies.
 bool llama_kv_stream_resident::synchronize(size_t active_tokens) {
     auto & s = *impl;
-    if (s.busy) return false;
+    if (s.busy || s.sequence) return false;
     s.valid = false; s.bytes = s.calls = 0;
     size_t padded;
     if (!s.extent(active_tokens, padded)) return false;
@@ -210,7 +366,7 @@ ggml_tensor * llama_kv_stream_resident::attention(ggml_context * context, uint32
         ggml_tensor * mask, size_t active_tokens, float scale) {
     auto & s = *impl;
     size_t padded;
-    if (s.busy || !context || !q || layer >= s.roots.size() || !std::isfinite(scale) || scale <= 0 ||
+    if (s.busy || s.sequence || !context || !q || layer >= s.roots.size() || !std::isfinite(scale) || scale <= 0 ||
             !s.extent(active_tokens, padded) || (!mask && active_tokens != padded) ||
             (mask && !ggml_is_contiguous(mask))) return nullptr;
     auto k = s.descriptor(layer, false, padded), v = s.descriptor(layer, true, padded);
@@ -242,7 +398,7 @@ ggml_tensor * llama_kv_stream_resident::attention(ggml_context * context, uint32
 // Reconfiguration touches only the ring, but any old writer capture must retire before its scratch is reused.
 bool llama_kv_stream_resident::configure_writes(size_t maximum) {
     auto & s = *impl;
-    if (s.busy || s.poisoned || !s.compatible() || !maximum) return false;
+    if (s.busy || s.sequence || s.poisoned || !s.compatible() || !maximum) return false;
     s.busy = true;
     struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
     ggml_backend_synchronize(s.backend);
@@ -257,7 +413,7 @@ bool llama_kv_stream_resident::write_rows(uint32_t layer, ggml_kv_stream_operand
     auto & s = *impl;
     s.write_stats = {};
     const bool value = operand == ggml_kv_stream_operand::v;
-    if (s.busy || s.poisoned || !s.writer || !s.compatible() || layer >= s.roots.size() ||
+    if (s.busy || s.sequence || s.poisoned || !s.writer || !s.compatible() || layer >= s.roots.size() ||
             (operand != ggml_kv_stream_operand::k && !value) || !s.writer->accepts(source, value)) return false;
     const size_t rows = size_t(source->ne[1]);
     const auto host = s.content->host();
@@ -323,6 +479,14 @@ bool llama_kv_stream_resident::compute_one_block(uint32_t layer, ggml_tensor * q
 bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q, ggml_tensor * mask,
         ggml_tensor * output, size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace, bool overlap, size_t span_pages) {
     auto & s = *impl;
+    if (s.busy) return false; // Reentrant rejection must not cancel the outer call's session.
+    const bool cross = bool(s.sequence);
+    struct session_guard {
+        implementation & s; bool enabled, keep = false;
+        ~session_guard() { if (enabled && !keep) s.stop_sequence(); }
+    } session_call{s,cross};
+    if (cross && (!s.sequence_valid() || !overlap || active_tokens != s.sequence->active || span_pages != s.sequence->span ||
+            s.sequence->next >= s.sequence->layers.size() || layer != s.sequence->layers[s.sequence->next])) return false;
     if (s.busy || s.poisoned || !s.compatible() || layer >= s.roots.size() || !q || !mask || !output ||
             !workspace || !std::isfinite(scale) || scale <= 0 || active_tokens > size_t(INT32_MAX)-255 ||
             active_tokens > s.content->host()->config().context_tokens || q->ne[1] <= 0 || q->ne[2] <= 0 ||
@@ -396,6 +560,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     const size_t resident_chunk = s.fallback ? s.page.tokens : prefix;
     for (size_t first = 0; first < prefix; first += resident_chunk)
         if (!describe(first,std::min(resident_chunk,prefix-first),0,true)) return false;
+    // Validate bounded covering spans here; each actual queue span is checked again before execution.
     for (size_t block = 0; block < blocks; block += width(block)) {
         const size_t pages = width(block);
         for (size_t offset = 0; offset < pages; offset += s.fallback ? 1 : pages) {
@@ -411,16 +576,34 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         if (data > UINTPTR_MAX-bytes || overlaps(data,bytes,scratch,region.size) ||
                 overlaps(data,bytes,pool,s.binding.capacity)) return false;
     }
-    release_write_workspace();
+    if (!cross) release_write_workspace();
     s.busy = true; s.valid = false;
     struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
-    if (!s.refresh(padded)) return false;
+    if (!cross) {
+        if (!s.refresh(padded)) return false;
+    } else {
+        s.bytes = s.calls = 0;
+        // begin_sequence refreshed the mirror; only authorized resident-tail publications can dirty it.
+        if (s.sequence->resident_dirty[s.sequence->next]) {
+            if (!s.refresh(padded,layer)) return false;
+            s.sequence->resident_dirty[s.sequence->next] = false;
+        }
+    }
     llama_kv_stream_host_layer host;
     if (!s.content->host()->layer(layer,host)) return false;
     s.attention_calls = 0;
     const auto partial = [&](bool second) {
         if (!ops->partial(s.backend,&op,wb,second)) return false;
         ++s.attention_calls;
+        return true;
+    };
+    const auto finish = [&] {
+        if (cross && s.sequence->plan.front() && s.sequence->plan.front()->layer == s.sequence->next) return false;
+        if (!ops->merge(s.backend,output,wb)) return false;
+        if (cross) {
+            if (++s.sequence->next == s.sequence->layers.size()) s.stop_sequence();
+            session_call.keep = true;
+        }
         return true;
     };
     const bool prefetch = overlap && prefix < padded;
@@ -431,15 +614,10 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     } copying;
     // Ordered calls after a replacement must not keep the old pinned cache alive either.
     if (s.copies && s.copy_host != s.content->host()->buffer()) { s.copies.reset(); s.copy_host = nullptr; }
-    if (prefetch) {
-        if (!s.copies) {
-            auto get_copy = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
-            s.copy_ops = get_copy ? get_copy() : nullptr;
-            if (!s.copy_ops || s.copy_ops->version < 2 || !s.copy_ops->enqueue_span) return false;
-            s.copies = decltype(s.copies)(s.copy_ops->create(s.backend,s.binding.buffer,s.content->host()->buffer(),s.binding.config.shape,slots),s.copy_ops->free);
-            if (!s.copies) return false;
-            s.copy_host = s.content->host()->buffer();
-        }
+    if (cross) {
+        if (!s.sequence->plan.make_ready(s.sequence->next) || !s.fill_sequence(true)) return false;
+    } else if (prefetch) {
+        if (!s.ensure_copies(slots)) return false;
         if (!s.copy_ops->begin(s.copies.get())) return false;
         copying.ops = s.copy_ops; copying.queue = s.copies.get();
     }
@@ -452,7 +630,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         s.bytes += live*(s.page.k_token_bytes+s.page.v_token_bytes); s.calls += 2;
         return true;
     };
-    if (prefetch) for (size_t block = 0; block < std::min(slots,blocks); block += width(block)) if (!enqueue(block)) return false;
+    if (prefetch && !cross) for (size_t block = 0; block < std::min(slots,blocks); block += width(block)) if (!enqueue(block)) return false;
     const auto convert_inputs = [&] {
         return !s.fallback || (ops->convert(s.backend,&k,&ck) && ops->convert(s.backend,&v,&cv));
     };
@@ -463,15 +641,20 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
         for (size_t first = 0; first < prefix; first += resident_chunk) {
             if (!describe(first,std::min(resident_chunk,prefix-first),0,true) || !convert_inputs() ||
                     !partial(true)) return false;
-            if (first+std::min(resident_chunk,prefix-first) == padded) return ops->merge(s.backend,output,wb);
+            if (first+std::min(resident_chunk,prefix-first) == padded) return finish();
             if (!ops->fold(s.backend,output,wb)) return false;
         }
     }
-    for (size_t block = 0; block < blocks; block += width(block)) {
-        const size_t pages = width(block), first = prefix+block*s.page.tokens;
+    for (size_t block = 0; block < blocks;) {
+        const size_t first = prefix+block*s.page.tokens;
+        size_t pages = width(block), slot = block%slots;
+        if (cross) {
+            const auto * request = s.sequence->plan.front();
+            if (!request || request->layer != s.sequence->next || request->first != first || !request->submitted) return false;
+            pages = request->pages; slot = request->slot;
+        }
         const size_t count = std::min(pages*s.page.tokens,padded-first);
         const size_t live = std::min(count,active_tokens-first);
-        const size_t slot = block%slots;
         if (!prefetch) for (int value = 0; value < 2; ++value) {
             auto staged = *s.stage[value];
             staged.data = static_cast<char *>(staged.data)+slot*(value ? s.page.v_bytes : s.page.k_bytes);
@@ -493,19 +676,25 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
                 if (!s.copy_ops->acquire(s.copies.get(),slot+offset+i)) return false;
             if (!convert_inputs()) return false;
             const auto recycle = [&] {
-                for (size_t i = 0; i < consumed; ++i)
-                    if (!s.copy_ops->release(s.copies.get(),slot+offset+i)) return false;
+                for (size_t i = 0; i < consumed; ++i) {
+                    // The current partial/convert callbacks synchronize before returning.
+                    const bool released = cross && s.copy_ops->version >= 3 && s.copy_ops->release_completed ?
+                        s.copy_ops->release_completed(s.copies.get(),slot+offset+i) : s.copy_ops->release(s.copies.get(),slot+offset+i);
+                    if (!released) return false;
+                }
+                if (cross) return s.sequence->plan.consume(consumed) && s.fill_sequence();
                 // A contiguous DMA must wait for the complete destination run to become reusable.
                 return offset+consumed != pages || block+slots >= blocks || enqueue(block+slots);
             };
             if (prefetch && s.fallback && !recycle()) return false;
             if (!partial(true)) return false;
             if (prefetch && !s.fallback && !recycle()) return false;
-            if (token+tokens == padded) return ops->merge(s.backend,output,wb);
+            if (token+tokens == padded) return finish();
             if (!ops->fold(s.backend,output,wb)) return false;
         }
+        block += pages;
     }
-    return ops->clear(s.backend,output,wb,true) && ops->merge(s.backend,output,wb);
+    return ops->clear(s.backend,output,wb,true) && finish();
 }
 
 // Expose exact submitted tile/copy counts and configured scratch bounds for tests and diagnostics.
@@ -513,7 +702,7 @@ llama_kv_stream_write_stats llama_kv_stream_resident::last_write_stats() const n
 
 // Drop the single cached graph/source reference before a caller reclaims prefill input workspace.
 void llama_kv_stream_resident::release_write_workspace() {
-    if (impl->busy) return;
+    if (impl->busy || impl->sequence) return;
     ggml_backend_synchronize(impl->backend);
     impl->writer.reset();
 }

@@ -65,5 +65,7 @@ struct ggml_kv_stream_copy_ops {
     bool (*enqueue_span)(void *, size_t first_slot, const void * k, const void * v, size_t live_tokens, size_t padded_tokens);
     // Actual submitted payload bytes and memcpy calls, excluding padding fills; reset by begin().
     ggml_kv_stream_copy_stats (*stats)(void *);
+    // Version 3: caller has already synchronized every encoded-slot reader; no queued consumer fence is needed.
+    bool (*release_completed)(void *, size_t slot);
 };
 using ggml_kv_stream_copy_ops_get = const ggml_kv_stream_copy_ops * (*)();

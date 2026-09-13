@@ -117,7 +117,7 @@ int main(int argc, char ** argv) {
     if (cuda) {
         auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get()));
         auto get = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
-        t.test("copy_events_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version == 2 && get()->enqueue_span && get()->stats); });
+        t.test("copy_events_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version >= 2 && get()->enqueue_span && get()->stats); });
         if (!get || !get()) return t.summary();
         t.test("batched_spans_preserve_values_and_reduce_copy_calls", [&](testing & t) {
             for (auto pair : {std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},std::pair{GGML_TYPE_IQ4_NL,GGML_TYPE_F32}})
@@ -254,6 +254,31 @@ int main(int argc, char ** argv) {
         });
 #ifdef KV_COPY_CUDA_TEST
         const auto * ops = get();
+        t.test("completed_consumer_release_is_explicit", [&](testing & t) {
+            if (!t.assert_true(ops->version >= 3 && ops->release_completed)) return;
+            fixture f(backend.get(),true);
+            auto * device = ggml_backend_memory_lease_buffer(f.lease.get());
+            std::unique_ptr<void,void(*)(void*)> queue(ops->create(backend.get(),device,f.host->buffer(),f.policy.shape,1),ops->free);
+            if (!t.assert_true(bool(queue))) return;
+            llama_kv_stream_host_layer host; f.host->layer(0,host);
+            delayed_event pending_consumer(backend.get());
+            t.assert_true(ops->begin(queue.get()));
+            t.assert_true(!ops->release_completed(queue.get(),0));
+            t.assert_true(ops->enqueue(queue.get(),0,host.k,host.v,256,256));
+            t.assert_true(ops->acquire(queue.get(),0));
+            ggml_backend_synchronize(backend.get());
+            t.assert_true(ops->release_completed(queue.get(),0));
+            t.assert_true(ops->enqueue(queue.get(),0,host.k,host.v,256,256));
+            t.assert_true(ops->acquire(queue.get(),0));
+            pending_consumer.arm(backend.get());
+            t.assert_true(ops->release(queue.get(),0)); // the ordinary queued release still works on reuse
+            t.assert_true(ops->enqueue(queue.get(),0,host.k,host.v,256,256));
+            const auto deadline = std::chrono::steady_clock::now()+std::chrono::milliseconds(20);
+            while (!ops->ready(queue.get(),0) && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+            t.assert_true(!ops->ready(queue.get(),0));
+            pending_consumer.open();
+            ops->drain(queue.get());
+        });
         t.test("batched_dma_waits_for_every_consumer_and_counts_actual_transfers", [&](testing & t) {
             fixture f(backend.get(),true);
             ggml_kv_stream_layout page,ring;

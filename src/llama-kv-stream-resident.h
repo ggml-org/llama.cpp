@@ -8,6 +8,13 @@ struct llama_kv_stream_write_stats {
     size_t device_scratch_bytes = 0, host_payload_bytes = 0, tile_rows = 0;
 };
 
+struct llama_kv_stream_prefetch_stats {
+    size_t pending_pages = 0, peak_pages = 0, max_layer_distance = 0;
+    size_t copy_bytes = 0, copy_calls = 0;
+    size_t ready_pages = 0;
+    bool demand_ready = false;
+};
+
 // Idle native resources owned by the coarse binding; backend and external graph contexts must outlive their users.
 // Hold a binding execution pin for the entire lifetime of any graph referencing these planes, including captures.
 class llama_kv_stream_resident : public llama_memory_executable {
@@ -27,7 +34,7 @@ public:
     bool compute_one_block(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
             size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace);
     // Traversal over any number of tail blocks; optional overlap retains the ordered correctness control.
-    // The call still completes before returning; overlap requires pinned host backing.
+    // Current-layer work completes before return; a sequence may retain future KV copies. Host backing must be pinned.
     // A positive span ceiling groups physical neighbors without increasing ring or conversion storage.
     bool compute_streamed(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
             size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace, bool overlap = false, size_t span_pages = 1);
@@ -35,6 +42,15 @@ public:
     size_t last_upload_calls() const noexcept;
     // Successful partial-attention submissions in the last started streamed execution.
     size_t last_attention_calls() const noexcept;
+    // Hold the binding pin until completion/cancel. Only publish_sequence_tail may mutate host content meanwhile.
+    // Default stable_tokens declares a fully ready snapshot; online producers must pass the immutable prefix explicitly.
+    bool begin_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages = 1, size_t stable_tokens = SIZE_MAX);
+    bool publish_sequence_tail(const std::vector<llama_kv_stream_write_span> & spans);
+    // An invalid or failed layer call cancels outstanding prefetch; the final valid layer ends the sequence.
+    void cancel_sequence();
+    bool sequence_active() const noexcept;
+    // Readiness is an observation, not a storage-lifetime fence; distance is measured in the supplied layer order.
+    llama_kv_stream_prefetch_stats sequence_stats() const noexcept;
 
     // Configure a physical-batch ceiling. Quantization scratch and indices borrow the unused ring region.
     bool configure_writes(size_t max_batch_rows);

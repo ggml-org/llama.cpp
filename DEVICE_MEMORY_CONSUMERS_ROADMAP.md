@@ -6,7 +6,7 @@ Last source review: 2026-09-12, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is ready for review. The remainder of milestones 5-8 is planned. Current work is **5.4g: contiguous attention spans and batched K/V uploads**. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is ready for review. The remainder of milestones 5-8 is planned. Current work is **5.4h: bounded cross-layer prefetch**. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is committed at `28e7999a0`. Stage 5.4d is committed at `59591b6da`. Stage 5.4e is committed at `a92107200`. Stage 5.4f is committed at `d48a1faa8`. Stage 5.4g is ready for review.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is committed at `28e7999a0`. Stage 5.4d is committed at `59591b6da`. Stage 5.4e is committed at `a92107200`. Stage 5.4f is committed at `d48a1faa8`. Stage 5.4g is committed at `f069590ef`. Stage 5.4h is ready for review.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -351,8 +351,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.4d | Complete | `59591b6da` | 14 real-CUDA cases / 542 assertions; multi-wave ring reuse, concentrated/zero-resident layouts, incremental GPU folding, and late-block failure recovery. 23 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; UVM-off/on memcheck clean. Merge-only racecheck clean; inherited vector-kernel warnings recorded below. |
 | 5.4e | Complete | `a92107200` | 81 writable K/V pairs via selected native/fallback paths, plus all 81 forced through bounded F16 fallback; 19 CUDA cases / 656,795 assertions. Exact conversion bounds/values, capability admission, and native/fallback comparisons. 23 focused suites pass in four configurations; GPU memcheck and reduced-build probes recorded below. |
 | 5.4f | Complete | `d48a1faa8` | Opt-in within-layer copy overlap; 8 CUDA cases / 1,565 assertions, all 81 pairs bitwise match ordered execution. Producer/consumer gates, cancellation, retained backing and host replacement pass. 24 focused Debug/CUDA-build/ASan/UBSan suites and GPU memcheck pass; targeted host-state TSan passes, broader TSan caveat below. Synthetic latency comparison retained. |
-| 5.4g | Ready for review | - | Contiguous native attention and two-copy K/V batches; 12 CUDA cases / 2,290 assertions. All 81 pairs, arbitrary span ceilings, wrap boundaries, batch-wide event fences and failure recovery pass. 24 focused suites and GPU memcheck pass; targeted host TSan passes. Native latency gains and fallback tradeoffs recorded below. |
-| 5.4h-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.4g | Complete | `f069590ef` | Contiguous native attention and two-copy K/V batches; 12 CUDA cases / 2,290 assertions. All 81 pairs, arbitrary span ceilings, wrap boundaries, batch-wide event fences and failure recovery pass. 24 focused suites and GPU memcheck pass; targeted host TSan passes. Native latency gains and fallback tradeoffs recorded below. |
+| 5.4h | Ready for review | - | Bounded cross-layer FIFO reservations and explicit tail publication; 11 CUDA cases / 2,395 assertions. All 81 pairs, more-than-three-layer lookahead, out-of-order readiness, concentrated placement and cancellation pass. 25 focused suites, UVM-off/on memcheck and targeted host TSan pass. Mixed latency results and producer-integration limits recorded below. |
+| 5.4i-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -1967,7 +1968,7 @@ Stage **5.4g**, documented below, adds contiguous spans and batched uploads. Cro
 
 ## Substage 5.4g: contiguous attention spans and batched K/V uploads
 
-**Status:** implemented and ready for review; not committed by the implementation agent. This stage follows committed 5.4f (`d48a1faa8`).
+**Status:** committed at `f069590ef`, following 5.4f (`d48a1faa8`).
 
 ### Span selection and bounded memory
 
@@ -2039,4 +2040,96 @@ setarch x86_64 -R build-device-memory-infra-tsan/bin/test-kv-stream-copy
 
 The benchmark accepts optional span ceiling and ring-slot count after its mode and appends the attention-call count after the original checksum column. Pool budgeting, conversion storage, head/sequence restrictions, and production configuration are unchanged. No automatic tuning, cross-layer queue, live repartition, new backend, or server enablement is included.
 
-After review and commit, proceed to **5.4h: the actual cross-layer prefetch queue with bounded lookahead and safe immediate slot reuse**.
+Stage **5.4h**, documented below, adds the actual cross-layer queue.
+
+## Substage 5.4h: bounded cross-layer prefetch sessions
+
+**Status:** implemented and ready for review; not committed by the implementation agent. This stage follows committed 5.4g (`f069590ef`).
+
+### Queue and scheduling model
+
+`begin_sequence(layers, active_tokens, span_pages, stable_tokens)` opens an opt-in serial attention session over an explicit, unique layer order. Existing single-layer calls remain the default control. A session supplies future K/V addresses without needing future Q tensors, retains queued transfers between layer calls, and ends automatically after the final valid layer. `cancel_sequence()` drains pending work between calls.
+
+The planner stores per-layer capacities/readiness and at most one request record per ring slot: **O(layers + slots)** metadata, not O(context pages). Requests are generated incrementally. A circular record queue preserves demand order, while a physical occupancy map allows immediate reuse of consumed prefixes, including the first consumed page of a larger fallback span. Requests never cross a layer boundary or the physical end of the ring.
+
+Lookahead is constrained by free ring slots, not a fixed layer count. Fully resident layers have no ring requests and are skipped by admission without skipping their attention execution. The eight-layer test queues data more than three layers ahead; concentrated layouts and multi-wave traversal use the same planner. Global ring placement can split spans differently from the single-layer control, so native comparisons use the established numerical tolerance rather than requiring bitwise identity.
+
+### Stable history, mutable tails, and readiness
+
+Future layers' newest K/V rows may not exist yet. The caller declares a stable prefix. Spans wholly inside it can be copied ahead; a boundary page containing mutable rows, and later mutable pages, remain reserved but unsubmitted until that layer is entered. A reserved demand tail occupies capacity, so later speculative copies cannot take the space needed to satisfy it. Later stable requests may finish first, but consumption still follows the FIFO demand head.
+
+The default `stable_tokens=SIZE_MAX` means **all active rows are already ready and immutable**. It is suitable for a completed snapshot, not an implicit assumption for online decoding. Online callers must pass the actual immutable prefix and prepare each layer's remaining rows before computing it.
+
+`publish_sequence_tail` accepts encoded host-row spans only within the mutable range of unconsumed layers. It validates all spans before using the existing atomic content-write mechanism and advances the session's expected generation. Stable history writes, writes to consumed layers, malformed row ranges, and unknown content-generation/epoch changes are rejected. Untracked raw writes still violate the host-content contract; generation counters are not a data-race cure.
+
+The current boundary page is conservatively deferred in full, even if most of it is historical. Speculative partial-tail copies followed by row patching are not implemented here. Calling the current layer's compute method declares that its tail is ready. Its reserved copies are then submitted before consumption.
+
+```mermaid
+flowchart LR
+    P["Ordered layer/capacity plan"] --> R["Bounded FIFO slot reservations"]
+    R --> S["Stable history: submit now"]
+    R --> T["Mutable tail: reserve, defer"]
+    S --> Q["Copy-ready events may finish out of demand order"]
+    T -->|current layer entered after publication| Q
+    Q --> D["Consume FIFO head; wait for its own readiness"]
+    D --> F["Release consumed prefix and immediately admit more work"]
+    F --> R
+```
+
+### Lifetime and integration boundaries
+
+The caller holds the coarse binding execution pin and host-content contract through completion/cancellation. Each layer's Q, mask, output, and partial workspace are needed only until that layer call returns: future prefetch stores K/V references, not future graph/workspace pointers. Pending DMA is drained before a session is discarded, and backing buffers remain retained until their last GPU use.
+
+The resident mirror is refreshed at session entry. Authorized publications track which resident tails need refreshing; unchanged layers do not repeatedly rescan every cache plane. Reentrant calls reject without cancelling the outer operation. A bad layer order, mismatched active/span settings, unknown mutation, or failed attention cancels pending prefetch without publishing that failed layer's new output. Earlier completed layer outputs and authoritative host writes are not rolled back; request-level recovery remains the server/context owner's responsibility.
+
+The existing writer uses ring scratch and is therefore blocked while a session is active. This stage provides encoded-host tail publication, not the real-model GPU producer bridge. **5.5a must connect producer completion and provide non-conflicting writer workspace (or explicitly suspend/drain prefetch) before enabling sessions in a server.** Ordinary graph attention is also not a bypass around the session's layer-completion protocol.
+
+The copy extension is version 3. `release_completed` is an explicit optimization for callers that already synchronized every encoded-slot reader. Current partial/conversion callbacks meet that contract, so sessions avoid redundant consumer-event submissions. Asynchronous consumers retain the original event-record/wait release path; tests verify that switching back from completed releases restores the queued fence. No caller may use completed release merely because a kernel was submitted.
+
+### TDD and validation
+
+The initial queue/session stubs failed **15 assertions**. Additional regressions caught an invalid-padding case that could admit a wholly empty source page. The completed-consumer optimization was separately introduced through a failing capability test.
+
+The final cross-layer suite passes **11 CUDA cases / 2,395 assertions**, including:
+
+- Bounded request/slot counts across many waves, partial-span consumption, and invalid padding/range rejection.
+- Eight-layer lookahead, zero-resident and fully resident layers in concentrated placement, and arbitrary supplied layer order.
+- All 81 writable K/V pairs across layer-boundary wrap and partial-slot reuse, compared with the qualified single-layer control.
+- A future historical page observed ready on the GPU while the FIFO demand tail remains reserved and unsubmitted.
+- Explicit mutable-tail publication, resident-tail refresh, rejection of stable/consumed-row mutations, and reentrant rejection without destroying the outer session.
+- Invalid execution order, unknown content mutation, numerical failure, cancellation, and recovery with unchanged failed-call output.
+
+All **25 focused suites** pass in CPU Debug, CUDA-build Debug, CPU ASan/leak checking, and CPU UBSan. Targeted host-planner TSan passes **1,121 assertions** with process-local ASLR disabled. Cross-layer memcheck reports **zero errors and zero leaked bytes** with UVM off and on; the copy suite also passes memcheck (**13 cases / 2,302 assertions**) including both release contracts. Existing GPU block/resident/writer controls remain required and are recorded in the final handoff evidence. Previously documented broad TSan and vector-kernel racecheck limitations remain unresolved; no whole-repository sanitizer claim is made.
+
+### Targeted latency comparison and remaining overhead
+
+Before implementation, `f069590ef` was measured with eight synthetic Q8_0/Q4_0 attention consumers, one resident page per layer, eight ring slots, two-page spans, and UVM off. Each point uses three warmups and twenty measured traversals. There are **no intervening model-weight computations** in this test, so it does not measure the main opportunity to hide future K/V traffic during other transformer work.
+
+Initial session measurements regressed at longer points. The implementation removed duplicated page preflight, unnecessary readiness rescans, repeated resident-mirror checks, and redundant fences for explicitly completed consumers. Byte flags also avoid bit-proxy overhead in hot owner-thread bookkeeping. The final observed medians are:
+
+| Active tokens | Query rows | Pre-change control ms | Matched post-change control ms | Cross-layer session ms |
+| ---: | ---: | ---: | ---: | ---: |
+| 257 | 1 | 0.4890 | 0.5016 | 0.4494 |
+| 257 | 33 | 0.6235 | 0.6320 | 0.5846 |
+| 2,049 | 1 | 1.3417 | 1.3767 | 1.4022 |
+| 2,049 | 33 | 1.9440 | 1.9648 | 1.9633 |
+| 8,193 | 1 | 5.0696 | 5.1438 | 5.2223 |
+| 8,193 | 33 | 7.1858 | 7.1987 | 7.1714 |
+
+Short cases improve; longer attention-only cases are near the matched control or modestly slower. Queue/setup work and the absence of intervening layer computation limit gains here. These Debug-build, non-clock-locked measurements are not a universal speedup or a llama-server token-rate prediction. Sessions remain explicit opt-in; real-model qualification is still 5.5c.
+
+For these aligned test layouts, both paths transfer identical payloads (**6,656 / 11,934,208 / 52,828,672 bytes**) in **16 / 64 / 256** K/V copy calls, and their final checksums agree. Other layer/ring boundaries or deferred tails may split batches differently. The queue avoids duplicate payload copies but does not promise identical call counts for every layout.
+
+```sh
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-prefetch test-kv-stream-copy -j 20
+build-device-memory-infra-cuda/bin/test-kv-stream-prefetch --cuda
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-prefetch --bench
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-prefetch --bench-sequence
+compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-prefetch --cuda
+GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-prefetch --cuda
+setarch x86_64 -R build-device-memory-infra-tsan/bin/test-kv-stream-prefetch
+```
+
+Readiness statistics are observations, not lifetime fences or copy-bandwidth estimates; layer distance refers to the supplied attention order. No feedback-driven tuning, capture replay, live repartition, multi-GPU/backend port, or server enablement is included. Production services, compose files, models, checkpoints, and caches remain unchanged.
+
+After review and commit, proceed to **5.4i: wide micro-batch query tiling with lifetime extending through the final consuming tile**.

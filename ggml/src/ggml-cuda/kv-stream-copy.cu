@@ -14,7 +14,8 @@ struct copy_queue {
     cudaStream_t stream = nullptr;
     cudaEvent_t producer = nullptr;
     std::vector<cudaEvent_t> ready, consumed;
-    copy_queue(ggml_backend_cuda_context * context, size_t slots) : context(context), state(slots), ready(slots), consumed(slots) {}
+    std::vector<uint8_t> completed;
+    copy_queue(ggml_backend_cuda_context * context, size_t slots) : context(context), state(slots), ready(slots), consumed(slots), completed(slots,false) {}
     // Retire all pointer users before destroying events or releasing pinned/device backing.
     ~copy_queue() {
         ggml_cuda_set_device(context->device);
@@ -96,7 +97,7 @@ static bool enqueue_span(void * handle, size_t slot, const void * k, const void 
             !source_range(q,k,live*q.page.k_token_bytes) || !source_range(q,v,live*q.page.v_token_bytes)) return false;
     ggml_cuda_set_device(q.context->device);
     for (size_t i = 0; i < count; ++i)
-        if (q.state.recycled(slot+i)) CUDA_CHECK(cudaStreamWaitEvent(q.stream,q.consumed[slot+i],0));
+        if (q.state.recycled(slot+i) && !q.completed[slot+i]) CUDA_CHECK(cudaStreamWaitEvent(q.stream,q.consumed[slot+i],0));
     auto * base = static_cast<char *>(ggml_backend_buffer_get_base(q.device));
     for (int value = 0; value < 2; ++value) {
         const size_t stride = value ? q.page.v_token_bytes : q.page.k_token_bytes;
@@ -148,6 +149,16 @@ static bool release(void * handle, size_t slot) {
     if (!q.state.held(slot)) return false;
     ggml_cuda_set_device(q.context->device);
     CUDA_CHECK(cudaEventRecord(q.consumed[slot],q.context->stream()));
+    q.completed[slot] = false;
+    return q.state.release(slot);
+}
+
+// The caller already completed every reader; retain the queued-fence path for asynchronous consumers.
+static bool release_completed(void * handle, size_t slot) {
+    if (!handle) return false;
+    auto & q = *static_cast<copy_queue *>(handle);
+    if (!q.state.held(slot)) return false;
+    q.completed[slot] = true;
     return q.state.release(slot);
 }
 
@@ -166,7 +177,7 @@ static void destroy(void * handle) { delete static_cast<copy_queue *>(handle); }
 
 // Expose the CUDA adapter through an opaque, backend-neutral ownership contract.
 const ggml_kv_stream_copy_ops * ggml_cuda_kv_stream_copy_ops() {
-    static const ggml_kv_stream_copy_ops ops{2,create,begin,enqueue,ready,acquire,release,drain,destroy,enqueue_span,stats};
+    static const ggml_kv_stream_copy_ops ops{3,create,begin,enqueue,ready,acquire,release,drain,destroy,enqueue_span,stats,release_completed};
     return &ops;
 }
 #endif

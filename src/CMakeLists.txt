@@ -63,6 +63,7 @@ add_library(llama
             llama-kv-stream-content.h
             llama-kv-stream-resident.cpp
             llama-kv-stream-resident.h
+            llama-kv-stream-prefetch.h
             llama-kv-stream-writer.cpp
             llama-kv-stream-writer.h
             llama-memory-executor.cpp
