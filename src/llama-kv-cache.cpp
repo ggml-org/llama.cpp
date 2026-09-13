@@ -2056,7 +2056,10 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
         return;
     }
 
-    GGML_UNUSED(flags);
+    // a full-attention KV cache is rolled back with seq_rm, so a partial (checkpoint) state carries nothing for it
+    if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) && !hparams.is_swa_any()) {
+        return;
+    }
 
     io.write(&n_stream, sizeof(n_stream));
 
@@ -2135,7 +2138,10 @@ const slot_info_vec_t *   sinfos_in) {
         return;
     }
 
-    GGML_UNUSED(flags);
+    // mirrors state_write: a partial checkpoint holds nothing for a full-attention cache
+    if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) && !hparams.is_swa_any()) {
+        return;
+    }
 
     // TODO: fix incosistent handling of `seq_id < 0` and `seq_id == -1` in the codebase [TAG_LLAMA_SEQ_ID_NEG]
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
