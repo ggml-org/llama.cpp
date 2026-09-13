@@ -99,6 +99,7 @@ static void test_normalize_quotes_with_embedded_quotes(testing & t);
 static void test_tagged_args_with_embedded_quotes(testing & t);
 static void test_bailing_v3_tool_format(testing & t);
 
+
 static void test_role_markers_all_templates(testing & t);
 
 static json build_tools_definition();
@@ -2587,6 +2588,16 @@ static void test_bailing_v3_tool_format(testing & t) {
     common_peg_parse_context ctx(output, COMMON_PEG_PARSE_FLAG_LENIENT);
     t.assert_true("multi-argument tool call", parser.parse(ctx).success());
 }
+
+// ============================================================================
+// Ling 3.0 Flash tests
+//
+// The template pre-opens the think block in the generation prompt
+// ('<role>ASSISTANT</role>\n<think>'), so the model never emits an opening
+// <think>. Reasoning must terminate at </think> OR at a tool-call start,
+// otherwise a tool call emitted before the think block closes is swallowed
+// into reasoning_content and the client sees a reasoning-only turn.
+// ============================================================================
 
 // Test that reproduces the Seed-OSS template issue with embedded quotes
 static void test_tagged_args_with_embedded_quotes(testing & t) {

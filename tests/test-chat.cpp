@@ -2117,8 +2117,170 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
 
 }
 
+
+// Ling 3.0 Flash / Bailing V3 dedicated parser
+static void test_ling_3_0_flash(bool detailed_debug) {
+    common_chat_tool file_read;
+    file_read.name        = "file_read";
+    file_read.description = "Read a file";
+    file_read.parameters =
+        R"({"type":"object","properties":{"path":{"type":"string","description":"File path"},"note":{"type":"string"}},"required":["path"]})";
+
+    common_chat_tool file_edit;
+    file_edit.name        = "file_edit";
+    file_edit.description = "Edit a file";
+    file_edit.parameters  = R"({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})";
+
+    auto mk_call = [](const std::string & name, const std::string & arguments) {
+        common_chat_tool_call call;
+        call.name      = name;
+        call.arguments = arguments;
+        return call;
+    };
+
+    auto tst = peg_tester("models/templates/inclusionai-ling-3.0-flash.jinja", detailed_debug);
+
+    const std::string file_read_call =
+        "<tool_call>file_read\n"
+        "<arg_key>path</arg_key>\n"
+        "<arg_value>/workspace/service/handlers.py</arg_value>\n"
+        "</tool_call>";
+
+    // A tool call emitted before the think block is closed must be extracted,
+    // with the preceding text kept as reasoning.
+    tst.test("I need to read the handlers file first.\n" + file_read_call)
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .tools({ file_read })
+        .expect_reasoning("I need to read the handlers file first.\n")
+        .expect_tool_calls({ mk_call("file_read", R"({"path":"/workspace/service/handlers.py"})") })
+        .run();
+
+    // Closed think block, prose, then a tool call.
+    tst.test("Let me read the file.\n</think>\nReading it now.\n" + file_read_call)
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .tools({ file_read })
+        .expect_reasoning("Let me read the file.\n")
+        .expect_content("Reading it now.\n")
+        .expect_tool_calls({ mk_call("file_read", R"({"path":"/workspace/service/handlers.py"})") })
+        .run();
+
+    // Prose after the last tool call is content, not a parse failure.
+    tst.test(file_read_call + "\nThe file has been read.")
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .tools({ file_read })
+        .expect_content("\nThe file has been read.")
+        .expect_tool_calls({ mk_call("file_read", R"({"path":"/workspace/service/handlers.py"})") })
+        .run();
+
+    // Parallel tool calls.
+    tst.test("</think>\n" + file_read_call + "\n" + file_read_call)
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .tools({ file_read })
+        .parallel_tool_calls(true)
+        .expect_content("")
+        .expect_tool_calls({ mk_call("file_read", R"({"path":"/workspace/service/handlers.py"})"),
+                             mk_call("file_read", R"({"path":"/workspace/service/handlers.py"})") })
+        .run();
+
+    // Argument values may contain marker-like strings.
+    tst.test("check this\n</think>\n<tool_call>file_read\n"
+             "<arg_key>path</arg_key>\n<arg_value>/tmp/x</arg_value>\n"
+             "<arg_key>note</arg_key>\n<arg_value>contains </think> and <tool_call> strings</arg_value>\n"
+             "</tool_call>")
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .tools({ file_read })
+        .expect_reasoning("check this\n")
+        .expect_tool_calls({ mk_call(
+            "file_read", R"({"path":"/tmp/x","note":"contains </think> and <tool_call> strings"})") })
+        .run();
+
+    // reasoning_format=none keeps extracting tool calls.
+    tst.test("I need to read the handlers file first.\n" + file_read_call)
+        .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+        .tools({ file_read })
+        .expect_content("I need to read the handlers file first.\n")
+        .expect_tool_calls({ mk_call("file_read", R"({"path":"/workspace/service/handlers.py"})") })
+        .run();
+
+    // With thinking off the template pre-closes the think block, so the model
+    // emits bare content: it must not be classified as reasoning.
+    tst.test("Here is the answer.\nNo think block at all.")
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .enable_thinking(false)
+        .expect_reasoning("")
+        .expect_content("Here is the answer.\nNo think block at all.")
+        .run();
+
+    tst.test(file_read_call)
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .enable_thinking(false)
+        .tools({ file_read })
+        .expect_reasoning("")
+        .expect_tool_calls({ mk_call("file_read", R"({"path":"/workspace/service/handlers.py"})") })
+        .run();
+
+    // Continuation: the partial assistant turn is spliced back into the prompt.
+    {
+        common_chat_msg prefill = simple_assist_msg("", "I'm thinking");
+
+        tst.test("Hello, world!")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, prefill })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!")
+            .run();
+
+        tst.test(" more</think>Hello, world!")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, prefill })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking more")
+            .expect_content("Hello, world!")
+            .run();
+    }
+
+    // The end-of-turn token may arrive spelled out as text tokens instead of
+    // the single control token; it must not leak into content.
+    tst.test("Here is the answer.<|role_end|>")
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .enable_thinking(false)
+        .expect_content("Here is the answer.")
+        .run();
+
+    tst.test(file_read_call + "<|role_end|>")
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .tools({ file_read })
+        .expect_tool_calls({ mk_call("file_read", R"({"path":"/workspace/service/handlers.py"})") })
+        .run();
+
+    // Real output tolerates whitespace variation between tags (the template
+    // renders historical calls with no newline after the tool name).
+    tst.test("</think>\n<tool_call>file_read<arg_key>path</arg_key><arg_value>/tmp/x</arg_value></tool_call>")
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .tools({ file_read })
+        .expect_tool_calls({ mk_call("file_read", R"({"path":"/tmp/x"})") })
+        .run();
+
+    // Required arguments may arrive in any order.
+    tst.test("</think>\n<tool_call>file_edit\n"
+             "<arg_key>content</arg_key>\n<arg_value>hello</arg_value>\n"
+             "<arg_key>path</arg_key>\n<arg_value>/tmp/x</arg_value>\n"
+             "</tool_call>")
+        .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+        .tools({ file_edit })
+        .expect_tool_calls({ mk_call("file_edit", R"({"content":"hello","path":"/tmp/x"})") })
+        .run();
+}
+
 static void test_template_output_peg_parsers(bool detailed_debug) {
     LOG_DBG("%s\n", __func__);
+
+    test_ling_3_0_flash(detailed_debug);
 
     // JSON schemas
     const char * invoice_schema = R"({
