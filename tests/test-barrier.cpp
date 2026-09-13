@@ -10,7 +10,6 @@
 #include <thread>
 
 #define MAX_NARGS 2
-
 static void test_barrier(int n_threads, int n_rounds) {
     struct ggml_init_params params = {
         /* .mem_size   = */ 1024*1024*1024,
