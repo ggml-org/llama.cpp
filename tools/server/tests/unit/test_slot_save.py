@@ -96,7 +96,7 @@ def test_slot_restore_legacy_token_list():
     assert res.status_code == 200
     assert res.body["n_saved"] == 84
 
-    # rewrite the file as v3 with a plain token list, as written by llama_state_seq_save_file
+    # rewrite the file as v4 with a plain token list, as written by llama_state_seq_save_file
     path = os.path.join(server.slot_save_path, "slot_legacy.bin")
     with open(path, "rb") as f:
         data = bytearray(f.read())
@@ -110,7 +110,7 @@ def test_slot_restore_legacy_token_list():
     assert n_tokens == 84
 
     tokens_start = STATE_FILE_HEADER_SIZE + packed_header_size
-    data = data[:4] + struct.pack("=II", 3, n_tokens) + data[tokens_start:tokens_start + n_tokens * 4] + data[payload_end:]
+    data = data[:4] + struct.pack("=II", 4, n_tokens) + data[tokens_start:tokens_start + n_tokens * 4] + data[payload_end:]
 
     with open(path, "wb") as f:
         f.write(data)
