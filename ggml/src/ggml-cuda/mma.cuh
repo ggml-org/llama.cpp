@@ -1336,6 +1336,35 @@ namespace ggml_cuda_mma {
 #endif // AMD_MFMA_AVAILABLE
     }
 
+    // Half of the WMMA mma() above: issues only the half'th of its two instructions.
+    // The MMA result is only complete once both halves have run. A caller that holds
+    // several B tiles can issue every tile's half 0, do unrelated work, then issue the
+    // half 1s, which keeps the WMMA pipe busy across that work instead of stalling on
+    // it once per tile. WMMA only: the MFMA paths do not decompose the same way.
+    template <int half, data_layout dl_d, data_layout dl_ab>
+    static __device__ __forceinline__ void mma_half(
+            tile<16, 16, int, dl_d> & D, const tile<16, 8, int, dl_ab> & A, const tile<16, 8, int, dl_ab> & B) {
+        static_assert(half == 0 || half == 1, "mma_half expects half 0 or 1");
+#if defined(AMD_WMMA_AVAILABLE)
+        using int32x8_t = __attribute__((__vector_size__(8 * sizeof(int)))) int;
+        int32x8_t * acc = (int32x8_t *) D.x;
+#if defined(RDNA4)
+        using int32x2_t = __attribute__((__vector_size__(2 * sizeof(int)))) int;
+        const int32x2_t * a_vec = (const int32x2_t *) A.x;
+        const int32x2_t * b_vec = (const int32x2_t *) B.x;
+        acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12(true, a_vec[half], true, b_vec[half], acc[0], true);
+#elif defined(RDNA3)
+        using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
+        const int32x4_t * a_vec = (const int32x4_t *) A.x;
+        const int32x4_t * b_vec = (const int32x4_t *) B.x;
+        acc[0] = __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(true, a_vec[half], true, b_vec[half], acc[0], true);
+#endif // RDNA4
+#else
+        GGML_UNUSED_VARS(D, A, B);
+        NO_DEVICE_CODE;
+#endif // defined(AMD_WMMA_AVAILABLE)
+    }
+
     static __device__ __forceinline__ void mma(
             tile<32, 32, int> & D, const tile<32, 4, int> & A, const tile<32, 4, int> & B) {
 #if defined(AMD_MFMA_AVAILABLE)
