@@ -449,7 +449,8 @@ static void tiled_unpack_src1_q8_K(const block_q8_K * const * rows, int n_rows, 
                                    int kblk) {
     GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
     const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
-    const __m256i bias = _mm256_set1_epi8(128);
+    // +128 bias per src1 byte; the byte pattern we need is 0x80, which as signed char is -128
+    const __m256i bias = _mm256_set1_epi8((int8_t)128);
     for (int r = 0; r < n_padded; r++) {
         uint8_t * dst = &tile->q[r * TILED_TILE_K];
         if (r < n_rows) {
@@ -748,7 +749,7 @@ static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_t
     // K is stepped in slabs; the slab offset is applied in the unpack
     for (int64_t ib = 0; ib < ne00; ib += TILED_TILE_K) {
         const int kblk = (int) (ib / TILED_TILE_K);
-        if (nrows <= TILED_MICRO) {
+        if (nrows <= 32) {
             tiled_unpack_src1_q8_K(rows, nrows, &ws->src1, kblk);
             for (int64_t ir0 = r; ir0 < r_end; ir0 += TILED_MICRO) {
                 const int grp = (int) ((ir0 - r) / TILED_MICRO);

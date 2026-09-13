@@ -1008,25 +1008,25 @@ int main(int argc, char ** argv) {
             { 4096, 4096,   8 },
             { 4096, 4096,   1 },
         };
-        for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); ++s) {
-            bench_row rows[n_types];
-            for (size_t i = 0; i < n_types; ++i) {
-                rows[i] = bench_three_way(backend, shapes[s].M, shapes[s].N, shapes[s].K, bench_types[i]);
-            }
-            print_bench_table(shapes[s].M, shapes[s].N, shapes[s].K, rows, n_types);
-        }
+        // for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); ++s) {
+        //     bench_row rows[n_types];
+        //     for (size_t i = 0; i < n_types; ++i) {
+        //         rows[i] = bench_three_way(backend, shapes[s].M, shapes[s].N, shapes[s].K, bench_types[i]);
+        //     }
+        //     print_bench_table(shapes[s].M, shapes[s].N, shapes[s].K, rows, n_types);
+        // }
 
-        // A/B pass: iqp panel vs tiled kernel (see bench_tiled_iqp); the iqp column reflects the
-        // in-process tiled-on constraint, the genuine tiled-off number is perf-tiled-mulmat --path iqp
-        const ggml_type ab_types[] = { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS };
-        const size_t n_ab_types = sizeof(ab_types) / sizeof(ab_types[0]);
-        for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); ++s) {
-            bench_row_ab ab_rows[n_ab_types];
-            for (size_t i = 0; i < n_ab_types; ++i) {
-                ab_rows[i] = bench_tiled_iqp(backend, shapes[s].M, shapes[s].N, shapes[s].K, ab_types[i]);
-            }
-            print_ab_table(shapes[s].M, shapes[s].N, shapes[s].K, ab_rows, n_ab_types);
-        }
+        // // A/B pass: iqp panel vs tiled kernel (see bench_tiled_iqp); the iqp column reflects the
+        // // in-process tiled-on constraint, the genuine tiled-off number is perf-tiled-mulmat --path iqp
+        // const ggml_type ab_types[] = { GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS };
+        // const size_t n_ab_types = sizeof(ab_types) / sizeof(ab_types[0]);
+        // for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); ++s) {
+        //     bench_row_ab ab_rows[n_ab_types];
+        //     for (size_t i = 0; i < n_ab_types; ++i) {
+        //         ab_rows[i] = bench_tiled_iqp(backend, shapes[s].M, shapes[s].N, shapes[s].K, ab_types[i]);
+        //     }
+        //     print_ab_table(shapes[s].M, shapes[s].N, shapes[s].K, ab_rows, n_ab_types);
+        // }
 
         // MUL_MAT_ID (MoE) three-way bench (std, repack, tiled); K must be a multiple of
         // 256 (the tiled slab). Every type the tiled gate accepts; the repack column is
@@ -1034,6 +1034,8 @@ int main(int argc, char ** argv) {
         // batch (32); TILED_MM_FORCE is set in main, so that row is the forced GEMV extreme
         struct { int64_t K, R, E, k, b_slots, batch; } mmid_shapes[] = {
             { 1024, 1024,  8,   8, 1,    1 },  // cne1 = 1, single-token decode, one routed row per expert
+            {  512,  512,  8,   2, 1,   32 },  // cne1 = 8, the iqp per expert floor, mirrors the K=512 cne1=32 shape
+            { 1024, 1024, 16,   8, 1,   16 },  // cne1 = 8, the iqp per expert floor, mirrors the K=1024 cne1=32 shape
             {  512,  512,  8,   2, 1,  128 },  // cne1 = 32, the tiled min batch
             { 1024, 1024, 16,   8, 1,   64 },  // cne1 = 32
             { 1024, 1024, 16,   8, 1,  256 },  // cne1 = 128
@@ -1044,15 +1046,15 @@ int main(int argc, char ** argv) {
                                          GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
                                          GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
         const size_t n_mmid_types = sizeof(mmid_types) / sizeof(mmid_types[0]);
-        for (size_t s = 0; s < sizeof(mmid_shapes) / sizeof(mmid_shapes[0]); ++s) {
-            bench_row_mmid rows[n_mmid_types];
-            for (size_t i = 0; i < n_mmid_types; ++i) {
-                rows[i] = bench_mul_mat_id(backend, mmid_shapes[s].K, mmid_shapes[s].R, mmid_shapes[s].E,
-                                           mmid_shapes[s].k, mmid_shapes[s].b_slots, mmid_shapes[s].batch, mmid_types[i]);
-            }
-            print_mmid_table(mmid_shapes[s].K, mmid_shapes[s].R, mmid_shapes[s].E, mmid_shapes[s].k,
-                             mmid_shapes[s].b_slots, mmid_shapes[s].batch, rows, n_mmid_types);
-        }
+        // for (size_t s = 0; s < sizeof(mmid_shapes) / sizeof(mmid_shapes[0]); ++s) {
+        //     bench_row_mmid rows[n_mmid_types];
+        //     for (size_t i = 0; i < n_mmid_types; ++i) {
+        //         rows[i] = bench_mul_mat_id(backend, mmid_shapes[s].K, mmid_shapes[s].R, mmid_shapes[s].E,
+        //                                    mmid_shapes[s].k, mmid_shapes[s].b_slots, mmid_shapes[s].batch, mmid_types[i]);
+        //     }
+        //     print_mmid_table(mmid_shapes[s].K, mmid_shapes[s].R, mmid_shapes[s].E, mmid_shapes[s].k,
+        //                      mmid_shapes[s].b_slots, mmid_shapes[s].batch, rows, n_mmid_types);
+        // }
 
         // MUL_MAT_ID (MoE) A/B pass: iqp panel vs tiled kernel (see bench_mmid_tiled_iqp); the iqp
         // column is the genuine 256-bit panel (the tiled gate declines on MM_PATH=iqp). Types are

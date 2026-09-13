@@ -115,7 +115,10 @@ static void tiled_run_micro_vnni_16x8(const tiled_tile_src0 & src0, const tiled_
         for (int g = 0; g < NG; g++) {
             const int kg = s * NG + g;
             // 512-bit load: 16 src0 rows x 4 k, interleaved layout
-            const __m512i src0_512 = _mm512_load_si512((const __m512i *) &src0.q[(i0 / TILED_MICRO) * (TILED_MICRO * TILED_TILE_K) + kg * (TILED_MICRO * 4)]);
+            // in-place transpose layout: group-local, row = kg%16, chunk c = kg/16
+            const __m512i src0_512 = _mm512_load_si512((const __m512i *) &src0.q[(i0 / TILED_MICRO) * (TILED_MICRO * TILED_TILE_K)
+                                                                              + (kg % TILED_MICRO) * TILED_TILE_K
+                                                                              + (kg / TILED_MICRO) * (TILED_MICRO * 4)]);
             // broadcast: one src1 col's 4 k-values (biased s1+128, uint8)
             for (int t = 0; t < tmax; t++) {
                 const uint32_t s1_u4 = *(const uint32_t *) &src1.q[(j0 + t) * TILED_TILE_K + kg * 4];
@@ -480,21 +483,11 @@ void tiled_repack_src0(tiled_tile_src0 * tile, int nb) {
         }
     }
 
-    // interleave codes
-    alignas(64) uint8_t grp_src[TILED_MICRO * TILED_TILE_K];
-    alignas(64) uint8_t grp_dst[1024];
-
-    const int8_t * rp[TILED_MICRO];
-    for (int r = 0; r < TILED_MICRO; r++) {
-        rp[r] = (const int8_t *) &grp_src[r * TILED_TILE_K];
-    }
-
+    // interleave codes (in-place: each 16x16 int32 tile transposes onto itself)
     for (int grp = 0; grp < TILED_TILE_ROWS / TILED_MICRO; grp++) {
         uint8_t * base = (uint8_t *) &tile->q[grp * (TILED_MICRO * TILED_TILE_K)];
-        memcpy(grp_src, base, TILED_MICRO * TILED_TILE_K);
         for (int c = 0; c < 4; c++) {
-            tiled_repack_16x16(rp, c, grp_dst);
-            memcpy(base + c * 1024, grp_dst, 1024);
+            tiled_repack_16x16(base, c);
         }
     }
 }
@@ -516,18 +509,10 @@ void tiled_repack_src0_group(tiled_tile_src0 * tile, int grp, int nb) {
             tile->mins_t[s * TILED_TILE_ROWS + r] = tile->mins[r * nb + s];
         }
     }
-    // interleave codes for this group
-    alignas(64) uint8_t grp_src[TILED_MICRO * TILED_TILE_K];
-    alignas(64) uint8_t grp_dst[1024];
-    const int8_t * rp[TILED_MICRO];
-    for (int r = 0; r < TILED_MICRO; r++) {
-        rp[r] = (const int8_t *) &grp_src[r * TILED_TILE_K];
-    }
+    // interleave codes for this group (in-place)
     uint8_t * base = (uint8_t *) &tile->q[r0 * TILED_TILE_K];
-    memcpy(grp_src, base, TILED_MICRO * TILED_TILE_K);
     for (int c = 0; c < 4; c++) {
-        tiled_repack_16x16(rp, c, grp_dst);
-        memcpy(base + c * 1024, grp_dst, 1024);
+        tiled_repack_16x16(base, c);
     }
 }
 #else
@@ -538,15 +523,17 @@ void tiled_repack_src0_group(tiled_tile_src0 * tile, int grp, int nb) {
 }
 #endif
 
-// Interleave one 16-row x 64-k chunk of src1 q8 codes into [g][row][4] layout.
-// rows[r] points to the qs field (256 bytes) of row r at the desired kblk.
-// c selects the chunk (0..3): int32s [c*16, c*16+16) of the 64-int32 qs field.
-// out receives 1024 bytes: 16 k-groups of 16 rows x 4 bytes (dpbusd-ready).
+// In-place transpose of one 16-row x 64-k chunk of src0 codes.
+// base points at the 16-row group (row r at base + r*256); row r is row-major.
+// c selects the chunk (0..3): k in [c*64, c*64+64) = 16 int32 k-groups of 4 k-values.
+// After the call, the 16x16 int32 tile [row][k-group] is transposed in place, so the
+// kernel reads the 16 rows' k-group (kg%16) as one 512-bit vector at
+// base + (kg%16)*256 + (kg/16)*64. All 16 loads retire before any store, so it is safe.
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-void tiled_repack_16x16(const int8_t * const * rows, int c, uint8_t * out) {
+void tiled_repack_16x16(uint8_t * base, int c) {
     __m512i v[16];
     for (int r = 0; r < 16; r++) {
-        v[r] = _mm512_loadu_si512((const void *) ((const int32_t *) rows[r] + c * 16));
+        v[r] = _mm512_load_si512((const __m512i *) (base + r * TILED_TILE_K + c * (TILED_MICRO * 4)));
     }
 
     // 16x16 int32 transpose, 4 butterfly phases
@@ -596,24 +583,26 @@ void tiled_repack_16x16(const int8_t * const * rows, int c, uint8_t * out) {
         }
     }
 
-    // store: v[g] holds 16 int32s for k-group col_order[g], rows 0..15
+    // store: v[g] holds 16 int32s for k-group col_order[g], rows 0..15.
+    // in-place: write back to the same chunk-c slice of row col_order[g]
     static const int col_order[16] = {0, 8, 1, 9, 4, 12, 5, 13, 2, 10, 3, 11, 6, 14, 7, 15};
     for (int g = 0; g < 16; g++) {
-        _mm512_store_si512((void *) (out + col_order[g] * 64), v[g]);
+        _mm512_store_si512((void *) (base + col_order[g] * TILED_TILE_K + c * (TILED_MICRO * 4)), v[g]);
     }
 }
 #else
-void tiled_repack_16x16(const int8_t * const * rows, int c, uint8_t * out) {
-    // scalar: out[g][r*4..r*4+3] = rows[r][c*64 + g*4 + 0..3]
-    for (int g = 0; g < 16; g++) {
-        for (int r = 0; r < 16; r++) {
-            uint8_t * p = out + g * 64 + r * 4;
-            const uint8_t * s = (const uint8_t *) rows[r] + c * 64 + g * 4;
-            p[0] = s[0];
-            p[1] = s[1];
-            p[2] = s[2];
-            p[3] = s[3];
+void tiled_repack_16x16(uint8_t * base, int c) {
+    // scalar: transpose the 16x16 int32 tile (dead path on non-VNNI; kept correct via temp)
+    alignas(64) uint8_t tmp[TILED_MICRO * TILED_MICRO * 4];
+    for (int r = 0; r < 16; r++) {
+        for (int g = 0; g < 16; g++) {
+            const uint8_t * s = base + r * TILED_TILE_K + c * (TILED_MICRO * 4) + g * 4;
+            uint8_t * p = tmp + g * 64 + r * 4;
+            memcpy(p, s, 4);
         }
+    }
+    for (int g = 0; g < 16; g++) {
+        memcpy(base + g * TILED_TILE_K + c * (TILED_MICRO * 4), tmp + g * 64, 64);
     }
 }
 #endif

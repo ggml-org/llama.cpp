@@ -129,6 +129,19 @@ int main(int argc, char ** argv) {
     bool      flush   = false;
     unsigned  seed    = 0xBEEF;
 
+    // mmid (mul_mat_id / MoE) mode: the small-cne1 regime. Shape is (K reduction, R rows
+    // per expert, E experts, k top-k, b_slots, batch); cne1 = k*batch/E rows per expert.
+    // K is reused as the reduction dim. For the tiled/iqp A/B this matches the bench's
+    // bench_mmid_tiled_iqp forcing (force=1 + MM_PATH selects the panel; tiled declines on
+    // MM_PATH=iqp). One path per process.
+    bool      mmid      = false;
+    int64_t   rows      = 512;   // R: output dim per expert
+    int64_t   experts   = 8;     // E
+    int64_t   topk      = 2;     // k
+    int64_t   b_slots   = 1;
+    int64_t   batch     = 32;
+    ggml_type qtype     = GGML_TYPE_Q5_K;
+
     for (int i = 1; i < argc; ++i) {
         if      (!strcmp(argv[i], "--path"))    { if (!strcmp(argv[++i], "std"))          path = PATH_STD;
                                                   else if (!strcmp(argv[i], "tiled"))      path = PATH_TILED;
@@ -142,10 +155,25 @@ int main(int argc, char ** argv) {
         else if (!strcmp(argv[i], "--threads")) threads = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--flush"))   flush   = true;
         else if (!strcmp(argv[i], "--seed"))    seed    = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--mmid"))    mmid    = true;
+        else if (!strcmp(argv[i], "--rows"))    rows    = atoll(argv[++i]);
+        else if (!strcmp(argv[i], "--experts")) experts = atoll(argv[++i]);
+        else if (!strcmp(argv[i], "--topk"))    topk    = atoll(argv[++i]);
+        else if (!strcmp(argv[i], "--bslots"))  b_slots = atoll(argv[++i]);
+        else if (!strcmp(argv[i], "--batch"))   batch   = atoll(argv[++i]);
+        else if (!strcmp(argv[i], "--type"))    { if (!strcmp(argv[++i], "q5_K"))     qtype = GGML_TYPE_Q5_K;
+                                                  else if (!strcmp(argv[++i], "iq4_xs")) qtype = GGML_TYPE_IQ4_XS;
+                                                  else if (!strcmp(argv[++i], "iq2_xxs"))qtype = GGML_TYPE_IQ2_XXS;
+                                                  else { fprintf(stderr, "bad --type %s\n", argv[i-1]); return 1; } }
         else { fprintf(stderr, "unknown arg %s\n", argv[i]); return 1; }
     }
 
-    if (M < 8 || N % 8 != 0 || K % 256 != 0) {
+    if (mmid) {
+        if (K % 256 != 0 || rows % 8 != 0) {
+            fprintf(stderr, "mmid: need K%%256==0, rows%%8==0 (got K=%lld rows=%lld)\n", (long long)K, (long long)rows);
+            return 1;
+        }
+    } else if (M < 8 || N % 8 != 0 || K % 256 != 0) {
         fprintf(stderr, "need M>=8, N%%8==0, K%%256==0 for the iqp/tiled gates (got M=%lld N=%lld K=%lld)\n",
                 (long long)M, (long long)N, (long long)K);
         return 1;
@@ -165,24 +193,60 @@ int main(int argc, char ** argv) {
 
     struct ggml_init_params ip = { 1024*1024*1024, nullptr, true };
     struct ggml_context * ctx = ggml_init(ip);
-    struct ggml_tensor * src1 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, N, M);
-    struct ggml_tensor * src0 = ggml_new_tensor_2d(ctx, GGML_TYPE_Q5_K,   N, K);
-    struct ggml_cgraph * gf  = ggml_new_graph(ctx);
-    struct ggml_tensor * dst = ggml_mul_mat(ctx, src0, src1);
-    ggml_build_forward_expand(gf, dst);
-    ggml_backend_alloc_ctx_tensors(ctx, backend);
+    struct ggml_cgraph * gf = ggml_new_graph(ctx);
+    struct ggml_tensor * dst = NULL;
+    int64_t out_elems = 0;
 
-    // deterministic inputs so the checksum is reproducible across runs
-    float * src1_data = gen_rand_f32(M * N, seed);
-    float * src0_data = gen_rand_f32(N * K, seed + 1);
-    fill_tensor(src1, src1_data, M, N, GGML_TYPE_F32);
-    fill_tensor(src0, src0_data, K, N, GGML_TYPE_Q5_K);
-    free(src1_data); free(src0_data);
+    if (mmid) {
+        // src0 (quant) [K, R, E]; src1 (F32) [K, b_slots, batch]; ids [k, batch]
+        int64_t ne_as[4]  = { K, rows, experts, 1 };
+        int64_t ne_b[4]   = { K, b_slots, batch, 1 };
+        int64_t ne_ids[4] = { topk, batch, 1, 1 };
+        struct ggml_tensor * src1  = ggml_new_tensor(ctx, GGML_TYPE_F32,  4, ne_b);
+        struct ggml_tensor * src0  = ggml_new_tensor(ctx, qtype,        4, ne_as);
+        struct ggml_tensor * ids_t = ggml_new_tensor(ctx, GGML_TYPE_I32, 4, ne_ids);
+        dst = ggml_mul_mat_id(ctx, src0, src1, ids_t);
+        ggml_build_forward_expand(gf, dst);
+        ggml_backend_alloc_ctx_tensors(ctx, backend);
 
-    const double flops = 2.0 * M * N * K;
-    printf("perf-tiled-mulmat: path=%s M=%lld N=%lld K=%lld iters=%d threads=%d flush=%s  (%.3f GFLOP per op)\n",
-           path_name(path), (long long)M, (long long)N, (long long)K, iters, threads,
-           flush ? "on" : "off", flops / 1e9);
+        // balanced routing: each expert gets ~ topk*batch/experts rows
+        int32_t * ids = (int32_t *) malloc(topk * batch * sizeof(int32_t));
+        for (int64_t t = 0; t < batch; t++)
+            for (int64_t e = 0; e < topk; e++)
+                ids[t * topk + e] = (int32_t) ((t * topk + e) % experts);
+        float * b_data  = gen_rand_f32(K * b_slots * batch, seed);
+        float * as_data = gen_rand_f32(K * rows * experts,  seed + 1);
+        fill_tensor(src1,  b_data,  b_slots * batch, K, GGML_TYPE_F32);
+        fill_tensor(src0,  as_data, rows * experts, K, qtype);
+        ggml_backend_tensor_set(ids_t, ids, 0, ggml_nbytes(ids_t));
+        free(ids); free(b_data); free(as_data);
+        out_elems = rows * topk * batch;
+    } else {
+        struct ggml_tensor * src1 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, N, M);
+        struct ggml_tensor * src0 = ggml_new_tensor_2d(ctx, qtype,        N, K);
+        dst = ggml_mul_mat(ctx, src0, src1);
+        ggml_build_forward_expand(gf, dst);
+        ggml_backend_alloc_ctx_tensors(ctx, backend);
+
+        float * src1_data = gen_rand_f32(M * N, seed);
+        float * src0_data = gen_rand_f32(N * K, seed + 1);
+        fill_tensor(src1, src1_data, M, N, GGML_TYPE_F32);
+        fill_tensor(src0, src0_data, K, N, qtype);
+        free(src1_data); free(src0_data);
+        out_elems = M * K;
+    }
+
+    const double flops = mmid ? 2.0 * K * rows * topk * batch : 2.0 * M * N * K;
+    if (mmid) {
+        printf("perf-tiled-mulmat [mmid]: path=%s K=%lld R=%lld E=%lld k=%lld b_slots=%lld batch=%lld cne1=%lld type=%s iters=%d threads=%d flush=%s (%.3f GFLOP per op)\n",
+               path_name(path), (long long)K, (long long)rows, (long long)experts, (long long)topk,
+               (long long)b_slots, (long long)batch, (long long)(topk * batch / experts), ggml_type_name(qtype),
+               iters, threads, flush ? "on" : "off", flops / 1e9);
+    } else {
+        printf("perf-tiled-mulmat: path=%s M=%lld N=%lld K=%lld type=%s iters=%d threads=%d flush=%s  (%.3f GFLOP per op)\n",
+               path_name(path), (long long)M, (long long)N, (long long)K, ggml_type_name(qtype),
+               iters, threads, flush ? "on" : "off", flops / 1e9);
+    }
     printf("  env: GGML_CPU_TILED_MM=%s GGML_CPU_TILED_MM_FORCE=%s GGML_CPU_MM_PATH=%s use_ref=%d\n",
            tiled_mm, force, mm_path, use_ref ? 1 : 0);
     fflush(stdout);
@@ -214,10 +278,10 @@ int main(int argc, char ** argv) {
 
     // readback + cheap checksum: three distinct values across std/tiled/iqp prove
     // three distinct code paths actually ran (guards against a routing collapse)
-    float * out = (float *) malloc(M * K * sizeof(float));
+    float * out = (float *) malloc(out_elems * sizeof(float));
     ggml_backend_tensor_get(dst, out, 0, ggml_nbytes(dst));
     double csum = 0.0; int ccount = 0; float cmax = 0.0f;
-    for (int64_t i = 0; i < M * K; i += 101) { csum += (double) out[i]; cmax = fmaxf(cmax, fabsf(out[i])); ++ccount; }
+    for (int64_t i = 0; i < out_elems; i += 101) { csum += (double) out[i]; cmax = fmaxf(cmax, fabsf(out[i])); ++ccount; }
     printf("checksum: sum[every 101] = %.6f over %d elems   max|dst| = %.4f\n", csum, ccount, cmax);
     fflush(stdout);
 

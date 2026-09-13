@@ -27,7 +27,7 @@
 struct tiled_tile_src0 {
     static constexpr int NB_MAX = TILED_TILE_K / 16; // max subblocks per 256-elem block
 
-    alignas(32) uint8_t q[TILED_TILE_ROWS * TILED_TILE_K]; // raw codes (pre-BIAS-subtraction); kernel reads as int8
+    alignas(64) uint8_t q[TILED_TILE_ROWS * TILED_TILE_K]; // raw codes (pre-BIAS-subtraction); kernel reads as int8
     float    d[TILED_TILE_ROWS];  // One d from each input block, widened to f32
     float    dmin[TILED_TILE_ROWS]; // dmin from each input block (if applicable), widened to F32
     // scales/mins: [row * NB + s] (for AVX2/AVX/scalar kernels)
@@ -162,5 +162,5 @@ void tiled_repack_src0_group(tiled_tile_src0 * tile, int grp, int nb);
 // rows[r] points to the qs field (256 bytes) of row r's block_q8_K at the desired kblk.
 // c selects the chunk (0..3) within the 64-int32 qs field (int32s [c*16, c*16+16)).
 // out receives 1024 bytes in [k-group][row][4] layout (dpbusd-ready).
-void tiled_repack_16x16(const int8_t * const * rows, int c, uint8_t * out);
+void tiled_repack_16x16(uint8_t * base, int c);
 
