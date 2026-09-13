@@ -381,6 +381,19 @@ static bool ggml_cuda_is_aligned(const ggml_tensor * tensor, const size_t alignm
            tensor->nb[3] % alignment == 0;
 }
 
+static void ggml_cuda_clear_padding(const ggml_tensor * tensor, cudaStream_t stream) {
+    if (ggml_backend_buffer_get_usage(tensor->buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
+        return;
+    }
+    const size_t size_data  = ggml_nbytes(tensor);
+    const size_t size_alloc = ggml_backend_buffer_get_alloc_size(tensor->buffer, tensor);
+    if (size_alloc > size_data) {
+        GGML_ASSERT(ggml_is_contiguously_allocated(tensor));
+        GGML_ASSERT(!tensor->view_src);
+        CUDA_CHECK(cudaMemsetAsync((char *) tensor->data + size_data, 0, size_alloc - size_data, stream));
+    }
+}
+
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
 #if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
     return 64;

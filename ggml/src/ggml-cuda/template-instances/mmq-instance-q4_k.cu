@@ -3,3 +3,6 @@
 #include "../mmq.cuh"
 
 DECL_MMQ_CASE(GGML_TYPE_Q4_K);
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+DECL_MMQ_GATE_UP_SWIGLU_CASE(GGML_TYPE_Q4_K);
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)

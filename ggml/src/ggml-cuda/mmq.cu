@@ -6,6 +6,14 @@
 #include <cstdint>
 
 static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if (args.x_gate) {
+        GGML_ASSERT(args.type_x == GGML_TYPE_Q4_K);
+        mul_mat_q_gate_up_swiglu_case<GGML_TYPE_Q4_K>(ctx, args, stream);
+        return;
+    }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+
     switch (args.type_x) {
         case GGML_TYPE_Q1_0:
             mul_mat_q_case<GGML_TYPE_Q1_0>(ctx, args, stream);
@@ -82,11 +90,20 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
     }
 }
 
-void ggml_cuda_mul_mat_q(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
+// gate != nullptr selects the fused dense Q4_K gate+up+SwiGLU kernel: src0 is the up weight, dst the SwiGLU output.
+static void ggml_cuda_mul_mat_q_impl(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+        const ggml_tensor * ids, ggml_tensor * dst, const ggml_tensor * gate) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
+
+    if (gate) {
+        GGML_ASSERT(ids == nullptr);
+        GGML_ASSERT(src0->type == GGML_TYPE_Q4_K && gate->type == GGML_TYPE_Q4_K);
+        GGML_ASSERT(ggml_are_same_shape(src0, gate));
+        GGML_ASSERT(ggml_are_same_stride(src0, gate));
+    }
 
     GGML_TENSOR_BINARY_OP_LOCALS;
 
@@ -106,15 +123,9 @@ void ggml_cuda_mul_mat_q(
     const float * src1_d = (const float *) src1->data;
     float       *  dst_d = (float       *)  dst->data;
 
-    // If src0 is a temporary compute buffer, clear any potential padding.
-    if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
-        const size_t size_data  = ggml_nbytes(src0);
-        const size_t size_alloc = ggml_backend_buffer_get_alloc_size(src0->buffer, src0);
-        if (size_alloc > size_data) {
-            GGML_ASSERT(ggml_is_contiguously_allocated(src0));
-            GGML_ASSERT(!src0->view_src);
-            CUDA_CHECK(cudaMemsetAsync((char *) src0->data + size_data, 0, size_alloc - size_data, stream));
-        }
+    ggml_cuda_clear_padding(src0, stream);
+    if (gate) {
+        ggml_cuda_clear_padding(gate, stream);
     }
 
     const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
@@ -133,8 +144,14 @@ void ggml_cuda_mul_mat_q(
     const size_t y_values_per_block = use_native_fp4 ? QK_FP4_MMQ            : QK8_1_MMQ;
 
     if (!ids) {
+        int64_t J_padding = ggml_cuda_mmq_get_J_max(src0->type, fallback, cc, ne11);
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+        if (gate) {
+            J_padding = GGML_CUDA_MMQ_GATE_UP_SWIGLU_J_MAX;
+        }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * y_block_size/y_values_per_block +
-            ggml_cuda_mmq_get_J_max(src0->type, fallback, cc, ne11) * sizeof(block_q8_1_mmq);
+            J_padding * sizeof(block_q8_1_mmq);
         ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
         ggml_cuda_pool_alloc<float> src1_scale(ctx.pool());
         if (src0->type == GGML_TYPE_NVFP4 && use_native_fp4) {
@@ -165,13 +182,14 @@ void ggml_cuda_mul_mat_q(
                                 ne11 * ne10_padded * sizeof(block_q8_1) / (QK8_1 * sizeof(int));
         const int64_t s13 = ne12*s12;
 
-        const mmq_args args = {
+        mmq_args args = {
             src0_d, src0->type, (const int *) src1_q8_1.ptr, nullptr, nullptr, dst_d,
             src0->type == GGML_TYPE_NVFP4 && use_native_fp4 ? src1_scale.ptr : nullptr,
             ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
             ne1, ne1};
+        args.x_gate = gate ? (const char *) gate->data : nullptr;
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
         return;
     }
@@ -262,6 +280,21 @@ void ggml_cuda_mul_mat_q(
 
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 }
+
+void ggml_cuda_mul_mat_q(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+        const ggml_tensor * ids, ggml_tensor * dst) {
+    ggml_cuda_mul_mat_q_impl(ctx, src0, src1, ids, dst, nullptr);
+}
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+void ggml_cuda_mul_mat_q_gate_up_swiglu(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * up, const ggml_tensor * gate,
+        const ggml_tensor * src, ggml_tensor * dst) {
+    GGML_ASSERT(gate != nullptr);
+    ggml_cuda_mul_mat_q_impl(ctx, up, src, nullptr, dst, gate);
+}
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts) {
 #ifdef GGML_CUDA_FORCE_CUBLAS

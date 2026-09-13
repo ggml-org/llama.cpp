@@ -1783,14 +1783,17 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
     return use_mul_mat_vec_f;
 }
 
+static bool ggml_cuda_mul_mat_bad_padding_clear(const ggml_tensor * src0) {
+    return ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+        ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
+}
+
 static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     ggml_tensor *       src0 = tensor->src[0];
     ggml_tensor *       src1 = tensor->src[1];
     const ggml_tensor * dst  = tensor;
 
-    const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
-                                   ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
-                                   src0->view_src;
+    const bool bad_padding_clear = ggml_cuda_mul_mat_bad_padding_clear(src0);
 
     bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear && src1->type == GGML_TYPE_F32 &&
                              dst->type == GGML_TYPE_F32 && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
@@ -1812,6 +1815,50 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     return use_mul_mat_vec_q;
 }
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+static bool ggml_cuda_mul_mat_q_gate_up_swiglu_matches(
+        const ggml_tensor * up, const ggml_tensor * gate, const ggml_tensor * glu, const int device) {
+    const ggml_tensor * x_up = up->src[0];
+    const ggml_tensor * y    = up->src[1];
+
+    if (up->op != GGML_OP_MUL_MAT || x_up->type != GGML_TYPE_Q4_K || y->type != GGML_TYPE_F32 || y->ne[1] <= 1 ||
+            ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU || glu->type != GGML_TYPE_F32 ||
+            ggml_get_op_params_i32(up, 1) != GGML_HINT_NONE || ggml_get_op_params_i32(gate, 1) != GGML_HINT_NONE) {
+        return false;
+    }
+
+    if (!ggml_cuda_should_fuse_mul_mat(up, gate, glu)) {
+        return false;
+    }
+
+    const int cc        = ggml_cuda_info().devices[device].cc;
+    const int warp_size = ggml_cuda_info().devices[device].warp_size;
+    if (!GGML_CUDA_CC_IS_NVIDIA(cc) || !turing_mma_available(cc) || !cp_async_available(cc) ||
+            ggml_cuda_should_use_mmvf(GGML_TYPE_Q4_K, cc, x_up->ne, x_up->nb, y->ne[1]) ||
+            ggml_cuda_should_use_mmf(GGML_TYPE_Q4_K, cc, warp_size, x_up->ne, x_up->nb, y->ne[1], false) ||
+            ggml_cuda_should_use_mmvq(GGML_TYPE_Q4_K, cc, y->ne[1])) {
+        return false;
+    }
+
+    return ggml_cuda_should_use_mmq(GGML_TYPE_Q4_K, cc, y->ne[1], 0);
+}
+
+static bool ggml_cuda_should_fuse_mul_mat_q_gate_up_swiglu(
+        const ggml_tensor * up, const ggml_tensor * gate, const ggml_tensor * glu) {
+    if (!ggml_cuda_mul_mat_q_gate_up_swiglu_matches(up, gate, glu, ggml_cuda_get_device())) {
+        return false;
+    }
+
+    const ggml_tensor * x_up   = up->src[0];
+    const ggml_tensor * x_gate = gate->src[0];
+    if (ggml_cuda_mul_mat_bad_padding_clear(x_up) || ggml_cuda_mul_mat_bad_padding_clear(x_gate)) {
+        return false;
+    }
+
+    return ggml_cuda_is_aligned(x_up, 16) && ggml_cuda_is_aligned(x_gate, 16);
+}
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+
 static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -1823,9 +1870,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
     // But if src0 is also a view of another tensor then this cannot be done safely because it may overwrite valid tensor data.
     // Therefore, in such cases use cuBLAS.
-    const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
-        && ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
-    if (bad_padding_clear || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    if (ggml_cuda_mul_mat_bad_padding_clear(src0) || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
         return;
     }
@@ -3965,6 +4010,13 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 fused_node_count  = 3;
                 break;
             }
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+            if (ggml_cuda_should_fuse_mul_mat_q_gate_up_swiglu(up, gate, glu)) {
+                ggml_cuda_mul_mat_q_gate_up_swiglu(*cuda_ctx, up->src[0], gate->src[0], up->src[1], glu);
+                return 2;
+            }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         }
     }
 
@@ -4495,10 +4547,24 @@ static void ggml_backend_cuda_event_wait(ggml_backend_t backend, ggml_backend_ev
 
 static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph, ggml_backend_graph_optimize_params * params) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+    ggml_cuda_set_device(cuda_ctx->device);
 
     static const bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
     if (!disable_fusion) {
         for (int i = 0; i < cgraph->n_nodes; ++i) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+            if (i + 2 < cgraph->n_nodes && cgraph->nodes[i + 2]->op == GGML_OP_GLU) {
+                ggml_tensor * glu  = cgraph->nodes[i + 2];
+                ggml_tensor * gate = cgraph->nodes[i];
+                ggml_tensor * up   = cgraph->nodes[i + 1];
+                if (glu->src[0] == gate && glu->src[1] == up &&
+                        ggml_cuda_mul_mat_q_gate_up_swiglu_matches(up, gate, glu, cuda_ctx->device)) {
+                    params->add_alloc_dep(params->user_data, up->src[1], glu);
+                    i += 2;
+                    continue;
+                }
+            }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
             if (cgraph->nodes[i]->op != GGML_OP_MUL) {
                 continue;
             }
@@ -4542,8 +4608,6 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     if (!use_cuda_graph) {
         return;
     }
-
-    ggml_cuda_set_device(cuda_ctx->device);
 
     // number of out-degrees for a particular node
     std::unordered_map<const ggml_tensor *, int> fan_out;
