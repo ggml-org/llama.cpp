@@ -140,6 +140,10 @@ bool server_http_context::init(const common_params & params) {
         if (!init_listener(params)) {
             return false;
         }
+        // with multiple TCP addresses, [::] must not also claim 0.0.0.0
+        if (n_tcp_hosts > 1) {
+            pimpl->servers.back()->set_ipv6_v6only(true);
+        }
     }
 
     pimpl->n_threads_http = params.n_threads_http;
@@ -516,6 +520,7 @@ bool server_http_context::start() {
             SRV_ERR("couldn't start HTTP listener on %s\n", listening_addresses[i].c_str());
             stop();
             join();
+            listening_addresses.clear();
             return false;
         }
     }
