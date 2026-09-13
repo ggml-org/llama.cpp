@@ -496,6 +496,10 @@ struct ggml_threadpool {
     atomic_bool pause;        // Used for pausing the threadpool or individual threads
     atomic_int  abort;        // Used for aborting processing of a graph
 
+#ifndef GGML_USE_OPENMP
+    atomic_bool sched_sync;   // Used for tracking if the calling thread has this pool's prio/affinity applied
+#endif
+
     struct ggml_compute_state * workers;   // per thread state
     int          n_threads;   // Number of threads in the pool
     int32_t      prio;        // Scheduling priority
@@ -2786,6 +2790,7 @@ void ggml_threadpool_pause(struct ggml_threadpool * threadpool) {
     if (!threadpool->pause) {
        ggml_threadpool_pause_locked(threadpool);
     }
+    atomic_store_explicit(&threadpool->sched_sync, false, memory_order_relaxed);
     ggml_mutex_unlock(&threadpool->mutex);
 #else
     UNUSED(threadpool);
@@ -3299,6 +3304,7 @@ static void ggml_graph_compute_kickoff(struct ggml_threadpool * threadpool, int 
        if (ggml_thread_cpumask_is_valid(threadpool->workers[0].cpumask)) {
            ggml_thread_apply_affinity(threadpool->workers[0].cpumask);
        }
+       atomic_store_explicit(&threadpool->sched_sync, true, memory_order_relaxed);
 
        // resume does cond broadcast
        ggml_threadpool_resume_locked(threadpool);
@@ -3327,6 +3333,9 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->current_chunk    = 0;
         threadpool->stop             = false;
         threadpool->pause            = tpp->paused;
+#ifndef GGML_USE_OPENMP
+        threadpool->sched_sync       = !tpp->paused;
+#endif
         threadpool->abort            = -1;
         threadpool->workers          = NULL;
         threadpool->n_threads        = tpp->n_threads;
@@ -3395,8 +3404,48 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     GGML_ASSERT(cplan->n_threads > 0);
     GGML_ASSERT(cplan->work_size == 0 || cplan->work_data != NULL);
 
-    int n_threads                               = cplan->n_threads;
+    int n_threads = cplan->n_threads;
     struct ggml_threadpool * threadpool = cplan->threadpool;
+
+    // check if the graph has any node that needs to be computed
+    // this is common with full GPU offload, where the CPU splits often contain only views and NOPs
+    bool has_work = false;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        struct ggml_tensor * node = cgraph->nodes[i];
+        if (!ggml_op_is_empty(node->op) && (node->flags & GGML_TENSOR_FLAG_COMPUTE)) {
+            has_work = true;
+            break;
+        }
+    }
+
+    if (!has_work) {
+        // Nothing to compute on the CPU. Avoid creating a disposable threadpool
+        // and waking up the worker threads, but keep the calling thread's
+        // scheduling settings in sync with the threadpool.
+        if (threadpool != NULL) {
+#ifdef GGML_USE_OPENMP
+            // OpenMP applies the prio/affinity on every graph, inside the parallel region
+            if (n_threads > 1) {
+                ggml_thread_apply_priority(threadpool->prio);
+                if (ggml_thread_cpumask_is_valid(threadpool->workers[0].cpumask)) {
+                    ggml_thread_apply_affinity(threadpool->workers[0].cpumask);
+                }
+            }
+#else
+            // apply the calling thread's prio/affinity once per pool activation
+            if (!atomic_load_explicit(&threadpool->sched_sync, memory_order_relaxed)) {
+                ggml_thread_apply_priority(threadpool->prio);
+                if (ggml_thread_cpumask_is_valid(threadpool->workers[0].cpumask)) {
+                    ggml_thread_apply_affinity(threadpool->workers[0].cpumask);
+                }
+                atomic_store_explicit(&threadpool->sched_sync, true, memory_order_relaxed);
+            }
+#endif
+        }
+        clear_numa_thread_affinity();
+
+        return GGML_STATUS_SUCCESS;
+    }
 
     bool disposable_threadpool = false;
 
