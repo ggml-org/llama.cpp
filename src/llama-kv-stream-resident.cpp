@@ -2,6 +2,7 @@
 #include "ggml-cpp.h"
 #include "llama-kv-stream-writer.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
+#include "../ggml/src/ggml-kv-stream-copy.h"
 
 #include <cmath>
 #include <cstring>
@@ -25,6 +26,10 @@ struct llama_kv_stream_resident::implementation {
     bool initialized = false, valid = false, busy = false, poisoned = false;
     std::unique_ptr<llama_kv_stream_writer> writer;
     llama_kv_stream_write_stats write_stats;
+    const ggml_kv_stream_copy_ops * copy_ops = nullptr;
+    ggml_backend_buffer_t copy_host = nullptr;
+    // Destroy the copy queue before tensor metadata and authoritative host storage.
+    std::unique_ptr<void,void(*)(void*)> copies{nullptr,nullptr};
 
     // Storage encoding must match the fixed device layout; replacement alone cannot change it.
     bool compatible() const {
@@ -314,7 +319,7 @@ bool llama_kv_stream_resident::compute_one_block(uint32_t layer, ggml_tensor * q
 
 // Traverse resident and streamed ranges with one reusable export and an unnormalized accumulator.
 bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q, ggml_tensor * mask,
-        ggml_tensor * output, size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace) {
+        ggml_tensor * output, size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace, bool overlap) {
     auto & s = *impl;
     if (s.busy || s.poisoned || !s.compatible() || layer >= s.roots.size() || !q || !mask || !output ||
             !workspace || !std::isfinite(scale) || scale <= 0 || active_tokens > size_t(INT32_MAX)-255 ||
@@ -400,6 +405,39 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     s.busy = true; s.valid = false;
     struct guard { bool & busy; ~guard() { busy = false; } } operation{s.busy};
     if (!s.refresh(padded)) return false;
+    llama_kv_stream_host_layer host;
+    if (!s.content->host()->layer(layer,host)) return false;
+    const bool prefetch = overlap && prefix < padded;
+    struct copy_guard {
+        const ggml_kv_stream_copy_ops * ops = nullptr;
+        void * queue = nullptr;
+        ~copy_guard() { if (queue) ops->drain(queue); }
+    } copying;
+    // Ordered calls after a replacement must not keep the old pinned cache alive either.
+    if (s.copies && s.copy_host != s.content->host()->buffer()) { s.copies.reset(); s.copy_host = nullptr; }
+    if (prefetch) {
+        if (!s.copies) {
+            auto get_copy = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
+            s.copy_ops = get_copy ? get_copy() : nullptr;
+            if (!s.copy_ops || s.copy_ops->version != 1) return false;
+            s.copies = decltype(s.copies)(s.copy_ops->create(s.backend,s.binding.buffer,s.content->host()->buffer(),s.binding.config.shape,slots),s.copy_ops->free);
+            if (!s.copies) return false;
+            s.copy_host = s.content->host()->buffer();
+        }
+        if (!s.copy_ops->begin(s.copies.get())) return false;
+        copying.ops = s.copy_ops; copying.queue = s.copies.get();
+    }
+    const size_t blocks = (padded-prefix)/s.page.tokens + ((padded-prefix)%s.page.tokens != 0);
+    const auto enqueue = [&](size_t block) {
+        const size_t first = prefix+block*s.page.tokens;
+        const size_t count = std::min(s.page.tokens,padded-first), live = std::min(count,active_tokens-first);
+        if (!s.copy_ops->enqueue(s.copies.get(),block%slots,
+                static_cast<const char *>(host.k)+first*s.page.k_token_bytes,
+                static_cast<const char *>(host.v)+first*s.page.v_token_bytes,live,count)) return false;
+        s.bytes += live*(s.page.k_token_bytes+s.page.v_token_bytes); s.calls += 2;
+        return true;
+    };
+    if (prefetch) for (size_t block = 0; block < std::min(slots,blocks); ++block) if (!enqueue(block)) return false;
     const auto convert_inputs = [&] {
         return !s.fallback || (ops->convert(s.backend,&k,&ck) && ops->convert(s.backend,&v,&cv));
     };
@@ -414,15 +452,14 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
             if (!ops->fold(s.backend,output,wb)) return false;
         }
     }
-    llama_kv_stream_host_layer host;
-    if (!s.content->host()->layer(layer,host)) return false;
     for (size_t first = prefix, block = 0; first < padded; first += s.page.tokens, ++block) {
         const size_t count = std::min(s.page.tokens,padded-first);
         const size_t live = std::min(count,active_tokens-first);
         const size_t slot = block%slots;
-        // The previous partial and fold completed synchronously before this slot can be overwritten.
+        // Wait on this slot's producer, not the entire copy stream or later lookahead slots.
         if (!describe(first,count,slot,false)) return false;
-        for (int value = 0; value < 2; ++value) {
+        if (prefetch && !s.copy_ops->acquire(s.copies.get(),slot)) return false;
+        if (!prefetch) for (int value = 0; value < 2; ++value) {
             auto staged = *s.stage[value];
             staged.data = static_cast<char *>(staged.data)+slot*(value ? s.page.v_bytes : s.page.k_bytes);
             const size_t stride = value ? s.page.v_token_bytes : s.page.k_token_bytes;
@@ -431,7 +468,14 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
             ggml_backend_tensor_set(&staged,source+first*stride,0,live*stride);
             s.bytes += live*stride; ++s.calls;
         }
-        if (!convert_inputs() || !ops->partial(s.backend,&op,wb,true)) return false;
+        if (!convert_inputs()) return false;
+        const auto recycle = [&] {
+            return s.copy_ops->release(s.copies.get(),slot) && (block+slots >= blocks || enqueue(block+slots));
+        };
+        // Conversion is the last encoded-slot reader in fallback mode; native attention reads it directly.
+        if (prefetch && s.fallback && !recycle()) return false;
+        if (!ops->partial(s.backend,&op,wb,true)) return false;
+        if (prefetch && !s.fallback && !recycle()) return false;
         if (first+count == padded) return ops->merge(s.backend,output,wb);
         if (!ops->fold(s.backend,output,wb)) return false;
     }

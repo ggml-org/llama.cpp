@@ -26,9 +26,10 @@ public:
     // Caller supplies padded causal mask values. Query backend capabilities before planning native or converted K/V.
     bool compute_one_block(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
             size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace);
-    // Ordered traversal over any number of tail blocks; scratch stays bounded by the same workspace layout.
+    // Traversal over any number of tail blocks; optional overlap retains the ordered correctness control.
+    // The call still completes before returning; overlap requires pinned host backing.
     bool compute_streamed(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
-            size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace);
+            size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace, bool overlap = false);
     size_t last_upload_bytes() const noexcept;
     size_t last_upload_calls() const noexcept;
 

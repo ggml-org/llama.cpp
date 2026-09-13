@@ -208,6 +208,7 @@ add_library(ggml-base
             ggml-kv-stream-partial.h
             ggml-kv-stream-device.cpp
             ggml-kv-stream-device.h
+            ggml-kv-stream-copy.h
             ggml-backend-meta.cpp
             ggml-opt.cpp
             ggml-threading.cpp

@@ -6,7 +6,7 @@ Last source review: 2026-09-12, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is ready for review. The remainder of milestones 5-8 is planned. Current work is **5.4e: generic quant dispatch and bounded F16 fallback**. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is ready for review. The remainder of milestones 5-8 is planned. Current work is **5.4f: copy-stream overlap and event-driven slot reuse**. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -321,7 +321,7 @@ The contracts should permit these additions without claiming they are implemente
 
 ## Progress ledger
 
-Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is committed at `28e7999a0`. Stage 5.4d is committed at `59591b6da`. Stage 5.4e is ready for review.
+Record substage completion here only after the required validation succeeds. Expand the grouped planned rows as work proceeds; keep each completed substage's actual commit and evidence. Milestone 4 is checkpointed. Substages 5.1a and 5.1b are committed; 5.2a is committed at `4717474c3`. Stage 5.2b is committed at `0e3d5a0c0`. Stage 5.3a is committed at `7bfc17ac3`. Stage 5.3b is committed at `15d47eb72`. Stage 5.4a is committed at `ff4d3bdef`. Stage 5.3c is committed at `6c724dee1`, with its baseline/comparison recorded below. Stage 5.4b is committed at `6db00070d`. Stage 5.4c is committed at `28e7999a0`. Stage 5.4d is committed at `59591b6da`. Stage 5.4e is committed at `a92107200`. Stage 5.4f is ready for review.
 
 | Stage | Status | Commit | Validation / limitations |
 | --- | --- | --- | --- |
@@ -349,8 +349,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.4b | Complete | `6db00070d` | 13 cases / 48,614 assertions; 22 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. Ordinary GGML attention comparison, CUDA metadata ABI check, and existing GPU regressions pass. Common format/CPU reference only; no new partial GPU kernel. |
 | 5.4c | Complete | `28e7999a0` | 8 real-CUDA cases / 126 assertions; ordered resident-plus-one-block export and GPU merge, exact leased scratch, masked/dirty tails, malformed-payload atomicity, and UVM-off/on memcheck. 23 focused CPU/CUDA Debug and CPU ASan/UBSan suites pass. |
 | 5.4d | Complete | `59591b6da` | 14 real-CUDA cases / 542 assertions; multi-wave ring reuse, concentrated/zero-resident layouts, incremental GPU folding, and late-block failure recovery. 23 focused suites pass in CPU/CUDA Debug and CPU ASan/UBSan; UVM-off/on memcheck clean. Merge-only racecheck clean; inherited vector-kernel warnings recorded below. |
-| 5.4e | Ready for review | - | 81 writable K/V pairs via selected native/fallback paths, plus all 81 forced through bounded F16 fallback; 19 CUDA cases / 656,795 assertions. Exact conversion bounds/values, capability admission, and native/fallback comparisons. 23 focused suites pass in four configurations; GPU memcheck and reduced-build probes recorded below. |
-| 5.4f-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.4e | Complete | `a92107200` | 81 writable K/V pairs via selected native/fallback paths, plus all 81 forced through bounded F16 fallback; 19 CUDA cases / 656,795 assertions. Exact conversion bounds/values, capability admission, and native/fallback comparisons. 23 focused suites pass in four configurations; GPU memcheck and reduced-build probes recorded below. |
+| 5.4f | Ready for review | - | Opt-in within-layer copy overlap; 8 CUDA cases / 1,565 assertions, all 81 pairs bitwise match ordered execution. Producer/consumer gates, cancellation, retained backing and host replacement pass. 24 focused Debug/CUDA-build/ASan/UBSan suites and GPU memcheck pass; targeted host-state TSan passes, broader TSan caveat below. Synthetic latency comparison retained. |
+| 5.4g-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -1816,7 +1817,7 @@ Stage **5.4e**, documented below, adds supported quant dispatch and bounded F16 
 
 ## Substage 5.4e: generic quant dispatch and bounded F16 fallback
 
-**Status:** implemented and ready for review; not committed by the implementation agent. This stage follows committed 5.4d (`59591b6da`).
+**Status:** committed at `a92107200`, following 5.4d (`59591b6da`).
 
 ### Capability admission and compiled dispatch
 
@@ -1883,4 +1884,82 @@ GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --leak-check
 
 The streamed device adapter still requires head size 256, one sequence, a supplied padded mask, and no sinks/bias/softcap. No new accelerator backend, live repartition, asynchronous overlap, server enablement, or model benchmark is included. Production services, compose configuration, models, checkpoints, and caches remain unchanged.
 
-After review and commit, proceed to **5.4f: dedicated copy stream and producer-ready/final-consumer events**. The synchronous baseline remains the correctness control for overlap work.
+Stage **5.4f**, documented below, adds copy-stream overlap. The synchronous baseline remains its correctness control.
+
+## Substage 5.4f: dedicated copy stream and event-driven slot reuse
+
+**Status:** implemented and ready for review; not committed by the implementation agent. This stage follows committed 5.4e (`a92107200`).
+
+### Execution boundary
+
+`compute_streamed(..., workspace, true)` opts into copy overlap. The default remains ordered execution, and the complete method still finishes before returning. No production server configuration or model integration is enabled by this stage.
+
+One cached queue per executable owns a nonblocking CUDA copy stream, one initial producer-ready event, and ready/consumed events for each ring slot. It retains the explicit device-local buffer and pinned host buffer without allocating additional KV storage. Event/stream bookkeeping is created on first use and reused; a changed authoritative host buffer retires and recreates the queue. No three-layer lookahead constant is introduced.
+
+The prefetch window is confined to the current layer and bounded by the existing ring capacity. The first available slots are submitted before resident-prefix attention. Consumed slots are immediately scheduled for their next block, with a GPU-side dependency preventing overwrite before the old consumer finishes. The same shared ring is reused across layer calls; cross-layer queuing remains 5.4h.
+
+| Dependency | Purpose |
+| --- | --- |
+| Compute producer-ready event -> copy stream | Fence earlier backend work before touching the ring |
+| Slot copy-ready event -> compute stream | Prevent attention/conversion from reading incomplete K/V copies |
+| Slot final-consumer event -> next copy into that slot | Prevent wrapped slots from overwriting live inputs |
+| Both streams drained -> reset/free | Retire outstanding accesses before resetting ownership or releasing backing |
+
+Native attention is the final encoded-slot consumer. In fallback mode, conversion of both operands is the final encoded-slot consumer; subsequent attention reads the separate F16 workspace. This permits earlier encoded-slot reuse without overwriting converted inputs. K and V remain separate transfers in separate contiguous planes, and padded tails are zeroed on the copy stream before readiness is recorded.
+
+Partial/convert/fold operations retain their existing synchronous completion contract. Copies already queued on the separate stream can progress while these compute calls run. This stage does not convert the entire compute pipeline into asynchronous submissions or batch multiple pages into one attention/copy span.
+
+### Ownership, cancellation, and validation
+
+The backend-neutral slot state tracks `empty -> queued -> acquired -> released`; a released slot can be queued again only with the backend's final-consumer dependency. These are owner-thread admission states, not GPU completion indicators. `ready()` is a non-owning observation; it never replaces the mandatory event wait or serves as a lifetime fence for all host content.
+
+The caller holds the coarse device lease/execution pin and keeps authoritative host content immutable until the method completes. The method retains its partial-workspace lease through a scoped queue drain on success, failure, or exception. Queue destruction also drains before destroying events and releasing retained device/pinned-host buffers. Cached writer resources are retired before the ring is reused.
+
+Cancellation here means abandoning logical slots after already-submitted work drains, not retracting an in-flight DMA operation or implementing server request cancellation. Admission checks reject invalid slot transitions, short/wrapping source ranges, insufficient ring capacity, non-device-local destinations, and pageable host buffers. Opting into overlap with unsupported backing fails; it does not silently claim overlap while using pageable copies. Calls remain owner-thread-only and outside active CUDA capture.
+
+### TDD and lifecycle evidence
+
+The initial state-machine/registry stubs failed **503 assertions**. The final copy suite passes **8 CUDA cases / 1,565 assertions**, including:
+
+- One hundred state-machine reuse rounds, invalid transitions, bounds, and drain/restart behavior.
+- Ordered-versus-overlapped bitwise equality for all 81 writable K/V pairs.
+- One, two, and three slots with native and fallback attention and query batches of 1, 33, and 257.
+- Artificially blocked GPU producers and consumers. The test proves that a copy remains blocked until producer readiness and that the old slot contents survive a pending consumer even after the next copy is submitted.
+- Cancellation with queued and acquired slots, invalid source spans, finite partial-tail padding, and readiness reset.
+- Dropping caller-owned buffer references while a copy is gated, followed by destruction with pending work; retained backing and teardown complete safely.
+- Failed attention with prefetch in flight, unchanged public output, successful retry, and authoritative-host replacement with queue rebinding.
+
+All **24 focused suites** pass in CPU Debug, CUDA-build Debug, CPU ASan/leak checking, and CPU UBSan. The actual GPU copy suite passes memcheck with **zero errors and zero leaked bytes**, both with UVM disabled and enabled. Existing GPU controls pass: block attention **19 cases / 656,795 assertions**, resident attention **13 / 246**, writer **10 / 609**, and all four CPU-referenced CUDA SCALE cases.
+
+The new host-state test passes TSan (**908 assertions**), both within the attempted sweep and in a targeted `setarch x86_64 -R` run. The broader TSan sweep is **not clean**: most failures are runtime `unexpected memory mapping` startup errors, and the existing CPU/OpenMP graph path also emits race reports. Those CPU paths were not modified or resolved in this stage; this is not a clean whole-repository TSan claim or CUDA-runtime TSan qualification. Process-local ASLR was changed only for the targeted child process, not through system settings. The vector-attention racecheck warning recorded in 5.4d also remains unresolved.
+
+### Targeted comparison against 5.4e
+
+Before changing execution, the benchmark captured revision `a92107200`'s synchronous path. It uses Q8_0/Q4_0, head size 256, two KV heads, four query heads, two layers, a four-page encoded pool (one resident page per layer and two ring slots), and UVM disabled. Each point has three warmups and twenty measured calls; the table shows medians, with ranges across two post-change runs.
+
+| Active tokens | Query rows | 5.4e baseline ms | Post-change ordered ms | Opt-in overlap ms |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,025 | 1 | 0.1976 | 0.1881-0.1994 | 0.1495-0.1521 |
+| 1,025 | 33 | 0.2486 | 0.2507-0.2567 | 0.2078-0.2081 |
+| 8,193 | 1 | 1.3121 | 1.3055-1.3928 | 1.1007-1.1021 |
+| 8,193 | 33 | 1.7169 | 1.7164-1.7251 | 1.3925-1.4227 |
+| 32,769 | 1 | 5.2702 | 5.1701-5.4077 | 4.3530-4.3701 |
+| 32,769 | 33 | 6.8229 | 6.7509-6.8460 | 5.4674-5.5289 |
+
+Overlap reduced observed wall latency by roughly **16-24%** relative to the original baseline. Ordered controls show run-to-run variation, including about 6% on one point; these are not clock-locked production benchmarks. The gain combines asynchronous submission and transfer/compute overlap, not an isolated measurement of PCIe latency hiding.
+
+All checksums and transfer counts are identical. The three context sizes upload respectively **639,808 / 6,603,584 / 27,050,816 bytes** in **8 / 64 / 256 K/V copy calls**, independent of query count. Fewer copy calls are explicitly left to 5.4g. These synthetic attention-call latencies are not llama-server token throughput or a full-model performance forecast.
+
+```sh
+cmake --build build-device-memory-infra-cuda --target test-kv-stream-copy -j 20
+build-device-memory-infra-cuda/bin/test-kv-stream-copy --cuda
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-copy --bench-ordered
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY build-device-memory-infra-cuda/bin/test-kv-stream-copy --bench
+env -u GGML_CUDA_ENABLE_UNIFIED_MEMORY compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-copy --cuda
+GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99 build-device-memory-infra-cuda/bin/test-kv-stream-copy --cuda
+setarch x86_64 -R build-device-memory-infra-tsan/bin/test-kv-stream-copy
+```
+
+No Windows/other-accelerator runtime qualification, allocation-failure injection for every driver event/stream call, live repartition, cross-layer scheduling, server cancellation, or production throughput claim is included. Production services, compose configuration, models, checkpoints, and caches remain unchanged.
+
+After review and commit, proceed to **5.4g: contiguous attention spans and batched K/V uploads**. Cross-layer bounded lookahead remains **5.4h**.
