@@ -41,6 +41,11 @@ void llama_model_modern_bert::load_arch_tensors(llama_model_loader &) {
 
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
 
+    // optional sentence-transformers dense projection (e.g. the ColBERT
+    // 1_Dense module); output width comes from {arch}.embedding_length_out
+    dense_2_out_layers   = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.n_embd_out()}, TENSOR_NOT_REQUIRED);
+    dense_2_out_layers_b = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "bias"),   {hparams.n_embd_out()},         TENSOR_NOT_REQUIRED);
+
     for(int i = 0; i < n_layer; ++i) {
         auto& layer = layers[i];
 
