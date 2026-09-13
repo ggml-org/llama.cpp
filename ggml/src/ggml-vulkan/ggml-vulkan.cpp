@@ -191,6 +191,7 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define VK_VENDOR_ID_INTEL 0x8086
 #define VK_VENDOR_ID_NVIDIA 0x10de
 #define VK_VENDOR_ID_QUALCOMM 0x5143
+#define VK_VENDOR_ID_SAMSUNG 0x144d
 
 #define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
 
@@ -7338,6 +7339,20 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->mul_mat_id_m[i] = true;
                 device->mul_mat_id_s[i] = true;
                 break;
+            case VK_VENDOR_ID_SAMSUNG: {
+                // Samsung Xclipse: the large tile gives each thread 128 accumulators instead of 32, so they spill to scratch.
+                // With 32KB of shared memory it also cuts occupancy from 3 workgroups per CU to 1, so nothing hides the spill.
+                // Parts with 64KB keep 3 workgroups, so leave the large tile on there.
+                const bool large_tile = device->properties.limits.maxComputeSharedMemorySize >= 65536; // 32KB: Xclipse 530, 540, 550, 920, 930A, 940, 950. 64KB: Xclipse 960.
+                device->mul_mat_l[i] = large_tile;
+                device->mul_mat_m[i] = true;
+                device->mul_mat_s[i] = true;
+                // mul_mat_id is not tested here, so follow AMD and keep it off the large tile.
+                device->mul_mat_id_l[i] = false;
+                device->mul_mat_id_m[i] = true;
+                device->mul_mat_id_s[i] = true;
+                break;
+            }
 #endif
             default:
                 device->mul_mat_l[i] = true;
