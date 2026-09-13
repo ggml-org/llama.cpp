@@ -221,7 +221,7 @@ static const remote_model_spec model_specs[] = {
     { "ggml-org/Step-3.5-Flash-GGUF",                 "Q4_K"   },
     { "ggml-org/Qwen3-Coder-Next-GGUF",               "Q8_0"   },
     { "ggml-org/Qwen3-14B-GGUF",                      "Q8_0"   },
-    { "ggml-org/NVIDIA-Nemotron-Nano-3-30B-A3B-GGUF", "Q8_0"   },
+    { "ggml-org/NVIDIA-Nemotron-3-Nano-30B-A3B-GGUF", "Q8_0"   },
     { "ggml-org/gpt-oss-120b-GGUF",                   "mxfp4"  },
     { "ggml-org/gemma-3-4b-it-GGUF",                  "Q8_0"   },
     { "bartowski/Meta-Llama-3.1-70B-Instruct-GGUF",   "Q4_K_M" },
