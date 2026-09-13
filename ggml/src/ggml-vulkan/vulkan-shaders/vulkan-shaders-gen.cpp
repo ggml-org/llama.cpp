@@ -6,6 +6,7 @@
 #include <array>
 #include <vector>
 #include <map>
+#include <chrono>
 #include <thread>
 #include <mutex>
 #include <future>
@@ -38,6 +39,14 @@ std::vector<std::pair<std::string, std::string>> shader_fnames;
 // Set when any shader subprocess fails (non-zero exit / stderr / launch failure) so the
 // build is stopped instead of silently producing a broken libggml-vulkan. (issue #24393)
 static std::atomic<bool> compile_failed{false};
+
+// A shader is usable only if its SPIR-V exists and is non-empty; a zero-byte
+// file is what an interrupted or silently-failed compile leaves behind.
+static bool spv_is_usable(const std::string & path) {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    return !ec && size > 0;
+}
 std::locale c_locale("C");
 
 std::string GLSLC = "glslc";
@@ -395,13 +404,45 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
         // }
         // std::cout << std::endl;
 
-        int exit_code = execute_command(cmd, stdout_str, stderr_str);
+        // A compile can report success and still leave no SPIR-V behind. That
+        // has been observed in CI, and because the generated header declares
+        // every shader unconditionally, the gap only surfaces at link as an
+        // undefined reference to a generated symbol, long after the cause is
+        // visible. Judge by the artefact and retry before giving up.
+        constexpr int max_attempts = 3;
+        int exit_code = 0;
+        bool produced = false;
+
+        for (int attempt = 1; attempt <= max_attempts && !produced; ++attempt) {
+            stdout_str.clear();
+            stderr_str.clear();
+
+            exit_code = execute_command(cmd, stdout_str, stderr_str);
+            if (exit_code != 0 || !stderr_str.empty()) {
+                break;
+            }
+
+            produced = spv_is_usable(out_path);
+            if (!produced && attempt < max_attempts) {
+                std::cerr << "shader " << name << " produced no SPIR-V; retrying ("
+                          << (attempt + 1) << "/" << max_attempts << ")" << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100 * attempt));
+            }
+        }
+
         if (exit_code != 0 || !stderr_str.empty()) {
             std::cerr << "cannot compile " << name << " (exit code " << exit_code << ")\n\n";
             for (const auto& part : cmd) {
                 std::cerr << part << " ";
             }
             std::cerr << "\n\n" << stderr_str << std::endl;
+            compile_failed = true;
+            return;
+        }
+
+        if (!produced) {
+            std::cerr << "cannot compile " << name << ": no SPIR-V produced after "
+                      << max_attempts << " attempts (" << out_path << ")" << std::endl;
             compile_failed = true;
             return;
         }
@@ -1249,6 +1290,11 @@ void write_output_files() {
         if (input_filepath != "") {
             std::string data = read_binary_file(path);
             if (data.empty()) {
+                // The declaration above is already written, so skipping the
+                // definition would leave the symbol declared and never defined.
+                std::cerr << "shader " << name << " has no SPIR-V to embed ("
+                          << path << ")" << std::endl;
+                compile_failed = true;
                 continue;
             }
 
