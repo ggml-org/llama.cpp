@@ -1621,6 +1621,9 @@ class TextModel(ModelBase):
         if chkhsh == "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f":
             # ref: https://huggingface.co/openbmb/MiniCPM-V-4_6
             res = "qwen35"
+        if chkhsh == "11865354be60ff9206694aed04242190f1807029bbd750bfbced09b4d26f1ad2":
+            # ref: https://huggingface.co/datalab-to/surya-ocr-2
+            res = "qwen35"
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
