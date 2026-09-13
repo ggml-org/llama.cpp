@@ -53,6 +53,12 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,           hparams.dsv4_o_lora_rank);
         ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
         ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
+
+        // A V4.1 draft ships no output_hc_* head: its mixes lag by one sublayer and the last FFN mix
+        // collapses the copies, exactly as in the V4.1 body (see deepseek41.cpp). The absent head is the signature.
+        hparams.dflash_dsv41 = ml.get_tensor_meta("output_hc_base.weight") == nullptr;
+        LLAMA_LOG_INFO("%s: DSV4 draft flavor = %s\n", __func__,
+                hparams.dflash_dsv41 ? "V4.1 (lagged hyper-connections, no output head)" : "V4");
         ml.get_arr(LLM_KV_ATTENTION_COMPRESS_RATIOS,            hparams.dsv4_compress_ratios, false);
 
         GGML_ASSERT(hparams.dsv4_o_group_count > 0); // avoid div by zero
@@ -168,9 +174,11 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         const int64_t hc_dim          = hc_mult * n_embd;
         const int64_t hc_mix_dim      = (2 + hc_mult) * hc_mult;
 
-        hc_head_fn    = create_tensor(tn(LLM_TENSOR_HC_HEAD_FN,    "weight"), {hc_dim, hc_mult}, 0);
-        hc_head_base  = create_tensor(tn(LLM_TENSOR_HC_HEAD_BASE,  "weight"), {hc_mult}, 0);
-        hc_head_scale = create_tensor(tn(LLM_TENSOR_HC_HEAD_SCALE, "weight"), {1}, 0);
+        // V4.1 drafts carry no output hyper-connection head
+        const int hc_head_flags = hparams.dflash_dsv41 ? TENSOR_NOT_REQUIRED : 0;
+        hc_head_fn    = create_tensor(tn(LLM_TENSOR_HC_HEAD_FN,    "weight"), {hc_dim, hc_mult}, hc_head_flags);
+        hc_head_base  = create_tensor(tn(LLM_TENSOR_HC_HEAD_BASE,  "weight"), {hc_mult}, hc_head_flags);
+        hc_head_scale = create_tensor(tn(LLM_TENSOR_HC_HEAD_SCALE, "weight"), {1}, hc_head_flags);
 
         for (int i = 0; i < n_layer; ++i) {
             auto & layer = layers[i];
@@ -894,18 +902,36 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
     inpL = ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
     cb(inpL, "hc_init", -1);
 
+    // V4.1 rules (deepseek41.cpp): a sublayer computes the mix the NEXT one consumes, layer 0 starts
+    // from a one-hot that selects the first copy, and the last FFN mix collapses the copies at the end
+    const bool hc_lag = hparams.dflash_dsv41;
+    ggml_tensor * pre_mix = nullptr;
+    if (hc_lag) {
+        pre_mix = ggml_concat(ctx0,
+                ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1,      n_tokens), 1.0f),
+                ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hc - 1, n_tokens), 0.0f), 0);
+        cb(pre_mix, "hc_pre_init", -1);
+    }
+
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers[il];
 
         ggml_tensor * residual = inpL;
         ggml_tensor * post = nullptr;
         ggml_tensor * comb = nullptr;
+        ggml_tensor * attn_pre = nullptr;
 
-        ggml_tensor * cur = build_hc_pre(inpL,
+        ggml_tensor * cur = nullptr;
+        if (hc_lag) {
+            build_hc_mixes(inpL, layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, &attn_pre, &post, &comb, il);
+            cur = build_hc_pre(inpL, pre_mix, il);
+        } else {
+            cur = build_hc_pre(inpL,
                 layer.hc_attn_fn,
                 layer.hc_attn_scale,
                 layer.hc_attn_base,
                 &post, &comb, il);
+        }
         cb(cur, "hc_attn_pre", il);
 
         cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
@@ -917,11 +943,16 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         cb(inpL, "hc_attn_post", il);
 
         residual = inpL;
-        cur = build_hc_pre(inpL,
+        if (hc_lag) {
+            build_hc_mixes(inpL, layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &pre_mix, &post, &comb, il);
+            cur = build_hc_pre(inpL, attn_pre, il);
+        } else {
+            cur = build_hc_pre(inpL,
                 layer.hc_ffn_fn,
                 layer.hc_ffn_scale,
                 layer.hc_ffn_base,
                 &post, &comb, il);
+        }
         cb(cur, "hc_ffn_pre", il);
 
         cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
@@ -954,7 +985,13 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         cb(inpL, "l_out", il);
     }
 
-    ggml_tensor * cur = build_hc_head(inpL, model.hc_head_fn, model.hc_head_scale, model.hc_head_base);
+    ggml_tensor * cur = nullptr;
+    if (hc_lag) {
+        // the last FFN mix is the one nothing consumed; it does what V4's learned head does
+        cur = build_hc_pre(inpL, pre_mix, -1);
+    } else {
+        cur = build_hc_head(inpL, model.hc_head_fn, model.hc_head_scale, model.hc_head_base);
+    }
     cb(cur, "hc_head", -1);
 
     // confidence head input: the reference scores the pre-norm collapsed hidden state
