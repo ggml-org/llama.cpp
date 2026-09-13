@@ -906,7 +906,7 @@ static std::string string_format(const char * fmt, ...) {
     GGML_ASSERT(size2 == size);
     va_end(ap2);
     va_end(ap);
-    return std::string(buf.data(), buf.size());
+    return std::string(buf.data(), size);
 }
 
 static void string_replace_all(std::string & s, const std::string & search, const std::string & replace) {
