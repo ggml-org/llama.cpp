@@ -8302,9 +8302,20 @@ inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, c
     bool threashold_ok = tensor->ne[0] >= threshold_ne0 && tensor->ne[1] >= threshold_ne1 &&
             tensor->ne[2] == 1 && tensor->ne[3] == 1;
 
-    // q6_K adreno kernels requires ne1 is multiple of 128
-    if (tensor->type == GGML_TYPE_Q6_K) {
-        return threashold_ok && tensor->ne[1] % 128 == 0;
+    // The noshuffle layout packs 2 rows per 32-bit texel and the GEMV reads it at an
+    // ne1/2 texel stride with an exact-cover dispatch, so it is only addressable when
+    // ne1 is a multiple of 64; an unaligned ne1 truncates the stride and the weight is
+    // read misaligned. That is a property of the layout, not of one quant -- q4_K, q5_K
+    // and q8_0 read the same packing as q6_K. The bound is 64, not 128: a q8_0 attention
+    // weight of ne1 = 2880 is a multiple of 64 but not 128 and is correct.
+    switch (tensor->type) {
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+            return threashold_ok && tensor->ne[1] % 64 == 0;
+        default:
+            break;
     }
     return threashold_ok;
 }
