@@ -290,6 +290,7 @@ class _QwenMtpMixin:
     tensor_map: gguf.TensorNameMap
     no_mtp: bool
     mtp_only: bool
+    mtp_shared_embd: bool
     _original_block_count: int | None = None
     opt_num_mtp_layers: int = 0
 
@@ -338,7 +339,7 @@ class _QwenMtpMixin:
             elif len(parts) == 3 and parts[1] in remapper:
                 name = f"model.layers.{cls._original_block_count}.{remapper[parts[1]]}.{parts[2]}"
         elif cls.mtp_only:
-            keep = name in (
+            keep = not cls.mtp_shared_embd and name in (
                 "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
                 "embed_tokens.weight", "norm.weight",
             )
