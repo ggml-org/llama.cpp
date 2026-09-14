@@ -311,6 +311,14 @@ endif()
 # TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
 llama_build(test-backend-ops.cpp)
 
+add_executable(test-flash-attn-bias test-flash-attn-bias.cpp)
+target_link_libraries(test-flash-attn-bias PRIVATE ggml)
+add_test(NAME test-flash-attn-bias COMMAND test-flash-attn-bias)
+
+add_executable(test-flash-attn-generic-hash test-flash-attn-generic-hash.cpp)
+target_link_libraries(test-flash-attn-generic-hash PRIVATE ggml)
+add_test(NAME test-flash-attn-generic-hash COMMAND test-flash-attn-generic-hash)
+
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
