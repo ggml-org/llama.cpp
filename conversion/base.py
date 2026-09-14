@@ -684,8 +684,14 @@ class ModelBase:
                 continue
 
             scale = self.model_tensors[scale_name]()
-            if prod(scale.shape) != 1:
-                continue
+            # accept per-tensor (scalar) or per-output-channel scales
+            scale_size = prod(scale.shape)
+            if scale_size != 1 and scale_size != weight.shape[0]:
+                raise ValueError(
+                    f"FP8 weight {weight_name!r} has an unsupported block/group scale "
+                    f"(scale numel {scale_size}, weight shape {list(weight.shape)}); "
+                    f"only per-tensor or per-output-channel scales can be preserved. "
+                    f"Re-run with --fp8-as-q8 to dequantize instead.")
 
             merged_name = re.sub(r"(\.experts)\.\d+\.", r"\1.", weight_name)
             new_names = self._map_fp8_weight_names(merged_name)
@@ -708,8 +714,13 @@ class ModelBase:
                 continue
             if dtypes == {torch.float8_e4m3fn} and not any(name in scaled_weights for name in names):
                 continue
+            scale_sizes: dict[str, set[int]] = {}
+            for name in names:
+                if name in candidates:
+                    proj = name.rsplit(".", 2)[1]
+                    scale_sizes.setdefault(proj, set()).add(prod(candidates[name][1].shape))
             # The converter emits all three projections when the last expert arrives.
-            if not all(name in candidates for name in names):
+            if not all(name in candidates for name in names) or any(len(sizes) > 1 for sizes in scale_sizes.values()):
                 for name in names:
                     candidates.pop(name, None)
                     self._fp8_e4m3_preserved.discard(name)
@@ -751,7 +762,7 @@ class ModelBase:
                 target_name = new_name.replace(".weight", ".scale")
                 entries = scale_tensors.setdefault(target_name, [])
                 assert isinstance(entries, list)
-                cast(list[tuple[int, float]], entries).append((expert_id, float(scale[0])))
+                cast(list, entries).append((expert_id, scale.numpy().astype(np.float32)))
                 if input_scale is not None:
                     target_name = new_name.replace(".weight", ".input_scale")
                     entries = input_scale_tensors.setdefault(target_name, [])
@@ -775,11 +786,15 @@ class ModelBase:
         for name, values in chain(scale_tensors.items(), input_scale_tensors.items()):
             if isinstance(values, list):
                 values.sort(key=lambda item: item[0])
-                scale = np.array([item[1] for item in values], dtype=np.float32)
+                arrays = [np.asarray(item[1], dtype=np.float32).reshape(-1) for item in values]
+                if all(a.size == 1 for a in arrays):
+                    scale = np.array([a[0] for a in arrays], dtype=np.float32)
+                else:
+                    scale = np.stack(arrays, axis=0)
             else:
                 scale = values.astype(np.float32)
             if not np.allclose(scale, 1.0, atol=1e-6):
-                logger.info(f"  + {name} (FP8 scale, shape [{scale.size}])")
+                logger.info(f"  + {name} (FP8 scale, shape {list(scale.shape)})")
                 self.gguf_writer.add_tensor(name, scale)
 
     @classmethod
