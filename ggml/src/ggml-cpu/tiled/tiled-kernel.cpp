@@ -192,9 +192,11 @@ static void tiled_run_microtile_vnni(const tiled_tile_src0 & src0, const tiled_t
 
 #if defined(__AVX2__)
 
-// AVX2 kernel: maddubs(src1_biased_uint8, src0_true_int8).
-// No 4-bit split needed: max pair = 2*255*31 = 15810 < 32767.
-// Correction: 128 * bsums_s0 (scalar per row, same for all columns).
+// AVX2 kernel: maddubs with the sign trick (vpsignb) on the true values.
+// src1 is stored biased (+128); de-bias to true s1, then A = |s1| (u8) and
+// B = q0 * sign(s1) (i8) so maddubs gives sum(s1 * q0) directly -- no 4-bit
+// split, no bias correction. Max i16 pair = 2 * 128 * 127 = 32512 < 32767
+// (holds for every type: |s1| <= 128, |q0| <= 127).
 template <int SUBBLK, bool HAS_MIN, int BIAS>
 static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                      int i0, int j0, int n_cols, float * buf, int buf_stride) {
@@ -243,33 +245,32 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                     const __m256i q0_32 = _mm256_load_si256((const __m256i *) &q0[s * SUBBLK]);
                     const __m256i scales16 = _mm256_set1_epi16(scales_row[s]);
 
-                    // src1 is always biased +128 by the driver, so correction is always needed
-                    int32_t bs0 = 0;
-                    for (int u = 0; u < NS; u++) { bs0 += src0.bsums[(s * NS + u) * TILED_TILE_ROWS + ar]; }
-                    bias_corr += 128 * bs0 * scales_row[s];
-
                     // src1 bsums for 8 cols (per-column, for min correction)
                     const __m256i bsums_v = _mm256_add_epi32(
-                        _mm256_load_si256((const __m256i *) &src1.bsums[s * 2 * TILED_TILE_ROWS + j0 + g]),
-                        _mm256_load_si256((const __m256i *) &src1.bsums[(s * 2 + 1) * TILED_TILE_ROWS + j0 + g]));
+                        _mm256_load_si256((const __m256i *) &src1.bsums[s * NS * TILED_TILE_ROWS + j0 + g]),
+                        _mm256_load_si256((const __m256i *) &src1.bsums[(s * NS + 1) * TILED_TILE_ROWS + j0 + g]));
 
-                    // maddubs: A=src1 biased (uint8), B=src0 true (int8)
-                    if constexpr (BIAS != 0) {
-                        const __m256i scales16x16 = _mm256_set1_epi16(16 * scales_row[s]);
-                        #pragma GCC unroll 8
-                        for (int t = 0; t < tg; t++) {
-                            const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][s * SUBBLK]);
-                            const __m256i a_lo = _mm256_and_si256(q1_32, _mm256_set1_epi8(0x0F));
-                            const __m256i a_hi = _mm256_and_si256(_mm256_srli_epi16(q1_32, 4), _mm256_set1_epi8(0x0F));
-                            acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(scales16, _mm256_maddubs_epi16(a_lo, q0_32)));
-                            acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(scales16x16, _mm256_maddubs_epi16(a_hi, q0_32)));
-                        }
-                    } else {
+                    if constexpr (BIAS == 0) {
+                        // small codes (|q0| <= 31): one maddubs on the biased src1, corrected by
+                        // 128*sum(q0); cheaper than the sign trick
+                        int32_t bs0 = 0;
+                        for (int u = 0; u < NS; u++) { bs0 += src0.bsums[(s * NS + u) * TILED_TILE_ROWS + ar]; }
+                        bias_corr += 128 * bs0 * scales_row[s];
                         #pragma GCC unroll 8
                         for (int t = 0; t < tg; t++) {
                             const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][s * SUBBLK]);
                             acc[t] = _mm256_add_epi32(acc[t],
                                 _mm256_madd_epi16(scales16, _mm256_maddubs_epi16(q1_32, q0_32)));
+                        }
+                    } else {
+                        // sign trick: de-bias src1 to true s1, A = |s1|, B = q0*sign(s1) -> sum(s1*q0)
+                        #pragma GCC unroll 8
+                        for (int t = 0; t < tg; t++) {
+                            const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][s * SUBBLK]);
+                            const __m256i s1 = _mm256_xor_si256(q1_32, _mm256_set1_epi8((int8_t) 0x80));
+                            const __m256i a_abs = _mm256_sign_epi8(s1, s1);
+                            const __m256i b_sgn = _mm256_sign_epi8(q0_32, s1);
+                            acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(scales16, _mm256_maddubs_epi16(a_abs, b_sgn)));
                         }
                     }
 
@@ -284,27 +285,25 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                     const __m256i bsums0_v = _mm256_load_si256((const __m256i *) &src1.bsums[sp * TILED_TILE_ROWS + j0 + g]);
                     const __m256i bsums1_v = _mm256_load_si256((const __m256i *) &src1.bsums[(sp + 1) * TILED_TILE_ROWS + j0 + g]);
 
-                    // src1 is always biased +128, correction always needed
-                    bias_corr += 128 * src0.bsums[sp * TILED_TILE_ROWS + ar] * scales_row[sp];
-                    bias_corr += 128 * src0.bsums[(sp + 1) * TILED_TILE_ROWS + ar] * scales_row[sp + 1];
-
-                    // maddubs: A=src1 biased (uint8), B=src0 true (int8)
-                    if constexpr (BIAS != 0) {
-                        const __m256i scalesv16 = _mm256_set_m128i(_mm_set1_epi16(16 * scales_row[sp + 1]), _mm_set1_epi16(16 * scales_row[sp]));
-                        #pragma GCC unroll 8
-                        for (int t = 0; t < tg; t++) {
-                            const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][sp * SUBBLK]);
-                            const __m256i a_lo = _mm256_and_si256(q1_32, _mm256_set1_epi8(0x0F));
-                            const __m256i a_hi = _mm256_and_si256(_mm256_srli_epi16(q1_32, 4), _mm256_set1_epi8(0x0F));
-                            acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(scalesv, _mm256_maddubs_epi16(a_lo, q0_32)));
-                            acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(scalesv16, _mm256_maddubs_epi16(a_hi, q0_32)));
-                        }
-                    } else {
+                    if constexpr (BIAS == 0) {
+                        // small codes (|q0| <= 3): one maddubs on the biased src1, corrected by bias_corr
+                        bias_corr += 128 * src0.bsums[sp * TILED_TILE_ROWS + ar] * scales_row[sp];
+                        bias_corr += 128 * src0.bsums[(sp + 1) * TILED_TILE_ROWS + ar] * scales_row[sp + 1];
                         #pragma GCC unroll 8
                         for (int t = 0; t < tg; t++) {
                             const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][sp * SUBBLK]);
                             acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(
                                 scalesv, _mm256_maddubs_epi16(q1_32, q0_32)));
+                        }
+                    } else {
+                        // sign trick: de-bias src1 to true s1, A = |s1|, B = q0*sign(s1) -> sum(s1*q0)
+                        #pragma GCC unroll 8
+                        for (int t = 0; t < tg; t++) {
+                            const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][sp * SUBBLK]);
+                            const __m256i s1 = _mm256_xor_si256(q1_32, _mm256_set1_epi8((int8_t) 0x80));
+                            const __m256i a_abs = _mm256_sign_epi8(s1, s1);
+                            const __m256i b_sgn = _mm256_sign_epi8(q0_32, s1);
+                            acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(scalesv, _mm256_maddubs_epi16(a_abs, b_sgn)));
                         }
                     }
 
@@ -379,30 +378,33 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
             for (int s = 0; s < NB; s++) {
                 const __m128i scales16 = _mm_set1_epi16(scales_row[s]);
                 __m128i bsums_v = _mm_setzero_si128();
-                int32_t bs0 = 0;
                 for (int u = 0; u < NS; u++) {
                     const __m128i a16 = _mm_loadu_si128((const __m128i *) &q0[s * SUBBLK + u * 16]);
                     bsums_v = _mm_add_epi32(bsums_v, _mm_loadu_si128(
                         (const __m128i *) &src1.bsums[(s * NS + u) * TILED_TILE_ROWS + j0 + g]));
-                    bs0 += src0.bsums[(s * NS + u) * TILED_TILE_ROWS + ar];
-                    if constexpr (BIAS != 0) {
-                        const __m128i scales16x16 = _mm_set1_epi16(16 * scales_row[s]);
-                        for (int t = 0; t < tg; t++) {
-                            const __m128i q1_16 = _mm_loadu_si128((const __m128i *) &q1g[t][s * SUBBLK + u * 16]);
-                            const __m128i a_lo = _mm_and_si128(q1_16, _mm_set1_epi8(0x0F));
-                            const __m128i a_hi = _mm_and_si128(_mm_srli_epi16(q1_16, 4), _mm_set1_epi8(0x0F));
-                            acc[t] = _mm_add_epi32(acc[t], _mm_madd_epi16(scales16, _mm_maddubs_epi16(a_lo, a16)));
-                            acc[t] = _mm_add_epi32(acc[t], _mm_madd_epi16(scales16x16, _mm_maddubs_epi16(a_hi, a16)));
-                        }
-                    } else {
+                    if constexpr (BIAS == 0) {
+                        // small codes: one maddubs on the biased src1, corrected by bias_corr
                         for (int t = 0; t < tg; t++) {
                             const __m128i q1_16 = _mm_loadu_si128((const __m128i *) &q1g[t][s * SUBBLK + u * 16]);
                             acc[t] = _mm_add_epi32(acc[t], _mm_madd_epi16(scales16,
                                 _mm_maddubs_epi16(q1_16, a16)));
                         }
+                    } else {
+                        // sign trick: de-bias src1 to true s1, A = |s1|, B = q0*sign(s1) -> sum(s1*q0)
+                        for (int t = 0; t < tg; t++) {
+                            const __m128i q1_16 = _mm_loadu_si128((const __m128i *) &q1g[t][s * SUBBLK + u * 16]);
+                            const __m128i s1 = _mm_xor_si128(q1_16, _mm_set1_epi8((int8_t) 0x80));
+                            const __m128i a_abs = _mm_sign_epi8(s1, s1);
+                            const __m128i b_sgn = _mm_sign_epi8(a16, s1);
+                            acc[t] = _mm_add_epi32(acc[t], _mm_madd_epi16(scales16, _mm_maddubs_epi16(a_abs, b_sgn)));
+                        }
                     }
                 }
-                bias_corr += 128 * bs0 * scales_row[s];
+                if constexpr (BIAS == 0) {
+                    int32_t bs0 = 0;
+                    for (int u = 0; u < NS; u++) { bs0 += src0.bsums[(s * NS + u) * TILED_TILE_ROWS + ar]; }
+                    bias_corr += 128 * bs0 * scales_row[s];
+                }
                 if constexpr (HAS_MIN) {
                     s2 = _mm_add_epi32(s2, _mm_mullo_epi32(bsums_v, _mm_set1_epi32(mins_row[s])));
                 }
