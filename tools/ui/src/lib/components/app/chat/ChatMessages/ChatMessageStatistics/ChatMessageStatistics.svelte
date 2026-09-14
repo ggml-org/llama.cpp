@@ -125,7 +125,10 @@
 
 	let formattedAgenticTotalTime = $derived(formatPerformanceTime(agenticTotalTimeMs));
 
-	const fixedFormatter = new Intl.NumberFormat(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+	const fixedFormatter = new Intl.NumberFormat(undefined, {
+		maximumFractionDigits: 2,
+		minimumFractionDigits: 2
+	});
 </script>
 
 {#snippet viewButton(opts: {
