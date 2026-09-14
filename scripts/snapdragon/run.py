@@ -14,6 +14,42 @@ import logging
 logger = logging.getLogger("run")
 
 
+MANAGED_ENV_NAMES = (
+    "GGML_HEXAGON_DEVICES",
+    "GGML_HEXAGON_VERBOSE",
+    "GGML_HEXAGON_PROFILE",
+    "GGML_HEXAGON_NHVX",
+    "GGML_HEXAGON_NHMX",
+    "GGML_HEXAGON_HOSTBUF",
+    "GGML_HEXAGON_OPBATCH",
+    "GGML_HEXAGON_OPQUEUE",
+    "GGML_HEXAGON_OPPOLL",
+    "GGML_HEXAGON_OPFILTER",
+    "GGML_HEXAGON_OPFUSION",
+    "GGML_HEXAGON_VMEM",
+    "GGML_HEXAGON_MBUF",
+    "GGML_HEXAGON_MM_SELECT",
+    "GGML_HEXAGON_FA_SELECT",
+    "GGML_HEXAGON_AR_SELECT",
+    "GGML_HEXAGON_ETM",
+    "GGML_HEXAGON_ARCH",
+    "GGML_HEXAGON_OPTRACE",
+    "GGML_OPENCL_PLATFORM",
+    "GGML_OPENCL_DEVICE",
+    "GGML_OPENCL_OPFILTER",
+    "GGML_OPENCL_KERNEL_CACHE_DIR",
+    "GGML_OPENCL_KERNEL_CACHE_DEBUG",
+    "GGML_OPENCL_FA_TUNE",
+    "GGML_OPENCL_DISABLE_FUSION",
+    "GGML_OPENCL_ADRENO_XMEM_GEMM",
+    "GGML_OPENCL_ADRENO_USE_LARGE_BUFFER",
+    "GGML_SCHED_DEBUG",
+    "MTMD_BACKEND_DEVICE",
+    "D",
+    "DEVICE",
+)
+
+
 def parse_target(target_str):
     if not target_str:
         return None, None
@@ -36,6 +72,57 @@ def shlex_join(args_list):
         return shlex.join(args_list)
     import pipes
     return " ".join(pipes.quote(x) for x in args_list)
+
+
+def split_device_list(devices):
+    parts = []
+    curr = []
+    bracket_depth = 0
+
+    for ch in devices:
+        if ch == '[':
+            bracket_depth += 1
+            curr.append(ch)
+        elif ch == ']':
+            if bracket_depth > 0:
+                bracket_depth -= 1
+            curr.append(ch)
+        elif ch == ',' and bracket_depth == 0:
+            part = "".join(curr).strip()
+            if part:
+                parts.append(part)
+            curr = []
+        else:
+            curr.append(ch)
+
+    part = "".join(curr).strip()
+    if part:
+        parts.append(part)
+
+    return parts
+
+
+def device_arg_from_devices(devices):
+    if devices.isdigit():
+        n = int(devices)
+        return ",".join(f"HTP{i}" for i in range(n))
+
+    names = []
+    for part in split_device_list(devices):
+        if "[" in part:
+            part = part.split("[", 1)[0].strip()
+        if part:
+            names.append(part)
+
+    return ",".join(names)
+
+
+def normalize_cmd_device_args(cmd_args):
+    for i, arg in enumerate(cmd_args):
+        if arg == "--device" and i + 1 < len(cmd_args):
+            cmd_args[i + 1] = device_arg_from_devices(cmd_args[i + 1])
+        elif arg.startswith("--device="):
+            cmd_args[i] = "--device=" + device_arg_from_devices(arg.split("=", 1)[1])
 
 
 def main():
@@ -142,34 +229,50 @@ def main():
     def set_env(env_name, opt_val):
         if opt_val is not None:
             env_vars[env_name] = str(opt_val)
-        elif env_name in os.environ:
-            env_vars[env_name] = os.environ[env_name]
 
     # Resolve and filter devices (HTP vs OpenCL)
-    devices_val = args.devices if args.devices is not None else "HTP0"
+    device_in_cmd = None
+    for i, arg in enumerate(cmd_args):
+        if arg == "--device" and i + 1 < len(cmd_args):
+            device_in_cmd = cmd_args[i + 1]
+            break
+        elif arg.startswith("--device="):
+            device_in_cmd = arg.split("=", 1)[1]
+            break
+
+    if args.devices is not None:
+        devices_val = args.devices
+    elif device_in_cmd is not None:
+        devices_val = device_in_cmd
+    else:
+        devices_val = "HTP0"
+
     if devices_val.isdigit():
         hex_devices = devices_val
         cl_device = ""
     else:
-        parts = [p.strip() for p in devices_val.split(",")]
+        parts = split_device_list(devices_val)
         # Any device containing "htp" is Hexagon, rest is OpenCL
         hex_parts = [p for p in parts if "htp" in p.lower()]
-        cl_parts = [p for p in parts if "htp" not in p.lower()]
+        cl_parts = [
+            p for p in parts
+            if "htp" not in p.lower()
+            and p.lower() not in ("none", "cpu")
+            and not p.lower().startswith("gpuopencl")
+        ]
         hex_devices = ",".join(hex_parts)
         cl_device = ",".join(cl_parts)
 
     # Set Hexagon devices
     if hex_devices:
         env_vars["GGML_HEXAGON_DEVICES"] = hex_devices
-    elif "GGML_HEXAGON_DEVICES" in os.environ:
-        env_vars["GGML_HEXAGON_DEVICES"] = os.environ["GGML_HEXAGON_DEVICES"]
+
+    normalize_cmd_device_args(cmd_args)
 
     # Set OpenCL device (unless overridden by --cl-device)
     final_cl_device = args.cl_device if args.cl_device is not None else cl_device
     if final_cl_device:
         env_vars["GGML_OPENCL_DEVICE"] = final_cl_device
-    elif "GGML_OPENCL_DEVICE" in os.environ:
-        env_vars["GGML_OPENCL_DEVICE"] = os.environ["GGML_OPENCL_DEVICE"]
 
     # Map shared & backend-specific parameters with correct overrides
 
@@ -186,8 +289,6 @@ def main():
 
     if args.cl_fa_tune or args.profile is not None:
         env_vars["GGML_OPENCL_FA_TUNE"] = "1"
-    elif "GGML_OPENCL_FA_TUNE" in os.environ:
-        env_vars["GGML_OPENCL_FA_TUNE"] = os.environ["GGML_OPENCL_FA_TUNE"]
 
     # Other Hexagon environment variables
     set_env("GGML_HEXAGON_NHVX", args.hex_nhvx)
@@ -215,18 +316,12 @@ def main():
 
     if args.cl_disable_fusion:
         env_vars["GGML_OPENCL_DISABLE_FUSION"] = "1"
-    elif "GGML_OPENCL_DISABLE_FUSION" in os.environ:
-        env_vars["GGML_OPENCL_DISABLE_FUSION"] = os.environ["GGML_OPENCL_DISABLE_FUSION"]
 
     if args.cl_adreno_xmem:
         env_vars["GGML_OPENCL_ADRENO_XMEM_GEMM"] = "1"
-    elif "GGML_OPENCL_ADRENO_XMEM_GEMM" in os.environ:
-        env_vars["GGML_OPENCL_ADRENO_XMEM_GEMM"] = os.environ["GGML_OPENCL_ADRENO_XMEM_GEMM"]
 
     if args.cl_adreno_large_buffer:
         env_vars["GGML_OPENCL_ADRENO_USE_LARGE_BUFFER"] = "1"
-    elif "GGML_OPENCL_ADRENO_USE_LARGE_BUFFER" in os.environ:
-        env_vars["GGML_OPENCL_ADRENO_USE_LARGE_BUFFER"] = os.environ["GGML_OPENCL_ADRENO_USE_LARGE_BUFFER"]
 
     if args.sched_debug:
         env_vars["GGML_SCHED_DEBUG"] = "2"
@@ -268,15 +363,7 @@ def main():
         has_b = any(arg == "-b" for arg in cmd_args)
         if not has_b:
             if args.devices:
-                if args.devices.isdigit():
-                    n = int(args.devices)
-                    device_val = ",".join(f"HTP{i}" for i in range(n))
-                else:
-                    device_val = args.devices
-            elif "D" in os.environ:
-                device_val = os.environ["D"]
-            elif "DEVICE" in os.environ:
-                device_val = os.environ["DEVICE"]
+                device_val = device_arg_from_devices(args.devices)
             else:
                 device_val = "HTP0"
             if device_val:
@@ -285,17 +372,10 @@ def main():
         has_device = any(arg.startswith("--device") for arg in cmd_args)
         if not has_device:
             if args.devices:
-                if args.devices.isdigit():
-                    n = int(args.devices)
-                    device_val = ",".join(f"HTP{i}" for i in range(n))
-                else:
-                    device_val = args.devices
-            elif "D" in os.environ:
-                device_val = os.environ["D"]
-            elif "DEVICE" in os.environ:
-                device_val = os.environ["DEVICE"]
+                device_val = device_arg_from_devices(args.devices)
             else:
                 device_val = "HTP0"
+
             if device_val:
                 cmd_args += ["--device", device_val]
 
@@ -316,10 +396,16 @@ def main():
     if basename in ("llama-cli", "llama-completion", "llama-server"):
         if "-ngl" not in cmd_args and "--n-gpu-layers" not in cmd_args:
             cmd_args += ["-ngl", "99"]
-        if "--ubatch-size" not in cmd_args and "-ub" not in cmd_args:
-            cmd_args += ["--ubatch-size", "1024"]
         if "-fa" not in cmd_args and "--flash-attn" not in cmd_args:
             cmd_args += ["-fa", "on"]
+
+    # Use ubatch-size 1024 for hexagon backend (HTP devices)
+    if hex_devices and basename in ("llama-cli", "llama-completion", "llama-server", "llama-bench"):
+        if "--ubatch-size" not in cmd_args and "-ub" not in cmd_args:
+            cmd_args += ["--ubatch-size", "1024"]
+    elif basename in ("llama-cli", "llama-completion", "llama-server"):
+        if "--ubatch-size" not in cmd_args and "-ub" not in cmd_args:
+            cmd_args += ["--ubatch-size", "1024"]
 
     if basename in ("llama-cli", "llama-completion", "llama-server", "llama-bench"):
         if "-t" not in cmd_args and "--threads" not in cmd_args:
@@ -389,6 +475,8 @@ def main():
         else:
             local_env["LD_LIBRARY_PATH"] = lib_dir + os.path.pathsep + local_env.get("LD_LIBRARY_PATH", "")
 
+        for k in MANAGED_ENV_NAMES:
+            local_env.pop(k, None)
         for k, v in env_vars.items():
             local_env[k] = v
 

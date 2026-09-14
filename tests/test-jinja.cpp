@@ -374,10 +374,40 @@ static void test_expressions(testing & t) {
         "42"
     );
 
+    test_template(t, "none in object",
+        "{{ x in {'low': 1, 'high': 2} }}",
+        {{"x", nullptr}},
+        "False"
+    );
+
+    test_template(t, "none not in object",
+        "{{ x not in {'low': 1, 'high': 2} }}",
+        {{"x", nullptr}},
+        "True"
+    );
+
+    test_template(t, "none in array",
+        "{{ x in [1, none, 3] }}",
+        {{"x", nullptr}},
+        "True"
+    );
+
     test_template(t, "dot notation",
         "{{ user.name }}",
         {{"user", {{"name", "Bob"}}}},
         "Bob"
+    );
+
+    test_template(t, "dot notation (integer property)",
+        "{{ {10: 'Bob'}.10 }}",
+        json::object(),
+        "Bob"
+    );
+
+    test_template(t, "dot notation (array index)",
+        "{{ user.10 }}",
+        {{"user", json::array({"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"})}},
+        "k"
     );
 
     test_template(t, "negative float (not dot notation)",
