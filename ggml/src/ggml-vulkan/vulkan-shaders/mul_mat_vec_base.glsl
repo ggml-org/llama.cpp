@@ -90,6 +90,16 @@ layout (constant_id = 0) const uint BLOCK_SIZE = 32;
 layout (constant_id = 1) const uint NUM_ROWS = 1;
 layout (constant_id = 2) const uint NUM_COLS = 1;
 
+#ifdef MUL_MAT_ID
+#define WEIGHT_SCALE_INDEX(row) (((p.fusion_flags & MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE_2D) != 0) ? (expert_id * p.stride_d + (row)) : (((p.fusion_flags & MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE_VEC) != 0) ? expert_id : 0u))
+#else
+#define WEIGHT_SCALE_INDEX(row) (((p.fusion_flags & MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE_VEC) != 0) ? (row) : 0u)
+#endif
+#define APPLY_WEIGHT_SCALE(acc, row) \
+    if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE) != 0) { \
+        (acc) *= FLOAT_TYPE(data_fuse0[WEIGHT_SCALE_INDEX(row)]); \
+    }
+
 #ifdef USE_SUBGROUP_ADD_NO_SHMEM
 void reduce_result(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offset, const in uint32_t first_row, const in uint32_t num_rows, const in uint32_t tid) {
     [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
@@ -101,6 +111,7 @@ void reduce_result(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t 
     if (tid == 0) {
         [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
             [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+                APPLY_WEIGHT_SCALE(temp[j][n], first_row + n);
 #ifdef MUL_MAT_ID
                 if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS0) != 0) {
                     temp[j][n] += FLOAT_TYPE(data_fuse0[expert_id*p.stride_d + first_row + n]);
@@ -156,6 +167,7 @@ void reduce_result(FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offs
                 [[unroll]] for (uint s = 0; s < gl_NumSubgroups; ++s) {
                     temp[j][n] += tmpsh[j][n][s];
                 }
+                APPLY_WEIGHT_SCALE(temp[j][n], first_row + n);
 #ifdef MUL_MAT_ID
                 if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS0) != 0) {
                     temp[j][n] += FLOAT_TYPE(data_fuse0[expert_id*p.stride_d + first_row + n]);
@@ -201,6 +213,7 @@ void reduce_result(FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offs
     if (tid == 0) {
         [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
             [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+                APPLY_WEIGHT_SCALE(tmpsh[j][n][0], first_row + n);
 #ifdef MUL_MAT_ID
                 if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS0) != 0) {
                     tmpsh[j][n][0] += FLOAT_TYPE(data_fuse0[expert_id*p.stride_d + first_row + n]);
