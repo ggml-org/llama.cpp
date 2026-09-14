@@ -397,6 +397,128 @@ static __global__ void lightning_indexer_kernel_vec(
         );                                                                                  \
     } else
 
+// ---- chunked cuBLAS path for NVIDIA GPUs without the wmma kernel -----------------------------
+// score[b,kv] = sum_h w[b,h] * relu(q[b,h] . k[kv]) + mask[b,kv]
+//
+// The vector kernel above is the only option on pre-Turing hardware and reaches ~4.3 TFLOPS on a V100,
+// while cuBLAS does the same multiply-accumulate at ~20 TFLOPS there. Compute K^T Q with cuBLAS one
+// chunk of query rows at a time (C is n_kv x n_head*nb, column-major, so one head is one contiguous
+// stream and neighbouring lanes of the reduce kernel read neighbouring kv rows), then do relu, the
+// per-head weighting, the sum and the mask add in one fused kernel. The scratch buffer is bounded and
+// does not grow with the context length.
+
+#define LID_GEMM_MAX_SCRATCH (128ll << 20)
+
+static __global__ void lightning_indexer_gemm_reduce(
+        const float * __restrict__ G, const float * __restrict__ W, const half * __restrict__ M,
+        float * __restrict__ dst, const int64_t n_kv, const int64_t n_b, const int n_head,
+        const int64_t sw, const int64_t sm, const int64_t sd) {
+    const int64_t i_kv = (int64_t) blockDim.x*blockIdx.x + threadIdx.x;
+    const int64_t ib   = blockIdx.y;
+
+    if (i_kv >= n_kv || ib >= n_b) {
+        return;
+    }
+
+    const float * g = G + ib*n_head*n_kv + i_kv;
+    const float * w = W + ib*sw;
+
+    float s = 0.0f;
+    for (int h = 0; h < n_head; ++h) {
+        const float v = g[h*n_kv];
+        s += (v > 0.0f ? v : 0.0f) * w[h];
+    }
+
+    dst[ib*sd + i_kv] = s + __half2float(M[ib*sm + i_kv]);
+}
+
+static bool ggml_cuda_lightning_indexer_gemm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * q = dst->src[0];
+    const ggml_tensor * k = dst->src[1];
+    const ggml_tensor * w = dst->src[2];
+    const ggml_tensor * m = dst->src[3];
+
+    GGML_TENSOR_LOCALS(int64_t, neq,  q, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbq,  q, nb)
+    GGML_TENSOR_LOCALS(int64_t, nek,  k, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbk,  k, nb)
+    GGML_TENSOR_LOCALS(size_t,  nbw,  w, nb)
+    GGML_TENSOR_LOCALS(int64_t, nem,  m, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbm,  m, nb)
+    GGML_TENSOR_LOCALS(size_t,  nb, dst, nb)
+
+    const int64_t n_embd   = neq0;
+    const int     n_head   = (int) neq1;
+    const int64_t n_batch  = neq2;
+    const int64_t n_stream = neq3;
+    const int64_t n_kv     = nek2;
+
+    const size_t tsk = ggml_type_size(k->type);
+
+    // Q columns (one per head of each token) and K rows must be on a regular stride
+    if (nbq1 % sizeof(float) != 0 || nbq1/sizeof(float) < (size_t) n_embd || nbq2 != (size_t) n_head*nbq1) {
+        return false;
+    }
+    if (nbk2 % tsk != 0 || nbk2/tsk < (size_t) n_embd) {
+        return false;
+    }
+    // K that is not F32 is converted first, which needs packed rows
+    const bool k_convert = k->type != GGML_TYPE_F32;
+    if (k_convert && (nbk2 != n_embd*tsk || ggml_get_to_fp32_cuda(k->type) == nullptr)) {
+        return false;
+    }
+
+    const int64_t nb_chunk = std::max<int64_t>(1, std::min<int64_t>(
+        n_batch, LID_GEMM_MAX_SCRATCH / ((int64_t) n_head*n_kv*(int64_t) sizeof(float))));
+
+    cudaStream_t   stream = ctx.stream();
+    cublasHandle_t handle = ctx.cublas_handle();
+
+    ggml_cuda_pool_alloc<float> g_alloc(ctx.pool(), nb_chunk*n_head*n_kv);
+    ggml_cuda_pool_alloc<float> k_alloc(ctx.pool());
+    if (k_convert) {
+        k_alloc.alloc(n_kv*n_embd);
+    }
+
+    for (int64_t s = 0; s < n_stream; ++s) {
+        const float * k_ptr = (const float *) ((const char *) k->data + s*nbk3);
+        int           ldk   = (int) (nbk2/tsk);
+        if (k_convert) {
+            ggml_get_to_fp32_cuda(k->type)((const char *) k->data + s*nbk3, k_alloc.get(), n_kv*n_embd, stream);
+            k_ptr = k_alloc.get();
+            ldk   = (int) n_embd;
+        }
+
+        const float * w_s = (const float *) ((const char *)   w->data + s*nbw3);
+        const half  * m_s = (const half  *) ((const char *)   m->data + (s % nem3)*nbm3);
+        float       * d_s = (float       *) ((char       *) dst->data + s*nb3);
+
+        for (int64_t b0 = 0; b0 < n_batch; b0 += nb_chunk) {
+            const int64_t nb     = std::min(nb_chunk, n_batch - b0);
+            const int     n_rows = (int) (nb*n_head);
+            const float * q_b    = (const float *) ((const char *) q->data + b0*nbq2 + s*nbq3);
+
+            const float alpha = 1.0f;
+            const float beta  = 0.0f;
+            CUBLAS_CHECK(cublasGemmEx(handle, CUBLAS_OP_T, CUBLAS_OP_N,
+                    (int) n_kv, n_rows, (int) n_embd,
+                    &alpha, k_ptr, CUDA_R_32F, ldk,
+                            q_b,   CUDA_R_32F, (int) (nbq1/sizeof(float)),
+                    &beta,  g_alloc.get(), CUDA_R_32F, (int) n_kv,
+                    CUBLAS_COMPUTE_32F_FAST_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+            const dim3 block(256, 1, 1);
+            const dim3 grid((n_kv + 255)/256, nb, 1);
+            lightning_indexer_gemm_reduce<<<grid, block, 0, stream>>>(
+                g_alloc.get(), w_s + b0*(nbw1/sizeof(float)), m_s + b0*(nbm1/sizeof(half)), d_s + b0*(nb1/sizeof(float)),
+                n_kv, nb, n_head, (int64_t) (nbw1/sizeof(float)), (int64_t) (nbm1/sizeof(half)), (int64_t) (nb1/sizeof(float)));
+            CUDA_CHECK(cudaGetLastError());
+        }
+    }
+
+    return true;
+}
+
 void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * q = dst->src[0];
     const ggml_tensor * k = dst->src[1];
@@ -445,6 +567,13 @@ void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     const int device = ggml_cuda_get_device();
     const int cc     = ggml_cuda_info().devices[device].cc;
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    // the wmma kernel needs Turing; on Volta cuBLAS is ~4.6x faster than the vector kernel below
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_VOLTA && ggml_cuda_lightning_indexer_gemm(ctx, dst)) {
+        return;
+    }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
     if (n_embd == 128 && n_head == 64) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
