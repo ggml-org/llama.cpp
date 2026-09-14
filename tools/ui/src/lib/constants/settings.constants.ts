@@ -208,6 +208,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				label: 'Backends',
 				standaloneField: false,
 				type: SettingsFieldType.INPUT
+			},
+			{
+				defaultValue: true,
+				help: 'Query the llama-server that serves this UI. Disable it when this UI runs standalone and talks to external backends only.',
+				key: SETTINGS_KEYS.LOCAL_BACKEND_ENABLED,
+				label: 'Local backend',
+				standaloneField: false,
+				type: SettingsFieldType.CHECKBOX
 			}
 		],
 		slug: SETTINGS_SECTION_SLUGS.BACKENDS,

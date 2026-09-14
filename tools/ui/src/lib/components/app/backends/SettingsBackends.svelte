@@ -38,7 +38,11 @@
 <div in:fade={{ duration: 150 }} class={['flex flex-col gap-4', className]}>
 	<DialogBackendForm bind:open={isAdding} backend={editing} onOpenChange={handleOpenChange} />
 
-	<BackendCard backend={backendsStore.local} isLocal />
+	<BackendCard
+		backend={backendsStore.local}
+		isLocal
+		onToggle={(enabled) => backendsStore.setLocalEnabled(enabled)}
+	/>
 
 	{#each backendsStore.external as backend (backend.id)}
 		<BackendCard

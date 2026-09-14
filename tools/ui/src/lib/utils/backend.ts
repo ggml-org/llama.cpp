@@ -26,11 +26,11 @@ export function backendModelsUrl(backend: Backend): string {
 }
 
 /** The built-in backend pointing at the server that serves this UI. */
-export function createLocalBackend(apiKey?: string): Backend {
+export function createLocalBackend(apiKey?: string, enabled = true): Backend {
 	return {
 		apiKey,
 		baseUrl: '',
-		enabled: true,
+		enabled,
 		id: LOCAL_BACKEND_ID,
 		name: 'Local',
 		protocol: 'llama.cpp'

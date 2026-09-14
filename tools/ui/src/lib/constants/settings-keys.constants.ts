@@ -32,6 +32,7 @@ export const SETTINGS_KEYS = {
 	FREQUENCY_PENALTY: 'frequency_penalty',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
+	LOCAL_BACKEND_ENABLED: 'localBackendEnabled',
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
 	MAX_TOKENS: 'max_tokens',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
