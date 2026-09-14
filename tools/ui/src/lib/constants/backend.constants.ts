@@ -1,4 +1,4 @@
-import type { BackendPreset, BackendProtocol } from '$lib/types';
+import type { BackendCapabilities, BackendPreset, BackendProtocol } from '$lib/types';
 
 /** Version sent with the Anthropic Messages API. */
 export const ANTHROPIC_API_VERSION = '2023-06-01';
@@ -17,6 +17,34 @@ export const DEFAULT_BACKEND_MODELS_PATH = '/v1/models';
 
 /** Id of the built-in backend that points at the server serving this UI. */
 export const LOCAL_BACKEND_ID = 'local';
+
+/** Capabilities of a full llama.cpp server. */
+const LLAMA_CPP_CAPABILITIES: BackendCapabilities = {
+	corsProxy: true,
+	loadUnload: true,
+	props: true,
+	router: true,
+	slots: true,
+	statusFeed: true,
+	tools: true
+};
+/** Capabilities of a plain OpenAI- or Anthropic-compatible endpoint. */
+const COMPATIBLE_CAPABILITIES: BackendCapabilities = {
+	corsProxy: false,
+	loadUnload: false,
+	props: false,
+	router: false,
+	slots: false,
+	statusFeed: false,
+	tools: false
+};
+
+/** Capabilities per backend protocol. */
+export const BACKEND_CAPABILITIES: Record<BackendProtocol, BackendCapabilities> = {
+	anthropic: COMPATIBLE_CAPABILITIES,
+	'llama.cpp': LLAMA_CPP_CAPABILITIES,
+	openai: COMPATIBLE_CAPABILITIES
+};
 
 /**
  * Ready-made endpoints offered when adding a backend. `custom` intentionally

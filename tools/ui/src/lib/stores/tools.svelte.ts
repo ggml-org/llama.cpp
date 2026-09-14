@@ -30,6 +30,7 @@ import { ToolsService } from '$lib/services/tools.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '$lib/stores/mcp/index.svelte';
 import { modelsStore } from '$lib/stores/models/index.svelte';
+import { serverStore } from '$lib/stores/server.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { ApiError, buildSandboxToolDefinition } from '$lib/utils';
@@ -232,6 +233,14 @@ class ToolsStore {
 	}
 
 	async fetchServerTools(): Promise<void> {
+		// the /tools endpoint only exists on llama.cpp servers
+		if (!serverStore.capabilities.tools) {
+			this._serverTools = [];
+			this.cwdAwareTools = new SvelteSet();
+
+			return;
+		}
+
 		if (this._loading) return;
 
 		this._loading = true;

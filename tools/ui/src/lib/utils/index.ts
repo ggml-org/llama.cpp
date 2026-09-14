@@ -21,6 +21,7 @@ export {
 	backendChatUrl,
 	backendModelsUrl,
 	createLocalBackend,
+	getBackendCapabilities,
 	parseBackendsSettings
 } from './backend';
 

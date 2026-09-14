@@ -33,6 +33,7 @@ import {
 	StreamConnectionState
 } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models/index.svelte';
+import { serverStore } from '$lib/stores/server.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import type {
@@ -87,6 +88,9 @@ export class ChatService {
 	 * @returns {Promise<boolean>} Promise that resolves to true if all slots are idle, false if any is processing
 	 */
 	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
+		// the /slots endpoint only exists on llama.cpp servers
+		if (!serverStore.capabilities.slots) return true;
+
 		try {
 			const url = model ? `${API_SLOTS.LIST}?model=${encodeURIComponent(model)}` : API_SLOTS.LIST;
 			const res = await fetch(apiUrl(url), { signal });
