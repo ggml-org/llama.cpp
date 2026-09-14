@@ -52,6 +52,7 @@ enum htp_op_code {
     HTP_OP_MUL_MAT,
     HTP_OP_MUL_MAT_ID,
     HTP_OP_MUL_MAT_NX,
+    HTP_OP_MUL_MAT_ID_NX,
     HTP_OP_MUL_MAT_ADD,
     HTP_OP_RMS_NORM,
     HTP_OP_RMS_NORM_MUL,
@@ -64,6 +65,7 @@ enum htp_op_code {
     HTP_OP_UNARY_TANH,
     HTP_OP_UNARY_ABS,
     HTP_OP_UNARY_LOG,
+    HTP_OP_UNARY_RELU,
     HTP_OP_GLU_SWIGLU,
     HTP_OP_GLU_SWIGLU_OAI,
     HTP_OP_GLU_GEGLU,
@@ -75,6 +77,7 @@ enum htp_op_code {
     HTP_OP_GET_ROWS,
     HTP_OP_SCALE,
     HTP_OP_CPY,
+    HTP_OP_CPY_FENCE,
     HTP_OP_ARGSORT,
     HTP_OP_SQR,
     HTP_OP_SQRT,
@@ -92,11 +95,13 @@ enum htp_op_code {
     HTP_OP_NORM,
     HTP_OP_CONCAT,
     HTP_OP_CLAMP,
+    HTP_OP_LEAKY_RELU,
     HTP_OP_IM2COL,
     HTP_OP_FENCE,
     HTP_OP_ALLREDUCE,
     HTP_OP_ALLREDUCE_ADD,
     HTP_OP_GLU_SWIGLU_CLAMP,
+    HTP_OP_MDEV_GROUP,
 
     HTP_OP_INVALID
 };
@@ -111,6 +116,7 @@ enum htp_op_code {
 #define HTP_OP_MAX_TENSORS 8192 // must stay under 64K (uint16)
 
 #define HTP_FENCE_TIMEOUT  (1000000000ULL)
+#define HTP_FENCE_SLOT_SIZE 128
 
 #define HTP_OP_MAX_VMEM_DEFAULT (3355443200u)
 
@@ -211,30 +217,26 @@ struct htp_prof_desc {
 };
 
 struct htp_opbatch_req {
-    uint32_t id;          // Batch id
+    uint64_t seq;         // Sequence number
     uint32_t n_bufs;      // Number of buffers
     uint32_t n_tensors;   // Number of tensors
     uint32_t n_ops;       // Number of ops
     uint32_t n_traces;    // Number of trace descriptors per thread
-    uint32_t pad;         // unused
-    uint64_t seq;         // Sequence number
     // struct htp_buf_desc  bufs[];    -- dspqueue buf 0
     // struct htp_tensor    tensors[]; -- dspqueue buf 0
     // struct htp_op_desc   ops[];     -- dspqueue buf 0
 };
 
 struct htp_opbatch_rsp {
-    uint32_t id;         // Batch id
-    uint32_t status;     // HTP_STATUS_...
-    uint32_t n_bufs;     // Number of buffers
-    uint32_t n_tensors;  // Number of tensors
-    uint32_t n_ops;      // Number of op profile descriptors
-    uint32_t n_traces[HTP_MAX_NTHREADS + 1];
-    uint32_t usecs;          // Number of usec
-    uint32_t pad;            // align to 8 bytes
+    uint64_t seq;            // Sequence number
     uint64_t cycles_start;   // Start cycle counter
     uint64_t cycles_stop;    // Stop cycle counter
-    uint64_t seq;            // Sequence number
+    uint32_t status;         // HTP_STATUS_...
+    uint32_t n_bufs;         // Number of buffers
+    uint32_t n_tensors;      // Number of tensors
+    uint32_t n_ops;          // Number of op profile descriptors
+    uint32_t usecs;          // Number of usec
+    uint32_t n_traces[HTP_MAX_NTHREADS + 1];
     // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 

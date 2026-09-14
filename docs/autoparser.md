@@ -514,6 +514,7 @@ The following templates have active tests in `tests/test-chat.cpp`:
 | Mistral Small 3.2 | JSON_NATIVE | `[TOOL_CALLS]func[ARGS]{...}` with call ID |
 | Devstral | JSON_NATIVE | `[TOOL_CALLS]func[ARGS]{...}` without call ID |
 | StepFun 3.5 Flash | TAG_WITH_TAGGED | `<function=X><parameter=Y>` format |
+| Spark2.5 | TAG_WITH_TAGGED | `<tool_call>name<arg_key>...<arg_value>...` format |
 
 ## Adding Support for New Templates
 

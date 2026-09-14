@@ -14,9 +14,11 @@
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
+#include "hex-common.h"
+#include "hex-profile.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
+#include "htp-tensor.h"
 
 #define htp_softmax_preamble3                     \
     const uint32_t ne00 = src0->ne[0];            \
@@ -69,6 +71,8 @@ struct htp_softmax_context {
     struct fastdiv_values fastdiv_ne13; // For mask broadcasting
 
     uint32_t src0_nrows_per_thread;
+    uint32_t row_start;
+    uint32_t nrows;
 };
 
 static void apply_mask(float * restrict wp0,
@@ -223,18 +227,16 @@ static void softmax_job_f32(unsigned int nth, unsigned int ith, void * data) {
 
     htp_softmax_preamble3;
 
-    const uint32_t src0_nrows            = ne01 * ne02 * ne03;  // src0 rows
+    const uint32_t src0_nrows            = smctx->nrows;
     const uint32_t src0_nrows_per_thread = smctx->src0_nrows_per_thread;
 
-    const uint32_t src0_start_row = src0_nrows_per_thread * ith;
-    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
+    const uint32_t src0_start_row = smctx->row_start + src0_nrows_per_thread * ith;
+    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, smctx->row_start + src0_nrows);
 
     // no work for this thread
     if (src0_start_row >= src0_end_row) {
         return;
     }
-
-    uint64_t qt = HAP_perf_get_qtimer_count();
 
     int is_aligned = 1;
     int opt_path   = 0;
@@ -261,6 +263,9 @@ static void softmax_job_f32(unsigned int nth, unsigned int ith, void * data) {
 
     uint32_t prev_i2 = (uint32_t)-1;
     float slope = 1.0f;
+
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, src0_start_row);
 
     for (uint32_t r = src0_start_row; r < src0_end_row; ++r) {
         uint32_t i1 = fastmodulo(r, ne01, &smctx->fastdiv_ne01);
@@ -323,10 +328,11 @@ static void softmax_job_f32(unsigned int nth, unsigned int ith, void * data) {
         }
     }
 
-    qt = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - qt);
-    FARF(HIGH, "softmax-f32 %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u : opt %u f16 %u usec %u\n", ith, nth,
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, src0_start_row);
+
+    FARF(HIGH, "softmax-f32 %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u : opt %u f16 %u\n", ith, nth,
          ne00, ne01, ne02, ne03, src0_start_row, src0_end_row, ne10, ne11, ne12, ne13,
-         ne0, ne1, ne2, ne3, opt_path, smctx->use_f16, (unsigned) qt);
+         ne0, ne1, ne2, ne3, opt_path, smctx->use_f16);
 }
 
 static int execute_op_softmax_f32(struct htp_ops_context * octx) {
@@ -342,13 +348,32 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
     init_softmax_ctx(&smctx, octx);
 
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
-    const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
+    const size_t elem_size = sizeof(float);
+    const size_t dst_row_size = dst->nb[1];
 
-    smctx.src0_nrows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
+    uint32_t row_start = 0;
+    uint32_t nrows     = src0_nrows;
+
+    if (octx->ctx->mdev.count > 1) {
+        uint32_t rows_per_chunk = 0;
+        htp_tensor_mdev_rows_per_chunk(dst, (uint32_t) elem_size, (uint32_t) dst_row_size, &rows_per_chunk);
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(src0_nrows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        row_start = range.start;
+        nrows     = range.count;
+    }
+
+    if (nrows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    const uint32_t n_threads = octx->n_threads;
+
+    smctx.src0_nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
+    smctx.row_start             = row_start;
+    smctx.nrows                 = nrows;
 
     const size_t src0_row_size = src0->nb[1];
     const size_t src1_row_size = src0_row_size;
-    const size_t dst_row_size  = dst->nb[1];
 
     // VTCM scratchpads for all tensors
     // 4 rows per thread, padded to HVX vector size
@@ -383,9 +408,7 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
     octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size; octx->src1_spad.src = NULL;
     octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size; octx->dst_spad.src  = NULL;
 
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) return err;
-
-    worker_pool_run_func(octx->ctx->worker_pool, softmax_job_f32, &smctx, n_threads);
+    work_queue_run(octx->ctx->work_queue, softmax_job_f32, &smctx, n_threads);
 
     return err;
 }
