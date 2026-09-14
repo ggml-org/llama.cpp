@@ -102,8 +102,11 @@ class XingChen4Model(DeepseekV2Model):
             hparams.get("hc_eps",  1e-6))
 
     def set_vocab(self):
+        # XingChen4 uses a SentencePiece tokenizer (tokenizer.model + XingChen4Tokenizer).
+        # V2's set_vocab tries GPT2/BPE first, which fails for SPM. Use the SPM path directly.
+        # Note: no add_tokenizer_pre override — the C++ SPM load path ignores
+        # tokenizer.ggml.pre entirely (pre-tokenizers only apply to BPE vocabs).
         self._set_vocab_sentencepiece()
-        self.gguf_writer.add_tokenizer_pre("xingchen4")
 
     def prepare_metadata(self, vocab_only: bool):
         from_dir = self.fname_out.is_dir()
