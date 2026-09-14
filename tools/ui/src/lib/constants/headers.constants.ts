@@ -3,6 +3,10 @@ const MCP_SESSION_ID_VISIBLE_CHARS = 5;
 
 /** HTTP header handling for API and MCP requests. */
 export const HEADERS = {
+	/** Anthropic-compatible backends authenticate with this header instead of Authorization */
+	ANTHROPIC_API_KEY: 'x-api-key',
+	/** Required version header for the Anthropic Messages API */
+	ANTHROPIC_VERSION: 'anthropic-version',
 	/** Canonical casing for the Authorization header (RFC 7235) */
 	AUTHORIZATION: 'Authorization',
 	/** Bearer scheme prefix used for Authorization headers (RFC 6750) */
