@@ -1,6 +1,7 @@
 import { filterModelOptions, groupModelOptions } from '$lib/components/app/navigation/utils';
 import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
-import { modelsStore, serverStore } from '$lib/stores';
+import { backendsStore, modelsStore, serverStore } from '$lib/stores';
+import type { Backend } from '$lib/types';
 import type { ModelOption } from '$lib/types/models';
 import { onMount } from 'svelte';
 
@@ -18,6 +19,9 @@ export interface UseModelsSelectorReturn {
 	readonly loading: boolean;
 	readonly updating: boolean;
 	readonly activeId: string | null;
+	readonly activeBackendId: string;
+	readonly backends: Backend[];
+	readonly isMultiModel: boolean;
 	readonly isRouter: boolean;
 	readonly serverModel: string | null;
 	readonly isHighlightedCurrentModelActive: boolean;
@@ -31,6 +35,7 @@ export interface UseModelsSelectorReturn {
 	setSearchTerm(value: string): void;
 	setShowModelDialog(value: boolean): void;
 	handleInfoClick(modelName: string): void;
+	handleBackendChange(backendId: string): Promise<void>;
 	handleSelect(modelId: string): Promise<void>;
 	handleOpenChange(open: boolean): void;
 	isFavorite(model: string): boolean;
@@ -55,6 +60,11 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const loading = $derived(modelsStore.loading);
 	const updating = $derived(modelsStore.updating);
 	const activeId = $derived(modelsStore.selectedModelId);
+	const activeBackendId = $derived(backendsStore.active.id);
+	const backends = $derived(backendsStore.enabled);
+	// Router mode and external backends both expose a selectable model list;
+	// a single-model llama.cpp server does not.
+	const isMultiModel = $derived(serverStore.isRouterMode || !serverStore.capabilities.props);
 	const isRouter = $derived(serverStore.isRouterMode);
 	const serverModel = $derived(modelsStore.singleModelName);
 	const currentModel = $derived(opts.currentModel());
@@ -113,6 +123,15 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		}
 	}
 
+	async function handleBackendChange(backendId: string) {
+		if (backendId === backendsStore.active.id) return;
+
+		backendsStore.setActive(backendId);
+		searchTerm = '';
+
+		await modelsStore.switchBackend();
+	}
+
 	async function handleSelect(modelId: string) {
 		const option = options.find((opt) => opt.id === modelId);
 
@@ -152,6 +171,16 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 	function getDisplayOption(): ModelOption | undefined {
 		if (!isRouter) {
+			// External backend: the selection is backend-scoped, so it wins over
+			// the conversation's model, which may belong to another backend.
+			if (!serverStore.capabilities.props) {
+				const selected = activeId ? options.find((option) => option.id === activeId) : undefined;
+
+				if (selected) return selected;
+
+				return currentModel ? options.find((option) => option.model === currentModel) : undefined;
+			}
+
 			const displayModel = serverModel || currentModel;
 
 			if (displayModel) {
@@ -187,8 +216,16 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	}
 
 	return {
+		get activeBackendId() {
+			return activeBackendId;
+		},
+
 		get activeId() {
 			return activeId;
+		},
+
+		get backends() {
+			return backends;
 		},
 
 		get filteredOptions() {
@@ -200,6 +237,8 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		get groupedFilteredOptions() {
 			return groupedFilteredOptions;
 		},
+
+		handleBackendChange,
 
 		handleInfoClick,
 
@@ -225,6 +264,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		get isLoadingModel() {
 			return isLoadingModel;
+		},
+
+		get isMultiModel() {
+			return isMultiModel;
 		},
 
 		get isRouter() {

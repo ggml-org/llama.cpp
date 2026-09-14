@@ -46,6 +46,8 @@
  */
 export { default as ModelsSelectorDropdown } from './ModelsSelectorDropdown.svelte';
 
+export { default as ModelsSelectorBackendSwitcher } from './ModelsSelectorBackendSwitcher.svelte';
+
 /**
  * **ModelsSelectorList** - Grouped model options list
  *

@@ -331,6 +331,22 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		}
 	}
 
+	/**
+	 * Drop per-backend state when the active backend changes. The model list,
+	 * router rows and selection all belong to the previous backend, so they
+	 * must not leak into the next one. Refetches for the new backend.
+	 */
+	async switchBackend(): Promise<void> {
+		this.status.unsubscribe();
+		this.clearSelection();
+		this.models = [];
+		this.routerModels = [];
+		this.error = null;
+		serverStore.clear();
+
+		await this.fetch(true);
+	}
+
 	toDisplayName(id: string): string {
 		const segments = id.split(/\\|\//);
 		const candidate = segments.pop();

@@ -4,10 +4,12 @@
 	import {
 		DialogModelInformation,
 		ModelId,
+		ModelsSelectorBackendSwitcher,
 		ModelsSelectorList,
 		ModelsSelectorReasoningPanel,
 		SearchInput
 	} from '$lib/components/app';
+	import { DialogBackendForm } from '$lib/components/app/backends';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
@@ -36,6 +38,7 @@
 	}: Props = $props();
 
 	let sheetOpen = $state(false);
+	let showAddBackend = $state(false);
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
@@ -57,15 +60,22 @@
 			ms.handleOpenChange(false);
 		}
 	}
+
+	function handleAddBackend() {
+		sheetOpen = false;
+
+		// let the sheet finish closing before the dialog takes focus
+		setTimeout(() => (showAddBackend = true), 0);
+	}
 </script>
 
 <div class={['relative inline-flex flex-col items-end gap-1', className]}>
-	{#if ms.loading && ms.options.length === 0 && ms.isRouter}
+	{#if ms.loading && ms.options.length === 0 && ms.isMultiModel}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
 			Loading models…
 		</div>
-	{:else if ms.options.length === 0 && ms.isRouter}
+	{:else if ms.options.length === 0 && ms.isMultiModel}
 		<p class="text-xs text-muted-foreground">No models available.</p>
 	{:else}
 		{@const selectedOption = ms.getDisplayOption()}
@@ -81,7 +91,7 @@
 			? Math.round(modelLoadFraction(modelsStore.status.getLoadProgress(triggerModel)) * 100)
 			: 0}
 
-		{#if ms.isRouter}
+		{#if ms.isMultiModel}
 			<button
 				class={[
 					`relative inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 max-sm:px-3 max-sm:py-2 max-sm:text-sm dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
@@ -139,6 +149,13 @@
 					</Sheet.Header>
 
 					<div class="flex flex-col gap-1 pb-4">
+						<ModelsSelectorBackendSwitcher
+							activeId={ms.activeBackendId}
+							backends={ms.backends}
+							onAdd={handleAddBackend}
+							onSelect={(backendId) => void ms.handleBackendChange(backendId)}
+						/>
+
 						<div class="mb-3 px-4">
 							<SearchInput
 								onInput={(v) => ms.setSearchTerm(v)}
@@ -219,3 +236,8 @@
 		open={ms.showModelDialog}
 	/>
 {/if}
+
+<DialogBackendForm
+	bind:open={showAddBackend}
+	onSaved={(backend) => void ms.handleBackendChange(backend.id)}
+/>

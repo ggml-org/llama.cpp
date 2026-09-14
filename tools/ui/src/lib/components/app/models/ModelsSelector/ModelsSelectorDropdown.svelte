@@ -5,10 +5,12 @@
 		DialogModelInformation,
 		DropdownMenuSearchable,
 		ModelId,
+		ModelsSelectorBackendSwitcher,
 		ModelsSelectorList,
 		ModelsSelectorOption,
 		ModelsSelectorReasoningPanel
 	} from '$lib/components/app';
+	import { DialogBackendForm } from '$lib/components/app/backends';
 	import type { ModelItem } from '$lib/components/app/navigation/utils';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -43,6 +45,7 @@
 
 	let isOpen = $state(false);
 	let highlightedId = $state<string | null>(null);
+	let showAddBackend = $state(false);
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
@@ -123,6 +126,13 @@
 		highlightedId = null;
 	}
 
+	function handleAddBackend() {
+		isOpen = false;
+
+		// let the menu finish closing before the dialog takes focus
+		setTimeout(() => (showAddBackend = true), 0);
+	}
+
 	// Alt+Enter only unloads and keeps the dropdown open.
 	async function handleModelKeyAction(modelId: string, unload: boolean) {
 		if (!unload) {
@@ -165,13 +175,13 @@
 </script>
 
 <div class={['relative inline-flex flex-col items-end gap-1', className]}>
-	{#if ms.loading && ms.options.length === 0 && ms.isRouter}
+	{#if ms.loading && ms.options.length === 0 && ms.isMultiModel}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
 
 			Loading models…
 		</div>
-	{:else if ms.options.length === 0 && ms.isRouter}
+	{:else if ms.options.length === 0 && ms.isMultiModel}
 		{#if currentModel}
 			<span
 				class={[
@@ -197,7 +207,7 @@
 			? Math.round(modelLoadFraction(modelsStore.status.getLoadProgress(triggerModel)) * 100)
 			: 0}
 
-		{#if ms.isRouter}
+		{#if ms.isMultiModel}
 			<DropdownMenu.Root bind:open={isOpen} onOpenChange={ms.handleOpenChange}>
 				<Tooltip.Root>
 					<Tooltip.Trigger>
@@ -263,6 +273,13 @@
 					class="w-full md:min-w-80 md:max-w-[26rem] max-w-[calc(100vw-2rem)] p-0!"
 					onOpenAutoFocus={(event) => event.preventDefault()}
 				>
+					<ModelsSelectorBackendSwitcher
+						activeId={ms.activeBackendId}
+						backends={ms.backends}
+						onAdd={handleAddBackend}
+						onSelect={(backendId) => void ms.handleBackendChange(backendId)}
+					/>
+
 					<DropdownMenuSearchable
 						emptyMessage="No models found."
 						isEmpty={ms.filteredOptions.length === 0 && ms.isCurrentModelInCache}
@@ -407,3 +424,8 @@
 		open={ms.showModelDialog}
 	/>
 {/if}
+
+<DialogBackendForm
+	bind:open={showAddBackend}
+	onSaved={(backend) => void ms.handleBackendChange(backend.id)}
+/>

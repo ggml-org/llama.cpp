@@ -14,9 +14,10 @@
 		backend?: Backend | null;
 		open?: boolean;
 		onOpenChange?: (open: boolean) => void;
+		onSaved?: (backend: Backend) => void;
 	}
 
-	let { backend = null, onOpenChange, open = $bindable(false) }: Props = $props();
+	let { backend = null, onOpenChange, onSaved, open = $bindable(false) }: Props = $props();
 
 	let draft = $state<Backend>(createBackend());
 	let selectedPresetId = $state<string | null>(null);
@@ -106,6 +107,7 @@
 			backendsStore.addBackend(next);
 		}
 
+		onSaved?.(next);
 		handleOpenChange(false);
 	}
 
