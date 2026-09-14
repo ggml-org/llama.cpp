@@ -106,15 +106,25 @@ void ggml_cuda_flash_attn_ext_compact_mask(
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
-bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+// Volta can use the sparse kernels as well, but only via the <512, 512, 1, 32> instance:
+// the sparse gather needs one index row per launch (ncols1 == 1) and the Volta build has no device code
+// for launches with fewer than 32 columns, so all GQA heads of one query row go into a single launch.
+static bool ggml_cuda_fattn_volta_sparse_ok(const int cc, const ggml_tensor * dst) {
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+    return cc == GGML_CUDA_CC_VOLTA && Q->ne[0] == 512 && V->ne[0] == 512 &&
+        K->ne[2] > 0 && Q->ne[2] % K->ne[2] == 0 && (Q->ne[2] / K->ne[2]) % 32 == 0;
+}
+
+static bool ggml_cuda_fattn_sparse_applicable(const int cc, const ggml_tensor * dst) {
 #if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
-    GGML_UNUSED_VARS(ctx, dst);
+    GGML_UNUSED_VARS(cc, dst);
     return false;
 #else
     const ggml_tensor * Q    = dst->src[0];
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * mask = dst->src[3];
-    const int cc = ggml_cuda_info().devices[ctx.device].cc;
 
     float max_bias = 0.0f;
     float logit_softcap = 0.0f;
@@ -122,11 +132,15 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ggml_backend_cuda_context
     memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
 
     const int32_t n_kv_max = ggml_get_op_params_i32(dst, 4);
-    return GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) &&
+    return GGML_CUDA_CC_IS_NVIDIA(cc) && (turing_mma_available(cc) || ggml_cuda_fattn_volta_sparse_ok(cc, dst)) &&
         mask != nullptr && n_kv_max > 0 && max_bias == 0.0f && logit_softcap == 0.0f &&
         mask->ne[0] == K->ne[1] && mask->ne[1] >= Q->ne[1] && mask->ne[2] == 1 &&
         K->ne[1] >= std::max<int64_t>(4096, 2LL*n_kv_max);
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+}
+
+bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    return ggml_cuda_fattn_sparse_applicable(ggml_cuda_info().devices[ctx.device].cc, dst);
 }
 
 template <int DKQ, int DV, int ncols2>
@@ -136,7 +150,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     if constexpr (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, 1, ncols2)) {
-        if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ctx, dst)) {
+        if ((cc != GGML_CUDA_CC_VOLTA || ncols2 >= 32) && ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ctx, dst)) {
             ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 1, ncols2>(ctx, dst);
             return;
         }
@@ -198,6 +212,13 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
 
     // On Volta the GQA optimizations aren't as impactful vs. minimizing wasted compute:
     if (cc == GGML_CUDA_CC_VOLTA) {
+        if constexpr (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, 1, 32)) {
+            if (use_gqa_opt && gqa_ratio % 32 == 0 && ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(ctx, dst)) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 1, 32>(ctx, dst);
+                return;
+            }
+        }
+
         if (use_gqa_opt && gqa_ratio % 8 == 0) {
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
             return;
@@ -642,6 +663,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     if (volta_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
+        // a sparse launch reads n_kv_max entries instead of all of K, which beats the dense tile kernel
+        // already for a single token as soon as the KV cache is much larger than n_kv_max
+        if (gqa_opt_applies && ggml_cuda_fattn_sparse_applicable(cc, dst)) {
+            return BEST_FATTN_KERNEL_MMA_F16;
+        }
         if (can_use_vector_kernel && Q->ne[1] * gqa_ratio_eff <= 2) {
             return BEST_FATTN_KERNEL_VEC;
         }

@@ -1757,7 +1757,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
 static constexpr __host__ __device__ bool ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(
         const int DKQ, const int DV, const int ncols1, const int ncols2) {
-    return (DKQ == 512 && DV == 512 && ncols1 == 1 && ncols2 == 8) ||
+    return (DKQ == 512 && DV == 512 && ncols1 == 1 && ncols2 ==  8) ||
+           (DKQ == 512 && DV == 512 && ncols1 == 1 && ncols2 == 32) || // Volta: >= 32 columns per launch
            (DKQ == 576 && DV == 512 && ncols1 == 1 && ncols2 == 16);
 }
 
@@ -2118,6 +2119,7 @@ extern DECL_FATTN_MMA_F16_CASE(512, 512,  1,  8);
 extern DECL_FATTN_MMA_F16_CASE(512, 512,  2,  8);
 extern DECL_FATTN_MMA_F16_CASE(512, 512,  4,  8);
 extern DECL_FATTN_MMA_F16_CASE(512, 512,  8,  8);
+extern DECL_FATTN_MMA_F16_CASE(512, 512,  1, 32); // sparse on Volta
 
 // The number of viable configurations for Deepseek is very limited:
 extern DECL_FATTN_MMA_F16_CASE(576, 512, 1, 16);
