@@ -79,7 +79,7 @@ layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
 layout (binding = 1) readonly buffer B4 {B_TYPEV4 data_b_v4[];};
 #endif
 
-#if QUANT_K > 1
+#if QUANT_K > 1 || defined(DATA_A_F8_E4M3)
 #include "dequant_funcs_cm2.glsl"
 #if defined(dequantFuncA_v) && defined(GGML_VULKAN_COOPMAT2_DECODE_VECTOR)
 #define DECODEFUNCA , dequantFuncA, dequantFuncA_v
