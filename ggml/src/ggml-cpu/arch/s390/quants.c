@@ -417,6 +417,7 @@ void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     sumf = vec_hsum_f32x4(v_acc);
     *s = sumf;
 #else
+    UNUSED(nb);
     UNUSED(x);
     UNUSED(y);
     UNUSED(ib);
