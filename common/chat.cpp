@@ -1133,6 +1133,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_kimi_k3(tmpl, params);
     }
 
+    // Ling 3.0 / Bailing V3 - <role>X</role> sections with <arg_key>/<arg_value> tagged
+    // tool calls. <role> sections are unique to this family among the tagged-arg templates.
+    if (src.find("<role>ASSISTANT</role>") != std::string::npos &&
+        src.find("<arg_key>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Ling 3.0 (Bailing V3)\n");
+        return common_chat_params_init_ling3(tmpl, params);
+    }
+
     // Cohere2 MoE / North Code - marker-wrapped format with <|START_TEXT|> content and
     // <|START_ACTION|> JSON tool calls. <|START_TEXT|> is unique to this template (the older
     // Command-R templates use <|START_RESPONSE|>).
