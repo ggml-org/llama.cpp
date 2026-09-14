@@ -276,6 +276,9 @@ struct llama_hparams {
     uint32_t indexer_n_head    = 0;
     uint32_t indexer_head_size = 0;
     uint32_t indexer_top_k     = 0;
+    uint32_t indexer_kpool     = 0; // k-pool size
+    bool     indexer_kpool_select_tail = true;
+    bool     indexer_index_share_mtp   = false; // MTP iterations reuse one indexer selection
     // MSA
     uint32_t indexer_block_size  = 0;
     uint32_t indexer_local_blocks = 0;
