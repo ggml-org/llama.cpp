@@ -34,9 +34,14 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-
   ubuntu-24-s390x:
+    name: ubuntu-24-s390x (VXE ${{ matrix.vxe }})
     runs-on: ubuntu-24.04-s390x
+
+    strategy:
+      fail-fast: false
+      matrix:
+        vxe: ["ON", "OFF"]  # `-DGGML_VXE=ON/OFF`
 
     steps:
       - name: Clone
@@ -77,7 +82,8 @@ jobs:
         run: |
           cmake -B build \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DGGML_VXE=${{ matrix.vxe }}
           time cmake --build build --config Release -j $(nproc)
 
       - name: Test

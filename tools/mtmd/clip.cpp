@@ -780,7 +780,7 @@ ggml_tensor * clip_graph::build_attn(
         }
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, 0.0f, 0.0f);
-        ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
+        ggml_prec_set_acc(cur, GGML_PREC_F32);
         if (sinks != nullptr) {
             ggml_flash_attn_ext_add_sinks(cur, sinks);
         }
@@ -793,7 +793,7 @@ ggml_tensor * clip_graph::build_attn(
 
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
         // F32 may not needed for vision encoders?
-        // ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        // ggml_prec_set_acc(kq, GGML_PREC_F32);
 
         kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, 0.0f);
         if (sinks != nullptr) {
