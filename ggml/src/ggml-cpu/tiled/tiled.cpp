@@ -15,8 +15,6 @@
 
 #include <mutex>
 
-#define UNUSED GGML_UNUSED
-
 // unpack routines for various quant types src0
 static void tiled_unpack_src0(const block_q4_K * rows, int64_t row_stride, int n_rows, int r0, tiled_tile_src0 * tile) {
     GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
@@ -449,16 +447,13 @@ static void tiled_unpack_src1_q8_K(const block_q8_K * const * rows, int n_rows, 
                                    int kblk) {
     GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
     const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
-    // +128 bias per src1 byte; the byte pattern we need is 0x80, which as signed char is -128
-    const __m256i bias = _mm256_set1_epi8((int8_t)128);
+    // +128 per src1 byte for the maddubs/dpbusd A operand; ragged rows hold the
+    // biased zero (0x80) so column windows never read past valid data
     for (int r = 0; r < n_padded; r++) {
         uint8_t * dst = &tile->q[r * TILED_TILE_K];
         if (r < n_rows) {
             const uint8_t * src = (const uint8_t *) rows[r][kblk].qs;
-            for (int e = 0; e < TILED_TILE_K; e += 32) {
-                _mm256_storeu_si256((__m256i *) (dst + e),
-                    _mm256_add_epi8(_mm256_loadu_si256((const __m256i *) (src + e)), bias));
-            }
+            tiled_byte_add(src, dst, TILED_TILE_K, (int8_t) 128);
         } else {
             memset(dst, 0x80, TILED_TILE_K);
         }
@@ -482,14 +477,8 @@ static void tiled_postprocess_src0(tiled_tile_src0 * tile, int n_rows, int nb) {
     const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
 
     if constexpr (BIAS != 0) {
-        const __m256i bias = _mm256_set1_epi8((int8_t) BIAS);
-        for (int r = 0; r < n_padded; r++) {
-            uint8_t * q = (uint8_t *) &tile->q[r * TILED_TILE_K];
-            for (int e = 0; e < TILED_TILE_K; e += 32) {
-                _mm256_storeu_si256((__m256i *) (q + e),
-                    _mm256_sub_epi8(_mm256_loadu_si256((const __m256i *) (q + e)), bias));
-            }
-        }
+        // true values: code - BIAS (mod 256)
+        tiled_byte_add(tile->q, tile->q, n_padded * TILED_TILE_K, (int8_t) -BIAS);
     }
 
     // compute bsums: [s * ROWS + row], s = 0..15 (per 16-k group)
@@ -511,14 +500,8 @@ template <int BIAS>
 static void tiled_postprocess_src0_group(tiled_tile_src0 * tile, int grp, int nb) {
     const int r0 = grp * TILED_MICRO;
     if constexpr (BIAS != 0) {
-        const __m256i bias = _mm256_set1_epi8((int8_t) BIAS);
-        for (int r = r0; r < r0 + TILED_MICRO; r++) {
-            uint8_t * q = (uint8_t *) &tile->q[r * TILED_TILE_K];
-            for (int e = 0; e < TILED_TILE_K; e += 32) {
-                _mm256_storeu_si256((__m256i *) (q + e),
-                    _mm256_sub_epi8(_mm256_loadu_si256((const __m256i *) (q + e)), bias));
-            }
-        }
+        uint8_t * q = &tile->q[r0 * TILED_TILE_K];
+        tiled_byte_add(q, q, TILED_MICRO * TILED_TILE_K, (int8_t) -BIAS);
     }
     for (int r = r0; r < r0 + TILED_MICRO; r++) {
         const int8_t * q = (const int8_t *) &tile->q[r * TILED_TILE_K];
@@ -555,18 +538,13 @@ static bool ggml_tiled_matmul_forced(void) {
 
 // hard constraints shared by the MUL_MAT and MUL_MAT_ID entries; the src0 type gate is the
 // entries' type switch
-
-#if !defined(__AVX512VNNI__) && !defined(__AVX2__) && !defined(__AVX__)
-static bool ggml_tiled_supported(const struct ggml_tensor * src0,
-                                 const struct ggml_tensor * src1) {
-    UNUSED(src0);
-    UNUSED(src1);
-    return false;
-}
-#else
 static bool ggml_tiled_supported(const struct ggml_tensor * src0,
                                  const struct ggml_tensor * src1) {
     if (!ggml_tiled_matmul_enabled()) {
+        return false;
+    }
+
+    if (!tiled_kernel_accelerated()) {
         return false;
     }
 
@@ -611,7 +589,6 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
     }
     return true;
 }
-#endif
 
 // per-thread workspace size (0 when tiled is disabled or unsupported on this arch)
 static size_t ggml_tiled_ws_size(void) {
@@ -917,8 +894,11 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
             int64_t iir0_end = MIN(iir0 + TILE, ir0_end);
             const int n_src0 = (int) (iir0_end - iir0);
 
-            // result buffer zeroed once per macrotile
-            memset(ws->acc, 0, (size_t)TILED_TILE_ROWS * TILED_TILE_ROWS * sizeof(float));
+            // result buffer zeroed once per macrotile; only the cols/rows the MAC will
+            // write and the scatter will read (buf is [col][row], stride TILED_TILE_ROWS)
+            for (int j = 0; j < n_src1; j++) {
+                memset(&ws->acc[j * TILED_TILE_ROWS], 0, n_src0 * sizeof(float));
+            }
 
             // Iterate K dimension by chunks of 256
             for (int64_t ib = 0; ib < ne00; ib += TILE) {

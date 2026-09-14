@@ -4,6 +4,7 @@
 
 // Currently only optimized for x86, new architectures should implement:
 // tiled_run_microtile:  16x16 microkernel
+// byte bias routine: tiled_byte_add
 // bit unpacking routines: tiled_unpk_nib4, tiled_unpk_2bit, tiled_unpk_or
 // LUT value expansion routines: tiled_lut8, tiled_unpk_sign8, tiled_unpk_tern8
 
@@ -63,6 +64,15 @@ static_assert(sizeof(tiled_ws) <= 512 * 1024, "tiled workspace exceeds 512KB per
 // unpack primitives for reading quants, defined as inline here to keep arch-specific code in kernel.h/.cpp
 // If this section gets too hairy later, we can break up into separate includes.
 #if defined(__AVX2__)
+// add a constant to every byte (mod 256); src and dst may alias, n % 32 == 0.
+// the src1 +128 bias and the src0 BIAS subtraction (val = -BIAS)
+inline void tiled_byte_add(const uint8_t * src, uint8_t * dst, int n, int8_t val) {
+    const __m256i v = _mm256_set1_epi8(val);
+    for (int e = 0; e < n; e += 32) {
+        _mm256_storeu_si256((__m256i *) (dst + e),
+                            _mm256_add_epi8(_mm256_loadu_si256((const __m256i *) (src + e)), v));
+    }
+}
 // packed 4-bit codes -> low nibbles (lo) + high nibbles (hi)
 inline void tiled_unpk_nib4(const uint8_t * src, uint8_t * lo, uint8_t * hi) {
     const __m256i v = _mm256_loadu_si256((const __m256i *) src);
@@ -119,6 +129,9 @@ inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
     _mm_storel_epi64((__m128i *) dst, _mm_packus_epi16(p, _mm_setzero_si128()));
 }
 #else
+inline void tiled_byte_add(const uint8_t * src, uint8_t * dst, int n, int8_t val) {
+    for (int i = 0; i < n; i++) { dst[i] = (uint8_t) (src[i] + val); }
+}
 inline void tiled_unpk_nib4(const uint8_t * src, uint8_t * lo, uint8_t * hi) {
     for (int l = 0; l < 32; l++) { lo[l] = (uint8_t) (src[l] & 0xF); hi[l] = (uint8_t) (src[l] >> 4); }
 }
@@ -141,6 +154,17 @@ inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
     for (int j = 0; j < 8; j++) { dst[j] = (uint8_t) (128 + (int) delta + 8 * (int8_t) src[j]); }
 }
 #endif
+
+// true when this build has an ISA-optimized microtile body (same #if as the
+// dispatch in tiled-kernel.cpp); the scalar-only build is slower than the
+// stock vec_dot path, so the driver declines there
+inline bool tiled_kernel_accelerated(void) {
+#if defined(__AVX512VNNI__) || defined(__AVX2__) || defined(__AVX__)
+    return true;
+#else
+    return false;
+#endif
+}
 
 // Accumulate one 16x16 microtile (src0 rows [i0, i0+16), src1 cols [j0, j0+16))
 // over the full 256-K slab held in the tiles into a j-major float buffer
