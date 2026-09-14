@@ -428,6 +428,7 @@ common_chat_schema::type_set common_chat_schema::value_types() const {
 
 static bool may_be_string_impl(const common_chat_schema & s, std::unordered_set<const common_chat_schema *> & visited) {
     switch (s.kind()) {
+        case common_chat_schema::KIND_ANY:
         case common_chat_schema::KIND_STRING:
             return true;
         case common_chat_schema::KIND_CONST:
@@ -456,20 +457,14 @@ static bool may_be_string_impl(const common_chat_schema & s, std::unordered_set<
                 }
             }
             return false;
-        case common_chat_schema::KIND_ALL_OF: {
-            // every child must allow a string, an any child constrains nothing
-            bool any_string = false;
+        case common_chat_schema::KIND_ALL_OF:
+            // every child must allow a string
             for (const auto & child : static_cast<const common_chat_schema_all_of &>(s).children) {
-                if (child->kind() == common_chat_schema::KIND_ANY) {
-                    continue;
-                }
                 if (!may_be_string_impl(*child, visited)) {
                     return false;
                 }
-                any_string = true;
             }
-            return any_string;
-        }
+            return true;
         default:
             return false;
     }

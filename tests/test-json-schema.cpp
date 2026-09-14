@@ -386,6 +386,9 @@ static void test_may_be_string(testing & t) {
         check(t, R"({"const": 123})", false);
         check(t, R"({"enum": [1, "a", null]})", true);
         check(t, R"({"enum": [1, 2, 3]})", false);
+        // an unconstrained schema accepts a string too
+        check(t, R"({})", true);
+        check(t, R"({"description": "x"})", true);
     });
 
     t.test("composites", [&](testing & t) {
@@ -394,6 +397,9 @@ static void test_may_be_string(testing & t) {
         check(t, R"({"allOf": [{"type": "string"}, {"minLength": 1}]})", true);
         check(t, R"({"allOf": [{"type": "string"}, {"type": "integer"}]})", false);
         check(t, R"({"allOf": [{"minLength": 1}, {"maxLength": 2}]})", true);
+        check(t, R"({"anyOf": [{"description": "x"}, {"type": "integer"}]})", true);
+        check(t, R"({"allOf": [{"description": "x"}]})", true);
+        check(t, R"({"allOf": [{"description": "x"}, {"type": "integer"}]})", false);
     });
 
     t.test("ref", [&](testing & t) {
