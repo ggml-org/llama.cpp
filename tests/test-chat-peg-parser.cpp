@@ -385,6 +385,43 @@ static void test_example_native(testing & t) {
             }
         });
     }
+
+    t.test("tools followed by dangling reasoning opener", [&](testing & t) {
+        test_case tc = {
+            /* .name =                 */ "tools followed by dangling reasoning opener",
+            /* .tools =                */ create_tools(),
+            /* .tool_choice =          */ COMMON_CHAT_TOOL_CHOICE_AUTO,
+            /* .reasoning_format =     */ COMMON_REASONING_FORMAT_AUTO,
+            /* .json_schema =          */ {},
+            /* .parallel_tool_calls =  */ false,
+            /* .generation_prompt =    */ "<think>",
+            /* .input =                */
+                ("I must get the weather in New York</think>\n"
+                 "<tool_call>["
+                 R"({"name": "get_current_weather", "arguments": {"location": "New York City, NY", "unit": "fahrenheit"}})"
+                 "]</tool_call><think>\n"),
+            /* .expect_reasoning =     */ "I must get the weather in New York",
+            /* .expect_content =       */ "",
+            /* .expect_tool_calls =    */
+                { {
+                    /* .name =      */ "get_current_weather",
+                    /* .arguments = */ R"({"location": "New York City, NY", "unit": "fahrenheit"})",
+                    /* .id =        */ "",
+                } },
+        };
+
+        common_chat_parser_params params;
+        params.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
+        params.generation_prompt = tc.generation_prompt;
+
+        auto msg = common_chat_peg_parse(build_parser(tc), tc.input, false, params);
+
+        t.assert_equal("content equal", tc.expect_content, msg.content);
+        t.assert_equal("reasoning equal", tc.expect_reasoning, msg.reasoning_content);
+        t.assert_equal("number of tool calls", tc.expect_tool_calls.size(), msg.tool_calls.size());
+        t.assert_equal("tool name", tc.expect_tool_calls[0].name, msg.tool_calls[0].name);
+        t.assert_equal("tool args", tc.expect_tool_calls[0].arguments, msg.tool_calls[0].arguments);
+    });
 }
 
 static void test_example_qwen3_coder(testing & t) {

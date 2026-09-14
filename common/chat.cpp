@@ -1481,7 +1481,40 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
                 fprintf(stderr, "\nAST for partial parse (fail):\n%s\n", ctx.ast.dump().c_str());
                 fflush(stderr);
             }
+
             return msg;
+        }
+
+        if (!is_partial && result.end > 0) {
+            const std::string unparsed = effective_input.substr(result.end);
+            const bool is_dangling_reasoning_open =
+                unparsed.compare(0, 7, "<think>") == 0 &&
+                unparsed.find_first_not_of(" \t\r\n", 7) == std::string::npos;
+
+            // Some reasoning models can emit a fresh opening reasoning tag after one
+            // or more complete tool calls, then stop before producing its body. Retry
+            // the complete prefix and only recover when it contains valid tool calls.
+            if (is_dangling_reasoning_open) {
+                common_peg_parse_context retry_ctx(effective_input.substr(0, result.end), flags);
+                auto retry_result = parser.parse(retry_ctx);
+                if (retry_result.success()) {
+                    common_chat_msg msg;
+                    msg.role = "assistant";
+                    std::unique_ptr<common_chat_peg_mapper> mapper;
+                    if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
+                        mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+                    } else if (params.format == COMMON_CHAT_FORMAT_PEG_MINIMAX_M3) {
+                        mapper = std::make_unique<common_chat_peg_minimax_m3_mapper>(msg);
+                    } else {
+                        mapper = std::make_unique<common_chat_peg_mapper>(msg);
+                    }
+                    mapper->from_ast(retry_ctx.ast, retry_result);
+                    if (!msg.tool_calls.empty()) {
+                        LOG_WRN("%s: ignoring dangling reasoning opener after complete tool call(s)\n", __func__);
+                        return msg;
+                    }
+                }
+            }
         }
         LOG_WRN("%s: unparsed %s output: %s\n", __func__, common_chat_format_name(params.format), effective_input.substr(result.end).c_str());
         LOG_DBG("%s: full %s output triggering error:\n=== BEGIN ===\n%s\n=== END ===\n", __func__, common_chat_format_name(params.format), effective_input.c_str());
