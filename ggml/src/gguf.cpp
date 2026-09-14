@@ -10,7 +10,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
+#include <filesystem>
+#include <fstream>
 #include <map>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -990,7 +993,7 @@ struct gguf_context * gguf_init_from_buffer(const void * data, size_t size, stru
     return gguf_init_from_reader(gr, params);
 }
 
-struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_params params) {
+static struct gguf_context * gguf_init_from_file_impl(const char * fname, struct gguf_init_params params) {
     FILE * file = ggml_fopen(fname, "rb");
 
     if (!file) {
@@ -1000,6 +1003,406 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
 
     struct gguf_context * result = gguf_init_from_file_ptr(file, params);
     fclose(file);
+    return result;
+}
+
+// =====================================================================
+// Optional GGUF metadata/tensor-TOC index cache (opt-in, off by default)
+// =====================================================================
+//
+// gguf_init_from_file() re-parses the full KV + tensor-TOC section of a
+// .gguf file byte-by-byte on every call. For a typical model this is
+// already fast (single-digit milliseconds even for a multi-hundred-tensor
+// model with large tokenizer vocab/merges arrays) -- but it is repeated
+// work every time the *same* file is loaded again (dev iteration, server
+// restarts, etc). This cache stores a flat, directly-reconstructible
+// snapshot of the parsed gguf_context next to the source file and skips
+// the byte-level parse entirely on a validated cache hit.
+//
+// Safety/correctness:
+//   - Off by default; enabled only via GGML_GGUF_INDEX_CACHE=1, so it can
+//     never change behavior for existing callers/tools that don't opt in.
+//   - The cache is validated against the source file's exact size and
+//     modification time on every read; any mismatch (or any parse/read
+//     error in the cache file itself) is treated as a miss and falls back
+//     to the normal full parse, which then rewrites the cache.
+//   - Cache writing is best-effort: any failure (read-only directory,
+//     disk full, etc) is silently ignored and never affects the result of
+//     gguf_init_from_file().
+//   - The reconstructed gguf_context is built from the *exact* kv/tensor
+//     data captured from a real, fully-validated parse (see
+//     gguf_write_index_cache, called right after a successful
+//     gguf_init_from_file_impl()) -- it is a direct snapshot, not
+//     re-derived or recomputed, so it cannot diverge from what a full
+//     parse of the same bytes would produce.
+static bool gguf_index_cache_enabled() {
+    const char * v = std::getenv("GGML_GGUF_INDEX_CACHE");
+    return v != nullptr && v[0] == '1';
+}
+
+static std::string gguf_index_cache_path(const std::string & fname) {
+    return fname + ".gguf-idxcache";
+}
+
+struct gguf_cache_src_stat {
+    bool     ok = false;
+    uint64_t size = 0;
+    int64_t  mtime_ns = 0;
+};
+
+static gguf_cache_src_stat gguf_cache_stat_src(const std::string & fname) {
+    gguf_cache_src_stat st;
+    std::error_code ec;
+    const auto fsize = std::filesystem::file_size(fname, ec);
+    if (ec) {
+        return st;
+    }
+    const auto ftime = std::filesystem::last_write_time(fname, ec);
+    if (ec) {
+        return st;
+    }
+    st.ok       = true;
+    st.size     = static_cast<uint64_t>(fsize);
+    st.mtime_ns = static_cast<int64_t>(ftime.time_since_epoch().count());
+    return st;
+}
+
+static const uint32_t GGUF_IDXCACHE_MAGIC   = 0x58444947u; // "GIDX"
+static const uint32_t GGUF_IDXCACHE_VERSION = 1u;
+
+template <typename T>
+static bool gguf_idxcache_write_pod(std::ofstream & out, const T & v) {
+    out.write(reinterpret_cast<const char *>(&v), sizeof(T));
+    return out.good();
+}
+
+template <typename T>
+static bool gguf_idxcache_read_pod(std::ifstream & in, T & v) {
+    in.read(reinterpret_cast<char *>(&v), sizeof(T));
+    return in.good();
+}
+
+static bool gguf_idxcache_write_str(std::ofstream & out, const std::string & s) {
+    const uint32_t len = static_cast<uint32_t>(s.size());
+    if (!gguf_idxcache_write_pod(out, len)) return false;
+    out.write(s.data(), len);
+    return out.good();
+}
+
+static bool gguf_idxcache_read_str(std::ifstream & in, std::string & s, uint32_t max_len) {
+    uint32_t len = 0;
+    if (!gguf_idxcache_read_pod(in, len) || len > max_len) return false;
+    s.resize(len);
+    if (len > 0) {
+        in.read(&s[0], len);
+    }
+    return in.good();
+}
+
+// Best-effort: writes the cache, silently gives up on any failure.
+static void gguf_write_index_cache(const std::string & fname, const struct gguf_context * ctx) {
+    try {
+        const gguf_cache_src_stat st = gguf_cache_stat_src(fname);
+        if (!st.ok) {
+            return;
+        }
+
+        const std::string tmp_path = gguf_index_cache_path(fname) + ".tmp";
+        std::ofstream out(tmp_path, std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            return;
+        }
+
+        bool ok = true;
+        ok = ok && gguf_idxcache_write_pod(out, GGUF_IDXCACHE_MAGIC);
+        ok = ok && gguf_idxcache_write_pod(out, GGUF_IDXCACHE_VERSION);
+        ok = ok && gguf_idxcache_write_pod(out, st.size);
+        ok = ok && gguf_idxcache_write_pod(out, st.mtime_ns);
+        ok = ok && gguf_idxcache_write_pod(out, ctx->alignment);
+        ok = ok && gguf_idxcache_write_pod(out, ctx->offset);
+        ok = ok && gguf_idxcache_write_pod(out, ctx->size);
+
+        const uint64_t n_kv = ctx->kv.size();
+        ok = ok && gguf_idxcache_write_pod(out, n_kv);
+        for (size_t i = 0; ok && i < ctx->kv.size(); i++) {
+            const gguf_kv & kv = ctx->kv[i];
+            ok = ok && gguf_idxcache_write_str(out, kv.get_key());
+            const uint8_t is_array = kv.is_array ? 1 : 0;
+            const int32_t type     = static_cast<int32_t>(kv.type);
+            ok = ok && gguf_idxcache_write_pod(out, is_array);
+            ok = ok && gguf_idxcache_write_pod(out, type);
+            if (kv.type == GGUF_TYPE_STRING) {
+                const uint64_t n = kv.data_string.size();
+                ok = ok && gguf_idxcache_write_pod(out, n);
+                for (size_t j = 0; ok && j < kv.data_string.size(); j++) {
+                    ok = ok && gguf_idxcache_write_str(out, kv.data_string[j]);
+                }
+            } else {
+                const uint64_t n_bytes = kv.data.size();
+                ok = ok && gguf_idxcache_write_pod(out, n_bytes);
+                if (n_bytes > 0) {
+                    out.write(reinterpret_cast<const char *>(kv.data.data()), n_bytes);
+                    ok = ok && out.good();
+                }
+            }
+        }
+
+        const uint64_t n_tensors = ctx->info.size();
+        ok = ok && gguf_idxcache_write_pod(out, n_tensors);
+        for (size_t i = 0; ok && i < ctx->info.size(); i++) {
+            const gguf_tensor_info & info = ctx->info[i];
+            ok = ok && gguf_idxcache_write_str(out, std::string(info.t.name));
+            const int32_t type = static_cast<int32_t>(info.t.type);
+            ok = ok && gguf_idxcache_write_pod(out, type);
+            for (int d = 0; ok && d < GGML_MAX_DIMS; d++) {
+                ok = ok && gguf_idxcache_write_pod(out, info.t.ne[d]);
+            }
+            ok = ok && gguf_idxcache_write_pod(out, info.offset);
+        }
+
+        out.close();
+        if (!ok) {
+            std::error_code ec;
+            std::filesystem::remove(tmp_path, ec);
+            return;
+        }
+
+        std::error_code ec;
+        std::filesystem::rename(tmp_path, gguf_index_cache_path(fname), ec);
+        if (ec) {
+            std::filesystem::remove(tmp_path, ec);
+        }
+    } catch (...) {
+        // Never let a caching failure affect the caller.
+    }
+}
+
+// Returns nullptr on any miss/mismatch/corruption -- caller falls back to
+// the normal full parse.
+static struct gguf_context * gguf_try_read_index_cache(const std::string & fname, struct gguf_init_params params) {
+    try {
+        const gguf_cache_src_stat st = gguf_cache_stat_src(fname);
+        if (!st.ok) {
+            return nullptr;
+        }
+
+        std::ifstream in(gguf_index_cache_path(fname), std::ios::binary);
+        if (!in.is_open()) {
+            return nullptr;
+        }
+
+        uint32_t magic = 0, version = 0;
+        uint64_t src_size = 0;
+        int64_t  src_mtime_ns = 0;
+        if (!gguf_idxcache_read_pod(in, magic)   || magic   != GGUF_IDXCACHE_MAGIC)   return nullptr;
+        if (!gguf_idxcache_read_pod(in, version) || version != GGUF_IDXCACHE_VERSION) return nullptr;
+        if (!gguf_idxcache_read_pod(in, src_size))     return nullptr;
+        if (!gguf_idxcache_read_pod(in, src_mtime_ns)) return nullptr;
+
+        // Cache must exactly match the current source file -- any drift
+        // (re-quantized, re-converted, touched, replaced) invalidates it.
+        if (src_size != st.size || src_mtime_ns != st.mtime_ns) {
+            return nullptr;
+        }
+
+        std::unique_ptr<gguf_context> ctx(new gguf_context);
+        if (!gguf_idxcache_read_pod(in, ctx->alignment)) return nullptr;
+        if (!gguf_idxcache_read_pod(in, ctx->offset))    return nullptr;
+        if (!gguf_idxcache_read_pod(in, ctx->size))      return nullptr;
+
+        uint64_t n_kv = 0;
+        if (!gguf_idxcache_read_pod(in, n_kv) || n_kv > GGUF_MAX_ARRAY_ELEMENTS) return nullptr;
+        ctx->kv.reserve(n_kv);
+        for (uint64_t i = 0; i < n_kv; i++) {
+            std::string key;
+            if (!gguf_idxcache_read_str(in, key, GGUF_MAX_STRING_LENGTH)) return nullptr;
+            uint8_t is_array_u8 = 0;
+            int32_t type_i32 = 0;
+            if (!gguf_idxcache_read_pod(in, is_array_u8)) return nullptr;
+            if (!gguf_idxcache_read_pod(in, type_i32))    return nullptr;
+            const bool is_array = is_array_u8 != 0;
+            const enum gguf_type type = static_cast<enum gguf_type>(type_i32);
+
+            if (type == GGUF_TYPE_STRING) {
+                uint64_t n = 0;
+                if (!gguf_idxcache_read_pod(in, n) || n > GGUF_MAX_ARRAY_ELEMENTS) return nullptr;
+                std::vector<std::string> vals(n);
+                for (uint64_t j = 0; j < n; j++) {
+                    if (!gguf_idxcache_read_str(in, vals[j], GGUF_MAX_STRING_LENGTH)) return nullptr;
+                }
+                if (is_array) {
+                    ctx->kv.emplace_back(key, vals);
+                } else {
+                    if (vals.empty()) return nullptr;
+                    ctx->kv.emplace_back(key, vals[0]);
+                }
+                continue;
+            }
+
+            uint64_t n_bytes = 0;
+            if (!gguf_idxcache_read_pod(in, n_bytes) || n_bytes > (uint64_t) GGUF_MAX_ARRAY_ELEMENTS * 8) return nullptr;
+            std::vector<int8_t> raw(n_bytes);
+            if (n_bytes > 0) {
+                in.read(reinterpret_cast<char *>(raw.data()), n_bytes);
+                if (!in.good()) return nullptr;
+            }
+
+            if (type == GGUF_TYPE_BOOL) {
+                if (is_array) {
+                    std::vector<bool> v(n_bytes);
+                    for (uint64_t j = 0; j < n_bytes; j++) v[j] = raw[j] != 0;
+                    ctx->kv.emplace_back(key, v);
+                } else {
+                    if (n_bytes < 1) return nullptr;
+                    ctx->kv.emplace_back(key, raw[0] != 0);
+                }
+                continue;
+            }
+
+#define GGUF_IDXCACHE_KV_CASE(TYPE_ENUM, CTYPE)                                     \
+            case TYPE_ENUM: {                                                      \
+                if (n_bytes % sizeof(CTYPE) != 0) return nullptr;                  \
+                const size_t n = n_bytes / sizeof(CTYPE);                          \
+                std::vector<CTYPE> v(n);                                           \
+                if (n_bytes > 0) memcpy(v.data(), raw.data(), n_bytes);            \
+                if (is_array) {                                                    \
+                    ctx->kv.emplace_back(key, v);                                  \
+                } else {                                                           \
+                    if (v.empty()) return nullptr;                                 \
+                    ctx->kv.emplace_back(key, v[0]);                               \
+                }                                                                  \
+            } break;
+
+            switch (type) {
+                GGUF_IDXCACHE_KV_CASE(GGUF_TYPE_UINT8,   uint8_t)
+                GGUF_IDXCACHE_KV_CASE(GGUF_TYPE_INT8,    int8_t)
+                GGUF_IDXCACHE_KV_CASE(GGUF_TYPE_UINT16,  uint16_t)
+                GGUF_IDXCACHE_KV_CASE(GGUF_TYPE_INT16,   int16_t)
+                GGUF_IDXCACHE_KV_CASE(GGUF_TYPE_UINT32,  uint32_t)
+                GGUF_IDXCACHE_KV_CASE(GGUF_TYPE_INT32,   int32_t)
+                GGUF_IDXCACHE_KV_CASE(GGUF_TYPE_FLOAT32, float)
+                GGUF_IDXCACHE_KV_CASE(GGUF_TYPE_UINT64,  uint64_t)
+                GGUF_IDXCACHE_KV_CASE(GGUF_TYPE_INT64,   int64_t)
+                GGUF_IDXCACHE_KV_CASE(GGUF_TYPE_FLOAT64, double)
+                default: return nullptr; // corrupt/unknown -- bail out to full parse
+            }
+#undef GGUF_IDXCACHE_KV_CASE
+        }
+
+        uint64_t n_tensors = 0;
+        if (!gguf_idxcache_read_pod(in, n_tensors) || n_tensors > GGUF_MAX_ARRAY_ELEMENTS) return nullptr;
+        ctx->info.reserve(n_tensors);
+        size_t running_size = 0;
+        for (uint64_t i = 0; i < n_tensors; i++) {
+            gguf_tensor_info info;
+            std::string name;
+            if (!gguf_idxcache_read_str(in, name, GGML_MAX_NAME - 1)) return nullptr;
+            ggml_set_name(&info.t, name.c_str());
+
+            int32_t type_i32 = 0;
+            if (!gguf_idxcache_read_pod(in, type_i32)) return nullptr;
+            if (type_i32 < 0 || type_i32 >= GGML_TYPE_COUNT) return nullptr;
+            info.t.type = static_cast<enum ggml_type>(type_i32);
+
+            for (int d = 0; d < GGML_MAX_DIMS; d++) {
+                if (!gguf_idxcache_read_pod(in, info.t.ne[d])) return nullptr;
+                if (info.t.ne[d] < 0) return nullptr;
+            }
+            if (!gguf_idxcache_read_pod(in, info.offset)) return nullptr;
+
+            // recompute strides exactly as gguf_init_from_reader does
+            const size_t  type_size = ggml_type_size(info.t.type);
+            const int64_t blck_size = ggml_blck_size(info.t.type);
+            if (blck_size == 0 || info.t.ne[0] % blck_size != 0) return nullptr;
+            info.t.nb[0] = type_size;
+            info.t.nb[1] = info.t.nb[0] * (info.t.ne[0] / blck_size);
+            for (int d = 2; d < GGML_MAX_DIMS; d++) {
+                info.t.nb[d] = info.t.nb[d - 1] * info.t.ne[d - 1];
+            }
+
+            // cross-check against the file's own contiguity invariant instead of
+            // trusting the cached offset blindly (defense in depth: if this ever
+            // disagrees, the cache is stale/corrupt in a way size/mtime didn't
+            // catch, and we bail out to the real parser rather than risk
+            // pointing a tensor at the wrong bytes).
+            if (info.offset != running_size) return nullptr;
+            running_size += GGML_PAD(ggml_nbytes(&info.t), ctx->alignment);
+
+            ctx->info.push_back(info);
+        }
+        if (ctx->info.size() != n_tensors || running_size != ctx->size) {
+            return nullptr;
+        }
+
+        // ---- tensor-context creation, mirrors gguf_init_from_reader() exactly ----
+        if (params.ctx != nullptr) {
+            size_t mem_size = 0;
+            if (params.no_alloc) {
+                if (n_tensors != 0 && SIZE_MAX / n_tensors < ggml_tensor_overhead()) return nullptr;
+                mem_size = n_tensors * ggml_tensor_overhead();
+            } else {
+                if ((n_tensors + 1) != 0 && SIZE_MAX / (n_tensors + 1) < ggml_tensor_overhead()) return nullptr;
+                const size_t overhead = (n_tensors + 1) * ggml_tensor_overhead();
+                if (SIZE_MAX - overhead < ctx->size) return nullptr;
+                mem_size = overhead + ctx->size;
+            }
+
+            struct ggml_init_params pdata = {
+                /*mem_size   =*/ mem_size,
+                /*mem_buffer =*/ nullptr,
+                /*no_alloc   =*/ params.no_alloc,
+            };
+            *params.ctx = ggml_init(pdata);
+            if (*params.ctx == nullptr) return nullptr;
+            struct ggml_context * ctx_data = *params.ctx;
+
+            struct ggml_tensor * data = nullptr;
+            if (!params.no_alloc) {
+                data = ggml_new_tensor_1d(ctx_data, GGML_TYPE_I8, ctx->size);
+                if (data == nullptr) return nullptr;
+                ggml_set_name(data, "GGUF tensor data binary blob");
+
+                std::ifstream data_in(fname, std::ios::binary);
+                if (!data_in.is_open()) return nullptr;
+                data_in.seekg(static_cast<std::streamoff>(ctx->offset));
+                data_in.read(static_cast<char *>(data->data), ctx->size);
+                if (!data_in.good()) return nullptr;
+            }
+
+            ggml_set_no_alloc(ctx_data, true);
+            for (size_t i = 0; i < ctx->info.size(); i++) {
+                const gguf_tensor_info & info = ctx->info[i];
+                struct ggml_tensor * cur = ggml_new_tensor(ctx_data, info.t.type, GGML_MAX_DIMS, info.t.ne);
+                if (cur == nullptr) return nullptr;
+                ggml_set_name(cur, info.t.name);
+                if (!params.no_alloc) {
+                    cur->data = (char *) data->data + info.offset;
+                }
+            }
+            ggml_set_no_alloc(ctx_data, params.no_alloc);
+        }
+
+        GGML_LOG_INFO("%s: loaded metadata for '%s' from index cache (%" PRIu64 " kv, %" PRIu64 " tensors)\n",
+            __func__, fname.c_str(), (uint64_t) ctx->kv.size(), n_tensors);
+        return ctx.release();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_params params) {
+    if (gguf_index_cache_enabled()) {
+        if (struct gguf_context * cached = gguf_try_read_index_cache(fname, params)) {
+            return cached;
+        }
+    }
+
+    struct gguf_context * result = gguf_init_from_file_impl(fname, params);
+
+    if (result != nullptr && gguf_index_cache_enabled()) {
+        gguf_write_index_cache(fname, result);
+    }
+
     return result;
 }
 
