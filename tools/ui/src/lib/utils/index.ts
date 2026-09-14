@@ -8,7 +8,14 @@
  */
 
 // API utilities
-export { apiUrl, getBackend, getBackendBaseUrl, type BackendsSnapshot } from './api-base';
+export {
+	apiChatUrl,
+	apiModelsUrl,
+	apiUrl,
+	getBackend,
+	getBackendBaseUrl,
+	type BackendsSnapshot
+} from './api-base';
 export {
 	getAuthHeaders,
 	getAuthHeadersForBackend,
