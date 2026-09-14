@@ -1,0 +1,4 @@
+#pragma once
+
+#define LLAMA_VERSION "@LLAMA_VERSION@"
+#define LLAMA_COMMIT  "@LLAMA_BUILD_COMMIT@"

@@ -218,6 +218,7 @@ struct ggml_cuda_mmq_config {
 #include "mmq-config-ampere.cuh"
 #include "mmq-config-blackwell.cuh"
 
+#include "mmq-config-gcn.cuh"
 #include "mmq-config-cdna.cuh"
 #include "mmq-config-rdna2.cuh"
 #include "mmq-config-rdna3.cuh"
@@ -228,6 +229,9 @@ struct ggml_cuda_mmq_config {
 
 static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type type, const int J, const bool fallback, const int cc) {
     if (GGML_CUDA_CC_IS_AMD(cc)) {
+        if (GGML_CUDA_CC_IS_GCN(cc)) {
+            return ggml_cuda_mmq_get_config_gcn(type, J, fallback);
+        }
         if (GGML_CUDA_CC_IS_CDNA(cc)) {
             return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
         }
@@ -256,7 +260,9 @@ static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type ty
 
 static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_type type, int J, bool fallback) {
 #ifdef GGML_USE_HIP
-#ifdef CDNA
+#ifdef GCN
+    return ggml_cuda_mmq_get_config_gcn(type, J, fallback);
+#elif defined(CDNA)
     return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
 #elif defined(RDNA4)
     return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
@@ -481,9 +487,6 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
     typedef tile<16,  8, int> tile_C;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 
-    constexpr int warp_size     = ggml_cuda_get_physical_warp_size();
-    constexpr int nwarps        = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
@@ -540,8 +543,6 @@ struct ggml_cuda_mmq_util_funcs {
 
 template <ggml_type type, int J, bool fallback>
 static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_funcs() {
-    constexpr int I = ggml_cuda_mmq_get_I(type, J, fallback);
-
     if (!ggml_cuda_mmq_get_config(type, J, fallback).use_mma_data_layout()) {
         switch (type) {
             case GGML_TYPE_Q1_0:
@@ -1381,6 +1382,7 @@ struct mmq_args {
     int64_t nchannels_x; int64_t nchannels_y; int64_t stride_channel_x; int64_t stride_channel_y; int64_t stride_channel_dst;
     int64_t nsamples_x; int64_t nsamples_y; int64_t stride_sample_x; int64_t stride_sample_y; int64_t stride_sample_dst;
     int64_t ncols_max;
+    int64_t ncols_opt; // value to optimize the tile size against, launch grid still uses ncols_max
 };
 
 static size_t mmq_get_nbytes_shared(const ggml_cuda_mmq_config & config, const int cc) {
@@ -1491,7 +1493,7 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
             continue;
         }
 
-        const int ntiles_x = (args.ncols_max + config.J - 1) / config.J;
+        const int ntiles_x = (args.ncols_opt + config.J - 1) / config.J;
 
         if (ntiles_x < ntiles_J_best) {
             J_best = J;

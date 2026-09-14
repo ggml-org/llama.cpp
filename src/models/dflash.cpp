@@ -40,7 +40,7 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     if (hparams.dsv4_hc_mult > 0) {
         ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,                hparams.n_lora_q);
         ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,             hparams.n_swa);
-        ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,           hparams.n_ff_exp);
+        ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,    hparams.n_ff_exp_arr, hparams.n_layer_all);
         ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,                  hparams.n_expert_shared);
         ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,                 hparams.expert_weights_scale);
         ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,                  hparams.expert_weights_norm);
@@ -159,7 +159,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
     if (hparams.dsv4_hc_mult > 0) {
         const int64_t q_lora_rank     = hparams.n_lora_q;
-        const int64_t n_ff_exp        = hparams.n_ff_exp;
+        const int64_t n_ff_exp        = hparams.n_ff_exp();
         const int64_t n_expert_shared = hparams.n_expert_shared;
         const int64_t n_embd_head     = hparams.n_embd_head_k();
         const int64_t o_groups        = hparams.dsv4_o_group_count;
@@ -948,7 +948,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
                 layer.ffn_gate_exps,
                 layer.ffn_down_exps,
                 layer.ffn_exp_probs_b,
-                n_expert, hparams.n_expert_used,
+                n_expert, hparams.n_expert_used(),
                 LLM_FFN_SILU, hparams.expert_weights_norm,
                 hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,

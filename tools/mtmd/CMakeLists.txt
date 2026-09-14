@@ -30,6 +30,7 @@ add_library(mtmd
             models/models.h
             models/cogvlm.cpp
             models/conformer.cpp
+            models/deepseek4v.cpp
             models/dots3note.cpp
             models/dotsocr.cpp
             models/exaone4_5.cpp
@@ -83,6 +84,13 @@ target_link_libraries     (mtmd PUBLIC ggml llama)
 target_link_libraries     (mtmd PRIVATE Threads::Threads vendor::hash vendor::miniaudio vendor::stb vendor::sheredom)
 target_include_directories(mtmd PUBLIC  .)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
+target_precompile_headers (mtmd PRIVATE models/models.h)
+
+set_source_files_properties(
+    mtmd-helper.cpp
+    mtmd-helper-gen.cpp
+    PROPERTIES SKIP_PRECOMPILE_HEADERS ON
+)
 
 if (MTMD_VIDEO)
     target_compile_definitions(mtmd PRIVATE MTMD_VIDEO)

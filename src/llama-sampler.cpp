@@ -1006,7 +1006,7 @@ struct llama_sampler * llama_sampler_chain_remove(struct llama_sampler * chain, 
     return result;
 }
 
-int llama_sampler_chain_n(const struct llama_sampler * chain) {
+int32_t llama_sampler_chain_n(const struct llama_sampler * chain) {
     const auto * p = (const llama_sampler_chain *) chain->ctx;
 
     return p->samplers.size();
