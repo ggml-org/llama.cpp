@@ -414,19 +414,19 @@ void main() {
                 uint32_t c = (idx + tid) / (HSV_pad / 4);
                 if (idx + gl_WorkGroupSize.x <= Bc * HSV_pad / 4 || c < Bc) {
                     FLOAT_TYPEV4 V_Tf = FLOAT_TYPEV4(0);
-                    uint32_t vcol;
-                    bool kv_active = fa_kv_index(j * Bc + c, vcol);
+                    uint32_t v_row;
+                    bool kv_active = fa_kv_index(j * Bc + c, v_row);
                     if (kv_active && (HSV == HSV_pad || d < HSV / 4)) {
 #if !defined(BFLOAT16)
                         if (USE_DECODE_V) {
-                            uint coord = vcol * v_stride * BLOCK_SIZE_V + 4 * d;
+                            uint coord = v_row * v_stride * BLOCK_SIZE_V + 4 * d;
                             uint ib = coord / BLOCK_SIZE_V;
                             uint iqs = (coord % BLOCK_SIZE_V);
                             V_Tf = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
                         } else
 #endif
                         {
-                            V_Tf = FLOAT_TYPEV4(data_vv4[v_offset / 4 + vcol * v_stride / 4 + d]);
+                            V_Tf = FLOAT_TYPEV4(data_vv4[v_offset / 4 + v_row * v_stride / 4 + d]);
                         }
                     }
 
@@ -463,9 +463,8 @@ void main() {
                     const uint row = idx / v_cols;
                     const uint col = idx % v_cols;
 
-                    uint32_t vcol;
-                    bool kv_active = fa_kv_index(j * Bc + row, vcol);
-                    const uint v_row = USE_SPARSE ? vcol : (j * Bc + row);
+                    uint32_t v_row;
+                    bool kv_active = fa_kv_index(j * Bc + row, v_row);
                     const uint v_col = hsv_tile * MatBc * row_split + col * 4;
 
                     const uint coord = v_row * v_stride * BLOCK_SIZE_V + v_col;
