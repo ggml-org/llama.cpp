@@ -7,7 +7,7 @@
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
-#if !defined(DATA_A_F32) && !defined(DATA_A_F16) && !defined(DATA_A_BF16)
+#if !defined(DATA_A_F32) && !defined(DATA_A_F16) && !defined(DATA_A_BF16) && !defined(DATA_A_F8_E4M3)
 #define K_PER_ITER 8
 #else
 #define K_PER_ITER 4
@@ -114,7 +114,7 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
     }
 }
 
-#if defined(DATA_A_F32) || defined(DATA_A_F16) || defined(DATA_A_BF16)
+#if defined(DATA_A_F32) || defined(DATA_A_F16) || defined(DATA_A_BF16) || defined(DATA_A_F8_E4M3)
 void iter_aligned_nonquant(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint tid, const uint i)
 {
     [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {

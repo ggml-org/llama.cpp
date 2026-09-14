@@ -15,6 +15,13 @@ struct vk_mat_mat_push_constants {
     uint32_t padded_N;
 };
 
+struct vk_op_mul_mat_scale_push_constants {
+    uint32_t ne0; uint32_t ne1; uint32_t ne2; uint32_t ne3;
+    uint32_t sne0; uint32_t sne1; uint32_t sne2; uint32_t sne3;
+    uint32_t per_expert;
+    uint32_t ids_s0; uint32_t ids_s1;
+};
+
 struct vk_mat_vec_push_constants {
     uint32_t ncols;
     uint32_t stride_a;
@@ -1137,4 +1144,3 @@ static vk_op_binary_push_constants ggml_vk_rms_norm_push_constants(
         eps, 0.0f, (int32_t)num_partials,
     };
 }
-
