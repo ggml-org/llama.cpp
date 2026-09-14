@@ -1,0 +1,41 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) buffer D { float data_d[]; };
+layout(binding = 1) readonly buffer S { float data_s[]; };
+layout(binding = 2) readonly buffer I { int32_t data_ids[]; };
+
+layout(push_constant) uniform parameter {
+    uint ne0; uint ne1; uint ne2; uint ne3;
+    uint sne0; uint sne1; uint sne2; uint sne3;
+    uint per_expert;
+    uint ids_s0; uint ids_s1;
+} p;
+
+void main() {
+    const uint total = p.ne0 * p.ne1 * p.ne2 * p.ne3;
+    const uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+
+    for (uint i = gl_GlobalInvocationID.x; i < total; i += stride) {
+        const uint i0 = i % p.ne0;
+        const uint i1 = (i / p.ne0) % p.ne1;
+        const uint i2 = (i / (p.ne0 * p.ne1)) % p.ne2;
+        const uint i3 = i / (p.ne0 * p.ne1 * p.ne2);
+
+        uint si;
+        if (p.per_expert != 0) {
+            const uint expert = uint(data_ids[i1 * p.ids_s0 + i2 * p.ids_s1]);
+            si = (p.sne1 > 1) ? (i0 % p.sne0) + expert * p.sne0 : expert;
+        } else {
+            si = (i0 % p.sne0)
+               + (i1 % p.sne1) * p.sne0
+               + (i2 % p.sne2) * p.sne0 * p.sne1
+               + (i3 % p.sne3) * p.sne0 * p.sne1 * p.sne2;
+        }
+
+        data_d[i] *= data_s[si];
+    }
+}
