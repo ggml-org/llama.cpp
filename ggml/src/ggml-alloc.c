@@ -1361,7 +1361,6 @@ cleanup:
             }
         }
     } else {
-        // The integer hash map is needed by the lifetime traversal after measurement preparation.
         for (int i = 0; i < galloc->n_buffers; i++) {
             struct ggml_gallocr_composite_plan * composite = plan->composites[i];
             if (composite) {
@@ -2047,7 +2046,6 @@ static bool ggml_gallocr_alloc_composite_graph(ggml_gallocr_t galloc, struct ggm
         ggml_gallocr_graph_free(&graph);
         return true;
     }
-    // Reject assignment-only external tensors before retiring current bindings.
     for (size_t i = 0; i < graph.count; i++) {
         if (galloc->plan.tensors[i].external && !ggml_backend_tensor_is_bound(graph.tensors[i])) {
             ggml_gallocr_graph_free(&graph);

@@ -42,8 +42,6 @@ GGML_API enum ggml_status    ggml_tallocr_alloc(struct ggml_tallocr * talloc, st
 // special tensor flags for use with the graph allocator:
 //   ggml_set_input(): all input tensors are allocated at the beginning of the graph in non-overlapping addresses
 //   ggml_set_output(): output tensors are never freed and never overwritten
-// Quiesce backend work before replacing graph bindings, reserving physical buffers, or freeing the allocator.
-// Size-only reservation does not retire bindings or change physical storage.
 
 typedef struct ggml_gallocr * ggml_gallocr_t;
 
@@ -69,8 +67,6 @@ GGML_API bool ggml_gallocr_reserve_n(
     const int * node_buffer_ids,
     const int * leaf_buffer_ids);
 
-// Estimate peak requested capacity across a reservation sequence, including reuse but excluding backend allocation overhead.
-// No physical buffers or bindings are changed. Use a fresh allocator for each independent measurement sequence.
 GGML_API void ggml_gallocr_reserve_n_size_reuse(
     ggml_gallocr_t galloc,
     struct ggml_cgraph * graph,
@@ -92,9 +88,6 @@ GGML_API size_t                       ggml_backend_alloc_ctx_tensors_from_buft_s
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors(struct ggml_context * ctx, ggml_backend_t backend);
 
-// Bind a new context using optional owned capacity in *buffer. The caller quiesces backend work first.
-// On success, *buffer owns the result. On failure it remains owned but may be NULL or retired; discard ctx.
-// Sources borrowed by ctx must not depend on storage being replaced.
 GGML_API enum ggml_status ggml_backend_alloc_ctx_tensors_from_buft_reuse(
         struct ggml_context * ctx, ggml_backend_buffer_type_t buft, ggml_backend_buffer_t * buffer);
 

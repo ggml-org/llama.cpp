@@ -1157,7 +1157,6 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             for (size_t segment = 0; segment < state.n_segments; segment++) {
                 extent += state.ne[segment]*state.nr[segment];
             }
-            // A single full shard is equivalent to a mirrored tensor.
             if (extent == tensor->ne[state.axis]) {
                 state = {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
             }
@@ -1318,7 +1317,6 @@ static enum ggml_status ggml_backend_meta_prepare_tensor(
                 return GGML_STATUS_FAILED;
             }
             if (ggml_nelements(t_ij) == 0) {
-                // Empty shards have no byte position in their source.
                 t_ij->view_offs = 0;
             } else if (t_ij->view_src != tensor->view_src && t_ij->view_offs > 0 && split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
                 GGML_ASSERT(tensor->ne[split_dim] != 0);

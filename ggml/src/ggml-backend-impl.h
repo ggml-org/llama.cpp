@@ -104,7 +104,6 @@ extern "C" {
     };
 
     GGML_API void ggml_backend_buffer_set_free(struct ggml_backend_buffer_set * buffers);
-    // Physical types and an empty result set only. On failure, the result is empty and ctx must be discarded.
     GGML_API enum ggml_status ggml_backend_alloc_ctx_tensors_from_buft_set(
             struct ggml_context * ctx, ggml_backend_buffer_type_t buft, struct ggml_backend_buffer_set * buffers);
     GGML_API enum ggml_status ggml_backend_alloc_ctx_tensors_from_buft_set_reuse(
@@ -131,7 +130,6 @@ extern "C" {
             struct ggml_backend_meta_split_context * ctx, const struct ggml_tensor * tensor, bool assume_sync);
 
     struct ggml_backend_meta_preparation;
-    // Assignments are fixed during preparation; borrowed descriptors and context must outlive it.
     struct ggml_backend_alloc_source_i {
         ggml_backend_buffer_type_t (*get_buft)(void * context, const struct ggml_tensor * tensor, enum ggml_backend_buffer_usage * usage);
         // Borrow descriptors from another preparation; return NULL for an unprepared tensor.
@@ -151,8 +149,7 @@ extern "C" {
         void (*free_preparation)(void * preparation);
         enum ggml_status (*prepare_tensor)(void * preparation, const struct ggml_tensor * tensor);
         struct ggml_tensor * (*get_tensor)(void * preparation, const struct ggml_tensor * tensor, size_t domain);
-        // Takes prepared, physically bound descriptors and owned buffer sets; consumes both only on success.
-        // The returned owner's init_tensor publishes logical bindings. A NULL callback means materialization is unsupported.
+        // Takes prepared, physically bound descriptors and owned buffer sets; consumes both only on success. The returned owner's init_tensor publishes logical bindings. A NULL callback means materialization is unsupported.
         ggml_backend_buffer_t (*materialize)(void * preparation, struct ggml_backend_buffer_set * domains, size_t n_domains);
         size_t (*n_buffers)(ggml_backend_buffer_t owner, size_t domain);
         ggml_backend_buffer_t (*get_buffer)(ggml_backend_buffer_t owner, size_t domain, size_t chunk);
@@ -179,7 +176,6 @@ extern "C" {
             ggml_backend_buffer_type_t buft, enum ggml_backend_buffer_usage usage, size_t max_tensors,
             const struct ggml_backend_alloc_source_i * sources);
     GGML_API void ggml_backend_meta_preparation_free(struct ggml_backend_meta_preparation * preparation);
-    // Prepare dependencies first; discard the preparation after a failure.
     GGML_API enum ggml_status ggml_backend_meta_preparation_tensor(
             struct ggml_backend_meta_preparation * preparation, const struct ggml_tensor * tensor);
     GGML_API struct ggml_tensor * ggml_backend_meta_preparation_get_tensor(

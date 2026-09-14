@@ -1307,7 +1307,6 @@ static void ggml_compute_forward_sum_f32(
                     ggml_vec_sum_f32_ggf(ne00, &row_sum, (const float *) row);
                     sum += row_sum;
                 } else {
-                    // src rows are not contiguous, e.g. permuted views
                     for (int64_t i00 = 0; i00 < ne00; ++i00) {
                         const char * p = row + i00*nb00;
                         sum += *(const float *) p;
@@ -1345,7 +1344,6 @@ static void ggml_compute_forward_sum_f16(
                     ggml_vec_sum_f16_ggf(ne00, &row_sum, (const ggml_fp16_t *) row);
                     sum += row_sum;
                 } else {
-                    // src rows are not contiguous, e.g. permuted views
                     for (int64_t i00 = 0; i00 < ne00; ++i00) {
                         const char * p = row + i00*nb00;
                         sum += GGML_CPU_FP16_TO_FP32(*(const ggml_fp16_t *) p);
@@ -1383,7 +1381,6 @@ static void ggml_compute_forward_sum_bf16(
                     ggml_vec_sum_bf16_ggf(ne00, &row_sum, (const ggml_bf16_t *) row);
                     sum += row_sum;
                 } else {
-                    // src rows are not contiguous, e.g. permuted views
                     for (int64_t i00 = 0; i00 < ne00; ++i00) {
                         const char * p = row + i00*nb00;
                         sum += GGML_BF16_TO_FP32(*(const ggml_bf16_t *) p);
