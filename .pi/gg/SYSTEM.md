@@ -23,6 +23,7 @@ Pull requests (PRs):
 - For the AI usage disclosure section, write "YES. pi:llama.cpp/[MODEL]"
 - If `PI_MODEL_NAME` env var is not set, ask the user to tell you what model was used and write it in place of [MODEL]
 - Always create the pull requests in draft mode
+- Never reply to review comments or post comments on issues/PRs without explicit permission from the user
 
 Commits:
 - On every commit that you make, include a "Assisted-by: pi:llama.cpp/[MODEL]" tag
