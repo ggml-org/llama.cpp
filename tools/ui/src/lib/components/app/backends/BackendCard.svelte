@@ -40,23 +40,29 @@
 			</div>
 		</div>
 
-		<span class="shrink-0 rounded-md border px-2 py-0.5 text-[0.7rem] text-muted-foreground">
-			{protocolLabel}
-		</span>
+		<div class="flex shrink-0 items-center gap-1">
+			{#if isLocal}
+				<span class="rounded-md border px-2 py-0.5 text-[0.7rem] text-muted-foreground">
+					Built-in
+				</span>
+			{/if}
+
+			<span class="rounded-md border px-2 py-0.5 text-[0.7rem] text-muted-foreground">
+				{protocolLabel}
+			</span>
+		</div>
 	</div>
 
 	<div class="flex items-center justify-between gap-2">
-		{#if isLocal}
-			<span class="text-xs text-muted-foreground">Built-in</span>
-		{:else}
-			<div class="flex items-center gap-2">
-				<Switch checked={backend.enabled} onCheckedChange={(value) => onToggle?.(value)} />
+		<div class="flex items-center gap-2">
+			<Switch checked={backend.enabled} onCheckedChange={(value) => onToggle?.(value)} />
 
-				<span class="text-xs text-muted-foreground">
-					{backend.enabled ? 'Enabled' : 'Disabled'}
-				</span>
-			</div>
+			<span class="text-xs text-muted-foreground">
+				{backend.enabled ? 'Enabled' : 'Disabled'}
+			</span>
+		</div>
 
+		{#if !isLocal}
 			<div class="flex items-center gap-1">
 				<Button aria-label="Edit backend" onclick={() => onEdit?.()} size="sm" variant="ghost">
 					<Pencil class="h-3.5 w-3.5" />

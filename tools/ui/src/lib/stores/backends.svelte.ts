@@ -18,7 +18,9 @@ class BackendsStore {
 	activeId = $state<string>(LOCAL_BACKEND_ID);
 
 	get active(): Backend {
-		return this.list.find((backend) => backend.id === this.activeId) ?? this.local;
+		const active = this.enabled.find((backend) => backend.id === this.activeId);
+
+		return active ?? this.enabled[0] ?? this.local;
 	}
 
 	get enabled(): Backend[] {
@@ -34,7 +36,10 @@ class BackendsStore {
 	}
 
 	get local(): Backend {
-		return createLocalBackend(settingsStore.config.apiKey?.toString().trim() || undefined);
+		return createLocalBackend(
+			settingsStore.config.apiKey?.toString().trim() || undefined,
+			settingsStore.config[SETTINGS_KEYS.LOCAL_BACKEND_ENABLED] !== false
+		);
 	}
 
 	addBackend(backend: Backend): void {
@@ -44,7 +49,7 @@ class BackendsStore {
 	initialize(): void {
 		if (!browser) return;
 
-		setBackendsResolver(() => ({ activeId: this.activeId, backends: this.list }));
+		setBackendsResolver(() => ({ activeId: this.active.id, backends: this.list }));
 	}
 
 	removeBackend(backendId: string): void {
@@ -59,6 +64,10 @@ class BackendsStore {
 		this.activeId = this.list.some((backend) => backend.id === backendId)
 			? backendId
 			: LOCAL_BACKEND_ID;
+	}
+
+	setLocalEnabled(enabled: boolean): void {
+		settingsStore.updateConfig(SETTINGS_KEYS.LOCAL_BACKEND_ENABLED, enabled);
 	}
 
 	updateBackend(backendId: string, updates: Partial<Backend>): void {
