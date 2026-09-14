@@ -734,9 +734,14 @@ static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_t
                 tiled_unpack_src0((const B *) (src0_cur + r * src0->nb[1] + kblk * src0_bs),
                     src0_stride, n_grp, grp * TILED_MICRO, &ws->src0);
                 tiled_postprocess_src0_group<BIAS>(&ws->src0, grp, TILED_TILE_K / SUBBLK);
-                tiled_run_microtile<SUBBLK, HAS_MIN, BIAS>(ws->src0, ws->src1,
-                    (int) (ir0 - r), 0, nrows,
-                    ws->acc, TILED_TILE_ROWS);
+                // the AVX2/AVX microtile bodies only cover TILED_MICRO cols, so sweep in 16-col
+                // windows (one for nrows <= 16); VNNI handles the full window either way
+                for (int64_t ir1 = 0; ir1 < nrows; ir1 += TILED_MICRO) {
+                    const int n_cols = (int) MIN(TILED_MICRO, nrows - ir1);
+                    tiled_run_microtile<SUBBLK, HAS_MIN, BIAS>(ws->src0, ws->src1,
+                        (int) (ir0 - r), (int) ir1, n_cols,
+                        ws->acc, TILED_TILE_ROWS);
+                }
             }
         } else {
             tiled_unpack_src0((const B *) (src0_cur + r * src0->nb[1] + kblk * src0_bs), src0_stride, n_src0, 0, &ws->src0);
