@@ -35,7 +35,6 @@ import shutil
 import sys
 import tempfile
 import time
-import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -104,15 +103,7 @@ _NON_TERMINAL_STATE_VALUES = {s.value for s in NON_TERMINAL_STATES}
 _RUN_BENCH = _TESTS_DIR / "run_bench_tests_posix.py"
 _RUN_BACKEND_OPS = _TESTS_DIR / "run_backend_ops_posix.py"
 _REQUIREMENTS = _SCRIPTS_DIR / "requirements.txt"
-_UPSTREAM_ADB_SCRIPTS = (
-    "https://raw.githubusercontent.com/ggml-org/llama.cpp/master/scripts/snapdragon/adb"
-)
-_ADB_SCRIPT_NAMES = [
-    "run-bench.sh",
-    "run-cli.sh",
-    "run-completion.sh",
-    "run-tool.sh",
-]
+_RUN_PY = _SCRIPTS_DIR.parent / "run.py"
 
 # --- Linux (BASH) assets ------------------------------------------------------
 _RUN_LINUX_TEMPLATE = _TESTS_DIR / "linux" / "run_linux.sh"
@@ -147,7 +138,7 @@ def _build_android_artifact(
 
     Zip structure:
       llama_cpp_bundle/            installed package (adb pushed to /data/local/tmp/)
-      run-{bench,cli,completion,tool}.sh  upstream adb wrappers (patched)
+      run.py                       Snapdragon runner
       tests/
         utils.py                   shared adb helpers
         conftest.py                Appium pytest fixtures
@@ -159,21 +150,9 @@ def _build_android_artifact(
     bundle_dir = stage_dir / "llama_cpp_bundle"
     shutil.copytree(pkg_dir, bundle_dir)
 
-    # Download upstream adb scripts so they land at /qdc/appium/ on the QDC
-    # runner. They wrap `adb shell` internally. Patch in `chmod +x bin/* lib/*`
-    # right after `cd $basedir` so device binaries are executable.
-    for name in _ADB_SCRIPT_NAMES:
-        url = f"{_UPSTREAM_ADB_SCRIPTS}/{name}"
-        dest = stage_dir / name
-        log.info("Downloading %s", url)
-        urllib.request.urlretrieve(url, str(dest))
-        content = dest.read_text()
-        content = content.replace(
-            "cd $basedir;",
-            "cd $basedir; chmod +x bin/* lib/* 2>/dev/null;",
-        )
-        dest.write_text(content)
-        dest.chmod(0o755)
+    dest = stage_dir / "run.py"
+    shutil.copy(_RUN_PY, dest)
+    dest.chmod(0o755)
 
     tests_dir = stage_dir / "tests"
     tests_dir.mkdir()

@@ -17,7 +17,7 @@ struct ggml_et_glu_params {
     int32_t            glu_op_type;  // GLU operation type (REGLU=0, GEGLU=1, SWIGLU=2, etc.)
     int32_t            swapped;      // Whether gate and value are swapped
     float              alpha;        // SWIGLU_OAI: sigmoid scaling factor
-    float              limit;        // SWIGLU_OAI: clamp limit
+    float              limit;        // GLU clamp limit
 };
 
 // SiLU activation function: silu(x) = x * sigmoid(x) = x / (1 + exp(-x))
@@ -332,6 +332,57 @@ static inline void block_swiglu_oai(float *       dst_block,
     }
 }
 
+static inline void block_swiglu_clamp(float *       dst_block,
+                                      const float * gate_block,
+                                      const float * up_block,
+                                      int           elements,
+                                      float         limit) {
+    int32_t vec_end = (elements / 8) * 8;
+
+    unsigned long temp_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(temp_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+
+    float one_const = 1.0f;
+    float limit_pos = limit;
+    float limit_neg = -limit;
+    float neg_log2e = -1.4426950408889634f;
+
+    for (int32_t i = 0; i < vec_end; i += 8) {
+        __asm__ volatile(
+            "flw.ps  f10, %[gate_vec]\n"
+            "flw.ps  f11, %[up_vec]\n"
+            "fbc.ps  f21, %[one_ptr]\n"
+            "fbc.ps  f23, %[lim_pos]\n"
+            "fbc.ps  f24, %[lim_neg]\n"
+            "fbc.ps  f25, %[k_ptr]\n"
+            "fmin.ps f12, f10, f23\n"
+            "fmax.ps f13, f11, f24\n"
+            "fmin.ps f13, f13, f23\n"
+            "fmul.ps f14, f12, f25\n"
+            "fexp.ps f15, f14\n"
+            "fadd.ps f15, f15, f21\n"
+            "frcp.ps f16, f15\n"
+            "fmul.ps f17, f12, f16\n"
+            "fmul.ps f18, f17, f13\n"
+            "fsw.ps  f18, %[dst_out]\n"
+            : [dst_out] "=m"(*(float (*)[8]) & dst_block[i])
+            : [gate_vec] "m"(*(const float (*)[8]) & gate_block[i]), [up_vec] "m"(*(const float (*)[8]) & up_block[i]),
+              [one_ptr] "m"(one_const), [lim_pos] "m"(limit_pos), [lim_neg] "m"(limit_neg), [k_ptr] "m"(neg_log2e)
+            : "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f21", "f23", "f24", "f25");
+    }
+
+    __asm__ volatile("mova.m.x %0" :: "r"(temp_mask));
+
+    for (int32_t i = vec_end; i < elements; i++) {
+        float gate   = gate_block[i] > limit ? limit : gate_block[i];
+        float up     = up_block[i];
+        up           = up > limit ? limit : up;
+        up           = up < -limit ? -limit : up;
+        dst_block[i] = silu_f32(gate) * up;
+    }
+}
+
 // Scalar erf approximation (Abramowitz & Stegun 7.1.26, max error ~1.5e-7)
 static inline float erf_approx(float x) {
     const float a1 = 0.254829592f;
@@ -386,6 +437,7 @@ int entry_point(struct ggml_et_glu_params * params, void * env) {
     switch (params->glu_op_type) {
         case GGML_GLU_OP_SWIGLU:
         case GGML_GLU_OP_SWIGLU_OAI:
+        case GGML_GLU_OP_SWIGLU_CLAMP:
         case GGML_GLU_OP_GEGLU:
         case GGML_GLU_OP_GEGLU_ERF:
         case GGML_GLU_OP_GEGLU_QUICK:
@@ -530,6 +582,9 @@ int entry_point(struct ggml_et_glu_params * params, void * env) {
                     break;
                 case GGML_GLU_OP_SWIGLU_OAI:
                     block_swiglu_oai(dst_ptr, x_ptr, g_ptr, (int) elements_to_process, params->alpha, params->limit);
+                    break;
+                case GGML_GLU_OP_SWIGLU_CLAMP:
+                    block_swiglu_clamp(dst_ptr, x_ptr, g_ptr, (int) elements_to_process, params->limit);
                     break;
                 default:
                     return -1;

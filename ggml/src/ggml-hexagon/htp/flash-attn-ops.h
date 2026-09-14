@@ -51,6 +51,7 @@ struct htp_fa_kernel_params {
 
     uint32_t qrows;
     uint32_t qrows_per_thread;
+    uint32_t qrow_start;
     float    m0;
     float    m1;
     uint32_t n_head_log2;

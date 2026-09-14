@@ -188,7 +188,7 @@ llama_memory_breakdown_print: |   - Host               |                  439 = 
 Op test for MUL_MAT:
 
 ```
-~/src/llama.cpp$ ./scripts/snapdragon/run.py --target adb --hex-hostbuf 0 --devices HTP0:0 -- test-backend-ops -b HTP0:0 -o MUL_MAT
+~/src/llama.cpp$ ./scripts/snapdragon/run.py --target adb --devices HTP0:0 -- test-backend-ops -b HTP0:0 -o MUL_MAT
 ...
 Backend 2/3: HTP0:0
 Device description: Hexagon
@@ -213,14 +213,109 @@ ggml-hex: new session: HTP0 : session-id 0 domain-id 3 uri file:///libggml-htp-v
 | llama 1B Q4_0  | 729.75 MiB | 1.24 B | HTP        |  99 |       4 |     128 |    0 |  tg64 |  51.54 ± 1.13 |
 ```
 
+## Multi-Device Execution Modes
+
+The Hexagon backend supports multiple execution and partitioning modes to accommodate different model sizes, memory
+constraints, and single- or multi-NPU hardware topologies:
+
+### 1. Single-Device Mode with Dynamic Buffer Mapping
+
+Runs the model on a single NPU session (e.g. `HTP0` or `HTP0:0`).
+
+A single NPU session provides ~3.5GB of available virtual address space. For models larger than 3.5GB, the backend
+automatically maps and unmaps weight buffers during graph execution. This allows large models to run on a single NPU
+without manual configuration:
+
+```bash
+./scripts/snapdragon/run.py --target adb --devices HTP0:0 -- \
+    llama-cli -m models/Llama-3.2-3B-Instruct-Q4_0.gguf -ngl 99 -p "Hello"
+```
+
+### 2. Layer-Split Mode across Virtual Sessions (`HTP0,HTP1,...` or `HTP0:0,HTP0:1,...`)
+
+Partitions model layers at load time across multiple virtual sessions hosted on a single physical NPU.
+
+Each virtual session acts as an independent backend device from llama.cpp's perspective (similar to multiple GPUs).
+Because layers are permanently distributed across sessions, each session's allocated weights remain within its private 3.5GB
+address space window, eliminating runtime buffer re-mapping overhead.
+
+Here is an example of running the GPT-OSS-20B model on a Snapdragon device using 4 virtual sessions on a single NPU:
+
+```bash
+./scripts/snapdragon/run.py --target adb \
+    --devices HTP0:0,HTP0:1,HTP0:2,HTP0:3 -- \
+    llama-cli --load-mode none -m /data/local/tmp/gguf/gpt-oss-20b-Q4_0.gguf -t 4 \
+    --ctx-size 8192 --batch-size 128 -ctk q8_0 -ctv q8_0 -fa on -ngl 99 -no-cnv -f surfing.txt
+```
+
+Log output snippet:
+
+```
+...
+llama_model_loader: - type  f32:  289 tensors
+llama_model_loader: - type q4_0:   96 tensors
+llama_model_loader: - type q8_0:    2 tensors
+llama_model_loader: - type mxfp4:  72 tensors
+...
+load_tensors: offloaded 25/25 layers to GPU
+load_tensors:          CPU model buffer size =  1182.09 MiB
+load_tensors:       HTP0:1 model buffer size =  2512.58 MiB
+load_tensors:       HTP0:3 model buffer size =  2093.83 MiB
+load_tensors:       HTP0:0 model buffer size =  2931.34 MiB
+load_tensors:       HTP0:2 model buffer size =  2512.58 MiB
+...
+llama_perf_context_print: prompt eval time =    3843.67 ms /   197 tokens ( 19.51 ms per token, 51.25 tokens per second)
+llama_perf_context_print:        eval time =    1686.13 ms /    31 runs   ( 54.39 ms per token, 18.39 tokens per second)
+llama_perf_context_print:       total time =    6266.30 ms /   228 tokens
+llama_memory_breakdown_print: | memory breakdown [MiB] | total   free    self   model   context   compute    unaccounted |
+llama_memory_breakdown_print: |   - HTP0:0 (Hexagon)   |  2048 = 2048 + (   0 =     0 +       0 +       0) +           0 |
+llama_memory_breakdown_print: |   - HTP0:1 (Hexagon)   |  2048 = 2048 + (   0 =     0 +       0 +       0) +           0 |
+llama_memory_breakdown_print: |   - HTP0:2 (Hexagon)   |  2048 = 2048 + (   0 =     0 +       0 +       0) +           0 |
+llama_memory_breakdown_print: |   - HTP0:3 (Hexagon)   |  2048 = 2048 + (   0 =     0 +       0 +       0) +           0 |
+llama_memory_breakdown_print: |   - Host               |                 1476 =  1208 +     105 +     162                |
+```
+
+### 3. Tensor-Split Mode across Physical Devices (`HTP0:0,HTP1:0,...`)
+
+Distributes model tensors across distinct physical NPU hardware cores using llama.cpp's tensor parallelism
+(`--split-mode tensor`).
+
+Tensors are partitioned across physical NPUs for parallel execution (proportions are distributed equally by default without
+needing an explicit `--tensor-split` option):
+
+```bash
+./scripts/snapdragon/run.py --target adb \
+    --devices HTP0:0,HTP1:0 -- \
+    llama-cli -m models/Llama-3.2-3B-Instruct-Q4_0.gguf --split-mode tensor -ngl 99 -p "Hello"
+```
+
+### 4. Row-Split Multi-Device Mode via Device Grouping (`HTP0[0-1]`)
+
+Groups multiple physical NPU cores into a single logical device using bracket notation (`HTP0[0-1]` or `HTP0[0,1]`).
+
+Unlike host-level tensor-splitting, row-splitting is executed entirely inside the Hexagon backend:
+
+```bash
+./scripts/snapdragon/run.py --target adb \
+    --devices 'HTP0[0-1]' -- \
+    llama-cli -m models/Llama-3.2-3B-Instruct-Q4_0.gguf -ngl 99 -p "Hello"
+```
+
+You can also combine row-splitting with layer-splitting across multiple grouped devices (e.g. `--devices 'HTP0[0-1],HTP1[2-3]'`
+on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs using virtual sessions 0 and 1).
+
 ## Environment variables
 
 - `GGML_HEXAGON_DEVICES` (default: not set, defaults to HTP0 session)
-  Controls which NPU devices and sessions to allocate. Can be configured as:
-  - A single integer `N`: Allocates `N` sessions named `HTP0`, `HTP1`, ..., `HTP<N-1>` (behaves identically to `GGML_HEXAGON_NDEV=N`).
-  - A comma-separated list of device names in `HTP<physical_idx>:<virtual_idx>` format (or legacy `HTP<idx>` format). For example, `HTP0:0,HTP0:1` creates two virtual
-    sessions on the first physical NPU (useful for memory limits). `HTP0:0,HTP1:0` allocates one session on each of the two physical NPUs
-    on a dual-NPU device.
+  Controls which NPU devices and sessions to allocate. Configurable via `--devices` in `run.py`:
+  - `N` (single integer): Allocates `N` virtual sessions named `HTP0`, `HTP1`, ..., `HTP<N-1>` on physical NPU 0.
+  - `HTP<phys>:<virt>,...`: Comma-separated list of individual devices specifying physical and virtual index:
+    - `HTP0:0,HTP0:1`: Two virtual sessions on physical NPU 0 (layer-split on single NPU).
+    - `HTP0:0,HTP1:0`: One session on physical NPU 0 and one on physical NPU 1 (tensor-split across physical cores).
+  - `HTP<name>[<phys_spec>]`: Device grouping syntax for row-split multi-device execution:
+    - `HTP0[0-1]`: A single logical device `HTP0` that groups physical cores 0 and 1.
+    - `HTP0[0-1],HTP1[2-3]`: Two layer-split devices across 4 physical NPUs (cores 0-1 and 2-3).
+    - `HTP0[0-1:0],HTP1[0-1:1]`: Two layer-split devices across 2 physical NPUs using virtual sessions 0 and 1.
 
 - `GGML_HEXAGON_NDEV` (deprecated)
   Replaced by `GGML_HEXAGON_DEVICES`. Controls the number of virtual sessions to allocate on physical NPU `0`.
@@ -229,9 +324,8 @@ ggml-hex: new session: HTP0 : session-id 0 domain-id 3 uri file:///libggml-htp-v
 - `GGML_HEXAGON_NHVX=0`
   Controls the number of HVX hardware threads to use. The default is all (actual number varies depending on the hardware version).
 
-- `GGML_HEXAGON_HOSTBUF=1`
-  Controls whether the Hexagon backend allocates host buffers. By default, all buffers except for REPACK are host buffers.
-  This option is required for testing Ops that require REPACK buffers (MUL_MAT and MUL_MAT_ID).
+- `GGML_HEXAGON_HOSTBUF=1` (default: 0, disabled)
+  Enables allocating host buffers for debugging. By default, host buffers are disabled.
 
 - `GGML_HEXAGON_VERBOSE=1`
   Enables verbose logging of Ops from the backend. Example output:
@@ -246,23 +340,26 @@ ggml-hex: new session: HTP0 : session-id 0 domain-id 3 uri file:///libggml-htp-v
   ```
 
 - `GGML_HEXAGON_PROFILE=1`
-  Enables Op profiling:
+  Enables Op profiling (configurable via `--hex-profile` in `run.py`):
 
-  - `1` Basic profile with per-op `usecs` and `cycles` counters
-  - `2` Extended profile with per-op `usecs`, `cycles` and default PMU counter data
-  - `0x1,...,0x8` Extended profile with per-op `usecs`, `cycles` and custom PMU counter data
+  - `1`: Basic profile with per-op `usecs` and `cycles` counters
+  - `2`: Extended profile with per-op `usecs`, `cycles` and default PMU counter data
+  - `0x1,...,0x8`: Extended profile with per-op `usecs`, `cycles` and custom PMU counter data
 
-  The logging output can be either saved into a file for post-processing or it can be piped directly into the post-processing tool
-  to generate the report.
-  Examples:
+  The logging output can be saved to a file or piped directly into the post-processing script:
 
-      `GGML_HEXAGON_PROFILE=1 ./scripts/snapdragon/run.py --target adb -- llama-cli ... |& ./scripts/snapdragon/ggml-hexagon-profile.py -`
+  ```bash
+  ./scripts/snapdragon/run.py --target adb --hex-profile 1 -- llama-cli ... |& \
+      ./scripts/snapdragon/ggml-hexagon-profile.py -
+  ```
 
 - `GGML_HEXAGON_OPFILTER=regex`
-  Allows filtering (disabling) Ops that match the regex pattern:
+  Filters (disables) Ops matching the regex pattern (configurable via `--hex-opfilter` in `run.py`):
 
-  Examples:
+  ```bash
+  # Disable Flash Attention on Hexagon (falls back to CPU or GPU)
+  ./scripts/snapdragon/run.py --target adb --hex-opfilter "FLASH_ATTN_EXT" -- llama-cli ...
 
-      `GGML_HEXAGON_OPFILTER="FLASH_ATTN_EXT" ./scripts/snapdragon/run.py --target adb -- llama-cli ...` - Disable Flash Attention on Hexagon (falls back to CPU or GPU)
-      `GGML_HEXAGON_OPFILTER="ADD\|SUB" ./scripts/snapdragon/run.py --target adb -- llama-cli ...` - Disable ADD and SUB on Hexagon (fall back to CPU or GPU)
-
+  # Disable ADD and SUB on Hexagon (fall back to CPU or GPU)
+  ./scripts/snapdragon/run.py --target adb --hex-opfilter "ADD|SUB" -- llama-cli ...
+  ```
