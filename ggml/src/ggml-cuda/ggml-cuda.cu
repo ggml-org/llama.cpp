@@ -307,7 +307,12 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].integrated = false; // Temporarily disabled due to issues with corrupted output (e.g. #15034)
         info.devices[id].nsm        = prop.multiProcessorCount;
         info.devices[id].smpb       = prop.sharedMemPerBlock;
-        info.devices[id].warp_size  = prop.warpSize;
+        info.devices[id].reported_warp_size = prop.warpSize;
+        info.devices[id].warp_size = ggml_cuda_vendor_policy::kernel_warp_size(prop.warpSize);
+        if (info.devices[id].warp_size != info.devices[id].reported_warp_size) {
+            GGML_LOG_INFO("  Device %d: reported warp size = %d, kernel warp size = %d\n",
+                          id, info.devices[id].reported_warp_size, info.devices[id].warp_size);
+        }
 
 #ifndef GGML_USE_MUSA
         int supports_coop_launch = 0;

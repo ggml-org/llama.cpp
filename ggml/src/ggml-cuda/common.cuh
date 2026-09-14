@@ -64,6 +64,10 @@ struct ggml_cuda_default_vendor_policy {
     static constexpr bool supports_mmvq = true;
     static constexpr bool supports_mmvq_fusion = true;
     static constexpr bool supports_transposed_mmvf = true;
+
+    static constexpr __host__ __device__ int kernel_warp_size(int warp_size) {
+        return warp_size;
+    }
 };
 
 #define GGML_CUDA_VENDOR_POLICY ggml_cuda_default_vendor_policy
@@ -412,11 +416,12 @@ static bool ggml_cuda_is_aligned(const ggml_tensor * tensor, const size_t alignm
            tensor->nb[3] % alignment == 0;
 }
 
+// Kernel subgroup width; vendor policy can differ from the runtime-reported width.
 static constexpr GGML_CUDA_VENDOR_HOST_CONSTEXPR __device__ int ggml_cuda_get_physical_warp_size() {
 #if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
-    return 64;
+    return ggml_cuda_vendor_policy::kernel_warp_size(64);
 #else
-    return 32;
+    return ggml_cuda_vendor_policy::kernel_warp_size(32);
 #endif // defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
 }
 
@@ -1212,7 +1217,8 @@ struct ggml_cuda_device_info {
         bool    vmm;                            // virtual memory support
         size_t  vmm_granularity;                // granularity of virtual memory
         size_t  total_vram;
-        int     warp_size;                      // Number of threads in a dispatch
+        int     warp_size;                      // Logical subgroup width used by shared kernels
+        int     reported_warp_size;             // Unmodified cudaDeviceProp::warpSize
         bool    supports_cooperative_launch;    // whether cooperative launch is supported
         int     physical_device;                // backing physical CUDA device for this (virtual) device
         int     physical_share_count;           // number of (virtual) devices sharing this device's physical GPU

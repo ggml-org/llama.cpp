@@ -19,6 +19,12 @@ The initial implementation uses these matrix multiplication routes:
 | Quantized matrix multiplication, including prefill and decode | dequantization followed by mcBLAS |
 | Unvalidated fused or indexed operations | conservative fallback |
 
+## Kernel subgroup width
+
+MACA uses logical 32-lane groups for shared CUDA kernels. The vendor policy supplies the same width to device initialization and the compile-time kernel helper, so launch dimensions and kernel indexing agree. The device record preserves the runtime-reported width in `reported_warp_size`; `warp_size` holds the logical width used by shared kernels.
+
+The upstream helper name `ggml_cuda_get_physical_warp_size()` is retained; on MACA it returns the logical kernel width. This compatibility fix does not enable MMVQ, DP4A, Flash Attention, or graph capture. It does not claim a performance improvement.
+
 ## Requirements
 
 - A MetaX GPU with a compatible driver
@@ -149,7 +155,7 @@ Earlier development versions were reported tested with the configurations below.
 | MetaX C600-A, four devices | Qwen2.5-3B-Instruct | F16, Q8_0, Q4_0 | per-device execution and layer split |
 | MetaX C600-A, four devices | Llama-3.2-3B-Instruct | F16, Q8_0, Q4_0 | per-device execution and layer split |
 
-The current post-rebase C500 run passed 49 Q8_0 x F32 `MUL_MAT` cases. Model benchmarks and interactive smoke tests also completed for Llama-3.2-3B-Instruct Q8_0 and Qwen2.5-3B-Instruct Q4_0, Q2_K, and Q3_K_M. C600-A and multi-device results for this revision remain to be refreshed. Interactive generation is a smoke test, not a full numerical accuracy test.
+Before the subgroup-width fix, the post-rebase C500 run passed 49 Q8_0 x F32 `MUL_MAT` cases. Model benchmarks and interactive smoke tests also completed for Llama-3.2-3B-Instruct Q8_0 and Qwen2.5-3B-Instruct Q4_0, Q2_K, and Q3_K_M. The subgroup-width fix requires fresh hardware validation on this base branch; results from the optimization branch do not establish coverage here. C600-A and multi-device results also remain to be refreshed. Interactive generation is a smoke test, not a full numerical accuracy test.
 
 ## Current limitations
 
