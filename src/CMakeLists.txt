@@ -65,6 +65,10 @@ add_library(llama
             llama-kv-stream-resident.h
             llama-kv-stream-capture.cpp
             llama-kv-stream-capture.h
+            llama-kv-stream-session.cpp
+            llama-kv-stream-session.h
+            llama-kv-stream-model.cpp
+            llama-kv-stream-model.h
             llama-kv-stream-prefetch.h
             llama-kv-stream-writer.cpp
             llama-kv-stream-writer.h

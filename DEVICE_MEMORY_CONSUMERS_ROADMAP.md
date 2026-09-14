@@ -6,7 +6,7 @@ Last source review: 2026-09-13, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`. **5.4k** is ready for review; after its user commit, next is **5.5a**. The remainder of milestones 5-8 is planned. The new allocation factory is opt-in; no server streaming runtime is enabled and production allocation choices are unchanged.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`. All of **5.5a.1-5.5a.4** are implemented and qualified for one combined user review/commit, as requested. Public streaming is opt-in; production still runs its original image/configuration. The model bridge now retains strict native prefill and uses validated resumable native decode on eligible CUDA quantized paths; decode physically replaces the gather workspace with bounded accumulator storage. The strict gather control and measured tradeoffs are documented below. Next is **5.5b**, not completion of milestone 5.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -211,9 +211,15 @@ Outcome: fixed-budget adaptive streaming runs on milestone 3, independently of p
 | 5.4j.4 | 5.4j.3 | Qualify batch-level deadline/publication optimization while retaining ticket-based reuse safety. | Every eligible upload batch covered, fallback/subspan reuse, delayed publication and consumption, unchanged outputs, and isolated overhead comparison. Do not change the broader attention synchronization contract here. |
 | 5.4k | 5.4j.4 | Capture eligibility and invalidation for the completed KV runtime: enable eligible resident replay and gate streamed capture. | Resident replay, resident-to-streamed-to-resident transitions, content/layout generation changes, and no stale captured pointers. |
 | 5.5a | 5.4k | Opt-in text-context integration, serial execution gating, and hybrid recurrent-state preservation. | Real-model prefill/decode, context limits, unsupported model/device/sequence rejection, and feature-disabled equivalence. |
+| 5.5a.1 | 5.4k | Disjoint leased producer workspace and atomic K/V publication during live historical prefetch. | Workspace retention/alias rejection, completed GPU producer rows, tiled batches, resident/tail boundaries, post-submission failure and retry. |
+| 5.5a.2 | 5.5a.1 | Session ownership of host content, device grant, writer/partial workspace and accepted live policy transitions; no public enablement yet. | Full grant accounting, bind/repartition/capture retirement ordering, append continuity, failure cleanup and unchanged recurrent ownership. |
+| 5.5a.3 | 5.5a.2 | Model-graph producer/attention bridge over the session, including resident execution and streamed segmentation. | Real graph dependencies, producer completion before tail use, no accidental source recomputation or full-cache H2D, retained workspace/capture lifetime. |
+| 5.5a.4 | 5.5a.3 | Public opt-in context integration, serial/model/device gates and real hybrid-model qualification. | Original 5.5a acceptance tests: prefill/decode, b/ub splitting, context limits, unsupported configurations and feature-disabled/recurrent-state equivalence. |
 | 5.5b | 5.5a | Serial request/reset/cancellation and prompt-cache save/restore integration. | Different content/lengths, reused prefixes, cache replacement, abort followed by another request, and recurrent state equivalence. |
 | 5.5c | 5.5b | Qualify fixed-pool performance and add only diagnostics needed to explain differences. | All-resident, streaming onset, moderate streaming, and bandwidth-limited comparisons against the fixed-pool reference; transfer volume and sufficient decode length. |
 | 5.5d | 5.5c | Document supported configurations, fixed-budget semantics, limitations, and reproducible focused tests. | Verify documented invocations and capability matrix; no broad model/backend claim from quant-only coverage. |
+
+Stage 5.5a retains its original scope and is complete only after 5.5a.1-5.5a.4 pass. The integration review found independently risky producer, ownership and graph-dispatch boundaries: the existing writer used ring storage and could not run while cross-layer prefetch owned that storage. These explicit subdivisions follow the commit-sizing rule above; they do not renumber stages 5.5b-5.5d or declare server integration complete early. The original milestone commit counts are planning estimates, not fixed totals after subdivisions.
 
 Acceptance:
 
@@ -363,8 +369,13 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.4j.2 | Committed | 5ee09b7e1 | Two bounded deferred counter snapshots, run identity, nonblocking polling, and no measurement-only wait. User requested one combined commit for 5.4j.1-5.4j.4. |
 | 5.4j.3 | Committed | 5ee09b7e1 | Explicit decode intent/query count and immutable-history eligibility; unknown phase, prefill, one-token prompts, and producer-constrained tails do not train prefetch feedback. |
 | 5.4j.4 | Committed | 5ee09b7e1 | One marker/probe per eligible upload batch, with safe partial consumption and first-slot reuse. Full bundle: four 25-suite matrices, CUDA copy 23 / 3,211, runtime-prefetch 14 / 3,048, targeted TSan and CUDA memory checks pass. |
-| 5.4k | Ready for review | - | KV-aware resident replay over the existing CUDA executor; retained native roots and leases, fixed metadata admission, streamed-epoch invalidation, and active-capture rejection. 13 CUDA cases / 166 assertions; four 26-suite matrices, graph-disabled checks, targeted host TSan and UVM-off/on CUDA memcheck pass. Scope and measured guard cost below. |
-| 5.5a-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.4k | Committed | 6879fe81a | KV-aware resident replay over the existing CUDA executor; retained native roots and leases, fixed metadata admission, streamed-epoch invalidation, and active-capture rejection. 13 CUDA cases / 166 assertions; four 26-suite matrices, graph-disabled checks, targeted host TSan and UVM-off/on CUDA memcheck pass. Scope and measured guard cost below. |
+| 5.5a | Ready for review | - | All four substages qualified for one user commit. Q3 and IQ4 real-model logits/recurrent state match stock exactly in the tested append cases; strict native gather trades extra workspace/copies for arithmetic equivalence. |
+| 5.5a.1 | Ready for review | - | Separate leased producer scratch, atomic GPU-generated K/V tails and attention/writer alias rejection. CUDA 9 cases / 515 assertions; four 27-suite matrices, targeted host TSan, graph-disabled execution and UVM-off/on CUDA memcheck pass. |
+| 5.5a.2 | Ready for review | - | Leased session ownership, append frontier, accepted policy replacement, explicit phase, retained workspace/capture lifetime and failure closure. |
+| 5.5a.3 | Ready for review | - | Private buffer-local execution dispatch, paired model producers, native resident/captured attention and strict encoded-layer gather for streamed attention. |
+| 5.5a.4 | Ready for review | - | Public context/server opt-in, model/device/sequence gates, hybrid lifecycle guards, exact real-model comparisons and serial fresh-request HTTP smoke tests. Request/cache restoration remains 5.5b. |
+| 5.5b-5.5d | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -2570,3 +2581,172 @@ These differences are within about 0.5%; no material streaming regression or gen
 Reproduce the new checks with `build-device-memory-infra-cuda/bin/test-kv-stream-capture --cuda`; use `GGML_CUDA_DISABLE_GRAPHS=1` with `--cuda --no-graphs` for eager execution, and `GGML_CUDA_GRAPH_OPT=1` with `--cuda --unsupported` for the unsupported-mode contract. The replay comparison uses `--bench` and `--bench-guarded`. Local validation logs are `/tmp/kv-54k-*.log` and are not repository artifacts.
 
 After user review and commit, proceed to **5.5a: opt-in text-context integration, serial execution gating and hybrid recurrent-state preservation**. Full-model producer/writeback wiring remains there; this stage does not claim a captured complete decode graph. No production service, compose configuration, model, checkpoint or prompt cache was changed. Task files are staged for the user; unrelated README/documentation/benchmark edits remain untouched, and no commit or push was created.
+
+## Substage 5.5a.1: producer workspace during live prefetch
+
+The integration audit reread `llama_context::process_ubatch`, the ordinary graph's K/V producer and attention dependencies, `llama_kv_cache` allocation, `llama_memory_hybrid`, and the production reference at `d873e5db9`. The current components do not yet provide a complete model-graph bridge. In particular, the stage-5.3c writer borrowed ring storage, was retired at sequence entry, and could only publish rows that fit the resident plane. That cannot serve new GPU-produced tails while cross-layer historical copies own ring slots. Stage 5.5a is therefore split explicitly above; its original real-model acceptance criteria remain unchanged.
+
+### Implementation
+
+- `configure_writes(max_rows, workspace)` optionally accepts a separate coarse lease of the same device allocation type. Validate size, alignment, address overflow and physical disjointness from the entire KV region. Retain the lease until cached writer graphs retire and the workspace is explicitly released or the resident consumer is destroyed. The original no-workspace call still borrows the idle ring and is still retired before prefetch starts.
+- A writer with external workspace survives sequence entry and layer execution. Scratch indices and encoded output remain outside the ring, so historical prefetch need not be cancelled to run a producer.
+- `write_sequence_rows(layer, first, k, v)` accepts completed dense F32 K/V producer rows for an unconsumed layer. Both inputs must cover the complete declared mutable suffix `[stable_tokens, active_tokens)`. The existing quant-aware tiled SET_ROWS writer generates both planes into one private host-content transaction. Commit once, only after both planes and their downloads complete; then update the sequence's accepted content identity.
+- Reuse the existing tail validation and resident-dirty bookkeeping for both encoded host publication and generated GPU publication. Resident portions refresh at layer entry; deferred ring tails become eligible at that layer's existing readiness boundary. Publishing a tail alone does not issue another historical H2D copy.
+- The writer's D2D publication callback is optional. Sequence production performs private-host download only and reports zero D2D bytes/calls; the existing idle resident writer keeps its D2D fast path and byte accounting. Storage encoding still uses the generic K/V type contract, not a Q8/Q4 special case.
+- Reject producer sources overlapping encoded scratch/indices. Also reject attention scratch and Q/mask/output ranges that alias the retained external writer region: attention must not overwrite index values needed by a later writer replay. Cache the writer range at configuration, rather than querying a lease for each page.
+- Invalid producer inputs leave content and the sequence unchanged. Failure or exception after generation begins drains pending writer work and cancels historical prefetch before private payload memory disappears. Neither K nor V is committed on failure. This is producer transaction safety, not rollback of model recurrent state that may already have changed elsewhere.
+
+The synchronous producer boundary is deliberate: this method returns after quantization and D2H completion, not after merely enqueueing work. Historical prefetch can remain active on its separate copy stream, but this stage does not claim fully asynchronous model execution or new throughput gains. Source tensor metadata/owners and the resident binding pin must remain alive for each call. Cached source buffer retention stays bounded by the existing single writer plan.
+
+The external workspace is **additional explicitly granted storage**, not silently included in the KV pool. The tests provide a 32 KiB lease and exercise batches larger than its tile capacity. Session-level budget accounting and coordinated grant ownership belong to 5.5a.2; no production pool size or reserve was changed here. The partial-attention workspace remains a separate disjoint lease too.
+
+### TDD and qualification
+
+The initial external-lease and live-producer tests failed against rejecting stubs. After those passed, an additional test exposed attention scratch aliasing the retained writer indices: attention was incorrectly admitted, leaving the session active with overwritten scratch. The failing test was recorded before adding cached-range exclusions, then extended to aliased Q and output buffers.
+
+- Producer suite: **9 CUDA cases / 515 assertions**. It covers retained workspace after caller release, KV/scratch/source aliases, undersized and wrong-type workspace, invalid producers, reentrancy, failure after the V download is submitted, retry, resident-boundary updates and teardown with pending historical copies.
+- Real producer/attention matrix: F16/F16, Q8_0/Q4_0 and Q4_0/Q8_0 with 1, 33 and 257 producer rows across four layers. Encoded bytes match independent ordinary SET_ROWS output; streamed attention matches the scalar CPU oracle. A Q5_1/Q4_1 two-row update straddles the resident/streamed boundary and preserves previous rows.
+- Every successful K/V pair advances content generation once. Exact historical-plus-tail H2D byte counts are checked; publication does not duplicate historical traffic. The tests use an intentionally constrained pool to keep streaming active, not maximum-pool benchmarking.
+- All **27 focused suites** pass in CPU Debug, CUDA-build Debug, ASan and UBSan. Default CTest covers host contracts, not every native backend. The new CPU producer subset passes 3 cases / 16 assertions.
+- CUDA Compute Sanitizer memcheck passes all 9 / 515 cases with UVM disabled and enabled: zero errors and zero leaked bytes. Automatic CUDA graphs disabled also passes 9 / 515.
+- Existing native regressions pass: writer 10 / 609, cross-layer prefetch 14 / 3,048, resident capture 13 / 166, and all four CUDA SCALE CPU-reference comparisons. No CUDA kernel implementation changed in this substage.
+- Targeted CPU TSan passes producer workspace contracts (3 / 16) and common executor ownership (16 / 176), using process-local `setarch x86_64 -R`. This does not qualify CUDA device races or remove the earlier broader TSan limitations.
+- Reproduce with `build-device-memory-infra-cuda/bin/test-kv-stream-producer --cuda`; omit `--cuda` for CPU workspace tests. Set `GGML_CUDA_DISABLE_GRAPHS=1` for the eager path. Local build/test/sanitizer evidence is in `/tmp/kv-55a1-*.log` and is not committed.
+
+This records the producer prerequisite in isolation. The user subsequently requested completing all of 5.5a before committing; the combined result follows. No full-model performance claim follows from these producer tests.
+
+## Substages 5.5a.2-5.5a.4: session, model bridge and public integration
+
+### Ownership and execution
+
+- The session retains authoritative host content plus disjoint pool, writer and attention-workspace leases. It accepts one contiguous append in sequence zero, requires each layer's K/V production before attention, and commits the token frontier only after every attention layer completes. Recurrent state remains owned by the hybrid text context.
+- A replacement policy is published only after native binding succeeds. Rejected candidate construction preserves the previous policy/revision. Failures after mutation close the session for safe teardown; this is not recurrent-state rollback. Explicit prefill intent keeps uniform residency even for short prompt tails; authorized tail writes preserve feedback continuity.
+- The private execution-buffer wrapper retains stateless host storage but does not advertise CPU fallback. CUDA opts into owner-local SET_ROWS/attention dispatch; ordinary graph segments retain native fusion/capture. Mixed owners and unsupported operations are rejected. An atomic presence check avoids scanning ordinary graphs when no such buffers exist. No native buffer interface struct was enlarged.
+- K/V roots point to authoritative host planes. A V producer carries an explicit dependency on the K source so the scheduler cannot reuse K's allocator slot early. Actual row indices are checked once per distinct input buffer per append. Device execution does not silently copy the entire host KV tensor to CUDA.
+- Eligible all-resident TG1 attention uses the guarded capture executor from 5.4k. Captures retain root and compute-workspace leases and use owned leaf aliases. Captures and writer references retire before scheduler-workspace replacement. The context's memory owner now destructs before its backend objects, including constructor-unwind paths.
+- Proxy byte I/O uses a detached backing alias with the same absolute data address. Leaving its original view source attached recursively routed state-save reads back into the proxy; the dedicated view test now covers that regression. Stateful-reset host backings are rejected.
+
+### Stock arithmetic equivalence: deliberate integration change
+
+The original reference and the low-level partial consumer split attention reductions. Traced real-model Q/K/V inputs were equal, but changed FP16 reduction order produced about 0.04% local attention difference, amplified by recurrent layers into roughly 1.9-4.3% relative state L2 error and 30-31/32 matching top tokens. The user explicitly selected **tighter stock equivalence**, not reference-like tolerance or maximum speed. Keeping native all-resident attention established an exact control.
+
+The public model path therefore uses **strict native gather**:
+
+1. Copy the resident encoded prefix of the current layer into its leased full-layer workspace with D2D copies.
+2. Prefetch missing encoded pages through the existing shared ring and copy them into their logical positions in that workspace. A ring slot is reused only after its gather copy completes.
+3. Run ordinary CUDA Flash Attention once over the complete logical layer. All-resident layers bypass gathering and use native resident tensors directly.
+
+Authoritative host ownership, adaptive residency, shared-ring prefetch and cross-layer scheduling remain. Native Flash Attention kernels are unchanged; partial numerical reduction is no longer used by the public model bridge. Low-level partial tests remain as component coverage, not evidence of strict model-level equivalence for that alternative path.
+
+**Memory/performance cost:** besides `--kv-stream-pool-mib`, the bridge explicitly grants 32 KiB writer scratch and one full encoded layer's KV workspace sized for the configured context. For the tested Qwen 27B Q8_0/Q4_0 geometry this workspace is **1.625 MiB at 1,024 tokens** and **416 MiB at 262,144 tokens**. It is not a second full multi-layer cache. Graph-allocator conversion/output workspace and native backend scratch are separate; this is not a bound on total VRAM consumption. Gathering adds D2D traffic and delays same-layer attention until the gather completes, reducing within-layer copy/compute overlap. Do not infer reference-branch throughput from the functional results.
+
+**5.5c must explicitly measure this changed path**, including the extra workspace's effect on the maximum usable resident pool, D2D cost, attention launch shape, H2D volume, and all-resident/streaming-onset/moderate/saturated timings. Any future alternative must preserve the user's tighter numerical requirement or obtain approval for a different tradeoff. Full-layer workspace sizing limits scalability beyond the initially supported model; it is not a generic bounded-chunk solution for arbitrary architectures.
+
+### Public controls and boundaries
+
+- `llama_context_params.kv_stream_pool_bytes` defaults to zero. The CLI exposes `--kv-stream-pool-mib`; negative and overflowing values are rejected. `llama_set_kv_stream_decode()` provides explicit phase intent, and the single-slot server sets it from generation state rather than guessing from batch size.
+- Initial opt-in requires an allocated Qwen35 dense target model, all layers on one non-Meta CUDA device, one sequence, explicit Flash Attention, KV offload, causal text generation, and fitting disabled. MTP/speculation, mmproj, embedding mode, shared/SWA caches, rollback contexts and unsupported geometry are rejected. Common memory infrastructure remains backend-agnostic; this bridge is CUDA-only.
+- Physical host cells are padded to 256-token pages without relaxing the requested logical context limit. Decode checks append positions, sequence IDs and remaining capacity before preparing mutable hybrid state. Memory reporting separates authoritative host bytes from device grants.
+- Full clear and fresh serial requests work. Partial rewind/removal, sequence copying/shifting/rescaling, device-native snapshots and state restoration are rejected before mutation. Host state save works. Prefix reuse, cancellation followed by reuse, and prompt-cache restoration remain **5.5b**; use fresh requests with `cache_prompt: false` and `--cache-ram 0` for this stage.
+
+### TDD and real-model qualification
+
+Tests were first red for session construction, head geometry, execution-buffer admission, model SET_ROWS mapping, stateful backing, short-prefill policy, authorized-append feedback continuity, proxy-view byte routing and lifecycle/capacity handling. Real-model comparisons remained red while the partial arithmetic drift was investigated; thresholds were not relaxed to hide it.
+
+- Q3 `UD-Q3_K_XL` and IQ4 `UD-IQ4_XS`: context 1,024, logical batch 512, micro-batches 256 and 512, 640 prompt tokens plus 32 teacher-forced decode tokens, Q8_0/Q4_0 KV, and a constrained 16 MiB streaming pool. **Maximum logit error 0, recurrent relative L2 0 and 32/32 matching top tokens** for both model files and both micro-batches. This is measured equivalence for those cases, not a universal floating-point guarantee or a long-context benchmark.
+- Q3 all-resident 64 MiB control: the same exact comparisons pass, including **16 actual resident attention captures**. Q3 constrained-pool UVM-on comparison also passes exactly. F16 native-attention controls were used to isolate reduction-order differences.
+- Real-model lifecycle checks cover context overflow with preserved state, rejected partial mutation/restore/device snapshot, host state save, no-op control-vector update forcing workspace reconstruction, full clear and restart, and unsupported opt-in configurations.
+- CPU Debug, CUDA-build Debug, ASan and UBSan each cover the **31 focused suites**. Default CTest is host-contract coverage, not an automatic GPU/model run. The native suites were run separately. Rebuild all test executables after private policy/ops layout changes; stale executables are not valid regression evidence.
+- Native session: **5 cases / 168 assertions**; model graph: **1 / 37**; execution buffer including CUDA scheduling: **3 / 42**. CUDA Compute Sanitizer memcheck reports zero errors and zero leaked bytes for these, including the model graph with UVM off and on. The graph-disabled model path also passes. Earlier producer, writer, capture and prefetch controls remain recorded above.
+- Targeted host TSan passes execution-buffer contracts (2 / 17), CPU session rejection (1 / 2), producer contracts (3 / 16) and common executor ownership (16 / 176), using process-local `setarch x86_64 -R`. This is not GPU race coverage and does not remove earlier broad TSan limitations.
+- An isolated HTTP server passed health, fresh short and 640-token streamed completion, and chat returning `Paris`. Fresh serial request resets were exercised. The 640-token smoke timing was about 1,117 prompt tok/s and 43.9 decode tok/s for 32 generated tokens; these are functionality smoke timings, not 5.5c performance qualification.
+- Production `llm-llmster` was temporarily stopped with permission and restored using its existing image/configuration. Its original port 1234 health endpoint returns `{"status":"ok"}`. No production build, compose, model, checkpoint or prompt-cache file was changed.
+
+Reproduce native component tests with `build-device-memory-infra-cuda/bin/test-kv-stream-session --cuda`, `test-kv-stream-model --cuda` and `test-backend-execution --cuda`. Run `test-kv-stream-context --model /path/to/model.gguf` for the constrained-pool real-model comparison; add `--resident` for the captured all-resident control. A clean rebuild of `llama-server` and tests is required after public context/private ops changes. Local evidence is in `/tmp/kv-55a-*.log`, including Q3/IQ4/UVM/capture comparisons, HTTP, sanitizer and final matrix logs; these machine-local logs are not committed.
+
+All of **5.5a.1-5.5a.4** are ready for the requested combined user review/commit. Task changes are staged; unrelated README/documentation/benchmark changes remain untouched. No assistant commit or push was made. Continue with **5.5b** only after review; **5.5c** performance and **5.5d** supported-configuration documentation are still required before the milestone-5 checkpoint.
+
+## Numerical follow-up: resumable native accumulators (experiment, not integrated)
+
+After 5.5a qualification, the user clarified that bounded adaptive streaming with minimal numerical difference is preferable to byte identity obtained through a full-layer gather. This follow-up tests that direction before replacing the staged strict control. It does not renumber or complete later roadmap stages.
+
+The original d873e5db9 streaming branch was tested against its own ordinary-attention baseline using the same Q3/IQ4 model files, prompt640, context1024, forced decode32, Q8/Q4, pool16MiB and ub256/512. It also diverges: recurrent relative L2 is 2.34%/3.82% for Q3 and 1.78%/41.22% for IQ4. The IQ4 result reproduced; resident64MiB controls are exact. These are internal numerical metrics, not quality-loss percentages. The earlier synthetic per-attention tolerances did not establish full-model state equivalence. Evidence: `/tmp/kv-equivalence-20260913-results.md` and its referenced logs.
+
+Further isolation found that the NVIDIA vector path already uses FP32 softmax/value accumulation, and the new outer fold already uses FP64 intermediates. Bounded F16 conversion improved error against a scalar high-precision oracle by about 25-78x on synthetic inputs, but did not reliably improve full-model stock equivalence. Strict prefill followed by independent chunked decode still drifted. These candidates were not accepted; their temporary source switches were removed. Evidence: `/tmp/kv-precision-investigation-20260913.md`.
+
+### Resumable-vector hypothesis and mechanism
+
+A temporary copy of the native vector kernel saves each thread's running maximum, exponential sum and weighted-value accumulators before its final warp/block reductions. The next ring chunk restores those FP32 values and resumes the same logical tile assignments. Native split count and tile ownership stay fixed throughout one attention evaluation; native reductions and normalization run only after the final chunk. The prototype is restricted to NVIDIA, head256, one query per block, and the tested types; it is not a generic new backend API.
+
+Fixed-input tests compare an uninterrupted native vector launch with resumed launches using the same split count. They copy encoded data through two reused device slots, including chunk boundaries not aligned with split cycles and workers with no tile in a particular chunk. A deliberately broken reset-on-every-chunk control fails (max absolute error 2.05466). The resumable path matches both raw partial numerators and normalized outputs exactly in all 18 tested cases:
+
+- Q8_0/Q4_0: active769, 4097, 1025, 32769 and131073; query counts1 and33; split counts1/2/3/7/16; chunk sizes256/768/1280/4096 as enumerated by the harness.
+- F16/F16 and Q5_1/Q4_1: active769, query1, splits3, chunk256.
+- CUDA memcheck passes the initial 16-case matrix with zero errors. The additional 32K/128K cases pass normally; they were not included in that memcheck run.
+
+At a fixed split count, accumulator size is independent of context. Q8/Q4 with24 query heads uses 360KiB for3 splits and480KiB for4 splits at TG1. The32K and128K tests both use1.875MiB for16 splits, plus a13MiB two-slot ring with4096 tokens per slot. Query count, head count, type-dependent per-thread storage and chosen split count still affect state size. Full device KV allocations remain in the test process as the uninterrupted control; these figures describe candidate workspace, not measured total-server memory savings.
+
+### Full-model decode qualification
+
+A process-local test adapter replaces only the direct Q8/Q4 TG1 arithmetic, selects the native vector split count using its occupancy policy, and feeds the resumed kernel through a two-slot temporary D2D ring. Prefill remains strict/native. Importantly, this adapter still receives the existing full-layer gathered input: it validates arithmetic on real model tensors but does not remove the gather allocation, integrate host-prefetch scheduling, or establish production throughput.
+
+| Model | Micro-batch | Forced decode length | Max logit error | Recurrent relative L2 | Matching top tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Q3_K_XL | 256 | 192 | 0 | 0 | 192/192 |
+| Q3_K_XL | 512 | 192 | 0 | 0 | 192/192 |
+| IQ4_XS | 256 | 192 | 0 | 0 | 192/192 |
+| IQ4_XS | 512 | 192 | 0 | 0 | 192/192 |
+
+All four32-token preliminary cases also match exactly. The192-token runs cross from768 to1024 padded KV tokens and3 to4 native splits. Adapter counters confirm6144 resumed attention calls per model across both micro-batch tests. Resident64MiB controls and repeated ordinary baselines match exactly. Production was stopped with permission and restored unchanged; one30-second stop required Podman's SIGKILL fallback, and the later group used a60-second stop window. Final health on port1234 is OK.
+
+### Interpretation and next work
+
+This is positive evidence that preserving native tile ownership and per-thread accumulation across chunk boundaries can eliminate the tested decode drift without a context-sized accumulator. It does not isolate split-count matching from accumulator continuity as separate causes. It does not establish long-context full-model accuracy: the128K case is a fixed-input kernel test, while full-model tests use context1024. Prefill needs its own MMA/tile-continuation investigation; running many independent one-query vector blocks does not reproduce native prefill dispatch.
+
+Before adopting this in5.5a, add proper resumable capability/lifetime contracts and tests, choose and retain the native layout for each evaluation, integrate leased bounded workspace and actual resident/ring spans, handle cancellation and layout changes, and remove the decode full-layer gather only after real-model tests pass. Investigate resumable native prefill separately. Then benchmark state traffic, launch overhead and copy/compute overlap: the temporary adapter allocates scratch per call and is not performance-ready. Preserve the existing strict path as a correctness control. Also update the stale native block-test version3 assertion for the version4 ops contract before relying on that suite; host-only CTest does not exercise it.
+
+Prototype sources: `/tmp/kv-resume-kernel.cuh`, `/tmp/kv-resume-test.cu`, `/tmp/kv-resume-adapter.cu`, and `/tmp/kv-equivalence-resume-long.cpp`. Evidence: `/tmp/kv-resume-{red,green,memcheck,long-green}.log`, `/tmp/kv-resume-model-{Q3_K_XL,IQ4_XS}.log`, and `/tmp/kv-resume-model-long-{Q3_K_XL,IQ4_XS}.log`. These machine-local artifacts are not committed. No repository implementation was changed by this experiment; only this roadmap follow-up is added to the staged review.
+
+## Resumable decode integration: ready for review
+
+The user approved integrating the successful hypothesis and measuring memory/throughput. This section supersedes the experiment-only status above: the model now consumes actual resident and shared-ring spans during supported TG1 decode, without a full-layer decode gather. Strict native prefill remains unchanged. This extends the pending 5.5a review; it does not complete 5.5b request/cache integration or the wider 5.5c qualification matrix.
+
+### Implementation and boundaries
+
+- Ordinary and resumable vector kernels share one device implementation. The ordinary wrapper preserves its launch ABI and compile-time non-resumable path. The resumed wrapper saves per-thread FP32 state before native warp/block reductions and restores the same tile ownership on the next span. Quantized Q arithmetic, native split selection and final reduction order are preserved.
+- Private backend ops version 5 adds checked TG1 split/workspace planning and span consumption. Workspace includes bounded per-thread state and final partials; no context-sized KV allocation or per-span device allocation is hidden in the callback. Invalid shapes, malformed plans, undersized/overlapping workspace, unsupported types/backends, capture and invalid boundaries are rejected.
+- The initial resumed path is CUDA Ada-or-newer, head 256, one explicitly marked decode query, a compiled native K/V pair with at least one quantized side, and the existing serial model scope. Unquantized pairs whose native dispatch can switch to MMA, conversion-only pairs and unsupported hardware retain strict gather. This is not a claim of resumed MMA prefill or cross-backend support.
+- Resident prefixes and queued ring spans feed the same evaluation state. The current callback synchronizes before its span is recycled; future-layer copies can continue on the existing copy stream. The independent partial-fold path remains for existing low-level consumers. Fully resident model attention retains ordinary native execution/capture.
+- Pool/writer backing is persistent. Attention scratch now has a separate leased arena, so releasing its last lease actually frees the prefill gather allocation. At decode entry the model detaches idle scratch, releases its parent, and allocates the bounded workspace before accepting the append. Returning to prefill restores the full-layer workspace. Persistent host KV and recurrent state are not moved or discarded by this swap.
+- Allocation failure after releasing reconstructible scratch leaves the token frontier/host owner intact and permits retry. Invalid/aliased grants and replacement during active execution are rejected. No whole-inference rollback is claimed after a device failure has already mutated model state.
+- `--kv-stream-pool-mib` remains the fixed KV resident/ring budget; writer, attention and graph workspaces are additional. Released decode capacity is NOT automatically added to that pool. Existing prefill graph/compute workspace is not unloaded by this change, and startup/prefill still need their previous capacity.
+- The internal diagnostic control `LLAMA_KV_STREAM_DECODE_GATHER=1` disables resumed decode when the model consumer is created, retaining strict gather for A/B tests. Unset it for default eligible resumed decode. It is not a new public context parameter or CLI flag. UVM remains optional; its supported coexistence is smoke-tested below.
+
+### TDD and validation
+
+The checked-layout test was first red against a rejecting stub. A second model-level test was red because decode had not released its prefill allocation; it passed after separating attention backing. Additional tests cover empty/malformed layout, aliases, invalid spans without output mutation, active replacement rejection, detach/reattach, scratch allocation failure and retry, and reset back to prefill. The stale native version 3 test assertion now checks the version 5 contract.
+
+- Actual resident/ring execution matches ordinary CUDA output in the new tests for Q8_0/Q4_0, Q5_1/Q4_1 and Q4_0/F16 at 513/769/4097 active tokens, across two layers and a one-slot ring. These are real host-copy/ring tests, not the temporary gathered-input adapter.
+- Full-model integration (no adapter or preload): Q3 and IQ4, context 1024, prompt 640, Q8/Q4, constrained 16 MiB and resident 64 MiB controls, ub256/512, **192 forced decode tokens**. Every case has max logit error 0, recurrent relative L2 error 0, and 192/192 matching top tokens. This includes page/split-count transitions. It is measured equivalence for these inputs, not a universal guarantee.
+- **32 focused suites pass** in CPU Debug, CUDA-build Debug, ASan and UBSan after rebuilding all selected executables. Default CTest is host-contract coverage; native tests are separate.
+- Native resume suite: **4 cases  / 110 assertions**. Model suite: **2 / 44**. Session suite: **5 / 178**. CUDA memcheck with full leak checking reports zero errors and zero leaked bytes for all three.
+- The legacy native block/quantization suite passes **20 cases  / 656,887 assertions**, including the existing conversion and partial-fold controls after the shared native-kernel refactor.
+- Q3 UVM-on context/lifecycle tests pass **4 / 446**, with exact logits/state for both micro-batches. This includes workspace reconstruction, rejected restore/partial mutation, full clear and restart. No new device-race or broad TSan qualification is claimed.
+
+### HTTP memory and throughput comparison
+
+Same rebuilt server binary, Q3_K_XL model, all layers on the 5070 Ti, UVM disabled, batch/micro-batch 256/256, one slot, **context 131072 and fixed 2048 MiB pool** for every point. Each server is fresh, prompt reuse/RAM cache is disabled, and each response produces 128 tokens. The existing HTTP stream/timing collector is reused. These are exploratory single runs, not clock-locked repeated statistical benchmarks or maximum-pool searches.
+
+| Prompt tokens | Gather prefill tok/s | Resume prefill tok/s | Gather decode tok/s | Resume decode tok/s | Decode change |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 65536 | 1072.81 | 1070.76 | 27.76 | 27.72 | -0.16% |
+| 98304 | 894.40 | 895.54 | 21.79 | 23.23 | +6.58% |
+| 130816 | 760.67 | 759.42 | 18.02 | 19.58 | +8.67% |
+
+The 64K point fits resident KV; 96K and 130816 tokens require streaming with this fixed pool. Prefill is effectively unchanged in these runs. Steady decode GPU-memory samples are **14986 MiB for gather versus14782 MiB for resume**, a 204 MiB reduction at all three points. The context-sized 208 MiB attention allocation is replaced by roughly 4 MiB of bounded decode workspace. This is not a reduction in startup/prefill peak and does not demonstrate a larger allocatable initial pool.
+
+The aggregate GPU peak at 64K and96K is 14986 MiB in both modes. The last resumed run briefly records 15287 MiB during prefill; a separate GPU PID with 296 MiB was observed around completion and then exited before identification. Because sampling was total-GPU rather than per-process, that peak is not a clean isolated server measurement. Do not attribute the extra 301 MiB conclusively to this implementation or claim a lower 128K peak; treat the last timing point as exploratory as well. No unrelated GPU process was stopped.
+
+Benchmark artifacts: `/tmp/bench-kv-resume.py`, `/tmp/kv-resume-throughput.jsonl`, `/tmp/kv-resume-benchmark-progress.log`, and `/tmp/kv-resume-http-<prompt>-<mode>.log`. The script accepts model, pool, context, prompt points and output path. Native/model evidence is in `/tmp/kv-resume-integrated-*.log`, `/tmp/resume-final-*.log`, and the four `/tmp/resume-*-tests.log` matrices. Temporary measurement artifacts are not committed.
+
+Production has been restored using its existing image/configuration; port 1234 health is OK. No compose/model/cache change or deployment was made. Implementation, tests and this roadmap are staged for the user; unrelated README/documentation/benchmark changes remain untouched. No assistant commit or push was made. Follow-up work remains resumed native prefill, broader type/model qualification, performance repeats with per-process telemetry, and the original 5.5b-5.5d acceptance gates.

@@ -6,14 +6,14 @@ struct block_workspace {
     arena_ptr arena{nullptr, ggml_backend_memory_arena_free};
     lease_ptr lease{nullptr, ggml_backend_memory_lease_free};
     // Exercise an exact-sized lease at a nonzero parent offset.
-    block_workspace(fixture & f, size_t bytes) {
+    block_workspace(fixture & f, size_t bytes, uint64_t id = 19) {
         auto * type = f.cuda ? llama_kv_stream_device_buffer_type(ggml_backend_get_device(f.backend)) : ggml_backend_cpu_buffer_type();
         arena.reset(ggml_backend_memory_arena_new(type, bytes + 256));
         GGML_ASSERT(arena && ggml_backend_memory_arena_begin(arena.get(), 0));
         const auto base = reinterpret_cast<uintptr_t>(ggml_backend_buffer_get_base(ggml_backend_memory_arena_parent(arena.get())));
-        GGML_ASSERT(ggml_backend_memory_arena_reserve_at(arena.get(), 19, 128 + (128-base%128)%128, bytes, 64, 0, nullptr));
+        GGML_ASSERT(ggml_backend_memory_arena_reserve_at(arena.get(), id, 128 + (128-base%128)%128, bytes, 64, 0, nullptr));
         GGML_ASSERT(ggml_backend_memory_arena_commit(arena.get()));
-        lease.reset(ggml_backend_memory_arena_acquire(arena.get(), 19));
+        lease.reset(ggml_backend_memory_arena_acquire(arena.get(), id));
     }
 };
 

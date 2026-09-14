@@ -2,6 +2,7 @@
 #include "ggml-cuda-graph.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
+#include "ggml-backend-execution.h"
 
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
@@ -4814,6 +4815,37 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
     ggml_cuda_set_device(cuda_ctx->device);
 
+    // Keep ordinary subgraphs on native fusion/capture; managed nodes execute outside CUDA capture.
+    bool managed = false;
+    for (int i = 0; ggml_backend_execution_buffers_present() && i < cgraph->n_nodes; ++i) {
+        ggml_backend_buffer_t owner;
+        if (!ggml_backend_execution_owner(cgraph->nodes[i],owner)) return GGML_STATUS_FAILED;
+        managed |= owner != nullptr;
+        if (owner && !ggml_backend_execution_supports(owner,ggml_backend_get_device(backend),cgraph->nodes[i])) return GGML_STATUS_FAILED;
+    }
+    if (managed) {
+        cudaStreamCaptureStatus status;
+        CUDA_CHECK(cudaStreamIsCapturing(cuda_ctx->stream(),&status));
+        if (status != cudaStreamCaptureStatusNone) return GGML_STATUS_FAILED;
+        int first = 0;
+        for (int i = 0; i <= cgraph->n_nodes; ++i) {
+            ggml_backend_buffer_t owner = nullptr;
+            if (i < cgraph->n_nodes) ggml_backend_execution_owner(cgraph->nodes[i],owner);
+            if (!owner && i < cgraph->n_nodes) continue;
+            if (i > first) {
+                auto ordinary = ggml_graph_view(cgraph,first,i);
+                const auto result = ggml_backend_cuda_graph_compute(backend,&ordinary);
+                if (result != GGML_STATUS_SUCCESS) return result;
+            }
+            if (owner) {
+                const auto result = ggml_backend_execution_compute(owner,backend,cgraph->nodes[i]);
+                if (result != GGML_STATUS_SUCCESS) return result;
+            }
+            first = i+1;
+        }
+        return GGML_STATUS_SUCCESS;
+    }
+
     bool use_cuda_graph             = false;
     bool cuda_graph_update_required = false;
     const void * graph_key = nullptr;
@@ -5542,6 +5574,9 @@ static ggml_backend_buffer_type_t ggml_backend_cuda_device_get_host_buffer_type(
 
 // TODO: move these functions here
 static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    ggml_backend_buffer_t owner;
+    if (!ggml_backend_execution_owner(op,owner)) return false;
+    if (owner) return ggml_backend_execution_supports(owner,dev,op);
     ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
 
     // check if all the sources are allocated on this device
@@ -6020,7 +6055,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 static bool ggml_backend_cuda_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
     const bool integrated = ggml_cuda_info().devices[dev_ctx->device].integrated;
-    return (ggml_backend_buft_is_cuda(buft) && buft->device == dev) || (integrated && ggml_backend_buft_is_cuda_host(buft));
+    return ((ggml_backend_buft_is_cuda(buft) || ggml_backend_buft_is_execution(buft)) && buft->device == dev) || (integrated && ggml_backend_buft_is_cuda_host(buft));
 }
 
 static int64_t get_op_batch_size(const ggml_tensor * op) {

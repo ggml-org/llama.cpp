@@ -136,7 +136,9 @@ bool llama_kv_stream_writer::accepts(const ggml_tensor * source, bool value) con
     const auto data = reinterpret_cast<uintptr_t>(source->data);
     const size_t size = ggml_backend_buffer_get_size(buffer);
     const size_t bytes = size_t(source->ne[1])*source->nb[1];
-    return data >= base && data - base <= size && bytes <= size - size_t(data - base);
+    const auto scratch = reinterpret_cast<uintptr_t>(ggml_backend_buffer_get_base(s.buffer));
+    const bool overlaps = data >= scratch ? data-scratch < s.scratch_bytes : bytes > scratch-data;
+    return !overlaps && data >= base && data - base <= size && bytes <= size - size_t(data - base);
 }
 
 // Complete each tile's quantization, D2H, and publication before the shared output region is reused.
@@ -144,7 +146,7 @@ bool llama_kv_stream_writer::generate(const ggml_tensor * source, bool value, vo
         const std::function<bool(const ggml_tensor *, size_t, size_t)> & publish) {
     auto & s = *impl;
     s.last = {}; s.last.device_scratch_bytes = s.scratch_bytes; s.last.tile_rows = s.capacity;
-    if (!host || !publish || !accepts(source, value)) return false;
+    if (!host || !accepts(source, value)) return false;
     const size_t rows = size_t(source->ne[1]), stride = s.row_bytes(value);
     s.last.host_payload_bytes = rows*stride;
     try {
@@ -159,12 +161,12 @@ bool llama_kv_stream_writer::generate(const ggml_tensor * source, bool value, vo
                 if (status != GGML_STATUS_SUCCESS) { s.plan->execution->drain(); s.plan.reset(); return false; }
             }
             ggml_backend_tensor_get_async(s.backend, s.plan->output, static_cast<char *>(host) + first*stride, 0, count*stride);
-            const bool published = publish(s.roots[value], first, count);
+            const bool published = !publish || publish(s.roots[value], first, count);
             if (s.cpu) ggml_backend_synchronize(s.backend);
             else if (!s.plan->execution->drain()) return false;
             s.last.d2h_bytes += count*stride; ++s.last.d2h_calls;
             if (!published) return false;
-            s.last.d2d_bytes += count*stride; ++s.last.d2d_calls;
+            if (publish) { s.last.d2d_bytes += count*stride; ++s.last.d2d_calls; }
         }
         return true;
     } catch (...) {

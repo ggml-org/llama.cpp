@@ -507,5 +507,35 @@ int main(int argc, char ** argv) {
         t.assert_true(!f.resident->sequence_active() && f.resident->sequence_stats().pending_pages == 0);
         t.assert_true(f.resident->compute_streamed(1,input.q,input.mask,input.output,513,1.0f/16,workspace.lease.get(),true,2));
     });
+    if (cuda) t.test("authorized_decode_tails_preserve_feedback_continuity", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,1025,false,4);
+        if (!t.assert_true(f.attach())) return;
+        auto pin = f.binding->acquire();
+        if (!t.assert_true(f.resident->configure_feedback(true))) return;
+        ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(4,256,layout);
+        block_workspace work(f,layout.bytes);
+        const size_t key = f.host->layout().k_token_bytes, value = f.host->layout().v_token_bytes;
+        std::vector<uint8_t> encoded(key+value,0);
+        llama_kv_stream_feedback previous;
+        for (size_t active : {size_t(769),size_t(770)}) {
+            block_inputs input(f,active,1);
+            if (!t.assert_true(f.resident->begin_sequence({0,1,2,3},active,2,active-1,{1,true}))) return;
+            for (uint32_t layer = 0; layer < 4; ++layer) {
+                t.assert_true(f.resident->publish_sequence_tail({
+                    {layer,ggml_kv_stream_operand::k,(active-1)*key,encoded.data(),key},
+                    {layer,ggml_kv_stream_operand::v,(active-1)*value,encoded.data()+key,value}}));
+                if (!t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,active,1.0f/16,work.lease.get(),true,2))) return;
+            }
+            llama_kv_stream_feedback current;
+            for (int attempt = 0; attempt < 1000; ++attempt) {
+                current = f.resident->feedback();
+                if (current.available && (!previous.available || current.epoch != previous.epoch || current.samples > previous.samples)) break;
+                ggml_backend_synchronize(backend.get());
+            }
+            t.assert_true(current.available && current.samples > 0);
+            if (previous.available) { t.assert_equal(previous.epoch,current.epoch); t.assert_true(current.samples > previous.samples); }
+            previous = current;
+        }
+    });
     return t.summary();
 }

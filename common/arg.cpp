@@ -2422,6 +2422,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_OFFLOAD"));
     add_opt(common_arg(
+        {"--kv-stream-pool-mib"}, "N",
+        "experimental serial CUDA KV pool in MiB; excludes workspaces (requires -fa on, --fit off)",
+        [](common_params & params, int value) {
+            if (value < 0 || size_t(value) > SIZE_MAX/1048576) throw std::invalid_argument("invalid KV stream pool size");
+            params.kv_stream_pool_bytes = size_t(value)*1048576;
+        }
+    ));
+    add_opt(common_arg(
         {"--repack"},
         {"-nr", "--no-repack"},
         string_format("whether to enable weight repacking (default: %s)", params.no_extra_bufts ? "disabled" : "enabled"),

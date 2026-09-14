@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include <stdexcept>
 
 //
 // llama_memory_hybrid
@@ -29,7 +30,8 @@ llama_memory_hybrid::llama_memory_hybrid(
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn,
-    const layer_filter_cb & filter_recr) :
+    const layer_filter_cb & filter_recr,
+    const llama_memory_params * stream) :
     hparams(model.hparams),
     mem_attn(new llama_kv_cache(
         model,
@@ -49,7 +51,9 @@ llama_memory_hybrid::llama_memory_hybrid(
             [&](int32_t il) { return !hparams.is_recr(il); }
             : filter_attn,
         nullptr,
-        nullptr
+        nullptr,
+        "",
+        stream
     )),
     mem_recr(new llama_memory_recurrent(
         model,
@@ -141,6 +145,7 @@ void llama_memory_hybrid::clear(bool data) {
 }
 
 bool llama_memory_hybrid::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    if (!mem_attn->kv_stream_can_remove(seq_id,p0,p1)) return false;
     // Try removing from the recurrent cache first since it may fail. If it does
     // fail, the cache will not have been mutated.
     if (!mem_recr->seq_rm(seq_id, p0, p1)) {
@@ -150,21 +155,37 @@ bool llama_memory_hybrid::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
 }
 
 void llama_memory_hybrid::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    if (mem_attn->get_kv_stream()) {
+        if (seq_id_src != seq_id_dst) LLAMA_LOG_ERROR("%s: KV streaming does not support sequence copies\n",__func__);
+        return;
+    }
     mem_attn->seq_cp(seq_id_src, seq_id_dst, p0, p1);
     mem_recr->seq_cp(seq_id_src, seq_id_dst, p0, p1);
 }
 
 void llama_memory_hybrid::seq_keep(llama_seq_id seq_id) {
+    if (mem_attn->get_kv_stream()) {
+        if (seq_id != 0) LLAMA_LOG_ERROR("%s: KV streaming only supports sequence zero\n",__func__);
+        return;
+    }
     mem_attn->seq_keep(seq_id);
     mem_recr->seq_keep(seq_id);
 }
 
 void llama_memory_hybrid::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
+    if (mem_attn->get_kv_stream()) {
+        if (shift) LLAMA_LOG_ERROR("%s: KV streaming does not support position shifts\n",__func__);
+        return;
+    }
     mem_attn->seq_add(seq_id, p0, p1, shift);
     mem_recr->seq_add(seq_id, p0, p1, shift);
 }
 
 void llama_memory_hybrid::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
+    if (mem_attn->get_kv_stream()) {
+        if (d != 1) LLAMA_LOG_ERROR("%s: KV streaming does not support position rescaling\n",__func__);
+        return;
+    }
     mem_attn->seq_div(seq_id, p0, p1, d);
     mem_recr->seq_div(seq_id, p0, p1, d);
 }
@@ -197,6 +218,7 @@ void llama_memory_hybrid::state_write(llama_io_write_i & io, llama_seq_id seq_id
 void llama_memory_hybrid::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     const bool read_attn = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0;
 
+    if (mem_attn->get_kv_stream()) throw std::runtime_error("KV streaming does not yet support state restoration");
     if (read_attn) {
         mem_attn->state_read(io, seq_id, flags);
     }

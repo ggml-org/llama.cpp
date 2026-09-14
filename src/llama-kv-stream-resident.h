@@ -56,7 +56,7 @@ public:
     size_t last_upload_calls() const noexcept;
     // Successful partial-attention submissions in the last started streamed execution.
     size_t last_attention_calls() const noexcept;
-    // Hold the binding pin until completion/cancel. Only publish_sequence_tail may mutate host content meanwhile.
+    // Hold the binding pin until completion/cancel. Only sequence-tail publication APIs may mutate host content meanwhile.
     // Default stable_tokens declares a fully ready snapshot; online producers must pass the immutable prefix explicitly.
     // Declare both decode intent and query count before prefetch starts. Unknown phase and single-token prompts stay unprofiled.
     bool begin_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages = 1,
@@ -70,16 +70,24 @@ public:
 
     // Opt-in diagnostics and span trials. Change only while idle; no KV storage is resized here.
     bool configure_feedback(bool enable, size_t bounded_span_pages = 32);
+    // Graph callers reserve native FA extras for their output; low-level minimal-workspace callers leave this off.
+    bool configure_native_graph_attention(bool enable);
+    // Only explicitly marked decode sequences may use the optional native resumable contract.
+    bool configure_resumed_decode(bool enable);
     size_t suggested_span_pages() const noexcept;
     // Poll completed snapshots without waiting; the latest successful run may still be pending.
     llama_kv_stream_feedback feedback() const noexcept;
     ggml_kv_stream_copy_feedback copy_feedback() const noexcept;
     // Read-only proposal. Decode feedback requires explicit intent; accept device layout before publishing decision.next.
     bool recommend_policy(const llama_kv_stream_policy_state & previous, size_t active_tokens,
-            uint32_t query_tokens, llama_kv_stream_policy_decision & decision, bool decode_feedback = false) const;
+            uint32_t query_tokens, llama_kv_stream_policy_decision & decision, bool decode_feedback = false, bool uniform_prefill = false) const;
 
-    // Configure a physical-batch ceiling. Quantization scratch and indices borrow the unused ring region.
-    bool configure_writes(size_t max_batch_rows);
+    // Configure a physical-batch ceiling. Default scratch borrows the idle ring; external scratch must be a disjoint lease.
+    bool configure_writes(size_t max_batch_rows, ggml_backend_memory_lease_t workspace = nullptr);
+    // Publish both completed GPU producer planes atomically while historical prefetch remains live.
+    // Requires disjoint leased writer workspace configured before begin_sequence().
+    // Rows must cover [stable_tokens, active_tokens). Submission failure cancels prefetch but preserves host bytes.
+    bool write_sequence_rows(uint32_t layer, size_t first_row, const ggml_tensor * k, const ggml_tensor * v);
     // Source is a completed, dense F32 [head_dim * heads, rows] device tensor. Rows are consecutive.
     // Hold a binding pin and the source owner until return; call synchronize() before attention.
     bool write_rows(uint32_t layer, ggml_kv_stream_operand operand, size_t first_row, const ggml_tensor * source);

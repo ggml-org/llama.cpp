@@ -200,3 +200,5 @@ void llama_context_memory::synchronize() { ggml_backend_sched_synchronize(impl->
 
 // Fallback-only schedulers need no physical arena while retaining the same teardown protocol.
 bool llama_context_memory::uses_arenas() const noexcept { return !impl->arenas.empty(); }
+
+const std::vector<ggml_backend_memory_lease_t> & llama_context_memory::workspace_leases() const noexcept { return impl->bindings; }

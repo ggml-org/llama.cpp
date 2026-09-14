@@ -200,6 +200,8 @@ add_library(ggml-base
             ggml.cpp
             ggml-alloc.c
             ggml-backend.cpp
+            ggml-backend-execution.cpp
+            ggml-backend-execution.h
             ggml-backend-memory.cpp
             ggml-backend-memory.h
             ggml-kv-stream.cpp

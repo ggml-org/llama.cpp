@@ -130,6 +130,7 @@ struct llama_context {
     void set_embeddings_layer_inp(uint32_t lid, bool enable);
     void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
+    void set_kv_stream_decode(bool value) { cparams.kv_stream_decode = value; }
     void set_warmup(bool value);
 
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
@@ -243,6 +244,7 @@ private:
     uint32_t output_reserve(int32_t n_outputs);
 
     void output_reorder();
+    void release_kv_workspaces(bool retiring);
 
     // map the output row index `i` to batch index
     int64_t output_resolve_row(int32_t i) const;
@@ -311,8 +313,8 @@ private:
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
-    llama_memory_ptr memory;
     llama_moe_cache_ptr moe_cache;
+
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
@@ -371,6 +373,8 @@ private:
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
+    // Memory consumers may drain backend work during teardown, including constructor-failure unwinding.
+    llama_memory_ptr memory;
 
     // The scheduler is declared after the arenas and backends so it is destroyed first.
     std::vector<llama_compute_arena_binding> compute_arenas;

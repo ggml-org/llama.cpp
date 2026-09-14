@@ -1,0 +1,100 @@
+#include "kv-stream-block-test.h"
+#include "../src/llama-kv-stream-model.h"
+
+// Quantization error is not adapter error: compare the exact bytes from an ordinary CUDA producer graph.
+static std::vector<uint8_t> reference_bytes(ggml_backend_t backend,const std::vector<float> & data,ggml_type type,float scale) {
+    const size_t rows = data.size()/512;
+    ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+    auto * source = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,512,rows);
+    auto * indices = ggml_new_tensor_1d(ctx.get(),GGML_TYPE_I64,rows);
+    auto * destination = ggml_new_tensor_2d(ctx.get(),type,512,rows);
+    auto * output = ggml_set_rows(ctx.get(),destination,ggml_scale(ctx.get(),source,scale),indices);
+    auto * graph = ggml_new_graph_custom(ctx.get(),64,false); ggml_build_forward_expand(graph,output);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),backend)); GGML_ASSERT(buffer);
+    std::vector<int64_t> ids(rows); for (size_t i = 0; i < rows; ++i) ids[i] = int64_t(i);
+    ggml_backend_tensor_set(source,data.data(),0,data.size()*sizeof(float));
+    ggml_backend_tensor_set(indices,ids.data(),0,ids.size()*sizeof(int64_t));
+    llama_memory_cuda_executor executor(backend); GGML_ASSERT(executor.bind(graph,{},1));
+    GGML_ASSERT(executor.compute_async({},1) == GGML_STATUS_SUCCESS && executor.drain());
+    std::vector<uint8_t> result(ggml_nbytes(output)); ggml_backend_tensor_get(output,result.data(),0,result.size()); return result;
+}
+
+int main(int argc,char ** argv) {
+    testing t;
+    if (argc < 2 || std::strcmp(argv[1],"--cuda")) {
+        t.assert_true(!llama_kv_stream_model::create({})); return t.summary();
+    }
+    ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
+    ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr)), cpu(ggml_backend_cpu_init());
+    t.test("failed_scratch_replacement_keeps_host_state_and_can_retry", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        auto model=llama_kv_stream_model::create({backend.get(),f.host->config(),page.bytes*4,256,4});
+        if (!t.assert_true(bool(model))) return;
+        const auto initial=model->granted_bytes(); auto host=model->host();
+        auto * type=llama_kv_stream_device_buffer_type(dev);
+        const auto allocate=type->iface.alloc_buffer;
+        type->iface.alloc_buffer=[](ggml_backend_buffer_type_t,size_t)->ggml_backend_buffer_t { return nullptr; };
+        const bool began=model->begin(1,1,true);
+        type->iface.alloc_buffer=allocate;
+        t.assert_true(!began && model->complete() && model->tokens()==0 && model->host()==host);
+        t.assert_true(model->granted_bytes()<initial);
+        t.assert_true(model->begin(1,1,true)); model->abort();
+        t.assert_true(model->reset(false)); t.assert_equal(initial,model->granted_bytes());
+    });
+    t.test("ordinary_graph_dispatches_kv_producers_and_streamed_attention", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        auto model = llama_kv_stream_model::create({backend.get(),f.host->config(),page.bytes*4,256,4});
+        if (!t.assert_true(bool(model))) return;
+        const auto prefill_grants = model->granted_bytes();
+        f.host = model->host();
+        size_t active = 0;
+        for (uint32_t rows : {256u,256u,1u}) {
+            const size_t first = active; active += rows;
+            ggml_context_ptr ctx(ggml_init({1024*1024,nullptr,true}));
+            auto * source = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,512,rows);
+            auto * indices = ggml_new_tensor_1d(ctx.get(),GGML_TYPE_I64,rows);
+            ggml_backend_buffer_ptr inputs(ggml_backend_alloc_ctx_tensors(ctx.get(),backend.get()));
+            std::vector<float> data(rows*512); std::vector<int64_t> ids(rows);
+            for (size_t i = 0; i < data.size(); ++i) data[i] = .25f*std::sin(float((first*512+i)%677)*.07f);
+            const auto expected_k = reference_bytes(backend.get(),data,GGML_TYPE_Q8_0,2);
+            const auto expected_v = reference_bytes(backend.get(),data,GGML_TYPE_Q4_0,3);
+            for (size_t i = 0; i < ids.size(); ++i) ids[i] = int64_t(first+i);
+            ggml_backend_tensor_set(source,data.data(),0,data.size()*sizeof(float));
+            ggml_backend_tensor_set(indices,ids.data(),0,ids.size()*sizeof(int64_t));
+            auto * k = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_Q8_0,512,f.host->layout().tokens);
+            auto * v = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_Q4_0,512,f.host->layout().tokens);
+            llama_kv_stream_host_layer planes; f.host->layer(0,planes);
+            t.assert_true(ggml_backend_tensor_alloc(model->buffer(),k,planes.k) == GGML_STATUS_SUCCESS);
+            t.assert_true(ggml_backend_tensor_alloc(model->buffer(),v,planes.v) == GGML_STATUS_SUCCESS);
+            auto * graph = ggml_new_graph_custom(ctx.get(),128,false);
+            auto * k_source = ggml_scale(ctx.get(),source,2);
+            auto * v_source = ggml_scale(ctx.get(),source,3);
+            ggml_build_forward_expand(graph,k_source); ggml_build_forward_expand(graph,v_source);
+            auto * k_write = ggml_set_rows(ctx.get(),k,k_source,indices);
+            auto * v_write = ggml_set_rows(ctx.get(),v,v_source,indices); v_write->src[3] = k_source;
+            ggml_build_forward_expand(graph,k_write); ggml_build_forward_expand(graph,v_write);
+            block_inputs attn(f,active,rows);
+            auto * key = ggml_view_3d(ctx.get(),k,256,attn.padded,2,f.host->layout().k_token_bytes,f.host->layout().k_row_bytes,0);
+            auto * value = ggml_view_3d(ctx.get(),v,256,attn.padded,2,f.host->layout().v_token_bytes,f.host->layout().v_row_bytes,0);
+            auto * output = ggml_flash_attn_ext(ctx.get(),attn.q,key,value,attn.mask,1.0f/16,0,0);
+            ggml_flash_attn_ext_set_prec(output,GGML_PREC_F32);
+            ggml_build_forward_expand(graph,output);
+            ggml_backend_t backends[]{backend.get(),cpu.get()};
+            ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends,nullptr,2,128,false,true));
+            // Validate before allocation can abort on an unsupported preallocated destination.
+            if (!t.assert_true(ggml_backend_supports_op(backend.get(),k_write) && ggml_backend_supports_op(backend.get(),v_write))) return;
+            if (!t.assert_true(ggml_backend_sched_alloc_graph(sched.get(),graph))) return;
+            if (!t.assert_true(model->begin(active,rows,rows == 1))) return;
+            if (rows == 1) t.assert_true(model->granted_bytes() < prefill_grants);
+            if (!t.assert_true(ggml_backend_sched_graph_compute(sched.get(),graph) == GGML_STATUS_SUCCESS)) return;
+            t.assert_true(model->complete()); t.assert_equal(active,model->tokens());
+            t.assert_true(!std::memcmp(static_cast<const char *>(planes.k)+first*f.host->layout().k_token_bytes,expected_k.data(),expected_k.size()));
+            t.assert_true(!std::memcmp(static_cast<const char *>(planes.v)+first*f.host->layout().v_token_bytes,expected_v.data(),expected_v.size()));
+            std::vector<float> actual(ggml_nelements(output)); ggml_backend_tensor_get(output,actual.data(),0,actual.size()*sizeof(float));
+            close_values(t,oracle(f,0,active,rows,attn.qdata),actual,1e-3f);
+        }
+    });
+    return t.summary();
+}

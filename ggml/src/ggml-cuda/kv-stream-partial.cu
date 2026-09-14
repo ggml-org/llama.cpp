@@ -2,6 +2,7 @@
 #include "kv-stream-partial.cuh"
 #include "kv-stream-dispatch.cuh"
 #include "convert.cuh"
+#include "fattn.cuh"
 #include "../ggml-backend-impl.h"
 #include "../ggml-kv-stream.h"
 
@@ -199,6 +200,92 @@ static bool partial(ggml_backend_t backend, const ggml_tensor * op, ggml_backend
     return true;
 }
 
+// Use ordinary attention only when the graph allocator has reserved its backend-specific output extras.
+static bool direct(ggml_backend_t backend, const ggml_tensor * op) {
+    if (capture_active(backend) || !op || op->op != GGML_OP_FLASH_ATTN_EXT || !ggml_backend_supports_op(backend,op)) return false;
+    span output;
+    if (!tensor_span(backend,op,output)) return false;
+    for (int i = 0; i < 4; ++i) { span input; if (!tensor_span(backend,op->src[i],input) || overlap(input,output)) return false; }
+    const auto base = uintptr_t(ggml_backend_buffer_get_base(op->buffer)), address = uintptr_t(op->data);
+    const size_t capacity = ggml_backend_buffer_get_size(op->buffer);
+    const size_t required = ggml_backend_buffer_get_alloc_size(op->buffer,op);
+    if (address < base || address-base > capacity || required > capacity-(address-base)) return false;
+    auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_flash_attn_ext(ctx,const_cast<ggml_tensor *>(op));
+    CUDA_CHECK(cudaStreamSynchronize(ctx.stream())); return true;
+}
+
+// Match native TG1 vector ownership before any resident or ring span is consumed.
+static bool resume_plan(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads, uint32_t kv_heads,
+        size_t tokens, ggml_kv_stream_resume_plan & output) {
+    if (!backend || !ggml_backend_is_cuda(backend) || capture_active(backend) || key < 0 || key >= GGML_TYPE_COUNT || value < 0 || value >= GGML_TYPE_COUNT ||
+            !heads || !kv_heads || heads%kv_heads || heads > 65535 || !tokens || tokens%256 || tokens > INT32_MAX) return false;
+    auto kernel = ggml_cuda_kv_stream_kernel(ggml_type(key),ggml_type(value));
+    auto resumed = ggml_cuda_kv_stream_resume_kernel(ggml_type(key),ggml_type(value));
+    auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_set_device(ctx.device);
+    const auto & device = ggml_cuda_info().devices[ctx.device];
+    // Native dispatch may select MMA for long unquantized TG1; keep that path on strict attention.
+    if (!kernel || !resumed || device.cc < GGML_CUDA_CC_ADA_LOVELACE ||
+            (!ggml_is_quantized(ggml_type(key)) && !ggml_is_quantized(ggml_type(value)))) return false;
+    int occupancy = 0;
+    CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy,kernel,128,0));
+    const int tiles = int(tokens/256), wave = device.nsm*occupancy;
+    if (!wave || !occupancy) return false;
+    int splits = std::min(occupancy,tiles), best = 0;
+    int64_t best_waves = 0;
+    for (int p = splits; p <= tiles; ++p) {
+        const int64_t blocks = int64_t(heads)*p, waves = (blocks+wave-1)/wave;
+        const int efficiency = int(100*blocks/(waves*wave));
+        if (best >= 95 && waves > best_waves) break;
+        if (efficiency > best) { best = efficiency; best_waves = waves; splits = p; }
+    }
+    return ggml_kv_stream_resume_layout_make(heads,uint32_t(splits),
+        value == GGML_TYPE_F16 || value == GGML_TYPE_BF16 ? 32 : 8,output);
+}
+
+// Span order belongs to the session. Each completed call releases its input bytes for ring reuse.
+static bool resume(ggml_backend_t backend, const ggml_tensor * op, ggml_backend_buffer_t workspace,
+        const ggml_kv_stream_resume_plan & plan, size_t tokens, size_t first, bool last) {
+    if (capture_active(backend) || !supports(backend,op) || !workspace || !tokens || tokens%256 || tokens > INT32_MAX || first >= tokens || first%256) return false;
+    const auto * q = op->src[0], * k = op->src[1], * v = op->src[2], * m = op->src[3];
+    if (q->ne[1] != 1 || q->ne[2] != plan.heads || k->ne[1]%256 || size_t(k->ne[1]) > tokens-first ||
+            last != (first+size_t(k->ne[1]) == tokens)) return false;
+    ggml_kv_stream_resume_plan checked;
+    if (!ggml_kv_stream_resume_layout_make(plan.heads,plan.splits,
+            v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_BF16 ? 32 : 8,checked) ||
+            checked.bytes != plan.bytes || checked.state_bytes != plan.state_bytes || checked.partial_offset != plan.partial_offset ||
+            checked.meta_offset != plan.meta_offset || checked.values_per_thread != plan.values_per_thread) return false;
+    auto kernel = ggml_cuda_kv_stream_resume_kernel(k->type,v->type);
+    const auto base = uintptr_t(ggml_backend_buffer_get_base(workspace));
+    const auto capacity = ggml_backend_buffer_get_size(workspace);
+    if (!kernel || !base || base%128 || base > UINTPTR_MAX-capacity || capacity < plan.bytes ||
+            !ggml_backend_supports_buft(backend,ggml_backend_buffer_get_type(workspace)) || ggml_backend_buffer_is_host(workspace)) return false;
+    const span scratch{base,base+capacity}; span touched;
+    if (!tensor_span(backend,op,touched) || overlap(scratch,touched)) return false;
+    for (int i = 0; i < 4; ++i) if (!tensor_span(backend,op->src[i],touched) || overlap(scratch,touched)) return false;
+    auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
+    float scale; std::memcpy(&scale,op->op_params,sizeof(scale));
+    auto * partials = reinterpret_cast<float *>(base+plan.partial_offset);
+    auto * meta = reinterpret_cast<float2 *>(base+plan.meta_offset);
+    const ggml_cuda_kernel_launch_params launch({1,plan.splits,plan.heads},{32,4,1},0,ctx.stream());
+    ggml_cuda_kernel_launch(kernel,launch,
+        static_cast<const char *>(q->data),static_cast<const char *>(k->data),static_cast<const char *>(v->data),static_cast<const char *>(m->data),
+        (const char *) nullptr,(const int *) nullptr,partials,meta,scale,0.0f,1.0f,1.0f,uint32_t(1),0.0f,
+        int32_t(256),init_fastdiv_values(1),int32_t(q->ne[2]),int32_t(1),int32_t(q->nb[1]),int32_t(q->nb[2]),int32_t(q->nb[3]),
+        int32_t(256),int32_t(tokens),int32_t(k->ne[2]),int32_t(1),int32_t(k->nb[1]),int32_t(k->nb[2]),int64_t(k->nb[3]),
+        int32_t(v->nb[1]),int32_t(v->nb[2]),int64_t(v->nb[3]),int32_t(m->ne[1]),int32_t(1),int32_t(1),
+        int32_t(m->nb[1]),int32_t(m->nb[2]),int64_t(m->nb[3]),reinterpret_cast<float *>(base),int(first),int(first+k->ne[1]),first == 0,last);
+    CUDA_CHECK(cudaGetLastError());
+    if (last) {
+        if (plan.splits > 1) {
+            const ggml_cuda_kernel_launch_params combine({1,plan.heads,1},{256,1,1},plan.splits*sizeof(float2),ctx.stream());
+            ggml_cuda_kernel_launch(flash_attn_combine_results<256>,combine,partials,meta,static_cast<float *>(op->data),int(plan.splits));
+        } else CUDA_CHECK(cudaMemcpyAsync(op->data,partials,ggml_nbytes(op),cudaMemcpyDeviceToDevice,ctx.stream()));
+    }
+    CUDA_CHECK(cudaGetLastError()); CUDA_CHECK(cudaStreamSynchronize(ctx.stream())); return true;
+}
+
 // The surrounding attention TU uses fast math; preserve subnormal contract payloads across conversion.
 static __device__ __forceinline__ double widen(float value) {
     double result;
@@ -311,7 +398,7 @@ static bool clear(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buf
 // Keep CUDA details behind the backend-neutral registry contract.
 const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
     static_assert(sizeof(float2) == sizeof(ggml_kv_stream_partial_meta), "partial metadata ABI");
-    static const ggml_kv_stream_partial_ops ops{3,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert};
+    static const ggml_kv_stream_partial_ops ops{5,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert,direct,resume_plan,resume};
 #ifdef GGML_CUDA_NO_FA
     GGML_UNUSED(ops);
     return nullptr;

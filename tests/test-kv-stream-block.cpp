@@ -62,7 +62,7 @@ int main(int argc, char ** argv) {
     if (!cuda) return t.summary();
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get()));
     auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_kv_stream_partial_ops"));
-    t.test("native_partial_hooks_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version == 3 && get()->fold && get()->clear && get()->capabilities && get()->convert); });
+    t.test("native_partial_hooks_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version == 5 && get()->fold && get()->clear && get()->capabilities && get()->convert && get()->direct && get()->resume); });
     if (!get || !get()) return t.summary();
     t.test("capabilities_exclude_read_only_weight_quants_before_pool_planning", [&](testing & t) {
         size_t writable = 0, native = 0, fallback = 0;

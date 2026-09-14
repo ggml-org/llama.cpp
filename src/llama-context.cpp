@@ -7,6 +7,8 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-memory-hybrid.h"
+#include "llama-kv-stream-model.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
@@ -249,6 +251,18 @@ llama_context::llama_context(
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
+    cparams.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
+    if (params.kv_stream_pool_bytes) {
+        if (model.arch != LLM_ARCH_QWEN35 || params.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT || params.ctx_other ||
+                hparams.no_alloc || hparams.vocab_only || model.devices.size() != 1 || cparams.n_seq_max != 1 ||
+                cparams.n_rs_seq || !cparams.offload_kqv || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED ||
+                !cparams.causal_attn || params.embeddings || model.devices.front().is_meta || !llama_kv_stream_device_buffer_type(model.devices.front().dev)) {
+            throw std::runtime_error("KV streaming requires one CUDA device, serial Qwen35 target context, -fa on, no MTP/rollback/embedding mode and allocated weights (--fit off)");
+        }
+        for (uint32_t il = 0; il < hparams.n_layer(); ++il) if (model.dev_layer(il) != model.devices.front().dev) {
+            throw std::runtime_error("initial KV streaming integration requires all model layers on the single CUDA device");
+        }
+    }
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
     cparams.n_outputs_max_per_seq = params.n_outputs_max_per_seq == 0 ?
@@ -397,6 +411,14 @@ llama_context::llama_context(
             /*.ctx_type  =*/ cparams.ctx_type,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
         };
+        if (params.kv_stream_pool_bytes) {
+            params_mem.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
+            params_mem.kv_stream_max_rows = cparams.n_ubatch;
+            for (auto & backend : backends) if (ggml_backend_get_device(backend.get()) == model.devices.front().dev) {
+                params_mem.kv_stream_backend = backend.get(); break;
+            }
+            if (!params_mem.kv_stream_backend) throw std::runtime_error("missing KV streaming CUDA backend");
+        }
 
         memory.reset(model.create_memory(params_mem, cparams));
     }
@@ -513,6 +535,7 @@ llama_context::~llama_context() {
     ggml_opt_free(opt_ctx);
 
     // Release scheduler leases while the backend objects are still alive.
+    release_kv_workspaces(true);
     compute_memory.reset();
     sched.reset();
     compute_arenas.clear();
@@ -658,6 +681,16 @@ bool llama_context::prepare_compute_arenas(
         sched.get(), backend_ptrs, groups, compute_arenas);
 }
 
+void llama_context::release_kv_workspaces(bool retiring) {
+    if (!cparams.kv_stream_pool_bytes || !memory) return;
+    auto * stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
+    if (!stream) return;
+    if (retiring) stream->abort();
+    const bool released = stream->set_workspaces({});
+    if (retiring) { GGML_ASSERT(released); }
+    else if (!released) throw std::runtime_error("cannot replace workspace during active KV execution");
+}
+
 void llama_context::sched_reserve() {
     if (!sched_reserve_state.begin()) {
         return;
@@ -666,6 +699,7 @@ void llama_context::sched_reserve() {
     LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
 
     synchronize();
+    release_kv_workspaces(false);
     compute_memory.reset();
     sched.reset();
     compute_arenas.clear();
@@ -1484,6 +1518,25 @@ bool llama_context::set_adapter_cvec(
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    llama_kv_stream_model * stream = nullptr;
+    if (cparams.kv_stream_pool_bytes) {
+        static const std::vector<ggml_backend_memory_lease_t> empty;
+        stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
+        if (!stream || !stream->set_workspaces(compute_memory ? compute_memory->workspace_leases() : empty)) {
+            ret = GGML_STATUS_FAILED; return nullptr;
+        }
+        if (!mctx || gtype != LLM_GRAPH_TYPE_DEFAULT ||
+                !static_cast<llama_memory_hybrid_context *>(mctx)->get_attn()->kv_stream_begin(ubatch,cparams.kv_stream_decode)) {
+            LLAMA_LOG_ERROR("%s: KV streaming rejected non-serial/non-append execution\n",__func__);
+            ret = GGML_STATUS_FAILED; return nullptr;
+        }
+        stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
+    }
+    struct stream_guard {
+        llama_kv_stream_model * stream;
+        bool completed = false;
+        ~stream_guard() { if (stream && !completed) stream->abort(); }
+    } streaming{stream};
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1510,6 +1563,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         n_reused++;
     } else {
         gf_res_prev_active = nullptr;
+        if (stream) stream->release_graphs();
         res->reset();
 
         ggml_backend_sched_reset(sched.get());
@@ -1553,6 +1607,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
+    if (stream && !stream->complete()) {
+        LLAMA_LOG_ERROR("%s: KV streaming graph did not complete every attention layer\n",__func__);
+        ret = GGML_STATUS_FAILED; return nullptr;
+    }
+    streaming.completed = true;
     ret = GGML_STATUS_SUCCESS;
 
     return res;
@@ -1812,6 +1871,24 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         LLAMA_LOG_ERROR("%s: embd row width %zu does not match the decoder input %zu\n",
                 __func__, batch_inp.n_embd, batch_inp.n_embd_inp);
         return -1;
+}
+
+    if (cparams.kv_stream_pool_bytes) {
+        auto * stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
+        if (!stream || !stream->complete() || batch_inp.n_tokens < 0 || batch_inp.embd) {
+            LLAMA_LOG_ERROR("%s: KV streaming requires an idle text-token append\n",__func__); return -1;
+        }
+        const size_t first = stream->tokens();
+        if (first > cparams.n_ctx_seq || size_t(batch_inp.n_tokens) > cparams.n_ctx_seq-first) {
+            LLAMA_LOG_ERROR("%s: KV streaming context capacity exceeded\n",__func__); return 1;
+        }
+        for (int32_t i = 0; i < batch_inp.n_tokens; ++i) {
+            if ((batch_inp.pos && batch_inp.pos[i] != int64_t(first+size_t(i))) ||
+                    (batch_inp.n_seq_id && batch_inp.n_seq_id[i] != 1) ||
+                    (batch_inp.seq_id && (!batch_inp.seq_id[i] || batch_inp.seq_id[i][0] != 0))) {
+                LLAMA_LOG_ERROR("%s: KV streaming requires contiguous positions in sequence zero\n",__func__); return -1;
+            }
+        }
     }
 
     const auto & vocab   = model.vocab;
@@ -3354,6 +3431,9 @@ size_t llama_context::state_set_data(const uint8_t * src, size_t size) {
 static constexpr uint32_t io_magic = 0xaf143cd8;
 
 size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags) {
+    if (cparams.kv_stream_pool_bytes && (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)) {
+        LLAMA_LOG_ERROR("%s: KV streaming does not yet support device-native snapshots\n",__func__); return 0;
+    }
     llama_io_write_dummy io(flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
     try {
         io.write(&io_magic, sizeof(io_magic));
@@ -3367,6 +3447,9 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
 }
 
 size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags) {
+    if (cparams.kv_stream_pool_bytes && (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)) {
+        LLAMA_LOG_ERROR("%s: KV streaming does not yet support device-native snapshots\n",__func__); return 0;
+    }
     std::unique_ptr<llama_io_write_i> io;
     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
         io = std::make_unique<llama_io_write_device>(dst, size, mem_storage[seq_id]);
@@ -3386,6 +3469,9 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
 }
 
 size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
+    if (cparams.kv_stream_pool_bytes) {
+        LLAMA_LOG_ERROR("%s: KV streaming does not yet support state restoration\n",__func__); return 0;
+    }
     std::unique_ptr<llama_io_read_i> io;
     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
         // create a temporary io to read the magic and the src seq_id
@@ -3580,6 +3666,7 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
 }
 
 size_t llama_context::state_read_data(llama_io_read_i & io) {
+    if (cparams.kv_stream_pool_bytes) throw std::runtime_error("KV streaming does not yet support state restoration");
     LLAMA_LOG_DEBUG("%s: reading state\n", __func__);
 
     // read model info
@@ -3614,6 +3701,9 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 }
 
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    if (cparams.kv_stream_pool_bytes) throw std::runtime_error("KV streaming does not yet support state restoration");
+    GGML_UNUSED(seq_id);
+
     if (memory) {
         memory->state_read(io, seq_id, flags);
     }
@@ -3962,6 +4052,7 @@ llama_context_params llama_context_default_params() {
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,
+        /*.kv_stream_pool_bytes        =*/ 0,
     };
 
     return result;
@@ -4154,6 +4245,10 @@ void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
 
 bool llama_get_causal_attn(const llama_context * ctx) {
     return ctx->get_causal_attn();
+}
+
+void llama_set_kv_stream_decode(llama_context * ctx, bool decode) {
+    if (ctx) ctx->set_kv_stream_decode(decode);
 }
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {

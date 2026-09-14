@@ -22,6 +22,7 @@ GGML_API bool ggml_kv_stream_query_tile_make(
 // Optional registry extension "ggml_backend_kv_stream_partial_ops". All calls complete before returning.
 // Getter may return null when disabled. Call outside active capture; CUDA execution errors follow backend error handling.
 // All tensor/workspace buffers belong to the backend; workspace must not overlap inputs or public output.
+struct ggml_kv_stream_resume_plan;
 struct ggml_kv_stream_partial_ops {
     uint32_t version;
     bool (*supports)(ggml_backend_t backend, const ggml_tensor * attention);
@@ -38,5 +39,21 @@ struct ggml_kv_stream_partial_ops {
     bool (*supports_conversion)(ggml_backend_t backend, const ggml_tensor * source, const ggml_tensor * destination);
     // Caller supplies a disjoint, bounded F16 plane; this operation does not allocate device scratch.
     bool (*convert)(ggml_backend_t backend, const ggml_tensor * source, ggml_tensor * destination);
+    // Version 4: ordinary attention, requiring the caller's native FA output allocation including backend extras.
+    bool (*direct)(ggml_backend_t backend, const ggml_tensor * attention) = nullptr;
+    // Version 5: plan a TG1 native vector evaluation, then consume consecutive 256-token-aligned spans.
+    bool (*resume_plan)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads, uint32_t kv_heads,
+            size_t tokens, ggml_kv_stream_resume_plan & output) = nullptr;
+    // No allocation; scratch is caller-owned and retains per-thread state until the final span publishes output.
+    bool (*resume)(ggml_backend_t backend, const ggml_tensor * attention, ggml_backend_buffer_t workspace,
+            const ggml_kv_stream_resume_plan & plan, size_t tokens, size_t first, bool last) = nullptr;
 };
 using ggml_kv_stream_partial_ops_get = const ggml_kv_stream_partial_ops * (*)();
+
+struct ggml_kv_stream_resume_plan {
+    uint32_t heads = 0, splits = 0, values_per_thread = 0;
+    size_t state_bytes = 0, partial_offset = 0, meta_offset = 0, bytes = 0;
+};
+// Bound the native per-thread state and final partials without a context-sized KV allocation.
+GGML_API bool ggml_kv_stream_resume_layout_make(uint32_t heads, uint32_t splits, uint32_t values_per_thread,
+        ggml_kv_stream_resume_plan & output);

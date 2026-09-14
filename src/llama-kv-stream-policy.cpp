@@ -187,7 +187,7 @@ llama_kv_stream_policy_result llama_kv_stream_policy_step(
     double miss_ratio = 0;
     ingest_feedback(observation.feedback, d, miss_ratio);
     const bool pressure = active > s.resident_pages_per_layer;
-    const uint32_t requested_decode = observation.query_tokens <= DECODE_QUERY_LIMIT && pressure ? active : 0;
+    const uint32_t requested_decode = !observation.uniform_prefill && observation.query_tokens <= DECODE_QUERY_LIMIT && pressure ? active : 0;
     const bool entering = requested_decode && requested_decode != previous.decode_active_pages;
     d.target_resident_pages = overlap_target(b, active, c.overlap_ratio);
     if (!pressure) {
@@ -224,7 +224,7 @@ llama_kv_stream_policy_result llama_kv_stream_policy_step(
     if (d.partition_changed) {
         s.starved = s.overprovisioned = s.evaluations_since_repartition = 0;
     }
-    s.decode_active_pages = observation.query_tokens <= DECODE_QUERY_LIMIT && active > s.resident_pages_per_layer ? active : 0;
+    s.decode_active_pages = !observation.uniform_prefill && observation.query_tokens <= DECODE_QUERY_LIMIT && active > s.resident_pages_per_layer ? active : 0;
     d.layout_changed = d.partition_changed || !same_capacity(profile(previous), profile(s));
     output = d;
     return {};

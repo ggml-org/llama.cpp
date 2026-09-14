@@ -4,6 +4,8 @@
 #include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-kv-stream-model.h"
+#include "../ggml/src/ggml-kv-stream-device.h"
 
 #include <algorithm>
 #include <cassert>
@@ -79,9 +81,10 @@ llama_kv_cache::llama_kv_cache(
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share,
-             const char *   name_tag) :
+             const char *   name_tag,
+    const llama_memory_params * stream) :
     model(model), hparams(hparams), v_trans(v_trans),
-    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
+    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(stream ? 256 : n_pad), n_swa(n_swa), swa_type(swa_type),
     other(static_cast<llama_kv_cache *>(mem_other)),
     v_cells_impl(other ? other->v_cells_impl : std::make_shared<llama_kv_cells_vec>()),
     v_cells(*v_cells_impl) {
@@ -97,7 +100,15 @@ llama_kv_cache::llama_kv_cache(
         }
     }
 
-    GGML_ASSERT(kv_size % n_pad == 0);
+    const uint32_t requested_kv_size = kv_size;
+    if (stream) {
+        if (model.arch != LLM_ARCH_QWEN35 || hparams.no_alloc || v_trans || !offload || n_seq_max != 1 ||
+                n_swa || other || reuse || share || !stream->kv_stream_backend || kv_size > UINT32_MAX-255) {
+            throw std::runtime_error("KV streaming requires an allocated serial Qwen35 CUDA target context with Flash Attention and no shared/SWA cache");
+        }
+        kv_size = GGML_PAD(kv_size,256);
+    }
+    GGML_ASSERT(kv_size % this->n_pad == 0);
 
     const uint32_t n_layer = hparams.n_layer_all;
 
@@ -162,6 +173,31 @@ llama_kv_cache::llama_kv_cache(
 
     const bool is_mla = hparams.is_mla();
 
+    if (stream) {
+        auto * dev = ggml_backend_get_device(stream->kv_stream_backend);
+        std::vector<uint32_t> ids;
+        for (uint32_t il = 0; il < n_layer; ++il) if (hparams.has_kv(il) && (!filter || filter(il))) ids.push_back(il);
+        if (ids.empty()) throw std::runtime_error("KV streaming found no attention layers");
+        const auto first = ids.front();
+        for (auto il : ids) if (model.dev_layer(il) != dev || hparams.n_embd_head_k(il) != 256 || hparams.n_embd_head_v(il) != 256 ||
+                hparams.n_head_kv(il) != hparams.n_head_kv(first) || hparams.n_head(il) != hparams.n_head(first)) {
+            throw std::runtime_error("KV streaming requires uniform 256-wide attention on one CUDA device");
+        }
+        auto * reg = ggml_backend_dev_backend_reg(dev);
+        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
+        if (!get || !get() || get()->version < 3) throw std::runtime_error("missing CUDA KV streaming capabilities");
+        llama_kv_stream_model_config config;
+        config.backend = stream->kv_stream_backend; config.pool_bytes = stream->kv_stream_pool_bytes;
+        config.max_batch_rows = stream->kv_stream_max_rows; config.query_heads = hparams.n_head(first);
+        config.measure = true;
+        config.host = {0,{type_k,type_v,256,256,hparams.n_head_kv(first),256,128},
+            get()->capabilities(config.backend,type_k,type_v),requested_kv_size,uint32_t(ids.size())};
+        kv_stream = llama_kv_stream_model::create(config);
+        if (!kv_stream) throw std::runtime_error("failed to allocate or bind the CUDA KV streaming grants");
+        LLAMA_LOG_INFO("%s: KV stream pool %.2f MiB, total device grants %.2f MiB, authoritative host %.2f MiB\n",__func__,
+            config.pool_bytes/1048576.0,kv_stream->granted_bytes()/1048576.0,kv_stream->host()->bytes()/1048576.0);
+    }
+
     for (uint32_t il = 0; il < n_layer; il++) {
         if (!hparams.has_kv(il)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: does not have KV cache\n", __func__, il);
@@ -219,6 +255,7 @@ llama_kv_cache::llama_kv_cache(
 
             dev_name = ggml_backend_dev_name(dev);
         }
+        if (kv_stream) buft = ggml_backend_buffer_get_type(kv_stream->buffer());
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
 
@@ -232,6 +269,14 @@ llama_kv_cache::llama_kv_cache(
 
         ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
         ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
+        if (kv_stream) {
+            llama_kv_stream_host_layer planes;
+            if (!kv_stream->host()->layer(uint32_t(layers.size()),planes) ||
+                    ggml_backend_tensor_alloc(kv_stream->buffer(),k,planes.k) != GGML_STATUS_SUCCESS ||
+                    ggml_backend_tensor_alloc(kv_stream->buffer(),v,planes.v) != GGML_STATUS_SUCCESS) {
+                throw std::runtime_error("failed to bind authoritative host KV tensors");
+            }
+        }
 
         has_k && ggml_format_name(k, "cache_%sk_l%d", name_tag, il);
         has_v && ggml_format_name(v, "cache_%sv_l%d", name_tag, il);
@@ -276,7 +321,14 @@ llama_kv_cache::llama_kv_cache(
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
     for (auto & [buft, ctx] : ctx_map) {
         ggml_backend_buffer_t buf;
-        if (hparams.no_alloc) {
+        if (kv_stream) {
+            buf = ggml_backend_buffer_retain(kv_stream->buffer());
+            for (auto * tensor = ggml_get_first_tensor(ctx.get()); tensor; tensor = ggml_get_next_tensor(ctx.get(),tensor)) {
+                if (tensor->view_src && ggml_backend_view_init(tensor) != GGML_STATUS_SUCCESS) {
+                    ggml_backend_buffer_free(buf); throw std::runtime_error("failed to bind host KV views");
+                }
+            }
+        } else if (hparams.no_alloc) {
             buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0); // dummy buffer
             for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != nullptr; t = ggml_get_next_tensor(ctx.get(), t)) {
                 t->buffer = buf; // set dummy buffer for KV cache so that the backend scheduler won't try to allocate it
@@ -290,7 +342,7 @@ llama_kv_cache::llama_kv_cache(
 
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
 
-        ggml_backend_buffer_clear(buf, 0);
+        if (!kv_stream) ggml_backend_buffer_clear(buf, 0);
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
 
@@ -384,12 +436,18 @@ llama_kv_cache::llama_kv_cache(
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
 }
 
+llama_kv_cache::~llama_kv_cache() = default;
+
 void llama_kv_cache::clear(bool data) {
     for (uint32_t s = 0; s < n_stream; ++s) {
         v_cells[s].reset();
         v_heads[s] = 0;
     }
 
+    if (kv_stream) {
+        if (!kv_stream->reset(data)) throw std::runtime_error("failed to reset KV streaming session");
+        return;
+    }
     if (data) {
         for (auto & [_, buf] : ctxs_bufs) {
             ggml_backend_buffer_clear(buf.get(), 0);
@@ -397,7 +455,16 @@ void llama_kv_cache::clear(bool data) {
     }
 }
 
+bool llama_kv_cache::kv_stream_can_remove(llama_seq_id seq_id,llama_pos p0,llama_pos p1) const {
+    if (!kv_stream) return true;
+    if (seq_id != 0 && seq_id != -1) return false;
+    p0 = std::max(llama_pos(0),p0);
+    if (p1 < 0) p1 = std::numeric_limits<llama_pos>::max();
+    return p1 <= p0 || p0 >= int64_t(kv_stream->tokens()) || (p0 == 0 && p1 >= int64_t(kv_stream->tokens()));
+}
+
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    if (!kv_stream_can_remove(seq_id,p0,p1)) return false;
     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
     if (other) {
         return true;
@@ -412,6 +479,16 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
 
     if (p1 < 0) {
         p1 = std::numeric_limits<llama_pos>::max();
+    }
+
+    if (kv_stream) {
+        if (seq_id != 0 && seq_id != -1) return false;
+        if (p0 == 0 && p1 >= int64_t(kv_stream->tokens())) {
+            if (!kv_stream->reset(false)) return false;
+        } else if (p0 < int64_t(kv_stream->tokens()) && p1 > p0) {
+            // Partial rewind and prompt-cache restoration require the later request-lifecycle integration.
+            return false;
+        }
     }
 
     if (seq_id >= 0) {
@@ -702,6 +779,11 @@ llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, size_t> ret;
+    if (kv_stream) {
+        ret[ggml_backend_buffer_get_type(kv_stream->host()->buffer())] = kv_stream->host()->bytes();
+        ret[llama_kv_stream_device_buffer_type(ggml_backend_buft_get_device(ggml_backend_buffer_get_type(kv_stream->buffer())))] = kv_stream->granted_bytes();
+        return ret;
+    }
     for (const auto & [ctx, buf] : ctxs_bufs) {
         ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf.get());
 
@@ -1206,6 +1288,7 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
 }
 
 bool llama_kv_cache::get_can_shift() const {
+    if (kv_stream) return false;
     // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
     if (model.arch == LLM_ARCH_STEP35) {
         return false;
@@ -2881,6 +2964,17 @@ const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
 
 uint32_t llama_kv_cache_context::get_n_kv() const {
     return n_kv;
+}
+
+bool llama_kv_cache_context::kv_stream_begin(const llama_ubatch & ubatch, bool decode) const {
+    auto * stream = kv->get_kv_stream();
+    if (!stream || i_cur >= sinfos.size() || !ubatch.n_tokens || ubatch.n_seqs_unq != 1 ||
+            !ubatch.seq_id_unq || ubatch.seq_id_unq[0] != 0 || !ubatch.pos || ubatch.embd) return false;
+    const auto & info = sinfos[i_cur];
+    if (info.empty() || !info.is_contiguous() || info.s0 != 0 || info.s1 != 0 || info.strm.size() != 1 || info.strm[0] != 0 ||
+            info.head() != stream->tokens() || info.size() != ubatch.n_tokens) return false;
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) if (ubatch.pos[i] != int64_t(stream->tokens()+i)) return false;
+    return stream->begin(stream->tokens()+ubatch.n_tokens,ubatch.n_tokens,decode);
 }
 
 ggml_type llama_kv_cache_context::type_k() const {

@@ -425,6 +425,8 @@ extern "C" {
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
         struct llama_context * ctx_other;
+        // Experimental serial CUDA KV pool; excludes producer and attention workspace. Zero disables streaming.
+        size_t kv_stream_pool_bytes;
     };
 
     struct llama_model_tensor_override {
@@ -1110,6 +1112,8 @@ extern "C" {
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
+    // Explicit request phase for the experimental KV consumer; a one-token prompt is not necessarily decode.
+    LLAMA_API void llama_set_kv_stream_decode(struct llama_context * ctx, bool decode);
 
     // Returns whether the context is currently using causal attention
     LLAMA_API bool llama_get_causal_attn(const struct llama_context * ctx);

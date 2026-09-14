@@ -46,6 +46,7 @@ struct llama_kv_stream_policy_observation {
     size_t active_tokens = 0;
     uint32_t query_tokens = 1;
     llama_kv_stream_feedback feedback;
+    bool uniform_prefill = false;
 };
 
 struct llama_kv_stream_policy_decision {

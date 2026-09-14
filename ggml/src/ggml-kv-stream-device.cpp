@@ -1,5 +1,21 @@
 #include "ggml-kv-stream-device.h"
 
+bool ggml_kv_stream_resume_layout_make(uint32_t heads, uint32_t splits, uint32_t values, ggml_kv_stream_resume_plan & output) {
+    if (!heads || !splits || (values != 8 && values != 32) || size_t(heads) > SIZE_MAX/splits) return false;
+    const size_t rows = size_t(heads)*splits;
+    const size_t stride = 128*(2+size_t(values))*sizeof(float);
+    if (rows > (SIZE_MAX-127)/stride) return false;
+    ggml_kv_stream_resume_plan next;
+    next.heads = heads; next.splits = splits; next.values_per_thread = values;
+    next.state_bytes = rows*stride;
+    next.partial_offset = (next.state_bytes+127)/128*128;
+    if (rows > (SIZE_MAX-next.partial_offset-127)/(256*sizeof(float))) return false;
+    next.meta_offset = (next.partial_offset+rows*256*sizeof(float)+127)/128*128;
+    if (rows > (SIZE_MAX-next.meta_offset)/(2*sizeof(float))) return false;
+    next.bytes = next.meta_offset+rows*2*sizeof(float);
+    output = next; return true;
+}
+
 // Reject the entire shape before publishing offsets, including overflow beyond the selected tile.
 bool ggml_kv_stream_query_tile_make(size_t queries, size_t heads, size_t first, ggml_kv_stream_query_tile & output) {
     if (!heads || first >= queries || queries > SIZE_MAX/heads) return false;

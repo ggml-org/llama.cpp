@@ -23,6 +23,8 @@ public:
     // Observe completion without rebuilding the immutable lease-validation state on the next token.
     void synchronize();
     bool uses_arenas() const noexcept;
+    // Borrowed handles; consumers retain them before capturing addresses from this workspace.
+    const std::vector<ggml_backend_memory_lease_t> & workspace_leases() const noexcept;
 
 private:
     struct implementation;

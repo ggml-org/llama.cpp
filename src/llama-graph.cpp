@@ -1,4 +1,5 @@
 #include "llama-graph.h"
+#include "../ggml/src/ggml-backend-execution.h"
 
 #include "llama-impl.h"
 #include "llama-model.h"
@@ -2810,11 +2811,13 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
 
         // this can happen when KV cache is not used (e.g. an embedding model with non-causal attn)
-        if (k->type == GGML_TYPE_F32) {
+        ggml_backend_buffer_t managed_k = nullptr, managed_v = nullptr;
+        ggml_backend_execution_owner(k,managed_k); ggml_backend_execution_owner(v,managed_v);
+        if (k->type == GGML_TYPE_F32 && !managed_k) {
             k = ggml_cast(ctx0, k, GGML_TYPE_F16);
         }
 
-        if (v->type == GGML_TYPE_F32) {
+        if (v->type == GGML_TYPE_F32 && !managed_v) {
             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
         }
 
@@ -3073,8 +3076,15 @@ ggml_tensor * llm_graph_context::build_attn(
             const auto & k_idxs = inp->get_k_idxs();
             const auto & v_idxs = inp->get_v_idxs();
 
-            ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
-            ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+            auto * copy_k = mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il);
+            auto * copy_v = mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il);
+            ggml_backend_buffer_t managed = nullptr;
+            if (ggml_backend_execution_owner(copy_v,managed) && managed) {
+                // Pair publication needs K's producer allocation to survive until the V write boundary.
+                copy_v->src[3] = copy_k->src[0];
+            }
+            ggml_build_forward_expand(gf, copy_k);
+            ggml_build_forward_expand(gf, copy_v);
         }
 
         k = mctx_cur->get_k(ctx0, il);
