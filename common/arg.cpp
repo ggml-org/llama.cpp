@@ -396,9 +396,27 @@ common_models_handler common_models_handler_init(const common_params & params, l
     opts.download_dspark = spec_type_draft_dspark;
     opts.download_mmproj = use_mmproj && !params.no_mmproj
                         && params.mmproj.path.empty() && params.mmproj.url.empty();
+    opts.download_diffusion = !params.mediagen.no_auto
+                        && (curr_ex == LLAMA_EXAMPLE_SERVER || curr_ex == LLAMA_EXAMPLE_MEDIAGEN || curr_ex == LLAMA_EXAMPLE_DOWNLOAD);
 
     if (!params.model.hf_repo.empty()) {
         plan = common_download_get_hf_plan(params.model, opts);
+    }
+
+    // text encoder of a diffusion model
+    common_download_hf_plan plan_text_encoder;
+    {
+        common_params_model te = params.mediagen.text_encoder;
+        if (te.hf_repo.empty() && te.path.empty() && te.url.empty() && !plan.text_encoder_repo.empty()) {
+            te.hf_repo = plan.text_encoder_repo;
+        }
+        if (!te.hf_repo.empty()) {
+            auto opts_te = opts;
+            opts_te.download_mmproj    = false;
+            opts_te.download_diffusion = false;
+            opts_te.download_mtp = opts_te.download_dflash = opts_te.download_eagle3 = opts_te.download_dspark = false;
+            plan_text_encoder = common_download_get_hf_plan(te, opts_te);
+        }
     }
 
     if (!params.speculative.draft.mparams.hf_repo.empty()) {
@@ -413,7 +431,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
         plan_spec = common_download_get_hf_plan(params.speculative.draft.mparams, opts_spec);
     }
 
-    return common_models_handler{plan, plan_spec, opts};
+    return common_models_handler{plan, plan_spec, plan_text_encoder, opts};
 }
 
 bool common_models_handler_is_preset_repo(const common_models_handler & handler) {
@@ -628,6 +646,25 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
 
     if (!plan.model_files.empty()) {
         add_tasks(plan.model_files, plan.primary, params.model);
+    }
+    // diffusion model sidecars and text encoder
+    if (!plan.vae.local_path.empty() && params.mediagen.vae.path.empty()) {
+        tasks.emplace_back(plan.vae, opts, [&]() {
+            params.mediagen.vae.path = hf_cache::finalize_file(plan.vae);
+        });
+    }
+    if (!plan.audio_vae.local_path.empty() && params.mediagen.audio_vae.path.empty()) {
+        tasks.emplace_back(plan.audio_vae, opts, [&]() {
+            params.mediagen.audio_vae.path = hf_cache::finalize_file(plan.audio_vae);
+        });
+    }
+    if (!plan.text_proj.local_path.empty() && params.mediagen.text_proj.path.empty()) {
+        tasks.emplace_back(plan.text_proj, opts, [&]() {
+            params.mediagen.text_proj.path = hf_cache::finalize_file(plan.text_proj);
+        });
+    }
+    if (!handler.plan_text_encoder.model_files.empty() && params.mediagen.text_encoder.path.empty()) {
+        add_tasks(handler.plan_text_encoder.model_files, handler.plan_text_encoder.primary, params.mediagen.text_encoder);
     }
     if (!plan.mmproj.local_path.empty()) {
         tasks.emplace_back(plan.mmproj, opts, [&]() {
@@ -1088,6 +1125,7 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         "llama-lookup-create",
         "llama-lookup-merge",
         "llama-lookup-stats",
+        "llama-mediagen",
         "llama-minicpmv-cli",
         "llama-mtmd-cli",
         "llama-parallel",
@@ -2587,6 +2625,107 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_URL"));
     add_opt(common_arg(
+        {"--vae"}, "FILE",
+        "path to the video VAE of a latent diffusion model (see tools/mediagen/README.md)\n"
+        "note: if -hf is used, this argument can be omitted",
+        [](common_params & params, const std::string & value) {
+            params.mediagen.vae.path = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_VAE"));
+    add_opt(common_arg(
+        {"--audio-vae"}, "FILE",
+        "path to the audio VAE and vocoder of a latent diffusion model",
+        [](common_params & params, const std::string & value) {
+            params.mediagen.audio_vae.path = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_AUDIO_VAE"));
+    add_opt(common_arg(
+        {"--text-proj"}, "FILE",
+        "path to the text embedding projection (embeddings connectors) of a latent diffusion model",
+        [](common_params & params, const std::string & value) {
+            params.mediagen.text_proj.path = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TEXT_PROJ"));
+    add_opt(common_arg(
+        {"-te", "--text-encoder"}, "FILE",
+        "path to the text encoder GGUF of a latent diffusion model",
+        [](common_params & params, const std::string & value) {
+            params.mediagen.text_encoder.path = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TEXT_ENCODER"));
+    add_opt(common_arg(
+        {"-tehf", "--text-encoder-hf"}, "<user>/<model>[:quant]",
+        "Hugging Face repository of the text encoder of a latent diffusion model\n"
+        "(default: chosen from the diffusion model family when -hf is used)",
+        [](common_params & params, const std::string & value) {
+            params.mediagen.text_encoder.hf_repo = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TEXT_ENCODER_HF"));
+    add_opt(common_arg(
+        {"--no-diffusion-auto"},
+        "do not resolve the VAE, text projection and text encoder of a diffusion model from -hf",
+        [](common_params & params) {
+            params.mediagen.no_auto = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_DOWNLOAD}));
+    add_opt(common_arg(
+        {"-W", "--width"}, "N",
+        string_format("width of the generated image or video in pixels (default: %d)", params.mediagen.width),
+        [](common_params & params, int value) {
+            params.mediagen.width = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN}));
+    add_opt(common_arg(
+        {"-H", "--height"}, "N",
+        string_format("height of the generated image or video in pixels (default: %d)", params.mediagen.height),
+        [](common_params & params, int value) {
+            params.mediagen.height = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN}));
+    add_opt(common_arg(
+        {"--frames"}, "N",
+        string_format("number of video frames, 1 for an image (default: %d)", params.mediagen.n_frames),
+        [](common_params & params, int value) {
+            params.mediagen.n_frames = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN}));
+    add_opt(common_arg(
+        {"--fps"}, "N",
+        string_format("video frame rate (default: %.0f)", params.mediagen.fps),
+        [](common_params & params, const std::string & value) {
+            params.mediagen.fps = std::stof(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN}));
+    add_opt(common_arg(
+        {"--steps"}, "N",
+        "number of denoising steps (default: model schedule)",
+        [](common_params & params, int value) {
+            params.mediagen.steps = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN}));
+    add_opt(common_arg(
+        {"--cfg-scale"}, "N",
+        string_format("classifier-free guidance scale, 1.0 disables it (default: %.1f)", params.mediagen.cfg_scale),
+        [](common_params & params, const std::string & value) {
+            params.mediagen.cfg_scale = std::stof(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN}));
+    add_opt(common_arg(
+        {"--enhance-prompt"},
+        {"--no-enhance-prompt"},
+        string_format("expand the prompt into a detailed caption with the text model before generating (default: %s)", params.mediagen.enhance_prompt ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.mediagen.enhance_prompt = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN, LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--negative-prompt"}, "TEXT",
+        "negative prompt (used when --cfg-scale > 1)",
+        [](common_params & params, const std::string & value) {
+            params.mediagen.negative_prompt = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MEDIAGEN}));
+    add_opt(common_arg(
         {"--mmproj-auto"},
         {"--no-mmproj", "--no-mmproj-auto"},
         string_format("whether to use multimodal projector file (if available), useful when using -hf (default: %s)", params.no_mmproj ? "disabled" : "enabled"),
@@ -3145,7 +3284,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.out_file = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE,
-                    LLAMA_EXAMPLE_RESULTS, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS, LLAMA_EXAMPLE_CLI}));
+                    LLAMA_EXAMPLE_RESULTS, LLAMA_EXAMPLE_EXPORT_GRAPH_OPS, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MEDIAGEN}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
