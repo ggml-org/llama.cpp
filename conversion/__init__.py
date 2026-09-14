@@ -327,6 +327,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "MuseGlimmerForConditionalGeneration": "muse_glimmer",
     "PaddleOCRVisionModel": "ernie",
     "Phi4ForCausalLMV": "phi",
+    "NEOVisionModel": "sensenova_u1",
     "Qwen2AudioForConditionalGeneration": "ultravox",
     "Qwen2VLForConditionalGeneration": "qwenvl",
     "Qwen2VLModel": "qwenvl",

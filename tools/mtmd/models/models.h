@@ -50,6 +50,11 @@ struct clip_graph_qwen3vl : clip_graph_qwen2vl {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_sensenova_u1 : clip_graph {
+    clip_graph_sensenova_u1(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_minimax_m3 : clip_graph {
     clip_graph_minimax_m3(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
