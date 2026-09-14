@@ -5,10 +5,10 @@
 //
 // cache line
 //
-
-#if defined(__cpp_lib_hardware_interference_size)
-#define CACHE_LINE_SIZE std::hardware_destructive_interference_size
-#else
+// TODO: rework CACHE_LINE_SIZE so std::hardware_destructive_interference_size
+// can be used consistently between C and C++ TUs; the previous macro form
+// diverged based on include order and undersized the work buffer.
+// ref: https://github.com/ggml-org/llama.cpp/pull/28882
 #if defined(__POWER9_VECTOR__)
 #define CACHE_LINE_SIZE 128
 #elif defined(__VXE__) || defined(__VXE2__)
@@ -16,17 +16,8 @@
 #else
 #define CACHE_LINE_SIZE 64
 #endif
-#endif
 
-// -Winterference-size was introduced in GCC 12
-#if defined(__cplusplus) && defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 12
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Winterference-size"
-#endif
 static const size_t CACHE_LINE_SIZE_F32 = CACHE_LINE_SIZE/sizeof(float);
-#if defined(__cplusplus) && defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 12
-#pragma GCC diagnostic pop
-#endif
 
 // Work buffer size for im2col operations in CONV2D
 #define GGML_IM2COL_WORK_SIZE (16 * 1024 * 1024)
