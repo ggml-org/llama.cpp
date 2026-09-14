@@ -2,7 +2,7 @@
  * backendsStore - API endpoints the UI can talk to.
  *
  * The built-in local backend is the llama-server serving this UI. External
- * backends are user-configured endpoints read from settings. The store
+ * backends are user-configured endpoints persisted in settings. The store
  * registers the resolved list with the api-base registry, which services use
  * to build request URLs.
  */
@@ -34,7 +34,11 @@ class BackendsStore {
 	}
 
 	get local(): Backend {
-		return createLocalBackend();
+		return createLocalBackend(settingsStore.config.apiKey?.toString().trim() || undefined);
+	}
+
+	addBackend(backend: Backend): void {
+		this.saveExternal([...this.external, backend]);
 	}
 
 	initialize(): void {
@@ -43,10 +47,30 @@ class BackendsStore {
 		setBackendsResolver(() => ({ activeId: this.activeId, backends: this.list }));
 	}
 
+	removeBackend(backendId: string): void {
+		this.saveExternal(this.external.filter((backend) => backend.id !== backendId));
+
+		if (this.activeId === backendId) {
+			this.activeId = LOCAL_BACKEND_ID;
+		}
+	}
+
 	setActive(backendId: string): void {
 		this.activeId = this.list.some((backend) => backend.id === backendId)
 			? backendId
 			: LOCAL_BACKEND_ID;
+	}
+
+	updateBackend(backendId: string, updates: Partial<Backend>): void {
+		this.saveExternal(
+			this.external.map((backend) =>
+				backend.id === backendId ? { ...backend, ...updates } : backend
+			)
+		);
+	}
+
+	private saveExternal(backends: Backend[]): void {
+		settingsStore.updateConfig(SETTINGS_KEYS.BACKENDS, JSON.stringify(backends));
 	}
 }
 

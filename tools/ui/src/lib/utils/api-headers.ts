@@ -1,18 +1,44 @@
 import { getBackend } from './api-base';
 import { redactValue } from './redact';
-import { CORS_PROXY, HEADERS, LOCAL_BACKEND_ID } from '$lib/constants';
+import { ANTHROPIC_API_VERSION, CORS_PROXY, HEADERS } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
+import type { Backend } from '$lib/types';
 
 /**
  * Get authorization headers for API requests to a backend.
- * External backends carry their own key; the local backend reuses the global
- * API key setting.
  */
 export function getAuthHeaders(backendId?: string): Record<string, string> {
-	const apiKey = resolveBackendApiKey(backendId);
+	const backend = getBackend(backendId);
+
+	if (backend) return getAuthHeadersForBackend(backend);
+
+	// no backends resolver yet (early startup, or a non-browser call): keep the
+	// pre-backends behaviour and authenticate against the serving origin
+	const apiKey = settingsStore.config.apiKey?.toString().trim();
 
 	return apiKey ? { [HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKey}` } : {};
+}
+
+/**
+ * Get authorization headers for a backend object, including one that is not
+ * registered yet (used by the connection test on the add-backend form).
+ * Anthropic-compatible backends authenticate with x-api-key instead of Bearer.
+ */
+export function getAuthHeadersForBackend(backend: Backend): Record<string, string> {
+	const headers: Record<string, string> = { ...(backend.headers ?? {}) };
+	const apiKey = backend.apiKey?.trim();
+
+	if (!apiKey) return headers;
+
+	if (backend.protocol === 'anthropic') {
+		headers[HEADERS.ANTHROPIC_API_KEY] = apiKey;
+		headers[HEADERS.ANTHROPIC_VERSION] = ANTHROPIC_API_VERSION;
+	} else {
+		headers[HEADERS.AUTHORIZATION] = `${HEADERS.BEARER}${apiKey}`;
+	}
+
+	return headers;
 }
 
 /**
@@ -23,18 +49,6 @@ export function getJsonHeaders(backendId?: string): Record<string, string> {
 		[HEADERS.CONTENT_TYPE]: MimeTypeApplication.JSON,
 		...getAuthHeaders(backendId)
 	};
-}
-
-function resolveBackendApiKey(backendId?: string): string | undefined {
-	const backend = getBackend(backendId);
-	const backendKey = backend?.apiKey?.trim();
-
-	if (backendKey) return backendKey;
-
-	// an external backend without its own key must not receive the local key
-	if (backend && backend.id !== LOCAL_BACKEND_ID) return undefined;
-
-	return settingsStore.config.apiKey?.toString().trim() || undefined;
 }
 
 /**

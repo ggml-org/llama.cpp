@@ -20,6 +20,14 @@
  */
 
 /**
+ * **BackendsService** - Backend connectivity checks
+ *
+ * Probes an external backend's models endpoint to validate its URL and
+ * credentials before it is saved. Stateless.
+ */
+export { BackendsService } from './backends.service';
+
+/**
  * **ChatService** - Chat Completions API communication layer
  *
  * Handles direct communication with the llama-server's `/v1/chat/completions` endpoint.

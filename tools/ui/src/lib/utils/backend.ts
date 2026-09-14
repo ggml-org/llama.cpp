@@ -1,17 +1,34 @@
 /**
- * Backend list parsing and defaults.
+ * Backend list parsing, defaults and endpoint URLs.
  *
  * External backends are persisted in settings as a JSON list. Malformed
  * entries are dropped instead of throwing so a corrupted settings value can
  * never break URL resolution.
  */
 
-import { BACKEND_ID_PREFIX, BACKEND_PROTOCOLS, LOCAL_BACKEND_ID } from '$lib/constants';
+import {
+	BACKEND_ID_PREFIX,
+	BACKEND_PROTOCOLS,
+	DEFAULT_BACKEND_CHAT_PATH,
+	DEFAULT_BACKEND_MODELS_PATH,
+	LOCAL_BACKEND_ID
+} from '$lib/constants';
 import type { Backend, BackendProtocol } from '$lib/types';
 
+/** Absolute chat completions URL for a backend. */
+export function backendChatUrl(backend: Backend): string {
+	return joinBackendUrl(backend.baseUrl, backend.chatPath ?? DEFAULT_BACKEND_CHAT_PATH);
+}
+
+/** Absolute models listing URL for a backend. */
+export function backendModelsUrl(backend: Backend): string {
+	return joinBackendUrl(backend.baseUrl, backend.modelsPath ?? DEFAULT_BACKEND_MODELS_PATH);
+}
+
 /** The built-in backend pointing at the server that serves this UI. */
-export function createLocalBackend(): Backend {
+export function createLocalBackend(apiKey?: string): Backend {
 	return {
+		apiKey,
 		baseUrl: '',
 		enabled: true,
 		id: LOCAL_BACKEND_ID,
@@ -53,6 +70,13 @@ export function parseBackendsSettings(rawBackends: unknown): Backend[] {
 	});
 }
 
+function joinBackendUrl(baseUrl: string, path: string): string {
+	const base = baseUrl.replace(/\/+$/, '');
+	const suffix = path.startsWith('/') ? path : `/${path}`;
+
+	return `${base}${suffix}`;
+}
+
 function parseBackendEntry(entry: unknown, index: number): Backend | null {
 	if (!entry || typeof entry !== 'object') return null;
 
@@ -76,9 +100,11 @@ function parseBackendEntry(entry: unknown, index: number): Backend | null {
 	return {
 		apiKey,
 		baseUrl,
+		chatPath: parseOptionalPath(raw.chatPath),
 		enabled: raw.enabled !== false,
 		headers: parseBackendHeaders(raw.headers),
 		id,
+		modelsPath: parseOptionalPath(raw.modelsPath),
 		name,
 		protocol
 	};
@@ -92,4 +118,8 @@ function parseBackendHeaders(raw: unknown): Record<string, string> | undefined {
 		.map(([key, value]) => [key.trim(), (value as string).trim()] as const);
 
 	return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function parseOptionalPath(raw: unknown): string | undefined {
+	return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
 }

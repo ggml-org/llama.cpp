@@ -36,7 +36,7 @@ export type {
 } from './api';
 
 // Backend types
-export type { Backend, BackendProtocol } from './backend';
+export type { Backend, BackendPreset, BackendProtocol } from './backend';
 
 // HuggingFace types
 export type {
