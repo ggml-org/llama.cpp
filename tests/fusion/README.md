@@ -7,8 +7,7 @@ Per-device baselines for `test-fusion`, one CSV per backend (e.g. `MTL.csv`). Ro
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON   # enable the target backend
-cmake --build build --config Release --target test-llama-archs -j
-cmake --build build --config Release --target test-fusion   -j
+cmake --build build --config Release --target test-llama-archs --target test-fusion -j
 
 rm -rf build-ci-models && mkdir -p build-ci-models
 ./build/bin/test-llama-archs -o build-ci-models
