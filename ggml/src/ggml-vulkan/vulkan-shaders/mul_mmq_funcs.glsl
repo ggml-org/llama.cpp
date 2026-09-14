@@ -455,28 +455,33 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
 #endif
 
 #if defined(DATA_A_IQ3_S)
-// 1-byte loads for IQ3_S blocks (110 bytes)
+// 2-byte loads for IQ3_S blocks (110 bytes)
 void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
-    const uint ib_k  = ib / 8;
-    const uint ib32  = ib % 8;
-    const uint ib4   = ib32 * 8 + iqs;
+    const uint ib_k = ib / 8;
+    const uint ib32 = ib % 8;
 
-    const uint qs = data_a[ib_k].qs[ib4];
-    const uint qh = data_a[ib_k].qh[ib32];
+    // grid indices for qs[2 * iqs] and qs[2 * iqs + 1]
+    const uint qs    = uint(data_a_packed16[ib_k].qs[ib32 * 4 + iqs]);
+    // their two high index bits
+    const uint qh    = uint(data_a_packed16[ib_k].qh[ib32 / 2]) >> ((ib32 & 1) * 8 + 2 * iqs);
+    // one sign bit per value, 8 values
+    const uint signs = uint(data_a_packed16[ib_k].signs[ib32 * 2 + iqs / 2]) >> ((iqs & 1) * 8);
 
     // grid holds 4 values of 1..15, one per byte
-    const ivec4 vals = ivec4(unpack8(iq3s_grid[qs | ((qh << (8 - iqs)) & 256)]));
+    const ivec4 vals0 = ivec4(unpack8(iq3s_grid[( qs       & 0xFF) | ((qh & 1) << 8)]));
+    const ivec4 vals1 = ivec4(unpack8(iq3s_grid[((qs >> 8) & 0xFF) | ((qh & 2) << 7)]));
 
-    // one sign bit per value, negate with (v ^ -s) - -s to avoid branches
-    const uint sign = data_a[ib_k].signs[ib32 * 4 + iqs / 2] >> ((iqs & 1) * 4);
-    const ivec4 m = -(ivec4(sign, sign >> 1, sign >> 2, sign >> 3) & 1);
+    // negate with (v ^ -s) - -s to avoid branches
+    const ivec4 m0 = -(ivec4(signs,      signs >> 1, signs >> 2, signs >> 3) & 1);
+    const ivec4 m1 = -(ivec4(signs >> 4, signs >> 5, signs >> 6, signs >> 7) & 1);
 
-    buf_a[buf_ib].qs[iqs] = pack32(i8vec4((vals ^ m) - m));
+    buf_a[buf_ib].qs[2 * iqs    ] = pack32(i8vec4((vals0 ^ m0) - m0));
+    buf_a[buf_ib].qs[2 * iqs + 1] = pack32(i8vec4((vals1 ^ m1) - m1));
 
     if (iqs == 0) {
-        const uint scale = data_a[ib_k].scales[ib32 / 2];
+        const uint scale = (uint(data_a_packed16[ib_k].scales[ib32 / 4]) >> ((ib32 & 3) * 4)) & 0xF;
 
-        buf_a[buf_ib].d = FLOAT_TYPE(float(data_a[ib_k].d) * float(1 + 2 * ((scale >> (4 * (ib32 & 1))) & 0xF)));
+        buf_a[buf_ib].d = FLOAT_TYPE(float(data_a_packed16[ib_k].d) * float(1 + 2 * scale));
     }
 }
 
