@@ -5913,9 +5913,6 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 }
 
 #ifdef GGML_SYCL_GRAPH
-// SYCL async memory allocation extensions are available but lead to a hang when reordering
-// is needed (see https://github.com/intel/llvm/pull/21170)
-// TODO: Remove this when the intel.Dockerfile ONEAPI_VERSION is updated to include the fix
 static bool graph_needs_reorder(ggml_backend_sycl_context * ctx, const ggml_cgraph * cgraph) {
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
@@ -6092,7 +6089,13 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             if (cgraph->uid == 0 || cgraph->uid != graph->compatible_uid) {
                 graph->compatible_uid = cgraph->uid;
                 graph->compatible     = check_graph_compatibility(sycl_ctx, cgraph);
-                graph->needs_reorder  = true;
+// SYCL async memory allocation extensions are available but lead to a hang when reordering
+// is needed in versions prior to this fix https://github.com/intel/llvm/pull/21170
+#if !defined(__INTEL_LLVM_COMPILER) || __INTEL_LLVM_COMPILER <= 20250303
+                graph->needs_reorder = true;
+#else
+                graph->needs_reorder = false;
+#endif
             }
 
             // an eager call applies the reorder, so once needs_reorder is confirmed false for this
