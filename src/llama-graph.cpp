@@ -1850,18 +1850,13 @@ ggml_tensor * llm_graph_context::build_lora_mm(
 
     // a Hadamard-folded weight reads the transformed input; a LoRA delta lives in the primal basis and reads `cur`
     ggml_tensor * cur_mm = build_hadamard_input(w, cur);
-    ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
+    ggml_tensor * res = ggml_mul_mat_ext(ctx0, w, cur_mm, w_s, nullptr);
 
     if (w->type == GGML_TYPE_NVFP4) {
         ggml_prec_set_acc(res, GGML_PREC_BF16);
     }
 
-
     prec_policy.apply(res, w);
-
-    if (w_s) {
-        res = ggml_mul(ctx0, res, w_s);
-    }
 
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
@@ -1932,7 +1927,7 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     ggml_tensor * cur_mm = build_hadamard_input(w, cur);
     // the experts in the MoE cache are selected by their slots
     ggml_tensor * res = slots == nullptr ?
-        ggml_mul_mat_id(ctx0, w, cur_mm, ids) :
+        ggml_mul_mat_id_ext(ctx0, w, cur_mm, ids, w_s, nullptr) :
         ggml_mul_mat_id(ctx0, cached ? moe_cache->get_experts(w) : w, cur_mm, slots);
 
     if (w->type == GGML_TYPE_NVFP4) {
@@ -1942,7 +1937,8 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     // after the NVFP4 default, so that the policy can request a higher precision
     prec_policy.apply(res, w);
 
-    if (w_s) {
+    // Cache slots select weights; original expert IDs select scales.
+    if (slots && w_s) {
         const int64_t n_expert = w_s->ne[0];
         const int64_t n_tokens = cur->ne[2];
         ggml_tensor * s = ggml_reshape_3d(ctx0, w_s, 1, n_expert, 1);
@@ -1950,6 +1946,7 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
         s = ggml_get_rows(ctx0, s, ids);
         res = ggml_mul(ctx0, res, s);
     }
+
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
         if (lw == nullptr) {
