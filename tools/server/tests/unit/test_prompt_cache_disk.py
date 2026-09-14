@@ -89,8 +89,8 @@ def meta_checkpoint_count(path) -> int:
 def test_disk_cache_restores_across_server_restart(tmp_path):
     server = make_server()
     server.cache_ram = 0
-    server.cache_disk = str(tmp_path)
-    server.cache_disk_max = 256
+    server.cache_dir = str(tmp_path)
+    server.cache_dir_max = 256
     server.start()
 
     timings_full = completion(server, LONG_PROMPT, 0)
@@ -125,8 +125,8 @@ def test_disk_cache_removes_incomplete_and_invalid_entries(tmp_path):
 
     server = make_server()
     server.cache_ram = 0
-    server.cache_disk = str(tmp_path)
-    server.cache_disk_max = 256
+    server.cache_dir = str(tmp_path)
+    server.cache_dir_max = 256
     server.start()
 
     assert not incomplete.exists()
@@ -138,8 +138,8 @@ def test_disk_cache_removes_incomplete_and_invalid_entries(tmp_path):
 def test_disk_cache_size_limit_keeps_recent_entries(tmp_path):
     server = make_server()
     server.cache_ram = 0
-    server.cache_disk = str(tmp_path)
-    server.cache_disk_max = -1
+    server.cache_dir = str(tmp_path)
+    server.cache_dir_max = -1
     server.start()
 
     completion(server, LONG_PROMPT, 0)
@@ -152,7 +152,7 @@ def test_disk_cache_size_limit_keeps_recent_entries(tmp_path):
     for path in cache_files(tmp_path):
         path.unlink()
 
-    server.cache_disk_max = max(1, math.ceil(2.25 * entry_size / MIB))
+    server.cache_dir_max = max(1, math.ceil(2.25 * entry_size / MIB))
     server.start()
 
     prompts = [f"Cache entry {index}. {LONG_PROMPT}" for index in range(4)]
@@ -160,7 +160,7 @@ def test_disk_cache_size_limit_keeps_recent_entries(tmp_path):
         completion(server, prompt, index % 2)
     completion(server, "Move the last prompt into the disk cache.", 0)
 
-    cache_limit = server.cache_disk_max * MIB
+    cache_limit = server.cache_dir_max * MIB
     assert sum(path.stat().st_size for path in cache_files(tmp_path)) <= cache_limit
     assert len(cache_data_files(tmp_path)) <= 2
 
@@ -175,8 +175,8 @@ def test_disk_cache_strict_extension_matches_predicted_reuse(tmp_path, monkeypat
     server = make_server()
     server.n_predict = 1
     server.cache_ram = 0
-    server.cache_disk = str(tmp_path)
-    server.cache_disk_max = 256
+    server.cache_dir = str(tmp_path)
+    server.cache_dir_max = 256
     server.log_path = str(tmp_path / "server.log")
     server.start()
 
@@ -209,8 +209,8 @@ def test_disk_cache_no_usable_checkpoint_skips_candidate(tmp_path, monkeypatch):
     server = make_server()
     server.n_predict = 1
     server.cache_ram = 0
-    server.cache_disk = str(tmp_path)
-    server.cache_disk_max = 256
+    server.cache_dir = str(tmp_path)
+    server.cache_dir_max = 256
     server.start()
 
     cached_prompt = LONG_PROMPT + " This cached branch ends at the red gate."
@@ -240,8 +240,8 @@ def test_disk_cache_no_usable_checkpoint_skips_candidate(tmp_path, monkeypatch):
 def test_disk_cache_selector_prefers_smaller_equal_prefix(tmp_path):
     server = make_pure_attention_server()
     server.cache_ram = 0
-    server.cache_disk = str(tmp_path)
-    server.cache_disk_max = 256
+    server.cache_dir = str(tmp_path)
+    server.cache_dir_max = 256
     server.start()
 
     shared = LONG_PROMPT[:len(LONG_PROMPT) // 4]
@@ -286,8 +286,8 @@ def test_disk_cache_selector_prefers_smaller_equal_prefix(tmp_path):
 def test_disk_cache_reuses_long_entry_below_keep_threshold(tmp_path):
     server = make_pure_attention_server()
     server.cache_ram = 0
-    server.cache_disk = str(tmp_path)
-    server.cache_disk_max = 256
+    server.cache_dir = str(tmp_path)
+    server.cache_dir_max = 256
     server.start()
 
     shared = LONG_PROMPT[:len(LONG_PROMPT) // 8]
@@ -333,8 +333,8 @@ def test_disk_cache_does_not_load_when_prompt_cache_disabled(tmp_path):
     server = make_server()
     server.n_predict = 1
     server.cache_ram = 0
-    server.cache_disk = str(tmp_path)
-    server.cache_disk_max = 256
+    server.cache_dir = str(tmp_path)
+    server.cache_dir_max = 256
     server.start()
 
     completion(server, LONG_PROMPT, 0)

@@ -1454,23 +1454,23 @@ private:
             batch.init(std::max(n_batch, params_base.n_parallel), n_embd);
         }
 
-        const bool cache_disk_enabled = !params_base.cache_disk_path.empty() && params_base.cache_disk_max_mib != 0;
-        const bool prompt_cache_enabled = cache_disk_enabled || params_base.cache_ram_mib != 0;
+        const bool cache_dir_enabled = !params_base.cache_dir_path.empty() && params_base.cache_dir_max_mib != 0;
+        const bool prompt_cache_enabled = cache_dir_enabled || params_base.cache_ram_mib != 0;
 
         if (prompt_cache_enabled) {
-            const int32_t cache_limit_mib = cache_disk_enabled ? params_base.cache_disk_max_mib : params_base.cache_ram_mib;
-            const size_t cache_limit_tokens = cache_disk_enabled ? 0 : n_ctx;
+            const int32_t cache_limit_mib = cache_dir_enabled ? params_base.cache_dir_max_mib : params_base.cache_ram_mib;
+            const size_t cache_limit_tokens = cache_dir_enabled ? 0 : n_ctx;
 
-            if (cache_disk_enabled) {
+            if (cache_dir_enabled) {
                 std::error_code ec;
-                std::filesystem::create_directories(params_base.cache_disk_path, ec);
-                const bool cache_dir_valid = !ec && std::filesystem::is_directory(params_base.cache_disk_path, ec);
+                std::filesystem::create_directories(params_base.cache_dir_path, ec);
+                const bool cache_dir_valid = !ec && std::filesystem::is_directory(params_base.cache_dir_path, ec);
                 if (ec || !cache_dir_valid) {
                     SRV_ERR("failed to create prompt cache directory %s: %s\n",
-                            params_base.cache_disk_path.c_str(), ec ? ec.message().c_str() : "path is not a directory");
+                            params_base.cache_dir_path.c_str(), ec ? ec.message().c_str() : "path is not a directory");
                     return false;
                 }
-                SRV_TRC("prompt cache is enabled on disk: %s\n", params_base.cache_disk_path.c_str());
+                SRV_TRC("prompt cache is enabled on disk: %s\n", params_base.cache_dir_path.c_str());
             } else {
                 SRV_TRC("%s", "prompt cache is enabled in RAM\n");
             }
@@ -1484,11 +1484,11 @@ private:
             prompt_cache = std::make_unique<server_prompt_cache>(
                 cache_limit_mib,
                 cache_limit_tokens,
-                cache_disk_enabled ? params_base.cache_disk_path : "",
-                cache_disk_enabled ? server_prompt_cache_key(params_base, ctx_tgt, ctx_dft) : "",
+                cache_dir_enabled ? params_base.cache_dir_path : "",
+                cache_dir_enabled ? server_prompt_cache_key(params_base, ctx_tgt, ctx_dft) : "",
                 mctx != nullptr);
         } else {
-            SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` or `--cache-disk PATH` to enable it\n");
+            SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` or `--cache-dir PATH` to enable it\n");
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
