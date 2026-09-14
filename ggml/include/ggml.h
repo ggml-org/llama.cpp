@@ -768,6 +768,7 @@ extern "C" {
     GGML_API size_t  ggml_element_size(const struct ggml_tensor * tensor);
 
     GGML_API bool    ggml_is_quantized(enum ggml_type type);
+    GGML_API bool    ggml_needs_scale_quantized(enum ggml_type type);
 
     // TODO: temporary until model loading of ggml examples is refactored
     GGML_API enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype);
@@ -1441,6 +1442,13 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    GGML_API struct ggml_tensor * ggml_mul_mat_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * scale_weight,
+            struct ggml_tensor  * scale_activations);
+
     // change the precision of a matrix multiplication
     // set to GGML_PREC_F32 for higher precision (useful for phi-2)
     GGML_API void ggml_mul_mat_set_prec(
@@ -1458,6 +1466,14 @@ extern "C" {
             struct ggml_tensor  * as,
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
+
+    GGML_API struct ggml_tensor * ggml_mul_mat_id_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * as,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * scale_weight,
+            struct ggml_tensor  * scale_activations);
 
     // A: m columns, n rows,
     // B: p columns, n rows,
@@ -2924,6 +2940,7 @@ extern "C" {
         int64_t                  blck_size_interleave; // interleave elements in blocks
         size_t                   type_size;
         bool                     is_quantized;
+        bool                     needs_scale; // whether the quantization type needs a scale factor for valid dequantization
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float_ref;
     };
