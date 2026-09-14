@@ -30,7 +30,7 @@ ggml_cgraph * clip_graph_sensenova_u1::build() {
             hparams.n_merge, hparams.n_merge, 0, 0, 1, 1);
 
     const int n_output_patches = n_patches / (hparams.n_merge * hparams.n_merge);
-    inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 2, 0, 1, 3));
+    inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 2, 0, 3));
     inp = ggml_reshape_3d(ctx0, inp, n_mmproj_embd, n_output_patches, n_batch);
     inp = ggml_add(ctx0, inp, model.dense_bias);
     cb(inp, "proj_out", -1);

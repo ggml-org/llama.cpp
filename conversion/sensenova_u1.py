@@ -85,7 +85,7 @@ class SenseNovaU1VisionModel(MmprojModel):
         self.gguf_writer.add_vision_head_dim(1024)
         self.gguf_writer.add_vision_attention_layernorm_eps(1e-6)
         self.gguf_writer.add_vision_min_pixels(65536)
-        self.gguf_writer.add_vision_max_pixels(16777216)
+        self.gguf_writer.add_vision_max_pixels(4194304)
         self.gguf_writer.add_vision_spatial_merge_size(2)
 
     def modify_tensors(self, data_torch, name, bid):
