@@ -43,7 +43,7 @@ import type {
 	ApiStreamSession
 } from '$lib/types/api';
 import { isAbortError } from '$lib/utils/abort';
-import { apiUrl } from '$lib/utils/api-base';
+import { apiChatUrl, apiUrl } from '$lib/utils/api-base';
 import { ApiError } from '$lib/utils/api-fetch';
 import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
@@ -874,7 +874,7 @@ export class ChatService {
 		}
 
 		try {
-			await fetch(apiUrl(API_CHAT.COMPLETIONS), {
+			await fetch(apiChatUrl(), {
 				body: JSON.stringify(requestBody),
 				headers: getJsonHeaders(),
 				method: 'POST',
@@ -1235,7 +1235,7 @@ export class ChatService {
 				ChatService.saveStreamState(conversationId, 0, options.model ?? null);
 			}
 
-			const response = await fetch(apiUrl(API_CHAT.COMPLETIONS), {
+			const response = await fetch(apiChatUrl(), {
 				body: JSON.stringify(requestBody),
 				headers,
 				method: 'POST',

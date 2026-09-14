@@ -12,6 +12,7 @@ import type { ParsedModelId } from '$lib/types/models';
 import {
 	apiDelete,
 	apiFetch,
+	apiModelsUrl,
 	apiPost,
 	apiUrl,
 	extractSseDataPayload,
@@ -140,7 +141,7 @@ export class ModelsService {
 	 * @returns List of available models with basic metadata
 	 */
 	static async list(): Promise<ApiModelsListResponse> {
-		return apiFetch<ApiModelsListResponse>(API_MODELS.LIST);
+		return apiFetch<ApiModelsListResponse>(apiModelsUrl());
 	}
 
 	/**
