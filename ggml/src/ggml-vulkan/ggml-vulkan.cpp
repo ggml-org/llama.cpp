@@ -1160,6 +1160,8 @@ struct vk_device_struct {
     std::map<std::pair<uint32_t, uint32_t>, vk_pipeline> pipeline_fa_mask_opt;
 
     vk_pipeline pipeline_fa_sparse_compact;
+    vk_pipeline pipeline_fa_sparse_compact_subgroup;
+    bool fa_sparse_compact_use_subgroups;
 
     vk_pipeline pipeline_flash_attn_split_k_reduce;
     vk_pipeline pipeline_count_experts;
@@ -5782,8 +5784,18 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
     {
         // Large workgroup so the per-row KV scan parallelizes; capped to device limits.
-        const uint32_t compact_wg = std::min({1024u, device->properties.limits.maxComputeWorkGroupInvocations, device->properties.limits.maxComputeWorkGroupSize[0]});
-        ggml_vk_create_pipeline(device, device->pipeline_fa_sparse_compact, "fa_sparse_compact", fa_sparse_compact_len, fa_sparse_compact_data, "main", 2, sizeof(vk_op_flash_attn_sparse_compact_push_constants), {1, 1, 1}, {compact_wg}, 1, true);
+        const uint32_t compact_max = std::min({1024u, device->properties.limits.maxComputeWorkGroupInvocations, device->properties.limits.maxComputeWorkGroupSize[0]});
+
+        // Fast ballot prefix-sum path when the device supports full subgroups; otherwise
+        // a shared-memory prefix-sum fallback. Both emit a deterministic ascending list.
+        device->fa_sparse_compact_use_subgroups = device->subgroup_ballot && device->subgroup_require_full_support;
+        if (device->fa_sparse_compact_use_subgroups) {
+            const uint32_t compact_wg = std::max(device->subgroup_size, (compact_max / device->subgroup_size) * device->subgroup_size);
+            const uint32_t compact_num_sg = compact_wg / device->subgroup_size;
+            ggml_vk_create_pipeline(device, device->pipeline_fa_sparse_compact_subgroup, "fa_sparse_compact_subgroup", fa_sparse_compact_subgroup_len, fa_sparse_compact_subgroup_data, "main", 2, sizeof(vk_op_flash_attn_sparse_compact_push_constants), {1, 1, 1}, {compact_wg, compact_num_sg}, 1, true, true, device->subgroup_size);
+        } else {
+            ggml_vk_create_pipeline(device, device->pipeline_fa_sparse_compact, "fa_sparse_compact", fa_sparse_compact_len, fa_sparse_compact_data, "main", 2, sizeof(vk_op_flash_attn_sparse_compact_push_constants), {1, 1, 1}, {compact_max}, 1, true);
+        }
     }
 
     if (device->subgroup_clustered && device->subgroup_require_full_support) {
@@ -11446,8 +11458,11 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     const uint64_t sparse_idx_size = use_sparse
         ? sizeof(int32_t) * (uint64_t)n_kv_max * nem1 * nem2 * nem3
         : 0;
+    vk_pipeline sparse_compact_pipeline = ctx->device->fa_sparse_compact_use_subgroups
+        ? ctx->device->pipeline_fa_sparse_compact_subgroup
+        : ctx->device->pipeline_fa_sparse_compact;
     if (use_sparse) {
-        ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_fa_sparse_compact, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, sparse_compact_pipeline, 1);
         if (ctx->prealloc_size_y < sparse_idx_size) {
             ctx->prealloc_size_y = sparse_idx_size;
             ggml_vk_preallocate_buffers(ctx, subctx);
@@ -11533,7 +11548,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
             (uint32_t)n_kv_max,
         };
 
-        ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_fa_sparse_compact,
+        ggml_vk_dispatch_pipeline(ctx, subctx, sparse_compact_pipeline,
                                   { mask_buf, sparse_buf }, sc_pc,
                                   { nem1, nem2, nem3 });
         ggml_vk_sync_buffers(ctx, subctx);
