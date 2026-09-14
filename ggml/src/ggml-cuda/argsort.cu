@@ -31,9 +31,12 @@ static __global__ void init_offsets(int * offsets, const int ncols, const int nr
 
 // returns the suggested maximum number of rows to process during one argsort_f32_i32_cuda_cub() call
 int argsort_f32_i32_cuda_cub_chunk_nrows(const size_t nb01, const int64_t nrows) {
-    // perform argsort in chunks up to approximately this size (currently 64MB)
-    // to avoid excessive temporary buffers memory usage
-    const int chunk_bytes = 1 << 26;
+    // Perform argsort in chunks up to approximately this size to avoid excessive temporary buffer usage.
+    // One chunk needs several times its own size from the pool: ggml_cuda_op_top_k() allocates the gathered
+    // destination, this function allocates indices and a copy of the keys, and CUB asks for its own temporary
+    // storage on top. At 64 MB that is 300-450 MB reserved at graph execution time (i.e. after the context
+    // memory estimate), which is enough to abort a long-context run on a 16 GB card.
+    const int chunk_bytes = 1 << 24;
 
     // calculate how many rows will fit in one chunk (must be at least one)
     const int chunk_nrows = std::max((int) (chunk_bytes / nb01), 1);
