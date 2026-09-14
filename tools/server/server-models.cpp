@@ -1366,16 +1366,58 @@ void server_models::wait(std::unique_lock<std::mutex> & lk, const std::string & 
     });
 }
 
-bool server_models::ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop) {
+void server_models::release_occupancy(const std::string & name) {
+    bool went_idle = false;
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        auto it = mapping.find(name);
+        if (it != mapping.end() && it->second.req_count > 0) {
+            it->second.req_count--;
+            went_idle = it->second.req_count == 0;
+        }
+    }
+    if (went_idle) {
+        sched->on_model_idle(name);
+    }
+}
+
+bool server_models::ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop, bool * reserved_out) {
+    bool reserved = false;
+    if (reserved_out) {
+        *reserved_out = false;
+    }
+    auto commit_reserved = [&]() {
+        if (reserved_out) {
+            *reserved_out = reserved;
+        }
+    };
+
     auto meta = get_meta(name);
     if (!meta.has_value()) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
-    if (meta->is_ready()) {
-        return false; // ready for taking requests
-    }
-    if (meta->status == SERVER_MODEL_STATUS_SLEEPING) {
-        return false; // child is sleeping but still running; new request will wake it up
+
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        auto it = mapping.find(name);
+        if (it == mapping.end()) {
+            throw std::runtime_error("model name=" + name + " is not found");
+        }
+        // dying child can still be LOADED; wait until UNLOADED, then load a new instance
+        if (stopping_models.count(name)) {
+            while (true) {
+                it = mapping.find(name);
+                if (it == mapping.end() || it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED) {
+                    break;
+                }
+                if (should_stop && should_stop()) {
+                    throw std::runtime_error("request cancelled while waiting for model name=" + name);
+                }
+                cv.wait_for(lk, std::chrono::milliseconds(200));
+            }
+        } else if (it->second.meta.is_ready() || it->second.meta.status == SERVER_MODEL_STATUS_SLEEPING) {
+            return false; // ready for taking requests; occupancy is taken in proxy_request
+        }
     }
 
     bool queued   = false;
@@ -1419,6 +1461,17 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
             queued = false;
         }
     };
+    bool went_idle = false;
+    auto release_locked = [&]() {
+        if (reserved) {
+            auto it = mapping.find(name);
+            if (it != mapping.end() && it->second.req_count > 0) {
+                it->second.req_count--;
+                went_idle = it->second.req_count == 0;
+            }
+            reserved = false;
+        }
+    };
 
     try {
         bool saw_loading = false;
@@ -1429,7 +1482,20 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
             }
             const server_model_status status = it->second.meta.status;
 
+            if (stopping_models.count(name)) {
+                release_locked();
+                if (should_stop && should_stop()) {
+                    throw std::runtime_error("request cancelled while waiting for model name=" + name);
+                }
+                cv.wait_for(lk, std::chrono::milliseconds(200));
+                continue;
+            }
+
             if (status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_SLEEPING) {
+                if (!reserved) {
+                    it->second.req_count++;
+                    reserved = true;
+                }
                 break;
             }
             if (status == SERVER_MODEL_STATUS_DOWNLOADING || status == SERVER_MODEL_STATUS_DOWNLOADED) {
@@ -1437,6 +1503,10 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
             }
             if (status == SERVER_MODEL_STATUS_LOADING) {
                 saw_loading = true;
+                if (!reserved) {
+                    it->second.req_count++;
+                    reserved = true;
+                }
             } else if (status == SERVER_MODEL_STATUS_UNLOADED) {
                 if (did_load || saw_loading) {
                     // a spawn happened and the instance came back down
@@ -1480,14 +1550,29 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
         }
     } catch (...) {
         leave_queue();
+        release_locked();
+        if (lk.owns_lock()) {
+            lk.unlock();
+        }
+        commit_reserved();
+        if (went_idle) {
+            sched->on_model_idle(name);
+        }
         throw;
     }
     leave_queue();
+    lk.unlock();
 
+    if (debug_fake_timing) {
+        // sleep after occupying, so a competing request can run pick_victim
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+
+    commit_reserved();
     return true;
 }
 
-server_http_res_ptr server_models::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached) {
+server_http_res_ptr server_models::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached, bool occupy) {
     auto meta = get_meta(name);
     if (!meta.has_value()) {
         throw std::runtime_error("model name=" + name + " is not found");
@@ -1497,10 +1582,15 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     }
     {
         std::unique_lock<std::mutex> lk(mutex);
+        if (stopping_models.count(name)) {
+            throw std::runtime_error("model name=" + name + " is stopping");
+        }
         if (update_last_used) {
             mapping[name].meta.last_used = ggml_time_ms();
         }
-        mapping[name].req_count++;
+        if (occupy) {
+            mapping[name].req_count++;
+        }
     }
     if (debug_fake_timing) {
         // sleep after req_count++, so the model counts as busy while we wait here
@@ -1905,10 +1995,18 @@ void server_models_routes::init_routes() {
         if (!router_validate_model(name, models, autoload, error_res)) {
             return error_res;
         }
-        if (autoload) {
-            models.ensure_model_ready(name, req.should_stop);
+        bool reserved = false;
+        try {
+            if (autoload) {
+                models.ensure_model_ready(name, req.should_stop, &reserved);
+            }
+            return models.proxy_request(req, method, name, false, false, !reserved);
+        } catch (...) {
+            if (reserved) {
+                models.release_occupancy(name);
+            }
+            throw;
         }
-        return models.proxy_request(req, method, name, false);
     };
 
     this->proxy_post = [this](const server_http_req & req) {
@@ -1928,18 +2026,31 @@ void server_models_routes::init_routes() {
         uint64_t ticket = models.conv_models.remember(conv_id, name);
         // a dead socket must not cancel a session request, only a stop does (checked right below)
         auto should_stop = ticket == 0 ? req.should_stop : nullptr;
-        bool waited = autoload && models.ensure_model_ready(name, should_stop);
-        if (ticket != 0 && !models.conv_models.alive(conv_id, ticket)) {
-            SRV_INF("request for conv_id=%s cancelled while model name=%s was loading\n",
-                    conv_id.c_str(), name.c_str());
-            res_err(error_res, format_error_response(
-                    "request cancelled by a stop while the model was loading", ERROR_TYPE_INVALID_REQUEST));
-            return error_res;
+        bool reserved = false;
+        bool waited = false;
+        try {
+            waited = autoload && models.ensure_model_ready(name, should_stop, &reserved);
+            if (ticket != 0 && !models.conv_models.alive(conv_id, ticket)) {
+                if (reserved) {
+                    models.release_occupancy(name);
+                    reserved = false;
+                }
+                SRV_INF("request for conv_id=%s cancelled while model name=%s was loading\n",
+                        conv_id.c_str(), name.c_str());
+                res_err(error_res, format_error_response(
+                        "request cancelled by a stop while the model was loading", ERROR_TYPE_INVALID_REQUEST));
+                return error_res;
+            }
+            // a session request that waited for a load detaches from the client socket: the
+            // client may have dropped during the wait (page reload) and the session buffer must
+            // still receive the generation for a later resume
+            return models.proxy_request(req, method, name, true, waited && ticket != 0, !reserved);
+        } catch (...) {
+            if (reserved) {
+                models.release_occupancy(name);
+            }
+            throw;
         }
-        // a session request that waited for a load detaches from the client socket: the
-        // client may have dropped during the wait (page reload) and the session buffer must
-        // still receive the generation for a later resume
-        return models.proxy_request(req, method, name, true, waited && ticket != 0); // update last usage for POST request only
     };
 
     this->post_router_models_load = [this](const server_http_req & req) {
