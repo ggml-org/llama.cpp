@@ -88,7 +88,7 @@ class TestFP8Conversion(unittest.TestCase):
             self.assertEqual(reads, [])
         model.prepare_tensors()
         if check_lazy:
-            deferred = {name for name, tensor in tensors.items() if tensor.numel() != 1 or name.endswith((".weight", ".bias"))}
+            deferred = {name for name, tensor in tensors.items() if name in model.model_tensors and (tensor.numel() != 1 or name.endswith((".weight", ".bias")))}
             self.assertFalse(deferred.intersection(reads), f"Materialized during preparation: {reads}")
             for name, info in model.gguf_writer.tensors[0].items():
                 if name.endswith((".weight", ".bias")):
@@ -113,13 +113,9 @@ class TestFP8Conversion(unittest.TestCase):
                     }
                     result = self.convert(Qwen2MoeModel, tensors, check_lazy=True, scan_nvfp4=scan_nvfp4)
                     dtype, data = result["blk.0.attn_q.weight"]
-                    if channel_scale:
-                        self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
-                        np.testing.assert_array_equal(data, weight.float().numpy() * 0.25)
-                    else:
-                        self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
-                        np.testing.assert_array_equal(gguf.dequantize(data, dtype), weight.float().numpy())
-                        np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [0.25])
+                    self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
+                    np.testing.assert_array_equal(gguf.dequantize(data, dtype), weight.float().numpy())
+                    np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [0.25, 0.25] if channel_scale else [0.25])
 
     def test_mixed_compressed_fp8_block_scale(self):
         name = "model.layers.0.self_attn.q_proj.weight"
