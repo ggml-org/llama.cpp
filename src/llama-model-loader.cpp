@@ -919,7 +919,7 @@ const struct ggml_tensor * llama_model_loader::check_tensor_dims(
 }
 
 // checks if the weight tensor can be used with the specified buffer type and device
-static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w, ggml_op op, ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev) {
+static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w, const ggml_tensor * scale_meta, ggml_op op, ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev) {
     GGML_ASSERT(w != nullptr);
 
     if (op == GGML_OP_NONE) {
@@ -948,7 +948,8 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
         case GGML_OP_MUL_MAT:
             {
                 ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w->ne[0], 512, w->ne[2], w->ne[3]);
-                op_tensor = ggml_mul_mat(ctx, w, b);
+                ggml_tensor * s = scale_meta ? ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, scale_meta->ne) : nullptr;
+                op_tensor = ggml_mul_mat_ext(ctx, w, b, s, nullptr);
             } break;
         case GGML_OP_MUL_MAT_ID:
             {
@@ -957,7 +958,8 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 GGML_ASSERT(n_ids_used > 0);
                 ggml_tensor * b = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, w->ne[0], n_ids_used, 512);
                 ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_ids_used, 512);
-                op_tensor = ggml_mul_mat_id(ctx, w, b, ids);
+                ggml_tensor * s = scale_meta ? ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, scale_meta->ne) : nullptr;
+                op_tensor = ggml_mul_mat_id_ext(ctx, w, b, ids, s, nullptr);
             } break;
         case GGML_OP_ADD:
             {
@@ -1059,12 +1061,12 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
 }
 
 // find the first buffer type in the list that can use the tensor
-static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, ggml_op op, const buft_list_t * buft_list) {
+static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hparams, ggml_tensor * tensor, const ggml_tensor * scale_meta, ggml_op op, const buft_list_t * buft_list) {
     GGML_ASSERT(!buft_list->empty());
     for (const auto & cur : *buft_list) {
         ggml_backend_dev_t cur_dev = cur.first;
         ggml_backend_buffer_type_t cur_buft = cur.second;
-        if (weight_buft_supported(hparams, tensor, op, cur_buft, cur_dev)) {
+        if (weight_buft_supported(hparams, tensor, scale_meta, op, cur_buft, cur_dev)) {
             return cur_buft;
         }
     }
@@ -1207,6 +1209,12 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             return lazy_read::buft();
         }
 
+        const ggml_tensor * scale_meta = nullptr;
+        if ((op == GGML_OP_MUL_MAT || op == GGML_OP_MUL_MAT_ID) && ggml_needs_scale_quantized(t_meta->type)) {
+            const std::string scale_name = LLM_TN_IMPL(tn.arch, tn.tensor, "scale", tn.bid, tn.xid).str();
+            scale_meta = get_tensor_meta(scale_name.c_str());
+        }
+
         // select the buffer type for this tensor
         const buft_list_t * buft_list;
         switch (info.layer) {
@@ -1234,7 +1242,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                 if (std::regex_search(tensor_name, pattern)) {
                     if (overrides->buft == ggml_backend_cpu_buffer_type()) {
                         // when overriding to a CPU buffer, consider the extra buffer types
-                        buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);
+                        buft = select_weight_buft(hparams, t_meta, scale_meta, op, buft_list_cpu);
                         if (use_mmap) {
                             static std::once_flag once;
                             std::call_once(once, [] {
@@ -1255,7 +1263,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
 
         if (!buft) {
-            buft = select_weight_buft(hparams, t_meta, op, buft_list);
+            buft = select_weight_buft(hparams, t_meta, scale_meta, op, buft_list);
             if (!buft) {
                 throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
             }
