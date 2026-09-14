@@ -43,11 +43,46 @@ import type {
 	ApiStreamSession
 } from '$lib/types/api';
 import { isAbortError } from '$lib/utils/abort';
-import { apiChatUrl, apiUrl } from '$lib/utils/api-base';
+import { apiChatUrl, apiUrl, getBackend } from '$lib/utils/api-base';
 import { ApiError } from '$lib/utils/api-fetch';
 import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { streamIdentity } from '$lib/utils/stream-identity';
+
+/**
+ * llama.cpp-only chat request fields. Strict OpenAI-compatible endpoints
+ * reject unknown parameters, so they are dropped for those backends.
+ */
+const COMPAT_ONLY_OMIT_REQUEST_FIELDS = [
+	'add_generation_prompt',
+	'backend_sampling',
+	'cache_prompt',
+	'chat_template_kwargs',
+	'continue_final_message',
+	'dry_allowed_length',
+	'dry_base',
+	'dry_multiplier',
+	'dry_penalty_last_n',
+	'dynatemp_exponent',
+	'dynatemp_range',
+	'id_slot',
+	'min_p',
+	'n_keep',
+	'n_predict',
+	'reasoning_control',
+	'reasoning_format',
+	'repeat_last_n',
+	'repeat_penalty',
+	'return_progress',
+	'samplers',
+	'sse_ping_interval',
+	'thinking_budget_tokens',
+	'timings_per_token',
+	'top_k',
+	'typ_p',
+	'xtc_probability',
+	'xtc_threshold'
+];
 
 interface ResumableStreamState {
 	bytesReceived: number;
@@ -110,6 +145,8 @@ export class ChatService {
 	 */
 	static async cancelServerStream(conversationId: string, model?: string | null): Promise<void> {
 		if (!conversationId) return;
+
+		if (!serverStore.capabilities.resumableStreams) return;
 
 		try {
 			const id = streamIdentity(conversationId, model);
@@ -344,6 +381,10 @@ export class ChatService {
 	 * caller can pipe it through the SSE parser like a fresh stream.
 	 */
 	static async fetchStreamReplay(streamId: string): Promise<Response> {
+		if (!serverStore.capabilities.resumableStreams) {
+			return new Response(null, { status: 501, statusText: 'Not Implemented' });
+		}
+
 		const resp = await fetch(ChatService.buildStreamUrl(streamId, 0), {
 			headers: getAuthHeaders()
 		});
@@ -786,6 +827,8 @@ export class ChatService {
 	 * conv::model identity when a model was bound at POST time.
 	 */
 	static async lookupStreamSessions(conversationIds: string[]): Promise<ApiStreamSession[]> {
+		if (!serverStore.capabilities.resumableStreams) return [];
+
 		const resp = await fetch(apiUrl(API_STREAM.LOOKUP), {
 			body: JSON.stringify({ conversation_ids: conversationIds }),
 			headers: getJsonHeaders(),
@@ -848,6 +891,9 @@ export class ChatService {
 		excludeReasoning?: boolean,
 		signal?: AbortSignal
 	): Promise<void> {
+		// pre-encode warms the llama.cpp KV cache and posts llama.cpp-only fields
+		if (!serverStore.capabilities.props) return;
+
 		const normalizedMessages: ApiChatMessageData[] =
 			await ChatService.normalizeMessagesForApi(messages);
 		const requestBody: Record<string, unknown> = {
@@ -892,6 +938,8 @@ export class ChatService {
 	static async probeResumeStatus(streamId: string): Promise<number> {
 		if (!streamId) return 0;
 
+		if (!serverStore.capabilities.resumableStreams) return 0;
+
 		const ac = new AbortController();
 
 		try {
@@ -914,6 +962,8 @@ export class ChatService {
 		model?: string | null
 	): Promise<Response | null> {
 		if (!conversationId) return null;
+
+		if (!serverStore.capabilities.resumableStreams) return null;
 
 		const state = ChatService.getStreamState(conversationId);
 		const from = state?.bytesReceived ?? 0;
@@ -1234,6 +1284,8 @@ export class ChatService {
 				// the prompt processing must still find its way back to the session once it exists
 				ChatService.saveStreamState(conversationId, 0, options.model ?? null);
 			}
+
+			ChatService.stripBackendSpecificFields(requestBody);
 
 			const response = await fetch(apiChatUrl(), {
 				body: JSON.stringify(requestBody),
@@ -1630,6 +1682,28 @@ export class ChatService {
 	 * Strips legacy inline reasoning content tags from message content.
 	 * Handles both plain string content and multipart content arrays.
 	 */
+	private static stripBackendSpecificFields(body: ApiChatCompletionRequest): void {
+		const backend = getBackend();
+
+		if (!backend || backend.protocol === 'llama.cpp') return;
+
+		const record = body as unknown as Record<string, unknown>;
+
+		for (const field of COMPAT_ONLY_OMIT_REQUEST_FIELDS) {
+			delete record[field];
+		}
+
+		// compatible endpoints reject the reasoning_content message extension
+		for (const message of body.messages) {
+			delete (message as unknown as Record<string, unknown>).reasoning_content;
+		}
+
+		// -1 is llama.cpp's "no limit" sentinel; compatible endpoints reject it
+		if (typeof body.max_tokens === 'number' && body.max_tokens <= 0) {
+			delete record.max_tokens;
+		}
+	}
+
 	private static stripReasoningContent(
 		content: string | ApiChatMessageContentPart[]
 	): string | ApiChatMessageContentPart[] {

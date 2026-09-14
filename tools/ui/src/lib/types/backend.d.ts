@@ -22,6 +22,8 @@ export interface BackendCapabilities {
 	loadUnload: boolean;
 	/** The /props endpoint with server role and generation defaults. */
 	props: boolean;
+	/** Resumable stream sessions (/v1/stream, /v1/streams/lookup). */
+	resumableStreams: boolean;
 	/** Multi-model router mode. */
 	router: boolean;
 	/** The /slots introspection endpoint. */
