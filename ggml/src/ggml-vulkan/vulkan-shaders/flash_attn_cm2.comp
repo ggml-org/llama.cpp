@@ -117,6 +117,10 @@ layout (binding = 3) readonly buffer M {uint8_t data_m[];};
 layout (binding = 1) readonly buffer KF16 {float16_t data_kf16[];};
 layout (binding = 2) readonly buffer VF16 {float16_t data_vf16[];};
 layout (binding = 3) readonly buffer MF16 {float16_t data_mf16[];};
+#ifdef GL_NV_cooperative_matrix_decode_vector
+layout (binding = 1) readonly buffer KF16V4 {f16vec4 data_kf16v4[];};
+layout (binding = 2) readonly buffer VF16V4 {f16vec4 data_vf16v4[];};
+#endif
 
 // K/V/mask f16-element offsets for the current head/batch, set in main().
 uint32_t g_k_off_elem, g_v_off_elem, g_m_off_elem;
@@ -142,7 +146,7 @@ f16vec4 faGatherKVector(const decodeBufFA_K unused, const uint32_t blockCoords[2
     const int r = data_sparse[sparse_base + blockCoords[0]];
     if (r < 0) { return f16vec4(0); }
     const uint32_t o = g_k_off_elem + uint(r) * k_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1];
-    return f16vec4(data_kf16[o], data_kf16[o + 1], data_kf16[o + 2], data_kf16[o + 3]);
+    return data_kf16v4[o / 4];
 }
 
 f16vec4 faGatherVVector(const decodeBufFA_V unused, const uint32_t blockCoords[2], const uint32_t coordInBlock[2]) {
@@ -150,7 +154,7 @@ f16vec4 faGatherVVector(const decodeBufFA_V unused, const uint32_t blockCoords[2
     const int r = data_sparse[sparse_base + blockCoords[0]];
     if (r < 0) { return f16vec4(0); }
     const uint32_t o = g_v_off_elem + uint(r) * v_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1];
-    return f16vec4(data_vf16[o], data_vf16[o + 1], data_vf16[o + 2], data_vf16[o + 3]);
+    return data_vf16v4[o / 4];
 }
 
 #define FAGATHERK , faGatherK, faGatherKVector
