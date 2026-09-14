@@ -67,7 +67,6 @@ configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @O
 target_include_directories(llama PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
-target_precompile_headers (llama PRIVATE models/models.h)
 
 target_link_libraries(llama PUBLIC ggml)
 
