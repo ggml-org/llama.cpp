@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -18,6 +18,15 @@ class XingChen4Model(DeepseekV2Model):
 
     model_arch = gguf.MODEL_ARCH.XINGCHEN4
 
+    # NextN/MTP: the checkpoint appends the MTP block past num_hidden_layers
+    # (model.layers.40 -> blk.40), mirroring DeepSeek-V3.2.  The C++ loader
+    # (src/models/xingchen4.cpp) expects the MTP block to carry the standard
+    # MLA + MoE tensors plus nextn.eh_proj/enorm/hnorm (and optionally
+    # embed_tokens/shared_head.*), but NO mHC tensors -- those are trunk-only.
+    skip_mtp = False
+    supports_mtp_export = True
+    _n_main_layers: int | None = None
+
 # map (prefix, kind) -> MODEL_TENSOR enum
     _hc_tensor_map = {
         ("hc_attn", "fn"):    gguf.MODEL_TENSOR.HC_ATTN_FN,
@@ -33,11 +42,42 @@ class XingChen4Model(DeepseekV2Model):
         # buffer for alpha tensors: {bid: {"attn": {}, "ffn": {}}}
         self._tc4_alphas: dict[int, dict[str, dict[str, Tensor]]] = {}
 
+        self.block_count = self.hparams["num_hidden_layers"]
+        if not self.no_mtp:
+            self.block_count += self.hparams.get("num_nextn_predict_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        # needed by filter_tensors() before any tensor is filtered
+        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+
+        # the NextN/MTP block lives past num_hidden_layers (model.layers.40 -> blk.40)
+        assert cls._n_main_layers is not None
+        is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
+
+        if is_mtp and re.search(r"\.(attn_hc|ffn_hc)\.", name):
+            return None
+
+        # --no-mtp: drop the appended NextN block entirely.
+        if is_mtp and cls.no_mtp:
+            return None
+        # --mtp: keep ONLY NextN-block tensors plus the shared embeddings/
+        # norm/lm_head (so the resulting GGUF carries just the draft head).
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
+
+        return name, gen
+
     def set_gguf_parameters(self):
-        # XingChen4 config uses rope_scaling.type = "rope", which is equivalent
-        # to DeepSeek's "yarn" (vLLM maps it to "deepseek_yarn", TRT-LLM maps
-        # it to "yarn").  The base converter only recognises "yarn", so patch
-        # the rope_type before delegating to V2's set_gguf_parameters.
         rope_type = self.rope_parameters.get("rope_type") or self.rope_parameters.get("type")
         if rope_type == "rope":
             self.rope_parameters["rope_type"] = "yarn"
@@ -50,6 +90,10 @@ class XingChen4Model(DeepseekV2Model):
         super().set_gguf_parameters()
         hparams = self.hparams
 
+        # NextN/MTP prediction layers
+        if not self.no_mtp and (num_nextn_predict_layers := hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
+
         self.gguf_writer.add_hyper_connection_count(
             hparams.get("hc_mult",  1))
         self.gguf_writer.add_hyper_connection_sinkhorn_iterations(
@@ -58,13 +102,21 @@ class XingChen4Model(DeepseekV2Model):
             hparams.get("hc_eps",  1e-6))
 
     def set_vocab(self):
-        # XingChen4 uses a SentencePiece tokenizer (tokenizer.model + XingChen4Tokenizer).
-        # V2's set_vocab tries GPT2/BPE first, which fails for SPM. Use the SPM path directly.
         self._set_vocab_sentencepiece()
-        # Override the pre-tokenizer type: _set_vocab_sentencepiece writes "default",
-        # but XingChen4's SPM-style BPE needs a dedicated pre-type for correct pre-tokenization
-        # (no word-level pre-split, no byte encoding, just newline splitting — same as Gemma4).
         self.gguf_writer.add_tokenizer_pre("xingchen4")
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)
+
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # handle mHC tensors: new format is model.layers.{N}.{attn_hc|ffn_hc}.{hc_fn|hc_base|hc_scale}
