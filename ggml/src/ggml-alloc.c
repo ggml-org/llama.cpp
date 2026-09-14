@@ -1250,6 +1250,92 @@ static bool ggml_gallocr_prepare_graph_tensor(struct ggml_gallocr_graph * graph,
     return true;
 }
 
+static bool ggml_gallocr_prepare_graph_impl(struct ggml_gallocr_graph * graph, struct ggml_cgraph * cgraph, const int * node_buffer_ids, const int * leaf_buffer_ids) {
+    ggml_gallocr_t galloc = graph->galloc;
+    struct ggml_gallocr_plan * plan = &galloc->plan;
+    size_t capacity = plan->hash_set.size;
+    for (int i = 0; i < cgraph->n_leafs; i++) {
+        int buffer_id = get_node_buffer_id(leaf_buffer_ids, i);
+        int id = ggml_gallocr_graph_tensor_id(graph, cgraph->leafs[i], buffer_id);
+        if (id < 0) {
+            return false;
+        }
+        plan->leaf_ids[i] = id;
+        plan->tensors[id].buffer_id = buffer_id;
+        graph->declared[id] = true;
+    }
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        int buffer_id = get_node_buffer_id(node_buffer_ids, i);
+        int id = ggml_gallocr_graph_tensor_id(graph, cgraph->nodes[i], buffer_id);
+        if (id < 0) {
+            return false;
+        }
+        plan->node_ids[i] = id;
+        plan->tensors[id].buffer_id = buffer_id;
+        graph->declared[id] = true;
+    }
+    for (int i = 0; i < galloc->n_buffers; i++) {
+        struct ggml_gallocr_composite_plan * composite = plan->composites[i];
+        if (!composite || composite->preparation) {
+            continue;
+        }
+        if (composite->iface->n_domains(galloc->bufts[i]) != composite->n_domains) {
+            return false;
+        }
+        for (size_t device = 0; device < composite->n_domains; device++) {
+            if (composite->iface->get_domain(galloc->bufts[i], device) != composite->domains[device].buft ||
+                    ggml_backend_buft_get_alignment(composite->domains[device].buft) != composite->domains[device].alloc->alignment) {
+                return false;
+            }
+        }
+        struct ggml_backend_alloc_source_i sources = {ggml_gallocr_source_buft, ggml_gallocr_source_tensor, composite, NULL, ggml_gallocr_source_replaced};
+        composite->graph = graph;
+        composite->preparation = composite->iface->new_preparation(galloc->bufts[i], GGML_BACKEND_BUFFER_USAGE_COMPUTE, capacity, &sources);
+        if (!composite->preparation) {
+            return false;
+        }
+    }
+    for (size_t i = 0; i < graph->count; i++) {
+        if (!ggml_gallocr_prepare_graph_tensor(graph, (int) i)) {
+            return false;
+        }
+    }
+    for (size_t i = 0; i < graph->count; i++) {
+        struct ggml_gallocr_tensor_requirement * requirement = &plan->tensors[i];
+        struct ggml_gallocr_composite_plan * composite = plan->composites[requirement->buffer_id];
+        requirement->first_shard = plan->n_shards;
+        requirement->n_shards = composite ? composite->n_domains : 0;
+        if (requirement->n_shards > SIZE_MAX/sizeof(plan->shards[0]) - plan->n_shards) {
+            return false;
+        }
+        plan->n_shards += requirement->n_shards;
+    }
+    plan->shards = calloc(MAX((size_t) 1, plan->n_shards), sizeof(plan->shards[0]));
+    GGML_ASSERT(plan->shards);
+    for (size_t i = 0; i < graph->count; i++) {
+        struct ggml_gallocr_tensor_requirement * requirement = &plan->tensors[i];
+        struct ggml_gallocr_composite_plan * composite = plan->composites[requirement->buffer_id];
+        for (size_t device = 0; device < requirement->n_shards; device++) {
+            struct ggml_tensor * simple = composite->iface->get_tensor(composite->preparation, graph->tensors[i], device);
+            if (!simple) {
+                return false;
+            }
+            struct ggml_gallocr_shard_requirement * shard = &plan->shards[requirement->first_shard + device];
+            shard->addr = GGML_BUFFER_ADDRESS_INVALID;
+            shard->type = simple->type;
+            shard->op = simple->op;
+            memcpy(shard->op_params, simple->op_params, sizeof(shard->op_params));
+            memcpy(shard->ne, simple->ne, sizeof(shard->ne));
+            memcpy(shard->nb, simple->nb, sizeof(shard->nb));
+            shard->view_offs = simple->view_offs;
+            shard->flags = simple->flags;
+            shard->size = simple->view_src ? 0 : ggml_backend_buft_get_alloc_size(composite->domains[device].buft, simple);
+        }
+    }
+    plan->n_tensors = graph->count;
+    return true;
+}
+
 static bool ggml_gallocr_prepare_graph(ggml_gallocr_t galloc, struct ggml_cgraph * cgraph, const int * node_buffer_ids, const int * leaf_buffer_ids, struct ggml_gallocr_graph * retained) {
     struct ggml_gallocr_plan * plan = &galloc->plan;
     size_t capacity = plan->hash_set.size;
@@ -1271,88 +1357,7 @@ static bool ggml_gallocr_prepare_graph(ggml_gallocr_t galloc, struct ggml_cgraph
     plan->leaf_ids = calloc(MAX(1, cgraph->n_leafs), sizeof(plan->leaf_ids[0]));
     plan->n_tensors = plan->n_shards = 0;
     GGML_ASSERT(plan->tensors && plan->node_ids && plan->leaf_ids);
-    bool result = false;
-    for (int i = 0; i < cgraph->n_leafs; i++) {
-        int buffer_id = get_node_buffer_id(leaf_buffer_ids, i);
-        int id = ggml_gallocr_graph_tensor_id(&graph, cgraph->leafs[i], buffer_id);
-        if (id < 0) {
-            goto cleanup;
-        }
-        plan->leaf_ids[i] = id;
-        plan->tensors[id].buffer_id = buffer_id;
-        graph.declared[id] = true;
-    }
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        int buffer_id = get_node_buffer_id(node_buffer_ids, i);
-        int id = ggml_gallocr_graph_tensor_id(&graph, cgraph->nodes[i], buffer_id);
-        if (id < 0) {
-            goto cleanup;
-        }
-        plan->node_ids[i] = id;
-        plan->tensors[id].buffer_id = buffer_id;
-        graph.declared[id] = true;
-    }
-    for (int i = 0; i < galloc->n_buffers; i++) {
-        struct ggml_gallocr_composite_plan * composite = plan->composites[i];
-        if (!composite || composite->preparation) {
-            continue;
-        }
-        if (composite->iface->n_domains(galloc->bufts[i]) != composite->n_domains) {
-            goto cleanup;
-        }
-        for (size_t device = 0; device < composite->n_domains; device++) {
-            if (composite->iface->get_domain(galloc->bufts[i], device) != composite->domains[device].buft ||
-                    ggml_backend_buft_get_alignment(composite->domains[device].buft) != composite->domains[device].alloc->alignment) {
-                goto cleanup;
-            }
-        }
-        struct ggml_backend_alloc_source_i sources = {ggml_gallocr_source_buft, ggml_gallocr_source_tensor, composite, NULL, ggml_gallocr_source_replaced};
-        composite->graph = &graph;
-        composite->preparation = composite->iface->new_preparation(galloc->bufts[i], GGML_BACKEND_BUFFER_USAGE_COMPUTE, capacity, &sources);
-        if (!composite->preparation) {
-            goto cleanup;
-        }
-    }
-    for (size_t i = 0; i < graph.count; i++) {
-        if (!ggml_gallocr_prepare_graph_tensor(&graph, (int) i)) {
-            goto cleanup;
-        }
-    }
-    for (size_t i = 0; i < graph.count; i++) {
-        struct ggml_gallocr_tensor_requirement * requirement = &plan->tensors[i];
-        struct ggml_gallocr_composite_plan * composite = plan->composites[requirement->buffer_id];
-        requirement->first_shard = plan->n_shards;
-        requirement->n_shards = composite ? composite->n_domains : 0;
-        if (requirement->n_shards > SIZE_MAX/sizeof(plan->shards[0]) - plan->n_shards) {
-            goto cleanup;
-        }
-        plan->n_shards += requirement->n_shards;
-    }
-    plan->shards = calloc(MAX((size_t) 1, plan->n_shards), sizeof(plan->shards[0]));
-    GGML_ASSERT(plan->shards);
-    for (size_t i = 0; i < graph.count; i++) {
-        struct ggml_gallocr_tensor_requirement * requirement = &plan->tensors[i];
-        struct ggml_gallocr_composite_plan * composite = plan->composites[requirement->buffer_id];
-        for (size_t device = 0; device < requirement->n_shards; device++) {
-            struct ggml_tensor * simple = composite->iface->get_tensor(composite->preparation, graph.tensors[i], device);
-            if (!simple) {
-                goto cleanup;
-            }
-            struct ggml_gallocr_shard_requirement * shard = &plan->shards[requirement->first_shard + device];
-            shard->addr = GGML_BUFFER_ADDRESS_INVALID;
-            shard->type = simple->type;
-            shard->op = simple->op;
-            memcpy(shard->op_params, simple->op_params, sizeof(shard->op_params));
-            memcpy(shard->ne, simple->ne, sizeof(shard->ne));
-            memcpy(shard->nb, simple->nb, sizeof(shard->nb));
-            shard->view_offs = simple->view_offs;
-            shard->flags = simple->flags;
-            shard->size = simple->view_src ? 0 : ggml_backend_buft_get_alloc_size(composite->domains[device].buft, simple);
-        }
-    }
-    plan->n_tensors = graph.count;
-    result = true;
-cleanup:
+    bool result = ggml_gallocr_prepare_graph_impl(&graph, cgraph, node_buffer_ids, leaf_buffer_ids);
     if (result && retained) {
         *retained = graph;
         for (int i = 0; i < galloc->n_buffers; i++) {
@@ -1870,17 +1875,12 @@ static bool ggml_gallocr_bind_graph_tensor(struct ggml_gallocr_graph * graph, in
     return true;
 }
 
-static bool ggml_gallocr_materialize_graph(struct ggml_gallocr_graph * graph) {
+static bool ggml_gallocr_materialize_graph_impl(struct ggml_gallocr_graph * graph, ggml_backend_buffer_t * owners) {
     ggml_gallocr_t galloc = graph->galloc;
-    ggml_backend_buffer_t * owners = calloc(galloc->n_buffers, sizeof(owners[0]));
-    if (!owners) {
-        return false;
-    }
-    bool result = false;
     memset(graph->state, 0, graph->count*sizeof(graph->state[0]));
     for (size_t i = 0; i < graph->count; i++) {
         if (!ggml_gallocr_bind_graph_tensor(graph, (int) i, false)) {
-            goto cleanup;
+            return false;
         }
     }
     for (int i = 0; i < galloc->n_buffers; i++) {
@@ -1890,7 +1890,7 @@ static bool ggml_gallocr_materialize_graph(struct ggml_gallocr_graph * graph) {
         }
         owners[i] = composite->iface->materialize(composite->preparation, galloc->composite_buffers[i]->domains, composite->n_domains);
         if (!owners[i]) {
-            goto cleanup;
+            return false;
         }
         composite->preparation = NULL;
     }
@@ -1911,11 +1911,19 @@ static bool ggml_gallocr_materialize_graph(struct ggml_gallocr_graph * graph) {
                     ggml_backend_buffer_reset(galloc->composite_buffers[j]->owner);
                 }
             }
-            goto cleanup;
+            return false;
         }
     }
-    result = true;
-cleanup:
+    return true;
+}
+
+static bool ggml_gallocr_materialize_graph(struct ggml_gallocr_graph * graph) {
+    ggml_gallocr_t galloc = graph->galloc;
+    ggml_backend_buffer_t * owners = calloc(galloc->n_buffers, sizeof(owners[0]));
+    if (!owners) {
+        return false;
+    }
+    bool result = ggml_gallocr_materialize_graph_impl(graph, owners);
     for (int i = 0; i < galloc->n_buffers; i++) {
         ggml_backend_buffer_free(owners[i]);
     }
