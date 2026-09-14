@@ -3,7 +3,8 @@ import { browser } from '$app/environment';
 import { HEADERS } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
-import { apiUrl } from '$lib/utils/api-base';
+import { apiUrl, getBackend } from '$lib/utils/api-base';
+import { getBackendCapabilities } from '$lib/utils/backend';
 
 /**
  * Validates API key by making a request to the server props endpoint
@@ -11,6 +12,13 @@ import { apiUrl } from '$lib/utils/api-base';
  */
 export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<void> {
 	if (!browser) {
+		return;
+	}
+
+	// /props only exists on llama.cpp servers; external backends carry their own key
+	const backend = getBackend();
+
+	if (backend && !getBackendCapabilities(backend).props) {
 		return;
 	}
 

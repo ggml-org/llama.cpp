@@ -152,6 +152,9 @@ export class ModelPropsManager {
 	 * @returns Props data or null if fetch failed or model not loaded
 	 */
 	async fetchModelProps(modelId: string): Promise<ApiLlamaCppServerProps | null> {
+		// /props only exists on llama.cpp servers
+		if (!serverStore.capabilities.props) return null;
+
 		const cached = this.cache.get(modelId);
 
 		if (cached) return cached;
