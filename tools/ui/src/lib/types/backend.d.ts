@@ -10,6 +10,28 @@
 /** Request/response shape a backend speaks. */
 export type BackendProtocol = 'llama.cpp' | 'openai' | 'anthropic';
 
+/**
+ * Features a backend supports. A llama.cpp server exposes extra endpoints on
+ * top of the OpenAI-compatible API; plain OpenAI- and Anthropic-compatible
+ * endpoints only provide chat and model listing.
+ */
+export interface BackendCapabilities {
+	/** llama-server's /cors-proxy endpoint for cross-origin MCP requests. */
+	corsProxy: boolean;
+	/** Router-mode model load/unload. */
+	loadUnload: boolean;
+	/** The /props endpoint with server role and generation defaults. */
+	props: boolean;
+	/** Multi-model router mode. */
+	router: boolean;
+	/** The /slots introspection endpoint. */
+	slots: boolean;
+	/** The /models/sse load and download progress feed. */
+	statusFeed: boolean;
+	/** The /tools listing and execution endpoint. */
+	tools: boolean;
+}
+
 /** One configured API endpoint. */
 export interface Backend {
 	/** Bearer token / API key used for this backend. */

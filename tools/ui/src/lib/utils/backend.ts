@@ -7,13 +7,14 @@
  */
 
 import {
+	BACKEND_CAPABILITIES,
 	BACKEND_ID_PREFIX,
 	BACKEND_PROTOCOLS,
 	DEFAULT_BACKEND_CHAT_PATH,
 	DEFAULT_BACKEND_MODELS_PATH,
 	LOCAL_BACKEND_ID
 } from '$lib/constants';
-import type { Backend, BackendProtocol } from '$lib/types';
+import type { Backend, BackendCapabilities, BackendProtocol } from '$lib/types';
 
 /** Absolute chat completions URL for a backend. */
 export function backendChatUrl(backend: Backend): string {
@@ -23,6 +24,11 @@ export function backendChatUrl(backend: Backend): string {
 /** Absolute models listing URL for a backend. */
 export function backendModelsUrl(backend: Backend): string {
 	return joinBackendUrl(backend.baseUrl, backend.modelsPath ?? DEFAULT_BACKEND_MODELS_PATH);
+}
+
+/** Features a backend supports, derived from its protocol. */
+export function getBackendCapabilities(backend: Backend): BackendCapabilities {
+	return BACKEND_CAPABILITIES[backend.protocol] ?? BACKEND_CAPABILITIES.openai;
 }
 
 /** The built-in backend pointing at the server that serves this UI. */
