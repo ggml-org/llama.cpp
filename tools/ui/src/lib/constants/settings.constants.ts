@@ -11,6 +11,7 @@ import {
 	Monitor,
 	Moon,
 	PencilRuler,
+	Server,
 	SlidersVertical,
 	Sun
 } from '@lucide/svelte';
@@ -28,6 +29,7 @@ import type {
 /** Settings sections — slug is the routing identity, title is the display label. */
 export const SETTINGS_SECTIONS = {
 	AGENTIC: { slug: 'agentic', title: 'Agentic' },
+	BACKENDS: { slug: 'backends', title: 'Backends' },
 	DEVELOPER: { slug: 'developer', title: 'Developer' },
 	DISPLAY: { slug: 'display', title: 'Display' },
 	GENERAL: { slug: 'general', title: 'General' },
@@ -38,6 +40,7 @@ export const SETTINGS_SECTIONS = {
 
 export const SETTINGS_SECTION_SLUGS = {
 	AGENTIC: SETTINGS_SECTIONS.AGENTIC.slug,
+	BACKENDS: SETTINGS_SECTIONS.BACKENDS.slug,
 	DEVELOPER: SETTINGS_SECTIONS.DEVELOPER.slug,
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.slug,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.slug,
@@ -48,6 +51,7 @@ export const SETTINGS_SECTION_SLUGS = {
 
 export const SETTINGS_SECTION_TITLES = {
 	AGENTIC: SETTINGS_SECTIONS.AGENTIC.title,
+	BACKENDS: SETTINGS_SECTIONS.BACKENDS.title,
 	DEVELOPER: SETTINGS_SECTIONS.DEVELOPER.title,
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.title,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.title,
@@ -188,7 +192,15 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				key: SETTINGS_KEYS.MAX_IMAGE_RESOLUTION,
 				label: 'Maximum image resolution (megapixels)',
 				type: SettingsFieldType.INPUT
-			},
+			}
+		],
+		slug: SETTINGS_SECTION_SLUGS.GENERAL,
+		title: SETTINGS_SECTION_TITLES.GENERAL
+	},
+	// Backends (non-UI config object)
+	{
+		icon: Server,
+		settings: [
 			{
 				defaultValue: '[]',
 				help: 'Configure external API backends as a JSON list. The local backend is always available.',
@@ -198,8 +210,8 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.INPUT
 			}
 		],
-		slug: SETTINGS_SECTION_SLUGS.GENERAL,
-		title: SETTINGS_SECTION_TITLES.GENERAL
+		slug: SETTINGS_SECTION_SLUGS.BACKENDS,
+		title: SETTINGS_SECTION_TITLES.BACKENDS
 	},
 	// Display
 	{
