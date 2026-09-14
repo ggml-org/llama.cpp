@@ -543,9 +543,35 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_F8_E4M3)
+FLOAT_TYPE dequantize1(uint ib, uint iqs, uint a_offset) {
+    return FLOAT_TYPE(e4m3_to_fp32(data_a[a_offset + ib + iqs]));
+}
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint idx = a_offset + ib + iqs;
+    return vec2(e4m3_to_fp32(data_a[idx]), e4m3_to_fp32(data_a[idx + 1]));
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    const uint idx = a_offset + ib + iqs;
+    return vec4(e4m3_to_fp32(data_a[idx    ]), e4m3_to_fp32(data_a[idx + 1]),
+                e4m3_to_fp32(data_a[idx + 2]), e4m3_to_fp32(data_a[idx + 3]));
+}
+vec4 dequantize4_2aligned(uint ib, uint iqs, uint a_offset) {
+    const uint idx = a_offset + ib + iqs;
+    return vec4(e4m3_to_fp32(data_a[idx    ]), e4m3_to_fp32(data_a[idx + 1]),
+                e4m3_to_fp32(data_a[idx + 2]), e4m3_to_fp32(data_a[idx + 3]));
+}
+#endif
+
 #if defined(DATA_A_F32) || defined(DATA_A_F16) || defined(DATA_A_BF16)
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(0, 0);
+}
+#endif
+
+#if defined(DATA_A_F8_E4M3)
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(1.0, 0.0);
 }
 #endif
 

@@ -580,6 +580,26 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             store_a(col, eff_row + 4, FLOAT_TYPEV2(kvalues_mxfp4[vui  >>  4] * d,
                                                     kvalues_mxfp4[vui2 >>  4] * d));
 #endif
+#elif defined(DATA_A_F8_E4M3)
+#if LOAD_VEC_A == 4
+            if (ALIGNED != 0) {
+                const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+                const uint k_pair = row * LOAD_VEC_A / 2;
+                FLOAT_TYPEV4 aa = FLOAT_TYPEV4(e4m3_to_fp32(data_a[idx]));
+                store_a(col, k_pair,     aa.xy);
+                store_a(col, k_pair + 1, aa.zw);
+                return;
+            }
+#endif
+            const uint idx = pos_a + col * p.stride_a + row * 2;
+            if (idx_m < p.M && block + row * 2 + 1 < end_k) {
+                store_a(col, row, FLOAT_TYPEV2(e4m3_to_fp32(data_a_scalar[idx]),
+                                               e4m3_to_fp32(data_a_scalar[idx + 1])));
+            } else if (idx_m < p.M && block + row * 2 < end_k) {
+                store_a(col, row, FLOAT_TYPEV2(e4m3_to_fp32(data_a_scalar[idx]), 0.0f));
+            } else {
+                store_a(col, row, FLOAT_TYPEV2(0.0f));
+            }
 #endif
 }
 

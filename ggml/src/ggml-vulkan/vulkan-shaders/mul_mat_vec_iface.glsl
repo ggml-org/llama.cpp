@@ -4,6 +4,11 @@
 #define MAT_VEC_FUSION_FLAGS_BIAS1 0x2
 #define MAT_VEC_FUSION_FLAGS_SCALE0 0x4
 #define MAT_VEC_FUSION_FLAGS_SCALE1 0x8
+// weight scale in data_fuse0; _VEC: per-output (dense) / per-expert (id), else scalar;
+// _2D (id only): per-channel-per-expert [n_out, n_expert]
+#define MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE 0x10
+#define MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE_VEC 0x20
+#define MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE_2D 0x40
 
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
 #if defined(A_TYPEV4)
