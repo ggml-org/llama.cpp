@@ -2134,6 +2134,63 @@ static void test_convert_responses_to_chatcmpl() {
             }
         }
     }
+
+    // Test function_call_output input_image where image_url is an object (not a string)
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "type": "input_image",
+                            "image_url": {
+                                "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        try {
+            server_chat_convert_responses_to_chatcmpl(input);
+            throw std::runtime_error("Expected exception");
+        } catch (const std::exception & e) {
+            if (std::string(e.what()).find("image_url") == std::string::npos) {
+                throw std::runtime_error("Expected exception about 'image_url'");
+            }
+        }
+    }
+
+    // Test function_call_output input_text without text
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "type": "input_text"
+                        }
+                    ]
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        try {
+            server_chat_convert_responses_to_chatcmpl(input);
+            throw std::runtime_error("Expected exception");
+        } catch (const std::exception & e) {
+            if (std::string(e.what()).find("text") == std::string::npos) {
+                throw std::runtime_error("Expected exception about 'text'");
+            }
+        }
+    }
 }
 
 // Shared LFM2 parser cases - all variants use one output format and parser

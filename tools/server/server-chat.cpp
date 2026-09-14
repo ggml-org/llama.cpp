@@ -205,10 +205,13 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                     for (json & chatcmpl_output : chatcmpl_outputs) {
                         const std::string out_type = json_value(chatcmpl_output, "type", std::string());
                         if (out_type == "input_text") {
+                            if (!exists_and_is_string(chatcmpl_output, "text")) {
+                                throw std::invalid_argument("'text' is required for 'input_text' tool output");
+                            }
                             chatcmpl_output["type"] = "text";
                         } else if (out_type == "input_image") {
-                            if (!chatcmpl_output.contains("image_url")) {
-                                throw std::invalid_argument("'image_url' is required for 'input_image' tool output");
+                            if (!exists_and_is_string(chatcmpl_output, "image_url")) {
+                                throw std::invalid_argument("'image_url' is required for 'input_image' tool output and must be a string");
                             }
                             chatcmpl_output = json {
                                 {"image_url", json {
