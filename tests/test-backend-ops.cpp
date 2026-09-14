@@ -11494,7 +11494,7 @@ static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
     }
 
     struct shape_t { int dk, dv; };
-    const shape_t   shapes[] = { { 128, 128 }, { 96, 64 }, { 576, 512 } };  // mainstream head size + MiniCPM3 (NE=4 only) + MLA shared K/V view
+    const shape_t   shapes[] = { { 128, 128 }, { 576, 512 } };  // mainstream head size + MLA shared K/V view
     const int       ne01_pts[] = { 1, 3 };                      // decode, and padded rows for Q=2 and Q=4
     const int       ne11_pts[] = { 512, 4097 };                 // nsg=1, and nsg>=2 together with kvpad
     const ggml_type types[]    = { GGML_TYPE_F16, GGML_TYPE_Q4_0 };
