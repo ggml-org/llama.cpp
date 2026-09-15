@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
+	import { useBackendAvailability } from '$lib/hooks/use-backend-availability.svelte';
 	import { conversationsStore, deviceStore, modelsStore, serverStore } from '$lib/stores';
 	import { getConversationModel } from '$lib/utils';
 
@@ -28,7 +29,8 @@
 	}: Props = $props();
 
 	let isRouter = $derived(serverStore.isRouterMode);
-	let isOffline = $derived(!!serverStore.error);
+	const availability = useBackendAvailability();
+	let isOffline = $derived(availability.isOffline);
 
 	let conversationModel = $derived(
 		getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
