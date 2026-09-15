@@ -4171,11 +4171,14 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                     size = GGML_PAD(size, sizeof(int64_t)); // + padding for next block.
 
                     const int64_t ne02 = op->src[0]->ne[2]; // n_as, n_expert
-                    const int64_t ne12 = op->src[1]->ne[2]; // n_tokens
+
+                    // an expert can be referenced by several ids of the same
+                    // token, so the row list is sized by ids->ne[0]*ids->ne[1]
+                    const int64_t n_ids_total = op->src[2]->ne[0]*op->src[2]->ne[1];
 
                     const size_t sizeof_mmid_row_mapping = sizeof(int64_t);
 
-                    size += sizeof_mmid_row_mapping*ne02*(ne12 + 1);
+                    size += sizeof_mmid_row_mapping*ne02*(n_ids_total + 1);
 
                     return true;
                 }
@@ -4425,17 +4428,22 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             int32_t i2;
         };
 
+        // an expert can be referenced by several ids of the same token, so the
+        // per-expert row list is sized by ids->ne[0]*ids->ne[1], as in the
+        // generic path in ggml-cpu.c
+        const int64_t n_ids_total = ids->ne[0]*ids->ne[1];
+
         GGML_ASSERT(params->wsize >=
                 (GGML_PAD(nbw3, sizeof(int64_t)) +
-                 n_as*(ne12 + 1)*sizeof(mmid_row_mapping))
+                 n_as*(n_ids_total + 1)*sizeof(mmid_row_mapping))
                 );
 
         auto * wdata          = (char *)params->wdata;
         auto * wdata_src1_end = (char *)wdata + GGML_PAD(nbw3, sizeof(int64_t));
 
-        // total of [n_as][ne12 + 1] elements of type mmid_row_mapping (2*int32_t = int64_t)
+        // total of [n_as][n_ids_total + 1] elements of type mmid_row_mapping (2*int32_t = int64_t)
         auto * matrix_row_counts = (int64_t *) (wdata_src1_end);                                        // [n_as]
-        struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *) (matrix_row_counts + n_as); // [n_as][ne12]
+        struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *) (matrix_row_counts + n_as); // [n_as][n_ids_total]
 
         // src1: float32 => param type
         for (int64_t i12 = 0; i12 < ne12; ++i12) {
@@ -4446,7 +4454,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             }
         }
 
-#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id) * ne12 + (i1)]
+#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id) * n_ids_total + (i1)]
 
         if (ith == 0) {
             // initialize matrix_row_counts
