@@ -1,10 +1,10 @@
 /**
  * backendsModelsStore - Per-backend model catalog cache.
  *
- * The models selector prefetches every enabled backend's model list the first
- * time it opens, so switching backends is instant and the switcher can show
- * load state. The active backend's list still lives in modelsStore, which owns
- * selection and chat wiring; this cache is the prefetch layer for the others.
+ * Prefetches every enabled backend's model list, so switching backends is
+ * instant and the switcher can show load state. The active backend's list
+ * still lives in modelsStore, which owns selection and chat wiring; this
+ * cache is the prefetch layer the switches start from.
  */
 
 import { BackendsService } from '$lib/services/backends.service';
@@ -28,13 +28,12 @@ class BackendsModelsStore {
 	}
 
 	/**
-	 * Load a backend's models once. Local backends are skipped: their list is
-	 * owned by modelsStore.
+	 * Load a backend's models once.
 	 */
 	async ensureLoaded(backendId: string): Promise<void> {
 		const backend = backendsStore.enabled.find((candidate) => candidate.id === backendId);
 
-		if (!backend || !backend.baseUrl.trim()) return;
+		if (!backend) return;
 
 		const state = this.states[backendId];
 

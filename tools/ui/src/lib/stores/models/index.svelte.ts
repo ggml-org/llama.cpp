@@ -410,17 +410,28 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		this.clearSelection();
 		this.routerModels = [];
 		this.error = null;
-		serverStore.clear();
+
+		const backend = backendsStore.active;
+
+		// server props describe the local server; drop them only when the next
+		// backend is not the one they describe, refresh in place otherwise
+		if (backend.protocol !== 'llama.cpp') {
+			serverStore.clear();
+		}
 
 		// prefer the prefetched list so switching does not refetch
-		const backend = backendsStore.active;
-		const cached = backend.baseUrl.trim() ? backendsModelsStore.get(backend.id) : null;
+		const cached = backendsModelsStore.get(backend.id);
 
-		if (cached?.loaded) {
+		if (cached.loaded) {
 			this.activeModels = cached.models;
 			this.loading = false;
 
-			await serverStore.fetch();
+			await serverStore.fetch({ background: true });
+
+			// the cache carries names only; reload the router load status in place
+			if (serverStore.isRouterMode) {
+				await this.fetchRouterModels();
+			}
 
 			if (this.activeModels.length > 0) {
 				await this.ensureFirstModelSelected();
