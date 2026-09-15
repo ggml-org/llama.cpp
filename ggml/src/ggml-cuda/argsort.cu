@@ -163,52 +163,62 @@ static inline __device__ void ggml_cuda_swap(T & a, T & b) {
     b = tmp;
 }
 
+// One compare-exchange of the bitonic network at (k, j) for column col.
 template<ggml_sort_order order>
-static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int ncols, int ncols_pad) {
-    // bitonic sort
-    int col = threadIdx.x;
-    int row = blockIdx.x;
-
-    if (col >= ncols_pad) {
+static inline __device__ void bitonic_step(const float * x_row, int * dst_row, const int ncols, const int col, const int k, const int j) {
+    const int ixj = col ^ j;
+    if (ixj <= col) {
         return;
     }
+    if ((col & k) == 0) {
+        if (dst_row[col] >= ncols ||
+            (dst_row[ixj] < ncols && (order == GGML_SORT_ORDER_ASC ?
+                x_row[dst_row[col]] > x_row[dst_row[ixj]] :
+                x_row[dst_row[col]] < x_row[dst_row[ixj]]))
+        ) {
+            ggml_cuda_swap(dst_row[col], dst_row[ixj]);
+        }
+    } else {
+        if (dst_row[ixj] >= ncols ||
+            (dst_row[col] < ncols && (order == GGML_SORT_ORDER_ASC ?
+                x_row[dst_row[col]] < x_row[dst_row[ixj]] :
+                x_row[dst_row[col]] > x_row[dst_row[ixj]]))
+        ) {
+            ggml_cuda_swap(dst_row[col], dst_row[ixj]);
+        }
+    }
+}
+
+// Bitonic sort of one row per block. Each thread owns the columns
+// threadIdx.x + i * blockDim.x, so rows wider than the block (up to the
+// shared memory limit) sort with several columns per thread. Every
+// (k, j) stage runs all owned columns before the barrier; a pair
+// (col, col ^ j) is exchanged by the owner of its lower index only.
+template<ggml_sort_order order>
+static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int ncols, int ncols_pad) {
+    const int row = blockIdx.x;
 
     const float * x_row = x + row * ncols;
     extern __shared__ int dst_row[];
 
     // initialize indices
-    dst_row[col] = col;
+    for (int col = threadIdx.x; col < ncols_pad; col += blockDim.x) {
+        dst_row[col] = col;
+    }
 
     __syncthreads();
 
     for (int k = 2; k <= ncols_pad; k *= 2) {
         for (int j = k / 2; j > 0; j /= 2) {
-            int ixj = col ^ j;
-            if (ixj > col) {
-                if ((col & k) == 0) {
-                    if (dst_row[col] >= ncols ||
-                        (dst_row[ixj] < ncols && (order == GGML_SORT_ORDER_ASC ?
-                            x_row[dst_row[col]] > x_row[dst_row[ixj]] :
-                            x_row[dst_row[col]] < x_row[dst_row[ixj]]))
-                    ) {
-                        ggml_cuda_swap(dst_row[col], dst_row[ixj]);
-                    }
-                } else {
-                    if (dst_row[ixj] >= ncols ||
-                        (dst_row[col] < ncols && (order == GGML_SORT_ORDER_ASC ?
-                            x_row[dst_row[col]] < x_row[dst_row[ixj]] :
-                            x_row[dst_row[col]] > x_row[dst_row[ixj]]))
-                    ) {
-                        ggml_cuda_swap(dst_row[col], dst_row[ixj]);
-                    }
-                }
+            for (int col = threadIdx.x; col < ncols_pad; col += blockDim.x) {
+                bitonic_step<order>(x_row, dst_row, ncols, col, k, j);
             }
             __syncthreads();
         }
     }
 
     // copy the result to dst without the padding
-    if (col < ncols) {
+    for (int col = threadIdx.x; col < ncols; col += blockDim.x) {
         dst[row * ncols + col] = dst_row[col];
     }
 }
@@ -230,7 +240,9 @@ void argsort_f32_i32_cuda_bitonic(const float *   x,
     // bitonic sort requires ncols to be power of 2
     const int ncols_pad = next_power_of_2(ncols);
 
-    const dim3 block_dims(ncols_pad, 1, 1);
+    // one thread per column up to the block limit, several columns per
+    // thread beyond it; shared memory is the remaining bound
+    const dim3 block_dims(ncols_pad < CUDA_ARGSORT_BLOCK_SIZE ? ncols_pad : CUDA_ARGSORT_BLOCK_SIZE, 1, 1);
     const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = ncols_pad * sizeof(int);
 
