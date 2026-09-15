@@ -380,9 +380,11 @@ kernel void kernel_mul_mm_id_map0(
 
             threadgroup uint16_t * sids = (threadgroup uint16_t *) shmem + tpitg*ne20;
 
+            // 0xFFFF marks a skipped slot, it never matches an expert since ne02 fits in a threadgroup
             #pragma unroll(ne20)
             for (short i20 = 0; i20 < ne20; i20++) {
-                sids[i20] = src2_i32[i20];
+                const int32_t id = src2_i32[i20];
+                sids[i20] = id == -1 ? 0xFFFF : (uint16_t) id;
             }
         }
 
@@ -411,6 +413,30 @@ kernel void kernel_mul_mm_id_map0(
 
     device uint32_t * tpe_u32 = (device uint32_t *) (htpe);
     tpe_u32[ide] = n_all;
+}
+
+// kernel_mul_mm_id only writes the rows that an expert owns, so the skipped rows are zeroed here
+kernel void kernel_mul_mm_id_zero(
+        constant ggml_metal_kargs_mul_mm_id_zero & args,
+        device const char * src2,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int i20 = tgpig.x; // slot
+    const int i21 = tgpig.y; // token
+
+    const int32_t id = ((device const int32_t *) (src2 + i21*args.nb21))[i20];
+
+    if (id != -1) {
+        return;
+    }
+
+    device float * dst_row = (device float *) (dst + i20*args.nb1 + i21*args.nb2);
+
+    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+        dst_row[i0] = 0.0f;
+    }
 }
 
 typedef decltype(kernel_mul_mm_id_map0<1>) kernel_mul_mm_id_map0_t;
