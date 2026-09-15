@@ -4,10 +4,13 @@
 
 #include "hvx-utils.h"
 #include "hex-fastdiv.h"
+#include "hex-common.h"
+#include "hex-profile.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
+#include "htp-tensor.h"
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -22,6 +25,8 @@ struct htp_gdn_context {
     size_t   state_bytes;
     uint8_t * vtcm_base;
     size_t   vtcm_per_thread;
+    uint32_t row_start;
+    uint32_t nrows;
 };
 
 static inline HVX_Vector gdn_mul_dot_f32(float * restrict dst, const float * restrict mul, const float * restrict dot, uint32_t n) {
@@ -586,8 +591,9 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
     const uint32_t n_seqs   = v->ne[3];
     const uint32_t K        = octx->op_params[0];
 
-    const uint32_t total_rows = H * n_seqs;
-    if (ith >= total_rows) {
+    const uint32_t row_end = gctx->row_start + gctx->nrows;
+
+    if (ith >= gctx->nrows) {
         return;
     }
 
@@ -621,11 +627,11 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
     const uint64_t state_seq_stride = state->nb[3] / sizeof(float);
     const uint64_t state_size_per_snap = (uint64_t) S_v * S_v * H * n_seqs;
 
-    uint32_t ir_prefetch = ith;
+    uint32_t ir_prefetch = gctx->row_start + ith;
     int spad_idx = 0;
 
     // Prefetch preamble (up to 2 steps)
-    for (int k = 0; k < 2 && ir_prefetch < total_rows; k++) {
+    for (int k = 0; k < 2 && ir_prefetch < row_end; k++) {
         const uint32_t piv1 = fastmodulo(ir_prefetch, H, &fd_H);
         const uint32_t piv3 = fastdiv(ir_prefetch, &fd_H);
         const float * ps_in = state_in_base + (uint64_t) piv3 * state_seq_stride + (uint64_t) piv1 * S_v * S_v;
@@ -646,8 +652,11 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
         spad_idx ^= 1;
     }
 
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (gctx->row_start + ith));
+
     int curr_spad_idx = 0;
-    for (uint32_t ir = ith; ir < total_rows; ir += nth) {
+    for (uint32_t ir = gctx->row_start + ith; ir < row_end; ir += nth) {
         dma_queue_pop(dma);
         dma_queue_pop(dma);
 
@@ -812,7 +821,7 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
                        S_v * sizeof(float), S_v);
 
         // Prefetch next block (if any)
-        if (ir_prefetch < total_rows) {
+        if (ir_prefetch < row_end) {
             const uint32_t piv1 = fastmodulo(ir_prefetch, H, &fd_H);
             const uint32_t piv3 = fastdiv(ir_prefetch, &fd_H);
             const float * ps_in = state_in_base + (uint64_t) piv3 * state_seq_stride + (uint64_t) piv1 * S_v * S_v;
@@ -828,6 +837,7 @@ static void gated_delta_net_f32_pp_thread(unsigned int nth, unsigned int ith, vo
         curr_spad_idx ^= 1;
     }
     dma_queue_flush(dma);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) row_end);
 }
 
 
@@ -847,8 +857,9 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
     const uint32_t H        = v->ne[1];
     const uint32_t n_seqs   = v->ne[3];
 
-    const uint32_t total_rows = H * n_seqs;
-    if (ith >= total_rows) {
+    const uint32_t row_end = gctx->row_start + gctx->nrows;
+
+    if (ith >= gctx->nrows) {
         return;
     }
 
@@ -881,11 +892,11 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
 
     const uint64_t state_seq_stride = state->nb[3] / sizeof(float);
 
-    uint32_t ir_prefetch = ith;
+    uint32_t ir_prefetch = gctx->row_start + ith;
     int spad_idx = 0;
 
     // Prefetch preamble (up to 2 steps)
-    for (int k = 0; k < 2 && ir_prefetch < total_rows; k++) {
+    for (int k = 0; k < 2 && ir_prefetch < row_end; k++) {
         const uint32_t piv1 = fastmodulo(ir_prefetch, H, &fd_H);
         const uint32_t piv3 = fastdiv(ir_prefetch, &fd_H);
         const float * ps_in = state_in_base + (uint64_t) piv3 * state_seq_stride + (uint64_t) piv1 * S_v * S_v;
@@ -906,8 +917,11 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
         spad_idx ^= 1;
     }
 
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (gctx->row_start + ith));
+
     int curr_spad_idx = 0;
-    for (uint32_t ir = ith; ir < total_rows; ir += nth) {
+    for (uint32_t ir = gctx->row_start + ith; ir < row_end; ir += nth) {
         dma_queue_pop(dma);
         dma_queue_pop(dma);
 
@@ -1057,7 +1071,7 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
                        S_v * sizeof(float), S_v);
 
         // Prefetch next block (if any)
-        if (ir_prefetch < total_rows) {
+        if (ir_prefetch < row_end) {
             const uint32_t piv1 = fastmodulo(ir_prefetch, H, &fd_H);
             const uint32_t piv3 = fastdiv(ir_prefetch, &fd_H);
             const float * ps_in = state_in_base + (uint64_t) piv3 * state_seq_stride + (uint64_t) piv1 * S_v * S_v;
@@ -1073,6 +1087,7 @@ static void gated_delta_net_f32_tg_thread(unsigned int nth, unsigned int ith, vo
         curr_spad_idx ^= 1;
     }
     dma_queue_flush(dma);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) row_end);
 }
 
 
@@ -1084,10 +1099,6 @@ int op_gated_delta_net(struct htp_ops_context * octx) {
     const struct htp_tensor * beta  = octx->src[4];
     const struct htp_tensor * state = octx->src[5];
     const struct htp_tensor * dst   = octx->dst;
-
-    if (!q || !k || !v || !g || !beta || !state || !dst) {
-        return HTP_STATUS_INVAL_PARAMS;
-    }
 
     if (q->type != HTP_TYPE_F32 || k->type != HTP_TYPE_F32 || v->type != HTP_TYPE_F32 ||
         g->type != HTP_TYPE_F32 || beta->type != HTP_TYPE_F32 || state->type != HTP_TYPE_F32 ||
@@ -1124,16 +1135,37 @@ int op_gated_delta_net(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
+    const uint32_t total_rows = H * n_seqs;
+
+    uint32_t row_start = 0;
+    uint32_t nrows     = total_rows;
+
+    if (octx->ctx->mdev.count > 1) {
+        const uint32_t head_bytes = S_v * sizeof(float);
+        const uint32_t rows_per_chunk = (head_bytes > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(head_bytes, HEX_L2_LINE_SIZE)) : 1;
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(total_rows, htp_tensor_mdev_data_aligned(dst) ? rows_per_chunk : 0,
+                                                                             octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        row_start = range.start;
+        nrows     = range.count;
+    }
+
+    if (nrows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    const uint32_t n_threads = octx->n_threads;
+
     struct htp_gdn_context gctx;
     gctx.octx = octx;
-    gctx.rows_per_thread = (H * n_seqs + octx->n_threads - 1) / octx->n_threads;
+    gctx.row_start       = row_start;
+    gctx.nrows           = nrows;
+    gctx.rows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
     gctx.state_bytes = (size_t) S_v * S_v * sizeof(float);
 
     size_t state_aligned = (size_t) S_v * S_v * sizeof(float);
     state_aligned = (state_aligned + 127) & ~(size_t)127;
 
-    assert(octx->ctx->vtcm_base != NULL);
-    assert(octx->ctx->vtcm_size >= 2 * state_aligned * octx->n_threads);
+    assert(octx->ctx->vtcm_size >= 2 * state_aligned * n_threads);
 
     gctx.vtcm_base = octx->ctx->vtcm_base;
     gctx.vtcm_per_thread = 2 * state_aligned;
@@ -1148,9 +1180,9 @@ int op_gated_delta_net(struct htp_ops_context * octx) {
          gctx.vtcm_per_thread * octx->n_threads, octx->n_threads);
 
     if (n_tokens == 1) {
-        worker_pool_run_func(octx->ctx->worker_pool, gated_delta_net_f32_tg_thread, &gctx, octx->n_threads);
+        work_queue_run(octx->ctx->work_queue, gated_delta_net_f32_tg_thread, &gctx, n_threads);
     } else {
-        worker_pool_run_func(octx->ctx->worker_pool, gated_delta_net_f32_pp_thread, &gctx, octx->n_threads);
+        work_queue_run(octx->ctx->work_queue, gated_delta_net_f32_pp_thread, &gctx, n_threads);
     }
 
     return HTP_STATUS_OK;

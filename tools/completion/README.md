@@ -138,9 +138,6 @@ llama-completion.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 | `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
 | `-np, --parallel N` | number of parallel sequences to decode (default: 1)<br/>(env: LLAMA_ARG_N_PARALLEL) |
 | `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |
-| `--mlock` | DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
-| `--mmap, --no-mmap` | DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_MMAP) |
-| `-dio, --direct-io, -ndio, --no-direct-io` | DEPRECATED in favor of `--load-mode`: use DirectIO if available<br/>(env: LLAMA_ARG_DIO) |
 | `-lm, --load-mode MODE` | model loading mode (default: auto)<br/>- auto: mmap, unless a device does not support it<br/>- none: no special loading mode<br/>- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>- mlock: force system to keep model in RAM rather than swapping or compressing<br/>- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing<br/>- dio: use DirectIO if available<br/><br/>(env: LLAMA_ARG_LOAD_MODE) |
 | `-lzm, --lazy-mode MODE` | on-demand reading of certain tensors, for example per-layer embeddings (default: auto)<br/>- on: read the rows of such tensors from disk on demand instead of keeping them resident (requires mmap)<br/>- auto: on, but only for tensors larger than 4 GiB<br/>- off: always keep them resident<br/>(env: LLAMA_ARG_LAZY_MODE) |
 | `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
@@ -219,8 +216,8 @@ llama-completion.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 | `-l, --logit-bias TOKEN_ID(+/-)BIAS` | modifies the likelihood of token appearing in the completion,<br/>i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',<br/>or `--logit-bias 15043-1` to decrease likelihood of token ' Hello' |
 | `--grammar GRAMMAR` | BNF-like grammar to constrain generations (see samples in grammars/ dir) |
 | `--grammar-file FNAME` | file to read grammar from |
-| `-j, --json-schema SCHEMA` | JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
-| `-jf, --json-schema-file FILE` | File containing a JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
+| `-j, --json-schema SCHEMA` | JSON schema to constrain generations (https://json-schema.org/), e.g. `{"type": "object"}` for any JSON object |
+| `-jf, --json-schema-file FILE` | File containing a JSON schema to constrain generations (https://json-schema.org/), e.g. `{"type": "object"}` for any JSON object |
 | `-bs, --backend-sampling` | enable backend sampling (experimental) (default: disabled)<br/>(env: LLAMA_ARG_BACKEND_SAMPLING) |
 
 
@@ -559,7 +556,7 @@ These options help improve the performance and memory usage of the LLaMA models.
 
 -   `--grammar GRAMMAR`, `--grammar-file FILE`: Specify a grammar (defined inline or in a file) to constrain model output to a specific format. For example, you could force the model to output JSON or to speak only in emojis. See the [GBNF guide](../../grammars/README.md) for details on the syntax.
 
--   `--json-schema SCHEMA`: Specify a [JSON schema](https://json-schema.org/) to constrain model output to (e.g. `{}` for any JSON object, or `{"items": {"type": "string", "minLength": 10, "maxLength": 100}, "minItems": 10}` for a JSON array of strings with size constraints). If a schema uses external `$ref`s, you should use `--grammar "$( python examples/json_schema_to_grammar.py myschema.json )"` instead.
+-   `--json-schema SCHEMA`: Specify a [JSON schema](https://json-schema.org/) to constrain model output to (e.g. `{"type": "object"}` for any JSON object, or `{"items": {"type": "string", "minLength": 10, "maxLength": 100}, "minItems": 10}` for a JSON array of strings with size constraints).
 
 ### Quantization
 
