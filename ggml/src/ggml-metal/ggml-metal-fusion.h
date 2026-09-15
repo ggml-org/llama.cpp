@@ -35,6 +35,7 @@ typedef enum ggml_metal_fusion_id {
     GGML_METAL_FUSION_ADD_CHAIN,    // ADD x N (N in [2, 7])
     GGML_METAL_FUSION_SNAKE,        // MUL + SIN + SQR + MUL + ADD
     GGML_METAL_FUSION_GDN_CACHE,    // GATED_DELTA_NET + CPY (write snapshots into the recurrent cache)
+    GGML_METAL_FUSION_TOPK_MOE,     // SOFT_MAX + ARGSORT + GET_ROWS + norm/scale (MoE routing)
 } ggml_metal_fusion_id;
 
 struct ggml_metal_fusion {
@@ -49,9 +50,12 @@ struct ggml_metal_fusion {
     bool unsafe;
 
     // extra backend constraints on top of ggml_can_fuse_subgraph
-    // nodes[j] is the j-th node of the pattern
+    // nodes[j] is the j-th node of the pattern; node_idxs[idx + j] is its raw graph index
     bool (*check)(const struct ggml_metal_fusion   * fusion,
                   const struct ggml_tensor * const * nodes,
+                  const struct ggml_cgraph         * gf,
+                  const int                        * node_idxs,
+                        int                          idx,
                         ggml_metal_fusion_mode       mode);
 };
 

@@ -1232,6 +1232,17 @@ typedef struct {
 } ggml_metal_kargs_top_k;
 
 typedef struct {
+    int32_t  ne00;      // n_expert
+    int32_t  ne01;      // n_tokens
+    uint64_t nb01;      // logits row stride
+    uint64_t nb1_ids;   // ids row stride
+    int32_t  top_k;     // n_expert_used
+    int32_t  with_norm; // 0/1
+    float    clamp_val;
+    float    scale_val;
+} ggml_metal_kargs_topk_moe;
+
+typedef struct {
     int32_t nrows;
 } ggml_metal_kargs_fwht;
 

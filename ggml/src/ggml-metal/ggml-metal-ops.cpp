@@ -1540,6 +1540,14 @@ int ggml_metal_op_dsv4_hc(ggml_metal_op_t ctx, int idx) {
 int ggml_metal_op_soft_max(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
+    if (ctx->use_fusion()) {
+        int n = 1;
+        const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
+        if (fusion && fusion->id == GGML_METAL_FUSION_TOPK_MOE) {
+            return ggml_metal_op_topk_moe(ctx, idx);
+        }
+    }
+
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
@@ -5401,6 +5409,71 @@ static void ggml_metal_op_top_k_radix(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem_out,    3);
 
     ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
+}
+
+int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    int n_fuse = 1;
+    const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n_fuse);
+    if (!fusion || fusion->id != GGML_METAL_FUSION_TOPK_MOE) {
+        return 1;
+    }
+
+    ggml_tensor * softmax  = ctx->node(idx);
+    ggml_tensor * logits   = softmax->src[0];
+    ggml_tensor * get_rows = ctx->node(idx + 2);
+    ggml_tensor * ids      = get_rows->src[1];
+    ggml_tensor * weights  = ctx->node(idx + n_fuse - 1);
+
+    const int64_t n_expert      = logits->ne[0];
+    const int64_t n_tokens      = logits->ne[1];
+    const int64_t n_expert_used = ids->ne[0];
+
+    const bool with_norm  = n_fuse >= 6;
+    const bool with_scale = n_fuse == 4 || n_fuse == 7;
+
+    float clamp_val = -INFINITY;
+    if (with_norm) {
+        ggml_tensor * clamp = ctx->node(idx + 4);
+        clamp_val = ggml_get_op_params_f32(clamp, 0);
+    }
+
+    float scale_val = 1.0f;
+    if (with_scale) {
+        ggml_tensor * scale = ctx->node(idx + n_fuse - 1);
+        scale_val = ggml_get_op_params_f32(scale, 0);
+    }
+
+    ggml_metal_kargs_topk_moe args = {
+        /*.ne00      =*/ (int32_t) n_expert,
+        /*.ne01      =*/ (int32_t) n_tokens,
+        /*.nb01      =*/ logits->nb[1],
+        /*.nb1_ids   =*/ ids->nb[1],
+        /*.top_k     =*/ (int32_t) n_expert_used,
+        /*.with_norm =*/ with_norm ? 1 : 0,
+        /*.clamp_val =*/ clamp_val,
+        /*.scale_val =*/ scale_val,
+    };
+
+    auto pipeline = ggml_metal_library_get_pipeline_topk_moe(lib);
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(logits),  1);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(weights), 2);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(ids),     3);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, (uint32_t) n_tokens, 1, 1, 32, 1, 1);
+
+    ctx->count_fusions(fusion);
+
+    if (ggml_metal_fusion_info_debug(ctx->finfo) > 1) {
+        GGML_LOG_DEBUG("%s: fuse: SOFT_MAX + ARGSORT + GET_ROWS\n", __func__);
+    }
+
+    return n_fuse;
 }
 
 int ggml_metal_op_top_k(ggml_metal_op_t ctx, int idx) {

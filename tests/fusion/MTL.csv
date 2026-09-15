@@ -2,9 +2,11 @@
 # arch              ,moe ,mode    ,label                       ,  count
 arcee               ,0   ,any     ,RMS_NORM+MUL                ,      5
 arctic              ,0   ,any     ,RMS_NORM+MUL                ,      7
+arctic              ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 baichuan            ,0   ,any     ,RMS_NORM+MUL                ,      5
 bailingmoe          ,1   ,any     ,ADD+ADD                     ,      2
 bailingmoe          ,1   ,any     ,RMS_NORM+MUL                ,      5
+bailingmoe          ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS   ,      2
 bailingmoe2         ,1   ,any     ,ADD+ADD                     ,      1
 bailingmoe2         ,1   ,any     ,RMS_NORM+MUL                ,      9
 bailingmoe3         ,1   ,any     ,ADD+ADD                     ,      1
@@ -16,9 +18,11 @@ codeshell           ,0   ,any     ,NORM+MUL+ADD                ,      5
 cogvlm              ,0   ,any     ,RMS_NORM+MUL                ,      5
 command-r           ,0   ,any     ,NORM+MUL                    ,      3
 dbrx                ,0   ,any     ,NORM+MUL                    ,      5
+dbrx                ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 deci                ,0   ,any     ,RMS_NORM+MUL                ,      5
 deepseek            ,0   ,any     ,ADD+ADD                     ,      1
 deepseek            ,0   ,any     ,RMS_NORM+MUL                ,      5
+deepseek            ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS   ,      1
 deepseek2           ,0   ,any     ,ADD+ADD                     ,      1
 deepseek2           ,0   ,any     ,RMS_NORM+MUL                ,      9
 deepseek32          ,0   ,any     ,ADD+ADD                     ,      1
@@ -53,16 +57,20 @@ gpt2                ,0   ,any     ,NORM+MUL+ADD                ,      5
 gptneox             ,0   ,any     ,NORM+MUL+ADD                ,      5
 granite             ,0   ,any     ,RMS_NORM+MUL                ,      5
 granite             ,0   ,any     ,RMS_NORM+MUL                ,      5
+granite             ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 granitehybrid       ,0   ,any     ,RMS_NORM+MUL                ,      6
 granitemoe          ,1   ,any     ,RMS_NORM+MUL                ,      5
 granitemoe          ,1   ,any     ,RMS_NORM+MUL                ,      5
+granitemoe          ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 grok                ,0   ,any     ,RMS_NORM+MUL                ,      5
 grok                ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
+grok                ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 grovemoe            ,1   ,any     ,ADD+ADD                     ,      2
 grovemoe            ,1   ,any     ,RMS_NORM+MUL                ,      9
 hunyuan-dense       ,0   ,any     ,RMS_NORM+MUL                ,      9
 hunyuan-moe         ,1   ,any     ,ADD+ADD                     ,      2
 hunyuan-moe         ,1   ,any     ,RMS_NORM+MUL                ,      9
+hunyuan-moe         ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 hunyuan_vl          ,0   ,any     ,RMS_NORM+MUL                ,      9
 hy_v3               ,0   ,any     ,ADD+ADD                     ,      2
 hy_v3               ,0   ,any     ,RMS_NORM+MUL                ,      9
@@ -81,8 +89,10 @@ lfm2                ,0   ,any     ,RMS_NORM+MUL                ,      7
 lfm2moe             ,1   ,any     ,RMS_NORM+MUL                ,      7
 llada               ,0   ,any     ,RMS_NORM+MUL                ,      5
 llada-moe           ,1   ,any     ,RMS_NORM+MUL                ,      9
+llada-moe           ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS   ,      2
 llama               ,0   ,any     ,RMS_NORM+MUL                ,      5
 llama               ,0   ,any     ,RMS_NORM+MUL                ,      5
+llama               ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 llama4              ,0   ,any     ,ADD+ADD                     ,      2
 llama4              ,0   ,any     ,RMS_NORM+MUL                ,      9
 maincoder           ,0   ,any     ,RMS_NORM+MUL                ,      9
@@ -90,13 +100,16 @@ mamba               ,0   ,any     ,RMS_NORM+MUL                ,      3
 mamba2              ,0   ,any     ,RMS_NORM+MUL                ,      5
 minicpm             ,0   ,any     ,RMS_NORM+MUL                ,      5
 minicpm             ,0   ,any     ,RMS_NORM+MUL                ,      5
+minicpm             ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 minicpm3            ,0   ,any     ,RMS_NORM+MUL                ,      9
 minimax-01          ,0   ,any     ,RMS_NORM+MUL                ,      6
+minimax-01          ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 minimax-m2          ,0   ,any     ,RMS_NORM+MUL                ,      9
 minimax-m3          ,0   ,any     ,ADD+ADD                     ,      1
 minimax-m3          ,0   ,any     ,RMS_NORM+MUL                ,     11
 mistral3            ,0   ,any     ,RMS_NORM+MUL                ,      5
 mistral3            ,0   ,any     ,RMS_NORM+MUL                ,      5
+mistral3            ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 mistral4            ,0   ,any     ,ADD+ADD                     ,      1
 mistral4            ,0   ,any     ,RMS_NORM+MUL                ,      9
 mpt                 ,0   ,any     ,NORM+MUL+ADD                ,      5
@@ -105,6 +118,7 @@ nemotron            ,0   ,any     ,NORM+MUL+ADD                ,      5
 nemotron_h          ,0   ,any     ,RMS_NORM+MUL                ,      5
 nemotron_h_moe      ,1   ,any     ,RMS_NORM+MUL                ,      5
 olmoe               ,1   ,any     ,RMS_NORM+MUL                ,      9
+olmoe               ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS   ,      2
 openelm             ,0   ,any     ,RMS_NORM+MUL                ,      9
 orion               ,0   ,any     ,NORM+MUL+ADD                ,      5
 paddleocr           ,0   ,any     ,RMS_NORM+MUL                ,      5
@@ -113,6 +127,7 @@ phi2                ,0   ,any     ,ADD+ADD                     ,      2
 phi2                ,0   ,any     ,NORM+MUL+ADD                ,      3
 phi3                ,0   ,any     ,RMS_NORM+MUL                ,      5
 phimoe              ,1   ,any     ,RMS_NORM+MUL+ADD            ,      5
+phimoe              ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 plamo               ,0   ,any     ,ADD+ADD                     ,      2
 plamo               ,0   ,any     ,RMS_NORM+MUL                ,      3
 plamo2              ,0   ,any     ,RMS_NORM+MUL                ,     10
@@ -122,6 +137,7 @@ qwen                ,0   ,any     ,RMS_NORM+MUL                ,      5
 qwen2               ,0   ,any     ,RMS_NORM+MUL                ,      5
 qwen2moe            ,1   ,any     ,ADD+ADD                     ,      2
 qwen2moe            ,1   ,any     ,RMS_NORM+MUL                ,      5
+qwen2moe            ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS   ,      2
 qwen2vl             ,0   ,any     ,RMS_NORM+MUL                ,      5
 qwen3               ,0   ,any     ,RMS_NORM+MUL                ,      9
 qwen35              ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
@@ -129,20 +145,26 @@ qwen35              ,0   ,any     ,RMS_NORM+MUL                ,      8
 qwen35moe           ,1   ,any     ,ADD+ADD                     ,      2
 qwen35moe           ,1   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen35moe           ,1   ,any     ,RMS_NORM+MUL                ,      8
+qwen35moe           ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 qwen3moe            ,1   ,any     ,RMS_NORM+MUL                ,      9
+qwen3moe            ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 qwen3next           ,0   ,any     ,ADD+ADD                     ,      2
 qwen3next           ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen3next           ,0   ,any     ,RMS_NORM+MUL                ,      8
+qwen3next           ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 qwen3tts            ,0   ,any     ,RMS_NORM+MUL                ,      9
 qwen3vl             ,0   ,any     ,RMS_NORM+MUL                ,      9
 qwen3vlmoe          ,1   ,any     ,RMS_NORM+MUL                ,      9
+qwen3vlmoe          ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 qwen4exp            ,0   ,any     ,ADD+ADD+ADD                 ,      5
 qwen4exp            ,0   ,any     ,ADD+ADD+ADD+ADD+ADD+ADD+ADD ,      9
 qwen4exp            ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
-qwen4exp            ,0   ,any     ,RMS_NORM+MUL                ,      5
+qwen4exp            ,0   ,any     ,RMS_NORM+MUL                ,     13
+qwen4exp            ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
 rnd1                ,0   ,any     ,RMS_NORM+MUL                ,      9
+rnd1                ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 seed_oss            ,0   ,any     ,RMS_NORM+MUL                ,      5
 smallthinker        ,0   ,any     ,RMS_NORM+MUL                ,      5
 smollm3             ,0   ,any     ,RMS_NORM+MUL                ,      5
