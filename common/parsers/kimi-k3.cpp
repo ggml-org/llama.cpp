@@ -98,7 +98,7 @@ common_chat_params common_chat_params_init_kimi_k3(const common_chat_template & 
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
-            const json   schema   = function.contains("parameters") ? function.at("parameters") : json::object();
+            const json   schema   = common_chat_tool_parameters(function);
 
             // arguments come one tag per key, with the JSON type in a type="..."
             // attribute. the type is taken from the tool schema instead, as it tells
@@ -155,13 +155,6 @@ common_chat_params common_chat_params_init_kimi_k3(const common_chat_template & 
     if (include_grammar) {
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                if (function.contains("parameters")) {
-                    auto schema = function.at("parameters");
-                    builder.resolve_refs(schema);
-                }
-            });
             parser.build_grammar(builder, data.grammar_lazy);
         });
 

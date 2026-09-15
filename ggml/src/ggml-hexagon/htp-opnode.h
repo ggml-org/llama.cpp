@@ -344,6 +344,12 @@ struct htp_opformat {
         } else if (htp_op_is_unary(node.opcode)) {
             const auto * kparams = (const struct htp_unary_kernel_params *) node.kernel_params;
             snprintf(str, max_size, "%s vtcm %d", kparams->col_tile ? "wide-row" : "row-block", (int) kparams->vtcm_size);
+        } else if (node.opcode == HTP_OP_MDEV_GROUP && node.node) {
+            snprintf(str, max_size, "idx %d count %d", (int) node.node->op_params[0], (int) node.dst()->ne[1]);
+        } else if ((node.opcode == HTP_OP_FENCE || node.opcode == HTP_OP_CPY_FENCE) && node.node) {
+            snprintf(str, max_size, "seq 0x%x", (uint32_t) node.node->op_params[0]);
+        } else if (node.opcode == HTP_OP_ALLREDUCE && node.node) {
+            snprintf(str, max_size, "seq 0x%x -> 0x%x", (uint32_t) node.node->op_params[0], (uint32_t) node.node->op_params[1]);
         } else {
             snprintf(str, max_size, "----");
         }

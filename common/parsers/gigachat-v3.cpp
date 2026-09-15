@@ -33,7 +33,7 @@ common_chat_params common_chat_params_init_gigachat_v3(
             for (const auto & tool : inputs.tools) {
                 const auto & function = tool.at("function");
                 std::string name = function.at("name");
-                const auto & schema = function.at("parameters");
+                const auto  schema = common_chat_tool_parameters(function);
 
                 auto tool_name = p.json_member("name", "\"" + p.tool_name(p.literal(name)) + "\"");
                 auto tool_args = p.json_member("arguments", p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)));
@@ -65,11 +65,6 @@ common_chat_params common_chat_params_init_gigachat_v3(
         data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
 
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                auto schema = function.at("parameters");
-                builder.resolve_refs(schema);
-            });
             parser.build_grammar(builder, data.grammar_lazy);
         });
 

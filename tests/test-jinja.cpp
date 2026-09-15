@@ -398,6 +398,18 @@ static void test_expressions(testing & t) {
         "Bob"
     );
 
+    test_template(t, "dot notation (integer property)",
+        "{{ {10: 'Bob'}.10 }}",
+        json::object(),
+        "Bob"
+    );
+
+    test_template(t, "dot notation (array index)",
+        "{{ user.10 }}",
+        {{"user", json::array({"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"})}},
+        "k"
+    );
+
     test_template(t, "negative float (not dot notation)",
         "{{ -1.0 }}",
         json::object(),

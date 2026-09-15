@@ -77,10 +77,10 @@ jobs:
       - name: Dawn Dependency
         id: dawn-depends
         run: |
-          DAWN_VERSION="v20260317.182325"
+          DAWN_VERSION="v20260908.214631"
           DAWN_OWNER="google"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-macos-latest-Release"
+          DAWN_ASSET_NAME="Dawn-94c3c9cc0d5fb2e85aebb370fa8d37b71aa34655-macos-latest-Release"
           echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
           curl -L -o artifact.tar.gz \
             "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
@@ -147,10 +147,10 @@ jobs:
         id: dawn-depends
         run: |
           sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev libxi-dev
-          DAWN_VERSION="v20260317.182325"
+          DAWN_VERSION="v20260908.214631"
           DAWN_OWNER="google"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release"
+          DAWN_ASSET_NAME="Dawn-94c3c9cc0d5fb2e85aebb370fa8d37b71aa34655-ubuntu-latest-Release"
           echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
           curl -L -o artifact.tar.gz \
             "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
