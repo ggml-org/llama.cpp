@@ -18,6 +18,7 @@ The following sections describe how to build with different backends and options
 * [Metal Build](#metal-build)
 * [SYCL](#sycl)
 * [CUDA](#cuda)
+* [MACA](#maca)
 * [MUSA](#musa)
 * [HIP](#hip)
 * [Vulkan](#vulkan)
@@ -302,6 +303,19 @@ The following compilation options are also available to tweak performance:
 | GGML_CUDA_FORCE_CUBLAS        | Boolean                | false   | Force the use of FP16 cuBLAS instead of custom matrix multiplication kernels for quantized models. There may be issues with numerical overflows (except for V100, CDNA and RDNA4 which use FP32 compute type by default) and memory use will be higher. Prompt processing may become faster on recent datacenter GPUs (the custom kernels were tuned primarily for RTX 3000/4000).   |
 | GGML_CUDA_FA_QUANTS           | `all` or `type_K-type_V` list | q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16 | Select which K/V type combinations to compile the FlashAttention CUDA kernels for. `all` compiles every combination, but compilation takes much longer. Otherwise a `;`-separated list of `type_K-type_V` pairs; f16-f16 is always compiled. Combinations that were not compiled fall back to f16-f16 kernel with a warning. Legal types: f16, bf16, q4_0, q4_1, q5_0, q5_1, q8_0. |
 | GGML_CUDA_FA_ALL_QUANTS       | Boolean                | false   | Deprecated alias for `GGML_CUDA_FA_QUANTS=all`.                                                                                                                                                                                                                                                                                                                               |
+
+## MACA
+
+This provides GPU acceleration on MetaX devices through the MACA CUDA
+compatibility bridge. A MACA SDK containing `tools/cu-bridge` is required.
+
+```bash
+export MACA_PATH=/opt/maca
+scripts/maca/build.sh
+```
+
+See the [MACA backend guide](backend/MACA.md) for toolchain variables,
+validation commands, supported paths, and current limitations.
 
 ## MUSA
 

@@ -13,6 +13,9 @@ extern "C" {
 #elif defined(GGML_USE_MUSA)
 #define GGML_CUDA_NAME "MUSA"
 #define GGML_CUBLAS_NAME "muBLAS"
+#elif defined(GGML_USE_MACA)
+#define GGML_CUDA_NAME "MACA"
+#define GGML_CUBLAS_NAME "mcBLAS"
 #else
 #define GGML_CUDA_NAME "CUDA"
 #define GGML_CUBLAS_NAME "cuBLAS"
