@@ -449,7 +449,9 @@ static void tiled_unpack_src1_q8_K(const block_q8_K * const * rows, int n_rows, 
                                    int kblk) {
     GGML_ASSERT(n_rows <= TILED_TILE_ROWS);
     const int n_padded = (n_rows + TILED_MICRO - 1) & ~(TILED_MICRO - 1);
-    // natural [row][k] fill, zero-pad ragged tail
+    // natural [row][k] fill, zero-pad ragged tail; codes stay natural here, the driver
+    // repacks them per 16-row band just-in-time (tiled_repack_src1_band) so only the bands
+    // actually swept are repacked and each is L1-hot for its uses
     for (int r = 0; r < n_padded; r++) {
         if (r < n_rows) {
             memcpy(&tile->q[r * TILED_TILE_K], rows[r][kblk].qs, TILED_TILE_K);
@@ -457,8 +459,6 @@ static void tiled_unpack_src1_q8_K(const block_q8_K * const * rows, int n_rows, 
             memset(&tile->q[r * TILED_TILE_K], 0, TILED_TILE_K);
         }
     }
-    // ISA-specific interleave (in-place, no-op on non-VNNI)
-    tiled_repack_src1_codes(tile);
     // d and bsums (ISA-independent)
     for (int r = 0; r < n_padded; r++) {
         if (r < n_rows) {
@@ -684,10 +684,11 @@ static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_t
         const int kblk = (int) (ib / TILED_TILE_K);
         tiled_unpack_src0((const B *) (src0_cur + r * src0->nb[1] + kblk * src0_bs), src0_stride, n_src0, &ws->src0);
         tiled_unpack_src1_q8_K(rows, nrows, &ws->src1, kblk);
-        // 16x16 microtiles sweeping the window; the unpack routines zeropad the
-        // macrotiles outside the valid ranges, so the ragged tails are harmless
-        for (int64_t ir0 = r; ir0 < r_end; ir0 += TILED_MICRO) {
-            for (int64_t ir1 = 0; ir1 < nrows; ir1 += TILED_MICRO) {
+        // 16x16 microtiles sweeping the window; repack each src1 band just-in-time
+        // (j0-outer) so only the bands actually used are repacked and each is L1-hot
+        for (int64_t ir1 = 0; ir1 < nrows; ir1 += TILED_MICRO) {
+            tiled_repack_src1_band(&ws->src1, (int) (ir1 / TILED_MICRO));
+            for (int64_t ir0 = r; ir0 < r_end; ir0 += TILED_MICRO) {
                 tiled_run_microtile<SUBBLK, HAS_MIN, BIAS>(ws->src0, ws->src1,
                     (int) (ir0 - r), (int) ir1,
                     ws->acc, TILED_TILE_ROWS);
@@ -841,14 +842,16 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
 
             // Iterate K dimension by chunks of 256
             for (int64_t ib = 0; ib < ne00; ib += TILE) {
-                // Unpack src0 and src1 into macrotiles
+                // Unpack src0 and src1 into macrotiles (src1 codes stay natural until repacked below)
                 const int kblk = (int) (ib / TILE);
                 tiled_unpack_src0((const B *) (src0_row + iir0 * nb01 + kblk * src0_bs), src0_stride, n_src0, &ws->src0);
                 tiled_unpack_src1_q8_K(rows, n_src1, &ws->src1, kblk);
 
-                // 16x16 microtiles sweeping the window
-                for (int64_t ir0 = iir0; ir0 < iir0_end; ir0 += MICRO) {
-                    for (int64_t ir1 = iir1; ir1 < iir1_end; ir1 += MICRO) {
+                // 16x16 microtiles sweeping the window; repack each src1 band just-in-time
+                // (j0-outer) so only the bands actually used are repacked and each is L1-hot
+                for (int64_t ir1 = iir1; ir1 < iir1_end; ir1 += MICRO) {
+                    tiled_repack_src1_band(&ws->src1, (int) ((ir1 - iir1) / MICRO));
+                    for (int64_t ir0 = iir0; ir0 < iir0_end; ir0 += MICRO) {
                         tiled_run_microtile<SUBBLK, HAS_MIN, BIAS>(ws->src0, ws->src1,
                             (int) (ir0 - iir0), (int) (ir1 - iir1),
                             ws->acc, TILED_TILE_ROWS);

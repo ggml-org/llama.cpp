@@ -483,17 +483,15 @@ static_assert(sizeof(block_q8_K) == 292 && offsetof(block_q8_K, qs) == 4,
 // one chunk), but cross-chunk overlap within the 4KB group requires a temp.
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
 
-void tiled_repack_src1_codes(tiled_tile_src1 * tile) {
-    for (int grp = 0; grp < TILED_TILE_ROWS / TILED_MICRO; grp++) {
-        uint8_t * base = (uint8_t *) &tile->q[grp * (TILED_MICRO * TILED_TILE_K)];
-        for (int c = 0; c < 4; c++) {
-            tiled_repack_16x16(base, c, TILED_TILE_K);
-        }
+void tiled_repack_src1_band(tiled_tile_src1 * tile, int grp) {
+    uint8_t * base = (uint8_t *) &tile->q[grp * (TILED_MICRO * TILED_TILE_K)];
+    for (int c = 0; c < 4; c++) {
+        tiled_repack_16x16(base, c, TILED_TILE_K);
     }
 }
 #else
-void tiled_repack_src1_codes(tiled_tile_src1 * tile) {
-    GGML_UNUSED(tile);
+void tiled_repack_src1_band(tiled_tile_src1 * tile, int grp) {
+    GGML_UNUSED(tile); GGML_UNUSED(grp);
 }
 #endif
 
