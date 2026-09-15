@@ -6,8 +6,10 @@
  * consumed by the backends settings UI and the per-backend model cache.
  */
 
+import { API_MODELS, LOCAL_BACKEND_ID } from '$lib/constants';
 import type { Backend, ModelOption } from '$lib/types';
 import { isAbortError } from '$lib/utils/abort';
+import { apiUrl } from '$lib/utils/api-base';
 import { getAuthHeadersForBackend } from '$lib/utils/api-headers';
 import { backendModelsUrl } from '$lib/utils/backend';
 
@@ -35,12 +37,17 @@ export class BackendsService {
 	 * @param signal - Optional abort signal for a cancelled request.
 	 */
 	static async listModels(backend: Backend, signal?: AbortSignal): Promise<BackendModelsResult> {
-		if (!backend.baseUrl.trim()) {
+		// the local backend has no base URL; its models endpoint is base relative
+		const url = backend.baseUrl.trim()
+			? backendModelsUrl(backend)
+			: apiUrl(API_MODELS.LIST, LOCAL_BACKEND_ID);
+
+		if (!backend.baseUrl.trim() && backend.id !== LOCAL_BACKEND_ID) {
 			return { error: 'Backend URL is required', models: [], ok: false, status: null };
 		}
 
 		try {
-			const response = await fetch(backendModelsUrl(backend), {
+			const response = await fetch(url, {
 				headers: getAuthHeadersForBackend(backend),
 				signal
 			});
