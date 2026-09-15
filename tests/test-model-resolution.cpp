@@ -2,12 +2,14 @@
 // synthetic repo listings: a local httplib server bound to the loopback
 // serves hardcoded HF API responses, so the real client, hf_cache, resolution
 // and CLI parsing run against them without external network access
+// also tests local model discovery using temporary directories
 
 #include "arg.h"
 #include "common.h"
 #include "download.h"
 #include "http.h"
 #include "log.h"
+#include "preset.h"
 
 #include "json.h"
 
@@ -468,6 +470,54 @@ static void test_task_assembly() {
     g_repos.clear();
 }
 
+static void test_local_model_resolution() {
+    printf("test-model-resolution: local model directories\n");
+
+    struct local_case {
+        std::string name;
+        std::vector<std::string> files;
+        std::string primary;
+    };
+    const local_case cases[] = {
+        {"Laguna-S-2.1-UD-Q4_K_XL", {"Laguna-S-2.1-UD-Q4_K_XL.gguf", "laguna-s-2.1-DFlash-BF16.gguf"}, "Laguna-S-2.1-UD-Q4_K_XL.gguf"},
+        {"single", {"different-name.gguf"}, "different-name.gguf"},
+        {"sharded", {"sharded.gguf", "sharded-00001-of-00002.gguf", "sharded-00002-of-00002.gguf"}, "sharded-00001-of-00002.gguf"},
+    };
+
+    common_preset_context ctx(LLAMA_EXAMPLE_SERVER);
+    const auto models_dir = cache_dir / "local-models";
+    for (const auto & c : cases) {
+        for (int reverse = 0; reverse < 2; ++reverse) {
+            g_context = c.name + ", reverse creation order " + std::to_string(reverse);
+            std::filesystem::remove_all(models_dir);
+            const auto dir = models_dir / c.name;
+            std::filesystem::create_directories(dir);
+            auto files = c.files;
+            files.push_back("mmproj-model.gguf");
+            files.push_back("dflash-model.gguf");
+            if (reverse) {
+                std::reverse(files.begin(), files.end());
+            }
+            for (const auto & name : files) {
+                FILE * file = fopen((dir / name).string().c_str(), "wb");
+                REQUIRE(file != nullptr);
+                REQUIRE(fclose(file) == 0);
+            }
+
+            const auto presets = ctx.load_from_models_dir(models_dir.string());
+            REQUIRE(presets.size() == 1);
+            const auto & preset = presets.at(c.name);
+            std::string path;
+            REQUIRE(preset.get_option("LLAMA_ARG_MODEL", path));
+            REQUIRE_EQ(path, (dir / c.primary).string());
+            REQUIRE(preset.get_option("LLAMA_ARG_MMPROJ", path));
+            REQUIRE_EQ(path, (dir / "mmproj-model.gguf").string());
+            REQUIRE(preset.get_option("LLAMA_ARG_SPEC_DRAFT_MODEL", path));
+            REQUIRE_EQ(path, (dir / "dflash-model.gguf").string());
+        }
+    }
+}
+
 int main(void) {
     // unbuffered, so a crash cannot swallow the reports already printed
     setvbuf(stdout, nullptr, _IONBF, 0);
@@ -496,6 +546,7 @@ int main(void) {
 
     test_plan_resolution();
     test_task_assembly();
+    test_local_model_resolution();
 
     server.stop();
     server_thread.join();

@@ -1699,6 +1699,8 @@ models_directory
  │    └─ Kimi-K2-Thinking-UD-IQ1_S-00006-of-00006.gguf
 ```
 
+For non-sharded models, the router prefers a main model file named `<subdirectory>.gguf` (case-sensitive).
+
 You may also specify default arguments that will be passed to every model instance:
 
 ```sh
