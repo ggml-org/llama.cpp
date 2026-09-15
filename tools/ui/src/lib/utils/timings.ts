@@ -17,14 +17,33 @@ export interface StreamClock {
 	lastTokenAt: number | null;
 }
 
-/** Prompt/output token counts, accepting OpenAI and Anthropic usage fields. */
+/**
+ * Prompt/output/cache token counts, accepting OpenAI and Anthropic usage
+ * fields. `promptTokens` excludes the cache read tokens, which are returned
+ * separately as `cacheTokens`, so the two always add up to the prompt size.
+ */
 export function usageTokenCounts(usage: ApiChatCompletionUsage | undefined): {
-	promptTokens: number;
+	cacheTokens: number;
 	completionTokens: number;
+	promptTokens: number;
 } {
+	// Anthropic reports the input excluding cache tokens and splits reads from
+	// writes; OpenAI-compatible servers report a total that includes the reads
+	const isAnthropicStyle = usage?.input_tokens !== undefined;
+	const cacheTokens = isAnthropicStyle
+		? (usage?.cache_read_input_tokens ?? 0)
+		: (usage?.prompt_tokens_details?.cached_tokens ??
+			usage?.prompt_cache_hit_tokens ??
+			usage?.cached_tokens ??
+			0);
+	const promptTotal = isAnthropicStyle
+		? (usage?.input_tokens ?? 0) + (usage?.cache_creation_input_tokens ?? 0)
+		: (usage?.prompt_tokens ?? 0);
+
 	return {
+		cacheTokens,
 		completionTokens: usage?.completion_tokens ?? usage?.output_tokens ?? 0,
-		promptTokens: usage?.prompt_tokens ?? usage?.input_tokens ?? 0
+		promptTokens: isAnthropicStyle ? promptTotal : Math.max(0, promptTotal - cacheTokens)
 	};
 }
 
@@ -33,7 +52,7 @@ export function buildTimingsFromUsage(
 	clock: StreamClock,
 	fallbackTokens = 0
 ): ChatMessageTimings | null {
-	const { completionTokens, promptTokens } = usageTokenCounts(usage);
+	const { cacheTokens, completionTokens, promptTokens } = usageTokenCounts(usage);
 	const predictedN = completionTokens || fallbackTokens;
 
 	if (promptTokens === 0 && predictedN === 0) return null;
@@ -42,6 +61,7 @@ export function buildTimingsFromUsage(
 	const lastTokenAt = clock.lastTokenAt ?? firstTokenAt;
 
 	return {
+		cache_n: cacheTokens,
 		// clamp so a one-token reply still reports a positive duration
 		predicted_ms: firstTokenAt && lastTokenAt ? Math.max(1, lastTokenAt - firstTokenAt) : undefined,
 		predicted_n: predictedN,

@@ -224,10 +224,18 @@ function usageOf(raw: Record<string, unknown> | undefined): ApiChatCompletionUsa
 	if (!raw) return undefined;
 
 	const usage: ApiChatCompletionUsage = {};
+	const fields = [
+		'cache_creation_input_tokens',
+		'cache_read_input_tokens',
+		'input_tokens',
+		'output_tokens'
+	] as const;
 
-	if (typeof raw.input_tokens === 'number') usage.input_tokens = raw.input_tokens;
+	for (const field of fields) {
+		const value = raw[field];
 
-	if (typeof raw.output_tokens === 'number') usage.output_tokens = raw.output_tokens;
+		if (typeof value === 'number') usage[field] = value;
+	}
 
 	return Object.keys(usage).length > 0 ? usage : undefined;
 }
