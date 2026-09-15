@@ -5,6 +5,7 @@
 
 #include "../src/llama-ext.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <stdexcept>
@@ -24,6 +25,15 @@ enum common_layer_fraction_t {
     LAYER_FRACTION_ALL  = 5, // the whole layer
 };
 
+// size of the FFN tensors of each layer, which decides the order in which a dense model moves layers to system memory
+static std::vector<size_t> common_fit_ffn_bytes(const llama_model * model) {
+    std::vector<size_t> ret(llama_model_n_layer(model));
+    for (size_t il = 0; il < ret.size(); il++) {
+        ret[il] = llama_model_layer_ffn_nbytes(model, il);
+    }
+    return ret;
+}
+
 class common_params_fit_exception : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
@@ -36,6 +46,7 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
         uint32_t & hp_ngl,
         uint32_t & hp_n_ctx_train,
         uint32_t & hp_n_expert,
+        std::vector<size_t> & hp_ffn_bytes,
         ggml_log_level log_level) {
     struct user_data_t {
         struct {
@@ -145,6 +156,8 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
     hp_n_ctx_train = llama_model_n_ctx_train(model);
     hp_n_expert    = llama_model_n_expert(model);
 
+    hp_ffn_bytes = common_fit_ffn_bytes(model);
+
     common_memory_breakdown_print(ctx);
 
     llama_free(ctx);
@@ -163,8 +176,9 @@ common_device_memory_data_vec common_get_device_memory_data(
         uint32_t & hp_n_ctx_train,
         uint32_t & hp_n_expert,
         ggml_log_level log_level) {
+    std::vector<size_t> hp_ffn_bytes;
     std::vector<llama_device_memory_data> impl = common_get_device_memory_data_impl(
-            path_model, mparams, cparams, devs, hp_ngl, hp_n_ctx_train, hp_n_expert, log_level);
+            path_model, mparams, cparams, devs, hp_ngl, hp_n_ctx_train, hp_n_expert, hp_ffn_bytes, log_level);
 
     common_device_memory_data_vec ret(impl.size());
     for (size_t i = 0; i < impl.size(); i++) {
@@ -192,6 +206,7 @@ static void common_params_fit_impl(
     uint32_t hp_ngl = 0; // hparams.n_gpu_layers
     uint32_t hp_nct = 0; // hparams.n_ctx_train
     uint32_t hp_nex = 0; // hparams.n_expert
+    std::vector<size_t> hp_ffn_bytes;
 
     // size the context for all sequences, but keep minimums and alignment per KV stream
     const uint32_t n_seq_max  = std::max<uint32_t>(1, cparams->n_seq_max);
@@ -213,6 +228,7 @@ static void common_params_fit_impl(
             uint32_t ngl_extra = 0;
             uint32_t nct_extra = 0;
             uint32_t nex_extra = 0;
+            std::vector<size_t> ffn_bytes_extra;
 
             extra->cparams->n_ctx = cparams->n_ctx;
 
@@ -222,7 +238,7 @@ static void common_params_fit_impl(
             dmds_t measured;
             try {
                 measured = common_get_device_memory_data_impl(
-                    extra->path_model, extra->mparams, extra->cparams, devs_extra, ngl_extra, nct_extra, nex_extra, log_level);
+                    extra->path_model, extra->mparams, extra->cparams, devs_extra, ngl_extra, nct_extra, nex_extra, ffn_bytes_extra, log_level);
             } catch (const std::runtime_error & e) {
                 // the extra model is optional, fit the main model alone rather than giving up
                 LOG_WRN("%s: failed to measure the memory of the extra model, fitting without it: %s\n", __func__, e.what());
@@ -262,7 +278,7 @@ static void common_params_fit_impl(
     // step 1: get data for default parameters and check whether any changes are necessary in the first place
 
     LOG_TRC("%s: getting device memory data for initial parameters:\n", __func__);
-    dmds_t dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+    dmds_t dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, hp_ffn_bytes, log_level);
 
     // saturate instead of overflowing, this also preserves the UINT32_MAX sentinel of n_ctx_min:
     const uint32_t n_ctx_max       = (uint32_t) std::min<uint64_t>(uint64_t(hp_nct)    * n_seq_max, UINT32_MAX);
@@ -274,7 +290,7 @@ static void common_params_fit_impl(
         if (n_seq_max > 1) {
             LOG_TRC("%s: context size unset -> using %" PRIu32 " for %" PRIu32 " sequences:\n",
                 __func__, n_ctx_max, n_seq_max);
-            dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+            dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, hp_ffn_bytes, log_level);
         }
     }
     add_extra_memory(dmds_full);
@@ -413,7 +429,7 @@ static void common_params_fit_impl(
 
                     int64_t sum_projected_used_min_ctx = 0;
                     cparams->n_ctx = n_ctx_min_total;
-                    dmds_t dmds_min_ctx = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+                    dmds_t dmds_min_ctx = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, hp_ffn_bytes, log_level);
                     add_extra_memory(dmds_min_ctx);
                     if (nd == 0) {
                         sum_projected_used_min_ctx = dmds_min_ctx.back().mb.total();
@@ -492,6 +508,7 @@ static void common_params_fit_impl(
 
     const common_layer_fraction_t lf_partial = hp_nex > 0 ? LAYER_FRACTION_MOE : LAYER_FRACTION_ATTN;
     const char * partial_name = hp_nex > 0 ? "MoE" : "layer weight";
+    const uint32_t steps_per_layer = hp_nex > 0 ? 1 : 2; // see get_steps
 
     // utility function that returns a static C string matching the tensors for a specific layer index and layer fraction:
     auto get_overflow_pattern = [&](const size_t il, const common_layer_fraction_t lf) -> const char * {
@@ -557,8 +574,9 @@ static void common_params_fit_impl(
 
     // the order in which the layers [il_begin, il_end) of a device move tensors to system memory:
     //   - MoE: the MoE tensors of one layer per step, back to front
-    //   - dense: one step per layer, the whole layer, front to back; the KV cache of an attention layer stays on the
-    //     device, n_gpu_layers is only reduced once all weights are moved
+    //   - dense: two steps per layer, the FFN tensors and the whole layer. First the FFN tensors of all layers
+    //     (largest first), then the rest of those layers in the same order.
+    //     The KV cache of an attention layer stays on the device, n_gpu_layers is only reduced once all weights are moved.
     auto get_steps = [&](const uint32_t il_begin, const uint32_t il_end) -> std::vector<step_t> {
         std::vector<step_t> ret;
         if (hp_nex > 0) {
@@ -567,8 +585,23 @@ static void common_params_fit_impl(
             }
             return ret;
         }
+        std::vector<uint32_t> layers;
         for (uint32_t il = il_begin; il < std::min(il_end, hp_ngl); il++) { // the output layer is never moved
-            ret.push_back({il, LAYER_FRACTION_ALL});
+            layers.push_back(il);
+        }
+        auto ffn_bytes = [&](const uint32_t il) -> size_t { // MTP layers are past the end of hp_ffn_bytes
+            return il < hp_ffn_bytes.size() ? hp_ffn_bytes[il] : 0;
+        };
+        std::stable_sort(layers.begin(), layers.end(), [&](const uint32_t a, const uint32_t b) {
+            return ffn_bytes(a) > ffn_bytes(b);
+        });
+        for (const common_layer_fraction_t lf : {LAYER_FRACTION_ATTN, LAYER_FRACTION_ALL}) {
+            for (const uint32_t il : layers) {
+                if (lf == LAYER_FRACTION_ATTN && il < hp_ffn_bytes.size() && hp_ffn_bytes[il] == 0) {
+                    continue; // e.g. RWKV layers have no FFN tensors
+                }
+                ret.push_back({il, lf});
+            }
         }
         return ret;
     };
@@ -638,8 +671,13 @@ static void common_params_fit_impl(
             if (steps.empty()) {
                 continue;
             }
+            const step_t overflow = steps.back(); // the last step is the one that can overflow partially
+            std::stable_sort(steps.begin(), steps.end(), [](const step_t & a, const step_t & b) { return a.il < b.il; });
             for (size_t i = 0; i < steps.size(); i++) {
-                const bool is_overflow = i + 1 == steps.size(); // the last step is the one that can overflow partially
+                if (i + 1 < steps.size() && steps[i + 1].il == steps[i].il) {
+                    continue; // a later step of the same layer supersedes this one
+                }
+                const bool is_overflow = steps[i].il == overflow.il;
                 const common_layer_fraction_t lf = is_overflow && steps[i].lf != LAYER_FRACTION_ALL ? n.overflow_type : steps[i].lf;
                 push_override(get_overflow_pattern(steps[i].il, lf), is_overflow ? overflow_bufts[id] : ggml_backend_cpu_buffer_type());
             }
@@ -659,7 +697,7 @@ static void common_params_fit_impl(
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, mparams_copy);
 
         dmds_t dmd_nl = common_get_device_memory_data_impl(
-            path_model, &mparams_copy, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+            path_model, &mparams_copy, cparams, devs, hp_ngl, hp_nct, hp_nex, hp_ffn_bytes, log_level);
         add_extra_memory(dmd_nl);
 
         LOG_TRC("%s: memory for test allocation by device:\n", func_name);
@@ -689,7 +727,7 @@ static void common_params_fit_impl(
 
         LOG_TRC("%s: getting device memory data with all %s tensors moved to system memory:\n", __func__, partial_name);
         dmds_t dmds_partial = common_get_device_memory_data_impl(
-            path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+            path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, hp_ffn_bytes, log_level);
         add_extra_memory(dmds_partial);
 
         for (size_t id = 0; id < nd; id++) {
@@ -829,9 +867,10 @@ static void common_params_fit_impl(
                 uint32_t n_converted_test = 0;
                 for (;id_dense_start_test < nd; id_dense_start_test++) {
                     const uint32_t n_convert_jd = std::min(step_size - n_converted_test, ngl_per_device_test[id_dense_start_test].n_part);
-                    ngl_per_device_test[id_dense_start_test].n_layer -= n_convert_jd;
+                    const uint32_t n_layer_convert_jd = n_convert_jd / steps_per_layer; // layers whose steps are all converted
+                    ngl_per_device_test[id_dense_start_test].n_layer -= n_layer_convert_jd;
                     ngl_per_device_test[id_dense_start_test].n_part -= n_convert_jd;
-                    ngl_per_device_test[id].n_layer += n_convert_jd;
+                    ngl_per_device_test[id].n_layer += n_layer_convert_jd;
                     n_converted_test += n_convert_jd;
 
                     if (ngl_per_device_test[id_dense_start_test].n_part > 0) {
@@ -1153,8 +1192,9 @@ void common_fit_print(
     uint32_t hp_ngl = 0; // hparams.n_gpu_layers
     uint32_t hp_nct = 0; // hparams.n_ctx_train
     uint32_t hp_nex = 0; // hparams.n_expert
+    std::vector<size_t> hp_ffn_bytes;
 
-    auto dmd = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
+    auto dmd = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, hp_ffn_bytes, GGML_LOG_LEVEL_ERROR);
     GGML_ASSERT(dmd.size() == devs.size() + 1);
 
     for (size_t id = 0; id < devs.size(); id++) {
