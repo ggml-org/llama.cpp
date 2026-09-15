@@ -117,6 +117,7 @@
 #define FC_UPSCALE                     1500
 #define FC_GATED_DELTA_NET             1600
 #define FC_NORM                        1700
+#define FC_TOPK_MOE                    1800
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -1239,7 +1240,6 @@ typedef struct {
     uint64_t nb01;      // logits row stride
     uint64_t nb1_ids;   // ids row stride
     int32_t  top_k;     // n_expert_used
-    int32_t  with_norm; // 0/1
     float    clamp_val;
     float    scale_val;
 } ggml_metal_kargs_topk_moe;

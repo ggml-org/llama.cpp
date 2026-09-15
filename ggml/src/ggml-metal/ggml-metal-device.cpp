@@ -1548,16 +1548,21 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k_merge(ggml
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_topk_moe(ggml_metal_library_t lib) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_topk_moe(ggml_metal_library_t lib, bool with_norm) {
     char base[256];
     char name[256];
 
     snprintf(base, 256, "kernel_topk_moe_f32");
-    snprintf(name, 256, "%s", base);
+    snprintf(name, 256, "%s_with_norm=%d", base, with_norm ? 1 : 0);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
-        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+        ggml_metal_cv_set_bool(cv, with_norm, FC_TOPK_MOE + 0);
+
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+
+        ggml_metal_cv_free(cv);
     }
 
     return res;
