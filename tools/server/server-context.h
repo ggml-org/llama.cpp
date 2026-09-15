@@ -190,4 +190,7 @@ private:
     bool           should_reset_buckets = false;
     // call right before sleep to update the cached responses
     void update_cached_responses(bool is_sleeping);
+
+    // used to override system prompt when -sys/-sysf is used
+    void override_system_prompt(json & messages);
 };
