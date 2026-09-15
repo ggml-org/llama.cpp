@@ -741,28 +741,21 @@ void llama_context::sched_reserve() {
         }
     }
 
-    if (n_nodes_pp == n_nodes_tg) {
-        LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, n_nodes_pp);
-    } else {
-        LLAMA_LOG_INFO("%s: graph nodes  = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_nodes_pp, n_tokens, n_nodes_tg, n_seqs);
-    }
+    {
+        const bool diff = n_nodes_pp != n_nodes_tg || n_splits_pp != n_splits_tg ||
+                          n_inputs_pp != n_inputs_tg || n_input_tensors_pp != n_input_tensors_tg;
 
-    if (n_splits_pp == n_splits_tg) {
-        LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits_pp);
-    } else {
-        LLAMA_LOG_INFO("%s: graph splits = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_splits_pp, n_tokens, n_splits_tg, n_seqs);
-    }
+        const auto val = [diff](int v_pp, int v_tg) -> std::string {
+            return diff ? format("%d / %d", v_pp, v_tg) : format("%d", v_pp);
+        };
 
-    if (n_inputs_pp == n_inputs_tg) {
-        LLAMA_LOG_INFO("%s: graph input objects = %d\n", __func__, n_inputs_pp);
-    } else {
-        LLAMA_LOG_INFO("%s: graph input objects = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_inputs_pp, n_tokens, n_inputs_tg, n_seqs);
-    }
-
-    if (n_input_tensors_pp == n_input_tensors_tg) {
-        LLAMA_LOG_INFO("%s: graph input tensors = %d\n", __func__, n_input_tensors_pp);
-    } else {
-        LLAMA_LOG_INFO("%s: graph input tensors = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_input_tensors_pp, n_tokens, n_input_tensors_tg, n_seqs);
+        LLAMA_LOG_INFO("%s: graph%s: nodes = %s, splits = %s, input objects = %s, input tensors = %s\n",
+                __func__,
+                diff ? format(" (pp bs=%d, tg bs=%d)", n_tokens, n_seqs).c_str() : "",
+                val(n_nodes_pp, n_nodes_tg).c_str(),
+                val(n_splits_pp, n_splits_tg).c_str(),
+                val(n_inputs_pp, n_inputs_tg).c_str(),
+                val(n_input_tensors_pp, n_input_tensors_tg).c_str());
     }
 
     const int64_t t_end_us = ggml_time_us();
