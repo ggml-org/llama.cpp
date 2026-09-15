@@ -72,6 +72,8 @@ add_library(llama
             llama-kv-stream-model.cpp
             llama-kv-stream-model.h
             llama-kv-stream-prefetch.h
+            llama-memory-completion.cpp
+            llama-memory-completion.h
             llama-kv-stream-writer.cpp
             llama-kv-stream-writer.h
             llama-memory-executor.cpp

@@ -2,13 +2,13 @@
 
 Saved: 2026-09-10
 
-Last source review: 2026-09-14, against the checkpoint commits below.
+Last source review: 2026-09-15, against the checkpoint commits below.
 
 ## Status and how to resume
 
 Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. The fixed-pool qualification identified synchronous producer publication as the first remaining optimization. It is planned as backend-neutral stage **5.6** below. Stage **5.7** is reserved for graph segmentation, stage **5.8** for strict prefill streaming, and stage **5.9** for final support and reproducibility documentation.
 
-Stage **5.6a** is committed at `eff245203`. Stage **5.6b** is implemented and qualified for user review: current synchronous writer/session execution now passes through the common publication contract without a material performance or memory regression.
+Stage **5.6a** is committed at `eff245203` and **5.6b** at `04917421f`. Stage **5.6c** is implemented and qualified for user review: a reusable memory-completion wrapper now provides event-backed record/wait/host synchronization with safe synchronous fallback and teardown.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -226,7 +226,7 @@ Outcome: fixed-budget adaptive streaming runs on milestone 3, independently of p
 | 5.6 | 5.5c | Backend-neutral asynchronous K/V publication, separating accelerator consumption from durable host visibility. | Complete only after 5.6a-5.6f pass; preserve synchronous behavior as the fallback rather than duplicating the publication algorithm per backend. |
 | 5.6a | 5.5c | Common publication tickets, reserved/device-ready/host-ready/committed frontiers, reference-counted parent and lease retention, cancellation, and failure closure; no backend execution change. | Red-first fake-completion tests for ordered and out-of-order completion, atomic K/V visibility, invalid transitions, retained ownership, counter exhaustion, cancellation, and bytes beyond the committed frontier remaining invisible. |
 | 5.6b | 5.6a | Migrate the writer/session to a synchronous adapter over the common protocol without changing submission or drain behavior. | CPU, event-less backend, prompt-cache, restore, cancellation, injected K-only/V-only failure, and real-model equivalence; freeze latency and submission counts before async changes. |
-| 5.6c | 5.6b | Generic completion wrapper over existing `ggml_backend_event_t`, with capability discovery, device queue waits, host waits, safe teardown, and synchronous fallback; do not expose native event handles. | Fake event backend plus supported real events; record/wait ordering, unsupported event creation, cross-device rejection, teardown after partial submission, and no mandatory host wait for a device dependency. |
+| 5.6c | 5.6b | Generic completion wrapper over existing `ggml_backend_event_t`, with event capability discovery, backend waits, explicit host waits, safe teardown, and synchronous fallback; do not expose native event handles. | Fake event backend plus supported real events; record/wait ordering, unsupported event creation, cross-device rejection, teardown after partial submission, and no wrapper-added host wait beyond the backend's event behavior. |
 | 5.6d | 5.6c | Connect asynchronous tickets to the writer/session with distinct device and host completions, deferred atomic K/V commit, and retained plan/source ownership across graph replacement. | Device attention can consume a completed pair while host publication remains pending; save/restore and host-driven repartition wait for host readiness; graph rebuild, retry, cancellation, and malformed completion remain closed. |
 | 5.6e | 5.6d | CUDA producer adapter: queue bounded SET_ROWS production, resident-tail publication, and direct pinned-host mirror writes; replace per-tile/per-layer drains with event dependencies. | Real CUDA delayed producer/consumer tests, mutable tail, resident/ring boundaries, multiple tiles/layers, cache save during pending D2H, capture invalidation, memcheck, unchanged logits/recurrent state, and matched performance points. |
 | 5.6f | 5.6e | Cross-backend conformance for the common protocol on CPU, SYCL, Vulkan, OpenCL, and Meta; use the synchronous fallback where native async capability is absent. | Available-backend matrix, mixed completion/failure, aliased Meta buffers, exact outputs, no leaks, explicit capability reporting, and no performance claim for a fallback or unavailable backend. |
@@ -394,8 +394,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.5b | Committed | 10ec8902d | Host snapshot restore, dense-frontier validation, suffix truncation for recurrent checkpoints, malformed-state retry and serial cancellation recovery. |
 | 5.5c | Committed | 123e76b44 | Matched Release fixed-pool sweep; PDL-safe asynchronous resumed spans, coalesced resident drains and layout-change-only H2D diagnostics. Remaining producer/prefill costs are explicitly recorded. |
 | 5.6a | Committed | eff245203 | Common paired publication tickets and ordered reserved/device/host/committed frontiers; 10 cases / 133 assertions passed in Debug, ASan, UBSan, and a CUDA-enabled build. Seven focused existing regressions passed. |
-| 5.6b | Ready for review | - | Synchronous adapter and session migration; publication 11/147, CUDA session 6/286, CUDA model 3/54, seven focused Debug suites, ASan, UBSan, and CUDA memcheck pass. Two-point Release performance remains within 0.6% of 5.5c with identical memory. |
-| 5.6c-5.6f | Planned | - | Generic completions, async session integration, CUDA overlap, and cross-backend conformance remain. |
+| 5.6b | Committed | 04917421f | Synchronous adapter and session migration; publication 11/147, CUDA session 6/286, CUDA model 3/54, seven focused Debug suites, ASan, UBSan, and CUDA memcheck passed. Two-point Release performance remained within 0.6% of 5.5c with identical memory. |
+| 5.6c | Ready for review | - | Generic event-backed completion with synchronous fallback and tracked waiter teardown; fake/CPU 10/85 passes Debug, ASan, and UBSan, real CUDA 11/91 passes memcheck, and five focused regressions pass. No production consumer uses it yet. |
+| 5.6d-5.6f | Planned | - | Async session integration, CUDA overlap, and cross-backend conformance remain. |
 | 5.7 | Reserved | - | Graph segmentation optimization; split only after 5.6 qualification identifies the remaining submission boundary. |
 | 5.8 | Reserved | - | Strict prefill gather replacement; split only after native MMA continuation research establishes a credible numerical contract. |
 | 5.9 | Planned | - | Supported-configuration and reproducible-test documentation after optimization qualification. |
@@ -2981,7 +2982,7 @@ Each 5.6 substage starts with a failing behavioral test and leaves the synchrono
 
 - 5.6a proves the pure state machine, ordered atomic frontiers, reference-counted parent retention, and cancellation/failure retirement with fake completions and real arena views and leases.
 - 5.6b migrates current execution through the synchronous adapter and establishes an exact functional and performance baseline before removing drains.
-- 5.6c proves the generic completion wrapper independently of KV kernels, including device-side waits that do not call host synchronization.
+- 5.6c proves the generic completion wrapper independently of KV kernels, including event-backed waits whose host-blocking behavior remains an explicit backend property.
 - 5.6d connects pending tickets to the writer/session and exercises save, restore, repartition, graph replacement, and retry while completion is delayed.
 - 5.6e enables CUDA overlap only after all preceding generic tests pass, then runs real-model equivalence, repeated cross-layer stress, CUDA memcheck, and isolated synchronization/submission measurements.
 - 5.6f runs the common conformance suite across available CPU, SYCL, Vulkan, OpenCL, and Meta paths, using the synchronous fallback where native async capability is absent.
@@ -3046,4 +3047,27 @@ Matched Release Q3_K_XL, Q8 K/Q4 V, UVM off, context 163840, 2 GiB pool, b/ub256
 
 Both points retain the same 15166 MiB prefill peak and 14910 MiB steady decode allocation recorded by 5.5c. These differences are within run-to-run noise and do not establish a speedup; 5.6b deliberately preserves synchronous execution. Results are in `/tmp/kv-56b-fixed-pool.jsonl` and per-run `/tmp/kv-55c-current-{65536,98304}-r{0,1}.log`.
 
-Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. Production was restored with its existing configuration and port 1234 health is OK. No assistant commit or push was made. Next after review is **5.6c**, the generic completion wrapper.
+Stage 5.6b was committed by the user at `04917421f`. Its historical validation remains above; stage 5.6c follows below.
+
+### Stage 5.6c implementation and validation
+
+The first test was red because `llama-memory-completion.h` did not exist. The completed stage adds a reusable memory-infrastructure completion wrapper and its independent fake/real-backend test. It does not connect completions to publication tickets, writers, sessions, or model execution.
+
+The wrapper is one-shot and move-only. `record()` either records a native `ggml_backend_event_t` after producer submission or synchronizes the producer immediately when the complete event interface is unavailable or event allocation fails. `wait()` admits only a backend on the same device and delegates to its event-wait implementation. `synchronize()` establishes logical host visibility exactly once. Native handles remain private.
+
+The capability is named `event_backed()`, not `asynchronous()`: CUDA and Vulkan can enqueue device dependencies, while the current SYCL event wait blocks the host. The common wrapper adds no extra wait on the normal event-backed path, but it does not misrepresent backend behavior as universally nonblocking.
+
+Every backend that waits on an event remains tracked until `release_waiter()` promises that all of its referencing operations completed. Destruction synchronizes the producer event and every unreleased waiter before freeing the event. A throwing backend wait remains tracked because it may have failed after partial queue submission. Move assignment safely retires the replaced event owner. The producer and registered waiters must outlive the wrapper.
+
+Tests cover:
+
+- Invalid creation, event-capability discovery, event-allocation failure, incomplete interfaces, and synchronous fallback.
+- Record-before-wait ordering, duplicate record rejection, explicit host visibility, same-device admission, cross-device rejection, and missing consumer capability.
+- Unreleased and explicitly released waiters, duplicate waits, throwing waits after possible partial submission, destruction before host synchronization, and move ownership.
+- Real CPU fallback plus real CUDA record, same-device cross-backend wait, and host synchronization.
+
+The fake/CPU suite passes 10 cases / 85 assertions in Debug, ASan with leak detection, and UBSan. The real-CUDA suite passes 11 cases / 91 assertions under Compute Sanitizer with zero errors and zero leaked bytes. `test-memory-executor`, `test-backend-memory`, `test-kv-stream-publication`, and `test-kv-stream-session` also pass with the completion test in the five-suite Debug regression set.
+
+No throughput comparison is required because no production execution path constructs this wrapper in 5.6c. Production was restored with its existing configuration and port 1234 health is OK.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made. Next after review is **5.6d**, connection of backend completions to publication tickets and the writer/session lifecycle.
