@@ -62,7 +62,7 @@ env:
 
 jobs:
   gpu-cuda:
-    runs-on: [self-hosted, Linux, NVIDIA]
+    runs-on: [self-hosted, linux, x64, linux-gpu]
 
     steps:
       - name: Clone
