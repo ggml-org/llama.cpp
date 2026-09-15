@@ -1,0 +1,53 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer Src { uint8_t src[]; };
+layout(binding = 1) writeonly buffer DstS8 { uint8_t dst_s8[]; };
+layout(binding = 2) writeonly buffer DstScale { uint16_t dst_scale[]; };
+
+layout(push_constant) uniform parameter {
+    uint src_offset;
+    uint data_offset;
+    uint scale_offset;
+    uint nb1;
+    uint nb2;
+    uint n_tokens;
+    uint is_value;
+} p;
+
+void main() {
+    const uint index = gl_GlobalInvocationID.x;
+    if (index >= 4 * p.n_tokens * 8) {
+        return;
+    }
+
+    const uint h = index / (p.n_tokens * 8);
+    const uint t = (index / 8) % p.n_tokens;
+    const uint g = index % 8;
+    const uint block = p.src_offset + h * p.nb2 + t * p.nb1 + g * 34;
+    const uint scale = uint(src[block]) | (uint(src[block + 1]) << 8);
+
+    for (uint j = 0; j < 32; ++j) {
+        const uint payload = uint(src[block + 2 + j]);
+        if (p.is_value != 0) {
+            const uint dst = p.data_offset + (h * p.n_tokens + t) * 256 + g * 32 + j;
+            dst_s8[dst] = uint8_t(payload);
+        } else {
+            const uint dst = p.data_offset + (h * 256 + g * 32 + j) * p.n_tokens + t;
+            dst_s8[dst] = uint8_t(payload);
+        }
+    }
+
+    if (p.is_value != 0) {
+        const uint dst = p.scale_offset + (h * p.n_tokens + t) * 8 + g;
+        dst_scale[dst] = uint16_t(scale);
+    } else {
+        const uint dst = p.scale_offset + (h * 8 + g) * p.n_tokens + t;
+        dst_scale[dst] = uint16_t(scale);
+    }
+}

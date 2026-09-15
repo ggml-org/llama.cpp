@@ -6,6 +6,9 @@
 #include <oneapi/dnnl/dnnl_graph_sycl.hpp>
 #include <oneapi/dnnl/dnnl_sycl.hpp>
 #include <sycl/sycl.hpp>
+#if defined(_WIN32)
+#include <level_zero/ze_api.h>
+#endif
 
 #include <cmath>
 #include <cstring>
@@ -17,6 +20,8 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <chrono>
+#include <algorithm>
 
 using namespace dnnl;
 using namespace dnnl::graph;
@@ -112,6 +117,31 @@ static uint16_t float_to_half(float x) {
 
 struct allocation { sycl::queue *q = nullptr; void *p = nullptr; allocation() = default; allocation(sycl::queue &qq, size_t n) : q(&qq), p(sycl::malloc_device(n, qq)) { if (!p) throw std::bad_alloc(); } allocation(const allocation &) = delete; allocation &operator=(const allocation &) = delete; allocation(allocation &&x) noexcept : q(x.q), p(x.p) { x.p = nullptr; } ~allocation() { if (p) sycl::free(p, *q); } };
 
+#if defined(_WIN32)
+struct imported_allocation {
+    ze_context_handle_t context = nullptr;
+    void *ptr = nullptr;
+    void *handle = nullptr;
+    size_t size = 0;
+    imported_allocation() = default;
+    imported_allocation(ze_context_handle_t c, ze_device_handle_t d, void *h, size_t n) : context(c), handle(h), size(n) {
+        ze_external_memory_import_win32_handle_t ext{};
+        ext.stype = ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_WIN32;
+        ext.flags = ZE_EXTERNAL_MEMORY_TYPE_FLAG_OPAQUE_WIN32;
+        ext.handle = h;
+        ze_device_mem_alloc_desc_t desc{};
+        desc.stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC;
+        desc.pNext = &ext;
+        const ze_result_t result = zeMemAllocDevice(context, &desc, n, 0, d, &ptr);
+        if (result != ZE_RESULT_SUCCESS || !ptr) throw std::runtime_error("Level Zero Vulkan handle import failed");
+    }
+    imported_allocation(const imported_allocation &) = delete;
+    imported_allocation & operator=(const imported_allocation &) = delete;
+    imported_allocation(imported_allocation && other) noexcept : context(other.context), ptr(other.ptr), handle(other.handle), size(other.size) { other.ptr = nullptr; }
+    ~imported_allocation() { if (ptr) zeMemFree(context, ptr); }
+};
+#endif
+
 struct runtime {
     sycl::device device;
     sycl::context context;
@@ -120,6 +150,9 @@ struct runtime {
     stream stream_obj;
     std::mutex mutex;
     std::unordered_map<graph_key, std::shared_ptr<cached_graph>, graph_key_hash> graphs;
+#if defined(_WIN32)
+    std::unordered_map<uint64_t, std::shared_ptr<imported_allocation>> imported_allocations;
+#endif
 
     runtime() : device(pick_device()), context(device), queue(context, device, sycl::property::queue::in_order{}),
         engine_obj(dnnl::sycl_interop::make_engine(device, context)), stream_obj(dnnl::sycl_interop::make_stream(engine_obj, queue)) {}
@@ -186,4 +219,102 @@ extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa(int q, int kv, con
         for (size_t i = 0; i < host.size(); ++i) { sycl::half h; std::memcpy(&h, &host[i], sizeof(h)); output[i] = static_cast<float>(h); if (!std::isfinite(output[i])) throw std::runtime_error("oneDNN output contains NaN/Inf"); }
         return 1;
     } catch (const std::exception &e) { std::cerr << "ggml-vulkan-onednn: failure: " << e.what() << "\n"; return 0; }
+}
+
+extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa_win32(int q, int kv, const ggml_vulkan_onednn_win32_allocation * shared, float divisor) {
+#if !defined(_WIN32)
+    (void) q; (void) kv; (void) shared; (void) divisor;
+    return 0;
+#else
+    try {
+        if (q <= 0 || kv <= 0 || !shared || !shared->handle || !shared->allocation_size || !shared->allocation_id) throw std::invalid_argument("invalid Win32 SDPA arguments");
+        runtime & rt = get_runtime();
+        const auto native_device = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(rt.device);
+        const auto native_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(rt.context);
+        if (!native_device || !native_context) throw std::runtime_error("oneDNN queue is not Level Zero");
+        std::shared_ptr<cached_graph> cached;
+        {
+            std::lock_guard<std::mutex> lock(rt.mutex);
+            const graph_key key{q, kv, 16, 4, 256};
+            auto it = rt.graphs.find(key);
+            if (it == rt.graphs.end()) {
+                auto item = std::make_shared<cached_graph>();
+                item->graph = std::make_shared<graph_t>(make_graph(q, kv));
+                auto parts = item->graph->g.get_partitions();
+                if (parts.size() != 1 || !parts[0].is_supported()) throw std::runtime_error("oneDNN graph partition unsupported");
+                item->inputs = parts[0].get_input_ports(); item->outputs = parts[0].get_output_ports();
+                item->partition = std::make_shared<dnnl::graph::compiled_partition>(parts[0].compile(item->inputs, item->outputs, rt.engine_obj));
+                for (auto & x : item->outputs) x = item->partition->query_logical_tensor(x.get_id());
+                rt.graphs.emplace(key, item); cached = std::move(item);
+            } else cached = it->second;
+        }
+        const auto & ids = cached->graph->ids;
+        std::shared_ptr<imported_allocation> imported;
+        {
+            std::lock_guard<std::mutex> lock(rt.mutex);
+            auto it = rt.imported_allocations.find(shared->allocation_id);
+            if (it == rt.imported_allocations.end()) {
+                imported = std::make_shared<imported_allocation>(native_context, native_device, shared->handle, shared->allocation_size);
+                rt.imported_allocations.emplace(shared->allocation_id, imported);
+            } else {
+                imported = it->second;
+                if (imported->handle != shared->handle || imported->size != shared->allocation_size) throw std::invalid_argument("Level Zero allocation identity mismatch");
+            }
+        }
+        std::vector<tensor> ins, outs;
+        (void) divisor;
+        auto imported_ptr = [&](size_t id, size_t expected_size) -> void * {
+            size_t offset = 0;
+            size_t plane_size = 0;
+            if (id == ids.q) { offset = shared->query_offset; plane_size = shared->query_size; }
+            else if (id == ids.k) { offset = shared->key_offset; plane_size = shared->key_size; }
+            else if (id == ids.ks) { offset = shared->key_scale_offset; plane_size = shared->key_scale_size; }
+            else if (id == ids.mask) { offset = shared->mask_offset; plane_size = shared->mask_size; }
+            else if (id == ids.v) { offset = shared->value_offset; plane_size = shared->value_size; }
+            else if (id == ids.vs) { offset = shared->value_scale_offset; plane_size = shared->value_scale_size; }
+            else if (id == ids.divisor) { offset = shared->divisor_offset; plane_size = shared->divisor_size; }
+            else return nullptr;
+            if (plane_size < expected_size || offset > shared->allocation_size || plane_size > shared->allocation_size - offset) throw std::invalid_argument("Vulkan plane exceeds allocation");
+            return static_cast<uint8_t *>(imported->ptr) + offset;
+        };
+        for (const auto & x : cached->inputs) {
+            void * ptr = imported_ptr(x.get_id(), x.get_mem_size());
+            if (!ptr) throw std::invalid_argument("missing Vulkan plane");
+            ins.emplace_back(x, rt.engine_obj, ptr);
+        }
+        const auto out_it = std::find_if(cached->outputs.begin(), cached->outputs.end(), [&](const logical_tensor &x) { return x.get_id() == ids.out; });
+        if (out_it == cached->outputs.end()) throw std::invalid_argument("missing graph output");
+        if (shared->output_offset > shared->allocation_size || shared->output_size < out_it->get_mem_size() || shared->output_size > shared->allocation_size - shared->output_offset) throw std::invalid_argument("Vulkan output exceeds allocation");
+        outs.emplace_back(*out_it, rt.engine_obj, static_cast<uint8_t *>(imported->ptr) + shared->output_offset);
+        dnnl::graph::sycl_interop::execute(*cached->partition, rt.stream_obj, ins, outs);
+        rt.stream_obj.wait();
+        return 1;
+    } catch (const std::exception & e) { std::cerr << "ggml-vulkan-onednn: Win32 import failure: " << e.what() << "\n"; return 0; }
+#endif
+}
+
+extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_release_win32(uint64_t allocation_id) {
+#if !defined(_WIN32)
+    (void) allocation_id;
+    return 1;
+#else
+    if (!allocation_id) return 1;
+    try {
+        runtime & rt = get_runtime();
+        std::shared_ptr<imported_allocation> imported;
+        {
+            std::lock_guard<std::mutex> lock(rt.mutex);
+            auto it = rt.imported_allocations.find(allocation_id);
+            if (it == rt.imported_allocations.end()) return 1;
+            imported = std::move(it->second);
+            rt.imported_allocations.erase(it);
+        }
+        imported.reset();
+        std::cerr << "ggml-vulkan-onednn: released allocation_id=" << allocation_id << "\n";
+        return 1;
+    } catch (const std::exception & e) {
+        std::cerr << "ggml-vulkan-onednn: Win32 release failure: " << e.what() << "\n";
+        return 0;
+    }
+#endif
 }

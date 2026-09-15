@@ -1,4 +1,6 @@
 #include "ggml-vulkan-hybrid.h"
+#include "ggml-vulkan-hybrid-gpu.h"
+#include "ggml-vulkan-onednn.h"
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-impl.h"
@@ -13,6 +15,20 @@
 #include <chrono>
 
 using sdpa_fn = int (*)(int, int, const uint16_t *, const int8_t *, const uint16_t *, const int8_t *, const uint16_t *, const uint16_t *, float, float *);
+using sdpa_win32_fn = int (*)(int, int, const ggml_vulkan_onednn_win32_allocation *, float);
+using release_win32_fn = int (*)(uint64_t);
+
+void ggml_vk_hybrid_gpu_release_external_allocation(uint64_t allocation_id) {
+    if (!allocation_id) return;
+    static release_win32_fn release_zc = []() -> release_win32_fn {
+        const char * path = std::getenv("GGML_VULKAN_HYBRID_DLL");
+        HMODULE module = LoadLibraryA(path ? path : "ggml-vulkan-onednn.dll");
+        return module ? reinterpret_cast<release_win32_fn>(GetProcAddress(module, "ggml_vulkan_onednn_release_win32")) : nullptr;
+    }();
+    if (!release_zc || !release_zc(allocation_id)) {
+        GGML_LOG_WARN("vulkan-hybrid-zc: external allocation release failed allocation_id=%llu\n", (unsigned long long) allocation_id);
+    }
+}
 
 bool ggml_vk_hybrid_supported(const ggml_tensor * node) {
     const char * enabled = std::getenv("GGML_VULKAN_HYBRID");
@@ -35,17 +51,56 @@ bool ggml_vk_hybrid_supported(const ggml_tensor * node) {
         node->type == GGML_TYPE_F32 && ggml_is_contiguous(node);
 }
 
-static std::vector<uint8_t> read_tensor(const ggml_tensor * tensor) {
-    std::vector<uint8_t> data(ggml_nbytes(tensor));
-    ggml_backend_tensor_get(tensor, data.data(), 0, data.size());
-    return data;
-}
-
-bool ggml_vk_hybrid_try(ggml_tensor * node) {
+bool ggml_vk_hybrid_try(void * backend_ctx, ggml_tensor * node) {
     try {
         if (std::getenv("GGML_VULKAN_HYBRID_FORCE_FAIL")) {
             GGML_LOG_WARN("vulkan-hybrid: forced failure -> Vulkan fallback\n");
             return false;
+        }
+        if (std::getenv("GGML_VULKAN_HYBRID_ZC")) {
+            static sdpa_win32_fn run_zc = []() -> sdpa_win32_fn {
+                const char * path = std::getenv("GGML_VULKAN_HYBRID_DLL");
+                HMODULE module = LoadLibraryA(path ? path : "ggml-vulkan-onednn.dll");
+                return module ? reinterpret_cast<sdpa_win32_fn>(GetProcAddress(module, "ggml_vulkan_onednn_sdpa_win32")) : nullptr;
+            }();
+            if (!run_zc) {
+                GGML_LOG_WARN("vulkan-hybrid-zc: bridge entry unavailable -> Vulkan fallback\n");
+                return false;
+            }
+            const auto * q = node->src[0];
+            const auto * k = node->src[1];
+            const auto * v = node->src[2];
+            const auto * mask = node->src[3];
+            ggml_vk_hybrid_gpu_planes planes;
+            const float scale = reinterpret_cast<const float *>(node->op_params)[0];
+            if (!ggml_vk_hybrid_gpu_pack(backend_ctx, q, k, v, mask, 1.0f / scale, &planes)) {
+                GGML_LOG_WARN("vulkan-hybrid-zc: GPU pack failed -> Vulkan fallback\n");
+                return false;
+            }
+            const ggml_vulkan_onednn_win32_allocation shared = {
+                planes.handle, planes.allocation_size,
+                planes.q_off, planes.q_size,
+                planes.k_off, planes.k_size,
+                planes.ks_off, planes.ks_size,
+                planes.v_off, planes.v_size,
+                planes.vs_off, planes.vs_size,
+                planes.mask_off, planes.mask_size,
+                planes.divisor_off, planes.divisor_size,
+                planes.out_off, planes.out_size,
+                planes.allocation_id,
+            };
+            const int nq = (int) q->ne[1];
+            const int nk = (int) k->ne[1];
+            ggml_vk_hybrid_gpu_mark_imported(backend_ctx);
+            const bool executed = run_zc(nq, nk, &shared, 1.0f / scale) != 0;
+            const bool unpacked = executed && ggml_vk_hybrid_gpu_unpack(backend_ctx, node, planes.workspace);
+            ggml_vk_hybrid_gpu_release(planes.workspace);
+            if (!unpacked) {
+                GGML_LOG_WARN("vulkan-hybrid-zc: execution failed -> Vulkan fallback\n");
+                return false;
+            }
+            GGML_LOG_INFO("vulkan-hybrid-zc: complete %s q=%d kv=%d host_traffic=0\n", node->name, nq, nk);
+            return true;
         }
         static sdpa_fn run = []() -> sdpa_fn {
             const char * path = std::getenv("GGML_VULKAN_HYBRID_DLL");
@@ -62,13 +117,16 @@ bool ggml_vk_hybrid_try(ggml_tensor * node) {
         const auto * mask = node->src[3];
         const int nq = (int) q->ne[1];
         const int nk = (int) k->ne[1];
-        // TODO: replace staging with Vulkan/L0 shared memory
-        const auto t_get = std::chrono::steady_clock::now();
-        const auto q_raw = read_tensor(q);
-        const auto k_raw = read_tensor(k);
-        const auto v_raw = read_tensor(v);
-        const auto m_raw = read_tensor(mask);
-        const double tensor_get_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_get).count();
+        const auto t_readback = std::chrono::steady_clock::now();
+        std::vector<uint8_t> q_raw(ggml_nbytes(q)), k_raw(ggml_nbytes(k)), v_raw(ggml_nbytes(v)), m_raw(ggml_nbytes(mask));
+        const ggml_tensor * tensors[] = { q, k, v, mask };
+        void * data[] = { q_raw.data(), k_raw.data(), v_raw.data(), m_raw.data() };
+        const size_t sizes[] = { q_raw.size(), k_raw.size(), v_raw.size(), m_raw.size() };
+        if (!ggml_vk_hybrid_read_tensors(backend_ctx, tensors, data, sizes, 4)) {
+            GGML_LOG_WARN("vulkan-hybrid: batched readback failed -> Vulkan fallback\n");
+            return false;
+        }
+        const double readback_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_readback).count();
         const auto t_split = std::chrono::steady_clock::now();
         std::vector<uint16_t> q_half(size_t(16)*nq*256);
         std::vector<int8_t> kp(size_t(4)*256*nk), vp(size_t(4)*nk*256);
@@ -108,7 +166,7 @@ bool ggml_vk_hybrid_try(ggml_tensor * node) {
         const double host_split_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_split).count();
         std::vector<float> out(size_t(16)*nq*256), dst(out.size());
         const float scale = reinterpret_cast<const float *>(node->op_params)[0];
-        GGML_LOG_INFO("vulkan-hybrid: staging q=%d kv=%d tensor_get_ms=%.3f host_split_ms=%.3f\n", nq, nk, tensor_get_ms, host_split_ms);
+        GGML_LOG_INFO("vulkan-hybrid: staging q=%d kv=%d batched_readback_ms=%.3f host_split_ms=%.3f\n", nq, nk, readback_ms, host_split_ms);
         if (!run(nq, nk, q_half.data(), kp.data(), ks.data(), vp.data(), vs.data(), mh.data(), 1.0f/scale, out.data())) {
             GGML_LOG_WARN("vulkan-hybrid: oneDNN failed -> Vulkan fallback\n");
             return false;
