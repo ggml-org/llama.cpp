@@ -1,0 +1,191 @@
+// Same-format Q4_K attention projections over one contiguous Q/K/V tensor.
+//
+// The fixed parameter layout places Q, K, and Q4_K V rows consecutively. This
+// bounded candidate pairs those [5120][2048] weights with a row-interleaved
+// [token][5120] raw output so one uniform 80xN grid can reuse the canonical
+// dense WMMA body without buffer-valued control flow, completion counters, or
+// additional workgroup storage.
+amdgpu.target<gfx11-generic> @qwen3_moe_attention_qkv_same_format_prefill_gfx11_wave64 {subgroup_size = 64}
+
+config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+
+config.decl @qwen3_moe.attention.query_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @qwen3_moe.attention.key_value_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @qwen3_moe.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+// Runs every Q4_K Q/K/V tile in one launch over the aggregate physical rows.
+kernel.def target(@qwen3_moe_attention_qkv_same_format_prefill_gfx11_wave64) @qwen3_moe_attention_qkv_q4_prefill_512(%token_count: index) {
+  %query_size = config.get @qwen3_moe.attention.query_size : index
+  %key_value_size = config.get @qwen3_moe.attention.key_value_size : index
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %key_value_output_size = index.mul %key_value_size, %c2 : index
+  %combined_output_size = index.add %query_size, %key_value_output_size : index
+  %padded_output_size = index.add %combined_output_size, %c63 : index
+  %output_tiles = index.div %padded_output_size, %c64 : index
+  %padded_token_count = index.add %token_capacity, %c31 : index
+  %token_tiles = index.div %padded_token_count, %c32 : index
+  kernel.launch.config workgroups(%output_tiles, %token_tiles, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %combined_weight: buffer, %combined_output: buffer) {
+  %hidden_size = config.get @qwen3_moe.model.hidden_size : index
+  %query_size = config.get @qwen3_moe.attention.query_size : index
+  %key_value_size = config.get @qwen3_moe.attention.key_value_size : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %token_tile = kernel.workgroup.id<y> : index
+  %c2 = index.constant 2 : index
+  %q4 = index.constant 4 : index
+  %overwrite = index.constant 0 : index
+  %key_value_output_size = index.mul %key_value_size, %c2 : index
+  %combined_output_size = index.add %query_size, %key_value_output_size : index
+  func.apply<qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
+  kernel.return
+}
+
+// The three segment exports form the exact aggregate-layout baseline. Their
+// workgroups and memory accesses match the combined launch; only the launch
+// records differ.
+kernel.def target(@qwen3_moe_attention_qkv_same_format_prefill_gfx11_wave64) @qwen3_moe_attention_query_q4_aggregate_prefill_512(%token_count: index) {
+  %query_size = config.get @qwen3_moe.attention.query_size : index
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %c1 = index.constant 1 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %padded_output_size = index.add %query_size, %c63 : index
+  %output_tiles = index.div %padded_output_size, %c64 : index
+  %padded_token_count = index.add %token_capacity, %c31 : index
+  %token_tiles = index.div %padded_token_count, %c32 : index
+  kernel.launch.config workgroups(%output_tiles, %token_tiles, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %combined_weight: buffer, %combined_output: buffer) {
+  %hidden_size = config.get @qwen3_moe.model.hidden_size : index
+  %query_size = config.get @qwen3_moe.attention.query_size : index
+  %key_value_size = config.get @qwen3_moe.attention.key_value_size : index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %token_tile = kernel.workgroup.id<y> : index
+  %c2 = index.constant 2 : index
+  %q4 = index.constant 4 : index
+  %overwrite = index.constant 0 : index
+  %key_value_output_size = index.mul %key_value_size, %c2 : index
+  %combined_output_size = index.add %query_size, %key_value_output_size : index
+  func.apply<qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
+  kernel.return
+}
+
+kernel.def target(@qwen3_moe_attention_qkv_same_format_prefill_gfx11_wave64) @qwen3_moe_attention_key_q4_aggregate_prefill_512(%token_count: index) {
+  %key_value_size = config.get @qwen3_moe.attention.key_value_size : index
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %c1 = index.constant 1 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %padded_output_size = index.add %key_value_size, %c63 : index
+  %output_tiles = index.div %padded_output_size, %c64 : index
+  %padded_token_count = index.add %token_capacity, %c31 : index
+  %token_tiles = index.div %padded_token_count, %c32 : index
+  kernel.launch.config workgroups(%output_tiles, %token_tiles, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %combined_weight: buffer, %combined_output: buffer) {
+  %hidden_size = config.get @qwen3_moe.model.hidden_size : index
+  %query_size = config.get @qwen3_moe.attention.query_size : index
+  %key_value_size = config.get @qwen3_moe.attention.key_value_size : index
+  %local_channel_tile = kernel.workgroup.id<x> : index
+  %token_tile = kernel.workgroup.id<y> : index
+  %c2 = index.constant 2 : index
+  %q4 = index.constant 4 : index
+  %c64 = index.constant 64 : index
+  %overwrite = index.constant 0 : index
+  %query_channel_tile_count = index.div %query_size, %c64 : index
+  %channel_tile = index.add %query_channel_tile_count, %local_channel_tile : index
+  %key_value_output_size = index.mul %key_value_size, %c2 : index
+  %combined_output_size = index.add %query_size, %key_value_output_size : index
+  func.apply<qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
+  kernel.return
+}
+
+kernel.def target(@qwen3_moe_attention_qkv_same_format_prefill_gfx11_wave64) @qwen3_moe_attention_value_q4_aggregate_prefill_512(%token_count: index) {
+  %key_value_size = config.get @qwen3_moe.attention.key_value_size : index
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %c1 = index.constant 1 : index
+  %c31 = index.constant 31 : index
+  %c32 = index.constant 32 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %padded_output_size = index.add %key_value_size, %c63 : index
+  %output_tiles = index.div %padded_output_size, %c64 : index
+  %padded_token_count = index.add %token_capacity, %c31 : index
+  %token_tiles = index.div %padded_token_count, %c32 : index
+  kernel.launch.config workgroups(%output_tiles, %token_tiles, %c1) workgroup_size(%c128, %c1, %c1) : index
+} launch(%token_count: index, %input: buffer, %combined_weight: buffer, %combined_output: buffer) {
+  %hidden_size = config.get @qwen3_moe.model.hidden_size : index
+  %query_size = config.get @qwen3_moe.attention.query_size : index
+  %key_value_size = config.get @qwen3_moe.attention.key_value_size : index
+  %local_channel_tile = kernel.workgroup.id<x> : index
+  %token_tile = kernel.workgroup.id<y> : index
+  %c2 = index.constant 2 : index
+  %q4 = index.constant 4 : index
+  %c64 = index.constant 64 : index
+  %overwrite = index.constant 0 : index
+  %query_channel_tile_count = index.div %query_size, %c64 : index
+  %key_value_channel_tile_count = index.div %key_value_size, %c64 : index
+  %key_channel_tile_end = index.add %query_channel_tile_count, %key_value_channel_tile_count : index
+  %channel_tile = index.add %key_channel_tile_end, %local_channel_tile : index
+  %key_value_output_size = index.mul %key_value_size, %c2 : index
+  %combined_output_size = index.add %query_size, %key_value_output_size : index
+  func.apply<qwen3_moe.dense_quantized.body>(%q4, %token_count, %hidden_size, %combined_output_size, %overwrite, %channel_tile, %token_tile, %input, %combined_weight, %combined_output) : (index, index, index, index, index, index, index, buffer, buffer, buffer)
+  kernel.return
+}
+
+// The production shape crosses every token and channel tile. The aggregate
+// output starts with different sentinels so missing or overlapping segment
+// ownership is observable even though the packed bytes are uniform.
+check.case public @qwen3_moe_attention_qkv_q4_prefill_512_differential_case {
+  %token_count = check.literal value(512) : index
+  %input = check.generate.fill value(0.00390625) : tensor<512x2048xf32>
+  %combined_weight = check.generate.fill value(34) : tensor<5120x8x144xi8>
+  %expected = check.generate.fill value(-1.0) : tensor<512x5120xf32>
+  %actual = check.generate.fill value(1.0) : tensor<512x5120xf32>
+  kernel.launch @qwen3_moe_attention_query_q4_aggregate_prefill_512[%token_count](%token_count, %input, %combined_weight, %expected) : [index](index, tensor<512x2048xf32>, tensor<5120x8x144xi8>, tensor<512x5120xf32>)
+  kernel.launch @qwen3_moe_attention_key_q4_aggregate_prefill_512[%token_count](%token_count, %input, %combined_weight, %expected) : [index](index, tensor<512x2048xf32>, tensor<5120x8x144xi8>, tensor<512x5120xf32>)
+  kernel.launch @qwen3_moe_attention_value_q4_aggregate_prefill_512[%token_count](%token_count, %input, %combined_weight, %expected) : [index](index, tensor<512x2048xf32>, tensor<5120x8x144xi8>, tensor<512x5120xf32>)
+  kernel.launch @qwen3_moe_attention_qkv_q4_prefill_512[%token_count](%token_count, %input, %combined_weight, %actual) : [index](index, tensor<512x2048xf32>, tensor<5120x8x144xi8>, tensor<512x5120xf32>)
+  check.expect.close actual(%actual) expected(%expected) atol(0.0) rtol(0.0) nan(same) : tensor<512x5120xf32>
+  check.return
+}
+
+check.case public @qwen3_moe_attention_qkv_q4_prefill_512_composed_benchmark_case {
+  %token_count = check.literal value(512) : index
+  %input = check.generate.fill value(0.0) : tensor<512x2048xf32>
+  %combined_weight = check.generate.fill value(0) : tensor<5120x8x144xi8>
+  %output = check.generate.fill value(1.0) : tensor<512x5120xf32>
+  kernel.launch @qwen3_moe_attention_query_q4_aggregate_prefill_512[%token_count](%token_count, %input, %combined_weight, %output) : [index](index, tensor<512x2048xf32>, tensor<5120x8x144xi8>, tensor<512x5120xf32>)
+  kernel.launch @qwen3_moe_attention_key_q4_aggregate_prefill_512[%token_count](%token_count, %input, %combined_weight, %output) : [index](index, tensor<512x2048xf32>, tensor<5120x8x144xi8>, tensor<512x5120xf32>)
+  kernel.launch @qwen3_moe_attention_value_q4_aggregate_prefill_512[%token_count](%token_count, %input, %combined_weight, %output) : [index](index, tensor<512x2048xf32>, tensor<5120x8x144xi8>, tensor<512x5120xf32>)
+  check.return
+}
+
+check.case public @qwen3_moe_attention_qkv_q4_prefill_512_fused_benchmark_case {
+  %token_count = check.literal value(512) : index
+  %input = check.generate.fill value(0.0) : tensor<512x2048xf32>
+  %combined_weight = check.generate.fill value(0) : tensor<5120x8x144xi8>
+  %output = check.generate.fill value(1.0) : tensor<512x5120xf32>
+  kernel.launch @qwen3_moe_attention_qkv_q4_prefill_512[%token_count](%token_count, %input, %combined_weight, %output) : [index](index, tensor<512x2048xf32>, tensor<5120x8x144xi8>, tensor<512x5120xf32>)
+  check.return
+}
+
+check.benchmark<@qwen3_moe_attention_qkv_q4_prefill_512_differential_case> @qwen3_moe_attention_qkv_q4_prefill_512_differential
+
+check.benchmark<@qwen3_moe_attention_qkv_q4_prefill_512_composed_benchmark_case> @qwen3_moe_attention_qkv_q4_prefill_512_composed
+
+check.benchmark<@qwen3_moe_attention_qkv_q4_prefill_512_fused_benchmark_case> @qwen3_moe_attention_qkv_q4_prefill_512_fused
