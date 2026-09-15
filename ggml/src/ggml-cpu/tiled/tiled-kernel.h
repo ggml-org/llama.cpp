@@ -143,13 +143,14 @@ template <int SUBBLK, bool HAS_MIN, int BIAS>
 void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                          int i0, int j0, float * buf, int buf_stride);
 
-// Interleave the natural [row][256] src1 codes in-place into the VNNI
-// group-local [kg][row][4] layout. No-op on non-VNNI builds.
+// Interleave the natural [row][256] src1 codes in-place into the VNNI group-local
+// [kg%16][kg/16][row][4] layout, one 16x16 int32 tile at a time. No-op on non-VNNI.
 void tiled_repack_src1_codes(tiled_tile_src1 * tile);
 
-// Interleave one 16-row x 64-k chunk of src1 q8 codes into the VNNI [g][row][4] layout.
-// rows[r] points to the qs field (256 bytes) of row r's block_q8_K at the desired kblk.
-// c selects the chunk (0..3) within the 64-int32 qs field (int32s [c*16, c*16+16)).
-// out receives 1024 bytes in [k-group][row][4] layout (dpbusd-ready).
-void tiled_repack_16x16(const int8_t * const * rows, int c, uint8_t * out);
+// Transpose one 16-row x 64-k chunk of src1 codes in place (a 16x16 int32 tile). base
+// points at the 16-row group (row r at base + r*k_extent); c selects the chunk (0..3).
+// After the call, k-group kg reads as one 512-bit vector at base + (kg%16)*k_extent +
+// (kg/16)*64. All 16 rows load before any store and a chunk's rows are disjoint, so it
+// is in-place with no temp. No-op on non-VNNI.
+void tiled_repack_16x16(uint8_t * base, int c, int k_extent);
 
