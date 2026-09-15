@@ -29,6 +29,10 @@ export const AUDIO_FILE_TYPES = {
 	[FileTypeAudio.WAV]: {
 		extensions: [FileExtensionAudio.WAV],
 		mimeTypes: [MimeTypeAudio.WAV]
+	},
+	[FileTypeAudio.WEBM]: {
+		extensions: [FileExtensionAudio.WEBM],
+		mimeTypes: [MimeTypeAudio.WEBM]
 	}
 } as const;
 
@@ -40,7 +44,11 @@ export const VIDEO_FILE_TYPES = {
 	[FileTypeVideo.OGG]: {
 		extensions: [FileExtensionVideo.OGG],
 		mimeTypes: [MimeTypeVideo.OGG]
-	}
+	},
+	[FileTypeVideo.WEBM]: {
+		extensions: [FileExtensionVideo.WEBM],
+		mimeTypes: [MimeTypeVideo.WEBM]
+	},
 } as const;
 
 export const IMAGE_FILE_TYPES = {
