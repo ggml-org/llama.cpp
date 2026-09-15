@@ -446,6 +446,71 @@ struct ggml_metal_moe_reduce_match {
     int node_count;
 };
 
+struct ggml_metal_topk_moe_match {
+    const ggml_tensor * logits;
+    const ggml_tensor * dst;
+    int node_count;
+};
+
+static bool ggml_metal_fusion_match_topk_moe(const ggml_cgraph * gf, int node_idx, ggml_metal_topk_moe_match * match) {
+    if (match == nullptr || node_idx < 0 || node_idx + 5 > gf->n_nodes) {
+        return false;
+    }
+
+    const ggml_tensor * softmax = gf->nodes[node_idx];
+    if (softmax->op != GGML_OP_SOFT_MAX || softmax->src[0] == nullptr) {
+        return false;
+    }
+
+    static const ggml_op ops_topk_moe_raw[] = {
+        GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS
+    };
+    static const ggml_op ops_topk_moe_scale_raw[] = {
+        GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS, GGML_OP_SCALE
+    };
+    static const ggml_op ops_topk_moe_norm_raw[] = {
+        GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
+        GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE
+    };
+    static const ggml_op ops_topk_moe_norm_scale_raw[] = {
+        GGML_OP_SOFT_MAX, GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS,
+        GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
+    };
+
+    const ggml_op * expected[] = {
+        ops_topk_moe_raw,
+        ops_topk_moe_scale_raw,
+        ops_topk_moe_norm_raw,
+        ops_topk_moe_norm_scale_raw,
+    };
+    const int expected_n[] = { 5, 6, 10, 11 };
+
+    for (int v = 0; v < 4; ++v) {
+        const int n = expected_n[v];
+        if (node_idx + n > gf->n_nodes) {
+            continue;
+        }
+
+        bool ok = true;
+        for (int j = 0; j < n; ++j) {
+            if (gf->nodes[node_idx + j]->op != expected[v][j]) {
+                ok = false;
+                break;
+            }
+        }
+        if (!ok) {
+            continue;
+        }
+
+        match->logits     = softmax->src[0];
+        match->dst        = gf->nodes[node_idx + n - 1];
+        match->node_count = n;
+        return true;
+    }
+
+    return false;
+}
+
 static bool ggml_metal_fusion_match_moe_reduce(
         const ggml_cgraph * gf, int node_idx, ggml_metal_moe_reduce_match * match) {
     if (match == nullptr || node_idx < 0 || node_idx + 3 > gf->n_nodes) {
@@ -658,6 +723,16 @@ void ggml_metal_fusion_add_alloc_deps(
         void (*add_alloc_dep)(void *, ggml_tensor *, ggml_tensor *),
         const ggml_cgraph * gf) {
     for (int i = 0; i < gf->n_nodes; ++i) {
+        if (gf->nodes[i]->op == GGML_OP_SOFT_MAX) {
+            ggml_metal_topk_moe_match match;
+            if (ggml_metal_fusion_match_topk_moe(gf, i, &match)) {
+                add_alloc_dep(user_data, const_cast<ggml_tensor *>(match.logits), const_cast<ggml_tensor *>(match.dst));
+
+                i += match.node_count - 1;
+                continue;
+            }
+        }
+
         if (gf->nodes[i]->op != GGML_OP_MUL) {
             continue;
         }
