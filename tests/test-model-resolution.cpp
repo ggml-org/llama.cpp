@@ -453,6 +453,13 @@ static void test_task_assembly() {
         // -hfd on a repo without sidecars keeps resolving a full model as draft
         common_params params;
         assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/small"}, params);
+        REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_NGRAM_MOD});
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/small", "draft-model-Q4_K_M.gguf"));
+    }
+    {
+        // --no-spec-type removes the default speculative type and keeps the fallback draft resolution
+        common_params params;
+        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/small", "--no-spec-type", "ngram-mod"}, params);
         REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE});
         REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/small", "draft-model-Q4_K_M.gguf"));
     }
