@@ -1651,7 +1651,7 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
     int n_fuse = 1;
     bool use_silu = false;
 
-    {
+    if (ctx->use_fusion()) {
         int n = 1;
         const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
         if (fusion && fusion->id == GGML_METAL_FUSION_SSM_CONV_SILU) {
