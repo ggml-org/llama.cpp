@@ -1,5 +1,6 @@
 // direct imports, not via the barrel, to avoid circular deps
 import { backendsStore } from './backends.svelte';
+import { backendsModelsStore } from './backendsModels.svelte';
 import { conversationsStore } from './conversations/index.svelte';
 import { permissionsStore } from './permissions.svelte';
 import { settingsStore } from './settings/index.svelte';
@@ -19,6 +20,11 @@ export function initStores(): Promise<void> {
 
 		settingsStore.initialize();
 		backendsStore.initialize();
+
+		// prefetch every backend's model list in the background; failures are
+		// per-backend and never block startup
+		void backendsModelsStore.loadAll();
+
 		permissionsStore.initialize();
 		toolsStore.initialize();
 		void versionStore.initialize();

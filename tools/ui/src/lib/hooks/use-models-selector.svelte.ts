@@ -86,7 +86,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	let searchTerm = $state('');
 	let showModelDialog = $state(false);
 	let infoModelId = $state<string | null>(null);
-	let backendsPrefetched = false;
 
 	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
 	const groupedFilteredOptions = $derived(
@@ -107,12 +106,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	});
 
 	function handleOpenChange(open: boolean) {
-		// first open: prefetch every backend's model list so switching is instant
-		if (open && !backendsPrefetched) {
-			backendsPrefetched = true;
-			void backendsModelsStore.loadAll();
-		}
-
 		if (loading || updating) return;
 
 		if (isRouter) {

@@ -3,7 +3,7 @@
 	import { BackendCard, DialogBackendForm } from '$lib/components/app/backends';
 	import { Button } from '$lib/components/ui/button';
 	import * as Empty from '$lib/components/ui/empty';
-	import { backendsStore } from '$lib/stores';
+	import { backendsModelsStore, backendsStore } from '$lib/stores';
 	import type { Backend } from '$lib/types';
 	import { fade } from 'svelte/transition';
 
@@ -36,7 +36,12 @@
 </script>
 
 <div in:fade={{ duration: 150 }} class={['flex flex-col gap-4', className]}>
-	<DialogBackendForm bind:open={isAdding} backend={editing} onOpenChange={handleOpenChange} />
+	<DialogBackendForm
+		bind:open={isAdding}
+		backend={editing}
+		onOpenChange={handleOpenChange}
+		onSaved={() => void backendsModelsStore.loadAll()}
+	/>
 
 	<BackendCard
 		backend={backendsStore.local}
@@ -47,9 +52,15 @@
 	{#each backendsStore.external as backend (backend.id)}
 		<BackendCard
 			{backend}
-			onDelete={() => backendsStore.removeBackend(backend.id)}
+			onDelete={() => {
+				backendsStore.removeBackend(backend.id);
+				void backendsModelsStore.loadAll();
+			}}
 			onEdit={() => handleEdit(backend)}
-			onToggle={(enabled) => backendsStore.updateBackend(backend.id, { enabled })}
+			onToggle={(enabled) => {
+				backendsStore.updateBackend(backend.id, { enabled });
+				void backendsModelsStore.loadAll();
+			}}
 		/>
 	{/each}
 
