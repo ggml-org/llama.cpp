@@ -342,6 +342,7 @@
 							<ModelsSelectorList
 								activeId={ms.activeId}
 								{currentModel}
+								flat={!ms.isLocalBackend}
 								groups={ms.groupedFilteredOptions}
 								onInfoClick={ms.handleInfoClick}
 								onSelect={ms.handleSelect}

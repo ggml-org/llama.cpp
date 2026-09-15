@@ -21,6 +21,7 @@ export interface UseModelsSelectorReturn {
 	readonly updating: boolean;
 	readonly activeId: string | null;
 	readonly activeBackendId: string;
+	readonly isLocalBackend: boolean;
 	readonly backends: Backend[];
 	readonly isMultiModel: boolean;
 	readonly isRouter: boolean;
@@ -51,8 +52,13 @@ export interface UseModelsSelectorReturn {
  * duplicating store derivations, selection handling, and model loading.
  */
 export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSelectorReturn {
+	const activeBackendId = $derived(backendsStore.active.id);
+	const isLocalBackend = $derived(backendsStore.active.protocol === 'llama.cpp');
+	// the backend switcher tabs scope the list to one backend's models
 	const options = $derived(
 		modelsStore.models.filter((option) => {
+			if (option.backendId !== activeBackendId) return false;
+
 			const modelProps = modelsStore.props.getModelProps(option.model);
 
 			return modelProps?.ui !== false;
@@ -61,7 +67,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const loading = $derived(modelsStore.loading);
 	const updating = $derived(modelsStore.updating);
 	const activeId = $derived(modelsStore.selectedModelId);
-	const activeBackendId = $derived(backendsStore.active.id);
 	const backends = $derived(backendsStore.enabled);
 	// Router mode and external backends both expose a selectable model list;
 	// a single-model llama.cpp server does not.
@@ -270,6 +275,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		get isLoadingModel() {
 			return isLoadingModel;
+		},
+
+		get isLocalBackend() {
+			return isLocalBackend;
 		},
 
 		get isMultiModel() {
