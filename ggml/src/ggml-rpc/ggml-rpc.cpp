@@ -2137,8 +2137,10 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
         }
         printf("Accepted client connection\n");
         fflush(stdout);
-        rpc_serve_client(backends, cache_dir, client_socket);
-        printf("Client connection closed\n");
+        std::thread([backends, cache_dir, client_socket]() {
+            rpc_serve_client(backends, cache_dir, client_socket);
+        }).detach();
+        printf("Client connection accepted for serving\n");
         fflush(stdout);
     }
     rpc_transport_shutdown();
