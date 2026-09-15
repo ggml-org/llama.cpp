@@ -16,6 +16,7 @@ bailingmoe3         ,1   ,any     ,ADD+ADD                     ,      1
 bailingmoe3         ,1   ,any     ,GATED_DELTA_NET+CPY         ,      1
 bailingmoe3         ,1   ,any     ,MUL+ADD                     ,      2
 bailingmoe3         ,1   ,any     ,RMS_NORM+MUL                ,      8
+bailingmoe3         ,1   ,any     ,RMS_NORM+SCALE              ,      2
 bloom               ,0   ,any     ,NORM+MUL+ADD                ,      6
 chatglm             ,0   ,any     ,RMS_NORM+MUL                ,      5
 codeshell           ,0   ,any     ,NORM+MUL+ADD                ,      5
@@ -104,10 +105,12 @@ jamba               ,0   ,any     ,RMS_NORM+MUL                ,      8
 kimi-k3             ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 kimi-k3             ,0   ,any     ,MUL+ADD                     ,      2
 kimi-k3             ,0   ,any     ,RMS_NORM+MUL                ,     17
+kimi-k3             ,0   ,any     ,RMS_NORM+SCALE              ,      2
 kimi-linear         ,0   ,any     ,ADD+ADD                     ,      1
 kimi-linear         ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 kimi-linear         ,0   ,any     ,MUL+ADD                     ,      2
 kimi-linear         ,0   ,any     ,RMS_NORM+MUL                ,      7
+kimi-linear         ,0   ,any     ,RMS_NORM+SCALE              ,      2
 lfm2                ,0   ,any     ,RMS_NORM+MUL                ,      7
 lfm2moe             ,1   ,any     ,MUL+ADD                     ,      2
 lfm2moe             ,1   ,any     ,RMS_NORM+MUL                ,      7
@@ -177,10 +180,12 @@ qwen2vl             ,0   ,any     ,RMS_NORM+MUL                ,      5
 qwen3               ,0   ,any     ,RMS_NORM+MUL                ,      9
 qwen35              ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen35              ,0   ,any     ,RMS_NORM+MUL                ,      8
+qwen35              ,0   ,any     ,RMS_NORM+SCALE              ,      2
 qwen35moe           ,1   ,any     ,ADD+ADD                     ,      2
 qwen35moe           ,1   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen35moe           ,1   ,any     ,MUL+ADD                     ,      4
 qwen35moe           ,1   ,any     ,RMS_NORM+MUL                ,      8
+qwen35moe           ,1   ,any     ,RMS_NORM+SCALE              ,      2
 qwen35moe           ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 qwen3moe            ,1   ,any     ,MUL+ADD                     ,      4
 qwen3moe            ,1   ,any     ,RMS_NORM+MUL                ,      9
@@ -189,6 +194,7 @@ qwen3next           ,0   ,any     ,ADD+ADD                     ,      2
 qwen3next           ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen3next           ,0   ,any     ,MUL+ADD                     ,      4
 qwen3next           ,0   ,any     ,RMS_NORM+MUL                ,      8
+qwen3next           ,0   ,any     ,RMS_NORM+SCALE              ,      2
 qwen3next           ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 qwen3tts            ,0   ,any     ,RMS_NORM+MUL                ,      9
 qwen3vl             ,0   ,any     ,RMS_NORM+MUL                ,      9
@@ -200,6 +206,7 @@ qwen4exp            ,0   ,any     ,ADD+ADD+ADD+ADD+ADD+ADD+ADD ,      9
 qwen4exp            ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen4exp            ,0   ,any     ,MUL+ADD                     ,      4
 qwen4exp            ,0   ,any     ,RMS_NORM+MUL                ,     13
+qwen4exp            ,0   ,any     ,RMS_NORM+SCALE              ,      2
 qwen4exp            ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5

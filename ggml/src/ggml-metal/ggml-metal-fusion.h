@@ -32,6 +32,7 @@ typedef enum ggml_metal_fusion_id {
     GGML_METAL_FUSION_NONE = 0,
     GGML_METAL_FUSION_NORM_MUL,     // NORM/RMS_NORM + MUL
     GGML_METAL_FUSION_NORM_MUL_ADD, // NORM/RMS_NORM + MUL + ADD
+    GGML_METAL_FUSION_NORM_SCALE,   // NORM/RMS_NORM + SCALE
     GGML_METAL_FUSION_ADD_CHAIN,    // ADD x N (N in [2, 7])
     GGML_METAL_FUSION_SNAKE,        // MUL + SIN + SQR + MUL + ADD
     GGML_METAL_FUSION_GDN_CACHE,    // GATED_DELTA_NET + CPY (write snapshots into the recurrent cache)

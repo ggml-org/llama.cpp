@@ -80,7 +80,11 @@ kernel void kernel_norm_fuse_impl(
             y[i00] = (y[i00]*scale);
         }
         if (F == 2) {
-            y[i00] = (y[i00]*scale)*f0[i00];
+            if (args.use_scale) {
+                y[i00] = (y[i00]*scale) * args.scale_val;
+            } else {
+                y[i00] = (y[i00]*scale)*f0[i00];
+            }
         }
         if (F == 3) {
             y[i00] = (y[i00]*scale)*f0[i00] + f1[i00];
@@ -155,7 +159,11 @@ kernel void kernel_rms_norm_fuse_impl(
             y[i00] = (x[i00]*scale);
         }
         if (F == 2) {
-            y[i00] = (x[i00]*scale)*f0[i00];
+            if (args.use_scale) {
+                y[i00] = (x[i00]*scale) * args.scale_val;
+            } else {
+                y[i00] = (x[i00]*scale)*f0[i00];
+            }
         }
         if (F == 3) {
             y[i00] = (x[i00]*scale)*f0[i00] + f1[i00];
