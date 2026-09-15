@@ -82,6 +82,63 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
     }
 }
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 12050
+typedef CUresult (*ggml_cuda_tmap_encode_t)(CUtensorMap *, CUtensorMapDataType, cuuint32_t, void *, const cuuint64_t *,
+    const cuuint64_t *, const cuuint32_t *, const cuuint32_t *, CUtensorMapInterleave, CUtensorMapSwizzle,
+    CUtensorMapL2promotion, CUtensorMapFloatOOBfill);
+
+// cuTensorMapEncodeTiled through the runtime, so that no driver library needs to be linked
+static ggml_cuda_tmap_encode_t ggml_cuda_get_tmap_encode() {
+    static ggml_cuda_tmap_encode_t fn = nullptr;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        void * ptr = nullptr;
+        cudaDriverEntryPointQueryResult status;
+        if (cudaGetDriverEntryPointByVersion("cuTensorMapEncodeTiled", &ptr, 12000, cudaEnableDefault, &status) == cudaSuccess &&
+                status == cudaDriverEntryPointSuccess) {
+            fn = (ggml_cuda_tmap_encode_t) ptr;
+        } else {
+            (void) cudaGetLastError();
+        }
+    }
+    return fn;
+}
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 12050
+
+bool ggml_cuda_mmq_encode_tmap_nvfp4(const ggml_tensor * src0, const int cc, ggml_cuda_tmap & tmap) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 12050
+    if (src0->type != GGML_TYPE_NVFP4 || !blackwell_mma_available(cc)) {
+        return false;
+    }
+    // 144 byte boxes need 16 byte aligned row spans: K % 256 == 0; rows of all channels and samples are one
+    // strided 2D array, so the tensor has to be contiguous
+    const int64_t row_bytes = ggml_row_size(src0->type, src0->ne[0]);
+    const int64_t nrows     = src0->ne[1]*src0->ne[2]*src0->ne[3];
+    if (src0->ne[0] % 256 != 0 || (size_t) row_bytes != src0->nb[1] || !ggml_is_contiguous(src0) ||
+            reinterpret_cast<uintptr_t>(src0->data) % 16 != 0 || nrows > INT32_MAX) {
+        return false;
+    }
+    const ggml_cuda_tmap_encode_t encode = ggml_cuda_get_tmap_encode();
+    if (!encode) {
+        return false;
+    }
+    const cuuint64_t global_dim[2]     = { (cuuint64_t) row_bytes, (cuuint64_t) nrows };
+    const cuuint64_t global_stride[1]  = { (cuuint64_t) row_bytes };
+    const cuuint32_t box_dim[2]        = { MMQ_FP4_TMA_BOX_BYTES, (cuuint32_t) ggml_cuda_mmq_get_I(GGML_TYPE_NVFP4, 8, false, cc) };
+    const cuuint32_t element_stride[2] = { 1, 1 };
+    const CUresult res = encode(&tmap, CU_TENSOR_MAP_DATA_TYPE_UINT8, 2, src0->data, global_dim, global_stride, box_dim,
+        element_stride, CU_TENSOR_MAP_INTERLEAVE_NONE, CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
+        CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+    return res == CUDA_SUCCESS;
+#else
+    GGML_UNUSED(src0);
+    GGML_UNUSED(cc);
+    GGML_UNUSED(tmap);
+    return false;
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 12050
+}
+
 void ggml_cuda_mul_mat_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
@@ -165,9 +222,13 @@ void ggml_cuda_mul_mat_q(
                                 ne11 * ne10_padded * sizeof(block_q8_1) / (QK8_1 * sizeof(int));
         const int64_t s13 = ne12*s12;
 
+        ggml_cuda_tmap tmap_x;
+        const bool use_tmap = ggml_cuda_mmq_encode_tmap_nvfp4(src0, cc, tmap_x);
+
         const mmq_args args = {
             src0_d, src0->type, (const int *) src1_q8_1.ptr, nullptr, nullptr, dst_d,
             src0->type == GGML_TYPE_NVFP4 && use_native_fp4 ? src1_scale.ptr : nullptr,
+            use_tmap ? &tmap_x : nullptr,
             ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
@@ -252,9 +313,13 @@ void ggml_cuda_mul_mat_q(
     }
 
     // Note that ne02 is used instead of ne12 because the number of y channels determines the z dimension of the CUDA grid.
+    ggml_cuda_tmap tmap_x;
+    const bool use_tmap = ggml_cuda_mmq_encode_tmap_nvfp4(src0, cc, tmap_x);
+
     const mmq_args args = {
         src0_d, src0->type, (const int *) src1_q8_1.get(), ids_dst.get(), expert_bounds.get(), dst_d,
         src1_scale.ptr,
+        use_tmap ? &tmap_x : nullptr,
         ne00, ne01, ne_get_rows, s01, ne_get_rows, s1,
         ne02, ne02, s02, s12, s2,
         ne03, ne13, s03, s13, s3,
