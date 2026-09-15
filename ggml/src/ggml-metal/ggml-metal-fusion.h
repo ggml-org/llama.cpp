@@ -38,6 +38,8 @@ typedef enum ggml_metal_fusion_id {
     GGML_METAL_FUSION_GDN_CACHE,    // GATED_DELTA_NET + CPY (write snapshots into the recurrent cache)
     GGML_METAL_FUSION_TOPK_MOE,     // SOFT_MAX + ARGSORT + GET_ROWS + norm/scale (MoE routing)
     GGML_METAL_FUSION_MOE_REDUCE, // MUL + expert VIEWs + ADD chain (MoE output reduction)
+    GGML_METAL_FUSION_MUL_MAT_UNARY,     // MUL_MAT + UNARY (sigmoid/silu)
+    GGML_METAL_FUSION_MUL_MAT_ADD_UNARY, // MUL_MAT + ADD (bias) + UNARY (softplus)
 } ggml_metal_fusion_id;
 
 struct ggml_metal_fusion {
