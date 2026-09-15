@@ -1152,6 +1152,31 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
 }
 
 //
+// sharded (split) mmproj support — the same "<prefix>-NNNNN-of-MMMMM.gguf" convention as llama_model_loader
+//
+
+static int clip_gguf_get_int(const struct gguf_context * ctx, int kid) {
+    switch (gguf_get_kv_type(ctx, kid)) {
+        case GGUF_TYPE_UINT8:  return gguf_get_val_u8 (ctx, kid);
+        case GGUF_TYPE_INT8:   return gguf_get_val_i8 (ctx, kid);
+        case GGUF_TYPE_UINT16: return gguf_get_val_u16(ctx, kid);
+        case GGUF_TYPE_INT16:  return gguf_get_val_i16(ctx, kid);
+        case GGUF_TYPE_UINT32: return (int) gguf_get_val_u32(ctx, kid);
+        case GGUF_TYPE_INT32:  return gguf_get_val_i32(ctx, kid);
+        default:               return 0;
+    }
+}
+
+// "<prefix>-00001-of-00335.gguf" -> "<prefix>" when the name matches split_no/split_count, "" otherwise (rule of llama_split_prefix)
+static std::string clip_split_prefix(const std::string & path, int split_no, int split_count) {
+    const std::string postfix = string_format("-%05d-of-%05d.gguf", split_no + 1, split_count);
+    if (path.size() <= postfix.size() || path.compare(path.size() - postfix.size(), postfix.size(), postfix) != 0) {
+        return "";
+    }
+    return path.substr(0, path.size() - postfix.size());
+}
+
+//
 // clip_model_loader
 //
 
@@ -1160,6 +1185,15 @@ struct clip_model_loader {
     gguf_context_ptr ctx_gguf;
 
     std::string fname;
+
+    // sharded mmproj (produced by llama-gguf-split): the file given by the user carries the KV metadata
+    // (ctx_gguf / ctx_meta); the tensors of the other files of the split are found through `shards` (split.count > 1)
+    struct clip_split_shard {
+        std::string      fname;
+        gguf_context_ptr gguf;
+        ggml_context_ptr meta;
+    };
+    std::vector<clip_split_shard> shards;
 
     size_t model_size = 0; // in bytes
 
@@ -1191,6 +1225,39 @@ struct clip_model_loader {
         }
 
         ctx_meta.reset(meta);
+
+        // follow a sharded mmproj (split.count > 1): the other files are "<prefix>-NNNNN-of-MMMMM.gguf" next to this one
+        {
+            const int kid_count = gguf_find_key(ctx_gguf.get(), "split.count");
+            const int kid_no    = gguf_find_key(ctx_gguf.get(), "split.no");
+            const int split_count = kid_count >= 0 ? clip_gguf_get_int(ctx_gguf.get(), kid_count) : 0;
+            const int split_no    = kid_no    >= 0 ? clip_gguf_get_int(ctx_gguf.get(), kid_no)    : 0;
+            if (split_count > 1) {
+                const std::string split_prefix = clip_split_prefix(this->fname, split_no, split_count);
+                if (split_prefix.empty()) {
+                    throw std::runtime_error(string_format("%s: %s is split %d of %d but its name does not end in -%05d-of-%05d.gguf\n",
+                                __func__, fname, split_no + 1, split_count, split_no + 1, split_count));
+                }
+                for (int i = 0; i < split_count; ++i) {
+                    if (i == split_no) {
+                        continue;
+                    }
+                    const std::string split_path = string_format("%s-%05d-of-%05d.gguf", split_prefix.c_str(), i + 1, split_count);
+                    struct ggml_context * meta_i = nullptr;
+                    struct gguf_init_params params_i = {
+                        /*.no_alloc = */ true,
+                        /*.ctx      = */ &meta_i,
+                    };
+                    gguf_context_ptr gguf_i(gguf_init_from_file(split_path.c_str(), params_i));
+                    if (!gguf_i) {
+                        throw std::runtime_error(string_format("%s: failed to load split %d of %d of the CLIP model: %s\n",
+                                    __func__, i + 1, split_count, split_path.c_str()));
+                    }
+                    shards.push_back({split_path, std::move(gguf_i), ggml_context_ptr(meta_i)});
+                }
+                LOG_INF("%s: sharded mmproj: %d files (%s is split %d)\n", __func__, split_count, fname, split_no + 1);
+            }
+        }
 
         const int n_tensors = gguf_get_n_tensors(ctx_gguf.get());
 
@@ -1228,15 +1295,19 @@ struct clip_model_loader {
 
         // tensors
         if (!skip_tensors) {
-            for (int i = 0; i < n_tensors; ++i) {
-                const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
-                const size_t offset = gguf_get_tensor_offset(ctx_gguf.get(), i);
-                enum ggml_type type = gguf_get_tensor_type(ctx_gguf.get(), i);
-                ggml_tensor * cur = ggml_get_tensor(meta, name);
+            for (size_t s = 0; s <= shards.size(); ++s) {
+            const struct gguf_context * gguf_s = s == 0 ? ctx_gguf.get() : shards[s - 1].gguf.get();
+            struct ggml_context *       meta_s = s == 0 ? meta           : shards[s - 1].meta.get();
+            for (int i = 0; i < (int) gguf_get_n_tensors(gguf_s); ++i) {
+                const char * name = gguf_get_tensor_name(gguf_s, i);
+                const size_t offset = gguf_get_tensor_offset(gguf_s, i);
+                enum ggml_type type = gguf_get_tensor_type(gguf_s, i);
+                ggml_tensor * cur = ggml_get_tensor(meta_s, name);
                 size_t tensor_size = ggml_nbytes(cur);
                 model_size += tensor_size;
                 LOG_DBG("%s: tensor[%d]: n_dims = %d, name = %s, tensor_size=%zu, offset=%zu, shape:[%" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 "], type = %s\n",
                     __func__, i, ggml_n_dims(cur), cur->name, tensor_size, offset, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3], ggml_type_name(type));
+            }
             }
         }
     }
@@ -2099,7 +2170,7 @@ struct clip_model_loader {
     void load_tensors(clip_ctx & ctx_clip) {
         auto & model = ctx_clip.model;
         auto & hparams = model.hparams;
-        std::map<std::string, size_t> tensor_offset;
+        std::map<std::string, std::pair<size_t, size_t>> tensor_offset; // name -> (file: 0 = fname, s = shards[s-1]; byte offset in that file)
         std::vector<ggml_tensor *> tensors_to_load;
 
         auto fin = open_ifstream_binary(fname);
@@ -2112,15 +2183,29 @@ struct clip_model_loader {
                              : model.modality == CLIP_MODALITY_GEN_AUDIO ? "a.gen.code"
                              : "v";
 
-        // get offsets
-        for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
-            const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
-            tensor_offset[name] = gguf_get_data_offset(ctx_gguf.get()) + gguf_get_tensor_offset(ctx_gguf.get(), i);
+        // get offsets (per file of a sharded mmproj)
+        size_t n_tensors_total = 0;
+        for (size_t s = 0; s <= shards.size(); ++s) {
+            const struct gguf_context * gguf_s = s == 0 ? ctx_gguf.get() : shards[s - 1].gguf.get();
+            for (int64_t i = 0; i < gguf_get_n_tensors(gguf_s); ++i) {
+                const char * name = gguf_get_tensor_name(gguf_s, i);
+                tensor_offset[name] = { s, gguf_get_data_offset(gguf_s) + gguf_get_tensor_offset(gguf_s, i) };
+                n_tensors_total++;
+            }
         }
+        // a file of the split other than the one given by the user
+        auto open_shard = [&](size_t s) {
+            const std::string & path = s == 0 ? fname : shards[s - 1].fname;
+            auto f = open_ifstream_binary(path);
+            if (!f) {
+                throw std::runtime_error(string_format("%s: failed to open %s\n", __func__, path.c_str()));
+            }
+            return f;
+        };
 
         // create data context
         struct ggml_init_params params = {
-            /*.mem_size =*/ static_cast<size_t>(gguf_get_n_tensors(ctx_gguf.get()) + 1) * ggml_tensor_overhead(),
+            /*.mem_size =*/ (n_tensors_total + 1) * ggml_tensor_overhead(),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc =*/ true,
         };
@@ -2137,6 +2222,9 @@ struct clip_model_loader {
                 throw std::runtime_error(string_format("%s: tensor already loaded: %s\n", __func__, name.c_str()));
             }
             ggml_tensor * cur = ggml_get_tensor(ctx_meta.get(), name.c_str());
+            for (size_t s = 0; !cur && s < shards.size(); ++s) {
+                cur = ggml_get_tensor(shards[s].meta.get(), name.c_str());
+            }
             if (!cur && required) {
                 throw std::runtime_error(string_format("%s: unable to find tensor %s\n", __func__, name.c_str()));
             }
@@ -2184,25 +2272,32 @@ struct clip_model_loader {
                 return result;
             }
 
-            const int64_t idx = gguf_find_tensor(ctx_gguf.get(), name.c_str());
+            const struct gguf_context * gguf_t = it->second.first == 0 ? ctx_gguf.get() : shards[it->second.first - 1].gguf.get();
+            const int64_t idx = gguf_find_tensor(gguf_t, name.c_str());
             if (idx < 0) {
                 throw std::runtime_error(string_format("%s: failed to find tensor %s\n", __func__, name.c_str()));
             }
 
-            if (const auto type = gguf_get_tensor_type(ctx_gguf.get(), idx); type != GGML_TYPE_F32) {
+            if (const auto type = gguf_get_tensor_type(gguf_t, idx); type != GGML_TYPE_F32) {
                 throw std::runtime_error(string_format("%s: %s must be %s, was %s\n", __func__,
                             name.c_str(), ggml_type_name(GGML_TYPE_F32), ggml_type_name(type)));
             }
 
-            const size_t n_bytes = gguf_get_tensor_size(ctx_gguf.get(), idx);
+            const size_t n_bytes = gguf_get_tensor_size(gguf_t, idx);
             if (n_bytes == 0) {
                 throw std::runtime_error(string_format("%s: tensor %s is empty\n", __func__, name.c_str()));
             }
 
             const size_t n_elems = n_bytes / sizeof(float);
             result.resize(n_elems);
-            fin.seekg(it->second, std::ios::beg);
-            fin.read(reinterpret_cast<char*>(result.data()), n_bytes);
+            if (it->second.first == 0) {
+                fin.seekg(it->second.second, std::ios::beg);
+                fin.read(reinterpret_cast<char*>(result.data()), n_bytes);
+            } else {
+                auto fin_s = open_shard(it->second.first);
+                fin_s.seekg(it->second.second, std::ios::beg);
+                fin_s.read(reinterpret_cast<char*>(result.data()), n_bytes);
+            }
             return result;
         };
 
@@ -3603,12 +3698,19 @@ struct clip_model_loader {
             // read the weight from file
             if (!ctx_clip.no_alloc) {
                 size_t data_loaded = 0;
+                size_t cur_shard   = 0; // file `fin` currently reads from
                 for (auto & t : tensors_to_load) {
                     ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
                     GGML_ASSERT(cur && "tensor not found in ctx_data");
                     auto it_off = tensor_offset.find(t->name);
                     GGML_ASSERT(it_off != tensor_offset.end() && "no offset for tensor");
-                    const size_t offset = it_off->second;
+                    const size_t offset = it_off->second.second;
+                    if (it_off->second.first != cur_shard) {
+                        // the tensor lives in another file of the split
+                        cur_shard = it_off->second.first;
+                        fin.close();
+                        fin = open_shard(cur_shard);
+                    }
                     fin.seekg(offset, std::ios::beg);
                     if (!fin) {
                         throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
