@@ -4085,6 +4085,8 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
         /*.nbf1   =*/ { nb01 },
         /*.nbf2   =*/ { nb02 },
         /*.nbf3   =*/ { nb03 },
+        /*.scale_val =*/ 1.0f,
+        /*.use_scale =*/ 0,
     };
 
     int n_fuse = 1;
@@ -4092,7 +4094,7 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
     ggml_metal_buffer_id bid_fuse[2] = { bid_src0, bid_src0 };
 
     // d[0] = norm(a)
-    // d[1] = mul(d[0], b)
+    // d[1] = mul(d[0], b) or scale(d[0])
     // d[2] = add(d[1], c)
     if (use_fusion) {
         int n = 1;
@@ -4124,6 +4126,20 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
                 if (n_fuse == 3) {
                     GGML_LOG_DEBUG("%s: fuse: %s + MUL + ADD\n", __func__, ggml_op_name(op->op));
                 }
+            }
+        }
+
+        if (fusion && fusion->id == GGML_METAL_FUSION_NORM_SCALE) {
+            n_fuse = n;
+
+            ctx->count_fusions(fusion);
+
+            const ggml_tensor * scale_node = ctx->node(idx + 1);
+            args.scale_val = ggml_get_op_params_f32(scale_node, 0);
+            args.use_scale = 1;
+
+            if (debug_fusion > 1) {
+                GGML_LOG_DEBUG("%s: fuse: %s + SCALE\n", __func__, ggml_op_name(op->op));
             }
         }
     }

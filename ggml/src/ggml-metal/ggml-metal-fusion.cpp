@@ -43,6 +43,18 @@ static bool ggml_metal_fusion_check_norm(
 
     GGML_ASSERT(fusion->n_ops >= 2);
 
+    if (fusion->id == GGML_METAL_FUSION_NORM_SCALE) {
+        GGML_ASSERT(fusion->n_ops == 2);
+
+        const ggml_tensor * scale = nodes[1];
+        if (scale->op != GGML_OP_SCALE || scale->src[0] != nodes[0] || scale->src[1] ||
+            scale->type != GGML_TYPE_F32) {
+            return false;
+        }
+
+        return true;
+    }
+
     for (int j = 1; j < fusion->n_ops; j++) {
         // the fused MUL/ADD must read the previous node as src0
         if (nodes[j]->src[0] != nodes[j - 1]) {
@@ -526,8 +538,10 @@ static bool ggml_metal_fusion_check_moe_weighted_reduction(
 
 static const ggml_op ops_norm_mul[]         = { GGML_OP_NORM, GGML_OP_MUL };
 static const ggml_op ops_norm_mul_add[]     = { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD };
+static const ggml_op ops_norm_scale[]       = { GGML_OP_NORM, GGML_OP_SCALE };
 static const ggml_op ops_rms_norm_mul[]     = { GGML_OP_RMS_NORM, GGML_OP_MUL };
 static const ggml_op ops_rms_norm_mul_add[] = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD };
+static const ggml_op ops_rms_norm_scale[]   = { GGML_OP_RMS_NORM, GGML_OP_SCALE };
 
 static const ggml_op ops_add_2[] = { GGML_OP_ADD, GGML_OP_ADD };
 static const ggml_op ops_add_3[] = { GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
@@ -565,8 +579,10 @@ static const ggml_op ops_moe_weighted_reduction_8[] = { GGML_OP_MUL, GGML_OP_ADD
 static const ggml_metal_fusion ggml_metal_fusions[] = {
     { GGML_METAL_FUSION_NORM_MUL,     ops_norm_mul,         2, false, ggml_metal_fusion_check_norm },
     { GGML_METAL_FUSION_NORM_MUL_ADD, ops_norm_mul_add,     3, false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_SCALE,   ops_norm_scale,       2, false, ggml_metal_fusion_check_norm },
     { GGML_METAL_FUSION_NORM_MUL,     ops_rms_norm_mul,     2, false, ggml_metal_fusion_check_norm },
     { GGML_METAL_FUSION_NORM_MUL_ADD, ops_rms_norm_mul_add, 3, false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_SCALE,   ops_rms_norm_scale,   2, false, ggml_metal_fusion_check_norm },
     { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_2,            2, false, ggml_metal_fusion_check_add_chain },
     { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_3,            3, false, ggml_metal_fusion_check_add_chain },
     { GGML_METAL_FUSION_ADD_CHAIN,    ops_add_4,            4, false, ggml_metal_fusion_check_add_chain },
