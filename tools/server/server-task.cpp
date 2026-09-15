@@ -422,6 +422,11 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
     }
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         finish_reason = msg.tool_calls.empty() ? "stop" : "tool_calls";
+    } else if (stop == STOP_TYPE_LIMIT && !truncated) {
+        // a non-truncating limit (n_indent, t_max_predict_ms) is not length-truncation:
+        // report it as "stop". output-budget and context-capacity limits keep truncated=true
+        // and remain "length" (see the separate context-exhaustion discussion).
+        finish_reason = "stop";
     }
 
     json choice {
@@ -464,6 +469,11 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     std::string finish_reason = "length";
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         finish_reason = oaicompat_msg.tool_calls.empty() ? "stop" : "tool_calls";
+    } else if (stop == STOP_TYPE_LIMIT && !truncated) {
+        // a non-truncating limit (n_indent, t_max_predict_ms) is not length-truncation:
+        // report it as "stop". output-budget and context-capacity limits keep truncated=true
+        // and remain "length" (see the separate context-exhaustion discussion).
+        finish_reason = "stop";
     }
 
     json deltas = json::array();
