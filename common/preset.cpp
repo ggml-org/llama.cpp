@@ -276,10 +276,56 @@ static std::string parse_bool_arg(const common_arg & arg, const std::string & ke
     return value;
 }
 
+// keys that a remote (untrusted) preset is allowed to set
+// ref: https://github.com/ggml-org/llama.cpp/pull/18520
+static std::set<std::string> get_remote_preset_whitelist(const std::map<std::string, common_arg> & key_to_opt) {
+    static const std::set<std::string> allowed_options = {
+        "model-url",
+        "hf-repo",
+        "hf-repo-draft",
+        "hf-repo-v", // vocoder
+        "hf-file-v", // vocoder
+        "mmproj-url",
+        "pooling",
+        "jinja",
+        "batch-size",
+        "ubatch-size",
+        "cache-reuse",
+        "chat-template-kwargs",
+        "mmap",
+        // note: sampling params are automatically allowed by default
+        // negated args will be added automatically
+    };
+
+    std::set<std::string> allowed_keys;
+
+    for (const auto & it : key_to_opt) {
+        const std::string & key = it.first;
+        const common_arg & opt = it.second;
+        if (allowed_options.find(key) != allowed_options.end() || opt.is_sampling) {
+            allowed_keys.insert(key);
+            // also add variant keys (args without leading dashes and env vars)
+            for (const auto & arg : opt.get_args()) {
+                allowed_keys.insert(rm_leading_dashes(arg));
+            }
+            for (const auto & env : opt.get_env()) {
+                allowed_keys.insert(env);
+            }
+        }
+    }
+
+    return allowed_keys;
+}
+
 common_preset_context::common_preset_context(llama_example ex)
         : ctx_params(common_params_parser_init(default_params, ex)) {
     common_params_add_preset_options(ctx_params.options);
     key_to_opt = get_map_key_opt(ctx_params);
+}
+
+void common_preset_context::set_remote_allowed_keys() {
+    filter_allowed_keys = true;
+    allowed_keys = get_remote_preset_whitelist(key_to_opt);
 }
 
 common_presets common_preset_context::load_from_ini(const std::string & path, common_preset & global) const {
