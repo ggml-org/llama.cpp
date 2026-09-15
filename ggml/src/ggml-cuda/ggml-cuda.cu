@@ -1822,12 +1822,23 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     return use_mul_mat_vec_q;
 }
 
-static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+// returns true if a scaled matmul applied its weight scale in-kernel (mmvq epilogue fold),
+// so the caller can skip the separate ggml_cuda_op_mul_mat_scale pass
+static bool ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int32_t hint = ggml_get_op_params_i32(dst, 1);
     if (hint == GGML_HINT_SRC0_IS_HADAMARD && ggml_cuda_op_fwht(ctx, src1, dst)) {
-        return;
+        return false;
+    }
+
+    // mmvq can fold the weight scale (src[2]) into its epilogue for NVFP4 per-tensor scales
+    const bool scale_fold = dst->src[2] != NULL &&
+        src0->type == GGML_TYPE_NVFP4 && ggml_nelements(dst->src[2]) == 1 &&
+        ggml_cuda_should_fuse_mul_mat_vec_q(dst);
+    ggml_cuda_mm_fusion_args_host fusion = {};
+    if (scale_fold) {
+        fusion.x_scale = dst->src[2];
     }
 
     // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
@@ -1837,7 +1848,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
     if (bad_padding_clear || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
-        return;
+        return false;
     }
 
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
@@ -1847,7 +1858,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         // The custom F16 vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
-        return;
+        return false;
     }
     // A transposed vector can still use MMVQ (i.e. ne01 == 1)
     if (ne01 == 1 && ne11 > MMVF_MAX_BATCH_SIZE && ne2 == 1 && ne3 == 1
@@ -1861,28 +1872,30 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         dst_vec.nb[2] = dst_vec.nb[1];
         dst_vec.nb[3] = dst_vec.nb[1];
         ggml_cuda_mul_mat_vec_f(ctx, src1, src0, nullptr, &dst_vec);
-        return;
+        return false;
     }
     if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
-        return;
+        return false;
     }
     if (ggml_cuda_should_use_mmvq(src0->type, cc, ne11) &&
             (src0->type != GGML_TYPE_F8_E4M3 || ne00 % QK8_1 == 0)) {
-        ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
-        return;
+        ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst, scale_fold ? &fusion : nullptr);
+        return scale_fold;
     }
     if (ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
-        return;
+        return false;
     }
     if (src0->type == GGML_TYPE_F8_E4M3) {
+        // F8 kernels apply no weight scale; the trailing ggml_cuda_op_mul_mat_scale epilogue does (src[2])
         if (!ggml_cuda_mul_mat_fp8(ctx, src0, src1, dst)) {
             ggml_cuda_mul_mat_fp8_fallback(ctx, src0, src1, dst);
         }
-        return;
+        return false;
     }
     ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
+    return false;
 }
 
 // returns true when ggml_cuda_mul_mat_id takes the fallback path that requires stream synchronization
@@ -1917,7 +1930,8 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
     return true;
 }
 
-static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+// returns true if a scaled matmul applied its weight scale in-kernel (mmvq epilogue fold)
+static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * ids  = dst->src[2];
@@ -1929,6 +1943,15 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
+    // mmvq can fold the per-expert weight scale (src[3]) into its epilogue for NVFP4
+    const bool scale_fold = dst->src[3] != NULL &&
+        src0->type == GGML_TYPE_NVFP4 && ggml_nelements(dst->src[3]) == src0->ne[2] &&
+        ggml_cuda_should_fuse_mul_mat_vec_q(dst);
+    ggml_cuda_mm_fusion_args_host fusion = {};
+    if (scale_fold) {
+        fusion.x_scale = dst->src[3];
+    }
+
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
@@ -1937,25 +1960,25 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                 const int mmvq_mmid_max = get_mmvq_mmid_max_batch(src0->type, cc);
                 if (ne2 <= mmvq_mmid_max &&
                         (src0->type != GGML_TYPE_F8_E4M3 || ne00 % QK8_1 == 0)) {
-                    ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst);
-                    return;
+                    ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst, scale_fold ? &fusion : nullptr);
+                    return scale_fold;
                 }
             } else {
                 if (GGML_CUDA_CC_IS_AMD(cc)) {
                     ggml_cuda_mul_mat_vec_f(ctx, src0, src1, ids, dst);
-                    return;
+                    return false;
                 }
             }
         }
 
         if (ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
             ggml_cuda_mul_mat_q(ctx, src0, src1, ids, dst);
-            return;
+            return false;
         }
 
         if (ggml_cuda_should_use_mmf(src0->type, cc, WARP_SIZE, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
             ggml_cuda_mul_mat_f(ctx, src0, src1, ids, dst);
-            return;
+            return false;
         }
     }
 
@@ -2073,6 +2096,72 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         ne0, ne0*ts_dst_sorted, ne_get_rows*ne0*ts_dst_sorted, ne_get_rows*ne0*ts_dst_sorted,
         ne_get_rows, 1, 1, sizeof(int32_t), ne_get_rows*sizeof(int32_t), ne_get_rows*sizeof(int32_t),
         nb1, nb2, nb3, stream);
+    return false;
+}
+
+// epilogue for a scaled MUL_MAT/MUL_MAT_ID (weight scale in src[2] dense / src[3] id)
+#define CUDA_MUL_MAT_SCALE_BLOCK_SIZE 256
+static __global__ void mul_mat_scale_dense(float * dst, const float * scale,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3,
+        int64_t sne0, int64_t sne1, int64_t sne2, int64_t sne3) {
+    const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= ne0*ne1*ne2*ne3) {
+        return;
+    }
+    const int64_t i0 = i % ne0;
+    const int64_t i1 = (i / ne0) % ne1;
+    const int64_t i2 = (i / (ne0*ne1)) % ne2;
+    const int64_t i3 = i / (ne0*ne1*ne2);
+    const int64_t si = (i0 % sne0) + (i1 % sne1)*sne0 + (i2 % sne2)*sne0*sne1 + (i3 % sne3)*sne0*sne1*sne2;
+    dst[i] *= scale[si];
+}
+
+// sne0 == 0: scalar per-expert scale[expert]; sne0 > 0: per-channel-per-expert scale[i0 + expert*sne0]
+static __global__ void mul_mat_scale_id(float * dst, const float * scale, const int32_t * ids,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ids_s0, int64_t ids_s1, int64_t sne0) {
+    const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= ne0*ne1*ne2) {
+        return;
+    }
+    const int64_t i0 = i % ne0;
+    const int64_t i1 = (i / ne0) % ne1;
+    const int64_t i2 = i / (ne0*ne1);
+    const int64_t expert = ids[i1*ids_s0 + i2*ids_s1];
+    dst[i] *= scale[sne0 > 0 ? i0 + expert*sne0 : expert];
+}
+
+static void ggml_cuda_op_mul_mat_scale(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const bool is_id = dst->op == GGML_OP_MUL_MAT_ID;
+    const ggml_tensor * scale = is_id ? dst->src[3] : dst->src[2];
+    GGML_ASSERT(scale != NULL && scale->type == GGML_TYPE_F32 && ggml_is_contiguous(scale));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    float       * dst_d   = (float       *) dst->data;
+    const float * scale_d = (const float *) scale->data;
+    cudaStream_t  stream  = ctx.stream();
+
+    const int64_t ne0 = dst->ne[0], ne1 = dst->ne[1], ne2 = dst->ne[2], ne3 = dst->ne[3];
+
+    // per-expert scale is indexed through ids (scalar [n_expert] or 2D per-channel [n_out, n_expert]);
+    // per-tensor / dense scale is a plain broadcast
+    const bool per_channel_expert = is_id && scale->ne[1] == dst->src[0]->ne[2];
+    const bool per_expert = is_id && (ggml_nelements(scale) == dst->src[0]->ne[2] || per_channel_expert);
+
+    if (per_expert) {
+        const ggml_tensor * ids = dst->src[2];
+        const int64_t total  = ne0*ne1*ne2;
+        const int64_t blocks = (total + CUDA_MUL_MAT_SCALE_BLOCK_SIZE - 1) / CUDA_MUL_MAT_SCALE_BLOCK_SIZE;
+        mul_mat_scale_id<<<blocks, CUDA_MUL_MAT_SCALE_BLOCK_SIZE, 0, stream>>>(
+            dst_d, scale_d, (const int32_t *) ids->data, ne0, ne1, ne2,
+            ids->nb[0]/sizeof(int32_t), ids->nb[1]/sizeof(int32_t), per_channel_expert ? scale->ne[0] : 0);
+    } else {
+        const int64_t total  = ne0*ne1*ne2*ne3;
+        const int64_t blocks = (total + CUDA_MUL_MAT_SCALE_BLOCK_SIZE - 1) / CUDA_MUL_MAT_SCALE_BLOCK_SIZE;
+        mul_mat_scale_dense<<<blocks, CUDA_MUL_MAT_SCALE_BLOCK_SIZE, 0, stream>>>(
+            dst_d, scale_d, ne0, ne1, ne2, ne3,
+            scale->ne[0], scale->ne[1], scale->ne[2], scale->ne[3]);
+    }
+    CUDA_CHECK(cudaGetLastError());
 }
 
 static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst) {
@@ -2267,12 +2356,18 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_RMS_NORM_BACK:
             ggml_cuda_op_rms_norm_back(ctx, dst);
             break;
-        case GGML_OP_MUL_MAT:
-            ggml_cuda_mul_mat(ctx, dst->src[0], dst->src[1], dst);
-            break;
-        case GGML_OP_MUL_MAT_ID:
-            ggml_cuda_mul_mat_id(ctx, dst);
-            break;
+        case GGML_OP_MUL_MAT: {
+                const bool scale_folded = ggml_cuda_mul_mat(ctx, dst->src[0], dst->src[1], dst);
+                if (dst->src[2] != NULL && !scale_folded) {
+                    ggml_cuda_op_mul_mat_scale(ctx, dst);
+                }
+            } break;
+        case GGML_OP_MUL_MAT_ID: {
+                const bool scale_folded = ggml_cuda_mul_mat_id(ctx, dst);
+                if (dst->src[3] != NULL && !scale_folded) {
+                    ggml_cuda_op_mul_mat_scale(ctx, dst);
+                }
+            } break;
         case GGML_OP_OUT_PROD:
             ggml_cuda_out_prod(ctx, dst);
             break;
@@ -3448,6 +3543,12 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    // a scaled matmul applies its weight scale in-kernel or via epilogue; keep it out of multi-op fusion
+    if ((node->op == GGML_OP_MUL_MAT    && node->src[2] != NULL) ||
+        (node->op == GGML_OP_MUL_MAT_ID && node->src[3] != NULL)) {
+        return 0;
+    }
 
     if (node->op == GGML_OP_MUL) {
         ggml_cuda_moe_weighted_reduction_match match;
