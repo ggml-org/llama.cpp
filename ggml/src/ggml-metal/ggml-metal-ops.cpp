@@ -3835,9 +3835,9 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
         }
 
         // MoE output reduction: experts * weights -> weighted sum
-        if (fusion && fusion->id == GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION) {
+        if (fusion && fusion->id == GGML_METAL_FUSION_MOE_REDUCE) {
             ctx->count_fusions(fusion);
-            return ggml_metal_op_moe_weighted_reduction(ctx, idx);
+            return ggml_metal_op_moe_reduce(ctx, idx);
         }
     }
 
@@ -5499,13 +5499,13 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
     return n_fuse;
 }
 
-int ggml_metal_op_moe_weighted_reduction(ggml_metal_op_t ctx, int idx) {
+int ggml_metal_op_moe_reduce(ggml_metal_op_t ctx, int idx) {
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
     int n_fuse = 1;
     const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n_fuse);
-    if (!fusion || fusion->id != GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION) {
+    if (!fusion || fusion->id != GGML_METAL_FUSION_MOE_REDUCE) {
         return 1;
     }
 
@@ -5514,13 +5514,13 @@ int ggml_metal_op_moe_weighted_reduction(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * weights = mul->src[1];
     ggml_tensor * dst     = ctx->node(idx + n_fuse - 1);
 
-    ggml_metal_kargs_moe_weighted_reduction args = {
+    ggml_metal_kargs_moe_reduce args = {
         /*.ne00 =*/ (int32_t) experts->ne[0],
         /*.ne01 =*/ (int32_t) experts->ne[1],
         /*.ne02 =*/ (int32_t) experts->ne[2],
     };
 
-    auto pipeline = ggml_metal_library_get_pipeline_moe_weighted_reduction(lib);
+    auto pipeline = ggml_metal_library_get_pipeline_moe_reduce(lib);
 
     const int nth = std::min(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
     const int n_col_tiles = (args.ne00 + nth - 1) / nth;
@@ -5536,7 +5536,7 @@ int ggml_metal_op_moe_weighted_reduction(ggml_metal_op_t ctx, int idx) {
     ctx->count_fusions(fusion);
 
     if (ggml_metal_fusion_info_debug(ctx->finfo) > 1) {
-        GGML_LOG_DEBUG("%s: fuse: MOE_WEIGHTED_REDUCTION\n", __func__);
+        GGML_LOG_DEBUG("%s: fuse: MOE_REDUCE\n", __func__);
     }
 
     return n_fuse;

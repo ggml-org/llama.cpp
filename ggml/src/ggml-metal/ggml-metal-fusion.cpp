@@ -404,10 +404,10 @@ static bool ggml_metal_fusion_check_topk_moe(
     return true;
 }
 
-#define GGML_METAL_MOE_WEIGHTED_REDUCTION_MAX_EXPERTS 8
+#define GGML_METAL_MOE_REDUCE_MAX_EXPERTS 8
 
-bool ggml_metal_fusion_match_moe_weighted_reduction(
-        const ggml_cgraph * gf, int node_idx, ggml_metal_moe_weighted_reduction_match * match) {
+bool ggml_metal_fusion_match_moe_reduce(
+        const ggml_cgraph * gf, int node_idx, ggml_metal_moe_reduce_match * match) {
     if (match == nullptr || node_idx < 0 || node_idx + 3 > gf->n_nodes) {
         return false;
     }
@@ -424,7 +424,7 @@ bool ggml_metal_fusion_match_moe_weighted_reduction(
         n_views++;
     }
 
-    if (n_views < 2 || n_views > GGML_METAL_MOE_WEIGHTED_REDUCTION_MAX_EXPERTS) {
+    if (n_views < 2 || n_views > GGML_METAL_MOE_REDUCE_MAX_EXPERTS) {
         return false;
     }
 
@@ -502,7 +502,7 @@ bool ggml_metal_fusion_match_moe_weighted_reduction(
     return true;
 }
 
-static bool ggml_metal_fusion_check_moe_weighted_reduction(
+static bool ggml_metal_fusion_check_moe_reduce(
         const ggml_metal_fusion      * fusion,
         const ggml_tensor * const    * nodes,
         const ggml_cgraph            * gf,
@@ -511,8 +511,8 @@ static bool ggml_metal_fusion_check_moe_weighted_reduction(
               ggml_metal_fusion_mode   mode) {
     GGML_UNUSED(nodes);
 
-    ggml_metal_moe_weighted_reduction_match match;
-    if (!ggml_metal_fusion_match_moe_weighted_reduction(gf, node_idxs[idx], &match)) {
+    ggml_metal_moe_reduce_match match;
+    if (!ggml_metal_fusion_match_moe_reduce(gf, node_idxs[idx], &match)) {
         return false;
     }
 
@@ -568,13 +568,13 @@ static const ggml_op ops_topk_moe_norm_scale[] = {
     GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_SCALE
 };
 
-static const ggml_op ops_moe_weighted_reduction_2[] = { GGML_OP_MUL, GGML_OP_ADD };
-static const ggml_op ops_moe_weighted_reduction_3[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD };
-static const ggml_op ops_moe_weighted_reduction_4[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
-static const ggml_op ops_moe_weighted_reduction_5[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
-static const ggml_op ops_moe_weighted_reduction_6[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
-static const ggml_op ops_moe_weighted_reduction_7[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
-static const ggml_op ops_moe_weighted_reduction_8[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
+static const ggml_op ops_moe_reduce_2[] = { GGML_OP_MUL, GGML_OP_ADD };
+static const ggml_op ops_moe_reduce_3[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD };
+static const ggml_op ops_moe_reduce_4[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
+static const ggml_op ops_moe_reduce_5[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
+static const ggml_op ops_moe_reduce_6[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
+static const ggml_op ops_moe_reduce_7[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
+static const ggml_op ops_moe_reduce_8[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
 
 static const ggml_metal_fusion ggml_metal_fusions[] = {
     { GGML_METAL_FUSION_NORM_MUL,     ops_norm_mul,         2, false, ggml_metal_fusion_check_norm },
@@ -595,13 +595,13 @@ static const ggml_metal_fusion ggml_metal_fusions[] = {
     { GGML_METAL_FUSION_TOPK_MOE,     ops_topk_moe_scale,    4, true,  ggml_metal_fusion_check_topk_moe },
     { GGML_METAL_FUSION_TOPK_MOE,     ops_topk_moe_norm,     6, true,  ggml_metal_fusion_check_topk_moe },
     { GGML_METAL_FUSION_TOPK_MOE,     ops_topk_moe_norm_scale, 7, true, ggml_metal_fusion_check_topk_moe },
-    { GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION, ops_moe_weighted_reduction_2, 2, true, ggml_metal_fusion_check_moe_weighted_reduction },
-    { GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION, ops_moe_weighted_reduction_3, 3, true, ggml_metal_fusion_check_moe_weighted_reduction },
-    { GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION, ops_moe_weighted_reduction_4, 4, true, ggml_metal_fusion_check_moe_weighted_reduction },
-    { GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION, ops_moe_weighted_reduction_5, 5, true, ggml_metal_fusion_check_moe_weighted_reduction },
-    { GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION, ops_moe_weighted_reduction_6, 6, true, ggml_metal_fusion_check_moe_weighted_reduction },
-    { GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION, ops_moe_weighted_reduction_7, 7, true, ggml_metal_fusion_check_moe_weighted_reduction },
-    { GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION, ops_moe_weighted_reduction_8, 8, true, ggml_metal_fusion_check_moe_weighted_reduction },
+    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_2, 2, true, ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_3, 3, true, ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_4, 4, true, ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_5, 5, true, ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_6, 6, true, ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_7, 7, true, ggml_metal_fusion_check_moe_reduce },
+    { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_8, 8, true, ggml_metal_fusion_check_moe_reduce },
 };
 
 const ggml_metal_fusion * ggml_metal_fusion_all(int * n) {
