@@ -152,6 +152,80 @@ def test_synth_ignores_target_tokens():
     assert res.body["stop_type"] == "limit"
 
 
+def test_ngram_eog_draft_tail_is_not_accepted():
+    global server
+    server = ServerPreset.tinyllama2()
+    server.model_draft = None
+    server.spec_type = "ngram-simple"
+    server.n_slots = 1
+    server.server_slots = True
+    server.n_ctx = 1024
+    server.n_batch = 512
+    server.n_ubatch = 512
+    server.n_threads = 4
+    server.fa = "off"
+    server.start()
+
+    props = server.make_request("GET", "/props")
+    assert props.status_code == 200, props.body
+
+    eos = server.make_request("POST", "/tokenize", data={
+        "content": props.body["eos_token"],
+        "parse_special": True,
+    })
+    token_x = server.make_request("POST", "/tokenize", data={"content": "x"})
+    token_bos_x = server.make_request("POST", "/tokenize", data={
+        "content": "x",
+        "add_special": True,
+    })
+    assert eos.status_code == 200, eos.body
+    assert token_x.status_code == 200, token_x.body
+    assert token_bos_x.status_code == 200, token_bos_x.body
+    assert len(eos.body["tokens"]) == 1, eos.body
+    assert len(token_x.body["tokens"]) >= 1, token_x.body
+    assert len(token_bos_x.body["tokens"]) >= 2, token_bos_x.body
+
+    id_eos = eos.body["tokens"][0]
+    id_x = token_x.body["tokens"][0]
+    id_bos = token_bos_x.body["tokens"][0]
+
+    calibration = server.make_request("POST", "/completion", data={
+        "prompt": [id_bos, id_x],
+        "cache_prompt": False,
+        "temperature": 0.0,
+        "top_k": 1,
+        "n_predict": 2,
+        "return_tokens": True,
+        "grammar": 'root ::= "a"',
+    })
+    assert calibration.status_code == 200, calibration.body
+    assert len(calibration.body["tokens"]) == 2, calibration.body
+    assert calibration.body["tokens"][-1] == id_eos, calibration.body
+
+    id_a = calibration.body["tokens"][0]
+    prompt_tokens = [id_bos, id_x] + [id_x] * 11 + [id_a] + [id_eos] * 48 + [id_x] * 11
+
+    response = server.make_request("POST", "/completion", data={
+        "prompt": prompt_tokens,
+        "cache_prompt": False,
+        "temperature": 0.0,
+        "top_k": 1,
+        "n_predict": 64,
+        "return_tokens": True,
+        "grammar": 'root ::= "a"',
+    })
+    assert response.status_code == 200, response.body
+
+    slots = server.make_request("GET", "/slots")
+    assert slots.status_code == 200, slots.body
+
+    assert response.body["tokens"] == [id_a, id_eos]
+    assert response.body["stop_type"] == "eos"
+    assert response.body["timings"]["draft_n"] == 48
+    assert response.body["timings"]["draft_n_accepted"] == 0
+    assert slots.body[0]["n_prompt_tokens"] == len(prompt_tokens) + 1
+
+
 def test_slot_ctx_not_exceeded():
     global server
     server.n_ctx = 256
