@@ -52,15 +52,17 @@ export interface UseModelsSelectorReturn {
  */
 export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSelectorReturn {
 	const activeBackendId = $derived(backendsStore.active.id);
-	// every enabled backend's models are selectable; the switcher only picks
-	// the backend new requests target
-	const options = $derived(
+	// every enabled backend's models stay selectable and resolvable, so a
+	// model never turns unavailable just because another tab is open
+	const allOptions = $derived(
 		modelsStore.models.filter((option) => {
 			const modelProps = modelsStore.props.getModelProps(option.model);
 
 			return modelProps?.ui !== false;
 		})
 	);
+	// the switcher tabs scope the rendered list to one backend's models
+	const options = $derived(allOptions.filter((option) => option.backendId === activeBackendId));
 	const loading = $derived(modelsStore.loading);
 	const updating = $derived(modelsStore.updating);
 	const activeId = $derived(modelsStore.selectedModelId);
@@ -75,14 +77,14 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const isHighlightedCurrentModelActive = $derived.by(() => {
 		if (!isRouter || !currentModel) return false;
 
-		const currentOption = options.find((option) => option.model === currentModel);
+		const currentOption = allOptions.find((option) => option.model === currentModel);
 
 		return currentOption ? currentOption.id === activeId : false;
 	});
 	const isCurrentModelInCache = $derived.by(() => {
 		if (!isRouter || !currentModel) return true;
 
-		return options.some((option) => option.model === currentModel);
+		return allOptions.some((option) => option.model === currentModel);
 	});
 
 	let isLoadingModel = $state(false);
@@ -185,11 +187,13 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			// External backend: the selection is backend-scoped, so it wins over
 			// the conversation's model, which may belong to another backend.
 			if (!serverStore.capabilities.props) {
-				const selected = activeId ? options.find((option) => option.id === activeId) : undefined;
+				const selected = activeId ? allOptions.find((option) => option.id === activeId) : undefined;
 
 				if (selected) return selected;
 
-				return currentModel ? options.find((option) => option.model === currentModel) : undefined;
+				return currentModel
+					? allOptions.find((option) => option.model === currentModel)
+					: undefined;
 			}
 
 			const displayModel = serverModel || currentModel;
@@ -216,11 +220,11 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 				};
 			}
 
-			return options.find((option) => option.model === currentModel);
+			return allOptions.find((option) => option.model === currentModel);
 		}
 
 		if (activeId) {
-			return options.find((option) => option.id === activeId);
+			return allOptions.find((option) => option.id === activeId);
 		}
 
 		return undefined;
