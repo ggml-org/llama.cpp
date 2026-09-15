@@ -103,6 +103,7 @@
 				orgName: 'intel'
 			}
 		],
+		external: [],
 		favorites: favoriteModels,
 		loaded: loadedModels
 	};
@@ -138,6 +139,7 @@
 			currentModel={null}
 			groups={{
 				available: [],
+				external: [],
 				favorites: [],
 				loaded: [loadedModels[0]]
 			}}
@@ -154,6 +156,7 @@
 			currentModel={null}
 			groups={{
 				available: [],
+				external: [],
 				favorites: favoriteModels,
 				loaded: []
 			}}

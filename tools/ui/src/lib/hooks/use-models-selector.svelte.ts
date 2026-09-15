@@ -1,5 +1,5 @@
 import { filterModelOptions, groupModelOptions } from '$lib/components/app/navigation/utils';
-import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
+import { CHAT_INPUT_FOCUS_SELECTOR, LOCAL_BACKEND_ID } from '$lib/constants';
 import { backendsModelsStore, backendsStore, modelsStore, serverStore } from '$lib/stores';
 import type { Backend } from '$lib/types';
 import type { ModelOption } from '$lib/types/models';
@@ -21,7 +21,6 @@ export interface UseModelsSelectorReturn {
 	readonly updating: boolean;
 	readonly activeId: string | null;
 	readonly activeBackendId: string;
-	readonly isLocalBackend: boolean;
 	readonly backends: Backend[];
 	readonly isMultiModel: boolean;
 	readonly isRouter: boolean;
@@ -53,12 +52,10 @@ export interface UseModelsSelectorReturn {
  */
 export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSelectorReturn {
 	const activeBackendId = $derived(backendsStore.active.id);
-	const isLocalBackend = $derived(backendsStore.active.protocol === 'llama.cpp');
-	// the backend switcher tabs scope the list to one backend's models
+	// every enabled backend's models are selectable; the switcher only picks
+	// the backend new requests target
 	const options = $derived(
 		modelsStore.models.filter((option) => {
-			if (option.backendId !== activeBackendId) return false;
-
 			const modelProps = modelsStore.props.getModelProps(option.model);
 
 			return modelProps?.ui !== false;
@@ -95,8 +92,11 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
 	const groupedFilteredOptions = $derived(
-		groupModelOptions(filteredOptions, modelsStore.favoriteModelIds, (m) =>
-			modelsStore.isModelLoaded(m)
+		groupModelOptions(
+			filteredOptions,
+			modelsStore.favoriteModelIds,
+			(m) => modelsStore.isModelLoaded(m),
+			(option) => option.backendId === LOCAL_BACKEND_ID
 		)
 	);
 
@@ -275,10 +275,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		get isLoadingModel() {
 			return isLoadingModel;
-		},
-
-		get isLocalBackend() {
-			return isLocalBackend;
 		},
 
 		get isMultiModel() {

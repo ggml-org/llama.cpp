@@ -10,8 +10,6 @@
 		groups: GroupedModelOptions;
 		currentModel: string | null;
 		activeId: string | null;
-		/** Render one flat list without section headers (external backends). */
-		flat?: boolean;
 		sectionHeaderClass?: string;
 		onSelect: (modelId: string) => void;
 		onInfoClick: (modelName: string) => void;
@@ -21,7 +19,6 @@
 	let {
 		activeId,
 		currentModel,
-		flat = false,
 		groups,
 		onInfoClick,
 		onSelect,
@@ -64,44 +61,44 @@
 	/>
 {/snippet}
 
-{#if flat}
-	{#each [...groups.favorites, ...groups.available.flatMap((group) => group.items)] as item (item.option.id)}
+{#if groups.favorites.length > 0}
+	<p class={sectionHeaderClass}>Favorite models</p>
+
+	{#each groups.favorites as item (`fav-${item.option.id}`)}
 		{@render render(item, true)}
 	{/each}
-{:else}
-	{#if groups.favorites.length > 0}
-		<p class={sectionHeaderClass}>Favorite models</p>
+{/if}
 
-		{#each groups.favorites as item (`fav-${item.option.id}`)}
+{#if getDownloadEntries.length > 0}
+	<p class={sectionHeaderClass}>Download in progress</p>
+
+	{#each getDownloadEntries as entry (entry.repoWithTag)}
+		<ModelsSelectorDownloadItem {entry} onRequestCancel={requestCancel} />
+	{/each}
+{/if}
+
+{#if groups.loaded.length > 0}
+	<p class={sectionHeaderClass}>Loaded models</p>
+
+	{#each groups.loaded as item (`loaded-${item.option.id}`)}
+		{@render render(item, false)}
+	{/each}
+{/if}
+
+{#if groups.available.length > 0}
+	<h2 class={sectionHeaderClass}>Downloaded models</h2>
+
+	{#each groups.available as group (group.orgName)}
+		{#each group.items as item (item.option.id)}
 			{@render render(item, true)}
 		{/each}
-	{/if}
+	{/each}
+{/if}
 
-	{#if getDownloadEntries.length > 0}
-		<p class={sectionHeaderClass}>Download in progress</p>
-
-		{#each getDownloadEntries as entry (entry.repoWithTag)}
-			<ModelsSelectorDownloadItem {entry} onRequestCancel={requestCancel} />
-		{/each}
-	{/if}
-
-	{#if groups.loaded.length > 0}
-		<p class={sectionHeaderClass}>Loaded models</p>
-
-		{#each groups.loaded as item (`loaded-${item.option.id}`)}
-			{@render render(item, false)}
-		{/each}
-	{/if}
-
-	{#if groups.available.length > 0}
-		<h2 class={sectionHeaderClass}>Downloaded models</h2>
-
-		{#each groups.available as group (group.orgName)}
-			{#each group.items as item (item.option.id)}
-				{@render render(item, true)}
-			{/each}
-		{/each}
-	{/if}
+{#if groups.external.length > 0}
+	{#each groups.external as item (`ext-${item.option.id}`)}
+		{@render render(item, true)}
+	{/each}
 {/if}
 
 <DialogConfirmDownload
