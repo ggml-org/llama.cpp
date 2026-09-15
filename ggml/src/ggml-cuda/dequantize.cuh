@@ -43,6 +43,35 @@ static __device__ __forceinline__ void dequantize_q2_0(const void * vx, const in
     v.y = (c1 - 1) * d;
 }
 
+static __device__ __forceinline__ int dequantize_tq1_0_value(const block_tq1_0 & x, const int i) {
+    int byte_index;
+    int digit;
+
+    if (i < 160) {
+        byte_index = i % 32;
+        digit = i / 32;
+    } else if (i < 240) {
+        byte_index = 32 + (i - 160) % 16;
+        digit = (i - 160) / 16;
+    } else {
+        byte_index = 48 + (i - 240) % 4;
+        digit = (i - 240) / 4;
+    }
+
+    const uint8_t qbyte = byte_index < 48 ? x.qs[byte_index] : x.qh[byte_index - 48];
+    const int pow3 = digit == 0 ? 1 : digit == 1 ? 3 : digit == 2 ? 9 : digit == 3 ? 27 : 81;
+    const uint8_t q = qbyte * pow3; // Preserve the wraparound used by the format.
+    return (((uint16_t) q * 3) >> 8) - 1;
+}
+
+static __device__ __forceinline__ void dequantize_tq1_0(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_tq1_0 * x = (const block_tq1_0 *) vx;
+    const float d = x[ib].d;
+
+    v.x = dequantize_tq1_0_value(x[ib], iqs + 0) * d;
+    v.y = dequantize_tq1_0_value(x[ib], iqs + 1) * d;
+}
+
 static __device__ __forceinline__ void dequantize_q4_0(const void * vx, const int64_t ib, const int iqs, float2 & v){
     const block_q4_0 * x = (const block_q4_0 *) vx;
 
