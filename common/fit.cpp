@@ -577,8 +577,8 @@ static void common_params_fit_impl(
 
     // the order in which the layers [il_begin, il_end) of a device move tensors to system memory:
     //   - MoE: the MoE tensors of one layer per step, back to front
-    //   - dense: two steps per layer, the FFN tensors and the whole layer. First the FFN tensors of all layers
-    //     (largest first), then the rest of those layers in the same order, then the output tensor.
+    //   - dense: two steps per layer, the FFN tensors and the whole layer. First the FFN tensors of all regular layers
+    //     (largest first), then the rest of those layers in the same order, then the output tensor, then the MTP layers.
     //     The KV cache of an attention layer stays on the device, n_gpu_layers is only reduced once all weights are moved.
     auto get_steps = [&](const uint32_t il_begin, const uint32_t il_end) -> std::vector<step_t> {
         std::vector<step_t> ret;
@@ -588,27 +588,36 @@ static void common_params_fit_impl(
             }
             return ret;
         }
-        std::vector<uint32_t> layers;
+        // regular layers largest FFN first, the MTP layers (il >= n_layer) after them in their original order
+        std::vector<uint32_t> layers_regular;
+        std::vector<uint32_t> layers_mtp;
         for (uint32_t il = il_begin; il < std::min(il_end, hp_ngl); il++) { // the output layer is a separate step
-            layers.push_back(il);
-        }
-        auto ffn_bytes = [&](const uint32_t il) -> size_t { // MTP layers are past the end of hp_ffn_bytes
-            return il < hp_ffn_bytes.size() ? hp_ffn_bytes[il] : 0;
-        };
-        std::stable_sort(layers.begin(), layers.end(), [&](const uint32_t a, const uint32_t b) {
-            return ffn_bytes(a) > ffn_bytes(b);
-        });
-        for (const common_layer_fraction_t lf : {LAYER_FRACTION_ATTN, LAYER_FRACTION_ALL}) {
-            for (const uint32_t il : layers) {
-                if (lf == LAYER_FRACTION_ATTN && il < hp_ffn_bytes.size() && hp_ffn_bytes[il] == 0) {
-                    continue; // e.g. RWKV layers have no FFN tensors
-                }
-                ret.push_back({il, lf});
+            if (il < hp_ffn_bytes.size()) {
+                layers_regular.push_back(il);
+            } else {
+                layers_mtp.push_back(il);
             }
         }
+        std::stable_sort(layers_regular.begin(), layers_regular.end(), [&](const uint32_t a, const uint32_t b) {
+            return hp_ffn_bytes[a] > hp_ffn_bytes[b];
+        });
+        // first the FFN tensors of all layers of a group, then the rest of those layers in the same order
+        auto push_group = [&](const std::vector<uint32_t> & layers) {
+            for (const uint32_t il : layers) {
+                if (il < hp_ffn_bytes.size() && hp_ffn_bytes[il] == 0) {
+                    continue; // e.g. RWKV layers have no FFN tensors
+                }
+                ret.push_back({il, LAYER_FRACTION_ATTN});
+            }
+            for (const uint32_t il : layers) {
+                ret.push_back({il, LAYER_FRACTION_ALL});
+            }
+        };
+        push_group(layers_regular);
         if (il_end > hp_ngl) {
             ret.push_back({hp_ngl, LAYER_FRACTION_ALL}); // the output tensor, it is read once per generated or drafted token
         }
+        push_group(layers_mtp);
         return ret;
     };
 
