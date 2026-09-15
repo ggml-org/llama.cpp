@@ -2,6 +2,7 @@
 
 #define _USE_MATH_DEFINES // for M_PI
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <thread>
@@ -646,6 +647,21 @@ bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 sa
     GGML_ASSERT(!cache.cos_vals.empty());
     GGML_ASSERT(!cache.filters.data.empty());
 
+    const bool gt_asr_enabled = hparams.gt_asr_enabled;
+    const char * gt_asr_debug_dir = gt_asr_enabled ? std::getenv("MTMD_GT_ASR_DEBUG_DIR") : nullptr;
+    if (gt_asr_debug_dir != nullptr) {
+        const std::string base = std::string(gt_asr_debug_dir) + "/mel_filters";
+        std::ofstream data_file(base + ".f32", std::ios::binary);
+        if (data_file.is_open()) {
+            data_file.write(
+                reinterpret_cast<const char *>(cache.filters.data.data()),
+                cache.filters.data.size() * sizeof(float));
+        }
+        std::ofstream shape_file(base + ".shape");
+        shape_file << (hparams.audio_n_fft / 2 + 1) << " "
+                   << hparams.n_mel_bins << " 1 1\n";
+    }
+
     // Reflection-pad n_fft/2 samples at each end, matching WhisperFeatureExtractor center=True
     const int pad = hparams.audio_n_fft / 2; // = 200
 
@@ -670,6 +686,9 @@ bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 sa
     params.sample_rate      = hparams.audio_sample_rate;
     params.no_padding       = true; // reflection padding already applied above
     params.use_natural_log  = false; // log10
+    if (gt_asr_enabled) {
+        params.mel_floor = 1.0e-10f; // WhisperFeatureExtractor clamp minimum
+    }
 
     mtmd_audio_mel mel_full;
     bool ok = log_mel_spectrogram(padded.data(), (int)padded.size(), 4, params, cache, mel_full);
@@ -677,28 +696,52 @@ bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 sa
         return false;
     }
 
-    // Whisper-style normalization: clamp to (max - 8), scale to [-1, 1]
-    {
+    int64_t n_eff;
+    if (gt_asr_enabled) {
+        // torch.stft(center=True) produces one terminal frame that Whisper drops
+        // before the mel projection. Keep the same effective frame count here.
+        n_eff = std::min(
+            mel_full.n_len,
+            (int64_t)(n_samples / hparams.audio_hop_len));
+
+        // The dropped terminal frame must not influence normalization.
         double mmax = -1e20;
-        for (float v : mel_full.data) {
-            if (v > mmax) mmax = v;
+        for (int64_t m = 0; m < mel_full.n_mel; ++m) {
+            for (int64_t t = 0; t < n_eff; ++t) {
+                mmax = std::max(
+                    mmax,
+                    (double)mel_full.data[(size_t)m * mel_full.n_len + t]);
+            }
         }
         mmax -= 8.0;
-        for (float & v : mel_full.data) {
-            v = (std::max((double)v, mmax) + 4.0) / 4.0;
+        for (int64_t m = 0; m < mel_full.n_mel; ++m) {
+            for (int64_t t = 0; t < n_eff; ++t) {
+                float & value = mel_full.data[(size_t)m * mel_full.n_len + t];
+                value = (std::max((double)value, mmax) + 4.0) / 4.0;
+            }
         }
+    } else {
+        double mmax = -1e20;
+        for (float value : mel_full.data) {
+            mmax = std::max(mmax, (double)value);
+        }
+        mmax -= 8.0;
+        for (float & value : mel_full.data) {
+            value = (std::max((double)value, mmax) + 4.0) / 4.0;
+        }
+
+        n_eff = std::min(
+            mel_full.n_len,
+            (int64_t)(n_samples / hparams.audio_hop_len) + 1);
+    }
+    if (n_eff <= 0) {
+        return false;
     }
 
-    // The effective frame count: center-padded STFT gives ~n_samples/hop_length frames.
-    // We take min(mel_full.n_len, n_samples/hop + 1) to avoid including excess frames.
-    const int64_t n_eff = std::min(mel_full.n_len,
-                               (int64_t)(n_samples / hparams.audio_hop_len) + 1);
-
-    // Split into inference windows matching n_window_infer=800 from model config.
-    // Each window is padded to the next multiple of chunk_size for the cgraph.
-    // The mtmd caller loops over output entries, so long audio is handled automatically.
-    const int chunk_size  = 100; // conv sub-chunk size (n_window * 2, n_window=50)
-    const int window_size = 800; // mel frames per forward pass (n_window_infer=800)
+    // Stock inference uses separate 800-frame windows. GT-ASR keeps one packed
+    // utterance so its adapter sees the same sequence as the PyTorch runtime.
+    const int chunk_size = 100; // conv sub-chunk size (n_window * 2, n_window=50)
+    const int64_t window_size = gt_asr_enabled ? n_eff : 800;
 
     for (int64_t off = 0; off < n_eff; off += window_size) {
         const int64_t win_eff  = std::min((int64_t)window_size, n_eff - off);
@@ -717,6 +760,18 @@ bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 sa
                           mel_full.data.begin() + (size_t)m * mel_full.n_len + off + copy_len,
                           out.data.begin()      + (size_t)m * out.n_len);
             }
+        }
+        if (gt_asr_debug_dir != nullptr) {
+            const std::string base = std::string(gt_asr_debug_dir) +
+                "/mel_input_" + std::to_string(off / window_size);
+            std::ofstream data_file(base + ".f32", std::ios::binary);
+            if (data_file.is_open()) {
+                data_file.write(
+                    reinterpret_cast<const char *>(out.data.data()),
+                    out.data.size() * sizeof(float));
+            }
+            std::ofstream shape_file(base + ".shape");
+            shape_file << out.n_len << " " << out.n_mel << " 1 1\n";
         }
         output.push_back(std::move(out));
     }
