@@ -26,7 +26,7 @@
 
 // dedup helpers
 
-static ggml_tensor * build_attn_inp_kq_mask(
+ggml_tensor * build_attn_inp_kq_mask(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
         const llama_ubatch & ubatch,
