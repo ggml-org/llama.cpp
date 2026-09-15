@@ -14,6 +14,7 @@
 
 bool llama_model_saver_supports_arch(llm_arch arch) {
     switch (arch) {
+        case LLM_ARCH_SENSENOVA_U1:
         case LLM_ARCH_PLAMO3:
         case LLM_ARCH_GEMMA3:
         case LLM_ARCH_GEMMA3N:
