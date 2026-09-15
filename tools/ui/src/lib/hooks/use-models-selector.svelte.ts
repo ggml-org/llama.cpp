@@ -3,6 +3,7 @@ import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
 import { backendsModelsStore, backendsStore, modelsStore, serverStore } from '$lib/stores';
 import type { Backend } from '$lib/types';
 import type { ModelOption } from '$lib/types/models';
+import { rawModelId } from '$lib/utils/model-option-id';
 import { onMount } from 'svelte';
 
 export interface UseModelsSelectorOptions {
@@ -145,7 +146,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		let shouldCloseMenu = true;
 
 		if (onModelChange) {
-			const result = await onModelChange(option.id, option.model);
+			const result = await onModelChange(rawModelId(option.id), option.model);
 
 			if (result === false) {
 				shouldCloseMenu = false;

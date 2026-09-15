@@ -28,7 +28,7 @@ import { SvelteSet } from 'svelte/reactivity';
  */
 export interface ModelPropsHost {
 	/** Model rows the manager mirrors fetched modalities onto. */
-	models: ModelOption[];
+	activeModels: ModelOption[];
 	readonly selectedModelName: string | null;
 	readonly loadedModelIds: string[];
 	isModelLoaded(modelId: string): boolean;
@@ -123,7 +123,7 @@ export class ModelPropsManager {
 		try {
 			const results = await Promise.all(propsPromises);
 
-			this.host.models = this.host.models.map((model) => {
+			this.host.activeModels = this.host.activeModels.map((model) => {
 				const modelIndex = loadedModelIds.indexOf(model.model);
 
 				if (modelIndex === -1) return model;
@@ -195,7 +195,7 @@ export class ModelPropsManager {
 			return this.buildModalities(serverStore.props.modalities);
 		}
 
-		const model = this.host.models.find((m) => m.model === modelId || m.id === modelId);
+		const model = this.host.activeModels.find((m) => m.model === modelId || m.id === modelId);
 
 		if (model?.modalities) {
 			return model.modalities;
@@ -255,7 +255,7 @@ export class ModelPropsManager {
 
 		if (!props?.modalities) return;
 
-		this.host.models = this.host.models.map((model) =>
+		this.host.activeModels = this.host.activeModels.map((model) =>
 			model.model === modelId
 				? { ...model, modalities: this.buildModalities(props.modalities!) }
 				: model

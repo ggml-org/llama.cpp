@@ -16,6 +16,8 @@ export interface ModelOption {
 	id: string;
 	name: string;
 	model: string;
+	/** Backend that serves this model; set on the aggregated option list. */
+	backendId?: string;
 	description?: string;
 	capabilities: string[];
 	modalities?: ModelModalities;
