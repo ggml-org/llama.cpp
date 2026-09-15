@@ -1858,6 +1858,9 @@ class TextModel(ModelBase):
         if chkhsh == "972da7b59cec44d1f0a490a86c96df53859e486e481563e5dddac155013d87ac":
             # ref: https://huggingface.co/poolside/Laguna-XS.2
             res = "laguna"
+        if chkhsh == "079be25958f51a600a944c6c529381549910befee3970e703cbd2fbb9ea5468f":
+            # ref: https://huggingface.co/fraunhofer-iis/elmod-2.7b-base
+            res = "elmod"
 
         if res is None:
             logger.warning("\n")

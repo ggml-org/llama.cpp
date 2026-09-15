@@ -69,6 +69,14 @@ struct naive_trie {
     llama_token value;
 };
 
+static void llama_escape_whitespace(std::string & text) {
+    replace_all(text, " ", "\xe2\x96\x81");
+}
+
+static void llama_unescape_whitespace(std::string & word) {
+    replace_all(word, "\xe2\x96\x81", " ");
+}
+
 //
 // tokenizers
 //
@@ -545,6 +553,15 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}+| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_ELMOD:
+                regex_exprs = {
+                    // note the missing backslashes near the end, the model was trained with this regex so we keep the original form
+                    // see https://huggingface.co/fraunhofer-iis/elmod-2.7b-it/discussions/2 for details
+                    // "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|s+(?!\\S)|\\s+"
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|s+(?!\\S)|\\s+",
+                };
+                byte_encode = false;
+                break;
             case LLAMA_VOCAB_PRE_TYPE_WHITESPACE:
                 // whitespace pre-tokenizer (jinaai/jina-embeddings-v2-base-zh)
                 regex_exprs = {
@@ -612,7 +629,13 @@ struct llm_tokenizer_bpe_session {
 
     virtual void tokenize(const std::string & text, std::vector<llama_token> & output) {
         int final_prev_index = -1;
-        const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+        auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+
+        if (vocab.get_escape_whitespaces() && vocab.get_escape_after_split()) {
+            for (auto & word : word_collection) {
+                llama_escape_whitespace(word);
+            }
+        }
 
         symbols_final.clear();
         auto tok_pre = vocab.get_pre_type();
@@ -1829,6 +1852,7 @@ struct llama_vocab::impl {
     bool clean_spaces               = false;  // clean_up_tokenization_spaces
     bool remove_extra_whitespaces   = false;
     bool escape_whitespaces         = true;
+    bool escape_after_split         = false;
     bool treat_whitespace_as_suffix = false;
 
     // BertNormalizer options
@@ -2399,6 +2423,11 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "mellum2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MELLUM2;
+            } else if (
+                tokenizer_pre == "elmod") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_ELMOD;
+                escape_whitespaces = true;
+                escape_after_split = true;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
@@ -3358,14 +3387,6 @@ std::string llama_vocab::impl::token_to_piece_for_cache(llama_token token, bool 
     return piece;
 }
 
-static void llama_escape_whitespace(std::string & text) {
-    replace_all(text, " ", "\xe2\x96\x81");
-}
-
-static void llama_unescape_whitespace(std::string & word) {
-    replace_all(word, "\xe2\x96\x81", " ");
-}
-
 static std::string llama_decode_text(const std::string & text) {
     std::string decoded_text;
 
@@ -3474,7 +3495,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
                         std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
 
-                        if (escape_whitespaces) {
+                        if (escape_whitespaces && !escape_after_split) {
                             llama_escape_whitespace(text);
                         }
 
@@ -4088,6 +4109,10 @@ bool llama_vocab::get_remove_extra_whitespaces() const {
 
 bool llama_vocab::get_escape_whitespaces() const {
     return pimpl->escape_whitespaces;
+}
+
+bool llama_vocab::get_escape_after_split() const {
+    return pimpl->escape_after_split;
 }
 
 bool llama_vocab::get_treat_whitespace_as_suffix() const {
