@@ -1,5 +1,28 @@
 #include "common.h"
 #include "dequantize.h"
+
+constant short FC_mul_mv_nsg    [[function_constant(FC_MUL_MV + 0)]];
+constant short FC_mul_mv_nxpsg  [[function_constant(FC_MUL_MV + 1)]];
+constant short FC_mul_mv_ne12   [[function_constant(FC_MUL_MV + 2)]];
+constant short FC_mul_mv_r2     [[function_constant(FC_MUL_MV + 3)]];
+constant short FC_mul_mv_r3     [[function_constant(FC_MUL_MV + 4)]];
+constant bool  FC_mul_mv_split  [[function_constant(FC_MUL_MV + 5)]];
+constant short FC_mul_mv_act    [[function_constant(FC_MUL_MV + 6)]];
+constant bool  FC_mul_mv_has_bias [[function_constant(FC_MUL_MV + 7)]];
+
+static inline float mul_mv_epilogue(float tot, device const float * bias, int row) {
+    if (FC_mul_mv_has_bias) {
+        tot += bias[row];
+    }
+
+    switch (FC_mul_mv_act) {
+        case 1: return 1.0f / (1.0f + exp(-tot)); // SIGMOID
+        case 2: return tot / (1.0f + exp(-tot));  // SILU
+        case 3: return max(tot, 0.0f) + log(1.0f + exp(-fabs(tot))); // SOFTPLUS
+        default: return tot;
+    }
+}
+
 // Q1_0 dot product: dot = d * (2 * Σ(yl[i] where bit=1) - sumy)
 inline float block_q_n_dot_y(device const block_q1_0 * qb_curr, float sumy, thread float * yl, int il) {
     device const uint8_t * qs = qb_curr->qs + il / 8;
@@ -174,7 +197,8 @@ static inline void helper_mv_reduce_and_write(
         const int ne01,
         ushort tiisg,
         ushort sgitg,
-        threadgroup char * shmem) {
+        threadgroup char * shmem,
+        device const float * bias) {
     constexpr short NW = N_SIMDWIDTH;
 
     threadgroup float * shmem_f32[NR0];
@@ -203,17 +227,10 @@ static inline void helper_mv_reduce_and_write(
         float tot = simd_sum(shmem_f32[row][tiisg]);
 
         if (tiisg == 0 && sgitg == 0) {
-            dst_f32[r0 + row] = tot;
+            dst_f32[r0 + row] = mul_mv_epilogue(tot, bias, r0 + row);
         }
     }
 }
-
-constant short FC_mul_mv_nsg   [[function_constant(FC_MUL_MV + 0)]];
-constant short FC_mul_mv_nxpsg [[function_constant(FC_MUL_MV + 1)]];
-constant short FC_mul_mv_ne12  [[function_constant(FC_MUL_MV + 2)]];
-constant short FC_mul_mv_r2    [[function_constant(FC_MUL_MV + 3)]];
-constant short FC_mul_mv_r3    [[function_constant(FC_MUL_MV + 4)]];
-constant bool  FC_mul_mv_split [[function_constant(FC_MUL_MV + 5)]];
 
 template<typename block_q_type, short NR0, typename args_t>
 void mul_vec_q_n_f32_impl(
@@ -519,7 +536,8 @@ void kernel_mul_mv_q8_0_f32_impl(
         threadgroup  char * shmem,
         uint3  tgpig,
         ushort tiisg,
-        ushort sgitg) {
+        ushort sgitg,
+        device const float * bias) {
     const short NSG = FC_mul_mv_nsg;
 
     constexpr short NW = N_SIMDWIDTH;
@@ -581,7 +599,7 @@ void kernel_mul_mv_q8_0_f32_impl(
 
     device float * dst_f32 = (device float *) dst + (uint64_t)im*args.ne0*args.ne1 + (uint64_t)r1*args.ne0;
 
-    helper_mv_reduce_and_write<NR0>(dst_f32, sumf, r0, args.ne01, tiisg, sgitg, shmem);
+    helper_mv_reduce_and_write<NR0>(dst_f32, sumf, r0, args.ne01, tiisg, sgitg, shmem, bias);
 }
 
 [[host_name("kernel_mul_mv_q8_0_f32")]]
@@ -590,11 +608,12 @@ kernel void kernel_mul_mv_q8_0_f32(
         device const char * src0,
         device const char * src1,
         device       char * dst,
+        device const float * bias,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiisg[[thread_index_in_simdgroup]],
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
-    kernel_mul_mv_q8_0_f32_impl<N_R0_Q8_0, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
+    kernel_mul_mv_q8_0_f32_impl<N_R0_Q8_0, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias);
 }
 
 // mat-vec kernel processing in chunks of float4
@@ -605,6 +624,7 @@ void kernel_mul_mv_ext_q4_f32_impl(
         device const char * src0,
         device const char * src1,
         device       char * dst,
+        device const float * bias,
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
@@ -695,7 +715,7 @@ void kernel_mul_mv_ext_q4_f32_impl(
             device float * dst_f32 = (device float *) dst + (uint64_t)i1m*args.ne0*args.ne1 + (uint64_t)(i11 + ir1)*args.ne0;
 
             if (i01 < args.ne01) {
-                dst_f32[i01] = sumf[ir1];
+                dst_f32[i01] = mul_mv_epilogue(sumf[ir1], bias, i01);
             }
         }
     }
@@ -708,6 +728,7 @@ void kernel_mul_mv_ext_q4x4_f32_impl(
         device const char * src0,
         device const char * src1,
         device       char * dst,
+        device const float * bias,
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
@@ -802,7 +823,7 @@ void kernel_mul_mv_ext_q4x4_f32_impl(
             device float * dst_f32 = (device float *) dst + (uint64_t)i1m*args.ne0*args.ne1 + (uint64_t)(i11 + ir1)*args.ne0;
 
             if (i01 < args.ne01) {
-                dst_f32[i01] = sumf[ir1];
+                dst_f32[i01] = mul_mv_epilogue(sumf[ir1], bias, i01);
             }
         }
     }
@@ -816,10 +837,11 @@ kernel void kernel_mul_mv_ext_q4_f32_disp(
         device const char * src0,
         device const char * src1,
         device       char * dst,
+        device const float * bias,
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
-    kernel_mul_mv_ext_q4_f32_impl<r1ptg, q_t, epb/4, deq_t4>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+    kernel_mul_mv_ext_q4_f32_impl<r1ptg, q_t, epb/4, deq_t4>(args, src0, src1, dst, bias, tgpig, tiisg, sgitg);
 }
 
 template<short r1ptg, typename q_t, short epb, void (*deq_t4x4)(device const q_t *, short, thread float4x4 &)>
@@ -828,10 +850,11 @@ kernel void kernel_mul_mv_ext_q4x4_f32_disp(
         device const char * src0,
         device const char * src1,
         device       char * dst,
+        device const float * bias,
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
-    kernel_mul_mv_ext_q4x4_f32_impl<r1ptg, q_t, epb/16, deq_t4x4>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+    kernel_mul_mv_ext_q4x4_f32_impl<r1ptg, q_t, epb/16, deq_t4x4>(args, src0, src1, dst, bias, tgpig, tiisg, sgitg);
 }
 
 typedef decltype(kernel_mul_mv_ext_q4_f32_disp  <2, block_q8_0, 32,  dequantize_q8_0_t4>) mul_mv_ext_q4_f32_t;
@@ -933,7 +956,8 @@ void kernel_mul_mv_t_t_impl(
         threadgroup  char * shmem,
         uint3  tgpig,
         ushort tiisg,
-        ushort sgitg) {
+        ushort sgitg,
+        device const float * bias) {
     const short NSG = FC_mul_mv_nsg;
 
     constexpr short NW = N_SIMDWIDTH;
@@ -1001,7 +1025,7 @@ void kernel_mul_mv_t_t_impl(
 
     device float * dst_f32 = (device float *) dst + (uint64_t)im*args.ne0*args.ne1 + (uint64_t)r1*args.ne0;
 
-    helper_mv_reduce_and_write<NR0>(dst_f32, sumf, r0, args.ne01, tiisg, sgitg, shmem);
+    helper_mv_reduce_and_write<NR0>(dst_f32, sumf, r0, args.ne01, tiisg, sgitg, shmem, bias);
 }
 
 template<typename T0, typename T1, typename args_t>
@@ -1013,12 +1037,13 @@ void kernel_mul_mv_t_t_disp(
         threadgroup  char * shmem,
         uint3  tgpig,
         ushort tiisg,
-        ushort sgitg) {
+        ushort sgitg,
+        device const float * bias) {
     switch (args.nr0) {
-      //case 1: kernel_mul_mv_t_t_impl<T0, T1, 1, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg); break;
-        case 2: kernel_mul_mv_t_t_impl<T0, T1, 2, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg); break;
-      //case 3: kernel_mul_mv_t_t_impl<T0, T1, 3, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg); break;
-      //case 4: kernel_mul_mv_t_t_impl<T0, T1, 4, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg); break;
+      //case 1: kernel_mul_mv_t_t_impl<T0, T1, 1, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias); break;
+        case 2: kernel_mul_mv_t_t_impl<T0, T1, 2, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias); break;
+      //case 3: kernel_mul_mv_t_t_impl<T0, T1, 3, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias); break;
+      //case 4: kernel_mul_mv_t_t_impl<T0, T1, 4, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias); break;
     }
 }
 
@@ -1028,11 +1053,12 @@ kernel void kernel_mul_mv_t_t(
         device const char * src0,
         device const char * src1,
         device       char * dst,
+        device const float * bias,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiisg[[thread_index_in_simdgroup]],
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
-    kernel_mul_mv_t_t_disp<T0, T1, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
+    kernel_mul_mv_t_t_disp<T0, T1, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias);
 }
 
 typedef decltype(kernel_mul_mv_t_t<half, half>) mul_mv_t_t;
@@ -1054,7 +1080,8 @@ void kernel_mul_mv_t_t_4_impl(
         threadgroup  char * shmem,
         uint3  tgpig,
         ushort tiisg,
-        ushort sgitg) {
+        ushort sgitg,
+        device const float * bias) {
     const short NSG = FC_mul_mv_nsg;
 
     constexpr short NW = N_SIMDWIDTH;
@@ -1125,7 +1152,7 @@ void kernel_mul_mv_t_t_4_impl(
 
     device float * dst_f32 = (device float *) dst + (uint64_t)im*args.ne0*args.ne1 + (uint64_t)r1*args.ne0;
 
-    helper_mv_reduce_and_write<NR0>(dst_f32, sumf, r0, args.ne01, tiisg, sgitg, shmem);
+    helper_mv_reduce_and_write<NR0>(dst_f32, sumf, r0, args.ne01, tiisg, sgitg, shmem, bias);
 }
 
 template<typename T0, typename T04, typename T1, typename T14, typename args_t>
@@ -1137,12 +1164,13 @@ void kernel_mul_mv_t_t_4_disp(
         threadgroup  char * shmem,
         uint3  tgpig,
         ushort tiisg,
-        ushort sgitg) {
+        ushort sgitg,
+        device const float * bias) {
     switch (args.nr0) {
-      //case 1: kernel_mul_mv_t_t_4_impl<T0, T04, T1, T14, 1, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg); break;
-        case 2: kernel_mul_mv_t_t_4_impl<T0, T04, T1, T14, 2, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg); break;
-      //case 3: kernel_mul_mv_t_t_4_impl<T0, T04, T1, T14, 3, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg); break;
-      //case 4: kernel_mul_mv_t_t_4_impl<T0, T04, T1, T14, 4, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg); break;
+      //case 1: kernel_mul_mv_t_t_4_impl<T0, T04, T1, T14, 1, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias); break;
+        case 2: kernel_mul_mv_t_t_4_impl<T0, T04, T1, T14, 2, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias); break;
+      //case 3: kernel_mul_mv_t_t_4_impl<T0, T04, T1, T14, 3, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias); break;
+      //case 4: kernel_mul_mv_t_t_4_impl<T0, T04, T1, T14, 4, args_t>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias); break;
     };
 }
 
@@ -1152,11 +1180,12 @@ kernel void kernel_mul_mv_t_t_4(
         device const char * src0,
         device const char * src1,
         device       char * dst,
+        device const float * bias,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiisg[[thread_index_in_simdgroup]],
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
-    kernel_mul_mv_t_t_4_disp<T0, T04, T1, T14, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
+    kernel_mul_mv_t_t_4_disp<T0, T04, T1, T14, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias);
 }
 
 typedef decltype(kernel_mul_mv_t_t_4<half, half4, half, half4>) mul_mv_t_t_4;
@@ -1176,7 +1205,8 @@ void kernel_mul_mv_t_t_short_impl(
         device const char * src1,
         device       char * dst,
         uint3  tgpig,
-        ushort tiisg) {
+        ushort tiisg,
+        device const float * bias) {
     const int r0 = tgpig.x*32 + tiisg;
     const int r1 = tgpig.y;
     const int im = tgpig.z;
@@ -1204,7 +1234,7 @@ void kernel_mul_mv_t_t_short_impl(
         res += (float) x[i] * (float) y[i];
     }
 
-    dst_f32[(uint64_t)r1*args.ne0 + r0] = res;
+    dst_f32[(uint64_t)r1*args.ne0 + r0] = mul_mv_epilogue(res, bias, r0);
 }
 
 template<typename T0, typename T1>
@@ -1213,6 +1243,7 @@ kernel void kernel_mul_mv_t_t_short(
         device const char * src0,
         device const char * src1,
         device       char * dst,
+        device const float * bias,
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiisg[[thread_index_in_simdgroup]]) {
     kernel_mul_mv_t_t_short_impl<T0, T1, constant ggml_metal_kargs_mul_mv &>(
@@ -1221,7 +1252,8 @@ kernel void kernel_mul_mv_t_t_short(
         src1,
         dst,
         tgpig,
-        tiisg);
+        tiisg,
+        bias);
 }
 
 typedef decltype(kernel_mul_mv_t_t_short<half, half>) mul_mv_t_t_short_t;
@@ -3246,7 +3278,8 @@ typedef void (kernel_mul_mv_disp_t)(
         device const char * src1,
         device       char * dst,
         uint3  tgpig,
-        ushort tiisg);
+        ushort tiisg,
+        device const float * bias);
 
 typedef void (kernel_mul_mv2_disp_t)(
         ggml_metal_kargs_mul_mv args,
@@ -3256,7 +3289,8 @@ typedef void (kernel_mul_mv2_disp_t)(
         threadgroup  char * shmem,
         uint3  tgpig,
         ushort tiisg,
-        ushort sgitg);
+        ushort sgitg,
+        device const float * bias);
 
 template<kernel_mul_mv_disp_t disp_fn>
 void mmv_fn(
@@ -3268,8 +3302,9 @@ void mmv_fn(
         uint3  tgpig,
         ushort tiitg,
         ushort tiisg,
-        ushort sgitg) {
-    disp_fn(args, src0, src1, dst, tgpig, tiisg);
+        ushort sgitg,
+        device const float * bias) {
+    disp_fn(args, src0, src1, dst, tgpig, tiisg, bias);
 }
 
 template<kernel_mul_mv2_disp_t disp_fn>
@@ -3282,7 +3317,33 @@ void mmv_fn(
         uint3  tgpig,
         ushort tiitg,
         ushort tiisg,
-        ushort sgitg) {
+        ushort sgitg,
+        device const float * bias) {
+    disp_fn(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg, bias);
+}
+
+typedef void (kernel_mul_mv2_disp_no_bias_t)(
+        ggml_metal_kargs_mul_mv args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem,
+        uint3  tgpig,
+        ushort tiisg,
+        ushort sgitg);
+
+template<kernel_mul_mv2_disp_no_bias_t disp_fn>
+void mmv_fn(
+        ggml_metal_kargs_mul_mv args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem,
+        uint3  tgpig,
+        ushort tiitg,
+        ushort tiisg,
+        ushort sgitg,
+        device const float * bias) {
     disp_fn(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
 }
 
@@ -3349,7 +3410,8 @@ kernel void kernel_mul_mv_id(
         tgpig,
         tiitg,
         tiisg,
-        sgitg);
+        sgitg,
+        /* bias */ nullptr);
 }
 
 typedef decltype(kernel_mul_mv_id<mmv_fn<kernel_mul_mv_t_t_disp<float, float>>>) kernel_mul_mv_id_t;
