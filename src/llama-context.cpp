@@ -754,9 +754,9 @@ void llama_context::sched_reserve() {
     }
 
     if (n_inputs_pp == n_inputs_tg) {
-        LLAMA_LOG_INFO("%s: graph inputs = %d\n", __func__, n_inputs_pp);
+        LLAMA_LOG_INFO("%s: graph input objects = %d\n", __func__, n_inputs_pp);
     } else {
-        LLAMA_LOG_INFO("%s: graph inputs = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_inputs_pp, n_tokens, n_inputs_tg, n_seqs);
+        LLAMA_LOG_INFO("%s: graph input objects = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_inputs_pp, n_tokens, n_inputs_tg, n_seqs);
     }
 
     if (n_input_tensors_pp == n_input_tensors_tg) {
