@@ -1140,6 +1140,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             throw std::runtime_error("failed to initialize CPU backend");
         }
 
+        // src, f32 and dst tensors of the current slab
         ggml_init_params ctx_params = { 3*ggml_tensor_overhead(), nullptr, true };
         ctx.reset(ggml_init(ctx_params));
     }
@@ -1149,7 +1150,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         if (!buf || ggml_backend_buffer_get_size(buf.get()) < size) {
             buf.reset();
             buf.reset(ggml_backend_alloc_buffer(backend.get(), size));
-            GGML_ASSERT(buf && ggml_backend_buffer_is_host(buf.get()));
+            if (!buf) {
+                throw std::runtime_error(format("failed to allocate buffer of size %zu", size));
+            }
+            GGML_ASSERT(ggml_backend_buffer_is_host(buf.get()));
         }
     };
 
@@ -1252,6 +1256,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // no --dry-run, perform quantization
             if (ml.use_mmap) {
                 void * addr = (uint8_t *) ml.mappings.at(weight.idx)->addr() + weight.offs;
+                if ((uintptr_t) addr % ggml_backend_get_alignment(backend.get()) != 0) {
+                    throw std::runtime_error(format("tensor '%s' is not aligned in the input file", ggml_get_name(tensor)));
+                }
                 buf_mmap.reset(ggml_backend_cpu_buffer_from_ptr(addr, tensor_size));
             }
 
@@ -1260,6 +1267,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 LLAMA_LOG_INFO("size = %8.3f MiB\n", tensor_size/1024.0/1024.0);
 
                 // copy in slabs of whole rows, so that each slab can be validated
+                // the slabs are only written to the file, so they do not need to be aligned
                 const size_t  row_size    = ggml_row_size(tensor->type, tensor->ne[0]);
                 const int64_t nrows_total = ggml_nrows(tensor);
                 const int64_t nrows_slab  = std::max<int64_t>(1, std::min<int64_t>(nrows_total, max_buf_size/row_size));
