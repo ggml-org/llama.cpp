@@ -39,7 +39,39 @@ ggml_add_backend_library(ggml-webgpu
 
 add_dependencies(ggml-webgpu generate_shaders)
 
-if(EMSCRIPTEN)
+option(GGML_WEBGPU_HEADER_ONLY
+    "Build ggml-webgpu against a caller-supplied webgpu.h + webgpu_cpp.h \
+without linking Dawn or emdawnwebgpu. Intended for wasm32-wasip2 targets \
+that provide the WebGPU surface at link time (e.g. cognition-webgpu-c-shim). \
+The caller MUST set GGML_WEBGPU_HEADER_ONLY_INCLUDE_DIR to a directory \
+containing both webgpu/webgpu.h and webgpu/webgpu_cpp.h."
+    OFF)
+
+if(GGML_WEBGPU_HEADER_ONLY)
+    # wasm32-wasip2 / cognition path: no Dawn, no emdawnwebgpu, no
+    # emscripten flags.  ggml-webgpu.cpp compiles against the
+    # caller-supplied webgpu.h + webgpu_cpp.h and expects every
+    # `wgpu*` symbol to be provided at link time by an external
+    # component (the cognition-webgpu-c-shim in this project).
+    if(NOT GGML_WEBGPU_HEADER_ONLY_INCLUDE_DIR)
+        message(FATAL_ERROR
+            "GGML_WEBGPU_HEADER_ONLY=ON requires GGML_WEBGPU_HEADER_ONLY_INCLUDE_DIR \
+to point at a directory holding webgpu/webgpu.h and webgpu/webgpu_cpp.h.")
+    endif()
+    target_include_directories(ggml-webgpu PRIVATE ${GGML_WEBGPU_HEADER_ONLY_INCLUDE_DIR})
+    target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_HEADER_ONLY=1)
+    # Sentinel target — nothing to link against.  Downstream users
+    # of ggml-webgpu still reference DawnWebGPU_TARGET via
+    # target_link_libraries(... PRIVATE ${DawnWebGPU_TARGET}); a
+    # skipped find_package() would leave that variable undefined
+    # and the link-libraries call would silently drop the symbol.
+    # We keep the variable non-empty but pointing at a shim
+    # interface library that carries only the header-only include.
+    add_library(ggml_webgpu_header_only INTERFACE)
+    target_include_directories(ggml_webgpu_header_only
+        INTERFACE ${GGML_WEBGPU_HEADER_ONLY_INCLUDE_DIR})
+    set(DawnWebGPU_TARGET ggml_webgpu_header_only)
+elseif(EMSCRIPTEN)
     set(EMDAWNWEBGPU_DIR "" CACHE PATH "Path to emdawnwebgpu_pkg")
 
     if(NOT EMDAWNWEBGPU_DIR)
