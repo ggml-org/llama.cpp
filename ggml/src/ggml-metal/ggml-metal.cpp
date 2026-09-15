@@ -562,7 +562,25 @@ static void ggml_backend_metal_event_wait(ggml_backend_t backend, ggml_backend_e
 }
 
 static void ggml_backend_metal_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph, ggml_backend_graph_optimize_params * params) {
-    GGML_UNUSED(params);
+    GGML_ASSERT(params && params->add_alloc_dep);
+
+    // keep the MoE weighted-reduction inputs alive until the fused output so the
+    // allocator cannot reuse them while the fused kernel is still reading them
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        if (cgraph->nodes[i]->op != GGML_OP_MUL) {
+            continue;
+        }
+
+        ggml_metal_moe_weighted_reduction_match match;
+        if (!ggml_metal_fusion_match_moe_weighted_reduction(cgraph, i, &match)) {
+            continue;
+        }
+
+        params->add_alloc_dep(params->user_data, (ggml_tensor *) match.experts, (ggml_tensor *) match.dst);
+        params->add_alloc_dep(params->user_data, (ggml_tensor *) match.weights, (ggml_tensor *) match.dst);
+
+        i += match.node_count - 1;
+    }
 
     ggml_metal_t ctx = (ggml_metal_t)backend->context;
 
