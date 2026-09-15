@@ -375,6 +375,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			const modelName = modelsStore.selectedModelName;
 
 			if (modelName) apiOptions.model = modelName;
+		} else if (!serverStore.capabilities.props) {
+			// external backends need an explicit model on every request
+			const modelName = modelsStore.activeModelId;
+
+			if (modelName) apiOptions.model = modelName;
 		}
 
 		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
@@ -813,6 +818,9 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			const conversationModel = getConversationModel(allMessages);
 
 			effectiveModel = modelOverride || modelsStore.selectedModelName || conversationModel;
+		} else if (!serverStore.capabilities.props) {
+			// external backends are not router mode but still require a model
+			effectiveModel = modelOverride || modelsStore.activeModelId;
 		}
 
 		if (serverStore.isRouterMode && effectiveModel) {
