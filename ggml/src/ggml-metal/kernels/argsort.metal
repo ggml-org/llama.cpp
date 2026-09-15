@@ -1,5 +1,7 @@
 #include "common.h"
 
+constant bool FC_topk_moe_with_norm [[function_constant(FC_TOPK_MOE + 0)]];
+
 // bitonic sort implementation following the CUDA kernels as reference
 typedef void (argsort_t)(
         constant   ggml_metal_kargs_argsort & args,
@@ -423,13 +425,13 @@ kernel void kernel_topk_moe_f32(
 
         if ((best_expert & 31) == lane) {
             ids_row[k] = best_expert;
-            if (args.with_norm) {
+            if (FC_topk_moe_with_norm) {
                 wt_sum += best_val;
             }
         }
     }
 
-    if (args.with_norm) {
+    if (FC_topk_moe_with_norm) {
         wt_sum = simd_sum(wt_sum);
         wt_sum = max(wt_sum, args.clamp_val);
         const float inv = 1.0f / wt_sum;
