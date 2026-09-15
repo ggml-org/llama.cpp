@@ -22,6 +22,7 @@ class ServerStore {
 	props = $state<ApiLlamaCppServerProps | null>(null);
 	role = $state<ServerRole | null>(null);
 	status = $state<number | null>(null);
+	private fetchBackendId: string | undefined;
 	private fetchPromise: Promise<void> | null = null;
 	private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -62,6 +63,7 @@ class ServerStore {
 		this.loading = false;
 		this.role = null;
 		this.fetchPromise = null;
+		this.fetchBackendId = undefined;
 	}
 
 	/**
@@ -70,7 +72,12 @@ class ServerStore {
 	 * splash and the chat screen every retry tick.
 	 */
 	async fetch({ background = false }: { background?: boolean } = {}): Promise<void> {
-		if (this.fetchPromise) return this.fetchPromise;
+		// props and role describe one server. a fetch started for another backend
+		// must not be reused, and its response must not commit once the active
+		// backend has changed while it was in flight
+		const backendId = getBackend()?.id;
+
+		if (this.fetchPromise && this.fetchBackendId === backendId) return this.fetchPromise;
 
 		this.clearRetryTimer();
 
@@ -93,15 +100,20 @@ class ServerStore {
 			this.error = null;
 		}
 
-		const fetchPromise = (async () => {
+		const promise = (async () => {
 			try {
 				const props = await PropsService.fetch();
+
+				// the active backend changed while this request was in flight
+				if (getBackend()?.id !== backendId) return;
 
 				this.props = props;
 				this.error = null;
 				this.status = null;
 				this.detectRole(props);
 			} catch (error: unknown) {
+				if (getBackend()?.id !== backendId) return;
+
 				this.error = error instanceof Error ? error.message : String(error);
 				this.status = error instanceof ApiError ? error.status : null;
 				console.error('Error fetching server properties:', error);
@@ -113,13 +125,24 @@ class ServerStore {
 				if (!background) {
 					this.loading = false;
 				}
-
-				this.fetchPromise = null;
 			}
 		})();
 
-		this.fetchPromise = fetchPromise;
-		await fetchPromise;
+		this.fetchPromise = promise;
+		this.fetchBackendId = backendId;
+
+		// a backend switch clears the in-flight handle; only the fetch that is
+		// still the current one may release it
+		void promise
+			.catch(() => {})
+			.finally(() => {
+				if (this.fetchPromise === promise) {
+					this.fetchPromise = null;
+					this.fetchBackendId = undefined;
+				}
+			});
+
+		await promise;
 	}
 
 	private clearRetryTimer(): void {
