@@ -47,6 +47,13 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	 */
 	get activeModelId(): string | null {
 		if (!serverStore.isRouterMode) {
+			// external backends expose a selectable list; prefer the user's pick
+			const selected = this.selectedModelId
+				? this.models.find((m) => m.id === this.selectedModelId)
+				: undefined;
+
+			if (selected) return selected.model;
+
 			return this.models.length > 0 ? this.models[0].model : this.singleModelName;
 		}
 
@@ -469,6 +476,12 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 				}
 			} else {
 				this.models = await this.fetchModelModeInternal();
+
+				// external backends expose a selectable list; pick a default so the
+				// first send and title generation have a model to target
+				if (!serverStore.capabilities.props && !this.selectedModelName) {
+					await this.ensureFirstModelSelected();
+				}
 			}
 		} catch (error) {
 			this.models = [];

@@ -1277,8 +1277,8 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		convId: string
 	): Promise<void> {
 		const effectiveModel =
-			serverStore.isRouterMode && modelsStore.selectedModelName
-				? modelsStore.selectedModelName
+			serverStore.isRouterMode || !serverStore.capabilities.props
+				? (modelsStore.activeModelId ?? undefined)
 				: undefined;
 		const configValue = settingsStore.config;
 		const titlePromptTemplate =
