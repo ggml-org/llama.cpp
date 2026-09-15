@@ -178,6 +178,17 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
     } catch (...) { s.drain(); s.poisoned = true; throw; }
 }
 
+bool llama_kv_stream_session::restore(size_t tokens) {
+    auto & s = *impl;
+    if (s.busy || s.running || s.poisoned || s.committed || tokens > s.content->host()->config().context_tokens) return false;
+    session_operation guard(s.busy);
+    if (s.content->generation() != s.expected_generation) return false;
+    s.committed = tokens;
+    s.target = tokens;
+    s.graphs.clear();
+    return true;
+}
+
 // Pair publication is a required dependency of each layer's attention call.
 bool llama_kv_stream_session::produce(uint32_t layer, const ggml_tensor * k, const ggml_tensor * v) {
     auto & s = *impl;

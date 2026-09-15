@@ -27,6 +27,8 @@ public:
 
     virtual void read(void * dst, size_t size) = 0;
     virtual void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) = 0;
+    // Apply deferred tensor writes when a consumer must validate restored backing before parsing completes.
+    virtual void flush_tensor_reads() {}
 
     // drop tensor data that has been read but not yet applied (e.g. when a restore fails)
     virtual void discard() {}

@@ -460,7 +460,7 @@ bool llama_kv_cache::kv_stream_can_remove(llama_seq_id seq_id,llama_pos p0,llama
     if (seq_id != 0 && seq_id != -1) return false;
     p0 = std::max(llama_pos(0),p0);
     if (p1 < 0) p1 = std::numeric_limits<llama_pos>::max();
-    return p1 <= p0 || p0 >= int64_t(kv_stream->tokens()) || (p0 == 0 && p1 >= int64_t(kv_stream->tokens()));
+    return p1 <= p0 || p0 >= int64_t(kv_stream->tokens()) || p1 >= int64_t(kv_stream->tokens());
 }
 
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -486,8 +486,7 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
         if (p0 == 0 && p1 >= int64_t(kv_stream->tokens())) {
             if (!kv_stream->reset(false)) return false;
         } else if (p0 < int64_t(kv_stream->tokens()) && p1 > p0) {
-            // Partial rewind and prompt-cache restoration require the later request-lifecycle integration.
-            return false;
+            if (p1 < int64_t(kv_stream->tokens()) || !kv_stream->truncate(size_t(p0))) return false;
         }
     }
 
@@ -2270,6 +2269,7 @@ const slot_info_vec_t *   sinfos_in) {
             if (sinfos_in && !(*sinfos_in)[s].empty()) {
                 throw std::runtime_error("failed to restore kv cache: mirrored cache holds cells this one does not");
             }
+            if (kv_stream && !seq_rm(seq_id,-1,-1)) throw std::runtime_error("failed to clear streamed kv cache");
             continue;
         }
 
@@ -2282,6 +2282,15 @@ const slot_info_vec_t *   sinfos_in) {
 
         try {
             res = res && state_read_data(io, strm, cell_count, sinfo);
+            if (res && kv_stream) {
+                io.flush_tensor_reads();
+                const auto & cells = v_cells[strm];
+                res = strm == 0 && sinfo.is_contiguous() && sinfo.head() == 0 && cell_count <= kv_stream->host()->config().context_tokens;
+                for (uint32_t i = 0; res && i < cell_count; ++i) {
+                    res = cells.pos_get(sinfo.idxs[0][i]) == llama_pos(i) && cells.seq_has(sinfo.idxs[0][i],0);
+                }
+                res = res && kv_stream->restore(cell_count);
+            }
         } catch (...) {
             res = false;
         }

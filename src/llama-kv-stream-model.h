@@ -21,6 +21,8 @@ public:
     bool complete() const noexcept;
     void abort();
     bool reset(bool clear_bytes);
+    bool restore(size_t tokens);
+    bool truncate(size_t tokens);
     size_t tokens() const noexcept;
     size_t granted_bytes() const noexcept;
     bool set_workspaces(const std::vector<ggml_backend_memory_lease_t> & leases);

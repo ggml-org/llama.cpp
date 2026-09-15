@@ -107,6 +107,21 @@ int main(int argc, char ** argv) {
             t.assert_equal(size_t(0),session->tokens());
         }
     });
+    if (cuda) t.test("restored_frontier_reopens_serial_append", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769,false,4);
+        block_workspace writer(f,32768,19), partial(f,f.host->layout().bytes,29);
+        auto session=llama_kv_stream_session::create(backend.get(),f.content,{f.policy,256,4,false,true,true},
+            f.lease.get(),writer.lease.get(),partial.lease.get());
+        if (!t.assert_true(bool(session))) return;
+        t.assert_true(!session->restore(770));
+        t.assert_true(session->restore(513));
+        t.assert_equal(size_t(513),session->tokens());
+        t.assert_true(!session->restore(512));
+        t.assert_true(session->begin(514,1,true));
+        t.assert_true(!session->restore(0));
+        session->abort();
+        t.assert_true(!session->restore(513));
+    });
     if (cuda) t.test("failure_after_production_never_commits_the_token_frontier", [&](testing & t) {
         fixture f(backend.get(),true); block_workspace writer(f,32768,19), partial(f,65536,29);
         auto session = llama_kv_stream_session::create(backend.get(),f.content,{f.policy,1,4,false},f.lease.get(),writer.lease.get(),partial.lease.get());

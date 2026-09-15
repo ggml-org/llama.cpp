@@ -2989,10 +2989,14 @@ public:
     llama_io_read_host(const uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
 
     ~llama_io_read_host() {
-        // flush the reads
+        flush_tensor_reads();
+    }
+
+    void flush_tensor_reads() override {
         for (const auto & rinfo : rinfos) {
             ggml_backend_tensor_set(rinfo.tensor, rinfo.ptr, rinfo.offset, rinfo.size);
         }
+        rinfos.clear();
     }
 
     void read(void * dst, size_t size) override {
@@ -3469,8 +3473,8 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
 }
 
 size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
-    if (cparams.kv_stream_pool_bytes) {
-        LLAMA_LOG_ERROR("%s: KV streaming does not yet support state restoration\n",__func__); return 0;
+    if (cparams.kv_stream_pool_bytes && (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)) {
+        LLAMA_LOG_ERROR("%s: KV streaming does not support device-native snapshots\n",__func__); return 0;
     }
     std::unique_ptr<llama_io_read_i> io;
     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
@@ -3666,7 +3670,6 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
 }
 
 size_t llama_context::state_read_data(llama_io_read_i & io) {
-    if (cparams.kv_stream_pool_bytes) throw std::runtime_error("KV streaming does not yet support state restoration");
     LLAMA_LOG_DEBUG("%s: reading state\n", __func__);
 
     // read model info
@@ -3701,7 +3704,6 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 }
 
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
-    if (cparams.kv_stream_pool_bytes) throw std::runtime_error("KV streaming does not yet support state restoration");
     GGML_UNUSED(seq_id);
 
     if (memory) {

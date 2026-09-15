@@ -42,6 +42,21 @@ int main(int argc,char ** argv) {
         t.assert_true(model->begin(1,1,true)); model->abort();
         t.assert_true(model->reset(false)); t.assert_equal(initial,model->granted_bytes());
     });
+    t.test("suffix_truncation_reopens_frontier_without_erasing_host_bytes", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        auto model=llama_kv_stream_model::create({backend.get(),f.host->config(),page.bytes*4,256,4});
+        if (!t.assert_true(bool(model))) return;
+        ggml_backend_buffer_clear(model->buffer(),0);
+        t.assert_true(model->restore(513));
+        auto * raw=static_cast<uint8_t *>(ggml_backend_buffer_get_base(model->host()->buffer()));
+        raw[model->host()->bytes()-1]=91;
+        t.assert_true(!model->truncate(514));
+        t.assert_true(model->truncate(256));
+        t.assert_equal(size_t(256),model->tokens());
+        t.assert_equal(uint8_t(91),raw[model->host()->bytes()-1]);
+        t.assert_true(model->begin(257,1,true)); model->abort();
+    });
     t.test("ordinary_graph_dispatches_kv_producers_and_streamed_attention", [&](testing & t) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
         ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
@@ -95,6 +110,14 @@ int main(int argc,char ** argv) {
             std::vector<float> actual(ggml_nelements(output)); ggml_backend_tensor_get(output,actual.data(),0,actual.size()*sizeof(float));
             close_values(t,oracle(f,0,active,rows,attn.qdata),actual,1e-3f);
         }
+        auto * type=llama_kv_stream_device_buffer_type(dev);
+        const auto allocate=type->iface.alloc_buffer;
+        type->iface.alloc_buffer=[](ggml_backend_buffer_type_t,size_t)->ggml_backend_buffer_t { return nullptr; };
+        const bool truncated=model->truncate(256);
+        type->iface.alloc_buffer=allocate;
+        t.assert_true(!truncated && !model->complete());
+        t.assert_true(model->restore(256));
+        t.assert_equal(size_t(256),model->tokens());
     });
     return t.summary();
 }

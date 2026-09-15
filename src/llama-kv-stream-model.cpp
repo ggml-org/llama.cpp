@@ -26,6 +26,7 @@ struct llama_kv_stream_model::implementation {
     uint32_t pending_layer = 0, queries = 0;
     std::vector<const void *> checked_indices;
     std::vector<int64_t> indices;
+    bool external_mutation = false;
 
     ~implementation() { abort(); }
 
@@ -127,11 +128,32 @@ struct llama_kv_stream_model::implementation {
         if (session) session->abort();
         pending_k = nullptr; pending_owner.reset(); checked_indices.clear();
     }
+    void modified() {
+        if (external_mutation) return;
+        abort();
+        external_mutation = content->invalidate();
+    }
     bool reset(bool clear) {
         abort(); session.reset();
         if (clear) ggml_backend_buffer_clear(host->buffer(),0);
         if (!content->invalidate()) return false;
+        external_mutation = false;
         return resize_attention(host->layout().bytes,false) && make_session();
+    }
+    bool restore(size_t tokens) {
+        if (!external_mutation || tokens > host->config().context_tokens) return false;
+        session.reset();
+        if (!resize_attention(host->layout().bytes,false) || !make_session() || !session->restore(tokens)) return false;
+        external_mutation = false;
+        return true;
+    }
+    bool truncate(size_t tokens) {
+        if (external_mutation || !session || session->active() || tokens > session->tokens()) return false;
+        if (tokens == session->tokens()) return true;
+        abort(); session.reset();
+        if (!content->invalidate()) return false;
+        external_mutation = true;
+        return restore(tokens);
     }
 };
 
@@ -186,7 +208,7 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
                 catch (...) { s.abort(); return GGML_STATUS_FAILED; }
             },
             [](void * p) { auto & s = **static_cast<std::shared_ptr<implementation> *>(p); return !s.session || !s.session->active(); },
-            [](void * p) { (void) (*static_cast<std::shared_ptr<implementation> *>(p))->reset(false); },
+            [](void * p) { (*static_cast<std::shared_ptr<implementation> *>(p))->modified(); },
             [](void * p) { delete static_cast<std::shared_ptr<implementation> *>(p); }
         };
         auto owner = std::make_unique<std::shared_ptr<implementation>>(s);
@@ -202,16 +224,18 @@ llama_kv_stream_model::~llama_kv_stream_model() { ggml_backend_buffer_free(proxy
 ggml_backend_buffer_t llama_kv_stream_model::buffer() const noexcept { return proxy; }
 std::shared_ptr<llama_kv_stream_host> llama_kv_stream_model::host() const noexcept { return impl->host; }
 bool llama_kv_stream_model::begin(size_t active,uint32_t queries,bool decode) {
-    if (!impl->session || impl->session->active() || impl->session->failed() || !queries || queries > impl->config.max_batch_rows ||
+    if (!impl->session || impl->external_mutation || impl->session->active() || impl->session->failed() || !queries || queries > impl->config.max_batch_rows ||
             (decode && queries != 1) || active < impl->session->tokens() || active-impl->session->tokens() != queries ||
             active > impl->host->config().context_tokens) return false;
     if (!impl->resize_attention(decode ? impl->decode_bytes : impl->host->layout().bytes,decode) ||
             !impl->session->begin(active,queries,decode)) return false;
     impl->queries = queries; impl->pending_k = nullptr; impl->pending_owner.reset(); impl->checked_indices.clear(); return true;
 }
-bool llama_kv_stream_model::complete() const noexcept { return impl->session && !impl->session->active() && !impl->session->failed() && !impl->pending_k; }
+bool llama_kv_stream_model::complete() const noexcept { return impl->session && !impl->external_mutation && !impl->session->active() && !impl->session->failed() && !impl->pending_k; }
 void llama_kv_stream_model::abort() { impl->abort(); }
 bool llama_kv_stream_model::reset(bool clear) { return impl->reset(clear); }
+bool llama_kv_stream_model::restore(size_t tokens) { return impl->restore(tokens); }
+bool llama_kv_stream_model::truncate(size_t tokens) { return impl->truncate(tokens); }
 size_t llama_kv_stream_model::tokens() const noexcept { return impl->session ? impl->session->tokens() : 0; }
 size_t llama_kv_stream_model::granted_bytes() const noexcept {
     return ggml_backend_buffer_get_size(ggml_backend_memory_arena_parent(impl->arena.get())) +

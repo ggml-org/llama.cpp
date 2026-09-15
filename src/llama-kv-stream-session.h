@@ -18,6 +18,8 @@ public:
             ggml_backend_memory_lease_t pool, ggml_backend_memory_lease_t writer, ggml_backend_memory_lease_t partial);
     // Begin a complete contiguous append. Phase intent is explicit, not inferred from a one-token batch.
     bool begin(size_t active_tokens, uint32_t query_tokens, bool decode);
+    // Adopt an externally restored contiguous host-cache prefix while idle.
+    bool restore(size_t tokens);
     bool produce(uint32_t layer, const ggml_tensor * k, const ggml_tensor * v);
     bool attention(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale);
     // Cancellation may follow model-state mutation; this session cannot be resumed without reconstruction.
