@@ -8,6 +8,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/functionary-v3-2.cpp
     ${CMAKE_CURRENT_LIST_DIR}/gemma4.cpp
     ${CMAKE_CURRENT_LIST_DIR}/gigachat-v3.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/gigachat35.cpp
     ${CMAKE_CURRENT_LIST_DIR}/gpt-oss.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kimi-k2.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kimi-k3.cpp
