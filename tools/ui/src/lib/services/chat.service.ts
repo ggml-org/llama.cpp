@@ -33,6 +33,8 @@ import {
 	ReasoningFormat,
 	StreamConnectionState
 } from '$lib/enums';
+import { getProtocolAdapter } from '$lib/services/protocols';
+import { extractModelName } from '$lib/services/protocols/openai';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
@@ -50,41 +52,6 @@ import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { streamIdentity } from '$lib/utils/stream-identity';
 import { buildTimingsFromUsage } from '$lib/utils/timings';
-
-/**
- * llama.cpp-only chat request fields. Strict OpenAI-compatible endpoints
- * reject unknown parameters, so they are dropped for those backends.
- */
-const COMPAT_ONLY_OMIT_REQUEST_FIELDS = [
-	'add_generation_prompt',
-	'backend_sampling',
-	'cache_prompt',
-	'chat_template_kwargs',
-	'continue_final_message',
-	'dry_allowed_length',
-	'dry_base',
-	'dry_multiplier',
-	'dry_penalty_last_n',
-	'dynatemp_exponent',
-	'dynatemp_range',
-	'id_slot',
-	'min_p',
-	'n_keep',
-	'n_predict',
-	'reasoning_control',
-	'reasoning_format',
-	'repeat_last_n',
-	'repeat_penalty',
-	'return_progress',
-	'samplers',
-	'sse_ping_interval',
-	'thinking_budget_tokens',
-	'timings_per_token',
-	'top_k',
-	'typ_p',
-	'xtc_probability',
-	'xtc_threshold'
-];
 
 interface ResumableStreamState {
 	bytesReceived: number;
@@ -539,6 +506,8 @@ export class ChatService {
 		let liveTimingsAt = 0;
 		let usage: ApiChatCompletionUsage | undefined;
 
+		// the protocol decides how payloads map onto canonical events
+		const streamReader = getProtocolAdapter(getBackend()).createStreamReader();
 		const finalizeOpenToolCallBatch = () => {
 			if (!hasOpenToolCallBatch) {
 				return;
@@ -576,6 +545,32 @@ export class ChatService {
 
 			if (!abortSignal?.aborted) {
 				onToolCallChunk?.(serializedToolCalls);
+			}
+		};
+		// backends that do not stream their own timings report progress from wall
+		// clock time and the streamed delta count, throttled to keep updates cheap
+		const markToken = () => {
+			firstTokenAt ??= Date.now();
+			lastTokenAt = Date.now();
+			streamedTokens++;
+
+			if (
+				serverStore.capabilities.props ||
+				Date.now() - liveTimingsAt < STREAM_LIVE_TIMINGS_INTERVAL_MS
+			) {
+				return;
+			}
+
+			liveTimingsAt = Date.now();
+
+			const liveTimings = buildTimingsFromUsage(
+				usage,
+				{ firstTokenAt, lastTokenAt, startedAt },
+				streamedTokens
+			);
+
+			if (liveTimings) {
+				ChatService.notifyTimings(liveTimings, undefined, onTimings);
 			}
 		};
 		const onVisibilityChange = () => {
@@ -679,82 +674,89 @@ export class ChatService {
 								continue;
 							}
 
+							let parsed: unknown;
+
 							try {
-								const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
-								const choice = parsed.choices?.[0];
-								const content = choice?.delta?.content;
-								const reasoningContent = choice?.delta?.reasoning_content;
-								const toolCalls = choice?.delta?.tool_calls;
-								const timings = parsed.timings;
-								const promptProgress = parsed.prompt_progress;
-								const chunkUsage = parsed.usage;
-								const chunkModel = ChatService.extractModelName(parsed);
+								parsed = JSON.parse(data);
+							} catch (parseError) {
+								console.error('Error parsing JSON chunk:', parseError);
 
-								if (chunkUsage) usage = chunkUsage;
+								continue;
+							}
 
-								if (chunkModel && !modelEmitted) {
-									modelEmitted = true;
-									onModel?.(chunkModel);
-								}
+							for (const event of streamReader.readChunk(parsed)) {
+								switch (event.type) {
+									case 'done':
+										streamFinished = true;
 
-								if (parsed.id && !idEmitted) {
-									idEmitted = true;
-									onCompletionId?.(parsed.id);
-								}
+										break;
 
-								if (promptProgress) {
-									ChatService.notifyTimings(undefined, promptProgress, onTimings);
-								}
+									case 'error':
+										throw new Error(event.message);
 
-								if (timings) {
-									ChatService.notifyTimings(timings, promptProgress, onTimings);
-									lastTimings = timings;
-								}
-
-								if (content) {
-									finalizeOpenToolCallBatch();
-									aggregatedContent += content;
-
-									if (!abortSignal?.aborted) {
-										onChunk?.(content);
-									}
-								}
-
-								if (reasoningContent) {
-									finalizeOpenToolCallBatch();
-									fullReasoningContent += reasoningContent;
-
-									if (!abortSignal?.aborted) {
-										onReasoningChunk?.(reasoningContent);
-									}
-								}
-
-								processToolCallDelta(toolCalls);
-
-								if (content || reasoningContent) {
-									firstTokenAt ??= Date.now();
-									lastTokenAt = Date.now();
-									streamedTokens++;
-
-									if (
-										!serverStore.capabilities.props &&
-										Date.now() - liveTimingsAt >= STREAM_LIVE_TIMINGS_INTERVAL_MS
-									) {
-										liveTimingsAt = Date.now();
-
-										const liveTimings = buildTimingsFromUsage(
-											usage,
-											{ firstTokenAt, lastTokenAt, startedAt },
-											streamedTokens
-										);
-
-										if (liveTimings) {
-											ChatService.notifyTimings(liveTimings, undefined, onTimings);
+									case 'id':
+										if (!idEmitted) {
+											idEmitted = true;
+											onCompletionId?.(event.id);
 										}
-									}
+
+										break;
+
+									case 'model':
+										if (!modelEmitted) {
+											modelEmitted = true;
+											onModel?.(event.model);
+										}
+
+										break;
+
+									case 'prompt_progress':
+										ChatService.notifyTimings(undefined, event.progress, onTimings);
+
+										break;
+
+									case 'text':
+										finalizeOpenToolCallBatch();
+										aggregatedContent += event.text;
+
+										if (!abortSignal?.aborted) {
+											onChunk?.(event.text);
+										}
+
+										markToken();
+
+										break;
+
+									case 'thinking':
+										finalizeOpenToolCallBatch();
+										fullReasoningContent += event.text;
+
+										if (!abortSignal?.aborted) {
+											onReasoningChunk?.(event.text);
+										}
+
+										markToken();
+
+										break;
+
+									case 'timings':
+										ChatService.notifyTimings(event.timings, event.promptProgress, onTimings);
+										lastTimings = event.timings;
+
+										break;
+
+									case 'tool_calls':
+										processToolCallDelta(event.deltas);
+
+										break;
+
+									case 'usage':
+										// providers may split usage across chunks (Anthropic reports input
+										// tokens on message_start and output tokens on message_delta)
+										usage = { ...usage, ...event.usage };
+
+										break;
 								}
-							} catch (e) {
-								console.error('Error parsing JSON chunk:', e);
 							}
 						}
 					}
@@ -1313,12 +1315,6 @@ export class ChatService {
 
 		if (timings_per_token !== undefined) requestBody.timings_per_token = timings_per_token;
 
-		// OpenAI-compatible servers report token counts in a final usage chunk, which
-		// the client side timing fallback in handleStreamResponse relies on
-		if (stream && !serverStore.capabilities.props && requestBody.stream_options === undefined) {
-			requestBody.stream_options = { include_usage: true };
-		}
-
 		if (custom) {
 			try {
 				const customParams = typeof custom === 'string' ? JSON.parse(custom) : custom;
@@ -1342,10 +1338,17 @@ export class ChatService {
 				ChatService.saveStreamState(conversationId, 0, options.model ?? null);
 			}
 
-			ChatService.stripBackendSpecificFields(requestBody);
-
+			// the protocol adapter owns the wire format: it strips llama.cpp-only
+			// fields, applies the backend's token cap field and adds the usage chunk
+			const backend = getBackend();
+			const wireBody = backend
+				? getProtocolAdapter(backend).buildChatRequest(
+						requestBody as unknown as Record<string, unknown>,
+						backend
+					)
+				: (requestBody as unknown as Record<string, unknown>);
 			const response = await fetch(apiChatUrl(), {
-				body: JSON.stringify(requestBody),
+				body: JSON.stringify(wireBody),
 				headers,
 				method: 'POST',
 				signal
@@ -1491,61 +1494,6 @@ export class ChatService {
 	}
 
 	/**
-	 * Extracts model name from Chat Completions API response data.
-	 * Handles various response formats including streaming chunks and final responses.
-	 *
-	 * WORKAROUND: In single model mode, llama-server returns a default/incorrect model name
-	 * in the response. We override it with the actual model name from serverStore.
-	 *
-	 * @param data - Raw response data from the Chat Completions API
-	 * @returns Model name string if found, undefined otherwise
-	 * @private
-	 */
-	private static extractModelName(data: unknown): string | undefined {
-		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
-			return typeof value === 'object' && value !== null
-				? (value as Record<string, unknown>)
-				: undefined;
-		};
-		const getTrimmedString = (value: unknown): string | undefined => {
-			return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-		};
-		const root = asRecord(data);
-
-		if (!root) return undefined;
-
-		// 1) root (some implementations provide `model` at the top level)
-		const rootModel = getTrimmedString(root.model);
-
-		if (rootModel) {
-			return rootModel;
-		}
-
-		// 2) streaming choice (delta) or final response (message)
-		const firstChoice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : undefined;
-
-		if (!firstChoice) {
-			return undefined;
-		}
-
-		// priority: delta.model (first chunk) else message.model (final response)
-		const deltaModel = getTrimmedString(asRecord(firstChoice.delta)?.model);
-
-		if (deltaModel) {
-			return deltaModel;
-		}
-
-		const messageModel = getTrimmedString(asRecord(firstChoice.message)?.model);
-
-		if (messageModel) {
-			return messageModel;
-		}
-
-		// avoid guessing from non-standard locations (metadata, etc.)
-		return undefined;
-	}
-
-	/**
 	 * Handles non-streaming response from the chat completion API.
 	 * Parses the JSON response and extracts the generated content.
 	 *
@@ -1577,7 +1525,7 @@ export class ChatService {
 			}
 
 			const data: ApiChatCompletionResponse = JSON.parse(responseText);
-			const responseModel = ChatService.extractModelName(data);
+			const responseModel = extractModelName(data);
 
 			if (responseModel) {
 				onModel?.(responseModel);
@@ -1739,28 +1687,6 @@ export class ChatService {
 	 * Strips legacy inline reasoning content tags from message content.
 	 * Handles both plain string content and multipart content arrays.
 	 */
-	private static stripBackendSpecificFields(body: ApiChatCompletionRequest): void {
-		const backend = getBackend();
-
-		if (!backend || backend.protocol === 'llama.cpp') return;
-
-		const record = body as unknown as Record<string, unknown>;
-
-		for (const field of COMPAT_ONLY_OMIT_REQUEST_FIELDS) {
-			delete record[field];
-		}
-
-		// compatible endpoints reject the reasoning_content message extension
-		for (const message of body.messages) {
-			delete (message as unknown as Record<string, unknown>).reasoning_content;
-		}
-
-		// -1 is llama.cpp's "no limit" sentinel; compatible endpoints reject it
-		if (typeof body.max_tokens === 'number' && body.max_tokens <= 0) {
-			delete record.max_tokens;
-		}
-	}
-
 	private static stripReasoningContent(
 		content: string | ApiChatMessageContentPart[]
 	): string | ApiChatMessageContentPart[] {

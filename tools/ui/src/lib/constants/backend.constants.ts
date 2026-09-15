@@ -1,4 +1,9 @@
-import type { BackendCapabilities, BackendPreset, BackendProtocol } from '$lib/types';
+import type {
+	BackendCapabilities,
+	BackendCompat,
+	BackendPreset,
+	BackendProtocol
+} from '$lib/types';
 
 /** Version sent with the Anthropic Messages API. */
 export const ANTHROPIC_API_VERSION = '2023-06-01';
@@ -48,6 +53,15 @@ export const BACKEND_CAPABILITIES: Record<BackendProtocol, BackendCapabilities> 
 	openai: COMPATIBLE_CAPABILITIES
 };
 
+/** Default wire quirks per protocol. */
+export const BACKEND_COMPAT: Record<BackendProtocol, BackendCompat> = {
+	// the Messages API has no OpenAI-style token cap or usage-in-stream toggle
+	anthropic: { maxTokensField: 'max_tokens', supportsUsageInStreaming: false },
+	// llama-server reports its own timings, so it needs no usage chunk
+	'llama.cpp': { maxTokensField: 'max_tokens', supportsUsageInStreaming: false },
+	openai: { maxTokensField: 'max_tokens', supportsUsageInStreaming: true }
+};
+
 /**
  * Ready-made endpoints offered when adding a backend. `custom` intentionally
  * carries no URL so the user starts from an empty form.
@@ -85,6 +99,8 @@ export const BACKEND_PRESETS: readonly BackendPreset[] = [
 	},
 	{
 		baseUrl: 'https://api.openai.com',
+		// newer OpenAI models reject max_tokens
+		compat: { maxTokensField: 'max_completion_tokens' },
 		id: 'openai',
 		name: 'OpenAI',
 		protocol: 'openai'

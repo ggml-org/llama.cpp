@@ -11,6 +11,17 @@
 export type BackendProtocol = 'llama.cpp' | 'openai' | 'anthropic';
 
 /**
+ * Wire-level quirks of a backend's protocol. Capabilities gate llama.cpp
+ * features; compat describes how the request and stream payloads differ.
+ */
+export interface BackendCompat {
+	/** Field carrying the output token cap. */
+	maxTokensField: 'max_completion_tokens' | 'max_tokens';
+	/** Whether the endpoint accepts stream_options.include_usage. */
+	supportsUsageInStreaming: boolean;
+}
+
+/**
  * Features a backend supports. A llama.cpp server exposes extra endpoints on
  * top of the OpenAI-compatible API; plain OpenAI- and Anthropic-compatible
  * endpoints only provide chat and model listing.
@@ -45,6 +56,8 @@ export interface Backend {
 	baseUrl: string;
 	/** Chat completions path override, e.g. /v1/messages. */
 	chatPath?: string;
+	/** Wire quirks overriding the protocol defaults. */
+	compat?: Partial<BackendCompat>;
 	/** Disabled backends stay configured but are not queried. */
 	enabled: boolean;
 	/** Extra headers merged into every request to this backend. */
@@ -63,6 +76,8 @@ export interface BackendPreset {
 	apiKeyHelp?: string;
 	baseUrl: string;
 	chatPath?: string;
+	/** Wire quirks this preset needs on top of the protocol defaults. */
+	compat?: Partial<BackendCompat>;
 	id: string;
 	modelsPath?: string;
 	name: string;

@@ -66,6 +66,7 @@
 			...draft,
 			baseUrl: preset.baseUrl,
 			chatPath: preset.chatPath,
+			compat: preset.compat,
 			modelsPath: preset.modelsPath,
 			name: preset.id === 'custom' ? '' : preset.name,
 			protocol: preset.protocol

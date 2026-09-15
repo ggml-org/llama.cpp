@@ -8,13 +8,14 @@
 
 import {
 	BACKEND_CAPABILITIES,
+	BACKEND_COMPAT,
 	BACKEND_ID_PREFIX,
 	BACKEND_PROTOCOLS,
 	DEFAULT_BACKEND_CHAT_PATH,
 	DEFAULT_BACKEND_MODELS_PATH,
 	LOCAL_BACKEND_ID
 } from '$lib/constants';
-import type { Backend, BackendCapabilities, BackendProtocol } from '$lib/types';
+import type { Backend, BackendCapabilities, BackendCompat, BackendProtocol } from '$lib/types';
 
 /** Absolute chat completions URL for a backend. */
 export function backendChatUrl(backend: Backend): string {
@@ -29,6 +30,11 @@ export function backendModelsUrl(backend: Backend): string {
 /** Features a backend supports, derived from its protocol. */
 export function getBackendCapabilities(backend: Backend): BackendCapabilities {
 	return BACKEND_CAPABILITIES[backend.protocol] ?? BACKEND_CAPABILITIES.openai;
+}
+
+/** Wire quirks for a backend: protocol defaults overridden by the backend. */
+export function getBackendCompat(backend: Backend): BackendCompat {
+	return { ...(BACKEND_COMPAT[backend.protocol] ?? BACKEND_COMPAT.openai), ...backend.compat };
 }
 
 /** The built-in backend pointing at the server that serves this UI. */
@@ -107,6 +113,7 @@ function parseBackendEntry(entry: unknown, index: number): Backend | null {
 		apiKey,
 		baseUrl,
 		chatPath: parseOptionalPath(raw.chatPath),
+		compat: parseBackendCompat(raw.compat, protocol),
 		enabled: raw.enabled !== false,
 		headers: parseBackendHeaders(raw.headers),
 		id,
@@ -114,6 +121,36 @@ function parseBackendEntry(entry: unknown, index: number): Backend | null {
 		name,
 		protocol
 	};
+}
+
+// only keep the override keys the protocol understands, so a stale persisted
+// value can never inject an unknown field into a request
+function parseBackendCompat(
+	raw: unknown,
+	protocol: BackendProtocol
+): Partial<BackendCompat> | undefined {
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+
+	const entry = raw as Record<string, unknown>;
+	const defaults = BACKEND_COMPAT[protocol] ?? BACKEND_COMPAT.openai;
+	const overrides: Partial<BackendCompat> = {};
+
+	if (entry.maxTokensField === 'max_tokens' || entry.maxTokensField === 'max_completion_tokens') {
+		overrides.maxTokensField = entry.maxTokensField;
+	}
+
+	if (typeof entry.supportsUsageInStreaming === 'boolean') {
+		overrides.supportsUsageInStreaming = entry.supportsUsageInStreaming;
+	}
+
+	// drop a no-op override so an unmodified backend stays undefined
+	const isDefault =
+		(overrides.maxTokensField === undefined ||
+			overrides.maxTokensField === defaults.maxTokensField) &&
+		(overrides.supportsUsageInStreaming === undefined ||
+			overrides.supportsUsageInStreaming === defaults.supportsUsageInStreaming);
+
+	return isDefault ? undefined : overrides;
 }
 
 function parseBackendHeaders(raw: unknown): Record<string, string> | undefined {
