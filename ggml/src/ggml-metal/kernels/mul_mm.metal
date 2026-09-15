@@ -132,12 +132,13 @@ kernel void kernel_mul_mm(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    // Store result tile to output matrix (with batch offset)
-    // cT.store handles bounds checking via tD's extents (M, N)
-    device float * dstBatch = (device float *)dst + im * N * M;
+    const int tileM = min(NRA, M - ra);
+    const int tileN = min(NRB, N - rb);
 
-    auto tD = tensor(dstBatch, dextents<int32_t, 2>(M, N), array<int, 2>({1, M}));
-    cT.store(tD.slice(ra, rb));
+    device float * dstTile = (device float *)dst + (uint64_t) im * N * M + (uint64_t) rb * M + ra;
+
+    auto tD = tensor(dstTile, dextents<int32_t, 2>(tileM, tileN), array<int, 2>({1, M}));
+    cT.store(tD);
 }
 
 #else
