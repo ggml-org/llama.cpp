@@ -26,12 +26,14 @@ enum htp_data_type {
     HTP_TYPE_I32    = 26,
     HTP_TYPE_I64    = 27,
     HTP_TYPE_MXFP4  = 39,
+    HTP_TYPE_F8_E4M3 = 43,
 
     // types used internally for repack, dyn.quant, etc
     HTP_TYPE_Q4_0_TILED = 200,
     HTP_TYPE_Q4_1_TILED,
     HTP_TYPE_Q8_0_TILED,
     HTP_TYPE_MXFP4_TILED,
+    HTP_TYPE_F8_E4M3_TILED,
 
     HTP_TYPE_INVALID
 };
@@ -40,6 +42,7 @@ enum htp_data_type {
 #define QK_Q4_0_TILED  256  // 32x32 Q4_0 tiled layout
 #define QK_Q8_0_TILED  128  // 32x32 Q8_0 tiled layout
 #define QK_MXFP4_TILED 256  // 32x32 MXFP4 tiled layout
+#define QK_F8_E4M3_TILED 1024 // 32x32 E4M3 tiled layout
 
 
 
@@ -102,6 +105,10 @@ enum htp_op_code {
     HTP_OP_ALLREDUCE_ADD,
     HTP_OP_GLU_SWIGLU_CLAMP,
     HTP_OP_MDEV_GROUP,
+    HTP_OP_QKNORM_ROPE,
+    HTP_OP_CONV_2D,
+    HTP_OP_GROUP_NORM,
+    HTP_OP_MUL_MAT_SEGMENTED,
 
     HTP_OP_INVALID
 };

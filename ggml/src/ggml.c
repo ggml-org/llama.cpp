@@ -943,6 +943,13 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .type_size                = 0,
         .is_quantized             = false,
     },
+    [GGML_TYPE_F8_E4M3] = {
+        .type_name                = "f8_e4m3",
+        .blck_size                = 1,
+        .type_size                = sizeof(uint8_t),
+        .is_quantized             = false,
+        .to_float                 = (ggml_to_float_t) dequantize_row_f8_e4m3,
+    },
 };
 
 const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type) {
@@ -1099,9 +1106,15 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+
+    "MUL_MAT_SEGMENTED",
+    "QKNORM_ROPE",
+    "GROUP_NORM_AFFINE_SILU",
+    "CONV_2D_BIAS",
+    "CONV_2D_UPSCALE",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1214,9 +1227,15 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+
+    "X*concat(Y0,Y1)",
+    "qknorm_rope(x,w,theta)",
+    "silu(group_norm(x)*w+b)",
+    "conv2d(x)+b",
+    "conv2d(upscale(x))",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3193,6 +3212,30 @@ struct ggml_tensor * ggml_rms_norm_inplace(
     return ggml_rms_norm_impl(ctx, a, eps, true);
 }
 
+struct ggml_tensor * ggml_qknorm_rope(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * weight,
+        struct ggml_tensor  * theta,
+        float                 eps) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(weight->type == GGML_TYPE_F32);
+    GGML_ASSERT(theta->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_nelements(weight) == a->ne[0]);
+    GGML_ASSERT(ggml_nelements(theta) >= a->ne[2] * 2 * a->ne[0]);
+
+    const int64_t ne[3] = { a->ne[0], a->ne[2], a->ne[1] * a->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 3, ne);
+
+    ggml_set_op_params(result, &eps, sizeof(eps));
+    result->op     = GGML_OP_QKNORM_ROPE;
+    result->src[0] = a;
+    result->src[1] = weight;
+    result->src[2] = theta;
+
+    return result;
+}
+
 // ggml_rms_norm_back
 
 struct ggml_tensor * ggml_rms_norm_back(
@@ -3244,6 +3287,52 @@ struct ggml_tensor * ggml_group_norm_inplace(
         int                   n_groups,
         float                 eps) {
     return ggml_group_norm_impl(ctx, a, n_groups, eps, true);
+}
+
+static struct ggml_tensor * ggml_group_norm_affine_silu_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * weight,
+        struct ggml_tensor  * bias,
+        int                   n_groups,
+        float                 eps,
+        bool                  inplace) {
+    GGML_ASSERT(weight->type == GGML_TYPE_F32);
+    GGML_ASSERT(bias->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_nelements(weight) == a->ne[2]);
+    GGML_ASSERT(ggml_nelements(bias) == a->ne[2]);
+
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_i32(result, 0, n_groups);
+    ggml_set_op_params_f32(result, 1, eps);
+
+    result->op     = GGML_OP_GROUP_NORM_AFFINE_SILU;
+    result->src[0] = a;
+    result->src[1] = weight;
+    result->src[2] = bias;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_group_norm_affine_silu(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * weight,
+        struct ggml_tensor  * bias,
+        int                   n_groups,
+        float                 eps) {
+    return ggml_group_norm_affine_silu_impl(ctx, a, weight, bias, n_groups, eps, false);
+}
+
+struct ggml_tensor * ggml_group_norm_affine_silu_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * weight,
+        struct ggml_tensor  * bias,
+        int                   n_groups,
+        float                 eps) {
+    return ggml_group_norm_affine_silu_impl(ctx, a, weight, bias, n_groups, eps, true);
 }
 
 // ggml_l2_norm
@@ -3355,10 +3444,34 @@ struct ggml_tensor * ggml_mul_mat(
     return result;
 }
 
+struct ggml_tensor * ggml_mul_mat_segmented(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b0,
+        struct ggml_tensor  * b1) {
+    GGML_ASSERT(a->ne[0] == b0->ne[0] + b1->ne[0]);
+    GGML_ASSERT(b0->ne[1] == b1->ne[1]);
+    GGML_ASSERT(b0->ne[2] == b1->ne[2]);
+    GGML_ASSERT(b0->ne[3] == b1->ne[3]);
+    GGML_ASSERT(b0->ne[2] % a->ne[2] == 0);
+    GGML_ASSERT(b0->ne[3] % a->ne[3] == 0);
+    GGML_ASSERT(!ggml_is_transposed(a));
+
+    const int64_t ne[4] = { a->ne[1], b0->ne[1], b0->ne[2], b0->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    result->op     = GGML_OP_MUL_MAT_SEGMENTED;
+    result->src[0] = a;
+    result->src[1] = b0;
+    result->src[2] = b1;
+
+    return result;
+}
+
 void ggml_mul_mat_set_prec(
         struct ggml_tensor * a,
         enum ggml_prec       prec) {
-    GGML_ASSERT(a->op == GGML_OP_MUL_MAT);
+    GGML_ASSERT(a->op == GGML_OP_MUL_MAT || a->op == GGML_OP_MUL_MAT_SEGMENTED);
 
     const int32_t prec_i32 = (int32_t) prec;
 
@@ -4976,6 +5089,58 @@ struct ggml_tensor * ggml_conv_2d_direct(
     result->op = GGML_OP_CONV_2D;
     result->src[0] = a;
     result->src[1] = b;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_conv_2d_direct_bias(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * bias,
+        int s0, int s1, int p0, int p1, int d0, int d1) {
+    GGML_ASSERT(bias != NULL);
+    GGML_ASSERT(bias->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_nelements(bias) == a->ne[3]);
+
+    struct ggml_tensor * result = ggml_conv_2d_direct(ctx, a, b, s0, s1, p0, p1, d0, d1);
+    result->op     = GGML_OP_CONV_2D_BIAS;
+    result->src[2] = bias;
+    return result;
+}
+
+struct ggml_tensor * ggml_conv_2d_direct_upscale(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * bias,
+        int upscale_factor,
+        int s0, int s1, int p0, int p1, int d0, int d1) {
+    GGML_ASSERT(upscale_factor > 1);
+    GGML_ASSERT(a->ne[2] == b->ne[2]);
+    GGML_ASSERT(bias == NULL || bias->type == GGML_TYPE_F32);
+    GGML_ASSERT(bias == NULL || ggml_nelements(bias) == a->ne[3]);
+
+    const int64_t ne[4] = {
+        ggml_calc_conv_output_size(b->ne[0] * upscale_factor, a->ne[0], s0, p0, d0),
+        ggml_calc_conv_output_size(b->ne[1] * upscale_factor, a->ne[1], s1, p1, d1),
+        a->ne[3],
+        b->ne[3],
+    };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, b->type, 4, ne);
+
+    ggml_set_op_params_i32(result, 0, s0);
+    ggml_set_op_params_i32(result, 1, s1);
+    ggml_set_op_params_i32(result, 2, p0);
+    ggml_set_op_params_i32(result, 3, p1);
+    ggml_set_op_params_i32(result, 4, d0);
+    ggml_set_op_params_i32(result, 5, d1);
+    ggml_set_op_params_i32(result, 6, upscale_factor);
+
+    result->op     = GGML_OP_CONV_2D_UPSCALE;
+    result->src[0] = a;
+    result->src[1] = b;
+    result->src[2] = bias;
 
     return result;
 }

@@ -25,6 +25,7 @@ extern "C" {
 #define HTP_MM_WEIGHT_TILE_SIZE_Q8_0   1088
 #define HTP_MM_WEIGHT_TILE_SIZE_IQ4_NL 576
 #define HTP_MM_WEIGHT_TILE_SIZE_MXFP4  544
+#define HTP_MM_WEIGHT_TILE_SIZE_F8_E4M3 1024
 
 // --- Weight Repacked Aligned Tile Sizes ---
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q4_0   640
@@ -32,6 +33,7 @@ extern "C" {
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q8_0   1152
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_IQ4_NL 640
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_MXFP4  640
+#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_F8_E4M3 1024
 
 // --- Activation Tiled Block Sizes (including padding) ---
 #define HTP_MM_ACT_TILE_SIZE_Q8_0      1152
@@ -69,6 +71,11 @@ enum htp_mm_kernel_type {
     HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT, // row-wise fallback flat quantization
 };
 
+enum htp_mm_scale_flags {
+    HTP_MM_SCALE_PARAM  = 1u << 0,
+    HTP_MM_SCALE_TENSOR = 1u << 1,
+};
+
 // Op-specific struct for precomputed matmul params
 struct htp_mm_kernel_params {
     int32_t  kernel_type;        // enum htp_mm_kernel_type
@@ -88,7 +95,8 @@ struct htp_mm_kernel_params {
     int32_t  vtcm_src2_size;     // src2 scratchpad size in VTCM (fused only)
     int32_t  vtcm_src3_size;     // src3 scratchpad size in VTCM (fused only)
     int32_t  vtcm_dst_size;      // dst scratchpad size in VTCM
-    int32_t  n_weights;          // Number of weights for fused NX
+    uint16_t n_weights;          // Number of weights for fused NX
+    uint16_t scale_flags;        // enum htp_mm_scale_flags
 
     // Precomputed division values
     struct fastdiv_values div_ne12_ne1;
@@ -200,6 +208,8 @@ static inline uint32_t htp_mm_get_weight_tile_size(int weight_type) {
             return HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
         case HTP_TYPE_MXFP4:
             return HTP_MM_WEIGHT_TILE_SIZE_MXFP4;
+        case HTP_TYPE_F8_E4M3:
+            return HTP_MM_WEIGHT_TILE_SIZE_F8_E4M3;
         default:
             return 0;
     }
@@ -216,6 +226,8 @@ static inline uint32_t htp_mm_get_weight_aligned_tile_size(int weight_type) {
             return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q8_0;
         case HTP_TYPE_MXFP4:
             return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_MXFP4;
+        case HTP_TYPE_F8_E4M3:
+            return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_F8_E4M3;
         default:
             return 0;
     }
@@ -257,6 +269,8 @@ static inline size_t htp_mm_get_tiled_row_stride(int weight_type, uint32_t k) {
         case HTP_TYPE_Q8_0:
         case HTP_TYPE_MXFP4:
             return (size_t) nb * htp_mm_get_weight_tile_size(weight_type);
+        case HTP_TYPE_F8_E4M3:
+            return (size_t) k;
         case HTP_TYPE_F16:
             return (size_t) k * sizeof(__fp16);
         case HTP_TYPE_F32:
@@ -279,13 +293,14 @@ static inline void htp_mm_hmx_get_2d_chunk_costs(
     size_t * size_per_n_out, size_t * size_per_m_out, size_t * size_per_mn_out
 ) {
     const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32);
+    const bool direct_f8 = (wtype == HTP_TYPE_F8_E4M3);
     const size_t row_stride = htp_mm_get_tiled_row_stride(wtype, k);
     const size_t vec_dot_size = k * sizeof(uint16_t);
     const uint32_t n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
     const size_t qweight_row_stride = is_quant ? (size_t)(n_k_tiles * aligned_tile_size) / 32 : 0;
 
     *size_per_n_out = (pipeline ? 2 : 1) * (is_quant ? qweight_row_stride : row_stride) +
-                      (pipeline ? 2 * vec_dot_size : vec_dot_size);
+                      (direct_f8 ? 0 : (pipeline ? 2 * vec_dot_size : vec_dot_size));
     *size_per_m_out = vec_dot_size;
     *size_per_mn_out = (pipeline ? 2 : 1) * sizeof(uint16_t);
 }
@@ -409,6 +424,7 @@ static inline void htp_mm_hmx_vtcm_layout_build(
     } else {
         // HTP_MM_KERNEL_HMX_2D
         const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32);
+        const bool direct_f8 = (wtype == HTP_TYPE_F8_E4M3);
         const size_t row_stride = htp_mm_get_tiled_row_stride(wtype, k);
         const size_t vec_dot_size = k * sizeof(uint16_t);
         const uint32_t n_k_tiles = k / HTP_MM_HMX_TILE_N_COLS;
@@ -420,7 +436,7 @@ static inline void htp_mm_hmx_vtcm_layout_build(
         const size_t act_area_size    = hex_align_up(mc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
         const size_t output_area_size = hex_align_up(mc * nc * sizeof(__fp16), HTP_MM_HMX_TILE_SIZE);
 
-        const size_t scratch0_size = hex_align_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
+        const size_t scratch0_size = direct_f8 ? 0 : hex_align_up(nc * vec_dot_size, HTP_MM_HMX_TILE_SIZE);
         const size_t scratch1_size = pipeline ? scratch0_size : 0;
 
         // Group A:  Scales and activation tiles (must not overlap with Group B or C)

@@ -25,6 +25,27 @@
 
 #define UNUSED GGML_UNUSED
 
+static float fp8_e4m3_to_fp32(uint8_t x) {
+    const uint32_t sign     = x >> 7;
+    const uint32_t exponent = (x >> 3) & 0x0f;
+    const uint32_t mantissa = x & 0x07;
+
+    if (exponent == 0x0f && mantissa == 0x07) {
+        return sign ? -NAN : NAN;
+    }
+
+    const float value = exponent == 0
+                            ? ldexpf((float) mantissa, -9)
+                            : ldexpf(1.0f + (float) mantissa / 8.0f, (int) exponent - 7);
+    return sign ? -value : value;
+}
+
+void dequantize_row_f8_e4m3(const uint8_t * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    for (int64_t i = 0; i < k; ++i) {
+        y[i] = fp8_e4m3_to_fp32(x[i]);
+    }
+}
+
 static inline int best_index_int8(int n, const int8_t * val, float x) {
     if (x <= val[0]) return 0;
     if (x >= val[n-1]) return n-1;

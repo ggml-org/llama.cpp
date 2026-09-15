@@ -10,7 +10,44 @@
 #define FAST_SIGMOID_C2    (0x3e8d74bd)  // 0.276281267
 #define FAST_SIGMOID_C3    (0x3f000000)  // 0.5
 
+#if __HVX_ARCH__ >= 79
+static inline HVX_Vector hvx_vec_inverse_f32_v79(HVX_Vector v) {
+    const HVX_Vector two = hvx_vec_splat_f32(2.0f);
+    HVX_Vector r = Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(0x7EEEEBB3), v);
+    r = Q6_Vsf_vmpy_VsfVsf(r, Q6_Vsf_vsub_VsfVsf(two, Q6_Vsf_vmpy_VsfVsf(r, v)));
+    return Q6_Vsf_vmpy_VsfVsf(r, Q6_Vsf_vsub_VsfVsf(two, Q6_Vsf_vmpy_VsfVsf(r, v)));
+}
+
+static inline HVX_Vector hvx_vec_fast_sigmoid_f32_v79(HVX_Vector v) {
+    v = Q6_Vsf_vmpy_VsfVsf(v, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
+    v = Q6_Vsf_vmpy_VsfVsf(v, Q6_V_vsplat_R(FAST_SIGMOID_C3));
+
+    const HVX_Vector in_int = hvx_vec_truncate_f32(v);
+    const HVX_Vector x = Q6_Vsf_vsub_VsfVsf(v, Q6_Vsf_equals_Vw(in_int));
+    const HVX_Vector xx = Q6_Vsf_vmpy_VsfVsf(x, x);
+
+    HVX_Vector v1 = Q6_Vsf_vmpy_VsfVsf(xx, Q6_V_vsplat_R(FAST_SIGMOID_C2));
+    v1 = Q6_Vsf_vadd_VsfVsf(v1, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
+
+    HVX_Vector v2 = Q6_Vsf_vmpy_VsfVsf(x, Q6_V_vsplat_R(FAST_SIGMOID_C1));
+    v2 = Q6_Vsf_vadd_VsfVsf(Q6_Vsf_vmpy_VsfVsf(v2, xx), x);
+
+    HVX_Vector v3 = Q6_Vsf_vadd_VsfVsf(v2, v1);
+    HVX_Vector v3_exponent = Q6_Vw_vasl_VwR(v3, 1);
+    v3_exponent = Q6_Vuw_vlsr_VuwR(v3_exponent, 24);
+    v3_exponent = Q6_Vw_vadd_VwVw(in_int, v3_exponent);
+    v3 = Q6_Vw_vaslacc_VwVwR(v3, in_int, 24);
+
+    const HVX_Vector v4 = Q6_Vsf_vsub_VsfVsf(v2, v1);
+    const HVX_Vector v5 = Q6_Vsf_vsub_VsfVsf(v3, v4);
+    return Q6_Vsf_vmpy_VsfVsf(v3, hvx_vec_inverse_f32_v79(v5));
+}
+#endif
+
 static inline HVX_Vector hvx_vec_fast_sigmoid_f32(HVX_Vector v) {
+#if __HVX_ARCH__ >= 79
+    return hvx_vec_fast_sigmoid_f32_v79(v);
+#else
     v = Q6_Vqf32_vmpy_VsfVsf(v, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
     v = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v), Q6_V_vsplat_R(FAST_SIGMOID_C3));
 
@@ -38,6 +75,7 @@ static inline HVX_Vector hvx_vec_fast_sigmoid_f32(HVX_Vector v) {
     res            = Q6_Vqf32_vmpy_VsfVsf(v3, res);
 
     return Q6_Vsf_equals_Vqf32(res);
+#endif
 }
 
 static inline HVX_Vector hvx_vec_fast_sigmoid_f32_guard(HVX_Vector v,

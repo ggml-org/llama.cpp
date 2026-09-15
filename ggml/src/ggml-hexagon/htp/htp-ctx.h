@@ -149,6 +149,7 @@ static inline void htp_ops_context_set_status(struct htp_ops_context * octx, int
 }
 
 int op_matmul(struct htp_ops_context * octx);
+int op_matmul_segmented(struct htp_ops_context * octx);
 int op_matmul_id(struct htp_ops_context * octx);
 int op_matmul_nx(struct htp_ops_context * octx);
 int op_matmul_id_nx(struct htp_ops_context * octx);
@@ -175,5 +176,8 @@ int op_gated_delta_net(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
 int op_im2col(struct htp_ops_context * octx);
 int op_allreduce(struct htp_ops_context * octx);
+int op_qknorm_rope(struct htp_ops_context * octx);
+int op_conv2d(struct htp_ops_context * octx);
+int op_group_norm(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */
