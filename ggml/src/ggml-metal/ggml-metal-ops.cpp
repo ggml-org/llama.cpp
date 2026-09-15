@@ -2923,6 +2923,7 @@ static int ggml_metal_op_flash_attn_ext_n_kv_max_sparse(const ggml_tensor * op) 
     const bool dk_dv_ok = (dk == 32  && dv == 32)  ||
                           (dk == 64  && dv == 64)  ||
                           (dk == 96  && dv == 96)  ||
+                          (dk == 96  && dv == 64)  ||
                           (dk == 128 && dv == 128) ||
                           (dk == 192 && dv == 128) ||
                           (dk == 192 && dv == 192) ||
