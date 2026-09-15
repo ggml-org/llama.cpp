@@ -10425,6 +10425,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {202048, nrows, 1, 1}, k, true));
         }
     }
+    // sparse-attention indexer shapes: k ~ 2048 of a long row (CUDA radix select path)
+    for (int nrows : {1, 5}) {
+        test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {70000, nrows, 1, 1}, 2051));
+        test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {70000, nrows, 1, 1}, 2051, true));
+    }
 
     for (int k : {1, 2, 3, 7, 15}) {
         test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {16, 10, 10, 10}, k));
