@@ -609,6 +609,12 @@ struct server_prompt_cache_state {
     }
 };
 
+enum server_prompt_cache_load_result {
+    SERVER_PROMPT_CACHE_LOAD_RESULT_RESTORED,
+    SERVER_PROMPT_CACHE_LOAD_RESULT_NO_MATCH,
+    SERVER_PROMPT_CACHE_LOAD_RESULT_FAILED,
+};
+
 struct server_prompt_cache {
     server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
@@ -629,7 +635,11 @@ struct server_prompt_cache {
 
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+    server_prompt_cache_load_result load(server_prompt &       prompt,
+                                         const server_tokens & tokens_new,
+                                         llama_context *       ctx_tgt,
+                                         llama_context *       ctx_dft,
+                                         int32_t               id_slot);
 
     void update();
 };
