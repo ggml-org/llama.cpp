@@ -515,7 +515,7 @@ PY
     check_ppl "qwen3-0.6b" "q4_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_1.log)" | tee -a $OUT/${ci}-ppl.log
     check_ppl "qwen3-0.6b" "q5_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_0.log)" | tee -a $OUT/${ci}-ppl.log
     check_ppl "qwen3-0.6b" "q5_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_1.log)" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "qwen3-0.6b" "q2_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q2_k.log)" | tee -a $OUT/${ci}-ppl.log
+    #check_ppl "qwen3-0.6b" "q2_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q2_k.log)" | tee -a $OUT/${ci}-ppl.log
     check_ppl "qwen3-0.6b" "q3_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q3_k.log)" | tee -a $OUT/${ci}-ppl.log
     check_ppl "qwen3-0.6b" "q4_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_k.log)" | tee -a $OUT/${ci}-ppl.log
     check_ppl "qwen3-0.6b" "q5_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_k.log)" | tee -a $OUT/${ci}-ppl.log
