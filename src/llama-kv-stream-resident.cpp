@@ -1021,8 +1021,9 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
             if (!native && !resumed && !convert_inputs()) return false;
             const auto recycle = [&] {
                 for (size_t i = 0; i < consumed; ++i) {
-                    // The current partial/convert callbacks synchronize before returning.
-                    const bool released = cross && s.copy_ops->version >= 3 && s.copy_ops->release_completed ?
+                    // Resumed attention is asynchronous; its event fences ring reuse on the copy stream.
+                    const bool completed = !resumed && cross && s.copy_ops->version >= 3 && s.copy_ops->release_completed;
+                    const bool released = completed ?
                         s.copy_ops->release_completed(s.copies.get(),slot+offset+i) : s.copy_ops->release(s.copies.get(),slot+offset+i);
                     if (!released) return false;
                 }

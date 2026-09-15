@@ -47,7 +47,8 @@ public:
     bool compute_one_block(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
             size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace);
     // Traversal over any number of tail blocks; optional overlap retains the ordered correctness control.
-    // Current-layer work completes before return; a sequence may retain future KV copies. Host backing must be pinned.
+    // Ordered sequences may return after queueing an intermediate layer; the final layer drains all retained work.
+    // Non-sequence calls complete before return. Host backing must remain pinned through the sequence.
     // A positive span ceiling groups physical neighbors without increasing ring or conversion storage.
     bool compute_streamed(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output,
             size_t active_tokens, float scale, ggml_backend_memory_lease_t workspace, bool overlap = false,

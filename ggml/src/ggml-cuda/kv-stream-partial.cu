@@ -244,7 +244,7 @@ static bool resume_plan(ggml_backend_t backend, int32_t key, int32_t value, uint
         value == GGML_TYPE_F16 || value == GGML_TYPE_BF16 ? 32 : 8,output);
 }
 
-// Span order belongs to the session. Each completed call releases its input bytes for ring reuse.
+// Span order belongs to the session. The caller records slot-consumption events after each queued launch.
 static bool resume(ggml_backend_t backend, const ggml_tensor * op, ggml_backend_buffer_t workspace,
         const ggml_kv_stream_resume_plan & plan, size_t tokens, size_t first, bool last) {
     if (capture_active(backend) || !supports(backend,op) || !workspace || !tokens || tokens%256 || tokens > INT32_MAX || first >= tokens || first%256) return false;
@@ -283,7 +283,7 @@ static bool resume(ggml_backend_t backend, const ggml_tensor * op, ggml_backend_
             ggml_cuda_kernel_launch(flash_attn_combine_results<256>,combine,partials,meta,static_cast<float *>(op->data),int(plan.splits));
         } else CUDA_CHECK(cudaMemcpyAsync(op->data,partials,ggml_nbytes(op),cudaMemcpyDeviceToDevice,ctx.stream()));
     }
-    CUDA_CHECK(cudaGetLastError()); CUDA_CHECK(cudaStreamSynchronize(ctx.stream())); return true;
+    CUDA_CHECK(cudaGetLastError()); return true;
 }
 
 // The surrounding attention TU uses fast math; preserve subnormal contract payloads across conversion.

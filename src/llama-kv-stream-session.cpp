@@ -1,5 +1,6 @@
 #include "llama-kv-stream-session.h"
 #include "llama-kv-stream-capture.h"
+#include "llama-impl.h"
 #include "ggml-cpp.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
 #include <array>
@@ -37,7 +38,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     uint32_t next = 0, queries = 0;
     uint64_t revision = 0, expected_generation = 0;
     bool running = false, produced = false, poisoned = false, busy = false;
-    bool direct_mode = false;
+    bool direct_mode = false, report_layout = false;
 
     // End copy use before releasing the execution pin that owns native metadata.
     bool drain() override {
@@ -91,7 +92,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
             next->q = *q; next->mask = *mask; next->output = *output; next->scale = scale;
             cached = std::move(next);
         }
-        return cached->executor->compute_async(target) == GGML_STATUS_SUCCESS && cached->executor->drain();
+        return cached->executor->compute_async(target) == GGML_STATUS_SUCCESS;
     }
 };
 
@@ -164,6 +165,16 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
         if (decision.layout_changed) {
             if (!s.install(decision.next)) return false;
         } else s.state = decision.next;
+        if (decision.layout_changed) {
+            const size_t page_tokens=size_t(s.state.budget.shape.page_tokens);
+            const size_t active_pages=(active-1)/page_tokens+1;
+            const size_t streamed=active_pages > s.state.resident_pages_per_layer ?
+                (active_pages-s.state.resident_pages_per_layer)*s.state.budget.layers : 0;
+            const double mib=double(streamed)*s.state.budget.page.storage.bytes/1048576.0;
+            LLAMA_LOG_WARN("%s: KV layout revision %llu, resident pages/layer %u, ring slots %u, active pages %zu, padded H2D %.2f MiB/eval\n",
+                __func__,(unsigned long long)s.revision,s.state.resident_pages_per_layer,s.state.ring_slots,active_pages,mib);
+            s.report_layout = true;
+        }
         s.span = std::max(size_t(1),s.resident->suggested_span_pages());
         s.pin = s.binding->acquire();
         llama_kv_stream_capture_stamp stamp;
@@ -220,6 +231,13 @@ bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_te
         }
         s.produced = false;
         if (++s.next == s.order.size()) {
+            if (s.report_layout) {
+                const auto stats=s.resident->sequence_stats();
+                LLAMA_LOG_WARN("%s: accepted KV layout copied %.2f MiB in %zu H2D calls, peak ring pages %zu\n",
+                    __func__,stats.copy_bytes/1048576.0,stats.copy_calls,stats.peak_pages);
+                s.report_layout = false;
+            }
+            if (s.direct_mode) ggml_backend_synchronize(s.backend);
             s.committed = s.target; s.expected_generation = s.content->generation(); s.running = false;
             s.pin.reset();
         }

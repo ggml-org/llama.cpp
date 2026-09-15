@@ -19,7 +19,8 @@ struct ggml_kv_stream_query_tile {
 GGML_API bool ggml_kv_stream_query_tile_make(
         size_t queries, size_t heads, size_t first, ggml_kv_stream_query_tile & output);
 
-// Optional registry extension "ggml_backend_kv_stream_partial_ops". All calls complete before returning.
+// Optional registry extension "ggml_backend_kv_stream_partial_ops". Partial/conversion calls complete before returning;
+// version 5 resume calls enqueue work and require the caller's stream/event lifetime fence.
 // Getter may return null when disabled. Call outside active capture; CUDA execution errors follow backend error handling.
 // All tensor/workspace buffers belong to the backend; workspace must not overlap inputs or public output.
 struct ggml_kv_stream_resume_plan;

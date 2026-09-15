@@ -6,7 +6,7 @@ Last source review: 2026-09-13, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`. **5.5b** is implemented and qualified for user review. It adds host snapshot restoration, recurrent-checkpoint-compatible attention truncation and cancellation recovery while retaining the serial/single-CUDA scope. Next is **5.5c** performance qualification, not completion of milestone 5.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`. **5.5c** is implemented and qualified for user review. It removes unsafe/per-span decode waits, records fixed-pool transfer diagnostics and documents the remaining performance gap without weakening numerical or publication guarantees. Next is **5.5d** documentation, not completion of milestone 5.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -372,8 +372,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.4k | Committed | 6879fe81a | KV-aware resident replay over the existing CUDA executor; retained native roots and leases, fixed metadata admission, streamed-epoch invalidation, and active-capture rejection. 13 CUDA cases / 166 assertions; four 26-suite matrices, graph-disabled checks, targeted host TSan and UVM-off/on CUDA memcheck pass. Scope and measured guard cost below. |
 | 5.5a | Committed | b72bcc9e6 | Opt-in text/server integration plus stock-equivalent prefill and bounded resumable native decode for eligible CUDA quantized paths. See the detailed substages and numerical follow-up below. |
 | 5.5a.1-5.5a.4 | Committed | b72bcc9e6 | Producer workspace, session ownership, graph bridge, public gates, real-model qualification and resumable-decode extension were reviewed as one combined commit. |
-| 5.5b | Ready for review | - | Host snapshot restore, dense-frontier validation, suffix truncation for recurrent checkpoints, malformed-state retry and serial cancellation recovery. Q3/IQ4 and HTTP prompt-cache qualification pass. |
-| 5.5c-5.5d | Planned | - | Performance qualification, then supported-configuration documentation. |
+| 5.5b | Committed | 10ec8902d | Host snapshot restore, dense-frontier validation, suffix truncation for recurrent checkpoints, malformed-state retry and serial cancellation recovery. |
+| 5.5c | Ready for review | - | Matched Release fixed-pool sweep; PDL-safe asynchronous resumed spans, coalesced resident drains and layout-change-only H2D diagnostics. Remaining producer/prefill costs are explicitly recorded. |
+| 5.5d | Planned | - | Supported-configuration and reproducible-test documentation. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -2789,3 +2790,75 @@ A streaming completion was disconnected after its first content event. After the
 Evidence is in `/tmp/kv-55b-*.log` and the temporary `/tmp/kv-55b-{http,prefix,cancel}.py` scripts/results; these machine-local files are not committed. Production `llm-llmster` was restored with its existing image/configuration and port 1234 health is OK. No compose, production image, model, checkpoint or prompt-cache file was changed.
 
 Task implementation, tests and this roadmap are staged for the user. Unrelated README, infrastructure documentation and benchmark-tree changes remain untouched. No assistant commit or push was made. Next is **5.5c** fixed-pool performance qualification; **5.5d** documentation remains after it.
+
+## Stage 5.5c: fixed-pool performance qualification
+
+Stage 5.5c is ready for user review. It qualifies the current memory-infrastructure implementation against the committed `feature/adaptive-kv-stream` reference at `d873e5db9`, fixes one synchronization/lifetime defect found by the benchmark, and records the remaining gaps. It does not claim performance parity.
+
+### Matched setup
+
+- Both servers are Release builds from their own source trees using GNU 13.3, shared libraries, `GGML_NATIVE=OFF`, CUDA architecture 120a, CUDA graphs, size compression and all-quant Flash Attention.
+- Model: Qwen3.8-27B UD-Q3_K_XL; all model layers on the RTX 5070 Ti; Q8_0 K/Q4_0 V; UVM off; one slot; batch/ubatch 256/256; context 163840; fixed 2048 MiB KV pool. The reference uses `--kv-stream-stage-mib 2048`; current uses `--kv-stream-pool-mib 2048`.
+- Each fresh server receives the same hashed token array, prompt reuse disabled, then generates 256 tokens with greedy sampling and EOS ignored. Server timings exclude model loading. Per-process VRAM is sampled every 200 ms.
+- Variant order was alternated in the initial sweep. Reference 64K/96K/160K points were repeated and differ by at most 0.46% in decode speed. Current retained-source points were also repeated during optimization and were stable within ordinary run noise. The table uses reference medians where two runs exist and a retained-source current result; 80K/128K reference values have one run.
+
+### Final retained-source results
+
+| Prompt tokens | Reference prefill tok/s | Current prefill tok/s | Prefill delta | Reference decode tok/s | Current decode tok/s | Decode delta |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 65,536 | 1,185.59 | 1,136.27 | -4.16% | 36.92 | 34.67 | -6.09% |
+| 81,920 | 1,081.79 | 1,034.58 | -4.36% | 33.48 | 32.53 | -2.83% |
+| 98,304 | 1,056.56 | 942.73 | -10.77% | 30.50 | 28.56 | -6.36% |
+| 131,072 | 977.65 | 796.03 | -18.58% | 25.69 | 21.87 | -14.87% |
+| 163,584 | 890.94 | 686.73 | -22.92% | 17.91 | 15.35 | -14.27% |
+
+The first point is all-resident. The 81,920-token point is the initial concentrated decode boundary with the minimum ring. The remaining points cover moderate through bandwidth-limited streaming. The reference uses partitioned attention with its previously measured numerical drift; current keeps stock-equivalent strict prefill and resumable native decode. This is therefore a comparison of the intended quality/performance tradeoff, not identical arithmetic.
+
+Current prefill peak is 15166 MiB versus 14896-14900 MiB for the reference because strict prefill retains one full encoded layer workspace. Current steady decode is 14910 MiB versus 14900 MiB for the reference because the context-sized prefill workspace is replaced by bounded resumed state. The fixed pool is identical; this stage does not search for a larger current pool.
+
+### Transfer demand
+
+For this Q8/Q4 geometry, one 256-token K/V page for one attention layer is 425,984 bytes. The pool contains 5,041 pages across 16 attention layers. The accepted geometric layouts match the reference policy: initial 314 resident pages/layer plus 17 ring slots, then 309/97 at 96K, 300/241 at 128K and 291/385 at 160K. Concentrated decode keeps most layers fully resident and places the total deficit in 7, 13, 15 and 15 streamed layers at the four pressure points.
+
+The following live H2D demand excludes padding bytes in the final partial page. Calls are two per streamed layer when each layer fits one ring wave. Effective bandwidth is live demand multiplied by measured token rate; it is not a hardware-counter measurement.
+
+| Prompt | Resident pages/layer | Ring slots | Streamed layers | Live H2D/token | H2D calls/token | Reference effective GiB/s | Current effective GiB/s |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 65,536 | 314 | 17 | 0 | 0 | 0 | 0 | 0 |
+| 81,920 | 314 | 17 | 7 | 42.67 MiB | 14 | 1.39 | 1.36 |
+| 98,304 | 309 | 97 | 13 | 488.74 MiB | 26 | 14.56 | 13.63 |
+| 131,072 | 300 | 241 | 15 | 1,378.43 MiB | 30 | 34.58 | 29.43 |
+| 163,584 | 291 | 385 | 15 | 2,262.43 MiB | 30 | 39.57 | 33.92 |
+
+The component suites already assert actual copy bytes/calls against independent geometry. New verbosity 3 logs report each accepted layout's revision, resident/ring/active page counts, padded H2D estimate, then actual completed copy bytes/calls and peak occupied ring pages. Logs occur only on layout changes, not every token. The synthetic session check reports 1.02 MiB in 12 calls and 1.63 MiB in 16 calls for its two accepted test layouts, matching its existing assertions.
+
+### Synchronization optimization and TDD
+
+The initial Release sweep was the red performance test: current decode was 4.7-14.7% behind the reference and prefill 4.7-23.0% behind. A delayed Nsight experiment that ended before request completion was discarded. A later trace containing real prefill and partial warm-prefix decode showed `cudaStreamSynchronize` consuming 94.6% of captured CUDA API time, with 117,400 calls; it is diagnostic evidence, not a complete-request timing record.
+
+Resumed attention previously synchronized after every streamed span and then declared its ring slot completed. Removing the wait initially failed 6-10 of 84 cross-layer output assertions, while `CUDA_LAUNCH_BLOCKING=1` passed all cases. The kernel inherited an early `cudaTriggerProgrammaticLaunchCompletion()` call: its following consumed event could become eligible before the resumed kernel's final ring read. The fix disables early PDL completion only for resumable kernels. Their completion is triggered implicitly at kernel exit, so the consumed event fences the copy stream correctly. Ordinary attention kernels retain PDL.
+
+The copy queue now records a consumed event after each queued resume launch and waits on it before overwriting that physical slot. Intermediate ordered layers may return after enqueue; the final layer drains the sequence. Five isolated cross-layer stress repetitions pass, including Q8/Q4, Q5_1/Q4_1 and Q4_0/F16 at 513/769/4097 active tokens. CUDA launch blocking is no longer required. CUDA memcheck is clean.
+
+This change improves current decode from 31.89 to 32.53 tok/s at 80K and 26.61 to 28.56 tok/s at 96K. It is neutral within noise at 128K/160K, where transfer and attention dominate. Eligible all-resident captured attention also queues all layer graphs and drains once before releasing its binding pin, improving the 64K control from about 34.10 to 34.67 tok/s. Cached graph metadata and leases remain retained until that drain.
+
+Two additional experiments were removed before review: asynchronous strict-gather copies improved prefill by less than 1%, and an asynchronous direct-attention hook produced no material gain. Keeping them would have expanded the backend contract without solving the bottleneck.
+
+### Remaining bottlenecks and follow-up
+
+- Producer publication is synchronous per attention layer. K and V are quantized and downloaded into a private transaction before authoritative host publication. This preserves atomic logical K/V visibility and failure cleanup, but splits the model graph and repeatedly drains writer executors. The old CUDA-integrated reference queues these operations within its main pipeline.
+- Strict prefill assembles a full encoded layer and runs stock native attention. Its D2D traffic grows with context and explains the increasing prefill gap. Replacing it with independent partial attention would recover speed but reintroduce the model-level numerical drift rejected earlier.
+- At 160K, unavoidable live H2D alone reaches 2.21 GiB/token. The reference achieves about 39.6 GiB/s effective transfer while current reaches 33.9 GiB/s. The remaining decode gap combines producer drains, backend graph segmentation and less complete copy/compute overlap.
+- A future asynchronous producer design should write append-only K/V directly into retained pinned authoritative storage, publish K/V logically as one pair, fence mutable-tail use across streams, and preserve failure closure. It also needs bounded plan/source retention across graph rebuilds. This is a separate design/qualification stage, not a safe local change inside 5.5c.
+- Exact high-throughput prefill requires resumable native MMA/tile state or another method that preserves acceptable numerical behavior without a context-sized gather. It is not implemented here.
+
+### Final qualification
+
+- Q3_K_XL and IQ4_XS remain exact against their ordinary controls through 192 forced decode tokens at ub256/512: max logit error 0, recurrent relative L2 error 0 and 192/192 matching top tokens.
+- All 32 focused suites pass in CPU Debug, CUDA-build Debug, ASan and UBSan after the retained changes. The native resume suite passes repeatedly; session is 6/186 and model is 3/54.
+- CUDA memcheck with full leak checking passes resume 4/110, session 6/186 and model 3/54 with zero errors and zero leaked bytes. The legacy 20-case/656,887-assertion native block suite passes after the shared-kernel PDL change.
+- Production was stopped for isolated profiling/measurement and restored with its existing image/configuration; port 1234 health is OK. No compose, model, checkpoint or prompt-cache file was changed.
+
+Benchmark inputs/results are in `/tmp/kv-55c-*.jsonl`, `/tmp/kv-55c-*-progress.log` and per-run `/tmp/kv-55c-{reference,current}-*.log`. Nsight reports and discarded-attempt notes are under `/tmp/kv-55c-*.nsys-rep` and corresponding stats files. These machine-local artifacts are not committed.
+
+Task implementation, tests and this roadmap are staged for the user. Unrelated README, infrastructure documentation and benchmark-tree changes remain untouched. No assistant commit or push was made. Next is **5.5d** supported-configuration and reproducibility documentation.

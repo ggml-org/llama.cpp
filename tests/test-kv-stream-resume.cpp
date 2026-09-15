@@ -48,6 +48,7 @@ int main(int argc, char ** argv) {
             if (!t.assert_true(f.attach() && f.resident->configure_resumed_decode(true))) return;
             auto pin=f.binding->acquire();
             for (size_t active : {size_t(513),size_t(769),size_t(4097)}) {
+                t.out << ggml_type_name(pair.first) << '/' << ggml_type_name(pair.second) << " active=" << active << '\n';
                 block_inputs input(f,active,1);
                 ggml_kv_stream_resume_plan plan;
                 if (!t.assert_true(get()->resume_plan(backend.get(),pair.first,pair.second,4,2,input.padded,plan))) return;
@@ -56,6 +57,7 @@ int main(int argc, char ** argv) {
                 for (uint32_t layer=0;layer<2;++layer) {
                     const auto expected=ordinary(f,input,layer);
                     if (!t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,active,1.0f/16,workspace.lease.get(),true,1))) return;
+                    ggml_backend_synchronize(backend.get());
                     close_values(t,expected,input.read(),1e-6f);
                 }
                 t.assert_true(!f.resident->sequence_active());

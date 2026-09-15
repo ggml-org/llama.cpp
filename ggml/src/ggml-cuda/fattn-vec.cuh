@@ -40,7 +40,8 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33,
         float * resume_state, int chunk_first, int chunk_end, bool reset_state, bool finish_state) {
-    ggml_cuda_pdl_lc();
+    // Ring reuse records an event after resumed launches, so they must not signal completion before their final read.
+    if constexpr (!resumable) ggml_cuda_pdl_lc();
 #ifdef FLASH_ATTN_AVAILABLE
     const char * GGML_CUDA_RESTRICT Q        = Q_ptr;
     const char * GGML_CUDA_RESTRICT K        = K_ptr;
