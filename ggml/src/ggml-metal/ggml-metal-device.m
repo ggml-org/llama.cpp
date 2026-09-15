@@ -1092,6 +1092,36 @@ const char * ggml_metal_device_id_token(enum ggml_metal_device_id id) {
     return "GGML_METAL_DEVICE_GENERIC";
 }
 
+// physical GPUs sorted by VRAM, largest first
+static NSUInteger ggml_metal_device_vram(id<MTLDevice> mtl_dev) {
+    if (@available(macOS 10.12, iOS 16.0, *)) {
+        return [mtl_dev recommendedMaxWorkingSetSize];
+    }
+    return [mtl_dev maxBufferLength];
+}
+
+// caller must release the result
+static NSArray * ggml_metal_physical_devices(void) {
+    NSArray * devices = [MTLCopyAllDevices() copy];
+    NSArray * sorted = [devices sortedArrayUsingComparator:^NSComparisonResult(id<MTLDevice> a, id<MTLDevice> b) {
+        const NSUInteger size_a = ggml_metal_device_vram(a);
+        const NSUInteger size_b = ggml_metal_device_vram(b);
+        if (size_a == size_b) {
+            return NSOrderedSame;
+        }
+        return size_a > size_b ? NSOrderedAscending : NSOrderedDescending;
+    }];
+    [devices release]; // since it was created by a *Copy* C method
+    return [sorted retain];
+}
+
+size_t ggml_metal_physical_device_count(void) {
+    NSArray * devices = MTLCopyAllDevices();
+    const size_t count = devices.count;
+    [devices release];
+    return count;
+}
+
 ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
     ggml_metal_device_t dev = calloc(1, sizeof(struct ggml_metal_device));
 
@@ -1099,7 +1129,21 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
 
     @autoreleasepool {
         if (dev->mtl_device == nil) {
-            dev->mtl_device = MTLCreateSystemDefaultDevice();
+            // one backend device per physical GPU, ordered by VRAM (largest first)
+            NSArray * phys_devices = ggml_metal_physical_devices();
+            id<MTLDevice> selected_device = nil;
+            int phys_device = 0;
+            if ((NSUInteger)device < phys_devices.count) {
+                selected_device = phys_devices[device];
+                phys_device = device;
+            }
+            if (selected_device != nil) {
+                dev->mtl_device = [selected_device retain];
+            } else {
+                // index out of range (e.g. GGML_METAL_DEVICES virtual splits): use the default GPU
+                dev->mtl_device = MTLCreateSystemDefaultDevice();
+            }
+            [phys_devices release];
 
             if (dev->mtl_device) {
                 dev->mtl_queue = [dev->mtl_device newCommandQueue];
@@ -1111,9 +1155,9 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
 
                 dev->props.device = device;
 
-                // the Metal backend uses the system default device as the single physical device;
-                // additional (virtual) devices are emulated on top of it via GGML_METAL_DEVICES
-                dev->props.device_phys = 0;
+                // device index maps to a physical GPU (largest VRAM first);
+                // indices beyond that are virtual devices on the default GPU
+                dev->props.device_phys = phys_device;
                 dev->props.device_virt = device;
 
                 dev->props.has_simdgroup_reduction  = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
@@ -2411,6 +2455,12 @@ bool ggml_metal_buffer_cpy_tensor(ggml_metal_buffer_t buf_dst, const struct ggml
     if (buf_dst->is_shared && buf_src->is_shared) {
         memcpy(dst->data, src->data, size);
         return true;
+    }
+
+    // a private buffer is only readable by the device that created it;
+    // for cross-device copies fall back to the host staging path
+    if (buf_src->dev != buf_dst->dev) {
+        return false;
     }
 
     // for private buffers, we need to use Metal blit commands
