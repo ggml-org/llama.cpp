@@ -31,7 +31,8 @@ layout (push_constant) uniform parameter
   uint qkRatio;
   uint qkSubGroups;
   uint flag;
-  uint kvStride;
+  uint kvStride1;
+  uint kvStride2;
   uint batchStrideQ;
   uint batchStrideK;
   uint batchStrideV;
@@ -48,7 +49,6 @@ layout (constant_id = 4) const uint WARPSIZE = 16;
 layout (constant_id = 5) const uint MATP_PER_LOOP = 64;
 layout (constant_id = 6) const uint MATP_REDUCE = 32;
 layout (constant_id = 7) const uint WARP_V_DIM = 16;
-layout (constant_id = 8) const uint EXT_FLAG = 0;
 
 #define TN WARPSIZE
 #define TM 8
@@ -105,11 +105,11 @@ void main() {
   const uint splitIdx = localLinearId;
   const uint maxDim = (p.kvSeqLen + MATP_REDUCE - 1) / MATP_REDUCE;
   const uint pDim = maxDim * MATP_REDUCE;
-  const uint kvDim = p.kvStride;
+  const uint kvDim = p.kvStride1;
   const uint oDim = p.qHead * HEAD_DIM;
   const uint offsetBaseP = (d * p.activationLength * p.qHead + v * GQA_RATIO + outTokIdx * N_TOKS_PER_GROUP * p.qHead) * pDim / 4;
   const uint offsetBaseMax = (d * p.activationLength * p.qHead + v * GQA_RATIO + outTokIdx * N_TOKS_PER_GROUP * p.qHead) * maxDim;
-  const uint offsetBaseV = (d * p.batchStrideV + v * HEAD_DIM + vWarpIdx * WARP_V_DIM + splitIdx * TK * kvDim);
+  const uint offsetBaseV = (d * p.batchStrideV + v * p.kvStride2 + vWarpIdx * WARP_V_DIM + splitIdx * TK * kvDim);
   const uint offsetSlmP = (SLM_OFFSET_P + wgLane * 4);
   const float fp32Min = uintBitsToFloat(0xFEFFFFFF);
   const float fp32Max = uintBitsToFloat(0x7EFFFFFF);
@@ -134,9 +134,9 @@ void main() {
     const uint flatOffset = pm * WARPSIZE + lane;
     const uint inGroupTokIdx = flatOffset / GQA_RATIO;
     const uint inGroupHeadIdx = flatOffset % GQA_RATIO;
-    outputMask[pm] = (N_TOKS_PER_GROUP * outTokIdx + inGroupTokIdx < p.activationLength) && (inGroupHeadIdx < GQA_RATIO);
+    outputMask[pm] = (N_TOKS_PER_GROUP * outTokIdx + inGroupTokIdx < p.activationLength) && (inGroupHeadIdx < GQA_RATIO) && (inGroupTokIdx < N_TOKS_PER_GROUP);
     outOffsets[pm] = (inGroupTokIdx * oDim + inGroupHeadIdx * HEAD_DIM) / 4;
-    if (0x1 == EXT_FLAG) {
+    if ((0x1 & p.flag) != 0) {
       fp32SinkCoeff[pm] = sink_f32[inGroupHeadIdx + v * GQA_RATIO];
     }
   }
@@ -149,7 +149,7 @@ void main() {
     if (tokIdx < N_TOKS_PER_GROUP) {
       float fp32MaxReduce = fp32Min;
       const uint maxOffset = offsetBaseMax + (tokIdx * p.qHead + rowIdx) * maxDim;
-      [[unroll]] for (uint maxReduce = 0; maxReduce < maxDim / WARPSIZE; maxReduce++) {
+      [[unroll]] for (uint maxReduce = 0; maxReduce < (maxDim + WARPSIZE - 1) / WARPSIZE; maxReduce++) {
         if (maxReduce * WARPSIZE + lane < maxDim) {
           fp32MaxReduce = max(fp32MaxReduce, max_f32[maxOffset + maxReduce * WARPSIZE + lane]);
         }
@@ -170,7 +170,7 @@ void main() {
   [[unroll]] for (uint pLoad = 0; pLoad < P_LOAD_LOOPS; pLoad++) {
     const uint flatOffset = (pLoad * GROUPSIZE + wgLane) / P_REDUCE_VEC4;
     const uint rowIdxFlat = flatOffset % GQA_RATIO;
-    const uint tokenIdxFlat = min(flatOffset / GQA_RATIO, p.activationLength - 1);
+    const uint tokenIdxFlat = min(flatOffset / GQA_RATIO, N_TOKS_PER_GROUP - 1);
     loadColBase[pLoad] = (pLoad * GROUPSIZE + wgLane) % P_REDUCE_VEC4;
     loadRowBase[pLoad] = (tokenIdxFlat * p.qHead + rowIdxFlat);
     fp32SoftMaxSum[pLoad] = 0.0f;
@@ -180,7 +180,7 @@ void main() {
   [[unroll]] for (uint maxLoad = 0; maxLoad < MAX_LOAD_LOOPS; maxLoad++) {
     const uint flatOffset = (maxLoad * GROUPSIZE + wgLane) / MAX_PER_LOOP;
     const uint rowIdxFlat = flatOffset % GQA_RATIO;
-    const uint tokenIdxFlat = min(flatOffset / GQA_RATIO, p.activationLength - 1);
+    const uint tokenIdxFlat = min(flatOffset / GQA_RATIO, N_TOKS_PER_GROUP - 1);
     maxColBase[maxLoad] = (maxLoad * GROUPSIZE + wgLane) % MAX_PER_LOOP;
     maxRowBase[maxLoad] = (tokenIdxFlat * p.qHead + rowIdxFlat);
   }
@@ -335,7 +335,7 @@ void main() {
       }
     }
 
-    if (0x1 == EXT_FLAG) {
+    if ((0x1 & p.flag) != 0) {
       [[unroll]] for (uint pm = 0; pm < ALIGNED_P_M; pm++) {
         float fp32GlobalMax = slm_pool_f32.slm_pool_o[SLM_OFFSET_GLOBAL_MAX + pm * WARPSIZE + lane];
         float sinkCompensation = fp32GlobalMax - fp32SinkCoeff[pm];
@@ -383,7 +383,7 @@ void main() {
     const uint slmBase0 = SLM_OFFSET_O + lane * WARP_V_DIM;
     const uint slmBase1 = slmBase0 + SPLIT_P_GROUPS / 2 * ALIGNED_P_M * TN * MAT_O_N * TM;
 
-    const uint offsetOutBase = (d * p.activationLength * p.batchStrideO + vWarpIdx * WARP_V_DIM + v * GQA_RATIO * HEAD_DIM + outTokIdx * oDim * N_TOKS_PER_GROUP) / 4;
+    const uint offsetOutBase = (d * p.batchStrideO + vWarpIdx * WARP_V_DIM + v * GQA_RATIO * HEAD_DIM + outTokIdx * oDim * N_TOKS_PER_GROUP) / 4;
     float fp32SoftMaxMul[ALIGNED_P_M];
     float fp32Output[ALIGNED_P_M][4];
     [[unroll]] for (uint pm = 0; pm < ALIGNED_P_M; pm++) {

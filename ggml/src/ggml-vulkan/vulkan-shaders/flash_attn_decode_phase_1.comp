@@ -28,7 +28,8 @@ layout (push_constant) uniform parameter
   uint qkRatio;
   uint qkSubGroups;
   uint flag;
-  uint kvStride;
+  uint kvStride1;
+  uint kvStride2;
   uint batchStrideQ;
   uint batchStrideK;
   uint batchStrideV;
@@ -76,20 +77,22 @@ shared slm_pool_alias_block {
 
 void main() {
   const uint lane = gl_SubgroupInvocationID;
-  const uint h = gl_WorkGroupID.x;
+  const uint kHeadIdx = gl_WorkGroupID.x % p.kvHead;
+  const uint outGroupIdx = gl_WorkGroupID.x / p.kvHead;
   const uint v = gl_WorkGroupID.y;
   const uint d = gl_WorkGroupID.z;
   const uint localLinearId = gl_SubgroupID;
   const uint wgLane = localLinearId * WARPSIZE + lane;
   const uint qDim = p.qHead * HEAD_DIM;
-  const uint kvDim = p.kvStride;
+  const uint kvDim = p.kvStride1;
   const uint maskDim = p.kvSeqLen;
   const uint maxDim = (p.kvSeqLen + MATP_REDUCE - 1) / MATP_REDUCE;
   const uint pDim = maxDim * MATP_REDUCE;
-  uint offsetBaseQ = (d * p.batchStrideQ + h * HEAD_DIM * GQA_RATIO + localLinearId * qDim);
-  const uint offsetBaseK = (d * p.batchStrideK + (v * MATP_REDUCE) * kvDim + h * HEAD_DIM) / 4;
-  uint offsetOut = d * p.qHead * pDim + v * MATP_REDUCE + h * GQA_RATIO * pDim + localLinearId * O_COUNT * pDim + lane;
-  uint offsetMax = d * p.qHead * maxDim + v + h * GQA_RATIO * maxDim + localLinearId * O_COUNT * maxDim;
+  const uint tokFlatIdx = localLinearId + outGroupIdx * N_TOK;
+  uint offsetBaseQ = (d * p.batchStrideQ + kHeadIdx * HEAD_DIM * GQA_RATIO + tokFlatIdx * qDim);
+  const uint offsetBaseK = (d * p.batchStrideK + (v * MATP_REDUCE) * kvDim + kHeadIdx * p.kvStride2) / 4;
+  uint offsetOut = d * p.qHead * p.activationLength * pDim + v * MATP_REDUCE + kHeadIdx * GQA_RATIO * pDim + (localLinearId * O_COUNT + outGroupIdx * N_TOK * p.qHead) * pDim + lane;
+  uint offsetMax = d * p.qHead * p.activationLength * maxDim + v + kHeadIdx * GQA_RATIO * maxDim + (localLinearId * O_COUNT + outGroupIdx * N_TOK * p.qHead) * maxDim;
   const uint offsetSlmLoadPv = (localLinearId * O_COUNT * MATP_REDUCE + lane);
   const uint offsetBaseM = v * MATP_REDUCE + lane;
   const float fp32Min = uintBitsToFloat(0xFEFFFFFF);
@@ -97,11 +100,11 @@ void main() {
   const uint loopCount = HEAD_DIM / TK;
   float maskFp32[MATP_REDUCE / WARPSIZE];
 
-  if (localLinearId < N_TOK) {
+  if (tokFlatIdx < p.activationLength) {
     [[unroll]] for (uint mk = 0; mk < MATP_REDUCE / WARPSIZE; mk++) {
       const uint maskOffset = mk * WARPSIZE + offsetBaseM;
       if (maskOffset < maskDim) {
-        maskFp32[mk] = float(mState_f16[d * p.batchStrideM + localLinearId * maskDim + maskOffset]);
+        maskFp32[mk] = float(mState_f16[d * p.batchStrideM + tokFlatIdx * maskDim + maskOffset]);
       } else {
         maskFp32[mk] = fp32Min;
       }
@@ -144,7 +147,7 @@ void main() {
     }
 
     barrier();
-    if (localLinearId < N_TOK) {
+    if (tokFlatIdx < p.activationLength) {
       const uint slmLoadOffset = (pLoop & 0x1) * SLM_POOL_SIZE_K;
 
       [[unroll]] for (uint loop = 0; loop < loopCount; loop++) {
@@ -196,63 +199,65 @@ void main() {
 
   barrier();
 
-  if (localLinearId < N_TOK) {
+  if (tokFlatIdx < p.activationLength) {
     [[unroll]] for (uint mk = 0; mk < MATP_REDUCE / WARPSIZE; mk++) {
       slm_pool_f32.slm_pool_pv[SLM_PV_SIZE + localLinearId * MATP_REDUCE + mk * WARPSIZE + lane] = maskFp32[mk];
     }
   }
 
   [[unroll]] for (uint oLoop = 0; oLoop < N_TOK; oLoop++) {
-    if (localLinearId == oLoop) {
-      [[unroll]] for (uint mp = 0; mp < COOP_MAT_P_M; mp++) {
-        [[unroll]] for (uint np = 0; np < COOP_MAT_P_N; np++) {
-          coopMatStore(matP[mp][np], slm_pool_f32.slm_pool_pv, mp * MATP_REDUCE * TN + np * TM, MATP_REDUCE, gl_CooperativeMatrixLayoutColumnMajor);
+    if (oLoop + outGroupIdx * N_TOK < p.activationLength) {
+      if (localLinearId == oLoop) {
+        [[unroll]] for (uint mp = 0; mp < COOP_MAT_P_M; mp++) {
+          [[unroll]] for (uint np = 0; np < COOP_MAT_P_N; np++) {
+            coopMatStore(matP[mp][np], slm_pool_f32.slm_pool_pv, mp * MATP_REDUCE * TN + np * TM, MATP_REDUCE, gl_CooperativeMatrixLayoutColumnMajor);
+          }
         }
       }
-    }
 
-    barrier();
+      barrier();
 
-    [[unroll]] for (uint maskIdx = 0; maskIdx < MATP_REDUCE / WARPSIZE; maskIdx++) {
-      maskFp32[maskIdx] = slm_pool_f32.slm_pool_pv[SLM_PV_SIZE + oLoop * MATP_REDUCE + maskIdx * WARPSIZE + lane];
-    }
-
-    float fp32O[O_COUNT][MATP_REDUCE / WARPSIZE];
-    float maxOut[O_COUNT];
-
-    [[unroll]] for (uint oc = 0; oc < O_COUNT; oc++) {
-      [[unroll]] for (uint os = 0; os < MATP_REDUCE / WARPSIZE; os++) {
-        fp32O[oc][os] = slm_pool_f32.slm_pool_pv[offsetSlmLoadPv + os * WARPSIZE + oc * MATP_REDUCE] * p.softMaxScale;
+      [[unroll]] for (uint maskIdx = 0; maskIdx < MATP_REDUCE / WARPSIZE; maskIdx++) {
+        maskFp32[maskIdx] = slm_pool_f32.slm_pool_pv[SLM_PV_SIZE + oLoop * MATP_REDUCE + maskIdx * WARPSIZE + lane];
       }
 
-      [[unroll]] for (uint os = 0; os < MATP_REDUCE / WARPSIZE; os++) {
-        fp32O[oc][os] = fp32O[oc][os] + maskFp32[os];
-      }
+      float fp32O[O_COUNT][MATP_REDUCE / WARPSIZE];
+      float maxOut[O_COUNT];
 
-      float maxTemp = fp32Min;
-      [[unroll]] for (uint os = 0; os < MATP_REDUCE / WARPSIZE; os++) {
-        maxTemp = max(maxTemp, fp32O[oc][os]);
-      }
-      maxOut[oc] = subgroupMax(maxTemp);
-      [[unroll]] for (uint os = 0; os < MATP_REDUCE / WARPSIZE; os++) {
-        fp32O[oc][os] = exp(fp32O[oc][os] - maxOut[oc]);
-      }
-    }
-
-    [[unroll]] for (uint oc = 0; oc < O_COUNT; oc++) {
-      if (localLinearId * O_COUNT + oc < GQA_RATIO) {
+      [[unroll]] for (uint oc = 0; oc < O_COUNT; oc++) {
         [[unroll]] for (uint os = 0; os < MATP_REDUCE / WARPSIZE; os++) {
-          matP_f16[offsetOut + oc * pDim + os * WARPSIZE] = float16_t(fp32O[oc][os]);
+          fp32O[oc][os] = slm_pool_f32.slm_pool_pv[offsetSlmLoadPv + os * WARPSIZE + oc * MATP_REDUCE] * p.softMaxScale;
         }
 
-        if (lane == 0) {
-          out_max_f32[offsetMax + oc * maxDim] = maxOut[oc];
+        [[unroll]] for (uint os = 0; os < MATP_REDUCE / WARPSIZE; os++) {
+          fp32O[oc][os] = fp32O[oc][os] + maskFp32[os];
+        }
+
+        float maxTemp = fp32Min;
+        [[unroll]] for (uint os = 0; os < MATP_REDUCE / WARPSIZE; os++) {
+          maxTemp = max(maxTemp, fp32O[oc][os]);
+        }
+        maxOut[oc] = subgroupMax(maxTemp);
+        [[unroll]] for (uint os = 0; os < MATP_REDUCE / WARPSIZE; os++) {
+          fp32O[oc][os] = exp(fp32O[oc][os] - maxOut[oc]);
         }
       }
-    }
 
-    offsetOut = offsetOut + p.qHead * pDim;
-    offsetMax = offsetMax + p.qHead * maxDim;
-    barrier();
+      [[unroll]] for (uint oc = 0; oc < O_COUNT; oc++) {
+        if (localLinearId * O_COUNT + oc < GQA_RATIO) {
+          [[unroll]] for (uint os = 0; os < MATP_REDUCE / WARPSIZE; os++) {
+            matP_f16[offsetOut + oc * pDim + os * WARPSIZE] = float16_t(fp32O[oc][os]);
+          }
+
+          if (lane == 0) {
+            out_max_f32[offsetMax + oc * maxDim] = maxOut[oc];
+          }
+        }
+      }
+
+      offsetOut = offsetOut + p.qHead * pDim;
+      offsetMax = offsetMax + p.qHead * maxDim;
+      barrier();
+    }
   }
 }
