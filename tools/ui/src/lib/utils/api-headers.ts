@@ -1,7 +1,8 @@
 import { getBackend } from './api-base';
 import { redactValue } from './redact';
-import { ANTHROPIC_API_VERSION, CORS_PROXY, HEADERS } from '$lib/constants';
+import { CORS_PROXY, HEADERS } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
+import { getProtocolAdapter } from '$lib/services/protocols';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { Backend } from '$lib/types';
 
@@ -23,22 +24,10 @@ export function getAuthHeaders(backendId?: string): Record<string, string> {
 /**
  * Get authorization headers for a backend object, including one that is not
  * registered yet (used by the connection test on the add-backend form).
- * Anthropic-compatible backends authenticate with x-api-key instead of Bearer.
+ * The protocol adapter owns the credential scheme and any required headers.
  */
 export function getAuthHeadersForBackend(backend: Backend): Record<string, string> {
-	const headers: Record<string, string> = { ...(backend.headers ?? {}) };
-	const apiKey = backend.apiKey?.trim();
-
-	if (!apiKey) return headers;
-
-	if (backend.protocol === 'anthropic') {
-		headers[HEADERS.ANTHROPIC_API_KEY] = apiKey;
-		headers[HEADERS.ANTHROPIC_VERSION] = ANTHROPIC_API_VERSION;
-	} else {
-		headers[HEADERS.AUTHORIZATION] = `${HEADERS.BEARER}${apiKey}`;
-	}
-
-	return headers;
+	return getProtocolAdapter(backend).authHeaders(backend);
 }
 
 /**

@@ -67,7 +67,7 @@
 		<span class="mb-2 block text-xs font-medium select-none">API format</span>
 
 		<Select.Root
-			onValueChange={(value) => onChange({ protocol: value as BackendProtocol })}
+			onValueChange={(value) => onChange({ compat: undefined, protocol: value as BackendProtocol })}
 			type="single"
 			value={backend.protocol}
 		>

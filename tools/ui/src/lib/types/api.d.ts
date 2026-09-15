@@ -358,7 +358,9 @@ export interface ApiChatCompletionStreamChunk {
 		metadata?: { model?: string };
 		delta: {
 			content?: string;
+			reasoning?: string;
 			reasoning_content?: string;
+			reasoning_text?: string;
 			model?: string;
 			tool_calls?: ApiChatCompletionToolCallDelta[];
 		};
