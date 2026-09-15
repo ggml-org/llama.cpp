@@ -104,6 +104,7 @@ struct common_speculative_init_result {
 
     llama_model   * model();
     llama_context * context();
+    llama_context * context_mtp();
 
 private:
     struct impl;
