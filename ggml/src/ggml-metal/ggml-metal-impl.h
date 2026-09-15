@@ -1230,8 +1230,8 @@ typedef struct {
     uint64_t nb01;      // logits row stride
     uint64_t nb1_ids;   // ids row stride
     int32_t  top_k;     // n_expert_used
-    float    clamp_val;
-    float    scale_val;
+    float    val_clamp;
+    float    val_scale;
 } ggml_metal_kargs_topk_moe;
 
 typedef struct {

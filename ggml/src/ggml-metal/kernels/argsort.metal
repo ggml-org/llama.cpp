@@ -433,7 +433,7 @@ kernel void kernel_topk_moe_f32(
 
     if (FC_topk_moe_with_norm) {
         wt_sum = simd_sum(wt_sum);
-        wt_sum = max(wt_sum, args.clamp_val);
+        wt_sum = max(wt_sum, args.val_clamp);
         const float inv = 1.0f / wt_sum;
         for (int i = 0; i < n_per_lane; ++i) {
             output_weights[i] *= inv;
@@ -443,7 +443,7 @@ kernel void kernel_topk_moe_f32(
     for (int i = 0; i < n_per_lane; ++i) {
         const int idx = i * 32 + lane;
         if (idx < top_k) {
-            weights_row[idx] = output_weights[i] * args.scale_val;
+            weights_row[idx] = output_weights[i] * args.val_scale;
         }
     }
 }
