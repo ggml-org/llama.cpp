@@ -36,6 +36,7 @@ typedef enum ggml_metal_fusion_id {
     GGML_METAL_FUSION_SNAKE,        // MUL + SIN + SQR + MUL + ADD
     GGML_METAL_FUSION_GDN_CACHE,    // GATED_DELTA_NET + CPY (write snapshots into the recurrent cache)
     GGML_METAL_FUSION_TOPK_MOE,     // SOFT_MAX + ARGSORT + GET_ROWS + norm/scale (MoE routing)
+    GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION, // MUL + expert VIEWs + ADD chain (MoE output reduction)
 } ggml_metal_fusion_id;
 
 struct ggml_metal_fusion {
@@ -60,6 +61,18 @@ struct ggml_metal_fusion {
 };
 
 typedef struct ggml_metal_fusion ggml_metal_fusion;
+
+struct ggml_metal_moe_weighted_reduction_match {
+    const struct ggml_tensor * experts;
+    const struct ggml_tensor * weights;
+    const struct ggml_tensor * dst;
+    int node_count;
+};
+
+// match MUL(experts, weights) + expert VIEWs + ADD chain; used by both the fusion
+// validator and the graph-optimize alloc-dependency hook
+bool ggml_metal_fusion_match_moe_weighted_reduction(
+        const struct ggml_cgraph * gf, int node_idx, struct ggml_metal_moe_weighted_reduction_match * match);
 
 // the single table of all fusions supported by the Metal backend
 const ggml_metal_fusion * ggml_metal_fusion_all(int * n);

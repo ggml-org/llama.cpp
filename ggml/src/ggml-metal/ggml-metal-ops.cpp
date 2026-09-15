@@ -3777,6 +3777,12 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
             ctx->count_fusions(fusion);
             return ggml_metal_op_snake_fused(ctx, idx);
         }
+
+        // MoE output reduction: experts * weights -> weighted sum
+        if (fusion && fusion->id == GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION) {
+            ctx->count_fusions(fusion);
+            return ggml_metal_op_moe_weighted_reduction(ctx, idx);
+        }
     }
 
     ggml_tensor * op = ctx->node(idx);
@@ -5415,6 +5421,49 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
 
     if (ggml_metal_fusion_info_debug(ctx->finfo) > 1) {
         GGML_LOG_DEBUG("%s: fuse: SOFT_MAX + ARGSORT + GET_ROWS\n", __func__);
+    }
+
+    return n_fuse;
+}
+
+int ggml_metal_op_moe_weighted_reduction(ggml_metal_op_t ctx, int idx) {
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    int n_fuse = 1;
+    const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n_fuse);
+    if (!fusion || fusion->id != GGML_METAL_FUSION_MOE_WEIGHTED_REDUCTION) {
+        return 1;
+    }
+
+    ggml_tensor * mul     = ctx->node(idx);
+    ggml_tensor * experts = mul->src[0];
+    ggml_tensor * weights = mul->src[1];
+    ggml_tensor * dst     = ctx->node(idx + n_fuse - 1);
+
+    ggml_metal_kargs_moe_weighted_reduction args = {
+        /*.ne00 =*/ (int32_t) experts->ne[0],
+        /*.ne01 =*/ (int32_t) experts->ne[1],
+        /*.ne02 =*/ (int32_t) experts->ne[2],
+    };
+
+    auto pipeline = ggml_metal_library_get_pipeline_moe_weighted_reduction(lib);
+
+    const int nth = std::min(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+    const int n_col_tiles = (args.ne00 + nth - 1) / nth;
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(experts), 1);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(weights), 2);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(dst),     3);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, (uint32_t) args.ne02, (uint32_t) n_col_tiles, 1, nth, 1, 1);
+
+    ctx->count_fusions(fusion);
+
+    if (ggml_metal_fusion_info_debug(ctx->finfo) > 1) {
+        GGML_LOG_DEBUG("%s: fuse: MOE_WEIGHTED_REDUCTION\n", __func__);
     }
 
     return n_fuse;
