@@ -116,7 +116,9 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
 #endif
         for (int g = 0; g < NG; g++) {
             const int kg = s * NG + g;
-            const __m512i codes = _mm512_load_si512((const __m512i *) &src1.q[(j0 / TILED_MICRO) * (TILED_MICRO * TILED_TILE_K) + kg * (TILED_MICRO * 4)]);
+            // in-place interleave layout: [kg%16 @ TILED_TILE_K][kg/16 @ 64][row @ 4]
+            const __m512i codes = _mm512_load_si512((const __m512i *) &src1.q[(j0 / TILED_MICRO) * (TILED_MICRO * TILED_TILE_K)
+                + (kg % TILED_MICRO) * TILED_TILE_K + (kg / TILED_MICRO) * (TILED_MICRO * 4)]);
             for (int t = 0; t < NUM_ROWS; t++) {
                 const uint32_t u4 = *(const uint32_t *) &src0.q[(i0 + t) * TILED_TILE_K + kg * 4];
                 const __m512i u4b = _mm512_set1_epi32((int) u4);
@@ -482,20 +484,10 @@ static_assert(sizeof(block_q8_K) == 292 && offsetof(block_q8_K, qs) == 4,
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
 
 void tiled_repack_src1_codes(tiled_tile_src1 * tile) {
-    alignas(64) uint8_t grp_src[TILED_MICRO * TILED_TILE_K];
-    alignas(64) uint8_t grp_dst[1024];
-
-    const int8_t * rp[TILED_MICRO];
-    for (int r = 0; r < TILED_MICRO; r++) {
-        rp[r] = (const int8_t *) &grp_src[r * TILED_TILE_K];
-    }
-
     for (int grp = 0; grp < TILED_TILE_ROWS / TILED_MICRO; grp++) {
         uint8_t * base = (uint8_t *) &tile->q[grp * (TILED_MICRO * TILED_TILE_K)];
-        memcpy(grp_src, base, TILED_MICRO * TILED_TILE_K);
         for (int c = 0; c < 4; c++) {
-            tiled_repack_16x16(rp, c, grp_dst);
-            memcpy(base + c * 1024, grp_dst, 1024);
+            tiled_repack_16x16(base, c, TILED_TILE_K);
         }
     }
 }
@@ -505,15 +497,16 @@ void tiled_repack_src1_codes(tiled_tile_src1 * tile) {
 }
 #endif
 
-// Interleave one 16-row x 64-k chunk of src1 q8 codes into [g][row][4] layout.
-// rows[r] points to the qs field (256 bytes) of row r at the desired kblk.
-// c selects the chunk (0..3): int32s [c*16, c*16+16) of the 64-int32 qs field.
-// out receives 1024 bytes: 16 k-groups of 16 rows x 4 bytes (dpbusd-ready).
+// In-place transpose of one 16-row x 64-k chunk of src1 codes (a 16x16 int32 tile).
+// base points at the 16-row group (row r at base + r*k_extent); c selects the chunk
+// (0..3) = 16 int32 k-groups. After the call, k-group kg reads as one 512-bit vector at
+// base + (kg%16)*k_extent + (kg/16)*64. All 16 rows load before any store and a chunk's
+// 16 rows are disjoint, so the transpose is in-place with no temp.
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-void tiled_repack_16x16(const int8_t * const * rows, int c, uint8_t * out) {
+void tiled_repack_16x16(uint8_t * base, int c, int k_extent) {
     __m512i v[16];
     for (int r = 0; r < 16; r++) {
-        v[r] = _mm512_loadu_si512((const void *) ((const int32_t *) rows[r] + c * 16));
+        v[r] = _mm512_load_si512((const __m512i *) (base + r * k_extent + c * (TILED_MICRO * 4)));
     }
 
     // 16x16 int32 transpose, 4 butterfly phases
@@ -566,22 +559,12 @@ void tiled_repack_16x16(const int8_t * const * rows, int c, uint8_t * out) {
     // store: v[g] holds 16 int32s for k-group col_order[g], rows 0..15
     static const int col_order[16] = {0, 8, 1, 9, 4, 12, 5, 13, 2, 10, 3, 11, 6, 14, 7, 15};
     for (int g = 0; g < 16; g++) {
-        _mm512_store_si512((void *) (out + col_order[g] * 64), v[g]);
+        _mm512_store_si512((void *) (base + col_order[g] * k_extent + c * (TILED_MICRO * 4)), v[g]);
     }
 }
 #else
-void tiled_repack_16x16(const int8_t * const * rows, int c, uint8_t * out) {
-    // scalar: out[g][r*4..r*4+3] = rows[r][c*64 + g*4 + 0..3]
-    for (int g = 0; g < 16; g++) {
-        for (int r = 0; r < 16; r++) {
-            uint8_t * p = out + g * 64 + r * 4;
-            const uint8_t * s = (const uint8_t *) rows[r] + c * 64 + g * 4;
-            p[0] = s[0];
-            p[1] = s[1];
-            p[2] = s[2];
-            p[3] = s[3];
-        }
-    }
+void tiled_repack_16x16(uint8_t * base, int c, int k_extent) {
+    GGML_UNUSED(base); GGML_UNUSED(c); GGML_UNUSED(k_extent);
 }
 #endif
 
