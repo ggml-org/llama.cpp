@@ -210,7 +210,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_test(
         test-recurrent-state-rollback
         LABEL main
-        ARGS -m "${MODEL_DIR}/qwen35-dense.gguf"
+        ARGS -m "${MODEL_DIR}/qwen35-dense.gguf" -dev none
     )
     set_tests_properties(test-recurrent-state-rollback PROPERTIES
         FIXTURES_REQUIRED generate-models
@@ -220,7 +220,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         test-recurrent-state-rollback
         NAME test-recurrent-state-rollback-nemotron-h
         LABEL main
-        ARGS -m "${MODEL_DIR}/nemotron_h-dense.gguf"
+        ARGS -m "${MODEL_DIR}/nemotron_h-dense.gguf" -dev none
     )
     set_tests_properties(test-recurrent-state-rollback-nemotron-h PROPERTIES
         FIXTURES_REQUIRED generate-models
@@ -229,7 +229,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         test-recurrent-state-rollback
         NAME test-recurrent-state-rollback-dsv4
         LABEL main
-        ARGS -m "${MODEL_DIR}/deepseek4-moe.gguf"
+        ARGS -m "${MODEL_DIR}/deepseek4-moe.gguf" -dev none
     )
     set_tests_properties(test-recurrent-state-rollback-dsv4 PROPERTIES
         FIXTURES_REQUIRED generate-models
@@ -238,7 +238,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         test-recurrent-state-rollback
         NAME test-recurrent-state-rollback-kimi-k3
         LABEL main
-        ARGS -m "${MODEL_DIR}/kimi-k3-moe.gguf"
+        ARGS -m "${MODEL_DIR}/kimi-k3-moe.gguf" -dev none
     )
     set_tests_properties(test-recurrent-state-rollback-kimi-k3 PROPERTIES
         FIXTURES_REQUIRED generate-models
@@ -248,7 +248,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_test(
         test-save-load-state
         LABEL main
-        ARGS --models "${MODEL_DIR}"
+        ARGS --models "${MODEL_DIR}" -dev none
     )
     set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
 
