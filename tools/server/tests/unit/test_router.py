@@ -1,4 +1,5 @@
 import threading
+import tempfile
 import pytest
 from utils import *
 
@@ -295,6 +296,61 @@ def test_router_queue_is_fifo():
     second.assert_ok("second queued request")
 
     assert first.done_at < second.done_at, "queue was not served in arrival order"
+
+
+def _wait_for_log(path: str, needle: str, timeout: int = 30) -> None:
+    deadline = time.time() + timeout
+    last = ""
+    while time.time() < deadline:
+        try:
+            with open(path) as f:
+                last = f.read()
+        except FileNotFoundError:
+            last = ""
+        if needle in last:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"timed out waiting for log {needle!r}, last log:\n{last[-2000:]}")
+
+
+def test_router_fast_path_load_not_evicted_before_proxy():
+    """fast-path load is not evicted before the waiting request is proxied"""
+    global server
+    server.models_max = 1
+    fd, server.log_path = tempfile.mkstemp(suffix=".log")
+    os.close(fd)
+    server.start()
+
+    req_a = _Bg(lambda: _tokenize(MODEL_A)).start()
+    _wait_for_model_status(MODEL_A, {"loaded"}, timeout=120)
+
+    req_b = _Bg(lambda: _tokenize(MODEL_B)).start()
+
+    req_a.join()
+    req_b.join()
+
+    req_a.assert_ok("fast-path request for model A")
+    req_b.assert_ok("queued request for model B")
+
+
+def test_router_does_not_proxy_into_stopping_model():
+    """a request for a LOADED model that is already stopping waits for UNLOADED"""
+    global server
+    server.models_max = 1
+    fd, server.log_path = tempfile.mkstemp(suffix=".log")
+    os.close(fd)
+    server.start()
+
+    _load_model_and_wait(MODEL_A, timeout=120)
+
+    unload_res = server.make_request("POST", "/models/unload", data={"model": MODEL_A})
+    assert unload_res.status_code == 200
+
+    _wait_for_log(server.log_path, "exit command received")
+
+    res = _tokenize(MODEL_A)
+    assert res.status_code == 200, res.body
+    assert not isinstance(res.body, str) or "Could not establish connection" not in res.body
 
 
 def test_router_queue_two_waiters_share_one_eviction():

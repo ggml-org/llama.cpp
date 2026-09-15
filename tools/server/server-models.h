@@ -296,10 +296,13 @@ public:
     // otherwise, load the model and blocking wait until it's ready, then return true (meta may need to be refreshed)
     // if models_max is reached, the request waits in a queue until a slot frees up
     // throws if the load fails, or if should_stop fires while waiting
-    bool ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop = nullptr);
+    // if reserved is set, this call incremented req_count; pass occupy=false to proxy_request
+    bool ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop = nullptr, bool * reserved = nullptr);
 
-    // proxy an HTTP request to the model instance
-    server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached = false);
+    void release_occupancy(const std::string & name);
+
+    // occupy=false when req_count was already reserved by ensure_model_ready
+    server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached = false, bool occupy = true);
 
     // handle message sent from server_child::notify_to_router()
     // raw input must starts with CMD_CHILD_TO_ROUTER_STATE, followed by a JSON string
