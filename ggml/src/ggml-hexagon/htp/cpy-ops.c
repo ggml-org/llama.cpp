@@ -294,6 +294,18 @@ static inline void cpy_dma_sametype_sameshape(
     dma_queue_flush(q);
 }
 
+static inline void cpy_dma_sametype_reshape_contig(
+    struct htp_ops_context * octx,
+    const struct htp_tensor * dst,
+    const struct htp_tensor * src0,
+    uint32_t total_bytes
+) {
+    dma_queue * q = octx->ctx->dma[0];
+    dma_queue_push(q, dma_make_ptr((void *) dst->data, (const void *) src0->data),
+                   total_bytes, total_bytes, total_bytes, /*nrows=*/ 1);
+    dma_queue_pop(q);
+}
+
 static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
     cpy_preamble;
     *use_dma = false;
@@ -327,6 +339,7 @@ static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
 
     const uint32_t n_threads = octx->n_threads;
 
+    const bool src_is_contiguous = htp_tensor_is_contiguous(src0, ct.src0_type_size);
     const bool dst_is_contiguous = htp_tensor_is_contiguous(dst, ct.dst_type_size);
 
     if (sameshape) {
@@ -374,6 +387,12 @@ static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
     } else if (sametype) {
         const uint32_t total_elems = ne0 * ne1 * ne2 * ne3;
         const uint32_t elems_per_line = (ct.dst_type_size == 4) ? 32 : 64;
+
+        if (octx->ctx->mdev.count <= 1 && dst_is_contiguous && src_is_contiguous) {
+            *use_dma = true;
+            cpy_dma_sametype_reshape_contig(octx, dst, src0, total_elems * ct.dst_type_size);
+            return HTP_STATUS_OK;
+        }
 
         ct.div_ne0            = init_fastdiv_values(ne0);
         ct.div_ne1_ne0        = init_fastdiv_values(ne1 * ne0);
