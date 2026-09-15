@@ -1145,6 +1145,7 @@ ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_conte
     return ggml_backend_alloc_ctx_tensors_from_buft_impl(ctx, buft);
 }
 
+// TODO [TAG_ALLOC_SAHRED_BUFFER_SPLIT]: reuse shared buffer-splitting logic from ggml_backend_buft_alloc_buffer_n_default
 size_t ggml_backend_alloc_ctx_tensors_from_buft_size(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
     GGML_ASSERT(ggml_get_no_alloc(ctx) == true);
 
