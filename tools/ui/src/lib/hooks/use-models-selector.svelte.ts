@@ -116,19 +116,23 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	function handleOpenChange(open: boolean) {
 		if (loading || updating) return;
 
-		if (isRouter) {
-			searchTerm = '';
-
-			if (open) {
-				modelsStore.fetchRouterModels().then(() => {
-					modelsStore.props.fetchModalitiesForLoadedModels();
-				});
-			}
-
-			opts.onOpenChange?.(open);
-		} else {
+		// a single-model llama.cpp server has no list to show, so the trigger
+		// opens the model info dialog instead; external backends have a menu
+		if (!isRouter && serverStore.capabilities.props) {
 			showModelDialog = open;
+
+			return;
 		}
+
+		searchTerm = '';
+
+		if (open && isRouter) {
+			modelsStore.fetchRouterModels().then(() => {
+				modelsStore.props.fetchModalitiesForLoadedModels();
+			});
+		}
+
+		opts.onOpenChange?.(open);
 	}
 
 	async function handleBackendChange(backendId: string) {
