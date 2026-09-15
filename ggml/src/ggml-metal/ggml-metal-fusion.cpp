@@ -277,6 +277,7 @@ static bool ggml_metal_fusion_check_topk_moe(
               int                      idx,
               ggml_metal_fusion_mode   mode) {
     GGML_ASSERT(fusion->n_ops >= 3);
+    GGML_UNUSED(nodes);
 
     const int n_ops = fusion->n_ops;
 
