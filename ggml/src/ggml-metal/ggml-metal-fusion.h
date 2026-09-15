@@ -44,8 +44,11 @@ typedef enum ggml_metal_fusion_id {
 struct ggml_metal_fusion {
     ggml_metal_fusion_id id;
 
-    const enum ggml_op * ops;        // op sequence (fixed length)
+    const enum ggml_op * ops;        // op sequence (fixed length, non-empty nodes)
     int                  n_ops;      // number of ops
+
+    const enum ggml_op * raw_ops;    // full raw op sequence (may include empty RESHAPE/VIEW nodes)
+    int                  n_raw_ops;  // number of raw ops
 
     // if unsafe: the generic chain/shape + ggml_can_fuse_subgraph checks are skipped and the
     // check callback below is the sole validator (used for patterns that are not elision chains,
