@@ -210,6 +210,10 @@ __kernel void kernel_gemv_noshuffle_q5_1_f32(
     uint M = ne01;
 
     uint LINE_STRIDE_A    = M / 2;
+    // The x-grid is padded to a whole wave, so the tail lanes hold a row past the packed
+    // weight and only the stores below are guarded. Clamp the row every fetch reads; the
+    // lanes stay active, which the sub_group ops in the dequant macros require.
+    uint gid_s = min(gid, LINE_STRIDE_A - 1);
    uint BLOCK_STRIDE_A  = NSUBGROUPS * M;
 
     __private uint4     regA;
@@ -220,8 +224,8 @@ __kernel void kernel_gemv_noshuffle_q5_1_f32(
     __private float2 totalSum = (float2)(0.0f);
 
     for (uint k = groupId; k < (K / QK5_1); k += NSUBGROUPS) {
-        regS = src0_d[gid + k * LINE_STRIDE_A];
-        regM = src0_m[gid + k * LINE_STRIDE_A];
+        regS = src0_d[gid_s + k * LINE_STRIDE_A];
+        regM = src0_m[gid_s + k * LINE_STRIDE_A];
 
         ushort4 qh_raw;
         qh_raw.s0 = src0_qh[gid + (4*k + 0) * LINE_STRIDE_A];
@@ -239,10 +243,10 @@ __kernel void kernel_gemv_noshuffle_q5_1_f32(
             regB.s4567 = read_imagef(src1, (1 + slid * 2 + k * 8));
         }
 
-        regA.s0 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
-        regA.s1 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
-        regA.s2 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
-        regA.s3 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
+        regA.s0 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
+        regA.s1 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
+        regA.s2 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
+        regA.s3 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
 
 #ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_q5_1_sgbroadcast_8_hi(totalSum, as_ushort8(regA), qh_bytes, regS, regM, regB);
@@ -250,10 +254,10 @@ __kernel void kernel_gemv_noshuffle_q5_1_f32(
         dequantizeBlockAccum_ns_q5_1_sgbroadcast_1_hi(totalSum, as_ushort8(regA), qh_bytes, regS, regM, regB);
 #endif // VECTOR_SUB_GROUP_BROADCAST
 
-        regA.s0 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
-        regA.s1 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
-        regA.s2 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
-        regA.s3 = read_imageui(src0_qs, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
+        regA.s0 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
+        regA.s1 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
+        regA.s2 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
+        regA.s3 = read_imageui(src0_qs, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
 #ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_q5_1_sgbroadcast_8_lo(totalSum, as_ushort8(regA), qh_bytes, regS, regM, regB);
 #else

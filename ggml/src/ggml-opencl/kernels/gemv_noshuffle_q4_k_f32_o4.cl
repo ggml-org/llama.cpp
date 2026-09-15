@@ -231,8 +231,11 @@ kernel void kernel_gemv_noshuffle_q4_k_f32_o4(
 
     // Two consecutive pair-indices (each the same access pattern the 2-output
     // kernel uses); together they cover 4 consecutive output rows.
-    uint gid_a = gid * 2;
-    uint gid_b = gid * 2 + 1;
+    // The x-grid is padded to a whole wave of quads, so the tail lanes hold pair indices
+    // past the packed weight and only the stores below are guarded. Clamp the pair index
+    // every fetch reads; the lanes stay active, which the sub_group ops require.
+    uint gid_a = min(gid * 2,     (uint)(ne01 / 2) - 1u);
+    uint gid_b = min(gid * 2 + 1, (uint)(ne01 / 2) - 1u);
 
     uint K = ne00;
     uint M = ne01;
