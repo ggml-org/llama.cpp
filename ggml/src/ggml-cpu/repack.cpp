@@ -4598,9 +4598,12 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 case 256:  { if (cur->ne[1] % 16 == 0) { return &q4_0_16x1_q8_0; } break; }
                 case 512:  { break; } // TODO
                 case 1024: { break; } // TODO
-                default:   { return nullptr; }
+                default:   { break; } // fall into backup layout
             }
             #endif
+            if (cur->ne[1] % 8 == 0) {
+                return &q4_0_8x8_q8_0;
+            }
         }
     } else if (cur->type == GGML_TYPE_Q4_K) {
         if (ggml_cpu_has_avx2()) {
