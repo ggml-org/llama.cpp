@@ -74,3 +74,10 @@ export { default as SettingsChatFields } from './SettingsChat/SettingsChatFields
  * server favicons and permission management controls.
  */
 export { default as SettingsChatToolsTab } from './SettingsChat/SettingsChatToolsTab.svelte';
+
+/**
+ * Remote Access configuration panel.
+ * Host mode: generates a share code for remote clients.
+ * Client mode: accepts a share code and routes all same-origin requests through a WebRTC tunnel.
+ */
+export { default as SettingsRemoteAccess } from './SettingsRemoteAccess.svelte';
