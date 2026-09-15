@@ -40,6 +40,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_TENSORS_ZERO_DIM           =  35 + offset_has_tensors,
     HANDCRAFTED_TENSORS_NE_TOO_BIG         =  40 + offset_has_tensors,
     HANDCRAFTED_TENSORS_NBYTES_TOO_BIG     =  45 + offset_has_tensors,
+    HANDCRAFTED_TENSORS_PAD_OVERFLOW       =  47 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_TYPE           =  50 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_OFFSET         =  60 + offset_has_tensors,
     HANDCRAFTED_TENSORS_DUPLICATE_NAME     =  70 + offset_has_tensors,
@@ -80,6 +81,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_TENSORS_ZERO_DIM:           return "TENSORS_ZERO_DIM";
         case HANDCRAFTED_TENSORS_NE_TOO_BIG:         return "TENSORS_NE_TOO_BIG";
         case HANDCRAFTED_TENSORS_NBYTES_TOO_BIG:     return "TENSORS_NBYTES_TOO_BIG";
+        case HANDCRAFTED_TENSORS_PAD_OVERFLOW:       return "TENSORS_PAD_OVERFLOW";
         case HANDCRAFTED_TENSORS_BAD_TYPE:           return "TENSORS_BAD_TYPE";
         case HANDCRAFTED_TENSORS_BAD_OFFSET:         return "TENSORS_BAD_OFFSET";
         case HANDCRAFTED_TENSORS_DUPLICATE_NAME:     return "TENSORS_DUPLICATE_NAME";
@@ -248,6 +250,13 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
 
         tensor_configs[0] = { GGML_TYPE_I8, { 0x7FFFFFFFFFFFFFC0, 1, 1, 1 } };
         tensor_configs[1] = { GGML_TYPE_I8, { 0x7FFFFFFFFFFFFFC0, 1, 1, 1 } };
+    }
+
+    if (hft == HANDCRAFTED_TENSORS_PAD_OVERFLOW) {
+        // nbytes is representable but nbytes + (alignment - 1) is not
+        tensor_configs.resize(1);
+
+        tensor_configs[0] = { GGML_TYPE_I64, { int64_t(SIZE_MAX/ggml_type_size(GGML_TYPE_I64)), 1, 1, 1 } };
     }
 
     if (hft == HANDCRAFTED_HEADER_BAD_N_TENSORS) {
@@ -774,6 +783,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_TENSORS_ZERO_DIM,
         HANDCRAFTED_TENSORS_NE_TOO_BIG,
         HANDCRAFTED_TENSORS_NBYTES_TOO_BIG,
+        HANDCRAFTED_TENSORS_PAD_OVERFLOW,
         HANDCRAFTED_TENSORS_BAD_TYPE,
         HANDCRAFTED_TENSORS_BAD_OFFSET,
         HANDCRAFTED_TENSORS_DUPLICATE_NAME,
