@@ -4086,10 +4086,10 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
         /*.nbf2   =*/ { nb02 },
         /*.nbf3   =*/ { nb03 },
         /*.scale_val =*/ 1.0f,
-        /*.use_scale =*/ 0,
     };
 
     int n_fuse = 1;
+    bool fused_norm_scale = false;
 
     ggml_metal_buffer_id bid_fuse[2] = { bid_src0, bid_src0 };
 
@@ -4131,12 +4131,12 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
 
         if (fusion && fusion->id == GGML_METAL_FUSION_NORM_SCALE) {
             n_fuse = n;
+            fused_norm_scale = true;
 
             ctx->count_fusions(fusion);
 
             const ggml_tensor * scale_node = ctx->node(idx + 1);
             args.scale_val = ggml_get_op_params_f32(scale_node, 0);
-            args.use_scale = 1;
 
             if (debug_fusion > 1) {
                 GGML_LOG_DEBUG("%s: fuse: %s + SCALE\n", __func__, ggml_op_name(op->op));
@@ -4156,7 +4156,9 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
         }
     }
 
-    auto pipeline = ggml_metal_library_get_pipeline_norm(lib, op, n_fuse);
+    auto pipeline = fused_norm_scale ?
+        ggml_metal_library_get_pipeline_norm_scale(lib, op) :
+        ggml_metal_library_get_pipeline_norm(lib, op, n_fuse);
 
     int nth = 32; // SIMD width
 

@@ -114,6 +114,7 @@
 #define FC_SUM_ROWS                    1400
 #define FC_UPSCALE                     1500
 #define FC_GATED_DELTA_NET             1600
+#define FC_NORM                        1700
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -613,7 +614,6 @@ typedef struct {
     uint64_t nbf2[3];
     uint64_t nbf3[3];
     float    scale_val;
-    int32_t  use_scale;
 } ggml_metal_kargs_norm;
 
 typedef struct {
