@@ -21,7 +21,8 @@ on:
       '**/*.metal',
       '**/*.comp',
       '**/*.glsl',
-      '**/*.wgsl'
+      '**/*.wgsl',
+      'ci/ppl-baselines.json',
     ]
 
   pull_request:
@@ -42,7 +43,8 @@ on:
       '**/*.metal',
       '**/*.comp',
       '**/*.glsl',
-      '**/*.wgsl'
+      '**/*.wgsl',
+      'ci/ppl-baselines.json',
     ]
 
 concurrency:
