@@ -5478,16 +5478,16 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
     const bool with_norm  = n_fuse >= 6;
     const bool with_scale = n_fuse == 4 || n_fuse == 7;
 
-    float clamp_val = -INFINITY;
+    float val_clamp = -INFINITY;
     if (with_norm) {
         ggml_tensor * clamp = ctx->node(idx + 4);
-        clamp_val = ggml_get_op_params_f32(clamp, 0);
+        val_clamp = ggml_get_op_params_f32(clamp, 0);
     }
 
-    float scale_val = 1.0f;
+    float val_scale = 1.0f;
     if (with_scale) {
         ggml_tensor * scale = ctx->node(idx + n_fuse - 1);
-        scale_val = ggml_get_op_params_f32(scale, 0);
+        val_scale = ggml_get_op_params_f32(scale, 0);
     }
 
     ggml_metal_kargs_topk_moe args = {
@@ -5496,8 +5496,8 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
         /*.nb01      =*/ logits->nb[1],
         /*.nb1_ids   =*/ ids->nb[1],
         /*.top_k     =*/ (int32_t) n_expert_used,
-        /*.clamp_val =*/ clamp_val,
-        /*.scale_val =*/ scale_val,
+        /*.val_clamp =*/ val_clamp,
+        /*.val_scale =*/ val_scale,
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_topk_moe(lib, with_norm);
