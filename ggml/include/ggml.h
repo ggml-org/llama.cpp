@@ -430,7 +430,8 @@ extern "C" {
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
-        GGML_TYPE_COUNT   = 43,
+        GGML_TYPE_F8_E4M3 = 43,
+        GGML_TYPE_COUNT   = 44,
     };
 
     // [TAG_GGML_PREC]
@@ -600,6 +601,12 @@ extern "C" {
         GGML_OP_OPT_STEP_SGD,
 
         GGML_OP_GLU,
+
+        GGML_OP_MUL_MAT_SEGMENTED,
+        GGML_OP_QKNORM_ROPE,
+        GGML_OP_GROUP_NORM_AFFINE_SILU,
+        GGML_OP_CONV_2D_BIAS,
+        GGML_OP_CONV_2D_UPSCALE,
 
         GGML_OP_COUNT,
     };
@@ -1406,6 +1413,13 @@ extern "C" {
             struct ggml_tensor  * a,
             float                 eps);
 
+    GGML_API struct ggml_tensor * ggml_qknorm_rope(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * weight,
+            struct ggml_tensor  * theta,
+            float                 eps);
+
     // group normalize along ne0*ne1*n_groups
     // used in stable-diffusion
     GGML_API struct ggml_tensor * ggml_group_norm(
@@ -1417,6 +1431,22 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_group_norm_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
+            int                   n_groups,
+            float                 eps);
+
+    GGML_API struct ggml_tensor * ggml_group_norm_affine_silu(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * weight,
+            struct ggml_tensor  * bias,
+            int                   n_groups,
+            float                 eps);
+
+    GGML_API struct ggml_tensor * ggml_group_norm_affine_silu_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * weight,
+            struct ggml_tensor  * bias,
             int                   n_groups,
             float                 eps);
 
@@ -1483,6 +1513,12 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_mul_mat_segmented(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b0,
+            struct ggml_tensor  * b1);
 
     // change the precision of a matrix multiplication
     // set to GGML_PREC_F32 for higher precision (useful for phi-2)
@@ -2254,6 +2290,31 @@ extern "C" {
             int                   p1,  // padding dimension 1
             int                   d0,  // dilation dimension 0
             int                   d1); // dilation dimension 1
+
+    GGML_API struct ggml_tensor * ggml_conv_2d_direct_bias(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * bias,
+            int                   s0,
+            int                   s1,
+            int                   p0,
+            int                   p1,
+            int                   d0,
+            int                   d1);
+
+    GGML_API struct ggml_tensor * ggml_conv_2d_direct_upscale(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * bias,
+            int                   upscale_factor,
+            int                   s0,
+            int                   s1,
+            int                   p0,
+            int                   p1,
+            int                   d0,
+            int                   d1);
 
     GGML_API struct ggml_tensor * ggml_conv_3d_direct(
             struct ggml_context * ctx,

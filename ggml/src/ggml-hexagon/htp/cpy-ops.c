@@ -49,6 +49,100 @@ struct htp_copy_context {
     struct fastdiv_values div_ne02_ne01_ne00;
 };
 
+static inline void hvx_transpose_32x32_f32(HVX_Vector matrix[32]) {
+    HVX_Vector temp[32];
+
+    for (int i = 0; i < 16; ++i) {
+        const HVX_VectorPair pair = Q6_W_vshuff_VVR(matrix[2 * i + 1], matrix[2 * i], -4);
+        temp[2 * i]     = Q6_V_lo_W(pair);
+        temp[2 * i + 1] = Q6_V_hi_W(pair);
+    }
+    for (int base = 0; base < 32; base += 4) {
+        const HVX_VectorPair pair0 = Q6_W_vshuff_VVR(temp[base + 2], temp[base], -8);
+        const HVX_VectorPair pair1 = Q6_W_vshuff_VVR(temp[base + 3], temp[base + 1], -8);
+        matrix[base]     = Q6_V_lo_W(pair0);
+        matrix[base + 1] = Q6_V_hi_W(pair0);
+        matrix[base + 2] = Q6_V_lo_W(pair1);
+        matrix[base + 3] = Q6_V_hi_W(pair1);
+    }
+    for (int base = 0; base < 32; base += 8) {
+        for (int i = 0; i < 4; ++i) {
+            const HVX_VectorPair pair = Q6_W_vshuff_VVR(matrix[base + i + 4], matrix[base + i], -16);
+            temp[base + 2 * i]     = Q6_V_lo_W(pair);
+            temp[base + 2 * i + 1] = Q6_V_hi_W(pair);
+        }
+    }
+    for (int base = 0; base < 32; base += 16) {
+        for (int i = 0; i < 8; ++i) {
+            const HVX_VectorPair pair = Q6_W_vshuff_VVR(temp[base + i + 8], temp[base + i], -32);
+            matrix[base + 2 * i]     = Q6_V_lo_W(pair);
+            matrix[base + 2 * i + 1] = Q6_V_hi_W(pair);
+        }
+    }
+    for (int i = 0; i < 16; ++i) {
+        const HVX_VectorPair pair = Q6_W_vshuff_VVR(matrix[i + 16], matrix[i], -64);
+        temp[2 * i]     = Q6_V_lo_W(pair);
+        temp[2 * i + 1] = Q6_V_hi_W(pair);
+    }
+    for (int i = 0; i < 32; ++i) {
+        matrix[i] = temp[i];
+    }
+}
+
+struct htp_transpose_f32_context {
+    const float * src;
+    float * dst;
+    uint32_t rows;
+    uint32_t cols;
+};
+
+static void cpy_thread_transpose_f32(unsigned int nth, unsigned int ith, void * data) {
+    const struct htp_transpose_f32_context * ctx = (const struct htp_transpose_f32_context *) data;
+    const uint32_t row_tiles = ctx->rows / 32u;
+    const uint32_t col_tiles = ctx->cols / 32u;
+    const uint32_t tiles = row_tiles * col_tiles;
+    HVX_Vector matrix[32] __attribute__((aligned(128)));
+
+    for (uint32_t tile = ith; tile < tiles; tile += nth) {
+        const uint32_t row_tile = tile / col_tiles;
+        const uint32_t col_tile = tile - row_tile * col_tiles;
+        const uint32_t row0 = row_tile * 32u;
+        const uint32_t col0 = col_tile * 32u;
+        hex_l2fetch(ctx->src + (size_t) row0 * ctx->cols + col0,
+                    32u * sizeof(float), ctx->cols * sizeof(float), 32u);
+        for (uint32_t row = 0; row < 32u; ++row) {
+            matrix[row] = hvx_vmemu(ctx->src + (size_t) (row0 + row) * ctx->cols + col0);
+        }
+        hvx_transpose_32x32_f32(matrix);
+        for (uint32_t row = 0; row < 32u; ++row) {
+            hvx_vmemu(ctx->dst + (size_t) (col0 + row) * ctx->rows + row0) = matrix[row];
+        }
+    }
+}
+
+static bool cpy_is_contiguous_transpose_f32(
+        const struct htp_tensor * src,
+        const struct htp_tensor * dst,
+        uint32_t * rows,
+        uint32_t * cols) {
+    const uint64_t rest = (uint64_t) src->ne[1] * src->ne[2] * src->ne[3];
+    if (src->type != HTP_TYPE_F32 || dst->type != HTP_TYPE_F32 ||
+        src->ne[3] != 1 || src->ne[0] % 32u != 0 || rest == 0 ||
+        rest > UINT32_MAX || rest % 32u != 0 ||
+        src->nb[1] != sizeof(float) ||
+        (src->ne[2] > 1 && src->nb[2] != (uint64_t) src->ne[1] * sizeof(float)) ||
+        src->nb[0] != rest * sizeof(float) ||
+        dst->nb[0] != sizeof(float) ||
+        dst->nb[1] != (uint64_t) dst->ne[0] * sizeof(float) ||
+        dst->nb[2] != (uint64_t) dst->ne[1] * dst->nb[1] ||
+        dst->nb[3] != (uint64_t) dst->ne[2] * dst->nb[2]) {
+        return false;
+    }
+    *rows = src->ne[0];
+    *cols = (uint32_t) rest;
+    return true;
+}
+
 #define cpy_preamble                              \
     const struct htp_tensor *src0 = octx->src[0]; \
     const struct htp_tensor *dst  = octx->dst;    \
@@ -297,6 +391,23 @@ static inline void cpy_dma_sametype_sameshape(
 static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
     cpy_preamble;
     *use_dma = false;
+
+    uint32_t transpose_rows;
+    uint32_t transpose_cols;
+    if (octx->ctx->mdev.count <= 1 &&
+        cpy_is_contiguous_transpose_f32(src0, dst, &transpose_rows, &transpose_cols)) {
+        if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
+            const struct htp_transpose_f32_context transpose = {
+                .src = (const float *) src0->data,
+                .dst = (float *) dst->data,
+                .rows = transpose_rows,
+                .cols = transpose_cols,
+            };
+            work_queue_run(octx->ctx->work_queue, cpy_thread_transpose_f32,
+                           (void *) &transpose, octx->n_threads);
+        }
+        return HTP_STATUS_OK;
+    }
 
     struct htp_copy_context ct;
     ct.octx = octx;

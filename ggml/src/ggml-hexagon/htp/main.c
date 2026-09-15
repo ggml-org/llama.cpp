@@ -796,6 +796,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_MUL_MAT_NX:
             return op_matmul_nx(octx);
 
+        case HTP_OP_MUL_MAT_SEGMENTED:
+            return op_matmul_segmented(octx);
+
         case HTP_OP_MUL:
         case HTP_OP_ADD:
         case HTP_OP_SUB:
@@ -884,6 +887,15 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_GATED_DELTA_NET:
             return op_gated_delta_net(octx);
+
+        case HTP_OP_QKNORM_ROPE:
+            return op_qknorm_rope(octx);
+
+        case HTP_OP_CONV_2D:
+            return op_conv2d(octx);
+
+        case HTP_OP_GROUP_NORM:
+            return op_group_norm(octx);
 
         case HTP_OP_TRI:
             return op_unary(octx);
