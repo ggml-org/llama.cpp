@@ -2,11 +2,13 @@
 
 Saved: 2026-09-10
 
-Last source review: 2026-09-13, against the checkpoint commits below.
+Last source review: 2026-09-14, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`. **5.5c** is implemented and qualified for user review. It removes unsafe/per-span decode waits, records fixed-pool transfer diagnostics and documents the remaining performance gap without weakening numerical or publication guarantees. Next is **5.5d** documentation, not completion of milestone 5.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. The fixed-pool qualification identified synchronous producer publication as the first remaining optimization. It is planned as backend-neutral stage **5.6** below. Stage **5.7** is reserved for graph segmentation, stage **5.8** for strict prefill streaming, and stage **5.9** for final support and reproducibility documentation.
+
+Stage **5.6a** is implemented and qualified for user review. It adds only the common publication state/lifetime contract and tests; writer/session migration remains **5.6b**.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -131,7 +133,7 @@ The split below preserves milestones 4-8 and all existing parent stage scopes. I
 | Milestone | Commit units | Main reason for subdivision |
 | --- | --- | --- |
 | 4 | 11 | Separate planning, asynchronous lifetimes, recovery, and the first real consumer. |
-| 5 | 22 | Establish exact bounded streaming before adding asynchronous copy, prefetch, tuning, and server/cache integration. |
+| 5 | Original units plus named subdivisions and optimization stages 5.6-5.9 | Establish exact bounded streaming, server/cache integration, backend-neutral producer overlap, graph integration, and strict prefill optimization. |
 | 6 | 12 | Separate accounting, growth/shrink, failure handling, phase activation, and budget probing. |
 | 7 | 11 | Separate embedding lifetime, KV suspension, projector ownership/reload, and server wiring. |
 | 8 | 9, including conditional 8.2b | Separate real model adapters, capability coverage, and sustained lifecycle validation. |
@@ -153,7 +155,11 @@ These are planned review units, not a guarantee of final diff size or 65 mandato
 1. Through 5.4a: authoritative host state, leased resident mirrors, and correct all-resident execution.
 2. Through 5.4e: correct bounded block streaming and supported quant dispatch, without relying on asynchronous overlap.
 3. Through 5.4k: optimized copy/prefetch pipeline, wide micro-batches, feedback, and resident capture.
-4. Through 5.5d: real serial server/cache integration and reference-performance qualification.
+4. Through 5.5c: real serial server/cache integration and fixed-pool reference-performance qualification.
+5. Through 5.6f: backend-neutral asynchronous K/V publication with qualified synchronous fallbacks and native adapters.
+6. Through 5.7: reduced graph segmentation without weakening execution-owner lifetimes.
+7. Through 5.8: bounded prefill streaming with acceptable numerical behavior and no full-layer gather.
+8. Through 5.9: supported-configuration and reproducibility documentation for the completed fixed-pool implementation.
 
 Do not enable phase-dependent grants before the fixed-pool gate passes. Do not attempt full vision eviction until text phase transitions and host/device KV separation are validated.
 
@@ -217,9 +223,18 @@ Outcome: fixed-budget adaptive streaming runs on milestone 3, independently of p
 | 5.5a.4 | 5.5a.3 | Public opt-in context integration, serial/model/device gates and real hybrid-model qualification. | Original 5.5a acceptance tests: prefill/decode, b/ub splitting, context limits, unsupported configurations and feature-disabled/recurrent-state equivalence. |
 | 5.5b | 5.5a | Serial request/reset/cancellation and prompt-cache save/restore integration. | Different content/lengths, reused prefixes, cache replacement, abort followed by another request, and recurrent state equivalence. |
 | 5.5c | 5.5b | Qualify fixed-pool performance and add only diagnostics needed to explain differences. | All-resident, streaming onset, moderate streaming, and bandwidth-limited comparisons against the fixed-pool reference; transfer volume and sufficient decode length. |
-| 5.5d | 5.5c | Document supported configurations, fixed-budget semantics, limitations, and reproducible focused tests. | Verify documented invocations and capability matrix; no broad model/backend claim from quant-only coverage. |
+| 5.6 | 5.5c | Backend-neutral asynchronous K/V publication, separating accelerator consumption from durable host visibility. | Complete only after 5.6a-5.6f pass; preserve synchronous behavior as the fallback rather than duplicating the publication algorithm per backend. |
+| 5.6a | 5.5c | Common publication tickets, reserved/device-ready/host-ready/committed frontiers, reference-counted parent and lease retention, cancellation, and failure closure; no backend execution change. | Red-first fake-completion tests for ordered and out-of-order completion, atomic K/V visibility, invalid transitions, retained ownership, counter exhaustion, cancellation, and bytes beyond the committed frontier remaining invisible. |
+| 5.6b | 5.6a | Migrate the writer/session to a synchronous adapter over the common protocol without changing submission or drain behavior. | CPU, event-less backend, prompt-cache, restore, cancellation, injected K-only/V-only failure, and real-model equivalence; freeze latency and submission counts before async changes. |
+| 5.6c | 5.6b | Generic completion wrapper over existing `ggml_backend_event_t`, with capability discovery, device queue waits, host waits, safe teardown, and synchronous fallback; do not expose native event handles. | Fake event backend plus supported real events; record/wait ordering, unsupported event creation, cross-device rejection, teardown after partial submission, and no mandatory host wait for a device dependency. |
+| 5.6d | 5.6c | Connect asynchronous tickets to the writer/session with distinct device and host completions, deferred atomic K/V commit, and retained plan/source ownership across graph replacement. | Device attention can consume a completed pair while host publication remains pending; save/restore and host-driven repartition wait for host readiness; graph rebuild, retry, cancellation, and malformed completion remain closed. |
+| 5.6e | 5.6d | CUDA producer adapter: queue bounded SET_ROWS production, resident-tail publication, and direct pinned-host mirror writes; replace per-tile/per-layer drains with event dependencies. | Real CUDA delayed producer/consumer tests, mutable tail, resident/ring boundaries, multiple tiles/layers, cache save during pending D2H, capture invalidation, memcheck, unchanged logits/recurrent state, and matched performance points. |
+| 5.6f | 5.6e | Cross-backend conformance for the common protocol on CPU, SYCL, Vulkan, OpenCL, and Meta; use the synchronous fallback where native async capability is absent. | Available-backend matrix, mixed completion/failure, aliased Meta buffers, exact outputs, no leaks, explicit capability reporting, and no performance claim for a fallback or unavailable backend. |
+| 5.7 | 5.6f | Reduce managed graph segmentation through planned execution islands while preserving publication tickets, lease retention, and invalidation. | Detailed commit split follows 5.6 evidence; compare graph submissions, capture reuse, failure closure, and steady-state latency before implementation. |
+| 5.8 | 5.7 | Replace strict full-layer prefill gathering with bounded native-state continuation or another numerically qualified streaming method. | Detailed commit split follows native MMA investigation; preserve the strict gather as a control until local and recurrent-model errors and performance pass. |
+| 5.9 | 5.8 | Document supported configurations, fixed-budget semantics, asynchronous-publication capability/fallback behavior, limitations, and reproducible focused tests. | Verify documented invocations and capability matrix; no broad model/backend claim from producer-only, attention-only, or quant-only coverage. |
 
-Stage 5.5a retains its original scope and is complete only after 5.5a.1-5.5a.4 pass. The integration review found independently risky producer, ownership and graph-dispatch boundaries: the existing writer used ring storage and could not run while cross-layer prefetch owned that storage. These explicit subdivisions follow the commit-sizing rule above; they do not renumber stages 5.5b-5.5d or declare server integration complete early. The original milestone commit counts are planning estimates, not fixed totals after subdivisions.
+Stage 5.5a retains its original scope and is complete only after 5.5a.1-5.5a.4 pass. The integration review found independently risky producer, ownership and graph-dispatch boundaries: the existing writer used ring storage and could not run while cross-layer prefetch owned that storage. These explicit subdivisions follow the commit-sizing rule above; they do not renumber completed stages 5.5b-5.5c. Remaining optimization and documentation work is assigned to stages 5.6-5.9. The original milestone commit counts are planning estimates, not fixed totals after subdivisions.
 
 Acceptance:
 
@@ -228,6 +243,10 @@ Acceptance:
 - The KV runtime owns resident/ring subdivision within a coarse lease.
 - Concentrated decode layouts and all-resident capture have execution coverage, not just standalone policy tests.
 - No broad sweep is required unless representative points reveal an unexplained difference.
+- K/V publication uses one common transaction/frontier contract across backends; native events stay inside backend adapters.
+- Device consumers can depend on device-ready K/V without forcing host publication, while host-visible state advances only after both K and V complete.
+- Event-capable adapters avoid a device-wide host synchronization on the steady producer path; unsupported adapters preserve correctness through the synchronous fallback.
+- Publication tickets retain all referenced storage and execution plans until completion, cancellation, or explicit retirement.
 
 ## Milestone 6: prefill/decode memory sharing
 
@@ -373,8 +392,12 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.5a | Committed | b72bcc9e6 | Opt-in text/server integration plus stock-equivalent prefill and bounded resumable native decode for eligible CUDA quantized paths. See the detailed substages and numerical follow-up below. |
 | 5.5a.1-5.5a.4 | Committed | b72bcc9e6 | Producer workspace, session ownership, graph bridge, public gates, real-model qualification and resumable-decode extension were reviewed as one combined commit. |
 | 5.5b | Committed | 10ec8902d | Host snapshot restore, dense-frontier validation, suffix truncation for recurrent checkpoints, malformed-state retry and serial cancellation recovery. |
-| 5.5c | Ready for review | - | Matched Release fixed-pool sweep; PDL-safe asynchronous resumed spans, coalesced resident drains and layout-change-only H2D diagnostics. Remaining producer/prefill costs are explicitly recorded. |
-| 5.5d | Planned | - | Supported-configuration and reproducible-test documentation. |
+| 5.5c | Committed | 123e76b44 | Matched Release fixed-pool sweep; PDL-safe asynchronous resumed spans, coalesced resident drains and layout-change-only H2D diagnostics. Remaining producer/prefill costs are explicitly recorded. |
+| 5.6a | Ready for review | - | Common paired publication tickets and ordered reserved/device/host/committed frontiers; 10 cases / 133 assertions pass in Debug, ASan, UBSan, and a CUDA-enabled build. Seven focused existing regressions pass. No execution path is migrated yet. |
+| 5.6b-5.6f | Planned | - | Synchronous migration, generic completions, async session integration, CUDA overlap, and cross-backend conformance remain. |
+| 5.7 | Reserved | - | Graph segmentation optimization; split only after 5.6 qualification identifies the remaining submission boundary. |
+| 5.8 | Reserved | - | Strict prefill gather replacement; split only after native MMA continuation research establishes a credible numerical contract. |
+| 5.9 | Planned | - | Supported-configuration and reproducible-test documentation after optimization qualification. |
 | 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -2663,7 +2686,7 @@ Tests were first red for session construction, head geometry, execution-buffer a
 
 Reproduce native component tests with `build-device-memory-infra-cuda/bin/test-kv-stream-session --cuda`, `test-kv-stream-model --cuda` and `test-backend-execution --cuda`. Run `test-kv-stream-context --model /path/to/model.gguf` for the constrained-pool real-model comparison; add `--resident` for the captured all-resident control. A clean rebuild of `llama-server` and tests is required after public context/private ops changes. Local evidence is in `/tmp/kv-55a-*.log`, including Q3/IQ4/UVM/capture comparisons, HTTP, sanitizer and final matrix logs; these machine-local logs are not committed.
 
-All of **5.5a.1-5.5a.4** are ready for the requested combined user review/commit. Task changes are staged; unrelated README/documentation/benchmark changes remain untouched. No assistant commit or push was made. Continue with **5.5b** only after review; **5.5c** performance and **5.5d** supported-configuration documentation are still required before the milestone-5 checkpoint.
+All of **5.5a.1-5.5a.4** are ready for the requested combined user review/commit. Task changes are staged; unrelated README/documentation/benchmark changes remain untouched. No assistant commit or push was made. Continue with **5.5b** only after review; **5.5c** performance and the later optimization/documentation stages are still required before the milestone-5 checkpoint.
 
 ## Numerical follow-up: resumable native accumulators (experiment, not integrated)
 
@@ -2748,7 +2771,7 @@ The aggregate GPU peak at 64K and96K is 14986 MiB in both modes. The last resume
 
 Benchmark artifacts: `/tmp/bench-kv-resume.py`, `/tmp/kv-resume-throughput.jsonl`, `/tmp/kv-resume-benchmark-progress.log`, and `/tmp/kv-resume-http-<prompt>-<mode>.log`. The script accepts model, pool, context, prompt points and output path. Native/model evidence is in `/tmp/kv-resume-integrated-*.log`, `/tmp/resume-final-*.log`, and the four `/tmp/resume-*-tests.log` matrices. Temporary measurement artifacts are not committed.
 
-Production has been restored using its existing image/configuration; port 1234 health is OK. No compose/model/cache change or deployment was made. Implementation, tests and this roadmap are staged for the user; unrelated README/documentation/benchmark changes remain untouched. No assistant commit or push was made. Follow-up work remains resumed native prefill, broader type/model qualification, performance repeats with per-process telemetry, and the original 5.5b-5.5d acceptance gates.
+Production has been restored using its existing image/configuration; port 1234 health is OK. No compose/model/cache change or deployment was made. Implementation, tests and this roadmap are staged for the user; unrelated README/documentation/benchmark changes remain untouched. No assistant commit or push was made. Follow-up work remains resumed native prefill, broader type/model qualification, performance repeats with per-process telemetry, and the milestone-5 acceptance gates now detailed through stage 5.9.
 
 ## Stage 5.5b: serial request and prompt-cache lifecycle
 
@@ -2789,7 +2812,7 @@ A streaming completion was disconnected after its first content event. After the
 
 Evidence is in `/tmp/kv-55b-*.log` and the temporary `/tmp/kv-55b-{http,prefix,cancel}.py` scripts/results; these machine-local files are not committed. Production `llm-llmster` was restored with its existing image/configuration and port 1234 health is OK. No compose, production image, model, checkpoint or prompt-cache file was changed.
 
-Task implementation, tests and this roadmap are staged for the user. Unrelated README, infrastructure documentation and benchmark-tree changes remain untouched. No assistant commit or push was made. Next is **5.5c** fixed-pool performance qualification; **5.5d** documentation remains after it.
+Task implementation, tests and this roadmap are staged for the user. Unrelated README, infrastructure documentation and benchmark-tree changes remain untouched. No assistant commit or push was made. Next is **5.5c** fixed-pool performance qualification; final documentation now follows optimization in **5.9**.
 
 ## Stage 5.5c: fixed-pool performance qualification
 
@@ -2861,4 +2884,138 @@ Two additional experiments were removed before review: asynchronous strict-gathe
 
 Benchmark inputs/results are in `/tmp/kv-55c-*.jsonl`, `/tmp/kv-55c-*-progress.log` and per-run `/tmp/kv-55c-{reference,current}-*.log`. Nsight reports and discarded-attempt notes are under `/tmp/kv-55c-*.nsys-rep` and corresponding stats files. These machine-local artifacts are not committed.
 
-Task implementation, tests and this roadmap are staged for the user. Unrelated README, infrastructure documentation and benchmark-tree changes remain untouched. No assistant commit or push was made. Next is **5.5d** supported-configuration and reproducibility documentation.
+Task implementation and tests were committed by the user at `123e76b44`. Unrelated README, infrastructure documentation and benchmark-tree changes remain untouched. No assistant commit or push was made. Stage **5.6a** follows below.
+
+## Stage 5.6: backend-neutral asynchronous K/V publication plan
+
+Stage 5.6 removes the synchronous producer boundary found by 5.5c without moving publication policy into CUDA. The common layer owns the K/V transaction, visibility frontiers, failure state, and retained resources. Each backend adapter only submits work and supplies completion dependencies. A backend without the required asynchronous capabilities uses the same transaction through a synchronous adapter.
+
+### Scope and success criteria
+
+- Preserve atomic logical publication: no observer can see K without the matching V or see bytes beyond the contiguous committed frontier.
+- Separate accelerator readiness from durable host visibility. Attention may consume a device-ready pair while its authoritative D2H mirror is still pending.
+- Keep native stream, queue, event, semaphore, and command-buffer handles out of the KV session and memory manager.
+- Retain source buffers, destinations, writer plans, arena leases, and their parent owners until every completion that can reference them is retired.
+- Remove steady-state per-tile and per-layer host drains on event-capable backends without changing encoded bytes, cache state, logits, or recurrent state.
+- Preserve a complete synchronous fallback with the same state machine and failure semantics.
+- Prepare the execution boundary for stage 5.7, but do not combine graph-island or capture changes with 5.6.
+
+### Common ownership and visibility model
+
+One publication ticket represents one logical append range for both K and V. It records the cache content generation, layer and token range, K/V destinations, retained producer inputs and workspaces, device completion, host completion, and terminal failure or cancellation state. A ticket holds strong references to every parent owner behind its views or leases; a child completion cannot outlive the storage that it names.
+
+The session maintains these distinct concepts:
+
+- The reserved frontier is the highest range exclusively owned by admitted tickets. Reserved bytes are never observable cache state.
+- Device readiness is tracked per ticket and as a contiguous device frontier. Device attention can wait on this completion through its own queue without synchronizing the host.
+- Host readiness means both K and V authoritative transfers for a ticket completed successfully. It does not advance the public cache when an earlier ticket is incomplete.
+- The committed frontier advances only across a contiguous sequence of host-ready K/V pairs whose content generation still matches. Save, restore, host-driven repartition, and external cache reads observe only this frontier.
+- Retirement releases completion objects and retained storage only after no device or host operation can still reference them.
+
+```mermaid
+flowchart LR
+    R["Reserve K/V pair"] --> S["Submit producer work"]
+    S --> D["Device completion"]
+    S --> H["Host mirror completion"]
+    D --> A["Device attention may proceed"]
+    H --> C["Ordered atomic host commit"]
+    A --> T["Retire after final device use"]
+    C --> T
+    S --> F["Failure or cancellation"]
+    F --> X["Drain or retire safely; do not publish"]
+```
+
+Device and host completion can become ready in either order. The common state machine must not infer host visibility from device readiness or infer device consumption from a completed D2H operation.
+
+### Completion abstraction
+
+Use the existing `ggml_backend_event_t` operations as the first generic device-completion mechanism. The common adapter must support event creation capability discovery, record-after-submission, queue-side wait, explicit host wait, and safe destruction. It must reject device/context mismatches instead of assuming that one backend can consume another backend's native event.
+
+A nonblocking event query is useful but not required for stage 5.6. Ordinary device execution can enqueue a wait without involving the host. Operations that require authoritative host bytes can explicitly finish pending host publications. Opportunistic polling can be proposed later without changing the ticket contract.
+
+The synchronous adapter implements the same interface by completing submitted work before returning a ready ticket. This is the required behavior for CPU and the initial fallback for any backend that lacks usable events, asynchronous tensor transfer, or stable retained host destinations.
+
+### Backend adapter boundaries
+
+| Backend family | Common behavior | Native completion mechanism | Stage 5.6 expectation |
+| --- | --- | --- | --- |
+| CPU | Same ticket/frontier protocol | Immediate or synchronized completion | Required synchronous conformance path |
+| CUDA | Same protocol | CUDA streams and events behind `ggml_backend_event_t` | Full asynchronous producer path in 5.6e |
+| ROCm/HIP | Same protocol | HIP streams and events through the corresponding backend implementation | Compile/contract compatibility; hardware qualification recorded when available |
+| SYCL/Level Zero | Same protocol | SYCL event dependencies | Common conformance on the available Intel device in 5.6f; native async optimization can follow |
+| Vulkan | Same protocol | Queue submission and timeline semaphore-backed backend events | Common conformance on available Intel/NVIDIA devices in 5.6f; native async optimization can follow |
+| Metal and other event-capable backends | Same protocol | Existing backend event implementation | Build/contract preservation; hardware gaps recorded rather than claimed |
+| OpenCL | Same protocol | Native command events are not yet exposed through the GGML event API | Qualify the synchronous fallback in 5.6f; native event exposure is a separate backend follow-up |
+| Meta | Same protocol | Child backends can have different completion capabilities | Qualify composed fallback behavior in 5.6f; native aggregation is a separate backend follow-up |
+
+Producer capability and streamed-attention capability remain independent. Passing asynchronous publication tests on SYCL or Vulkan does not claim that adaptive streamed attention kernels exist on those backends.
+
+### Submission and dependency rules
+
+1. Reserve one K/V pair and all retained resources before submitting either plane.
+2. Submit K and V device production into bounded writer storage without advancing a visible frontier.
+3. Publish or copy the device tail into its resident/ring destination and record device completion only after both planes are safe to consume.
+4. Submit both authoritative host transfers into retained pinned or otherwise stable host storage and record host completion after both planes.
+5. Return the pending ticket without a host drain when the backend supports the required dependencies.
+6. Make attention wait on device completion through the backend queue. Do not wait for host completion solely to run attention.
+7. Advance the committed host frontier in token order after host completion. Later ready tickets remain pending behind an earlier incomplete ticket.
+8. Retire producer scratch after its final producer/copy dependency and retire device destinations only after their final consumer. These can be different completion points.
+
+The first implementation can use separate device and host completion events. It must not force both onto one late event if that delays attention behind D2H work. An adapter may collapse them only when its queue semantics make them truly equivalent without adding a host synchronization.
+
+### Failure and lifecycle contract
+
+- Failure before submission releases the reservation without changing any visible frontier.
+- Failure after only one K/V plane is submitted never publishes either plane. The session drains or safely retires submitted work before releasing retained storage.
+- Failure after device readiness but before host readiness can allow already-admitted device consumption to finish, but the append is not durable and cannot advance the host frontier. The session becomes closed or poisoned unless a tested recovery path reconstructs the missing host pair.
+- Cancellation does not revoke memory from pending operations. It closes admission, waits or retires all relevant completions, then discards unpublished tickets.
+- Content replacement or restore invalidates pending tickets from the prior content generation after their physical work is safe to retire.
+- Repartition can use the completed historical host frontier and the current device-ready tail. Any path that requires pending host bytes must first finish their host publication.
+- Prompt-cache save and state serialization explicitly finish host-ready publication. They never serialize reserved or device-only bytes.
+- Counter exhaustion, completion allocation failure, event record failure, and adapter teardown failure are explicit errors; generations and frontiers never wrap silently.
+
+### TDD and review gates for each commit
+
+Each 5.6 substage starts with a failing behavioral test and leaves the synchronous path runnable. Fake delayed completions provide deterministic host coverage before device work. Tests must inspect observable state and retained lifetime, not private timing assumptions.
+
+- 5.6a proves the pure state machine, ordered atomic frontiers, reference-counted parent retention, and cancellation/failure retirement with fake completions and real arena views and leases.
+- 5.6b migrates current execution through the synchronous adapter and establishes an exact functional and performance baseline before removing drains.
+- 5.6c proves the generic completion wrapper independently of KV kernels, including device-side waits that do not call host synchronization.
+- 5.6d connects pending tickets to the writer/session and exercises save, restore, repartition, graph replacement, and retry while completion is delayed.
+- 5.6e enables CUDA overlap only after all preceding generic tests pass, then runs real-model equivalence, repeated cross-layer stress, CUDA memcheck, and isolated synchronization/submission measurements.
+- 5.6f runs the common conformance suite across available CPU, SYCL, Vulkan, OpenCL, and Meta paths, using the synchronous fallback where native async capability is absent.
+
+### Performance qualification
+
+Freeze model, K/V types, context, b/ub, UVM mode, pool size, prompt tokens, and decode length when comparing 5.5c with 5.6. Record prefill/decode throughput, writer graph submissions, backend/event waits, host/device synchronizations, D2H/D2D/H2D bytes and calls, peak retained ticket count, and steady/peak device memory.
+
+The minimum CUDA success gate is removal of the writer's steady per-tile/per-layer drains with unchanged transfer volume and exact Q3_K_XL/IQ4_XS outputs at the existing ub256/512 qualification points. Measure all-resident, streaming onset, moderate streaming, and bandwidth-limited contexts. A speedup is expected near all-resident and onset; long-context results can remain bandwidth-bound. Investigate any regression outside run-to-run noise before enabling the asynchronous adapter by default.
+
+For other backends, the first gate is semantic equivalence and no regression when the synchronous fallback is selected. Report unavailable toolchains or devices explicitly. Do not convert a compilation result into a performance or asynchronous-execution claim.
+
+### Explicit non-goals
+
+- Stage 5.6 does not reduce managed graph segmentation or capture K/V publication inside a larger executable graph; that is stage 5.7.
+- Stage 5.6 does not replace strict full-layer prefill gathering or change attention arithmetic; that is stage 5.8.
+- Stage 5.6 does not implement streamed-attention kernels for non-CUDA backends.
+- Stage 5.6 does not add parallel requests, multi-GPU publication, MTP, or vision-phase overlap.
+- Stage 5.6 does not require a new public API if the private execution/consumer interfaces can establish the contract. Any broader backend interface expansion requires a separate design review before implementation.
+
+### Stage 5.6a implementation and validation
+
+The first test was red because no publication API or implementation existed. The completed stage adds `llama-kv-stream-publication.h/.cpp`, registers it in the llama library, and adds `test-kv-stream-publication.cpp`. It does not modify `llama_kv_stream_content`, the writer, session, model graph bridge, backend events, or CUDA execution.
+
+One move-only batch ticket covers a contiguous token range and one K/V pair per participating layer. Each K/V plane/domain submission receives its own move-only completion handle. Dropping an unfinished completion fails the batch. Device and host readiness advance independently, while committed visibility requires both domains for every pair and never jumps an earlier batch gap.
+
+Tickets retain type-erased reference-counted parent owners and retained arena leases. Successful resources remain retained until explicit ticket retirement. Cancellation, failure, ticket abandonment, or publication-owner destruction closes admission and prevents frontier advancement, but submitted work keeps its resources until its final completion returns. This is owner-thread-only state; stage 5.6a does not claim concurrent callback safety.
+
+The tests cover:
+
+- Invalid and transactional reservation, capacity bounds, duplicate submission, invalid pair/domain/plane, and sequence exhaustion without wrap.
+- Atomic K/V readiness, independent device/host frontiers, committed-frontier gating, and two batches completing out of order.
+- Failure, idempotent cancellation, move assignment, premature retirement rejection, and unfinished-completion destruction.
+- Real CPU-arena lease retention, arbitrary parent reference retention, ticket abandonment with submitted work, and publication-owner destruction before completion.
+
+The publication suite passes 10 cases / 133 assertions in CPU Debug, ASan with leak detection, UBSan, and the CUDA-enabled Debug build. The existing `test-kv-stream-content`, `test-kv-stream-writer`, `test-kv-stream-producer`, `test-kv-stream-session`, `test-backend-memory`, and `test-memory-executor` focused regressions also pass in the Debug build, for seven focused suites including the new test. No throughput result is expected because 5.6a is not connected to production execution.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made. Next after review is **5.6b**, migration of current synchronous publication through this common contract.

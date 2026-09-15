@@ -62,6 +62,8 @@ add_library(llama
             llama-kv-stream-content.cpp
             llama-kv-stream-content.h
             llama-kv-stream-resident.cpp
+            llama-kv-stream-publication.cpp
+            llama-kv-stream-publication.h
             llama-kv-stream-resident.h
             llama-kv-stream-capture.cpp
             llama-kv-stream-capture.h
