@@ -16,6 +16,8 @@ export interface GroupedModelOptions {
 	loaded: ModelItem[];
 	favorites: ModelItem[];
 	available: OrgGroup[];
+	/** Models served by other backends; rendered flat, without categories. */
+	external: ModelItem[];
 }
 
 function matchesModality(option: ModelOption, term: string): boolean {
@@ -53,7 +55,8 @@ export function filterModelOptions(options: ModelOption[], searchTerm: string): 
 export function groupModelOptions(
 	filteredOptions: ModelOption[],
 	favoriteIds: Set<string>,
-	isModelLoaded: (model: string) => boolean
+	isModelLoaded: (model: string) => boolean,
+	isLocalModel: (option: ModelOption) => boolean = () => true
 ): GroupedModelOptions {
 	// Loaded models
 	const loaded: ModelItem[] = [];
@@ -79,12 +82,20 @@ export function groupModelOptions(
 
 	// Available models grouped by org (excluding loaded and favorites)
 	const available: OrgGroup[] = [];
+	// models from other backends have no load state, so they stay flat
+	const external: ModelItem[] = [];
 	const orgGroups = new SvelteMap<string, ModelItem[]>();
 
 	for (let i = 0; i < filteredOptions.length; i++) {
 		const option = filteredOptions[i];
 
 		if (loadedModelIds.has(option.model) || favoriteIds.has(option.model)) continue;
+
+		if (!isLocalModel(option)) {
+			external.push({ flatIndex: i, option });
+
+			continue;
+		}
 
 		const key = option.parsedId?.orgName ?? '';
 
@@ -97,5 +108,5 @@ export function groupModelOptions(
 		available.push({ items, orgName: orgName || null });
 	}
 
-	return { available, favorites, loaded };
+	return { available, external, favorites, loaded };
 }

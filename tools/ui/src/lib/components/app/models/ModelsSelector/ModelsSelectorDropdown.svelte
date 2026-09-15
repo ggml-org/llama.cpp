@@ -91,6 +91,7 @@
 
 		for (const item of ms.groupedFilteredOptions.favorites) order.push(item.option.id);
 		for (const item of ms.groupedFilteredOptions.loaded) order.push(item.option.id);
+		for (const item of ms.groupedFilteredOptions.external) order.push(item.option.id);
 		for (const group of ms.groupedFilteredOptions.available) {
 			for (const item of group.items) order.push(item.option.id);
 		}
@@ -342,7 +343,6 @@
 							<ModelsSelectorList
 								activeId={ms.activeId}
 								{currentModel}
-								flat={!ms.isLocalBackend}
 								groups={ms.groupedFilteredOptions}
 								onInfoClick={ms.handleInfoClick}
 								onSelect={ms.handleSelect}
