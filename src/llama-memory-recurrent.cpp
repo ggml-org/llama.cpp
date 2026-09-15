@@ -202,6 +202,12 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                 }
                 return false;
             }
+            // a mid-range partial erase cannot be represented in a recurrent state - reject it,
+            // otherwise callers (e.g. --cache-reuse KV surgery) would assume the erase succeeded
+            // while the state still contains the removed tokens, leaking state across requests
+            if (0 < p1 && p1 <= cell.pos) {
+                return false;
+            }
             // invalidate tails which will be cleared
             if (p0 <= cell.pos && cell.pos < p1) {
                 tail_id = -1;
