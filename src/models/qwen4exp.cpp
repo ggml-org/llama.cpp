@@ -373,6 +373,8 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
             ggml_reshape_3d(ctx0, inpL, n_embd, 1, n_tokens),
             n_embd, hc, n_tokens, 1);
     cb(res_hc, "hc_init", -1);
+    // make sure hc_init is in the same graph split as the first layer (-sm tensor)
+    ggml_build_forward_expand(gf, res_hc);
 
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = res_hc;
