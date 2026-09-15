@@ -1,4 +1,5 @@
 #import "ggml-metal-device.h"
+#import "ggml-metal-fusion.h"
 
 #import "ggml-impl.h"
 #import "ggml-backend-impl.h"
@@ -896,6 +897,9 @@ struct ggml_metal_device {
 
     struct ggml_metal_device_props props;
 
+    // shared fusion debugging context
+    struct ggml_metal_fusion_info * finfo;
+
     // virtual address for GPU memory allocations
     atomic_uintptr_t addr_virt;
 };
@@ -1274,6 +1278,13 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
                     dev->props.max_working_set_size   = dev->mtl_device.maxBufferLength;
                 }
 
+                {
+                    const char * val = getenv("GGML_METAL_FUSION_DEBUG");
+                    dev->finfo = ggml_metal_fusion_info_init(
+                            getenv("GGML_METAL_FUSION_DISABLE") == nil,
+                            val ? atoi(val) : 0);
+                }
+
                 snprintf(dev->props.name, sizeof(dev->props.name), "%s%d", "MTL", device);
                 const char * gpu_name = [[dev->mtl_device name] UTF8String];
                 if (n_devices > 1) {
@@ -1348,6 +1359,8 @@ void ggml_metal_device_free(ggml_metal_device_t dev) {
     assert(dev != NULL);
 
     @autoreleasepool {
+        ggml_metal_fusion_info_free(dev->finfo);
+
         ggml_metal_rsets_free(dev->rsets);
 
         ggml_metal_library_free(dev->library);
@@ -1471,8 +1484,10 @@ void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_eve
 
 void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t * total) {
     if (@available(macOS 10.12, iOS 16.0, *)) {
-        *total = dev->mtl_device.recommendedMaxWorkingSetSize;
-        *free  = *total - dev->mtl_device.currentAllocatedSize;
+        *total     = dev->mtl_device.recommendedMaxWorkingSetSize;
+        size_t cur = dev->mtl_device.currentAllocatedSize;
+        // it's possible to allocate more than `recommendedMaxWorkingSetSize`
+        *free      = *total > cur ? *total - cur : 0;
     } else {
         *free = 0;
         *total = 0;
@@ -1484,7 +1499,9 @@ static bool ggml_metal_supports_mul_mat_op(
         const struct ggml_tensor * op,
         bool src0_f16_has_mv,
         bool mm_path) {
-    if (!has_simdgroup_reduction || op->src[0]->type == GGML_TYPE_NVFP4) {
+    if (!has_simdgroup_reduction ||
+        op->src[0]->type == GGML_TYPE_NVFP4 ||
+        op->src[0]->type == GGML_TYPE_TQ1_0) {
         return false;
     }
 
@@ -1885,7 +1902,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 };
             }
         case GGML_OP_GET_ROWS:
-            return op->src[0]->type != GGML_TYPE_NVFP4;
+            return op->src[0]->type != GGML_TYPE_NVFP4 &&
+                   op->src[0]->type != GGML_TYPE_TQ1_0;
         case GGML_OP_SET_ROWS:
             {
                 if (op->src[0]->type == GGML_TYPE_F16) {
@@ -1928,6 +1946,10 @@ const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_de
 
 static void ggml_metal_device_disable_tensor(ggml_metal_device_t dev) {
     dev->props.has_tensor = false;
+}
+
+struct ggml_metal_fusion_info * ggml_metal_device_get_fusion_info(ggml_metal_device_t dev) {
+    return dev->finfo;
 }
 
 //

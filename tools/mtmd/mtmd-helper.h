@@ -46,7 +46,7 @@ MTMD_API struct mtmd_helper_init_opt mtmd_helper_init_opt_default(void);
 MTMD_API void mtmd_helper_log_set(ggml_log_callback log_callback, void * user_data);
 
 // Returns true if this build includes video support (MTMD_VIDEO was ON at compile time).
-MTMD_API bool mtmd_helper_support_video(mtmd_context * ctx);
+MTMD_API bool mtmd_helper_support_video(const mtmd_context * ctx);
 
 struct mtmd_helper_bitmap_wrapper {
     mtmd_bitmap * bitmap;
@@ -58,7 +58,7 @@ struct mtmd_helper_bitmap_wrapper {
 // returns nullptr on failure
 // this function is thread-safe
 MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(
-                    mtmd_context * ctx,
+                    const mtmd_context * ctx,
                     const char * fname,
                     bool placeholder,
                     struct mtmd_helper_init_opt opt);
@@ -75,7 +75,7 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(
 // returns nullptr on failure
 // this function is thread-safe
 MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(
-                    mtmd_context * ctx,
+                    const mtmd_context * ctx,
                     const unsigned char * buf, size_t len,
                     bool placeholder,
                     struct mtmd_helper_init_opt opt);
@@ -153,7 +153,7 @@ struct mtmd_helper_video_info {
 
 // returns NULL on failure (ffprobe not found, file unreadable, etc.)
 MTMD_API mtmd_helper_video * mtmd_helper_video_init(
-                    struct mtmd_context * mctx,
+                    const struct mtmd_context * mctx,
                     const char * path,
                     struct mtmd_helper_video_init_params params);
 
@@ -162,7 +162,7 @@ MTMD_API mtmd_helper_video * mtmd_helper_video_init(
 // Note: pipe input is not seekable, so seeking will use output-side seeking
 // (ffmpeg decodes and discards frames up to the target position).
 MTMD_API mtmd_helper_video * mtmd_helper_video_init_from_buf(
-                    struct mtmd_context * mctx,
+                    const struct mtmd_context * mctx,
                     const unsigned char * buf, size_t len,
                     struct mtmd_helper_video_init_params params);
 MTMD_API void mtmd_helper_video_free(mtmd_helper_video * ctx);
@@ -177,7 +177,7 @@ MTMD_API int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
             char ** out_text);
 
 // return true if model can be used for chat
-MTMD_API bool mtmd_helper_model_can_chat(struct llama_context * lctx, struct mtmd_context * mctx);
+MTMD_API bool mtmd_helper_model_can_chat(const struct llama_context * lctx, const struct mtmd_context * mctx);
 
 //
 // Audio generation helpers

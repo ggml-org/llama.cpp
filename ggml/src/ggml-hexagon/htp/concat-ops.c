@@ -1,5 +1,8 @@
+#include "hex-common.h"
+#include "hex-profile.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
 #include "hexagon_types.h"
 #include "hexagon_protos.h"
 #include "hvx_hexagon_protos.h"
@@ -13,6 +16,10 @@ struct htp_concat_context {
     struct htp_ops_context * octx;
     uint32_t dim;
     uint32_t nrows_per_thread;
+    uint32_t row_start;
+    uint32_t nrows;
+    uint32_t elem_start;
+    uint32_t nelems;
     struct fastdiv_values div_ne0;
     struct fastdiv_values div_ne1;
     struct fastdiv_values div_ne2;
@@ -28,10 +35,10 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
 
     const uint32_t src0_ne0 = src0->ne[0];
     const uint32_t src1_ne0 = src1->ne[0];
-    const uint32_t ne1      = dst->ne[1];
 
-    const uint32_t start_i = ith * cctx->nrows_per_thread;
-    const uint32_t end_i   = (start_i + cctx->nrows_per_thread < ne1) ? (start_i + cctx->nrows_per_thread) : ne1;
+    const uint32_t row_end = cctx->row_start + cctx->nrows;
+    const uint32_t start_i = cctx->row_start + ith * cctx->nrows_per_thread;
+    const uint32_t end_i   = (start_i + cctx->nrows_per_thread < row_end) ? (start_i + cctx->nrows_per_thread) : row_end;
     if (start_i >= end_i) return;
 
     dma_queue * q = octx->ctx->dma[ith];
@@ -51,6 +58,8 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
     const uint32_t spad0_row_bytes = hex_round_up((src0_ne0 + src1_ne0_padded) * sizeof(float), VLEN);
     uint32_t mu = src1_ne0_padded * spad1_stride;
 
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+
     for (uint32_t i = start_i; i < end_i; i += block_i) {
         uint32_t current_block_i = (end_i - i < block_i) ? (end_i - i) : block_i;
 
@@ -66,6 +75,7 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
 
         HVX_Vector * vtcm_tmp = (HVX_Vector *)(spad1_base + src1_ne0_padded * spad1_stride);
 
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
         for (uint32_t j = 0; j < src1_ne0_padded; j += 32) {
             #pragma unroll(4)
             for (uint32_t ii = 0; ii < current_block_i; ii++) {
@@ -75,6 +85,7 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
                 hvx_vmemu(dst_ptr) = vtcm_tmp[ii];
             }
         }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
 
         dma_queue_pop(q); // src0
 
@@ -95,10 +106,10 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
 
     const uint32_t src0_ne0 = src0->ne[0];
     const uint32_t src1_ne0 = src1->ne[0];
-    const uint32_t ne1      = dst->ne[1];
 
-    const uint32_t start_i = ith * cctx->nrows_per_thread;
-    const uint32_t end_i   = (start_i + cctx->nrows_per_thread < ne1) ? (start_i + cctx->nrows_per_thread) : ne1;
+    const uint32_t row_end = cctx->row_start + cctx->nrows;
+    const uint32_t start_i = cctx->row_start + ith * cctx->nrows_per_thread;
+    const uint32_t end_i   = (start_i + cctx->nrows_per_thread < row_end) ? (start_i + cctx->nrows_per_thread) : row_end;
     if (start_i >= end_i) return;
 
     dma_queue * q = octx->ctx->dma[ith];
@@ -118,6 +129,8 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
     const uint32_t spad0_row_bytes = hex_round_up((src0_ne0 + src1_ne0_padded) * sizeof(__fp16), VLEN);
     uint32_t mu = src1_ne0_padded * spad1_stride;
 
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+
     for (uint32_t i = start_i; i < end_i; i += block_i) {
         uint32_t current_block_i = (end_i - i < block_i) ? (end_i - i) : block_i;
 
@@ -133,6 +146,7 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
 
         HVX_Vector * vtcm_tmp = (HVX_Vector *)(spad1_base + src1_ne0_padded * spad1_stride);
 
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
         for (uint32_t j = 0; j < src1_ne0_padded; j += 64) {
             #pragma unroll(4)
             for (uint32_t ii = 0; ii < current_block_i; ii++) {
@@ -142,6 +156,7 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
                 hvx_vmemu(dst_ptr) = vtcm_tmp[ii];
             }
         }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
 
         dma_queue_pop(q); // src0
 
@@ -164,11 +179,14 @@ static void concat_generic(unsigned int nth, unsigned int ith, void * data) {
     const uint32_t type_size = (dst->type == HTP_TYPE_F32 || dst->type == HTP_TYPE_I32) ? 4 : 2;
 
     const uint32_t ne[4] = {dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]};
-    const uint32_t total_elements = ne[0] * ne[1] * ne[2] * ne[3];
-    const uint32_t chunk_size = (total_elements + nth - 1) / nth;
 
-    const uint32_t start_idx = MIN(ith * chunk_size, total_elements);
-    const uint32_t end_idx   = MIN(start_idx + chunk_size, total_elements);
+    // Per-device element range aligned to prevent false sharing
+    const uint32_t elem_start = cctx->elem_start;
+    const uint32_t nelems     = cctx->nelems;
+    const uint32_t chunk_size = (nelems + nth - 1) / nth;
+
+    const uint32_t start_idx = MIN(elem_start + ith * chunk_size, elem_start + nelems);
+    const uint32_t end_idx   = MIN(start_idx + chunk_size, elem_start + nelems);
 
     // Naive scalar element-wise copy
     for (uint32_t idx = start_idx; idx < end_idx; idx++) {
@@ -236,13 +254,28 @@ int op_concat(struct htp_ops_context * octx) {
     void (*worker_func)(unsigned int, unsigned int, void *) = concat_generic;
 
     if (dim == 0 && is_2d && is_src1_transposed && !is_src0_transposed) {
-        n_threads = MIN(dst->ne[1], n_threads);
-        if (n_threads < 1) {
-            n_threads = 1;
+        const uint32_t total_rows = dst->ne[1];
+        const size_t dst_data_row_size = dst->ne[0] * type_size;
+        uint32_t row_start = 0;
+        uint32_t nrows     = total_rows;
+        if (octx->ctx->mdev.count > 1) {
+            uint32_t rows_per_chunk = 0;
+            htp_tensor_mdev_rows_per_chunk(dst, type_size, (uint32_t) dst_data_row_size, &rows_per_chunk);
+            const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(total_rows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+            row_start = range.start;
+            nrows     = range.count;
         }
+
+        if (nrows == 0) {
+            return HTP_STATUS_OK;
+        }
+
+        cctx.row_start = row_start;
+        cctx.nrows     = nrows;
+
         uint32_t block_i = (type_size == 4) ? 32 : 64;
 
-        cctx.nrows_per_thread = hmx_ceil_div(dst->ne[1], n_threads);
+        cctx.nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
 
         // Allocate VTCM
         uint32_t spad1_stride = block_i * type_size;
@@ -270,8 +303,26 @@ int op_concat(struct htp_ops_context * octx) {
         } else {
             worker_func = concat_2d_f16_transposed;
         }
+    } else {
+        const uint32_t total_elements = dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3];
+        uint32_t elem_start = 0;
+        uint32_t nelems     = total_elements;
+        if (octx->ctx->mdev.count > 1) {
+            const uint32_t elems_per_chunk = HEX_L2_LINE_SIZE / type_size;
+            const bool can_split = htp_tensor_mdev_data_aligned(dst) && htp_tensor_is_contiguous(dst, type_size) && !htp_tensor_is_permuted(dst);
+            const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(total_elements, can_split ? elems_per_chunk : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+            elem_start = range.start;
+            nelems     = range.count;
+        }
+
+        if (nelems == 0) {
+            return HTP_STATUS_OK;
+        }
+
+        cctx.elem_start = elem_start;
+        cctx.nelems     = nelems;
     }
 
-    worker_pool_run_func(octx->ctx->worker_pool, worker_func, &cctx, n_threads);
+    work_queue_run(octx->ctx->work_queue, worker_func, &cctx, n_threads);
     return HTP_STATUS_OK;
 }

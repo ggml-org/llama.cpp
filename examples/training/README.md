@@ -6,6 +6,8 @@ Finetuning of Stories 260K and LLaMA 3.2 1b seems to work with 24 GB of memory.
 **For CPU training, compile llama.cpp without any additional backends such as CUDA.**
 **For CUDA training, use the maximum number of GPU layers.**
 
+Flash attention is disabled during training because `FLASH_ATTN_EXT` has no backward pass.
+
 Proof of concept:
 
 ``` sh

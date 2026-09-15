@@ -105,18 +105,34 @@ export function filterByLeafNodeId(
  */
 function findLeafNodeInMap(
 	nodeMap: ReadonlyMap<string, DatabaseMessage>,
-	messageId: string
+	messageId: string,
+	leafCache?: Map<string, string>
 ): string {
+	const path: string[] = [];
+
 	let currentNode: DatabaseMessage | undefined = nodeMap.get(messageId);
 
 	while (currentNode && currentNode.children.length > 0) {
 		// Follow the last child (most recent branch)
+		const cached = leafCache?.get(currentNode.id);
+
+		if (cached !== undefined) {
+			for (const id of path) leafCache?.set(id, cached);
+
+			return cached;
+		}
+
+		path.push(currentNode.id);
 		const lastChildId = currentNode.children[currentNode.children.length - 1];
 
 		currentNode = nodeMap.get(lastChildId);
 	}
 
-	return currentNode?.id ?? messageId;
+	const leafId = currentNode?.id ?? messageId;
+
+	for (const id of path) leafCache?.set(id, leafId);
+
+	return leafId;
 }
 
 /**
@@ -176,7 +192,8 @@ export function findDescendantMessages(
  */
 export function getMessageSiblings(
 	nodeMap: ReadonlyMap<string, DatabaseMessage>,
-	messageId: string
+	messageId: string,
+	leafCache?: Map<string, string>
 ): ChatMessageSiblingInfo | null {
 	const message = nodeMap.get(messageId);
 
@@ -212,7 +229,7 @@ export function getMessageSiblings(
 	// Convert sibling message IDs to their corresponding leaf node IDs
 	// This allows navigation between different conversation branches
 	const siblingLeafIds = siblingIds.map((siblingId: string) =>
-		findLeafNodeInMap(nodeMap, siblingId)
+		findLeafNodeInMap(nodeMap, siblingId, leafCache)
 	);
 	// Find current message's position among siblings
 	const currentIndex = siblingIds.indexOf(messageId);
@@ -236,9 +253,12 @@ export function buildSiblingInfoMap(
 ): Map<string, ChatMessageSiblingInfo> {
 	const nodeMap = new Map(messages.map((msg) => [msg.id, msg] as const));
 	const siblingMap = new Map<string, ChatMessageSiblingInfo>();
+	// Leaf walks repeat along the same child chains for every message; memoize
+	// them per build so each edge is walked once instead of O(messages^2)
+	const leafCache = new Map<string, string>();
 
 	for (const msg of messages) {
-		const info = getMessageSiblings(nodeMap, msg.id);
+		const info = getMessageSiblings(nodeMap, msg.id, leafCache);
 
 		if (info) {
 			siblingMap.set(msg.id, info);

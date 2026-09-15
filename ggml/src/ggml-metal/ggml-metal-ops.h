@@ -8,17 +8,18 @@ extern "C" {
 
 typedef struct ggml_metal_op * ggml_metal_op_t;
 
+struct ggml_metal_fusion; // forward decl (ggml-metal-device.h)
+
 ggml_metal_op_t ggml_metal_op_init(
         ggml_metal_device_t dev,
         ggml_metal_cmd_buf_t cmd_buf,
         struct ggml_cgraph * gf,
+        struct ggml_metal_fusion_info * finfo,
         int  idx_start,
         int  idx_end,
-        bool use_fusion,
         bool use_concurrency,
         bool use_capture,
-        int  debug_graph,
-        int  debug_fusion);
+        int  debug_graph);
 
 void ggml_metal_op_free(ggml_metal_op_t ctx);
 
@@ -43,6 +44,7 @@ size_t ggml_metal_op_flash_attn_ext_extra_pad(const struct ggml_tensor * op);
 size_t ggml_metal_op_flash_attn_ext_extra_blk(const struct ggml_tensor * op);
 size_t ggml_metal_op_flash_attn_ext_extra_tmp(const struct ggml_tensor * op);
 size_t ggml_metal_op_flash_attn_ext_extra_kv_f16(const struct ggml_tensor * op);
+size_t ggml_metal_op_flash_attn_ext_extra_idx(const struct ggml_tensor * op);
 
 int ggml_metal_op_concat            (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_repeat            (ggml_metal_op_t ctx, int idx);
