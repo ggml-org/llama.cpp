@@ -103,7 +103,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba_layer(llm_graph_input_rs * inp,
         }
 
         // {dt_rank, d_inner} @ {dt_rank, n_seq_tokens, n_seqs} => {d_inner, n_seq_tokens, n_seqs}
-        dt = build_lora_mm(layer.ssm_dt, dt);
+        dt = build_lora_mm(layer.ssm_dt, ggml_cont(ctx0, dt));
         dt = ggml_add(ctx0, dt, layer.ssm_dt_b);
 
         cur = x;
