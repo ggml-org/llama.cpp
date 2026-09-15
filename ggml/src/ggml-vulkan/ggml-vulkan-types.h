@@ -267,8 +267,6 @@ struct vk_pipeline_struct {
     // linked list of pipelines for multiple compilation variants.
     // currently only used to compile a 64-bit indexing variant.
     vk_pipeline next;
-    // Variant with Stream-K enabled through a specialization constant.
-    vk_pipeline stream_k;
 };
 
 typedef std::weak_ptr<vk_pipeline_struct> vk_pipeline_ref;
@@ -278,10 +276,11 @@ struct vk_matmul_pipeline_key {
     ggml_type type_b;
     bool mul_mat_id;
     bool f16acc;
+    bool stream_k = false;
 
     bool operator<(const vk_matmul_pipeline_key & o) const {
-        return std::tie(type_a, type_b, mul_mat_id, f16acc)
-             < std::tie(o.type_a, o.type_b, o.mul_mat_id, o.f16acc);
+        return std::tie(type_a, type_b, mul_mat_id, f16acc, stream_k)
+             < std::tie(o.type_a, o.type_b, o.mul_mat_id, o.f16acc, o.stream_k);
     }
 };
 
