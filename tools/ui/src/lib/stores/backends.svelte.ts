@@ -8,14 +8,34 @@
  */
 
 import { browser } from '$app/environment';
-import { LOCAL_BACKEND_ID, SETTINGS_KEYS } from '$lib/constants';
+import { ACTIVE_BACKEND_LOCALSTORAGE_KEY, LOCAL_BACKEND_ID, SETTINGS_KEYS } from '$lib/constants';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { Backend } from '$lib/types';
 import { setBackendsResolver } from '$lib/utils/api-base';
 import { createLocalBackend, parseBackendsSettings } from '$lib/utils/backend';
 
+function loadActiveBackendId(): string {
+	if (!browser) return LOCAL_BACKEND_ID;
+
+	try {
+		return localStorage.getItem(ACTIVE_BACKEND_LOCALSTORAGE_KEY) ?? LOCAL_BACKEND_ID;
+	} catch {
+		return LOCAL_BACKEND_ID;
+	}
+}
+
+function persistActiveBackendId(backendId: string): void {
+	if (!browser) return;
+
+	try {
+		localStorage.setItem(ACTIVE_BACKEND_LOCALSTORAGE_KEY, backendId);
+	} catch {
+		/* ignore */
+	}
+}
+
 class BackendsStore {
-	activeId = $state<string>(LOCAL_BACKEND_ID);
+	activeId = $state<string>(loadActiveBackendId());
 
 	get active(): Backend {
 		const active = this.enabled.find((backend) => backend.id === this.activeId);
@@ -56,14 +76,15 @@ class BackendsStore {
 		this.saveExternal(this.external.filter((backend) => backend.id !== backendId));
 
 		if (this.activeId === backendId) {
-			this.activeId = LOCAL_BACKEND_ID;
+			this.setActive(LOCAL_BACKEND_ID);
 		}
 	}
 
 	setActive(backendId: string): void {
-		this.activeId = this.list.some((backend) => backend.id === backendId)
-			? backendId
-			: LOCAL_BACKEND_ID;
+		const id = this.list.some((backend) => backend.id === backendId) ? backendId : LOCAL_BACKEND_ID;
+
+		this.activeId = id;
+		persistActiveBackendId(id);
 	}
 
 	setLocalEnabled(enabled: boolean): void {
