@@ -865,7 +865,12 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         ggml_backend_meta_split_state split_state;
         switch (tensor->op) {
             case GGML_OP_NONE: {
-                split_state = {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+                if (tensor->view_src != nullptr) {
+                    // full-tensor view created with ggml_view_tensor, transparent for the split state
+                    split_state = ggml_backend_meta_get_split_state(stc, tensor->view_src, assume_sync);
+                } else {
+                    split_state = {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+                }
             } break;
             case GGML_OP_DUP: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ true);
@@ -2281,6 +2286,14 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                     cgraph_ij->use_counts[hash_pos_ij] = cgraph->use_counts[hash_pos_orig];
                 }
                 cgraph_ij->uid = ggml_graph_next_uid();
+            }
+        }
+
+        // Aux graph contents are rewritten on every compute but are identical across calls while the subgraphs are reused,
+        // so they can get stable uids on rebuild. Only safe without a comm backend, where the fallback usage is deterministic.
+        if (backend_ctx->comm_ctx == nullptr) {
+            for (ggml_cgraph * cgraph_aux : backend_ctx->cgraphs_aux) {
+                cgraph_aux->uid = ggml_graph_next_uid();
             }
         }
     }
