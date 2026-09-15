@@ -1760,10 +1760,24 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     std::vector<uint8_t> state_data_tgt;
     std::vector<uint8_t> state_data_dft;
 
-    // check if we can allocate enough memory for the new state
+    // Keep every allocation involved in creating the cache entry under the
+    // same bad_alloc guard. In particular, prompt.tokens.clone(), copying the
+    // checkpoint list (cheap shared snapshot handles) and states.push_back()
+    // can allocate too. A failure must skip caching, not terminate the server.
     try {
         state_data_tgt.resize(state_size_tgt);
         state_data_dft.resize(state_size_dft);
+
+        states.push_back({
+            /*.prompt =*/ {
+                /*.tokens      =*/ prompt.tokens.clone(),
+                /*.checkpoints =*/ prompt.checkpoints,
+            },
+            /*.data   =*/ {
+                /*.main =*/ std::move(state_data_tgt),
+                /*.drft =*/ std::move(state_data_dft),
+            },
+        });
     } catch (const std::bad_alloc & e) {
         SRV_ERR("failed to allocate memory for prompt cache state: %s\n", e.what());
 
@@ -1775,17 +1789,6 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
 
         return nullptr;
     }
-
-    states.push_back({
-        /*.prompt =*/ {
-            /*.tokens      =*/ prompt.tokens.clone(),
-            /*.checkpoints =*/ prompt.checkpoints,
-        },
-        /*.data   =*/ {
-            /*.main =*/ std::move(state_data_tgt),
-            /*.drft =*/ std::move(state_data_dft),
-        },
-    });
 
     return &states.back();
 }
