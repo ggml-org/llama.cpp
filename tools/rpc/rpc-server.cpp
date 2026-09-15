@@ -170,7 +170,7 @@ static std::string fs_get_cache_directory() {
 }
 
 struct rpc_server_params {
-    std::string              host        = "127.0.0.1";
+    std::string              host        = "::";
     int                      port        = 50052;
     bool                     use_cache   = false;
     int                      n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
@@ -198,6 +198,10 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
                 return false;
             }
             params.host = argv[i];
+            // Strip brackets from IPv6 addresses (e.g., [::] -> ::)
+            if (params.host.size() >= 2 && params.host.front() == '[' && params.host.back() == ']') {
+                params.host = params.host.substr(1, params.host.size() - 2);
+            }
         } else if (arg == "-t" || arg == "--threads") {
             if (++i >= argc) {
                 return false;
@@ -298,10 +302,10 @@ int main(int argc, char * argv[]) {
         return 1;
     }
 
-    if (params.host != "127.0.0.1") {
+    if (params.host != "127.0.0.1" && params.host != "::1") {
         fprintf(stderr, "\n");
         fprintf(stderr, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
-        fprintf(stderr, "WARNING: Host ('%s') is != '127.0.0.1'\n", params.host.c_str());
+        fprintf(stderr, "WARNING: Host ('%s') is not a loopback address\n", params.host.c_str());
         fprintf(stderr, "         Never expose the RPC server to an open network!\n");
         fprintf(stderr, "         This is an experimental feature and is not secure!\n");
         fprintf(stderr, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
@@ -313,7 +317,13 @@ int main(int argc, char * argv[]) {
         fprintf(stderr, "No devices found\n");
         return 1;
     }
-    std::string endpoint = params.host + ":" + std::to_string(params.port);
+    std::string endpoint;
+    if (params.host.find(':') != std::string::npos) {
+        // IPv6 address needs bracket notation in endpoint
+        endpoint = "[" + params.host + "]:" + std::to_string(params.port);
+    } else {
+        endpoint = params.host + ":" + std::to_string(params.port);
+    }
     const char * cache_dir = nullptr;
     std::string cache_dir_str;
     if (params.use_cache) {
