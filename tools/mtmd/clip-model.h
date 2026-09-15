@@ -485,6 +485,39 @@ struct clip_flow_net {
     std::vector<block> blocks;
 };
 
+// WavLM speaker embedding and Kani backbone projection.
+struct clip_kani_speaker {
+    struct linear { ggml_tensor * w = nullptr; ggml_tensor * b = nullptr; };
+    struct conv { ggml_tensor * w = nullptr; linear norm; };
+    struct layer {
+        linear norm, ffn_norm, q, k, v, o, up, down, gate;
+        ggml_tensor * gate_const = nullptr;
+    };
+    conv convs[7];
+    linear feature_norm, feature_proj, pos, output_norm, top[2], top_norm[2];
+    layer layers[24];
+    ggml_tensor * relative = nullptr;
+    ggml_tensor * projection = nullptr;
+};
+
+// NeMo Nano Codec 22 kHz / 12.5 fps: grouped FSQ codes -> raw PCM.
+struct clip_nemo_nano_codec {
+    static constexpr int n_groups = 4;
+    static constexpr int codebook_size = 4032;
+    struct conv {
+        ggml_tensor * w = nullptr;
+        ggml_tensor * b = nullptr;
+        ggml_tensor * alpha = nullptr;
+    };
+    struct stage {
+        conv up;
+        conv res[3][3][2];
+    };
+    ggml_tensor * codebook = nullptr;
+    conv pre, post;
+    stage stages[5];
+};
+
 // qwen3tts code2wav: RVQ codes -> raw PCM
 struct clip_code2wav {
     // "upsample" stage: one ConvNeXt block plus the causal ConvTranspose1d before it
@@ -786,6 +819,8 @@ struct clip_model {
 
     // qwen3tts code2wav: RVQ codes -> raw PCM
     clip_code2wav c2w;
+    clip_nemo_nano_codec nemo;
+    clip_kani_speaker kani_speaker;
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     clip_seanet seanet;

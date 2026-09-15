@@ -5,6 +5,7 @@
 #include <algorithm>
 
 void llama_model_lfm2::load_arch_hparams(llama_model_loader & ml) {
+    ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
     ml.get_key(LLM_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
@@ -67,6 +68,7 @@ void llama_model_lfm2::load_arch_tensors(llama_model_loader &) {
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
         if (!hparams.is_recr(i)) {
+            layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ATTN_ROPE_FREQS, "weight", i), {hparams.n_rot()/2}, TENSOR_NOT_REQUIRED);
             layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
             layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
             GGML_ASSERT(n_embd_v_gqa == n_embd_k_gqa);
@@ -143,10 +145,21 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
         cb(k, "model.layers.{}.self_attn.k_layernorm", il);
 
         // RoPE
-        q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
-                          attn_factor, beta_fast, beta_slow);
-        k = ggml_rope_ext(ctx0, k, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
-                          attn_factor, beta_fast, beta_slow);
+        auto * factors = model.layers[il].rope_freqs;
+        if (rope_type == LLAMA_ROPE_TYPE_MROPE) {
+            // KaniTTS-2 uses separate cache and audio-frame positions.
+            int sections[4];
+            std::copy(hparams.rope_sections.begin(), hparams.rope_sections.end(), sections);
+            q = ggml_rope_multi(ctx0, q, inp_pos, factors, n_rot, sections, rope_type, n_ctx_orig,
+                    freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+            k = ggml_rope_multi(ctx0, k, inp_pos, factors, n_rot, sections, rope_type, n_ctx_orig,
+                    freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+        } else {
+            q = ggml_rope_ext(ctx0, q, inp_pos, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
+                              attn_factor, beta_fast, beta_slow);
+            k = ggml_rope_ext(ctx0, k, inp_pos, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
+                              attn_factor, beta_fast, beta_slow);
+        }
 
         cur = build_attn(inp_attn,
                 model.layers[il].wo, NULL, model.layers[il].wo_s,
@@ -284,7 +297,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    if (!cparams.embeddings) {
+    // Audio generation needs both the hidden state and next-token logits.
+    if (!cparams.embeddings || rope_type == LLAMA_ROPE_TYPE_MROPE) {
         cur = build_lora_mm(model.output, cur, model.output_s);
         cb(cur, "result_output", -1);
 
