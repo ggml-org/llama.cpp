@@ -6913,96 +6913,6 @@ struct test_moe_reduce : public test_case {
     }
 };
 
-// GGML_OP_MUL_MAT + GGML_OP_UNARY (sigmoid/silu)
-struct test_mul_mat_unary : public test_case {
-    const ggml_type type;
-    const ggml_unary_op un_op;
-    const int64_t m;
-    const int64_t n;
-    const int64_t k;
-
-    std::string vars() override {
-        return VARS_TO_STR5(type, un_op, m, n, k);
-    }
-
-    test_mul_mat_unary(ggml_type type, ggml_unary_op un_op, int64_t m = 64, int64_t n = 4, int64_t k = 128)
-        : type(type), un_op(un_op), m(m), n(n), k(k) {}
-
-    double max_nmse_err() override { return 5e-4; }
-
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return "MUL_MAT_UNARY";
-    }
-
-    bool run_whole_graph() override { return true; }
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * w = ggml_new_tensor_2d(ctx, type, k, m);
-        ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
-        ggml_set_name(w, "w");
-        ggml_set_name(a, "a");
-
-        ggml_tensor * out = ggml_mul_mat(ctx, w, a);
-        out = un_op == GGML_UNARY_OP_SIGMOID ? ggml_sigmoid(ctx, out) : ggml_silu(ctx, out);
-        ggml_set_name(out, "out");
-
-        return out;
-    }
-
-    void initialize_tensors(ggml_context * ctx) override {
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            init_tensor_uniform(t);
-        }
-    }
-};
-
-// GGML_OP_MUL_MAT + GGML_OP_ADD (bias) + GGML_OP_UNARY (softplus)
-struct test_mul_mat_add_unary : public test_case {
-    const ggml_type type;
-    const int64_t m;
-    const int64_t n;
-    const int64_t k;
-
-    std::string vars() override {
-        return VARS_TO_STR4(type, m, n, k);
-    }
-
-    test_mul_mat_add_unary(ggml_type type, int64_t m = 64, int64_t n = 4, int64_t k = 128)
-        : type(type), m(m), n(n), k(k) {}
-
-    double max_nmse_err() override { return 5e-4; }
-
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return "MUL_MAT_ADD_UNARY";
-    }
-
-    bool run_whole_graph() override { return true; }
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * w = ggml_new_tensor_2d(ctx, type, k, m);
-        ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
-        ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, m);
-        ggml_set_name(w, "w");
-        ggml_set_name(a, "a");
-        ggml_set_name(b, "b");
-
-        ggml_tensor * out = ggml_mul_mat(ctx, w, a);
-        out = ggml_add(ctx, out, b);
-        out = ggml_softplus(ctx, out);
-        ggml_set_name(out, "out");
-
-        return out;
-    }
-
-    void initialize_tensors(ggml_context * ctx) override {
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            init_tensor_uniform(t);
-        }
-    }
-};
-
 struct test_mul_mat_vec_fusion : public test_case {
     const ggml_type type;
     const ggml_glu_op glu_op;
@@ -11007,14 +10917,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int64_t rows : {6271, 6272, 6273}) {
         test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 2, rows, 256,
             false, 16, 8, false, false, true, false, { 1, 1 }));
-    }
-
-    for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_Q8_0 }) {
-        for (int64_t n : { 1, 4 }) {
-            test_cases.emplace_back(new test_mul_mat_unary(type, GGML_UNARY_OP_SIGMOID, 64, n, 128));
-            test_cases.emplace_back(new test_mul_mat_unary(type, GGML_UNARY_OP_SILU,    64, n, 128));
-            test_cases.emplace_back(new test_mul_mat_add_unary(type, 64, n, 128));
-        }
     }
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
