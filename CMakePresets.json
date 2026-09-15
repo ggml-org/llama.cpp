@@ -39,6 +39,16 @@
     },
 
     {
+        "name": "x64-windows-msvc", "hidden": true,
+        "architecture": { "value": "x64",      "strategy": "external" },
+        "toolset":      { "value": "host=x64", "strategy": "external" },
+        "cacheVariables": {
+            "CMAKE_C_COMPILER": "cl.exe",
+            "CMAKE_CXX_COMPILER": "cl.exe"
+        }
+    },
+
+    {
         "name": "arm64-windows-llvm", "hidden": true,
         "architecture": { "value": "arm64",    "strategy": "external" },
         "toolset":      { "value": "host=x64", "strategy": "external" },
@@ -80,9 +90,9 @@
     { "name": "x64-windows-llvm-reldbg", "inherits": [ "base", "x64-windows-llvm", "reldbg" ] },
     { "name": "x64-windows-llvm+static-release", "inherits": [ "base", "x64-windows-llvm", "reldbg", "static" ] },
 
-    { "name": "x64-windows-msvc-debug", "inherits": [ "base", "debug" ] },
-    { "name": "x64-windows-msvc-release", "inherits": [ "base", "reldbg" ] },
-    { "name": "x64-windows-msvc+static-release", "inherits": [ "base", "reldbg", "static" ] },
+    { "name": "x64-windows-msvc-debug", "inherits": [ "base", "x64-windows-msvc", "debug" ] },
+    { "name": "x64-windows-msvc-release", "inherits": [ "base", "x64-windows-msvc", "reldbg" ] },
+    { "name": "x64-windows-msvc+static-release", "inherits": [ "base", "x64-windows-msvc", "reldbg", "static" ] },
 
     { "name": "x64-windows-sycl-debug", "inherits": [ "sycl-base", "debug" ] },
     { "name": "x64-windows-sycl-debug-f16", "inherits": [ "sycl-base", "debug", "sycl_f16" ] },
