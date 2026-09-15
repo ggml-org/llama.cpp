@@ -13,35 +13,38 @@
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
+#include "hex-common.h"
+#include "hex-profile.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
+#include "htp-tensor.h"
 
 #define sum_rows_preamble                         \
     const struct htp_tensor *src0 = octx->src[0]; \
     const struct htp_tensor *dst  = octx->dst;    \
                                                   \
-    const uint32_t ne00 = src0->ne[0];     \
-    const uint32_t ne01 = src0->ne[1];     \
-    const uint32_t ne02 = src0->ne[2];     \
-    const uint32_t ne03 = src0->ne[3];     \
-                                           \
-    const uint32_t nb00 = src0->nb[0];     \
-    const uint32_t nb01 = src0->nb[1];     \
-    const uint32_t nb02 = src0->nb[2];     \
-    const uint32_t nb03 = src0->nb[3];     \
-                                           \
-    const uint32_t  ne0 = dst->ne[0];      \
-    const uint32_t  ne1 = dst->ne[1];      \
-    const uint32_t  ne2 = dst->ne[2];      \
-    const uint32_t  ne3 = dst->ne[3];      \
-                                           \
-    const uint32_t  nb0 = dst->nb[0];      \
-    const uint32_t  nb1 = dst->nb[1];      \
-    const uint32_t  nb2 = dst->nb[2];      \
-    const uint32_t  nb3 = dst->nb[3];      \
+    const uint32_t ne00 = src0->ne[0];            \
+    const uint32_t ne01 = src0->ne[1];            \
+    const uint32_t ne02 = src0->ne[2];            \
+    const uint32_t ne03 = src0->ne[3];            \
+                                                  \
+    const uint32_t nb00 = src0->nb[0];            \
+    const uint32_t nb01 = src0->nb[1];            \
+    const uint32_t nb02 = src0->nb[2];            \
+    const uint32_t nb03 = src0->nb[3];            \
+                                                  \
+    const uint32_t  ne0 = dst->ne[0];             \
+    const uint32_t  ne1 = dst->ne[1];             \
+    const uint32_t  ne2 = dst->ne[2];             \
+    const uint32_t  ne3 = dst->ne[3];             \
+                                                  \
+    const uint32_t  nb0 = dst->nb[0];             \
+    const uint32_t  nb1 = dst->nb[1];             \
+    const uint32_t  nb2 = dst->nb[2];             \
+    const uint32_t  nb3 = dst->nb[3];             \
 
 struct sum_rows_context {
+    struct htp_ops_context * octx;
     const uint8_t * src_data;
     uint8_t       * dst_data;
     uint32_t        ne00;
@@ -76,6 +79,9 @@ static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) 
     // Calculate actual number of rows for this thread
     const uint32_t n_rows = end_row - start_row;
 
+    struct htp_thread_trace * tr = &smctx->octx->ctx->trace[ith];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start_row);
+
     for (uint32_t ir = 0; ir < n_rows; ir++) {
         const float * restrict src_local = src_th + (ir * (src_stride / sizeof(float)));
 
@@ -89,6 +95,8 @@ static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) 
             dst_th[ir] = hvx_reduce_sum_f32((const uint8_t *) src_local, ne00);
         }
     }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start_row);
 }
 
 int op_sum_rows(struct htp_ops_context * octx) {
@@ -102,9 +110,26 @@ int op_sum_rows(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t src0_nrows = ne01 * ne02 * ne03;
-    const uint32_t n_threads = MIN(octx->n_threads, src0_nrows);
-    const uint32_t rows_per_thread = (src0_nrows + n_threads - 1) / n_threads;
+    const uint32_t src0_nrows      = ne01 * ne02 * ne03;
+    const size_t dst_data_row_size = dst->ne[0] * sizeof(float);
+
+    uint32_t row_start = 0;
+    uint32_t nrows     = src0_nrows;
+
+    if (octx->ctx->mdev.count > 1) {
+        uint32_t rows_per_chunk = 0;
+        htp_tensor_mdev_rows_per_chunk(dst, sizeof(float), (uint32_t) dst_data_row_size, &rows_per_chunk);
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(src0_nrows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        row_start = range.start;
+        nrows     = range.count;
+    }
+
+    if (nrows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    const uint32_t n_threads = octx->n_threads;
+    const uint32_t rows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
 
     bool opt_path = false;
     if ((0 == hex_is_aligned((void *) src0->data, VLEN)) && !(nb01 & (VLEN - 1))) {
@@ -112,17 +137,18 @@ int op_sum_rows(struct htp_ops_context * octx) {
     }
 
     struct sum_rows_context smctx = {
-        .src_data        = (const uint8_t *) src0->data,
-        .dst_data        = (uint8_t *) dst->data,
+        .octx            = octx,
+        .src_data        = (const uint8_t *) src0->data + row_start * nb01,
+        .dst_data        = (uint8_t *) dst->data + row_start * nb1,
         .ne00            = ne00,
         .src_stride      = nb01,
         .dst_stride      = nb1,
         .rows_per_thread = rows_per_thread,
-        .total_rows      = src0_nrows,
+        .total_rows      = nrows,
         .opt_path        = opt_path,
     };
 
-    worker_pool_run_func(octx->ctx->worker_pool, sum_rows_thread_f32, &smctx, n_threads);
+    work_queue_run(octx->ctx->work_queue, sum_rows_thread_f32, &smctx, n_threads);
 
     return HTP_STATUS_OK;
 }

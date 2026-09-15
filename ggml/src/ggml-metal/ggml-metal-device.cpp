@@ -932,12 +932,24 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
                 nsg = N_SG_IQ2_XXS;
                 nr0 = N_R0_IQ2_XXS;
                 smem = 256*8+128;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ2_XXS_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ2_XS:
             {
                 nsg = N_SG_IQ2_XS;
                 nr0 = N_R0_IQ2_XS;
                 smem = 512*8+128;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ2_XS_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ3_XXS:
             {
@@ -957,21 +969,45 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
                 nsg = N_SG_IQ3_S;
                 nr0 = N_R0_IQ3_S;
                 smem = 512*4;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ3_S_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ2_S:
             {
                 nsg = N_SG_IQ2_S;
                 nr0 = N_R0_IQ2_S;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ2_S_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ1_S:
             {
                 nsg = N_SG_IQ1_S;
                 nr0 = N_R0_IQ1_S;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ1_S_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ1_M:
             {
                 nsg = N_SG_IQ1_M;
                 nr0 = N_R0_IQ1_M;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ1_M_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ4_NL:
             {
@@ -1177,12 +1213,24 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
                 nsg = N_SG_IQ2_XXS;
                 nr0 = N_R0_IQ2_XXS;
                 smem = 256*8+128;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ2_XXS_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ2_XS:
             {
                 nsg = N_SG_IQ2_XS;
                 nr0 = N_R0_IQ2_XS;
                 smem = 512*8+128;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ2_XS_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ3_XXS:
             {
@@ -1202,21 +1250,45 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id(ggml_m
                 nsg = N_SG_IQ3_S;
                 nr0 = N_R0_IQ3_S;
                 smem = 512*4;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ3_S_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ2_S:
             {
                 nsg = N_SG_IQ2_S;
                 nr0 = N_R0_IQ2_S;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ2_S_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ1_S:
             {
                 nsg = N_SG_IQ1_S;
                 nr0 = N_R0_IQ1_S;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ1_S_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ1_M:
             {
                 nsg = N_SG_IQ1_M;
                 nr0 = N_R0_IQ1_M;
+
+                const int nb32 = ne00/32;
+                if (nb32 < 32 && (32 % nb32) == 0) {
+                    nr0 = N_R0_IQ1_M_SPLIT;
+                    split = true;
+                }
             } break;
         case GGML_TYPE_IQ4_NL:
             {

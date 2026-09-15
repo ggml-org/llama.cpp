@@ -248,7 +248,7 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          cmake -B build -DGGML_SCHED_NO_REALLOC=ON -DGGML_CPU_KLEIDIAI=ON
+          cmake -B build -DGGML_SCHED_NO_REALLOC=ON -DGGML_CPU_KLEIDIAI=ON -DLLAMA_FATAL_WARNINGS=ON
           cmake --build build --config Release -j $(nproc) --target llama-server
 
       - name: Python setup

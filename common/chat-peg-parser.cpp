@@ -488,7 +488,7 @@ common_peg_parser common_chat_peg_builder::standard_constructed_tools(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         // Build argument parsers
         auto args = eps();
@@ -565,7 +565,7 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         auto args = eps();
         if (params.contains("properties") && !params["properties"].empty()) {
@@ -640,7 +640,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         // Build inner object fields
         std::vector<common_peg_parser> inner_fields;
@@ -726,7 +726,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
                           atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
@@ -795,7 +795,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
         }
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
-        ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
+        ordered_json   params   = common_chat_tool_parameters(function);
 
         auto tool_name_ = name_key_parser + space() + literal(":") + space() +
                          atomic(literal("\"") + tool_name(literal(name)) + literal("\""));

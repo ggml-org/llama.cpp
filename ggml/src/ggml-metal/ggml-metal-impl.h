@@ -62,18 +62,23 @@
 
 #define N_R0_IQ1_S 4
 #define N_SG_IQ1_S 2
+#define N_R0_IQ1_S_SPLIT 8
 
 #define N_R0_IQ1_M 4
 #define N_SG_IQ1_M 2
+#define N_R0_IQ1_M_SPLIT 8
 
 #define N_R0_IQ2_XXS 4
 #define N_SG_IQ2_XXS 2
+#define N_R0_IQ2_XXS_SPLIT 8
 
 #define N_R0_IQ2_XS 4
 #define N_SG_IQ2_XS 2
+#define N_R0_IQ2_XS_SPLIT 8
 
 #define N_R0_IQ2_S 4
 #define N_SG_IQ2_S 2
+#define N_R0_IQ2_S_SPLIT 8
 
 #define N_R0_IQ3_XXS 4
 #define N_SG_IQ3_XXS 2
@@ -81,6 +86,7 @@
 
 #define N_R0_IQ3_S 4
 #define N_SG_IQ3_S 2
+#define N_R0_IQ3_S_SPLIT 8
 
 #define N_R0_IQ4_NL 2
 #define N_SG_IQ4_NL 2
@@ -979,6 +985,7 @@ typedef struct {
     uint64_t nb1;
     uint64_t nb2;
     uint64_t nb3;
+    uint64_t nb_out; // 0 => snapshots are appended after the attn scores (unfused)
 } ggml_metal_kargs_gated_delta_net;
 
 typedef struct {

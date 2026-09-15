@@ -37,6 +37,16 @@ void common_log_set_verbosity_thold(int verbosity) {
     common_log_verbosity_thold = verbosity;
 }
 
+static bool common_log_jsonl = false;
+
+bool common_log_get_jsonl(void) {
+    return common_log_jsonl;
+}
+
+void common_log_set_jsonl(bool jsonl) {
+    common_log_jsonl = jsonl;
+}
+
 static int64_t t_us() {
     return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
@@ -87,6 +97,7 @@ struct common_log_entry {
     bool is_end       { false }; // signals the worker thread to stop
     bool prefix       { false };
     bool jsonl        { false };
+    bool is_json      { false }; // msg already holds a serialized JSON object
 
     common_log_entry(size_t size = 256) : msg(size) { }
 
@@ -107,6 +118,12 @@ struct common_log_entry {
         }
 
         if (jsonl) {
+            if (is_json) {
+                fprintf(fcur, "%s\n", msg.data());
+                fflush(fcur);
+                return;
+            }
+
             common_json obj = {
                 {"type",  "log"},
                 {"time",  timestamp},
@@ -156,7 +173,6 @@ struct common_log {
         file       = nullptr;
         prefix     = false;
         timestamps = false;
-        jsonl      = false;
         running    = false;
         t_start    = t_us();
 
@@ -184,7 +200,6 @@ private:
 
     bool prefix;
     bool timestamps;
-    bool jsonl;
     bool running;
 
     int64_t t_start;
@@ -273,11 +288,48 @@ public:
         entry.is_end    = false;
         entry.level     = level;
         entry.prefix    = prefix;
-        entry.jsonl     = jsonl;
+        entry.jsonl     = common_log_jsonl;
+        entry.is_json   = false;
         entry.timestamp = 0;
         if (timestamps) {
             entry.timestamp = t_us() - t_start;
         }
+
+        tail = (tail + 1) % queue.size();
+        cv_new.notify_one();
+    }
+
+    void add_json(const char * type, const common_json & obj) {
+        const common_json full = {
+            {"type", type},
+            {"data", obj},
+        };
+
+        const std::string text = full.dump_safe();
+
+        std::unique_lock<std::mutex> lock(mtx);
+
+        // block if the queue is full
+        cv_full.wait(lock, [this]() { return !running || !is_full(); });
+
+        if (!running) {
+            // discard messages while the worker thread is paused
+            return;
+        }
+
+        auto & entry = queue[tail];
+
+        if (entry.msg.size() < text.size() + 1) {
+            entry.msg.resize(text.size() + 1);
+        }
+        memcpy(entry.msg.data(), text.c_str(), text.size() + 1);
+
+        entry.is_end    = false;
+        entry.level     = GGML_LOG_LEVEL_NONE;
+        entry.prefix    = false;
+        entry.jsonl     = true;
+        entry.is_json   = true;
+        entry.timestamp = 0;
 
         tail = (tail + 1) % queue.size();
         cv_new.notify_one();
@@ -388,12 +440,6 @@ public:
 
         this->timestamps = timestamps;
     }
-
-    void set_jsonl(bool jsonl) {
-        std::lock_guard<std::mutex> lock(mtx);
-
-        this->jsonl = jsonl;
-    }
 };
 
 //
@@ -440,6 +486,14 @@ void common_log_add(struct common_log * log, enum ggml_log_level level, const ch
     va_end(args);
 }
 
+void common_log_add_json(struct common_log * log, const char * type, const common_json & obj) {
+    if (!common_log_jsonl) {
+        return;
+    }
+
+    log->add_json(type, obj);
+}
+
 void common_log_set_file(struct common_log * log, const char * file) {
     log->set_file(file);
 }
@@ -465,10 +519,6 @@ void common_log_set_prefix(struct common_log * log, bool prefix) {
 
 void common_log_set_timestamps(struct common_log * log, bool timestamps) {
     log->set_timestamps(timestamps);
-}
-
-void common_log_set_jsonl(struct common_log * log, bool jsonl) {
-    log->set_jsonl(jsonl);
 }
 
 void common_log_flush(struct common_log * log) {
