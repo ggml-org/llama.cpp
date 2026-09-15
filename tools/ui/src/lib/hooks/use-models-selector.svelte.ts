@@ -1,6 +1,6 @@
 import { filterModelOptions, groupModelOptions } from '$lib/components/app/navigation/utils';
 import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
-import { backendsStore, modelsStore, serverStore } from '$lib/stores';
+import { backendsModelsStore, backendsStore, modelsStore, serverStore } from '$lib/stores';
 import type { Backend } from '$lib/types';
 import type { ModelOption } from '$lib/types/models';
 import { onMount } from 'svelte';
@@ -86,6 +86,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	let searchTerm = $state('');
 	let showModelDialog = $state(false);
 	let infoModelId = $state<string | null>(null);
+	let backendsPrefetched = false;
 
 	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
 	const groupedFilteredOptions = $derived(
@@ -106,6 +107,12 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	});
 
 	function handleOpenChange(open: boolean) {
+		// first open: prefetch every backend's model list so switching is instant
+		if (open && !backendsPrefetched) {
+			backendsPrefetched = true;
+			void backendsModelsStore.loadAll();
+		}
+
 		if (loading || updating) return;
 
 		if (isRouter) {
@@ -130,6 +137,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		searchTerm = '';
 
 		try {
+			await backendsModelsStore.ensureLoaded(backendId);
 			await modelsStore.switchBackend();
 		} catch (error) {
 			console.error('Failed to switch backend:', error);

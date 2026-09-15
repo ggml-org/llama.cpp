@@ -40,6 +40,8 @@ export { mcpStore } from './mcp/index.svelte';
 // BACKENDS
 export { backendsStore } from './backends.svelte';
 
+export { backendsModelsStore } from './backendsModels.svelte';
+
 // MODELS
 export { modelsStore } from './models/index.svelte';
 

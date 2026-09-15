@@ -11,6 +11,8 @@ import { FAVORITE_MODELS_LOCALSTORAGE_KEY } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
+import { backendsStore } from '$lib/stores/backends.svelte';
+import { backendsModelsStore } from '$lib/stores/backendsModels.svelte';
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
@@ -350,10 +352,26 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	async switchBackend(): Promise<void> {
 		this.status.unsubscribe();
 		this.clearSelection();
-		this.models = [];
 		this.routerModels = [];
 		this.error = null;
 		serverStore.clear();
+
+		// prefer the prefetched list so switching does not refetch
+		const backend = backendsStore.active;
+		const cached = backend.baseUrl.trim() ? backendsModelsStore.get(backend.id) : null;
+
+		if (cached?.loaded) {
+			this.models = cached.models;
+			this.loading = false;
+
+			await serverStore.fetch();
+
+			if (this.models.length > 0) {
+				await this.ensureFirstModelSelected();
+			}
+
+			return;
+		}
 
 		await this.fetch(true);
 	}
