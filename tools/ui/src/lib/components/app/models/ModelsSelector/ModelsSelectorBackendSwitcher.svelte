@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Plus } from '@lucide/svelte';
+	import { Loader2, Plus } from '@lucide/svelte';
+	import { backendsModelsStore } from '$lib/stores';
 	import type { Backend } from '$lib/types';
 
 	interface Props {
@@ -14,9 +15,10 @@
 
 <div class="flex items-center gap-1 overflow-x-auto border-b border-border/50 px-2 py-2">
 	{#each backends as backend (backend.id)}
+		{@const state = backendsModelsStore.get(backend.id)}
 		<button
 			class={[
-				'shrink-0 rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap transition',
+				'inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap transition',
 				activeId === backend.id
 					? 'bg-muted text-foreground'
 					: 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
@@ -25,6 +27,12 @@
 			type="button"
 		>
 			{backend.name}
+
+			{#if state.loading}
+				<Loader2 class="h-3 w-3 animate-spin" />
+			{:else if state.error}
+				<span class="h-1.5 w-1.5 rounded-full bg-destructive" title={state.error}></span>
+			{/if}
 		</button>
 	{/each}
 
