@@ -173,6 +173,42 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     }
 }
 
+#elif defined(DATA_A_IQ4_XS)
+
+struct block_a_prefetch {
+    uint32_t qs;
+    float d;
+};
+
+block_a_prefetch block_a_load(uint ib, uint loadr) {
+    block_a_prefetch blk;
+    const uint ib_k = ib / 8;
+    const uint ib32 = ib % 8;
+    blk.qs = data_a_packed32[ib_k].qs[4 * ib32 + loadr];
+    blk.d = 0.0;
+    if (loadr == 0) {
+        const uint sl = (data_a_packed32[ib_k].scales_l >> (4 * ib32)) & 0xF;
+        const uint sh = (data_a_packed32[ib_k].scales_h >> (2 * ib32)) & 3;
+        blk.d = float(data_a_packed32[ib_k].d) * float(int(sl | (sh << 4)) - 32);
+    }
+    return blk;
+}
+
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+    const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
+    const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
+        pack32(i8vec4(cm1_kvalues[lo_idx.x], cm1_kvalues[lo_idx.y],
+                      cm1_kvalues[lo_idx.z], cm1_kvalues[lo_idx.w]));
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] =
+        pack32(i8vec4(cm1_kvalues[hi_idx.x], cm1_kvalues[hi_idx.y],
+                      cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
+
+    if (loadr == 0) {
+        buf_a_d[ks * BM + buf_ib] = blk.d;
+    }
+}
+
 #elif defined(DATA_A_MXFP4)
 
 struct block_a_prefetch {
