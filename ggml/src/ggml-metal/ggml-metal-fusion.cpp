@@ -10,14 +10,6 @@
 
 // ---- helpers -------------------------------------------------------------
 
-// follow the view/reshape chain to the underlying tensor
-static const ggml_tensor * ggml_metal_fusion_view_src(const ggml_tensor * t) {
-    while (t && t->view_src) {
-        t = t->view_src;
-    }
-    return t;
-}
-
 // true if two tensors live in the same Metal buffer
 static bool ggml_metal_fusion_same_buffer(const ggml_tensor * a, const ggml_tensor * b) {
     if (!a || !b) {
@@ -81,109 +73,6 @@ static bool ggml_metal_fusion_check_norm(
         if (nodes[j]->type != GGML_TYPE_F32) {
             return false;
         }
-    }
-
-    return true;
-}
-
-// MUL_MAT + UNARY (sigmoid/silu): dense mat-vec output followed directly by a supported unary op
-static bool ggml_metal_fusion_check_mul_mat_unary(
-        const ggml_metal_fusion      * fusion,
-        const ggml_tensor * const    * nodes,
-        const ggml_cgraph            * gf,
-        const int                    * node_idxs,
-              int                      idx,
-              ggml_metal_fusion_mode   mode) {
-    GGML_UNUSED(fusion);
-    GGML_UNUSED(gf);
-    GGML_UNUSED(node_idxs);
-    GGML_UNUSED(idx);
-    GGML_UNUSED(mode);
-
-    const ggml_tensor * mm   = nodes[0];
-    const ggml_tensor * un   = nodes[1];
-
-    if (mm->op != GGML_OP_MUL_MAT || un->op != GGML_OP_UNARY || un->src[1]) {
-        return false;
-    }
-
-    if (ggml_metal_fusion_view_src(un->src[0]) != mm) {
-        return false;
-    }
-
-    const ggml_unary_op un_op = ggml_get_unary_op(un);
-    if (un_op != GGML_UNARY_OP_SIGMOID && un_op != GGML_UNARY_OP_SILU) {
-        return false;
-    }
-
-    if (mm->type != GGML_TYPE_F32 || un->type != GGML_TYPE_F32 || !ggml_is_contiguous_rows(un)) {
-        return false;
-    }
-
-    // only mat-vec paths for now
-    if (mm->src[1]->type != GGML_TYPE_F32 || mm->src[1]->ne[1] > 8) {
-        return false;
-    }
-
-    const ggml_type wt = mm->src[0]->type;
-    if (wt != GGML_TYPE_F32 && wt != GGML_TYPE_F16 && wt != GGML_TYPE_BF16 && wt != GGML_TYPE_Q8_0) {
-        return false;
-    }
-
-    return true;
-}
-
-// MUL_MAT + ADD (bias) + UNARY (softplus): dense mat-vec output with a 1D bias and softplus
-static bool ggml_metal_fusion_check_mul_mat_add_unary(
-        const ggml_metal_fusion      * fusion,
-        const ggml_tensor * const    * nodes,
-        const ggml_cgraph            * gf,
-        const int                    * node_idxs,
-              int                      idx,
-              ggml_metal_fusion_mode   mode) {
-    GGML_UNUSED(fusion);
-    GGML_UNUSED(gf);
-    GGML_UNUSED(node_idxs);
-    GGML_UNUSED(idx);
-    GGML_UNUSED(mode);
-
-    const ggml_tensor * mm   = nodes[0];
-    const ggml_tensor * add  = nodes[1];
-    const ggml_tensor * un   = nodes[2];
-    const ggml_tensor * bias = add->src[1];
-
-    if (mm->op != GGML_OP_MUL_MAT || add->op != GGML_OP_ADD ||
-        un->op != GGML_OP_UNARY || un->src[0] != add || !bias) {
-        return false;
-    }
-
-    if (ggml_metal_fusion_view_src(add->src[0]) != mm) {
-        return false;
-    }
-
-    if (ggml_get_unary_op(un) != GGML_UNARY_OP_SOFTPLUS) {
-        return false;
-    }
-
-    if (mm->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 || un->type != GGML_TYPE_F32 ||
-        !ggml_is_contiguous_rows(add) || !ggml_is_contiguous_rows(un)) {
-        return false;
-    }
-
-    if (bias->type != GGML_TYPE_F32 || !ggml_is_contiguous(bias) ||
-        bias->ne[1] != 1 || bias->ne[2] != 1 || bias->ne[3] != 1 ||
-        bias->ne[0] != mm->ne[0]) {
-        return false;
-    }
-
-    // only mat-vec paths for now
-    if (mm->src[1]->type != GGML_TYPE_F32 || mm->src[1]->ne[1] > 8) {
-        return false;
-    }
-
-    const ggml_type wt = mm->src[0]->type;
-    if (wt != GGML_TYPE_F32 && wt != GGML_TYPE_F16 && wt != GGML_TYPE_BF16 && wt != GGML_TYPE_Q8_0) {
-        return false;
     }
 
     return true;
@@ -679,9 +568,6 @@ static const ggml_op ops_topk_moe_norm_scale[] = {
     GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_SCALE
 };
 
-static const ggml_op ops_mul_mat_unary[]     = { GGML_OP_MUL_MAT, GGML_OP_UNARY };
-static const ggml_op ops_mul_mat_add_unary[] = { GGML_OP_MUL_MAT, GGML_OP_ADD, GGML_OP_UNARY };
-
 static const ggml_op ops_moe_reduce_2[] = { GGML_OP_MUL, GGML_OP_ADD };
 static const ggml_op ops_moe_reduce_3[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD };
 static const ggml_op ops_moe_reduce_4[] = { GGML_OP_MUL, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
@@ -716,8 +602,6 @@ static const ggml_metal_fusion ggml_metal_fusions[] = {
     { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_6, 6, true, ggml_metal_fusion_check_moe_reduce },
     { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_7, 7, true, ggml_metal_fusion_check_moe_reduce },
     { GGML_METAL_FUSION_MOE_REDUCE, ops_moe_reduce_8, 8, true, ggml_metal_fusion_check_moe_reduce },
-    { GGML_METAL_FUSION_MUL_MAT_UNARY,     ops_mul_mat_unary,     2, true, ggml_metal_fusion_check_mul_mat_unary },
-    { GGML_METAL_FUSION_MUL_MAT_ADD_UNARY, ops_mul_mat_add_unary, 3, true, ggml_metal_fusion_check_mul_mat_add_unary },
 };
 
 const ggml_metal_fusion * ggml_metal_fusion_all(int * n) {
