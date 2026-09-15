@@ -1238,7 +1238,7 @@ typedef struct {
     int32_t ne00; // n_embd
     int32_t ne01; // n_expert_used
     int32_t ne02; // n_tokens
-} ggml_metal_kargs_moe_weighted_reduction;
+} ggml_metal_kargs_moe_reduce;
 
 typedef struct {
     int32_t nrows;

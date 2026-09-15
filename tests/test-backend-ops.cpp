@@ -6817,7 +6817,7 @@ struct test_topk_moe : public test_case {
     }
 };
 
-struct test_moe_weighted_reduction : public test_case {
+struct test_moe_reduce : public test_case {
     const int64_t n_embd;
     const int64_t n_expert_used;
     const int64_t n_tokens;
@@ -6825,7 +6825,7 @@ struct test_moe_weighted_reduction : public test_case {
     const bool with_expert_scale;
     const bool interleaved_views_adds;
 
-    test_moe_weighted_reduction(
+    test_moe_reduce(
             int64_t n_embd, int64_t n_expert_used, int64_t n_tokens,
             bool unaligned_experts = false, bool with_expert_scale = false, bool interleaved_views_adds = false) :
         n_embd(n_embd), n_expert_used(n_expert_used), n_tokens(n_tokens),
@@ -6838,7 +6838,7 @@ struct test_moe_weighted_reduction : public test_case {
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "MOE_WEIGHTED_REDUCTION";
+        return "MOE_REDUCE";
     }
 
     bool run_whole_graph() override { return true; }
@@ -6885,7 +6885,7 @@ struct test_moe_weighted_reduction : public test_case {
                 ggml_build_forward_expand(gf, out);
             }
         }
-        ggml_set_name(out, "moe_weighted_reduction");
+        ggml_set_name(out, "moe_reduce");
         return out;
     }
 };
@@ -10896,12 +10896,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // Cover the supported boundaries, common k = 8 shapes, interleaved views and adds, and k = 16 fallback.
-    test_cases.emplace_back(new test_moe_weighted_reduction(63,  2, 17));
-    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 8, 128));
-    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 8, 128, false, true));
-    test_cases.emplace_back(new test_moe_weighted_reduction(63,   12, 33, true,  true, true));
-    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 15, 40, false, true));
-    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 16, 32, false, true));
+    test_cases.emplace_back(new test_moe_reduce(63,  2, 17));
+    test_cases.emplace_back(new test_moe_reduce(2048, 8, 128));
+    test_cases.emplace_back(new test_moe_reduce(2048, 8, 128, false, true));
+    test_cases.emplace_back(new test_moe_reduce(63,   12, 33, true,  true, true));
+    test_cases.emplace_back(new test_moe_reduce(2048, 15, 40, false, true));
+    test_cases.emplace_back(new test_moe_reduce(2048, 16, 32, false, true));
 
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));

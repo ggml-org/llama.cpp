@@ -570,8 +570,8 @@ static void ggml_backend_metal_graph_optimize(ggml_backend_t backend, ggml_cgrap
             continue;
         }
 
-        ggml_metal_moe_weighted_reduction_match match;
-        if (!ggml_metal_fusion_match_moe_weighted_reduction(cgraph, i, &match)) {
+        ggml_metal_moe_reduce_match match;
+        if (!ggml_metal_fusion_match_moe_reduce(cgraph, i, &match)) {
             continue;
         }
 

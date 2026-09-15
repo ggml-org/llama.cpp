@@ -450,8 +450,8 @@ kernel void kernel_topk_moe_f32(
 
 // fused MoE expert weighting + reduction: weighted = sum(experts[e] * weights[e]).
 // The host guarantees all tensors are contiguous F32.
-kernel void kernel_moe_weighted_reduction_f32(
-        constant   ggml_metal_kargs_moe_weighted_reduction & args,
+kernel void kernel_moe_reduce_f32(
+        constant   ggml_metal_kargs_moe_reduce & args,
         device const float * experts,
         device const float * weights,
         device       float * dst,

@@ -1519,11 +1519,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_topk_moe(ggml_me
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_moe_weighted_reduction(ggml_metal_library_t lib) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_moe_reduce(ggml_metal_library_t lib) {
     char base[256];
     char name[256];
 
-    snprintf(base, 256, "kernel_moe_weighted_reduction_f32");
+    snprintf(base, 256, "kernel_moe_reduce_f32");
     snprintf(name, 256, "%s", base);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
