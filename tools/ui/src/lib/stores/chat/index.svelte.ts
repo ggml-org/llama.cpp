@@ -809,6 +809,15 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		modelOverride?: string | null,
 		firstUserMessageContent?: string
 	): Promise<void> {
+		// a conversation keeps the model that generated it, which can belong to
+		// another backend; make that backend active so the request is not sent to
+		// a server that does not serve the model
+		const requestedModel = modelOverride ?? getConversationModel(allMessages);
+
+		if (requestedModel) {
+			await modelsStore.ensureModelBackend(requestedModel);
+		}
+
 		// the ::model suffix in the stream identity is only for router mode, where it routes to the
 		// owning child. in single-model mode the identity stays the bare conv id so that attach, stop
 		// and reattach all agree, regardless of fresh send vs regenerate passing a resolved model

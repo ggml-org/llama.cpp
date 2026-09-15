@@ -223,6 +223,19 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
+	 * Make the backend serving `modelName` active when it is not already.
+	 * A conversation keeps the model that generated it, which can belong to a
+	 * backend other than the active one.
+	 */
+	async ensureModelBackend(modelName: string): Promise<void> {
+		const option = this.models.find((model) => model.model === modelName);
+
+		if (!option?.backendId || option.backendId === backendsStore.active.id) return;
+
+		await this.selectModelById(option.id);
+	}
+
+	/**
 	 * Fetch list of models from server and detect server role.
 	 * Also fetches modalities for MODEL mode (single model).
 	 */
