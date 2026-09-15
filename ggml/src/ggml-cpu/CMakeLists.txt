@@ -104,6 +104,19 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             ggml-cpu/arch/arm/repack.cpp
             )
 
+        set(ARM_FEATURE_CODE_DOTPROD
+            "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vdotq_s32(_s, _a, _b); return 0; }")
+        set(ARM_FEATURE_CODE_MATMUL_INT8
+            "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vmmlaq_s32(_s, _a, _b); return 0; }")
+        set(ARM_FEATURE_CODE_FMA
+            "#include <arm_neon.h>\nint main() { float32x4_t _a, _b, _c; volatile float32x4_t _s = vfmaq_f32(_a, _b, _c); return 0; }")
+        set(ARM_FEATURE_CODE_FP16_VECTOR_ARITHMETIC
+            "#include <arm_neon.h>\nint main() { float16x8_t _a, _b, _c; volatile float16x8_t _s = vfmaq_f16(_a, _b, _c); volatile float16x8_t _t = vaddq_f16(_a, _b); return 0; }")
+        set(ARM_FEATURE_CODE_SVE
+            "#include <arm_sve.h>\nint main() { svfloat32_t _a, _b; volatile svfloat32_t _c = svadd_f32_z(svptrue_b8(), _a, _b); return 0; }")
+        set(ARM_FEATURE_CODE_SME
+            "#include <arm_sme.h>\n__arm_locally_streaming int main() { __asm__ volatile(\"smstart; smstop;\"); return 0; }")
+
         if (MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
             message(FATAL_ERROR "MSVC is not supported for ARM, use clang")
         else()
@@ -161,10 +174,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                     set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
                 endmacro()
 
-                check_arm_feature(dotprod DOTPROD     "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vdotq_s32(_s, _a, _b); return 0; }")
-                check_arm_feature(i8mm    MATMUL_INT8 "#include <arm_neon.h>\nint main() { int8x16_t _a, _b; volatile int32x4_t _s = vmmlaq_s32(_s, _a, _b); return 0; }")
-                check_arm_feature(sve     SVE         "#include <arm_sve.h>\nint main()  { svfloat32_t _a, _b; volatile svfloat32_t _c = svadd_f32_z(svptrue_b8(), _a, _b); return 0; }")
-                check_arm_feature(sme     SME         "#include <arm_sme.h>\n__arm_locally_streaming int main() { __asm__ volatile(\"smstart; smstop;\"); return 0; }")
+                check_arm_feature(dotprod DOTPROD     "${ARM_FEATURE_CODE_DOTPROD}")
+                check_arm_feature(i8mm    MATMUL_INT8 "${ARM_FEATURE_CODE_MATMUL_INT8}")
+                check_arm_feature(sve     SVE         "${ARM_FEATURE_CODE_SVE}")
+                check_arm_feature(sme     SME         "${ARM_FEATURE_CODE_SME}")
 
                 list(APPEND ARCH_FLAGS "${ARM_NATIVE_FLAG}${ARM_NATIVE_FLAG_FIX}")
             else()
@@ -227,15 +240,23 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             set(CMAKE_REQUIRED_FLAGS "${ARCH_FLAGS_STR}")
             foreach(feature DOTPROD SVE MATMUL_INT8 FMA FP16_VECTOR_ARITHMETIC SME)
                 set(ARM_FEATURE "HAVE_${feature}")
+                unset(${ARM_FEATURE} CACHE)
                 check_cxx_source_compiles(
                     "
                     #if !defined(__ARM_FEATURE_${feature})
-                    #  error \"Feature ${feature} is not defined\"
-                    #endif
                     int main() { return 0; }
+                    #else
+                    ${ARM_FEATURE_CODE_${feature}}
+                    #endif
                     "
                     ${ARM_FEATURE}
                 )
+                if (NOT ${ARM_FEATURE})
+                    message(FATAL_ERROR
+                        "__ARM_FEATURE_${feature} is defined but its intrinsics do not compile. "
+                        "The base architecture is likely too old for this extension. "
+                        "Set the target explicitly with GGML_NATIVE=OFF and GGML_CPU_ARM_ARCH.")
+                endif()
             endforeach()
             set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
         endif()
