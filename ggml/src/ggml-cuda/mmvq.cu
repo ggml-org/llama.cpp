@@ -285,10 +285,11 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
 int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     // NVIDIA: Volta, Ada Lovelace, and Blackwell always use MMVQ for MUL_MAT_ID.
     if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
-        if (cc == GGML_CUDA_CC_VOLTA || cc >= GGML_CUDA_CC_ADA_LOVELACE) {
+        const int carch = ggml_cuda_highest_compiled_arch(cc);
+        if (carch == GGML_CUDA_CC_VOLTA || carch >= GGML_CUDA_CC_ADA_LOVELACE) {
             return MMVQ_MAX_BATCH_SIZE;
         }
-        if (cc >= GGML_CUDA_CC_TURING) {
+        if (carch >= GGML_CUDA_CC_TURING) {
             return get_mmvq_mmid_max_batch_turing_plus(type);
         }
         return get_mmvq_mmid_max_batch_pascal_older(type);
