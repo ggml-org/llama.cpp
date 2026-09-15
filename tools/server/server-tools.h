@@ -26,6 +26,12 @@ struct server_tool {
         std::function<bool()> alive;
         void push(const std::string & chunk);
     };
+    // NOTE: every chunk pushed through `stream` MUST be self-contained valid UTF-8.
+    // run_subprocess enforces this with a carry that joins multi-byte sequences split
+    // across pipe reads, so a chunk never ends mid-character. Downstream JSON encoding
+    // therefore requires no lossy fallback: safe_json_to_str / dump_safe on a tool
+    // stream chunk is a category error, substituting U+FFFD for data that is already
+    // valid. Use plain dump().
     virtual json invoke(json params, stream * st = nullptr) const = 0;
 
     json to_json() const;
