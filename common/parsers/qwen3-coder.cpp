@@ -106,8 +106,18 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
                     auto types = param.schema->value_types();
 
+                    const auto * enum_schema = dynamic_cast<const common_chat_schema_enum *>(param.schema.get());
+                    const bool string_enum = enum_schema && std::all_of(enum_schema->values.begin(), enum_schema->values.end(),
+                        [](const json & value) { return value.is_string(); });
+
                     auto arg_value = p.eps();
-                    if (!types.has(common_chat_schema::TYPE_STRING)) {
+                    if (string_enum) {
+                        auto values = p.choice();
+                        for (const auto & value : enum_schema->values) {
+                            values |= p.literal(value.get<std::string>()) + p.peek(p.literal("\n</parameter>\n"));
+                        }
+                        arg_value = p.tool_arg_string_value(values) + arg_close;
+                    } else if (!types.has(common_chat_schema::TYPE_STRING)) {
                         arg_value = p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", doc, *param.schema)) + arg_close;
                     } else if (types.is_only(common_chat_schema::TYPE_STRING)) {
                         arg_value = arg_string;
