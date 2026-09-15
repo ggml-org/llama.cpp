@@ -509,6 +509,8 @@ static void common_params_fit_impl(
     const common_layer_fraction_t lf_partial = hp_nex > 0 ? LAYER_FRACTION_MOE : LAYER_FRACTION_ATTN;
     const char * partial_name = hp_nex > 0 ? "MoE" : "layer weight";
     const uint32_t steps_per_layer = hp_nex > 0 ? 1 : 2; // see get_steps
+    // dense prioritization for multiple devices is untested and guarded against
+    const bool dense_steps_enabled = hp_nex == 0 && nd == 1;
 
     // utility function that returns a static C string matching the tensors for a specific layer index and layer fraction:
     auto get_overflow_pattern = [&](const size_t il, const common_layer_fraction_t lf) -> const char * {
@@ -586,6 +588,9 @@ static void common_params_fit_impl(
             for (uint32_t il = il_end; il > il_begin; il--) {
                 ret.push_back({il - 1, LAYER_FRACTION_MOE});
             }
+            return ret;
+        }
+        if (!dense_steps_enabled) {
             return ret;
         }
         // regular layers largest FFN first, the MTP layers (il >= n_layer) after them in their original order
@@ -732,7 +737,7 @@ static void common_params_fit_impl(
     };
 
     int64_t global_surplus_partial = 0;
-    {
+    if (hp_nex > 0 || dense_steps_enabled) {
         const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate_up|gate)_(ch|)exps"; // matches all MoE tensors
         const static std::string pattern_dense_all = "blk\\.\\d+\\..*"; // matches all layer weights of a dense model
         ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
