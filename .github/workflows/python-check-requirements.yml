@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   python-check-requirements:
-    runs-on: ubuntu-slim
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     name: check-requirements
     steps:
       - name: Check out source repository
