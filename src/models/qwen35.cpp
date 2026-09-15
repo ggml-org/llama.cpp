@@ -216,10 +216,15 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     res->t_embd = cur;
 
     // LM head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    // in embeddings mode t_logits is never read, and output_all forces
+    // n_outputs == n_tokens, so this would run the vocab projection over
+    // every token in the batch for nothing
+    if (!cparams.embeddings) {
+        cur = build_lora_mm(model.output, cur, model.output_s);
 
-    cb(cur, "result_output", -1);
-    res->t_logits = cur;
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+    }
 
     ggml_build_forward_expand(gf, cur);
 }
