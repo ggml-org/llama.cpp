@@ -2,6 +2,7 @@
 
 #include "llama.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -64,4 +65,9 @@ struct llama_cparams {
     void * cb_eval_user_data;
 
     llama_context * ctx_other;
+
+    uint32_t n_sampling_chains_per_seq() const {
+        const uint32_t n_chains = std::min({ n_outputs_max_per_seq, n_outputs_max, n_ubatch });
+        return std::max<uint32_t>(1, n_chains);
+    }
 };
