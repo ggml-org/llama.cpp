@@ -208,7 +208,7 @@ jobs:
 
   server-kleidiai:
     if: ${{ github.event_name != 'pull_request' }}
-    runs-on: ah-ubuntu_22_04-c8g_8x
+    runs-on: ah-ubuntu_24_04-c8g_8x
 
     steps:
       - name: Clone
