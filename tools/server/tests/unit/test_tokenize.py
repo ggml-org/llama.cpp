@@ -1,6 +1,8 @@
 import pytest
 from utils import *
 
+pytestmark = pytest.mark.pr
+
 server = ServerPreset.tinyllama2()
 
 
