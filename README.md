@@ -87,7 +87,6 @@ Everything else is upstream `llama.cpp`. The additions currently carried here:
 | Change | Flag / switch | What it does |
 | --- | --- | --- |
 | Speculative prefill | `--spec-prefill` | A small draft model scores prompt tokens by attention importance so the target model only prefills the ones that matter, cutting time-to-first-token on long prompts |
-| N-gram table on disk | `--ngram-on-disk`, `--ngram-cache`, `--ngram-io-threads` | Keeps a model's n-gram hash-embedding table (28.8 GB on Qwen3.8-Flash-Next) off the memory budget entirely, reading only the rows each batch actually gathers |
 | Adaptive speculative draft length | `--spec-draft-adaptive` | Sizes each draft from a measured per-sequence acceptance EMA rather than always drafting `--spec-draft-n-max`; speeds up MTP and DFlash |
 | Vulkan fixes and tuning for RDNA 3.5 | | Driver-gated coopmat LDS stride padding, UMA bulk readback gated on host-cached mappings, IQ3_S mat-vec at batch sizes > 4, and a radix top-k kernel for large k |
 | Hidden server presets | `hidden` in the models `.ini` | Keep a model loadable by name while omitting it from `GET /models` |

@@ -79,8 +79,6 @@ Flash-Next gains less than the dense 27B because it is hybrid: most layers are l
 so baseline prefill is already closer to linear in N. MTP acceptance and decode rate hold across
 keep ratios.
 
-The IQ4_XS build reaches 4,718 -> 1,599 ms over the same sweep when run with `--ngram-on-disk`.
-
 ## Caveats
 
 - Greedy (temperature 0) output is not reproducible on this box even with no speculation and no
