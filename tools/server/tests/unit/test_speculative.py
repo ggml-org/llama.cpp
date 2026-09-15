@@ -203,3 +203,39 @@ def test_multi_requests_parallel(n_slots: int, n_requests: int):
     for res in results:
         assert res.status_code == 200
         assert match_regex("(wise|kind|owl|answer)+", res.body["content"])
+
+
+def test_draft_token_probs():
+    # tokens accepted from the draft must carry the target model's probabilities,
+    # same as without speculative decoding (#24271)
+    global server
+    request = {
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "top_k": 1,
+        "n_predict": 16,
+        "n_probs": 4,
+    }
+
+    server.model_draft = None  # disable draft model
+    server.spec_type = None
+    server.start()
+    res = server.make_request("POST", "/completion", data=request)
+    assert res.status_code == 200
+    probs_no_draft = res.body["completion_probabilities"]
+    server.stop()
+
+    create_server()
+    server.start()
+    res = server.make_request("POST", "/completion", data=request)
+    assert res.status_code == 200
+    assert res.body["timings"]["draft_n"] > 0
+    probs_draft = res.body["completion_probabilities"]
+
+    assert len(probs_draft) == len(probs_no_draft)
+    for tok_draft, tok_no_draft in zip(probs_draft, probs_no_draft):
+        assert tok_draft["id"] == tok_no_draft["id"]
+        assert len(tok_draft["top_logprobs"]) == len(tok_no_draft["top_logprobs"])
+        assert abs(tok_draft["logprob"] - tok_no_draft["logprob"]) < 0.25
+    # real logprobs are not all exactly 0.0 (prob 1.0)
+    assert any(tok["logprob"] < -1e-4 for tok in probs_draft)
