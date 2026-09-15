@@ -284,23 +284,32 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_mix(
 
     ggml_tensor * lo = build_lora_mm(w_down, xn);
     lo = ggml_silu(ctx0, ggml_scale(ctx0, lo, 1.0f / (float) hc));
-    ggml_tensor * gate = ggml_sigmoid(ctx0, build_lora_mm(w_up, lo));
+    ggml_tensor * gate = build_lora_mm(w_up, lo);
     cb(gate, "hc_gate", il);
 
-    ggml_tensor * gated = ggml_mul(ctx0, xn, gate);
-    gated = ggml_reshape_3d(ctx0, gated, n_embd, hc, nt);
+    ggml_tensor * mixed = nullptr;
+    if (cparams.fused_dsv4_hc_pre && il >= 0) {
+        // sigmoid gate and mean over the streams in one op
+        mixed = ggml_dsv4_hc_pre_gated(ctx0,
+                ggml_reshape_3d(ctx0, xn,   n_embd, hc, nt),
+                ggml_reshape_3d(ctx0, gate, n_embd, hc, nt), 1.0f / (float) hc);
+        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_PRE, mixed, il});
+    } else {
+        ggml_tensor * gated = ggml_mul(ctx0, xn, ggml_sigmoid(ctx0, gate));
+        gated = ggml_reshape_3d(ctx0, gated, n_embd, hc, nt);
 
-    // collapse the streams by their mean
-    ggml_tensor * mixed = ggml_view_2d(ctx0, gated, n_embd, nt,
-            ggml_row_size(gated->type, n_embd) * hc, 0);
-    mixed = ggml_cont(ctx0, mixed);
-    for (int64_t c = 1; c < hc; ++c) {
-        ggml_tensor * s = ggml_view_2d(ctx0, gated, n_embd, nt,
-                ggml_row_size(gated->type, n_embd) * hc,
-                ggml_row_size(gated->type, n_embd) * c);
-        mixed = ggml_add(ctx0, mixed, s);
+        // collapse the streams by their mean
+        mixed = ggml_view_2d(ctx0, gated, n_embd, nt,
+                ggml_row_size(gated->type, n_embd) * hc, 0);
+        mixed = ggml_cont(ctx0, mixed);
+        for (int64_t c = 1; c < hc; ++c) {
+            ggml_tensor * s = ggml_view_2d(ctx0, gated, n_embd, nt,
+                    ggml_row_size(gated->type, n_embd) * hc,
+                    ggml_row_size(gated->type, n_embd) * c);
+            mixed = ggml_add(ctx0, mixed, s);
+        }
+        mixed = ggml_scale(ctx0, mixed, 1.0f / (float) hc);
     }
-    mixed = ggml_scale(ctx0, mixed, 1.0f / (float) hc);
     cb(mixed, "hc_mixed", il);
 
     if (inject) {
@@ -322,12 +331,20 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_combine(
     // 2*sigmoid centres the scatter weights on 1, so a zero injection is a plain residual add
     ggml_tensor * w = ggml_sigmoid(ctx0, ggml_scale(ctx0, inject, 1.0f / (float) hc));
     w = ggml_scale(ctx0, w, 2.0f);
-    w = ggml_reshape_3d(ctx0, w, 1, hc, nt);
 
-    ggml_tensor * b = ggml_reshape_3d(ctx0, block_out, n_embd, 1, nt);
-    b = ggml_repeat_4d(ctx0, b, n_embd, hc, nt, 1);
+    ggml_tensor * cur = nullptr;
+    if (cparams.fused_dsv4_hc_post && il >= 0) {
+        // identity comb: every stream adds the same block output, scaled by its own weight
+        cur = ggml_dsv4_hc_post(ctx0, block_out, residual, w, nullptr);
+        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_POST, cur, il});
+    } else {
+        w = ggml_reshape_3d(ctx0, w, 1, hc, nt);
 
-    ggml_tensor * cur = ggml_add(ctx0, residual, ggml_mul(ctx0, b, w));
+        ggml_tensor * b = ggml_reshape_3d(ctx0, block_out, n_embd, 1, nt);
+        b = ggml_repeat_4d(ctx0, b, n_embd, hc, nt, 1);
+
+        cur = ggml_add(ctx0, residual, ggml_mul(ctx0, b, w));
+    }
     cb(cur, "hc_combine", il);
 
     return cur;

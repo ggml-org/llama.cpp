@@ -19692,10 +19692,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 }
                 // hc is hardcoded to 4 in the shaders. ggml only constrains it
                 // to 4 for COMB, so PRE/POST have to be checked here.
-                if (op->op == GGML_OP_DSV4_HC_PRE && op->src[0]->ne[1] != 4) {
+                if (op->op == GGML_OP_DSV4_HC_PRE && (op->src[0]->ne[1] != 4 || ggml_get_op_params_i32(op, 1) != 0)) {
                     return false;
                 }
-                if (op->op == GGML_OP_DSV4_HC_POST && op->src[1]->ne[1] != 4) {
+                if (op->op == GGML_OP_DSV4_HC_POST && (op->src[1]->ne[1] != 4 || op->src[3] == nullptr)) {
                     return false;
                 }
                 if (op->op == GGML_OP_DSV4_HC_COMB) {
