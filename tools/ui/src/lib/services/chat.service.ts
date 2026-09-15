@@ -20,6 +20,7 @@ import {
 	SSE_DATA_PREFIX,
 	SSE_DONE_MARKER,
 	SSE_LINE_SEPARATOR,
+	STREAM_LIVE_TIMINGS_INTERVAL_MS,
 	STREAM_QUERY_PARAMS,
 	STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX,
 	STREAM_VISIBILITY_KICK_MS
@@ -48,6 +49,7 @@ import { ApiError } from '$lib/utils/api-fetch';
 import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { streamIdentity } from '$lib/utils/stream-identity';
+import { buildTimingsFromUsage } from '$lib/utils/timings';
 
 /**
  * llama.cpp-only chat request fields. Strict OpenAI-compatible endpoints
@@ -528,6 +530,15 @@ export class ChatService {
 		let toolCallIndexOffset = 0;
 		let hasOpenToolCallBatch = false;
 
+		// client side clock for backends that do not stream their own timings
+		const startedAt = Date.now();
+
+		let firstTokenAt: number | null = null;
+		let lastTokenAt: number | null = null;
+		let streamedTokens = 0;
+		let liveTimingsAt = 0;
+		let usage: ApiChatCompletionUsage | undefined;
+
 		const finalizeOpenToolCallBatch = () => {
 			if (!hasOpenToolCallBatch) {
 				return;
@@ -676,7 +687,10 @@ export class ChatService {
 								const toolCalls = choice?.delta?.tool_calls;
 								const timings = parsed.timings;
 								const promptProgress = parsed.prompt_progress;
+								const chunkUsage = parsed.usage;
 								const chunkModel = ChatService.extractModelName(parsed);
+
+								if (chunkUsage) usage = chunkUsage;
 
 								if (chunkModel && !modelEmitted) {
 									modelEmitted = true;
@@ -716,6 +730,29 @@ export class ChatService {
 								}
 
 								processToolCallDelta(toolCalls);
+
+								if (content || reasoningContent) {
+									firstTokenAt ??= Date.now();
+									lastTokenAt = Date.now();
+									streamedTokens++;
+
+									if (
+										!serverStore.capabilities.props &&
+										Date.now() - liveTimingsAt >= STREAM_LIVE_TIMINGS_INTERVAL_MS
+									) {
+										liveTimingsAt = Date.now();
+
+										const liveTimings = buildTimingsFromUsage(
+											usage,
+											{ firstTokenAt, lastTokenAt, startedAt },
+											streamedTokens
+										);
+
+										if (liveTimings) {
+											ChatService.notifyTimings(liveTimings, undefined, onTimings);
+										}
+									}
+								}
 							} catch (e) {
 								console.error('Error parsing JSON chunk:', e);
 							}
@@ -787,6 +824,20 @@ export class ChatService {
 
 			if (streamFinished) {
 				finalizeOpenToolCallBatch();
+
+				// external backends report token counts only in the final usage chunk
+				if (!lastTimings && !serverStore.capabilities.props) {
+					lastTimings =
+						buildTimingsFromUsage(
+							usage,
+							{ firstTokenAt, lastTokenAt, startedAt },
+							streamedTokens
+						) ?? undefined;
+
+					if (lastTimings) {
+						ChatService.notifyTimings(lastTimings, undefined, onTimings);
+					}
+				}
 
 				if (conversationId) {
 					ChatService.clearStreamState(conversationId);
@@ -1261,6 +1312,12 @@ export class ChatService {
 		if (backend_sampling !== undefined) requestBody.backend_sampling = backend_sampling;
 
 		if (timings_per_token !== undefined) requestBody.timings_per_token = timings_per_token;
+
+		// OpenAI-compatible servers report token counts in a final usage chunk, which
+		// the client side timing fallback in handleStreamResponse relies on
+		if (stream && !serverStore.capabilities.props && requestBody.stream_options === undefined) {
+			requestBody.stream_options = { include_usage: true };
+		}
 
 		if (custom) {
 			try {
