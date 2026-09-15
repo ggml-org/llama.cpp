@@ -143,9 +143,11 @@ template <int SUBBLK, bool HAS_MIN, int BIAS>
 void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                          int i0, int j0, float * buf, int buf_stride);
 
-// Interleave the natural [row][256] src1 codes in-place into the VNNI group-local
-// [kg%16][kg/16][row][4] layout, one 16x16 int32 tile at a time. No-op on non-VNNI.
-void tiled_repack_src1_codes(tiled_tile_src1 * tile);
+// Repack one 16-row band (group) of the natural [row][256] src1 codes in-place into the
+// VNNI group-local [kg%16][kg/16][row][4] layout. Call once per band just before it's
+// swept, so only the bands actually used are repacked and each is L1-hot for its uses.
+// No-op on non-VNNI.
+void tiled_repack_src1_band(tiled_tile_src1 * tile, int grp);
 
 // Transpose one 16-row x 64-k chunk of src1 codes in place (a 16x16 int32 tile). base
 // points at the 16-row group (row r at base + r*k_extent); c selects the chunk (0..3).
