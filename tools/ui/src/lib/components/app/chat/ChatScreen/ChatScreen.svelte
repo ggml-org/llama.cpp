@@ -13,6 +13,7 @@
 	} from '$lib/components/app';
 	import { LANDING_SETTLE_MAX_MS, LANDING_STABLE_FRAMES, ROUTES } from '$lib/constants';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
+	import { useBackendAvailability } from '$lib/hooks/use-backend-availability.svelte';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
 	import { useChatScreenFileUpload } from '$lib/hooks/use-chat-screen-file-upload.svelte';
@@ -45,7 +46,8 @@
 	);
 	let activeErrorDialog = $derived(chatStore.errorDialogState);
 	let isServerLoading = $derived(serverStore.loading);
-	let hasPropsError = $derived(!!serverStore.error);
+	const availability = useBackendAvailability();
+	let hasPropsError = $derived(availability.isOffline);
 	let isCurrentConversationLoading = $derived(chatStore.isLoading || chatStore.isStreaming());
 	let chatFormBottomPosition = $derived.by(() => {
 		if (!deviceStore.isMobile) return '1rem';
