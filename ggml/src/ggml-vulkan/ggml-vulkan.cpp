@@ -11576,6 +11576,15 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         split_k = CEIL_DIV(KV, split_kv);
     }
 
+    if (!use_sparse && N == 1) {
+        uint32_t default_partitions = KV <= 3072 ? 32 : KV < 5120 ? 64 : 128;
+        if (KV >= 24576 && (KV / 32) % 256 == 0) {
+            default_partitions = 256;
+        }
+        split_kv = CEIL_DIV(KV, default_partitions);
+        split_k = CEIL_DIV(KV, split_kv);
+    }
+
     const char * fa_kv_partitions = std::getenv("GGML_VK_FA_KV_PARTITIONS");
     if (fa_kv_partitions) {
         const uint32_t forced_partitions = (uint32_t) atoi(fa_kv_partitions);
