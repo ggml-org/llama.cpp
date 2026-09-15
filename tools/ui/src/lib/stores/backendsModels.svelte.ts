@@ -56,7 +56,7 @@ class BackendsModelsStore {
 		return this.states[backendId] ?? EMPTY_STATE;
 	}
 
-	/** Prefetch every enabled external backend, skipping the active one. */
+	/** Prefetch every enabled backend's model list. */
 	async loadAll(): Promise<void> {
 		const enabled = backendsStore.enabled;
 		const ids = new Set(enabled.map((backend) => backend.id));
@@ -67,11 +67,7 @@ class BackendsModelsStore {
 			}
 		}
 
-		await Promise.all(
-			enabled
-				.filter((backend) => backend.id !== backendsStore.active.id)
-				.map((backend) => this.ensureLoaded(backend.id))
-		);
+		await Promise.all(enabled.map((backend) => this.ensureLoaded(backend.id)));
 	}
 }
 

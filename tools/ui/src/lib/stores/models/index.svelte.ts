@@ -18,14 +18,15 @@ import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props
 import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { getConversationModel } from '$lib/utils/conversation-utils';
+import { backendIdFromModelId, qualifyModelId, rawModelId } from '$lib/utils/model-option-id';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
 class ModelsStore implements ModelPropsHost, ModelStatusHost {
+	activeModels = $state<ModelOption[]>([]);
 	error = $state<string | null>(null);
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
 	loading = $state(false);
-	models = $state<ModelOption[]>([]);
 	routerModels = $state<ApiModelDataEntry[]>([]);
 	selectedModelId = $state<string | null>(null);
 	selectedModelName = $state<string | null>(null);
@@ -84,6 +85,39 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 					m.status.value === ServerModelStatus.SLEEPING
 			)
 			.map((m) => m.id);
+	}
+
+	/**
+	 * Every selectable model across enabled backends. The active backend's
+	 * models come from {@link activeModels}; the rest come from the background
+	 * prefetch cache. Ids are backend-qualified so the same model name on two
+	 * backends stays distinct.
+	 */
+	get models(): ModelOption[] {
+		const activeBackendId = backendsStore.active.id;
+		const merged: ModelOption[] = [];
+
+		for (const option of this.activeModels) {
+			merged.push({
+				...option,
+				backendId: activeBackendId,
+				id: qualifyModelId(activeBackendId, option.id)
+			});
+		}
+
+		for (const backend of backendsStore.enabled) {
+			if (backend.id === activeBackendId) continue;
+
+			for (const option of backendsModelsStore.get(backend.id).models) {
+				merged.push({
+					...option,
+					backendId: backend.id,
+					id: qualifyModelId(backend.id, option.id)
+				});
+			}
+		}
+
+		return merged;
 	}
 
 	get props() {
@@ -195,7 +229,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	async fetch(force = false): Promise<void> {
 		if (this.inflightFetch) return this.inflightFetch;
 
-		if (this.models.length > 0 && !force) return;
+		if (this.activeModels.length > 0 && !force) return;
 
 		this.inflightFetch = this.runFetch();
 		try {
@@ -219,7 +253,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			this.routerModels = response.data;
 			// keep the selector options in sync: a downloaded / deleted model shows
 			// up here too, not only in the router model rows
-			this.models = this.buildModelOptions(response);
+			this.activeModels = this.buildModelOptions(response);
 			await this.props.fetchModalitiesForLoadedModels();
 
 			const visible = this.getVisibleModels();
@@ -290,9 +324,19 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	async selectModelById(modelId: string): Promise<void> {
 		if (!modelId || this.updating) return;
 
+		const backendId = backendIdFromModelId(modelId) ?? backendsStore.active.id;
+		const rawId = rawModelId(modelId);
+
+		// a model from another backend makes that backend active first
+		if (backendId !== backendsStore.active.id) {
+			backendsStore.setActive(backendId);
+			await backendsModelsStore.ensureLoaded(backendId);
+			await this.switchBackend();
+		}
+
 		if (this.selectedModelId === modelId) return;
 
-		const option = this.models.find((model) => model.id === modelId);
+		const option = this.activeModels.find((model) => model.id === rawId);
 
 		if (!option) throw new Error('Selected model is not available');
 
@@ -300,7 +344,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		this.error = null;
 
 		try {
-			this.selectedModelId = option.id;
+			this.selectedModelId = modelId;
 			this.selectedModelName = option.model;
 		} finally {
 			this.updating = false;
@@ -314,8 +358,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const option = this.models.find((model) => model.model === modelName);
 
 		if (option) {
-			this.selectedModelId = option.id;
-			this.selectedModelName = option.model;
+			void this.selectModelById(option.id);
 		}
 	}
 
@@ -361,12 +404,12 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const cached = backend.baseUrl.trim() ? backendsModelsStore.get(backend.id) : null;
 
 		if (cached?.loaded) {
-			this.models = cached.models;
+			this.activeModels = cached.models;
 			this.loading = false;
 
 			await serverStore.fetch();
 
-			if (this.models.length > 0) {
+			if (this.activeModels.length > 0) {
 				await this.ensureFirstModelSelected();
 			}
 
@@ -457,7 +500,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	 * Filter to models visible in the UI (ui !== false).
 	 */
 	private getVisibleModels(): ModelOption[] {
-		return this.models.filter((option) => this.props.getModelProps(option.model)?.ui !== false);
+		return this.activeModels.filter(
+			(option) => this.props.getModelProps(option.model)?.ui !== false
+		);
 	}
 
 	private loadFavoritesFromStorage(): Set<string> {
@@ -487,7 +532,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 				const response = await ModelsService.list();
 
 				this.routerModels = response.data;
-				this.models = this.buildModelOptions(response);
+				this.activeModels = this.buildModelOptions(response);
 
 				await this.props.fetchModalitiesForLoadedModels();
 
@@ -497,7 +542,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 					this.selectModelById(visible[0].id);
 				}
 			} else {
-				this.models = await this.fetchModelModeInternal();
+				this.activeModels = await this.fetchModelModeInternal();
 
 				// external backends expose a selectable list; pick a default so the
 				// first send and title generation have a model to target
@@ -506,7 +551,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 				}
 			}
 		} catch (error) {
-			this.models = [];
+			this.activeModels = [];
 			this.error = error instanceof Error ? error.message : 'Failed to load models';
 
 			throw error;

@@ -127,6 +127,9 @@ export {
 // Model name utilities
 export { isValidModelName, normalizeModelName, orgOf } from './model-names';
 
+// Backend-qualified model option ids
+export { backendIdFromModelId, qualifyModelId, rawModelId } from './model-option-id';
+
 // Sidecar token utilities
 export { isAuxSidecar, isDraftSidecar, sidecarFromFileToken } from './sidecars';
 

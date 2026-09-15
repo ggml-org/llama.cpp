@@ -24,6 +24,7 @@
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
+	import { rawModelId } from '$lib/utils/model-option-id';
 
 	interface Props {
 		class?: string;
@@ -141,12 +142,13 @@
 			return;
 		}
 
-		const model = modelsStore.routerModels.find((m) => m.id === modelId);
+		const rawId = rawModelId(modelId);
+		const model = modelsStore.routerModels.find((m) => m.id === rawId);
 		const status = model?.status?.value as ServerModelStatus | undefined;
 
 		if (status === ServerModelStatus.LOADING) return;
 
-		await modelsStore.status.unload(modelId);
+		await modelsStore.status.unload(rawId);
 	}
 
 	export function open() {
