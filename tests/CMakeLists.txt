@@ -309,6 +309,9 @@ endif()
 # TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
 llama_build(test-backend-ops.cpp)
 
+llama_build_and_test(test-tiled-mulmat.cpp)
+# profiling-only driver (no ctest): isolates the tiled/iqp mul_mat kernels for perf
+llama_build(perf-tiled-mulmat.cpp)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
