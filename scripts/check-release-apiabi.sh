@@ -82,12 +82,24 @@ else
         exit 0
     fi
 fi
-OLD_MAJOR="${PREV_TAG#v}"
-OLD_MAJOR="${OLD_MAJOR%%.*}"
+OLD_VERSION="${PREV_TAG#v}"
+OLD_MAJOR="${OLD_VERSION%%.*}"
+OLD_MINOR="${OLD_VERSION#*.}"; OLD_MINOR="${OLD_MINOR%%.*}"
+
 NEW_MAJOR=$(grep "set(LLAMA_VERSION_MAJOR" "$REPO_ROOT/CMakeLists.txt" | sed 's/.*MAJOR \([0-9]*\).*/\1/')
+NEW_MINOR=$(grep "set(LLAMA_VERSION_MINOR" "$REPO_ROOT/CMakeLists.txt" | sed 's/.*MINOR \([0-9]*\).*/\1/')
+
 if [[ "$NEW_MAJOR" -gt "$OLD_MAJOR" ]]; then
     echo "Major version increment ($OLD_MAJOR -> $NEW_MAJOR): API/ABI breaking changes are expected, skipping compatibility check."
     exit 0
+fi
+
+CHECK_FLAGS=()
+if [[ "$NEW_MINOR" -eq "$OLD_MINOR" ]]; then
+    echo "Patch version bump detected: checking for any API/ABI changes (a minor bump is required if any are found)..."
+    CHECK_FLAGS+=(--strict)
+else
+    echo "Minor version bump detected: checking for backwards-incompatible API/ABI changes..."
 fi
 
 echo "Checking API/ABI compatibility against ${PREV_TAG}..."
@@ -104,16 +116,16 @@ trap cleanup EXIT
 
 git -C "$REPO_ROOT" worktree add "$WORKTREE_DIR" "$PREV_TAG"
 
-cmake -S "$WORKTREE_DIR" -B "$BUILD_OLD" -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
+cmake -S "$WORKTREE_DIR" -B "$BUILD_OLD" -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build "$BUILD_OLD" --parallel "$(nproc)"
 OLD_LIBS=($(discover_libs "$BUILD_OLD"))
 echo "Libraries found in old build: ${OLD_LIBS[*]}"
 
-cmake -S "$REPO_ROOT"    -B "$BUILD_NEW" -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
+cmake -S "$REPO_ROOT"    -B "$BUILD_NEW" -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build "$BUILD_NEW" --parallel "$(nproc)"
 NEW_LIBS=($(discover_libs "$BUILD_NEW"))
 echo "Libraries found in new build: ${NEW_LIBS[*]}"
 
 (cd "$WORKTREE_DIR" && "$SCRIPT_DIR/check-apiabi-compat.sh" --include-path ggml/include --generate "$BUILD_OLD" "${OLD_LIBS[@]}")
 (cd "$REPO_ROOT"    && "$SCRIPT_DIR/check-apiabi-compat.sh" --include-path ggml/include --generate "$BUILD_NEW" "${NEW_LIBS[@]}")
-(cd "$REPO_ROOT"    && "$SCRIPT_DIR/check-apiabi-compat.sh" --check "$BUILD_OLD" "$BUILD_NEW")
+(cd "$REPO_ROOT"    && "$SCRIPT_DIR/check-apiabi-compat.sh" "${CHECK_FLAGS[@]}" --check "$BUILD_OLD" "$BUILD_NEW")
