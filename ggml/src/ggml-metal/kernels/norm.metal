@@ -1,5 +1,7 @@
 #include "common.h"
 
+constant bool FC_norm_use_scale [[function_constant(FC_NORM + 0)]];
+
 // F == 1 : norm (no fuse)
 // F == 2 : norm + mul
 // F == 3 : norm + mul + add
@@ -80,7 +82,11 @@ kernel void kernel_norm_fuse_impl(
             y[i00] = (y[i00]*scale);
         }
         if (F == 2) {
-            y[i00] = (y[i00]*scale)*f0[i00];
+            if (FC_norm_use_scale) {
+                y[i00] = (y[i00]*scale) * args.scale_val;
+            } else {
+                y[i00] = (y[i00]*scale)*f0[i00];
+            }
         }
         if (F == 3) {
             y[i00] = (y[i00]*scale)*f0[i00] + f1[i00];
@@ -155,7 +161,11 @@ kernel void kernel_rms_norm_fuse_impl(
             y[i00] = (x[i00]*scale);
         }
         if (F == 2) {
-            y[i00] = (x[i00]*scale)*f0[i00];
+            if (FC_norm_use_scale) {
+                y[i00] = (x[i00]*scale) * args.scale_val;
+            } else {
+                y[i00] = (x[i00]*scale)*f0[i00];
+            }
         }
         if (F == 3) {
             y[i00] = (x[i00]*scale)*f0[i00] + f1[i00];
