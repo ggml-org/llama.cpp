@@ -8,7 +8,7 @@ Last source review: 2026-09-14, against the checkpoint commits below.
 
 Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. The fixed-pool qualification identified synchronous producer publication as the first remaining optimization. It is planned as backend-neutral stage **5.6** below. Stage **5.7** is reserved for graph segmentation, stage **5.8** for strict prefill streaming, and stage **5.9** for final support and reproducibility documentation.
 
-Stage **5.6a** is implemented and qualified for user review. It adds only the common publication state/lifetime contract and tests; writer/session migration remains **5.6b**.
+Stage **5.6a** is committed at `eff245203`. Stage **5.6b** is implemented and qualified for user review: current synchronous writer/session execution now passes through the common publication contract without a material performance or memory regression.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -393,8 +393,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.5a.1-5.5a.4 | Committed | b72bcc9e6 | Producer workspace, session ownership, graph bridge, public gates, real-model qualification and resumable-decode extension were reviewed as one combined commit. |
 | 5.5b | Committed | 10ec8902d | Host snapshot restore, dense-frontier validation, suffix truncation for recurrent checkpoints, malformed-state retry and serial cancellation recovery. |
 | 5.5c | Committed | 123e76b44 | Matched Release fixed-pool sweep; PDL-safe asynchronous resumed spans, coalesced resident drains and layout-change-only H2D diagnostics. Remaining producer/prefill costs are explicitly recorded. |
-| 5.6a | Ready for review | - | Common paired publication tickets and ordered reserved/device/host/committed frontiers; 10 cases / 133 assertions pass in Debug, ASan, UBSan, and a CUDA-enabled build. Seven focused existing regressions pass. No execution path is migrated yet. |
-| 5.6b-5.6f | Planned | - | Synchronous migration, generic completions, async session integration, CUDA overlap, and cross-backend conformance remain. |
+| 5.6a | Committed | eff245203 | Common paired publication tickets and ordered reserved/device/host/committed frontiers; 10 cases / 133 assertions passed in Debug, ASan, UBSan, and a CUDA-enabled build. Seven focused existing regressions passed. |
+| 5.6b | Ready for review | - | Synchronous adapter and session migration; publication 11/147, CUDA session 6/286, CUDA model 3/54, seven focused Debug suites, ASan, UBSan, and CUDA memcheck pass. Two-point Release performance remains within 0.6% of 5.5c with identical memory. |
+| 5.6c-5.6f | Planned | - | Generic completions, async session integration, CUDA overlap, and cross-backend conformance remain. |
 | 5.7 | Reserved | - | Graph segmentation optimization; split only after 5.6 qualification identifies the remaining submission boundary. |
 | 5.8 | Reserved | - | Strict prefill gather replacement; split only after native MMA continuation research establishes a credible numerical contract. |
 | 5.9 | Planned | - | Supported-configuration and reproducible-test documentation after optimization qualification. |
@@ -3018,4 +3019,31 @@ The tests cover:
 
 The publication suite passes 10 cases / 133 assertions in CPU Debug, ASan with leak detection, UBSan, and the CUDA-enabled Debug build. The existing `test-kv-stream-content`, `test-kv-stream-writer`, `test-kv-stream-producer`, `test-kv-stream-session`, `test-backend-memory`, and `test-memory-executor` focused regressions also pass in the Debug build, for seven focused suites including the new test. No throughput result is expected because 5.6a is not connected to production execution.
 
-Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made. Next after review is **5.6b**, migration of current synchronous publication through this common contract.
+Stage 5.6a was committed by the user at `eff245203`. Its historical validation remains above; stage 5.6b follows below.
+
+### Stage 5.6b implementation and validation
+
+The synchronous-adapter test was first red because no adapter existed. The session integration assertions were also red because the session did not expose or own publication frontiers. The implementation adds `llama_kv_stream_publication_complete_sync()` and routes the existing synchronous writer/session path through the 5.6a contract without removing any backend drain.
+
+The session owns one persistent publication queue and reserves one batch for each complete append. A batch contains one K/V pair per attention layer and retains the host-content owner plus the pool, writer, and attention-workspace leases. Restore constructs a fresh queue at the restored token frontier. Begin rejects a stale, failed, outstanding, or discontinuous publication state before accepting execution.
+
+Each successful synchronous producer marks both K/V planes device-ready and host-ready for its layer. Attention requires that layer's device-ready pair. After the final producer, the publication frontier can reach the target while `session->tokens()` intentionally remains at the previous value. The visible inference frontier advances only after final attention succeeds and publication retirement completes. Abort and failure drain backend work, cancel unpublished state, and release the ticket without reopening the failed session.
+
+Validation:
+
+- Publication state and synchronous adapter: 11 cases / 147 assertions in CPU Debug, ASan with leak detection, UBSan, and CUDA-enabled Debug.
+- CUDA session: 6 cases / 286 assertions, including repeated 256/32/224/1/256-token appends, policy rebinding, restore, abort, and failure after production.
+- CUDA model bridge: 3 cases / 54 assertions, including ordinary graph dispatch, streamed attention, scratch replacement retry, and suffix truncation.
+- Compute Sanitizer memcheck on the final CUDA session binary: zero errors and zero leaked bytes.
+- Seven focused Debug suites pass: publication, content, writer, producer, session, backend memory, and memory executor.
+
+Matched Release Q3_K_XL, Q8 K/Q4 V, UVM off, context 163840, 2 GiB pool, b/ub256, and 256 decode tokens produced these two-repetition averages:
+
+| Prompt | 5.5c prefill | 5.6b prefill | Change | 5.5c decode | 5.6b decode | Change |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 65,536 | 1136.27 | 1133.85 | -0.21% | 34.67 | 34.60 | -0.21% |
+| 98,304 | 942.73 | 941.36 | -0.15% | 28.56 | 28.40 | -0.56% |
+
+Both points retain the same 15166 MiB prefill peak and 14910 MiB steady decode allocation recorded by 5.5c. These differences are within run-to-run noise and do not establish a speedup; 5.6b deliberately preserves synchronous execution. Results are in `/tmp/kv-56b-fixed-pool.jsonl` and per-run `/tmp/kv-55c-current-{65536,98304}-r{0,1}.log`.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. Production was restored with its existing configuration and port 1234 health is OK. No assistant commit or push was made. Next after review is **5.6c**, the generic completion wrapper.

@@ -1,5 +1,6 @@
 #pragma once
 #include "llama-kv-stream-resident.h"
+#include "llama-kv-stream-publication.h"
 
 struct llama_kv_stream_session_config {
     llama_kv_stream_policy_config policy;
@@ -30,6 +31,7 @@ public:
     size_t granted_bytes() const noexcept;
     uint64_t layout_revision() const noexcept;
     const llama_kv_stream_policy_state & policy() const noexcept;
+    llama_kv_stream_publication_frontiers publication_frontiers() const noexcept;
     bool set_workspaces(const std::vector<ggml_backend_memory_lease_t> & leases);
     // Scratch is reconstructible; detach only while idle, and attach a disjoint grant before beginning work.
     bool set_attention_workspace(ggml_backend_memory_lease_t lease, bool decode);

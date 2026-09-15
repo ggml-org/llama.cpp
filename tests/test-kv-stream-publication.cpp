@@ -114,6 +114,24 @@ int main() {
         t.assert_equal(size_t(0), state->pending());
     });
 
+    t.test("synchronous_adapter_completes_one_pair_without_partial_visibility", [](testing & t) {
+        auto state = publications(); ticket value;
+        if (!t.assert_true(state && state->reserve(8, 2, 2, {}, {}, value))) return;
+        t.assert_true(llama_kv_stream_publication_complete_sync(value, 0));
+        t.assert_true(value.ready(0, domain::device));
+        t.assert_true(value.ready(0, domain::host));
+        t.assert_equal(size_t(8), state->frontiers().device);
+        t.assert_equal(size_t(8), state->frontiers().host);
+        t.assert_equal(size_t(8), state->frontiers().committed);
+        t.assert_true(!llama_kv_stream_publication_complete_sync(value, 0));
+        t.assert_true(!llama_kv_stream_publication_complete_sync(value, 2));
+        t.assert_true(!state->failed());
+        t.assert_true(llama_kv_stream_publication_complete_sync(value, 1));
+        t.assert_equal(size_t(10), state->frontiers().committed);
+        t.assert_true(value.committed());
+        t.assert_true(value.retire());
+    });
+
     t.test("host_and_device_frontiers_advance_independently", [](testing & t) {
         auto state = publications(); ticket value;
         if (!t.assert_true(state && state->reserve(8, 1, 1, {}, {}, value))) return;

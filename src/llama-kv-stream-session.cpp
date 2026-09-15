@@ -25,6 +25,8 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     ggml_backend_t backend = nullptr;
     std::shared_ptr<llama_kv_stream_content> content;
     llama_kv_stream_session_config config;
+    std::unique_ptr<llama_kv_stream_publications> publications;
+    llama_kv_stream_publication_ticket publication;
     std::array<lease_ptr,3> leases{{{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free}}};
     std::unique_ptr<llama_kv_stream_binding> binding;
     llama_kv_stream_resident * resident = nullptr;
@@ -40,10 +42,19 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     bool running = false, produced = false, poisoned = false, busy = false;
     bool direct_mode = false, report_layout = false;
 
+    bool retire_publication() {
+        if (!publication.pending()) return true;
+        if (!publication.committed() && !publication.failed()) publication.cancel();
+        return publication.retire();
+    }
+
     // End copy use before releasing the execution pin that owns native metadata.
     bool drain() override {
         if (resident) resident->cancel_sequence();
-        ggml_backend_synchronize(backend); pin.reset(); return true;
+        ggml_backend_synchronize(backend);
+        const bool retired = retire_publication();
+        pin.reset();
+        return retired;
     }
     // Prepare metadata first; publish policy only after the new writer binding succeeds.
     bool install(const llama_kv_stream_policy_state & candidate) {
@@ -148,6 +159,8 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
         s.order.resize(config.policy.layers); std::iota(s.order.begin(),s.order.end(),0);
         s.expected_generation = s.content->generation();
         if (!s.install(state)) return {};
+        s.publications = llama_kv_stream_publications::create({0,s.content->host()->config().context_tokens,s.expected_generation,1});
+        if (!s.publications) return {};
         return result;
     } catch (const std::bad_alloc &) { return {}; }
 }
@@ -155,7 +168,8 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
 // A failed native transition closes admission; host bytes and leases remain owned for safe teardown.
 bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode) {
     auto & s = *impl;
-    if (s.busy || s.running || s.poisoned || !s.leases[2] || !queries || queries > s.config.max_batch_rows || (decode && queries != 1) ||
+    if (s.busy || s.running || s.poisoned || !s.publications || s.publications->failed() || s.publication.pending() || !s.leases[2] ||
+            !queries || queries > s.config.max_batch_rows || (decode && queries != 1) ||
             active < s.committed || active-s.committed != queries || active > s.content->host()->config().context_tokens) return false;
     session_operation guard(s.busy);
     if (s.content->generation() != s.expected_generation) { s.poisoned = true; return false; }
@@ -184,6 +198,17 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
         if (!s.pin || !(s.direct_mode ? s.resident->synchronize(active) : s.resident->begin_sequence(s.order,active,s.span,s.committed,{queries,decode}))) {
             s.drain(); s.poisoned = true; return false;
         }
+        llama_kv_stream_publication_ticket publication;
+        std::vector<std::shared_ptr<void>> owners{s.content};
+        std::vector<ggml_backend_memory_lease_t> dependencies;
+        dependencies.reserve(s.leases.size());
+        for (const auto & lease : s.leases) dependencies.push_back(lease.get());
+        const auto frontiers = s.publications->frontiers();
+        if (frontiers.reserved != s.committed || frontiers.committed != s.committed ||
+                !s.publications->reserve(s.committed,queries,s.config.policy.layers,owners,dependencies,publication)) {
+            s.drain(); s.poisoned = true; return false;
+        }
+        s.publication = std::move(publication);
         s.running = true; s.produced = false; s.target = active; s.queries = queries; s.next = 0;
         return true;
     } catch (...) { s.drain(); s.poisoned = true; throw; }
@@ -194,9 +219,13 @@ bool llama_kv_stream_session::restore(size_t tokens) {
     if (s.busy || s.running || s.poisoned || s.committed || tokens > s.content->host()->config().context_tokens) return false;
     session_operation guard(s.busy);
     if (s.content->generation() != s.expected_generation) return false;
+    auto publications = llama_kv_stream_publications::create(
+        {tokens,s.content->host()->config().context_tokens,s.expected_generation,1});
+    if (!publications) return false;
     s.committed = tokens;
     s.target = tokens;
     s.graphs.clear();
+    s.publications = std::move(publications);
     return true;
 }
 
@@ -207,21 +236,23 @@ bool llama_kv_stream_session::produce(uint32_t layer, const ggml_tensor * k, con
     session_operation guard(s.busy);
     try {
         const bool valid = k && v && k->ne[1] == s.queries && v->ne[1] == s.queries;
-        const bool written = valid && (s.direct_mode ?
+        const bool written = valid && s.publication.pending() && (s.direct_mode ?
             (s.resident->write_rows(layer,ggml_kv_stream_operand::k,s.committed,k) &&
              s.resident->write_rows(layer,ggml_kv_stream_operand::v,s.committed,v) && s.resident->synchronize(s.target)) :
             s.resident->write_sequence_rows(layer,s.committed,k,v));
-        if (!written) {
+        if (!written || !llama_kv_stream_publication_complete_sync(s.publication,s.next)) {
             s.drain(); s.running = false; s.poisoned = true; return false;
         }
-        s.produced = true; return true;
+        s.produced = s.publication.ready(s.next,llama_kv_stream_publication_domain::device);
+        return s.produced;
     } catch (...) { s.drain(); s.running = false; s.poisoned = true; throw; }
 }
 
 // Finish all query tiles before advancing the serial layer cursor or committing the append frontier.
 bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale) {
     auto & s = *impl;
-    if (s.busy || !s.running || s.poisoned || !s.produced || layer != s.next) return false;
+    if (s.busy || !s.running || s.poisoned || !s.produced || layer != s.next ||
+            !s.publication.ready(s.next,llama_kv_stream_publication_domain::device)) return false;
     session_operation guard(s.busy);
     try {
         if (!q || !mask || !output || q->ne[1] != s.queries || q->ne[2] != s.config.query_heads ||
@@ -231,6 +262,9 @@ bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_te
         }
         s.produced = false;
         if (++s.next == s.order.size()) {
+            if (!s.publication.committed() || s.publications->frontiers().committed != s.target) {
+                s.drain(); s.running = false; s.poisoned = true; return false;
+            }
             if (s.report_layout) {
                 const auto stats=s.resident->sequence_stats();
                 LLAMA_LOG_WARN("%s: accepted KV layout copied %.2f MiB in %zu H2D calls, peak ring pages %zu\n",
@@ -238,6 +272,9 @@ bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_te
                 s.report_layout = false;
             }
             if (s.direct_mode) ggml_backend_synchronize(s.backend);
+            if (!s.publication.retire()) {
+                s.drain(); s.running = false; s.poisoned = true; return false;
+            }
             s.committed = s.target; s.expected_generation = s.content->generation(); s.running = false;
             s.pin.reset();
         }
@@ -257,6 +294,10 @@ size_t llama_kv_stream_session::tokens() const noexcept { return impl->committed
 size_t llama_kv_stream_session::granted_bytes() const noexcept { return impl->grant; }
 uint64_t llama_kv_stream_session::layout_revision() const noexcept { return impl->revision; }
 const llama_kv_stream_policy_state & llama_kv_stream_session::policy() const noexcept { return impl->state; }
+
+llama_kv_stream_publication_frontiers llama_kv_stream_session::publication_frontiers() const noexcept {
+    return impl->publications ? impl->publications->frontiers() : llama_kv_stream_publication_frontiers{};
+}
 
 bool llama_kv_stream_session::set_workspaces(const std::vector<ggml_backend_memory_lease_t> & workspaces) {
     auto & s = *impl;

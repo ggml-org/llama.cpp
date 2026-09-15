@@ -64,12 +64,23 @@ int main(int argc, char ** argv) {
                 t.assert_equal(active-rows,session->tokens());
             }
             if (!t.assert_true(session->begin(active,rows,decode))) return;
+            auto publication = session->publication_frontiers();
+            t.assert_equal(active,publication.reserved);
+            t.assert_equal(active-rows,publication.device);
+            t.assert_equal(active-rows,publication.host);
+            t.assert_equal(active-rows,publication.committed);
             t.assert_true(!session->set_attention_workspace(nullptr,decode));
             if (!decode) t.assert_equal(uint32_t(0),session->policy().decode_active_pages);
             t.assert_true(!session->begin(active,rows,decode));
             t.assert_true(!session->attention(0,attn.q,attn.mask,attn.output,1.0f/16));
             for (uint32_t layer = 0; layer < 4; ++layer) {
                 if (!t.assert_true(session->produce(layer,input.k,input.v))) return;
+                publication = session->publication_frontiers();
+                const size_t published = layer+1 == 4 ? active : active-rows;
+                t.assert_equal(published,publication.device);
+                t.assert_equal(published,publication.host);
+                t.assert_equal(published,publication.committed);
+                t.assert_equal(active-rows,session->tokens());
                 t.assert_true(!session->produce(layer,input.k,input.v));
                 if (!t.assert_true(session->attention(layer,attn.q,attn.mask,attn.output,1.0f/16))) return;
                 close_values(t,oracle(f,layer,active,rows,attn.qdata),attn.read(),1e-3f);

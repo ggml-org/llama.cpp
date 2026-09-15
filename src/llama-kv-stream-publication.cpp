@@ -265,6 +265,20 @@ bool llama_kv_stream_publication_ticket::retire() noexcept {
     retained_state->collect();
     return true;
 }
+bool llama_kv_stream_publication_complete_sync(llama_kv_stream_publication_ticket & ticket, uint32_t pair) noexcept {
+    std::array<llama_kv_stream_publication_completion, 4> completions;
+    size_t next = 0;
+    for (auto domain : {llama_kv_stream_publication_domain::device, llama_kv_stream_publication_domain::host}) {
+        for (auto plane : {llama_kv_stream_publication_plane::k, llama_kv_stream_publication_plane::v}) {
+            if (!ticket.submit(pair, plane, domain, completions[next])) return false;
+            ++next;
+        }
+    }
+    for (auto & completion : completions) if (!completion.finish()) return false;
+    return ticket.ready(pair, llama_kv_stream_publication_domain::device) &&
+        ticket.ready(pair, llama_kv_stream_publication_domain::host);
+}
+
 
 void llama_kv_stream_publication_ticket::abandon() noexcept {
     if (!pending()) return;

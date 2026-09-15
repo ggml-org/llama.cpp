@@ -95,6 +95,9 @@ private:
     std::shared_ptr<llama_kv_stream_publication_state> state;
     std::shared_ptr<llama_kv_stream_publication_entry> entry;
 };
+// Mark one pair device-ready and host-ready through the common completion protocol.
+bool llama_kv_stream_publication_complete_sync(llama_kv_stream_publication_ticket & ticket, uint32_t pair) noexcept;
+
 
 // Owner-thread-only ordered publication state. Backend callbacks must return completion to its owner thread.
 class llama_kv_stream_publications {
