@@ -161,6 +161,8 @@ export { extractSseDataPayload, parseSseJsonStream, splitSseRecords } from './ss
 // Stream session identity (conversation-id based)
 export { streamIdentity } from './stream-identity';
 
+export { buildTimingsFromUsage, usageTokenCounts } from './timings';
+
 // MCP utilities
 export {
 	detectMcpTransportFromUrl,

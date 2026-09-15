@@ -372,6 +372,16 @@ export interface ApiChatCompletionStreamChunk {
 		cache_n?: number;
 	};
 	prompt_progress?: ChatMessagePromptProgress;
+	/** Token counts, sent by OpenAI-compatible servers on the final chunk. */
+	usage?: ApiChatCompletionUsage;
+}
+
+export interface ApiChatCompletionUsage {
+	completion_tokens?: number;
+	input_tokens?: number;
+	output_tokens?: number;
+	prompt_tokens?: number;
+	total_tokens?: number;
 }
 
 export interface ApiChatCompletionResponse {

@@ -25,6 +25,7 @@ export type {
 	ApiChatCompletionToolCallDelta,
 	ApiChatCompletionToolCall,
 	ApiChatCompletionStreamChunk,
+	ApiChatCompletionUsage,
 	ApiChatCompletionResponse,
 	ApiSlotData,
 	ApiProcessingState,
