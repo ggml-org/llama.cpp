@@ -4826,23 +4826,39 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     }
 #endif
 
-    auto const &ggml_vk_mul_mm_spec = [&device](std::vector<uint32_t> spec, bool aligned) {
+    // Strix Halo class gate: UMA + 64 KiB LDS + name match.
+    // Other AMD parts keep the shader-default PAD.
+    const bool strix_halo = device->uma &&
+        device->properties.limits.maxComputeSharedMemorySize == 65536 &&
+        std::string(device->properties.deviceName.data()).find("STRIX_HALO") != std::string::npos;
+
+    auto const &ggml_vk_mul_mm_spec = [&device, strix_halo](std::vector<uint32_t> spec, bool aligned) {
         spec.push_back(aligned ? 1u : 0u);  // constantID=11: ALIGNED
         if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support &&
             device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
             spec.push_back(0u);  // constantID=12: SHMEM_STRIDE_PAD = 0
             spec.push_back(1u);  // constantID=13: APPLY_SLM_A_RESHAPE = true
+        } else if (device->vendor_id == VK_VENDOR_ID_AMD && device->coopmat_support &&
+            device->driver_id != vk::DriverId::eAmdProprietary && strix_halo) {
+            // PAD=6 trims LDS bank conflicts on Strix Halo
+            spec.push_back(6u);  // constantID=12: SHMEM_STRIDE_PAD
+            spec.push_back(0u);  // constantID=13: APPLY_SLM_A_RESHAPE = false
         }
         return spec;
     };
 
-    auto const &ggml_vk_mul_mm_spec_quant = [&device](std::vector<uint32_t> spec, bool aligned, uint32_t type) {
+    auto const &ggml_vk_mul_mm_spec_quant = [&device, strix_halo](std::vector<uint32_t> spec, bool aligned, uint32_t type) {
         spec.push_back(aligned ? 1u : 0u);  // constantID=11: ALIGNED
         spec.push_back(type);               // constantID=12: MmTypeA
         if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support &&
             device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
             spec.push_back(0u);  // constantID=13: SHMEM_STRIDE_PAD = 0
             spec.push_back(1u);  // constantID=14: APPLY_SLM_A_RESHAPE = true
+        } else if (device->vendor_id == VK_VENDOR_ID_AMD && device->coopmat_support &&
+            device->driver_id != vk::DriverId::eAmdProprietary && strix_halo) {
+            // PAD=6 trims LDS bank conflicts on Strix Halo
+            spec.push_back(6u);  // constantID=13: SHMEM_STRIDE_PAD
+            spec.push_back(0u);  // constantID=14: APPLY_SLM_A_RESHAPE = false
         }
         return spec;
     };
