@@ -111,6 +111,7 @@ struct llama_context {
     void set_n_threads(int32_t n_threads, int32_t n_threads_batch);
 
     void set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
+    void set_eval_callback(ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data);
 
     void set_embeddings (bool value);
     void set_embeddings_nextn(bool value, bool masked);
