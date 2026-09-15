@@ -387,6 +387,9 @@ struct common_sampler * common_sampler_init(
                     // so we know to add the sampler at the very end.
                     use_adaptive_p = true;
                     break;
+                case COMMON_SAMPLER_TYPE_P_LESS:
+                    samplers.push_back(llama_sampler_init_p_less());
+                    break;
                 default:
                     GGML_ASSERT(false && "unknown sampler type");
             }
