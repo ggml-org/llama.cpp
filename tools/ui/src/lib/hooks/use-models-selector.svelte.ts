@@ -129,7 +129,11 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		backendsStore.setActive(backendId);
 		searchTerm = '';
 
-		await modelsStore.switchBackend();
+		try {
+			await modelsStore.switchBackend();
+		} catch (error) {
+			console.error('Failed to switch backend:', error);
+		}
 	}
 
 	async function handleSelect(modelId: string) {

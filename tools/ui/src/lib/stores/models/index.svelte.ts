@@ -169,11 +169,15 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			return;
 		}
 
-		// Try loading a favorite model
+		// Try a favorite model, but only one that exists on this backend: favorites
+		// are shared across backends, so a stored id may belong to another one
 		const favorite = this.favoriteModelIds.values().next()?.value;
+		const favoriteOption = favorite
+			? availableModels.find((m) => m.id === favorite || m.model === favorite)
+			: undefined;
 
-		if (favorite) {
-			await this.selectModelById(favorite);
+		if (favoriteOption) {
+			await this.selectModelById(favoriteOption.id);
 
 			return;
 		}
