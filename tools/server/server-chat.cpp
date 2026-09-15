@@ -217,26 +217,34 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
             } else if (exists_and_is_array(item, "summary") &&
                 exists_and_is_string(item, "type") &&
                 item.at("type") == "reasoning") {
-                // #responses_create-input-input_item_list-item-reasoning
 
-                if (!exists_and_is_array(item, "content")) {
-                    throw std::invalid_argument("item['content'] is not an array");
+                std::string reasoning_text;
+
+                if (exists_and_is_array(item, "content") && !item.at("content").empty()) {
+                    if (!exists_and_is_string(item.at("content")[0], "text")) {
+                        throw std::invalid_argument("item['content']['text'] is not a string");
+                    }
+                    reasoning_text = item.at("content")[0].at("text").get<std::string>();
+                } else if (!item.at("summary").empty()) {
+                    for (const auto & summary_item : item.at("summary")) {
+                        if (exists_and_is_string(summary_item, "text")) {
+                            reasoning_text += summary_item.at("text").get<std::string>();
+                        }
+                    }
                 }
-                if (item.at("content").empty()) {
-                    throw std::invalid_argument("item['content'] is empty");
-                }
-                if (!exists_and_is_string(item.at("content")[0], "text")) {
-                    throw std::invalid_argument("item['content']['text'] is not a string");
+
+                if (reasoning_text.empty()) {
+                    continue;
                 }
 
                 if (merge_prev) {
                     auto & prev_msg = chatcmpl_messages.back();
-                    prev_msg["reasoning_content"] = item.at("content")[0].at("text");
+                    prev_msg["reasoning_content"] = reasoning_text;
                 } else {
                     chatcmpl_messages.push_back(json {
                         {"role", "assistant"},
                         {"content", json::array()},
-                        {"reasoning_content", item.at("content")[0].at("text")},
+                        {"reasoning_content", reasoning_text},
                     });
                 }
             } else {
