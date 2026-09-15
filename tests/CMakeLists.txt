@@ -253,6 +253,13 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
 
     llama_build(test-fusion.cpp)
+
+    # llama-dense covers llama_kv_cache, mamba-dense covers llama_memory_recurrent
+    llama_build(test-state-restore-failure.cpp)
+    llama_test(test-state-restore-failure LABEL main ARGS -m "${MODEL_DIR}/llama-dense.gguf")
+    set_tests_properties(test-state-restore-failure PROPERTIES FIXTURES_REQUIRED generate-models)
+    llama_test(test-state-restore-failure NAME test-state-restore-failure-mamba LABEL main ARGS -m "${MODEL_DIR}/mamba-dense.gguf")
+    set_tests_properties(test-state-restore-failure-mamba PROPERTIES FIXTURES_REQUIRED generate-models)
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
