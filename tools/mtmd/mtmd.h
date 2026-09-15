@@ -156,6 +156,9 @@ MTMD_API int mtmd_get_audio_sample_rate(const mtmd_context * ctx);
 // get the current marker string
 MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
 
+// get the current number of max tokens per image
+MTMD_API uint32_t mtmd_get_image_num_tokens(const mtmd_context * ctx);
+
 // mtmd_bitmap
 //
 // if bitmap is image:

@@ -1167,6 +1167,8 @@ private:
             SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
 
             init_opt.video_params.fps_target = params_base.video_fps;
+            init_opt.video_params.max_tokens = params_base.video_max_tokens;
+            init_opt.video_params.tokens_per_frame = mtmd_get_image_num_tokens(mctx);
             init_opt.video_params.timestamp_interval_ms = params_base.video_timestamp_interval_ms;
             init_opt.video_params.ffmpeg_bin_dir = params_base.video_ffmpeg_bin_dir.empty()
                                 ? nullptr : params_base.video_ffmpeg_bin_dir.c_str();
