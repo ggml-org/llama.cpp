@@ -1,0 +1,67 @@
+[[docs:funcstructs:ggml-backend-impl.h]]
+== ggml-backend-impl.h
+
+
+[[docs:funcstructs:ggml-backend-impl.h:struct-ggml_backend_i]]
+=== struct ggml_backend_i
+
+The interface for a [.codebit]#`ggml_backend`#. Has the following mandatory members:
+
+
+* [.codebit]#`const char * (*get_name)(ggml_backend_t backend)`#
+* [.codebit]#`void (*free)(ggml_backend_t backend)`#
+* [.codebit]#`enum ggml_status (*graph_compute)     (ggml_backend_t backend, struct ggml_cgraph * cgraph)`#: from comments: "compute graph (always async if supported by the backend)"
+
+
+
+[[docs:funcstructs:ggml-backend-impl.h:struct-ggml_backend]]
+=== struct ggml_backend
+
+Describes a high-level backend that contains an interface for tensor operations (optional), graph computation and event synchronization (optional). Has the following members:
+
+
+* [.codebit]#`ggml_guid_t guid`#
+* [.codebit]#`struct ggml_backend_i iface`#
+* [.codebit]#`ggml_backend_dev_t device`#
+* [.codebit]#`void * context`#
+
+
+[[docs:funcstructs:ggml-backend-impl.h:struct-ggml_backend_device_i]]
+=== struct ggml_backend_device_i
+
+The interface of a [.codebit]#`ggml_backend_device`#. Here are some of its members:
+
+* [.codebit]#`const char * (*get_name)(ggml_backend_dev_t dev)`#: from comments
+* [.codebit]#`ggml_backend_t (*init_backend)(ggml_backend_dev_t dev, const char * params)`#: initializes the [.codebit]#`ggml_backend`# corresponding to this device
+* [.codebit]#`bool (*supports_op)(ggml_backend_dev_t dev, const struct ggml_tensor * op)`#
+
+
+[[docs:funcstructs:ggml-backend-impl.h:struct-ggml_backend_device]]
+=== struct ggml_backend_device
+
+Describes a usable device. Has the following members:
+
+* [.codebit]#`struct ggml_backend_device_i iface`#
+* [.codebit]#`ggml_backend_reg_t reg`#
+* [.codebit]#`void * context`#
+
+
+[[docs:funcstructs:ggml-backend-impl.h:struct-ggml_backend_reg_i]]
+=== struct ggml_backend_reg_i
+
+The interface for a [.codebit]#`ggml_backend_reg`#. Has the following members:
+
+* [.codebit]#`const char * (*get_name)(ggml_backend_reg_t reg)`#
+* [.codebit]#`size_t (*get_device_count)(ggml_backend_reg_t reg)`#
+* [.codebit]#`ggml_backend_dev_t (*get_device)(ggml_backend_reg_t reg, size_t index)`#
+* [.codebit]#`void * (*get_proc_address)(ggml_backend_reg_t reg, const char * name)`#: from comments: "(optional) get a pointer to a function in the backend; backends can add custom functions that are not part of the standard ggml-backend interface"
+
+
+[[docs:funcstructs:ggml-backend-impl.h:struct-ggml_backend_reg]]
+=== struct ggml_backend_reg
+
+A registry managing the devices for a specific backend. Has the following members:
+
+* [.codebit]#`int api_version`#: must be initialized to [.codebit]#`GGML_BACKEND_API_VERSION`#
+* [.codebit]#`struct ggml_backend_reg_i iface`#
+* [.codebit]#`void * context`#
