@@ -1999,6 +1999,198 @@ static void test_convert_responses_to_chatcmpl() {
 
         assert_equals(false, result.contains("tools"));
     }
+
+    // Test function_call_output with array output containing input_text
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call",
+                    "name": "view_image",
+                    "arguments": "{}",
+                    "call_id": "call_1"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": "here is the image"
+                        }
+                    ]
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+        assert_equals((size_t)2, result.at("messages").size());
+
+        const auto & tool_msg = result.at("messages")[1];
+        assert_equals(std::string("tool"), tool_msg.at("role").get<std::string>());
+        assert_equals(std::string("call_1"), tool_msg.at("tool_call_id").get<std::string>());
+        assert_equals(true, tool_msg.at("content").is_array());
+        assert_equals(std::string("text"), tool_msg.at("content")[0].at("type").get<std::string>());
+        assert_equals(std::string("here is the image"), tool_msg.at("content")[0].at("text").get<std::string>());
+    }
+
+    // Test function_call_output with input_image (e.g. Codex view_image tool output)
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call",
+                    "name": "view_image",
+                    "arguments": "{}",
+                    "call_id": "call_1"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": "here you go"
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+                        }
+                    ]
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+        assert_equals((size_t)2, result.at("messages").size());
+
+        const auto & tool_msg = result.at("messages")[1];
+        assert_equals(std::string("tool"), tool_msg.at("role").get<std::string>());
+        assert_equals(std::string("call_1"), tool_msg.at("tool_call_id").get<std::string>());
+        assert_equals((size_t)2, tool_msg.at("content").size());
+
+        assert_equals(std::string("text"), tool_msg.at("content")[0].at("type").get<std::string>());
+        assert_equals(std::string("here you go"), tool_msg.at("content")[0].at("text").get<std::string>());
+
+        assert_equals(std::string("image_url"), tool_msg.at("content")[1].at("type").get<std::string>());
+        assert_equals(
+            std::string("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"),
+            tool_msg.at("content")[1].at("image_url").at("url").get<std::string>()
+        );
+    }
+
+    // Test function_call_output input_image without image_url
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "type": "input_image"
+                        }
+                    ]
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        try {
+            server_chat_convert_responses_to_chatcmpl(input);
+            throw std::runtime_error("Expected exception");
+        } catch (const std::exception & e) {
+            if (std::string(e.what()).find("image_url") == std::string::npos) {
+                throw std::runtime_error("Expected exception about missing 'image_url'");
+            }
+        }
+    }
+
+    // Test function_call_output with unsupported type
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "type": "input_file"
+                        }
+                    ]
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        try {
+            server_chat_convert_responses_to_chatcmpl(input);
+            throw std::runtime_error("Expected exception");
+        } catch (const std::exception & e) {
+            if (std::string(e.what()).find("must be one of") == std::string::npos) {
+                throw std::runtime_error("Expected exception about 'type'");
+            }
+        }
+    }
+
+    // Test function_call_output input_image where image_url is an object (not a string)
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "type": "input_image",
+                            "image_url": {
+                                "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        try {
+            server_chat_convert_responses_to_chatcmpl(input);
+            throw std::runtime_error("Expected exception");
+        } catch (const std::exception & e) {
+            if (std::string(e.what()).find("image_url") == std::string::npos) {
+                throw std::runtime_error("Expected exception about 'image_url'");
+            }
+        }
+    }
+
+    // Test function_call_output input_text without text
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "type": "input_text"
+                        }
+                    ]
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        try {
+            server_chat_convert_responses_to_chatcmpl(input);
+            throw std::runtime_error("Expected exception");
+        } catch (const std::exception & e) {
+            if (std::string(e.what()).find("text") == std::string::npos) {
+                throw std::runtime_error("Expected exception about 'text'");
+            }
+        }
+    }
 }
 
 // Shared LFM2 parser cases - all variants use one output format and parser

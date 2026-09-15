@@ -203,10 +203,25 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 } else {
                     json chatcmpl_outputs = item.at("output");
                     for (json & chatcmpl_output : chatcmpl_outputs) {
-                        if (!chatcmpl_output.contains("type") || chatcmpl_output.at("type") != "input_text") {
-                            throw std::invalid_argument("Output of tool call should be 'Input text'");
+                        const std::string out_type = json_value(chatcmpl_output, "type", std::string());
+                        if (out_type == "input_text") {
+                            if (!exists_and_is_string(chatcmpl_output, "text")) {
+                                throw std::invalid_argument("'text' is required for 'input_text' tool output");
+                            }
+                            chatcmpl_output["type"] = "text";
+                        } else if (out_type == "input_image") {
+                            if (!exists_and_is_string(chatcmpl_output, "image_url")) {
+                                throw std::invalid_argument("'image_url' is required for 'input_image' tool output and must be a string");
+                            }
+                            chatcmpl_output = json {
+                                {"image_url", json {
+                                    {"url", chatcmpl_output.at("image_url")}
+                                }},
+                                {"type", "image_url"},
+                            };
+                        } else {
+                            throw std::invalid_argument("'type' must be one of 'input_text' or 'input_image'");
                         }
-                        chatcmpl_output["type"] = "text";
                     }
                     chatcmpl_messages.push_back(json {
                         {"content",      chatcmpl_outputs},
