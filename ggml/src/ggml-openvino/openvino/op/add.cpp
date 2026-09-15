@@ -5,6 +5,7 @@
 #include <memory>
 #include <openvino/op/add.hpp>
 #include <openvino/op/constant.hpp>
+#include <openvino/op/convert.hpp>
 #include <openvino/op/reduce_sum.hpp>
 #include <openvino/op/unsqueeze.hpp>
 
@@ -35,7 +36,20 @@ OutputVector translate_add(const NodeContext & context) {
 
     auto input_0 = process_view_input_new(context, 0);
     auto input_1 = process_view_input_new(context, 1);
-    auto res = std::make_shared<ov::op::v1::Add>(input_0, input_1);
+    // opset1::Add needs matching types (e.g. fused ADD_ADD mixes f16/f32); add in f32, cast once.
+    auto output_type = context.get_output_type();
+    if (input_0.get_element_type() != input_1.get_element_type()) {
+        if (input_0.get_element_type() != ov::element::f32) {
+            input_0 = std::make_shared<ov::op::v0::Convert>(input_0, ov::element::f32);
+        }
+        if (input_1.get_element_type() != ov::element::f32) {
+            input_1 = std::make_shared<ov::op::v0::Convert>(input_1, ov::element::f32);
+        }
+    }
+    ov::Output<ov::Node> res = std::make_shared<ov::op::v1::Add>(input_0, input_1);
+    if (res.get_element_type() != output_type) {
+        res = std::make_shared<ov::op::v0::Convert>(res, output_type);
+    }
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 

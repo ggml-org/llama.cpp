@@ -669,6 +669,11 @@ function gg_run_test_backend_ops {
         args_extra=""
     fi
 
+    # TODO: OpenVINO GPU plugin crashes (CL_OUT_OF_RESOURCES) with 2 concurrent workers on GPU.
+    if [ ! -z "${GG_BUILD_OPENVINO}" ] && [ "${GGML_OPENVINO_DEVICE:-}" = "GPU" ]; then
+        args_extra=""
+    fi
+
     # TODO: reduce the test-backend-ops timeout to 1800s
     if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
         (time timeout 3600 ./bin/test-backend-ops ${args_extra} -b CPU) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
