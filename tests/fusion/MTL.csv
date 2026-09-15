@@ -169,6 +169,7 @@ plamo               ,0   ,any     ,ADD+ADD                     ,      2
 plamo               ,0   ,any     ,RMS_NORM+MUL                ,      3
 plamo2              ,0   ,any     ,RMS_NORM+MUL                ,     10
 plamo2              ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
+plamo2              ,0   ,any     ,SSM_CONV+UNARY              ,      1
 pockettts           ,0   ,any     ,NORM+MUL+ADD                ,      5
 qwen                ,0   ,any     ,RMS_NORM+MUL                ,      5
 qwen2               ,0   ,any     ,RMS_NORM+MUL                ,      5
@@ -181,12 +182,14 @@ qwen3               ,0   ,any     ,RMS_NORM+MUL                ,      9
 qwen35              ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen35              ,0   ,any     ,RMS_NORM+MUL                ,      8
 qwen35              ,0   ,any     ,RMS_NORM+SCALE              ,      2
+qwen35              ,0   ,any     ,SSM_CONV+UNARY              ,      1
 qwen35moe           ,1   ,any     ,ADD+ADD                     ,      2
 qwen35moe           ,1   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen35moe           ,1   ,any     ,MUL+ADD                     ,      4
 qwen35moe           ,1   ,any     ,RMS_NORM+MUL                ,      8
 qwen35moe           ,1   ,any     ,RMS_NORM+SCALE              ,      2
 qwen35moe           ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
+qwen35moe           ,1   ,any     ,SSM_CONV+UNARY              ,      1
 qwen3moe            ,1   ,any     ,MUL+ADD                     ,      4
 qwen3moe            ,1   ,any     ,RMS_NORM+MUL                ,      9
 qwen3moe            ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
@@ -196,6 +199,7 @@ qwen3next           ,0   ,any     ,MUL+ADD                     ,      4
 qwen3next           ,0   ,any     ,RMS_NORM+MUL                ,      8
 qwen3next           ,0   ,any     ,RMS_NORM+SCALE              ,      2
 qwen3next           ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
+qwen3next           ,0   ,any     ,SSM_CONV+UNARY              ,      1
 qwen3tts            ,0   ,any     ,RMS_NORM+MUL                ,      9
 qwen3vl             ,0   ,any     ,RMS_NORM+MUL                ,      9
 qwen3vlmoe          ,1   ,any     ,MUL+ADD                     ,      4
@@ -208,6 +212,7 @@ qwen4exp            ,0   ,any     ,MUL+ADD                     ,      4
 qwen4exp            ,0   ,any     ,RMS_NORM+MUL                ,     13
 qwen4exp            ,0   ,any     ,RMS_NORM+SCALE              ,      2
 qwen4exp            ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
+qwen4exp            ,0   ,any     ,SSM_CONV+UNARY              ,      1
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
 rnd1                ,0   ,any     ,MUL+ADD                     ,      4
