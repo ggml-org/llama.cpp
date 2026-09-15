@@ -119,6 +119,16 @@ static __device__ __forceinline__ void dequantize_q8_0(const void * vx, const in
     v.y *= d;
 }
 
+// b-posit8 W8A8 (Anomly): value = lattice[code] * 2^scale_exp (bp8_lut_f from ggml-common.h)
+static __device__ __forceinline__ void dequantize_bposit8(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_bposit8 * x = (const block_bposit8 *) vx;
+
+    const float d = ldexpf(1.0f, (int) x[ib].scale_exp);
+
+    v.x = bp8_lut_f[x[ib].qs[iqs + 0]] * d;
+    v.y = bp8_lut_f[x[ib].qs[iqs + 1]] * d;
+}
+
 //================================== k-quants
 
 // Each call dequantizes one super-block of QK_K values into y using the

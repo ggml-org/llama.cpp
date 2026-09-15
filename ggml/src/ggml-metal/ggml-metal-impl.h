@@ -42,6 +42,9 @@
 #define N_R0_Q8_0 2
 #define N_SG_Q8_0 4
 
+#define N_R0_BPOSIT8 2
+#define N_SG_BPOSIT8 4
+
 #define N_R0_MXFP4 2
 #define N_SG_MXFP4 2
 
