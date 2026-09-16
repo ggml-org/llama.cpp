@@ -435,24 +435,35 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     ggml_build_forward_expand(gf, cur);
 }
 
+// one row of the per-layer table per token; the token ids themselves come from build_inp_embd()
+class llm_graph_input_gemma4_per_layer : public llm_graph_input_i {
+public:
+    void set_input(const llama_ubatch * ubatch) override {
+        rows.set_rows(ubatch->token, ubatch->n_tokens);
+    }
+
+    bool can_reuse(const llm_graph_params & params) override {
+        return rows.can_reuse(params.ubatch.n_tokens);
+    }
+
+    llm_graph_lazy_rows rows;
+};
+
 // equivalent to get_per_layer_inputs() in python code
 // output shape: [n_embd_per_layer, n_layer, n_tokens]
 ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
-
     ggml_tensor * inp_per_layer;
     float tok_embd_scale = sqrtf((float) n_embd_per_layer);
     if (ubatch.token) {
-        inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
-        ggml_set_input(inp->tokens);
-        res->t_inp_tokens = inp->tokens;
+        auto inp = std::make_unique<llm_graph_input_gemma4_per_layer>();
 
-        inp_per_layer = ggml_get_rows  (ctx0, model.per_layer_tok_embd, inp->tokens);
+        inp_per_layer = inp->rows.build(ctx0, model.per_layer_tok_embd,
+                model.lazy_reader(model.per_layer_tok_embd), ubatch.n_tokens);
+        res->add_input(std::move(inp));
+
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, n_tokens);
         inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
         cb(inp_per_layer, "inp_per_layer_selected", -1);
-
-        res->add_input(std::move(inp));
     } else {
         // Multimodal embedding path: use padding token (ID=0) embedding
         // TODO: verify if this is the correct behavior in transformers implementation

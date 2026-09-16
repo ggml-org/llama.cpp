@@ -17,6 +17,7 @@ struct ggml_cgraph;
 struct ggml_context;
 struct ggml_tensor;
 
+struct llama_lazy_reader;
 struct llama_cparams;
 struct llama_layer;
 
@@ -97,6 +98,26 @@ struct llm_graph_params;
 //
 // llm_graph_input
 //
+
+// a ggml_get_rows() over a lazily read table, where --lazy-mode on-direct stages the rows instead; both paths yield the same F32 rows
+class llm_graph_lazy_rows {
+public:
+    // reader comes from llama_model::lazy_reader(table), and is null unless the rows of this table are being read directly
+    ggml_tensor * build(ggml_context * ctx0, ggml_tensor * table, const llama_lazy_reader * reader, int64_t n_rows);
+
+    void set_rows(const int32_t * idx, int64_t n);
+
+    bool can_reuse(int64_t n_rows) const;
+
+private:
+    const llama_lazy_reader * reader = nullptr;
+
+    // I32 [n_rows] row indices, or in direct mode F32 [table->ne[0], n_rows] staged rows
+    ggml_tensor * t = nullptr;
+
+    // host side of t in direct mode, reused across set_rows() calls
+    std::vector<uint8_t> staging;
+};
 
 class llm_graph_input_i {
 public:
