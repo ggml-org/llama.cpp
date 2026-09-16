@@ -41,8 +41,8 @@ layout (constant_id = 2) const uint BN = 64;
 layout (constant_id = 3) const uint BK = 16;  // Assumed to be 32 if working with a quant
 
 layout (constant_id = 4) const bool enable_smaller_matrices = false;
-const uint BNover2 = enable_smaller_matrices ? (BN / 2) : BN;
-const uint BNover4 = enable_smaller_matrices ? (BN / 4) : BN;
+const uint BNover2 = BN / 2;
+const uint BNover4 = enable_smaller_matrices ? (BN / 4) : (BN / 2);
 layout (constant_id = 5) const uint ALIGNED = 0;
 layout (constant_id = 6) const uint subgroup_size = 32;
 
@@ -677,7 +677,7 @@ void main() {
             coopMatPerElementNV(mat_d, mat_d, perElemOpD, ir, ic);
             return;
         }
-        if (enable_smaller_matrices && ic * BN + BNover2 >= _ne1) {
+        if (ic * BN + BNover2 >= _ne1) {
             coopmat<ACC_TYPE, gl_ScopeWorkgroup, BM, BNover2, gl_MatrixUseAccumulator> sum;
             sum = coopmat<ACC_TYPE, gl_ScopeWorkgroup, BM, BNover2, gl_MatrixUseAccumulator>(0.0);
 

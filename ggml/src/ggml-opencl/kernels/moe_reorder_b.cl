@@ -20,11 +20,13 @@ kernel void kernel_moe_reorder_b(
 
     uint router_idx = router[post_router_idx];
 
-    float4 out = (float4)(0);
-    if (router_idx != 0xFFFFFFFF) {
-        ushort activation_idx = router_idx / map_ratio;
-        out = src[activation_idx * K / 4 + k_4];
+    // Padded slots need not be written at all. The MoE GEMMs accumulate per output
+    // column and scatter only the real columns, so whatever sits in a padded slot
+    // never reaches dst
+    if (router_idx == 0xFFFFFFFF) {
+        return;
     }
 
-    dst[post_router_idx * K / 4 + k_4] = out;
+    ushort activation_idx = router_idx / map_ratio;
+    dst[post_router_idx * K / 4 + k_4] = src[activation_idx * K / 4 + k_4];
 }
