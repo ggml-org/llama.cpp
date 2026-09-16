@@ -18,6 +18,8 @@
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { modelLoadFraction, modelLoadProgressText, orgOf } from '$lib/utils';
+	import { getBackend } from '$lib/utils/api-base';
+	import { getBackendCapabilities } from '$lib/utils/backend';
 
 	interface Props {
 		option: ModelOption;
@@ -83,6 +85,13 @@
 		fetchedBaseModelOrg = null;
 
 		if (!showBaseModelAvatar || !orgName || tagBaseModel) return;
+
+		// external provider ids (`~openai/gpt-...`, `deepseek/deepseek-chat`) are
+		// not HF repos; their org is already the provider slug, so the base model
+		// lookup would be a missed request for every row
+		const backend = getBackend(option.backendId);
+
+		if (backend && !getBackendCapabilities(backend).props) return;
 
 		let cancelled = false;
 
