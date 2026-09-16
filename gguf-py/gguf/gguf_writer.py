@@ -830,9 +830,6 @@ class GGUFWriter:
     def add_indexer_kpool_select_tail(self, value: bool) -> None:
         self.add_bool(Keys.Attention.Indexer.KPOOL_SELECT_TAIL.format(arch=self.arch), value)
 
-    def add_indexer_index_share_mtp(self, value: bool) -> None:
-        self.add_bool(Keys.Attention.Indexer.INDEX_SHARE_MTP.format(arch=self.arch), value)
-
     def add_max_alibi_bias(self, bias: float) -> None:
         self.add_float32(Keys.Attention.MAX_ALIBI_BIAS.format(arch=self.arch), bias)
 

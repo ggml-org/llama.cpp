@@ -496,7 +496,6 @@ class Glm5NextModel(TextModel):
         self.gguf_writer.add_indexer_top_k(hp["index_topk"])
         self.gguf_writer.add_indexer_kpool(hp["index_kpool"])
         self.gguf_writer.add_indexer_kpool_select_tail(hp.get("index_kpool_always_select_tail", True))
-        self.gguf_writer.add_indexer_index_share_mtp(hp.get("index_share_for_mtp_iteration", False))
         if (indexer_types := hp.get("indexer_types")) is not None:
             self.gguf_writer.add_indexer_types([t == "full" for t in indexer_types])
 
