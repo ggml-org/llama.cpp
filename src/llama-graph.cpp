@@ -1,6 +1,7 @@
 #include "llama-graph.h"
 
 #include "llama-impl.h"
+#include "llama-lazy-reader.h"
 #include "llama-model.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
@@ -65,6 +66,41 @@ static bool can_reuse_kq_mask(
 }
 
 // impl
+
+ggml_tensor * llm_graph_lazy_rows::build(ggml_context * ctx0, ggml_tensor * table,
+                                         const llama_lazy_reader * reader, int64_t n_rows) {
+    this->reader = reader;
+
+    if (!reader) {
+        t = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rows);
+        ggml_set_input(t);
+
+        return ggml_get_rows(ctx0, table, t);
+    }
+
+    t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, table->ne[0], n_rows);
+    ggml_set_input(t);
+
+    return t;
+}
+
+void llm_graph_lazy_rows::set_rows(const int32_t * idx, int64_t n) {
+    GGML_ASSERT(can_reuse(n));
+
+    if (!reader) {
+        ggml_backend_tensor_set(t, idx, 0, n*ggml_element_size(t));
+        return;
+    }
+
+    staging.resize(n*reader->row_elems()*sizeof(float));
+    reader->gather(idx, n, (float *) staging.data());
+
+    ggml_backend_tensor_set(t, staging.data(), 0, staging.size());
+}
+
+bool llm_graph_lazy_rows::can_reuse(int64_t n_rows) const {
+    return t && n_rows == (reader ? t->ne[1] : t->ne[0]);
+}
 
 void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     if (ubatch->token) {

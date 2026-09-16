@@ -4,6 +4,7 @@
 #include "llama-ext.h"
 #include "llama-hparams.h"
 #include "llama-impl.h"
+#include "llama-lazy-reader.h"
 #include "llama-mmap.h"
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
@@ -28,6 +29,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
+#include <cinttypes>
 #include <cstdint>
 #include <cstring>
 #include <cmath>
@@ -38,6 +40,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
@@ -1863,11 +1866,52 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     return true;
 }
 
+// --lazy-mode on-direct: give a lazily read tensor a reader that gathers its rows with explicit positional reads
+void llama_model_base::add_lazy_reader(llama_model_loader & ml, const ggml_tensor * t) {
+    if (ml.lazy.mode != LLAMA_LAZY_MODE_DIRECT || ml.no_alloc || !t || !ml.lazy.has(t)) {
+        return;
+    }
+
+    const char * name = ggml_get_name(t);
+
+    if (!ggml_is_matrix(t)) {
+        LLAMA_LOG_WARN("%s: tensor %s needs a 2d table for direct reads, using lazy mmap reads\n", __func__, name);
+        return;
+    }
+
+    const auto * w = ml.get_weight(name);
+    if (!w) {
+        return;
+    }
+
+    // in-flight reads are IO queue depth rather than compute, so oversubscribe the cores
+    const int n_readers = 2*(int) std::max(1u, std::thread::hardware_concurrency());
+
+    const std::string & path = ml.files[w->idx]->name();
+
+    try {
+        auto reader = std::make_unique<llama_lazy_reader>(path, w->offs, t->type, t->ne[0], t->ne[1], n_readers);
+
+        LLAMA_LOG_INFO("%s: tensor %s direct reads enabled: %" PRId64 " rows of %zu bytes at offset %zu of %s, %d readers\n",
+                __func__, name, reader->n_rows(), reader->row_size(), w->offs, path.c_str(), n_readers);
+
+        lazy_readers.emplace(t, std::move(reader));
+    } catch (const std::exception & e) {
+        // the tensor is still lazy, so a file that cannot be reopened just keeps its mmap reads
+        LLAMA_LOG_WARN("%s: tensor %s cannot use direct reads (%s), using lazy mmap reads\n",
+                __func__, name, e.what());
+    }
+}
+
 ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
     const buft_list_t * buft_list_layer = tn.bid == -1 ? nullptr : pimpl->dev_layer.at(tn.bid).buft_list;
-    return ml.create_tensor(
+    ggml_tensor * t = ml.create_tensor(
         hparams, &pimpl->cpu_buft_list, pimpl->dev_input.buft_list, pimpl->dev_output.buft_list, buft_list_layer,
         tn, ne, flags);
+
+    add_lazy_reader(ml, t);
+
+    return t;
 }
 
 std::string llama_model::arch_name() const {
