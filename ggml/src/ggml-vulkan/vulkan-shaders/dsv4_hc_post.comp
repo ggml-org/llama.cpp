@@ -8,7 +8,7 @@
 //   dst[i0, idst, it] = x[i0, it]*post[idst, it]
 //                     + sum_isrc residual[i0, isrc, it]*comb[idst, isrc, it]
 //
-// NO_COMB: identity mixing, each stream keeps its own residual:
+// HAS_COMB == 0: identity mixing, each stream keeps its own residual:
 //
 //   dst[i0, idst, it] = x[i0, it]*post[idst, it] + residual[i0, idst, it]
 
