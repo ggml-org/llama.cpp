@@ -89,23 +89,16 @@
 	{/each}
 {/if}
 
-{#if groups.loaded.length > 0}
-	<p class={headerClass} style={headerStyle}>Loaded models</p>
+<!-- Local view: one list, the loaded models first, no section headers. -->
+{#each groups.loaded as item (`loaded-${item.option.id}`)}
+	{@render render(item, false)}
+{/each}
 
-	{#each groups.loaded as item (`loaded-${item.option.id}`)}
-		{@render render(item, false)}
+{#each groups.available as group (group.orgName)}
+	{#each group.items as item (item.option.id)}
+		{@render render(item, true)}
 	{/each}
-{/if}
-
-{#if groups.available.length > 0}
-	<h2 class={headerClass} style={headerStyle}>Downloaded models</h2>
-
-	{#each groups.available as group (group.orgName)}
-		{#each group.items as item (item.option.id)}
-			{@render render(item, true)}
-		{/each}
-	{/each}
-{/if}
+{/each}
 
 <!-- Remote view: one section per backend. -->
 {#each groups.providers as provider (provider.backendId)}
