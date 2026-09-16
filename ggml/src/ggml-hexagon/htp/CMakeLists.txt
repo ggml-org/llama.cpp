@@ -44,6 +44,9 @@ add_library(${HTP_LIB} SHARED
     argsort-ops.c
     im2col-ops.c
     allreduce-ops.c
+    conv2d-ops.c
+    groupnorm-ops.c
+    qknorm-rope-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE

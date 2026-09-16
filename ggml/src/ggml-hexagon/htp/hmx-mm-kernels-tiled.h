@@ -676,6 +676,63 @@ static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict 
     }
 }
 
+static void core_dot_chunk_fp16_f8(__fp16 *restrict output, const __fp16 *restrict activation,
+                                   const uint8_t *restrict weight, const __fp16 *restrict scales,
+                                   uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
+#if defined(__HEXAGON_ARCH__) && (__HEXAGON_ARCH__ >= 79)
+    __builtin_assume(n_row_tiles > 0);
+    __builtin_assume(n_col_tiles > 0);
+    __builtin_assume(n_dot_tiles > 0);
+
+    asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int) scales));
+
+    const size_t act_dot_stride = (size_t) n_dot_tiles * HTP_MM_HMX_TILE_N_ELMS;
+    const size_t weight_dot_stride = (size_t) n_dot_tiles * HTP_MM_WEIGHT_TILE_SIZE_F8_E4M3;
+
+    for (uint32_t r = 0; r < n_row_tiles; ++r) {
+        const __fp16 * row_base = activation + r * act_dot_stride;
+        const uint8_t * col_base = weight;
+        __fp16 * out_tile = output + (size_t) r * n_col_tiles * HTP_MM_HMX_TILE_N_ELMS;
+
+        for (uint32_t c = 0; c < n_col_tiles; ++c) {
+            const __fp16 * row_tiles = row_base;
+            const uint8_t * col_tiles = col_base;
+
+            asm volatile(HMX_CLRACC_F16());
+
+            for (uint32_t kt = 0; kt < n_dot_tiles; kt += 32) {
+                const uint32_t count = hex_smin(32, n_dot_tiles - kt);
+                const uint32_t act_range = count * HTP_MM_HMX_TILE_SIZE - 1;
+                const uint32_t weight_range = count * HTP_MM_WEIGHT_TILE_SIZE_F8_E4M3 - 1;
+                asm volatile(
+                    "{\n"
+                    "    activation.hf = mxmem(%0, %1):deep\n"
+                    "    weight.f8 = mxmem(%2, %3)\n"
+                    "}\n"
+                    :: "r"(row_tiles), "r"(act_range), "r"(col_tiles), "r"(weight_range));
+                row_tiles += (size_t) count * HTP_MM_HMX_TILE_N_ELMS;
+                col_tiles += (size_t) count * HTP_MM_WEIGHT_TILE_SIZE_F8_E4M3;
+            }
+
+            asm volatile(
+                "cvt.hf = acc(%0)\n"
+                "mxmem(%1, %2) = cvt\n"
+                :: "r"(2), "r"(out_tile), "r"(0) : "memory");
+            col_base += weight_dot_stride;
+            out_tile += HTP_MM_HMX_TILE_N_ELMS;
+        }
+    }
+#else
+    (void) output;
+    (void) activation;
+    (void) weight;
+    (void) scales;
+    (void) n_row_tiles;
+    (void) n_col_tiles;
+    (void) n_dot_tiles;
+#endif
+}
+
 static void core_mma_chunk_fp16_short(__fp16 *restrict c, const __fp16 *restrict a, const __fp16 *restrict b,
                                 const __fp16 *restrict col_scales, const __fp16 *restrict eye_tile,
                                 uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles, bool zero_init) {
@@ -777,13 +834,16 @@ static void transfer_output_chunk_fp16_to_fp32_col_chunk(
     uint32_t total_n_cols,
     uint32_t dst_stride,
     uint32_t src2_stride,
-    uint32_t dst_cols
+    uint32_t dst_cols,
+    float output_scale
 ) {
     assert(c_len % HTP_MM_HMX_TILE_N_COLS == 0);
     assert(total_n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
     const size_t tile_row_stride = (total_n_cols / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
 
     const HVX_Vector one = hvx_vec_splat_f16(1.0);
+    const HVX_Vector scale = hvx_vec_splat_f32(output_scale);
+    const bool apply_scale = output_scale != 1.0f;
 
     const size_t limit_c         = hex_smin(c_len, dst_cols);
     const size_t limit_c_aligned = (limit_c & ~31);
@@ -807,6 +867,9 @@ static void transfer_output_chunk_fp16_to_fp32_col_chunk(
             HVX_Vector *pv_out1 = (HVX_Vector *) (output_row_base + c + dst_stride);
 
             HVX_Vector v_out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
+            if (apply_scale) {
+                v_out0 = hvx_vec_mul_f32_f32(v_out0, scale);
+            }
             if (src2_row_base) {
                 HVX_Vector v_src2_0 = hvx_vmemu(src2_row_base + c + 0);
                 v_out0 = hvx_vec_add_f32_f32(v_out0, v_src2_0);
@@ -815,6 +878,9 @@ static void transfer_output_chunk_fp16_to_fp32_col_chunk(
 
             if (r + 1 < n_rows) {
                 HVX_Vector v_out1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+                if (apply_scale) {
+                    v_out1 = hvx_vec_mul_f32_f32(v_out1, scale);
+                }
                 if (src2_row_base) {
                     HVX_Vector v_src2_1 = hvx_vmemu(src2_row_base + c + src2_stride);
                     v_out1 = hvx_vec_add_f32_f32(v_out1, v_src2_1);
@@ -832,6 +898,9 @@ static void transfer_output_chunk_fp16_to_fp32_col_chunk(
             HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);
 
             HVX_Vector v_out0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
+            if (apply_scale) {
+                v_out0 = hvx_vec_mul_f32_f32(v_out0, scale);
+            }
             if (src2_row_base) {
                 HVX_Vector v_src2_0 = hvx_vmemu(src2_row_base + c + 0);
                 v_out0 = hvx_vec_add_f32_f32(v_out0, v_src2_0);
@@ -840,6 +909,9 @@ static void transfer_output_chunk_fp16_to_fp32_col_chunk(
 
             if (r + 1 < n_rows) {
                 HVX_Vector v_out1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+                if (apply_scale) {
+                    v_out1 = hvx_vec_mul_f32_f32(v_out1, scale);
+                }
                 if (src2_row_base) {
                     HVX_Vector v_src2_1 = hvx_vmemu(src2_row_base + c + src2_stride);
                     v_out1 = hvx_vec_add_f32_f32(v_out1, v_src2_1);
@@ -862,7 +934,7 @@ static inline void transfer_output_chunk_fp16_to_fp32(
     uint32_t dst_cols
 ) {
     transfer_output_chunk_fp16_to_fp32_col_chunk(
-        dst, src2, vtcm_src, start_row, n_rows, n_cols, n_cols, dst_stride, src2_stride, dst_cols
+        dst, src2, vtcm_src, start_row, n_rows, n_cols, n_cols, dst_stride, src2_stride, dst_cols, 1.0f
     );
 }
 
@@ -877,6 +949,7 @@ typedef struct {
     uint32_t       dst_stride;  // DDR row stride
     uint32_t       src2_stride; // DDR row stride for residual
     uint32_t       dst_cols;    // Actual output columns
+    float          output_scale;
     struct htp_thread_trace * traces;
 } output_transfer_task_state_t;
 
