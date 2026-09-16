@@ -164,6 +164,10 @@ export class ModelPropsManager {
 		// /props only exists on llama.cpp servers
 		if (!serverStore.capabilities.props) return null;
 
+		// props not loaded yet (mid backend switch): the server role and model
+		// load state are not trustworthy, so do not guess
+		if (!serverStore.props) return null;
+
 		const cached = this.cache.get(modelId);
 
 		if (cached) return cached;
