@@ -50,6 +50,9 @@ export const DARK_INVERT_AVATAR_ORGS = ['openai'];
 /** Icon used for the model selector and the `/model` slash command. */
 export const MODEL_SELECTOR_ICON = Package;
 
+/** Pseudo backend tab listing the favorites of every backend. */
+export const FAVORITES_TAB_ID = 'favorites';
+
 export const ICON_STRIP_TRANSITION_DURATION = 150;
 export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
 

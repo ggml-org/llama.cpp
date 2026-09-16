@@ -1,28 +1,47 @@
 <script lang="ts">
-	import { Loader2, Plus } from '@lucide/svelte';
+	import { Loader2, Plus, Star } from '@lucide/svelte';
 	import { backendsModelsStore } from '$lib/stores';
 	import type { Backend } from '$lib/types';
 
 	interface Props {
 		activeId: string;
 		backends: Backend[];
+		favoritesActive?: boolean;
 		onAdd: () => void;
 		onSelect: (backendId: string) => void;
+		onSelectFavorites?: () => void;
 	}
 
-	let { activeId, backends, onAdd, onSelect }: Props = $props();
+	let {
+		activeId,
+		backends,
+		favoritesActive = false,
+		onAdd,
+		onSelect,
+		onSelectFavorites
+	}: Props = $props();
+
+	const tabClass = (active: boolean) => [
+		'inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap transition',
+		active
+			? 'bg-muted text-foreground'
+			: 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+	];
 </script>
 
 <div class="flex items-center gap-1 overflow-x-auto border-b border-border/50 px-2 py-2">
+	{#if onSelectFavorites}
+		<button class={tabClass(favoritesActive)} onclick={onSelectFavorites} type="button">
+			<Star class="h-3 w-3" />
+
+			Favorites
+		</button>
+	{/if}
+
 	{#each backends as backend (backend.id)}
 		{@const state = backendsModelsStore.get(backend.id)}
 		<button
-			class={[
-				'inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap transition',
-				activeId === backend.id
-					? 'bg-muted text-foreground'
-					: 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
-			]}
+			class={tabClass(activeId === backend.id)}
 			onclick={() => onSelect(backend.id)}
 			type="button"
 		>

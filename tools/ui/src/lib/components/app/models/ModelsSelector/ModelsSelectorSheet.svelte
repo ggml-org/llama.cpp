@@ -157,12 +157,14 @@
 							/>
 						</div>
 
-						<!-- Provider tabs sit under the search input, above the option list. -->
+						<!-- Provider tabs (favorites first), above the option list. -->
 						<ModelsSelectorBackendSwitcher
-							activeId={ms.activeBackendId}
+							activeId={ms.viewId}
 							backends={ms.backends}
+							favoritesActive={ms.isFavoritesView}
 							onAdd={handleAddBackend}
 							onSelect={(backendId) => void ms.handleBackendChange(backendId)}
+							onSelectFavorites={ms.showFavorites}
 						/>
 
 						<div class="max-h-[60vh] overflow-y-auto px-2">
@@ -182,13 +184,16 @@
 								<div class="my-1 h-px bg-border"></div>
 							{/if}
 
-							{#if ms.filteredOptions.length === 0}
-								<p class="px-3 py-3 text-center text-sm text-muted-foreground">No models found.</p>
+							{#if ms.isEmpty}
+								<p class="px-3 py-3 text-center text-sm text-muted-foreground">
+									{ms.isFavoritesView ? 'No favorite models yet.' : 'No models found.'}
+								</p>
 							{/if}
 
 							<ModelsSelectorList
 								activeId={ms.activeId}
 								{currentModel}
+								favorites={ms.isFavoritesView ? ms.favoriteItems : []}
 								groups={ms.groupedFilteredOptions}
 								onInfoClick={ms.handleInfoClick}
 								onSelect={ms.handleSelect}

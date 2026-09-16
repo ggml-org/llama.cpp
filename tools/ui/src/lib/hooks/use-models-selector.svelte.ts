@@ -1,10 +1,18 @@
-import { filterModelOptions, groupModelOptions } from '$lib/components/app/navigation/utils';
-import { CHAT_INPUT_FOCUS_SELECTOR, LOCAL_BACKEND_ID } from '$lib/constants';
+import type { ModelItem } from '$lib/components/app/navigation/utils';
+import {
+	filterModelOptions,
+	groupFavoriteOptions,
+	groupModelOptions
+} from '$lib/components/app/navigation/utils';
+import { CHAT_INPUT_FOCUS_SELECTOR, FAVORITES_TAB_ID, LOCAL_BACKEND_ID } from '$lib/constants';
 import { backendsModelsStore, backendsStore, modelsStore, serverStore } from '$lib/stores';
 import type { Backend } from '$lib/types';
 import type { ModelOption } from '$lib/types/models';
 import { rawModelId } from '$lib/utils/model-option-id';
 import { onMount } from 'svelte';
+
+/** Groups of the favorites tab, which lists favorites only. */
+const EMPTY_GROUPS = { available: [], external: [], loaded: [] };
 
 export interface UseModelsSelectorOptions {
 	currentModel: () => string | null;
@@ -27,13 +35,18 @@ export interface UseModelsSelectorReturn {
 	readonly serverModel: string | null;
 	readonly isHighlightedCurrentModelActive: boolean;
 	readonly isCurrentModelInCache: boolean;
+	readonly favoriteItems: ModelItem[];
 	readonly filteredOptions: ModelOption[];
+	readonly isFavoritesView: boolean;
+	readonly isEmpty: boolean;
 	readonly groupedFilteredOptions: ReturnType<typeof groupModelOptions>;
 	readonly isLoadingModel: boolean;
 	readonly switchingBackends: boolean;
 	readonly searchTerm: string;
 	readonly showModelDialog: boolean;
 	readonly infoModelId: string | null;
+	readonly viewId: string;
+	showFavorites(): void;
 	setSearchTerm(value: string): void;
 	setShowModelDialog(value: boolean): void;
 	handleInfoClick(modelName: string): void;
@@ -52,6 +65,9 @@ export interface UseModelsSelectorReturn {
  * duplicating store derivations, selection handling, and model loading.
  */
 export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSelectorReturn {
+	/** Tab the selector shows: a backend id, or the favorites pseudo tab. */
+	let viewId = $state<string>(backendsStore.active.id);
+
 	const activeBackendId = $derived(backendsStore.active.id);
 	// every enabled backend's models stay selectable and resolvable, so a
 	// model never turns unavailable just because another tab is open
@@ -62,8 +78,12 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			return modelProps?.ui !== false;
 		})
 	);
-	// the switcher tabs scope the rendered list to one backend's models
-	const options = $derived(allOptions.filter((option) => option.backendId === activeBackendId));
+	// the switcher tabs scope the rendered list to one backend's models; the
+	// favorites tab is not a backend and lists every backend's favorites
+	const isFavoritesView = $derived(viewId === FAVORITES_TAB_ID);
+	const options = $derived(
+		isFavoritesView ? allOptions : allOptions.filter((option) => option.backendId === viewId)
+	);
 	const loading = $derived(modelsStore.loading);
 	const updating = $derived(modelsStore.updating);
 	const activeId = $derived(modelsStore.selectedModelId);
@@ -98,13 +118,21 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	let infoModelId = $state<string | null>(null);
 
 	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
+	// favorites span every backend, so they come from the full option list
+	const favoriteItems = $derived(
+		groupFavoriteOptions(filterModelOptions(allOptions, searchTerm), modelsStore.favoriteModelIds)
+	);
 	const groupedFilteredOptions = $derived(
-		groupModelOptions(
-			filteredOptions,
-			modelsStore.favoriteModelIds,
-			(m) => modelsStore.isModelLoaded(m),
-			(option) => option.backendId === LOCAL_BACKEND_ID
-		)
+		isFavoritesView
+			? EMPTY_GROUPS
+			: groupModelOptions(
+					filteredOptions,
+					(m) => modelsStore.isModelLoaded(m),
+					(option) => option.backendId === LOCAL_BACKEND_ID
+				)
+	);
+	const isEmpty = $derived(
+		isFavoritesView ? favoriteItems.length === 0 : filteredOptions.length === 0
 	);
 
 	function handleInfoClick(modelName: string) {
@@ -139,14 +167,16 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	}
 
 	async function handleBackendChange(backendId: string) {
+		viewId = backendId;
+		searchTerm = '';
+
 		if (backendId === backendsStore.active.id) return;
 
 		backendsStore.setActive(backendId);
-		searchTerm = '';
 
-		// keep the multi-model selector mounted while the new backend's props and
-		// models load; role flips (external MODEL mode -> local ROUTER mode) would
-		// otherwise unmount and remount the open dropdown mid switch
+		// keep the multi-model selector mounted across the swap; a role flip
+		// (external MODEL mode -> local ROUTER mode) would otherwise unmount and
+		// remount the open dropdown
 		switchingBackends = true;
 
 		try {
@@ -160,7 +190,9 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	}
 
 	async function handleSelect(modelId: string) {
-		const option = options.find((opt) => opt.id === modelId);
+		// favorites live above the tabs and may belong to another backend, so the
+		// lookup spans every enabled backend
+		const option = allOptions.find((opt) => opt.id === modelId);
 
 		if (!option) return;
 
@@ -257,6 +289,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			return backends;
 		},
 
+		get favoriteItems() {
+			return favoriteItems;
+		},
+
 		get filteredOptions() {
 			return filteredOptions;
 		},
@@ -283,8 +319,16 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			return isCurrentModelInCache;
 		},
 
+		get isEmpty() {
+			return isEmpty;
+		},
+
 		isFavorite(model: string) {
 			return modelsStore.favoriteModelIds.has(model);
+		},
+
+		get isFavoritesView() {
+			return isFavoritesView;
 		},
 
 		get isHighlightedCurrentModelActive() {
@@ -327,6 +371,11 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			showModelDialog = value;
 		},
 
+		showFavorites() {
+			viewId = FAVORITES_TAB_ID;
+			searchTerm = '';
+		},
+
 		get showModelDialog() {
 			return showModelDialog;
 		},
@@ -337,6 +386,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		get updating() {
 			return updating;
+		},
+
+		get viewId() {
+			return viewId;
 		}
 	};
 }

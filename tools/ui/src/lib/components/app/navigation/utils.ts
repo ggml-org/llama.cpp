@@ -14,7 +14,6 @@ export interface OrgGroup {
 
 export interface GroupedModelOptions {
 	loaded: ModelItem[];
-	favorites: ModelItem[];
 	available: OrgGroup[];
 	/** Models served by other backends; rendered flat, without categories. */
 	external: ModelItem[];
@@ -52,9 +51,27 @@ export function filterModelOptions(options: ModelOption[], searchTerm: string): 
 	);
 }
 
+/**
+ * Favorite models across every backend, in list order. The favorites tab spans
+ * all backends, so they are collected from the full option list.
+ */
+export function groupFavoriteOptions(
+	options: ModelOption[],
+	favoriteIds: Set<string>
+): ModelItem[] {
+	const favorites: ModelItem[] = [];
+
+	for (let i = 0; i < options.length; i++) {
+		if (favoriteIds.has(options[i].model)) {
+			favorites.push({ flatIndex: i, option: options[i] });
+		}
+	}
+
+	return favorites;
+}
+
 export function groupModelOptions(
 	filteredOptions: ModelOption[],
-	favoriteIds: Set<string>,
 	isModelLoaded: (model: string) => boolean,
 	isLocalModel: (option: ModelOption) => boolean = () => true
 ): GroupedModelOptions {
@@ -62,25 +79,15 @@ export function groupModelOptions(
 	const loaded: ModelItem[] = [];
 
 	for (let i = 0; i < filteredOptions.length; i++) {
-		if (isModelLoaded(filteredOptions[i].model)) {
-			loaded.push({ flatIndex: i, option: filteredOptions[i] });
+		const option = filteredOptions[i];
+
+		if (isModelLoaded(option.model)) {
+			loaded.push({ flatIndex: i, option });
 		}
 	}
 
-	// Favorites (excluding loaded)
 	const loadedModelIds = new Set(loaded.map((item) => item.option.model));
-	const favorites: ModelItem[] = [];
-
-	for (let i = 0; i < filteredOptions.length; i++) {
-		if (
-			favoriteIds.has(filteredOptions[i].model) &&
-			!loadedModelIds.has(filteredOptions[i].model)
-		) {
-			favorites.push({ flatIndex: i, option: filteredOptions[i] });
-		}
-	}
-
-	// Available models grouped by org (excluding loaded and favorites)
+	// Available models grouped by org (excluding loaded)
 	const available: OrgGroup[] = [];
 	// models from other backends have no load state, so they stay flat
 	const external: ModelItem[] = [];
@@ -89,7 +96,7 @@ export function groupModelOptions(
 	for (let i = 0; i < filteredOptions.length; i++) {
 		const option = filteredOptions[i];
 
-		if (loadedModelIds.has(option.model) || favoriteIds.has(option.model)) continue;
+		if (loadedModelIds.has(option.model)) continue;
 
 		if (!isLocalModel(option)) {
 			external.push({ flatIndex: i, option });
@@ -108,5 +115,5 @@ export function groupModelOptions(
 		available.push({ items, orgName: orgName || null });
 	}
 
-	return { available, external, favorites, loaded };
+	return { available, external, loaded };
 }

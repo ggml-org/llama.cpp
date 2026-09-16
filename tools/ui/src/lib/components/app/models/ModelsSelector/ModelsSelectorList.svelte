@@ -14,11 +14,14 @@
 		onSelect: (modelId: string) => void;
 		onInfoClick: (modelName: string) => void;
 		renderOption?: import('svelte').Snippet<[ModelItem, boolean]>;
+		/** Favorite models of every backend; shown on the favorites tab. */
+		favorites?: ModelItem[];
 	}
 
 	let {
 		activeId,
 		currentModel,
+		favorites = [],
 		groups,
 		onInfoClick,
 		onSelect,
@@ -61,13 +64,10 @@
 	/>
 {/snippet}
 
-{#if groups.favorites.length > 0}
-	<p class={sectionHeaderClass}>Favorite models</p>
-
-	{#each groups.favorites as item (`fav-${item.option.id}`)}
-		{@render render(item, true)}
-	{/each}
-{/if}
+<!-- Favorites tab: rows only, the tab already names the view. -->
+{#each favorites as item (`fav-${item.option.id}`)}
+	{@render render(item, true)}
+{/each}
 
 {#if getDownloadEntries.length > 0}
 	<p class={sectionHeaderClass}>Download in progress</p>
