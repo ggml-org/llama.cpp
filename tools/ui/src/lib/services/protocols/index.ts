@@ -6,13 +6,11 @@
  * what the local llama-server speaks.
  */
 
-import { anthropicAdapter } from './anthropic';
 import { openaiAdapter } from './openai';
 import type { ChatProtocolAdapter } from './types';
 import type { Backend, BackendProtocol } from '$lib/types';
 
 const ADAPTERS: Record<BackendProtocol, ChatProtocolAdapter> = {
-	anthropic: anthropicAdapter,
 	'llama.cpp': openaiAdapter,
 	openai: openaiAdapter
 };

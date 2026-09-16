@@ -1,7 +1,7 @@
 /**
  * Client side timing fallback for backends that do not report their own.
  *
- * llama.cpp streams per-token timings; OpenAI and Anthropic compatible servers
+ * llama.cpp streams per-token timings; OpenAI-compatible servers
  * do not. Token counts come from the usage block of the final chunk (or the
  * count of streamed deltas as a fallback), times are measured locally: the wait
  * for the first token is attributed to prompt processing, the rest to
@@ -18,32 +18,27 @@ export interface StreamClock {
 }
 
 /**
- * Prompt/output/cache token counts, accepting OpenAI and Anthropic usage
- * fields. `promptTokens` excludes the cache read tokens, which are returned
- * separately as `cacheTokens`, so the two always add up to the prompt size.
+ * Prompt/output/cache token counts. `promptTokens` excludes the cache read
+ * tokens, which are returned separately as `cacheTokens`, so the two always
+ * add up to the prompt size.
  */
 export function usageTokenCounts(usage: ApiChatCompletionUsage | undefined): {
 	cacheTokens: number;
 	completionTokens: number;
 	promptTokens: number;
 } {
-	// Anthropic reports the input excluding cache tokens and splits reads from
-	// writes; OpenAI-compatible servers report a total that includes the reads
-	const isAnthropicStyle = usage?.input_tokens !== undefined;
-	const cacheTokens = isAnthropicStyle
-		? (usage?.cache_read_input_tokens ?? 0)
-		: (usage?.prompt_tokens_details?.cached_tokens ??
-			usage?.prompt_cache_hit_tokens ??
-			usage?.cached_tokens ??
-			0);
-	const promptTotal = isAnthropicStyle
-		? (usage?.input_tokens ?? 0) + (usage?.cache_creation_input_tokens ?? 0)
-		: (usage?.prompt_tokens ?? 0);
+	// a total that includes the cache reads, which are reported separately
+	const cacheTokens =
+		usage?.prompt_tokens_details?.cached_tokens ??
+		usage?.prompt_cache_hit_tokens ??
+		usage?.cached_tokens ??
+		0;
+	const promptTotal = usage?.prompt_tokens ?? 0;
 
 	return {
 		cacheTokens,
-		completionTokens: usage?.completion_tokens ?? usage?.output_tokens ?? 0,
-		promptTokens: isAnthropicStyle ? promptTotal : Math.max(0, promptTotal - cacheTokens)
+		completionTokens: usage?.completion_tokens ?? 0,
+		promptTokens: Math.max(0, promptTotal - cacheTokens)
 	};
 }
 

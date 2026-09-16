@@ -8,7 +8,6 @@
 
 	const PROTOCOL_OPTIONS: Array<{ label: string; value: BackendProtocol }> = [
 		{ label: 'OpenAI-compatible', value: 'openai' },
-		{ label: 'Anthropic-compatible', value: 'anthropic' },
 		{ label: 'llama.cpp (llama-server)', value: 'llama.cpp' }
 	];
 
@@ -26,7 +25,6 @@
 	let protocolLabel = $derived(
 		PROTOCOL_OPTIONS.find((option) => option.value === backend.protocol)?.label ?? ''
 	);
-	let isAnthropic = $derived(backend.protocol === 'anthropic');
 </script>
 
 <div class="grid gap-2">
@@ -95,13 +93,7 @@
 			value={backend.apiKey ?? ''}
 		/>
 
-		<p class="mt-1.5 text-xs text-muted-foreground">
-			{#if isAnthropic}
-				Sent as the x-api-key header.
-			{:else}
-				Sent as a Bearer token.
-			{/if}
-		</p>
+		<p class="mt-1.5 text-xs text-muted-foreground">Sent as a Bearer token.</p>
 	</div>
 
 	<Collapsible.Root bind:open={showAdvanced}>

@@ -5,8 +5,8 @@
  * SSE framing, resume offsets) and delegates the parts that differ per
  * protocol here: credential headers, request shaping and stream decoding.
  *
- * Decoding is per-stream: the Anthropic reader tracks content block state, so
- * it must not be shared between concurrent requests.
+ * Decoding is per-stream: a reader keeps per-stream state, so it must not be
+ * shared between concurrent requests.
  */
 
 import type { Backend } from '$lib/types';

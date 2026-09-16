@@ -5,14 +5,11 @@ import type {
 	BackendProtocol
 } from '$lib/types';
 
-/** Version sent with the Anthropic Messages API. */
-export const ANTHROPIC_API_VERSION = '2023-06-01';
-
 /** Prefix for generated ids of user-added backends. */
 export const BACKEND_ID_PREFIX = 'backend';
 
 /** Protocols a configured backend can speak, in display order. */
-export const BACKEND_PROTOCOLS: readonly BackendProtocol[] = ['llama.cpp', 'openai', 'anthropic'];
+export const BACKEND_PROTOCOLS: readonly BackendProtocol[] = ['llama.cpp', 'openai'];
 
 /** Chat completions path used when a backend does not override it. */
 export const DEFAULT_BACKEND_CHAT_PATH = '/v1/chat/completions';
@@ -34,7 +31,7 @@ const LLAMA_CPP_CAPABILITIES: BackendCapabilities = {
 	statusFeed: true,
 	tools: true
 };
-/** Capabilities of a plain OpenAI- or Anthropic-compatible endpoint. */
+/** Capabilities of a plain OpenAI-compatible endpoint. */
 const COMPATIBLE_CAPABILITIES: BackendCapabilities = {
 	corsProxy: false,
 	loadUnload: false,
@@ -48,15 +45,12 @@ const COMPATIBLE_CAPABILITIES: BackendCapabilities = {
 
 /** Capabilities per backend protocol. */
 export const BACKEND_CAPABILITIES: Record<BackendProtocol, BackendCapabilities> = {
-	anthropic: COMPATIBLE_CAPABILITIES,
 	'llama.cpp': LLAMA_CPP_CAPABILITIES,
 	openai: COMPATIBLE_CAPABILITIES
 };
 
 /** Default wire quirks per protocol. */
 export const BACKEND_COMPAT: Record<BackendProtocol, BackendCompat> = {
-	// the Messages API has no OpenAI-style token cap or usage-in-stream toggle
-	anthropic: { maxTokensField: 'max_tokens', supportsUsageInStreaming: false },
 	// llama-server reports its own timings, so it needs no usage chunk
 	'llama.cpp': { maxTokensField: 'max_tokens', supportsUsageInStreaming: false },
 	openai: { maxTokensField: 'max_tokens', supportsUsageInStreaming: true }

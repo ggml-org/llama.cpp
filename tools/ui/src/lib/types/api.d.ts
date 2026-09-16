@@ -379,12 +379,8 @@ export interface ApiChatCompletionStreamChunk {
 }
 
 export interface ApiChatCompletionUsage {
-	cache_creation_input_tokens?: number;
-	cache_read_input_tokens?: number;
 	cached_tokens?: number;
 	completion_tokens?: number;
-	input_tokens?: number;
-	output_tokens?: number;
 	prompt_cache_hit_tokens?: number;
 	prompt_tokens?: number;
 	prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };

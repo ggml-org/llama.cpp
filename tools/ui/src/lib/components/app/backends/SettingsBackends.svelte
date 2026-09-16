@@ -72,7 +72,7 @@
 
 			<Empty.Title>Add another backend</Empty.Title>
 
-			<Empty.Description>Connect an OpenAI- or Anthropic-compatible endpoint.</Empty.Description>
+			<Empty.Description>Connect an OpenAI-compatible endpoint.</Empty.Description>
 		</Empty.Header>
 
 		<Empty.Content>
