@@ -1405,7 +1405,7 @@ int ggml_metal_op_dsv4_hc(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
     ggml_metal_encoder_t enc = ctx->enc;
-    auto pipeline = ggml_metal_library_get_pipeline_dsv4_hc(ctx->lib, op->op);
+    auto pipeline = ggml_metal_library_get_pipeline_dsv4_hc(ctx->lib, op);
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
 
@@ -1467,8 +1467,10 @@ int ggml_metal_op_dsv4_hc(ggml_metal_op_t ctx, int idx) {
                     /*.nb_x2    =*/ x->nb[2],
                     /*.nb_w0    =*/ weights->nb[0],
                     /*.nb_w1    =*/ weights->nb[1],
+                    /*.nb_w2    =*/ weights->nb[2],
                     /*.nb_d0    =*/ op->nb[0],
                     /*.nb_d1    =*/ op->nb[1],
+                    /*.scale    =*/ ggml_get_op_params_f32(op, 0),
                 };
 
                 ggml_metal_encoder_set_bytes (enc, &args, sizeof(args), 0);
@@ -1491,7 +1493,6 @@ int ggml_metal_op_dsv4_hc(ggml_metal_op_t ctx, int idx) {
                 GGML_ASSERT(x->type        == GGML_TYPE_F32);
                 GGML_ASSERT(residual->type == GGML_TYPE_F32);
                 GGML_ASSERT(post->type     == GGML_TYPE_F32);
-                GGML_ASSERT(comb->type     == GGML_TYPE_F32);
                 GGML_ASSERT(op->type       == GGML_TYPE_F32);
                 GGML_ASSERT(residual->ne[1] == 4);
 
@@ -1505,9 +1506,9 @@ int ggml_metal_op_dsv4_hc(ggml_metal_op_t ctx, int idx) {
                     /*.nb_r2    =*/ residual->nb[2],
                     /*.nb_p0    =*/ post->nb[0],
                     /*.nb_p1    =*/ post->nb[1],
-                    /*.nb_c0    =*/ comb->nb[0],
-                    /*.nb_c1    =*/ comb->nb[1],
-                    /*.nb_c2    =*/ comb->nb[2],
+                    /*.nb_c0    =*/ comb ? comb->nb[0] : 0,
+                    /*.nb_c1    =*/ comb ? comb->nb[1] : 0,
+                    /*.nb_c2    =*/ comb ? comb->nb[2] : 0,
                     /*.nb_d0    =*/ op->nb[0],
                     /*.nb_d1    =*/ op->nb[1],
                     /*.nb_d2    =*/ op->nb[2],
@@ -1517,8 +1518,12 @@ int ggml_metal_op_dsv4_hc(ggml_metal_op_t ctx, int idx) {
                 ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(x),        1);
                 ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(residual), 2);
                 ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(post),     3);
-                ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(comb),     4);
-                ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),       5);
+                if (comb) {
+                    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(comb), 4);
+                    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),   5);
+                } else {
+                    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),   4);
+                }
 
                 const int n_tiles = (args.n_embd + 31)/32;
                 const int nsg = std::min(4, n_tiles);
