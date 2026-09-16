@@ -11509,6 +11509,10 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         aligned = false;
     }
 
+    if (std::getenv("GGML_VK_FA_FORCE_UNALIGNED") != nullptr) {
+        aligned = false;
+    }
+
     // Only use mask opt when the mask is fairly large. This hasn't been tuned extensively.
     bool use_mask_opt = mask && !use_sparse && nem1 >= 32 && nem0 * nem1 > 32768 && nem0 >= tuning_params.block_cols * 16
                         && (ctx->device->architecture != vk_device_architecture::AMD_GCN || HSK > 256 || HSV > 256);
@@ -11531,6 +11535,10 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     assert(pipeline);
     // Compile early to initialize wg_denoms.
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+
+    const char * fa_kv_partitions = std::getenv("GGML_VK_FA_KV_PARTITIONS");
+    const uint32_t requested_partitions = fa_kv_partitions ? (uint32_t) atoi(fa_kv_partitions) : 0;
+    const bool disable_partition_heuristic = std::getenv("GGML_VK_FA_DISABLE_PARTITION_HEURISTIC") != nullptr;
 
     uint32_t split_kv = KV;
     uint32_t split_k = 1;
@@ -11576,23 +11584,16 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         split_k = CEIL_DIV(KV, split_kv);
     }
 
-    if (!use_sparse && N == 1) {
+    if (!use_sparse && N == 1 && (!disable_partition_heuristic || requested_partitions > 1)) {
         uint32_t default_partitions = KV <= 3072 ? 32 : KV < 5120 ? 64 : 128;
-        if (KV >= 24576 && (KV / 32) % 256 == 0) {
+        if (!disable_partition_heuristic && KV >= 24576 && (KV / 32) % 256 == 0) {
             default_partitions = 256;
+        }
+        if (requested_partitions > 1) {
+            default_partitions = requested_partitions;
         }
         split_kv = CEIL_DIV(KV, default_partitions);
         split_k = CEIL_DIV(KV, split_kv);
-    }
-
-    const char * fa_kv_partitions = std::getenv("GGML_VK_FA_KV_PARTITIONS");
-    if (fa_kv_partitions) {
-        const uint32_t forced_partitions = (uint32_t) atoi(fa_kv_partitions);
-        if (forced_partitions > 1) {
-            split_k = forced_partitions;
-            split_kv = CEIL_DIV(KV, split_k);
-            split_k = CEIL_DIV(KV, split_kv);
-        }
     }
 
     const uint32_t dispatch_x = split_k > 1
@@ -11777,6 +11778,12 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                                               mask_n_head_log2, m0, m1,
                                               gqa_ratio, split_kv, split_k };
 
+    if (log_shape && std::getenv("GGML_VK_FA_DEBUG") != nullptr) {
+        fprintf(stderr, "vulkan FA debug: requested_P=%u heuristic=%u actual_P=%u push_k_num=%u split_kv=%u main=(%u,%u,%u)\n",
+                requested_partitions, disable_partition_heuristic ? 0u : 1u, split_k, pc.k_num, pc.split_kv,
+                dispatch_x, workgroups_y, workgroups_z);
+    }
+
     if (split_k > 1) {
         ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_flash_attn_split_k_reduce, 1);
 
@@ -11797,6 +11804,10 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
 
         ggml_vk_sync_buffers(ctx, subctx);
         const vk_op_flash_attn_split_k_reduce_push_constants pc2 = { HSV, (uint32_t)ne1, (uint32_t)ne2, (uint32_t)ne3, split_k, (sinks != nullptr) };
+        if (log_shape && std::getenv("GGML_VK_FA_DEBUG") != nullptr) {
+            fprintf(stderr, "vulkan FA debug: reducer=(%u,%u,%u) push_k_num=%u\n",
+                    (uint32_t) ne1, HSV, (uint32_t) (ne2 * ne3), pc2.k_num);
+        }
         ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_flash_attn_split_k_reduce,
                                     {split_k_buf, sinks_buf, dst_buf},
                                     pc2, { (uint32_t)ne1, HSV, (uint32_t)(ne2 * ne3) }, "FA_SPLIT_REDUCE");
