@@ -98,6 +98,14 @@ export const BACKEND_PRESETS: readonly BackendPreset[] = [
 		protocol: 'openai'
 	},
 	{
+		baseUrl: 'https://api.z.ai/api/paas/v4',
+		chatPath: '/chat/completions',
+		id: 'zai',
+		modelsPath: '/models',
+		name: 'Z.ai',
+		protocol: 'openai'
+	},
+	{
 		baseUrl: 'https://api.openai.com',
 		// newer OpenAI models reject max_tokens
 		compat: { maxTokensField: 'max_completion_tokens' },
