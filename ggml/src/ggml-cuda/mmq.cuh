@@ -1608,11 +1608,8 @@ extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS);
 // -----------------------------------------
 extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
 extern DECL_MMQ_CASE(GGML_TYPE_NVFP4);
-#ifdef GGML_CUDA_HAS_BLACKWELL_TARGET
-// the FP4 instructions are Blackwell-only
 extern DECL_MMQ_CASE_W4A4(GGML_TYPE_MXFP4);
 extern DECL_MMQ_CASE_W4A4(GGML_TYPE_NVFP4);
-#endif // GGML_CUDA_HAS_BLACKWELL_TARGET
 
 // -------------------------------------------------------------------------------------------------------------------------
 

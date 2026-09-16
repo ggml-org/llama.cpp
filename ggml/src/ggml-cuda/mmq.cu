@@ -5,8 +5,7 @@
 
 #include <cstdint>
 
-static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream,
-                                            [[maybe_unused]] const ggml_prec prec_src1) {
+static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream, const ggml_prec prec_src1) {
     switch (args.type_x) {
         case GGML_TYPE_Q1_0:
             mul_mat_q_case<GGML_TYPE_Q1_0>(ctx, args, stream);
@@ -72,22 +71,18 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
             break;
 // -----------------------------------------------------------------------
         case GGML_TYPE_MXFP4:
-#ifdef GGML_CUDA_HAS_BLACKWELL_TARGET
             // src1 at Q4 uses the native FP4 instructions, which are Blackwell-only
             if (prec_src1 == GGML_PREC_Q4) {
                 mul_mat_q_case<GGML_TYPE_MXFP4, GGML_PREC_Q4>(ctx, args, stream);
                 break;
             }
-#endif // GGML_CUDA_HAS_BLACKWELL_TARGET
             mul_mat_q_case<GGML_TYPE_MXFP4>(ctx, args, stream);
             break;
         case GGML_TYPE_NVFP4:
-#ifdef GGML_CUDA_HAS_BLACKWELL_TARGET
             if (prec_src1 == GGML_PREC_Q4) {
                 mul_mat_q_case<GGML_TYPE_NVFP4, GGML_PREC_Q4>(ctx, args, stream);
                 break;
             }
-#endif // GGML_CUDA_HAS_BLACKWELL_TARGET
             mul_mat_q_case<GGML_TYPE_NVFP4>(ctx, args, stream);
             break;
         default:
@@ -96,21 +91,45 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
     }
 }
 
-// src1 is quantized to Q8_1 unless the FP4 types can use 4-bit activations, in which case they
-// default to native W4A4 on Blackwell. GGML_CUDA_FORCE_W4A4 overrides a higher requested precision.
-static inline ggml_prec ggml_cuda_mmq_get_prec_src1(const ggml_tensor * src0, const ggml_tensor * dst) {
-    static const bool force_w4a4 = []() {
-        const char * env = getenv("GGML_CUDA_FORCE_W4A4");
-        return env != nullptr && std::atoi(env) != 0;
-    }();
-    if (src0->type != GGML_TYPE_NVFP4 && src0->type != GGML_TYPE_MXFP4) {
-        return GGML_PREC_Q8;
+// overrides the src1 precision requested by the graph, "auto" keeps the requested one
+static ggml_prec ggml_cuda_mmq_get_prec_env() {
+    const char * env_c = getenv("GGML_CUDA_MMQ_PREC");
+    if (env_c == nullptr) {
+        return GGML_PREC_UNDEFINED;
     }
-    const auto prec = ggml_get_op_params_i32(dst, 3);
-    if (force_w4a4 || prec == GGML_PREC_UNDEFINED || prec == GGML_PREC_Q4) {
+    std::string env_cpp = env_c;
+    for (char & c : env_cpp) {
+        c = std::tolower(c);
+    }
+    if (env_cpp == "q4") {
         return GGML_PREC_Q4;
     }
-    return GGML_PREC_Q8;
+    if (env_cpp == "q8") {
+        return GGML_PREC_Q8;
+    }
+    if (env_cpp != "auto") {
+        GGML_LOG_WARN("%s: Not supported yet for GGML_CUDA_MMQ_PREC: %s\n", __func__, env_cpp.c_str());
+    }
+    return GGML_PREC_UNDEFINED;
+}
+
+// src1 is quantized to Q8_1 unless the FP4 types can use 4-bit activations, in which case they
+// default to the native W4A4 instructions on Blackwell.
+static ggml_prec ggml_cuda_mmq_get_prec_src1(const ggml_tensor * src0, const ggml_tensor * dst, const int cc) {
+    static const ggml_prec prec_env = ggml_cuda_mmq_get_prec_env();
+
+    ggml_prec prec = prec_env;
+    if (prec == GGML_PREC_UNDEFINED) {
+        prec = (ggml_prec) ggml_get_op_params_i32(dst, 3);
+    }
+
+    // Q4 only for the FP4 types on Blackwell
+    GGML_ASSERT(prec == GGML_PREC_UNDEFINED || prec == GGML_PREC_Q8 || prec == GGML_PREC_Q4);
+    const bool can_use_q4 = (src0->type == GGML_TYPE_NVFP4 || src0->type == GGML_TYPE_MXFP4) && blackwell_mma_available(cc);
+    if (prec == GGML_PREC_Q8 || !can_use_q4) {
+        return GGML_PREC_Q8;
+    }
+    return GGML_PREC_Q4;
 }
 
 void ggml_cuda_mul_mat_q(
@@ -159,9 +178,9 @@ void ggml_cuda_mul_mat_q(
 
     const bool fallback = ne01 % 128 != 0;
 
-    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(src0, dst);
+    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(src0, dst, cc);
 
-    const bool use_native_fp4 = prec_src1 == GGML_PREC_Q4 && blackwell_mma_available(cc);
+    const bool use_native_fp4 = prec_src1 == GGML_PREC_Q4;
     const size_t y_block_size       = use_native_fp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
     const size_t y_values_per_block = use_native_fp4 ? QK_FP4_MMQ            : QK8_1_MMQ;
 
