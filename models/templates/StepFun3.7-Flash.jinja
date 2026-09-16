@@ -1,8 +1,11 @@
-{% macro render_content(content) %}{% if content is none %}{{- '' }}{% elif content is string %}{{- content }}{% elif content is mapping %}{{- content['value'] if 'value' in content else content['text'] }}{% elif content is iterable %}{% for item in content %}{% if item.type == 'text' %}{{- item['value'] if 'value' in item else item['text'] }}{% elif item.type == 'image' %}<im_patch>{% endif %}{% endfor %}{% endif %}{% endmacro %}
+{% macro render_message_content(message) %}{% if message.content is none %}{{- '' }}{% elif message.content is string %}{{- message.content }}{% elif message.content is mapping %}{{- message.content['value'] if 'value' in message.content else message.content['text'] }}{% elif message.content is iterable %}{% set ns = namespace(needs_text_separator=false) %}{% for item in message.content %}{% if item.type == 'text' %}{% if ns.needs_text_separator %}{{- ' ' }}{% endif %}{{- item['value'] if 'value' in item else item['text'] }}{% set ns.needs_text_separator = true %}{% elif item.type == 'image' %}<im_patch>{% set ns.needs_text_separator = false %}{% endif %}{% endfor %}{% endif %}{% endmacro %}
 {{bos_token}}{%- if tools %}
     {{- '<|im_start|>system\n' }}
+    {%- if reasoning_effort is defined %}
+        {{- "Reasoning: " + reasoning_effort + '\n\n' }}
+    {%- endif %}
     {%- if messages[0].role == 'system' %}
-        {{- render_content(messages[0].content) + '\n\n' }}
+        {{- render_message_content(messages[0]) + '\n\n' }}
     {%- endif %}
     {{- "# Tools\n\nYou have access to the following functions in JSONSchema format:\n\n<tools>" }}
     {%- for tool in tools %}
@@ -12,25 +15,31 @@
     {{- "\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...>\n...\n</function> block must be nested within <tool_call>\n...\n</tool_call> XML tags\n- Required parameters MUST be specified\n</IMPORTANT><|im_end|>\n" }}
 {%- else %}
     {%- if messages[0].role == 'system' %}
-        {{- '<|im_start|>system\n' + render_content(messages[0].content) + '<|im_end|>\n' }}
+        {{- '<|im_start|>system\n' }}
+        {%- if reasoning_effort is defined %}
+            {{- "Reasoning: " + reasoning_effort + '\n\n' }}
+        {%- endif %}
+        {{- render_message_content(messages[0]) + '<|im_end|>\n' }}
+    {%- elif reasoning_effort is defined %}
+        {{- '<|im_start|>system\n' + "Reasoning: " + reasoning_effort + '\n\n' + '<|im_end|>\n' }}
     {%- endif %}
 {%- endif %}
 {%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
 {%- for message in messages[::-1] %}
     {%- set index = (messages|length - 1) - loop.index0 %}
-    {%- if ns.multi_step_tool and message.role == "user" and render_content(message.content) is string and not(render_content(message.content).startswith('<tool_response>') and render_content(message.content).endswith('</tool_response>')) %}
+    {%- if ns.multi_step_tool and message.role == "user" and render_message_content(message) is string and not(render_message_content(message).startswith('<tool_response>') and render_message_content(message).endswith('</tool_response>')) %}
         {%- set ns.multi_step_tool = false %}
         {%- set ns.last_query_index = index %}
     {%- endif %}
 {%- endfor %}
 {%- for message in messages %}
-    {%- set content = render_content(message.content) %}
+    {%- set content = render_message_content(message) %}
     {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
         {%- set role_name = 'observation' if (message.role == "system" and not loop.first and message.name == 'observation') else message.role %}
         {{- '<|im_start|>' + role_name + '\n' + content + '<|im_end|>' + '\n' }}
     {%- elif message.role == "assistant" %}
         {%- if message.reasoning_content is string %}
-            {%- set reasoning_content = render_content(message.reasoning_content) %}
+            {%- set reasoning_content = message.reasoning_content %}
         {%- else %}
             {%- if '</think>' in content %}
                 {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
@@ -39,8 +48,8 @@
                 {%- set reasoning_content = '' %}
             {%- endif %}
         {%- endif %}
-        {#- keep <think> for the current turn; also keep it for earlier turns when the host
-            asks to preserve reasoning (llama.cpp --reasoning-preserve, gated on
+        {#- keep <think> for the current turn; also keep it for older turns when the
+            host asks to preserve reasoning (llama.cpp --reasoning-preserve, gated on
             supports_preserve_reasoning) -#}
         {%- if loop.index0 > ns.last_query_index or (preserve_thinking is defined and preserve_thinking) %}
             {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content + '\n</think>\n' + content }}
@@ -54,7 +63,7 @@
                 {%- endif %}
                 {{- '<tool_call>\n<function=' + tool_call.name + '>\n' }}
                 {%- if tool_call.arguments is defined %}
-                    {%- set arguments = tool_call.arguments %}
+                    {%- set arguments = tool_call.arguments | fromjson if tool_call.arguments is string else tool_call.arguments %}
                     {%- for args_name, args_value in arguments|items %}
                         {{- '<parameter=' + args_name + '>\n' }}
                         {%- set args_value = args_value | tojson(ensure_ascii=False) | safe if args_value is mapping or (args_value is sequence and args_value is not string) else args_value | string %}
