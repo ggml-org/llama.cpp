@@ -2,6 +2,7 @@
 
 #include "llama-kv-stream-binding.h"
 #include "llama-kv-stream-content.h"
+#include "llama-kv-stream-publication.h"
 
 struct llama_kv_stream_write_stats {
     size_t graph_submissions = 0, d2h_bytes = 0, d2h_calls = 0, d2d_bytes = 0, d2d_calls = 0;
@@ -89,6 +90,10 @@ public:
     // Requires disjoint leased writer workspace configured before begin_sequence().
     // Rows must cover [stable_tokens, active_tokens). Submission failure cancels prefetch but preserves host bytes.
     bool write_sequence_rows(uint32_t layer, size_t first_row, const ggml_tensor * k, const ggml_tensor * v);
+    bool prepare_write_pair(uint32_t layer, size_t first_row, const ggml_tensor * k, const ggml_tensor * v,
+            llama_kv_stream_publication_ticket & ticket, uint32_t pair,
+            std::unique_ptr<llama_kv_stream_publication_pair> & output);
+
     // Source is a completed, dense F32 [head_dim * heads, rows] device tensor. Rows are consecutive.
     // Hold a binding pin and the source owner until return; call synchronize() before attention.
     bool write_rows(uint32_t layer, ggml_kv_stream_operand operand, size_t first_row, const ggml_tensor * source);

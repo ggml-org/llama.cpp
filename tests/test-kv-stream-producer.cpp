@@ -145,6 +145,46 @@ int main(int argc, char ** argv) {
             t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(work.arena.get()));
         }
     });
+    if (cuda) t.test("completion_backed_producer_defers_multitile_host_publication_until_attention", [&](testing & t) {
+        const size_t rows=257, first=512, active=first+rows;
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,false,4);
+        ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        f.policy.pool_bytes=page.bytes*10; f.policy.initial_ring_slots=6;
+        if (!t.assert_true(f.attach())) return;
+        auto pin=f.binding->acquire(); block_workspace work(f,32768);
+        producer_inputs input(f,rows); block_inputs attention(f,active,rows);
+        ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(4*rows,256,layout);
+        block_workspace partial(f,layout.bytes);
+        if (!t.assert_true(f.resident->configure_writes(rows,work.lease.get()))) return;
+        if (!t.assert_true(f.resident->begin_sequence({0,1,2,3},active,2,first,{uint32_t(rows),false}))) return;
+        auto publications=llama_kv_stream_publications::create({first,active,f.content->generation(),1});
+        llama_kv_stream_publication_ticket ticket;
+        if (!t.assert_true(publications && publications->reserve(first,rows,4,{f.content},{},ticket))) return;
+        for (uint32_t layer=0; layer < 4; ++layer) {
+            const auto generation=f.content->generation();
+            std::unique_ptr<llama_kv_stream_publication_pair> pair;
+            if (!t.assert_true(f.resident->prepare_write_pair(layer,first,input.k,input.v,ticket,layer,pair))) return;
+            const auto stats=f.resident->last_write_stats();
+            t.assert_true(pair && stats.graph_submissions > 2 && stats.d2h_calls > 2);
+            t.assert_equal(generation,f.content->generation());
+            t.assert_true(!ticket.ready(layer,llama_kv_stream_publication_domain::host));
+            if (!t.assert_true(pair->wait_device(backend.get()))) return;
+            t.assert_true(ticket.ready(layer,llama_kv_stream_publication_domain::device));
+            t.assert_equal(generation,f.content->generation());
+            if (!t.assert_true(f.resident->compute_streamed(layer,attention.q,attention.mask,attention.output,
+                    active,1.0f/16,partial.lease.get(),true,2))) return;
+            if (!t.assert_true(pair->publish_host())) return;
+            t.assert_equal(generation+1,f.content->generation());
+            t.assert_true(ticket.ready(layer,llama_kv_stream_publication_domain::host));
+            check_host(t,f,layer,first,input);
+            close_values(t,oracle(f,layer,active,rows,attention.qdata),attention.read(),1e-3f);
+            ggml_backend_synchronize(backend.get());
+            t.assert_true(pair->release_device(backend.get()));
+        }
+        t.assert_true(ticket.committed());
+        t.assert_equal(active,publications->frontiers().committed);
+        t.assert_true(ticket.retire());
+    });
     if (cuda) t.test("invalid_producers_preserve_sequence_and_content", [&](testing & t) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,4);
         if (!t.assert_true(f.attach())) return;

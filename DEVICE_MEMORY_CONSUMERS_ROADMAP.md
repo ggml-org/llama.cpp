@@ -8,7 +8,7 @@ Last source review: 2026-09-15, against the checkpoint commits below.
 
 Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. The fixed-pool qualification identified synchronous producer publication as the first remaining optimization. It is planned as backend-neutral stage **5.6** below. Stage **5.7** is reserved for graph segmentation, stage **5.8** for strict prefill streaming, and stage **5.9** for final support and reproducibility documentation.
 
-Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, and **5.6c** at `a53e3bf81`. Stage **5.6d** is implemented and qualified for user review: backend completions now drive paired publication, and the current synchronous writer/session uses the same bridge through an already-completed adapter.
+Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, and **5.6d** at `9f2fe3aff`. Stage **5.6e** is implemented and qualified for user review: the CUDA writer now returns real completions, queues immutable per-tile producer plans, and orders resident/ring consumption without per-tile or per-layer backend drains.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -396,8 +396,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.6a | Committed | eff245203 | Common paired publication tickets and ordered reserved/device/host/committed frontiers; 10 cases / 133 assertions passed in Debug, ASan, UBSan, and a CUDA-enabled build. Seven focused existing regressions passed. |
 | 5.6b | Committed | 04917421f | Synchronous adapter and session migration; publication 11/147, CUDA session 6/286, CUDA model 3/54, seven focused Debug suites, ASan, UBSan, and CUDA memcheck passed. Two-point Release performance remained within 0.6% of 5.5c with identical memory. |
 | 5.6c | Committed | a53e3bf81 | Generic event-backed completion with synchronous fallback and tracked waiter teardown; fake/CPU 10/85 passed Debug, ASan, and UBSan, real CUDA 11/91 passed memcheck, and five focused regressions passed. |
-| 5.6d | Ready for review | - | Completion-backed K/V pair bridge and synchronous session adapter; publication 16/199 CPU and 17/207 CUDA, session 6/286, model 3/54, ASan/UBSan, two CUDA memchecks, and eight focused regressions pass. Release performance and memory remain within noise of 5.6b. |
-| 5.6e-5.6f | Planned | - | CUDA producer overlap and cross-backend conformance remain. |
+| 5.6d | Committed | 9f2fe3aff | Completion-backed K/V pair bridge and synchronous session adapter; publication 16/199 CPU and 17/207 CUDA, session 6/286, model 3/54, ASan/UBSan, two CUDA memchecks, and eight focused regressions pass. Release performance and memory remain within noise of 5.6b. |
+| 5.6e | Ready for review | - | Real CUDA completion-backed producer, direct pinned-host generation, resident-tail D2D, running-window producer fences and immutable per-tile plans. Focused CUDA, repeated session stress, ASan/UBSan, memcheck, exact Q3/IQ4 model equivalence and matched Release points pass. |
+| 5.6f | Planned | - | Cross-backend conformance remains. |
 | 5.7 | Reserved | - | Graph segmentation optimization; split only after 5.6 qualification identifies the remaining submission boundary. |
 | 5.8 | Reserved | - | Strict prefill gather replacement; split only after native MMA continuation research establishes a credible numerical contract. |
 | 5.9 | Planned | - | Supported-configuration and reproducible-test documentation after optimization qualification. |
@@ -3103,3 +3104,39 @@ Matched Release Q3_K_XL, Q8 K/Q4 V, UVM off, context 163840, 2 GiB pool, b/ub256
 Both points retain the same 15166 MiB prefill peak and 14910 MiB steady decode allocation. These small positive differences are ordinary run-to-run noise, not a speedup claim. Results are in `/tmp/kv-56d-fixed-pool.jsonl` and the corresponding `/tmp/kv-55c-current-{65536,98304}-r{0,1}.log` files.
 
 Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. Production was restored with its existing configuration and port 1234 health is OK. No assistant commit or push was made. Next after review is **5.6e**, the real CUDA producer adapter and removal of synchronous publication drains.
+
+### Stage 5.6e implementation and validation
+
+The initial real-session test was red in two distinct ways. First, device readiness advanced while host visibility remained pending, but resident tail rows were not available to attention. Second, once resident publication was added, later streamed layers failed intermittently because their copy window had inherited only the producer fence recorded at sequence start. Repeated CUDA tests exposed both ordering gaps before performance qualification.
+
+The CUDA writer now provides real completion-backed submission. It queues every bounded SET_ROWS tile, D2H mirror transfer, and applicable resident-tail D2D copy without draining between tiles. One immutable cached graph/executor exists per K/V plane and tile: queued launches never observe tensor pointer or shape metadata rewritten for a later tile. A partial-submission failure synchronizes before returning storage and execution pins. The original synchronous API remains as a wrapper over the same path.
+
+Generated bytes are written directly into retained pinned authoritative host storage. Their physical DMA destination remains alive through the pair, while content generation and dirty-row visibility stay unchanged until the atomic K/V host callback commits. Cancellation can leave bytes beyond the closed logical frontier physically changed, but no cache observer may admit them. Direct resident portions are copied from encoded writer scratch on the producer stream; only the actually resident range is acknowledged as mirrored after host publication.
+
+The session retains all layer pairs through the final evaluation drain. `wait_device()` inserts CUDA event dependencies before attention, host publication advances only after both K/V host completions, and the logical token frontier still changes only after final attention and ticket retirement. The final backend synchronization releases every retained waiter and writer execution pin together instead of draining each tile or layer.
+
+The copy adapter is version 8. A running historical-prefetch window can now record a later producer event on the compute stream and make its private copy stream wait before newly ready mutable-tail H2D submissions. First use continues through the existing `begin()` fence; already-running windows use `fence_producer()`. This hook is backend-neutral at the copy-ops boundary and CUDA-specific in implementation. Stage 5.6f must qualify or fall back on other backends.
+
+TDD and fault coverage include:
+
+- Direct generated tickets retain their host backing, defer generation/dirty visibility, commit K/V atomically, reject replaced backing, and leave cancelled rows logically invisible.
+- A 257-row Q8/Q4 producer is forced through multiple tiles. Device readiness precedes host publication, exact encoded host bytes are checked, and streamed attention matches the independent oracle.
+- Serial 256/32/224/1/256 appends cross resident/ring and policy-rebinding boundaries. Three consecutive CUDA runs pass with stable maximum error below 4.7e-5.
+- Partial submission, second-plane failure, invalid shapes, workspace aliases, cancellation, restore, graph replacement, and teardown remain fail-closed.
+- Producer, session, model, writer, content, and prefetch suites pass with 586, 326, 54, 609, 150503, and 3072 assertions respectively.
+- Focused CPU ASan with leak checking and UBSan each pass six suites. Compute Sanitizer reports zero errors and zero leaked device bytes for CUDA session and producer.
+
+Full-model Q3_K_XL and IQ4_XS qualification uses context 1024, prompt 640, Q8/Q4 KV, streamed 16 MiB and resident 64 MiB controls, ub256/512, and 192 teacher-forced decode tokens. Every case retains max logit error 0, recurrent relative L2 error 0, and 192/192 matching top tokens. Evidence is in `/tmp/kv-equivalence-56e-{Q3_K_XL,IQ4_XS}.log`.
+
+Matched Release Q3_K_XL, UVM off, context 163840, 2 GiB pool, b/ub256, and 256 decode tokens produced:
+
+| Prompt | 5.6d prefill | 5.6e prefill | Change | 5.6d decode | 5.6e decode | Change |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 65,536 | 1135.04 | 1146.07 | +0.97% | 34.81 | 36.29 | +4.25% |
+| 98,304 | 943.15 | 950.71 | +0.80% | 28.56 | 28.65 | +0.31% |
+
+The 64K point confirms that removing producer drains improves the all-resident/onset path. At 96K the decode gain is within noise because streamed attention and transfer dominate. Prefill peak remains 15166 MiB; median decode is 14912 MiB at 64K and 14910 MiB at 96K. Results are in `/tmp/kv-56e-fixed-pool.jsonl`.
+
+The device and host completions currently collapse onto the same late stream point because each tile reuses bounded encoded scratch after its D2H and optional D2D copies. Logical host publication remains deferred, but attention does not overtake that tile's D2H. Separating those completion times would require additional bounded device staging or another producer layout and is not claimed here. Graph segmentation and strict full-layer prefill gathering remain stages 5.7 and 5.8.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made. Production is restored with its existing configuration. Next after review is **5.6f**, cross-backend conformance.

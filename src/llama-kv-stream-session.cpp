@@ -27,7 +27,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     llama_kv_stream_session_config config;
     std::unique_ptr<llama_kv_stream_publications> publications;
     llama_kv_stream_publication_ticket publication;
-    std::unique_ptr<llama_kv_stream_publication_pair> publication_pair;
+    std::vector<std::unique_ptr<llama_kv_stream_publication_pair>> publication_pairs;
     std::array<lease_ptr,3> leases{{{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free}}};
     std::unique_ptr<llama_kv_stream_binding> binding;
     llama_kv_stream_resident * resident = nullptr;
@@ -44,13 +44,12 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     bool direct_mode = false, report_layout = false;
 
     bool retire_publication() {
-        if (publication_pair) {
-            if (publication_pair->device_ready()) publication_pair->release_device(backend);
-            publication_pair.reset();
-        }
+        bool released=true;
+        for (auto & pair : publication_pairs) if (pair && pair->device_ready()) released &= pair->release_device(backend);
+        publication_pairs.clear();
         if (!publication.pending()) return true;
         if (!publication.committed() && !publication.failed()) publication.cancel();
-        return publication.retire();
+        return publication.retire() && released;
     }
 
     // End copy use before releasing the execution pin that owns native metadata.
@@ -203,6 +202,8 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
         if (!s.pin || !(s.direct_mode ? s.resident->synchronize(active) : s.resident->begin_sequence(s.order,active,s.span,s.committed,{queries,decode}))) {
             s.drain(); s.poisoned = true; return false;
         }
+        s.publication_pairs.clear();
+        s.publication_pairs.reserve(s.order.size());
         llama_kv_stream_publication_ticket publication;
         std::vector<std::shared_ptr<void>> owners{s.content};
         std::vector<ggml_backend_memory_lease_t> dependencies;
@@ -240,19 +241,14 @@ bool llama_kv_stream_session::produce(uint32_t layer, const ggml_tensor * k, con
     if (s.busy || !s.running || s.poisoned || s.produced || layer != s.next) return false;
     session_operation guard(s.busy);
     try {
-        const bool valid = k && v && k->ne[1] == s.queries && v->ne[1] == s.queries;
-        const bool written = valid && s.publication.pending() && (s.direct_mode ?
-            (s.resident->write_rows(layer,ggml_kv_stream_operand::k,s.committed,k) &&
-             s.resident->write_rows(layer,ggml_kv_stream_operand::v,s.committed,v) && s.resident->synchronize(s.target)) :
-            s.resident->write_sequence_rows(layer,s.committed,k,v));
-        auto pair = written ? llama_kv_stream_publication_pair::completed(
-            s.publication,s.next,s.backend,[] { return true; }) : nullptr;
-        if (!pair || !pair->publish_host() || !pair->wait_device(s.backend)) {
+        const bool valid=k && v && k->ne[1] == s.queries && v->ne[1] == s.queries;
+        std::unique_ptr<llama_kv_stream_publication_pair> pair;
+        if (!valid || !s.resident->prepare_write_pair(layer,s.committed,k,v,s.publication,s.next,pair) ||
+                !pair || !pair->wait_device(s.backend)) {
             s.drain(); s.running = false; s.poisoned = true; return false;
         }
-        s.produced = pair->device_ready() && pair->host_ready() &&
-            s.publication.ready(s.next,llama_kv_stream_publication_domain::device);
-        s.publication_pair=std::move(pair);
+        s.produced=pair->device_ready() && s.publication.ready(s.next,llama_kv_stream_publication_domain::device);
+        s.publication_pairs.push_back(std::move(pair));
         return s.produced;
     } catch (...) { s.drain(); s.running = false; s.poisoned = true; throw; }
 }
@@ -261,7 +257,7 @@ bool llama_kv_stream_session::produce(uint32_t layer, const ggml_tensor * k, con
 bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale) {
     auto & s = *impl;
     if (s.busy || !s.running || s.poisoned || !s.produced || layer != s.next ||
-            !s.publication_pair || !s.publication_pair->device_ready()) return false;
+            s.publication_pairs.empty() || !s.publication_pairs.back()->device_ready()) return false;
     session_operation guard(s.busy);
     try {
         if (!q || !mask || !output || q->ne[1] != s.queries || q->ne[2] != s.config.query_heads ||
@@ -269,22 +265,25 @@ bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_te
                   s.resident->compute_streamed(layer,q,mask,output,s.target,scale,s.leases[2].get(),true,s.span))) {
             s.drain(); s.running = false; s.poisoned = true; return false;
         }
-        if (!s.publication_pair->release_device(s.backend)) {
+        if (!s.publication_pairs.back()->publish_host()) {
             s.drain(); s.running = false; s.poisoned = true; return false;
         }
-        s.publication_pair.reset();
         s.produced = false;
         if (++s.next == s.order.size()) {
             if (!s.publication.committed() || s.publications->frontiers().committed != s.target) {
                 s.drain(); s.running = false; s.poisoned = true; return false;
             }
+            ggml_backend_synchronize(s.backend);
+            for (auto & pair : s.publication_pairs) if (!pair->release_device(s.backend)) {
+                s.drain(); s.running = false; s.poisoned = true; return false;
+            }
+            s.publication_pairs.clear();
             if (s.report_layout) {
                 const auto stats=s.resident->sequence_stats();
                 LLAMA_LOG_WARN("%s: accepted KV layout copied %.2f MiB in %zu H2D calls, peak ring pages %zu\n",
                     __func__,stats.copy_bytes/1048576.0,stats.copy_calls,stats.peak_pages);
                 s.report_layout = false;
             }
-            if (s.direct_mode) ggml_backend_synchronize(s.backend);
             if (!s.publication.retire()) {
                 s.drain(); s.running = false; s.poisoned = true; return false;
             }

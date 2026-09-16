@@ -44,9 +44,11 @@ private:
     friend class llama_kv_stream_content;
     struct part { uint32_t layer; ggml_kv_stream_operand operand; size_t offset, begin, bytes; };
     std::shared_ptr<llama_kv_stream_content_state> owner;
+    std::shared_ptr<llama_kv_stream_host> backing;
     uint64_t generation = 0;
     std::vector<part> parts;
     std::vector<uint8_t> bytes;
+    bool direct = false;
 };
 
 // Owner-thread-only bookkeeping for one authoritative host cache and one logical device mirror.
@@ -72,6 +74,10 @@ public:
 
     // Fill a private ticket synchronously (span.data must be null). Failed generation never publishes host bytes.
     bool prepare_generated(const std::vector<llama_kv_stream_write_span> & spans,
+            const std::function<bool(const llama_kv_stream_write_span &, void *)> & fill, llama_kv_stream_write & output) const;
+    // Fill retained authoritative storage directly but defer generation and dirty-row visibility until commit.
+    // Cancellation can leave bytes beyond the caller's logical token frontier physically changed.
+    bool prepare_direct_generated(const std::vector<llama_kv_stream_write_span> & spans,
             const std::function<bool(const llama_kv_stream_write_span &, void *)> & fill, llama_kv_stream_write & output) const;
 
     // Preserve new backing bytes but invalidate all mirror rows and outstanding writes, even for the same cache ID.

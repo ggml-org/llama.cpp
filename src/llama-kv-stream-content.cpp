@@ -116,6 +116,36 @@ bool llama_kv_stream_content::dirty(const llama_kv_stream_rows & rows, bool & ou
 bool llama_kv_stream_content::prepare(const std::vector<llama_kv_stream_write_span> & spans, llama_kv_stream_write & output) const {
     return prepare_internal(spans, output, nullptr);
 }
+bool llama_kv_stream_content::prepare_direct_generated(const std::vector<llama_kv_stream_write_span> & spans,
+        const std::function<bool(const llama_kv_stream_write_span &, void *)> & fill, llama_kv_stream_write & output) const {
+    if (!fill || state->busy || output.pending()) return false;
+    state->busy = true;
+    content_operation operation{state->busy};
+    try {
+        llama_kv_stream_write next;
+        if (spans.size() > next.parts.max_size()) return false;
+        next.parts.reserve(spans.size());
+        for (const auto & span : spans) {
+            if (!plane_valid(*state,span.layer,span.operand)) return false;
+            const size_t bytes=span.operand == ggml_kv_stream_operand::k ? state->host->layout().k_bytes : state->host->layout().v_bytes;
+            if (span.offset > bytes || span.bytes > bytes-span.offset || span.data || !span.bytes) return false;
+        }
+        next.owner=state;
+        next.backing=state->host;
+        next.generation=state->generation;
+        next.direct=true;
+        for (const auto & span : spans) {
+            void * destination=plane_data(*state,span.layer,span.operand)+span.offset;
+            if (!fill(span,destination)) return false;
+            next.parts.push_back({span.layer,span.operand,span.offset,0,span.bytes});
+        }
+        output=std::move(next);
+        return true;
+    } catch (const std::bad_alloc &) {
+        return false;
+    }
+}
+
 
 // Both CPU snapshots and generated payloads share validation, ownership, and atomic publication.
 bool llama_kv_stream_content::prepare_internal(const std::vector<llama_kv_stream_write_span> & spans, llama_kv_stream_write & output,
@@ -158,13 +188,15 @@ bool llama_kv_stream_content::prepare_internal(const std::vector<llama_kv_stream
 
 // Byte patches can intersect only part of a quant block; the entire touched token row becomes dirty.
 bool llama_kv_stream_content::commit(llama_kv_stream_write & write) {
-    if (state->busy || write.owner != state || write.generation != state->generation) return false;
+    if (state->busy || write.owner != state || write.generation != state->generation ||
+            (write.direct && write.backing != state->host)) return false;
     state->busy = true;
     content_operation operation{state->busy};
     if (!write.parts.empty()) {
         if (state->generation == UINT64_MAX) return false;
         for (const auto & part : write.parts) {
-            std::memcpy(plane_data(*state, part.layer, part.operand) + part.offset, write.bytes.data() + part.begin, part.bytes);
+            if (!write.direct) std::memcpy(plane_data(*state,part.layer,part.operand)+part.offset,
+                write.bytes.data()+part.begin,part.bytes);
             const size_t stride = token_bytes(*state, part.operand);
             const size_t first = part.offset / stride;
             const size_t last = (part.offset + part.bytes - 1) / stride;

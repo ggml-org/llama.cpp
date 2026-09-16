@@ -240,6 +240,45 @@ int main(int argc, char ** argv) {
         t.assert_true(content.flush(all(*host), [](const auto &) { return true; }));
         t.assert_true(content.flush(all(*host), {}));
     });
+    t.test("direct_generated_pair_defers_visibility_and_retains_backing", [](testing & t) {
+        auto host=storage(); std::weak_ptr<llama_kv_stream_host> weak=host;
+        llama_kv_stream_content content(host);
+        if (!t.assert_true(content.flush(all(*host),[](const auto &) { return true; }))) return;
+        const size_t ks=host->layout().k_token_bytes,vs=host->layout().v_token_bytes;
+        const auto generation=content.generation();
+        llama_kv_stream_write write;
+        size_t calls=0;
+        t.assert_true(content.prepare_direct_generated({
+            {0,operand::k,3*ks,nullptr,ks},{0,operand::v,3*vs,nullptr,vs}},
+            [&](const auto & span,void * output) {
+                ++calls;
+                std::memset(output,span.operand == operand::k ? 0x35 : 0x64,span.bytes);
+                return true;
+            },write));
+        t.assert_equal(size_t(2),calls);
+        t.assert_true(write.pending());
+        t.assert_equal(generation,content.generation());
+        t.assert_true(!is_dirty(t,content,0,operand::k,3));
+        t.assert_true(!is_dirty(t,content,0,operand::v,3));
+        llama_kv_stream_host_layer layer; host->layer(0,layer);
+        t.assert_equal(uint8_t(0x35),static_cast<uint8_t *>(layer.k)[3*ks]);
+        t.assert_equal(uint8_t(0x64),static_cast<uint8_t *>(layer.v)[3*vs]);
+        host.reset();
+        t.assert_true(!weak.expired());
+        t.assert_true(content.commit(write));
+        t.assert_equal(generation+1,content.generation());
+        t.assert_true(is_dirty(t,content,0,operand::k,3));
+        t.assert_true(is_dirty(t,content,0,operand::v,3));
+        t.assert_true(!write.pending());
+
+        llama_kv_stream_write cancelled;
+        t.assert_true(content.prepare_direct_generated({{0,operand::k,4*ks,nullptr,ks}},
+            [](const auto & span,void * output) { std::memset(output,0x71,span.bytes); return true; },cancelled));
+        cancelled.cancel();
+        t.assert_equal(generation+1,content.generation());
+        t.assert_true(!is_dirty(t,content,0,operand::k,4));
+    });
+
     t.test("move_cancel_and_owner_destruction_preserve_ticket_safety", [](testing & t) {
         llama_kv_stream_write pending;
         std::weak_ptr<llama_kv_stream_host> weak;

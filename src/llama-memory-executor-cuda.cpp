@@ -86,10 +86,15 @@ ggml_status llama_memory_cuda_executor::compute_async(
 // CUDA's primary stream joins its internal compute streams and backend-mediated copies.
 bool llama_memory_cuda_executor::drain() {
     if (!supported()) return false;
+
     ggml_backend_synchronize(backend);
     pending.reset();
     return true;
 }
+void llama_memory_cuda_executor::release_completed() noexcept {
+    pending.reset();
+}
+
 
 // Block new launches before a multi-consumer coordinator begins draining.
 void llama_memory_cuda_executor::quiesce() noexcept {

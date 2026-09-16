@@ -140,5 +140,7 @@ struct ggml_kv_stream_copy_ops {
     bool (*begin_with_feedback)(void *, bool eligible);
     bool (*enqueue_span_with_feedback)(void *, size_t first_slot, const void * k, const void * v,
                                       size_t live_tokens, size_t padded_tokens, bool eligible);
+    // Version 8: make later copy-stream submissions wait for current producer-stream work.
+    bool (*fence_producer)(void *);
 };
 using ggml_kv_stream_copy_ops_get = const ggml_kv_stream_copy_ops * (*)();

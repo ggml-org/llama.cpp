@@ -78,12 +78,15 @@ int main(int argc, char ** argv) {
                 publication = session->publication_frontiers();
                 const size_t published = layer+1 == 4 ? active : active-rows;
                 t.assert_equal(published,publication.device);
-                t.assert_equal(published,publication.host);
-                t.assert_equal(published,publication.committed);
+                t.assert_equal(active-rows,publication.host);
+                t.assert_equal(active-rows,publication.committed);
                 t.assert_equal(active-rows,session->tokens());
                 t.assert_true(!session->produce(layer,input.k,input.v));
                 if (!t.assert_true(session->attention(layer,attn.q,attn.mask,attn.output,1.0f/16))) return;
                 close_values(t,oracle(f,layer,active,rows,attn.qdata),attn.read(),1e-3f);
+                publication=session->publication_frontiers();
+                t.assert_equal(published,publication.host);
+                t.assert_equal(published,publication.committed);
             }
             t.assert_equal(active,session->tokens()); t.assert_true(!session->active() && !session->failed());
         }

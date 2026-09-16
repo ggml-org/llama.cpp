@@ -26,40 +26,43 @@ struct llama_kv_stream_writer::implementation {
     ggml_context_ptr context;
     ggml_tensor * roots[2] = {};
     ggml_tensor * indices = nullptr;
-    std::unique_ptr<write_graph> plan;
+    std::array<std::vector<std::unique_ptr<write_graph>>,2> plans;
     llama_kv_stream_write_stats last;
 
     size_t width(bool value) const { return size_t(value ? shape.head_dim_v : shape.head_dim_k)*size_t(shape.heads); }
     ggml_type type(bool value) const { return ggml_type(value ? shape.type_v : shape.type_k); }
     size_t row_bytes(bool value) const { return ggml_row_size(type(value), int64_t(width(value))); }
 
-    // One cached plan bounds metadata/source retention even when batch shape or layer inputs change.
-    bool prepare(const ggml_tensor * source, bool value, size_t offset, size_t count) {
-        auto * owner = source->view_src ? source->view_src->buffer : source->buffer;
-        auto * data = static_cast<char *>(source->data) + offset*source->nb[1];
-        if (plan && plan->source_owner.get() == owner && plan->data == data && plan->type == type(value) && plan->rows == count && plan->width == width(value)) return true;
+    // Immutable per-tile metadata remains valid until every queued launch reaches its completion event.
+    write_graph * prepare(const ggml_tensor * source, bool value, size_t tile, size_t offset, size_t count) {
+        auto * owner=source->view_src ? source->view_src->buffer : source->buffer;
+        auto * data=static_cast<char *>(source->data)+offset*source->nb[1];
+        auto & cache=plans[value];
+        if (cache.size() <= tile) cache.resize(tile+1);
+        auto & plan=cache[tile];
+        if (plan && plan->source_owner.get() == owner && plan->data == data && plan->type == type(value) &&
+                plan->rows == count && plan->width == width(value)) return plan.get();
         plan.reset();
-        auto next = std::make_unique<write_graph>();
+        auto next=std::make_unique<write_graph>();
         next->source_owner.reset(ggml_backend_buffer_retain(owner));
-        next->context.reset(ggml_init({65536, nullptr, true}));
-        if (!next->context) return false;
-        next->data = data; next->type = type(value); next->rows = count; next->width = width(value);
-        // A leaf alias is a synchronous graph boundary: never traverse/recompute the source model graph.
-        auto * input = ggml_new_tensor_2d(next->context.get(), GGML_TYPE_F32, int64_t(width(value)), int64_t(count));
-        if (ggml_backend_tensor_alloc(owner, input, data) != GGML_STATUS_SUCCESS) return false;
-        auto * dst = ggml_view_2d(next->context.get(), roots[value], int64_t(width(value)), int64_t(capacity), row_bytes(value), 0);
-        auto * idx = ggml_view_1d(next->context.get(), indices, int64_t(count), 0);
-        if (ggml_backend_view_init(dst) != GGML_STATUS_SUCCESS || ggml_backend_view_init(idx) != GGML_STATUS_SUCCESS) return false;
-        next->output = ggml_set_rows(next->context.get(), dst, input, idx);
-        if (!ggml_backend_supports_op(backend, next->output) || ggml_backend_view_init(next->output) != GGML_STATUS_SUCCESS) return false;
-        next->graph = ggml_new_graph_custom(next->context.get(), 32, false);
-        ggml_build_forward_expand(next->graph, next->output);
+        next->context.reset(ggml_init({65536,nullptr,true}));
+        if (!next->context) return nullptr;
+        next->data=data; next->type=type(value); next->rows=count; next->width=width(value);
+        auto * input=ggml_new_tensor_2d(next->context.get(),GGML_TYPE_F32,int64_t(width(value)),int64_t(count));
+        if (ggml_backend_tensor_alloc(owner,input,data) != GGML_STATUS_SUCCESS) return nullptr;
+        auto * dst=ggml_view_2d(next->context.get(),roots[value],int64_t(width(value)),int64_t(capacity),row_bytes(value),0);
+        auto * idx=ggml_view_1d(next->context.get(),indices,int64_t(count),0);
+        if (ggml_backend_view_init(dst) != GGML_STATUS_SUCCESS || ggml_backend_view_init(idx) != GGML_STATUS_SUCCESS) return nullptr;
+        next->output=ggml_set_rows(next->context.get(),dst,input,idx);
+        if (!ggml_backend_supports_op(backend,next->output) || ggml_backend_view_init(next->output) != GGML_STATUS_SUCCESS) return nullptr;
+        next->graph=ggml_new_graph_custom(next->context.get(),32,false);
+        ggml_build_forward_expand(next->graph,next->output);
         if (!cpu) {
-            next->execution = std::make_unique<llama_memory_cuda_executor>(backend);
-            if (!next->execution->bind(next->graph, {}, 1)) return false;
+            next->execution=std::make_unique<llama_memory_cuda_executor>(backend);
+            if (!next->execution->bind(next->graph,{},1)) return nullptr;
         }
-        plan = std::move(next);
-        return true;
+        plan=std::move(next);
+        return plan.get();
     }
 };
 
@@ -141,41 +144,68 @@ bool llama_kv_stream_writer::accepts(const ggml_tensor * source, bool value) con
     return !overlaps && data >= base && data - base <= size && bytes <= size - size_t(data - base);
 }
 
-// Complete each tile's quantization, D2H, and publication before the shared output region is reused.
-bool llama_kv_stream_writer::generate(const ggml_tensor * source, bool value, void * host,
-        const std::function<bool(const ggml_tensor *, size_t, size_t)> & publish) {
-    auto & s = *impl;
-    s.last = {}; s.last.device_scratch_bytes = s.scratch_bytes; s.last.tile_rows = s.capacity;
-    if (!host || !accepts(source, value)) return false;
-    const size_t rows = size_t(source->ne[1]), stride = s.row_bytes(value);
-    s.last.host_payload_bytes = rows*stride;
+bool llama_kv_stream_writer::generate_async(const ggml_tensor * source, bool value, void * host,
+        const std::function<bool(const ggml_tensor *, size_t, size_t)> & publish,
+        llama_kv_stream_writer_completion & completion) {
+    auto & s=*impl;
+    s.last={}; s.last.device_scratch_bytes=s.scratch_bytes; s.last.tile_rows=s.capacity;
+    if (!host || !accepts(source,value) || completion.device || completion.host) return false;
+    const size_t rows=size_t(source->ne[1]),stride=s.row_bytes(value);
+    s.last.host_payload_bytes=rows*stride;
+    const auto fail=[&] {
+        ggml_backend_synchronize(s.backend);
+        release_completed();
+        return false;
+    };
     try {
-        for (size_t first = 0; first < rows; first += std::min(s.capacity, rows - first)) {
-            const size_t count = std::min(s.capacity, rows - first);
-            if (!s.prepare(source, value, first, count)) return false;
+        size_t tile=0;
+        for (size_t first=0; first < rows; first += std::min(s.capacity,rows-first)) {
+            const size_t count=std::min(s.capacity,rows-first);
+            auto * plan=s.prepare(source,value,tile++,first,count);
+            if (!plan) return fail();
             ++s.last.graph_submissions;
             if (s.cpu) {
-                if (ggml_backend_graph_compute(s.backend, s.plan->graph) != GGML_STATUS_SUCCESS) return false;
-            } else {
-                const auto status = s.plan->execution->compute_async({}, 1);
-                if (status != GGML_STATUS_SUCCESS) { s.plan->execution->drain(); s.plan.reset(); return false; }
-            }
-            ggml_backend_tensor_get_async(s.backend, s.plan->output, static_cast<char *>(host) + first*stride, 0, count*stride);
-            const bool published = !publish || publish(s.roots[value], first, count);
-            if (s.cpu) ggml_backend_synchronize(s.backend);
-            else if (!s.plan->execution->drain()) return false;
+                if (ggml_backend_graph_compute(s.backend,plan->graph) != GGML_STATUS_SUCCESS) return fail();
+            } else if (plan->execution->compute_async({},1) != GGML_STATUS_SUCCESS) return fail();
+            ggml_backend_tensor_get_async(s.backend,plan->output,static_cast<char *>(host)+first*stride,0,count*stride);
+            const bool published=!publish || publish(s.roots[value],first,count);
             s.last.d2h_bytes += count*stride; ++s.last.d2h_calls;
-            if (!published) return false;
+            if (!published) return fail();
             if (publish) { s.last.d2d_bytes += count*stride; ++s.last.d2d_calls; }
         }
+        llama_kv_stream_writer_completion next;
+        if (s.cpu) {
+            next.device=llama_memory_completion::completed(s.backend);
+            next.host=llama_memory_completion::completed(s.backend);
+        } else {
+            next.device=llama_memory_completion::create(s.backend);
+            next.host=llama_memory_completion::create(s.backend);
+            if (!next.device || !next.host || !next.device->record() || !next.host->record()) return fail();
+        }
+        if (!next.device || !next.host) return fail();
+        completion=std::move(next);
         return true;
     } catch (...) {
-        // The ticket's host pointer must remain alive until even a partially submitted copy has completed.
         ggml_backend_synchronize(s.backend);
-        if (s.plan && s.plan->execution) s.plan->execution->drain();
-        s.plan.reset();
+        release_completed();
         throw;
     }
+}
+
+bool llama_kv_stream_writer::generate(const ggml_tensor * source, bool value, void * host,
+        const std::function<bool(const ggml_tensor *, size_t, size_t)> & publish) {
+    llama_kv_stream_writer_completion completion;
+    if (!generate_async(source,value,host,publish,completion)) return false;
+    const bool device=completion.device->synchronize();
+    const bool host_ready=completion.host->synchronize();
+    release_completed();
+    return device && host_ready;
+}
+
+void llama_kv_stream_writer::release_completed() noexcept {
+    if (!impl || impl->cpu) return;
+    for (auto & cache : impl->plans) for (auto & plan : cache)
+        if (plan && plan->execution) plan->execution->release_completed();
 }
 
 llama_kv_stream_write_stats llama_kv_stream_writer::stats() const { return impl->last; }

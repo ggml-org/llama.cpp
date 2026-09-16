@@ -179,6 +179,20 @@ static void * create(ggml_backend_t backend, ggml_backend_buffer_t device, ggml_
     } catch (const std::bad_alloc &) { return nullptr; }
 }
 
+// Extend a running copy window with work published after its original begin fence.
+static bool fence_producer(void * handle) {
+    if (!handle) return false;
+    auto & q=*static_cast<copy_queue *>(handle);
+    if (!q.state.running()) return false;
+    ggml_cuda_set_device(q.context->device);
+    cudaStreamCaptureStatus status;
+    CUDA_CHECK(cudaStreamIsCapturing(q.context->stream(),&status));
+    if (status != cudaStreamCaptureStatusNone) return false;
+    CUDA_CHECK(cudaEventRecord(q.producer,q.context->stream()));
+    CUDA_CHECK(cudaStreamWaitEvent(q.stream,q.producer,0));
+    return true;
+}
+
 // Fence earlier compute producers before any ring writes; active CUDA capture is unsupported.
 static bool begin_with_feedback(void * handle, bool eligible) {
     if (!handle) return false;
@@ -199,9 +213,7 @@ static bool begin_with_feedback(void * handle, bool eligible) {
             CUDA_CHECK(cudaMemsetAsync(m.active_data(),0,(q.ready.size()+2)*sizeof(uint64_t),q.context->stream()));
         }
     }
-    CUDA_CHECK(cudaEventRecord(q.producer,q.context->stream()));
-    CUDA_CHECK(cudaStreamWaitEvent(q.stream,q.producer,0));
-    return true;
+    return fence_producer(handle);
 }
 
 // Legacy callers declare a fully eligible run.
@@ -408,7 +420,7 @@ static void destroy(void * handle) { delete static_cast<copy_queue *>(handle); }
 
 // Expose the CUDA adapter through an opaque, backend-neutral ownership contract.
 const ggml_kv_stream_copy_ops * ggml_cuda_kv_stream_copy_ops() {
-    static const ggml_kv_stream_copy_ops ops{7,create,begin,enqueue,ready,acquire,release,drain,destroy,enqueue_span,stats,release_completed,measure,acquire_span,feedback,feedback_id,poll_feedback,begin_with_feedback,enqueue_span_with_feedback};
+    static const ggml_kv_stream_copy_ops ops{8,create,begin,enqueue,ready,acquire,release,drain,destroy,enqueue_span,stats,release_completed,measure,acquire_span,feedback,feedback_id,poll_feedback,begin_with_feedback,enqueue_span_with_feedback,fence_producer};
     return &ops;
 }
 #endif

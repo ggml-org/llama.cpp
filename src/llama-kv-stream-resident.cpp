@@ -677,6 +677,116 @@ bool llama_kv_stream_resident::write_sequence_rows(uint32_t layer, size_t first,
 }
 
 // Publish host bytes atomically after all tiled generation completes; completed D2D tiles need no H2D refresh.
+struct pending_resident_write {
+    llama_kv_stream_write write;
+    std::vector<llama_kv_stream_write_span> spans;
+    std::function<void()> rollback;
+    bool committed = false;
+    ~pending_resident_write() { if (!committed && rollback) rollback(); }
+};
+
+bool llama_kv_stream_resident::prepare_write_pair(uint32_t layer, size_t first, const ggml_tensor * k, const ggml_tensor * v,
+        llama_kv_stream_publication_ticket & ticket, uint32_t pair,
+        std::unique_ptr<llama_kv_stream_publication_pair> & output) {
+    auto & s=*impl;
+    if (output || s.busy || s.capturing() || s.poisoned || !s.writer || !s.writer_lease || !ticket.pending() ||
+            pair >= ticket.pairs() || !k || !v || !s.writer->accepts(k,false) || !s.writer->accepts(v,true) ||
+            k->ne[1] != v->ne[1] || layer >= s.roots.size()) return false;
+    const bool sequence=bool(s.sequence);
+    const size_t rows=size_t(k->ne[1]);
+    if (!rows) return false;
+    const auto host=s.content->host();
+    if (first > host->config().context_tokens || rows > host->config().context_tokens-first) return false;
+    auto pending=std::make_shared<pending_resident_write>();
+    pending->spans={
+        {layer,ggml_kv_stream_operand::k,first*s.page.k_token_bytes,nullptr,rows*s.page.k_token_bytes},
+        {layer,ggml_kv_stream_operand::v,first*s.page.v_token_bytes,nullptr,rows*s.page.v_token_bytes}};
+    if (sequence) {
+        if (!s.sequence_valid()) { s.stop_sequence(); return false; }
+        if (first != s.sequence->stable || rows != s.sequence->active-first || !s.tail_valid(pending->spans,true)) return false;
+    } else {
+        if (!s.compatible() || first > s.layout.layers[layer].planes.tokens ||
+                rows > s.layout.layers[layer].planes.tokens-first) return false;
+    }
+    s.write_stats={};
+    s.busy=true;
+    struct guard { bool & busy; ~guard() { busy=false; } } operation{s.busy};
+    if (!sequence && !s.initialized) {
+        if (!s.content->reset_mirror()) return false;
+        s.initialized=true;
+    }
+    bool copied=false;
+    pending->rollback=[&s,&copied] {
+        if (copied && !s.content->reset_mirror()) s.poisoned=true;
+    };
+    llama_kv_stream_publication_pair_dependencies dependencies;
+    const auto accumulate=[&](size_t d2d_bytes,size_t d2d_calls) {
+        const auto part=s.writer->stats();
+        s.write_stats.graph_submissions += part.graph_submissions;
+        s.write_stats.d2h_bytes += part.d2h_bytes; s.write_stats.d2h_calls += part.d2h_calls;
+        s.write_stats.d2d_bytes += d2d_bytes; s.write_stats.d2d_calls += d2d_calls;
+        s.write_stats.device_scratch_bytes=std::max(s.write_stats.device_scratch_bytes,part.device_scratch_bytes);
+        s.write_stats.host_payload_bytes += part.host_payload_bytes; s.write_stats.tile_rows=part.tile_rows;
+    };
+    try {
+        const bool generated=s.content->prepare_direct_generated(pending->spans,[&](const auto & span,void * destination) {
+            const bool value=span.operand == ggml_kv_stream_operand::v;
+            llama_kv_stream_writer_completion completion;
+            size_t d2d_bytes=0,d2d_calls=0;
+            const std::function<bool(const ggml_tensor *,size_t,size_t)> publish={[&,value](const ggml_tensor * stage,size_t offset,size_t count) {
+                const size_t resident=s.layout.layers[layer].planes.tokens;
+                if (first+offset >= resident) return true;
+                count=std::min(count,resident-first-offset);
+                const size_t stride=value ? s.page.v_token_bytes : s.page.k_token_bytes;
+                ggml_tensor src=*stage,dst=*stage;
+                src.ne[0]=dst.ne[0]=int64_t((value ? s.binding.config.shape.head_dim_v : s.binding.config.shape.head_dim_k)*s.binding.config.shape.heads*count);
+                src.ne[1]=src.ne[2]=src.ne[3]=dst.ne[1]=dst.ne[2]=dst.ne[3]=1;
+                src.nb[1]=src.nb[2]=src.nb[3]=dst.nb[1]=dst.nb[2]=dst.nb[3]=count*stride;
+                auto * root=value ? s.roots[layer].second : s.roots[layer].first;
+                dst.buffer=root->buffer; dst.data=static_cast<char *>(root->data)+(first+offset)*stride;
+                copied=true; d2d_bytes += count*stride; ++d2d_calls;
+                ggml_backend_tensor_copy_async(s.backend,s.backend,&src,&dst); return true;
+            }};
+            bool ok=false;
+            try { ok=s.writer->generate_async(value ? v : k,value,destination,publish,completion); accumulate(d2d_bytes,d2d_calls); }
+            catch (...) { accumulate(d2d_bytes,d2d_calls); throw; }
+            if (!ok) return false;
+            const size_t index=value;
+            dependencies.device[index]=std::move(completion.device);
+            dependencies.host[index]=std::move(completion.host);
+            return true;
+        },pending->write);
+        if (!generated) { if (sequence) s.stop_sequence(); return false; }
+        pending->rollback=[&s,copied] { if (copied && !s.content->reset_mirror()) s.poisoned=true; };
+        auto next=llama_kv_stream_publication_pair::create(ticket,pair,std::move(dependencies),[pending,&s,sequence,layer,first,rows] {
+            if (s.busy || !pending->write.pending()) return false;
+            s.busy=true; struct guard { bool & busy; ~guard() { busy=false; } } operation{s.busy};
+            s.writer->release_completed();
+            if (!s.content->commit(pending->write)) return false;
+            if (sequence) {
+                const size_t resident=s.layout.layers[layer].planes.tokens;
+                if (first < resident) {
+                    const size_t count=std::min(rows,resident-first);
+                    const std::vector<llama_kv_stream_rows> copied_rows{
+                        {layer,ggml_kv_stream_operand::k,first,count},
+                        {layer,ggml_kv_stream_operand::v,first,count}};
+                    if (!s.content->flush(copied_rows,[](const auto &) { return true; })) return false;
+                }
+                if (s.sequence) { s.sequence->generation=s.content->generation(); s.sequence->epoch=s.content->mirror_epoch(); }
+                s.valid=false;
+            } else {
+                const std::vector<llama_kv_stream_rows> ranges{{layer,ggml_kv_stream_operand::k,first,rows},{layer,ggml_kv_stream_operand::v,first,rows}};
+                if (!s.content->flush(ranges,[](const auto &) { return true; })) return false;
+                s.generation=s.content->generation(); s.epoch=s.content->mirror_epoch(); s.valid=true;
+            }
+            pending->committed=true; pending->rollback={}; return true;
+        });
+        if (!next) { if (sequence) s.stop_sequence(); return false; }
+        output=std::move(next);
+        return true;
+    } catch (...) { if (sequence) s.stop_sequence(); throw; }
+}
+
 bool llama_kv_stream_resident::write_rows(uint32_t layer, ggml_kv_stream_operand operand, size_t first, const ggml_tensor * source) {
     auto & s = *impl;
     s.write_stats = {};
@@ -914,6 +1024,9 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     // Ordered calls after a replacement must not keep the old pinned cache alive either.
     if (s.copies && s.copy_host != s.content->host()->buffer()) { s.copies.reset(); s.copy_host = nullptr; }
     if (cross) {
+        if (prefix < padded && (!s.ensure_copies(slots) || (s.sequence->started &&
+                (s.copy_ops->version < 8 || !s.copy_ops->fence_producer ||
+                !s.copy_ops->fence_producer(s.copies.get()))))) return false;
         if (!s.sequence->plan.make_ready(s.sequence->next) || !s.fill_sequence(true)) return false;
     } else if (prefetch) {
         if (!s.ensure_copies(slots)) return false;

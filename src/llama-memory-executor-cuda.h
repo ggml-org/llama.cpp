@@ -31,6 +31,9 @@ public:
 
     // Native capture is lazy: an attached graph can execute without a CUDA graph instance.
     bool is_captured() const;
+    // Release after an external completion proved all submitted work finished.
+    // This is a completion promise and does not synchronize the backend.
+    void release_completed() noexcept;
     bool ready() const noexcept;
     size_t outstanding() const noexcept;
 
