@@ -15,6 +15,15 @@
 static int g_npass = 0;
 static int g_ntest = 0;
 
+static bool g_mmap_disabled = false;
+
+static void log_callback(ggml_log_level /*level*/, const char * text, void * /*user_data*/) {
+    if (strstr(text, "mmap is disabled")) {
+        g_mmap_disabled = true;
+    }
+    fputs(text, stderr);
+}
+
 #define TEST_ASSERT(expr) do { \
     if (!(expr)) { \
         fprintf(stderr, "  FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
@@ -78,7 +87,7 @@ static bool logits_of(llama_model * model, llama_adapter_lora * adapter, std::ve
     return ok;
 }
 
-static bool test_model(FILE * model_file, const std::vector<float> & ref, long prefix, llama_load_mode mode, const char * name) {
+static bool test_model(FILE * model_file, const std::vector<float> & ref, long prefix, llama_load_mode mode, bool expect_mmap_disabled, const char * name) {
     test_begin(name);
 
     FILE * file = embed(model_file, prefix);
@@ -87,8 +96,10 @@ static bool test_model(FILE * model_file, const std::vector<float> & ref, long p
     llama_model_params mparams = llama_model_default_params();
     mparams.load_mode = mode;
 
+    g_mmap_disabled = false;
     llama_model * model = llama_model_load_from_file_ptr(file, mparams);
     TEST_ASSERT(model != nullptr);
+    TEST_ASSERT(g_mmap_disabled == expect_mmap_disabled);
 
     std::vector<float> logits;
     const bool ok = logits_of(model, nullptr, logits);
@@ -185,6 +196,7 @@ int main(int argc, char ** argv) {
     }
 
     llama_backend_init();
+    llama_log_set(log_callback, nullptr);
 
     printf("test-load-file-ptr\n\n");
 
@@ -197,9 +209,9 @@ int main(int argc, char ** argv) {
     FILE * model_file = fopen(model_path, "rb");
     if (!model_file) { perror("fopen"); return 1; }
 
-    test_model(model_file, ref, 7,    LLAMA_LOAD_MODE_NONE, "model: offset 7, no mmap");
-    test_model(model_file, ref, 7,    LLAMA_LOAD_MODE_AUTO, "model: offset 7, mmap requested (must fall back, not abort)");
-    test_model(model_file, ref, 4096, LLAMA_LOAD_MODE_AUTO, "model: offset 4096, mmap");
+    test_model(model_file, ref, 7,    LLAMA_LOAD_MODE_NONE, false, "model: offset 7, no mmap");
+    test_model(model_file, ref, 7,    LLAMA_LOAD_MODE_AUTO, true,  "model: offset 7, mmap requested, falls back");
+    test_model(model_file, ref, 4096, LLAMA_LOAD_MODE_AUTO, false, "model: offset 4096, mmap stays enabled");
     test_lora(model, ref);
 
     fclose(model_file);

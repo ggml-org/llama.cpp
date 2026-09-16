@@ -519,7 +519,7 @@ extern "C" {
 
     // Load a model from an open FILE pointer
     // The GGUF is read from the current position, so it can be embedded in a larger file
-    // mmap needs the GGUF data section to sit on a 32 byte aligned file offset, otherwise it is disabled
+    // mmap needs the GGUF data section at a file offset aligned to the CPU tensor alignment (32 bytes), otherwise it is disabled
     LLAMA_API struct llama_model * llama_model_load_from_file_ptr(
                                    FILE * file,
               struct llama_model_params   params);
