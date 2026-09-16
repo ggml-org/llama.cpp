@@ -206,6 +206,22 @@ extern "C" {
 
     // Context management and operations for faster communication between backends, used for tensor parallelism (meta backend)
     typedef void * (*ggml_backend_comm_init_t)(ggml_backend_t * backends, size_t n_backends);
+
+    // Builds the communicator for the case where each rank is a separate process, so a process
+    // owns one backend of the communicator rather than all of them.
+    //
+    // Supported initialization model: one rank produces an opaque handle, the caller relays it
+    // to every other rank out of band, then every rank passes it to comm_init_rank, which blocks
+    // until all world_size ranks have joined. A backend that needs a different way for the ranks
+    // to find each other does not fit this model.
+    //
+    // The handle is opaque to the caller. GGML_BACKEND_COMM_UNIQUE_ID_SIZE is the size of the
+    // buffer the caller provides, not a property of any backend. The value is NCCL's
+    // NCCL_UNIQUE_ID_BYTES and can be raised if a backend needs more room.
+#define GGML_BACKEND_COMM_UNIQUE_ID_SIZE 128
+    typedef bool   (*ggml_backend_comm_get_unique_id_t)(void * id_out);
+    typedef void * (*ggml_backend_comm_init_rank_t)(ggml_backend_t backend, const void * id, int rank, int world_size);
+
     typedef void   (*ggml_backend_comm_free_t)(void * comm_ctx);
     typedef bool   (*ggml_backend_comm_allreduce_tensor_t)(void * comm_ctx, struct ggml_tensor ** tensors);
 
