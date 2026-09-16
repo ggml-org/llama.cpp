@@ -516,6 +516,9 @@ static void common_params_fit_impl(
         if (il >= n_strings) {
             throw std::runtime_error("at most " + std::to_string(n_strings) + " model layers are supported");
         }
+        if (hp_nex == 0 && il == hp_ngl) {
+            return "^(output|token_embd)\\.weight$";
+        }
         switch (lf) {
             case LAYER_FRACTION_ATTN: {
                 static std::array<std::string, n_strings> patterns;
@@ -575,7 +578,7 @@ static void common_params_fit_impl(
     // the order in which the layers [il_begin, il_end) of a device move tensors to system memory:
     //   - MoE: the MoE tensors of one layer per step, back to front
     //   - dense: two steps per layer, the FFN tensors and the whole layer. First the FFN tensors of all layers
-    //     (largest first), then the rest of those layers in the same order.
+    //     (largest first), then the rest of those layers in the same order, then the output tensor.
     //     The KV cache of an attention layer stays on the device, n_gpu_layers is only reduced once all weights are moved.
     auto get_steps = [&](const uint32_t il_begin, const uint32_t il_end) -> std::vector<step_t> {
         std::vector<step_t> ret;
@@ -586,7 +589,7 @@ static void common_params_fit_impl(
             return ret;
         }
         std::vector<uint32_t> layers;
-        for (uint32_t il = il_begin; il < std::min(il_end, hp_ngl); il++) { // the output layer is never moved
+        for (uint32_t il = il_begin; il < std::min(il_end, hp_ngl); il++) { // the output layer is a separate step
             layers.push_back(il);
         }
         auto ffn_bytes = [&](const uint32_t il) -> size_t { // MTP layers are past the end of hp_ffn_bytes
@@ -602,6 +605,9 @@ static void common_params_fit_impl(
                 }
                 ret.push_back({il, lf});
             }
+        }
+        if (il_end > hp_ngl) {
+            ret.push_back({hp_ngl, LAYER_FRACTION_ALL}); // the output tensor, it is read once per generated or drafted token
         }
         return ret;
     };
