@@ -35,7 +35,7 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use
         return false;
     }
     // without a fused SDPA kernel oneDNN falls back to the same matmul, so reuse the check
-    if (!ggml_sycl_dnnl_has_optimized_gemm(&dpct::get_current_device().default_queue())) {
+    if (!ggml_sycl_dnnl_has_optimized_gemm(ggml_sycl_get_device())) {
         return false;
     }
     const ggml_tensor * Q     = dst->src[0];

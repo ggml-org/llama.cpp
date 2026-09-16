@@ -59,56 +59,6 @@ bool gpu_has_xmx(sycl::device &dev) {
     return dev.has(sycl::aspect::ext_intel_matrix);
 }
 
-#if GGML_SYCL_DNNL
-// ask oneDNN which matmul it picks for a small f16 problem, once per device
-bool ggml_sycl_dnnl_has_optimized_gemm(queue_ptr q) {
-    enum class gemm_impl : uint8_t {
-        UNKNOWN   = 0,
-        OPTIMIZED = 1,
-        REFERENCE = 2,
-    };
-
-    static gemm_impl cache[GGML_SYCL_MAX_DEVICES] = {};
-
-    // with a split model the queue can run on another device than ctx.device
-    const int device = dpct::dev_mgr::instance().get_device_id(q->get_device());
-
-    GGML_ASSERT(device >= 0 && device < GGML_SYCL_MAX_DEVICES);
-
-    if (cache[device] == gemm_impl::UNKNOWN) {
-        using dt = dnnl::memory::data_type;
-
-        cache[device] = gemm_impl::REFERENCE;
-        try {
-            const dnnl::memory::dims dims    = { 1, 64, 64 };
-            const dnnl::memory::dims strides = { 64 * 64, 64, 1 };
-
-            dnnl::primitive_attr attr;
-            attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
-
-            const auto eng = dnnl::sycl_interop::make_engine(q->get_device(), q->get_context());
-            const auto pd  = dnnl::matmul::primitive_desc(eng,
-                                                          dnnl::memory::desc(dims, dt::f16, strides),
-                                                          dnnl::memory::desc(dims, dt::f16, strides),
-                                                          dnnl::memory::desc(dims, dt::f32, strides), attr);
-
-            const std::string impl = pd.impl_info_str();
-            if (impl.find("ref") == std::string::npos) {
-                cache[device] = gemm_impl::OPTIMIZED;
-            } else {
-                GGML_LOG_WARN("%s: oneDNN has no optimized matmul for device %d (picks %s), using SYCL kernels\n",
-                              __func__, device, impl.c_str());
-            }
-        } catch (const std::exception & e) {
-            GGML_LOG_WARN("%s: oneDNN matmul probe failed on device %d (%s), using SYCL kernels\n",
-                          __func__, device, e.what());
-        }
-    }
-
-    return cache[device] == gemm_impl::OPTIMIZED;
-}
-#endif
-
 int ggml_sycl_get_env(const char *env_name, int default_val) {
     char *user_device_string = getenv(env_name);
     int user_number = default_val;
