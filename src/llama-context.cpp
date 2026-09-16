@@ -599,11 +599,8 @@ void llama_context::sched_reserve() {
 
     LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
 
-    gf_res_prev.reset(new llm_graph_result(max_nodes));
-    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
-        gf_res_prev_mtp_prefill.reset(new llm_graph_result(max_nodes));
-    } else {
-        gf_res_prev_mtp_prefill.reset();
+    for (auto & res : gf_res_prev) {
+        res.reset();
     }
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
     gf_res_prev_active = nullptr;
@@ -824,9 +821,10 @@ bool llama_context::memory_update(bool optimize) {
 
         // reset the previous graph results to make sure that they won't be reused
         // TODO: make mctx->apply() report if a graph reserve is needed, then reset graph results only if the memory module reset the scheduler
-        gf_res_prev->reset();
-        if (gf_res_prev_mtp_prefill) {
-            gf_res_prev_mtp_prefill->reset();
+        for (auto & res : gf_res_prev) {
+            if (res) {
+                res->reset();
+            }
         }
         gf_res_prev_active = nullptr;
 
@@ -1349,11 +1347,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
-    auto * res = gf_res_prev.get();
-    // common_speculative_impl_draft_mtp::process() submits prefill and catch-up batches without outputs.
-    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && n_outputs == 0) {
-        res = gf_res_prev_mtp_prefill.get();
-    }
+    auto * res = get_gf_res_prev();
     auto * gf  = res->get_gf();
 
     // the new graph parameters
@@ -2374,6 +2368,14 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
     return static_cast<llm_graph_result *>(gf_res_reserve.get());
 }
 
+llm_graph_result * llama_context::get_gf_res_prev() {
+    auto & res = gf_res_prev[n_outputs > 0];
+    if (!res) {
+        res.reset(new llm_graph_result(gf_res_reserve->get_max_nodes()));
+    }
+    return res.get();
+}
+
 // pack sampler outputs into as few sequences as possible before using sequences without samplers
 static void ubatch_prepare_reserve(
               llama_ubatch                            & ubatch,
@@ -2444,9 +2446,10 @@ ggml_cgraph * llama_context::graph_reserve(
     ggml_backend_sched_reset(sched.get());
 
     // when the scheduler is reset, we cannot reuse old graphs, so we reset the previous graph results
-    gf_res_prev->reset();
-    if (gf_res_prev_mtp_prefill) {
-        gf_res_prev_mtp_prefill->reset();
+    for (auto & res : gf_res_prev) {
+        if (res) {
+            res->reset();
+        }
     }
     gf_res_prev_active = nullptr;
 
@@ -3538,7 +3541,7 @@ void llama_context::opt_epoch_iter(
                 break;
             }
 
-            auto * res = gf_res_prev.get();
+            auto * res = get_gf_res_prev();
 
             const auto gparams = graph_params(res, ubatch, mctx.get(), ctx_type_to_graph_type(cparams.ctx_type));
 
