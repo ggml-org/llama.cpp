@@ -1,5 +1,4 @@
 <script lang="ts">
-	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { DARK_INVERT_AVATAR_ORGS } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -85,35 +84,31 @@
 	{/if}
 
 	{#if quantOrg && quantOrg !== org}
-		<Tooltip.Root>
-			<Tooltip.Trigger
-				class="absolute {quantPositionClass} {quantSize} overflow-hidden rounded-full border border-background bg-muted "
-			>
-				{#if quantAvatarFailed}
-					<span
-						aria-hidden="true"
-						class="flex h-full w-full items-center justify-center rounded-full text-[8px] font-semibold text-white"
-						style="background-color: hsl({quantHue} 60% 45%)"
-					>
-						{quantOrg.charAt(0).toUpperCase()}
-					</span>
-				{:else}
-					<img
-						alt=""
-						class="{quantImageClass} rounded-full {invertQuant ? 'dark:invert' : ''}"
-						loading="lazy"
-						onerror={() => {
-							failedAvatarOrgs.add(quantOrg ?? '');
-							quantError = true;
-						}}
-						src={HuggingFaceService.getAvatarUrl(quantOrg)}
-					/>
-				{/if}
-			</Tooltip.Trigger>
-
-			<Tooltip.Content>
-				<p>{quantOrg}</p>
-			</Tooltip.Content>
-		</Tooltip.Root>
+		<!-- native title instead of a floating tooltip: long model lists mount one badge per row -->
+		<span
+			class="absolute {quantPositionClass} {quantSize} overflow-hidden rounded-full border border-background bg-muted"
+			title={quantOrg}
+		>
+			{#if quantAvatarFailed}
+				<span
+					aria-hidden="true"
+					class="flex h-full w-full items-center justify-center rounded-full text-[8px] font-semibold text-white"
+					style="background-color: hsl({quantHue} 60% 45%)"
+				>
+					{quantOrg.charAt(0).toUpperCase()}
+				</span>
+			{:else}
+				<img
+					alt=""
+					class="{quantImageClass} rounded-full {invertQuant ? 'dark:invert' : ''}"
+					loading="lazy"
+					onerror={() => {
+						failedAvatarOrgs.add(quantOrg ?? '');
+						quantError = true;
+					}}
+					src={HuggingFaceService.getAvatarUrl(quantOrg)}
+				/>
+			{/if}
+		</span>
 	{/if}
 </span>
