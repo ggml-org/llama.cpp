@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <thread>
 #include <string>
@@ -139,7 +140,7 @@ static const std::vector<std::string> hole = {
     "dflash-model-Q8_0.gguf",
 };
 
-// unsloth-style naming with UD quants and a suffix MTP file
+// unsloth-style naming with UD quants and an uppercase infix MTP head
 static const std::vector<std::string> unsloth = {
     "model-UD-Q8_K_XL.gguf",
     "mmproj-BF16.gguf",
@@ -178,6 +179,13 @@ static const std::vector<std::string> spark = {
     "model-MXFP4.gguf",
     "dspark-model-BF16.gguf",
     "dspark-model-MXFP4.gguf",
+};
+
+// main weights plus a trailing-form mtp head, as in unsloth
+// gemma-4-E2B-it-GGUF (Model-Q4_0-mtp.gguf)
+static const std::vector<std::string> trailing = {
+    "model-BF16.gguf",
+    "model-BF16-mtp.gguf",
 };
 
 // dspark outranks dflash in the type auto-selection
@@ -223,7 +231,7 @@ static const plan_case plan_cases[] = {
     // no tag and no default match falls back to the first model in the listing
     {"unsloth fallback", unsloth, "test/repo", "", true, true,
      "model-UD-Q8_K_XL.gguf", {"model-UD-Q8_K_XL.gguf"},
-     "mmproj-BF16.gguf", "", "", "", ""},
+     "mmproj-BF16.gguf", "model-MTP-BF16.gguf", "", "", ""},
 
     // explicit hf_file picks that exact file
     {"flat hf_file", flat, "test/repo", "model-BF16.gguf", false, false,
@@ -258,10 +266,11 @@ static const plan_case plan_cases[] = {
      "model-Q4_K_M.gguf", {"model-Q4_K_M.gguf"},
      "", "mtp-model-Q4_0.gguf", "dflash-model-Q8_0.gguf", "", ""},
 
-    // the mtp- keyword is case sensitive, a suffix -MTP file is not discovered
+    // the uppercase infix MTP head is a sidecar too; it resolves at the
+    // nearest quant to the tag when the exact one does not exist
     {"unsloth suffix mtp", unsloth, "test/repo:Q8_K_XL", "", true, false,
      "model-UD-Q8_K_XL.gguf", {"model-UD-Q8_K_XL.gguf"},
-     "mmproj-BF16.gguf", "", "", "", ""},
+     "mmproj-BF16.gguf", "model-MTP-BF16.gguf", "", "", ""},
 
     // vendor prefixes and the dot quant convention both match the tag,
     // first match wins between two files at the same quant
@@ -283,6 +292,45 @@ static const plan_case plan_cases[] = {
     {"spark tag sidecar", spark, "test/repo:BF16", "", true, false,
      "", {},
      "", "", "", "", "dspark-model-BF16.gguf"},
+
+    // a `<quant>-<sidecar>` tag resolves that sidecar alone, without a primary
+    {"hole quant-sidecar tag", hole, "test/repo:Q4_0-mtp", "", false, false,
+     "", {},
+     "", "mtp-model-Q4_0.gguf", "", "", ""},
+
+    {"spark quant-sidecar tag", spark, "test/repo:BF16-dspark", "", false, false,
+     "", {},
+     "", "", "", "", "dspark-model-BF16.gguf"},
+
+    // a bare sidecar tag resolves the sidecar at any quant
+    {"hole bare sidecar tag", hole, "test/repo:mtp", "", false, false,
+     "", {},
+     "", "mtp-model-Q4_0.gguf", "", "", ""},
+
+    // a trailing-form sidecar resolves as the sidecar alone, never as a primary
+    {"trailing quant-sidecar tag", trailing, "test/repo:BF16-mtp", "", false, false,
+     "", {},
+     "", "model-BF16-mtp.gguf", "", "", ""},
+
+    // the plain tag resolves the plain model; the trailing-token file is skipped
+    {"trailing plain tag", trailing, "test/repo:BF16", "", false, false,
+     "model-BF16.gguf", {"model-BF16.gguf"},
+     "", "", "", "", ""},
+
+    // a short-form sidecar (`mmproj-F16.gguf`) resolves by its bare quant tag
+    {"unsloth quant-sidecar tag", unsloth, "test/repo:BF16-mmproj", "", false, false,
+     "", {},
+     "mmproj-BF16.gguf", "", "", "", ""},
+
+    // an uppercase infix sidecar resolves through the lowercase tag
+    {"unsloth uppercase infix tag", unsloth, "test/repo:BF16-mtp", "", false, false,
+     "", {},
+     "", "model-MTP-BF16.gguf", "", "", ""},
+
+    // a sidecar token in the middle of the name resolves as the sidecar alone
+    {"subdir quant-sidecar tag", subdir, "test/repo:Q8_0-mtp", "", false, false,
+     "", {},
+     "", "model-mtp-Q8_0.gguf", "", "", ""},
 };
 
 static void check_plan(const plan_case & c) {
@@ -468,6 +516,90 @@ static void test_task_assembly() {
     g_repos.clear();
 }
 
+//
+// cache listing and removal against the isolated LLAMA_CACHE, using the
+// same filename grammar the plan tests exercise above
+//
+
+static void cache_put(const std::string & repo, const std::string & path) {
+    namespace fs = std::filesystem;
+    auto local = fs::path(cached(repo, path));
+    fs::create_directories(local.parent_path());
+    { std::ofstream(local) << "gguf"; }
+    auto repo_dir = local.parent_path().parent_path().parent_path();
+    auto refs = repo_dir / "refs";
+    fs::create_directories(refs);
+    auto ref = refs / "main";
+    if (!fs::exists(ref)) {
+        std::ofstream(ref) << COMMIT << "\n";
+    }
+}
+
+static bool cache_lists(const std::string & repo_tag) {
+    for (const auto & e : common_list_cached_models()) {
+        if (e.to_string() == repo_tag) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void test_cache_listing_and_remove() {
+    namespace fs = std::filesystem;
+    const std::string repo = "test/eh";
+
+    printf("test-model-resolution: cache listing and removal\n");
+
+    g_context = "cache fixture";
+    cache_put(repo, "gemma-4-E2B-it-BF16.gguf");        // main weights
+    cache_put(repo, "gemma-4-E2B-it-BF16-mtp.gguf");    // trailing-form draft head
+    cache_put(repo, "gemma-4-31B-it-MTP-BF16.gguf");    // uppercase infix draft head
+    cache_put(repo, "mmproj-gemma-4-E2B-it-BF16.gguf");  // mmproj sidecar
+    cache_put(repo, "mmproj-F16.gguf");                 // short-form mmproj
+    cache_put(repo, "model-mtp-Q8_0.gguf");             // mid-name mtp sidecar
+
+    // a sidecar is listed under `<quant>-<sidecar>` in every form and case it
+    // can be named; only the token-less main weights stay a loadable model
+    REQUIRE(cache_lists("test/eh:BF16"));
+    REQUIRE(cache_lists("test/eh:BF16-mtp"));
+    REQUIRE(cache_lists("test/eh:BF16-mmproj"));
+    REQUIRE(cache_lists("test/eh:F16-mmproj"));
+    REQUIRE(cache_lists("test/eh:Q8_0-mtp"));
+    REQUIRE(!cache_lists("test/eh:MTP"));
+
+    // a plain quant tag removes the model files and leaves every sidecar,
+    // whatever form or case its name carries
+    g_context = "remove plain quant";
+    REQUIRE(common_download_remove("test/eh:BF16"));
+    REQUIRE(!fs::exists(cached(repo, "gemma-4-E2B-it-BF16.gguf")));
+    REQUIRE(fs::exists(cached(repo, "gemma-4-E2B-it-BF16-mtp.gguf")));
+    REQUIRE(fs::exists(cached(repo, "gemma-4-31B-it-MTP-BF16.gguf")));
+    REQUIRE(fs::exists(cached(repo, "mmproj-gemma-4-E2B-it-BF16.gguf")));
+    REQUIRE(fs::exists(cached(repo, "mmproj-F16.gguf")));
+    REQUIRE(fs::exists(cached(repo, "model-mtp-Q8_0.gguf")));
+
+    // a `<quant>-<sidecar>` tag removes every sidecar listed under it,
+    // across forms and cases
+    g_context = "remove quant-sidecar";
+    REQUIRE(common_download_remove("test/eh:BF16-mtp"));
+    REQUIRE(!fs::exists(cached(repo, "gemma-4-E2B-it-BF16-mtp.gguf")));
+    REQUIRE(!fs::exists(cached(repo, "gemma-4-31B-it-MTP-BF16.gguf")));
+    REQUIRE(fs::exists(cached(repo, "mmproj-gemma-4-E2B-it-BF16.gguf")));
+
+    // the short form removes by its bare quant tag
+    REQUIRE(common_download_remove("test/eh:F16-mmproj"));
+    REQUIRE(!fs::exists(cached(repo, "mmproj-F16.gguf")));
+
+    REQUIRE(common_download_remove("test/eh:Q8_0-mtp"));
+    REQUIRE(!fs::exists(cached(repo, "model-mtp-Q8_0.gguf")));
+
+    // a bare sidecar tag is ambiguous across quants and is rejected
+    g_context = "remove bare sidecar";
+    cache_put(repo, "mtp-Model-Q4_0.gguf");
+    REQUIRE(!common_download_remove("test/eh:mtp"));
+    REQUIRE(fs::exists(cached(repo, "mtp-Model-Q4_0.gguf")));
+}
+
 int main(void) {
     // unbuffered, so a crash cannot swallow the reports already printed
     setvbuf(stdout, nullptr, _IONBF, 0);
@@ -496,6 +628,7 @@ int main(void) {
 
     test_plan_resolution();
     test_task_assembly();
+    test_cache_listing_and_remove();
 
     server.stop();
     server_thread.join();
