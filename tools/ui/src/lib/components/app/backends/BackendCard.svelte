@@ -1,4 +1,5 @@
 <script lang="ts">
+	import BackendPresetIcon from './BackendPresetIcon.svelte';
 	import { Pencil, Server, Trash2 } from '@lucide/svelte';
 	import { DialogConfirmation } from '$lib/components/app/dialogs';
 	import { Button } from '$lib/components/ui/button';
@@ -6,6 +7,7 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import type { Backend, BackendProtocol } from '$lib/types';
+	import { findBackendPreset } from '$lib/utils';
 
 	const PROTOCOL_LABELS: Record<BackendProtocol, string> = {
 		anthropic: 'Anthropic',
@@ -26,12 +28,17 @@
 	let showDelete = $state(false);
 	let protocolLabel = $derived(PROTOCOL_LABELS[backend.protocol]);
 	let displayUrl = $derived(backend.baseUrl || 'This server');
+	let preset = $derived(findBackendPreset(backend.baseUrl));
 </script>
 
 <Card.Root class="!gap-3 bg-muted/30 p-4">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
-			<Server class={ICON_CLASS_DEFAULT} />
+			{#if preset}
+				<BackendPresetIcon class={ICON_CLASS_DEFAULT} {preset} />
+			{:else}
+				<Server class={ICON_CLASS_DEFAULT} />
+			{/if}
 
 			<div class="min-w-0">
 				<p class="truncate text-sm font-medium">{backend.name}</p>

@@ -68,64 +68,60 @@ export const BACKEND_COMPAT: Record<BackendProtocol, BackendCompat> = {
  */
 export const BACKEND_PRESETS: readonly BackendPreset[] = [
 	{
-		baseUrl: 'https://openrouter.ai/api',
-		id: 'openrouter',
-		name: 'OpenRouter',
-		protocol: 'openai'
-	},
-	{
-		baseUrl: 'https://api.together.xyz',
-		id: 'together',
-		name: 'Together',
-		protocol: 'openai'
-	},
-	{
 		baseUrl: 'https://router.huggingface.co',
+		iconUrl: '/backend-presets/huggingface.svg',
 		id: 'huggingface',
 		name: 'Hugging Face',
 		protocol: 'openai'
 	},
 	{
-		baseUrl: 'https://api.deepseek.com',
-		id: 'deepseek',
-		name: 'DeepSeek',
+		baseUrl: 'https://openrouter.ai/api',
+		// v2 brand: purple on light, lime on dark
+		iconUrlDark: '/backend-presets/openrouter-dark.svg',
+		iconUrlLight: '/backend-presets/openrouter-light.svg',
+		id: 'openrouter',
+		name: 'OpenRouter',
 		protocol: 'openai'
 	},
 	{
-		baseUrl: 'https://api.moonshot.ai',
-		id: 'kimi',
-		name: 'Kimi',
+		baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+		chatPath: '/chat/completions',
+		iconUrl: '/backend-presets/google.svg',
+		id: 'google',
+		modelsPath: '/models',
+		name: 'Google',
 		protocol: 'openai'
 	},
 	{
 		baseUrl: 'https://api.z.ai/api/paas/v4',
 		chatPath: '/chat/completions',
+		iconUrl: '/backend-presets/zai.png',
 		id: 'zai',
 		modelsPath: '/models',
 		name: 'Z.ai',
 		protocol: 'openai'
 	},
 	{
-		baseUrl: 'https://api.openai.com',
-		// newer OpenAI models reject max_tokens
-		compat: { maxTokensField: 'max_completion_tokens' },
-		id: 'openai',
-		name: 'OpenAI',
+		baseUrl: 'https://api.deepseek.com',
+		iconUrl: '/backend-presets/deepseek.svg',
+		id: 'deepseek',
+		name: 'DeepSeek',
 		protocol: 'openai'
 	},
 	{
-		baseUrl: 'https://api.anthropic.com',
-		chatPath: '/v1/messages',
-		id: 'anthropic',
-		name: 'Anthropic',
-		protocol: 'anthropic'
+		baseUrl: 'https://api.moonshot.ai',
+		iconUrl: '/backend-presets/kimi.png',
+		id: 'kimi',
+		name: 'Kimi',
+		protocol: 'openai'
 	},
 	{
-		baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+		baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
 		chatPath: '/chat/completions',
-		id: 'google',
+		iconUrl: '/backend-presets/qwen.svg',
+		id: 'qwen',
 		modelsPath: '/models',
-		name: 'Google',
+		name: 'Qwen',
 		protocol: 'openai'
 	},
 	{

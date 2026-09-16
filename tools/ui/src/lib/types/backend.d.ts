@@ -76,6 +76,12 @@ export interface BackendPreset {
 	apiKeyHelp?: string;
 	baseUrl: string;
 	chatPath?: string;
+	/** Brand mark used in both themes, for logos that carry their own background. */
+	iconUrl?: string;
+	/** Brand mark for the dark theme. Preferred over `iconUrl` when paired with `iconUrlLight`. */
+	iconUrlDark?: string;
+	/** Brand mark for the light theme. Preferred over `iconUrl` when paired with `iconUrlDark`. */
+	iconUrlLight?: string;
 	/** Wire quirks this preset needs on top of the protocol defaults. */
 	compat?: Partial<BackendCompat>;
 	id: string;

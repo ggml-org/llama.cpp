@@ -1,5 +1,6 @@
 <script lang="ts">
 	import BackendForm from './BackendForm.svelte';
+	import BackendPresetIcon from './BackendPresetIcon.svelte';
 	import { CheckCircle2, Loader2, XCircle } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -143,6 +144,8 @@
 						size="sm"
 						variant={selectedPresetId === preset.id ? 'secondary' : 'outline'}
 					>
+						<BackendPresetIcon class="h-4 w-4" {preset} />
+
 						{preset.name}
 					</Button>
 				{/each}
