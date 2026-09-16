@@ -12,15 +12,15 @@ from .base import ModelBase, gguf
 from .deepseek import DeepseekV2Model
 
 
-@ModelBase.register("XingChen4ForCausalLM")
-class XingChen4Model(DeepseekV2Model):
-    """XingChen4: DeepSeek-V2/V3 backbone (MLA + MoE) + mHC residual mixing."""
+@ModelBase.register("Xing4_0ForCausalLM", "XingChen4ForCausalLM")
+class Xing4_0Model(DeepseekV2Model):
+    """Xing4_0 (formerly XingChen4): DeepSeek-V2/V3 backbone (MLA + MoE) + mHC residual mixing."""
 
-    model_arch = gguf.MODEL_ARCH.XINGCHEN4
+    model_arch = gguf.MODEL_ARCH.XING4_0
 
     # NextN/MTP: the checkpoint appends the MTP block past num_hidden_layers
     # (model.layers.40 -> blk.40), mirroring DeepSeek-V3.2.  The C++ loader
-    # (src/models/xingchen4.cpp) expects the MTP block to carry the standard
+    # (src/models/xing4_0.cpp) expects the MTP block to carry the standard
     # MLA + MoE tensors plus nextn.eh_proj/enorm/hnorm (and optionally
     # embed_tokens/shared_head.*), but NO mHC tensors -- those are trunk-only.
     skip_mtp = False
@@ -40,7 +40,7 @@ class XingChen4Model(DeepseekV2Model):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # buffer for alpha tensors: {bid: {"attn": {}, "ffn": {}}}
-        self._tc4_alphas: dict[int, dict[str, dict[str, Tensor]]] = {}
+        self._xing4_0_alphas: dict[int, dict[str, dict[str, Tensor]]] = {}
 
         self.block_count = self.hparams["num_hidden_layers"]
         if not self.no_mtp:
@@ -102,7 +102,7 @@ class XingChen4Model(DeepseekV2Model):
             hparams.get("hc_eps",  1e-6))
 
     def set_vocab(self):
-        # XingChen4 uses a SentencePiece tokenizer (tokenizer.model + XingChen4Tokenizer).
+        # Xing4_0 uses a SentencePiece tokenizer (tokenizer.model + Xing4_0Tokenizer).
         # V2's set_vocab tries GPT2/BPE first, which fails for SPM. Use the SPM path directly.
         # Note: no add_tokenizer_pre override — the C++ SPM load path ignores
         # tokenizer.ggml.pre entirely (pre-tokenizers only apply to BPE vocabs).
@@ -169,13 +169,13 @@ class XingChen4Model(DeepseekV2Model):
 
             if param in ("alpha_pre", "alpha_post", "alpha_res"):
                 # buffer and concatenate when all three are collected
-                if bid not in self._tc4_alphas:
-                    self._tc4_alphas[bid] = {}
-                if hc_type not in self._tc4_alphas[bid]:
-                    self._tc4_alphas[bid][hc_type] = {}
-                self._tc4_alphas[bid][hc_type][param] = data_torch
+                if bid not in self._xing4_0_alphas:
+                    self._xing4_0_alphas[bid] = {}
+                if hc_type not in self._xing4_0_alphas[bid]:
+                    self._xing4_0_alphas[bid][hc_type] = {}
+                self._xing4_0_alphas[bid][hc_type][param] = data_torch
 
-                alphas = self._tc4_alphas[bid][hc_type]
+                alphas = self._xing4_0_alphas[bid][hc_type]
                 if len(alphas) == 3:
                     scale = torch.cat([
                         alphas["alpha_pre"],
@@ -184,7 +184,7 @@ class XingChen4Model(DeepseekV2Model):
                     ])
                     tensor_enum = self._hc_tensor_map[(prefix, "scale")]
                     gguf_name = self.format_tensor_name(tensor_enum, bid)
-                    del self._tc4_alphas[bid][hc_type]
+                    del self._xing4_0_alphas[bid][hc_type]
                     yield (gguf_name, scale)
                 return
             return
@@ -193,7 +193,7 @@ class XingChen4Model(DeepseekV2Model):
 
     def prepare_tensors(self):
         super().prepare_tensors()
-        for bid, hc_dict in self._tc4_alphas.items():
+        for bid, hc_dict in self._xing4_0_alphas.items():
             for hc_type, alphas in hc_dict.items():
                 if alphas:
                     raise ValueError(
