@@ -160,15 +160,15 @@ bool stream_session::append(const char * data, size_t len) {
     prefix_dropped += evicted;
 
     if (fits) {
-       buffer.insert(buffer.end(), data, data + len); // append data
+        buffer.insert(buffer.end(), data, data + len); // append data
     }
     // else: pathological, record too big for the cap; nothing was stored
 
     cv.notify_all();
 
     if (evicted) {
-		       SRV_DBG("stream session %s: evicting %zu bytes from front\n",
-                conversation_id.c_str(), evicted );
+        SRV_DBG("stream session %s: evicting %zu bytes from front\n",
+                  conversation_id.c_str(), evicted );
     }
 
     return true;
