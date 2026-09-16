@@ -48,6 +48,9 @@
 		showBaseModelAvatar = false
 	}: Props = $props();
 
+	// row actions follow the backend that serves the row, not the selected one
+	let rowBackend = $derived(getBackend(option.backendId));
+	let canLoad = $derived(rowBackend ? getBackendCapabilities(rowBackend).loadUnload : false);
 	let currentRouterModels = $derived(modelsStore.routerModels);
 	let serverStatus = $derived.by(() => {
 		const model = currentRouterModels.find((m) => m.id === option.model);
@@ -196,7 +199,9 @@
 			{/if}
 		</div>
 
-		{#if isLoading}
+		{#if !canLoad}
+			<!-- remote rows have no load state, the column stays out of the way -->
+		{:else if isLoading}
 			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-5">
 				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
 			</div>

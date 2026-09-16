@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
+	import { ChevronLeft, CircleAlert, Loader2 } from '@lucide/svelte';
 	import { ModelsSelectorOption } from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/navigation/utils';
@@ -16,6 +17,10 @@
 		renderOption?: import('svelte').Snippet<[ModelItem, boolean]>;
 		/** Favorite models of every backend; shown on the favorites tab. */
 		favorites?: ModelItem[];
+		/** Open one provider's full list, offered when a section is cut short. */
+		onProviderOpen?: (backendId: string) => void;
+		/** Leave the drilled-in provider; enables the back affordance. */
+		onProviderBack?: () => void;
 	}
 
 	let {
@@ -24,11 +29,18 @@
 		favorites = [],
 		groups,
 		onInfoClick,
+		onProviderBack,
+		onProviderOpen,
 		onSelect,
 		renderOption,
 		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none'
 	}: Props = $props();
 	let render = $derived(renderOption ?? defaultOption);
+	// section headers stick right below the search/tabs block of the dropdown
+	// scrollport; `--dropdown-sticky-height` is set by DropdownMenuSearchable
+	// and falls back to 0 in surfaces without one (the mobile sheet)
+	let headerClass = $derived(`${sectionHeaderClass} sticky z-10 bg-popover`);
+	const headerStyle = 'top: var(--dropdown-sticky-height, 0px)';
 
 	/** In-flight / paused downloads, tracked by the status feed. */
 	let getDownloadEntries = $derived(modelsStore.status.getDownloadEntries());
@@ -70,7 +82,7 @@
 {/each}
 
 {#if getDownloadEntries.length > 0}
-	<p class={sectionHeaderClass}>Download in progress</p>
+	<p class={headerClass} style={headerStyle}>Download in progress</p>
 
 	{#each getDownloadEntries as entry (entry.repoWithTag)}
 		<ModelsSelectorDownloadItem {entry} onRequestCancel={requestCancel} />
@@ -78,7 +90,7 @@
 {/if}
 
 {#if groups.loaded.length > 0}
-	<p class={sectionHeaderClass}>Loaded models</p>
+	<p class={headerClass} style={headerStyle}>Loaded models</p>
 
 	{#each groups.loaded as item (`loaded-${item.option.id}`)}
 		{@render render(item, false)}
@@ -86,7 +98,7 @@
 {/if}
 
 {#if groups.available.length > 0}
-	<h2 class={sectionHeaderClass}>Downloaded models</h2>
+	<h2 class={headerClass} style={headerStyle}>Downloaded models</h2>
 
 	{#each groups.available as group (group.orgName)}
 		{#each group.items as item (item.option.id)}
@@ -95,11 +107,50 @@
 	{/each}
 {/if}
 
-{#if groups.external.length > 0}
-	{#each groups.external as item (`ext-${item.option.id}`)}
-		{@render render(item, true)}
-	{/each}
-{/if}
+<!-- Remote view: one section per backend. -->
+{#each groups.providers as provider (provider.backendId)}
+	<p class="{headerClass} flex items-center gap-1.5" style={headerStyle}>
+		{#if onProviderBack}
+			<button
+				aria-label="Back to all providers"
+				class="-ml-1 inline-flex shrink-0 cursor-pointer items-center rounded-sm p-0.5 text-muted-foreground transition hover:bg-muted/60 hover:text-foreground"
+				onclick={onProviderBack}
+				type="button"
+			>
+				<ChevronLeft class="h-3.5 w-3.5" />
+			</button>
+		{/if}
+
+		{provider.name}
+
+		{#if provider.loading}
+			<Loader2 class="h-3 w-3 animate-spin" />
+		{:else if provider.error}
+			<CircleAlert class="h-3 w-3 text-destructive" />
+		{/if}
+	</p>
+
+	{#if provider.items.length > 0}
+		{#each provider.items as item (`${provider.backendId}-${item.option.id}`)}
+			{@render render(item, true)}
+		{/each}
+
+		{#if onProviderOpen && provider.matched > provider.items.length}
+			<!-- same box as a model row, it opens the provider's full list -->
+			<button
+				class="flex w-full cursor-pointer items-center gap-2 rounded-sm p-2 text-left text-sm text-muted-foreground transition hover:bg-accent hover:text-foreground focus:outline-none"
+				onclick={() => onProviderOpen(provider.backendId)}
+				type="button"
+			>
+				+ {provider.matched - provider.items.length} more
+			</button>
+		{/if}
+	{:else if provider.catalog === 0}
+		<p class="px-4 pb-2 text-xs text-muted-foreground">
+			{provider.error ?? (provider.loading ? 'Loading models...' : 'No models')}
+		</p>
+	{/if}
+{/each}
 
 <DialogConfirmDownload
 	action={ModelDownloadConfirmAction.CANCEL}
