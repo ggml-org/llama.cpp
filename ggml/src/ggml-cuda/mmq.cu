@@ -108,7 +108,7 @@ static ggml_prec ggml_cuda_mmq_get_prec_env() {
         return GGML_PREC_Q8;
     }
     if (env_cpp != "auto") {
-        GGML_LOG_WARN("%s: Not supported yet for GGML_CUDA_MMQ_PREC: %s\n", __func__, env_cpp.c_str());
+        GGML_LOG_WARN("%s: Unknown value for GGML_CUDA_MMQ_PREC: '%s'. Available: 'q4', 'q8', 'auto'.\n", __func__, env_cpp.c_str());
     }
     return GGML_PREC_UNDEFINED;
 }
