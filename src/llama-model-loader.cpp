@@ -688,9 +688,8 @@ llama_model_loader::llama_model_loader(
         // mmap places tensors at their file offsets, so an embedded GGUF must be aligned in the file too
         const size_t tensor_align = ggml_backend_buft_get_alignment(ggml_backend_cpu_buffer_type());
         if (use_mmap && gguf_get_data_offset(metadata) % tensor_align != 0) {
-            LLAMA_LOG_WARN("%s: GGUF data section at file offset %zu is not %zu byte aligned, mmap is disabled\n",
-                __func__, gguf_get_data_offset(metadata), tensor_align);
-            use_mmap = false;
+            throw std::runtime_error(format("%s: GGUF data section at file offset %zu is not %zu byte aligned, cannot mmap",
+                __func__, gguf_get_data_offset(metadata), tensor_align));
         }
 
         get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);

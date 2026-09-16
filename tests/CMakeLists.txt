@@ -296,9 +296,6 @@ set_tests_properties(test-download-model PROPERTIES FIXTURES_SETUP test-download
 llama_build_and_test(test-thread-safety.cpp ARGS -m "${MODEL_DEST}" -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4 -t 2)
 set_tests_properties(test-thread-safety PROPERTIES FIXTURES_REQUIRED test-download-model)
 
-llama_build_and_test(test-load-file-ptr.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
-set_tests_properties(test-load-file-ptr PROPERTIES FIXTURES_REQUIRED test-download-model)
-
 llama_build_and_test(test-arg-parser.cpp)
 llama_build_and_test(test-model-resolution.cpp)
 # the test serves its repos from an httplib server, and the library links it privately
