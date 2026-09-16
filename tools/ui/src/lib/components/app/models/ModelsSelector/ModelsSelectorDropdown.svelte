@@ -5,10 +5,10 @@
 		DialogModelInformation,
 		DropdownMenuSearchable,
 		ModelId,
-		ModelsSelectorBackendSwitcher,
 		ModelsSelectorList,
 		ModelsSelectorOption,
-		ModelsSelectorReasoningPanel
+		ModelsSelectorReasoningPanel,
+		ModelsSelectorTabs
 	} from '$lib/components/app';
 	import { DialogBackendForm } from '$lib/components/app/backends';
 	import type { ModelItem } from '$lib/components/app/navigation/utils';
@@ -94,7 +94,9 @@
 		for (const group of ms.groupedFilteredOptions.available) {
 			for (const item of group.items) order.push(item.option.id);
 		}
-		for (const item of ms.groupedFilteredOptions.external) order.push(item.option.id);
+		for (const provider of ms.groupedFilteredOptions.providers) {
+			for (const item of provider.items) order.push(item.option.id);
+		}
 
 		return order;
 	});
@@ -178,13 +180,13 @@
 </script>
 
 <div class={['relative inline-flex flex-col items-end gap-1', className]}>
-	{#if ms.loading && ms.options.length === 0 && ms.isMultiModel && !ms.switchingBackends}
+	{#if ms.loading && ms.options.length === 0 && ms.isMultiModel}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
 
 			Loading models…
 		</div>
-	{:else if ms.options.length === 0 && ms.isMultiModel && !ms.switchingBackends}
+	{:else if ms.options.length === 0 && ms.isMultiModel}
 		{#if currentModel}
 			<span
 				class={[
@@ -210,7 +212,7 @@
 			? Math.round(modelLoadFraction(modelsStore.status.getLoadProgress(triggerModel)) * 100)
 			: 0}
 
-		{#if ms.isMultiModel || ms.switchingBackends}
+		{#if ms.isMultiModel}
 			<DropdownMenu.Root bind:open={isOpen} onOpenChange={ms.handleOpenChange}>
 				<Tooltip.Root>
 					<Tooltip.Trigger>
@@ -251,7 +253,7 @@
 									{/if}
 								</span>
 
-								{#if ms.updating || ms.isLoadingModel || ms.switchingBackends}
+								{#if ms.updating || ms.isLoadingModel}
 									<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 								{:else}
 									<ChevronDown class="h-3 w-3.5 shrink-0" />
@@ -273,11 +275,11 @@
 
 				<DropdownMenu.Content
 					align="end"
-					class="w-full md:min-w-80 md:max-w-[26rem] max-w-[calc(100vw-2rem)] p-0!"
+					class="w-full md:min-w-80 md:w-96 max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
 					onOpenAutoFocus={(event) => event.preventDefault()}
 				>
 					<DropdownMenuSearchable
-						emptyMessage={ms.isFavoritesView ? 'No favorite models yet.' : 'No models found.'}
+						emptyMessage={ms.emptyMessage}
 						isEmpty={ms.isEmpty && ms.isCurrentModelInCache}
 						onSearchChange={(v) => ms.setSearchTerm(v)}
 						onSearchKeyDown={handleSearchKeyDown}
@@ -285,15 +287,14 @@
 						searchClass="bg-transparent"
 						searchValue={ms.searchTerm}
 					>
-						<!-- Provider tabs (favorites first), above the option list. -->
-						<ModelsSelectorBackendSwitcher
-							activeId={ms.viewId}
-							backends={ms.backends}
-							favoritesActive={ms.isFavoritesView}
-							onAdd={handleAddBackend}
-							onSelect={(backendId) => void ms.handleBackendChange(backendId)}
-							onSelectFavorites={ms.showFavorites}
-						/>
+						<!-- View tabs (favorites first), sticky under the search input. -->
+						{#snippet subheader()}
+							<ModelsSelectorTabs
+								activeId={ms.viewId}
+								onAdd={handleAddBackend}
+								onSelect={ms.setView}
+							/>
+						{/snippet}
 
 						<!-- Option list; the search header sticks to the top and the actions
 						     footer to the bottom of the content scrollport. -->
@@ -315,9 +316,7 @@
 							{/if}
 
 							{#if ms.isEmpty}
-								<p class="px-4 py-3 text-sm text-muted-foreground">
-									{ms.isFavoritesView ? 'No favorite models yet.' : 'No models found.'}
-								</p>
+								<p class="px-4 py-3 text-sm text-muted-foreground">{ms.emptyMessage}</p>
 							{/if}
 
 							{#snippet modelOption(item: ModelItem, _hideOrgName: boolean)}
@@ -351,6 +350,8 @@
 								favorites={ms.isFavoritesView ? ms.favoriteItems : []}
 								groups={ms.groupedFilteredOptions}
 								onInfoClick={ms.handleInfoClick}
+								onProviderBack={ms.isProviderView ? ms.closeProvider : undefined}
+								onProviderOpen={ms.openProvider}
 								onSelect={ms.handleSelect}
 								renderOption={modelOption}
 								sectionHeaderClass="[&:not(:first-child)]:mt-3 mb-1 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
@@ -436,5 +437,5 @@
 
 <DialogBackendForm
 	bind:open={showAddBackend}
-	onSaved={(backend) => void ms.handleBackendChange(backend.id)}
+	onSaved={(backend) => void ms.showBackendModels(backend.id)}
 />

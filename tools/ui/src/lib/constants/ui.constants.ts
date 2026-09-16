@@ -50,8 +50,13 @@ export const DARK_INVERT_AVATAR_ORGS = ['openai'];
 /** Icon used for the model selector and the `/model` slash command. */
 export const MODEL_SELECTOR_ICON = Package;
 
-/** Pseudo backend tab listing the favorites of every backend. */
-export const FAVORITES_TAB_ID = 'favorites';
+/** Models listed per remote provider before the "+ X more" line; search covers the rest. */
+export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
+
+/** Model selector views: the favorites of every backend, the local server, the remote backends. */
+export const MODELS_VIEW_FAVORITES = 'favorites';
+export const MODELS_VIEW_LOCAL = 'local';
+export const MODELS_VIEW_REMOTE = 'remote';
 
 export const ICON_STRIP_TRANSITION_DURATION = 150;
 export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;

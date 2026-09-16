@@ -10,6 +10,7 @@
 import {
 	CLI_FLAGS,
 	HF_UD_QUANT_PREFIX_REGEX,
+	LOCAL_BACKEND_ID,
 	MODEL_ID,
 	PATH_SEPARATOR,
 	PAUSED_MODEL_DOWNLOADS_LOCALSTORAGE_KEY
@@ -17,8 +18,10 @@ import {
 import { ModelDownloadStopRequest, ServerModelsSseEventType, ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
-import type { ModelPropsManager } from '$lib/stores/models/props.svelte';
+import { backendsStore } from '$lib/stores/backends.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
+import { backendsModelsStore } from '$lib/stores/backendsModels.svelte';
+import type { ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 // explicit type imports: the app.d.ts globals resolve to `any`, so import the real types
 import type { ApiModelsSseDownloadProgressData, ModelDownloadProgress } from '$lib/types';
@@ -37,6 +40,7 @@ export interface ModelStatusHost {
 	routerModels: ApiModelDataEntry[];
 	fetchRouterModels(): Promise<void>;
 	isModelLoaded(modelId: string): boolean;
+	switchBackend(): Promise<void>;
 	toDisplayName(id: string): string;
 }
 
@@ -109,6 +113,8 @@ export class ModelStatusManager {
 	 * feed's model_remove event.
 	 */
 	async cancelDownload(repoWithTag: string): Promise<boolean> {
+		await this.ensureLocalTarget();
+
 		if (!serverStore.isRouterMode) {
 			toast.error('Model downloads are only available in router mode');
 
@@ -154,6 +160,8 @@ export class ModelStatusManager {
 	 * waiter is registered here.
 	 */
 	async cancelLoad(modelId: string): Promise<void> {
+		await this.ensureLocalTarget();
+
 		if (!serverStore.isRouterMode) return;
 
 		this.subscribe();
@@ -190,6 +198,8 @@ export class ModelStatusManager {
 	 * (same tag) continues from the partial files the pause kept on disk.
 	 */
 	async downloadModel(repoWithTag: string): Promise<void> {
+		await this.ensureLocalTarget();
+
 		if (!serverStore.isRouterMode) {
 			toast.error('Model downloads are only available in router mode');
 
@@ -320,6 +330,8 @@ export class ModelStatusManager {
 	}
 
 	async load(modelId: string): Promise<void> {
+		await this.ensureLocalTarget();
+
 		if (this.host.isModelLoaded(modelId)) return;
 
 		if (this.loadingStates.get(modelId)) return;
@@ -356,6 +368,8 @@ export class ModelStatusManager {
 	 * reports the stop as download_failed; a 'pause' stop request marks it as such.
 	 */
 	async pauseDownload(repoWithTag: string): Promise<void> {
+		await this.ensureLocalTarget();
+
 		if (!serverStore.isRouterMode) {
 			toast.error('Model downloads are only available in router mode');
 
@@ -374,10 +388,6 @@ export class ModelStatusManager {
 		}
 	}
 
-	/**
-	 * Open the /models/sse feed and keep it live with auto reconnect.
-	 * Idempotent and router mode only.
-	 */
 	subscribe(): void {
 		if (this.statusReaderActive) return;
 
@@ -389,6 +399,8 @@ export class ModelStatusManager {
 	}
 
 	async unload(modelId: string): Promise<void> {
+		await this.ensureLocalTarget();
+
 		if (!this.host.isModelLoaded(modelId)) return;
 
 		if (this.loadingStates.get(modelId)) return;
@@ -584,6 +596,23 @@ export class ModelStatusManager {
 		this.persistPausedDownloads();
 
 		return true;
+	}
+
+	/**
+	 * Open the /models/sse feed and keep it live with auto reconnect.
+	 * Idempotent and router mode only.
+	 */
+	/**
+	 * Load, unload and download only exist on the local server. Make it the
+	 * target first when the action comes from a row while a remote backend is
+	 * the selected one.
+	 */
+	private async ensureLocalTarget(): Promise<void> {
+		if (backendsStore.active.id === LOCAL_BACKEND_ID) return;
+
+		backendsStore.setActive(LOCAL_BACKEND_ID);
+		await backendsModelsStore.ensureLoaded(LOCAL_BACKEND_ID);
+		await this.host.switchBackend();
 	}
 
 	private persistPausedDownloads(): void {

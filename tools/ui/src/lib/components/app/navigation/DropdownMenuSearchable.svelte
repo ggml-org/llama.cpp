@@ -21,6 +21,8 @@
 		 * overflow-y-auto and a max-height) and must not be `overflow-hidden`.
 		 */
 		footer?: Snippet;
+		/** Extra sticky content under the search input, e.g. the view tabs. */
+		subheader?: Snippet;
 	}
 
 	let {
@@ -33,11 +35,16 @@
 		onSearchKeyDown,
 		placeholder = 'Search...',
 		searchClass = '',
-		searchValue = $bindable('')
+		searchValue = $bindable(''),
+		subheader
 	}: Props = $props();
+
+	// the search and the subheader stick as one block; its height is published so
+	// list section headers can stick right below it
+	let stickyHeaderHeight = $state(0);
 </script>
 
-<div class="sticky top-0 z-20 p-1.5">
+<div bind:clientHeight={stickyHeaderHeight} class="sticky top-0 z-20 bg-popover p-1.5">
 	<SearchInput
 		bind:value={searchValue}
 		class={searchClass}
@@ -45,14 +52,21 @@
 		onKeyDown={onSearchKeyDown}
 		{placeholder}
 	/>
+
+	{#if subheader}
+		{@render subheader()}
+	{/if}
 </div>
 
 <div class={contentClass}>
-	{@render children()}
+	<!-- wrapper carries the sticky offset: bits-ui owns the style of the scrollport -->
+	<div style="--dropdown-sticky-height: {stickyHeaderHeight}px">
+		{@render children()}
 
-	{#if isEmpty}
-		<div class="px-2 py-3 text-center text-sm text-muted-foreground">{emptyMessage}</div>
-	{/if}
+		{#if isEmpty}
+			<div class="px-2 py-3 text-center text-sm text-muted-foreground">{emptyMessage}</div>
+		{/if}
+	</div>
 </div>
 
 {#if footer}

@@ -103,8 +103,8 @@
 				orgName: 'intel'
 			}
 		],
-		external: [],
-		loaded: loadedModels
+		loaded: loadedModels,
+		providers: []
 	};
 
 	function handleSelect(modelId: string) {
@@ -139,8 +139,8 @@
 			currentModel={null}
 			groups={{
 				available: [],
-				external: [],
-				loaded: [loadedModels[0]]
+				loaded: [loadedModels[0]],
+				providers: []
 			}}
 			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 			onSelect={handleSelect}
@@ -156,8 +156,8 @@
 			favorites={favoriteModels}
 			groups={{
 				available: [],
-				external: [],
-				loaded: []
+				loaded: [],
+				providers: []
 			}}
 			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 			onSelect={handleSelect}

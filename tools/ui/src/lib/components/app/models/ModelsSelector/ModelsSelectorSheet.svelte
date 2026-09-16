@@ -4,9 +4,9 @@
 	import {
 		DialogModelInformation,
 		ModelId,
-		ModelsSelectorBackendSwitcher,
 		ModelsSelectorList,
 		ModelsSelectorReasoningPanel,
+		ModelsSelectorTabs,
 		SearchInput
 	} from '$lib/components/app';
 	import { DialogBackendForm } from '$lib/components/app/backends';
@@ -70,12 +70,12 @@
 </script>
 
 <div class={['relative inline-flex flex-col items-end gap-1', className]}>
-	{#if ms.loading && ms.options.length === 0 && ms.isMultiModel && !ms.switchingBackends}
+	{#if ms.loading && ms.options.length === 0 && ms.isMultiModel}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
 			Loading models…
 		</div>
-	{:else if ms.options.length === 0 && ms.isMultiModel && !ms.switchingBackends}
+	{:else if ms.options.length === 0 && ms.isMultiModel}
 		<p class="text-xs text-muted-foreground">No models available.</p>
 	{:else}
 		{@const selectedOption = ms.getDisplayOption()}
@@ -91,7 +91,7 @@
 			? Math.round(modelLoadFraction(modelsStore.status.getLoadProgress(triggerModel)) * 100)
 			: 0}
 
-		{#if ms.isMultiModel || ms.switchingBackends}
+		{#if ms.isMultiModel}
 			<button
 				class={[
 					`relative inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 max-sm:px-3 max-sm:py-2 max-sm:text-sm dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
@@ -127,7 +127,7 @@
 					<Lightbulb class="h-3.5 w-3.5 shrink-0 text-amber-400" />
 				{/if}
 
-				{#if ms.updating || ms.isLoadingModel || ms.switchingBackends}
+				{#if ms.updating || ms.isLoadingModel}
 					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 				{:else}
 					<ChevronDown class="h-3 w-3.5 shrink-0" />
@@ -157,14 +157,11 @@
 							/>
 						</div>
 
-						<!-- Provider tabs (favorites first), above the option list. -->
-						<ModelsSelectorBackendSwitcher
+						<!-- View tabs (favorites first), above the option list. -->
+						<ModelsSelectorTabs
 							activeId={ms.viewId}
-							backends={ms.backends}
-							favoritesActive={ms.isFavoritesView}
 							onAdd={handleAddBackend}
-							onSelect={(backendId) => void ms.handleBackendChange(backendId)}
-							onSelectFavorites={ms.showFavorites}
+							onSelect={ms.setView}
 						/>
 
 						<div class="max-h-[60vh] overflow-y-auto px-2">
@@ -185,9 +182,7 @@
 							{/if}
 
 							{#if ms.isEmpty}
-								<p class="px-3 py-3 text-center text-sm text-muted-foreground">
-									{ms.isFavoritesView ? 'No favorite models yet.' : 'No models found.'}
-								</p>
+								<p class="px-3 py-3 text-center text-sm text-muted-foreground">{ms.emptyMessage}</p>
 							{/if}
 
 							<ModelsSelectorList
@@ -196,6 +191,8 @@
 								favorites={ms.isFavoritesView ? ms.favoriteItems : []}
 								groups={ms.groupedFilteredOptions}
 								onInfoClick={ms.handleInfoClick}
+								onProviderBack={ms.isProviderView ? ms.closeProvider : undefined}
+								onProviderOpen={ms.openProvider}
 								onSelect={ms.handleSelect}
 								sectionHeaderClass="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
 							/>
@@ -245,5 +242,5 @@
 
 <DialogBackendForm
 	bind:open={showAddBackend}
-	onSaved={(backend) => void ms.handleBackendChange(backend.id)}
+	onSaved={(backend) => void ms.showBackendModels(backend.id)}
 />
