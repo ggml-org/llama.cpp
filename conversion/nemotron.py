@@ -323,6 +323,8 @@ class NemotronHModel(GraniteHybridModel):
         self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     def set_gguf_parameters(self):
+        self.hparams['rms_norm_eps'] = self.hparams.get('rms_norm_eps', self.hparams.get('layer_norm_epsilon'))
+
         super().set_gguf_parameters()
 
         head_dim = self.head_dim
