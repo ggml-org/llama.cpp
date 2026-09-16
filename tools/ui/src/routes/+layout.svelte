@@ -253,7 +253,9 @@
 		}
 	});
 
-	// Live model status and load progress via the /models/sse feed (router mode)
+	// Live model status and load progress via the /models/sse feed (router mode).
+	// The feed is kept for the session: switching to an external backend and back
+	// must not tear it down and reconnect on every tab switch.
 	$effect(() => {
 		if (!browser) return;
 
@@ -262,10 +264,6 @@
 		untrack(() => {
 			modelsStore.status.subscribe();
 		});
-
-		return () => {
-			modelsStore.status.unsubscribe();
-		};
 	});
 
 	// Background MCP server health checks on app load.

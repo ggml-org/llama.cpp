@@ -24,6 +24,9 @@ class ServerStore {
 	status = $state<number | null>(null);
 	private fetchBackendId: string | undefined;
 	private fetchPromise: Promise<void> | null = null;
+	/** Local server state kept alive while an external backend is active. */
+	private localState: { props: ApiLlamaCppServerProps | null; role: ServerRole | null } | null =
+		null;
 	private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
 	/** Features of the active backend. Defaults to full llama.cpp support. */
@@ -53,6 +56,14 @@ class ServerStore {
 
 	get uiSettings(): Record<string, string | number | boolean> | undefined {
 		return this.props?.ui_settings ?? this.props?.webui_settings;
+	}
+
+	/**
+	 * Keep the local server state before switching to an external backend, so
+	 * switching back restores it instead of asking the server again.
+	 */
+	cacheLocalState(): void {
+		this.localState = { props: this.props, role: this.role };
 	}
 
 	clear(): void {
@@ -143,6 +154,16 @@ class ServerStore {
 			});
 
 		await promise;
+	}
+
+	/** Restore the state kept by {@link cacheLocalState}; no request is made. */
+	restoreLocalState(): void {
+		if (!this.localState) return;
+
+		this.props = this.localState.props;
+		this.role = this.localState.role;
+		this.error = null;
+		this.status = null;
 	}
 
 	private clearRetryTimer(): void {

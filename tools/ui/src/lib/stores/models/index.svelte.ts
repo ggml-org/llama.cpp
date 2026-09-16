@@ -404,46 +404,52 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
-	 * Drop per-backend state when the active backend changes. The model list,
-	 * router rows and selection all belong to the previous backend, so they
-	 * must not leak into the next one. Refetches for the new backend.
+	 * Swap the active backend's state in memory. Every backend is prefetched at
+	 * startup, so switching tabs restores the cached list and the local server
+	 * state without a request.
 	 */
 	async switchBackend(): Promise<void> {
-		this.status.unsubscribe();
 		this.clearSelection();
-		this.routerModels = [];
 		this.error = null;
 
 		const backend = backendsStore.active;
 
-		// server props describe the local server; drop them only when the next
-		// backend is not the one they describe, refresh in place otherwise
-		if (backend.protocol !== 'llama.cpp') {
+		// local props describe the server the UI is served from; keep them while
+		// an external backend is active instead of dropping and refetching
+		if (backend.protocol === 'llama.cpp') {
+			serverStore.restoreLocalState();
+		} else {
+			serverStore.cacheLocalState();
 			serverStore.clear();
 		}
 
-		// prefer the prefetched list so switching does not refetch
 		const cached = backendsModelsStore.get(backend.id);
 
-		if (cached.loaded) {
-			this.activeModels = cached.models;
-			this.loading = false;
-
-			await serverStore.fetch({ background: true });
-
-			// the cache carries names only; reload the router load status in place
-			if (serverStore.isRouterMode) {
-				await this.fetchRouterModels();
-			}
-
-			if (this.activeModels.length > 0) {
-				await this.ensureFirstModelSelected();
-			}
+		if (!cached.loaded) {
+			// nothing prefetched for this backend (startup prefetch failed): load it once
+			await this.fetch(true);
 
 			return;
 		}
 
-		await this.fetch(true);
+		if (backend.protocol === 'llama.cpp' && !serverStore.props) {
+			// first visit to the local tab in this session
+			await serverStore.fetch({ background: true });
+		}
+
+		this.activeModels = cached.models;
+		this.loading = false;
+
+		// the local router rows carry the load statuses; the startup prefetch
+		// already returned them, so a tab switch rebuilds the list from memory
+		if (backend.protocol === 'llama.cpp' && this.routerModels.length === 0 && cached.raw) {
+			this.routerModels = cached.raw.data;
+			this.activeModels = this.buildModelOptions(cached.raw);
+		}
+
+		if (this.activeModels.length > 0) {
+			await this.ensureFirstModelSelected();
+		}
 	}
 
 	toDisplayName(id: string): string {

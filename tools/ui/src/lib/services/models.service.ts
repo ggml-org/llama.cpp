@@ -6,7 +6,13 @@
  * modelsStore and its status manager.
  */
 
-import { API_MODELS, MODEL_ID, type ModelSidecar, SIDECAR_TOKENS } from '$lib/constants';
+import {
+	API_MODELS,
+	LOCAL_BACKEND_ID,
+	MODEL_ID,
+	type ModelSidecar,
+	SIDECAR_TOKENS
+} from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
 import {
@@ -346,8 +352,10 @@ export class ModelsService {
 
 		while (!signal.aborted) {
 			try {
-				const response = await fetch(apiUrl(API_MODELS.SSE), {
-					headers: getAuthHeaders(),
+				// the status feed only exists on the local llama.cpp server; pin the
+				// request so an active external backend cannot redirect it
+				const response = await fetch(apiUrl(API_MODELS.SSE, LOCAL_BACKEND_ID), {
+					headers: getAuthHeaders(LOCAL_BACKEND_ID),
 					signal
 				});
 
