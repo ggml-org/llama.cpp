@@ -118,7 +118,7 @@ export const BACKEND_PRESETS: readonly BackendPreset[] = [
 	{
 		baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
 		chatPath: '/chat/completions',
-		iconUrl: '/backend-presets/qwen.svg',
+		iconUrl: '/backend-presets/qwen.png',
 		id: 'qwen',
 		modelsPath: '/models',
 		name: 'Qwen',
