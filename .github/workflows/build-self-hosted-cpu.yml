@@ -1,4 +1,4 @@
-name: CI (self-hosted)
+name: CI (self-hosted CPU backend)
 
 on:
   workflow_dispatch: # allows manual triggering
