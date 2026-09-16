@@ -9,6 +9,7 @@
 
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
+#include "../src/llama-ext.h"
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
@@ -66,6 +67,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 
 static void usage(char ** argv) {
     printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
+    printf("       %s --layer-input-order\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
@@ -397,6 +399,101 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         gguf_add_tensor(ms.gguf_ctx, &t);
     }
     return ret;
+}
+
+static void set_row_order_tensor_data(ggml_tensor * tensor, void *) {
+    ggml_backend_tensor_memset(tensor, 0, 0, ggml_nbytes(tensor));
+    const bool embedding = strcmp(tensor->name, "token_embd.weight") == 0;
+    if (!embedding && strstr(tensor->name, "rope_freqs.weight") == nullptr) {
+        return;
+    }
+
+    // Zero attention/FFN weights preserve the token embedding through each residual layer.
+    std::vector<float> values(ggml_nelements(tensor));
+    for (size_t i = 0; i < values.size(); ++i) {
+        values[i] = embedding ? float(i / tensor->ne[0] + 1) : 1.0f;
+    }
+    if (tensor->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_set(tensor, values.data(), 0, ggml_nbytes(tensor));
+    } else {
+        GGML_ASSERT(tensor->type == GGML_TYPE_F16);
+        std::vector<ggml_fp16_t> values_f16(values.size());
+        for (size_t i = 0; i < values.size(); ++i) {
+            values_f16[i] = ggml_fp32_to_fp16(values[i]);
+        }
+        ggml_backend_tensor_set(tensor, values_f16.data(), 0, ggml_nbytes(tensor));
+    }
+}
+
+static int test_layer_input_order() {
+    auto gguf_ctx = get_gguf_ctx(LLM_ARCH_LLAMA, false);
+    auto mp = llama_model_default_params();
+    mp.n_gpu_layers = 0;
+    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_row_order_tensor_data, nullptr, mp));
+    if (!model) {
+        throw std::runtime_error("failed to create row-order model");
+    }
+
+    const int n_tokens = 80;
+    const int n_embd = llama_model_n_embd(model.get());
+    bool all_ok = true;
+    for (bool unified : {false, true}) {
+        for (uint32_t n_ubatch : {32u, 128u}) {
+            for (bool interleaved : {false, true}) {
+                for (bool dense : {false, true}) {
+                    auto cp = llama_context_default_params();
+                    cp.n_ctx = cp.n_batch = 256;
+                    cp.n_ubatch = n_ubatch;
+                    cp.n_seq_max = 2;
+                    cp.n_threads = cp.n_threads_batch = 1;
+                    cp.kv_unified = unified;
+                    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+                    llama_context_ptr ctx(llama_init_from_model(model.get(), cp));
+                    if (!ctx) {
+                        throw std::runtime_error("failed to create row-order context");
+                    }
+                    for (uint32_t layer : {0u, 1u}) {
+                        llama_set_embeddings_layer_inp(ctx.get(), layer, true);
+                    }
+                    auto batch = llama_batch_init(n_tokens, 0, 1);
+                    for (int i = 0; i < n_tokens; ++i) {
+                        const int seq = interleaved ? i % 2 : i / (n_tokens / 2);
+                        const int pos = interleaved ? i / 2 : i % (n_tokens / 2);
+                        common_batch_add(batch, i + 1, pos, {seq}, dense || pos == n_tokens / 2 - 1);
+                    }
+                    const int result = llama_decode(ctx.get(), batch);
+                    llama_batch_free(batch);
+                    if (result != 0) {
+                        throw std::runtime_error("failed to decode row-order batch");
+                    }
+
+                    int wrong_rows = 0;
+                    for (uint32_t layer : {0u, 1u}) {
+                        const float * values = llama_get_embeddings_layer_inp(ctx.get(), layer);
+                        bool reported = false;
+                        for (int i = 0; i < n_tokens; ++i) {
+                            for (int k = 0; k < n_embd; ++k) {
+                                if (values[i*n_embd + k] != float(i + 2)) {
+                                    if (!reported) {
+                                        printf("layer=%u row=%d: expected %g, got %g\n", layer, i, double(i + 2), double(values[i*n_embd + k]));
+                                        reported = true;
+                                    }
+                                    ++wrong_rows;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    printf("layer-input-order: %s, ubatch=%u, %s, %s: %d/%d wrong rows\n",
+                            unified ? "unified" : "separate", n_ubatch,
+                            interleaved ? "interleaved" : "grouped", dense ? "dense" : "sparse",
+                            wrong_rows, 2*n_tokens);
+                    all_ok = all_ok && wrong_rows == 0;
+                }
+            }
+        }
+    }
+    return all_ok ? 0 : 1;
 }
 
 static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/) {
@@ -836,9 +933,14 @@ int main(int argc, char ** argv) {
     size_t seed = rd();
     std::string out;
 
+    bool layer_input_order = false;
+
     int verbosity = LOG_LEVEL_ERROR;
 
     for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--layer-input-order") == 0) {
+            layer_input_order = true;
+        }
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv);
             return 0;
@@ -884,6 +986,9 @@ int main(int argc, char ** argv) {
     printf("%s: using seed %zu\n", __func__, seed);
 
     try {
+        if (layer_input_order) {
+            return test_layer_input_order();
+        }
         if (!out.empty()) {
             return save_models(arch, seed, verbosity, out);
         }
