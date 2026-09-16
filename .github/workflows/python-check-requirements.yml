@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   python-check-requirements:
-    runs-on: [self-hosted, CPU, fast]
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     name: check-requirements
     steps:
       - name: Check out source repository
