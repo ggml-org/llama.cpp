@@ -1,6 +1,6 @@
 #include "allreduce.cuh"
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if !defined(GGML_USE_MUSA)
 
 #include "convert.cuh"
 #include "ggml-impl.h"
@@ -11,11 +11,12 @@
 #include <limits>
 
 // ---------------------------------------------------------------------------
-// CUDA AllReduce for tensor-parallel inference across two GPUs.
+// AllReduce for tensor-parallel inference across two GPUs (CUDA or
+// ROCm/HIP).
 //
-// Provides an in-place sum reduction over matching tensors on two CUDA
-// devices in the same process.  Used by the tensor-split path alongside
-// NCCL; targets setups without NVLink, where data is exchanged between the
+// Provides an in-place sum reduction over matching tensors on two GPUs
+// in the same process.  Used by the tensor-split path alongside NCCL;
+// targets setups without NVLink/xGMI, where data is exchanged between the
 // GPUs by staging it through pinned host memory over PCIe.
 //
 // Two reduction strategies are selected per call by tensor size:
@@ -161,11 +162,14 @@ static __global__ void ggml_cuda_ar_kernel(
         __threadfence_system(); // make our signal visible system-wide
 
         while (ggml_cuda_ar_signal_get(other_slot) != token) {
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
+#ifdef GGML_USE_HIP
+            // Equals ~100ns at 2500 MHz (sleeps for n * [1,64] clock cycles)
+            __builtin_amdgcn_s_sleep(4);
+#elif __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
             __nanosleep(100);
 #else
             NO_DEVICE_CODE;
-#endif // __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
+#endif // GGML_USE_HIP
         }
     }
 
@@ -280,7 +284,7 @@ struct ggml_cuda_ar_host_mapping {
         }
         rc = cudaHostGetDevicePointer(reinterpret_cast<void **>(&dev), host, 0);
         if (rc != cudaSuccess) {
-            cudaFreeHost(host);
+            CUDA_CHECK(cudaFreeHost(host));
             host = nullptr;
             dev  = nullptr;
         }
@@ -289,7 +293,7 @@ struct ggml_cuda_ar_host_mapping {
 
     void free() {
         if (host) {
-            cudaFreeHost(host);
+            CUDA_CHECK(cudaFreeHost(host));
             host = nullptr;
             dev  = nullptr;
         }
@@ -401,7 +405,8 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
         return nullptr;
     }
 
-    // The chunked kernel uses __nanosleep, which is sm70+ (Volta+).
+    // The chunked kernel uses __nanosleep (NVIDIA, sm70+) or
+    // __builtin_amdgcn_s_sleep (AMD).
     for (size_t i = 0; i < n_devices; ++i) {
         const int cc = ggml_cuda_info().devices[devices[i]].cc;
         if (cc < GGML_CUDA_CC_VOLTA) {
@@ -543,7 +548,7 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
     for (int i = 0; i < p->n_devices; ++i) {
         if (p->streams[i]) {
             ggml_cuda_set_device(p->devices[i]);
-            cudaStreamSynchronize(p->streams[i]);
+            CUDA_CHECK(cudaStreamSynchronize(p->streams[i]));
         }
     }
 
@@ -552,28 +557,28 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
         p->host_large[i].free();
         if (p->dev_tmp[i]) {
             ggml_cuda_set_device(p->devices[i]);
-            cudaFree(p->dev_tmp[i]);
+            CUDA_CHECK(cudaFree(p->dev_tmp[i]));
         }
         ggml_cuda_set_device(p->devices[i]);
         for (int s = 0; s < GGML_CUDA_AR_POOL_SIZE; ++s) {
-            if (p->ev_pool[i][s].app) { cudaEventDestroy(p->ev_pool[i][s].app); }
+            if (p->ev_pool[i][s].app) { CUDA_CHECK(cudaEventDestroy(p->ev_pool[i][s].app)); }
             for (int c = 0; c < GGML_CUDA_AR_COPY_MAX_CHUNKS; ++c) {
-                if (p->ev_pool[i][s].cpy[c]) { cudaEventDestroy(p->ev_pool[i][s].cpy[c]); }
+                if (p->ev_pool[i][s].cpy[c]) { CUDA_CHECK(cudaEventDestroy(p->ev_pool[i][s].cpy[c])); }
             }
-            if (p->ev_pool[i][s].h2d) { cudaEventDestroy(p->ev_pool[i][s].h2d); }
-            if (p->ev_pool[i][s].ker) { cudaEventDestroy(p->ev_pool[i][s].ker); }
+            if (p->ev_pool[i][s].h2d) { CUDA_CHECK(cudaEventDestroy(p->ev_pool[i][s].h2d)); }
+            if (p->ev_pool[i][s].ker) { CUDA_CHECK(cudaEventDestroy(p->ev_pool[i][s].ker)); }
         }
         if (p->host_large_read_done[i]) {
             ggml_cuda_set_device(p->devices[i]);
-            cudaEventDestroy(p->host_large_read_done[i]);
+            CUDA_CHECK(cudaEventDestroy(p->host_large_read_done[i]));
         }
         if (p->dev_tmp_kernel_done[i]) {
             ggml_cuda_set_device(p->devices[i]);
-            cudaEventDestroy(p->dev_tmp_kernel_done[i]);
+            CUDA_CHECK(cudaEventDestroy(p->dev_tmp_kernel_done[i]));
         }
         if (p->streams[i]) {
             ggml_cuda_set_device(p->devices[i]);
-            cudaStreamDestroy(p->streams[i]);
+            CUDA_CHECK(cudaStreamDestroy(p->streams[i]));
         }
     }
     p->arrival.free();
@@ -952,13 +957,14 @@ bool ggml_cuda_ar_allreduce(
     return ok;
 }
 
-#else // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+#else // defined(GGML_USE_MUSA)
 
-// HIP and MUSA lack the host-mapped pinned-memory APIs (cudaHostAllocPortable
-// / cudaHostAllocMapped / cudaHostGetDevicePointer) and __nanosleep that this
-// implementation relies on, so the internal AllReduce is a CUDA-only feature.
-// The dispatcher in ggml-cuda.cu treats a nullptr pipeline as "init failed"
-// and silently falls back to the meta backend's generic AllReduce.
+// MUSA lacks the host-mapped pinned-memory APIs (cudaHostAllocPortable
+// / cudaHostAllocMapped / cudaHostGetDevicePointer) and a device-side
+// sleep intrinsic that this implementation relies on, so the internal
+// AllReduce is unavailable there. The dispatcher in ggml-cuda.cu treats
+// a nullptr pipeline as "init failed" and silently falls back to the meta
+// backend's generic AllReduce.
 ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int *, size_t) {
     return nullptr;
 }
@@ -968,4 +974,4 @@ bool ggml_cuda_ar_allreduce(ggml_cuda_ar_pipeline *, ggml_backend_t *, ggml_tens
     return false;
 }
 
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#endif // !defined(GGML_USE_MUSA)
