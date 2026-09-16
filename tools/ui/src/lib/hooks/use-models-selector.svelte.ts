@@ -68,9 +68,12 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const updating = $derived(modelsStore.updating);
 	const activeId = $derived(modelsStore.selectedModelId);
 	const backends = $derived(backendsStore.enabled);
-	// Router mode and external backends both expose a selectable model list;
-	// a single-model llama.cpp server does not.
-	const isMultiModel = $derived(serverStore.isRouterMode || !serverStore.capabilities.props);
+	// Router mode and external backends both expose a selectable model list, and
+	// configured backends always need the tabs; only a lone llama.cpp server
+	// without a router has nothing to list.
+	const isMultiModel = $derived(
+		serverStore.isRouterMode || !serverStore.capabilities.props || backendsStore.enabled.length > 1
+	);
 	const isRouter = $derived(serverStore.isRouterMode);
 	const serverModel = $derived(modelsStore.singleModelName);
 	const currentModel = $derived(opts.currentModel());
@@ -118,9 +121,9 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	function handleOpenChange(open: boolean) {
 		if (loading || updating) return;
 
-		// a single-model llama.cpp server has no list to show, so the trigger
-		// opens the model info dialog instead; external backends have a menu
-		if (!isRouter && serverStore.capabilities.props) {
+		// a single-model llama.cpp server with no other backend has no list to
+		// show, so the trigger opens the model info dialog instead
+		if (!isMultiModel) {
 			showModelDialog = open;
 
 			return;
@@ -129,9 +132,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		searchTerm = '';
 
 		if (open && isRouter) {
-			modelsStore.fetchRouterModels().then(() => {
-				modelsStore.props.fetchModalitiesForLoadedModels();
-			});
+			modelsStore.props.fetchModalitiesForLoadedModels();
 		}
 
 		opts.onOpenChange?.(open);
