@@ -210,7 +210,7 @@
 			? Math.round(modelLoadFraction(modelsStore.status.getLoadProgress(triggerModel)) * 100)
 			: 0}
 
-		{#if ms.isMultiModel}
+		{#if ms.isMultiModel || ms.switchingBackends}
 			<DropdownMenu.Root bind:open={isOpen} onOpenChange={ms.handleOpenChange}>
 				<Tooltip.Root>
 					<Tooltip.Trigger>
@@ -251,7 +251,7 @@
 									{/if}
 								</span>
 
-								{#if ms.updating || ms.isLoadingModel}
+								{#if ms.updating || ms.isLoadingModel || ms.switchingBackends}
 									<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 								{:else}
 									<ChevronDown class="h-3 w-3.5 shrink-0" />

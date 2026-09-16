@@ -7,7 +7,7 @@
  */
 
 import { API_MODELS, LOCAL_BACKEND_ID } from '$lib/constants';
-import type { Backend, ModelOption } from '$lib/types';
+import type { ApiModelsListResponse, Backend, ModelOption } from '$lib/types';
 import { isAbortError } from '$lib/utils/abort';
 import { apiUrl } from '$lib/utils/api-base';
 import { getAuthHeadersForBackend } from '$lib/utils/api-headers';
@@ -19,6 +19,8 @@ export interface BackendModelsResult {
 	models: ModelOption[];
 	ok: boolean;
 	status: number | null;
+	/** Untouched list payload of the local backend, kept so the router rows and their load statuses can be rebuilt without asking again. */
+	raw?: ApiModelsListResponse;
 }
 
 /** Outcome of a backend connectivity check. */
@@ -64,8 +66,10 @@ export class BackendsService {
 			const body = (await response.json()) as { data?: unknown };
 			const entries = Array.isArray(body?.data) ? body.data : [];
 			const models = entries.flatMap((entry) => normalizeBackendModel(entry));
+			// only the local server needs its raw rows: they carry the load status
+			const raw = backend.id === LOCAL_BACKEND_ID ? (body as ApiModelsListResponse) : undefined;
 
-			return { models, ok: true, status: response.status };
+			return { models, ok: true, raw, status: response.status };
 		} catch (error) {
 			if (isAbortError(error)) {
 				return { models: [], ok: false, status: null };

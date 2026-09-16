@@ -9,6 +9,7 @@
 
 import { BackendsService } from '$lib/services/backends.service';
 import { backendsStore } from '$lib/stores/backends.svelte';
+import type { ApiModelsListResponse } from '$lib/types';
 import type { ModelOption } from '$lib/types/models';
 
 export interface BackendModelsState {
@@ -16,9 +17,16 @@ export interface BackendModelsState {
 	loaded: boolean;
 	loading: boolean;
 	models: ModelOption[];
+	/** Untouched list payload, kept for the local backend so its router rows survive a tab switch. */
+	raw?: ApiModelsListResponse;
 }
 
-const EMPTY_STATE: BackendModelsState = { error: null, loaded: false, loading: false, models: [] };
+const EMPTY_STATE: BackendModelsState = {
+	error: null,
+	loaded: false,
+	loading: false,
+	models: []
+};
 
 class BackendsModelsStore {
 	private states = $state<Record<string, BackendModelsState>>({});
@@ -47,7 +55,8 @@ class BackendsModelsStore {
 			error: result.error ?? null,
 			loaded: result.ok,
 			loading: false,
-			models: result.models
+			models: result.models,
+			raw: result.raw
 		};
 	}
 
