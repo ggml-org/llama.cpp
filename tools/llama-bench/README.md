@@ -75,6 +75,8 @@ test parameters:
   -ot --override-tensor <tensor name pattern>=<buffer type>;...
                                             (default: disabled)
   -nopo, --no-op-offload <0|1>              (default: 0)
+  --override-kv <key>=<type>:<value>        override model metadata by key; types int, float, bool, str
+                                            (default: none; can be given multiple times)
   --no-host <0|1>                           (default: 0)
 
 Multiple values can be given for each parameter by separating them with ','
