@@ -11645,14 +11645,14 @@ void ggml_compute_forward_dsv4_hc_post(
     }
 }
 
-// ggml_compute_forward_xc4_hc_comb
+// ggml_compute_forward_xing4_0_hc_comb
 //
-// xingchen4 semantics: comb is [src, dst, n_tokens] (ne0 = src, fastest), raw
+// xing4_0 semantics: comb is [src, dst, n_tokens] (ne0 = src, fastest), raw
 // logits are clamped to [-30,30] before softmax, softmax is over src, then all
 // sinkhorn iterations do norm_src then norm_dst (src first). eps is only added
 // to the normalization denominators, never to the values.
 
-static void ggml_xc4_hc_comb_norm_dst(float * comb, float eps) {
+static void ggml_xing4_0_hc_comb_norm_dst(float * comb, float eps) {
     constexpr int64_t hc = 4;
 
     for (int64_t isrc = 0; isrc < hc; ++isrc) {
@@ -11668,7 +11668,7 @@ static void ggml_xc4_hc_comb_norm_dst(float * comb, float eps) {
     }
 }
 
-static void ggml_xc4_hc_comb_norm_src(float * comb, float eps) {
+static void ggml_xing4_0_hc_comb_norm_src(float * comb, float eps) {
     constexpr int64_t hc = 4;
 
     for (int64_t idst = 0; idst < hc; ++idst) {
@@ -11684,7 +11684,7 @@ static void ggml_xc4_hc_comb_norm_src(float * comb, float eps) {
     }
 }
 
-static void ggml_compute_forward_xc4_hc_comb_f32(
+static void ggml_compute_forward_xing4_0_hc_comb_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     const ggml_tensor * mixes = dst->src[0];
@@ -11751,8 +11751,8 @@ static void ggml_compute_forward_xc4_hc_comb_f32(
 
         // with_clamp: every sinkhorn normalization is inside the loop, src first.
         for (int32_t i = 0; i < n_iter; ++i) {
-            ggml_xc4_hc_comb_norm_src(comb, eps);
-            ggml_xc4_hc_comb_norm_dst(comb, eps);
+            ggml_xing4_0_hc_comb_norm_src(comb, eps);
+            ggml_xing4_0_hc_comb_norm_dst(comb, eps);
         }
 
         for (int64_t isrc = 0; isrc < hc; ++isrc) {
@@ -11764,7 +11764,7 @@ static void ggml_compute_forward_xc4_hc_comb_f32(
     }
 }
 
-void ggml_compute_forward_xc4_hc_comb(
+void ggml_compute_forward_xing4_0_hc_comb(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
@@ -11772,7 +11772,7 @@ void ggml_compute_forward_xc4_hc_comb(
     switch (src0->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_xc4_hc_comb_f32(params, dst);
+                ggml_compute_forward_xing4_0_hc_comb_f32(params, dst);
             } break;
         default:
             {
@@ -11781,9 +11781,9 @@ void ggml_compute_forward_xc4_hc_comb(
     }
 }
 
-// ggml_compute_forward_xc4_hc_pre
+// ggml_compute_forward_xing4_0_hc_pre
 
-static void ggml_compute_forward_xc4_hc_pre_f32(
+static void ggml_compute_forward_xing4_0_hc_pre_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     const ggml_tensor * x       = dst->src[0];
@@ -11829,7 +11829,7 @@ static void ggml_compute_forward_xc4_hc_pre_f32(
     }
 }
 
-void ggml_compute_forward_xc4_hc_pre(
+void ggml_compute_forward_xing4_0_hc_pre(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
@@ -11837,7 +11837,7 @@ void ggml_compute_forward_xc4_hc_pre(
     switch (src0->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_xc4_hc_pre_f32(params, dst);
+                ggml_compute_forward_xing4_0_hc_pre_f32(params, dst);
             } break;
         default:
             {
@@ -11846,9 +11846,9 @@ void ggml_compute_forward_xc4_hc_pre(
     }
 }
 
-// ggml_compute_forward_xc4_hc_post
+// ggml_compute_forward_xing4_0_hc_post
 
-static void ggml_compute_forward_xc4_hc_post_f32(
+static void ggml_compute_forward_xing4_0_hc_post_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     const ggml_tensor * x        = dst->src[0];
@@ -11911,7 +11911,7 @@ static void ggml_compute_forward_xc4_hc_post_f32(
     }
 }
 
-void ggml_compute_forward_xc4_hc_post(
+void ggml_compute_forward_xing4_0_hc_post(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
@@ -11919,7 +11919,7 @@ void ggml_compute_forward_xc4_hc_post(
     switch (src0->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_xc4_hc_post_f32(params, dst);
+                ggml_compute_forward_xing4_0_hc_post_f32(params, dst);
             } break;
         default:
             {

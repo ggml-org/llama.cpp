@@ -1,48 +1,48 @@
 #include "common.cuh"
-#include "xc4-hc.cuh"
+#include "xing4_0-hc.cuh"
 
 
-static constexpr int XC4_HC = 4;
-static constexpr float XC4_HC_CLAMP = 30.0f;
+static constexpr int XING4_0_HC = 4;
+static constexpr float XING4_0_HC_CLAMP = 30.0f;
 
 
 // normalize over ne1 (dst): each src row sums to 1 (eps only in denominator)
-static __device__ void xc4_hc_comb_norm_dst(float * comb, float eps) {
-    for (int isrc = 0; isrc < XC4_HC; ++isrc) {
+static __device__ void xing4_0_hc_comb_norm_dst(float * comb, float eps) {
+    for (int isrc = 0; isrc < XING4_0_HC; ++isrc) {
         float sum = eps;
-        for (int idst = 0; idst < XC4_HC; ++idst) {
-            sum += comb[isrc + XC4_HC*idst];
+        for (int idst = 0; idst < XING4_0_HC; ++idst) {
+            sum += comb[isrc + XING4_0_HC*idst];
         }
 
         const float inv_sum = 1.0f / sum;
-        for (int idst = 0; idst < XC4_HC; ++idst) {
-            comb[isrc + XC4_HC*idst] *= inv_sum;
+        for (int idst = 0; idst < XING4_0_HC; ++idst) {
+            comb[isrc + XING4_0_HC*idst] *= inv_sum;
         }
     }
 }
 
 // normalize over ne0 (src): each dst column sums to 1 (eps added in denominator)
-static __device__ void xc4_hc_comb_norm_src(float * comb, float eps) {
-    for (int idst = 0; idst < XC4_HC; ++idst) {
+static __device__ void xing4_0_hc_comb_norm_src(float * comb, float eps) {
+    for (int idst = 0; idst < XING4_0_HC; ++idst) {
         float sum = eps;
-        for (int isrc = 0; isrc < XC4_HC; ++isrc) {
-            sum += comb[isrc + XC4_HC*idst];
+        for (int isrc = 0; isrc < XING4_0_HC; ++isrc) {
+            sum += comb[isrc + XING4_0_HC*idst];
         }
 
         const float inv_sum = 1.0f / sum;
-        for (int isrc = 0; isrc < XC4_HC; ++isrc) {
-            comb[isrc + XC4_HC*idst] *= inv_sum;
+        for (int isrc = 0; isrc < XING4_0_HC; ++isrc) {
+            comb[isrc + XING4_0_HC*idst] *= inv_sum;
         }
     }
 }
 
 // comb is [src, dst, n_tokens]: ne0 = src (fastest), ne1 = dst.
-// flat idx = src + XC4_HC*dst. Matches xingchen4's
+// flat idx = src + XING4_0_HC*dst. Matches xing4_0's
 // mhc_pre_big_fuse_with_clamp_tilelang kernel: clamp raw logits to [-30,30],
 // exp(-max) over src WITHOUT normalizing, then all sinkhorn iterations do
 // norm_src then norm_dst (eps only in the normalization denominators, never on
 // the values). No separate softmax normalization is applied before the loop.
-static __global__ void xc4_hc_comb_f32(
+static __global__ void xing4_0_hc_comb_f32(
         const float * mixes,
         const float * scale,
         const float * base,
@@ -57,7 +57,7 @@ static __global__ void xc4_hc_comb_f32(
         int64_t sd2,
         float eps,
         int32_t n_iter) {
-    constexpr int comb_offset = 2*XC4_HC;
+    constexpr int comb_offset = 2*XING4_0_HC;
 
     ggml_cuda_pdl_lc();
     const int64_t it = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
@@ -69,19 +69,19 @@ static __global__ void xc4_hc_comb_f32(
     ggml_cuda_pdl_sync();
 
     const float scale_comb = scale[2*ss0];
-    float comb[XC4_HC*XC4_HC];
+    float comb[XING4_0_HC*XING4_0_HC];
 
-    for (int idst = 0; idst < XC4_HC; ++idst) {
+    for (int idst = 0; idst < XING4_0_HC; ++idst) {
         float max = -INFINITY;
-        for (int isrc = 0; isrc < XC4_HC; ++isrc) {
-            const int idx = isrc + XC4_HC*idst;
+        for (int isrc = 0; isrc < XING4_0_HC; ++isrc) {
+            const int idx = isrc + XING4_0_HC*idst;
             const float v = mixes[(comb_offset + idx)*sm0 + it*sm1] * scale_comb + base[(comb_offset + idx)*sb0];
-            comb[idx] = fminf(fmaxf(v, -XC4_HC_CLAMP), XC4_HC_CLAMP);
+            comb[idx] = fminf(fmaxf(v, -XING4_0_HC_CLAMP), XING4_0_HC_CLAMP);
             max = fmaxf(max, comb[idx]);
         }
 
-        for (int isrc = 0; isrc < XC4_HC; ++isrc) {
-            const int idx = isrc + XC4_HC*idst;
+        for (int isrc = 0; isrc < XING4_0_HC; ++isrc) {
+            const int idx = isrc + XING4_0_HC*idst;
             comb[idx] = expf(comb[idx] - max);
         }
     }
@@ -90,19 +90,19 @@ static __global__ void xc4_hc_comb_f32(
     // the exp(-max) step above is NOT sum-normalized (no softmax division), so
     // the first norm_src below applies eps to the denominator as well.
     for (int32_t i = 0; i < n_iter; ++i) {
-        xc4_hc_comb_norm_src(comb, eps);
-        xc4_hc_comb_norm_dst(comb, eps);
+        xing4_0_hc_comb_norm_src(comb, eps);
+        xing4_0_hc_comb_norm_dst(comb, eps);
     }
 
-    for (int idst = 0; idst < XC4_HC; ++idst) {
-        for (int isrc = 0; isrc < XC4_HC; ++isrc) {
-            const int idx = isrc + XC4_HC*idst;
+    for (int idst = 0; idst < XING4_0_HC; ++idst) {
+        for (int isrc = 0; isrc < XING4_0_HC; ++isrc) {
+            const int idx = isrc + XING4_0_HC*idst;
             dst[isrc*sd0 + idst*sd1 + it*sd2] = comb[idx];
         }
     }
 }
 
-static __global__ void xc4_hc_pre_f32(
+static __global__ void xing4_0_hc_pre_f32(
         const float * x,
         const float * weights,
         float * dst,
@@ -139,7 +139,7 @@ static __global__ void xc4_hc_pre_f32(
     dst[i0*sd0 + it*sd1] = sum;
 }
 
-static __global__ void xc4_hc_post_f32(
+static __global__ void xing4_0_hc_post_f32(
         const float * x,
         const float * residual,
         const float * post,
@@ -184,7 +184,7 @@ static __global__ void xc4_hc_post_f32(
     dst[i0*sd0 + idst*sd1 + it*sd2] = sum;
 }
 
-void ggml_cuda_op_xc4_hc_comb(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+void ggml_cuda_op_xing4_0_hc_comb(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * mixes = dst->src[0];
     const ggml_tensor * scale = dst->src[1];
     const ggml_tensor * base  = dst->src[2];
@@ -194,11 +194,11 @@ void ggml_cuda_op_xc4_hc_comb(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     GGML_ASSERT(base->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    constexpr int64_t hc_mix_dim = (2 + XC4_HC)*XC4_HC;
+    constexpr int64_t hc_mix_dim = (2 + XING4_0_HC)*XING4_0_HC;
 
     GGML_ASSERT(mixes->ne[0] == hc_mix_dim);
-    GGML_ASSERT(dst->ne[0] == XC4_HC);
-    GGML_ASSERT(dst->ne[1] == XC4_HC);
+    GGML_ASSERT(dst->ne[0] == XING4_0_HC);
+    GGML_ASSERT(dst->ne[1] == XING4_0_HC);
     GGML_ASSERT(dst->ne[2] == mixes->ne[1]);
     GGML_ASSERT(scale->ne[0] >= 3);
     GGML_ASSERT(base->ne[0] == hc_mix_dim);
@@ -217,7 +217,7 @@ void ggml_cuda_op_xc4_hc_comb(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const dim3 grid_dims((n_tokens + block_size - 1) / block_size, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, ctx.stream());
 
-    ggml_cuda_kernel_launch(xc4_hc_comb_f32, launch_params,
+    ggml_cuda_kernel_launch(xing4_0_hc_comb_f32, launch_params,
             (const float *) mixes->data, (const float *) scale->data, (const float *) base->data, (float *) dst->data,
             n_tokens,
             nbm0 / sizeof(float), nbm1 / sizeof(float),
@@ -227,7 +227,7 @@ void ggml_cuda_op_xc4_hc_comb(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             eps, n_iter);
 }
 
-void ggml_cuda_op_xc4_hc_pre(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+void ggml_cuda_op_xing4_0_hc_pre(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * x       = dst->src[0];
     const ggml_tensor * weights = dst->src[1];
 
@@ -249,7 +249,7 @@ void ggml_cuda_op_xc4_hc_pre(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
     const dim3 grid_dims((nr + block_size - 1) / block_size, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, ctx.stream());
 
-    ggml_cuda_kernel_launch(xc4_hc_pre_f32, launch_params,
+    ggml_cuda_kernel_launch(xing4_0_hc_pre_f32, launch_params,
             (const float *) x->data, (const float *) weights->data, (float *) dst->data,
             n_embd, hc, n_tokens,
             nbx0 / sizeof(float), nbx1 / sizeof(float), nbx2 / sizeof(float),
@@ -257,7 +257,7 @@ void ggml_cuda_op_xc4_hc_pre(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
             nbd0 / sizeof(float), nbd1 / sizeof(float));
 }
 
-void ggml_cuda_op_xc4_hc_post(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+void ggml_cuda_op_xing4_0_hc_post(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * x        = dst->src[0];
     const ggml_tensor * residual = dst->src[1];
     const ggml_tensor * post     = dst->src[2];
@@ -285,7 +285,7 @@ void ggml_cuda_op_xc4_hc_post(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const dim3 grid_dims((nr + block_size - 1) / block_size, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, ctx.stream());
 
-    ggml_cuda_kernel_launch(xc4_hc_post_f32, launch_params,
+    ggml_cuda_kernel_launch(xing4_0_hc_post_f32, launch_params,
             (const float *) x->data, (const float *) residual->data,
             (const float *) post->data, (const float *) comb->data, (float *) dst->data,
             n_embd, hc, n_tokens,

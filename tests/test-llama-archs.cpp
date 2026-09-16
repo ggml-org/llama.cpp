@@ -165,7 +165,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_HY_V4
-            || arch == LLM_ARCH_XINGCHEN4) {
+            || arch == LLM_ARCH_XING4_0) {
         n_embd = 128;
         n_head = 1;
         n_ff   = 192;
@@ -254,7 +254,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
             || arch == LLM_ARCH_MISTRAL4
-            || arch == LLM_ARCH_XINGCHEN4) {
+            || arch == LLM_ARCH_XING4_0) {
         // GLM5 next MLA is nope only, the cache row is the compressed latent alone.
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       arch == LLM_ARCH_GLM5_NEXT ? uint32_t(512) : uint32_t(576));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,     uint32_t(512));
@@ -282,7 +282,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
     }
 
-    if (arch == LLM_ARCH_XINGCHEN4) {
+    if (arch == LLM_ARCH_XING4_0) {
         // Manifold-Constrained Hyper-Connections (MHC) multi-residual-stream blocks
         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               uint32_t(4));
         ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(20));
@@ -680,7 +680,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_DEEPSEEK32:
         case LLM_ARCH_DOTS3NOTE:
         case LLM_ARCH_DEEPSEEK4:
-        case LLM_ARCH_XINGCHEN4:
+        case LLM_ARCH_XING4_0:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_EXAONE_MOE:
