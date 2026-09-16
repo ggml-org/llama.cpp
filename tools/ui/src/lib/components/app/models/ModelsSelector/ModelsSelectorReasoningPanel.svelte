@@ -126,8 +126,8 @@
      arrow-key navigation never sees hidden items. -->
 <div
 	bind:this={regionEl}
-	data-expanded={expanded}
 	class="overflow-hidden"
+	data-expanded={expanded}
 	style={`height: ${heightPx}px; visibility: ${
 		expanded ? 'visible' : 'hidden'
 	}; transition: height ${EXPAND_TRANSITION_MS}ms cubic-bezier(0.23, 1, 0.32, 1), visibility ${EXPAND_TRANSITION_MS}ms;`}
