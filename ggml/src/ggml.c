@@ -1084,9 +1084,9 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DSV4_HC_COMB",
     "DSV4_HC_PRE",
     "DSV4_HC_POST",
-    "XC4_HC_COMB",
-    "XC4_HC_PRE",
-    "XC4_HC_POST",
+    "XING4_0_HC_COMB",
+    "XING4_0_HC_PRE",
+    "XING4_0_HC_POST",
 
     "UNARY",
 
@@ -6611,9 +6611,9 @@ struct ggml_tensor * ggml_dsv4_hc_post(
     return result;
 }
 
-// ggml_xc4_hc_comb
+// ggml_xing4_0_hc_comb
 
-struct ggml_tensor * ggml_xc4_hc_comb(
+struct ggml_tensor * ggml_xing4_0_hc_comb(
         struct ggml_context * ctx,
         struct ggml_tensor  * mixes,
         struct ggml_tensor  * scale,
@@ -6625,7 +6625,7 @@ struct ggml_tensor * ggml_xc4_hc_comb(
     GGML_ASSERT(base->type == GGML_TYPE_F32);
     GGML_ASSERT(n_iter > 0);
 
-    const int64_t hc         = 4; // xingchen4 always uses 4 residual streams
+    const int64_t hc         = 4; // xing4_0 always uses 4 residual streams
     const int64_t hc_mix_dim = (2 + hc)*hc;
     const int64_t n_tokens   = mixes->ne[1];
 
@@ -6646,7 +6646,7 @@ struct ggml_tensor * ggml_xc4_hc_comb(
     ggml_set_op_params_f32(result, 0, eps);
     ggml_set_op_params_i32(result, 1, n_iter);
 
-    result->op     = GGML_OP_XC4_HC_COMB;
+    result->op     = GGML_OP_XING4_0_HC_COMB;
     result->src[0] = mixes;
     result->src[1] = scale;
     result->src[2] = base;
@@ -6654,9 +6654,9 @@ struct ggml_tensor * ggml_xc4_hc_comb(
     return result;
 }
 
-// ggml_xc4_hc_pre
+// ggml_xing4_0_hc_pre
 
-struct ggml_tensor * ggml_xc4_hc_pre(
+struct ggml_tensor * ggml_xing4_0_hc_pre(
         struct ggml_context * ctx,
         struct ggml_tensor  * x,
         struct ggml_tensor  * weights) {
@@ -6676,16 +6676,16 @@ struct ggml_tensor * ggml_xc4_hc_pre(
 
     struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
 
-    result->op     = GGML_OP_XC4_HC_PRE;
+    result->op     = GGML_OP_XING4_0_HC_PRE;
     result->src[0] = x;
     result->src[1] = weights;
 
     return result;
 }
 
-// ggml_xc4_hc_post
+// ggml_xing4_0_hc_post
 
-struct ggml_tensor * ggml_xc4_hc_post(
+struct ggml_tensor * ggml_xing4_0_hc_post(
         struct ggml_context * ctx,
         struct ggml_tensor  * x,
         struct ggml_tensor  * residual,
@@ -6720,7 +6720,7 @@ struct ggml_tensor * ggml_xc4_hc_post(
 
     struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
 
-    result->op     = GGML_OP_XC4_HC_POST;
+    result->op     = GGML_OP_XING4_0_HC_POST;
     result->src[0] = x;
     result->src[1] = residual;
     result->src[2] = post;

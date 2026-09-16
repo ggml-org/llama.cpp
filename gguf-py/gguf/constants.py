@@ -559,7 +559,7 @@ class MODEL_ARCH(IntEnum):
     DEEPSEEK2OCR     = auto()
     DEEPSEEK32       = auto()
     DEEPSEEK4        = auto()
-    XINGCHEN4        = auto()
+    XING4_0          = auto()
     CHATGLM          = auto()
     GLM4             = auto()
     GLM4_MOE         = auto()
@@ -1315,7 +1315,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DEEPSEEK2OCR:     "deepseek2-ocr",
     MODEL_ARCH.DEEPSEEK32:       "deepseek32",
     MODEL_ARCH.DEEPSEEK4:        "deepseek4",
-    MODEL_ARCH.XINGCHEN4:        "xingchen4",
+    MODEL_ARCH.XING4_0:          "xing4_0",
     MODEL_ARCH.CHATGLM:          "chatglm",
     MODEL_ARCH.GLM4:             "glm4",
     MODEL_ARCH.GLM4_MOE:         "glm4moe",
@@ -3801,7 +3801,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
-    MODEL_ARCH.XINGCHEN4: [
+    MODEL_ARCH.XING4_0: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
@@ -5650,7 +5650,7 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
-    MODEL_ARCH.XINGCHEN4: [
+    MODEL_ARCH.XING4_0: [
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],

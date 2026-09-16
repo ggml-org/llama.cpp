@@ -1,11 +1,11 @@
-// XingChen4: DeepSeek-V3 style MLA attention + DeepSeekMoE, with
+// Xing4_0 (formerly XingChen4): DeepSeek-V3 style MLA attention + DeepSeekMoE, with
 // Manifold-Constrained Hyper-Connections (MHC) multi-residual-stream blocks and
 // a DeepSeek-V3 MTP head.
 //
 // The layer body (MLA + MoE) mirrors deepseek2.cpp, the MHC helpers mirror
 // deepseek4.cpp, with two model-specific differences:
 //   * the comb logits are clamped to [-30, 30] before the Sinkhorn iterations
-//   * the residual streams are averaged (xc4_hc_mean) at the head, no hc_head
+//   * the residual streams are averaged (xing4_0_hc_mean) at the head, no hc_head
 
 #include "models.h"
 
@@ -13,25 +13,25 @@
 #include <stdexcept>
 #include <string>
 
-static size_t xc4_elem_offset(const ggml_tensor * t, int64_t i) {
+static size_t xing4_0_elem_offset(const ggml_tensor * t, int64_t i) {
     return ggml_row_size(t->type, i);
 }
 
-static ggml_tensor * xc4_view_1d(ggml_context * ctx, ggml_tensor * t, int64_t ne0, int64_t i0) {
-    return ggml_view_1d(ctx, t, ne0, xc4_elem_offset(t, i0));
+static ggml_tensor * xing4_0_view_1d(ggml_context * ctx, ggml_tensor * t, int64_t ne0, int64_t i0) {
+    return ggml_view_1d(ctx, t, ne0, xing4_0_elem_offset(t, i0));
 }
 
-static ggml_tensor * xc4_view_2d(
+static ggml_tensor * xing4_0_view_2d(
         ggml_context * ctx,
         ggml_tensor  * t,
         int64_t        ne0,
         int64_t        ne1,
         int64_t        i0) {
-    return ggml_view_2d(ctx, t, ne0, ne1, t->nb[1], xc4_elem_offset(t, i0));
+    return ggml_view_2d(ctx, t, ne0, ne1, t->nb[1], xing4_0_elem_offset(t, i0));
 }
 
 // mean over the hyper-connection streams: [n_embd, hc, n_tokens] -> [n_embd, n_tokens]
-static ggml_tensor * xc4_hc_mean(ggml_context * ctx, ggml_tensor * x) {
+static ggml_tensor * xing4_0_hc_mean(ggml_context * ctx, ggml_tensor * x) {
     const int64_t hc = x->ne[1];
 
     ggml_tensor * acc = ggml_view_2d(ctx, x, x->ne[0], x->ne[2], x->nb[2], 0);
@@ -41,7 +41,7 @@ static ggml_tensor * xc4_hc_mean(ggml_context * ctx, ggml_tensor * x) {
     return ggml_scale(ctx, acc, 1.0f/hc);
 }
 
-static ggml_tensor * xc4_hc_affine(
+static ggml_tensor * xing4_0_hc_affine(
         ggml_context * ctx,
         ggml_tensor  * x,
         ggml_tensor  * scale,
@@ -51,7 +51,7 @@ static ggml_tensor * xc4_hc_affine(
     return x;
 }
 
-void llama_model_xingchen4::load_arch_hparams(llama_model_loader & ml) {
+void llama_model_xing4_0::load_arch_hparams(llama_model_loader & ml) {
     uint32_t n_vocab = 0;
     ml.get_key(LLM_KV_VOCAB_SIZE, n_vocab, false) || ml.get_arr_n(LLM_KV_TOKENIZER_LIST, n_vocab, false);
 
@@ -76,7 +76,7 @@ void llama_model_xingchen4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.dsv4_hc_mult);
     ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
     ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
-    GGML_ASSERT(hparams.dsv4_hc_mult == 4 && "xingchen4 requires 4 residual streams");
+    GGML_ASSERT(hparams.dsv4_hc_mult == 4 && "xing4_0 requires 4 residual streams");
 
     if (ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, false)) {
         // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
@@ -90,11 +90,11 @@ void llama_model_xingchen4::load_arch_hparams(llama_model_loader & ml) {
         hparams.n_layer() + hparams.n_layer_nextn == hparams.n_layer_all);
 }
 
-void llama_model_xingchen4::load_arch_tensors(llama_model_loader & ml) {
+void llama_model_xing4_0::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
     const int64_t n_expert_shared = hparams.n_expert_shared;
-    const int64_t xc4_hc_dim      = hparams.dsv4_hc_mult * n_embd;
-    const int64_t xc4_hc_mix_dim  = (2 + hparams.dsv4_hc_mult) * hparams.dsv4_hc_mult;
+    const int64_t xing4_0_hc_dim      = hparams.dsv4_hc_mult * n_embd;
+    const int64_t xing4_0_hc_mix_dim  = (2 + hparams.dsv4_hc_mult) * hparams.dsv4_hc_mult;
 
     const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
     const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
@@ -106,8 +106,8 @@ void llama_model_xingchen4::load_arch_tensors(llama_model_loader & ml) {
         mtp_flags |= TENSOR_SKIP;
     }
 
-    GGML_ASSERT(hparams.is_mla() && "xingchen4 requires MLA");
-    GGML_ASSERT(hparams.n_lora_q > 0 && "xingchen4 requires q_lora_rank");
+    GGML_ASSERT(hparams.is_mla() && "xing4_0 requires MLA");
+    GGML_ASSERT(hparams.n_lora_q > 0 && "xing4_0 requires q_lora_rank");
 
     const int64_t n_embd_head_k_mla = hparams.n_embd_head_k_mla();
     const int64_t n_embd_head_v_mla = hparams.n_embd_head_v_mla();
@@ -152,11 +152,11 @@ void llama_model_xingchen4::load_arch_tensors(llama_model_loader & ml) {
 
         // MHC tensors (trunk layers only)
         if (i < n_layer) {
-            layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN,    "weight", i), {xc4_hc_dim, xc4_hc_mix_dim}, flags);
-            layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE,  "weight", i), {xc4_hc_mix_dim}, flags);
+            layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN,    "weight", i), {xing4_0_hc_dim, xing4_0_hc_mix_dim}, flags);
+            layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE,  "weight", i), {xing4_0_hc_mix_dim}, flags);
             layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, "weight", i), {3}, flags);
-            layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,     "weight", i), {xc4_hc_dim, xc4_hc_mix_dim}, flags);
-            layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE,   "weight", i), {xc4_hc_mix_dim}, flags);
+            layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,     "weight", i), {xing4_0_hc_dim, xing4_0_hc_mix_dim}, flags);
+            layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE,   "weight", i), {xing4_0_hc_mix_dim}, flags);
             layer.hc_ffn_scale  = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE,  "weight", i), {3}, flags);
         }
 
@@ -199,18 +199,18 @@ void llama_model_xingchen4::load_arch_tensors(llama_model_loader & ml) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_xingchen4::build_arch_graph(const llm_graph_params & params) const {
+std::unique_ptr<llm_graph_context> llama_model_xing4_0::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
         return std::make_unique<graph_mtp>(*this, params);
     }
     return std::make_unique<graph>(*this, params);
 }
 
-llama_model_xingchen4::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
+llama_model_xing4_0::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
-    GGML_ASSERT(hparams.n_layer_nextn > 0 && "xingchen4 MTP requires n_layer_nextn > 0");
-    GGML_ASSERT(hparams.n_layer_nextn == 1 && "xingchen4 MTP currently only supports a single MTP block");
-    GGML_ASSERT(hparams.is_mla() && "xingchen4 MTP requires MLA");
+    GGML_ASSERT(hparams.n_layer_nextn > 0 && "xing4_0 MTP requires n_layer_nextn > 0");
+    GGML_ASSERT(hparams.n_layer_nextn == 1 && "xing4_0 MTP currently only supports a single MTP block");
+    GGML_ASSERT(hparams.is_mla() && "xing4_0 MTP requires MLA");
 
     // The appended MTP block is stored immediately after the main decoder layers.
     const int il = hparams.n_layer();
@@ -220,7 +220,7 @@ llama_model_xingchen4::graph_mtp::graph_mtp(const llama_model & model, const llm
     GGML_ASSERT(layer.nextn.enorm   && "MTP block missing nextn.enorm");
     GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
 
-    GGML_ASSERT((uint32_t) il >= hparams.n_layer_dense_lead && "xingchen4 MTP block expected to use MoE FFN");
+    GGML_ASSERT((uint32_t) il >= hparams.n_layer_dense_lead && "xing4_0 MTP block expected to use MoE FFN");
 
     const int64_t n_embd_head_k_mla   = hparams.n_embd_head_k_mla();
     const int64_t n_embd_head_qk_rope = hparams.n_rot();
@@ -424,7 +424,7 @@ llama_model_xingchen4::graph_mtp::graph_mtp(const llama_model & model, const llm
     ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
             ? layer.nextn.shared_head_norm
             : model.output_norm;
-    GGML_ASSERT(head_norm_w && "xingchen4 MTP: missing both nextn.shared_head_norm and output_norm");
+    GGML_ASSERT(head_norm_w && "xing4_0 MTP: missing both nextn.shared_head_norm and output_norm");
 
     cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM_RMS, -1);
     cb(cur, "h_nextn", -1);
@@ -443,7 +443,7 @@ llama_model_xingchen4::graph_mtp::graph_mtp(const llama_model & model, const llm
             ? layer.nextn.shared_head_head_s
             : model.output_s;
 
-    GGML_ASSERT(head_w && "xingchen4 MTP: missing LM head (nextn.shared_head_head or model.output)");
+    GGML_ASSERT(head_w && "xing4_0 MTP: missing LM head (nextn.shared_head_head or model.output)");
 
     cur = build_lora_mm(head_w, cur, head_s);
     cb(cur, "result_output", -1);
@@ -452,7 +452,7 @@ llama_model_xingchen4::graph_mtp::graph_mtp(const llama_model & model, const llm
     ggml_build_forward_expand(gf, cur);
 }
 
-ggml_tensor * llama_model_xingchen4::graph::build_hc_pre(
+ggml_tensor * llama_model_xing4_0::graph::build_hc_pre(
         ggml_tensor * x,
         ggml_tensor * weights,
         int           il) const {
@@ -464,9 +464,9 @@ ggml_tensor * llama_model_xingchen4::graph::build_hc_pre(
     const int64_t hc = hparams.dsv4_hc_mult;
     const int64_t nt = x->ne[2];
 
-    if (cparams.fused_xc4_hc_pre && il >= 0) {
-        ggml_tensor * result = ggml_xc4_hc_pre(ctx0, x, weights);
-        res->add_fused_node({LLM_FUSED_OP_XC4_HC_PRE, result, il});
+    if (cparams.fused_xing4_0_hc_pre && il >= 0) {
+        ggml_tensor * result = ggml_xing4_0_hc_pre(ctx0, x, weights);
+        res->add_fused_node({LLM_FUSED_OP_XING4_0_HC_PRE, result, il});
         return result;
     }
 
@@ -481,7 +481,7 @@ ggml_tensor * llama_model_xingchen4::graph::build_hc_pre(
     return result;
 }
 
-ggml_tensor * llama_model_xingchen4::graph::build_hc_sinkhorn(
+ggml_tensor * llama_model_xing4_0::graph::build_hc_sinkhorn(
         ggml_tensor * comb,
         int           il) const {
     GGML_UNUSED(il);
@@ -492,9 +492,9 @@ ggml_tensor * llama_model_xingchen4::graph::build_hc_sinkhorn(
     // added to the normalization denominators, never to the values.
     // ggml_soft_max also performs the reference's first column normalization.
     //
-    // NOTE: this decomposed fallback (only used when fused_xc4_hc_comb is off)
+    // NOTE: this decomposed fallback (only used when fused_xing4_0_hc_comb is off)
     // cannot add eps to the first src-normalization because ggml_soft_max
-    // divides by the raw sum. The fused ggml_xc4_hc_comb path replicates
+    // divides by the raw sum. The fused ggml_xing4_0_hc_comb path replicates
     // with_clamp bit-exactly (exp(-max), then all eps-normalizations in the
     // loop); this path differs from it by ~1e-6 (eps missing in the very first
     // src normalization).
@@ -528,7 +528,7 @@ ggml_tensor * llama_model_xingchen4::graph::build_hc_sinkhorn(
     return comb;
 }
 
-ggml_tensor * llama_model_xingchen4::graph::build_hc_pre(
+ggml_tensor * llama_model_xing4_0::graph::build_hc_pre(
         ggml_tensor * x,
         ggml_tensor * hc_fn,
         ggml_tensor * hc_scale,
@@ -549,34 +549,34 @@ ggml_tensor * llama_model_xingchen4::graph::build_hc_pre(
     ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
     cb(mixes, "hc_mixes", il);
 
-    ggml_tensor * scale_pre  = xc4_view_1d(ctx0, hc_scale, 1, 0);
-    ggml_tensor * scale_post = xc4_view_1d(ctx0, hc_scale, 1, 1);
+    ggml_tensor * scale_pre  = xing4_0_view_1d(ctx0, hc_scale, 1, 0);
+    ggml_tensor * scale_post = xing4_0_view_1d(ctx0, hc_scale, 1, 1);
 
-    ggml_tensor * base_pre  = xc4_view_1d(ctx0, hc_base, hc, 0);
-    ggml_tensor * base_post = xc4_view_1d(ctx0, hc_base, hc, hc);
+    ggml_tensor * base_pre  = xing4_0_view_1d(ctx0, hc_base, hc, 0);
+    ggml_tensor * base_post = xing4_0_view_1d(ctx0, hc_base, hc, hc);
 
-    ggml_tensor * pre = xc4_view_2d(ctx0, mixes, hc, nt, 0);
-    pre = xc4_hc_affine(ctx0, pre, scale_pre, base_pre);
+    ggml_tensor * pre = xing4_0_view_2d(ctx0, mixes, hc, nt, 0);
+    pre = xing4_0_hc_affine(ctx0, pre, scale_pre, base_pre);
     // the reference with_clamp kernel has no hc_pre_eps on the pre gate
     pre = ggml_sigmoid(ctx0, pre);
     cb(pre, "hc_pre", il);
 
-    *post = xc4_view_2d(ctx0, mixes, hc, nt, hc);
-    *post = xc4_hc_affine(ctx0, *post, scale_post, base_post);
+    *post = xing4_0_view_2d(ctx0, mixes, hc, nt, hc);
+    *post = xing4_0_hc_affine(ctx0, *post, scale_post, base_post);
     *post = ggml_sigmoid(ctx0, *post);
     *post = ggml_scale(ctx0, *post, 2.0f);
     cb(*post, "hc_post", il);
 
-    if (cparams.fused_xc4_hc_comb) {
-        *comb = ggml_xc4_hc_comb(ctx0, mixes, hc_scale, hc_base, hparams.dsv4_hc_eps,
+    if (cparams.fused_xing4_0_hc_comb) {
+        *comb = ggml_xing4_0_hc_comb(ctx0, mixes, hc_scale, hc_base, hparams.dsv4_hc_eps,
                 (int32_t) hparams.dsv4_hc_sinkhorn_iters);
-        res->add_fused_node({LLM_FUSED_OP_XC4_HC_COMB, *comb, il});
+        res->add_fused_node({LLM_FUSED_OP_XING4_0_HC_COMB, *comb, il});
     } else {
-        ggml_tensor * scale_comb = xc4_view_1d(ctx0, hc_scale, 1, 2);
-        ggml_tensor * base_comb  = xc4_view_1d(ctx0, hc_base, hc*hc, 2*hc);
+        ggml_tensor * scale_comb = xing4_0_view_1d(ctx0, hc_scale, 1, 2);
+        ggml_tensor * base_comb  = xing4_0_view_1d(ctx0, hc_base, hc*hc, 2*hc);
 
-        *comb = xc4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc);
-        *comb = xc4_hc_affine(ctx0, *comb, scale_comb, base_comb);
+        *comb = xing4_0_view_2d(ctx0, mixes, hc*hc, nt, 2*hc);
+        *comb = xing4_0_hc_affine(ctx0, *comb, scale_comb, base_comb);
         // the reference MHC kernel clamps the raw comb logits before Sinkhorn
         *comb = ggml_clamp(ctx0, *comb, -30.0f, 30.0f);
         *comb = ggml_reshape_3d(ctx0, *comb, hc, hc, nt);
@@ -588,7 +588,7 @@ ggml_tensor * llama_model_xingchen4::graph::build_hc_pre(
     return result;
 }
 
-ggml_tensor * llama_model_xingchen4::graph::build_hc_post(
+ggml_tensor * llama_model_xing4_0::graph::build_hc_post(
         ggml_tensor * x,
         ggml_tensor * residual,
         ggml_tensor * post,
@@ -599,9 +599,9 @@ ggml_tensor * llama_model_xingchen4::graph::build_hc_post(
     GGML_ASSERT(x->ne[0] == n_embd);
     GGML_ASSERT(residual->ne[1] == hparams.dsv4_hc_mult);
 
-    if (cparams.fused_xc4_hc_post) {
-        ggml_tensor * result = ggml_xc4_hc_post(ctx0, x, residual, post, comb);
-        res->add_fused_node({LLM_FUSED_OP_XC4_HC_POST, result, il});
+    if (cparams.fused_xing4_0_hc_post) {
+        ggml_tensor * result = ggml_xing4_0_hc_post(ctx0, x, residual, post, comb);
+        res->add_fused_node({LLM_FUSED_OP_XING4_0_HC_POST, result, il});
         return result;
     }
 
@@ -617,7 +617,7 @@ ggml_tensor * llama_model_xingchen4::graph::build_hc_post(
             ggml_tensor * res_src = ggml_view_2d(ctx0, residual, n_embd, nt, residual->nb[2], src*residual->nb[1]);
             // comb is [src_hc, dst_hc, n_tokens]: the element [src, dst] holds the
             // mixing weight from residual stream src to output stream dst.
-            // NOTE: xingchen4's vllm reference (with_clamp kernel) transposes the
+            // NOTE: xing4_0's vllm reference (with_clamp kernel) transposes the
             // comb flat index relative to deepseek4's non-clamp kernel, so here we
             // must read comb[src, dst] (deepseek4 reads comb[dst, src]).
             ggml_tensor * comb_src_dst = ggml_view_2d(ctx0, comb, 1, nt, comb->nb[2],
@@ -632,7 +632,7 @@ ggml_tensor * llama_model_xingchen4::graph::build_hc_post(
     return out;
 }
 
-llama_model_xingchen4::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
     const int64_t hc = hparams.dsv4_hc_mult;
 
@@ -844,7 +844,7 @@ llama_model_xingchen4::graph::graph(const llama_model & model, const llm_graph_p
     cur = inpL;
 
     // average the residual streams -> single stream for the head
-    cur = xc4_hc_mean(ctx0, cur);
+    cur = xing4_0_hc_mean(ctx0, cur);
     cb(cur, "hc_mean", -1);
 
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
