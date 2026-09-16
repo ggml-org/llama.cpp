@@ -2,6 +2,11 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { DARK_INVERT_AVATAR_ORGS } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
+	import { SvelteSet } from 'svelte/reactivity';
+
+	// Orgs whose avatar failed before. A row remounting (scrolling, reopening
+	// the selector) must not re-request them; the monogram renders instead.
+	const failedAvatarOrgs = new SvelteSet<string>();
 
 	interface Props {
 		class?: string;
@@ -28,6 +33,9 @@
 	let avatarError = $state(false);
 	let quantError = $state(false);
 
+	let orgAvatarFailed = $derived(avatarError || failedAvatarOrgs.has(org));
+	let quantAvatarFailed = $derived(quantError || failedAvatarOrgs.has(quantOrg ?? ''));
+
 	let invertAvatar = $derived(DARK_INVERT_AVATAR_ORGS.includes(org));
 	let invertQuant = $derived(DARK_INVERT_AVATAR_ORGS.includes(quantOrg ?? ''));
 
@@ -53,7 +61,7 @@
 </script>
 
 <span class="relative mt-0.5 inline-flex shrink-0 {className}">
-	{#if avatarError}
+	{#if orgAvatarFailed}
 		<span
 			aria-hidden="true"
 			class="flex {size} items-center justify-center rounded-md text-sm font-semibold text-white"
@@ -67,7 +75,10 @@
 				alt=""
 				class="{size} rounded-md {invertAvatar ? 'dark:invert' : ''} {baseImageClass}"
 				loading="lazy"
-				onerror={() => (avatarError = true)}
+				onerror={() => {
+					failedAvatarOrgs.add(org);
+					avatarError = true;
+				}}
 				src={HuggingFaceService.getAvatarUrl(org)}
 			/>
 		</div>
@@ -78,7 +89,7 @@
 			<Tooltip.Trigger
 				class="absolute {quantPositionClass} {quantSize} overflow-hidden rounded-full border border-background bg-muted "
 			>
-				{#if quantError}
+				{#if quantAvatarFailed}
 					<span
 						aria-hidden="true"
 						class="flex h-full w-full items-center justify-center rounded-full text-[8px] font-semibold text-white"
@@ -91,7 +102,10 @@
 						alt=""
 						class="{quantImageClass} rounded-full {invertQuant ? 'dark:invert' : ''}"
 						loading="lazy"
-						onerror={() => (quantError = true)}
+						onerror={() => {
+							failedAvatarOrgs.add(quantOrg ?? '');
+							quantError = true;
+						}}
 						src={HuggingFaceService.getAvatarUrl(quantOrg)}
 					/>
 				{/if}
