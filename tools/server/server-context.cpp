@@ -3008,7 +3008,12 @@ private:
                     }
 
                     // the task is not deferred past this point
-                    if (plan.update_cache && prompt_cache) {
+                    // the plan only tells if the outgoing state is worth saving
+                    // the cache can still hold a better start for this task, so ask it
+                    const bool update_cache = prompt_cache && !task.is_stateless() &&
+                        (plan.update_cache || prompt_cache->has_better(slot->prompt, task.tokens, get_task_lora(task)));
+
+                    if (update_cache) {
                         update_prompt_cache(*slot, task);
                     }
 

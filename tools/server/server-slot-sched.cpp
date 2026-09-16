@@ -164,7 +164,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+std::list<server_prompt_cache_state>::iterator server_prompt_cache::find_better(const server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new) {
     // a prompt made with another lora config is cleared before the new one starts, so it counts as empty
     const bool is_empty = prompt.tokens.empty() || lora_should_clear_cache(prompt.lora, lora_new);
 
@@ -207,7 +207,19 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
     if (it_best != states.end()) {
         SRV_TRC(" - found better prompt with f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
+    }
 
+    return it_best;
+}
+
+bool server_prompt_cache::has_better(const server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new) {
+    return find_better(prompt, tokens_new, lora_new) != states.end();
+}
+
+bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+    auto it_best = find_better(prompt, tokens_new, lora_new);
+
+    if (it_best != states.end()) {
         const int64_t t_start = ggml_time_us();
 
         {
@@ -241,7 +253,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         SRV_DBG("%s", "__TEST_TAG_PROMPT_CACHE_RESTORE__\n");
 
         // the whole cached prompt is a prefix of the new one
-        if (lcp_best == (int) it_best->prompt.tokens.size()) {
+        if (it_best->prompt.tokens.get_common_prefix(tokens_new) == it_best->prompt.tokens.size()) {
             SRV_DBG("%s", "__TEST_TAG_PROMPT_CACHE_FULL_RESTORE__\n");
         }
 
@@ -392,7 +404,9 @@ server_slot_plan server_slot_sched::select(const std::vector<server_slot_info> &
         }
 
         if (ret != nullptr) {
-            const float f_keep = (f_sim_best*task.tokens.size()) / ret->prompt->tokens.size();
+            // empty slot: nothing to keep, avoid 0/0
+            const float f_keep = ret->prompt->tokens.size() > 0 ?
+                (f_sim_best*task.tokens.size()) / ret->prompt->tokens.size() : 0.0f;
 
             if (task.id_slot == -1) {
                 SLT_INF(*ret, "selected slot by LCP similarity, f_sim_best = %.3f (> %.3f thold), f_keep = %.3f\n",
