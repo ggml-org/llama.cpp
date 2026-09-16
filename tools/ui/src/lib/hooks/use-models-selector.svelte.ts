@@ -30,6 +30,7 @@ export interface UseModelsSelectorReturn {
 	readonly filteredOptions: ModelOption[];
 	readonly groupedFilteredOptions: ReturnType<typeof groupModelOptions>;
 	readonly isLoadingModel: boolean;
+	readonly switchingBackends: boolean;
 	readonly searchTerm: string;
 	readonly showModelDialog: boolean;
 	readonly infoModelId: string | null;
@@ -88,6 +89,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	});
 
 	let isLoadingModel = $state(false);
+	let switchingBackends = $state(false);
 	let searchTerm = $state('');
 	let showModelDialog = $state(false);
 	let infoModelId = $state<string | null>(null);
@@ -141,11 +143,18 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		backendsStore.setActive(backendId);
 		searchTerm = '';
 
+		// keep the multi-model selector mounted while the new backend's props and
+		// models load; role flips (external MODEL mode -> local ROUTER mode) would
+		// otherwise unmount and remount the open dropdown mid switch
+		switchingBackends = true;
+
 		try {
 			await backendsModelsStore.ensureLoaded(backendId);
 			await modelsStore.switchBackend();
 		} catch (error) {
 			console.error('Failed to switch backend:', error);
+		} finally {
+			switchingBackends = false;
 		}
 	}
 
@@ -319,6 +328,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		get showModelDialog() {
 			return showModelDialog;
+		},
+
+		get switchingBackends() {
+			return switchingBackends;
 		},
 
 		get updating() {

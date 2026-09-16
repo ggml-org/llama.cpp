@@ -276,13 +276,6 @@
 					class="w-full md:min-w-80 md:max-w-[26rem] max-w-[calc(100vw-2rem)] p-0!"
 					onOpenAutoFocus={(event) => event.preventDefault()}
 				>
-					<ModelsSelectorBackendSwitcher
-						activeId={ms.activeBackendId}
-						backends={ms.backends}
-						onAdd={handleAddBackend}
-						onSelect={(backendId) => void ms.handleBackendChange(backendId)}
-					/>
-
 					<DropdownMenuSearchable
 						emptyMessage="No models found."
 						isEmpty={ms.filteredOptions.length === 0 && ms.isCurrentModelInCache}
@@ -292,6 +285,14 @@
 						searchClass="bg-transparent"
 						searchValue={ms.searchTerm}
 					>
+						<!-- Provider tabs sit under the search input, above the option list. -->
+						<ModelsSelectorBackendSwitcher
+							activeId={ms.activeBackendId}
+							backends={ms.backends}
+							onAdd={handleAddBackend}
+							onSelect={(backendId) => void ms.handleBackendChange(backendId)}
+						/>
+
 						<!-- Option list; the search header sticks to the top and the actions
 						     footer to the bottom of the content scrollport. -->
 						<div class="models-list px-1.5">

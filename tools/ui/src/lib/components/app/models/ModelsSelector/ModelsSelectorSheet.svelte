@@ -91,7 +91,7 @@
 			? Math.round(modelLoadFraction(modelsStore.status.getLoadProgress(triggerModel)) * 100)
 			: 0}
 
-		{#if ms.isMultiModel}
+		{#if ms.isMultiModel || ms.switchingBackends}
 			<button
 				class={[
 					`relative inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 max-sm:px-3 max-sm:py-2 max-sm:text-sm dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
@@ -127,7 +127,7 @@
 					<Lightbulb class="h-3.5 w-3.5 shrink-0 text-amber-400" />
 				{/if}
 
-				{#if ms.updating || ms.isLoadingModel}
+				{#if ms.updating || ms.isLoadingModel || ms.switchingBackends}
 					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 				{:else}
 					<ChevronDown class="h-3 w-3.5 shrink-0" />
@@ -149,13 +149,6 @@
 					</Sheet.Header>
 
 					<div class="flex flex-col gap-1 pb-4">
-						<ModelsSelectorBackendSwitcher
-							activeId={ms.activeBackendId}
-							backends={ms.backends}
-							onAdd={handleAddBackend}
-							onSelect={(backendId) => void ms.handleBackendChange(backendId)}
-						/>
-
 						<div class="mb-3 px-4">
 							<SearchInput
 								onInput={(v) => ms.setSearchTerm(v)}
@@ -163,6 +156,14 @@
 								value={ms.searchTerm}
 							/>
 						</div>
+
+						<!-- Provider tabs sit under the search input, above the option list. -->
+						<ModelsSelectorBackendSwitcher
+							activeId={ms.activeBackendId}
+							backends={ms.backends}
+							onAdd={handleAddBackend}
+							onSelect={(backendId) => void ms.handleBackendChange(backendId)}
+						/>
 
 						<div class="max-h-[60vh] overflow-y-auto px-2">
 							{#if !ms.isCurrentModelInCache && currentModel}
