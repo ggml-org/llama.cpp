@@ -369,6 +369,10 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 if (NOT LLAMA_USE_SYSTEM_GGML)
     # Needs non-public ggml-impl.h
     llama_build_and_test(test-gguf.cpp)
+llama_build_and_test(test-fd.cpp)
+# same binary, also covering the llama level fd loading, which needs a model
+llama_test(test-fd NAME test-fd-model LABEL "model" ARGS -m "${MODEL_DEST}")
+set_tests_properties(test-fd-model PROPERTIES FIXTURES_REQUIRED test-download-model)
 
     # Needs non-public ggml{,-backend}-impl.h
     llama_build_and_test(test-alloc.cpp)

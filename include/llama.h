@@ -522,6 +522,18 @@ extern "C" {
                                    FILE * file,
               struct llama_model_params   params);
 
+    // Load a model from the GGUF data at [offset, offset + length) of an open file descriptor
+    // use case: a model embedded in a container file, for example an Android APK asset stored with noCompress
+    // the GGUF data must not be compressed, mmap and direct IO are disabled, split models are not supported
+    // the fd is read with pread, so it is not closed or duplicated and its file position is not changed;
+    // it only needs to stay valid during this call, and the same fd may be used by concurrent loads
+    // returns NULL on Windows, where fd based loading is not supported
+    LLAMA_API struct llama_model * llama_model_load_from_fd(
+                                    int   fd,
+                                 size_t   offset,
+                                 size_t   length,
+              struct llama_model_params   params);
+
     // Load a model from multiple splits (support custom naming scheme)
     // The paths must be in the correct order
     LLAMA_API struct llama_model * llama_model_load_from_splits(
@@ -680,6 +692,14 @@ extern "C" {
     LLAMA_API struct llama_adapter_lora * llama_adapter_lora_init(
             struct llama_model * model,
             const char * path_lora);
+
+    // Load a LoRA adapter from the GGUF data at [offset, offset + length) of an open file descriptor
+    // same requirements as llama_model_load_from_fd
+    LLAMA_API struct llama_adapter_lora * llama_adapter_lora_init_from_fd(
+            struct llama_model * model,
+            int fd,
+            size_t offset,
+            size_t length);
 
     // Functions to access the adapter's GGUF metadata scalar values
     // - The functions return the length of the string on success, or -1 on failure

@@ -29,6 +29,14 @@ enum llama_fver {
 
 const char * llama_file_version_name(llama_fver version);
 
+// GGUF data embedded in a container file at [offset, offset + length), read through a borrowed fd
+// use case: an Android APK asset stored with noCompress
+struct llama_fd_range {
+    int    fd     = -1;
+    size_t offset = 0;
+    size_t length = 0;
+};
+
 struct llama_model_loader {
     // Holds information on a model weight
     struct llama_tensor_weight {
@@ -178,6 +186,7 @@ struct llama_model_loader {
         const std::string & fname,
         std::vector<std::string> & splits, // optional, only need if the split does not follow naming scheme
         FILE * file,
+        llama_fd_range fd_range,
         llama_load_mode load_mode,
         bool check_tensors,
         bool no_alloc,

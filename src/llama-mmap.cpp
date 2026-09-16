@@ -233,7 +233,21 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
+    impl(int fd_borrowed, size_t offset, size_t length) : fname("(fd)") {
+        if (fd_borrowed < 0) {
+            throw std::runtime_error(format("invalid fd: %d", fd_borrowed));
+        }
+        fd          = fd_borrowed;
+        owns_fd     = false;
+        base_offset = offset;
+        size        = length;
+    }
+
     size_t tell() const {
+        if (!owns_fd) {
+            return read_pos;
+        }
+
         if (fd == -1) {
             off_t ret = llama_mmap_ftell(fp);
             if (ret == -1) {
@@ -251,6 +265,18 @@ struct llama_file::impl {
     }
 
     void seek(size_t offset, int whence) const {
+        if (!owns_fd) {
+            // a borrowed fd is read with pread, so the position lives here and the
+            // caller's file offset is never touched
+            switch (whence) {
+                case SEEK_SET: read_pos = offset;        break;
+                case SEEK_CUR: read_pos += offset;       break;
+                case SEEK_END: read_pos = size + offset; break;
+                default: throw std::runtime_error(format("invalid seek whence: %d", whence));
+            }
+            return;
+        }
+
         off_t ret = 0;
         if (fd == -1) {
             ret = llama_mmap_fseek(fp, offset, whence);
@@ -262,11 +288,40 @@ struct llama_file::impl {
         }
     }
 
+    // reads stay inside [base_offset, base_offset + size), so a bad tensor offset fails
+    // instead of silently returning bytes from elsewhere in the container
+    void read_borrowed(void * ptr, size_t len) {
+        if (read_pos > size || len > size - read_pos) {
+            throw std::runtime_error(format("read of %zu bytes at %zu is outside the %zu byte fd region", len, read_pos, size));
+        }
+
+        uint8_t * dst = (uint8_t *) ptr;
+        size_t nread = 0;
+        while (nread < len) {
+            const ssize_t ret = pread(fd, dst + nread, len - nread, (off_t) (base_offset + read_pos + nread));
+            if (ret < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                throw std::runtime_error(format("read error on fd %d: %s", fd, strerror(errno)));
+            }
+            if (ret == 0) {
+                throw std::runtime_error("unexpectedly reached end of file");
+            }
+            nread += (size_t) ret;
+        }
+        read_pos += len;
+    }
+
     void read_raw_unsafe(void * ptr, size_t len) {
         if (len == 0) {
             return;
         }
         errno = 0;
+        if (!owns_fd) {
+            read_borrowed(ptr, len);
+            return;
+        }
         if (fd == -1) {
             const size_t curr_off = tell();
             const size_t to_read = std::min(len, size - curr_off);
@@ -376,12 +431,17 @@ struct llama_file::impl {
 
     ~impl() {
         if (fd != -1) {
-            close(fd);
+            if (owns_fd) {
+                close(fd);
+            }
         } else if (owns_fp) {
             std::fclose(fp);
         }
     }
     int fd = -1;
+    bool owns_fd = true;
+    size_t base_offset = 0;          // start of the region a borrowed fd is viewed through
+    mutable size_t read_pos = 0;     // position within that region
     std::string fname;
 #endif
 
@@ -400,6 +460,10 @@ llama_file::llama_file(const char * fname, const char * mode, const bool use_dir
     pimpl(std::make_unique<impl>(fname, mode, use_direct_io)) {}
 
 llama_file::llama_file(FILE * file) : pimpl(std::make_unique<impl>(file)) {}
+
+#if !defined(_WIN32)
+llama_file::llama_file(int fd, size_t offset, size_t length) : pimpl(std::make_unique<impl>(fd, offset, length)) {}
+#endif
 
 llama_file::~llama_file() = default;
 

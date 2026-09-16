@@ -269,6 +269,9 @@ void ggml_abort(const char * file, int line, const char * fmt, ...) {
         ggml_print_backtrace();
     }
 
+    // also log the message so that it reaches Android logcat
+    GGML_LOG_ERROR("GGML_ABORT: %s\n", message);
+
     abort();
 }
 

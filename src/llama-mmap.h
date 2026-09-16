@@ -17,6 +17,12 @@ using llama_mlocks = std::vector<std::unique_ptr<llama_mlock>>;
 struct llama_file {
     llama_file(const char * fname, const char * mode, bool use_direct_io = false);
     llama_file(FILE * file);
+#if !defined(_WIN32)
+    // read only view of [offset, offset + length) of a borrowed fd, positions are relative to offset
+    // the fd is not dup()'d or closed and its file position is not changed, but it must stay valid
+    // for the lifetime of this object
+    llama_file(int fd, size_t offset, size_t length);
+#endif
     ~llama_file();
 
     size_t tell() const;

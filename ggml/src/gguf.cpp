@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
+#include <limits>
 #include <map>
 #include <new>
 #include <stdexcept>
@@ -23,6 +24,7 @@
 #    define gguf_ftell _ftelli64
 #    define gguf_fseek _fseeki64
 #else
+#    include <unistd.h>
 #    define gguf_ftell ftello
 #    define gguf_fseek fseeko
 #endif
@@ -988,6 +990,83 @@ struct gguf_context * gguf_init_from_buffer(const void * data, size_t size, stru
     };
     const struct gguf_reader gr(gguf_buffer_reader_callback, &reader, SIZE_MAX, 0, size);
     return gguf_init_from_reader(gr, params);
+}
+
+#if !defined(_WIN32)
+struct gguf_fd_reader {
+    int      fd;
+    uint64_t base;
+};
+
+static size_t gguf_fd_reader_callback(void * userdata, void * output, uint64_t offset, size_t len) {
+    GGML_ASSERT(len > 0);
+
+    const gguf_fd_reader & reader = *static_cast<gguf_fd_reader *>(userdata);
+
+    uint8_t * dst = static_cast<uint8_t *>(output);
+    size_t nread = 0;
+    while (nread < len) {
+        const ssize_t ret = pread(reader.fd, dst + nread, len - nread, (off_t) (reader.base + offset + nread));
+        if (ret < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (ret == 0) {
+            break;
+        }
+        nread += (size_t) ret;
+    }
+    return nread;
+}
+#endif
+
+struct gguf_context * gguf_init_from_fd(int fd, size_t offset, size_t length, struct gguf_init_params params) {
+#if defined(_WIN32)
+    GGML_LOG_ERROR("%s: fd based loading is not supported on Windows\n", __func__);
+    GGML_UNUSED(fd);
+    GGML_UNUSED(offset);
+    GGML_UNUSED(length);
+    GGML_UNUSED(params);
+    return nullptr;
+#else
+    if (fd < 0) {
+        GGML_LOG_ERROR("%s: invalid fd %d\n", __func__, fd);
+        return nullptr;
+    }
+    if (length == 0) {
+        GGML_LOG_ERROR("%s: length must be > 0\n", __func__);
+        return nullptr;
+    }
+    // off_t is 32 bit on some ABIs, where a larger offset would silently wrap in pread
+    if (offset > (uint64_t) std::numeric_limits<off_t>::max() - length) {
+        GGML_LOG_ERROR("%s: [%zu, %zu) is past the largest file offset of this platform\n",
+            __func__, offset, offset + length);
+        return nullptr;
+    }
+
+    gguf_fd_reader reader = {
+        /*.fd   = */ fd,
+        /*.base = */ offset,
+    };
+
+    // the reader works in offsets relative to the start of the GGUF data, so alignment of the
+    // data section and the bounds checks do not depend on where the GGUF sits inside the file
+    const struct gguf_reader gr(gguf_fd_reader_callback, &reader, SIZE_MAX, 0, length);
+
+    struct gguf_context * result = gguf_init_from_reader(gr, params);
+
+    // with no_alloc the data section is never read, so check that it fits in the given range
+    if (result != nullptr && (result->offset > length || result->size > length - result->offset)) {
+        GGML_LOG_ERROR("%s: tensor data [%zu, %zu) does not fit in the given length %zu\n",
+            __func__, result->offset, result->offset + result->size, length);
+        gguf_free(result);
+        return nullptr;
+    }
+
+    return result;
+#endif
 }
 
 struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_params params) {
