@@ -3,12 +3,18 @@
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_shader_16bit_storage : require
 
-#define BLOCK_SIZE 32
 #define FLOAT_TYPE float
 
-layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 #include "mul_mat_vec_iface.glsl"
+
+layout(constant_id = 0) const int BLOCK_SIZE = 32;
+// gqa_ratio is in the range [1,8]. When > 1, each workgroup loads rows of A
+// (the K cache in attention) once and dots them against gqa_ratio B channels
+// (the query heads sharing that KV head), avoiding gqa_ratio-times redundant
+// reads of A. Mirrors the same optimization in mul_mat_vec_p021.comp.
+layout(constant_id = 1) const uint gqa_ratio = 1;
 
 layout (push_constant) uniform parameter
 {
@@ -25,100 +31,113 @@ layout (push_constant) uniform parameter
     uint nb13;
     uint nb23;
     uint fusion_flags;
+    uint row_base;
 } p;
 
-shared FLOAT_TYPE tmp[BLOCK_SIZE];
+shared FLOAT_TYPE tmp[8][BLOCK_SIZE];
 
 void main() {
     const uint tid       = gl_LocalInvocationID.x;
-    const uint row_x     = gl_GlobalInvocationID.y;
-    const uint channel   = gl_GlobalInvocationID.z;
+    // row_base supports dispatches chunked over rows when the row count
+    // exceeds the device's max workgroup count in y (large n_kv).
+    const uint row_x     = p.row_base + gl_GlobalInvocationID.y;
     const uint i3        = gl_WorkGroupID.x;
-    const uint channel_x = channel / p.channel_x_divisor;
-    const uint channel_y = channel % p.ne12;
+
+    uint channel, channel_x;
+    // When gqa_ratio > 1, each workgroup handles one channel of A
+    // (channel_x) and the gqa_ratio channels of B that map onto it:
+    // [channel, channel + gqa_ratio).
+    if (gqa_ratio > 1) {
+        channel_x = gl_GlobalInvocationID.z;
+        channel   = channel_x * gqa_ratio;
+    } else {
+        channel   = gl_GlobalInvocationID.z;
+        channel_x = channel / p.channel_x_divisor;
+    }
 
     const uint nrows_y   = p.ncols_x;
     const uint nrows_dst = p.nrows_x;
     const uint row_dst   = row_x;
 
-    const uint idst = i3*p.nb23 + channel*nrows_dst + row_dst;
+    // Per-channel base offsets, hoisted out of the reduction loop. All
+    // channel indexing (including the gqa==1 modulo) happens exactly once.
+    uint ybase[8];
+    uint dbase[8];
+    [[unroll]] for (uint c = 0; c < gqa_ratio; ++c) {
+        const uint channel_y = (gqa_ratio > 1) ? (channel + c) : (channel % p.ne12);
+        ybase[c] = i3*p.nb13 + channel_y*p.channel_stride_y;
+        dbase[c] = i3*p.nb23 + channel_y*nrows_dst;
+    }
+    const uint xbase = i3*p.nb03 + channel_x*p.channel_stride_x + row_x*p.row_stride_x;
 
-    FLOAT_TYPE temp = 0.0f;
+    FLOAT_TYPE temp[8];
+    [[unroll]] for (uint c = 0; c < 8; ++c) {
+        temp[c] = FLOAT_TYPE(0.0f);
+    }
 
     // Detect alignment for vector loads
-    bool is_aligned = (p.ncols_x % 4) == 0 && (p.row_stride_x % 4) == 0 && (p.channel_stride_x % 4) == 0;
+    bool is_aligned = (p.ncols_x % 4) == 0 && (p.row_stride_x % 4) == 0 && (p.channel_stride_x % 4) == 0 && (p.channel_stride_y % 4) == 0;
 
     for (uint col_x0 = 0; col_x0 < p.ncols_x;) {
 
-        // Unroll 2x and do vec4 loads if aligned
-        const uint unroll_count = 2;
+        // For gqa_ratio == 1, unroll 2x as before. For gqa_ratio > 1 the
+        // per-iteration work is already gqa_ratio dots; skip the extra
+        // unroll to keep register pressure sane.
+        const uint unroll_count = (gqa_ratio > 1) ? 1 : 2;
         if (col_x0 + unroll_count * 4 * BLOCK_SIZE <= p.ncols_x && is_aligned) {
             [[unroll]] for (uint i = 0; i < unroll_count; ++i) {
                 const uint col_x = col_x0 + 4*tid;
 
-                const uint row_y = col_x;
+                const vec4 av4 = vec4(data_a_v4[(xbase + col_x) / 4]);
 
-                const uint ix = i3*p.nb03 + channel_x*p.channel_stride_x + row_x*p.row_stride_x + col_x;
-                const uint iy = i3*p.nb13 + channel_y*p.channel_stride_y + row_y;
-
-                const vec4 av4 = vec4(data_a_v4[ix / 4]);
-                const vec4 bv4 = vec4(data_b_v4[iy / 4]);
-
-                temp += dot(av4, bv4);
+                [[unroll]] for (uint c = 0; c < gqa_ratio; ++c) {
+                    const vec4 bv4 = vec4(data_b_v4[(ybase[c] + col_x) / 4]);
+                    temp[c] += dot(av4, bv4);
+                }
 
                 col_x0 += 4*BLOCK_SIZE;
             }
-        // do vec4 loads if aligned
-        } else if (col_x0 + 4*BLOCK_SIZE <= p.ncols_x && is_aligned) {
-            const uint col_x = col_x0 + 4*tid;
-
-            const uint row_y = col_x;
-
-            const uint ix = i3*p.nb03 + channel_x*p.channel_stride_x + row_x*p.row_stride_x + col_x;
-            const uint iy = i3*p.nb13 + channel_y*p.channel_stride_y + row_y;
-
-            const vec4 av4 = vec4(data_a_v4[ix / 4]);
-            const vec4 bv4 = vec4(data_b_v4[iy / 4]);
-
-            temp += dot(av4, bv4);
-
-            col_x0 += 4*BLOCK_SIZE;
         } else {
             const uint col_x = col_x0 + tid;
             if (col_x >= p.ncols_x) {
                 break;
             }
 
-            const uint row_y = col_x;
+            const FLOAT_TYPE xi = FLOAT_TYPE(data_a[xbase + col_x]);
 
-            const uint ix = i3*p.nb03 + channel_x*p.channel_stride_x + row_x*p.row_stride_x + col_x;
-            const uint iy = i3*p.nb13 + channel_y*p.channel_stride_y + row_y;
-
-            const FLOAT_TYPE xi = FLOAT_TYPE(data_a[ix]);
-
-            temp = fma(xi, FLOAT_TYPE(data_b[iy]), temp);
+            [[unroll]] for (uint c = 0; c < gqa_ratio; ++c) {
+                temp[c] = fma(xi, FLOAT_TYPE(data_b[ybase[c] + col_x]), temp[c]);
+            }
             col_x0 += BLOCK_SIZE;
         }
     }
 
-    tmp[tid] = temp;
+    [[unroll]] for (uint c = 0; c < gqa_ratio; ++c) {
+        tmp[c][tid] = temp[c];
+    }
 
     // sum up partial sums and write back result
     barrier();
     [[unroll]] for (int s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
         if (tid < s) {
-            tmp[tid] += tmp[tid + s];
+            [[unroll]] for (uint c = 0; c < gqa_ratio; ++c) {
+                tmp[c][tid] += tmp[c][tid + s];
+            }
         }
         barrier();
     }
 
     if (tid == 0) {
-        if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS0) != 0) {
-            tmp[0] += FLOAT_TYPE(data_fuse0[idst]);
+        [[unroll]] for (uint c = 0; c < gqa_ratio; ++c) {
+            const uint idst = dbase[c] + row_dst;
+            FLOAT_TYPE result = tmp[c][0];
+            if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS0) != 0) {
+                result += FLOAT_TYPE(data_fuse0[idst]);
+            }
+            if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS1) != 0) {
+                result += FLOAT_TYPE(data_fuse1[idst]);
+            }
+            data_d[idst] = result;
         }
-        if ((p.fusion_flags & MAT_VEC_FUSION_FLAGS_BIAS1) != 0) {
-            tmp[0] += FLOAT_TYPE(data_fuse1[idst]);
-        }
-        data_d[idst] = tmp[0];
     }
 }
