@@ -15,8 +15,10 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
         hparams.is_recr_impl[i] = i < hparams.n_layer() && hparams.n_head_kv(i) == 0 && hparams.n_ff(i) == 0;
     }
 
-    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,     hparams.f_norm_eps); // MTP head final_layernorm
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps); // MTP head final_layernorm
+    if (!ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps, false)) {
+        hparams.f_norm_rms_eps = hparams.f_norm_eps;
+    }
 
     // Puzzle models set a different expert FFN size per layer
     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all, false);
