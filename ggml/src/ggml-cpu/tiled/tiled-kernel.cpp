@@ -12,11 +12,24 @@
 
 
 // Reference implementation, slower than existing vec_dot approach
-template <int SUBBLK, bool HAS_MIN, int BIAS>
+template <int SUBBLK, bool HAS_MIN, int BIAS, int NK>
 static void tiled_run_microtile_scalar(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                       int i0, int j0, float * buf, int buf_stride) {
+                                       int i0, int j0, int num_k, int slab, float * buf, int buf_stride) {
     constexpr int NB = TILED_TILE_K / SUBBLK;    // subblocks per 256-K block
     constexpr int NS = SUBBLK / 16; // per-16 bsums per subblock
+
+    // num_k/slab: the narrow path holds num_k slabs at row stride num_k*256 (num_k=1, slab=0 = standard)
+    // NK: 1 = standard single-slab (offsets 0, strides compile-time); 0 = runtime
+    // (num_k/slab from the args). The narrow path is memory-bound, so one runtime
+    // version serves all of it.
+    const int nkr  = (NK > 0) ? NK : num_k;
+    const int seff = (NK > 0) ? 0 : slab;
+    const int qk_stride = nkr * TILED_TILE_K;
+    const int qk_off = seff * TILED_TILE_K;
+    const int nb_stride = NB * nkr;
+    const int nb_off = seff * NB;
+    const int bs_stride = (nkr == 1) ? TILED_TILE_ROWS : TILED_MICRO;
+    const int bs_off = seff * TILED_MICRO;
 
     float acc[TILED_MICRO][TILED_MICRO];
     memset(acc, 0, sizeof(acc));
@@ -25,15 +38,16 @@ static void tiled_run_microtile_scalar(const tiled_tile_src0 & src0, const tiled
     for (int s = 0; s < NB; s++) {
         for (int j = 0; j < TILED_MICRO; j++) {
             const int br = j0 + j;
-            const int8_t * q1 = &src1.q[br * TILED_TILE_K + s * SUBBLK];
+            const int8_t * q1 = &src1.q[br * qk_stride + qk_off + s * SUBBLK];
             int32_t bsum = 0;
             for (int u = 0; u < NS; u++) {
-                bsum += src1.bsums[(s * NS + u) * TILED_TILE_ROWS + br];
+                bsum += src1.bsums[(bs_off + s * NS + u) * bs_stride + br];
             }
 
             for (int i = 0; i < TILED_MICRO; i++) {
                 const int ar = i0 + i;
-                const uint8_t * q0 = &src0.q[ar * TILED_TILE_K + s * SUBBLK];
+                const int d_off = seff * TILED_MICRO + ar;
+                const uint8_t * q0 = &src0.q[ar * qk_stride + qk_off + s * SUBBLK];
 
                 int32_t raw = 0;
                 for (int e = 0; e < SUBBLK; e++) {
@@ -45,14 +59,14 @@ static void tiled_run_microtile_scalar(const tiled_tile_src0 & src0, const tiled
                 if constexpr (BIAS != 0) {
                     corr -= BIAS * bsum;
                 }
-                const int32_t scales_raw = (int32_t) src0.scales[ar * NB + s] * corr;
+                const int32_t scales_raw = (int32_t) src0.scales[ar * nb_stride + nb_off + s] * corr;
                 // d is NOT applied here: it is constant over the s-loop, so we apply it last before write-out
                 if constexpr (HAS_MIN) {
-                    const int32_t mins_bsum = (int32_t) src0.mins[ar * NB + s] * bsum;
-                    acc[i][j] += (float) src0.d[ar] * (float) scales_raw
-                              - (float) src0.dmin[ar] * (float) mins_bsum;
+                    const int32_t mins_bsum = (int32_t) src0.mins[ar * nb_stride + nb_off + s] * bsum;
+                    acc[i][j] += (float) src0.d[d_off] * (float) scales_raw
+                              - (float) src0.dmin[d_off] * (float) mins_bsum;
                 } else {
-                    acc[i][j] += (float) src0.d[ar] * (float) scales_raw;
+                    acc[i][j] += (float) src0.d[d_off] * (float) scales_raw;
                 }
             }
         }
@@ -61,7 +75,7 @@ static void tiled_run_microtile_scalar(const tiled_tile_src0 & src0, const tiled
     // Apply d and write out to buf
     for (int i = 0; i < TILED_MICRO; i++) {
         for (int j = 0; j < TILED_MICRO; j++) {
-            buf[(i0 + i) * buf_stride + (j0 + j)] += src1.d[j0 + j] * acc[i][j];
+            buf[(i0 + i) * buf_stride + (j0 + j)] += src1.d[seff * TILED_MICRO + j0 + j] * acc[i][j];
         }
     }
 }
@@ -77,9 +91,9 @@ static void tiled_run_microtile_scalar(const tiled_tile_src0 & src0, const tiled
 // Register pressure: the band pass holds acc16 + s1_acc = 16 zmm for the
 // 8-row band (s2_acc has no dpbusd dependency, so it is computed after the
 // band pass and adds no register pressure);
-template <int SUBBLK, bool HAS_MIN, int BIAS>
+template <int SUBBLK, bool HAS_MIN, int BIAS, int NK>
 static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                          int i0, int j0, float * buf, int buf_stride) {
+                                          int i0, int j0, int num_k, int slab, float * buf, int buf_stride) {
     constexpr int NB = TILED_TILE_K / SUBBLK;
     constexpr int NS = SUBBLK / 16;
     constexpr int NG = SUBBLK / 4;
@@ -87,7 +101,21 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
     // band width, see the register-pressure note above
     constexpr int NUM_ROWS = 8;
 
-    const __m512 d1_vec = _mm512_load_ps(&src1.d[j0]);
+    // num_k = K-blocks per row (the narrow path holds num_k slabs at row stride num_k*256 so
+    // each weight row is one long stream); slab = this call's slab. num_k=1, slab=0 = standard.
+    // NK: 1 = standard single-slab (offsets 0, strides compile-time); 0 = runtime
+    // (num_k/slab from the args). The narrow path is memory-bound, so one runtime
+    // version serves all of it.
+    const int nkr  = (NK > 0) ? NK : num_k;
+    const int seff = (NK > 0) ? 0 : slab;
+    const int qk_stride = nkr * TILED_TILE_K;
+    const int qk_off = seff * TILED_TILE_K;
+    const int nb_stride = NB * nkr;
+    const int nb_off = seff * NB;
+    const int bs_stride = (nkr == 1) ? TILED_TILE_ROWS : TILED_MICRO;
+    const int bs_off = seff * TILED_MICRO;
+
+    const __m512 d1_vec = _mm512_load_ps(&src1.d[seff * TILED_MICRO + j0]);
 
     __m512i s1_acc[NUM_ROWS];
     for (int t = 0; t < NUM_ROWS; t++) { s1_acc[t] = _mm512_setzero_si512(); }
@@ -98,9 +126,9 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
 
     const int32_t * bsums = src1.bsums; // int32 per-16 sums; NS > 1 combines NS lanes per subblock
     for (int s = 0; s < NB; s++) {
-        __m512i bsums32 = _mm512_load_si512((const __m512i *) &bsums[s * NS * TILED_TILE_ROWS + j0]);
+        __m512i bsums32 = _mm512_load_si512((const __m512i *) &bsums[(bs_off + s * NS) * bs_stride + j0]);
         for (int u = 1; u < NS; u++) {
-            bsums32 = _mm512_add_epi32(bsums32, _mm512_load_si512((const __m512i *) &bsums[(s * NS + u) * TILED_TILE_ROWS + j0]));
+            bsums32 = _mm512_add_epi32(bsums32, _mm512_load_si512((const __m512i *) &bsums[(bs_off + s * NS + u) * bs_stride + j0]));
         }
 
         __m512i bias32 = _mm512_setzero_si512();
@@ -117,10 +145,10 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
         for (int g = 0; g < NG; g++) {
             const int kg = s * NG + g;
             // in-place interleave layout: [kg%16 @ TILED_TILE_K][kg/16 @ 64][row @ 4]
-            const __m512i codes = _mm512_load_si512((const __m512i *) &src1.q[(j0 / TILED_MICRO) * (TILED_MICRO * TILED_TILE_K)
-                + (kg % TILED_MICRO) * TILED_TILE_K + (kg / TILED_MICRO) * (TILED_MICRO * 4)]);
+            const __m512i codes = _mm512_load_si512((const __m512i *) &src1.q[(j0 / TILED_MICRO) * (TILED_MICRO * qk_stride)
+                + qk_off + (kg % TILED_MICRO) * qk_stride + (kg / TILED_MICRO) * (TILED_MICRO * 4)]);
             for (int t = 0; t < NUM_ROWS; t++) {
-                const uint32_t u4 = *(const uint32_t *) &src0.q[(i0 + t) * TILED_TILE_K + kg * 4];
+                const uint32_t u4 = *(const uint32_t *) &src0.q[(i0 + t) * qk_stride + qk_off + kg * 4];
                 const __m512i u4b = _mm512_set1_epi32((int) u4);
                 acc16[t] = _mm512_dpbusd_epi32(acc16[t], u4b, codes);
             }
@@ -134,7 +162,7 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
                 rawi = _mm512_sub_epi32(rawi, bias32);
             }
             s1_acc[t] = _mm512_add_epi32(s1_acc[t],
-                _mm512_mullo_epi32(rawi, _mm512_set1_epi32(src0.scales[ar * NB + s])));
+                _mm512_mullo_epi32(rawi, _mm512_set1_epi32(src0.scales[ar * nb_stride + nb_off + s])));
         }
     }
 
@@ -142,13 +170,13 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
     // band pass: the band pass keeps the register budget for the 8-row band
     if constexpr (HAS_MIN) {
         for (int s = 0; s < NB; s++) {
-            __m512i bsums32 = _mm512_load_si512((const __m512i *) &bsums[s * NS * TILED_TILE_ROWS + j0]);
+            __m512i bsums32 = _mm512_load_si512((const __m512i *) &bsums[(bs_off + s * NS) * bs_stride + j0]);
             for (int u = 1; u < NS; u++) {
-                bsums32 = _mm512_add_epi32(bsums32, _mm512_load_si512((const __m512i *) &bsums[(s * NS + u) * TILED_TILE_ROWS + j0]));
+                bsums32 = _mm512_add_epi32(bsums32, _mm512_load_si512((const __m512i *) &bsums[(bs_off + s * NS + u) * bs_stride + j0]));
             }
             for (int t = 0; t < NUM_ROWS; t++) {
                 s2_acc[t] = _mm512_add_epi32(s2_acc[t],
-                    _mm512_mullo_epi32(bsums32, _mm512_set1_epi32(src0.mins[(i0 + t) * NB + s])));
+                    _mm512_mullo_epi32(bsums32, _mm512_set1_epi32(src0.mins[(i0 + t) * nb_stride + nb_off + s])));
             }
         }
     }
@@ -156,11 +184,12 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
     // epilogue: int->float, apply per-row scales, store to buf
     for (int t = 0; t < NUM_ROWS; t++) {
         const int ar = i0 + t;
+        const int d_off = seff * TILED_MICRO + ar;
         __m512 f1 = _mm512_cvtepi32_ps(s1_acc[t]);
-        __m512 result = _mm512_mul_ps(f1, _mm512_set1_ps(src0.d[ar]));
+        __m512 result = _mm512_mul_ps(f1, _mm512_set1_ps(src0.d[d_off]));
         if constexpr (HAS_MIN) {
             __m512 f2 = _mm512_cvtepi32_ps(s2_acc[t]);
-            result = _mm512_fnmadd_ps(_mm512_set1_ps(src0.dmin[ar]), f2, result);
+            result = _mm512_fnmadd_ps(_mm512_set1_ps(src0.dmin[d_off]), f2, result);
         }
         float * p = &buf[(i0 + t) * buf_stride + j0];
         _mm512_store_ps(p, _mm512_add_ps(_mm512_load_ps(p), _mm512_mul_ps(result, d1_vec)));
@@ -168,11 +197,11 @@ static void tiled_run_micro_vnni_8x16(const tiled_tile_src0 & src0, const tiled_
 }
 
 // 16x16 microtile as two explicit 8x16 band passes
-template <int SUBBLK, bool HAS_MIN, int BIAS>
+template <int SUBBLK, bool HAS_MIN, int BIAS, int NK>
 static void tiled_run_microtile_vnni(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                         int i0, int j0, float * buf, int buf_stride) {
-    tiled_run_micro_vnni_8x16<SUBBLK, HAS_MIN, BIAS>(src0, src1, i0,      j0, buf, buf_stride);
-    tiled_run_micro_vnni_8x16<SUBBLK, HAS_MIN, BIAS>(src0, src1, i0 + 8,  j0, buf, buf_stride);
+                                         int i0, int j0, int num_k, int slab, float * buf, int buf_stride) {
+    tiled_run_micro_vnni_8x16<SUBBLK, HAS_MIN, BIAS, NK>(src0, src1, i0,      j0, num_k, slab, buf, buf_stride);
+    tiled_run_micro_vnni_8x16<SUBBLK, HAS_MIN, BIAS, NK>(src0, src1, i0 + 8,  j0, num_k, slab, buf, buf_stride);
 }
 
 #endif // __AVX512VNNI__ && __AVX512VL__
@@ -190,13 +219,26 @@ static void tiled_run_microtile_vnni(const tiled_tile_src0 & src0, const tiled_t
 // With BIAS != 0 the q0 codes are biased (up to 241) and a maddubs i16 pair
 // overflows, so q0 is split into 4-bit halves and the dot is the sum of two
 // maddubs, each pair then <= 2*15*127
-template <int SUBBLK, bool HAS_MIN, int BIAS>
+template <int SUBBLK, bool HAS_MIN, int BIAS, int NK>
 static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                     int i0, int j0, float * buf, int buf_stride) {
+                                     int i0, int j0, int num_k, int slab, float * buf, int buf_stride) {
     constexpr int NB = TILED_TILE_K / SUBBLK;
     constexpr int GROUP = 8; // Process 8 src1 columns concurrently (1 YMM vector)
 
     static_assert(SUBBLK == 16 || SUBBLK == 32, "unsupported SUBBLK");
+
+    // num_k/slab: the narrow path holds num_k slabs at row stride num_k*256 (num_k=1, slab=0 = standard)
+    // NK: 1 = standard single-slab (offsets 0, strides compile-time); 0 = runtime
+    // (num_k/slab from the args). The narrow path is memory-bound, so one runtime
+    // version serves all of it.
+    const int nkr  = (NK > 0) ? NK : num_k;
+    const int seff = (NK > 0) ? 0 : slab;
+    const int qk_stride = nkr * TILED_TILE_K;
+    const int qk_off = seff * TILED_TILE_K;
+    const int nb_stride = NB * nkr;
+    const int nb_off = seff * NB;
+    const int bs_stride = (nkr == 1) ? TILED_TILE_ROWS : TILED_MICRO;
+    const int bs_off = seff * TILED_MICRO;
 
     // Horizontal sum helper: converts 8x32-bit int lane inside a YMM register to scalar int32
     auto hsum256_epi32 = [](const __m256i v) -> int32_t {
@@ -210,17 +252,18 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
 
     for (int i = 0; i < TILED_MICRO; i++) {
         const int ar = i0 + i;
-        const float d0 = src0.d[ar];
-        const float dmin0 = src0.dmin[ar];
-        const uint8_t * q0 = &src0.q[ar * TILED_TILE_K];
-        const int32_t * scales_row = &src0.scales[ar * NB];
-        const int32_t * mins_row = &src0.mins[ar * NB];
+        const int d_off = seff * TILED_MICRO + ar;
+        const float d0 = src0.d[d_off];
+        const float dmin0 = src0.dmin[d_off];
+        const uint8_t * q0 = &src0.q[ar * qk_stride + qk_off];
+        const int32_t * scales_row = &src0.scales[ar * nb_stride + nb_off];
+        const int32_t * mins_row = &src0.mins[ar * nb_stride + nb_off];
 
         for (int g = 0; g < TILED_MICRO; g += GROUP) {
             // Pre-calculate weight pointers for this column group
             const int8_t * q1_ptr[GROUP];
             for (int t = 0; t < GROUP; t++) {
-                q1_ptr[t] = &src1.q[(j0 + g + t) * TILED_TILE_K];
+                q1_ptr[t] = &src1.q[(j0 + g + t) * qk_stride + qk_off];
             }
 
             __m256i corr = _mm256_setzero_si256();
@@ -238,8 +281,8 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                     const __m256i scales16 = _mm256_set1_epi16(scales_row[s]);
                     
                     const __m256i bsums_v = _mm256_add_epi32(
-                        _mm256_load_si256((const __m256i *) &src1.bsums[s * 2 * TILED_TILE_ROWS + j0 + g]),
-                        _mm256_load_si256((const __m256i *) &src1.bsums[(s * 2 + 1) * TILED_TILE_ROWS + j0 + g]));
+                        _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + s * 2) * bs_stride + j0 + g]),
+                        _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + s * 2 + 1) * bs_stride + j0 + g]));
 
                     if constexpr (BIAS != 0) {
                         const __m256i q0a = _mm256_and_si256(q0_32, _mm256_set1_epi8(0x0F));
@@ -274,8 +317,8 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                 for (int sp = 0; sp < NB; sp += 2) {
                     const __m256i q0_32 = _mm256_load_si256((const __m256i *) &q0[sp * SUBBLK]);
                     const __m256i scalesv = _mm256_set_m128i(_mm_set1_epi16(scales_row[sp + 1]), _mm_set1_epi16(scales_row[sp]));
-                    const __m256i bsums0_v = _mm256_load_si256((const __m256i *) &src1.bsums[sp * TILED_TILE_ROWS + j0 + g]);
-                    const __m256i bsums1_v = _mm256_load_si256((const __m256i *) &src1.bsums[(sp + 1) * TILED_TILE_ROWS + j0 + g]);
+                    const __m256i bsums0_v = _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + sp) * bs_stride + j0 + g]);
+                    const __m256i bsums1_v = _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + sp + 1) * bs_stride + j0 + g]);
 
                     if constexpr (BIAS != 0) {
                         const __m256i q0a = _mm256_and_si256(q0_32, _mm256_set1_epi8(0x0F));
@@ -322,7 +365,7 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                 s1_vec = _mm256_add_epi32(s1_vec, corr);
             }
 
-            const __m256 src1_d_vec = _mm256_load_ps(&src1.d[j0 + g]);
+            const __m256 src1_d_vec = _mm256_load_ps(&src1.d[seff * TILED_MICRO + j0 + g]);
             __m256 res_vec = _mm256_mul_ps(_mm256_set1_ps(d0), _mm256_cvtepi32_ps(s1_vec));
 
             if constexpr (HAS_MIN) {
@@ -349,23 +392,38 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
         }
     }
 }
+
 #endif // __AVX2__
 
 #if defined(__AVX__) && !defined(__AVX2__)
-template <int SUBBLK, bool HAS_MIN, int BIAS>
+template <int SUBBLK, bool HAS_MIN, int BIAS, int NK>
 static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                    int i0, int j0, float * buf, int buf_stride) {
+                                    int i0, int j0, int num_k, int slab, float * buf, int buf_stride) {
     constexpr int NB = TILED_TILE_K / SUBBLK;
     constexpr int NS = SUBBLK / 16;
     constexpr int GROUP = 4; // src1 columns per group: one acc32 per column
 
+    // num_k/slab: the narrow path holds num_k slabs at row stride num_k*256 (num_k=1, slab=0 = standard)
+    // NK: 1 = standard single-slab (offsets 0, strides compile-time); 0 = runtime
+    // (num_k/slab from the args). The narrow path is memory-bound, so one runtime
+    // version serves all of it.
+    const int nkr  = (NK > 0) ? NK : num_k;
+    const int seff = (NK > 0) ? 0 : slab;
+    const int qk_stride = nkr * TILED_TILE_K;
+    const int qk_off = seff * TILED_TILE_K;
+    const int nb_stride = NB * nkr;
+    const int nb_off = seff * NB;
+    const int bs_stride = (nkr == 1) ? TILED_TILE_ROWS : TILED_MICRO;
+    const int bs_off = seff * TILED_MICRO;
+
     for (int i = 0; i < TILED_MICRO; i++) {
         const int ar = i0 + i;
-        const float d0 = src0.d[ar];
-        const float dmin0 = src0.dmin[ar];
-        const uint8_t * q0 = &src0.q[ar * TILED_TILE_K];
-        const int32_t * scales_row = &src0.scales[ar * NB];
-        const int32_t * mins_row = &src0.mins[ar * NB];
+        const int d_off = seff * TILED_MICRO + ar;
+        const float d0 = src0.d[d_off];
+        const float dmin0 = src0.dmin[d_off];
+        const uint8_t * q0 = &src0.q[ar * qk_stride + qk_off];
+        const int32_t * scales_row = &src0.scales[ar * nb_stride + nb_off];
+        const int32_t * mins_row = &src0.mins[ar * nb_stride + nb_off];
 
         for (int g = 0; g < TILED_MICRO; g += GROUP) {
             const int8_t * q1g[GROUP];
@@ -373,7 +431,7 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
             __m128i corr = _mm_setzero_si128(); // -BIAS * sum_s scales_s * bsums_s, 1 lane per col (vanishes via constexpr)
             __m128i s2 = _mm_setzero_si128();   // sum_s mins_s * bsums_s
             for (int t = 0; t < GROUP; t++) {
-                q1g[t] = &src1.q[(j0 + g + t) * TILED_TILE_K];
+                q1g[t] = &src1.q[(j0 + g + t) * qk_stride + qk_off];
                 acc[t] = _mm_setzero_si128();
             }
 
@@ -383,7 +441,7 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
                 for (int u = 0; u < NS; u++) {
                     const __m128i a16 = _mm_loadu_si128((const __m128i *) &q0[s * SUBBLK + u * 16]);
                     bsums_v = _mm_add_epi32(bsums_v, _mm_loadu_si128(
-                        (const __m128i *) &src1.bsums[(s * NS + u) * TILED_TILE_ROWS + j0 + g]));
+                        (const __m128i *) &src1.bsums[(bs_off + s * NS + u) * bs_stride + j0 + g]));
                     if constexpr (BIAS != 0) {
                         // biased codes overflow the maddubs i16 pairs, split into 4-bit halves
                         const __m128i a16a = _mm_and_si128(a16, _mm_set1_epi8(0x0F));
@@ -432,7 +490,7 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
                 if constexpr (HAS_MIN) {
                     res -= dmin0 * (float) s2_s[t];
                 }
-                buf[ar * buf_stride + j0 + g + t] += src1.d[j0 + g + t] * res;
+                buf[ar * buf_stride + j0 + g + t] += src1.d[seff * TILED_MICRO + j0 + g + t] * res;
             }
         }
     }
@@ -440,35 +498,57 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
 
 #endif // __AVX__ && !__AVX2__
 
-// main microtile entry point
+// main microtile entry point. num_k = K-blocks per row (the narrow path reads num_k slabs at row
+// stride num_k*256 so each weight row is one long stream); slab = this call's slab. num_k=1,
+// slab=0 is the standard single-slab path (the existing call sites use the header defaults).
+// num_k==1 dispatches to the NK=1 instantiation, whose strides/offsets are compile-time
+// constants (shifts/scaled-leas). num_k>1 (the narrow path) uses the NK=0 runtime-strided
+// version; it is memory-bound, so one version serves all of it.
 template <int SUBBLK, bool HAS_MIN, int BIAS>
 void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                         int i0, int j0, float * buf, int buf_stride) {
+                         int i0, int j0, int num_k, int slab, float * buf, int buf_stride) {
+    const bool standard = (num_k == 1);
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-    tiled_run_microtile_vnni<SUBBLK, HAS_MIN, BIAS>(src0, src1, i0, j0, buf, buf_stride);
+    if (standard) {
+        tiled_run_microtile_vnni<SUBBLK, HAS_MIN, BIAS, 1>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
+    } else {
+        tiled_run_microtile_vnni<SUBBLK, HAS_MIN, BIAS, 0>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
+    }
 #elif defined(__AVX2__)
-    tiled_run_microtile_avx2<SUBBLK, HAS_MIN, BIAS>(src0, src1, i0, j0, buf, buf_stride);
+    if (standard) {
+        tiled_run_microtile_avx2<SUBBLK, HAS_MIN, BIAS, 1>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
+    } else {
+        tiled_run_microtile_avx2<SUBBLK, HAS_MIN, BIAS, 0>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
+    }
 #elif defined(__AVX__)
-    tiled_run_microtile_avx<SUBBLK, HAS_MIN, BIAS>(src0, src1, i0, j0, buf, buf_stride);
+    if (standard) {
+        tiled_run_microtile_avx<SUBBLK, HAS_MIN, BIAS, 1>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
+    } else {
+        tiled_run_microtile_avx<SUBBLK, HAS_MIN, BIAS, 0>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
+    }
 #else
-    tiled_run_microtile_scalar<SUBBLK, HAS_MIN, BIAS>(src0, src1, i0, j0, buf, buf_stride);
+    if (standard) {
+        tiled_run_microtile_scalar<SUBBLK, HAS_MIN, BIAS, 1>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
+    } else {
+        tiled_run_microtile_scalar<SUBBLK, HAS_MIN, BIAS, 0>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
+    }
 #endif
 }
 
 // explicit instantiations for the in-use formats (q4_K and q5_K share the constants)
 template void tiled_run_microtile<32, true, 0>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                               int i0, int j0, float * buf, int buf_stride);
+                                               int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
 // iq4_xs and the other iq types: LUT-expanded codes, BIAS = 128
 template void tiled_run_microtile<32, false, 128>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                                  int i0, int j0, float * buf, int buf_stride);
+                                                  int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
 template void tiled_run_microtile<16, false, 128>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                                  int i0, int j0, float * buf, int buf_stride);
+                                                  int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
 template void tiled_run_microtile<16, false, 32>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                                 int i0, int j0, float * buf, int buf_stride);
+                                                 int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
 template void tiled_run_microtile<16, false, 4>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                                int i0, int j0, float * buf, int buf_stride);
+                                                int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
 template void tiled_run_microtile<16, true, 0>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                                               int i0, int j0, float * buf, int buf_stride);
+                                               int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
 
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))

@@ -136,12 +136,15 @@ inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
 #endif
 
 // Accumulate one 16x16 microtile (src0 rows [i0, i0+16), src1 cols [j0, j0+16))
-// over the full 256-K slab held in the tiles into a j-major float buffer
+// over one 256-K slab held in the tiles into a j-major float buffer
 // (row width buf_stride): buf[i*buf_stride + j] += partial.
 // SUBBLK/HAS_MIN/BIAS are the src0 format constants (see tiled_tile_src0).
+// num_k = K-blocks per row: the tile holds num_k slabs at row stride num_k*256 (each weight
+// row one long stream) and the call reads the slab-th one; the standard path uses num_k=1,
+// slab=0 (the defaults) so the single-slab layout is unchanged.
 template <int SUBBLK, bool HAS_MIN, int BIAS>
 void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
-                         int i0, int j0, float * buf, int buf_stride);
+                         int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
 
 // Repack one 16-row band (group) of the natural [row][256] src1 codes in-place into the
 // VNNI group-local [kg%16][kg/16][row][4] layout. Call once per band just before it's
@@ -153,6 +156,8 @@ void tiled_repack_src1_band(tiled_tile_src1 * tile, int grp);
 // points at the 16-row group (row r at base + r*k_extent); c selects the chunk (0..3).
 // After the call, k-group kg reads as one 512-bit vector at base + (kg%16)*k_extent +
 // (kg/16)*64. All 16 rows load before any store and a chunk's rows are disjoint, so it
-// is in-place with no temp. No-op on non-VNNI.
+// is in-place with no temp. k_extent is the code row stride (TILED_TILE_K for the standard
+// path, num_k*TILED_TILE_K for the narrow path). No-op on non-VNNI.
 void tiled_repack_16x16(uint8_t * base, int c, int k_extent);
+
 
