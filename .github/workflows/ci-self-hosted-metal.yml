@@ -6,7 +6,7 @@ on:
     branches:
       - master
     paths: [
-      '.github/workflows/build-self-hosted-metal.yml',
+      '.github/workflows/ci-self-hosted-metal.yml',
       'ci/run.sh',
       '**/CMakeLists.txt',
       '**/.cmake',
@@ -22,7 +22,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
-      '.github/workflows/build-self-hosted-metal.yml',
+      '.github/workflows/ci-self-hosted-metal.yml',
       'ci/run.sh',
       '**/CMakeLists.txt',
       '**/.cmake',
