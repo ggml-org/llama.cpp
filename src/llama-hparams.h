@@ -206,6 +206,12 @@ struct llama_hparams {
     float    situ_beta            = 1.0f;
     float    situ_linear_beta     = 0.0f;   // 0 = no linear-beta transform on the up branch
 
+    // hrm-text (looped H/L stacks)
+    uint32_t n_hrm_layers_per_stack = 0;
+    uint32_t n_hrm_h_cycles = 0;
+    uint32_t n_hrm_l_cycles = 0;
+    bool     hrm_prefix_lm = false;
+
     bool ssm_dt_b_c_rms = false;
 
     float f_clamp_kqv      = 0.0f;

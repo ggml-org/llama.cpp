@@ -932,6 +932,18 @@ class GGUFWriter:
     def add_embedding_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EMBEDDING_SCALE.format(arch=self.arch), value)
 
+    def add_hrm_layers_per_stack(self, value: int) -> None:
+        self.add_uint32(Keys.HRM.LAYERS_PER_STACK.format(arch=self.arch), value)
+
+    def add_hrm_h_cycles(self, value: int) -> None:
+        self.add_uint32(Keys.HRM.H_CYCLES.format(arch=self.arch), value)
+
+    def add_hrm_l_cycles(self, value: int) -> None:
+        self.add_uint32(Keys.HRM.L_CYCLES.format(arch=self.arch), value)
+
+    def add_hrm_prefix_lm(self, value: bool) -> None:
+        self.add_bool(Keys.HRM.PREFIX_LM.format(arch=self.arch), value)
+
     def add_adapter_count(self, count: int) -> None:
         self.add_uint32(Keys.Adapters.COUNT.format(arch=self.arch), count)
 
