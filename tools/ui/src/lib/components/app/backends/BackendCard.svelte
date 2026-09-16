@@ -10,7 +10,6 @@
 	import { findBackendPreset } from '$lib/utils';
 
 	const PROTOCOL_LABELS: Record<BackendProtocol, string> = {
-		anthropic: 'Anthropic',
 		'llama.cpp': 'llama.cpp',
 		openai: 'OpenAI'
 	};

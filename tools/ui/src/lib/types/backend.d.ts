@@ -3,12 +3,12 @@
  *
  * A backend is one API endpoint the UI can talk to. The built-in `local`
  * backend is the llama-server serving the UI. External backends are
- * user-configured endpoints that speak an OpenAI- or Anthropic-compatible
+ * user-configured endpoints that speak an OpenAI-compatible
  * protocol.
  */
 
 /** Request/response shape a backend speaks. */
-export type BackendProtocol = 'llama.cpp' | 'openai' | 'anthropic';
+export type BackendProtocol = 'llama.cpp' | 'openai';
 
 /**
  * Wire-level quirks of a backend's protocol. Capabilities gate llama.cpp
@@ -23,7 +23,7 @@ export interface BackendCompat {
 
 /**
  * Features a backend supports. A llama.cpp server exposes extra endpoints on
- * top of the OpenAI-compatible API; plain OpenAI- and Anthropic-compatible
+ * top of the OpenAI-compatible API; plain OpenAI-compatible
  * endpoints only provide chat and model listing.
  */
 export interface BackendCapabilities {

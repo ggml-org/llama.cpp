@@ -132,7 +132,7 @@
 		<Dialog.Header>
 			<Dialog.Title>{isEdit ? 'Edit backend' : 'Add backend'}</Dialog.Title>
 
-			<Dialog.Description>Connect an OpenAI- or Anthropic-compatible endpoint.</Dialog.Description>
+			<Dialog.Description>Connect an OpenAI-compatible endpoint.</Dialog.Description>
 		</Dialog.Header>
 
 		{#if !isEdit}
