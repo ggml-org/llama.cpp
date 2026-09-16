@@ -104,7 +104,6 @@
 			}
 		],
 		external: [],
-		favorites: favoriteModels,
 		loaded: loadedModels
 	};
 
@@ -125,6 +124,7 @@
 		<ModelsSelectorList
 			{activeId}
 			currentModel={selectedModel}
+			favorites={favoriteModels}
 			groups={groupedOptions}
 			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 			onSelect={handleSelect}
@@ -140,7 +140,6 @@
 			groups={{
 				available: [],
 				external: [],
-				favorites: [],
 				loaded: [loadedModels[0]]
 			}}
 			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
@@ -154,10 +153,10 @@
 		<ModelsSelectorList
 			activeId={null}
 			currentModel={null}
+			favorites={favoriteModels}
 			groups={{
 				available: [],
 				external: [],
-				favorites: favoriteModels,
 				loaded: []
 			}}
 			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}

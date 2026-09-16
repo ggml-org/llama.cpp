@@ -89,12 +89,12 @@
 	let visualOrder = $derived.by(() => {
 		const order: string[] = [];
 
-		for (const item of ms.groupedFilteredOptions.favorites) order.push(item.option.id);
+		for (const item of ms.favoriteItems) order.push(item.option.id);
 		for (const item of ms.groupedFilteredOptions.loaded) order.push(item.option.id);
-		for (const item of ms.groupedFilteredOptions.external) order.push(item.option.id);
 		for (const group of ms.groupedFilteredOptions.available) {
 			for (const item of group.items) order.push(item.option.id);
 		}
+		for (const item of ms.groupedFilteredOptions.external) order.push(item.option.id);
 
 		return order;
 	});
@@ -277,20 +277,22 @@
 					onOpenAutoFocus={(event) => event.preventDefault()}
 				>
 					<DropdownMenuSearchable
-						emptyMessage="No models found."
-						isEmpty={ms.filteredOptions.length === 0 && ms.isCurrentModelInCache}
+						emptyMessage={ms.isFavoritesView ? 'No favorite models yet.' : 'No models found.'}
+						isEmpty={ms.isEmpty && ms.isCurrentModelInCache}
 						onSearchChange={(v) => ms.setSearchTerm(v)}
 						onSearchKeyDown={handleSearchKeyDown}
 						placeholder="Search models..."
 						searchClass="bg-transparent"
 						searchValue={ms.searchTerm}
 					>
-						<!-- Provider tabs sit under the search input, above the option list. -->
+						<!-- Provider tabs (favorites first), above the option list. -->
 						<ModelsSelectorBackendSwitcher
-							activeId={ms.activeBackendId}
+							activeId={ms.viewId}
 							backends={ms.backends}
+							favoritesActive={ms.isFavoritesView}
 							onAdd={handleAddBackend}
 							onSelect={(backendId) => void ms.handleBackendChange(backendId)}
+							onSelectFavorites={ms.showFavorites}
 						/>
 
 						<!-- Option list; the search header sticks to the top and the actions
@@ -312,8 +314,10 @@
 								</button>
 							{/if}
 
-							{#if ms.filteredOptions.length === 0}
-								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
+							{#if ms.isEmpty}
+								<p class="px-4 py-3 text-sm text-muted-foreground">
+									{ms.isFavoritesView ? 'No favorite models yet.' : 'No models found.'}
+								</p>
 							{/if}
 
 							{#snippet modelOption(item: ModelItem, _hideOrgName: boolean)}
@@ -344,6 +348,7 @@
 							<ModelsSelectorList
 								activeId={ms.activeId}
 								{currentModel}
+								favorites={ms.isFavoritesView ? ms.favoriteItems : []}
 								groups={ms.groupedFilteredOptions}
 								onInfoClick={ms.handleInfoClick}
 								onSelect={ms.handleSelect}
