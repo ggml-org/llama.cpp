@@ -108,6 +108,8 @@
 	class={[
 		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
 		'cursor-pointer',
+		// skip layout and paint for rows scrolled out of the long lists
+		'[content-visibility:auto] [contain-intrinsic-size:auto_2.25rem]',
 		isSelected && !isHighlighted && 'bg-accent/50',
 		isHighlighted && 'bg-accent',
 		(isSelected || isHighlighted) && 'text-accent-foreground',
@@ -139,10 +141,10 @@
 		{hideOrgName}
 		{modalities}
 		modelId={option.model}
-		showRawTooltip
 		supportsThinking={capabilities.reasoning}
 		supportsToolUse={capabilities.tools}
 		tags={option.tags}
+		title={option.model}
 	/>
 
 	<div class="flex shrink-0 items-center gap-1">
@@ -159,6 +161,7 @@
 					iconSize="h-2.5 w-2.5"
 					onclick={() => modelsStore.toggleFavorite(option.model)}
 					tooltip="Remove from favorites"
+					tooltipAsTitle
 				/>
 			{:else}
 				<ActionIcon
@@ -167,6 +170,7 @@
 					iconSize="h-2.5 w-2.5"
 					onclick={() => modelsStore.toggleFavorite(option.model)}
 					tooltip="Add to favorites"
+					tooltipAsTitle
 				/>
 			{/if}
 
@@ -178,6 +182,7 @@
 					iconSize="h-2.5 w-2.5"
 					onclick={() => onInfoClick(option.model)}
 					tooltip="Model information"
+					tooltipAsTitle
 				/>
 			{/if}
 		</div>
@@ -200,6 +205,7 @@
 						onclick={() => modelsStore.status.load(option.model)}
 						stopPropagationOnClick
 						tooltip="Retry loading model"
+						tooltipAsTitle
 					/>
 				</div>
 			</div>
@@ -219,6 +225,7 @@
 							modelsStore.status.unload(option.model);
 						}}
 						tooltip="Unload model"
+						tooltipAsTitle
 					/>
 				</div>
 			</div>
@@ -236,6 +243,7 @@
 						onclick={() => modelsStore.status.unload(option.model)}
 						stopPropagationOnClick
 						tooltip="Unload model"
+						tooltipAsTitle
 					/>
 				</div>
 			</div>
@@ -253,6 +261,7 @@
 						onclick={() => modelsStore.status.load(option.model)}
 						stopPropagationOnClick
 						tooltip="Load model"
+						tooltipAsTitle
 					/>
 				</div>
 			</div>
