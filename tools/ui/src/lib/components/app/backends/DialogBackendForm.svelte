@@ -1,6 +1,6 @@
 <script lang="ts">
 	import BackendForm from './BackendForm.svelte';
-	import BackendPresetIcon from './BackendPresetIcon.svelte';
+	import BackendPresetCard from './BackendPresetCard.svelte';
 	import { CheckCircle2, Loader2, XCircle } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -9,7 +9,7 @@
 	import type { BackendTestResult } from '$lib/services/backends.service';
 	import { backendsStore } from '$lib/stores';
 	import type { Backend, BackendPreset } from '$lib/types';
-	import { uuid } from '$lib/utils';
+	import { findBackendPreset, uuid } from '$lib/utils';
 
 	interface Props {
 		backend?: Backend | null;
@@ -21,9 +21,17 @@
 	let { backend = null, onOpenChange, onSaved, open = $bindable(false) }: Props = $props();
 
 	let draft = $state<Backend>(createBackend());
-	let selectedPresetId = $state<string | null>(null);
 	let testResult = $state<BackendTestResult | null>(null);
 	let testing = $state(false);
+
+	// the card follows the URL, so editing any field deselects it
+	let selectedPresetId = $derived(findBackendPreset(draft.baseUrl)?.id ?? null);
+	// presets a configured backend already points at
+	let addedPresetIds = $derived(
+		backendsStore.external
+			.map((backend) => findBackendPreset(backend.baseUrl)?.id)
+			.filter((id) => id !== undefined)
+	);
 
 	let isEdit = $derived(backend !== null);
 	let urlError = $derived.by(() => {
@@ -46,7 +54,6 @@
 		if (!open) return;
 
 		draft = backend ? { ...backend } : createBackend();
-		selectedPresetId = null;
 		testResult = null;
 		testing = false;
 	});
@@ -62,14 +69,13 @@
 	}
 
 	function applyPreset(preset: BackendPreset) {
-		selectedPresetId = preset.id;
 		draft = {
 			...draft,
 			baseUrl: preset.baseUrl,
 			chatPath: preset.chatPath,
 			compat: preset.compat,
 			modelsPath: preset.modelsPath,
-			name: preset.id === 'custom' ? '' : preset.name,
+			name: preset.name,
 			protocol: preset.protocol
 		};
 		testResult = null;
@@ -136,19 +142,20 @@
 		</Dialog.Header>
 
 		{#if !isEdit}
-			<div class="grid grid-cols-2 gap-2 pt-2 sm:grid-cols-3">
-				{#each BACKEND_PRESETS as preset (preset.id)}
-					<Button
-						class="justify-start"
-						onclick={() => applyPreset(preset)}
-						size="sm"
-						variant={selectedPresetId === preset.id ? 'secondary' : 'outline'}
-					>
-						<BackendPresetIcon class="h-4 w-4" {preset} />
+			<div class="space-y-3 pt-2">
+				<h3 class="text-sm font-medium">Recommended providers</h3>
 
-						{preset.name}
-					</Button>
-				{/each}
+				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+					{#each BACKEND_PRESETS as preset (preset.id)}
+						<BackendPresetCard
+							added={addedPresetIds.includes(preset.id)}
+							dimmed={Boolean(selectedPresetId) && selectedPresetId !== preset.id}
+							onClick={() => applyPreset(preset)}
+							{preset}
+							selected={selectedPresetId === preset.id}
+						/>
+					{/each}
+				</div>
 			</div>
 		{/if}
 
