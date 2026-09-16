@@ -2,6 +2,7 @@
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
 	import { ChevronLeft, CircleAlert, Loader2 } from '@lucide/svelte';
 	import { ModelsSelectorOption } from '$lib/components/app';
+	import { BackendPresetIcon } from '$lib/components/app/backends';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/navigation/utils';
 	import { ModelDownloadConfirmAction } from '$lib/enums';
@@ -115,6 +116,10 @@
 			>
 				<ChevronLeft class="h-3.5 w-3.5" />
 			</button>
+		{/if}
+
+		{#if provider.preset}
+			<BackendPresetIcon class="h-3.5 w-3.5" preset={provider.preset} />
 		{/if}
 
 		{provider.name}

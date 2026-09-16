@@ -10,12 +10,19 @@ import {
 	BACKEND_CAPABILITIES,
 	BACKEND_COMPAT,
 	BACKEND_ID_PREFIX,
+	BACKEND_PRESETS,
 	BACKEND_PROTOCOLS,
 	DEFAULT_BACKEND_CHAT_PATH,
 	DEFAULT_BACKEND_MODELS_PATH,
 	LOCAL_BACKEND_ID
 } from '$lib/constants';
-import type { Backend, BackendCapabilities, BackendCompat, BackendProtocol } from '$lib/types';
+import type {
+	Backend,
+	BackendCapabilities,
+	BackendCompat,
+	BackendPreset,
+	BackendProtocol
+} from '$lib/types';
 
 /** Absolute chat completions URL for a backend. */
 export function backendChatUrl(backend: Backend): string {
@@ -25,6 +32,29 @@ export function backendChatUrl(backend: Backend): string {
 /** Absolute models listing URL for a backend. */
 export function backendModelsUrl(backend: Backend): string {
 	return joinBackendUrl(backend.baseUrl, backend.modelsPath ?? DEFAULT_BACKEND_MODELS_PATH);
+}
+
+/**
+ * Preset a backend was created from, matched on origin and path so a saved
+ * backend keeps its branding. Returns undefined for edited or custom URLs.
+ */
+export function findBackendPreset(baseUrl: string): BackendPreset | undefined {
+	const target = normalizeBaseUrl(baseUrl);
+
+	if (!target) return undefined;
+
+	return BACKEND_PRESETS.find((preset) => normalizeBaseUrl(preset.baseUrl) === target);
+}
+
+/** Origin and path of a URL, without a trailing slash; null when unparsable. */
+function normalizeBaseUrl(url: string): string | null {
+	try {
+		const parsed = new URL(url);
+
+		return `${parsed.origin}${parsed.pathname.replace(/\/+$/, '')}`.toLowerCase();
+	} catch {
+		return null;
+	}
 }
 
 /** Features a backend supports, derived from its protocol. */
