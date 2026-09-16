@@ -1536,7 +1536,7 @@ static bool ggml_vk_matmul_cm1_int_shmem_support(const vk_device& device, const 
         case GGML_TYPE_Q4_1: case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q4_K: case GGML_TYPE_Q5_K:
             has_dm = true;                          break;
-        case GGML_TYPE_IQ4_NL: case GGML_TYPE_MXFP4:
+        case GGML_TYPE_IQ4_NL: case GGML_TYPE_IQ4_XS: case GGML_TYPE_MXFP4:
             has_kvalues = true;                     break;
         case GGML_TYPE_Q3_K: case GGML_TYPE_Q6_K:
             kscales2 = true;                        break;
@@ -2465,6 +2465,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             if (!rdna4) { cm1_create_mmq({GGML_TYPE_Q5_1, GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_q5_1_q8_1",   matmul_q5_1_q8_1_cm1_len,   matmul_q5_1_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3); }
             cm1_create_mmq({GGML_TYPE_Q8_0,   GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_q8_0_q8_1",   matmul_q8_0_q8_1_cm1_len,   matmul_q8_0_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3);
             cm1_create_mmq({GGML_TYPE_IQ4_NL, GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_iq4_nl_q8_1", matmul_iq4_nl_q8_1_cm1_len, matmul_iq4_nl_q8_1_cm1_data, sizeof(vk_mat_mat_push_constants), 3);
+            cm1_create_mmq({GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_iq4_xs_q8_1", matmul_iq4_xs_q8_1_cm1_len, matmul_iq4_xs_q8_1_cm1_data, sizeof(vk_mat_mat_push_constants), 3);
             cm1_create_mmq({GGML_TYPE_MXFP4,  GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_mxfp4_q8_1",  matmul_mxfp4_q8_1_cm1_len,  matmul_mxfp4_q8_1_cm1_data,  sizeof(vk_mat_mat_push_constants), 3);
             cm1_create_mmq({GGML_TYPE_Q3_K,   GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int_k, "matmul_q3_k_q8_1",   matmul_q3_k_q8_1_cm1_len,   matmul_q3_k_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3);
             if (!rdna4) { cm1_create_mmq({GGML_TYPE_Q4_K, GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_q4_k_q8_1",   matmul_q4_k_q8_1_cm1_len,   matmul_q4_k_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3); }
@@ -2537,6 +2538,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             cm1_create_mmq({GGML_TYPE_Q5_1,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_q5_1_q8_1",   matmul_id_subgroup_q5_1_q8_1_cm1_len,   matmul_id_subgroup_q5_1_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
             cm1_create_mmq({GGML_TYPE_Q8_0,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_q8_0_q8_1",   matmul_id_subgroup_q8_0_q8_1_cm1_len,   matmul_id_subgroup_q8_0_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
             cm1_create_mmq({GGML_TYPE_IQ4_NL, GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_iq4_nl_q8_1", matmul_id_subgroup_iq4_nl_q8_1_cm1_len, matmul_id_subgroup_iq4_nl_q8_1_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_iq4_xs_q8_1", matmul_id_subgroup_iq4_xs_q8_1_cm1_len, matmul_id_subgroup_iq4_xs_q8_1_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
             cm1_create_mmq({GGML_TYPE_MXFP4,  GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_mxfp4_q8_1",  matmul_id_subgroup_mxfp4_q8_1_cm1_len,  matmul_id_subgroup_mxfp4_q8_1_cm1_data,  sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
             cm1_create_mmq({GGML_TYPE_Q3_K,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int_k, "matmul_id_subgroup_q3_k_q8_1",   matmul_id_subgroup_q3_k_q8_1_cm1_len,   matmul_id_subgroup_q3_k_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
             cm1_create_mmq({GGML_TYPE_Q4_K,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_q4_k_q8_1",   matmul_id_subgroup_q4_k_q8_1_cm1_len,   matmul_id_subgroup_q4_k_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
