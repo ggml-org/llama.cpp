@@ -339,6 +339,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 		const backendId = backendIdFromModelId(modelId) ?? backendsStore.active.id;
 		const rawId = rawModelId(modelId);
+		// the selection is stored backend-qualified, matching the aggregated
+		// model list, no matter which form the caller passed
+		const qualifiedId = qualifyModelId(backendId, rawId);
 
 		// a model from another backend makes that backend active first
 		if (backendId !== backendsStore.active.id) {
@@ -347,7 +350,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			await this.switchBackend();
 		}
 
-		if (this.selectedModelId === modelId) return;
+		if (this.selectedModelId === qualifiedId) return;
 
 		const option = this.activeModels.find((model) => model.id === rawId);
 
@@ -357,7 +360,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		this.error = null;
 
 		try {
-			this.selectedModelId = modelId;
+			this.selectedModelId = qualifiedId;
 			this.selectedModelName = option.model;
 		} finally {
 			this.updating = false;
