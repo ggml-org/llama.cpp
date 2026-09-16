@@ -9,6 +9,8 @@
 class llama_memory_completion {
 public:
     static std::unique_ptr<llama_memory_completion> create(ggml_backend_t producer);
+    // Represent work that the caller already completed without another backend synchronization.
+    static std::unique_ptr<llama_memory_completion> completed(ggml_backend_t producer);
     ~llama_memory_completion();
     llama_memory_completion(llama_memory_completion &&) noexcept;
     llama_memory_completion & operator=(llama_memory_completion &&) noexcept;

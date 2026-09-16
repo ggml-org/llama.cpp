@@ -278,6 +278,133 @@ bool llama_kv_stream_publication_complete_sync(llama_kv_stream_publication_ticke
     return ticket.ready(pair, llama_kv_stream_publication_domain::device) &&
         ticket.ready(pair, llama_kv_stream_publication_domain::host);
 }
+struct llama_kv_stream_publication_pair::implementation {
+    std::array<llama_kv_stream_publication_completion, 2> device;
+    std::array<llama_kv_stream_publication_completion, 2> host;
+    std::function<bool()> publish;
+    llama_kv_stream_publication_pair_dependencies dependencies;
+    ggml_backend_t waiter = nullptr;
+    bool device_done = false;
+    bool host_done = false;
+    bool released = false;
+    bool failed = false;
+
+    void fail() noexcept {
+        failed = true;
+        for (auto & value : device) if (value.pending()) value.finish(false);
+        for (auto & value : host) if (value.pending()) value.finish(false);
+    }
+
+    bool release_waiter(bool synchronize) noexcept {
+        if (!device_done || released || !waiter) return false;
+        const bool event_backed=std::any_of(dependencies.device.begin(),dependencies.device.end(),
+            [](const auto & completion) { return completion->event_backed(); });
+        if (synchronize && event_backed) ggml_backend_synchronize(waiter);
+        for (const auto & completion : dependencies.device) {
+            if (completion->event_backed() && !completion->release_waiter(waiter)) return false;
+        }
+        released=true;
+        return true;
+    }
+};
+
+std::unique_ptr<llama_kv_stream_publication_pair> llama_kv_stream_publication_pair::create(
+        llama_kv_stream_publication_ticket & ticket, uint32_t pair,
+        llama_kv_stream_publication_pair_dependencies dependencies, std::function<bool()> publish_host) {
+    if (!ticket.pending() || pair >= ticket.pairs() || !publish_host) return {};
+    for (size_t plane = 0; plane < 2; ++plane) {
+        if (!dependencies.device[plane] || !dependencies.device[plane]->valid() || !dependencies.device[plane]->recorded() ||
+                !dependencies.host[plane] || !dependencies.host[plane]->valid() || !dependencies.host[plane]->recorded()) return {};
+    }
+    try {
+        auto result = std::unique_ptr<llama_kv_stream_publication_pair>(new llama_kv_stream_publication_pair);
+        result->impl = std::make_unique<implementation>();
+        auto & state=*result->impl;
+        state.publish=std::move(publish_host);
+        state.dependencies=std::move(dependencies);
+        for (size_t plane = 0; plane < 2; ++plane) {
+            const auto operand=plane ? llama_kv_stream_publication_plane::v : llama_kv_stream_publication_plane::k;
+            if (!ticket.submit(pair,operand,llama_kv_stream_publication_domain::device,state.device[plane]) ||
+                    !ticket.submit(pair,operand,llama_kv_stream_publication_domain::host,state.host[plane])) return {};
+        }
+        return result;
+    } catch (const std::bad_alloc &) {
+        return {};
+    }
+}
+
+std::unique_ptr<llama_kv_stream_publication_pair> llama_kv_stream_publication_pair::completed(
+        llama_kv_stream_publication_ticket & ticket, uint32_t pair,
+        ggml_backend_t backend, std::function<bool()> publish_host) {
+    llama_kv_stream_publication_pair_dependencies dependencies;
+    for (size_t plane = 0; plane < 2; ++plane) {
+        dependencies.device[plane]=llama_memory_completion::completed(backend);
+        dependencies.host[plane]=llama_memory_completion::completed(backend);
+        if (!dependencies.device[plane] || !dependencies.host[plane]) return {};
+    }
+    return create(ticket,pair,std::move(dependencies),std::move(publish_host));
+}
+
+llama_kv_stream_publication_pair::~llama_kv_stream_publication_pair() {
+    if (impl && impl->device_done && !impl->released) impl->release_waiter(true);
+    if (impl && !impl->failed && (!impl->device_done || !impl->host_done)) impl->fail();
+}
+
+bool llama_kv_stream_publication_pair::wait_device(ggml_backend_t consumer) {
+    auto & state=*impl;
+    if (state.failed || !consumer) return false;
+    if (state.device_done) return consumer == state.waiter;
+    try {
+        for (const auto & completion : state.dependencies.device) if (!completion->wait(consumer)) {
+            state.fail(); return false;
+        }
+    } catch (...) {
+        state.fail(); throw;
+    }
+    for (auto & completion : state.device) if (!completion.finish()) {
+        state.fail(); return false;
+    }
+    state.waiter=consumer;
+    state.device_done=true;
+    return true;
+}
+
+bool llama_kv_stream_publication_pair::publish_host() {
+    auto & state=*impl;
+    if (state.failed) return false;
+    if (state.host_done) return true;
+    try {
+        for (const auto & completion : state.dependencies.host) if (!completion->synchronize()) {
+            state.fail(); return false;
+        }
+        if (!state.publish()) {
+            state.fail(); return false;
+        }
+    } catch (...) {
+        state.fail(); throw;
+    }
+    for (auto & completion : state.host) if (!completion.finish()) {
+        state.fail(); return false;
+    }
+    state.host_done=true;
+    return true;
+}
+
+bool llama_kv_stream_publication_pair::release_device(ggml_backend_t consumer) noexcept {
+    auto & state=*impl;
+    if (state.failed || !consumer || consumer != state.waiter) return false;
+    if (state.released) return true;
+    return state.release_waiter(false);
+}
+
+bool llama_kv_stream_publication_pair::device_ready() const noexcept {
+    return impl && impl->device_done && !impl->failed;
+}
+
+bool llama_kv_stream_publication_pair::host_ready() const noexcept {
+    return impl && impl->host_done && !impl->failed;
+}
+
 
 
 void llama_kv_stream_publication_ticket::abandon() noexcept {

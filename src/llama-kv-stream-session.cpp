@@ -27,6 +27,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     llama_kv_stream_session_config config;
     std::unique_ptr<llama_kv_stream_publications> publications;
     llama_kv_stream_publication_ticket publication;
+    std::unique_ptr<llama_kv_stream_publication_pair> publication_pair;
     std::array<lease_ptr,3> leases{{{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free}}};
     std::unique_ptr<llama_kv_stream_binding> binding;
     llama_kv_stream_resident * resident = nullptr;
@@ -43,6 +44,10 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     bool direct_mode = false, report_layout = false;
 
     bool retire_publication() {
+        if (publication_pair) {
+            if (publication_pair->device_ready()) publication_pair->release_device(backend);
+            publication_pair.reset();
+        }
         if (!publication.pending()) return true;
         if (!publication.committed() && !publication.failed()) publication.cancel();
         return publication.retire();
@@ -240,10 +245,14 @@ bool llama_kv_stream_session::produce(uint32_t layer, const ggml_tensor * k, con
             (s.resident->write_rows(layer,ggml_kv_stream_operand::k,s.committed,k) &&
              s.resident->write_rows(layer,ggml_kv_stream_operand::v,s.committed,v) && s.resident->synchronize(s.target)) :
             s.resident->write_sequence_rows(layer,s.committed,k,v));
-        if (!written || !llama_kv_stream_publication_complete_sync(s.publication,s.next)) {
+        auto pair = written ? llama_kv_stream_publication_pair::completed(
+            s.publication,s.next,s.backend,[] { return true; }) : nullptr;
+        if (!pair || !pair->publish_host() || !pair->wait_device(s.backend)) {
             s.drain(); s.running = false; s.poisoned = true; return false;
         }
-        s.produced = s.publication.ready(s.next,llama_kv_stream_publication_domain::device);
+        s.produced = pair->device_ready() && pair->host_ready() &&
+            s.publication.ready(s.next,llama_kv_stream_publication_domain::device);
+        s.publication_pair=std::move(pair);
         return s.produced;
     } catch (...) { s.drain(); s.running = false; s.poisoned = true; throw; }
 }
@@ -252,7 +261,7 @@ bool llama_kv_stream_session::produce(uint32_t layer, const ggml_tensor * k, con
 bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale) {
     auto & s = *impl;
     if (s.busy || !s.running || s.poisoned || !s.produced || layer != s.next ||
-            !s.publication.ready(s.next,llama_kv_stream_publication_domain::device)) return false;
+            !s.publication_pair || !s.publication_pair->device_ready()) return false;
     session_operation guard(s.busy);
     try {
         if (!q || !mask || !output || q->ne[1] != s.queries || q->ne[2] != s.config.query_heads ||
@@ -260,6 +269,10 @@ bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_te
                   s.resident->compute_streamed(layer,q,mask,output,s.target,scale,s.leases[2].get(),true,s.span))) {
             s.drain(); s.running = false; s.poisoned = true; return false;
         }
+        if (!s.publication_pair->release_device(s.backend)) {
+            s.drain(); s.running = false; s.poisoned = true; return false;
+        }
+        s.publication_pair.reset();
         s.produced = false;
         if (++s.next == s.order.size()) {
             if (!s.publication.committed() || s.publications->frontiers().committed != s.target) {

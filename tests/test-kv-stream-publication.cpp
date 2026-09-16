@@ -1,9 +1,66 @@
 #include "../src/llama-kv-stream-publication.h"
+#include "../src/llama-memory-completion.h"
+#include "../ggml/src/ggml-backend-impl.h"
 #include "../ggml/src/ggml-backend-memory.h"
 #include "testing.h"
+#include "ggml-cpp.h"
 
+#include <cstring>
 #include <memory>
 #include <vector>
+
+struct publication_event {};
+struct publication_backend {
+    ggml_backend_device device{};
+    ggml_backend backend{};
+    size_t records = 0, waits = 0, synchronizes = 0, drains = 0, frees = 0;
+    publication_backend() {
+        device.context=this; backend.context=this; backend.device=&device;
+        backend.iface.synchronize=[](ggml_backend_t backend) {
+            ++static_cast<publication_backend *>(backend->context)->drains;
+        };
+        device.iface.event_new=[](ggml_backend_dev_t device) -> ggml_backend_event_t {
+            return new ggml_backend_event{device,new publication_event};
+        };
+        device.iface.event_free=[](ggml_backend_dev_t device,ggml_backend_event_t event) {
+            ++static_cast<publication_backend *>(device->context)->frees;
+            delete static_cast<publication_event *>(event->context); delete event;
+        };
+        device.iface.event_synchronize=[](ggml_backend_dev_t device,ggml_backend_event_t) {
+            ++static_cast<publication_backend *>(device->context)->synchronizes;
+        };
+        backend.iface.event_record=[](ggml_backend_t backend,ggml_backend_event_t) {
+            ++static_cast<publication_backend *>(backend->context)->records;
+        };
+        backend.iface.event_wait=[](ggml_backend_t backend,ggml_backend_event_t) {
+            ++static_cast<publication_backend *>(backend->context)->waits;
+        };
+    }
+    ggml_backend_t get() { return &backend; }
+};
+
+static llama_kv_stream_publication_pair_dependencies publication_dependencies(publication_backend & backend) {
+    llama_kv_stream_publication_pair_dependencies result;
+    for (size_t plane = 0; plane < 2; ++plane) {
+        result.device[plane]=llama_memory_completion::create(backend.get());
+        result.host[plane]=llama_memory_completion::create(backend.get());
+        GGML_ASSERT(result.device[plane] && result.device[plane]->record());
+        GGML_ASSERT(result.host[plane] && result.host[plane]->record());
+    }
+    return result;
+}
+static llama_kv_stream_publication_pair_dependencies publication_dependencies(ggml_backend_t backend) {
+    llama_kv_stream_publication_pair_dependencies result;
+    for (size_t plane = 0; plane < 2; ++plane) {
+        result.device[plane]=llama_memory_completion::create(backend);
+        result.host[plane]=llama_memory_completion::create(backend);
+        GGML_ASSERT(result.device[plane] && result.device[plane]->record());
+        GGML_ASSERT(result.host[plane] && result.host[plane]->record());
+    }
+    return result;
+}
+
+
 
 using domain = llama_kv_stream_publication_domain;
 using plane = llama_kv_stream_publication_plane;
@@ -41,8 +98,14 @@ static std::unique_ptr<llama_kv_stream_publications> publications(size_t tokens 
         uint64_t generation = 7, uint64_t sequence = 1) {
     return llama_kv_stream_publications::create({tokens, capacity, generation, sequence});
 }
+static ticket publication_ticket(testing & t, std::unique_ptr<llama_kv_stream_publications> & state) {
+    state=publications(0,4,1,1); ticket result;
+    t.assert_true(state && state->reserve(0,1,1,{}, {},result));
+    return result;
+}
 
-int main() {
+
+int main(int argc, char ** argv) {
     testing t;
 
     t.test("initial_and_invalid_reservations_are_transactional", [](testing & t) {
@@ -120,6 +183,7 @@ int main() {
         t.assert_true(llama_kv_stream_publication_complete_sync(value, 0));
         t.assert_true(value.ready(0, domain::device));
         t.assert_true(value.ready(0, domain::host));
+
         t.assert_equal(size_t(8), state->frontiers().device);
         t.assert_equal(size_t(8), state->frontiers().host);
         t.assert_equal(size_t(8), state->frontiers().committed);
@@ -131,6 +195,88 @@ int main() {
         t.assert_true(value.committed());
         t.assert_true(value.retire());
     });
+    t.test("pending_pair_allows_device_before_atomic_host_publication", [](testing & t) {
+        publication_backend backend; std::unique_ptr<llama_kv_stream_publications> state;
+        auto ticket=publication_ticket(t,state); bool published=false;
+        auto pair=llama_kv_stream_publication_pair::create(ticket,0,publication_dependencies(backend),[&] { published=true; return true; });
+        if (!t.assert_true(pair != nullptr)) return;
+        t.assert_true(pair->wait_device(backend.get()));
+        t.assert_true(pair->device_ready() && !pair->host_ready() && !published);
+        auto frontier=state->frontiers();
+        t.assert_equal(size_t(1),frontier.device);
+        t.assert_equal(size_t(0),frontier.host);
+        t.assert_equal(size_t(0),frontier.committed);
+        t.assert_true(pair->publish_host());
+        t.assert_true(pair->host_ready() && published && ticket.committed());
+        t.assert_equal(size_t(1),state->frontiers().committed);
+        t.assert_true(!pair->release_device(nullptr));
+        t.assert_true(pair->release_device(backend.get()));
+        pair.reset();
+        t.assert_equal(size_t(4),backend.frees);
+        t.assert_true(ticket.retire());
+    });
+
+    t.test("host_and_device_pair_completion_can_arrive_in_either_order", [](testing & t) {
+        publication_backend backend; std::unique_ptr<llama_kv_stream_publications> state;
+        auto ticket=publication_ticket(t,state); size_t publications=0;
+        auto pair=llama_kv_stream_publication_pair::create(ticket,0,publication_dependencies(backend),[&] { ++publications; return true; });
+        if (!t.assert_true(pair && pair->publish_host())) return;
+        t.assert_true(pair->host_ready() && !pair->device_ready());
+        t.assert_equal(size_t(1),state->frontiers().host);
+        t.assert_equal(size_t(0),state->frontiers().committed);
+        t.assert_true(pair->publish_host());
+        t.assert_equal(size_t(1),publications);
+        t.assert_true(pair->wait_device(backend.get()));
+        t.assert_true(ticket.committed());
+        t.assert_true(pair->release_device(backend.get()));
+        pair.reset(); t.assert_true(ticket.retire());
+    });
+
+    t.test("host_publication_failure_closes_the_ticket_without_visibility", [](testing & t) {
+        publication_backend backend; std::unique_ptr<llama_kv_stream_publications> state;
+        auto ticket=publication_ticket(t,state);
+        auto pair=llama_kv_stream_publication_pair::create(ticket,0,publication_dependencies(backend),[] { return false; });
+        if (!t.assert_true(pair && pair->wait_device(backend.get()))) return;
+        t.assert_true(!pair->publish_host());
+        pair.reset();
+        t.assert_true(state->failed() && ticket.failed());
+        t.assert_equal(size_t(0),state->frontiers().host);
+        t.assert_equal(size_t(0),state->frontiers().committed);
+        t.assert_true(ticket.retire());
+    });
+
+    t.test("completed_pair_adapter_uses_no_event_or_backend_wait", [](testing & t) {
+        publication_backend backend; std::unique_ptr<llama_kv_stream_publications> state;
+        auto ticket=publication_ticket(t,state); size_t calls=0;
+        auto pair=llama_kv_stream_publication_pair::completed(ticket,0,backend.get(),[&] { ++calls; return true; });
+        if (!t.assert_true(pair != nullptr)) return;
+        t.assert_true(pair->wait_device(backend.get()));
+        t.assert_true(pair->publish_host());
+        t.assert_true(pair->device_ready() && pair->host_ready() && ticket.committed());
+        t.assert_equal(size_t(1),calls);
+        t.assert_equal(size_t(0),backend.records);
+        t.assert_equal(size_t(0),backend.waits);
+        t.assert_equal(size_t(0),backend.synchronizes);
+        t.assert_true(pair->release_device(backend.get()));
+        pair.reset(); t.assert_true(ticket.retire());
+    });
+    t.test("destroyed_device_ready_pair_fails_host_and_drains_waiter", [](testing & t) {
+        publication_backend backend; std::unique_ptr<llama_kv_stream_publications> state;
+        auto ticket=publication_ticket(t,state);
+        {
+            auto pair=llama_kv_stream_publication_pair::create(ticket,0,publication_dependencies(backend),[] { return true; });
+            if (!t.assert_true(pair && pair->wait_device(backend.get()))) return;
+            t.assert_true(pair->device_ready() && !pair->host_ready());
+        }
+        t.assert_true(state->failed() && ticket.failed());
+        t.assert_equal(size_t(0),state->frontiers().host);
+        t.assert_equal(size_t(0),state->frontiers().committed);
+        t.assert_equal(size_t(1),backend.drains);
+        t.assert_equal(size_t(4),backend.frees);
+        t.assert_true(ticket.retire());
+    });
+
+
 
     t.test("host_and_device_frontiers_advance_independently", [](testing & t) {
         auto state = publications(); ticket value;
@@ -274,5 +420,26 @@ int main() {
         t.assert_true(weak.expired());
     });
 
+    if (argc > 1 && std::strcmp(argv[1],"--cuda") == 0) {
+        ggml_backend_load_all();
+        auto * device=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr producer(device ? ggml_backend_dev_init(device,nullptr) : nullptr);
+        ggml_backend_ptr consumer(device ? ggml_backend_dev_init(device,nullptr) : nullptr);
+        t.test("real_cuda_pair_separates_device_wait_from_host_publication", [&](testing & t) {
+            if (!t.assert_true(producer && consumer)) return;
+            std::unique_ptr<llama_kv_stream_publications> state;
+            auto ticket=publication_ticket(t,state); bool published=false;
+            auto pair=llama_kv_stream_publication_pair::create(
+                ticket,0,publication_dependencies(producer.get()),[&] { published=true; return true; });
+            if (!t.assert_true(pair && pair->wait_device(consumer.get()))) return;
+            t.assert_true(pair->device_ready() && !pair->host_ready() && !published);
+            t.assert_true(pair->publish_host());
+            t.assert_true(pair->host_ready() && published && ticket.committed());
+            ggml_backend_synchronize(consumer.get());
+            t.assert_true(pair->release_device(consumer.get()));
+            pair.reset();
+            t.assert_true(ticket.retire());
+        });
+    }
     return t.summary();
 }

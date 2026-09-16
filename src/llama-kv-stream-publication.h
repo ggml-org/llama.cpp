@@ -1,9 +1,12 @@
 #pragma once
 
+#include "llama-memory-completion.h"
 #include "../ggml/src/ggml-backend-memory.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -97,6 +100,37 @@ private:
 };
 // Mark one pair device-ready and host-ready through the common completion protocol.
 bool llama_kv_stream_publication_complete_sync(llama_kv_stream_publication_ticket & ticket, uint32_t pair) noexcept;
+
+struct llama_kv_stream_publication_pair_dependencies {
+    std::array<std::unique_ptr<llama_memory_completion>, 2> device;
+    std::array<std::unique_ptr<llama_memory_completion>, 2> host;
+};
+
+// Bind backend completion to one logical K/V pair without exposing native events.
+class llama_kv_stream_publication_pair {
+public:
+    static std::unique_ptr<llama_kv_stream_publication_pair> create(
+            llama_kv_stream_publication_ticket & ticket, uint32_t pair,
+            llama_kv_stream_publication_pair_dependencies dependencies,
+            std::function<bool()> publish_host);
+    static std::unique_ptr<llama_kv_stream_publication_pair> completed(
+            llama_kv_stream_publication_ticket & ticket, uint32_t pair,
+            ggml_backend_t backend, std::function<bool()> publish_host);
+    ~llama_kv_stream_publication_pair();
+    llama_kv_stream_publication_pair(const llama_kv_stream_publication_pair &) = delete;
+    llama_kv_stream_publication_pair & operator=(const llama_kv_stream_publication_pair &) = delete;
+
+    bool wait_device(ggml_backend_t consumer);
+    bool publish_host();
+    bool release_device(ggml_backend_t consumer) noexcept;
+    bool device_ready() const noexcept;
+    bool host_ready() const noexcept;
+
+private:
+    llama_kv_stream_publication_pair() = default;
+    struct implementation;
+    std::unique_ptr<implementation> impl;
+};
 
 
 // Owner-thread-only ordered publication state. Backend callbacks must return completion to its owner thread.

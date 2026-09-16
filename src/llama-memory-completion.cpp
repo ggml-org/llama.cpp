@@ -43,6 +43,20 @@ std::unique_ptr<llama_memory_completion> llama_memory_completion::create(ggml_ba
         return {};
     }
 }
+std::unique_ptr<llama_memory_completion> llama_memory_completion::completed(ggml_backend_t producer) {
+    if (!producer || !producer->device) return {};
+    try {
+        auto result = std::unique_ptr<llama_memory_completion>(new llama_memory_completion);
+        result->impl = std::make_unique<implementation>();
+        result->impl->producer = producer;
+        result->impl->submitted = true;
+        result->impl->ready = true;
+        return result;
+    } catch (const std::bad_alloc &) {
+        return {};
+    }
+}
+
 
 bool llama_memory_completion::valid() const noexcept {
     return impl && impl->producer;
