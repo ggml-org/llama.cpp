@@ -1330,8 +1330,9 @@ export class ChatService {
 
 			// tag streaming requests with the conversation id, this single header is the opt in for the
 			// server side replay buffer and powers discoverActiveStream on tab reopen. with an explicit
-			// model the ::model suffix keeps the per model session distinct
-			if (stream && conversationId) {
+			// model the ::model suffix keeps the per model session distinct. external providers do not
+			// know the header and their CORS preflight rejects it, so only llama.cpp gets it
+			if (stream && conversationId && serverStore.capabilities.resumableStreams) {
 				headers[HEADERS.X_CONVERSATION_ID_HEADER] = streamIdentity(conversationId, options.model);
 				// persist the pending stream before the fetch: a reload during the model load or
 				// the prompt processing must still find its way back to the session once it exists
