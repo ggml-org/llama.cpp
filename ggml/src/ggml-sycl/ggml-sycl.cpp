@@ -4844,12 +4844,12 @@ static bool ggml_sycl_mul_mat_glu_mmvq_plain(ggml_backend_sycl_context & ctx, gg
     const int64_t ne00 = wu->ne[0];
     const int64_t ne11 = act->ne[1];
 
-    const queue_ptr stream           = ctx.stream();
-    const int       src1_padded_cols = GGML_PAD((int) ne00, MATRIX_ROW_PADDING);
+    const queue_ptr stream = ctx.stream();
+    const int src1_padded_cols = GGML_PAD((int) ne00, MATRIX_ROW_PADDING);
 
     ggml_sycl_pool_alloc<char> src1_q8_alloc(ctx.pool(),
-                                             (size_t) ne11 * src1_padded_cols * sizeof(block_q8_1) / QK8_1);
-    char *                     src1_ddq = src1_q8_alloc.get();
+        (size_t) ne11 * src1_padded_cols * sizeof(block_q8_1) / QK8_1);
+    char * src1_ddq = src1_q8_alloc.get();
 
     quantize_row_q8_1_sycl<quantize_q8_1>((const float *) act->data, src1_ddq, (int) ne00, (int) ne11,
                                           src1_padded_cols, stream);

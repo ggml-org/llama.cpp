@@ -3143,43 +3143,61 @@ static void launch_mul_mat_vec_q_glu(const void * vxg, const void * vxu, const v
     });
 }
 
-#define GGML_SYCL_DISPATCH_GLU_PLAIN(...)                                                      \
-    switch (ncols_dst) {                                                                       \
-        case 1:                                                                                \
-            launch_mul_mat_vec_q_glu<__VA_ARGS__, 1>(vgate, vup, vy, dst, ncols, nrows,        \
-                                                     stride_col_y, stride_col_dst, glu_op, stream); \
-            return true;                                                                       \
-        case 2:                                                                                \
-            launch_mul_mat_vec_q_glu<__VA_ARGS__, 2>(vgate, vup, vy, dst, ncols, nrows,        \
-                                                     stride_col_y, stride_col_dst, glu_op, stream); \
-            return true;                                                                       \
-        case 3:                                                                                \
-            launch_mul_mat_vec_q_glu<__VA_ARGS__, 3>(vgate, vup, vy, dst, ncols, nrows,        \
-                                                     stride_col_y, stride_col_dst, glu_op, stream); \
-            return true;                                                                       \
-        case 4:                                                                                \
-            launch_mul_mat_vec_q_glu<__VA_ARGS__, 4>(vgate, vup, vy, dst, ncols, nrows,        \
-                                                     stride_col_y, stride_col_dst, glu_op, stream); \
-            return true;                                                                       \
-        case 5:                                                                                \
-            launch_mul_mat_vec_q_glu<__VA_ARGS__, 5>(vgate, vup, vy, dst, ncols, nrows,        \
-                                                     stride_col_y, stride_col_dst, glu_op, stream); \
-            return true;                                                                       \
-        case 6:                                                                                \
-            launch_mul_mat_vec_q_glu<__VA_ARGS__, 6>(vgate, vup, vy, dst, ncols, nrows,        \
-                                                     stride_col_y, stride_col_dst, glu_op, stream); \
-            return true;                                                                       \
-        case 7:                                                                                \
-            launch_mul_mat_vec_q_glu<__VA_ARGS__, 7>(vgate, vup, vy, dst, ncols, nrows,        \
-                                                     stride_col_y, stride_col_dst, glu_op, stream); \
-            return true;                                                                       \
-        case 8:                                                                                \
-            launch_mul_mat_vec_q_glu<__VA_ARGS__, 8>(vgate, vup, vy, dst, ncols, nrows,        \
-                                                     stride_col_y, stride_col_dst, glu_op, stream); \
-            return true;                                                                       \
-        default:                                                                               \
-            return false;                                                                      \
+// Dispatch the plain-layout fused GLU GEMV over the activation batch: ncols_dst
+// selects the kernel's per-column template parameter. Returns false when the
+// batch exceeds the instantiated range; the caller falls back to unfused nodes.
+template <int qi_g, typename block_g_t, int vdr_g, vec_dot_q_sycl_t vec_dot_g,
+          int qi_u, typename block_u_t, int vdr_u, vec_dot_q_sycl_t vec_dot_u>
+static bool dispatch_mul_mat_vec_q_glu_plain(const void * vgate, const void * vup, const void * vy,
+                                             float * dst, const int ncols, const int nrows,
+                                             const int stride_col_y, const int stride_col_dst,
+                                             const ggml_glu_op glu_op, dpct::queue_ptr stream,
+                                             const int ncols_dst) {
+    switch (ncols_dst) {
+        case 1:
+            launch_mul_mat_vec_q_glu<qi_g, block_g_t, vdr_g, vec_dot_g,
+                                     qi_u, block_u_t, vdr_u, vec_dot_u, 1>(
+                vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream);
+            return true;
+        case 2:
+            launch_mul_mat_vec_q_glu<qi_g, block_g_t, vdr_g, vec_dot_g,
+                                     qi_u, block_u_t, vdr_u, vec_dot_u, 2>(
+                vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream);
+            return true;
+        case 3:
+            launch_mul_mat_vec_q_glu<qi_g, block_g_t, vdr_g, vec_dot_g,
+                                     qi_u, block_u_t, vdr_u, vec_dot_u, 3>(
+                vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream);
+            return true;
+        case 4:
+            launch_mul_mat_vec_q_glu<qi_g, block_g_t, vdr_g, vec_dot_g,
+                                     qi_u, block_u_t, vdr_u, vec_dot_u, 4>(
+                vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream);
+            return true;
+        case 5:
+            launch_mul_mat_vec_q_glu<qi_g, block_g_t, vdr_g, vec_dot_g,
+                                     qi_u, block_u_t, vdr_u, vec_dot_u, 5>(
+                vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream);
+            return true;
+        case 6:
+            launch_mul_mat_vec_q_glu<qi_g, block_g_t, vdr_g, vec_dot_g,
+                                     qi_u, block_u_t, vdr_u, vec_dot_u, 6>(
+                vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream);
+            return true;
+        case 7:
+            launch_mul_mat_vec_q_glu<qi_g, block_g_t, vdr_g, vec_dot_g,
+                                     qi_u, block_u_t, vdr_u, vec_dot_u, 7>(
+                vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream);
+            return true;
+        case 8:
+            launch_mul_mat_vec_q_glu<qi_g, block_g_t, vdr_g, vec_dot_g,
+                                     qi_u, block_u_t, vdr_u, vec_dot_u, 8>(
+                vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream);
+            return true;
+        default:
+            return false;
     }
+}
 
 // Fused dense-FFN GEMV + GLU for weight pairs the reorder kernel does not cover.
 // vgate/vup must be in the standard block layout; vy must be quantized with plain
@@ -3196,20 +3214,24 @@ bool ggml_sycl_mul_mat_vec_q_glu_plain(enum ggml_type gate_type, enum ggml_type 
         return false;
     }
     if (gate_type == GGML_TYPE_Q5_K && up_type == GGML_TYPE_Q5_K) {
-        GGML_SYCL_DISPATCH_GLU_PLAIN(QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1,
-                                     QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1)
+        return dispatch_mul_mat_vec_q_glu_plain<QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1,
+                                                QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1>(
+            vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream, ncols_dst);
     }
     if (gate_type == GGML_TYPE_IQ4_XS && up_type == GGML_TYPE_IQ4_XS) {
-        GGML_SYCL_DISPATCH_GLU_PLAIN(QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1,
-                                     QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1)
+        return dispatch_mul_mat_vec_q_glu_plain<QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1,
+                                                QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1>(
+            vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream, ncols_dst);
     }
     if (gate_type == GGML_TYPE_IQ4_XS && up_type == GGML_TYPE_Q5_K) {
-        GGML_SYCL_DISPATCH_GLU_PLAIN(QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1,
-                                     QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1)
+        return dispatch_mul_mat_vec_q_glu_plain<QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1,
+                                                QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1>(
+            vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream, ncols_dst);
     }
     if (gate_type == GGML_TYPE_Q5_K && up_type == GGML_TYPE_IQ4_XS) {
-        GGML_SYCL_DISPATCH_GLU_PLAIN(QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1,
-                                     QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1)
+        return dispatch_mul_mat_vec_q_glu_plain<QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1,
+                                                QI4_XS / 4, block_iq4_xs, VDR_IQ4_XS_Q8_1_MMVQ, vec_dot_iq4_xs_q8_1>(
+            vgate, vup, vy, dst, ncols, nrows, stride_col_y, stride_col_dst, glu_op, stream, ncols_dst);
     }
     return false;
 }
