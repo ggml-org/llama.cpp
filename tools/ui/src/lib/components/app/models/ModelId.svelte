@@ -29,6 +29,8 @@
 		modalities?: ModelModalities;
 		supportsThinking?: boolean;
 		supportsToolUse?: boolean;
+		/** Native title for the root element; keeps long lists light where a floating tooltip per row is too costly. */
+		title?: string;
 		/** Context length in tokens; renders a context icon when set. */
 		contextLength?: number;
 		/** Min/max GGUF file size (main + draft) across quants; renders a range when set. */
@@ -60,6 +62,7 @@
 		supportsThinking = false,
 		supportsToolUse = false,
 		tags,
+		title,
 		wrap = false,
 		...rest
 	}: Props = $props();
@@ -169,6 +172,7 @@
 		class="flex min-w-0 items-center gap-1.5 {wrap ? 'flex-wrap' : ''} {iconsOnNewLine
 			? 'flex-col items-start'
 			: ''} {className}"
+		{title}
 		{...rest}
 	>
 		<span class="flex min-w-0 items-center gap-1.5 {wrap ? 'flex-wrap' : ''}">
