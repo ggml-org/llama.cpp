@@ -4986,7 +4986,9 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
     const int mode   = op_params[2];
     const int n_offs = op_params[15];
 
-    if (n_dims <= 0 || n_dims % 2 != 0) {
+    // llama probes weight placement with a dummy rope where every param is 0 (llama-model-loader.cpp).
+    // Rejecting it puts rope_freqs on the CPU, which then splits the graph at every full-attention layer.
+    if (n_dims < 0 || n_dims % 2 != 0) {
         return false;
     }
 
@@ -4997,7 +4999,7 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
 
     float freq_base;
     memcpy(&freq_base, op_params + 5, sizeof(float));
-    if (freq_base <= 0.0f) {
+    if (freq_base < 0.0f) {
         return false;
     }
 
