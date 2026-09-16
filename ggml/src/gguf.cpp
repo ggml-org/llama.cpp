@@ -367,7 +367,7 @@ struct gguf_reader {
         return data_offset;
     }
 
-    // position where the GGUF starts, alignment is relative to it, not to the file
+    // position in the file where the GGUF data starts, alignment is relative to it, not to the file
     uint64_t start() const {
         return start_offset;
     }
