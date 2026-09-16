@@ -65,8 +65,13 @@ export interface UseModelsSelectorReturn {
  * duplicating store derivations, selection handling, and model loading.
  */
 export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSelectorReturn {
-	/** Tab the selector shows: a backend id, or the favorites pseudo tab. */
-	let viewId = $state<string>(backendsStore.active.id);
+	/**
+	 * Tab the selector shows: a backend id, or the favorites pseudo tab. Favorites
+	 * are the default view while there is at least one.
+	 */
+	let viewId = $state<string>(
+		modelsStore.favoriteModelIds.size > 0 ? FAVORITES_TAB_ID : backendsStore.active.id
+	);
 
 	const activeBackendId = $derived(backendsStore.active.id);
 	// every enabled backend's models stay selectable and resolvable, so a
