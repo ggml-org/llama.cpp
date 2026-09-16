@@ -63,6 +63,7 @@ export const BACKEND_COMPAT: Record<BackendProtocol, BackendCompat> = {
 export const BACKEND_PRESETS: readonly BackendPreset[] = [
 	{
 		baseUrl: 'https://router.huggingface.co',
+		description: 'Open models from the Hub, served by inference providers.',
 		iconUrl: '/backend-presets/huggingface.svg',
 		id: 'huggingface',
 		name: 'Hugging Face',
@@ -70,58 +71,12 @@ export const BACKEND_PRESETS: readonly BackendPreset[] = [
 	},
 	{
 		baseUrl: 'https://openrouter.ai/api',
+		description: 'Models from many providers behind a single API.',
 		// v2 brand: purple on light, lime on dark
 		iconUrlDark: '/backend-presets/openrouter-dark.svg',
 		iconUrlLight: '/backend-presets/openrouter-light.svg',
 		id: 'openrouter',
 		name: 'OpenRouter',
-		protocol: 'openai'
-	},
-	{
-		baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-		chatPath: '/chat/completions',
-		iconUrl: '/backend-presets/google.svg',
-		id: 'google',
-		modelsPath: '/models',
-		name: 'Google',
-		protocol: 'openai'
-	},
-	{
-		baseUrl: 'https://api.z.ai/api/paas/v4',
-		chatPath: '/chat/completions',
-		iconUrl: '/backend-presets/zai.png',
-		id: 'zai',
-		modelsPath: '/models',
-		name: 'Z.ai',
-		protocol: 'openai'
-	},
-	{
-		baseUrl: 'https://api.deepseek.com',
-		iconUrl: '/backend-presets/deepseek.svg',
-		id: 'deepseek',
-		name: 'DeepSeek',
-		protocol: 'openai'
-	},
-	{
-		baseUrl: 'https://api.moonshot.ai',
-		iconUrl: '/backend-presets/kimi.png',
-		id: 'kimi',
-		name: 'Kimi',
-		protocol: 'openai'
-	},
-	{
-		baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
-		chatPath: '/chat/completions',
-		iconUrl: '/backend-presets/qwen.png',
-		id: 'qwen',
-		modelsPath: '/models',
-		name: 'Qwen',
-		protocol: 'openai'
-	},
-	{
-		baseUrl: '',
-		id: 'custom',
-		name: 'Custom',
 		protocol: 'openai'
 	}
 ];

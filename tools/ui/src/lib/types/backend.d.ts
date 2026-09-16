@@ -75,6 +75,8 @@ export interface BackendPreset {
 	/** Optional help text shown under the API key field. */
 	apiKeyHelp?: string;
 	baseUrl: string;
+	/** One line describing the endpoint, shown on the preset card. */
+	description?: string;
 	chatPath?: string;
 	/** Brand mark used in both themes, for logos that carry their own background. */
 	iconUrl?: string;
