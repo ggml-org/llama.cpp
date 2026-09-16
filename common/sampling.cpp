@@ -265,9 +265,10 @@ struct common_sampler * common_sampler_init(
              if (params.grammar_lazy) {
                  grmr = llama_sampler_init_grammar_lazy_patterns(vocab, grammar_str.c_str(), "root",
                          trigger_patterns_c.data(), trigger_patterns_c.size(),
-                         trigger_tokens.data(), trigger_tokens.size());
+                         trigger_tokens.data(), trigger_tokens.size(),
+                         params.grammar_max_repetition);
              } else {
-                 grmr = llama_sampler_init_grammar(vocab, grammar_str.c_str(), "root");
+                 grmr = llama_sampler_init_grammar(vocab, grammar_str.c_str(), "root", params.grammar_max_repetition);
              }
         }
     }

@@ -272,6 +272,7 @@ struct common_params_sampling {
 
     common_grammar                      grammar;          // optional grammar constraint (user / output-format / tool-calls)
     bool                                grammar_lazy = false;
+    int32_t                             grammar_max_repetition = 2000; // cap on rule expansion for grammar repetitions (0 = built-in default)
     std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
     std::set<llama_token>               preserved_tokens;
 

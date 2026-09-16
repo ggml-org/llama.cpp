@@ -2663,6 +2663,8 @@ struct llama_sampler_grammar {
     std::string grammar_str;
     std::string grammar_root;
 
+    int32_t grammar_max_repetition; // 0 = use built-in default; kept for reset
+
     struct llama_grammar * grammar;
 };
 
@@ -2695,7 +2697,8 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
                const llama_token * trigger_tokens,
                             size_t num_trigger_tokens,
                      const char ** trigger_patterns,
-                            size_t num_trigger_patterns);
+                            size_t num_trigger_patterns,
+                           int32_t grammar_max_repetition);
 
 static void llama_sampler_grammar_reset(struct llama_sampler * smpl) {
     auto * ctx = (llama_sampler_grammar *) smpl->ctx;
@@ -2711,7 +2714,8 @@ static void llama_sampler_grammar_reset(struct llama_sampler * smpl) {
 
     auto * grammar_new = llama_grammar_init_impl(ctx->grammar->vocab, ctx->grammar_str.c_str(), ctx->grammar_root.c_str(),
                                                  ctx->grammar->lazy, trigger_patterns_c.data(), trigger_patterns_c.size(),
-                                                 ctx->grammar->trigger_tokens.data(), ctx->grammar->trigger_tokens.size());
+                                                 ctx->grammar->trigger_tokens.data(), ctx->grammar->trigger_tokens.size(),
+                                                 ctx->grammar_max_repetition);
 
     llama_grammar_free_impl(ctx->grammar);
     ctx->grammar = grammar_new;
@@ -2720,7 +2724,7 @@ static void llama_sampler_grammar_reset(struct llama_sampler * smpl) {
 static struct llama_sampler * llama_sampler_grammar_clone(const struct llama_sampler * smpl) {
     const auto * ctx = (const llama_sampler_grammar *) smpl->ctx;
 
-    auto * result = llama_sampler_init_grammar_impl(ctx->vocab, nullptr, nullptr, false, nullptr, 0, nullptr, 0, nullptr, 0);
+    auto * result = llama_sampler_init_grammar_impl(ctx->vocab, nullptr, nullptr, false, nullptr, 0, nullptr, 0, nullptr, 0, 0);
     GGML_ASSERT(result);
 
     // copy the state
@@ -2728,8 +2732,9 @@ static struct llama_sampler * llama_sampler_grammar_clone(const struct llama_sam
         auto * result_ctx = (llama_sampler_grammar *) result->ctx;
 
         if (ctx->grammar) {
-            result_ctx->grammar_str  = ctx->grammar_str;
-            result_ctx->grammar_root = ctx->grammar_root;
+            result_ctx->grammar_str            = ctx->grammar_str;
+            result_ctx->grammar_root           = ctx->grammar_root;
+            result_ctx->grammar_max_repetition = ctx->grammar_max_repetition;
 
             result_ctx->grammar = llama_grammar_clone_impl(*ctx->grammar);
         }
@@ -2773,7 +2778,8 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
                const llama_token * trigger_tokens,
                             size_t num_trigger_tokens,
                      const char ** trigger_patterns,
-                            size_t num_trigger_patterns) {
+                            size_t num_trigger_patterns,
+                           int32_t grammar_max_repetition) {
     auto * ctx = new llama_sampler_grammar;
 
     if (grammar_str != nullptr && grammar_str[0] != '\0') {
@@ -2793,15 +2799,16 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
             trigger_pattern += ")[\\s\\S]*";
 
             std::array<const char *, 1> tmp_trigger_patterns = { trigger_pattern.c_str() };
-            grammar = llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, tmp_trigger_patterns.data(), tmp_trigger_patterns.size(), trigger_tokens, num_trigger_tokens);
+            grammar = llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, tmp_trigger_patterns.data(), tmp_trigger_patterns.size(), trigger_tokens, num_trigger_tokens, grammar_max_repetition);
         } else {
-            grammar = llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, trigger_patterns, num_trigger_patterns, trigger_tokens, num_trigger_tokens);
+            grammar = llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, trigger_patterns, num_trigger_patterns, trigger_tokens, num_trigger_tokens, grammar_max_repetition);
         }
         *ctx = {
-            /* .vocab        = */ vocab,
-            /* .grammar_str  = */ grammar_str,
-            /* .grammar_root = */ grammar_root,
-            /* .grammar      = */ grammar,
+            /* .vocab                  = */ vocab,
+            /* .grammar_str            = */ grammar_str,
+            /* .grammar_root           = */ grammar_root,
+            /* .grammar_max_repetition = */ grammar_max_repetition,
+            /* .grammar                = */ grammar,
         };
         if (!ctx->grammar) {
             delete ctx;
@@ -2809,10 +2816,11 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
         }
     } else {
         *ctx = {
-            /* .vocab        = */ vocab,
-            /* .grammar_str  = */ {},
-            /* .grammar_root = */ {},
-            /* .grammar      = */ nullptr,
+            /* .vocab                  = */ vocab,
+            /* .grammar_str            = */ {},
+            /* .grammar_root           = */ {},
+            /* .grammar_max_repetition = */ grammar_max_repetition,
+            /* .grammar                = */ nullptr,
         };
     }
 
@@ -2825,8 +2833,9 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
 struct llama_sampler * llama_sampler_init_grammar(
         const struct llama_vocab * vocab,
                       const char * grammar_str,
-                      const char * grammar_root) {
-    return llama_sampler_init_grammar_impl(vocab, grammar_str, grammar_root, /* lazy= */ false, nullptr, 0, nullptr, 0, nullptr, 0);
+                      const char * grammar_root,
+                           int32_t grammar_max_repetition) {
+    return llama_sampler_init_grammar_impl(vocab, grammar_str, grammar_root, /* lazy= */ false, nullptr, 0, nullptr, 0, nullptr, 0, grammar_max_repetition);
 }
 
 struct llama_sampler * llama_sampler_init_grammar_lazy(
@@ -2837,7 +2846,7 @@ struct llama_sampler * llama_sampler_init_grammar_lazy(
                             size_t num_trigger_words,
                const llama_token * trigger_tokens,
                             size_t num_trigger_tokens) {
-    return llama_sampler_init_grammar_impl(vocab, grammar_str, grammar_root, /* lazy= */ true, trigger_words, num_trigger_words, trigger_tokens, num_trigger_tokens, nullptr, 0);
+    return llama_sampler_init_grammar_impl(vocab, grammar_str, grammar_root, /* lazy= */ true, trigger_words, num_trigger_words, trigger_tokens, num_trigger_tokens, nullptr, 0, 0);
 }
 
 struct llama_sampler * llama_sampler_init_grammar_lazy_patterns(
@@ -2847,8 +2856,9 @@ struct llama_sampler * llama_sampler_init_grammar_lazy_patterns(
                      const char ** trigger_patterns,
                             size_t num_trigger_patterns,
                const llama_token * trigger_tokens,
-                            size_t num_trigger_tokens) {
-    return llama_sampler_init_grammar_impl(vocab, grammar_str, grammar_root, /* lazy= */ true, nullptr, 0, trigger_tokens, num_trigger_tokens, trigger_patterns, num_trigger_patterns);
+                            size_t num_trigger_tokens,
+                           int32_t grammar_max_repetition) {
+    return llama_sampler_init_grammar_impl(vocab, grammar_str, grammar_root, /* lazy= */ true, nullptr, 0, trigger_tokens, num_trigger_tokens, trigger_patterns, num_trigger_patterns, grammar_max_repetition);
 }
 
 // penalties

@@ -2276,6 +2276,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sampling());
     add_opt(common_arg(
+        {"--grammar-max-repetition"}, "N",
+        string_format("max rule repetitions allowed when parsing a GBNF grammar (default: %d, 0 = use built-in default)", params.sampling.grammar_max_repetition),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("grammar-max-repetition must be >= 0");
+            }
+            params.sampling.grammar_max_repetition = value;
+        }
+    ).set_sampling().set_env("LLAMA_ARG_GRAMMAR_MAX_REPETITION"));
+    add_opt(common_arg(
         {"-j", "--json-schema"}, "SCHEMA",
         "JSON schema to constrain generations (https://json-schema.org/), e.g. `{\"type\": \"object\"}` for any JSON object",
         [](common_params & params, const std::string & value) {
