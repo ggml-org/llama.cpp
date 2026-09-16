@@ -363,7 +363,7 @@ void main() {
                                 (hsk4 % 2 == 0) ? 2 : 1;
 
         [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
-            if (KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
+            if (QK_KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
                 continue;
             }
 
@@ -515,6 +515,10 @@ void main() {
         }
 
         [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
+            if (PV_KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
+                continue;
+            }
+
             uint32_t vcol;
             bool kv_active = fa_kv_index(j * Bc + c * cols_per_iter + col_tid, vcol);
             if (!kv_active) {

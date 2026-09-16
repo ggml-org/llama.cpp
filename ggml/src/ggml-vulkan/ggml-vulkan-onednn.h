@@ -18,9 +18,9 @@ extern "C" {
 #endif
 
 // Run one folded-GQA compressed-KV attention operation on the selected GPU.
-// Q is [16,Q,256], K is [4,256,KV], V is [4,KV,256].
+// Q is [16,Q,D], K is [4,D,KV], V is [4,KV,D].
 GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa(
-        int q, int kv,
+        int q, int kv, int d,
         const uint16_t * query,
         const int8_t * key,
         const uint16_t * key_scale,
@@ -47,7 +47,7 @@ struct ggml_vulkan_onednn_win32_allocation {
 
 // Import Vulkan allocations into Level Zero and execute synchronously.
 GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa_win32(
-        int q, int kv,
+        int q, int kv, int d,
         const struct ggml_vulkan_onednn_win32_allocation * allocation,
         float divisor);
 

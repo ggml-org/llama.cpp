@@ -599,14 +599,16 @@ struct vk_fa_pipeline_state {
     uint32_t workgroup_size, subgroup_size;
     bool aligned;
     bool f32acc;
+    bool restore_qk_kv_bounds;
+    bool restore_pv_kv_bounds;
     uint32_t flags;
     uint32_t limit_occupancy_shmem;
     ggml_type k_type;
     ggml_type v_type;
 
     bool operator<(const vk_fa_pipeline_state &b) const {
-        return std::tie(HSK, HSV, Br, Bc, D_split, row_split, shmem_staging, path, workgroup_size, subgroup_size, aligned, f32acc, flags, limit_occupancy_shmem, k_type, v_type) <
-               std::tie(b.HSK, b.HSV, b.Br, b.Bc, b.D_split, b.row_split, b.shmem_staging, b.path, b.workgroup_size, b.subgroup_size, b.aligned, b.f32acc, b.flags, b.limit_occupancy_shmem, b.k_type, b.v_type);
+        return std::tie(HSK, HSV, Br, Bc, D_split, row_split, shmem_staging, path, workgroup_size, subgroup_size, aligned, f32acc, restore_qk_kv_bounds, restore_pv_kv_bounds, flags, limit_occupancy_shmem, k_type, v_type) <
+               std::tie(b.HSK, b.HSV, b.Br, b.Bc, b.D_split, b.row_split, b.shmem_staging, b.path, b.workgroup_size, b.subgroup_size, b.aligned, b.f32acc, b.restore_qk_kv_bounds, b.restore_pv_kv_bounds, b.flags, b.limit_occupancy_shmem, b.k_type, b.v_type);
     }
 };
 
@@ -4372,7 +4374,8 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
 }
 
 static vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool aligned, bool f32acc,
-                                                  bool use_mask, bool use_mask_opt, bool use_logit_softcap, bool use_sparse, ggml_type k_type, ggml_type v_type) {
+                                                  bool use_mask, bool use_mask_opt, bool use_logit_softcap, bool use_sparse, ggml_type k_type, ggml_type v_type,
+                                                  bool restore_qk_kv_bounds = false, bool restore_pv_kv_bounds = false) {
     const bool old_amd_windows = device->vendor_id == VK_VENDOR_ID_AMD && device->driver_id == vk::DriverId::eAmdProprietary &&
                                  (device->architecture == AMD_GCN || device->architecture == AMD_RDNA1 || device->architecture == AMD_RDNA2);
 
@@ -4384,7 +4387,7 @@ static vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const
 
     const uint32_t subgroup_size = params.disable_subgroups ? 0 : params.subgroup_size;
 
-    return vk_fa_pipeline_state{hsk, hsv, params.block_rows, params.block_cols, params.d_split, params.row_split, params.shmem_staging, params.path, params.workgroup_size, subgroup_size, aligned, f32acc, flags, params.limit_occupancy_shmem, k_type, v_type};
+    return vk_fa_pipeline_state{hsk, hsv, params.block_rows, params.block_cols, params.d_split, params.row_split, params.shmem_staging, params.path, params.workgroup_size, subgroup_size, aligned, f32acc, restore_qk_kv_bounds, restore_pv_kv_bounds, flags, params.limit_occupancy_shmem, k_type, v_type};
 }
 
 // Bytes per buffer block for the FaBlockBytesK/V spec constants. F32 is fed as
@@ -4414,6 +4417,8 @@ static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& s
         /*13 FaTypeV         */ static_cast<uint32_t>(state.v_type),
         /*14 FaBlockBytesK   */ fa_block_bytes(state.k_type),
         /*15 FaBlockBytesV   */ fa_block_bytes(state.v_type),
+        /*16 RestoreQKKVBounds */ state.restore_qk_kv_bounds ? 1u : 0u,
+        /*17 RestorePVKVBounds */ state.restore_pv_kv_bounds ? 1u : 0u,
     };
 }
 
@@ -5007,7 +5012,13 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             }
             name = aligned ? "flash_attn_f32_f16_aligned" : "flash_attn_f32_f16";
         }
-        ggml_vk_create_pipeline(device, fa.second, name, spv_size, spv_data, "main", 8,
+        std::string pipeline_name = name;
+        if (fa.first.restore_qk_kv_bounds) {
+            pipeline_name += "_qk_bounds";
+        } else if (fa.first.restore_pv_kv_bounds) {
+            pipeline_name += "_pv_bounds";
+        }
+        ggml_vk_create_pipeline(device, fa.second, pipeline_name.c_str(), spv_size, spv_data, "main", 8,
                                 sizeof(vk_flash_attn_push_constants), {Br, 1, 1},
                                 get_fa_spec_constants(fa.first), aligned ? Bc : 1, true,
                                 !fa_ds, !fa_ds ? fa_sgs : 0);
@@ -11649,8 +11660,24 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     // Only use mask opt when the mask is fairly large. This hasn't been tuned extensively.
     bool use_mask_opt = mask && !use_sparse && nem1 >= 32 && nem0 * nem1 > 32768 && nem0 >= tuning_params.block_cols * 16
                         && (ctx->device->architecture != vk_device_architecture::AMD_GCN || HSK > 256 || HSV > 256);
+    const char * fa_bounds_variant = std::getenv("GGML_VK_FA_BOUNDS_VARIANT");
+    const bool bounds_variant_scope = aligned && neq1 == 1 && tuning_params.path == FA_SCALAR &&
+                                      k_type_eff == GGML_TYPE_Q8_0 && v_type_eff == GGML_TYPE_Q8_0 &&
+                                      HSK == 256 && HSV == 256 && gqa_ratio == 4 && tuning_params.block_cols == 32;
+    const bool restore_qk_kv_bounds = bounds_variant_scope && fa_bounds_variant != nullptr &&
+                                      std::strcmp(fa_bounds_variant, "qk") == 0;
+    const bool restore_pv_kv_bounds = bounds_variant_scope && fa_bounds_variant != nullptr &&
+                                      std::strcmp(fa_bounds_variant, "pv") == 0;
+    if (fa_bounds_variant != nullptr) {
+        fprintf(stderr, "vulkan FA bounds variant: name=%s scope=%d Q=%lld N=%u aligned=%d path=%d K=%s V=%s HSK=%u HSV=%u gqa=%u Bc=%u qk=%d pv=%d\n",
+                fa_bounds_variant, bounds_variant_scope ? 1 : 0, (long long) neq1, N, aligned ? 1 : 0, (int) tuning_params.path,
+                ggml_type_name(k_type_eff), ggml_type_name(v_type_eff), HSK, HSV, gqa_ratio, tuning_params.block_cols,
+                restore_qk_kv_bounds ? 1 : 0, restore_pv_kv_bounds ? 1 : 0);
+    }
+
     vk_fa_pipeline_state fa_pipeline_state = get_fa_pipeline_state(ctx->device, tuning_params, HSK, HSV, aligned, f32acc,
-                                                                   mask != nullptr, use_mask_opt, logit_softcap != 0, use_sparse, k_type_eff, v_type_eff);
+                                                                   mask != nullptr, use_mask_opt, logit_softcap != 0, use_sparse, k_type_eff, v_type_eff,
+                                                                   restore_qk_kv_bounds, restore_pv_kv_bounds);
 
     vk_pipeline pipeline = nullptr;
 
@@ -11719,11 +11746,8 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         split_k = CEIL_DIV(KV, split_kv);
     }
 
-    if (!use_sparse && N == 1 && !disable_partition_heuristic && requested_partitions <= 1) {
-        uint32_t default_partitions = KV <= 3072 ? 32 : KV < 5120 ? 64 : 128;
-        if (!disable_partition_heuristic && KV >= 24576 && (KV / 32) % 256 == 0) {
-            default_partitions = 256;
-        }
+    if (!use_sparse && !disable_partition_heuristic && requested_partitions <= 1) {
+        const uint32_t default_partitions = KV <= 3072 ? 1 : (N == 1 ? 64 : 32);
         split_kv = CEIL_DIV(KV, default_partitions);
         split_k = CEIL_DIV(KV, split_kv);
     }

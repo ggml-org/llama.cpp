@@ -62,9 +62,9 @@ static sycl::device pick_device() {
     throw std::runtime_error("Intel Arc A750 Level Zero GPU not found");
 }
 
-static graph_t make_graph(int q, int kv) {
+static graph_t make_graph(int q, int kv, int d) {
     size_t id = 0;
-    const int hkv = 4, rep = 4, d = 256, ng = 8;
+    const int hkv = 4, rep = 4, ng = d / 32;
     const dims qd = {hkv, rep, q, d};
     const dims kd = {hkv, 1, d, kv};
     const dims ksd = {hkv, 1, ng, kv};
@@ -163,18 +163,18 @@ static runtime & get_runtime() {
     return value;
 }
 
-extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa(int q, int kv, const uint16_t *query, const int8_t *key, const uint16_t *key_scale, const int8_t *value, const uint16_t *value_scale, const uint16_t *mask, float divisor, float *output) {
+extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa(int q, int kv, int d, const uint16_t *query, const int8_t *key, const uint16_t *key_scale, const int8_t *value, const uint16_t *value_scale, const uint16_t *mask, float divisor, float *output) {
     try {
-        if (q <= 0 || kv <= 0 || !query || !key || !key_scale || !value || !value_scale || !mask || !output) throw std::invalid_argument("invalid SDPA arguments");
+        if (q <= 0 || kv <= 0 || (d != 128 && d != 256) || !query || !key || !key_scale || !value || !value_scale || !mask || !output) throw std::invalid_argument("invalid SDPA arguments");
         runtime & rt = get_runtime();
         std::shared_ptr<cached_graph> cached;
         {
             std::lock_guard<std::mutex> lock(rt.mutex);
-            const graph_key key{q, kv, 16, 4, 256};
+            const graph_key key{q, kv, 16, 4, d};
             auto it = rt.graphs.find(key);
             if (it == rt.graphs.end()) {
                 auto item = std::make_shared<cached_graph>();
-                item->graph = std::make_shared<graph_t>(make_graph(q, kv));
+                item->graph = std::make_shared<graph_t>(make_graph(q, kv, d));
                 auto parts = item->graph->g.get_partitions();
                 if (parts.size() != 1 || !parts[0].is_supported()) throw std::runtime_error("oneDNN graph partition unsupported");
                 item->inputs = parts[0].get_input_ports();
@@ -182,11 +182,11 @@ extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa(int q, int kv, con
                 item->partition = std::make_shared<dnnl::graph::compiled_partition>(parts[0].compile(item->inputs, item->outputs, rt.engine_obj));
                 for (auto & x : item->outputs) x = item->partition->query_logical_tensor(x.get_id());
                 rt.graphs.emplace(key, item);
-                std::cerr << "ggml-vulkan-onednn: compiled shape q=" << q << " kv=" << kv << " h=16 hkv=4 d=256\n";
+                std::cerr << "ggml-vulkan-onednn: compiled shape q=" << q << " kv=" << kv << " h=16 hkv=4 d=" << d << "\n";
                 cached = std::move(item);
             } else {
                 cached = it->second;
-                std::cerr << "ggml-vulkan-onednn: reused shape q=" << q << " kv=" << kv << " h=16 hkv=4 d=256\n";
+                std::cerr << "ggml-vulkan-onednn: reused shape q=" << q << " kv=" << kv << " h=16 hkv=4 d=" << d << "\n";
             }
         }
         auto & inputs = cached->inputs;
@@ -203,7 +203,7 @@ extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa(int q, int kv, con
         // TODO: replace staging with Vulkan/L0 shared memory.
         auto copy = [&](size_t id, const void *src, size_t bytes) { for (size_t i = 0; i < inputs.size(); ++i) if (inputs[i].get_id() == id) { rt.queue.memcpy(inptr[i], src, bytes).wait_and_throw(); return; } throw std::runtime_error("graph input not found"); };
         const auto t_h2d = std::chrono::steady_clock::now();
-        copy(ids.q, query, size_t(16) * q * 256 * 2); copy(ids.k, key, size_t(4) * 256 * kv); copy(ids.ks, key_scale, size_t(4) * 8 * kv * 2); copy(ids.v, value, size_t(4) * kv * 256); copy(ids.vs, value_scale, size_t(4) * kv * 8 * 2); copy(ids.mask, mask, size_t(q) * kv * 2);
+        copy(ids.q, query, size_t(16) * q * d * 2); copy(ids.k, key, size_t(4) * d * kv); copy(ids.ks, key_scale, size_t(4) * (d / 32) * kv * 2); copy(ids.v, value, size_t(4) * kv * d); copy(ids.vs, value_scale, size_t(4) * kv * (d / 32) * 2); copy(ids.mask, mask, size_t(q) * kv * 2);
         const uint16_t divisor_bits = float_to_half(divisor); copy(ids.divisor, &divisor_bits, sizeof(divisor_bits));
         const double h2d_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_h2d).count();
         rt.queue.wait_and_throw(); std::cerr << "ggml-vulkan-onednn: dispatch A750 q=" << q << " kv=" << kv << "\n";
@@ -211,7 +211,7 @@ extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa(int q, int kv, con
         dnnl::graph::sycl_interop::execute(*cached->partition, rt.stream_obj, ins, outs); rt.stream_obj.wait();
         const double exec_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_exec).count();
         const auto t_d2h = std::chrono::steady_clock::now();
-        std::vector<uint16_t> host(size_t(16) * q * 256); bool found_output = false; for (size_t i = 0; i < outputs.size(); ++i) if (outputs[i].get_id() == ids.out) { rt.queue.memcpy(host.data(), outptr[i], host.size() * sizeof(uint16_t)); found_output = true; break; }
+        std::vector<uint16_t> host(size_t(16) * q * d); bool found_output = false; for (size_t i = 0; i < outputs.size(); ++i) if (outputs[i].get_id() == ids.out) { rt.queue.memcpy(host.data(), outptr[i], host.size() * sizeof(uint16_t)); found_output = true; break; }
         if (!found_output) throw std::runtime_error("graph output not found");
         rt.queue.wait_and_throw();
         const double d2h_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_d2h).count();
@@ -221,13 +221,13 @@ extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa(int q, int kv, con
     } catch (const std::exception &e) { std::cerr << "ggml-vulkan-onednn: failure: " << e.what() << "\n"; return 0; }
 }
 
-extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa_win32(int q, int kv, const ggml_vulkan_onednn_win32_allocation * shared, float divisor) {
+extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa_win32(int q, int kv, int d, const ggml_vulkan_onednn_win32_allocation * shared, float divisor) {
 #if !defined(_WIN32)
-    (void) q; (void) kv; (void) shared; (void) divisor;
+    (void) q; (void) kv; (void) d; (void) shared; (void) divisor;
     return 0;
 #else
     try {
-        if (q <= 0 || kv <= 0 || !shared || !shared->handle || !shared->allocation_size || !shared->allocation_id) throw std::invalid_argument("invalid Win32 SDPA arguments");
+        if (q <= 0 || kv <= 0 || (d != 128 && d != 256) || !shared || !shared->handle || !shared->allocation_size || !shared->allocation_id) throw std::invalid_argument("invalid Win32 SDPA arguments");
         runtime & rt = get_runtime();
         const auto native_device = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(rt.device);
         const auto native_context = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(rt.context);
@@ -235,11 +235,11 @@ extern "C" GGML_VULKAN_ONEDNN_API int ggml_vulkan_onednn_sdpa_win32(int q, int k
         std::shared_ptr<cached_graph> cached;
         {
             std::lock_guard<std::mutex> lock(rt.mutex);
-            const graph_key key{q, kv, 16, 4, 256};
+            const graph_key key{q, kv, 16, 4, d};
             auto it = rt.graphs.find(key);
             if (it == rt.graphs.end()) {
                 auto item = std::make_shared<cached_graph>();
-                item->graph = std::make_shared<graph_t>(make_graph(q, kv));
+                item->graph = std::make_shared<graph_t>(make_graph(q, kv, d));
                 auto parts = item->graph->g.get_partitions();
                 if (parts.size() != 1 || !parts[0].is_supported()) throw std::runtime_error("oneDNN graph partition unsupported");
                 item->inputs = parts[0].get_input_ports(); item->outputs = parts[0].get_output_ports();
