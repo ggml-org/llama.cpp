@@ -27,6 +27,8 @@ layout (push_constant) uniform parameter {
     uint inner_end;
 } p;
 
+shared int s;
+
 void argsort(bool needs_bounds_check, const uint row) {
     // bitonic sort
     int col = int(gl_GlobalInvocationID.x);
@@ -34,6 +36,12 @@ void argsort(bool needs_bounds_check, const uint row) {
 
     const uint row_offset = row * p.ncols;
     uint idx_offset = row * p.ncols_padded;
+
+    // workaround for NV driver/compiler bug - dummy use of shared memory
+    if (gl_LocalInvocationIndex == 0) {
+        s = 0;
+        col += s;
+    }
 
     bool need_barrier = false;
 
