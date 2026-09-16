@@ -15,9 +15,11 @@
 		 * the list renders a single shared confirmation.
 		 */
 		onRequestCancel?: (repoWithTag: string) => void;
+		/** Show the organization name in the repo id, as the other selector rows do. */
+		showOrgName?: boolean;
 	}
 
-	let { entry, onRequestCancel }: Props = $props();
+	let { entry, onRequestCancel, showOrgName = true }: Props = $props();
 
 	let percent = $derived(
 		entry.progress && entry.progress.totalBytes > 0
@@ -79,7 +81,7 @@
 			/>
 		{/if}
 
-		<ModelId class="flex-1" hideOrgName modelId={entry.repoWithTag} showRawTooltip />
+		<ModelId class="flex-1" hideOrgName={!showOrgName} modelId={entry.repoWithTag} showRawTooltip />
 
 		{#if percent !== null}
 			<span class="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{percent}%</span>
