@@ -68,6 +68,10 @@ typedef struct {
 #define N_DST 1
 #define N_SIMDGROUP 2
 #define N_SIMDWIDTH 64
+#elif defined (POWERVR_GPU)
+#define N_DST 1
+#define N_SIMDGROUP 2
+#define N_SIMDWIDTH 128
 #endif
 
 #define BLOCK_STRIDE (N_SIMDWIDTH/16) // number of blocks each subgroup processes

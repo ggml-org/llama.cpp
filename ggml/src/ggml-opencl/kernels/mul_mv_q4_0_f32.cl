@@ -16,6 +16,12 @@
 #define ADRENO_GPU 1
 #define REQD_SUBGROUP_SIZE_64  __attribute__((qcom_reqd_sub_group_size("half")))
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
+#else
+#define POWERVR_GPU 1
+#define REQD_SUBGROUP_SIZE_16   // Nothing required here
+#define REQD_SUBGROUP_SIZE_32   // Nothing required here
+#define REQD_SUBGROUP_SIZE_64   // Nothing required here
+#define REQD_SUBGROUP_SIZE_128  // Nothing required here
 #endif
 
 #define QK4_0                   32
@@ -80,6 +86,10 @@ inline float block_q_4_0_dot_y(
 #define N_DST 4
 #define N_SIMDGROUP 1
 #define N_SIMDWIDTH 64
+#elif defined (POWERVR_GPU)
+#define N_DST 4
+#define N_SIMDGROUP 1
+#define N_SIMDWIDTH 128
 #endif
 
 inline void mul_vec_q_n_f32(

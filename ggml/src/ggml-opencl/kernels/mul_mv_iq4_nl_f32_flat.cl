@@ -73,6 +73,10 @@ inline float block_iq4_nl_dot_y_flat(
 #define N_DST 8
 #define N_SUBGROUP 1
 #define N_SUBGROUP_SIZE 64
+#elif defined (POWERVR_GPU)
+#define N_DST 8
+#define N_SUBGROUP 1
+#define N_SUBGROUP_SIZE 128
 #endif
 
 inline void mul_vec_q_n_f32_8x_flat(

@@ -112,6 +112,7 @@ static fastdiv_vals init_fastdiv_values(uint64_t d_64) {
 enum GPU_FAMILY {
     ADRENO,
     INTEL,
+    POWERVR,
     UNKNOWN,
 };
 
@@ -1465,6 +1466,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 
     if (backend_ctx->adreno_use_large_buffer) {
         compile_opts += " -qcom-enable-large-buffer ";
+    }
+    if (backend_ctx->gpu_family == GPU_FAMILY::POWERVR) {
+        compile_opts += " -DPOWERVR_GPU";
     }
 
     backend_ctx->kernel_compile_opts = compile_opts;
@@ -2944,6 +2948,10 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         std::string compile_opts = std::string("-cl-std=") + opencl_c_std +
                                " -cl-mad-enable -cl-finite-math-only ";
 
+        if (backend_ctx->gpu_family == GPU_FAMILY::POWERVR) {
+            compile_opts += " -DPOWERVR_GPU";
+        }
+
         backend_ctx->program_div =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
@@ -3513,9 +3521,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     #endif
 
         const int gdn_sizes[4] = { 16, 32, 64, 128 };
-        const int sg_size = backend_ctx->gpu_family == GPU_FAMILY::ADRENO ? 64 : backend_ctx->gpu_family == GPU_FAMILY::INTEL ? 32 : -1;
+        const int sg_size = backend_ctx->gpu_family == GPU_FAMILY::ADRENO ? 64 : backend_ctx->gpu_family == GPU_FAMILY::INTEL ? 32 : backend_ctx->gpu_family == GPU_FAMILY::POWERVR ? 128 : -1;
         if (sg_size < 0) {
-            GGML_LOG_ERROR("Unsupported GPU Family: only Adreno and Intel are supported.\n");
+            GGML_LOG_ERROR("Unsupported GPU Family: only Adreno, Intel, and PowerVR are supported.\n");
             exit(1);
         }
 
@@ -6390,6 +6398,8 @@ static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev) {
         }
     } else if (strstr(dev_ctx->device_name.c_str(), "Intel")) {
         dev_ctx->gpu_family = GPU_FAMILY::INTEL;
+    } else if (strstr(dev_ctx->device_name.c_str(), "PowerVR")) {
+        dev_ctx->gpu_family = GPU_FAMILY::POWERVR;
     } else {
         GGML_LOG_WARN("ggml_opencl: unsupported GPU '%s'.\n", dev_ctx->device_name.c_str());
         dev_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
@@ -6477,6 +6487,14 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
 
         // Use wave size of 64 for all Adreno GPUs.
         backend_ctx->adreno_wave_size = 64;
+    } else if (strstr(dev_ctx->device_name.c_str(), "Intel")) {
+        backend_ctx->gpu_family = GPU_FAMILY::INTEL;
+    } else if (strstr(dev_ctx->device_name.c_str(), "PowerVR")) {
+        backend_ctx->gpu_family = GPU_FAMILY::POWERVR;
+    } else {
+        GGML_LOG_ERROR("Unsupported GPU: %s\n", dev_ctx->device_name.c_str());
+        backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
+        return nullptr;
     }
 
     // Populate backend device name
@@ -8160,6 +8178,7 @@ static void ggml_opencl_op_rms_norm_mul_add_fused(ggml_backend_t backend, ggml_t
     size_t sgs;
     if (backend_ctx->gpu_family == ADRENO) sgs = 64;
     else if (backend_ctx->gpu_family == INTEL) sgs = 32;
+    else if (backend_ctx->gpu_family == POWERVR) sgs = 128;
     else GGML_ASSERT(false && "Unsupported GPU");
 
     cl_kernel kernel = backend_ctx->kernel_rms_norm_mul_add;
@@ -8773,6 +8792,10 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             }
         case GGML_OP_GATED_DELTA_NET:
             {
+                if (backend_ctx->gpu_family == POWERVR) {
+                    // Not supported on PowerVR GPUs as in development.
+                    return false;
+                }
                 // Match the Vulkan backend: only F32 -> F32, S_v in {16, 32, 64, 128}.
                 if (op->src[0]->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
                     return false;
@@ -8811,6 +8834,10 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                        op->src[0]->type == GGML_TYPE_Q4_K  ||
                        op->src[0]->type == GGML_TYPE_Q5_K  ||
                        op->src[0]->type == GGML_TYPE_Q6_K) {
+                // NOTE: QX_K kernels are currently not supported on PowerVR
+                if (backend_ctx && backend_ctx->gpu_family == POWERVR) {
+                    return false;
+                }
                 // The E031.41 compiler (usually with A7x) miscompiles the flat K-quant
                 // GEMV kernels (kernel_mul_mv_q*_K_f32_flat) and makes lm_head run much
                 // slower than it should. So, make it fallback to CPU to preserve performance
@@ -8928,6 +8955,10 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_MEAN:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_FLASH_ATTN_EXT: {
+            if (backend_ctx->gpu_family == POWERVR) {
+                    // Not supported on PowerVR GPUs as in development.
+                    return false;
+            }
             // The E17 compilers segfault while building FA kernels, skip E17 for now
             if (adreno_e17_compiler_quirks(backend_ctx)) {
                 return false;
@@ -13255,6 +13286,8 @@ static void ggml_cl_set_rows(ggml_backend_t backend, const ggml_tensor * src0, c
         nth0 = 32;
     } else if (backend_ctx->gpu_family == ADRENO) {
         nth0 = 64;
+    } else if (backend_ctx->gpu_family == POWERVR) {
+        nth0 = 128;
     }
 
     int max_workgroup_size = backend_ctx->get_kernel_workgroup_size(kernel);
@@ -14717,6 +14750,8 @@ static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, c
         sgs = 64;
     } else if (backend_ctx->gpu_family == INTEL) {
         sgs = 32;
+    } else if (backend_ctx->gpu_family == POWERVR) {
+        sgs = 128;
     } else {
         GGML_ASSERT(false && "Unsupported GPU");
     }
@@ -14804,6 +14839,8 @@ static void ggml_opencl_op_rms_norm_fused(ggml_backend_t backend, ggml_tensor * 
         sgs = 64;
     } else if (backend_ctx->gpu_family == INTEL) {
         sgs = 32;
+    } else if (backend_ctx->gpu_family == POWERVR) {
+        sgs = 128;
     } else {
         GGML_ASSERT(false && "Unsupported GPU");
     }
@@ -14884,6 +14921,7 @@ static void ggml_opencl_op_norm_fused(ggml_backend_t backend, ggml_tensor * norm
     size_t sgs;
     if (backend_ctx->gpu_family == ADRENO) sgs = 64;
     else if (backend_ctx->gpu_family == INTEL) sgs = 32;
+    else if (backend_ctx->gpu_family == POWERVR) sgs = 128;
     else GGML_ASSERT(false && "Unsupported GPU");
 
     cl_kernel kernel = backend_ctx->kernel_norm_mul_add;
@@ -15016,6 +15054,8 @@ static void ggml_cl_group_norm(ggml_backend_t backend, const ggml_tensor * src0,
         sgs = 64;
     } else if (backend_ctx->gpu_family == INTEL) {
         sgs = 32;
+    } else if (backend_ctx->gpu_family == POWERVR) {
+        sgs = 128;
     } else {
         GGML_ASSERT(false && "Unsupported GPU");
     }
@@ -15061,6 +15101,8 @@ static void ggml_cl_l2_norm(ggml_backend_t backend, const ggml_tensor * src0, co
         sgs = 64;
     } else if (backend_ctx->gpu_family == INTEL) {
         sgs = 32;
+    } else if (backend_ctx->gpu_family == POWERVR) {
+        sgs = 128;
     } else {
         GGML_ASSERT(false && "Unsupported GPU");
     }
@@ -23125,6 +23167,11 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                     nth1 = 1;
 
                     kernel = backend_ctx->kernel_mul_mat_q4_0_f32_1d_8x_flat;
+                } else if (backend_ctx->gpu_family == POWERVR) {
+                    nth0 = 128;
+                    nth1 = 1;
+
+                    kernel = backend_ctx->kernel_mul_mat_q4_0_f32_1d_8x_flat;
                 } else {
                     GGML_ASSERT(false && "TODO: Unknown GPU");
                 }
@@ -23184,6 +23231,9 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
                 nth1 = 1;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 1;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23221,6 +23271,9 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
                 nth1 = 1;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 1;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23243,7 +23296,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                     // staged once in __local. ne00<=8192 bounds the LDS. The mrow WG
                     // is 64 x MROW = 1024 work-items (> Intel's 512 max) and reduces
                     // within a 64-wide subgroup, so skip on Intel.
-                    if (backend_ctx->f16_mrow && backend_ctx->gpu_family != INTEL &&
+                    if (backend_ctx->f16_mrow && backend_ctx->gpu_family != INTEL && /* Not compatible with PowerVR */ backend_ctx->gpu_family != POWERVR &&
                         backend_ctx->kernel_mul_mat_f16_f32_mrow != nullptr &&
                         ne00 >= 128 && ne01 >= 8 && ne00 % 4 == 0 && ne00 <= 8192) {
                         // The register-blocked / half8 variants cast the src0 row pointer to
@@ -23282,7 +23335,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 } else if (adreno_use_lane_split && r2 >= 2 && ne00 > 128 && ne00 <= 256) {
                     kernel = backend_ctx->kernel_mul_mat_f16_f32_l4_dr_ls;
                     nrows  = 1;
-                } else if (ne00 >= 128 && ne01 >= 8 && ne00%4 == 0) {
+                } else if ((ne00 >= 128 && ne01 >= 8 && ne00%4 == 0) && /* Not compatible with PowerVR */ (backend_ctx->gpu_family != POWERVR)) {
                     // multi-output decode variants when Q is a single row
                     static const char * mm_force_l4_env = getenv("GGML_OPENCL_MM_F16_FORCE_L4");
                     static const bool mm_force_l4_on = (mm_force_l4_env != nullptr && mm_force_l4_env[0] != '0');
@@ -23394,6 +23447,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth0 = 64;
                 nth1 = 2;
                 ndst = nth1*4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 2;
+                ndst = nth1*4;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23426,6 +23483,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = nth1*4;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
+                nth1 = 2;
+                ndst = nth1*4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
                 nth1 = 2;
                 ndst = nth1*4;
             } else {
@@ -23471,7 +23532,13 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth1 = 1;
 
                 kernel = backend_ctx->kernel_mul_mat_q4_0_f32_8x_flat;
-                ndst =8;
+                ndst = 8;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 1;
+
+                kernel = backend_ctx->kernel_mul_mat_q4_0_f32_8x_flat;
+                ndst = 8;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23508,6 +23575,12 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
                 kernel = backend_ctx->kernel_mul_mat_q4_0_f32_v;
                 ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 1;
+
+                kernel = backend_ctx->kernel_mul_mat_q4_0_f32;
+                ndst = 4;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23539,6 +23612,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth0 = 64;
                 nth1 = 1;
                 ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 1;
+                ndst = 4;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23568,6 +23645,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = 4;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
+                nth1 = 1;
+                ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
                 nth1 = 1;
                 ndst = 4;
             } else {
@@ -23604,6 +23685,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth0 = 64;
                 nth1 = 1;
                 ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 1;
+                ndst = 4;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23633,6 +23718,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = 4;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
+                nth1 = 1;
+                ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
                 nth1 = 1;
                 ndst = 4;
             } else {
@@ -23669,6 +23758,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth0 = 64;
                 nth1 = 1;
                 ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 1;
+                ndst = 4;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23699,6 +23792,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = 4;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
+                nth1 = 1;
+                ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
                 nth1 = 1;
                 ndst = 4;
             } else {
@@ -23740,6 +23837,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth0 = 64;
                 nth1 = 2;
                 ndst = nth1*4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 2;
+                ndst = nth1*4;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23775,6 +23876,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = nth1*4;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
+                nth1 = 2;
+                ndst = nth1*4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
                 nth1 = 2;
                 ndst = nth1*4;
             } else {
@@ -23815,6 +23920,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth0 = 64;
                 nth1 = 1;
                 ndst = 8;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 1;
+                ndst = 8;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23843,6 +23952,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = 4;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
+                nth1 = 1;
+                ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
                 nth1 = 1;
                 ndst = 4;
             } else {
@@ -23881,6 +23994,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth0 = 64;
                 nth1 = 2;
                 ndst = 16;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 2;
+                ndst = 16;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23915,6 +24032,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = 4;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
+                nth1 = 1;
+                ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
                 nth1 = 1;
                 ndst = 4;
             } else {
@@ -23955,6 +24076,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth0 = 64;
                 nth1 = 2;
                 ndst = 16;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 2;
+                ndst = 16;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -23990,6 +24115,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = 4;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
+                nth1 = 1;
+                ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
                 nth1 = 1;
                 ndst = 4;
             } else {
@@ -24030,6 +24159,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 nth0 = 64;
                 nth1 = 2;
                 ndst = 16;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 2;
+                ndst = 4;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -24066,6 +24199,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = 1;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
+                nth1 = 2;
+                ndst = 1;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
                 nth1 = 2;
                 ndst = 1;
             } else {
@@ -24106,6 +24243,12 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = nth1*2;
 
                 q = extra0_mxfp4->q_img;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
+                nth1 = 2;
+                ndst = nth1*2;
+
+                q = extra0_mxfp4->q;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -24137,6 +24280,10 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 ndst = nth1*2;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
+                nth1 = 2;
+                ndst = nth1*2;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                nth0 = 128;
                 nth1 = 2;
                 ndst = nth1*2;
             } else {
@@ -24771,6 +24918,10 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 ndst = 8;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 sgs  = 64;
+                nsg  = 1;
+                ndst = 8;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                sgs  = 128;
                 nsg  = 1;
                 ndst = 8;
             } else {
@@ -25612,6 +25763,10 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 sgs  = 64;
                 nsg  = 2;
                 ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                sgs  = 128;
+                nsg  = 2;
+                ndst = 4;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -25646,6 +25801,10 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 ndst = 4;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 sgs  = 64;
+                nsg  = 2;
+                ndst = 4;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                sgs  = 128;
                 nsg  = 2;
                 ndst = 4;
             } else {
@@ -26732,6 +26891,12 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 ndst = 4;
 
                 q = extra0_mxfp4->q_img;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                sgs  = 128;
+                nsg  = 1;
+                ndst = 4;
+
+                q = extra0_mxfp4->q;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -26769,6 +26934,10 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                 ndst = 2;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 sgs  = 64;
+                nsg  = 2;
+                ndst = 2;
+            } else if (backend_ctx->gpu_family == POWERVR) {
+                sgs  = 128;
                 nsg  = 2;
                 ndst = 2;
             } else {
@@ -27279,6 +27448,8 @@ static void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, c
     }
     else if (backend_ctx->gpu_family == ADRENO) {
         nth = 64;
+    } else if (backend_ctx->gpu_family == POWERVR) {
+        nth = 128;
     } else {
         GGML_ASSERT(false && "TODO: Unknown GPU");
     }
@@ -28143,9 +28314,9 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),    &K));
 
     // Subgroup size is 64 for Adreno and 32 for Intel
-    const int sg_size = backend_ctx->gpu_family == GPU_FAMILY::ADRENO ? 64 : backend_ctx->gpu_family == GPU_FAMILY::INTEL ? 32 : -1;
+    const int sg_size = backend_ctx->gpu_family == GPU_FAMILY::ADRENO ? 64 : backend_ctx->gpu_family == GPU_FAMILY::INTEL ? 32 : backend_ctx->gpu_family == GPU_FAMILY::POWERVR ? 128 : -1;
     if (sg_size < 0) {
-        GGML_LOG_ERROR("Unsupported GPU Family: only Adreno and Intel are supported.\n");
+        GGML_LOG_ERROR("Unsupported GPU Family: only Adreno, Intel, and PowerVR are supported.\n");
         exit(1);
     }
 

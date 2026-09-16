@@ -32,6 +32,10 @@
 #define N_R0_Q1_0 4
 #define N_SG_Q1_0 2
 #define N_SIMDWIDTH 64
+#elif defined (POWERVR_GPU)
+#define N_R0_Q1_0 4
+#define N_SG_Q1_0 2
+#define N_SIMDWIDTH 128
 #endif
 
 #ifdef INTEL_GPU
