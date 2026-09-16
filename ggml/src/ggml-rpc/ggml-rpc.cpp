@@ -1326,7 +1326,7 @@ private:
     void sync_all_backends();
     void * backend_comm_proc_address(uint32_t dev_id, const char * name);
     void comm_free_device(uint32_t dev_id);
-    static bool comm_allreduce_pairwise(void * comm_ctx_v, ggml_tensor * t_dst);
+    static bool comm_allreduce_pairwise(void * comm_ctx_v, ggml_tensor ** tensors);
     bool get_cached_file(uint64_t hash, std::vector<uint8_t> & data);
     ggml_tensor * deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor);
     ggml_tensor * create_node(uint64_t id,
@@ -1352,8 +1352,9 @@ private:
         void *                              backend_comm_ctx = nullptr;
 
         // The chosen reduction, set once a path is agreed. Receives backend_comm_ctx, or
-        // comm_state on the pairwise path.
-        ggml_backend_comm_allreduce_rank_t  allreduce_fn     = nullptr;
+        // comm_state on the pairwise path. A communicator covers one device, so the caller
+        // passes a one-element tensor array.
+        ggml_backend_comm_allreduce_tensor_t allreduce_fn    = nullptr;
     };
 
     std::vector<ggml_backend_t> backends;
@@ -2257,8 +2258,8 @@ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_i
             return true;
         }
         state.backend_comm_ctx = backend_ctx;
-        state.allreduce_fn     = (ggml_backend_comm_allreduce_rank_t)
-            backend_comm_proc_address(dev_id, "ggml_backend_comm_allreduce_rank");
+        state.allreduce_fn     = (ggml_backend_comm_allreduce_tensor_t)
+            backend_comm_proc_address(dev_id, "ggml_backend_comm_allreduce_tensor");
         if (state.allreduce_fn == nullptr) {
             comm_free_device(dev_id);
             return true;
@@ -2285,8 +2286,9 @@ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_i
 
 // Reduces this rank's contribution in place, exchanging partials with the peer over peers[0].
 // Used when the backend provides no communicator. comm_ctx_v is the comm_state.
-bool rpc_server::comm_allreduce_pairwise(void * comm_ctx_v, ggml_tensor * t_dst) {
+bool rpc_server::comm_allreduce_pairwise(void * comm_ctx_v, ggml_tensor ** tensors) {
     comm_state & state = *(comm_state *) comm_ctx_v;
+    ggml_tensor * t_dst = tensors[0];
     ggml_backend_t backend = state.pairwise_backend;
 
     const size_t  nbytes = ggml_nbytes(t_dst);
@@ -2422,7 +2424,7 @@ bool rpc_server::comm_allreduce(const rpc_msg_comm_allreduce_req & request) {
     // Neither path needs a wait here. The pairwise path waits internally, and the backend orders
     // its reduction after the work that produced the partial sum.
     void * comm_ctx = state.backend_comm_ctx != nullptr ? state.backend_comm_ctx : &state;
-    if (!state.allreduce_fn(comm_ctx, t_dst)) {
+    if (!state.allreduce_fn(comm_ctx, &t_dst)) {
         GGML_LOG_ERROR("[%s] allreduce failed for tensor %s\n", __func__, t_dst->name);
         return false;
     }

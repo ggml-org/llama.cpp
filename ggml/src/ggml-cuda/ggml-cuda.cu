@@ -1269,59 +1269,14 @@ static bool ggml_backend_cuda_comm_get_unique_id(void * id_out) {
     return true;
 }
 
-// Builds the communicator with ncclCommInitRank, for the case where each rank is its own
-// process. Blocks until all world_size ranks have joined.
-static void * ggml_backend_cuda_comm_init_rank(ggml_backend_t backend, const void * id_in, int rank, int world_size) {
-    if (!ggml_backend_is_cuda(backend)) {
-        GGML_LOG_ERROR("%s: backend is not a CUDA backend\n", __func__);
-        return nullptr;
-    }
-    if (world_size < 1 || rank < 0 || rank >= world_size) {
-        GGML_LOG_ERROR("%s: invalid rank %d for world size %d\n", __func__, rank, world_size);
-        return nullptr;
-    }
-
-    // NCCL requires one distinct physical GPU per rank, see ggml_backend_cuda_comm_init_nccl.
-    const ggml_cuda_device_info & info = ggml_cuda_info();
-    if (info.device_count > info.physical_device_count) {
-        GGML_LOG_ERROR("%s: CUDA virtual devices are in use, which NCCL does not support\n", __func__);
-        return nullptr;
-    }
-
-    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
-
-    auto * ret = new ggml_backend_cuda_comm_context;
-    ret->backends.push_back(backend);
-    ret->dev_ids.push_back(cuda_ctx->device);
-    ret->world_size = world_size;
-    ret->comms.resize(1);
-
-    ncclUniqueId id;
-    memcpy(&id, id_in, sizeof(id));
-
-    ggml_cuda_set_device(cuda_ctx->device);
-    const ncclResult_t rc = ncclCommInitRank(&ret->comms[0], world_size, id, rank);
-    if (rc != ncclSuccess) {
-        GGML_LOG_ERROR("%s: ncclCommInitRank failed for rank %d/%d (%s)\n",
-                       __func__, rank, world_size, ncclGetErrorString(rc));
-        ret->comms.clear();
-        delete ret;
-        return nullptr;
-    }
-
-    GGML_LOG_INFO("%s: joined NCCL communicator as rank %d/%d on device %d\n",
-                  __func__, rank, world_size, cuda_ctx->device);
-    return ret;
-}
-
 // Reduces this rank's contribution in place across the communicator. Small tensors reduce as
 // FP32, larger ones convert to BF16 to halve the bytes on the wire. Returns false if the tensor
 // cannot be handled, in which case the caller is responsible for falling back.
-static bool ggml_backend_cuda_comm_allreduce_rank(void * comm_ctx_v, struct ggml_tensor * tensor) {
-    if (comm_ctx_v == nullptr || tensor == nullptr) {
+static bool ggml_backend_cuda_comm_allreduce_rank(
+        ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor * tensor) {
+    if (comm_ctx == nullptr || tensor == nullptr) {
         return false;
     }
-    auto * comm_ctx = static_cast<ggml_backend_cuda_comm_context *>(comm_ctx_v);
     if (comm_ctx->world_size < 1 || comm_ctx->comms.size() != 1) {
         GGML_LOG_ERROR("%s: communicator was not created by comm_init_rank\n", __func__);
         return false;
@@ -1382,6 +1337,61 @@ static bool ggml_backend_cuda_comm_allreduce_rank(void * comm_ctx_v, struct ggml
     CUDA_CHECK(cudaGetLastError());
 
     return true;
+}
+
+// A communicator from comm_init_rank spans one backend, so tensors has one entry.
+static bool ggml_backend_cuda_comm_try_allreduce_rank(
+        ggml_backend_cuda_comm_context * comm_ctx, struct ggml_tensor ** tensors) {
+    if (tensors == nullptr) {
+        return false;
+    }
+    return ggml_backend_cuda_comm_allreduce_rank(comm_ctx, tensors[0]);
+}
+
+// Builds the communicator with ncclCommInitRank, for the case where each rank is its own
+// process. Blocks until all world_size ranks have joined.
+static void * ggml_backend_cuda_comm_init_rank(ggml_backend_t backend, const void * id_in, int rank, int world_size) {
+    if (!ggml_backend_is_cuda(backend)) {
+        GGML_LOG_ERROR("%s: backend is not a CUDA backend\n", __func__);
+        return nullptr;
+    }
+    if (world_size < 1 || rank < 0 || rank >= world_size) {
+        GGML_LOG_ERROR("%s: invalid rank %d for world size %d\n", __func__, rank, world_size);
+        return nullptr;
+    }
+
+    // NCCL requires one distinct physical GPU per rank, see ggml_backend_cuda_comm_init_nccl.
+    const ggml_cuda_device_info & info = ggml_cuda_info();
+    if (info.device_count > info.physical_device_count) {
+        GGML_LOG_ERROR("%s: CUDA virtual devices are in use, which NCCL does not support\n", __func__);
+        return nullptr;
+    }
+
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+
+    auto * ret = new ggml_backend_cuda_comm_context;
+    ret->backends.push_back(backend);
+    ret->dev_ids.push_back(cuda_ctx->device);
+    ret->world_size = world_size;
+    ret->comms.resize(1);
+    ret->try_allreduce = ggml_backend_cuda_comm_try_allreduce_rank;
+
+    ncclUniqueId id;
+    memcpy(&id, id_in, sizeof(id));
+
+    ggml_cuda_set_device(cuda_ctx->device);
+    const ncclResult_t rc = ncclCommInitRank(&ret->comms[0], world_size, id, rank);
+    if (rc != ncclSuccess) {
+        GGML_LOG_ERROR("%s: ncclCommInitRank failed for rank %d/%d (%s)\n",
+                       __func__, rank, world_size, ncclGetErrorString(rc));
+        ret->comms.clear();
+        delete ret;
+        return nullptr;
+    }
+
+    GGML_LOG_INFO("%s: joined NCCL communicator as rank %d/%d on device %d\n",
+                  __func__, rank, world_size, cuda_ctx->device);
+    return ret;
 }
 #endif // GGML_USE_NCCL
 
@@ -5829,9 +5839,6 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     }
     if (strcmp(name, "ggml_backend_comm_init_rank") == 0) {
         return (void *)ggml_backend_cuda_comm_init_rank;
-    }
-    if (strcmp(name, "ggml_backend_comm_allreduce_rank") == 0) {
-        return (void *)ggml_backend_cuda_comm_allreduce_rank;
     }
 #endif // GGML_USE_NCCL
     if (strcmp(name, "ggml_backend_register_host_buffer") == 0) {
