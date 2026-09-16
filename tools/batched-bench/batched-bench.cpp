@@ -1,5 +1,6 @@
 #include "arg.h"
 #include "common.h"
+#include "fit.h"
 #include "log.h"
 #include "llama.h"
 
@@ -44,6 +45,20 @@ int llama_batched_bench(int argc, char ** argv) {
     // initialize the model
 
     llama_model_params model_params = common_model_params_to_llama(params);
+    llama_context_params ctx_params = common_context_params_to_llama(params);
+
+    // ensure enough sequences are available before fitting
+    ctx_params.n_seq_max = n_pl.empty() ? 1 : *std::max_element(n_pl.begin(), n_pl.end());
+
+    if (params.fit_params) {
+        common_fit_params(params.model.path.c_str(), &model_params, &ctx_params,
+            params.tensor_split,
+            params.tensor_buft_overrides.data(),
+            params.fit_params_target.data(),
+            params.fit_params_min_ctx,
+            nullptr,
+            params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+    }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);
 
@@ -51,11 +66,6 @@ int llama_batched_bench(int argc, char ** argv) {
         fprintf(stderr , "%s: error: unable to load model\n" , __func__);
         return 1;
     }
-
-    llama_context_params ctx_params = common_context_params_to_llama(params);
-
-    // ensure enough sequences are available
-    ctx_params.n_seq_max = n_pl.empty() ? 1 : *std::max_element(n_pl.begin(), n_pl.end());
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 
@@ -123,7 +133,7 @@ int llama_batched_bench(int argc, char ** argv) {
 
     if (!params.batched_bench_output_jsonl) {
         LOG("\n");
-        LOG("%s: n_kv_max = %d, n_batch = %d, n_ubatch = %d, flash_attn = %d, is_pp_shared = %d, is_tg_separate = %d, n_gpu_layers = %d, n_threads = %u, n_threads_batch = %u\n", __func__, n_kv_max, params.n_batch, params.n_ubatch, int(params.flash_attn_type), is_pp_shared, is_tg_separate, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch);
+        LOG("%s: n_kv_max = %d, n_batch = %d, n_ubatch = %d, flash_attn = %d, is_pp_shared = %d, is_tg_separate = %d, n_gpu_layers = %d, n_threads = %u, n_threads_batch = %u\n", __func__, n_kv_max, params.n_batch, params.n_ubatch, int(params.flash_attn_type), is_pp_shared, is_tg_separate, model_params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch);
         LOG("\n");
         LOG("|%6s | %6s | %4s | %6s | %8s | %8s | %8s | %8s | %8s | %8s |\n", "PP", "TG", "B", "N_KV", "T_PP s", "S_PP t/s", "T_TG s", "S_TG t/s", "T s", "S t/s");
         LOG("|%6s-|-%6s-|-%4s-|-%6s-|-%8s-|-%8s-|-%8s-|-%8s-|-%8s-|-%8s-|\n", "------", "------", "----", "------", "--------", "--------", "--------", "--------", "--------", "--------");
@@ -238,7 +248,7 @@ int llama_batched_bench(int argc, char ** argv) {
                     LOG(
                         "{\"n_kv_max\": %d, \"n_batch\": %d, \"n_ubatch\": %d, \"flash_attn\": %d, \"is_pp_shared\": %d, \"n_gpu_layers\": %d, \"n_threads\": %u, \"n_threads_batch\": %u, "
                         "\"pp\": %d, \"tg\": %d, \"pl\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f, \"t\": %f, \"speed\": %f}\n",
-                        n_kv_max, params.n_batch, params.n_ubatch, int(params.flash_attn_type), params.is_pp_shared, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch,
+                        n_kv_max, params.n_batch, params.n_ubatch, int(params.flash_attn_type), params.is_pp_shared, model_params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch,
                         pp, tg, pl, n_kv, t_pp, speed_pp, t_tg, speed_tg, t, speed
                     );
                 } else {

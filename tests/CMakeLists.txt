@@ -252,6 +252,21 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     )
     set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
 
+    if (LLAMA_BUILD_TOOLS AND NOT EMSCRIPTEN)
+        llama_test(
+            llama-batched-bench
+            NAME test-batched-bench-fit
+            ARGS -m "${MODEL_DIR}/llama-dense.gguf" --device none
+                --override-kv llama.context_length=int:1024
+                -fit on -c 0 --no-kv-unified -npl 2,1 -npp 16 -ntg 2 -t 2
+                --output-format jsonl
+        )
+        set_tests_properties(test-batched-bench-fit PROPERTIES
+            FIXTURES_REQUIRED generate-models
+            PASS_REGULAR_EXPRESSION "\"n_kv_max\": 2048[^\n]*\"pl\": 1,"
+        )
+    endif()
+
     llama_build(test-fusion.cpp)
 endif()
 
