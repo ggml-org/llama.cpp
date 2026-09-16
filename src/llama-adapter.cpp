@@ -146,22 +146,12 @@ llama_adapter_lora_weight * llama_adapter_lora::get_weight(ggml_tensor * w) {
     return nullptr;
 }
 
-static void llama_adapter_lora_init_impl(llama_model & model, const char * path_lora, llama_adapter_lora & adapter) {
-    LLAMA_LOG_INFO("%s: loading lora adapter from '%s' ...\n", __func__, path_lora);
-
-    ggml_context * ctx_init;
-    gguf_init_params meta_gguf_params = {
-        /* .no_alloc = */ true,
-        /* .ctx      = */ &ctx_init,
-    };
-
-    gguf_context_ptr ctx_gguf { gguf_init_from_file(path_lora, meta_gguf_params) };
-    if (!ctx_gguf) {
-        throw std::runtime_error("failed to load lora adapter file from " + std::string(path_lora));
-    }
-
-    ggml_context_ptr ctx { ctx_init };
-
+static void llama_adapter_lora_init_impl(
+        llama_model & model,
+        gguf_context_ptr ctx_gguf,
+        ggml_context_ptr ctx,
+        llama_file & gguf_file,
+        llama_adapter_lora & adapter) {
     // check metadata
     {
         const gguf_context * gguf_ctx = ctx_gguf.get();
@@ -393,7 +383,6 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
 
     // set tensor data
     {
-        llama_file gguf_file(path_lora, "rb");
         std::vector<uint8_t> read_buf;
         auto set_tensor = [&](ggml_tensor * orig, ggml_tensor * dev) {
             const size_t offs = gguf_get_data_offset(ctx_gguf.get()) + gguf_get_tensor_offset(ctx_gguf.get(), gguf_find_tensor(ctx_gguf.get(), orig->name));
@@ -424,7 +413,59 @@ llama_adapter_lora * llama_adapter_lora_init(llama_model * model, const char * p
     llama_adapter_lora * adapter = new llama_adapter_lora(model);
 
     try {
-        llama_adapter_lora_init_impl(*model, path_lora, *adapter);
+        LLAMA_LOG_INFO("%s: loading lora adapter from '%s' ...\n", __func__, path_lora);
+
+        ggml_context * ctx_init;
+        gguf_init_params meta_gguf_params = {
+            /* .no_alloc = */ true,
+            /* .ctx      = */ &ctx_init,
+        };
+
+        gguf_context_ptr ctx_gguf { gguf_init_from_file(path_lora, meta_gguf_params) };
+        if (!ctx_gguf) {
+            throw std::runtime_error("failed to load lora adapter file from " + std::string(path_lora));
+        }
+        ggml_context_ptr ctx { ctx_init };
+
+        llama_file gguf_file(path_lora, "rb");
+
+        llama_adapter_lora_init_impl(*model, std::move(ctx_gguf), std::move(ctx), gguf_file, *adapter);
+        return adapter;
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: failed to apply lora adapter: %s\n", __func__, err.what());
+
+        delete adapter;
+    }
+
+    return nullptr;
+}
+
+llama_adapter_lora * llama_adapter_lora_init_from_file_ptr(llama_model * model, FILE * file) {
+    if (!file) {
+        LLAMA_LOG_ERROR("%s: file is NULL\n", __func__);
+        return nullptr;
+    }
+
+    llama_adapter_lora * adapter = new llama_adapter_lora(model);
+
+    try {
+        LLAMA_LOG_INFO("%s: loading lora adapter from file pointer ...\n", __func__);
+
+        ggml_context * ctx_init;
+        gguf_init_params meta_gguf_params = {
+            /* .no_alloc = */ true,
+            /* .ctx      = */ &ctx_init,
+        };
+
+        gguf_context_ptr ctx_gguf { gguf_init_from_file_ptr(file, meta_gguf_params) };
+        if (!ctx_gguf) {
+            throw std::runtime_error("failed to load lora adapter from file pointer");
+        }
+        ggml_context_ptr ctx { ctx_init };
+
+        llama_file gguf_file(file);
+
+        llama_adapter_lora_init_impl(*model, std::move(ctx_gguf), std::move(ctx), gguf_file, *adapter);
         return adapter;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to apply lora adapter: %s\n", __func__, err.what());
