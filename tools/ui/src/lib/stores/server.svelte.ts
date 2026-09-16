@@ -6,7 +6,7 @@
  * PropsService for the /props fetch.
  */
 
-import { BACKEND_CAPABILITIES } from '$lib/constants';
+import { BACKEND_CAPABILITIES, LOCAL_BACKEND_ID } from '$lib/constants';
 import { ServerRole } from '$lib/enums';
 import { PropsService } from '$lib/services/props.service';
 import type { BackendCapabilities } from '$lib/types';
@@ -63,6 +63,10 @@ class ServerStore {
 	 * switching back restores it instead of asking the server again.
 	 */
 	cacheLocalState(): void {
+		// props only exist while a llama.cpp server is active; an external to
+		// external switch must not overwrite the kept local state with blanks
+		if (!this.props) return;
+
 		this.localState = { props: this.props, role: this.role };
 	}
 
@@ -154,6 +158,25 @@ class ServerStore {
 			});
 
 		await promise;
+	}
+
+	/**
+	 * Load the local server state in the background at startup. The local tab
+	 * then opens from memory instead of asking for props on the first click.
+	 */
+	async prefetchLocalState(): Promise<void> {
+		if (this.localState) return;
+
+		try {
+			const props = await PropsService.fetch(false, LOCAL_BACKEND_ID);
+
+			this.localState = {
+				props,
+				role: props?.role === ServerRole.ROUTER ? ServerRole.ROUTER : ServerRole.MODEL
+			};
+		} catch {
+			// the local tab falls back to fetching when it is opened
+		}
 	}
 
 	/** Restore the state kept by {@link cacheLocalState}; no request is made. */

@@ -98,10 +98,14 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const merged: ModelOption[] = [];
 
 		for (const option of this.activeModels) {
+			// keep the backend an option was built for: rows from the previous
+			// backend must not be relabelled while a switch is in flight
+			const backendId = option.backendId ?? activeBackendId;
+
 			merged.push({
 				...option,
-				backendId: activeBackendId,
-				id: qualifyModelId(activeBackendId, option.id)
+				backendId,
+				id: qualifyModelId(backendId, rawModelId(option.id))
 			});
 		}
 
@@ -111,8 +115,8 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			for (const option of backendsModelsStore.get(backend.id).models) {
 				merged.push({
 					...option,
-					backendId: backend.id,
-					id: qualifyModelId(backend.id, option.id)
+					backendId: option.backendId ?? backend.id,
+					id: qualifyModelId(option.backendId ?? backend.id, rawModelId(option.id))
 				});
 			}
 		}
@@ -404,12 +408,12 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
-	 * Swap the active backend's state in memory. Every backend is prefetched at
-	 * startup, so switching tabs restores the cached list and the local server
-	 * state without a request.
+	 * Activate a backend for the selector tabs. Everything comes from memory:
+	 * the model list and router rows are prefetched at startup and the local
+	 * server state is kept while an external backend is active. The selection
+	 * is left alone, switching tabs must not pick a model.
 	 */
 	async switchBackend(): Promise<void> {
-		this.clearSelection();
 		this.error = null;
 
 		const backend = backendsStore.active;
@@ -445,10 +449,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		if (backend.protocol === 'llama.cpp' && this.routerModels.length === 0 && cached.raw) {
 			this.routerModels = cached.raw.data;
 			this.activeModels = this.buildModelOptions(cached.raw);
-		}
-
-		if (this.activeModels.length > 0) {
-			await this.ensureFirstModelSelected();
 		}
 	}
 
@@ -506,6 +506,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 					return {
 						aliases: item.aliases ?? [],
+						// stamp the backend here so the option keeps its origin even
+						// after another backend becomes active
+						backendId: backendsStore.active.id,
 						capabilities: rawCapabilities.filter((value: unknown): value is string =>
 							Boolean(value)
 						),

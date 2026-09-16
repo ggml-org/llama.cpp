@@ -15,17 +15,21 @@ export class PropsService {
 	 * In ROUTER mode, returns server-wide settings without model-specific modalities.
 	 *
 	 * @param autoload - If false, prevents automatic model loading (default: false)
+	 * @param backendId - Backend to ask; defaults to the active one.
 	 * @returns Server properties including default generation settings and capabilities
 	 * @throws {Error} If the request fails or returns invalid data
 	 */
-	static async fetch(autoload = false): Promise<ApiLlamaCppServerProps> {
+	static async fetch(autoload = false, backendId?: string): Promise<ApiLlamaCppServerProps> {
 		const params: Record<string, string> = {};
 
 		if (!autoload) {
 			params.autoload = 'false';
 		}
 
-		return apiFetchWithParams<ApiLlamaCppServerProps>('./props', params, { authOnly: true });
+		return apiFetchWithParams<ApiLlamaCppServerProps>('./props', params, {
+			authOnly: true,
+			backendId
+		});
 	}
 
 	/**
