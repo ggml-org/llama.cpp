@@ -97,7 +97,6 @@
 /src/models/                            @CISC
 /tests/                                 @ggerganov
 /tests/test-chat.*                      @pwilkin
-/tests/test-llama-archs.cpp             @JohannesGaessler
 /tools/batched-bench/                   @ggerganov
 /tools/cli/                             @ngxson
 /tools/completion/                      @ggerganov
