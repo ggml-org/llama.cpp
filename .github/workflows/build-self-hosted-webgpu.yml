@@ -1,0 +1,128 @@
+name: CI (self-hosted)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/build-self-hosted-webgpu.yml',
+      'ci/run.sh',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.wgsl'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/build-self-hosted-webgpu.yml',
+      'ci/run.sh',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      'ggml/src/ggml-webgpu/**'
+    ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  # note: this is dud token to avoid rate limiting (https://github.com/ggml-org/llama.cpp/pull/25706#issuecomment-4979941302)
+  HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+
+jobs:
+  gpu-webgpu-nvidia:
+    runs-on: "hf-jobs-t4-small:ubuntu26_04"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential cmake libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan1 mesa-vulkan-drivers libglvnd0 libgl1 libglx0 libegl1 libgles2 libssl-dev time unzip wget python3 python3-venv python3-pip
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: self-hosted-webgpu-nvidia
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          DAWN_VERSION="v20260908.214631"
+          DAWN_OWNER="google"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-94c3c9cc0d5fb2e85aebb370fa8d37b71aa34655-ubuntu-latest-Release"
+          echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          mkdir dawn
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_WEBGPU=1 \
+          GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
+          GG_BUILD_WEBGPU_DAWN_DIR="$GITHUB_WORKSPACE/dawn/lib64/cmake/Dawn" \
+            bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: self-hosted-webgpu-nvidia
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
+  gpu-webgpu-apple:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          DAWN_VERSION="v20260908.214631"
+          DAWN_OWNER="google"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-94c3c9cc0d5fb2e85aebb370fa8d37b71aa34655-macos-latest-Release"
+          echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          mkdir dawn
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
+            bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
