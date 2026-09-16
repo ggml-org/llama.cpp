@@ -17,6 +17,8 @@
 		renderOption?: import('svelte').Snippet<[ModelItem, boolean]>;
 		/** Favorite models of every backend; shown on the favorites tab. */
 		favorites?: ModelItem[];
+		/** Show the organization name in every model id of the list. */
+		showOrgName?: boolean;
 		/** Open one provider's full list, offered when a section is cut short. */
 		onProviderOpen?: (backendId: string) => void;
 		/** Leave the drilled-in provider; enables the back affordance. */
@@ -33,7 +35,8 @@
 		onProviderOpen,
 		onSelect,
 		renderOption,
-		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none'
+		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none',
+		showOrgName = true
 	}: Props = $props();
 	let render = $derived(renderOption ?? defaultOption);
 	// section headers stick right below the search/tabs block of the dropdown
@@ -57,13 +60,13 @@
 	}
 </script>
 
-{#snippet defaultOption(item: ModelItem, _hideOrgName: boolean)}
+{#snippet defaultOption(item: ModelItem, hideOrgName: boolean)}
 	{@const { option } = item}
 	{@const isSelected = currentModel === option.model || activeId === option.id}
 	{@const isFav = modelsStore.favoriteModelIds.has(option.model)}
 
 	<ModelsSelectorOption
-		hideOrgName
+		{hideOrgName}
 		{isFav}
 		isHighlighted={false}
 		{isSelected}
@@ -78,25 +81,25 @@
 
 <!-- Favorites tab: rows only, the tab already names the view. -->
 {#each favorites as item (`fav-${item.option.id}`)}
-	{@render render(item, true)}
+	{@render render(item, !showOrgName)}
 {/each}
 
 {#if getDownloadEntries.length > 0}
 	<p class={headerClass} style={headerStyle}>Download in progress</p>
 
 	{#each getDownloadEntries as entry (entry.repoWithTag)}
-		<ModelsSelectorDownloadItem {entry} onRequestCancel={requestCancel} />
+		<ModelsSelectorDownloadItem {entry} onRequestCancel={requestCancel} {showOrgName} />
 	{/each}
 {/if}
 
 <!-- Local view: one list, the loaded models first, no section headers. -->
 {#each groups.loaded as item (`loaded-${item.option.id}`)}
-	{@render render(item, false)}
+	{@render render(item, !showOrgName)}
 {/each}
 
 {#each groups.available as group (group.orgName)}
 	{#each group.items as item (item.option.id)}
-		{@render render(item, true)}
+		{@render render(item, !showOrgName)}
 	{/each}
 {/each}
 
@@ -125,7 +128,7 @@
 
 	{#if provider.items.length > 0}
 		{#each provider.items as item (`${provider.backendId}-${item.option.id}`)}
-			{@render render(item, true)}
+			{@render render(item, !showOrgName)}
 		{/each}
 
 		{#if onProviderOpen && provider.matched > provider.items.length}

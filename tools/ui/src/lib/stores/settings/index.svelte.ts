@@ -220,6 +220,7 @@ class SettingsStore {
 		try {
 			this.loadConfig();
 			this.migrateLegacyTheme();
+			this.migrateModelOrgNameKey();
 			// Apply the persisted theme from config on initial load
 			setMode(this.config[SETTINGS_KEYS.THEME] as ColorMode);
 			this.isInitialized = true;
@@ -473,6 +474,30 @@ class SettingsStore {
 			this.saveConfig();
 			setMode(legacyTheme as ColorMode);
 		}
+	}
+
+	/**
+	 * Move the trigger-only org name key onto the selector wide one. The setting
+	 * grew from the trigger to every model id, so an explicit choice has to
+	 * survive the rename.
+	 */
+	private migrateModelOrgNameKey() {
+		if (!browser) return;
+
+		const legacyKey = 'showModelOrgNameInTrigger';
+		const { config: saved } = SettingsService.loadConfig();
+
+		if (!(legacyKey in saved)) return;
+
+		this.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] = Boolean(saved[legacyKey]);
+
+		if (this.userOverrides.delete(legacyKey)) {
+			this.userOverrides.add(SETTINGS_KEYS.SHOW_MODEL_ORG_NAME);
+		}
+
+		delete (this.config as Record<string, unknown>)[legacyKey];
+
+		this.saveConfig();
 	}
 
 	/**

@@ -318,10 +318,10 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: false,
-				help: 'Display the organization name in the model selector trigger button.',
-				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER,
-				label: 'Show organization name in model selector trigger',
+				defaultValue: true,
+				help: 'Display the organization name alongside model names in the model selector, in the trigger and in the model rows.',
+				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME,
+				label: 'Show organization name in model selector',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{

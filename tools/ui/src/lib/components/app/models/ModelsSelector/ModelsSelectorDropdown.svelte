@@ -76,9 +76,8 @@
 	const selectedOption = $derived(ms.getDisplayOption());
 	const triggerModel = $derived(selectedOption?.model ?? null);
 
-	const showOrgNameInTrigger = $derived(
-		settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER] ?? false
-	);
+	// one setting for every model id in the selector: the trigger and the rows
+	const showOrgName = $derived(settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] ?? true);
 
 	$effect(() => {
 		void ms.searchTerm;
@@ -240,7 +239,7 @@
 									{#if selectedOption}
 										<ModelId
 											class="min-w-0 overflow-hidden"
-											hideOrgName={!showOrgNameInTrigger}
+											hideOrgName={!showOrgName}
 											hideQuantization
 											modelId={selectedOption.model}
 										/>
@@ -309,7 +308,12 @@
 									role="option"
 									type="button"
 								>
-									<ModelId class="flex-1" hideQuantization modelId={currentModel} />
+									<ModelId
+										class="flex-1"
+										hideOrgName={!showOrgName}
+										hideQuantization
+										modelId={currentModel}
+									/>
 
 									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
 								</button>
@@ -319,14 +323,14 @@
 								<p class="px-4 py-3 text-sm text-muted-foreground">{ms.emptyMessage}</p>
 							{/if}
 
-							{#snippet modelOption(item: ModelItem, _hideOrgName: boolean)}
+							{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
 								{@const { option } = item}
 								{@const isSelected = currentModel === option.model || ms.activeId === option.id}
 								{@const isHighlighted = option.id === highlightedId}
 								{@const isFav = ms.isFavorite(option.model)}
 
 								<ModelsSelectorOption
-									hideOrgName
+									{hideOrgName}
 									{isFav}
 									{isHighlighted}
 									{isSelected}
@@ -355,6 +359,7 @@
 								onSelect={ms.handleSelect}
 								renderOption={modelOption}
 								sectionHeaderClass="[&:not(:first-child)]:mt-3 mb-1 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
+								{showOrgName}
 							/>
 						</div>
 
@@ -400,7 +405,7 @@
 							{#if selectedOption}
 								<ModelId
 									class="min-w-0 overflow-hidden"
-									hideOrgName={!showOrgNameInTrigger}
+									hideOrgName={!showOrgName}
 									hideQuantization
 									modelId={selectedOption.model}
 								/>
