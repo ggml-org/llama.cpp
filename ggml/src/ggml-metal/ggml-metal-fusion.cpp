@@ -647,7 +647,7 @@ static const ggml_op ops_moe_reduce_raw_8[] = {
     GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD
 };
 
-static const ggml_metal_fusion ggml_metal_fusions[] = {
+static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
     { GGML_METAL_FUSION_NORM_MUL,       ops_norm_mul,               2, ops_norm_mul,               2, false, ggml_metal_fusion_check_norm },
     { GGML_METAL_FUSION_NORM_MUL_ADD,   ops_norm_mul_add,           3, ops_norm_mul_add,           3, false, ggml_metal_fusion_check_norm },
     { GGML_METAL_FUSION_NORM_SCALE,     ops_norm_scale,             2, ops_norm_scale,             2, false, ggml_metal_fusion_check_norm },
@@ -675,12 +675,6 @@ static const ggml_metal_fusion ggml_metal_fusions[] = {
     { GGML_METAL_FUSION_MOE_REDUCE,     ops_moe_reduce_8,           8, ops_moe_reduce_raw_8,       16, true, ggml_metal_fusion_check_moe_reduce },
     { GGML_METAL_FUSION_SSM_CONV_SILU,  ops_ssm_conv_silu,          2, ops_ssm_conv_silu,          2, false, ggml_metal_fusion_check_ssm_conv_silu },
 };
-
-const ggml_metal_fusion * ggml_metal_fusion_all(int * n) {
-    *n = (int) sizeof(ggml_metal_fusions) / sizeof(ggml_metal_fusions[0]);
-
-    return ggml_metal_fusions;
-}
 
 static bool ggml_metal_fusion_match_raw_pattern(
         const ggml_cgraph * gf, int node_idx, const ggml_op * ops, int n_ops) {
@@ -723,21 +717,17 @@ void ggml_metal_fusion_add_alloc_deps(
         void * user_data,
         void (*add_alloc_dep)(void *, ggml_tensor *, ggml_tensor *),
         const ggml_cgraph * gf) {
-    int n_fusions = 0;
-    const ggml_metal_fusion * all = ggml_metal_fusion_all(&n_fusions);
-
     for (int i = 0; i < gf->n_nodes; ++i) {
         const ggml_metal_fusion * best = nullptr;
         int best_raw = 0;
 
-        for (int f = 0; f < n_fusions; ++f) {
-            const ggml_metal_fusion * fusion = &all[f];
-            if (fusion->n_raw_ops <= best_raw) {
+        for (const ggml_metal_fusion & fusion : ggml_metal_fusions) {
+            if (fusion.n_raw_ops <= best_raw) {
                 continue;
             }
-            if (ggml_metal_fusion_match_raw_pattern(gf, i, fusion->raw_ops, fusion->n_raw_ops)) {
-                best = fusion;
-                best_raw = fusion->n_raw_ops;
+            if (ggml_metal_fusion_match_raw_pattern(gf, i, fusion.raw_ops, fusion.n_raw_ops)) {
+                best = &fusion;
+                best_raw = fusion.n_raw_ops;
             }
         }
 
@@ -821,13 +811,10 @@ void ggml_metal_fusion_info_count_fusion(struct ggml_metal_fusion_info * finfo, 
         return;
     }
 
-    int n = 0;
-    const ggml_metal_fusion * all = ggml_metal_fusion_all(&n);
-
     int idx = -1;
-    for (int i = 0; i < n; i++) {
-        if (&all[i] == fusion) {
-            idx = i;
+    for (size_t i = 0; i < ggml_metal_fusions.size(); i++) {
+        if (&ggml_metal_fusions[i] == fusion) {
+            idx = (int) i;
             break;
         }
     }
@@ -846,15 +833,12 @@ void ggml_metal_fusion_info_labels_init(struct ggml_metal_fusion_info * finfo) {
         return;
     }
 
-    int n = 0;
-    const ggml_metal_fusion * all = ggml_metal_fusion_all(&n);
-
     finfo->labels.clear();
-    finfo->counts.assign(n, 0);
-    finfo->labels.reserve(n);
+    finfo->counts.assign(ggml_metal_fusions.size(), 0);
+    finfo->labels.reserve(ggml_metal_fusions.size());
 
-    for (int i = 0; i < n; i++) {
-        finfo->labels.emplace_back(ggml_metal_fusion_label(&all[i]));
+    for (const ggml_metal_fusion & fusion : ggml_metal_fusions) {
+        finfo->labels.emplace_back(ggml_metal_fusion_label(&fusion));
     }
 
     finfo->labels_set = true;
@@ -898,20 +882,15 @@ const ggml_metal_fusion * ggml_metal_fusion_next(
         int idx,
         ggml_metal_fusion_mode mode,
         int * n_out) {
-    int n = 0;
-    const ggml_metal_fusion * all = ggml_metal_fusion_all(&n);
-
     const ggml_metal_fusion * res = nullptr;
     int best = 1;
 
-    for (int i = 0; i < n; i++) {
-        const ggml_metal_fusion * fusion = &all[i];
-
+    for (const ggml_metal_fusion & fusion : ggml_metal_fusions) {
         // only look for a longer match than the current best
-        if (fusion->n_ops <= best) {
+        if (fusion.n_ops <= best) {
             continue;
         }
-        if (idx + fusion->n_ops > n_idxs) {
+        if (idx + fusion.n_ops > n_idxs) {
             continue;
         }
 
@@ -919,9 +898,9 @@ const ggml_metal_fusion * ggml_metal_fusion_next(
 
         // the op sequence must match exactly
         bool ok = true;
-        for (int j = 0; j < fusion->n_ops; j++) {
+        for (int j = 0; j < fusion.n_ops; j++) {
             nodes[j] = gf->nodes[node_idxs[idx + j]];
-            if (nodes[j]->op != fusion->ops[j]) {
+            if (nodes[j]->op != fusion.ops[j]) {
                 ok = false;
                 break;
             }
@@ -930,10 +909,10 @@ const ggml_metal_fusion * ggml_metal_fusion_next(
             continue;
         }
 
-        if (!fusion->unsafe) {
+        if (!fusion.unsafe) {
             // common element-wise chain constraints: each node reads the previous one,
             // and all nodes have the same shape
-            for (int j = 1; j < fusion->n_ops && ok; j++) {
+            for (int j = 1; j < fusion.n_ops && ok; j++) {
                 if (nodes[j]->src[0] != nodes[j - 1] && nodes[j]->src[1] != nodes[j - 1]) {
                     ok = false;
                     break;
@@ -950,21 +929,21 @@ const ggml_metal_fusion * ggml_metal_fusion_next(
             // all current fusions are single-output elision chains, so the last node is the only output
             // TODO: multi-output fusions: store pattern-relative offsets in the table and translate them here
             int outputs_buf[1];
-            outputs_buf[0] = node_idxs[idx + fusion->n_ops - 1];
+            outputs_buf[0] = node_idxs[idx + fusion.n_ops - 1];
 
             // structural subgraph checks (op sequence, elidable uses, view containment)
-            if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, fusion->n_ops, fusion->ops, outputs_buf, 1)) {
+            if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, fusion.n_ops, fusion.ops, outputs_buf, 1)) {
                 continue;
             }
         }
 
         // pattern-specific checks (the sole validator for unsafe patterns)
-        if (fusion->check && !fusion->check(fusion, nodes, gf, node_idxs, idx, mode)) {
+        if (fusion.check && !fusion.check(&fusion, nodes, gf, node_idxs, idx, mode)) {
             continue;
         }
 
-        best = fusion->n_ops;
-        res = fusion;
+        best = fusion.n_ops;
+        res = &fusion;
     }
 
     *n_out = best;

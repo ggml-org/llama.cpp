@@ -73,9 +73,6 @@ void ggml_metal_fusion_add_alloc_deps(
         void (*add_alloc_dep)(void *, struct ggml_tensor *, struct ggml_tensor *),
         const struct ggml_cgraph * gf);
 
-// the single table of all fusions supported by the Metal backend
-const ggml_metal_fusion * ggml_metal_fusion_all(int * n);
-
 // ---- shared fusion info ---------------------------------------------------
 
 // shared fusion debugging context, owned by the device; newly created backend contexts for that
