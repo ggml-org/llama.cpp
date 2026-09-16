@@ -24,6 +24,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #define VULKAN_HPP_DEFAULT_DISPATCHER ggml_vk_default_dispatcher()
 
 #include <vulkan/vulkan.hpp>
+#include <fstream>
 
 // Fallback definitions for VK_NV_cooperative_matrix_decode_vector in case the
 // installed Vulkan headers predate the extension.
@@ -2354,6 +2355,7 @@ static bool vk_enable_sync_logger = false;
 // number of calls between perf logger prints
 static uint32_t vk_perf_logger_frequency = 1;
 static std::string vk_pipeline_stats_filter;
+static std::string vk_pipeline_ir_dir;
 
 static uint64_t ggml_vk_get_node_flops(const ggml_tensor * node) {
     if (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) {
@@ -3275,6 +3277,57 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     }
 #endif
 
+    if (!vk_pipeline_ir_dir.empty()) {
+        if (spirv.empty()) {
+            const uint32_t * src = reinterpret_cast<const uint32_t *>(spv_data);
+            spirv.assign(src, src + spv_size / sizeof(uint32_t));
+        }
+
+        uint32_t uint_type_id = 0;
+        size_t function_pos = spirv.size();
+        for (size_t pos = 5; pos < spirv.size();) {
+            uint32_t word = spirv[pos];
+            uint32_t len = word >> spv::WordCountShift;
+            if (len == 0 || pos + len > spirv.size()) {
+                break;
+            }
+            if ((word & spv::OpCodeMask) == spv::OpTypeInt && len >= 5 &&
+                spirv[pos + 3] == 32 && spirv[pos + 4] == 0) {
+                uint_type_id = spirv[pos + 1];
+            } else if ((word & spv::OpCodeMask) == spv::OpFunction && function_pos == spirv.size()) {
+                function_pos = pos;
+            }
+            pos += len;
+        }
+
+        if (uint_type_id != 0 && function_pos < spirv.size()) {
+            const uint32_t nonce_id = spirv[3];
+            spirv[3] = nonce_id + 1;
+            const uint32_t nonce_value = 0x51a7e000u ^ static_cast<uint32_t>(pipeline->name.size());
+            const uint32_t spec_constant[] = {
+                (4u << spv::WordCountShift) | spv::OpSpecConstant,
+                uint_type_id, nonce_id, nonce_value,
+            };
+            spirv.insert(spirv.begin() + function_pos, std::begin(spec_constant), std::end(spec_constant));
+            shader_module_create_info = vk::ShaderModuleCreateInfo({}, spirv.size() * sizeof(uint32_t), spirv.data());
+        } else {
+            for (size_t pos = 5; pos < spirv.size();) {
+                uint32_t word = spirv[pos];
+                uint32_t len = word >> spv::WordCountShift;
+                if (len == 0 || pos + len > spirv.size()) {
+                    break;
+                }
+                if ((word & spv::OpCodeMask) == spv::OpLabel) {
+                    const uint32_t nop = (1u << spv::WordCountShift) | spv::OpNop;
+                    spirv.insert(spirv.begin() + pos + len, nop);
+                    shader_module_create_info = vk::ShaderModuleCreateInfo({}, spirv.size() * sizeof(uint32_t), spirv.data());
+                    break;
+                }
+                pos += len;
+            }
+        }
+    }
+
     pipeline->shader_module = device->device.createShaderModule(shader_module_create_info);
 
     vk::PushConstantRange pcr(
@@ -3321,10 +3374,17 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         pipeline_shader_create_info.setPNext(&pipeline_shader_stage_required_subgroup_size_create_info);
     }
 
+    bool capture_pipeline_ir = !vk_pipeline_ir_dir.empty();
+    vk::PipelineCreateFlags pipeline_create_flags = device->pipeline_executable_properties_support ?
+        vk::PipelineCreateFlagBits::eCaptureStatisticsKHR : vk::PipelineCreateFlags{};
+    if (device->pipeline_executable_properties_support && capture_pipeline_ir) {
+        pipeline_create_flags |= vk::PipelineCreateFlagBits::eCaptureInternalRepresentationsKHR;
+        std::cerr << "ggml_vulkan: pipeline IR capture flags=0x"
+                  << std::hex << static_cast<VkPipelineCreateFlags>(pipeline_create_flags)
+                  << std::dec << " pipeline=" << pipeline->name << std::endl;
+    }
     vk::ComputePipelineCreateInfo compute_pipeline_create_info(
-        device->pipeline_executable_properties_support ?
-            vk::PipelineCreateFlagBits::eCaptureStatisticsKHR :
-            vk::PipelineCreateFlags{},
+        pipeline_create_flags,
         pipeline_shader_create_info,
         pipeline->layout);
 
@@ -3343,6 +3403,9 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         pipelineFlags2CreateInfo.flags = vk::PipelineCreateFlagBits2::e64BitIndexingEXT;
         if (device->pipeline_executable_properties_support) {
             pipelineFlags2CreateInfo.flags |= vk::PipelineCreateFlagBits2::eCaptureStatisticsKHR;
+            if (capture_pipeline_ir) {
+                pipelineFlags2CreateInfo.flags |= vk::PipelineCreateFlagBits2::eCaptureInternalRepresentationsKHR;
+            }
         }
         pipelineFlags2CreateInfo.setPNext(compute_pipeline_create_info.pNext);
         compute_pipeline_create_info.setPNext(&pipelineFlags2CreateInfo);
@@ -3366,10 +3429,9 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     }
 
     if (device->pipeline_executable_properties_support) {
-        vk::PipelineExecutableInfoKHR executableInfo;
-        executableInfo.pipeline = pipeline->pipeline;
-
-        auto statistics = device->device.getPipelineExecutableStatisticsKHR(executableInfo);
+        vk::PipelineInfoKHR pipelineInfo;
+        pipelineInfo.pipeline = pipeline->pipeline;
+        auto executableProperties = device->device.getPipelineExecutablePropertiesKHR(pipelineInfo);
 
         bool print_stats = !vk_pipeline_stats_filter.empty() &&
                            pipeline->name.find(vk_pipeline_stats_filter) != std::string::npos;
@@ -3377,29 +3439,96 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
             std::cerr << "ggml_vulkan: pipeline stats for " << pipeline->name << ":" << std::endl;
         }
 
-        for (auto & s : statistics) {
+        for (uint32_t executableIndex = 0; executableIndex < executableProperties.size(); ++executableIndex) {
+            const auto & properties = executableProperties[executableIndex];
+            vk::PipelineExecutableInfoKHR executableInfo;
+            executableInfo.pipeline = pipeline->pipeline;
+            executableInfo.executableIndex = executableIndex;
+
             if (print_stats) {
-                std::cerr << "ggml_vulkan:   " << s.name.data() << ": ";
-                switch (s.format) {
-                    case vk::PipelineExecutableStatisticFormatKHR::eBool32:
-                        std::cerr << (s.value.b32 ? "true" : "false");
-                        break;
-                    case vk::PipelineExecutableStatisticFormatKHR::eInt64:
-                        std::cerr << s.value.i64;
-                        break;
-                    case vk::PipelineExecutableStatisticFormatKHR::eUint64:
-                        std::cerr << s.value.u64;
-                        break;
-                    case vk::PipelineExecutableStatisticFormatKHR::eFloat64:
-                        std::cerr << s.value.f64;
-                        break;
-                }
-                std::cerr << std::endl;
+                std::cerr << "ggml_vulkan: executable " << executableIndex
+                          << " name=" << properties.name.data()
+                          << " subgroup=" << properties.subgroupSize
+                          << " description=" << properties.description.data() << std::endl;
             }
-            // "Register Count" is reported by NVIDIA drivers.
-            if (strcmp(s.name, "Register Count") == 0) {
-                VK_LOG_DEBUG(pipeline->name << " " << s.name << ": " << s.value.u64 << " registers");
-                pipeline->register_count = (uint32_t)s.value.u64;
+
+            auto statistics = device->device.getPipelineExecutableStatisticsKHR(executableInfo);
+            for (auto & s : statistics) {
+                if (print_stats) {
+                    std::cerr << "ggml_vulkan:   " << s.name.data() << ": ";
+                    switch (s.format) {
+                        case vk::PipelineExecutableStatisticFormatKHR::eBool32:
+                            std::cerr << (s.value.b32 ? "true" : "false");
+                            break;
+                        case vk::PipelineExecutableStatisticFormatKHR::eInt64:
+                            std::cerr << s.value.i64;
+                            break;
+                        case vk::PipelineExecutableStatisticFormatKHR::eUint64:
+                            std::cerr << s.value.u64;
+                            break;
+                        case vk::PipelineExecutableStatisticFormatKHR::eFloat64:
+                            std::cerr << s.value.f64;
+                            break;
+                    }
+                    std::cerr << std::endl;
+                }
+                // "Register Count" is reported by NVIDIA drivers.
+                if (strcmp(s.name, "Register Count") == 0) {
+                    VK_LOG_DEBUG(pipeline->name << " " << s.name << ": " << s.value.u64 << " registers");
+                    pipeline->register_count = (uint32_t)s.value.u64;
+                }
+            }
+
+            if (capture_pipeline_ir) {
+                uint32_t representationCount = 0;
+                vk::Result result = device->device.getPipelineExecutableInternalRepresentationsKHR(
+                    &executableInfo, &representationCount, nullptr);
+                std::cerr << "ggml_vulkan: pipeline IR count pipeline=" << pipeline->name
+                          << " executable=" << executableIndex
+                          << " result=" << vk::to_string(result)
+                          << " count=" << representationCount << std::endl;
+                if (result == vk::Result::eSuccess && representationCount > 0) {
+                    std::vector<vk::PipelineExecutableInternalRepresentationKHR> representations(representationCount);
+                    result = device->device.getPipelineExecutableInternalRepresentationsKHR(
+                        &executableInfo, &representationCount, representations.data());
+                    if (result == vk::Result::eSuccess) {
+                        std::vector<std::vector<uint8_t>> storage(representationCount);
+                        for (uint32_t i = 0; i < representationCount; ++i) {
+                            storage[i].resize(representations[i].dataSize);
+                            representations[i].pData = storage[i].data();
+                        }
+                        result = device->device.getPipelineExecutableInternalRepresentationsKHR(
+                            &executableInfo, &representationCount, representations.data());
+                        if (result == vk::Result::eSuccess) {
+                            for (uint32_t i = 0; i < representationCount; ++i) {
+                                std::string path = vk_pipeline_ir_dir;
+                                if (!path.empty() && path.back() != '\\' && path.back() != '/') {
+                                    path += '\\';
+                                }
+                                path += pipeline->name + "-exec" + std::to_string(executableIndex) + "-ir" + std::to_string(i);
+                                path += representations[i].isText ? ".txt" : ".bin";
+
+                                std::ofstream file(path, std::ios::binary);
+                                if (file && representations[i].pData != nullptr) {
+                                    file.write(reinterpret_cast<const char *>(representations[i].pData),
+                                               representations[i].dataSize);
+                                }
+                                std::cerr << "ggml_vulkan: pipeline IR pipeline=" << pipeline->name
+                                          << " exec=" << executableIndex
+                                          << " ir=" << i
+                                          << " text=" << (representations[i].isText ? 1 : 0)
+                                          << " size=" << representations[i].dataSize
+                                          << " name=" << representations[i].name.data()
+                                          << " description=" << representations[i].description.data()
+                                          << " path=" << path << std::endl;
+                            }
+                        }
+                    }
+                }
+                if (result != vk::Result::eSuccess && result != vk::Result::eErrorFeatureNotPresent) {
+                    std::cerr << "ggml_vulkan: pipeline IR query failed for " << pipeline->name
+                              << " executable=" << executableIndex << ": " << vk::to_string(result) << std::endl;
+                }
             }
         }
     }
@@ -7953,6 +8082,10 @@ static void ggml_vk_instance_init() {
     if (GGML_VK_PIPELINE_STATS != nullptr) {
         vk_pipeline_stats_filter = GGML_VK_PIPELINE_STATS;
     }
+    const char* GGML_VK_PIPELINE_IR_DIR = getenv("GGML_VK_PIPELINE_IR_DIR");
+    if (GGML_VK_PIPELINE_IR_DIR != nullptr) {
+        vk_pipeline_ir_dir = GGML_VK_PIPELINE_IR_DIR;
+    }
     const char* GGML_VK_PERF_LOGGER_FREQUENCY = getenv("GGML_VK_PERF_LOGGER_FREQUENCY");
 
     if (GGML_VK_PERF_LOGGER_FREQUENCY != nullptr) {
@@ -11568,6 +11701,8 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         // Match the shader's per-split block count so no split is empty.
         const uint32_t per_blocks = CEIL_DIV(total_blocks, split_k);
         split_k = CEIL_DIV(total_blocks, per_blocks);
+    } else if (requested_partitions > 1) {
+        split_k = requested_partitions;
     } else if (gqa_ratio > 1 && workgroups_x <= Br) {
         split_k = shader_core_count * 2 / (workgroups_x * workgroups_y * workgroups_z);
     } else if (gqa_ratio <= 1) {
@@ -11584,13 +11719,10 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         split_k = CEIL_DIV(KV, split_kv);
     }
 
-    if (!use_sparse && N == 1 && (!disable_partition_heuristic || requested_partitions > 1)) {
+    if (!use_sparse && N == 1 && !disable_partition_heuristic && requested_partitions <= 1) {
         uint32_t default_partitions = KV <= 3072 ? 32 : KV < 5120 ? 64 : 128;
         if (!disable_partition_heuristic && KV >= 24576 && (KV / 32) % 256 == 0) {
             default_partitions = 256;
-        }
-        if (requested_partitions > 1) {
-            default_partitions = requested_partitions;
         }
         split_kv = CEIL_DIV(KV, default_partitions);
         split_k = CEIL_DIV(KV, split_kv);
