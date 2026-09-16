@@ -378,7 +378,9 @@ export class HuggingFaceService {
 	 * exist, so callers should provide a fallback.
 	 */
 	static getAvatarUrl(author: string): string {
-		return `${HF_AVATARS_URL}${PATH_SEPARATOR}${author}`;
+		// OpenRouter-style model ids prefix the provider with a tilde
+		// (`~openai/gpt-...`); the avatars endpoint only resolves bare names
+		return `${HF_AVATARS_URL}${PATH_SEPARATOR}${author.replace(/^~/, '')}`;
 	}
 
 	/**
