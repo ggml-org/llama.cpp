@@ -425,10 +425,12 @@ static void set_row_order_tensor_data(ggml_tensor * tensor, void *) {
     }
 }
 
-static int test_layer_input_order() {
+static int test_layer_input_order(ggml_backend_dev_t device, bool flash_attn) {
     auto gguf_ctx = get_gguf_ctx(LLM_ARCH_LLAMA, false);
     auto mp = llama_model_default_params();
-    mp.n_gpu_layers = 0;
+    ggml_backend_dev_t devices[] = {device, nullptr};
+    mp.devices = devices;
+    mp.n_gpu_layers = ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_CPU ? 0 : 99;
     llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_row_order_tensor_data, nullptr, mp));
     if (!model) {
         throw std::runtime_error("failed to create row-order model");
@@ -447,7 +449,7 @@ static int test_layer_input_order() {
                     cp.n_seq_max = 2;
                     cp.n_threads = cp.n_threads_batch = 1;
                     cp.kv_unified = unified;
-                    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+                    cp.flash_attn_type = flash_attn ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
                     llama_context_ptr ctx(llama_init_from_model(model.get(), cp));
                     if (!ctx) {
                         throw std::runtime_error("failed to create row-order context");
@@ -484,13 +486,26 @@ static int test_layer_input_order() {
                             }
                         }
                     }
-                    printf("layer-input-order: %s, ubatch=%u, %s, %s: %d/%d wrong rows\n",
+                    printf("layer-input-order: device=%s, flash=%s, %s, ubatch=%u, %s, %s: %d/%d wrong rows\n",
+                            ggml_backend_dev_name(device), flash_attn ? "on" : "off",
                             unified ? "unified" : "separate", n_ubatch,
                             interleaved ? "interleaved" : "grouped", dense ? "dense" : "sparse",
                             wrong_rows, 2*n_tokens);
                     all_ok = all_ok && wrong_rows == 0;
                 }
             }
+        }
+    }
+    return all_ok ? 0 : 1;
+}
+
+static int test_layer_input_order() {
+    bool all_ok = true;
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        auto device = ggml_backend_dev_get(i);
+        all_ok = test_layer_input_order(device, false) == 0 && all_ok;
+        if (strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(device)), "CUDA") == 0) {
+            all_ok = test_layer_input_order(device, true) == 0 && all_ok;
         }
     }
     return all_ok ? 0 : 1;
