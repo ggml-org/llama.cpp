@@ -714,9 +714,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
             std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
             ggml_decoder->set_compute_params(c_params);
             ggml_decoder->set_model_params(m_params);
-            if (old_m_params.kv_buffer_changed(m_params)) {
-                ggml_decoder->update_io(cgraph);
-            }
+            ggml_decoder->update_io(cgraph);
             ggml_decoder->add_extra_inputs();
             {
                 std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);

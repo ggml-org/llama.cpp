@@ -181,12 +181,13 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
                                          uint64_t extra_cfg) {
     uint64_t h = FNV_OFFSET;
 
-    // Topology: node count + each node's op and name (cheap, and distinguishes
+    // Topology: node count + each node's op, output flag and name (cheap, and distinguishes
     // graphs that share weights but differ structurally).
     h = fnv1a_u64(h, static_cast<uint64_t>(cgraph->n_nodes));
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
         h = fnv1a_u64(h, static_cast<uint64_t>(node->op));
+        h = fnv1a_u64(h, node->flags & GGML_TENSOR_FLAG_OUTPUT);
         h = fnv1a(h, node->name, strlen(node->name));
     }
 

@@ -31,7 +31,8 @@ OutputVector translate_permute(const NodeContext & context) {
 
     ov::Output<Node> res;
     ov::Output<Node> src;
-    if (op_case == 3 || op_case == 4 || op_case == 5 || op_case == 6) {
+    // Stateless Q uses the runtime sequence count below; do not apply the captured VIEW shape first.
+    if ((op_case == 2 && !context.is_stateful()) || op_case == 3 || op_case == 4 || op_case == 5 || op_case == 6) {
         src = context.get_input(0);
     } else {
         src = process_view_input_new(context, 0);
